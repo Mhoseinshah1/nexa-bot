@@ -40,9 +40,12 @@ M=[
  ('TB7-11',[(GUARDS,"    !flags.identityLinked &&","    false &&")],T_I,'each guard individually'),
  ('TB7-12',[(GUARDS,"  if (flags.hasUnderReviewPayment || flags.hasUnreconciledService) {","  if (false) {")],T_I,'each guard individually'),
  ('TB7-13',[(GUARDS,"  if (CONFIDENCE_RANK[decision.confidence] < CONFIDENCE_RANK[config.autoMinConfidence]) {","  if (false) {")],T_I,'each guard individually'),
- ('TB7-14',[(GUARDS,"    reply === '' ||","    false ||")],T_I,'each guard individually'),
- ('TB7-15',[(GUARDS,"  if (decision.factRefs.some((ref) => !input.knownAliases.has(ref))) {","  if (false) {")],T_I,'each guard individually'),
- ('TB7-16',[(GUARDS,"  if (input.autoAtEpoch >= input.maxConsecutiveReplies)","  if (input.autoAtEpoch > input.maxConsecutiveReplies)")],T_I,'consecutive automatic replies'),
+ # Re-anchored 2026-10-07: N7 (PR #228) made the empty check ignore invisible marks.
+ ('TB7-14',[(GUARDS,"    reply.replace(INVISIBLE_MARKS, '').trim() === '' ||","    false ||")],T_I,'each guard individually'),
+ # Re-anchored 2026-10-07: the hotfix joined the fact and knowledge citation checks.
+ ('TB7-15',[(GUARDS,"    decision.factRefs.some((ref) => !input.knownAliases.has(ref)) ||","    false ||")],T_I,'each guard individually'),
+ # Re-anchored 2026-10-07 (roadmap A1): the per-epoch count became the session reply budget.
+ ('TB7-16',[(GUARDS,"  if (input.sessionReplies >= input.sessionReplyBudget)","  if (input.sessionReplies > input.sessionReplyBudget)")],T_I,'stops when the session budget is spent'),
  ('TB7-17',[(GUARDS,"  if (trigger === null || trigger.origin !== 'INBOUND' || !readable) {","  if (trigger === null || !readable) {")],T_U,'preflight: only a customer message'),
  # TB6 x TB7: an image the reply would be about must be seen.
  ('TB7-22',[(GUARDS,"  if (input.required.some((id) => !input.loaded.has(id))) {","  if (false) {")],T_I,'vision off is never answered'),
@@ -97,7 +100,10 @@ for mid,edits,(project,test),filt in M:
     originals.setdefault(f,s)
     cur=open(f).read()
     if cur.count(a)!=1:
-      print(mid,'ANCHOR MISSING in',f,cur.count(a),flush=True); ok=False; break
+      # A missing anchor is a FAILURE, never a skip (review of PR #241, N4): a dropped mutant
+      # silently shrinks the denominator and the doc's count stops being true.
+      for g,o in originals.items(): open(g,'w').write(o)
+      sys.exit(f'{mid}: ANCHOR MISSING in {f} (found {cur.count(a)} times)')
     open(f,'w').write(cur.replace(a,b))
   if ok:
     ran+=1

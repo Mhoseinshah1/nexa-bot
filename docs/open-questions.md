@@ -3443,9 +3443,11 @@ TB7 (AUTO_REPLY_SAFE, handoff and tickets, `docs/support-agent/tb7-auto-reply.md
   as `UNSUPPORTED_CONTENT` (fail closed) rather than dropping quietly. An edit re-enqueues
   only while the conversation still has a pending job; an edit of an already-answered message
   starts nothing.
-- **OQ-TB-45 — the loop guard's window is a constant.** At most 10 automatic replies per
-  conversation per hour (`SUPPORT_AI_AUTO_WINDOW`), beside the configurable consecutive limit
-  (`maxConsecutiveReplies`). Whether the window should be a setting is open.
+- **OQ-TB-45 — the loop guard's window is a constant (resolved, roadmap A1, 2026-10-07).** The
+  hourly limit is the tenant's `maxAutoRepliesPerHour` (default 30, 10–60) over
+  `SUPPORT_AI_AUTO_WINDOW.windowSeconds` (3600 s), and the per-epoch `maxConsecutiveReplies` is
+  replaced by a session reply budget (`sessionReplyBudget`, default 20, 5–40; a session ends after
+  six hours of inactivity; greetings not counted). `docs/support-agent/tb7-auto-reply.md`.
 - **OQ-TB-46 — images in automatic replies (resolved by integrating TB6).** A customer photo
   is no longer refused outright. It goes through TB6's vision path: the tenant's
   `visionEnabled`, a vision-capable configured step, and the bounded, sniffed fetch. An AUTO job
@@ -3587,7 +3589,15 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
   found only when its title, tags or body share a (folded, lightly stemmed) word with the query.
   A synonym the article does not use («کانکت» for «اتصال») is found only if a tag says it. Whether
   real conversations need more than tags is settled by running the eval corpus against a real
-  model (A10), not by guessing.
+  model (`docs/support-agent/sai-eval.md`), not by guessing.
+- **OQ-SAI2-03 — an image resolution option for Anthropic (A9).** OpenAI's `image_url.detail` is
+  documented (`low`/`high`/`auto`) and A9 sends `high`. The Anthropic Messages reference the
+  adapter was audited against documents no such field for an image block, so none is sent. If the
+  current reference documents one, it is added with a fixture from a real call — never guessed.
+- **OQ-SAI2-04 — four images against the real request-size limits (A9).** Four images are bounded
+  to 15 MiB decoded together (about 20 MB of base64). That this is inside each provider's
+  request-size limit is the provider's documentation, not yet a real call; acceptance step S2
+  records it. Z.AI is blind and unaffected.
 
 ## OQ-A4 — tutorial video and guide in one message (pre-support item A4)
 
@@ -3783,3 +3793,25 @@ so the second cannot occur from it, and the broadcast lane already reads 401 and
 as `BOT_UNAVAILABLE`. Not evidenced: whether Telegram ever answers 404 for anything else on a
 valid token (it is not documented either way). If a real run shows a 404 that is not about
 the token, narrow the messenger back to 401 and record the sentence Telegram used.
+
+## OQ-CB-01 — which Bot API answers on a forward or copy are about the SOURCE chat?
+
+Status: OPEN (roadmap C1, D2-F1; PR #245 review m6; `docs/campaign-broadcast-readiness.md`).
+
+On a `forwardMessage`/`copyMessage` the broadcast transport now reads `Bad Request: chat not
+found` and `PEER_ID_INVALID` as a refusal (FAILED, re-queueable) instead of the recipient's
+unreachability. That fix rests on this repository's own reading of Telegram's descriptions,
+not on a real run. Two things are unproven and are NOT guessed:
+
+- A source the recipient's bot cannot reach may be answered with a **403** instead (for
+  example `Forbidden: bot is not a member of the channel chat`, or `CHANNEL_PRIVATE`). The
+  transport still files every 403 as UNREACHABLE, which is final, so such a source would again
+  mark every recipient of that bot unreachable.
+- A genuine recipient "chat not found" on a sourced send is now FAILED, and stays FAILED
+  through every operator "retry failed" (harmless: a 400 delivered nothing, and the stamp
+  re-reads the opt-out each time, but those rows never clear).
+
+**Decide** after manual acceptance step 10 (`docs/campaign-broadcast-readiness.md`): copy a
+post from a channel the second bot is not in, record the exact status and description
+Telegram answers, and narrow or widen the sourced-send rule to exactly those answers in the
+same commit that records them.

@@ -291,12 +291,10 @@ both.
 
 Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
 records it. On the TEST tenant under `AUTO_REPLY_SAFE` with `CONNECTION_TROUBLESHOOTING` and
-`GREETING` allowlisted, the confidence floor `HIGH`, «حداکثر سؤال تکمیلی پیاپی» at its default
-2, «بیشترین پاسخ خودکار پیاپی» (`maxConsecutiveReplies`) at **5 or more**, and at least one approved,
-enabled article about Sing-box connection errors. At its default of 4 the loop guard counts
-every automatic reply — the greeting too — so a flow of greeting, two questions and an answer
-uses all four, and any further automatic reply in the same epoch hands off as `LOOP_GUARD`
-(«پاسخ‌های خودکار پشت‌سرهم به سقف رسید»), not as the clarifying limit.
+`GREETING` allowlisted, the confidence floor `HIGH`, «حداکثر سؤال تکمیلی پیاپی» at 2, and at
+least one approved, enabled article about Sing-box connection errors. (Roadmap A1 replaced
+«بیشترین پاسخ خودکار پیاپی» with the session budget, default 20, which a greeting never spends;
+see section N.)
 
 1. **The conversation.** From the customer, one message at a time, waiting for each answer:
 
@@ -324,6 +322,35 @@ uses all four, and any further automatic reply in the same epoch hands off as `L
    پیاپی». **Expect:** the warning before saving, and the save refused.
 5. Set the limit back to 2.
 
+## N. Session budget, hourly limit, clarifying default (roadmap A1/A2) — NOT RUN
+
+Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
+records it. On the TEST tenant under `AUTO_REPLY_SAFE` with `CONNECTION_TROUBLESHOOTING` and
+`GREETING` allowlisted.
+
+1. **The fields.** Open `/support-ai`. **Expect:** «سقف پاسخ خودکار در هر جلسه» (20, range 5 – 40)
+   and «سقف پاسخ خودکار در هر ساعت» (30, range 10 – 60), each with its help text; no
+   «بیشترین پاسخ خودکار پیاپی». Type 4 and 41 into the first, 9 and 61 into the second:
+   «بازهٔ مجاز» error and the save disabled each time.
+2. **The budget.** Set the session budget to 5 and save. From the customer send six connection
+   messages, one at a time, each answered before the next. **Expect:** five automatic replies;
+   the sixth message is not answered, the conversation is «نیازمند پشتیبان» with «پاسخ‌های خودکار
+   جلسه یا ساعت به سقف رسید», a ticket, and `guard_consecutive` in the evidence query of M1.
+3. **Greetings are free.** Return it to the AI. Send «سلام» six times, then one connection
+   message. **Expect:** seven automatic replies, no handoff.
+4. **Inactivity.** Leave a conversation that used part of its budget with no message either way
+   for six hours, then write. **Expect:** answered; `sessionReplyCount` would read 1 (the evidence
+   query in runbook §13 shows the gap). A conversation silent five hours continues its session.
+5. **The hour.** Set the hourly limit to 10 and the budget to 40. Send eleven messages within an
+   hour. **Expect:** ten replies, then `guard_window` and a handoff.
+6. **The widening.** As an `admin` without `support_ai.auto_reply`, raise either limit.
+   **Expect:** the warning before saving, and the save refused; lowering it is saved.
+7. **Clarifying default (A2).** On a tenant that never set «حداکثر سؤال تکمیلی پیاپی» it reads 3;
+   on one saved earlier at 2, it still reads 2. With 3: three questions in a row are sent, the
+   fourth hands off with `CLARIFYING_LIMIT`; a «سلام» answered between questions does not reset
+   the count, a real answer does.
+8. Set the limits back to 20, 30 and the tenant's previous clarifying limit.
+
 ## R. Memory and knowledge retrieval (A7, A8 — 2026-10-07) — NOT RUN
 
 Needs the real Telegram Business account and a real provider key; **NOT RUN** until an operator
@@ -347,6 +374,25 @@ records it. On the TEST tenant in `ASSIST_ONLY`, with two approved, enabled arti
    بازگشت وجه داده شد». Request a draft.
    - **Expect:** the draft treats it as the customer's own claim (a refund claim hands off) and
      never as the team's promise.
+
+## S. Sharper screenshots and the model comparison (A9, A10 — 2026-10-07) — NOT RUN
+
+Needs a real provider key (and, for S1–S2, the real Business account); **NOT RUN** until an
+operator records it. On the TEST tenant in `ASSIST_ONLY` with vision on.
+
+1. **Error text in a screenshot.** Send a screenshot of an app's connection error whose text is
+   small (a phone screenshot, not cropped). Request a draft with an OpenAI vision step.
+   - **Expect:** the draft names the error in the screenshot; `images_seen = 1`.
+2. **Four images.** Send four screenshots in a row, then «این‌ها چیه؟». Request a draft.
+   - **Expect:** `images_seen` is 4 when they fit 15 MiB together; with larger images the oldest
+     are `OVER_LIMIT` in `support_ai_image_outcomes` and the request still succeeds (no 413 /
+     request-too-large from the provider — record the provider's answer for `OQ-SAI2-04`).
+   - Repeat with an Anthropic vision step; record whether a detail or resolution option exists
+     in the provider's current reference (`OQ-SAI2-03`).
+3. **The eval corpus against real models.** Outside CI, with a TEST key:
+   `SUPPORT_AI_EVAL_API_KEY=… pnpm --filter @nexa/api support-ai-eval --live --provider OPENAI --model <a> --model <b> --json eval.json`
+   (the same for ANTHROPIC). **Expect:** the reference column 40/40; record each model's
+   column, and any `no_leak`, `guard` or `citations` failure by scenario id.
 
 ## Results
 
@@ -391,10 +437,20 @@ no real provider key and no Telegram Business account (program §0).
 | M2 clarifying limit hands off, resume starts fresh        | NOT RUN               |            |          |                                               |
 | M3 money still hands off before the provider              | NOT RUN               |            |          |                                               |
 | M4 raising the limit is the owner's widening              | NOT RUN               |            |          |                                               |
+| N1 the two fields, bounds in Persian                      | NOT RUN               |            |          |                                               |
+| N2 session budget of 5 hands off the sixth                | NOT RUN               |            |          |                                               |
+| N3 greetings never spend the budget                       | NOT RUN               |            |          |                                               |
+| N4 six hours of inactivity start a new session            | NOT RUN               |            |          |                                               |
+| N5 hourly limit hands off                                 | NOT RUN               |            |          |                                               |
+| N6 raising a limit is the owner's widening                | NOT RUN               |            |          |                                               |
+| N7 clarifying default 3; stored 2 kept; greeting no reset | NOT RUN               |            |          |                                               |
 | R1 repeated failure keeps its article (A8)                | NOT RUN               |            |          |                                               |
 | R2 a person's words stay a person's (A7)                  | NOT RUN               |            |          |                                               |
 | R3 a greeting carries no knowledge (A8)                   | NOT RUN               |            |          |                                               |
 | R4 a forged author marker is just text (A7)               | NOT RUN               |            |          |                                               |
+| S1 error text read from a screenshot (A9)                 | NOT RUN               |            |          |                                               |
+| S2 four images, the 15 MiB total (A9)                     | NOT RUN               |            |          | OQ-SAI2-03, OQ-SAI2-04                        |
+| S3 eval corpus against real models (A10)                  | NOT RUN               |            |          | OQ-SAI2-02                                    |
 
 Sign-off:
 

@@ -4632,7 +4632,6 @@ export const WEB_FA = {
   'web.campaign_announcement_hint':
     'پیام با ارسال همگانی و در زمان شروع کمپین فرستاده می‌شود. شکست ارسال پیام هیچ اقدام مالی را برنمی‌گرداند.',
   'web.campaign_announcement_body': 'متن پیام',
-  'web.campaign_announcement_purpose': 'نوع پیام',
   'web.campaign_placeholders': 'متغیرهای مجاز: {firstName}، {username}، {walletBalance}',
   'web.campaign_button_label': 'متن دکمه',
   'web.campaign_button_url': 'پیوند دکمه',
@@ -6278,7 +6277,7 @@ export const WEB_FA = {
   'web.bchat_handoff_identity': 'مشتری به حسابی در ربات متصل نیست',
   'web.bchat_handoff_customer_blocked': 'حساب مشتری مسدود است',
   'web.bchat_handoff_grounding': 'پاسخ به اطلاعاتی استناد کرد که در دست نبود',
-  'web.bchat_handoff_loop_guard': 'پاسخ‌های خودکار پشت‌سرهم به سقف رسید',
+  'web.bchat_handoff_loop_guard': 'پاسخ‌های خودکار جلسه یا ساعت به سقف رسید',
   'web.bchat_handoff_unsupported': 'پیامی که هوش مصنوعی نمی‌تواند بخواند (عکس یا فایل)',
   'web.bchat_handoff_stale': 'دیرتر از آن که هوش مصنوعی خودکار پاسخ دهد',
   'web.bchat_escalations': 'سپردن‌ها به پشتیبان',
@@ -7808,14 +7807,19 @@ export const WEB_FA = {
   'web.sai_auto_min_confidence_hint':
     'پاسخی که هوش مصنوعی به آن کمتر از این مقدار مطمئن باشد خودکار فرستاده نمی‌شود و به پشتیبان سپرده می‌شود.',
   'web.sai_auto_widen_entering':
-    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی به اجازهٔ جداگانهٔ «پاسخ خودکار» نیاز دارد و سرور هنگام ذخیره آن را بررسی می‌کند.',
+    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی، سقف پاسخ در هر جلسه یا سقف پاسخ در هر ساعت به اجازهٔ جداگانهٔ «پاسخ خودکار» نیاز دارد و سرور هنگام ذخیره آن را بررسی می‌کند.',
   'web.sai_auto_widen_needs_owner':
-    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی به اجازهٔ «پاسخ خودکار» نیاز دارد که معمولاً فقط مالک دارد؛ اگر این اجازه را ندارید، سرور ذخیره را رد می‌کند.',
+    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی، سقف پاسخ در هر جلسه یا سقف پاسخ در هر ساعت به اجازهٔ «پاسخ خودکار» نیاز دارد که معمولاً فقط مالک دارد؛ اگر این اجازه را ندارید، سرور ذخیره را رد می‌کند.',
   'web.sai_invalid_auto_topics': 'هر موضوع پاسخ خودکار فقط یک بار می‌تواند انتخاب شود.',
   'web.sai_range': 'بازهٔ مجاز:',
   'web.sai_timeout_ms': 'مهلت هر درخواست (میلی‌ثانیه)',
   'web.sai_max_output_chars': 'بیشترین طول پاسخ (نویسه)',
-  'web.sai_max_consecutive_replies': 'بیشترین پاسخ خودکار پیاپی',
+  'web.sai_session_reply_budget': 'سقف پاسخ خودکار در هر جلسه',
+  'web.sai_session_reply_budget_hint':
+    'بیشترین تعداد پاسخ خودکار در یک جلسهٔ گفتگو؛ پس از رسیدن به آن، گفتگو به پشتیبان ارجاع می‌شود. جلسه با ورود همکار یا پس از ۶ ساعت بی‌فعالیتی از نو شروع می‌شود و پاسخ‌های خوشامدگویی شمرده نمی‌شوند.',
+  'web.sai_max_auto_replies_per_hour': 'سقف پاسخ خودکار در هر ساعت',
+  'web.sai_max_auto_replies_per_hour_hint':
+    'بیشترین تعداد پاسخ خودکار به یک گفتگو در هر ۶۰ دقیقه، از هر نوع؛ پس از رسیدن به آن، گفتگو به پشتیبان ارجاع می‌شود.',
   'web.sai_max_consecutive_clarifying': 'حداکثر سؤال تکمیلی پیاپی',
   'web.sai_max_consecutive_clarifying_hint':
     'حداکثر تعداد سؤال‌های تکمیلی متوالی که هوش مصنوعی می‌تواند در پاسخ خودکار از مشتری بپرسد. پس از رسیدن به این حد، گفتگو به پشتیبان ارجاع می‌شود.',
@@ -7922,7 +7926,7 @@ export const WEB_FA = {
   'web.sa_auto_dropped_scope': 'فعالیت مجموعه متوقف بود',
   'web.sa_auto_guard_content': 'پیام مشتری متن خوانا نداشت',
   'web.sa_auto_guard_customer_blocked': 'مشتری مسدود است',
-  'web.sa_auto_guard_consecutive': 'سقف پاسخ‌های پیاپی',
+  'web.sa_auto_guard_consecutive': 'سقف پاسخ در جلسه',
   'web.sa_auto_guard_window': 'سقف پاسخ در یک ساعت',
   'web.sa_auto_guard_decision': 'تصمیم مدل پاسخ نبود',
   'web.sa_auto_guard_handoff_topic': 'موضوع همیشه به همکار می‌رسد',
@@ -8318,6 +8322,10 @@ export const WEB_FA = {
   'web.bcx_held_until': 'تا',
   'web.bcx_history_title': 'تاریخچهٔ این ارسال',
   'web.bcx_history_empty': 'هنوز کاری ثبت نشده است.',
+  'web.bcx_draft_changed':
+    'این پیش‌نویس در این فاصله تغییر کرده است. تغییرات ذخیره‌نشدهٔ شما نگه داشته شده؛ پیش از ذخیره انتخاب کنید:',
+  'web.bcx_draft_load_latest': 'بارگذاری نسخهٔ تازه (تغییرات من کنار گذاشته شود)',
+  'web.bcx_draft_keep_mine': 'نگه‌داشتن تغییرات من روی نسخهٔ تازه',
   'web.bcx_history_truncated':
     'فقط تازه‌ترین موارد نشان داده شده است؛ موارد قدیمی‌تر در گزارش رویدادها (Audit log) هست.',
   'web.bcx_h_create': 'ساخت پیش‌نویس',
@@ -8332,9 +8340,28 @@ export const WEB_FA = {
   'web.bcx_h_retry_failed': 'ارسال دوباره به ناموفق‌ها',
   'web.bcx_h_requeued': '{count} گیرنده دوباره در صف',
   'web.bcx_h_refused': 'اجازه داده نشد',
-  // --- end roadmap C2 block -----------------------------------------------------------
-
-  // --- Roadmap B5/B6 (Agent 2b): Customer 360 workspace and the attention-first dashboard ---
+  // --- Roadmap C3/C4: audience by bot, attribution, the announcement's purpose --------
+  'web.aud_bots': 'ربات',
+  'web.aud_bot_not_active':
+    'این ربات فعال نیست؛ گیرندگانش ارسال را برای همه متوقف می‌کنند تا ربات درست شود.',
+  'web.aud_bots_hint':
+    'مشتریانی که از این ربات‌ها پیام می‌گیرند (رباتی که اول به آن پیام داده‌اند). هیچ‌کدام انتخاب نشود یعنی همهٔ ربات‌ها.',
+  'web.campaign_error_purpose_promotional':
+    'اطلاعیهٔ کمپین همیشه تبلیغاتی است تا انصراف مشتریان رعایت شود. برای اطلاع‌رسانی خدماتی، یک «ارسال همگانی» جدا با هدف اطلاع‌رسانی خدمات بسازید.',
+  'web.campaign_purpose_promotional_hint':
+    'اطلاعیهٔ کمپین تبلیغاتی است و به مشتریانی که از پیام تبلیغاتی انصراف داده‌اند نمی‌رسد. برای اطلاع‌رسانی خدماتی (مثلاً جبران قطعی) یک «ارسال همگانی» جدا بسازید.',
+  'web.campaign_attr_title': 'اطلاعیه و استفاده از تخفیف',
+  'web.campaign_attr_audience': 'مخاطبان ثبت‌شدهٔ اطلاعیه:',
+  'web.campaign_attr_told': 'پیام را گرفتند (یا شاید گرفته باشند):',
+  'web.campaign_attr_delivered': 'تحویل قطعی:',
+  'web.campaign_attr_skipped': 'کنار گذاشته شد (انصراف یا مسدود):',
+  'web.campaign_attr_redeemers_told':
+    'پس از گرفتن پیام، تخفیف را در سفارش پرداخت‌شده استفاده کردند:',
+  'web.campaign_attr_redeemers_delivered': 'از آن‌ها، با تحویل قطعی:',
+  'web.campaign_attr_redeemers_not_told':
+    'سایر استفاده‌کنندگان (پیام را نگرفتند، یا پیش از آن پرداخت کردند):',
+  'web.campaign_attr_note':
+    'شمارش افراد از ردیف‌های ثبت‌شده است و فقط سفارش‌های پرداخت‌شده (نه بازپرداخت‌شده) پس از ارسال پیام را می‌شمارد؛ این اعداد نمی‌گویند اطلاعیه باعث خرید شده است.',
   'web.attn_at_least': 'یا بیشتر',
   'web.attn_open': 'رسیدگی',
   'web.c360_nav_attention': 'نیازمند رسیدگی',

@@ -115,6 +115,30 @@ describe('canonicalAudienceDefinition', () => {
     expect(JSON.parse(one).tags).toEqual({ anyOf: [tagA], noneOf: [tagB] });
   });
 
+  it('roadmap C3: leaves an older hash alone, and appends the bots, sorted, after every earlier key', () => {
+    const botA = '01900000-0000-7000-8000-00000000a001';
+    const botB = '01900000-0000-7000-8000-00000000a002';
+    // Absent (null) is the previous spelling, byte for byte.
+    expect(canonicalAudienceJson({ version: 1, botInstanceIds: null })).toBe(
+      canonicalAudienceJson({ version: 1 }),
+    );
+    const one = canonicalAudienceJson({
+      version: 1,
+      botInstanceIds: [botB, botA, botB],
+      activeService: 'HAS',
+    });
+    const keys = Object.keys(JSON.parse(one) as Record<string, unknown>);
+    expect(keys.slice(-2)).toEqual(['activeService', 'botInstanceIds']);
+    expect(JSON.parse(one).botInstanceIds).toEqual([botA, botB]);
+    // An empty list is not "every bot": it is refused, so nothing selects nobody by accident.
+    expect(audienceDefinitionSchema.safeParse({ version: 1, botInstanceIds: [] }).success).toBe(
+      false,
+    );
+    expect(
+      audienceDefinitionSchema.safeParse({ version: 1, botInstanceIds: ['not-a-uuid'] }).success,
+    ).toBe(false);
+  });
+
   it('refuses an empty tag criterion and a tag both required and excluded', () => {
     const tag = '01900000-0000-7000-8000-0000000000c1';
     for (const input of [

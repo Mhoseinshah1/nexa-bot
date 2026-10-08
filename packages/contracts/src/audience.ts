@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { uuidV7Schema } from './ids.js';
 import { currencyCodeSchema } from './money.js';
 import { SERVICE_STATES } from './provisioning.js';
+import { BOT_INSTANCE_STATUSES } from './tenant.js';
 
 /**
  * The shared AUDIENCE — who a broadcast, a mass action or a campaign reaches (round N,
@@ -222,6 +223,13 @@ export const audienceDefinitionSchema = z
     tags: audienceTagsSchema.nullable().default(null),
     /** Broadcast V2: has / has no service that is active now. */
     activeService: z.enum(AUDIENCE_ACTIVE_SERVICE_FILTERS).default('ANY'),
+    /**
+     * Roadmap C3: the bot the customer is reached through — `customers.first_bot_instance_id`,
+     * the same bot a broadcast freezes onto each recipient row and sends through. `null`
+     * means every bot. A bot of another tenant selects nobody; a customer who never wrote
+     * to a bot is selected by no bot.
+     */
+    botInstanceIds: idList(AUDIENCE_LIST_MAX).min(1).nullable().default(null),
   })
   .strict()
   .refine(
@@ -259,9 +267,14 @@ type ParsedAudienceDefinition = z.output<typeof audienceDefinitionSchema>;
  * Broadcast V2 dimensions, which the CANONICAL form carries only when they narrow anything
  * (see `canonicalAudienceDefinition`). Absent means `null` / `'ANY'`.
  */
-export type AudienceDefinition = Omit<ParsedAudienceDefinition, 'tags' | 'activeService'> & {
+export type AudienceDefinition = Omit<
+  ParsedAudienceDefinition,
+  'tags' | 'activeService' | 'botInstanceIds'
+> & {
   readonly tags?: AudienceTags | null;
   readonly activeService?: AudienceActiveServiceFilter;
+  /** Roadmap C3: appended like the Broadcast V2 keys, only when it narrows anything. */
+  readonly botInstanceIds?: readonly string[] | null;
 };
 /** What a caller may submit: omitted fields take their defaults. */
 export type AudienceDefinitionInput = z.input<typeof audienceDefinitionSchema>;
@@ -339,6 +352,8 @@ export function canonicalAudienceDefinition(input: unknown): AudienceDefinition 
       ? {}
       : { tags: { anyOf: sortedUnique(d.tags.anyOf), noneOf: sortedUnique(d.tags.noneOf) } }),
     ...(d.activeService === 'ANY' ? {} : { activeService: d.activeService }),
+    // Roadmap C3, by the same rule: absent unless it narrows, so every older hash holds.
+    ...(d.botInstanceIds === null ? {} : { botInstanceIds: sortedUnique(d.botInstanceIds) }),
   };
 }
 
@@ -415,6 +430,15 @@ export const audienceOptionsResponseSchema = z.object({
    * an archived tag still selects the customers that carry it.
    */
   tags: z.array(z.object({ id: z.string(), label: z.string(), archived: z.boolean() })),
+  /**
+   * Roadmap C3: the tenant's bots, by the name Telegram knows them by and their status. A
+   * response from a release before this one has none, and parses as an empty list.
+   */
+  bots: z
+    .array(
+      z.object({ id: z.string(), username: z.string(), status: z.enum(BOT_INSTANCE_STATUSES) }),
+    )
+    .default([]),
 });
 export type AudienceOptionsResponse = z.infer<typeof audienceOptionsResponseSchema>;
 

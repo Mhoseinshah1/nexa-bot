@@ -33,6 +33,7 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
   CampaignActionConfig,
+  AnnouncementAttribution,
   CampaignActionRecord,
   CampaignLaunchBindingRecord,
   CampaignCursor,
@@ -563,6 +564,67 @@ export class DrizzleCampaignRepository implements CampaignRepository {
         amount: BigInt(row.amount),
         currency: row.currency as CurrencyCode,
       })),
+    };
+  }
+
+  async announcementAttribution(
+    scope: TenantContext,
+    input: { readonly broadcastId: string; readonly discountId: string },
+  ): Promise<AnnouncementAttribution> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Roadmap C3, as PR #245 review m1/m2 tightened it. Persisted rows only: the
+     * announcement's recipient rows ARE the audience it froze at launch (never released,
+     * unlike frozen_audience_members). A customer counts as TOLD when their row is SENT or
+     * UNCONFIRMED (delivered, or may have been) — never SKIPPED (opted out, blocked), FAILED,
+     * UNREACHABLE, CANCELLED or still waiting. A redemption counts only on an order PAID now
+     * (a REFUNDED one never does) and settled at or after that recipient's stamp
+     * (`send_started_at`, committed before the request went), so "told, then paid" is the
+     * order the card states. Distinct customers on both sides. Nothing here says a purchase
+     * was CAUSED.
+     */
+    const result = await this.db.execute<{
+      audience: number;
+      told: number;
+      delivered: number;
+      skipped: number;
+      redeemers: number;
+      redeemers_told: number;
+      redeemers_delivered: number;
+    }>(sql`
+      WITH audience AS (
+        SELECT customer_id, state, send_started_at FROM broadcast_recipients
+         WHERE tenant_id = ${tenantId}::uuid AND broadcast_id = ${input.broadcastId}::uuid
+      ), paid AS (
+        SELECT dr.customer_id, o.settled_at
+          FROM discount_redemptions dr
+          JOIN orders o ON o.tenant_id = dr.tenant_id AND o.id = dr.order_id
+         WHERE dr.tenant_id = ${tenantId}::uuid AND dr.discount_id = ${input.discountId}::uuid
+           AND o.state = 'PAID'
+      )
+      SELECT (SELECT count(*) FROM audience)::int AS audience,
+             (SELECT count(*) FROM audience WHERE state IN ('SENT', 'UNCONFIRMED'))::int AS told,
+             (SELECT count(*) FROM audience WHERE state = 'SENT')::int AS delivered,
+             (SELECT count(*) FROM audience WHERE state = 'SKIPPED')::int AS skipped,
+             (SELECT count(DISTINCT customer_id) FROM paid)::int AS redeemers,
+             (SELECT count(DISTINCT p.customer_id) FROM paid p
+                JOIN audience a ON a.customer_id = p.customer_id
+               WHERE a.state IN ('SENT', 'UNCONFIRMED')
+                 AND p.settled_at >= a.send_started_at)::int AS redeemers_told,
+             (SELECT count(DISTINCT p.customer_id) FROM paid p
+                JOIN audience a ON a.customer_id = p.customer_id
+               WHERE a.state = 'SENT'
+                 AND p.settled_at >= a.send_started_at)::int AS redeemers_delivered`);
+    const row = result.rows[0];
+    const redeemersTold = row?.redeemers_told ?? 0;
+    return {
+      audience: row?.audience ?? 0,
+      told: row?.told ?? 0,
+      delivered: row?.delivered ?? 0,
+      skipped: row?.skipped ?? 0,
+      redeemersTold,
+      redeemersDelivered: row?.redeemers_delivered ?? 0,
+      redeemersNotTold: (row?.redeemers ?? 0) - redeemersTold,
     };
   }
 

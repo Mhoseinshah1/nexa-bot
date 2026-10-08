@@ -53,6 +53,18 @@ const FIELD: Readonly<Record<MediaKind, 'photo' | 'video' | 'document'>> = {
 const UNREACHABLE_DESCRIPTIONS =
   /chat not found|user is deactivated|bot was blocked|bot can't initiate|peer_id_invalid|user not found/i;
 
+/**
+ * D2-F1 (roadmap C1). On a FORWARD or COPY the request names TWO chats — the recipient
+ * (`chat_id`) and the source (`from_chat_id`) — and Telegram's "chat not found" /
+ * `PEER_ID_INVALID` does not say which. When it is the SOURCE (a channel the recipient's bot is
+ * not in), calling it the recipient's unreachability would be final and wrong for every
+ * recipient of that bot. So on a sourced send these two answers are a refusal: FAILED with the
+ * transport's code, shown per bot, and re-queueable once the bot can reach the source. The
+ * answers that can only be about the recipient (blocked, deactivated, never started) stay
+ * UNREACHABLE.
+ */
+const AMBIGUOUS_ON_SOURCED_SEND = /chat not found|peer_id_invalid/i;
+
 /** A URL button's link, parsed for real: the contract's pattern has no URL parser to call. */
 function openable(url: string): boolean {
   try {
@@ -220,7 +232,9 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
         };
       }
     }
-    return classify(await telegramSend(call));
+    return classify(await telegramSend(call), {
+      sourced: isSourcedBroadcastKind(rendered.contentKind),
+    });
   }
 
   /**
@@ -274,7 +288,10 @@ export function classifyPin(outcome: TelegramSendOutcome): BroadcastPinResult {
  * the presence of `retry_after` (Telegram may omit it); every other retryable failure MAY have
  * been delivered and is UNKNOWN; a 401 is the bot, not the message.
  */
-export function classify(outcome: TelegramSendOutcome): BroadcastSendResult {
+export function classify(
+  outcome: TelegramSendOutcome,
+  request: { readonly sourced: boolean } = { sourced: false },
+): BroadcastSendResult {
   if (outcome.outcome === 'SUCCEEDED') {
     return {
       outcome: 'SENT',
@@ -293,6 +310,11 @@ export function classify(outcome: TelegramSendOutcome): BroadcastSendResult {
   const code = outcome.errorCode.slice(0, 100);
   if (code === 'telegram.rejected.401' || code === 'telegram.rejected.404') {
     return { outcome: 'BOT_UNAVAILABLE', errorCode: code };
+  }
+  // D2-F1: on a forward or copy, an answer that may name the SOURCE chat is not the
+  // recipient's unreachability (see AMBIGUOUS_ON_SOURCED_SEND).
+  if (request.sourced && AMBIGUOUS_ON_SOURCED_SEND.test(outcome.errorMessage)) {
+    return { outcome: 'REFUSED', errorCode: code };
   }
   if (code === 'telegram.rejected.403' || UNREACHABLE_DESCRIPTIONS.test(outcome.errorMessage)) {
     return { outcome: 'UNREACHABLE', errorCode: code };

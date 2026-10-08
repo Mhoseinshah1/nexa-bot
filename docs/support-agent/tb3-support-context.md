@@ -256,6 +256,11 @@ model, no I/O) and changes three things:
 
    Since the PR #236 review an automatic decision records the titles it cited too (`finishAuto`
    takes the resolved labels, as `markReady` does), so continuity works under `AUTO_REPLY_SAFE`.
+   A SENT job counts only while its lane row is PENDING, DELIVERED or UNCONFIRMED — a send that
+   FAILED or was SUPERSEDED never reached the customer (PR #244, CX1). The troubleshooting episode
+   is bounded by its own turns, not by position: walking back, it spans the support replies of the
+   current streak of troubleshooting decisions and the customer's messages just before the first
+   of them, and stops at any line a person or an automatic message wrote (PR #244, CX2).
    A "decided job" is an `ASSIST_DRAFT` or `AUTO_DECISION` row with a decision in `READY` or
    `SENT` — never `DISCARDED` (an operator's rejection, a superseded draft, a handed-off or
    dropped automatic job) or `FAILED`. `DrizzleSupportAiJobRepository.priorDecisions` reads at
@@ -277,6 +282,9 @@ model, no I/O) and changes three things:
 3. **At most eight entries** (`SUPPORT_CONTEXT_LIMITS.knowledge`, was 20) in a 24 KiB budget with
    a 12 KiB knowledge reserve (was 16 KiB and 6 KiB): about three full Persian articles survive
    any cut, instead of two of twenty.
+
+The A10 corpus (`sai-eval.md`) scores this retrieval on 40 conversations, for every model
+alike, and is where a regression in it shows first.
 
 Only `APPROVED` and enabled articles are candidates (`activeForContext`), with the `ACTIVE` FAQ;
 that is unchanged. Policy rule 4b tells the model the entries are the few that match, most
