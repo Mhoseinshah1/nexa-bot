@@ -237,6 +237,7 @@ export const NAV_COUNTER_KEYS = [
   'unreconciledServices',
   'refundRequestsAwaiting',
   'paymentsUnknown',
+  'businessHandoffs',
 ] as const;
 export type NavCounterKey = (typeof NAV_COUNTER_KEYS)[number];
 
@@ -253,6 +254,11 @@ export const NAV_COUNTER_PERMISSIONS: Readonly<Record<NavCounterKey, PermissionK
   refundRequestsAwaiting: 'refunds.view',
   /** `/payments`: payments in state UNKNOWN, awaiting reconciliation. */
   paymentsUnknown: 'payments.view',
+  /**
+   * `/business-chats`: Telegram Business conversations in `HANDOFF_REQUIRED` — the support
+   * agent stood down and a person must answer (roadmap B6, "support handoffs").
+   */
+  businessHandoffs: 'business_chats.view',
 };
 
 /** A ticket whose next word is support's: nobody has answered yet, or the customer has. */
@@ -280,6 +286,14 @@ export const navCountersResponseSchema = z.object({
     unreconciledServices: counter,
     refundRequestsAwaiting: counter,
     paymentsUnknown: counter,
+    /*
+     * OPTIONAL on the wire, read as `null` when absent (roadmap B6). An API released before
+     * this counter sends six keys; during a rolling update a new bundle's poll can reach
+     * such a replica, and a required key would make that answer unparseable — which
+     * `pollUnlessFinal` treats as final, freezing every sidebar badge until a reload.
+     * Absent means "not counted", which is already what `null` means.
+     */
+    businessHandoffs: counter.optional().transform((value) => value ?? null),
   }),
 });
 export type NavCountersResponse = z.infer<typeof navCountersResponseSchema>;
