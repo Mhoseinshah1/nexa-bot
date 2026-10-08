@@ -42,6 +42,7 @@ import {
   paymentOpsWindowShape,
   refinePaymentOpsWindow,
 } from './payment-operations.js';
+import { paymentSituationViewSchema } from './payment-situations.js';
 import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
@@ -4387,6 +4388,20 @@ export const paymentSummarySchema = z.object({
    * payment that is not a `GATEWAY` payment. Defaulted on parse, like the D7 fields.
    */
   gatewaySignal: paymentGatewaySignalSchema.nullable().default(null),
+  /**
+   * Roadmap E1 (`docs/payments-under-review-ux.md`): the situation the ONE classifier
+   * (`paymentSituationOf`) derived on the server — what happened, whether money probably
+   * moved, what the customer should do and which existing operator actions apply. Never a
+   * state: `state` above is still the answer to where the payment is. Defaulted on parse,
+   * like the D7 fields, so a reader holding the previous release's response reads "not
+   * known" rather than failing.
+   */
+  situation: paymentSituationViewSchema.nullable().default(null),
+  /**
+   * The Payment Operations Center queues this payment is in, from the same SQL predicates
+   * the queue list and counts use. Defaulted on parse.
+   */
+  queues: z.array(paymentOpsQueueSchema).default([]),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 

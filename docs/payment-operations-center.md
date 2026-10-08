@@ -43,6 +43,11 @@ shape asks the provider ids — a uuid too, since a provider's id can be uuid-sh
 classifies by shape. The web client sends `from`/`to` only with `range=CUSTOM`, which is the only
 range the server accepts them with.
 
+Roadmap E2 (`docs/payments-under-review-ux.md`) adds `NEEDS_ACTION`: the payments a person
+must act on, each with an existing command as its exit (every UNKNOWN, a signalled manual
+transfer, a confirmed payment with an open refund), shown first among the chips. Every row
+also carries the server-derived situation (E1), from the same predicates.
+
 ## Timeline
 
 `GET /payments/:id/timeline` gains (contract `PAYMENT_TIMELINE_KINDS`):

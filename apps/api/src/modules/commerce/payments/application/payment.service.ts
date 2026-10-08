@@ -21,6 +21,9 @@ import {
   nextState,
   orderIdSchema,
   paymentIdSchema,
+  paymentSituationOf,
+  type PaymentOpsQueue,
+  type PaymentSituationGuide,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
@@ -577,6 +580,12 @@ export interface TransferSignalResult {
   readonly receiptWindow: ReceiptWindow | null;
 }
 
+/** Roadmap E1: one payment's situation guide, and the queues it was derived beside. */
+export interface PaymentSituationRead {
+  readonly guide: PaymentSituationGuide;
+  readonly queues: readonly PaymentOpsQueue[];
+}
+
 export interface ReceiptWindow {
   readonly expiresAt: Date;
   /** What the customer is told, so the sentence and the deadline cannot disagree. */
@@ -737,6 +746,38 @@ export class PaymentService {
       scope,
       payments.filter((payment) => payment.method === 'GATEWAY').map((payment) => payment.id),
     );
+  }
+
+  /**
+   * Roadmap E1 (`docs/payments-under-review-ux.md`): each payment's situation, from the ONE
+   * classifier (`paymentSituationOf`) over facts read in ONE statement, plus the queues
+   * themselves. `payments.view`; read-only.
+   */
+  async situations(
+    scope: TenantContext,
+    actor: ActorContext,
+    records: readonly PaymentRecord[],
+  ): Promise<ReadonlyMap<PaymentId, PaymentSituationRead>> {
+    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
+    const facts = await this.deps.repository.situationFacts(
+      scope,
+      records.map((record) => record.id),
+    );
+    const found = new Map<PaymentId, PaymentSituationRead>();
+    for (const [id, recorded] of facts) {
+      const guide = paymentSituationOf(recorded);
+      found.set(id, {
+        /*
+         * `needsAction` is the SQL facet's answer, from the same statement as every other
+         * fact: ONE definition of NEEDS_ACTION, so the badge and the queue that lists the
+         * payment cannot disagree (review of PR #243, m1). `paymentNeedsAction` is the
+         * specification both are tested against.
+         */
+        guide: { ...guide, needsAction: recorded.queues.includes('NEEDS_ACTION') },
+        queues: recorded.queues,
+      });
+    }
+    return found;
   }
 
   async get(scope: TenantContext, actor: ActorContext, id: string): Promise<PaymentRecord> {

@@ -23,6 +23,11 @@ import {
   type PaymentOpsQueue,
   type ReceiptDisposition,
   type ReportRange,
+  type PaymentSituation,
+  type PaymentMoneySignal,
+  type PaymentCustomerGuidance,
+  type PaymentOperatorAction,
+  type PaymentSituationView,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -280,10 +285,210 @@ function GatewayName({ provider }: { provider: string | null }) {
 }
 
 // ---------------------------------------------------------------------------
+// The situation guide (roadmap E1, `docs/payments-under-review-ux.md`)
+// ---------------------------------------------------------------------------
+
+/*
+ * Each map is TOTAL over its contract enum, so a situation added to the contract without
+ * words here is a compile error rather than a blank cell. The page renders the SERVER's
+ * classification (`payment.situation`) and never classifies: no state, receipt or provider
+ * status is read here to decide what a payment means.
+ */
+const SITUATION_LABELS: Readonly<Record<PaymentSituation, WebKey>> = {
+  AWAITING_PAYMENT: 'web.payment_situation_awaiting_payment',
+  INVOICE_NOT_ISSUED: 'web.payment_situation_invoice_not_issued',
+  CUSTOMER_SIGNALLED: 'web.payment_situation_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_receipt_under_review',
+  PROVIDER_REVIEW: 'web.payment_situation_provider_review',
+  OUTCOME_UNKNOWN: 'web.payment_situation_outcome_unknown',
+  MISMATCH: 'web.payment_situation_mismatch',
+  PARTIAL: 'web.payment_situation_partial',
+  LATE_COMPLETION: 'web.payment_situation_late_completion',
+  CONFIRMED: 'web.payment_situation_confirmed',
+  REFUND_IN_PROGRESS: 'web.payment_situation_refund_in_progress',
+  REFUNDED: 'web.payment_situation_refunded',
+  CREDITED_TO_WALLET: 'web.payment_situation_credited_to_wallet',
+  REJECTED: 'web.payment_situation_rejected',
+  FAILED: 'web.payment_situation_failed',
+  EXPIRED: 'web.payment_situation_expired',
+  CANCELLED: 'web.payment_situation_cancelled',
+};
+
+const SITUATION_WHAT: Readonly<Record<PaymentSituation, WebKey>> = {
+  AWAITING_PAYMENT: 'web.payment_situation_what_awaiting_payment',
+  INVOICE_NOT_ISSUED: 'web.payment_situation_what_invoice_not_issued',
+  CUSTOMER_SIGNALLED: 'web.payment_situation_what_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_what_receipt_under_review',
+  PROVIDER_REVIEW: 'web.payment_situation_what_provider_review',
+  OUTCOME_UNKNOWN: 'web.payment_situation_what_outcome_unknown',
+  MISMATCH: 'web.payment_situation_what_mismatch',
+  PARTIAL: 'web.payment_situation_what_partial',
+  LATE_COMPLETION: 'web.payment_situation_what_late_completion',
+  CONFIRMED: 'web.payment_situation_what_confirmed',
+  REFUND_IN_PROGRESS: 'web.payment_situation_what_refund_in_progress',
+  REFUNDED: 'web.payment_situation_what_refunded',
+  CREDITED_TO_WALLET: 'web.payment_situation_what_credited_to_wallet',
+  REJECTED: 'web.payment_situation_what_rejected',
+  FAILED: 'web.payment_situation_what_failed',
+  EXPIRED: 'web.payment_situation_what_expired',
+  CANCELLED: 'web.payment_situation_what_cancelled',
+};
+
+const SITUATION_SAFE: Readonly<Record<PaymentSituation, WebKey>> = {
+  AWAITING_PAYMENT: 'web.payment_situation_safe_awaiting_payment',
+  INVOICE_NOT_ISSUED: 'web.payment_situation_safe_invoice_not_issued',
+  CUSTOMER_SIGNALLED: 'web.payment_situation_safe_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_safe_receipt_under_review',
+  PROVIDER_REVIEW: 'web.payment_situation_safe_provider_review',
+  OUTCOME_UNKNOWN: 'web.payment_situation_safe_outcome_unknown',
+  MISMATCH: 'web.payment_situation_safe_mismatch',
+  PARTIAL: 'web.payment_situation_safe_partial',
+  LATE_COMPLETION: 'web.payment_situation_safe_late_completion',
+  CONFIRMED: 'web.payment_situation_safe_confirmed',
+  REFUND_IN_PROGRESS: 'web.payment_situation_safe_refund_in_progress',
+  REFUNDED: 'web.payment_situation_safe_refunded',
+  CREDITED_TO_WALLET: 'web.payment_situation_safe_credited_to_wallet',
+  REJECTED: 'web.payment_situation_safe_rejected',
+  FAILED: 'web.payment_situation_safe_failed',
+  EXPIRED: 'web.payment_situation_safe_expired',
+  CANCELLED: 'web.payment_situation_safe_cancelled',
+};
+
+/*
+ * The tone says how much attention, never which way the money went: every situation where
+ * money MAY have moved is `warn`, not `danger` and not `ok` — the rule `STATE_TONES` states
+ * for UNKNOWN.
+ */
+const SITUATION_TONES: Readonly<Record<PaymentSituation, Tone>> = {
+  AWAITING_PAYMENT: 'neutral',
+  INVOICE_NOT_ISSUED: 'neutral',
+  CUSTOMER_SIGNALLED: 'info',
+  RECEIPT_UNDER_REVIEW: 'warn',
+  PROVIDER_REVIEW: 'info',
+  OUTCOME_UNKNOWN: 'warn',
+  MISMATCH: 'warn',
+  PARTIAL: 'warn',
+  LATE_COMPLETION: 'warn',
+  CONFIRMED: 'ok',
+  REFUND_IN_PROGRESS: 'warn',
+  REFUNDED: 'neutral',
+  CREDITED_TO_WALLET: 'ok',
+  REJECTED: 'danger',
+  FAILED: 'danger',
+  EXPIRED: 'neutral',
+  CANCELLED: 'neutral',
+};
+
+const MONEY_LABELS: Readonly<Record<PaymentMoneySignal, WebKey>> = {
+  NOT_YET: 'web.payment_money_not_yet',
+  NO: 'web.payment_money_no',
+  CLAIMED: 'web.payment_money_claimed',
+  POSSIBLY: 'web.payment_money_possibly',
+  PARTIALLY: 'web.payment_money_partially',
+  AT_PROVIDER: 'web.payment_money_at_provider',
+  YES: 'web.payment_money_yes',
+  TO_WALLET: 'web.payment_money_to_wallet',
+  RETURNING: 'web.payment_money_returning',
+  RETURNED: 'web.payment_money_returned',
+};
+
+const CUSTOMER_GUIDANCE_LABELS: Readonly<Record<PaymentCustomerGuidance, WebKey>> = {
+  PAY_WITHIN_WINDOW: 'web.payment_customer_guidance_pay_within_window',
+  SEND_RECEIPT: 'web.payment_customer_guidance_send_receipt',
+  START_AGAIN: 'web.payment_customer_guidance_start_again',
+  WAIT_DO_NOT_PAY_AGAIN: 'web.payment_customer_guidance_wait_do_not_pay_again',
+  MAY_PAY_AGAIN: 'web.payment_customer_guidance_may_pay_again',
+  NOTHING: 'web.payment_customer_guidance_nothing',
+};
+
+const OPERATOR_ACTION_LABELS: Readonly<Record<PaymentOperatorAction, WebKey>> = {
+  REVIEW_RECEIPT_IN_TELEGRAM: 'web.payment_operator_action_review_receipt_in_telegram',
+  ASK_PROVIDER_AGAIN: 'web.payment_operator_action_ask_provider_again',
+  RECONCILE: 'web.payment_operator_action_reconcile',
+  VERIFY_AT_PROVIDER: 'web.payment_operator_action_verify_at_provider',
+  MANUAL_WALLET_ADJUSTMENT: 'web.payment_operator_action_manual_wallet_adjustment',
+  ISSUE_REFUND: 'web.payment_operator_action_issue_refund',
+  SETTLE_REFUND: 'web.payment_operator_action_settle_refund',
+};
+
+/** The server's situation, as a badge; a dash for a response from before it existed. */
+export function SituationBadge({ value }: { value: PaymentSituationView | null }) {
+  if (value === null) return <Dash />;
+  return (
+    <Badge tone={SITUATION_TONES[value.situation]} outline={!value.needsAction}>
+      {t(SITUATION_LABELS[value.situation])}
+    </Badge>
+  );
+}
+
+/**
+ * The guidance card: what happened, whether money probably moved, what the customer should
+ * do, which EXISTING operator actions apply, and what is safe. Every line is the server's
+ * classification rendered through a total map; the controls themselves stay on the cards
+ * that hold the evidence (reconcile, refunds), each still gated by its own permission.
+ */
+export function SituationCard({ value }: { value: PaymentSituationView | null }) {
+  if (value === null) return null;
+  const situation: PaymentSituation = value.situation;
+  return (
+    <Card
+      title={t('web.payment_situation_card')}
+      {...(value.needsAction
+        ? {
+            actions: (
+              <Badge tone="warn" dot>
+                {t('web.payment_situation_needs_action')}
+              </Badge>
+            ),
+          }
+        : {})}
+    >
+      <KV
+        items={[
+          [
+            t('web.payment_situation_what'),
+            <span key="s">
+              <SituationBadge value={value} /> {t(SITUATION_WHAT[situation])}
+            </span>,
+          ],
+          [t('web.payment_situation_money'), t(MONEY_LABELS[value.money])],
+          [t('web.payment_situation_customer'), t(CUSTOMER_GUIDANCE_LABELS[value.customer])],
+          [
+            t('web.payment_situation_actions'),
+            value.actions.length === 0 ? (
+              <span key="a" className="muted small">
+                {t('web.payment_situation_no_action')}
+              </span>
+            ) : (
+              <ul key="a" className="plain">
+                {value.actions.map((action) => (
+                  <li key={action}>{t(OPERATOR_ACTION_LABELS[action])}</li>
+                ))}
+              </ul>
+            ),
+          ],
+          [t('web.payment_situation_safe'), t(SITUATION_SAFE[situation])],
+        ]}
+      />
+      <p className="muted small">{t('web.payment_situation_state_note')}</p>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
 
-/** The queues, in the order the workspace shows them (program §10). */
+/**
+ * The chips, attention first (roadmap E2): `NEEDS_ACTION` — everything a person must act on,
+ * oldest first — leads, then the facets in the contract's own order. A display order only;
+ * every queue is the server's predicate.
+ */
+const QUEUE_ORDER: readonly PaymentOpsQueue[] = [
+  'NEEDS_ACTION',
+  ...PAYMENT_OPS_QUEUES.filter((one) => one !== 'NEEDS_ACTION'),
+];
+
 const QUEUE_LABELS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
   PENDING: 'web.payment_ops_queue_pending',
   UNKNOWN: 'web.payment_ops_queue_unknown',
@@ -293,6 +498,7 @@ const QUEUE_LABELS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
   LATE_COMPLETION: 'web.payment_ops_queue_late_completion',
   PROVIDER_ERROR: 'web.payment_ops_queue_provider_error',
   REFUND_RELATED: 'web.payment_ops_queue_refund_related',
+  NEEDS_ACTION: 'web.payment_ops_queue_needs_action',
 };
 
 const QUEUE_HINTS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
@@ -304,6 +510,7 @@ const QUEUE_HINTS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
   LATE_COMPLETION: 'web.payment_ops_queue_hint_late_completion',
   PROVIDER_ERROR: 'web.payment_ops_queue_hint_provider_error',
   REFUND_RELATED: 'web.payment_ops_queue_hint_refund_related',
+  NEEDS_ACTION: 'web.payment_ops_queue_hint_needs_action',
 };
 
 /** The created-at presets the workspace offers; the server resolves each in the tenant calendar. */
@@ -514,6 +721,12 @@ export function PaymentsPage({
       ),
     },
     {
+      // Roadmap E1: the server's situation, beside the state and never instead of it.
+      key: 'situation',
+      header: t('web.payment_situation_column'),
+      render: (row) => <SituationBadge value={row.situation} />,
+    },
+    {
       /*
        * How the receipt left review, beside the state rather than instead of it: the state
        * is the payment's, this is the receipt's (WP10 follow-up §5).
@@ -647,7 +860,7 @@ export function PaymentsPage({
             >
               {t('web.payment_ops_queue_all')}
             </FilterChip>
-            {PAYMENT_OPS_QUEUES.map((one) => (
+            {QUEUE_ORDER.map((one) => (
               <FilterChip
                 key={one}
                 pressed={queue === one}
@@ -1506,6 +1719,7 @@ export function PaymentDetailPage({
             <TwoColumn
               main={
                 <>
+                  <SituationCard value={row.situation} />
                   <Card title={t('web.payment_detail')}>
                     <KV
                       items={[

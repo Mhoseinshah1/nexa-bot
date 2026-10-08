@@ -1068,6 +1068,25 @@ describe('WP19 — a customer asks for their money back', () => {
     expect((await requestRow(filed.request.id))?.request.state).toBe('EXECUTING');
   });
 
+  it('keeps a request’s reserved refund out of the operator’s work queue, and still refund-related (roadmap E2, CX3)', async () => {
+    const service = await activeService('reservation-queue');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    const payment = await ctx.container.payments.get(tenantA, owner, filed.request.paymentId);
+    const read = (await ctx.container.payments.situations(tenantA, owner, [payment])).get(
+      payment.id,
+    );
+    // Its workflow settles it, and complete/fail refuse it: no SETTLE_REFUND, no work item.
+    expect(read?.queues).toContain('REFUND_RELATED');
+    expect(read?.queues).not.toContain('NEEDS_ACTION');
+    expect(read?.guide.situation).not.toBe('REFUND_IN_PROGRESS');
+    expect(read?.guide.actions).not.toContain('SETTLE_REFUND');
+    expect(read?.guide.needsAction).toBe(false);
+  });
+
   it('refuses to announce a reservation closed elsewhere without its credit, and settles the next request anyway', async () => {
     // A rollback past WP19 runs a release whose operator `complete` knows nothing of
     // reservations: a hand-made call moves the reserved refund to COMPLETED with no

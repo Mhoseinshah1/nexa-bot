@@ -99,8 +99,18 @@ describe('the customer notification lane', () => {
   }
 
   /** A lane whose messenger is ours, so an outcome is a fixture rather than a network. */
-  function lane(options: { readonly stillHolds?: boolean; readonly active?: boolean } = {}) {
+  function lane(
+    options: {
+      readonly stillHolds?: boolean;
+      readonly active?: boolean;
+      /** Roadmap E6: wire the tracking-code reader production wires. */
+      readonly references?: boolean;
+    } = {},
+  ) {
     return new CustomerNotificationService({
+      ...(options.references === true
+        ? { paymentReferences: new DrizzlePaymentRepository(ctx.container.database.db) }
+        : {}),
       // The ledger reader the refund sentence renders from; the real repository,
       // so a test cannot assert a figure the production query would not produce.
       refundFigures: new DrizzleWalletRepository(ctx.container.database.db),
@@ -266,6 +276,38 @@ describe('the customer notification lane', () => {
     const again = await sweep(lane());
     expect(again.claimed).toBe(0);
     expect(sends).toHaveLength(1);
+  });
+
+  it('quotes the payment’s tracking code on a rejection, an expiry and a recorded claim (roadmap E6)', async () => {
+    const id = await customer(tenantA, '5090');
+    const paymentRow = async (state: 'FAILED' | 'EXPIRED' | 'PENDING', reference: string) => {
+      const paymentId = ctx.container.ids.uuid();
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO payments (id, tenant_id, customer_id, method, state, amount, currency,
+                              reference, resolved_at, expires_at)
+        VALUES (${paymentId}, ${tenantA.tenantId}, ${id}, 'MANUAL_TRANSFER', ${state}, 1000,
+                'IRT', ${reference}, ${state === 'PENDING' ? null : new Date()},
+                ${new Date(Date.now() + 3_600_000)})`);
+      return paymentId;
+    };
+    const rejected = await paymentRow('FAILED', 'e6-rejected-ref');
+    const expired = await paymentRow('EXPIRED', 'e6-expired-ref');
+    const claimed = await paymentRow('PENDING', 'e6-claimed-ref');
+    await enqueue(tenantA, id, 'PAYMENT_REJECTED', rejected);
+    await enqueue(tenantA, id, 'PAYMENT_EXPIRED', expired);
+    await enqueue(tenantA, id, 'PAYMENT_TRANSFER_RECORDED', claimed);
+
+    await sweep(lane({ references: true }));
+    const byKey = new Map(sends.map((one) => [one.templateKey, one.values]));
+    // A rejection recorded with no administrator has no reason: a dash, never a sentence.
+    expect(byKey.get('bot.payment.rejected')).toEqual({
+      reason: '\u2014',
+      reference: 'e6-rejected-ref',
+    });
+    expect(byKey.get('bot.payment.expired')).toEqual({ reference: 'e6-expired-ref' });
+    expect(byKey.get('bot.payment.received_for_review')).toEqual({
+      reference: 'e6-claimed-ref',
+    });
   });
 
   it('a rate limit spends NO attempt and leaves the row claimable at Telegram’s time', async () => {

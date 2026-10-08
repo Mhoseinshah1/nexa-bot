@@ -59,6 +59,7 @@ const zero: PaymentOpsQueueCounts = {
   LATE_COMPLETION: 0,
   PROVIDER_ERROR: 0,
   REFUND_RELATED: 0,
+  NEEDS_ACTION: 0,
 };
 
 describe('the gateway health operational codes', () => {

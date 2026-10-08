@@ -61,10 +61,11 @@ const RECEIPT_RECEIVED_TEXT =
  * A10: the invoice's final, button-less text — rendered from the catalogue and compared
  * EXACTLY, because the receipt prompt opens with the same first sentence.
  */
-const INVOICE_FINAL_TEXT = plain(CATALOGUE_FA['bot.payment.received_for_review']).replace(
-  '{icon:info}',
-  'ℹ️',
-);
+const invoiceFinalText = (reference: string): string =>
+  plain(CATALOGUE_FA['bot.payment.received_for_review'])
+    .replace('{icon:info}', 'ℹ️')
+    // Roadmap E6: the tracking code the invoice carried stays on its final state.
+    .replace('{reference}', reference);
 
 interface Sent {
   readonly url: string;
@@ -313,7 +314,7 @@ describe('the customer payment flow over Telegram', () => {
   const payments = async () =>
     (
       await api.container.database.db.execute(
-        sql`SELECT id, state, method, amount, currency, evidence_kind, order_id
+        sql`SELECT id, state, method, amount, currency, evidence_kind, order_id, reference
             FROM payments ORDER BY created_at ASC` as never,
       )
     ).rows as Record<string, unknown>[];
@@ -723,7 +724,9 @@ describe('the customer payment flow over Telegram', () => {
     const [final, fresh] = turn;
     expect(final?.url).toContain('/editMessageText');
     expect(final?.body['message_id']).toBe(invoice);
-    expect(String(final?.body['text'])).toBe(INVOICE_FINAL_TEXT);
+    expect(String(final?.body['text'])).toBe(
+      invoiceFinalText(String((await payments())[0]?.['reference'])),
+    );
     // The keyboard is sent EMPTY, which is what removes the old one.
     expect(final?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     // …then ONE new message, the brief's copy word for word, with no button.
@@ -805,6 +808,12 @@ describe('the customer payment flow over Telegram', () => {
     await photo('late-receipt');
     expect(newMessages()).toHaveLength(1);
     expect(String(newMessages()[0]?.body['text'])).toContain('مهلت ارسال رسید به پایان رسید');
+    /*
+     * Roadmap E6: the sentence says "press the button below", and the button IS below — the
+     * same «send receipt» tap, for this payment. The prompt edited the invoice's own button
+     * away, so without it the remedy named a button that was nowhere.
+     */
+    expect(buttonsOf(newMessages()[0]).map((b) => b.callback_data)).toEqual([`i:${payment}`]);
     // The invoice is left at the prompt: nothing was received, so nothing is final.
     expect(
       sent.filter(
@@ -812,6 +821,112 @@ describe('the customer payment flow over Telegram', () => {
       ),
     ).toHaveLength(0);
     expect(await receiptsFiled(payment)).toBe(0);
+  });
+
+  it('reopens the window from the expired reply’s button, and then files the receipt (E6)', async () => {
+    const { payment } = await atReceiptPrompt();
+    await api.container.database.db.execute(sql`
+      UPDATE receipt_captures
+         SET opened_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'
+       WHERE payment_id = ${payment} AND closed_at IS NULL`);
+    sent = [];
+    await photo('late-receipt');
+    const expiredReply = newMessages()[0];
+    expect(buttonsOf(expiredReply).map((b) => b.callback_data)).toEqual([`i:${payment}`]);
+
+    // The tap is a NEW key: it opens a new window, exactly as the invoice's button did.
+    sent = [];
+    await tap(`i:${payment}`, { message: (updateId += 1) });
+    const prompt = messages().at(-1);
+    expect(String(prompt?.body['text'])).toContain('تصویر رسید');
+
+    sent = [];
+    await photo('receipt-after-reopen');
+    expect(await receiptsFiled(payment)).toBe(1);
+    expect(newMessages().map((one) => String(one.body['text']))).toEqual([RECEIPT_RECEIVED_TEXT]);
+    // Nothing moved: the receipt is evidence, the payment still waits for a reviewer.
+    expect((await payments())[0]?.['state']).toBe('PENDING');
+  });
+
+  it('answers a late receipt for a payment that can no longer take one with not_pending, and no button (E6)', async () => {
+    const { payment } = await atReceiptPrompt();
+    await api.container.database.db.execute(sql`
+      UPDATE receipt_captures
+         SET opened_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'
+       WHERE payment_id = ${payment} AND closed_at IS NULL`);
+    // The payment's own deadline has passed too; the sweep has not reached it yet.
+    await api.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment}`,
+    );
+    sent = [];
+    await photo('too-late-receipt');
+    expect(newMessages()).toHaveLength(1);
+    expect(String(newMessages()[0]?.body['text'])).toBe(
+      plain(CATALOGUE_FA['bot.payment.not_pending']),
+    );
+    expect(buttonsOf(newMessages()[0])).toEqual([]);
+    expect(await receiptsFiled(payment)).toBe(0);
+  });
+
+  it('answers a late receipt for a receipted payment past its deadline as under review, with its code (m2)', async () => {
+    const { payment } = await atReceiptPrompt();
+    await photo('first-before-deadline');
+    await api.container.database.db.execute(sql`
+      UPDATE receipt_captures
+         SET opened_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'
+       WHERE payment_id = ${payment}`);
+    await api.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment}`,
+    );
+    sent = [];
+    await photo('clearer-copy-later');
+    expect(newMessages()).toHaveLength(1);
+    // Still waiting for a reviewer — never "no longer pending", which invites a second payment.
+    expect(String(newMessages()[0]?.body['text'])).toBe(
+      invoiceFinalText(String((await payments())[0]?.['reference'])),
+    );
+    expect(buttonsOf(newMessages()[0])).toEqual([]);
+  });
+
+  it('still edits the invoice into its final state when reading the code throws (m4)', async () => {
+    const { invoice } = await atReceiptPrompt();
+    const receipts = (
+      api.container.botRuntime as unknown as {
+        deps: { receipts: { trackingCodeForCustomer: (...args: unknown[]) => Promise<unknown> } };
+      }
+    ).deps.receipts;
+    const spy = vi
+      .spyOn(receipts, 'trackingCodeForCustomer')
+      .mockRejectedValue(new Error('code unreadable'));
+    try {
+      sent = [];
+      await photo('code-unreadable');
+    } finally {
+      spy.mockRestore();
+    }
+    const final = sent.filter(
+      (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
+    );
+    // The edit happened, button-less, with the code's line dropped rather than the edit.
+    expect(String(final.at(-1)?.body['text'])).toBe(invoiceFinalText('X').split('\n\n')[0]);
+    expect(final.at(-1)?.body['reply_markup']).toEqual({ inline_keyboard: [] });
+  });
+
+  it('keeps the tracking code on the claim reply when no window can open (R8)', async () => {
+    const orderId = await awaitingPayment();
+    const invoiceTap = (updateId += 1);
+    await tap(`m:${orderId}`, { update: invoiceTap });
+    const payment = String((await payments())[0]?.['id']);
+    // Past its own deadline, not yet swept: the claim is recorded, no window is promised.
+    await api.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = now() - interval '1 second' WHERE id = ${payment}`,
+    );
+    sent = [];
+    await tap(`i:${payment}`, { message: invoiceTap });
+    const reply = messages().at(-1);
+    expect(String(reply?.body['text'])).toBe(
+      invoiceFinalText(String((await payments())[0]?.['reference'])),
+    );
   });
 
   /*
@@ -921,7 +1036,9 @@ describe('the customer payment flow over Telegram', () => {
       (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
     );
     const lastOnInvoice = onInvoice.at(-1);
-    expect(String(lastOnInvoice?.body['text'])).toBe(INVOICE_FINAL_TEXT);
+    expect(String(lastOnInvoice?.body['text'])).toBe(
+      invoiceFinalText(String((await payments())[0]?.['reference'])),
+    );
     expect(lastOnInvoice?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     // The receipt's one new message went out once, although it never found the invoice.
     expect(
@@ -975,7 +1092,9 @@ describe('the customer payment flow over Telegram', () => {
     const onInvoice = sent.filter(
       (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
     );
-    expect(String(onInvoice.at(-1)?.body['text'])).toBe(INVOICE_FINAL_TEXT);
+    expect(String(onInvoice.at(-1)?.body['text'])).toBe(
+      invoiceFinalText(String((await payments())[0]?.['reference'])),
+    );
     expect(onInvoice.at(-1)?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     expect(
       sent.filter(

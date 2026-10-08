@@ -3748,6 +3748,19 @@ and `OQ-T-4` are live again and apply to inline buttons too.
     value. If a panel spells it differently, correct `readLastSeen` AND the fake in one
     commit.
 
+## OQ-E — payments roadmap E1–E6 (2026-10-07)
+
+- **OQ-E6-01 — one label for the tracking code.** The invoice labels the payment's code
+  «شناسه فاکتور» (the owner's invoice layout) while every later message labels the same
+  `payments.reference` «کد پیگیری پرداخت». Unifying the label is the owner's copy decision
+  (`docs/payments-under-review-ux.md` §6). Also: `bot.payment.expired` now quotes the code
+  of a closed payment, while `bot.payment.cancelled` says the old code is no longer valid; the
+  owner may want the expiry copy to say the code is for support only (review of PR #243).
+- **OQ-E2-01 — late or partial money on an ended attempt has no work-queue exit.** It is kept
+  out of `NEEDS_ACTION` (which must drain) and visible in its own facets until `OQ-WP11A-03`
+  decides between "credit by hand" and "nothing"; a domain resolution, if decided, joins the
+  queue with its exit.
+
 ## OQ-TG-06 — a network error that certainly sent nothing is still filed UNKNOWN
 
 Status: OPEN, deliberately conservative (roadmap D1, `docs/telegram-robustness-audit.md`).
