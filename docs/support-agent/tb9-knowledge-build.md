@@ -126,6 +126,11 @@ in is read **once**, as the reviewed article: the live FAQ row is skipped when a
 enabled `NEXA_BUILD` article holds `FAQ:<id>`. A disabled or retired built FAQ article lets
 the live FAQ entry show again (OQ-TB-61).
 
+Since A8 (2026-10-07) an article reaches a request only when the conversation's query matches
+it — the customer's words, the last intent and topic, the titles cited before, an open
+troubleshooting episode — and at most eight do (`tb3-support-context.md`, "A8"). A built
+article whose title and tags name what customers actually write is the one that is found.
+
 ## Web Admin
 
 «ساخت دانش از NEXA» (`/knowledge-build`, `support_knowledge.view`): run (a fresh key per click),

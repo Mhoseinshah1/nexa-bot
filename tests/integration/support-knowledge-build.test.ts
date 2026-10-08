@@ -182,7 +182,11 @@ describe('the knowledge build (TB9)', () => {
 
   it('the TB3 context carries a built FAQ entry once, as knowledge', async () => {
     await applyAll((await build()).build.id);
-    const { payload } = await ctx.container.supportContext.build(tenantA, null);
+    // A8: the context carries only knowledge the query matches, so the probe asks with the
+    // entry's own words; its state, not a missing word, decides whether it is there.
+    const { payload } = await ctx.container.supportContext.build(tenantA, null, {
+      query: 'چطور وصل شوم؟',
+    });
     const faqEntries = payload.knowledge.filter((k) => k.question === 'چطور وصل شوم؟');
     expect(faqEntries).toEqual([
       {
@@ -643,9 +647,9 @@ describe('the knowledge build (TB9)', () => {
   it('S2: a product made reseller-only is proposed for RETIRE; only a named apply retires it', async () => {
     await applyAll((await build()).build.id);
     const inContext = async () =>
-      (await ctx.container.supportContext.build(tenantA, null)).payload.knowledge.map(
-        (k) => k.question,
-      );
+      (
+        await ctx.container.supportContext.build(tenantA, null, { query: 'پلن عمومی' })
+      ).payload.knowledge.map((k) => k.question);
     expect(await inContext()).toContain('پلن عمومی');
     await ctx.container.database.db.execute(
       sql`UPDATE products SET audience = 'RESELLERS_ONLY' WHERE id = ${productId}`,

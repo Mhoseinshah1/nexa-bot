@@ -582,7 +582,7 @@ describe('the order list', () => {
      */
     stubApi(orderList([order()]));
     window.history.replaceState(null, '', '/orders?state=PAID');
-    renderPage(
+    const first = renderPage(
       <OrdersPage
         route={{ path: '/orders', query: new URLSearchParams({ state: 'PAID' }) }}
         denied={false}
@@ -601,6 +601,13 @@ describe('the order list', () => {
       expect(applied.get('state'), 'the state filter was dropped').toBe('PAID');
     });
 
+    /*
+     * The page as the router renders it AFTER that navigation. The first render is
+     * unmounted: it holds a static route prop that never sees the applied `q`, and the
+     * search box now applies itself (roadmap B4), so a copy left mounted would re-apply
+     * its typed text after Clear — an artifact of two pages on one URL, not the app.
+     */
+    first.unmount();
     const api = stubApi(orderList([order()]));
     renderPage(
       <OrdersPage

@@ -81,6 +81,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import { ListFreshness } from '../ui/list-search';
 import { Icon } from '../ui/icons';
 
 /**
@@ -471,7 +472,11 @@ export function TicketsPage({
 
   return (
     <>
-      <PageHead title={t('web.tickets_title')} subtitle={t('web.tickets_intro')} />
+      <PageHead
+        title={t('web.tickets_title')}
+        subtitle={t('web.tickets_intro')}
+        actions={<ListFreshness query={tickets} hidden={!requestable} />}
+      />
 
       <Card>
         <FilterBar hidden={!requestable}>

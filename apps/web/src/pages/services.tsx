@@ -28,7 +28,12 @@ import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
-import { ListSearchBox, appliedListSearch } from '../ui/list-search';
+import {
+  ClearFiltersButton,
+  ListFreshness,
+  ListSearchBox,
+  appliedListSearch,
+} from '../ui/list-search';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import { ChipGroup } from './commerce-parts';
 import {
@@ -241,6 +246,17 @@ function Bytes({ bytes }: { bytes: bigint }) {
 // List
 // ---------------------------------------------------------------------------
 
+/** Every URL key the service list filters on, its search included (`ClearFiltersButton`). */
+const SERVICE_FILTER_KEYS = [
+  'q',
+  'state',
+  'deliveryState',
+  'panelId',
+  'productId',
+  'locationKey',
+  'expiring',
+] as const;
+
 export function ServicesPage({
   route,
   denied,
@@ -384,7 +400,11 @@ export function ServicesPage({
 
   return (
     <>
-      <PageHead title={t('web.services_title')} subtitle={t('web.services_intro')} />
+      <PageHead
+        title={t('web.services_title')}
+        subtitle={t('web.services_intro')}
+        actions={<ListFreshness query={services} hidden={toolbarHidden} />}
+      />
       {/* Its own permission, not the list's: `refunds.view` alone reaches the queue (WP19). */}
       {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
@@ -392,6 +412,8 @@ export function ServicesPage({
         <ListSearchBox
           route={route}
           id="services-search"
+          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
+          autoApply
           hint={t('web.services_search_hint')}
           hidden={toolbarHidden}
           // A new search starts at the first page: this list keeps its cursor in the URL.
@@ -431,6 +453,7 @@ export function ServicesPage({
               })),
             ]}
           />
+          <ClearFiltersButton route={route} keys={SERVICE_FILTER_KEYS} />
         </div>
         {!toolbarHidden && (
           <ServiceFilterSelects

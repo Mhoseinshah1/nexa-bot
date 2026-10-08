@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  SUPPORT_CONTEXT_MAX_BYTES,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_HOURS,
   supportContextPayloadSchema,
   type ActorContext,
@@ -464,7 +465,11 @@ describe('TB3 — support context', () => {
     });
     const before = await writeCount();
 
-    const { payload } = await ctx.container.supportContext.build(tenantA, null);
+    // A8: knowledge is what the query matches; «active» matches both FAQs, and the INACTIVE one
+    // stays out by its state.
+    const { payload } = await ctx.container.supportContext.build(tenantA, null, {
+      query: 'active off',
+    });
     expect(payload.customer).toBeNull();
     expect(payload.services).toEqual([]);
     expect(payload.orders).toEqual([]);
@@ -586,10 +591,20 @@ describe('TB3 — support context', () => {
     );
     for (let i = 0; i < 5; i += 1) await payment(me, { state: 'CONFIRMED', minutesAgo: i + 1 });
     for (let i = 0; i < 3; i += 1) await incident({ message: 'پ'.repeat(1500) });
+    // A8: relevant knowledge inside its reserve holds its share, so the account facts must give way.
+    for (let i = 0; i < 3; i += 1) {
+      await run(sql`INSERT INTO support_faqs (id, tenant_id, question, answer, status, sort_order,
+                                              version, created_at, updated_at)
+                    VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${`اتصال ${String(i)}`},
+                            ${'ج'.repeat(1500)}, 'ACTIVE', ${i + 1}, 1, now(), now())`);
+    }
 
-    const built = await ctx.container.supportContext.build(tenantA, me);
+    const built = await ctx.container.supportContext.build(tenantA, me, { query: 'اتصال' });
     const { payload, references } = built;
-    expect(new TextEncoder().encode(JSON.stringify(payload)).length).toBeLessThanOrEqual(16 * 1024);
+    expect(payload.knowledge).toHaveLength(3);
+    expect(new TextEncoder().encode(JSON.stringify(payload)).length).toBeLessThanOrEqual(
+      SUPPORT_CONTEXT_MAX_BYTES,
+    );
     // The budget really cut: the test is about what survives a cut.
     expect(payload.services.length).toBeLessThan(10);
     expect(payload.incidents).toHaveLength(3);
