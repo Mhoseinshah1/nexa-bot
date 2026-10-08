@@ -41,6 +41,10 @@ holds. When it cannot, nobody pretends that it did.
 - **Kept.** The 5 MiB per-image bound, the magic-byte sniff, the unseen-image fail-closed rule,
   and no OCR.
 
+A9 tests: `support-ai-vision.test.ts` (detail, four images, the total) and
+`support-vision.test.ts` (four images end to end). Mutation results:
+`sai-vision-eval-falsification.md`.
+
 ## Decisions made in this package
 
 1. **Fail closed: a HANDOFF draft that no model wrote.** If the customer's latest message is an image nothing could process, the `assistant` role asks no model. The possible causes are: vision off, no capable step, too large, wrong type, download failure, or a missing reference. The draft is `READY` with `decision: HANDOFF`, topic `OTHER`, confidence `LOW`, an empty reply, no provider, `imagesSeen: 0`, and `unseenImageHandoff` set to the reason. The other option was to tell the model to ask for a text description, but that still sends a model a turn about an image it cannot see. It answers the caption, or nothing, as if it had looked, and its output is the only evidence that it did not pretend. A CHECK pins the draft's shape: HANDOFF, no provider, no model, no summary, nothing seen, and an empty reply, or no reply once retention has purged it. The same applies when vision steps exist but none of the configured steps could take this image: the chain returns `NO_VISION_STEP` without calling any step, and raises no outage alert because nothing failed. In Assist mode the draft only flags the conversation for the operator. It does not change the conversation's state, which stays TB7's responsibility.

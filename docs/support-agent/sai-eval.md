@@ -97,6 +97,8 @@ asked: «سلام وقت بخیر» selected the expiry article, because «وق�
 (when) in its body. «وقت», «وقتی», «بخیر» and «درود» are now stop words
 (`knowledge-relevance.ts`), pinned by `support-knowledge-query.test.ts`.
 
+Mutation results are in `sai-vision-eval-falsification.md`.
+
 ## NOT RUN
 
 | Item                                                       | Status  |

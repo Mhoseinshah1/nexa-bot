@@ -42,7 +42,7 @@ M=[
  ('SAI-E08',[(RUNNER,"      (checks.retrieval ?? true) && first === expect.topKnowledge,","      (checks.retrieval ?? true) && first.length >= 0,")],E,'a wrong first article'),
  ('SAI-E09',[(RUNNER,"    const missing = expect.knowledge.filter((title) => !titles.has(title));","    const missing = expect.knowledge.filter(() => false);")],E,'a wrong first article'),
  ('SAI-E10',[(RELEVANCE,"  'وقت',\n","")],Q,'a greeting matches nothing'),
- ('SAI-E11',[(RELEVANCE,"  'وقت',\n","")],E,'every scenario passes every check'),
+ ('SAI-E11',[(RELEVANCE,"  'وقت',\n  'وقتی',\n","")],E,'every scenario passes every check'),
 ]
 
 only=sys.argv[1:]
