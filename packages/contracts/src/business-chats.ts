@@ -507,15 +507,80 @@ const messageViewSchema = z.object({
   deleted: z.boolean(),
 });
 
+/**
+ * The outbound origins a Web Admin bundle from BEFORE roadmap A4 accepts: its `origin` is a
+ * strict three-value enum, and one value outside it fails the parse of the WHOLE conversation
+ * detail. During a rolling update that bundle reads from a new replica, so `origin` on the wire
+ * stays inside this set for ever (review of PR #248, CX1).
+ */
+export const BUSINESS_OUTBOUND_WIRE_ORIGINS = ['OPERATOR', 'ASSIST', 'AUTO'] as const;
+export type BusinessOutboundWireOrigin = (typeof BUSINESS_OUTBOUND_WIRE_ORIGINS)[number];
+
+/**
+ * The explicit compatibility mapping (CX1, `docs/deployment.md`): a lane origin the old bundle
+ * cannot read goes on the wire as the old value closest to what it is.
+ *
+ * `HANDOFF_NOTICE` → `AUTO`: the notice is a template NEXA sent, not a person's message, so
+ * the old bundle labels it automatic — and, like an automatic reply, never offers it as a
+ * knowledge proposal. (`OPERATOR` would show a person's message nobody wrote.) Its text is
+ * null on the wire (no body is stored), so nothing else about it is misread. The real origin
+ * travels beside it in `laneOrigin`, which the old bundle strips and the new one reads.
+ */
+export function businessOutboundWireOrigin(
+  origin: BusinessOutboundOrigin,
+): BusinessOutboundWireOrigin {
+  return origin === 'HANDOFF_NOTICE' ? 'AUTO' : origin;
+}
+
 const outboundViewSchema = z.object({
   id: z.string(),
-  origin: z.enum(BUSINESS_OUTBOUND_ORIGINS),
+  /** Never outside `BUSINESS_OUTBOUND_WIRE_ORIGINS`; read `businessOutboundOriginOf` instead. */
+  origin: z.enum(BUSINESS_OUTBOUND_WIRE_ORIGINS),
+  /**
+   * CX1 — the row's real lane origin. Optional when READ (an older replica does not send it),
+   * and an origin this bundle does not know reads as absent rather than failing the detail:
+   * the same tolerance, in the other direction, that `origin` keeps for the old bundle.
+   */
+  laneOrigin: z.enum(BUSINESS_OUTBOUND_ORIGINS).optional().catch(undefined),
   state: z.enum(BUSINESS_OUTBOUND_STATES),
   text: z.string().nullable(),
   createdAt: z.string(),
   resolvedAt: z.string().nullable(),
   failureCode: z.string().nullable(),
 });
+export type BusinessOutboundView = z.infer<typeof outboundViewSchema>;
+
+/** CX1 — who wrote an outbound row, as the new bundle reads it: the real origin when sent. */
+export function businessOutboundOriginOf(
+  view: Pick<BusinessOutboundView, 'origin' | 'laneOrigin'>,
+): BusinessOutboundOrigin {
+  return view.laneOrigin ?? view.origin;
+}
+
+/**
+ * CX1 — the ONE projection of a lane row onto the wire; the controller sends exactly this.
+ * Its output parses under the pre-A4 bundle's schema (`tests/unit/business-chat-wire.test.ts`).
+ */
+export function businessOutboundView(row: {
+  readonly id: string;
+  readonly origin: BusinessOutboundOrigin;
+  readonly state: BusinessOutboundState;
+  readonly body: string | null;
+  readonly createdAt: Date;
+  readonly resolvedAt: Date | null;
+  readonly failureCode: string | null;
+}): BusinessOutboundView {
+  return {
+    id: row.id,
+    origin: businessOutboundWireOrigin(row.origin),
+    laneOrigin: row.origin,
+    state: row.state,
+    text: row.body,
+    createdAt: row.createdAt.toISOString(),
+    resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    failureCode: row.failureCode,
+  };
+}
 
 export const businessEscalationViewSchema = z.object({
   id: z.string(),
