@@ -3262,6 +3262,12 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
 
     it('A6: «مرسی، حل شد» ends silently — no reply, no handoff, no ticket — and the chat goes on', async () => {
       const id = await turn('وصل نمیشم', step(0));
+      // The question was asked a minute before the answer (a customer line in the SAME second as
+      // the reply counts as after it — B1 — and this test is faster than any customer).
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = sent_at - interval '1 minute'
+            WHERE conversation_id = ${id}`,
+      );
       await turn('مرسی، حل شد', closing());
       expect(await autoJobs(id)).toMatchObject([
         { state: 'SENT', outcome: 'sent' },
