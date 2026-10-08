@@ -1150,6 +1150,47 @@ if [ "$SYNTHETIC_PANELS" -eq 1 ]; then
   PANEL_MAP="$OUT/panel-map.json"
 fi
 
+# aud5 F5 = aud6 F1: an APPLY run refuses a panel-map `products` entry the approved legacy
+# product review does not export for the source's current products read. So, once, before
+# the cycles' PRE snapshot (every rollback restores it): the products read of the source as
+# the runbook runs it (digest, then the approved ingest) and — synthetic only — the review
+# decision `products-export` would have exported, recorded as the synthetic owner. A staging
+# rehearsal's restored NEXA backup must carry the owner's own review; the harness never
+# decides one for real data.
+review_products_for_import() {
+  local audit fp digest pfp
+  audit="$OUT/logs/c0-products-audit.json"
+  importer audit --format json >"$audit" 2>"$OUT/logs/c0-products-audit.stderr.log" || true
+  fp="$(json_get "$audit" sections.source.fingerprint)"
+  [[ "$fp" =~ ^[0-9a-f]{64}$ ]] || die "the products-read audit printed no source fingerprint; see $audit"
+  products_read() {
+    (
+      NEXA_REHEARSAL_LEGACY_PASSWORD="$(cat "$MDB_RUN/legacy_ro.pw")"
+      export NEXA_REHEARSAL_LEGACY_PASSWORD
+      CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env node "$LEGACY_IMPORT_CLI" products-read \
+        --tenant "$TENANT" \
+        --source "mysql://legacy_ro@127.0.0.1:$MARIADB_PORT/$LEGACY_SCHEMA" \
+        --source-password-env "$P7_SOURCE_PASSWORD_ENV" \
+        --target "$NEXA_DB" --expected-fingerprint "$fp" --format json "$@"
+    )
+  }
+  digest="$OUT/logs/c0-products-digest.json"
+  products_read >"$digest" 2>"$OUT/logs/c0-products-digest.stderr.log" || true
+  pfp="$(json_get "$digest" productsFingerprint)"
+  [[ "$pfp" =~ ^[0-9a-f]{64}$ ]] || die "products-read printed no products fingerprint; see $digest"
+  products_read --expected-products-fingerprint "$pfp" >"$OUT/logs/c0-products-read.json" \
+    2>"$OUT/logs/c0-products-read.stderr.log" ||
+    die "products-read did not ingest; see $OUT/logs/c0-products-read.stderr.log"
+  if [ "$EVIDENCE_CLASS" = "synthetic" ]; then
+    CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env "$TSX_BIN" \
+      "$ROOT/tests/support/legacy-rehearsal-product-approval.ts" --tenant "$TENANT" \
+      --panel-map "$PANEL_MAP" >"$OUT/logs/c0-product-review.json" \
+      2>"$OUT/logs/c0-product-review.stderr.log" ||
+      die "the synthetic product review decision failed; see $OUT/logs/c0-product-review.stderr.log"
+  fi
+}
+run_direct 0 product-review review_products_for_import
+
 LEGACY_SRC="$OUT/snapshots/legacy-source.tsv"
 FINGERPRINT_FIRST=""
 
