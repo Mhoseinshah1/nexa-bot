@@ -433,7 +433,7 @@ ticket, before any provider is paid.
   replies to one conversation in the last 60 minutes, every kind counted, whatever happened in
   between — «سقف پاسخ در یک ساعت» (`guard_window`). This is the loop safety a new session never
   lifts.
-- **Existing tenants** read 20 and 30 from migration `0219`; the old «بیشترین پاسخ خودکار
+- **Existing tenants** read 20 and 30 from migration `0236`; the old «بیشترین پاسخ خودکار
   پیاپی» (default 4, counted for as long as nobody touched the conversation) is gone from the
   page and no longer applies.
 - **During the rollout** (review of PR #241): an `assistant` replica still on the previous

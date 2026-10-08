@@ -78,6 +78,7 @@ the filter that found it cannot disagree.
 | `backup.download`, `backup.archive_downloaded`                                             | `backup.download`                                                     |
 | `recovery.confirm`, `recovery.confirmed`                                                   | `recovery.restore`                                                    |
 | `recovery_kit.exported` / `recovery_kit.imported` / `installation_key.removed`             | `recovery.kit.export` / `recovery.kit.import` / `recovery.key.remove` |
+| `legacy.cutover.approve`, `legacy.cutover.revoke`                                          | `legacy.cutover.approve`                                              |
 
 `wallet.credit` is deliberately absent: it is CRITICAL only above the large-amount threshold,
 and the row does not say which key was charged. `tests/unit/audit-log-contract.test.ts` holds

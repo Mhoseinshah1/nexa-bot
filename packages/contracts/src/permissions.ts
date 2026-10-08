@@ -523,6 +523,129 @@ export const PERMISSIONS = [
   p('recovery.kit.import', 'Import a Recovery Kit as decrypt-only keys', 'CRITICAL'),
   p('recovery.key.remove', 'Remove an imported decrypt-only key', 'CRITICAL'),
 
+  /*
+   * Mirza migration PR2 — the legacy product review (`docs/legacy-product-review-design.md`
+   * §6). A review row is a legacy `product` row read into NEXA for an operator to decide on:
+   * its raw facts, its historical price and its live-invoice count. It carries no Telegram
+   * id, username or balance — but it is business data the legacy owner priced, and nothing
+   * migration-only is handed to the read-only `observer` role by accident: VIEW is MEDIUM,
+   * not LOW, so it is never auto-granted with every LOW key.
+   *
+   * DECIDE is HIGH: an approval is what `products-export` hands the importer's panel map,
+   * and an approved code adopts legacy services as the product it names. Approving AS NEW
+   * additionally needs `catalog.edit` — it creates a product (INACTIVE, HIDDEN, unpriced,
+   * uncategorised, panel-less). Both owner-only by default.
+   */
+  p('legacy.products.view', 'View the legacy product review', 'MEDIUM'),
+  p(
+    'legacy.products.decide',
+    'Approve, reject or reopen a legacy product review row (the mapping the importer is given)',
+    'HIGH',
+  ),
+  /*
+   * Mirza migration PR3 — the legacy invoice archive (`docs/legacy-migration/importer.md`
+   * §Invoice archive). An archive row is one legacy `invoice` row kept as read-only history:
+   * never an order, a payment, a ledger entry or revenue. Two keys, because the blast radius
+   * differs:
+   *
+   * - VIEW (MEDIUM, never auto-granted to `observer` with the LOW keys) reads the archive
+   *   with its personal cells REDACTED: the invoice id, status, panel and product codes,
+   *   the historical price, the classification and the provenance.
+   * - PII (HIGH) additionally reveals the legacy owner's Telegram id, the legacy account
+   *   username, the referrer id and the free-text note, and is what a search BY those
+   *   values needs. Each reveal and each such search is audited (names, never values).
+   *
+   * Owner-only by default. Neither is a SYSTEM_JOB permission; the CLI ingest stays on
+   * maintenance.run.
+   */
+  p('legacy.invoices.view', 'View the legacy invoice archive (personal data redacted)', 'MEDIUM'),
+  p(
+    'legacy.invoices.pii.view',
+    "View and search the legacy invoice archive's personal data (Telegram ids, usernames)",
+    'HIGH',
+  ),
+  /*
+   * Mirza migration PR4 — legacy wallet debts (owner decision 6, 2026-10-07). A negative
+   * legacy `user.Balance` is no longer a ledger DEBIT: it is recorded as a debt beside the
+   * ledger, the customer's NEXA balance starts at 0, and the debt is NEVER collected. A row
+   * names the legacy user (a Telegram id) and an exact amount owed, so:
+   *
+   * - VIEW (MEDIUM, never auto-granted to `observer` with the LOW keys) lists the debts and
+   *   their aggregate.
+   * - DECIDE (HIGH) records the owner's per-customer decision: ACKNOWLEDGED, WAIVED, or back
+   *   to PENDING_REVIEW. No decision moves money — collecting would need a new ledger reason
+   *   and an explicit owner instruction, and neither exists.
+   *
+   * Owner-only by default. Neither is a SYSTEM_JOB permission; the importer records a debt
+   * under maintenance.run, as it posts an opening.
+   */
+  p('legacy.debts.view', 'View the legacy wallet debts held for review', 'MEDIUM'),
+  p(
+    'legacy.debts.decide',
+    'Record the owner decision on a legacy wallet debt (acknowledge, waive, reopen; never collects)',
+    'HIGH',
+  ),
+  /*
+   * Mirza migration PR5 — legacy service candidates (Area D; owner decision 8, 2026-10-07).
+   * Every live legacy invoice the importer considered as a service gets exactly one
+   * deterministic outcome; one that was not adopted stays archived history. A candidate names
+   * a legacy invoice, a panel and product code, and the inventory evidence behind its outcome,
+   * so:
+   *
+   * - VIEW (MEDIUM, never auto-granted to `observer` with the LOW keys) lists the candidates,
+   *   their outcomes and evidence. Personal data (the legacy user id and username) is shown
+   *   only to a holder of `legacy.invoices.pii.view` as well.
+   * - DECIDE (HIGH) records the operator's review decision: ACKNOWLEDGE, KEEP_AS_HISTORY,
+   *   reopen, or an explicit ADOPT approval — the only way an invoice with an empty
+   *   `code_panel` may ever be adopted (owner decision 8). An approval is executed by the
+   *   next import run, which re-runs every adoption check against the inventory it walks
+   *   and adopts through the one P6 path. No provider write, ever.
+   *
+   * Owner-only by default. Neither is a SYSTEM_JOB permission; the importer records outcomes
+   * and executes approvals under maintenance.run.
+   */
+  p(
+    'legacy.services.view',
+    'View the legacy service candidates and their adoption outcomes',
+    'MEDIUM',
+  ),
+  p(
+    'legacy.services.decide',
+    'Review a legacy service candidate (acknowledge, keep as history, reopen, approve an adoption)',
+    'HIGH',
+  ),
+  /*
+   * Mirza migration PR6 — the final cutover approval (owner constraint 3; `docs/legacy-
+   * migration/cutover-runbook.md` §Owner approval). An approval is the owner's record, in
+   * the database, that ONE frozen legacy snapshot may be imported into this installation:
+   * it names the v1 source fingerprint, the panel-map fingerprint, the inventory, products
+   * and invoice-archive read-set fingerprints, the freeze proof file's SHA-256 and the final
+   * dump's SHA-256. A production-like import refuses without one matching every value it is
+   * given; any changed value voids it. A second kind, RERUN_OVER_PRIOR_IMPORT, is the
+   * owner's explicit acknowledgement that a newer snapshot is imported over an earlier
+   * import (SOURCE_SUPERSEDED otherwise).
+   *
+   * - VIEW (MEDIUM, never auto-granted to `observer` with the LOW keys) lists the approvals,
+   *   their revocations and the recorded read sets they can bind to. Fingerprints and
+   *   digests only — no legacy row.
+   * - APPROVE (CRITICAL) records or revokes one. It is what lets real legacy money and
+   *   accounts into the installation, the same blast radius as `recovery.restore`, so it is
+   *   CRITICAL and owner-only. Made by the authenticated owner in the Web Admin — never by
+   *   the CLI, whose SYSTEM_JOB actor could only TYPE a name — and read by the importer.
+   *
+   * Neither is a SYSTEM_JOB permission; the importer reads approvals under maintenance.run.
+   */
+  p(
+    'legacy.cutover.view',
+    'View the legacy cutover approvals and the read sets they bind',
+    'MEDIUM',
+  ),
+  p(
+    'legacy.cutover.approve',
+    'Record or revoke the owner approval of a legacy import snapshot (the final cutover)',
+    'CRITICAL',
+  ),
+
   // Platform
   p('tenant.cross_read', 'Read data across tenants', 'CRITICAL'),
   p('maintenance.run', 'Run maintenance operations', 'CRITICAL'),
@@ -938,6 +1061,19 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
    */
   'support_knowledge.propose': 'business_chats.view',
   'support_knowledge.review': 'support_knowledge.view',
+  /*
+   * Mirza PR2. A decision is made FROM a review row — its raw facts and the checksum the
+   * decision binds to — which `legacy.products.view` reads.
+   */
+  'legacy.products.decide': 'legacy.products.view',
+  /* Mirza PR3. Personal data is revealed ON the archive rows `legacy.invoices.view` reads. */
+  'legacy.invoices.pii.view': 'legacy.invoices.view',
+  /* Mirza PR4. A decision is made FROM the debt row `legacy.debts.view` reads. */
+  'legacy.debts.decide': 'legacy.debts.view',
+  /* Mirza PR5. A decision is made FROM the candidate `legacy.services.view` reads. */
+  'legacy.services.decide': 'legacy.services.view',
+  /* Mirza PR6. An approval is recorded FROM the read sets `legacy.cutover.view` lists. */
+  'legacy.cutover.approve': 'legacy.cutover.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass

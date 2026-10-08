@@ -25,12 +25,12 @@ nothing.
   them to `[]` and `HIGH`).
 - `maxConsecutiveClarifyingQuestions` («حداکثر سؤال تکمیلی پیاپی», hotfix 2026-10-06) is 3 by
   default since roadmap A2 (it was 2), 1–10. Migration `0218` added it with the default 2, so
-  every tenant that existed then STORES 2; migration `0219` changes only the column default to
+  every tenant that existed then STORES 2; migration `0236` changes only the column default to
   3 and rewrites no row, so those tenants keep 2 until an owner changes it, and a tenant with
   no row (or a row written later without the field) reads 3. See «Clarifying questions» below.
 - `sessionReplyBudget` («سقف پاسخ خودکار در هر جلسه», roadmap A1) is 20 by default, 5–40, and
   `maxAutoRepliesPerHour` («سقف پاسخ خودکار در هر ساعت») is 30 by default, 10–60. Migration
-  `0219` added both with those defaults, so every existing tenant reads 20 and 30. They replace
+  `0236` added both with those defaults, so every existing tenant reads 20 and 30. They replace
   `maxConsecutiveReplies` (default 4, per epoch) and the fixed 10 per hour. See «Session reply
   budget and the hourly limit» below.
 
@@ -178,7 +178,7 @@ warns about the widening before the save.
 Each reads only what NEXA recorded — the transcript the job already reads, and when the AI's part
 in this epoch began (`epochStartedAt`: the earliest message that triggered an automatic job at the
 epoch, so a takeover or a return to the AI starts every count again) — and each hands off with its
-own guard, outcome and reason (contract commit; CHECKs widened by `0220`).
+own guard, outcome and reason (contract commit; CHECKs widened by `0237`).
 
 | Guard             | When                     | Rule                                                                                                                                                                                                                                                                                                                                                                                                                               | Outcome / reason                            |
 | ----------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
@@ -265,7 +265,7 @@ What the review changed in the rules above. Each change has a test and a mutant 
   - The race "a takeover commits between the send stamp and Telegram's answer" is the same window every AUTO reply has, and is accepted (n5).
 - **A5, context bounds (M1).**
   - The fallback context comes only from an automatic decision of the epoch that just ended, written inside the 30-day retention.
-  - When the summary or intent is copied from such a decision, `context_from` keeps its time (migration `0221`). The purge then uses the older of `context_from` and the row's own `created_at`, so a copy never outlives its source.
+  - When the summary or intent is copied from such a decision, `context_from` keeps its time (migration `0238`). The purge then uses the older of `context_from` and the row's own `created_at`, so a copy never outlives its source.
   - The deciding decision's own summary, topic and intent are passed into `handOff` and win over the fallback (m6).
   - Steps tried counts only the replies Telegram confirmed DELIVERED, excluding free greetings (CX5).
 - **A6, the silent close (CX1, CX2, m2).**
@@ -282,7 +282,7 @@ What the review changed in the rules above. Each change has a test and a mutant 
 - **Rolling deploy (m8, n6).** The run-time classifier counts an unknown outcome by its family instead of throwing. See the runbook §16 rollout notes for an older replica.
 - **n4.** `support_ai_jobs_auto_epoch_idx` makes `epochStartedAt` read exactly one epoch's automatic jobs.
 
-## Schema (migrations `0205`, `0206`, `0218`, `0219`, `0220`, `0221`)
+## Schema (migrations `0205`, `0206`, `0218`, `0236`, `0237`, `0238`)
 
 - `support_ai_jobs` gains the following columns. A CHECK pins the shape of an automatic job.
   - `trigger_telegram_message_id`, `trigger_content_version`;
@@ -300,17 +300,17 @@ What the review changed in the rules above. Each change has a test and a mutant 
 - `0218` (hotfix 2026-10-06) adds `support_ai_configs.max_consecutive_clarifying_questions`
   (integer, NOT NULL, DEFAULT 2, CHECK 1–10) and widens the same four CHECKs
   (+`CLARIFYING_LIMIT`; +`sent_clarifying`, `guard_clarifying_limit`).
-- `0219` (roadmap A1/A2, numbered on its branch; the lead renumbers at the final sync) adds
+- `0236` (roadmap A1/A2; numbered 0219 on its branch, renumbered after the Mirza stack) adds
   `session_reply_budget` (DEFAULT 20, CHECK 5–40) and `max_auto_replies_per_hour` (DEFAULT 30,
   CHECK 10–60), sets the column default of `max_consecutive_clarifying_questions` to 3 (no row
   rewritten) and gives the retired `max_consecutive_replies` a DEFAULT 4. Additive only.
-- `0220` (roadmap A3–A5) widens the four CHECKs built from `BUSINESS_HANDOFF_REASONS`
+- `0237` (roadmap A3–A5) widens the four CHECKs built from `BUSINESS_HANDOFF_REASONS`
   (+`NO_PROGRESS`, `REPEATED_ADVICE`, `INBOUND_FLOOD`) and `SUPPORT_AI_AUTO_OUTCOMES`
   (+`guard_no_progress`, `guard_repeated_advice`, `guard_inbound_flood`, `no_action`), the lane's
   origin CHECK (+`HANDOFF_NOTICE`) and author CHECK; adds `business_outbound_messages.template_key`
   with its shape CHECK, and `business_conversation_escalations.topic` (CHECK ⊆ topics), `intent`
   (≤ 600) and `steps_tried` (≥ 0). Additive only.
-- `0221` (review of PR #246) adds `business_conversation_escalations.context_from` (M1) and the
+- `0238` (review of PR #246) adds `business_conversation_escalations.context_from` (M1) and the
   partial index `support_ai_jobs_auto_epoch_idx` (n4). Additive only.
 
 No grants are needed (no new permission).

@@ -35,6 +35,27 @@ export interface LegacyImportReport {
    * `docs/legacy-migration/final-report.schema.json`; `--format json` prints exactly it.
    */
   readonly final?: unknown;
+  /**
+   * `report` mode only (Mirza PR4): the users-and-wallets section
+   * (`LEGACY_USERS_WALLETS_SECTION_VERSION`), rendered after the final report in markdown.
+   * NOT in `--format json`, which prints the closed v1 document exactly; `reconcile` carries
+   * the same section in its JSON `sections`. PR6 folds it into schema version 2.
+   */
+  readonly usersWallets?: unknown;
+  /**
+   * `report` mode only (Mirza PR5): the service outcomes section
+   * (`LEGACY_SERVICE_OUTCOMES_SECTION_VERSION`), rendered after the users-and-wallets one in
+   * markdown and, like it, NOT in `--format json` (the closed v1 document); `reconcile`
+   * carries it in its JSON `sections`. PR6 folds it into schema version 2.
+   */
+  readonly serviceOutcomes?: unknown;
+  /**
+   * `report` mode only (Mirza PR6): the final report, schema version 2
+   * (`docs/legacy-migration/final-report-v2.schema.json`) — the v1 document unchanged as
+   * `core`, every later section with its version, the seven invariants and the verdict.
+   * `--format json` prints it (`--report-schema 1` prints `final` instead).
+   */
+  readonly finalV2?: unknown;
 }
 
 export interface LegacyReportInvocation {
@@ -143,5 +164,20 @@ export function reportMarkdown(report: LegacyImportReport): string {
   }
   out.push('');
   for (const [name, value] of Object.entries(report.sections)) renderValue(name, value, 0, out);
+  if (report.usersWallets !== undefined) renderValue('usersWallets', report.usersWallets, 0, out);
+  if (report.serviceOutcomes !== undefined) {
+    renderValue('serviceOutcomes', report.serviceOutcomes, 0, out);
+  }
+  if (report.finalV2 !== null && typeof report.finalV2 === 'object') {
+    // The v2 document without `core` (rendered above as the sections) and without the two
+    // sections already rendered: the verdict, the new sections and the invariants.
+    const { core: _core, sections, ...rest } = report.finalV2 as Record<string, unknown>;
+    const {
+      usersWallets: _uw,
+      serviceOutcomes: _so,
+      ...newSections
+    } = (sections ?? {}) as Record<string, unknown>;
+    renderValue('finalReportV2', { ...rest, sections: newSections }, 0, out);
+  }
   return `${out.join('\n').replace(/\n{3,}/gu, '\n\n')}\n`;
 }

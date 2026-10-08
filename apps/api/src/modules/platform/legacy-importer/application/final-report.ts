@@ -23,6 +23,13 @@ import type { LegacySnapshot } from './source-snapshot.js';
  *   frozen at the run's start would not.
  * - `services.manualReview` includes eligible candidates P6 has not adopted yet, under the
  *   reason `ADOPTION_PENDING_P6`, so the closure holds before P6 is wired and says why.
+ * - `wallet.importedTotalMinor` (Mirza PR4, owner decision 6) — Σ POSITIVE legacy balances
+ *   of importable users: the only figures that reach the ledger. A negative balance is a
+ *   legacy debt held for review beside the ledger, so it is in `notImportedTotalMinor`
+ *   (still listed under `negative`), and W1/W4 count openings against positives only. The
+ *   debts' own closure is the `usersWallets` section (U4/U5), not a v1 field: v1 is closed.
+ * - C1 counts a source id that occurs on several rows once on the map (one review row,
+ *   `DUPLICATE_SOURCE_ID`), so its extra rows are added back to close over source rows.
  */
 
 export const FINAL_REPORT_SCHEMA_VERSION = '1';
@@ -99,7 +106,8 @@ export function buildFinalReport(input: FinalReportInput) {
   // wallet
   let legacyTotal = 0n;
   for (const u of input.snapshot.users) legacyTotal += parseLegacyBalance(u.balance) ?? 0n;
-  const imported = plan.wallet.legacySumMinor;
+  // Owner decision 6: only positive balances are ledger openings.
+  const imported = plan.wallet.positive.sumMinor;
   const expected = input.nativeTotalMinor + imported;
 
   // services
@@ -114,8 +122,11 @@ export function buildFinalReport(input: FinalReportInput) {
     alreadyMapped: 0,
     testSkipped: cat('TEST_INVOICE_SKIPPED') + cat('TEST_PANEL_SKIPPED') + input.eligible.SKIPPED,
     providerMissing: cat('PROVIDER_MISSING'),
-    ambiguous: cat('AMBIGUOUS_PANEL') + cat('USERNAME_CASE_COLLISION'),
-    mappingMissing: cat('PANEL_UNMAPPED'),
+    // Mirza PR5: ambiguous ownership (several owners claim one account) is an ambiguity too,
+    // and NO_PANEL (owner decision 8) is a missing mapping — so the closed v1 fields still
+    // add up to the candidates (S3) without a new field.
+    ambiguous: cat('AMBIGUOUS_PANEL') + cat('USERNAME_CASE_COLLISION') + cat('AMBIGUOUS_OWNERSHIP'),
+    mappingMissing: cat('PANEL_UNMAPPED') + cat('NO_PANEL'),
     productUnresolved: cat('PRODUCT_UNRESOLVED'),
     unsupported: cat('UNSUPPORTED_SHAPE') + cat('INVALID_USERNAME') + cat('INVALID_SOURCE_ROW'),
     // An incomplete inventory is held for review (INVENTORY_INCOMPLETE) and decided again by
@@ -164,9 +175,18 @@ export function buildFinalReport(input: FinalReportInput) {
     manualReview: userReview,
     errors: userErrors,
   };
+  const duplicateExtraRows =
+    plan.customers.duplicateSourceIds.rows - plan.customers.duplicateSourceIds.ids;
   const customerSum =
-    existing + created + customers.blocked + userSkipped + userReview + userErrors;
-  const nonZero = plan.wallet.positive.count + plan.wallet.negative.count;
+    existing +
+    created +
+    customers.blocked +
+    userSkipped +
+    userReview +
+    userErrors +
+    duplicateExtraRows;
+  // One opening per POSITIVE imported balance: a negative one is a debt, never an entry.
+  const nonZero = plan.wallet.positive.count;
 
   return {
     schemaVersion: FINAL_REPORT_SCHEMA_VERSION,

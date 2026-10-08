@@ -1538,22 +1538,141 @@
     {
       "idx": 219,
       "version": "7",
-      "when": 1791401305405,
-      "tag": "0219_support_ai_session_budget",
+      "when": 1791360915004,
+      "tag": "0219_legacy_read_set_runs",
       "breakpoints": true
     },
     {
       "idx": 220,
       "version": "7",
-      "when": 1791406164078,
-      "tag": "0220_support_ai_progress_handoff",
+      "when": 1791360923964,
+      "tag": "0220_legacy_read_set_runs_append_only",
       "breakpoints": true
     },
     {
       "idx": 221,
       "version": "7",
-      "when": 1791431732630,
-      "tag": "0221_support_ai_handoff_context_age",
+      "when": 1791372724570,
+      "tag": "0221_legacy_product_reviews",
+      "breakpoints": true
+    },
+    {
+      "idx": 222,
+      "version": "7",
+      "when": 1791372732561,
+      "tag": "0222_legacy_product_review_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 223,
+      "version": "7",
+      "when": 1791377995528,
+      "tag": "0223_legacy_invoice_archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 224,
+      "version": "7",
+      "when": 1791378016433,
+      "tag": "0224_legacy_invoice_archive_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 225,
+      "version": "7",
+      "when": 1791378017433,
+      "tag": "0225_legacy_invoice_archive_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 226,
+      "version": "7",
+      "when": 1791385061155,
+      "tag": "0226_legacy_wallet_debts",
+      "breakpoints": true
+    },
+    {
+      "idx": 227,
+      "version": "7",
+      "when": 1791385061255,
+      "tag": "0227_legacy_wallet_debts_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 228,
+      "version": "7",
+      "when": 1791385061256,
+      "tag": "0228_legacy_wallet_debt_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 229,
+      "version": "7",
+      "when": 1791446557746,
+      "tag": "0229_legacy_read_set_user_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 230,
+      "version": "7",
+      "when": 1791448194124,
+      "tag": "0230_legacy_service_candidates",
+      "breakpoints": true
+    },
+    {
+      "idx": 231,
+      "version": "7",
+      "when": 1791448199991,
+      "tag": "0231_legacy_service_candidates_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 232,
+      "version": "7",
+      "when": 1791448199992,
+      "tag": "0232_legacy_service_review_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 233,
+      "version": "7",
+      "when": 1791448462079,
+      "tag": "0233_legacy_cutover_approvals",
+      "breakpoints": true
+    },
+    {
+      "idx": 234,
+      "version": "7",
+      "when": 1791448462151,
+      "tag": "0234_legacy_cutover_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 235,
+      "version": "7",
+      "when": 1791448462152,
+      "tag": "0235_legacy_cutover_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 236,
+      "version": "7",
+      "when": 1791460306948,
+      "tag": "0236_support_ai_session_budget",
+      "breakpoints": true
+    },
+    {
+      "idx": 237,
+      "version": "7",
+      "when": 1791460336429,
+      "tag": "0237_support_ai_progress_handoff",
+      "breakpoints": true
+    },
+    {
+      "idx": 238,
+      "version": "7",
+      "when": 1791460353017,
+      "tag": "0238_support_ai_handoff_context_age",
       "breakpoints": true
     }
   ]

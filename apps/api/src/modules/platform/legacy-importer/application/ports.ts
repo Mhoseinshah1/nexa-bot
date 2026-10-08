@@ -1,6 +1,7 @@
-import type { ActorContext, TenantContext } from '@nexa/contracts';
+import type { ActorContext, LegacyReadSetName, TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
+import type { ProductReviewRowFacts } from './product-map-review.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
 import type {
   AdoptionRuntimeFacts,
@@ -17,6 +18,13 @@ import type { LegacySourceEngine } from './source-port.js';
  * the caller's transaction.
  */
 
+/** Mirza PR4: a legacy debt as the plan compares it — what makes two debts "the same". */
+export interface RecordedDebt {
+  readonly amountMinor: bigint;
+  /** Recorded from a source carrying the synthetic-fixture marker. */
+  readonly synthetic: boolean;
+}
+
 export interface LegacyImporterDestination {
   /** The tenant exists (any status); activity is read inside each write's transaction. */
   tenantExists(scope: TenantContext): Promise<boolean>;
@@ -24,6 +32,28 @@ export interface LegacyImporterDestination {
   panels(scope: TenantContext, panelIds: readonly string[]): Promise<readonly PanelFacts[]>;
   /** Which of these product ids are products of this tenant. */
   productIds(scope: TenantContext, productIds: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * aud5 F5 / aud6 F1: the fingerprint of the latest `products` read set recorded against this
+   * v1 source fingerprint — the CURRENT products read of that source — or null.
+   */
+  latestProductsReadFingerprint(
+    scope: TenantContext,
+    sourceFingerprint: string,
+  ): Promise<string | null>;
+  /** Every legacy product review row of the tenant, as PR2's export predicate reads it. */
+  productReviewRows(scope: TenantContext): Promise<readonly ProductReviewRowFacts[]>;
+  /**
+   * aud6 F2/F3: what moved in the tenant since `since` (an APPLY run's start): non-opening
+   * wallet ledger entries (any currency) — count and signed net — and payments created.
+   */
+  movementSince(
+    scope: TenantContext,
+    since: Date,
+  ): Promise<{
+    readonly walletEntries: number;
+    readonly walletNetMinor: bigint;
+    readonly payments: number;
+  }>;
   /** Telegram id → customer id, for the ids that are customers of this tenant. */
   customersByTelegramIds(
     scope: TenantContext,
@@ -31,6 +61,18 @@ export interface LegacyImporterDestination {
   ): Promise<ReadonlyMap<string, string>>;
   /** Telegram id → the SIGNED amount of the migration opening already posted. */
   openingsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, bigint>>;
+  /** Mirza PR4: Telegram id → the legacy debt already recorded (magnitude and evidence class). */
+  debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, RecordedDebt>>;
+  /** Mirza PR4: count and Σ owed of the recorded legacy debts, in total and by state. */
+  debtAggregates(scope: TenantContext): Promise<{
+    readonly count: number;
+    readonly sumMinor: bigint;
+    readonly byState: Readonly<
+      Record<string, { readonly count: number; readonly sumMinor: bigint }>
+    >;
+    /** Debts recorded from a source carrying the synthetic-fixture marker. */
+    readonly synthetic: number;
+  }>;
   /** Customer id → override limit, for the customers that hold one. */
   trialOverrides(
     scope: TenantContext,
@@ -112,11 +154,57 @@ export interface LegacyRunInputsRepository {
   find(scope: TenantContext, runId: string): Promise<LegacyRunInputs | null>;
 }
 
+/**
+ * Mirza migration PR1 — one observation of a versioned read set (`legacy_read_set_runs`),
+ * bound to the approved v1 source by `sourceFingerprint`. Hashes and counts only.
+ */
+export interface LegacyReadSetRun {
+  readonly id: string;
+  readonly readSet: LegacyReadSetName;
+  readonly readSetVersion: number;
+  readonly fingerprintVersion: string;
+  readonly readSetFingerprint: string;
+  readonly sourceFingerprint: string;
+  readonly sourceSchemaHash: string;
+  readonly sourceEngine: LegacySourceEngine;
+  readonly synthetic: boolean;
+  readonly tableCount: number;
+  readonly rowCount: bigint;
+  readonly codeVersion: string | null;
+  readonly recordedAt: Date;
+}
+
+export interface LegacyReadSetRunRepository {
+  /**
+   * Insert-or-nothing on the observation key (tenant, read set, version, read-set
+   * fingerprint, source fingerprint). Returns the stored row and whether THIS call wrote it.
+   */
+  recordReadSetRun(
+    scope: TenantContext,
+    run: LegacyReadSetRun,
+    tx: TransactionScope,
+  ): Promise<{ readonly run: LegacyReadSetRun; readonly created: boolean }>;
+
+  /**
+   * Every read set fingerprint recorded for `readSet` at `readSetVersion` against this v1
+   * source fingerprint (OQ-LWD-07: the import refuses a second user-status of one source).
+   */
+  readSetFingerprintsOf(
+    scope: TenantContext,
+    readSet: LegacyReadSetName,
+    readSetVersion: number,
+    sourceFingerprint: string,
+    tx: TransactionScope,
+  ): Promise<readonly string[]>;
+}
+
 /** One legacy user, as the customer phase writes it. */
 export interface LegacyCustomerInsert {
   readonly id: string;
   readonly telegramUserId: string;
   readonly username: string | null;
+  /** The status a NEW customer is created with (OQ-LWD-07); never applied to an existing one. */
+  readonly status: 'ACTIVE' | 'BLOCKED';
   readonly now: Date;
 }
 

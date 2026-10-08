@@ -146,6 +146,18 @@ export * from './incidents.js';
 export * from './legacy-migration.js';
 /** Migration P4: legacy import run and map metadata (codes only, never source rows). */
 export * from './legacy-import.js';
+/** Mirza migration PR1: legacy table classes and read set names (codes only, never rows). */
+export * from './legacy-inventory.js';
+/** Mirza migration PR2: the legacy product review (states, parse notes, HTTP shapes). */
+export * from './legacy-product-review.js';
+/** Mirza migration PR3: the legacy invoice archive (classes, run states, HTTP shapes). */
+export * from './legacy-invoice-archive.js';
+/** Mirza migration PR4: legacy wallet debts (negative balances held for review), the users/wallets report section. */
+export * from './legacy-wallet-debt.js';
+/** Mirza migration PR5: legacy service candidates (one outcome each) and their operator review. */
+export * from './legacy-service-review.js';
+/** Mirza migration PR6: the cutover approval, SOURCE_SUPERSEDED, the gate steps, report v2 versions. */
+export * from './legacy-cutover.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */
 export * from './business-chats.js';
 /** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */

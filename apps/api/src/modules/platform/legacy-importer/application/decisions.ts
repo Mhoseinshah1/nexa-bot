@@ -4,6 +4,7 @@ import {
   PAYMENT_AMOUNT_MAX_MINOR,
   telegramUserIdSchema,
   type LegacyImportReasonCode,
+  type LegacyUserStatusClass,
 } from '@nexa/contracts';
 import {
   legacyCustomFlag,
@@ -14,6 +15,7 @@ import type { LegacyImportDecision } from '../../legacy-import/application/legac
 import { decisionForLegacyMatch } from '../../legacy-import/application/legacy-review-routing.js';
 import {
   matchLegacyService,
+  matchOnPanel,
   type LegacyPanelPolicy,
   type PanelInventoryIndex,
 } from '../../legacy-import/application/legacy-service-matching.js';
@@ -60,17 +62,34 @@ export type LegacyUserDecision =
   /** The identity is fine; a money fact is not readable. Nothing is written for the user. */
   | {
       readonly kind: 'MANUAL_REVIEW';
-      readonly reason: 'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE';
+      /**
+       * `DUPLICATE_SOURCE_ID` (Mirza PR4): the id is on more than one source row. Which
+       * row's balance is the customer's is unknowable, so none is imported: one review row
+       * (`INVALID_SOURCE_ROW`) stands for all of them, decided by the plan.
+       *
+       * `STATUS_UNKNOWN` (OQ-LWD-07): `User_Status` is neither `Active` nor `block`. Whether
+       * the operator banned this person is unknowable, so they are never imported ACTIVE.
+       */
+      readonly reason:
+        'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE' | 'DUPLICATE_SOURCE_ID' | 'STATUS_UNKNOWN';
       readonly mapReason: LegacyImportReasonCode;
     }
   | {
       readonly kind: 'IMPORT';
       readonly telegramUserId: string;
       readonly customer: 'NEW' | 'EXISTING';
+      /**
+       * Blocked in MirzaBot (`User_Status = 'block'`, OQ-LWD-07). A NEW customer is created
+       * BLOCKED; an EXISTING one is never changed. The money is recorded either way.
+       */
+      readonly blocked: boolean;
       readonly openingKind: LegacyOpeningKind;
       /** Signed legacy `Balance`, Toman = IRT minor units. */
       readonly balanceMinor: bigint;
-      /** The map row's warning, if any: `EXISTING_CUSTOMER`, else `NEGATIVE_BALANCE`. */
+      /**
+       * The map row's warning, if any: `EXISTING_CUSTOMER`, else `NEGATIVE_BALANCE` (the
+       * balance is held as a legacy debt, never a ledger entry — owner decision 6).
+       */
       readonly mapReason: LegacyImportReasonCode | null;
     };
 
@@ -90,7 +109,11 @@ export function legacyTelegramId(raw: string): string | null {
 }
 
 export function decideLegacyUser(
-  row: { readonly id: string; readonly balance: string | null },
+  row: {
+    readonly id: string;
+    readonly balance: string | null;
+    readonly status: LegacyUserStatusClass;
+  },
   existingCustomer: boolean,
 ): LegacyUserDecision {
   const telegramUserId = legacyTelegramId(row.id);
@@ -107,12 +130,17 @@ export function decideLegacyUser(
       mapReason: 'INVALID_SOURCE_ROW',
     };
   }
+  // OQ-LWD-07: a status that is not exactly `Active` or `block` is never read as ACTIVE.
+  if (row.status === 'UNKNOWN') {
+    return { kind: 'MANUAL_REVIEW', reason: 'STATUS_UNKNOWN', mapReason: 'INVALID_SOURCE_ROW' };
+  }
   const openingKind: LegacyOpeningKind =
     balanceMinor > 0n ? 'POSITIVE' : balanceMinor < 0n ? 'NEGATIVE' : 'ZERO';
   return {
     kind: 'IMPORT',
     telegramUserId,
     customer: existingCustomer ? 'EXISTING' : 'NEW',
+    blocked: row.status === 'BLOCKED',
     openingKind,
     balanceMinor,
     mapReason: existingCustomer
@@ -130,7 +158,12 @@ export function legacyProfileUsername(raw: string | null): string | null {
   return /^[A-Za-z][A-Za-z0-9_]{4,31}$/u.test(text) ? text : null;
 }
 
-/** Whether the legacy user was an agent (reseller). Reported only: resellers are out of Phase 1. */
+/**
+ * Whether the legacy user was an agent (reseller). Reported only, never granted: an agent is
+ * imported as an ordinary customer — no reseller row, no tier, and never credit (there is
+ * no reseller credit in NEXA). Making a legacy agent a NEXA reseller is the owner's
+ * decision (`OQ-LWD-03`).
+ */
 export function legacyIsAgent(raw: string | null): boolean {
   if (raw === null) return false;
   const text = raw.trim().toLowerCase();
@@ -160,10 +193,21 @@ export const SERVICE_CANDIDATE_CATEGORIES = [
   'INVALID_USERNAME',
   /** A panel the decision depends on has no complete inventory. */
   'INVENTORY_INCOMPLETE',
+  /**
+   * Owner decision 8 (Mirza PR5): `code_panel` empty or NULL. Never searched for, never
+   * adopted automatically; only an operator's explicit approval naming a mapped panel may.
+   */
+  'NO_PANEL',
   'PROVIDER_MISSING',
   'AMBIGUOUS_PANEL',
   'PANEL_UNMAPPED',
   'USERNAME_CASE_COLLISION',
+  /**
+   * Mirza PR5: live invoices of two or more DIFFERENT legacy owners claim the same account
+   * (panel and lowercase name). Which customer owns it is a guess, so none is adopted; a
+   * person keeps the wrong claims as history and the remaining one is decided again.
+   */
+  'AMBIGUOUS_OWNERSHIP',
   /** Productless/custom, and the shape key refuses it (Q1b's non-MAPPABLE rows). */
   'UNSUPPORTED_SHAPE',
   /** Productless/custom, the shape is mappable, and it has no current tariff. */
@@ -221,6 +265,15 @@ export function legacyCodePanel(raw: string | null): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
+/**
+ * Mirza PR5: an operator's explicit ADOPT approval, already checked against the run's panel
+ * map (the panel is mapped explicitly; the invoice's own code does not map elsewhere). The
+ * candidate is matched on THIS panel, with every other rule unchanged.
+ */
+export interface OperatorPanelOverride {
+  readonly panelId: string;
+}
+
 export function decideServiceCandidate(
   invoice: {
     readonly idInvoice: string;
@@ -235,6 +288,7 @@ export function decideServiceCandidate(
     readonly isCustom: string | null;
   },
   ctx: ServiceDecisionContext,
+  override: OperatorPanelOverride | null = null,
 ): ServiceCandidateDecision {
   // The row identity first, as a user's Telegram id is: a key the import map refuses
   // (`LEGACY_ID_PATTERNS.invoice`) cannot carry a decision, so a person looks at it.
@@ -249,11 +303,11 @@ export function decideServiceCandidate(
   const telegramUserId = ctx.importedUsers.get(invoice.idUser);
   if (telegramUserId === undefined) return held('CUSTOMER_NOT_IMPORTED');
 
-  const match = matchLegacyService(
-    { codePanel: legacyCodePanel(invoice.codePanel), username: invoice.username ?? '' },
-    ctx.policy,
-    ctx.inventories,
-  );
+  const row = { codePanel: legacyCodePanel(invoice.codePanel), username: invoice.username ?? '' };
+  const match =
+    override === null
+      ? matchLegacyService(row, ctx.policy, ctx.inventories)
+      : matchOnPanel(row, override.panelId, ctx.policy, ctx.inventories);
   // The matcher's outcome is recorded exactly as the review queue's one translation says
   // (`decisionForLegacyMatch`); the category is only its name in the report.
   if (match.kind !== 'ELIGIBLE') {
@@ -265,7 +319,9 @@ export function decideServiceCandidate(
           ? 'INVALID_USERNAME'
           : match.kind === 'UNDECIDABLE'
             ? 'INVENTORY_INCOMPLETE'
-            : match.reason;
+            : match.kind === 'NO_PANEL'
+              ? 'NO_PANEL'
+              : match.reason;
     return { category, map };
   }
 
@@ -358,6 +414,8 @@ export const INVOICE_MAP_DECISIONS = {
   CUSTOMER_NOT_IMPORTED: { status: 'MANUAL_REVIEW', reasonCode: 'CUSTOMER_MISSING' },
   UNSUPPORTED_SHAPE: { status: 'MANUAL_REVIEW', reasonCode: 'UNSUPPORTED_SHAPE' },
   PRODUCT_UNRESOLVED: { status: 'MANUAL_REVIEW', reasonCode: 'PRODUCT_MAPPING_UNRESOLVED' },
+  // Mirza PR5: several owners claim one account — the existing entity conflict, never a pick.
+  AMBIGUOUS_OWNERSHIP: { status: 'MANUAL_REVIEW', reasonCode: 'CONFLICTING_EXISTING_ENTITY' },
 } as const satisfies Readonly<Record<string, LegacyImportDecision>>;
 
 type HeldCategory = keyof typeof INVOICE_MAP_DECISIONS;

@@ -40,6 +40,8 @@ exists, the real-data half does not; **OPEN** — the evidence does not exist.
 | G16 | No P0/P1 blocker                 | OPEN    | **Open migration questions** (each needs an answer or the owner's explicit acceptance): OQ-REH-02 (UNKNOWN: how MirzaBot is stopped and its MySQL made read-only), OQ-P5-01 and OQ-P5-02 (the RickPanel list route and its order), OQ-P7-02 (map code for a live legacy trial invoice), OQ-P7-03 (code side addressed by WP-D1b; the real archive's MySQL 8 load is still step 1), OQ-P7-04 (inventory reads and the probe budget), OQ-P4-01 (the deployed invoice-key generator is unproven: a confirming aggregate is required before APPLY), OQ-I14-01 and OQ-I14-03 (hidden-product price following; `time_unit` spellings and a zero `Volume`), OQ-C4-02 (sending the NEXA keyboard proactively). |
 | G17 | Backup and runbooks ready        | OPEN    | **Missing:** production `botctl status`, a verified production backup within 24 h, a Recovery Kit exported after the last key rotation, the production restore drill — the backup/recovery program (Agent E). Not produced here.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | G18 | Provider writes = 0              | OPEN    | **Missing:** the staging run's report `provider.writes = 0` and `provider_writes_zero`, `adopted_services_without_operations`, `panel_state_unchanged` (P4, WP-D4) PASS. On staging the wire check `wire_provider_writes_zero` does not exist (it needs the fake panels); P4 is its staging equivalent.                                                                                                                                                                                                                                                                                                                                                                                                |
+| G19 | Every legacy table classified    | OPEN    | **Missing:** `table-inventory.md` filled from `legacy-import inventory` on the staging copy of the real dump, and the reviewed commit classifying every table (OQ-MZ-INV, OQ-LCO-06). Until then the gated import, the cutover gate and report v2 refuse (`TABLES_UNCLASSIFIED`).                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| G20 | Migration program rehearsed      | PARTIAL | Code side: the synthetic rehearsal's cycle 9 (Mirza PR6) — gated import refusals, SOURCE_SUPERSEDED, the acknowledged re-run with no duplicate, report v2 holding, `cutover-gate` CUTOVER_READY — see § Synthetic evidence. **Missing:** the staging run with the owner's approval recorded in `/legacy-cutover` and manual-acceptance W1–W8.                                                                                                                                                                                                                                                                                                                                                          |
 
 ## Accepted pending checks (G11)
 
@@ -62,11 +64,21 @@ evidence, a Q1–Q7 result, a C1/C3 result or a staging rehearsal.
 | `main` `edd13981` (before any WP-D) | MariaDB 10.11.14 | plain `synthetic-legacy.sql`          | 99   | 0    | 4       | 46 s      |
 | this branch `2042656c`              | MariaDB 10.11.14 | AES-256 zip (`backup_2026-01-01.zip`) | 127  | 0    | 6       | 110 s     |
 | this branch `2042656c`              | MySQL 8.0.46     | AES-256 zip (`backup_2026-01-01.zip`) | 127  | 0    | 6       | 114 s     |
+| Mirza PR6 `bea404eb`                | MariaDB 10.11.14 | AES-256 zip, plus cycle 9 (program)   | 162  | 0    | 6       | 292 s     |
+| Mirza PR6 `f1da89cf`                | MariaDB 10.11.14 | AES-256 zip, plus cycle 9 (program)   | 163  | 0    | 6       | 243 s     |
 
 Both rows are the same final code, run one after the other with the asserted wrapper
 (`pnpm rehearsal:synthetic`, which also checks every expected PASS check by name). An
 earlier MariaDB run on this branch failed at the rollback cutover: the `rename_db` defect
 fixed in `a23105a0`.
+
+The Mirza PR6 row adds cycle 9, the migration program: gated import refusals, SOURCE_SUPERSEDED,
+the acknowledged re-run over a second snapshot with no duplicate, report v2 holding and
+`cutover-gate` CUTOVER_READY. The `f1da89cf` row adds one check: the gate hashes the final dump
+FILE, so an edited dump under the approved hash is refused at `FINAL_DUMP_VERIFIED`, as is a
+wrong approved hash. The cycle's approval is recorded by
+`tests/support/legacy-rehearsal-cutover-approval.ts` as a synthetic owner, so it can never
+open a production-like target. The MySQL 8.0 run of this PR is CI's, NOT RUN here.
 
 The PENDING checks are the fixture's deliberate owner-decision cases, 3 per cycle:
 `invoice_keys_outside_evidenced_shape` (S2, OQ-P4-01), `report_equation_C3` (a user id that

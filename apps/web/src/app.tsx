@@ -55,6 +55,11 @@ import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chat
 import { SupportAiPage } from './pages/support-ai';
 import { SupportAnalyticsPage } from './pages/support-analytics';
 import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
+import { LegacyProductsPage } from './pages/legacy-products';
+import { LegacyInvoicesPage } from './pages/legacy-invoices';
+import { LegacyDebtsPage } from './pages/legacy-debts';
+import { LegacyServicesPage } from './pages/legacy-services';
+import { LegacyCutoverPage } from './pages/legacy-cutover';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -184,6 +189,16 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/products',
   '/products/:id',
   '/product-categories',
+  // Mirza PR2: the legacy product review.
+  '/legacy-products',
+  // Mirza PR3: the legacy invoice archive (read-only).
+  '/legacy-invoices',
+  // Mirza PR4: legacy wallet debts held for the owner's review.
+  '/legacy-debts',
+  // Mirza PR5: legacy service candidates — one outcome each — and their review.
+  '/legacy-services',
+  // Mirza PR6: the owner's cutover approval of one legacy snapshot.
+  '/legacy-cutover',
   '/extra-devices',
   '/service-locations',
   '/orders',
@@ -419,6 +434,75 @@ export function resolve(
     };
   }
 
+  // Mirza PR2: the legacy product review (its own service; never the importer's queue).
+  if (route.path === '/legacy-products') {
+    return {
+      element: (
+        <LegacyProductsPage
+          denied={!may('legacy.products.view')}
+          mayDecide={may('legacy.products.decide')}
+          mayCreateProduct={may('catalog.edit')}
+          mayPickProduct={may('catalog.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.lpr_title') }],
+      title: t('web.lpr_title'),
+    };
+  }
+  // Mirza PR3: the legacy invoice archive (read-only; personal data behind its own key).
+  if (route.path === '/legacy-invoices') {
+    return {
+      element: (
+        <LegacyInvoicesPage
+          denied={!may('legacy.invoices.view')}
+          mayViewPii={may('legacy.invoices.pii.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.lia_title') }],
+      title: t('web.lia_title'),
+    };
+  }
+  // Mirza PR4: legacy wallet debts (a decision is a label; it moves no money).
+  if (route.path === '/legacy-debts') {
+    return {
+      element: (
+        <LegacyDebtsPage
+          denied={!may('legacy.debts.view')}
+          mayDecide={may('legacy.debts.decide')}
+        />
+      ),
+      crumbs: [{ label: t('web.lwd_title') }],
+      title: t('web.lwd_title'),
+    };
+  }
+  // Mirza PR5: legacy service candidates (an ADOPT here is an approval; a run executes it).
+  if (route.path === '/legacy-services') {
+    return {
+      element: (
+        <LegacyServicesPage
+          denied={!may('legacy.services.view')}
+          mayDecide={may('legacy.services.decide')}
+          mayViewPanels={may('panels.view')}
+          mayViewArchive={may('legacy.invoices.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.lsr_title') }],
+      title: t('web.lsr_title'),
+    };
+  }
+  // Mirza PR6: the owner's cutover approval (an approval imports nothing; the import reads it).
+  if (route.path === '/legacy-cutover') {
+    return {
+      element: (
+        <LegacyCutoverPage
+          denied={!may('legacy.cutover.view')}
+          mayApprove={may('legacy.cutover.approve')}
+        />
+      ),
+      crumbs: [{ label: t('web.lco_title') }],
+      title: t('web.lco_title'),
+    };
+  }
   if (route.path === '/product-categories') {
     return {
       element: (

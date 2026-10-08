@@ -64,10 +64,10 @@ with one evidenced key shape per table** (`LEGACY_IMPORT_SOURCE_TABLES`,
 `LEGACY_ID_PATTERNS`, mirrored by `legacy_import_map_legacy_key_check`; an integration test
 runs the same samples through the contract and the database and requires the same answer):
 
-| `legacy_table` | `legacy_id` shape                              | evidence                                                                                                                               |
-| -------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `user`         | `^[1-9][0-9]{0,19}$`                           | `user.id` is the customer's Telegram id; all 197,461 values are numeric strings (program §19, `docs/legacy-migration/sql-evidence.md`) |
-| `invoice`      | `^([1-9][0-9]{6})?([0-9a-f]{4}\|[0-9a-f]{8})$` | `invoice.id_invoice`; MirzaBot's public source, every revision (below). Added by `0191_legacy_import_map_invoice_key.sql`              |
+| `legacy_table` | `legacy_id` shape                              | evidence                                                                                                                                                                                                                      |
+| -------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user`         | `^[1-9][0-9]{0,19}$`                           | `user.id` is the customer's Telegram id; every value of the historical staging snapshot (197,461 there: a dated baseline, never an expected count) is a numeric string (program §19, `docs/legacy-migration/sql-evidence.md`) |
+| `invoice`      | `^([1-9][0-9]{6})?([0-9a-f]{4}\|[0-9a-f]{8})$` | `invoice.id_invoice`; MirzaBot's public source, every revision (below). Added by `0191_legacy_import_map_invoice_key.sql`                                                                                                     |
 
 Any other table is refused until its primary-key format is evidenced and added by a
 forward migration — never a guessed shape.

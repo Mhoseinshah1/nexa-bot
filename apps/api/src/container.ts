@@ -250,6 +250,16 @@ import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/lo
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
+import { LegacyProductReviewService } from './modules/commerce/legacy-product-review/application/legacy-product-review.service.js';
+import { LegacyWalletDebtService } from './modules/commerce/legacy-wallet-debts/application/legacy-wallet-debt.service.js';
+import { DrizzleLegacyWalletDebtRepository } from './modules/commerce/legacy-wallet-debts/infrastructure/drizzle-legacy-wallet-debt.repository.js';
+import { LegacyServiceReviewService } from './modules/platform/legacy-service-review/application/legacy-service-review.service.js';
+import { DrizzleLegacyServiceCandidateRepository } from './modules/platform/legacy-service-review/infrastructure/drizzle-legacy-service-candidate.repository.js';
+import { LegacyCutoverService } from './modules/platform/legacy-cutover/application/legacy-cutover.service.js';
+import { DrizzleLegacyCutoverRepository } from './modules/platform/legacy-cutover/infrastructure/drizzle-legacy-cutover.repository.js';
+import { DrizzleLegacyProductReviewRepository } from './modules/commerce/legacy-product-review/infrastructure/drizzle-legacy-product-review.repository.js';
+import { LegacyInvoiceArchiveService } from './modules/platform/legacy-invoice-archive/application/legacy-invoice-archive.service.js';
+import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy-invoice-archive/infrastructure/drizzle-legacy-invoice-archive.repository.js';
 import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
 import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
 import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
@@ -939,6 +949,35 @@ export interface Container {
    * prerequisites only — no surface calls it yet (P6/P7 are on hold).
    */
   readonly legacyProducts: LegacyProductService;
+  /**
+   * Mirza migration PR2: the legacy product review (`docs/legacy-product-review-design.md`).
+   * The Web Admin reads and decides under `legacy.products.*`; the CLI ingest and export run
+   * under `maintenance.run`. Never a price, a panel or a sale.
+   */
+  readonly legacyProductReviews: LegacyProductReviewService;
+  /** Mirza PR3: the append-only legacy invoice archive (Web Admin reads; CLI ingest steps). */
+  readonly legacyInvoiceArchive: LegacyInvoiceArchiveService;
+  /**
+   * Mirza PR4 (owner decision 6): the owner's review of legacy wallet debts — negative legacy
+   * balances held beside the ledger. Reads under `legacy.debts.view`, decisions under
+   * `legacy.debts.decide`; it moves no money. The importer RECORDS debts through
+   * `migrationOpeningBalance`, never through this.
+   */
+  readonly legacyWalletDebts: LegacyWalletDebtService;
+  /**
+   * Mirza PR5 (Area D; owner decision 8): the operator's review of legacy service candidates —
+   * one outcome per live legacy invoice. Reads under `legacy.services.view`, decisions and ADOPT
+   * approvals under `legacy.services.decide`. It adopts nothing: the importer records outcomes
+   * and executes approvals through P6, never through this.
+   */
+  readonly legacyServiceReview: LegacyServiceReviewService;
+  /**
+   * Mirza PR6 (owner constraint 3): the owner's cutover approval of one legacy snapshot,
+   * bound to seven exact values, and its revocation. Reads under `legacy.cutover.view`,
+   * approvals under the CRITICAL `legacy.cutover.approve`. The importer reads it inside its
+   * start transaction and refuses a gated import without a matching approval.
+   */
+  readonly legacyCutover: LegacyCutoverService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   /** Discount rules, as an operator manages them (WP8). */
@@ -2073,6 +2112,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
 
+  const legacyInvoiceArchiveService = new LegacyInvoiceArchiveService({
+    repository: new DrizzleLegacyInvoiceArchiveRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    clock,
+    ids,
+    codeVersion: config.BUILD_VERSION,
+  });
+
+  const legacyProductReviewService = new LegacyProductReviewService({
+    repository: new DrizzleLegacyProductReviewRepository(database.db),
+    products: productService,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+
   /**
    * Program Item 14 (`docs/legacy-migration/hidden-legacy-products.md`): one hidden product
    * per legacy tariff shape, on the same product repository, so a migrated service renews
@@ -2246,9 +2312,46 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     operationId: (key) => operationIdFor('payment', key),
   });
+  const legacyWalletDebtRepository = new DrizzleLegacyWalletDebtRepository(database.db);
+  const legacyWalletDebts = new LegacyWalletDebtService({
+    repository: legacyWalletDebtRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
+  const legacyServiceCandidateRepository = new DrizzleLegacyServiceCandidateRepository(database.db);
+  const legacyServiceReview = new LegacyServiceReviewService({
+    repository: legacyServiceCandidateRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
+  const legacyCutover = new LegacyCutoverService({
+    repository: new DrizzleLegacyCutoverRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const migrationOpeningBalance = new MigrationOpeningBalanceService({
     repository: walletRepository,
     customers: customerRepository,
+    debts: legacyWalletDebtRepository,
     guard,
     audit,
     opsLog,
@@ -6768,6 +6871,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customerServicesToggle: customerServicesToggleService,
     products: productService,
     legacyProducts: legacyProductService,
+    legacyProductReviews: legacyProductReviewService,
+    legacyInvoiceArchive: legacyInvoiceArchiveService,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,
@@ -6811,6 +6916,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     bulkOperationLoop,
     wallet: walletService,
     migrationOpeningBalance,
+    legacyWalletDebts,
+    legacyServiceReview,
+    legacyCutover,
     legacyReviewQueue,
     legacyAdoption,
     payments: paymentService,
@@ -7176,6 +7284,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         destination: importerRepository,
         runs: new DrizzleLegacyImportRepository(database.db),
         runInputs: importerRepository,
+        readSetRuns: importerRepository,
+        productReview: legacyProductReviewService,
+        invoiceArchive: legacyInvoiceArchiveService,
         customers: importerRepository,
         inventory: legacyInventory(options),
         openings: migrationOpeningBalance,
@@ -7190,6 +7301,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
                   legacyAdoption.adoptCandidate(scope, actor, candidate),
               }
             : options.adoption,
+        serviceCandidates: legacyServiceCandidateRepository,
+        cutover: legacyCutover,
         guard,
         uow,
         audit,

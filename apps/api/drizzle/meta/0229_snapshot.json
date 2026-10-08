@@ -1,6 +1,6 @@
 {
-  "id": "0fe4a0bd-bf21-4079-93ba-4d4910e11fa0",
-  "prevId": "496d221b-3893-4e46-80c6-218c7ce0e222",
+  "id": "34c60943-05a4-483d-af14-6afea1c7153c",
+  "prevId": "88267d8b-0a5a-4715-ac74-666f80681f44",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4360,24 +4360,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "topic": {
-          "name": "topic",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "intent": {
-          "name": "intent",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "steps_tried": {
-          "name": "steps_tried",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "ticket_id": {
           "name": "ticket_id",
           "type": "uuid",
@@ -4541,7 +4523,7 @@
       "checkConstraints": {
         "business_conversation_escalations_reason_check": {
           "name": "business_conversation_escalations_reason_check",
-          "value": "reason IN ('SEND_OUTCOME_UNKNOWN', 'TRANSPORT_REFUSED', 'AI_REQUESTED', 'HANDOFF_TOPIC', 'HUMAN_REQUESTED', 'TOPIC_NOT_ALLOWED', 'LOW_CONFIDENCE', 'REPLY_OUT_OF_BOUNDS', 'DECISION_NOT_REPLY', 'AI_OUTPUT_INVALID', 'AI_UNAVAILABLE', 'ACCOUNT_UNDER_REVIEW', 'IDENTITY_UNVERIFIED', 'CUSTOMER_BLOCKED', 'INSUFFICIENT_GROUNDING', 'LOOP_GUARD', 'UNSUPPORTED_CONTENT', 'REPLY_STALE', 'CLARIFYING_LIMIT', 'NO_PROGRESS', 'REPEATED_ADVICE', 'INBOUND_FLOOD')"
+          "value": "reason IN ('SEND_OUTCOME_UNKNOWN', 'TRANSPORT_REFUSED', 'AI_REQUESTED', 'HANDOFF_TOPIC', 'HUMAN_REQUESTED', 'TOPIC_NOT_ALLOWED', 'LOW_CONFIDENCE', 'REPLY_OUT_OF_BOUNDS', 'DECISION_NOT_REPLY', 'AI_OUTPUT_INVALID', 'AI_UNAVAILABLE', 'ACCOUNT_UNDER_REVIEW', 'IDENTITY_UNVERIFIED', 'CUSTOMER_BLOCKED', 'INSUFFICIENT_GROUNDING', 'LOOP_GUARD', 'UNSUPPORTED_CONTENT', 'REPLY_STALE', 'CLARIFYING_LIMIT')"
         },
         "business_conversation_escalations_ticket_outcome_check": {
           "name": "business_conversation_escalations_ticket_outcome_check",
@@ -4554,18 +4536,6 @@
         "business_conversation_escalations_summary_check": {
           "name": "business_conversation_escalations_summary_check",
           "value": "summary IS NULL OR length(summary) <= 600"
-        },
-        "business_conversation_escalations_topic_check": {
-          "name": "business_conversation_escalations_topic_check",
-          "value": "topic IN ('CONNECTION_TROUBLESHOOTING', 'APP_SETUP', 'SUBSCRIPTION_UPDATE', 'SERVICE_INFO', 'TRAFFIC_AND_EXPIRY', 'PLAN_INFO', 'KNOWN_ERROR', 'GREETING', 'REFUND', 'WALLET', 'PAYMENT_DISPUTE', 'PAYMENT_STATUS', 'RECEIPT_REVIEW', 'SERVICE_DELETE_OR_TERMINATE', 'OWNERSHIP_OR_ACCOUNT_TRANSFER', 'ACCOUNT_SECURITY', 'CREDENTIALS', 'PROVIDER_CHANGE', 'FRAUD_OR_CHARGEBACK', 'LEGAL_OR_SAFETY', 'HUMAN_REQUESTED', 'OTHER')"
-        },
-        "business_conversation_escalations_intent_check": {
-          "name": "business_conversation_escalations_intent_check",
-          "value": "intent IS NULL OR length(intent) <= 600"
-        },
-        "business_conversation_escalations_steps_check": {
-          "name": "business_conversation_escalations_steps_check",
-          "value": "steps_tried IS NULL OR steps_tried >= 0"
         },
         "business_conversation_escalations_epoch_check": {
           "name": "business_conversation_escalations_epoch_check",
@@ -4862,7 +4832,7 @@
         },
         "business_conversations_handoff_reason_check": {
           "name": "business_conversations_handoff_reason_check",
-          "value": "handoff_reason IN ('SEND_OUTCOME_UNKNOWN', 'TRANSPORT_REFUSED', 'AI_REQUESTED', 'HANDOFF_TOPIC', 'HUMAN_REQUESTED', 'TOPIC_NOT_ALLOWED', 'LOW_CONFIDENCE', 'REPLY_OUT_OF_BOUNDS', 'DECISION_NOT_REPLY', 'AI_OUTPUT_INVALID', 'AI_UNAVAILABLE', 'ACCOUNT_UNDER_REVIEW', 'IDENTITY_UNVERIFIED', 'CUSTOMER_BLOCKED', 'INSUFFICIENT_GROUNDING', 'LOOP_GUARD', 'UNSUPPORTED_CONTENT', 'REPLY_STALE', 'CLARIFYING_LIMIT', 'NO_PROGRESS', 'REPEATED_ADVICE', 'INBOUND_FLOOD')"
+          "value": "handoff_reason IN ('SEND_OUTCOME_UNKNOWN', 'TRANSPORT_REFUSED', 'AI_REQUESTED', 'HANDOFF_TOPIC', 'HUMAN_REQUESTED', 'TOPIC_NOT_ALLOWED', 'LOW_CONFIDENCE', 'REPLY_OUT_OF_BOUNDS', 'DECISION_NOT_REPLY', 'AI_OUTPUT_INVALID', 'AI_UNAVAILABLE', 'ACCOUNT_UNDER_REVIEW', 'IDENTITY_UNVERIFIED', 'CUSTOMER_BLOCKED', 'INSUFFICIENT_GROUNDING', 'LOOP_GUARD', 'UNSUPPORTED_CONTENT', 'REPLY_STALE', 'CLARIFYING_LIMIT')"
         },
         "business_conversations_handoff_shape_check": {
           "name": "business_conversations_handoff_shape_check",
@@ -5248,12 +5218,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "template_key": {
-          "name": "template_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -5401,7 +5365,7 @@
       "checkConstraints": {
         "business_outbound_messages_origin_check": {
           "name": "business_outbound_messages_origin_check",
-          "value": "origin IN ('OPERATOR', 'ASSIST', 'AUTO', 'HANDOFF_NOTICE')"
+          "value": "origin IN ('OPERATOR', 'ASSIST', 'AUTO')"
         },
         "business_outbound_messages_state_check": {
           "name": "business_outbound_messages_state_check",
@@ -5413,11 +5377,7 @@
         },
         "business_outbound_messages_author_check": {
           "name": "business_outbound_messages_author_check",
-          "value": "(origin IN ('AUTO', 'HANDOFF_NOTICE')) = (created_by_admin_id IS NULL)"
-        },
-        "business_outbound_messages_template_check": {
-          "name": "business_outbound_messages_template_check",
-          "value": "(origin = 'HANDOFF_NOTICE') = (template_key IS NOT NULL) AND (template_key IS NULL OR body IS NULL)"
+          "value": "(origin = 'AUTO') = (created_by_admin_id IS NULL)"
         },
         "business_outbound_messages_resolved_check": {
           "name": "business_outbound_messages_resolved_check",
@@ -14093,6 +14053,1202 @@
       },
       "isRLSEnabled": false
     },
+    "public.legacy_invoice_archive": {
+      "name": "legacy_invoice_archive",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "invoice_key": {
+          "name": "invoice_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_reason": {
+          "name": "revision_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_shape_evidenced": {
+          "name": "key_shape_evidenced",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "raw_row": {
+          "name": "raw_row",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "row_checksum": {
+          "name": "row_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "archive_checksum": {
+          "name": "archive_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "classification": {
+          "name": "classification",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "live": {
+          "name": "live",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_test": {
+          "name": "is_test",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "legacy_user_id": {
+          "name": "legacy_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "owner_present": {
+          "name": "owner_present",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "panel_code": {
+          "name": "panel_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "product_code": {
+          "name": "product_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "product_ref": {
+          "name": "product_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "product_name": {
+          "name": "product_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "price_raw": {
+          "name": "price_raw",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "price_minor": {
+          "name": "price_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "price_currency": {
+          "name": "price_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "price_note": {
+          "name": "price_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sold_at_raw": {
+          "name": "sold_at_raw",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sold_at": {
+          "name": "sold_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sold_at_note": {
+          "name": "sold_at_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "read_set_fingerprint": {
+          "name": "read_set_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "normalization_version": {
+          "name": "normalization_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "legacy_invoice_archive_run_idx": {
+          "name": "legacy_invoice_archive_run_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_key_prefix_idx": {
+          "name": "legacy_invoice_archive_key_prefix_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "invoice_key text_pattern_ops",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_user_idx": {
+          "name": "legacy_invoice_archive_user_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "legacy_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "invoice_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_username_idx": {
+          "name": "legacy_invoice_archive_username_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(username) text_pattern_ops",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_status_idx": {
+          "name": "legacy_invoice_archive_status_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "invoice_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_panel_idx": {
+          "name": "legacy_invoice_archive_panel_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "panel_code",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "invoice_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_product_idx": {
+          "name": "legacy_invoice_archive_product_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "product_code",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "invoice_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_class_idx": {
+          "name": "legacy_invoice_archive_class_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "classification",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "invoice_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_test_idx": {
+          "name": "legacy_invoice_archive_test_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "is_test",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "invoice_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "legacy_invoice_archive_tenant_id_tenants_id_fk": {
+          "name": "legacy_invoice_archive_tenant_id_tenants_id_fk",
+          "tableFrom": "legacy_invoice_archive",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_invoice_archive_run_fk": {
+          "name": "legacy_invoice_archive_run_fk",
+          "tableFrom": "legacy_invoice_archive",
+          "tableTo": "legacy_invoice_archive_runs",
+          "columnsFrom": [
+            "tenant_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "legacy_invoice_archive_tenant_id_key": {
+          "name": "legacy_invoice_archive_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "legacy_invoice_archive_revision_key": {
+          "name": "legacy_invoice_archive_revision_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "invoice_key",
+            "revision"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "legacy_invoice_archive_class_check": {
+          "name": "legacy_invoice_archive_class_check",
+          "value": "(classification IN ('KEY_SHAPE_UNRECOGNISED', 'TEST', 'TEST_FLAG_INVALID', 'ORPHAN_OWNER', 'NOT_LIVE', 'NO_PANEL', 'LIVE_CANDIDATE')) AND classification = CASE WHEN NOT key_shape_evidenced THEN 'KEY_SHAPE_UNRECOGNISED' WHEN is_test IS TRUE THEN 'TEST' WHEN is_test IS NULL THEN 'TEST_FLAG_INVALID' WHEN NOT owner_present THEN 'ORPHAN_OWNER' WHEN NOT live THEN 'NOT_LIVE' WHEN panel_code IS NULL THEN 'NO_PANEL' ELSE 'LIVE_CANDIDATE' END"
+        },
+        "legacy_invoice_archive_revision_check": {
+          "name": "legacy_invoice_archive_revision_check",
+          "value": "revision >= 1 AND (revision_reason IN ('FIRST_SEEN', 'ROW_CHANGED', 'CONTEXT_CHANGED')) AND ((revision = 1) = (revision_reason = 'FIRST_SEEN'))"
+        },
+        "legacy_invoice_archive_product_check": {
+          "name": "legacy_invoice_archive_product_check",
+          "value": "(product_ref IN ('NONE', 'NAMED', 'NOT_IN_PRODUCT_TABLE')) AND ((product_code IS NULL) = (product_ref = 'NONE'))"
+        },
+        "legacy_invoice_archive_price_check": {
+          "name": "legacy_invoice_archive_price_check",
+          "value": "((price_minor IS NULL) = (price_currency IS NULL)) AND ((price_minor IS NULL) = (price_note IS NOT NULL)) AND (price_currency IS NULL OR price_currency = 'IRT') AND (price_minor IS NULL OR price_minor >= 0) AND (price_note IS NULL OR price_note IN ('ABSENT', 'EMPTY', 'NOT_A_NUMBER', 'OUT_OF_RANGE', 'FORMAT_UNKNOWN'))"
+        },
+        "legacy_invoice_archive_sold_at_check": {
+          "name": "legacy_invoice_archive_sold_at_check",
+          "value": "((sold_at IS NULL) = (sold_at_note IS NOT NULL)) AND (sold_at_note IS NULL OR sold_at_note IN ('ABSENT', 'EMPTY', 'NOT_A_NUMBER', 'OUT_OF_RANGE', 'FORMAT_UNKNOWN'))"
+        },
+        "legacy_invoice_archive_shape_check": {
+          "name": "legacy_invoice_archive_shape_check",
+          "value": "jsonb_typeof(raw_row) = 'object' AND char_length(invoice_key) <= 1000 AND (panel_code IS NULL OR (panel_code <> '' AND panel_code = btrim(panel_code))) AND (product_code IS NULL OR (product_code <> '' AND product_code = btrim(product_code)))"
+        },
+        "legacy_invoice_archive_hashes_check": {
+          "name": "legacy_invoice_archive_hashes_check",
+          "value": "row_checksum ~ '^[0-9a-f]{64}$' AND archive_checksum ~ '^[0-9a-f]{64}$' AND read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND normalization_version ~ '^legacy-invoice-archive:v[1-9][0-9]{0,3}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.legacy_invoice_archive_runs": {
+      "name": "legacy_invoice_archive_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "read_set_version": {
+          "name": "read_set_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "read_set_fingerprint": {
+          "name": "read_set_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_schema_hash": {
+          "name": "source_schema_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_engine": {
+          "name": "source_engine",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "synthetic": {
+          "name": "synthetic",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_invoice_rows": {
+          "name": "source_invoice_rows",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_user_rows": {
+          "name": "source_user_rows",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_product_rows": {
+          "name": "source_product_rows",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promoted_through": {
+          "name": "promoted_through",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promoted_rows": {
+          "name": "promoted_rows",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "inserted_new": {
+          "name": "inserted_new",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "inserted_revision": {
+          "name": "inserted_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "unchanged": {
+          "name": "unchanged",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "missing_in_snapshot": {
+          "name": "missing_in_snapshot",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "archive_invoices_after": {
+          "name": "archive_invoices_after",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "code_version": {
+          "name": "code_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "verified_at": {
+          "name": "verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "legacy_invoice_archive_runs_one_open_idx": {
+          "name": "legacy_invoice_archive_runs_one_open_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "state IN ('STAGING', 'VERIFIED')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_invoice_archive_runs_tenant_started_idx": {
+          "name": "legacy_invoice_archive_runs_tenant_started_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "legacy_invoice_archive_runs_tenant_id_tenants_id_fk": {
+          "name": "legacy_invoice_archive_runs_tenant_id_tenants_id_fk",
+          "tableFrom": "legacy_invoice_archive_runs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "legacy_invoice_archive_runs_tenant_id_key": {
+          "name": "legacy_invoice_archive_runs_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "legacy_invoice_archive_runs_state_check": {
+          "name": "legacy_invoice_archive_runs_state_check",
+          "value": "state IN ('STAGING', 'VERIFIED', 'COMPLETED', 'FAILED')"
+        },
+        "legacy_invoice_archive_runs_failure_check": {
+          "name": "legacy_invoice_archive_runs_failure_check",
+          "value": "(failure_code IS NULL OR failure_code IN ('SNAPSHOT_DIVERGED', 'ABANDONED', 'STAGED_COUNT_MISMATCH', 'SOURCE_KEY_DUPLICATED', 'CELL_UNREPRESENTABLE', 'INTERRUPTED')) AND ((state = 'FAILED') = (failure_code IS NOT NULL))"
+        },
+        "legacy_invoice_archive_runs_lifecycle_check": {
+          "name": "legacy_invoice_archive_runs_lifecycle_check",
+          "value": "((verified_at IS NOT NULL) = (state IN ('VERIFIED', 'COMPLETED'))) AND ((finished_at IS NOT NULL) = (state IN ('COMPLETED', 'FAILED'))) AND ((source_invoice_rows IS NOT NULL) = (verified_at IS NOT NULL)) AND ((source_user_rows IS NOT NULL) = (verified_at IS NOT NULL)) AND ((source_product_rows IS NOT NULL) = (verified_at IS NOT NULL)) AND (state IN ('VERIFIED', 'COMPLETED') OR (promoted_rows = 0 AND promoted_through IS NULL))"
+        },
+        "legacy_invoice_archive_runs_closure_check": {
+          "name": "legacy_invoice_archive_runs_closure_check",
+          "value": "promoted_rows = inserted_new + inserted_revision + unchanged AND (source_invoice_rows IS NULL OR promoted_rows <= source_invoice_rows) AND ((state = 'COMPLETED') = (missing_in_snapshot IS NOT NULL)) AND ((state = 'COMPLETED') = (archive_invoices_after IS NOT NULL)) AND (state <> 'COMPLETED' OR (promoted_rows = source_invoice_rows AND archive_invoices_after = source_invoice_rows + missing_in_snapshot))"
+        },
+        "legacy_invoice_archive_runs_counts_check": {
+          "name": "legacy_invoice_archive_runs_counts_check",
+          "value": "read_set_version BETWEEN 1 AND 9999 AND inserted_new >= 0 AND inserted_revision >= 0 AND unchanged >= 0 AND (source_invoice_rows IS NULL OR source_invoice_rows >= 0) AND (source_user_rows IS NULL OR source_user_rows >= 0) AND (source_product_rows IS NULL OR source_product_rows >= 0) AND (missing_in_snapshot IS NULL OR missing_in_snapshot >= 0)"
+        },
+        "legacy_invoice_archive_runs_hashes_check": {
+          "name": "legacy_invoice_archive_runs_hashes_check",
+          "value": "read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND source_schema_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "legacy_invoice_archive_runs_engine_check": {
+          "name": "legacy_invoice_archive_runs_engine_check",
+          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')"
+        },
+        "legacy_invoice_archive_runs_code_version_check": {
+          "name": "legacy_invoice_archive_runs_code_version_check",
+          "value": "code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.legacy_invoice_archive_staging": {
+      "name": "legacy_invoice_archive_staging",
+      "schema": "",
+      "columns": {
+        "run_id": {
+          "name": "run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_table": {
+          "name": "source_table",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_key": {
+          "name": "source_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lookup": {
+          "name": "lookup",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cells": {
+          "name": "cells",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "row_checksum": {
+          "name": "row_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "legacy_invoice_archive_staging_lookup_idx": {
+          "name": "legacy_invoice_archive_staging_lookup_idx",
+          "columns": [
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_table",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lookup",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "legacy_invoice_archive_staging_tenant_id_tenants_id_fk": {
+          "name": "legacy_invoice_archive_staging_tenant_id_tenants_id_fk",
+          "tableFrom": "legacy_invoice_archive_staging",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_invoice_archive_staging_run_fk": {
+          "name": "legacy_invoice_archive_staging_run_fk",
+          "tableFrom": "legacy_invoice_archive_staging",
+          "tableTo": "legacy_invoice_archive_runs",
+          "columnsFrom": [
+            "tenant_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "legacy_invoice_archive_staging_pk": {
+          "name": "legacy_invoice_archive_staging_pk",
+          "columns": [
+            "run_id",
+            "source_table",
+            "source_key"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "legacy_invoice_archive_staging_table_check": {
+          "name": "legacy_invoice_archive_staging_table_check",
+          "value": "source_table IN ('invoice', 'user', 'product') AND ((source_table = 'invoice') = (cells IS NOT NULL)) AND ((source_table = 'invoice') = (row_checksum IS NOT NULL)) AND (cells IS NULL OR jsonb_typeof(cells) = 'object') AND (row_checksum IS NULL OR row_checksum ~ '^[0-9a-f]{64}$') AND (source_table <> 'user' OR lookup = source_key)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.legacy_product_reviews": {
+      "name": "legacy_product_reviews",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "code_product": {
+          "name": "code_product",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "legacy_product_id": {
+          "name": "legacy_product_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "legacy_facts": {
+          "name": "legacy_facts",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "facts_checksum": {
+          "name": "facts_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_conflict": {
+          "name": "source_conflict",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "traffic_bytes": {
+          "name": "traffic_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duration_days": {
+          "name": "duration_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "historical_price_raw": {
+          "name": "historical_price_raw",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "historical_price_minor": {
+          "name": "historical_price_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "historical_price_currency": {
+          "name": "historical_price_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parse_notes": {
+          "name": "parse_notes",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "live_invoice_count": {
+          "name": "live_invoice_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "prior_state": {
+          "name": "prior_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_product_id": {
+          "name": "approved_product_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_facts_checksum": {
+          "name": "approved_facts_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decision_reason": {
+          "name": "decision_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_by_admin_id": {
+          "name": "decided_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "read_fingerprint": {
+          "name": "read_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "missing_since_read_fingerprint": {
+          "name": "missing_since_read_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "legacy_product_reviews_tenant_state_idx": {
+          "name": "legacy_product_reviews_tenant_state_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "legacy_product_reviews_tenant_id_tenants_id_fk": {
+          "name": "legacy_product_reviews_tenant_id_tenants_id_fk",
+          "tableFrom": "legacy_product_reviews",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_product_reviews_tenant_product_fk": {
+          "name": "legacy_product_reviews_tenant_product_fk",
+          "tableFrom": "legacy_product_reviews",
+          "tableTo": "products",
+          "columnsFrom": [
+            "tenant_id",
+            "approved_product_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_product_reviews_tenant_admin_fk": {
+          "name": "legacy_product_reviews_tenant_admin_fk",
+          "tableFrom": "legacy_product_reviews",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "decided_by_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "legacy_product_reviews_tenant_id_key": {
+          "name": "legacy_product_reviews_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "legacy_product_reviews_tenant_code_key": {
+          "name": "legacy_product_reviews_tenant_code_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "code_product"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "legacy_product_reviews_state_check": {
+          "name": "legacy_product_reviews_state_check",
+          "value": "state IN ('PENDING_REVIEW', 'APPROVED_EXISTING', 'APPROVED_NEW', 'REJECTED', 'SOURCE_CHANGED')"
+        },
+        "legacy_product_reviews_prior_state_check": {
+          "name": "legacy_product_reviews_prior_state_check",
+          "value": "(prior_state IS NULL OR prior_state IN ('APPROVED_EXISTING', 'APPROVED_NEW', 'REJECTED')) AND ((state = 'SOURCE_CHANGED') = (prior_state IS NOT NULL))"
+        },
+        "legacy_product_reviews_conflict_check": {
+          "name": "legacy_product_reviews_conflict_check",
+          "value": "(source_conflict IS NULL OR source_conflict IN ('CODE_DUPLICATED')) AND jsonb_typeof(legacy_facts) = 'array' AND jsonb_array_length(legacy_facts) >= 1 AND ((source_conflict IS NULL) = (jsonb_array_length(legacy_facts) = 1))"
+        },
+        "legacy_product_reviews_approval_check": {
+          "name": "legacy_product_reviews_approval_check",
+          "value": "((approved_product_id IS NULL) = (approved_facts_checksum IS NULL)) AND (state NOT IN ('APPROVED_EXISTING', 'APPROVED_NEW') OR approved_product_id IS NOT NULL) AND (state NOT IN ('PENDING_REVIEW', 'REJECTED') OR approved_product_id IS NULL)"
+        },
+        "legacy_product_reviews_decision_check": {
+          "name": "legacy_product_reviews_decision_check",
+          "value": "(state NOT IN ('APPROVED_EXISTING', 'APPROVED_NEW', 'REJECTED') OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500)"
+        },
+        "legacy_product_reviews_price_check": {
+          "name": "legacy_product_reviews_price_check",
+          "value": "((historical_price_minor IS NULL) = (historical_price_currency IS NULL)) AND (historical_price_currency IS NULL OR historical_price_currency = 'IRT') AND (historical_price_minor IS NULL OR historical_price_minor >= 0)"
+        },
+        "legacy_product_reviews_code_check": {
+          "name": "legacy_product_reviews_code_check",
+          "value": "char_length(code_product) BETWEEN 1 AND 200 AND code_product !~ '[[:cntrl:]]' AND code_product = btrim(code_product)"
+        },
+        "legacy_product_reviews_hashes_check": {
+          "name": "legacy_product_reviews_hashes_check",
+          "value": "facts_checksum ~ '^[0-9a-f]{64}$' AND (approved_facts_checksum IS NULL OR approved_facts_checksum ~ '^[0-9a-f]{64}$') AND read_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND (missing_since_read_fingerprint IS NULL OR missing_since_read_fingerprint ~ '^[0-9a-f]{64}$')"
+        },
+        "legacy_product_reviews_counts_check": {
+          "name": "legacy_product_reviews_counts_check",
+          "value": "(traffic_bytes IS NULL OR traffic_bytes >= 0) AND (duration_days IS NULL OR duration_days >= 0) AND live_invoice_count >= 0 AND version >= 1 AND jsonb_typeof(parse_notes) = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.legacy_product_shapes": {
       "name": "legacy_product_shapes",
       "schema": "",
@@ -14339,6 +15495,184 @@
       },
       "isRLSEnabled": false
     },
+    "public.legacy_read_set_runs": {
+      "name": "legacy_read_set_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "read_set": {
+          "name": "read_set",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "read_set_version": {
+          "name": "read_set_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fingerprint_version": {
+          "name": "fingerprint_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "read_set_fingerprint": {
+          "name": "read_set_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_schema_hash": {
+          "name": "source_schema_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_engine": {
+          "name": "source_engine",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "synthetic": {
+          "name": "synthetic",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "table_count": {
+          "name": "table_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "row_count": {
+          "name": "row_count",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "code_version": {
+          "name": "code_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "legacy_read_set_runs_tenant_recorded_idx": {
+          "name": "legacy_read_set_runs_tenant_recorded_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "recorded_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "legacy_read_set_runs_tenant_id_tenants_id_fk": {
+          "name": "legacy_read_set_runs_tenant_id_tenants_id_fk",
+          "tableFrom": "legacy_read_set_runs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "legacy_read_set_runs_tenant_id_key": {
+          "name": "legacy_read_set_runs_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "legacy_read_set_runs_observation_key": {
+          "name": "legacy_read_set_runs_observation_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "read_set",
+            "read_set_version",
+            "read_set_fingerprint",
+            "source_fingerprint"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "legacy_read_set_runs_read_set_check": {
+          "name": "legacy_read_set_runs_read_set_check",
+          "value": "read_set IN ('inventory', 'products', 'invoice-archive', 'user-status')"
+        },
+        "legacy_read_set_runs_version_check": {
+          "name": "legacy_read_set_runs_version_check",
+          "value": "read_set_version BETWEEN 1 AND 9999 AND fingerprint_version = 'legacy-read-set:' || read_set || ':v' || read_set_version::text"
+        },
+        "legacy_read_set_runs_hashes_check": {
+          "name": "legacy_read_set_runs_hashes_check",
+          "value": "read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND source_schema_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "legacy_read_set_runs_engine_check": {
+          "name": "legacy_read_set_runs_engine_check",
+          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')"
+        },
+        "legacy_read_set_runs_counts_check": {
+          "name": "legacy_read_set_runs_counts_check",
+          "value": "table_count >= 0 AND row_count >= 0"
+        },
+        "legacy_read_set_runs_code_version_check": {
+          "name": "legacy_read_set_runs_code_version_check",
+          "value": "code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.legacy_trial_eligibility": {
       "name": "legacy_trial_eligibility",
       "schema": "",
@@ -14485,6 +15819,251 @@
         "legacy_trial_eligibility_hash_check": {
           "name": "legacy_trial_eligibility_hash_check",
           "value": "input_hash ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.legacy_wallet_debts": {
+      "name": "legacy_wallet_debts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "legacy_user_id": {
+          "name": "legacy_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount_minor": {
+          "name": "amount_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "row_checksum": {
+          "name": "row_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "synthetic": {
+          "name": "synthetic",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision_reason": {
+          "name": "decision_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_by_admin_id": {
+          "name": "decided_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "legacy_wallet_debts_tenant_state_idx": {
+          "name": "legacy_wallet_debts_tenant_state_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "legacy_wallet_debts_tenant_id_tenants_id_fk": {
+          "name": "legacy_wallet_debts_tenant_id_tenants_id_fk",
+          "tableFrom": "legacy_wallet_debts",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_wallet_debts_tenant_customer_fk": {
+          "name": "legacy_wallet_debts_tenant_customer_fk",
+          "tableFrom": "legacy_wallet_debts",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_wallet_debts_tenant_run_fk": {
+          "name": "legacy_wallet_debts_tenant_run_fk",
+          "tableFrom": "legacy_wallet_debts",
+          "tableTo": "legacy_import_runs",
+          "columnsFrom": [
+            "tenant_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_wallet_debts_tenant_admin_fk": {
+          "name": "legacy_wallet_debts_tenant_admin_fk",
+          "tableFrom": "legacy_wallet_debts",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "decided_by_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "legacy_wallet_debts_tenant_id_key": {
+          "name": "legacy_wallet_debts_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "legacy_wallet_debts_tenant_customer_key": {
+          "name": "legacy_wallet_debts_tenant_customer_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "customer_id"
+          ]
+        },
+        "legacy_wallet_debts_tenant_legacy_user_key": {
+          "name": "legacy_wallet_debts_tenant_legacy_user_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "legacy_user_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "legacy_wallet_debts_state_check": {
+          "name": "legacy_wallet_debts_state_check",
+          "value": "state IN ('PENDING_REVIEW', 'ACKNOWLEDGED', 'WAIVED')"
+        },
+        "legacy_wallet_debts_amount_check": {
+          "name": "legacy_wallet_debts_amount_check",
+          "value": "amount_minor > 0 AND currency = 'IRT'"
+        },
+        "legacy_wallet_debts_identity_check": {
+          "name": "legacy_wallet_debts_identity_check",
+          "value": "legacy_user_id ~ '^[1-9][0-9]{0,19}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND row_checksum ~ '^[0-9a-f]{64}$'"
+        },
+        "legacy_wallet_debts_decision_check": {
+          "name": "legacy_wallet_debts_decision_check",
+          "value": "(state = 'PENDING_REVIEW' OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500) AND version >= 1"
         }
       },
       "isRLSEnabled": false
@@ -28082,29 +29661,14 @@
           "name": "max_consecutive_replies",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": 4
-        },
-        "session_reply_budget": {
-          "name": "session_reply_budget",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 20
-        },
-        "max_auto_replies_per_hour": {
-          "name": "max_auto_replies_per_hour",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 30
+          "notNull": true
         },
         "max_consecutive_clarifying_questions": {
           "name": "max_consecutive_clarifying_questions",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "default": 3
+          "default": 2
         },
         "cooldown_seconds": {
           "name": "cooldown_seconds",
@@ -28234,14 +29798,6 @@
         "support_ai_configs_replies_check": {
           "name": "support_ai_configs_replies_check",
           "value": "max_consecutive_replies BETWEEN 1 AND 20"
-        },
-        "support_ai_configs_session_budget_check": {
-          "name": "support_ai_configs_session_budget_check",
-          "value": "session_reply_budget BETWEEN 5 AND 40"
-        },
-        "support_ai_configs_hourly_limit_check": {
-          "name": "support_ai_configs_hourly_limit_check",
-          "value": "max_auto_replies_per_hour BETWEEN 10 AND 60"
         },
         "support_ai_configs_clarifying_check": {
           "name": "support_ai_configs_clarifying_check",
@@ -28939,7 +30495,7 @@
         },
         "support_ai_jobs_outcome_check": {
           "name": "support_ai_jobs_outcome_check",
-          "value": "outcome IS NULL OR outcome IN ('sent', 'sent_clarifying', 'dropped_mode', 'dropped_epoch', 'dropped_state', 'dropped_coalesced', 'dropped_connection', 'dropped_scope', 'guard_content', 'guard_customer_blocked', 'guard_consecutive', 'guard_window', 'guard_decision', 'guard_handoff_topic', 'guard_human_requested', 'guard_topic_allowlist', 'guard_identity', 'guard_account_review', 'guard_confidence', 'guard_reply_bounds', 'guard_grounding', 'guard_clarifying_limit', 'handoff_ai_requested', 'handoff_output_invalid', 'handoff_ai_unavailable', 'handoff_stale', 'guard_no_progress', 'guard_repeated_advice', 'guard_inbound_flood', 'no_action')"
+          "value": "outcome IS NULL OR outcome IN ('sent', 'sent_clarifying', 'dropped_mode', 'dropped_epoch', 'dropped_state', 'dropped_coalesced', 'dropped_connection', 'dropped_scope', 'guard_content', 'guard_customer_blocked', 'guard_consecutive', 'guard_window', 'guard_decision', 'guard_handoff_topic', 'guard_human_requested', 'guard_topic_allowlist', 'guard_identity', 'guard_account_review', 'guard_confidence', 'guard_reply_bounds', 'guard_grounding', 'guard_clarifying_limit', 'handoff_ai_requested', 'handoff_output_invalid', 'handoff_ai_unavailable', 'handoff_stale')"
         },
         "support_ai_jobs_failure_class_check": {
           "name": "support_ai_jobs_failure_class_check",
@@ -28951,7 +30507,7 @@
         },
         "support_ai_jobs_handoff_reason_check": {
           "name": "support_ai_jobs_handoff_reason_check",
-          "value": "handoff_reason IS NULL OR handoff_reason IN ('SEND_OUTCOME_UNKNOWN', 'TRANSPORT_REFUSED', 'AI_REQUESTED', 'HANDOFF_TOPIC', 'HUMAN_REQUESTED', 'TOPIC_NOT_ALLOWED', 'LOW_CONFIDENCE', 'REPLY_OUT_OF_BOUNDS', 'DECISION_NOT_REPLY', 'AI_OUTPUT_INVALID', 'AI_UNAVAILABLE', 'ACCOUNT_UNDER_REVIEW', 'IDENTITY_UNVERIFIED', 'CUSTOMER_BLOCKED', 'INSUFFICIENT_GROUNDING', 'LOOP_GUARD', 'UNSUPPORTED_CONTENT', 'REPLY_STALE', 'CLARIFYING_LIMIT', 'NO_PROGRESS', 'REPEATED_ADVICE', 'INBOUND_FLOOD')"
+          "value": "handoff_reason IS NULL OR handoff_reason IN ('SEND_OUTCOME_UNKNOWN', 'TRANSPORT_REFUSED', 'AI_REQUESTED', 'HANDOFF_TOPIC', 'HUMAN_REQUESTED', 'TOPIC_NOT_ALLOWED', 'LOW_CONFIDENCE', 'REPLY_OUT_OF_BOUNDS', 'DECISION_NOT_REPLY', 'AI_OUTPUT_INVALID', 'AI_UNAVAILABLE', 'ACCOUNT_UNDER_REVIEW', 'IDENTITY_UNVERIFIED', 'CUSTOMER_BLOCKED', 'INSUFFICIENT_GROUNDING', 'LOOP_GUARD', 'UNSUPPORTED_CONTENT', 'REPLY_STALE', 'CLARIFYING_LIMIT')"
         },
         "support_ai_jobs_auto_shape_check": {
           "name": "support_ai_jobs_auto_shape_check",

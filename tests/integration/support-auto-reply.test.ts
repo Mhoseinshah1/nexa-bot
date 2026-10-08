@@ -2142,7 +2142,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         maxAutoRepliesPerHour: 30,
       });
       // A row written by a writer that knows none of these columns: the columns' defaults
-      // (0219: 3 for the clarifying limit, 20 and 30 for the two A1 limits).
+      // (0236: 3 for the clarifying limit, 20 and 30 for the two A1 limits).
       await db().execute(
         sql`INSERT INTO support_ai_configs (tenant_id, mode, timeout_ms, max_output_chars,
               cooldown_seconds)
@@ -2155,7 +2155,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         sessionReplyBudget: 20,
         maxAutoRepliesPerHour: 30,
       });
-      // A2: a value STORED before 0219 (the old default, 2) is not rewritten — the migration
+      // A2: a value STORED before 0236 (the old default, 2) is not rewritten — the migration
       // changes the column default only. Read back exactly as stored.
       await db().execute(
         sql`UPDATE support_ai_configs SET max_consecutive_clarifying_questions = 2

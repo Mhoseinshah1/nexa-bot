@@ -1,15 +1,18 @@
 import { readFile } from 'node:fs/promises';
+import { isLegacyTableRowReadable } from '@nexa/contracts';
 import {
   EvidenceUnsupported,
   LEGACY_PRIMARY_KEYS,
   LEGACY_SOURCE_TABLES,
   LegacySourceRefused,
   compareKeyBytes,
+  type LegacyCatalogColumn,
   type LegacyCell,
   type LegacySchemaColumn,
   type LegacySourceConnector,
   type LegacySourceSession,
   type LegacySourceTableName,
+  type LegacyTableInfo,
 } from '../application/source-port.js';
 
 /**
@@ -33,7 +36,27 @@ export interface LegacyFixtureDataset {
   readonly label: string;
   readonly schema: readonly LegacySchemaColumn[];
   readonly tables: Readonly<Record<string, readonly Readonly<Record<string, LegacyCell>>[]>>;
+  /**
+   * What the SQL form of the dataset declares for every table (`syntheticLegacySql`), so
+   * the inventory of the fixture and of the same dataset loaded into an engine agree.
+   * Absent: reported as unknown.
+   */
+  readonly tableCharset?: string;
+  readonly tableCollation?: string;
+  readonly storageEngine?: string;
 }
+
+/** The DATA_TYPEs that carry a character set in `information_schema.COLUMNS`. */
+const TEXT_TYPES: ReadonlySet<string> = new Set([
+  'char',
+  'varchar',
+  'tinytext',
+  'text',
+  'mediumtext',
+  'longtext',
+  'enum',
+  'set',
+]);
 
 export function assertSyntheticDataset(value: unknown): LegacyFixtureDataset {
   const candidate = value as Partial<LegacyFixtureDataset> | null;
@@ -103,6 +126,50 @@ export class FixtureLegacySourceConnector implements LegacySourceConnector {
         const pk = LEGACY_PRIMARY_KEYS[table];
         const rows = [...(dataset.tables[table] ?? [])].sort((a, b) =>
           compareKeyBytes(a[pk] ?? '', b[pk] ?? ''),
+        );
+        return (async function* () {
+          for (const row of rows) yield columns.map((c) => row[c] ?? null);
+        })();
+      },
+      tables: () => {
+        live();
+        const names = [...new Set(dataset.schema.map((c) => c.table))];
+        return Promise.resolve(
+          names.map((name): LegacyTableInfo => ({
+            name,
+            tableType: 'BASE TABLE',
+            storageEngine: dataset.storageEngine ?? null,
+            charset: dataset.tableCharset ?? null,
+            collation: dataset.tableCollation ?? null,
+          })),
+        );
+      },
+      catalogColumns: () => {
+        live();
+        return Promise.resolve(
+          dataset.schema.map((c): LegacyCatalogColumn => ({
+            ...c,
+            charset: TEXT_TYPES.has(c.dataType) ? (dataset.tableCharset ?? null) : null,
+          })),
+        );
+      },
+      countRows: (table: string) => {
+        live();
+        if (!dataset.schema.some((c) => c.table === table)) {
+          return Promise.reject(new Error('not a table of this source'));
+        }
+        return Promise.resolve((dataset.tables[table] ?? []).length);
+      },
+      readSetRows: (table: string, primaryKey: string, columns: readonly string[]) => {
+        live();
+        if (!isLegacyTableRowReadable(table)) {
+          throw new LegacySourceRefused(
+            'SOURCE_TABLE_NOT_READABLE',
+            `the table catalogue does not let a read set read rows of ${table}`,
+          );
+        }
+        const rows = [...(dataset.tables[table] ?? [])].sort((a, b) =>
+          compareKeyBytes(a[primaryKey] ?? '', b[primaryKey] ?? ''),
         );
         return (async function* () {
           for (const row of rows) yield columns.map((c) => row[c] ?? null);

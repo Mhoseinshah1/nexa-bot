@@ -164,6 +164,11 @@ export async function resetDatabase(db: Database): Promise<void> {
        trial_limit_overrides, resellers,
        -- WP11A, before the payments they reference.
        gateway_invoices, payment_gateway_credentials, payment_gateway_call_budgets,
+       -- Mirza PR5: legacy service candidates, before the services, runs, archive, panels
+       -- and admins they name.
+       legacy_service_candidates,
+       -- Mirza PR2: the legacy product review, before the products and admins it names.
+       legacy_product_reviews,
        provisioning_operations, services, payments, orders, discounts, products,
        -- AFTER products, which reference it. Named for the same reason as the rest:
        -- the tenants table above does CASCADE to it today, and a table whose clearing
@@ -173,10 +178,14 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- (No backticks. The warning twenty lines up is there because this is a plain
        -- template literal, and the first version of THIS comment ignored it.)
        product_categories,
+       -- Mirza PR4: legacy wallet debts, before the runs and customers they name.
+       legacy_wallet_debts,
        -- Migration P4: the import map before the runs it names.
        legacy_import_map, legacy_import_runs,
        -- Migration P7: the run inputs, before the runs they name.
-       legacy_import_run_inputs,
+       legacy_import_run_inputs, legacy_read_set_runs,
+       -- Mirza PR3: the invoice archive and its staging, before the runs they name.
+       legacy_invoice_archive, legacy_invoice_archive_staging, legacy_invoice_archive_runs,
        -- TB1: Telegram Business connections, before the bots and tenants they name.
        -- TB4: the support AI's runs, keys and configuration.
        support_knowledge_build_proposals, support_knowledge_builds, support_knowledge_revisions, support_knowledge_articles, support_learning_candidates, support_learning_jobs,

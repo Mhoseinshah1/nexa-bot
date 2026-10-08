@@ -219,8 +219,10 @@ export const LEGACY_REVIEW_RETRY_RESOLUTIONS = [
  * evidence establishes for it. A closed set, mirrored exactly by
  * `legacy_import_map_legacy_key_check`.
  *
- * - `user` — `user.id`, which is the customer's Telegram user id: all 197,461 values are
- *   numeric strings (program §19, `docs/legacy-migration/sql-evidence.md`). Digits only, no
+ * - `user` — `user.id`, which is the customer's Telegram user id: every value of the
+ *   historical staging snapshot (197,461 there — a dated baseline, never an expected count;
+ *   the cutover snapshot is newer) is a numeric string (program §19,
+ *   `docs/legacy-migration/sql-evidence.md`). Digits only, no
  *   leading zero, at most 20. This is the key, and it is expected: the map holds an
  *   identifier, never a credential or free text. A digit string is, by shape alone,
  *   indistinguishable from other digit strings (a phone number among them); the CHECK

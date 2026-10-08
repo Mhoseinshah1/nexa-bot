@@ -13,7 +13,12 @@
 #      resume -> reconcile -> report -> independent reconciliation checks -> rollback
 #      rehearsal (restore the pre-import snapshot into a candidate, validate, cut over by
 #      two renames, keep the displaced database) -> post-restore validation;
-#   4. cycle 2 repeats from the clean restore and must reproduce cycle 1 exactly.
+#   4. cycle 2 repeats from the clean restore and must reproduce cycle 1 exactly;
+#   5. once (Mirza PR6, recorded as cycle 9): the whole program — table inventory, products
+#      and invoice-archive reads, the owner's cutover approval, the GATED import and its
+#      refusals (UNCLASSIFIED, no approval, SOURCE_SUPERSEDED), a newer snapshot imported as
+#      an acknowledged re-run with no duplicate effect, reconcile, the final report v2 and
+#      the cutover gate. A staging run stops after the reads: approval is a person's act.
 #
 # Everything is recorded under --out: durations.tsv (seconds and load per stage),
 # checks.tsv (PASS/FAIL per assertion), the snapshots, the P7 report, and summary.json.
@@ -782,12 +787,23 @@ imported_balance() {
     awk 'BEGIN { print "INSERT INTO nexa_reconcile.customer_missing VALUES (\"-\")" } $1 ~ /^[0-9a-f]+$/ { printf ",(\"%s\")", $1 } END { print ";" }' |
     mdb_root
   mdb_root -N -B -e "
+    -- Mirza PR4 (owner decision 6): only POSITIVE balances become ledger openings; a
+    -- negative one is a legacy debt of its magnitude, beside the ledger.
     SELECT 'imported_balance_sum', CAST(COALESCE(SUM(CAST(u.Balance AS DECIMAL(24,4))), 0) AS CHAR)
       FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) > 0
     UNION ALL
     SELECT 'imported_nonzero_users', CAST(COUNT(*) AS CHAR)
       FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
-     WHERE CAST(u.Balance AS DECIMAL(24,4)) <> 0
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) > 0
+    UNION ALL
+    SELECT 'imported_negative_users', CAST(COUNT(*) AS CHAR)
+      FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) < 0
+    UNION ALL
+    SELECT 'imported_negative_magnitude', CAST(COALESCE(-SUM(CAST(u.Balance AS DECIMAL(24,4))), 0) AS CHAR)
+      FROM \`$LEGACY_SCHEMA\`.user u JOIN nexa_reconcile.imported i ON i.legacy_id = CAST(u.id AS CHAR)
+     WHERE CAST(u.Balance AS DECIMAL(24,4)) < 0
     UNION ALL
     -- W8: a fractional Toman balance is never imported (IRT has no minor digits): it is held
     -- for review, never rounded.
@@ -870,7 +886,7 @@ importer() { # importer MODE [args...]
     export NEXA_REHEARSAL_LEGACY_PASSWORD
     CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env node "$LEGACY_IMPORT_CLI" "$mode" \
       --tenant "$TENANT" \
-      --source "mysql://legacy_ro@127.0.0.1:$MARIADB_PORT/$LEGACY_SCHEMA" \
+      --source "mysql://legacy_ro@127.0.0.1:$MARIADB_PORT/${P7_SCHEMA:-$LEGACY_SCHEMA}" \
       --source-password-env "$P7_SOURCE_PASSWORD_ENV" \
       --target "$NEXA_DB" \
       --panel-map "$PANEL_MAP" \
@@ -1005,7 +1021,9 @@ interrupted_import() {
 
 report_json() {
   local rc=0
-  importer report --format json >"$OUT/c$1-report.json" || rc=$?
+  # The cycle checks read the v1 document (its C/W/S/P equations); the program phase below
+  # reads version 2.
+  importer report --format json --report-schema 1 >"$OUT/c$1-report.json" || rc=$?
   # 3 is "an equation failed" — the per-equation checks below record which; the document
   # itself must still be there and valid.
   [ "$rc" -eq 0 ] || [ "$rc" -eq "$P7_EXIT_NEEDS_DECISION" ] || exit "$rc"
@@ -1131,6 +1149,47 @@ if [ "$SYNTHETIC_PANELS" -eq 1 ]; then
   run_direct 0 synthetic-panels start_synthetic_panels
   PANEL_MAP="$OUT/panel-map.json"
 fi
+
+# aud5 F5 = aud6 F1: an APPLY run refuses a panel-map `products` entry the approved legacy
+# product review does not export for the source's current products read. So, once, before
+# the cycles' PRE snapshot (every rollback restores it): the products read of the source as
+# the runbook runs it (digest, then the approved ingest) and — synthetic only — the review
+# decision `products-export` would have exported, recorded as the synthetic owner. A staging
+# rehearsal's restored NEXA backup must carry the owner's own review; the harness never
+# decides one for real data.
+review_products_for_import() {
+  local audit fp digest pfp
+  audit="$OUT/logs/c0-products-audit.json"
+  importer audit --format json >"$audit" 2>"$OUT/logs/c0-products-audit.stderr.log" || true
+  fp="$(json_get "$audit" sections.source.fingerprint)"
+  [[ "$fp" =~ ^[0-9a-f]{64}$ ]] || die "the products-read audit printed no source fingerprint; see $audit"
+  products_read() {
+    (
+      NEXA_REHEARSAL_LEGACY_PASSWORD="$(cat "$MDB_RUN/legacy_ro.pw")"
+      export NEXA_REHEARSAL_LEGACY_PASSWORD
+      CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env node "$LEGACY_IMPORT_CLI" products-read \
+        --tenant "$TENANT" \
+        --source "mysql://legacy_ro@127.0.0.1:$MARIADB_PORT/$LEGACY_SCHEMA" \
+        --source-password-env "$P7_SOURCE_PASSWORD_ENV" \
+        --target "$NEXA_DB" --expected-fingerprint "$fp" --format json "$@"
+    )
+  }
+  digest="$OUT/logs/c0-products-digest.json"
+  products_read >"$digest" 2>"$OUT/logs/c0-products-digest.stderr.log" || true
+  pfp="$(json_get "$digest" productsFingerprint)"
+  [[ "$pfp" =~ ^[0-9a-f]{64}$ ]] || die "products-read printed no products fingerprint; see $digest"
+  products_read --expected-products-fingerprint "$pfp" >"$OUT/logs/c0-products-read.json" \
+    2>"$OUT/logs/c0-products-read.stderr.log" ||
+    die "products-read did not ingest; see $OUT/logs/c0-products-read.stderr.log"
+  if [ "$EVIDENCE_CLASS" = "synthetic" ]; then
+    CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env "$TSX_BIN" \
+      "$ROOT/tests/support/legacy-rehearsal-product-approval.ts" --tenant "$TENANT" \
+      --panel-map "$PANEL_MAP" >"$OUT/logs/c0-product-review.json" \
+      2>"$OUT/logs/c0-product-review.stderr.log" ||
+      die "the synthetic product review decision failed; see $OUT/logs/c0-product-review.stderr.log"
+  fi
+}
+run_direct 0 product-review review_products_for_import
 
 LEGACY_SRC="$OUT/snapshots/legacy-source.tsv"
 FINGERPRINT_FIRST=""
@@ -1274,11 +1333,16 @@ for cycle in $(seq 1 "$CYCLES"); do
   check "$cycle" no_duplicate_openings 0 "$(metric "$POST" opening_customers_with_duplicates)"
   check "$cycle" opening_reference_matches_customer 0 "$(metric "$POST" opening_reference_mismatch)"
   check "$cycle" opening_links_no_money 0 "$(metric "$POST" opening_linked_to_money)"
-  # The equation: Σ openings = Σ legacy Balance over imported users (exact, decimal-safe),
-  # and one opening per imported user with a non-zero balance.
+  # The equation: Σ openings = Σ POSITIVE legacy Balance over imported users (exact,
+  # decimal-safe), and one opening per imported user with a positive balance. Mirza PR4
+  # (owner decision 6): a negative balance is a legacy debt, never a ledger DEBIT — so no
+  # DEBIT opening exists, and the debts equal the negative population exactly.
   IMPORTED_SUM="$(metric "$S-legacy-imported.tsv" imported_balance_sum)"
   check "$cycle" wallet_equation_imported_balance "$IMPORTED_SUM" "$(printf '%.4f' "$(delta opening_signed_total_minor)")"
   check "$cycle" openings_one_per_nonzero_user "$(metric "$S-legacy-imported.tsv" imported_nonzero_users)" "$(delta opening_entries_total)"
+  check "$cycle" no_debit_openings 0 "$(metric "$POST" opening_debit_entries)"
+  check "$cycle" legacy_debts_one_per_negative_user "$(metric "$S-legacy-imported.tsv" imported_negative_users)" "$(delta legacy_debts_total)"
+  check "$cycle" legacy_debts_equal_negative_magnitude "$(metric "$S-legacy-imported.tsv" imported_negative_magnitude)" "$(printf '%.4f' "$(delta legacy_debts_sum_minor)")"
 
   # Not revenue, and no money moved.
   for k in sale_orders_paid sale_orders_paid_total_minor payments_total wallet_topup_signed_total_minor; do
@@ -1353,6 +1417,309 @@ for cycle in $(seq 1 "$CYCLES"); do
       "$(sha256sum <"$OUT/snapshots/c1-post-import.tsv" | cut -d' ' -f1)" "$(sha256sum <"$POST" | cut -d' ' -f1)"
   fi
 done
+
+# --- The migration program, PR1-PR6, end to end (Mirza PR6) --------------------------------
+#
+# Once, after the cycles (whose last rollback left the database at its pre-import state). It
+# exercises what the cycles do not: the table inventory, the products and invoice-archive
+# reads (digest, approve, ingest), the owner's cutover approval, the GATED import, the
+# SOURCE_SUPERSEDED refusal, a second snapshot imported as an acknowledged re-run with no
+# duplicate effect, reconcile, the final report v2 and the cutover gate. Recorded as cycle
+# $PROGRAM_CYCLE in checks.tsv.
+#
+# Snapshot A is the loaded fixture as it is: it keeps its UNCLASSIFIED table, so the gated
+# import of A is refused for that, and A is then imported the historical, staging way (no
+# gate). Snapshot B is a NEWER snapshot made from A on this throwaway engine (a table
+# classified away, a non-Telegram id gone, a user, a product and an archived invoice added);
+# its "final dump" is a stand-in — a byte-exact TSV export of every table, because the CI's
+# MySQL client packages carry no dump binary — and its "restore" is a table-by-table copy
+# into a third schema, which PR1's freeze checker then compares with the frozen one.
+#
+# The approvals are recorded by tests/support/legacy-rehearsal-cutover-approval.ts as the
+# rehearsal's synthetic owner. On staging and production a PERSON records them in the Web
+# Admin; a staging rehearsal records the gate's approval steps as PENDING instead.
+PROGRAM_CYCLE=9
+CUTOVER_APPROVAL_HELPER="$ROOT/tests/support/legacy-rehearsal-cutover-approval.ts"
+REPORT_V2_SCHEMA="$ROOT/docs/legacy-migration/final-report-v2.schema.json"
+FREEZE_SQL="$ROOT/scripts/legacy-freeze-checksum.sql"
+FREEZE_CHECKER="$ROOT/scripts/legacy-freeze-checksum-verify.sh"
+
+# legacy_sub SUBCOMMAND [args...] — inventory, products-read, invoices-read, cutover-gate:
+# the importer's subcommands, against the schema in P7_SCHEMA (default: the loaded one).
+legacy_sub() {
+  local sub="$1"
+  shift
+  (
+    NEXA_REHEARSAL_LEGACY_PASSWORD="$(cat "$MDB_RUN/legacy_ro.pw")"
+    export NEXA_REHEARSAL_LEGACY_PASSWORD
+    CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env node "$LEGACY_IMPORT_CLI" "$sub" \
+      --tenant "$TENANT" \
+      --source "mysql://legacy_ro@127.0.0.1:$MARIADB_PORT/${P7_SCHEMA:-$LEGACY_SCHEMA}" \
+      --source-password-env "$P7_SOURCE_PASSWORD_ENV" \
+      --target "$NEXA_DB" "$@"
+  )
+}
+
+# p_call NAME CMD... — runs CMD with its stdout and stderr in logs/p-NAME*.log, records the
+# duration, and leaves the exit code in P_RC. Never stops the rehearsal: the CHECKS decide.
+P_RC=0
+p_call() {
+  local name="$1" t0 load0
+  shift
+  t0=$SECONDS
+  load0="$(loadavg)"
+  log "program: $name"
+  set +e
+  "$@" >"$OUT/logs/p-${name}.log" 2>"$OUT/logs/p-${name}.stderr.log"
+  P_RC=$?
+  set -e
+  record_duration "$PROGRAM_CYCLE" "$name" "$((SECONDS - t0))" "$P_RC" "$load0"
+}
+
+p_out() { printf '%s\n' "$OUT/logs/p-$1.log"; }
+# The refusal code a gated import printed: the first word of its stderr's last line.
+p_refusal() { tail -n 1 "$OUT/logs/p-$1.stderr.log" 2>/dev/null | cut -d: -f1; }
+p_apply_runs() {
+  pg_nexa -c "SELECT count(*) FROM legacy_import_runs r JOIN tenants t ON t.id = r.tenant_id
+              WHERE t.slug = '$TENANT' AND r.mode = 'APPLY'"
+}
+p_counts() { # what a re-run must not duplicate, as one line
+  pg_nexa -c "SELECT (SELECT count(*) FROM customers c JOIN tenants t ON t.id = c.tenant_id WHERE t.slug = '$TENANT')
+          || '/' || (SELECT count(*) FROM wallet_entries w JOIN tenants t ON t.id = w.tenant_id
+                     WHERE t.slug = '$TENANT' AND w.reason = 'MIGRATION_OPENING_BALANCE')
+          || '/' || (SELECT count(*) FROM legacy_wallet_debts d JOIN tenants t ON t.id = d.tenant_id WHERE t.slug = '$TENANT')
+          || '/' || (SELECT count(*) FROM services s JOIN tenants t ON t.id = s.tenant_id WHERE t.slug = '$TENANT')
+          || '/' || (SELECT count(*) FROM legacy_import_map m JOIN tenants t ON t.id = m.tenant_id WHERE t.slug = '$TENANT')"
+}
+
+# The freeze proof of one schema, as the runbook takes it (every base table), and its check.
+p_freeze() { # SCHEMA FILE
+  mdb_root --batch "$1" <"$FREEZE_SQL" >"$2"
+}
+
+# The read sets of the schema in P7_SCHEMA, as the runbook runs them; sets FP_* for it.
+p_reads() { # LABEL
+  local label="$1"
+  p_call "${label}-audit" importer audit --format json
+  FP_SOURCE="$(json_get "$(p_out "${label}-audit")" sections.source.fingerprint)"
+  FP_MAP="$(json_get "$(p_out "${label}-audit")" sections.panelMapping.fingerprint)"
+  p_call "${label}-inventory" legacy_sub inventory --expected-fingerprint "$FP_SOURCE" --format json
+  P_INVENTORY_RC=$P_RC
+  FP_INVENTORY="$(json_get "$(p_out "${label}-inventory")" fingerprint)"
+  P_INVENTORY_VERDICT="$(json_get "$(p_out "${label}-inventory")" verdict)"
+  p_call "${label}-products-digest" legacy_sub products-read --expected-fingerprint "$FP_SOURCE" --format json
+  FP_PRODUCTS="$(json_get "$(p_out "${label}-products-digest")" productsFingerprint)"
+  p_call "${label}-products-read" legacy_sub products-read --expected-fingerprint "$FP_SOURCE" \
+    --expected-products-fingerprint "$FP_PRODUCTS" --format json
+  check "$PROGRAM_CYCLE" "${label}_products_ingested" "0 INGESTED" \
+    "$P_RC $(json_get "$(p_out "${label}-products-read")" verdict)"
+  p_call "${label}-invoices-digest" legacy_sub invoices-read --expected-fingerprint "$FP_SOURCE" --format json
+  FP_ARCHIVE="$(json_get "$(p_out "${label}-invoices-digest")" invoiceArchiveFingerprint)"
+  p_call "${label}-invoices-read" legacy_sub invoices-read --expected-fingerprint "$FP_SOURCE" \
+    --expected-invoice-archive-fingerprint "$FP_ARCHIVE" --format json
+  check "$PROGRAM_CYCLE" "${label}_invoices_archived" "0 ARCHIVED" \
+    "$P_RC $(json_get "$(p_out "${label}-invoices-read")" verdict)"
+}
+
+p_expected() { # the seven --expected-* values, for the current snapshot
+  P_EXPECTED=(--expected-fingerprint "$FP_SOURCE" --expected-panel-map-fingerprint "$FP_MAP"
+    --expected-inventory-fingerprint "$FP_INVENTORY" --expected-products-fingerprint "$FP_PRODUCTS"
+    --expected-invoice-archive-fingerprint "$FP_ARCHIVE"
+    --expected-freeze-proof-sha256 "$FP_FREEZE" --expected-final-dump-sha256 "$FP_DUMP")
+}
+
+approval_helper() {
+  CLI_DATABASE_URL="$PG_URL/$NEXA_DB" with_nexa_env "$TSX_BIN" "$CUTOVER_APPROVAL_HELPER" "$@"
+}
+
+p_approve() { # NAME KIND [PRIOR]
+  p_call "$1" approval_helper --tenant "$TENANT" --kind "$2" \
+    --source "$FP_SOURCE" --panel-map "$FP_MAP" --inventory "$FP_INVENTORY" \
+    --products "$FP_PRODUCTS" --invoice-archive "$FP_ARCHIVE" --freeze "$FP_FREEZE" \
+    --dump "$FP_DUMP" ${3:+--prior "$3"}
+}
+
+# A table-by-table copy of one schema into another (the synthetic dump+restore stand-in).
+p_copy_schema() { # FROM TO
+  local t
+  mdb_root -e "CREATE DATABASE \`$2\` CHARACTER SET utf8mb4"
+  for t in $(mdb_root -N -B -e "SELECT table_name FROM information_schema.tables WHERE table_schema = '$1' AND table_type = 'BASE TABLE' ORDER BY table_name"); do
+    mdb_root -e "CREATE TABLE \`$2\`.\`$t\` LIKE \`$1\`.\`$t\`; INSERT INTO \`$2\`.\`$t\` SELECT * FROM \`$1\`.\`$t\`"
+  done
+  mdb_root -e "GRANT SELECT ON \`$2\`.* TO 'legacy_ro'@'127.0.0.1'; GRANT SELECT ON \`$2\`.* TO 'legacy_ro'@'localhost'"
+}
+
+# The "final dump" stand-in: every table's rows, in a fixed order, as TSV.
+p_export_schema() { # SCHEMA FILE
+  local t
+  : >"$2"
+  for t in $(mdb_root -N -B -e "SELECT table_name FROM information_schema.tables WHERE table_schema = '$1' AND table_type = 'BASE TABLE' ORDER BY table_name"); do
+    printf '## %s\n' "$t" >>"$2"
+    mdb_root --batch "$1" -e "SELECT * FROM \`$t\` ORDER BY 1" >>"$2"
+  done
+}
+
+p_stop_sales() { # the runbook's step 1, the way its effects leave the destination
+  pg_nexa -c "INSERT INTO incidents (id, tenant_id, kind, severity, status, title, stop_sales, admin_banner,
+                started_at, created_at, updated_at)
+              SELECT gen_random_uuid(), t.id, 'MAINTENANCE', 'MAJOR', 'ACTIVE', 'synthetic cutover window',
+                     true, true, now(), now(), now() FROM tenants t WHERE t.slug = '$TENANT'" >/dev/null
+  pg_nexa -c "UPDATE panels p SET drained_at = now(), drain_reason = 'synthetic cutover window'
+                FROM tenants t WHERE t.id = p.tenant_id AND t.slug = '$TENANT' AND p.drained_at IS NULL" >/dev/null
+  pg_nexa -c "UPDATE payment_gateways g SET status = 'DISABLED'
+                FROM tenants t WHERE t.id = g.tenant_id AND t.slug = '$TENANT'" >/dev/null
+}
+
+run_program() {
+  local P=$PROGRAM_CYCLE
+  # --- Snapshot A: the historical one -----------------------------------------------------
+  P7_SCHEMA="$LEGACY_SCHEMA"
+  p_reads a
+  p_freeze "$LEGACY_SCHEMA" "$OUT/snapshots/p-a-freeze.tsv"
+  FP_FREEZE="$(sha256sum <"$OUT/snapshots/p-a-freeze.tsv" | cut -d' ' -f1)"
+  FP_DUMP="$(cat "$OUT/snapshots/legacy-dump.sha256")"
+  p_expected
+  local runs_before
+  runs_before="$(p_apply_runs)"
+  if [ "$EVIDENCE_CLASS" != "synthetic" ]; then
+    # A real dump: what its inventory says is evidence for table-inventory.md, and the owner's
+    # approval is a person's act in the Web Admin — the harness records neither as a pass.
+    if [ "$P_INVENTORY_VERDICT" = "COMPLETE" ]; then
+      check "$P" a_inventory_complete COMPLETE "$P_INVENTORY_VERDICT"
+    else
+      pending "$P" a_inventory_complete COMPLETE "$P_INVENTORY_VERDICT (classify every table, table-inventory.md)"
+    fi
+    pending "$P" cutover_approval_by_owner "recorded in the Web Admin" "a staging rehearsal records no owner approval"
+    return 0
+  fi
+  # The fixture's own UNCLASSIFIED table: the inventory says so, and exits 3 ...
+  check "$P" a_inventory_unclassified "3 UNCLASSIFIED_TABLES" "$P_INVENTORY_RC $P_INVENTORY_VERDICT"
+  # ... and a gated import of it is refused for that before it writes anything.
+  p_call a-gated-unclassified importer import "${P_EXPECTED[@]}" --cutover-gate
+  check "$P" a_gated_import_unclassified_refused "65 TABLES_UNCLASSIFIED $runs_before" \
+    "$P_RC $(p_refusal a-gated-unclassified) $(p_apply_runs)"
+  local fp_a="$FP_SOURCE"
+  # The historical snapshot, imported the staging way (ungated).
+  p_call a-import importer import --expected-fingerprint "$FP_SOURCE" \
+    --expected-panel-map-fingerprint "$FP_MAP" --format json
+  check "$P" a_historical_import_completed "COMPLETED" \
+    "$(pg_nexa -c "SELECT r.status FROM legacy_import_runs r JOIN tenants t ON t.id = r.tenant_id
+                   WHERE t.slug = '$TENANT' AND r.mode = 'APPLY' ORDER BY r.started_at DESC LIMIT 1")"
+  local counts_a
+  counts_a="$(p_counts)"
+
+  # --- Snapshot B: newer, frozen, "dumped" and "restored" -----------------------------------
+  p_copy_schema "$LEGACY_SCHEMA" "${LEGACY_SCHEMA}_b"
+  mdb_root "${LEGACY_SCHEMA}_b" <<SQL
+DROP TABLE IF EXISTS \`nexa_synthetic_unclassified\`;
+DELETE FROM \`user\` WHERE id = 'not-a-telegram-id';
+CREATE TEMPORARY TABLE nexa_new_user AS SELECT * FROM \`user\` WHERE id = '100000011';
+UPDATE nexa_new_user SET id = '100000099', Balance = '4000';
+INSERT INTO \`user\` SELECT * FROM nexa_new_user;
+CREATE TEMPORARY TABLE nexa_new_product AS SELECT * FROM \`product\` ORDER BY id LIMIT 1;
+UPDATE nexa_new_product SET id = 999, code_product = 'psyn_new';
+INSERT INTO \`product\` SELECT * FROM nexa_new_product;
+CREATE TEMPORARY TABLE nexa_new_invoice AS SELECT * FROM \`invoice\` ORDER BY id_invoice LIMIT 1;
+UPDATE nexa_new_invoice SET id_invoice = '17000099abcdef01', id_user = '100000099', Status = 'unpaid', is_test = '0';
+INSERT INTO \`invoice\` SELECT * FROM nexa_new_invoice;
+SQL
+  # A user, a product and an archived (not live) invoice added; a non-Telegram id gone.
+  check "$P" b_snapshot_changes "1 1 1 0" \
+    "$(mdb_root -N -B "${LEGACY_SCHEMA}_b" -e "SELECT (SELECT count(*) FROM \`user\` WHERE id = '100000099'), (SELECT count(*) FROM \`product\` WHERE code_product = 'psyn_new'), (SELECT count(*) FROM \`invoice\` WHERE id_invoice = '17000099abcdef01'), (SELECT count(*) FROM \`user\` WHERE id = 'not-a-telegram-id')" | tr '\t' ' ')"
+  p_freeze "${LEGACY_SCHEMA}_b" "$OUT/snapshots/p-b-freeze-frozen.tsv"
+  p_export_schema "${LEGACY_SCHEMA}_b" "$OUT/snapshots/p-b-final-dump.tsv"
+  p_copy_schema "${LEGACY_SCHEMA}_b" "${LEGACY_SCHEMA}_c"
+  p_freeze "${LEGACY_SCHEMA}_c" "$OUT/snapshots/p-b-freeze-restored.tsv"
+  p_call b-freeze-verify bash "$FREEZE_CHECKER" "$OUT/snapshots/p-b-freeze-frozen.tsv" "$OUT/snapshots/p-b-freeze-restored.tsv"
+  check "$P" b_freeze_proof_equal "0" "$P_RC"
+  P7_SCHEMA="${LEGACY_SCHEMA}_c"
+  p_reads b
+  check "$P" b_inventory_complete "0 COMPLETE" "$P_INVENTORY_RC $P_INVENTORY_VERDICT"
+  check "$P" b_source_is_new "different" "$([ "$FP_SOURCE" != "$fp_a" ] && echo different || echo same)"
+  FP_FREEZE="$(sha256sum <"$OUT/snapshots/p-b-freeze-frozen.tsv" | cut -d' ' -f1)"
+  FP_DUMP="$(sha256sum <"$OUT/snapshots/p-b-final-dump.tsv" | cut -d' ' -f1)"
+  p_expected
+  runs_before="$(p_apply_runs)"
+  # Classified, read, frozen — and not yet approved: refused, nothing written.
+  p_call b-gated-no-approval importer import "${P_EXPECTED[@]}" --cutover-gate
+  check "$P" b_gated_import_without_approval_refused "65 APPROVAL_MISSING $runs_before" \
+    "$P_RC $(p_refusal b-gated-no-approval) $(p_apply_runs)"
+  p_approve b-approve CUTOVER
+  check "$P" b_approval_recorded 0 "$P_RC"
+  # SOURCE_SUPERSEDED: A was imported here, and nobody acknowledged a re-run over it.
+  p_call b-superseded importer import "${P_EXPECTED[@]}" --cutover-gate
+  check "$P" b_source_superseded_refused "65 SOURCE_SUPERSEDED $runs_before" \
+    "$P_RC $(p_refusal b-superseded) $(p_apply_runs)"
+  check "$P" b_superseded_wrote_nothing "$counts_a" "$(p_counts)"
+  p_approve b-rerun-ack RERUN_OVER_PRIOR_IMPORT "$fp_a"
+  check "$P" b_rerun_acknowledged 0 "$P_RC"
+  # aud6 F2: approved and acknowledged, but sales are open: a gated import measures the freeze
+  # in its own start transaction and refuses, writing nothing.
+  p_call b-sales-open importer import "${P_EXPECTED[@]}" --cutover-gate --format json
+  check "$P" b_gated_import_sales_open_refused "65 STOP_SALES_NOT_ACTIVE $runs_before" \
+    "$P_RC $(p_refusal b-sales-open) $(p_apply_runs)"
+  # The runbook's step 1, now: it holds through the import, reconcile, the report and the gate.
+  p_stop_sales
+  p_call b-import importer import "${P_EXPECTED[@]}" --cutover-gate --format json
+  check "$P" b_rerun_import_completed "COMPLETED" "$(json_get "$(p_out b-import)" verdict)"
+  # A re-run, never a merge: exactly the one new user, and its one opening; nothing else.
+  local a_customers a_openings a_debts a_services a_map b_customers b_openings b_debts b_services b_map
+  IFS=/ read -r a_customers a_openings a_debts a_services a_map <<<"$counts_a"
+  IFS=/ read -r b_customers b_openings b_debts b_services b_map <<<"$(p_counts)"
+  check "$P" b_rerun_one_new_customer "$((a_customers + 1))" "$b_customers"
+  check "$P" b_rerun_one_new_opening "$((a_openings + 1))" "$b_openings"
+  check "$P" b_rerun_no_new_debt "$a_debts" "$b_debts"
+  check "$P" b_rerun_no_new_service "$a_services" "$b_services"
+  # One map row more: the new user's. The added invoice is not live, so it is archive only.
+  check "$P" b_rerun_one_new_map_row "$((a_map + 1))" "$b_map"
+  # The same snapshot again: nothing at all.
+  local counts_b
+  counts_b="$(p_counts)"
+  p_call b-import-again importer import "${P_EXPECTED[@]}" --cutover-gate --format json
+  check "$P" b_second_rerun_writes_nothing "$counts_b" "$(p_counts)"
+
+  # --- Reconcile, report v2, the cutover gate -----------------------------------------------
+  p_call b-reconcile importer reconcile --format json
+  check "$P" b_reconciled "0 RECONCILED" "$P_RC $(json_get "$(p_out b-reconcile)" verdict)"
+  p_call b-report importer report --format json
+  cp "$(p_out b-report)" "$OUT/final-report-v2.json"
+  check "$P" b_report_v2_schema_valid valid \
+    "$(report_schema_verdict "$REPORT_V2_SCHEMA" "$OUT/final-report-v2.json" "$OUT/final-report-v2.schema-violations.txt")"
+  check "$P" b_report_v2_holds "0 true" "$P_RC $(json_get "$OUT/final-report-v2.json" verdict.holds)"
+  check "$P" b_report_v2_rerun_acknowledged true \
+    "$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.sections.cutover.supersededSources.length===1&&r.sections.cutover.supersededSources[0].acknowledged)' "$OUT/final-report-v2.json")"
+  p_call b-cutover-gate legacy_sub cutover-gate --panel-map "$PANEL_MAP" \
+    --evidence-class "$EVIDENCE_CLASS" "${P_EXPECTED[@]}" \
+    --freeze-proof "$OUT/snapshots/p-b-freeze-frozen.tsv" \
+    --freeze-proof-restored "$OUT/snapshots/p-b-freeze-restored.tsv" \
+    --freeze-checker "$FREEZE_CHECKER" --final-dump "$OUT/snapshots/p-b-final-dump.tsv" --format json
+  cp "$(p_out b-cutover-gate)" "$OUT/cutover-gate.json"
+  check "$P" b_cutover_gate_ready "0 CUTOVER_READY" "$P_RC $(json_get "$OUT/cutover-gate.json" verdict)"
+  # Changed after approval: an expected hash other than the approved one voids the approval,
+  # and the gate refuses at once, because the dump file it hashes is not that value either.
+  local wrong_dump
+  wrong_dump="$(printf 'not the approved dump' | sha256sum | cut -d' ' -f1)"
+  p_call b-cutover-gate-changed legacy_sub cutover-gate --panel-map "$PANEL_MAP" \
+    --evidence-class "$EVIDENCE_CLASS" "${P_EXPECTED[@]:0:12}" --expected-final-dump-sha256 "$wrong_dump" \
+    --freeze-proof "$OUT/snapshots/p-b-freeze-frozen.tsv" \
+    --freeze-proof-restored "$OUT/snapshots/p-b-freeze-restored.tsv" \
+    --freeze-checker "$FREEZE_CHECKER" --final-dump "$OUT/snapshots/p-b-final-dump.tsv" --format json
+  check "$P" b_cutover_gate_changed_dump_refused "3 FINAL_DUMP_VERIFIED" \
+    "$P_RC $(json_get "$(p_out b-cutover-gate-changed)" failedStep)"
+  # The approved hash, but a dump FILE edited since: the gate hashes the bytes, so it refuses.
+  cp "$OUT/snapshots/p-b-final-dump.tsv" "$OUT/snapshots/p-b-final-dump-tampered.tsv"
+  printf 'one more row\n' >>"$OUT/snapshots/p-b-final-dump-tampered.tsv"
+  p_call b-cutover-gate-tampered legacy_sub cutover-gate --panel-map "$PANEL_MAP" \
+    --evidence-class "$EVIDENCE_CLASS" "${P_EXPECTED[@]}" \
+    --freeze-proof "$OUT/snapshots/p-b-freeze-frozen.tsv" \
+    --freeze-proof-restored "$OUT/snapshots/p-b-freeze-restored.tsv" \
+    --freeze-checker "$FREEZE_CHECKER" --final-dump "$OUT/snapshots/p-b-final-dump-tampered.tsv" --format json
+  check "$P" b_cutover_gate_tampered_dump_refused "3 FINAL_DUMP_VERIFIED" \
+    "$P_RC $(json_get "$(p_out b-cutover-gate-tampered)" failedStep)"
+}
+
+run_program
+P7_SCHEMA="$LEGACY_SCHEMA"
 
 # --- Summary ------------------------------------------------------------------------------
 

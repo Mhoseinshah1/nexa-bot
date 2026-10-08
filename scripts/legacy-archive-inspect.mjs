@@ -5,7 +5,7 @@
  *
  *   node scripts/legacy-archive-inspect.mjs --archive PATH
  *        [--password-env NAME] [--engine mariadb|mysql8] [--out DIR [--extract]]
- *        [--require-class synthetic|staging] [--max-dump-bytes N]
+ *        [--require-class synthetic|staging] [--max-dump-bytes N] [--columns]
  *
  * Accepted, and nothing else (each is an evidenced MirzaBot shape, docs/legacy-migration/
  * importer.md §10):
@@ -38,6 +38,9 @@
  * version, engine, tables (names and whether the importer's required columns are there),
  * statement counts, character sets, collations, stored objects, USE/CREATE DATABASE, and
  * `blockers[]`. `--extract` writes the inner dump to `DIR/<entry>` (0600, in a 0700 dir).
+ * `--columns` adds `dump.tableColumns`: every table's column NAMES in declaration order —
+ * names only, never a type default or a value — so the table inventory
+ * (docs/legacy-migration/table-inventory.md) can be drafted from a dump before any load.
  *
  * Exit: 0 ACCEPTED; 2 BLOCKED (the report says why); 64 usage; 1 an I/O failure.
  */
@@ -128,6 +131,7 @@ export function parseArgs(argv, env) {
     engine: null,
     out: null,
     extract: false,
+    columns: false,
     requireClass: null,
     maxDumpBytes: String(DEFAULT_MAX_DUMP_BYTES),
   };
@@ -149,6 +153,8 @@ export function parseArgs(argv, env) {
     }
     if (arg === '--extract') {
       opts.extract = true;
+    } else if (arg === '--columns') {
+      opts.columns = true;
     } else if (takes.has(arg)) {
       const value = argv[i + 1];
       if (value === undefined || value === '' || value.startsWith('--'))
@@ -890,6 +896,14 @@ export async function inspect(opts) {
       definer: scanner.definer,
       selectsDatabase: [...new Set(scanner.selectsDatabase)],
       createsDatabase: scanner.createsDatabase,
+      // Opt-in, so the default report is unchanged: names only, in declaration order.
+      ...(opts.columns === true
+        ? {
+            tableColumns: Object.fromEntries(
+              tables.map((table) => [table, [...(scanner.tables.get(table) ?? [])]]),
+            ),
+          }
+        : {}),
     };
 
     if (fmt === null) {
@@ -1007,7 +1021,7 @@ export async function inspect(opts) {
 
 const HELP = `usage: node scripts/legacy-archive-inspect.mjs --archive PATH
          [--password-env NAME] [--engine mariadb|mysql8] [--out DIR [--extract]]
-         [--require-class synthetic|staging] [--max-dump-bytes N]
+         [--require-class synthetic|staging] [--max-dump-bytes N] [--columns]
 The password is read ONLY from the environment variable NAME; never pass it on argv.`;
 
 const isMain =

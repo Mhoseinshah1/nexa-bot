@@ -1,5 +1,5 @@
 {
-  "id": "496d221b-3893-4e46-80c6-218c7ce0e222",
+  "id": "c81e6786-36c8-4309-9955-cfe4f4a6c249",
   "prevId": "842cba44-3b8d-4666-9993-f1661b70d86a",
   "version": "7",
   "dialect": "postgresql",
@@ -14299,6 +14299,184 @@
       },
       "isRLSEnabled": false
     },
+    "public.legacy_read_set_runs": {
+      "name": "legacy_read_set_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "read_set": {
+          "name": "read_set",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "read_set_version": {
+          "name": "read_set_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fingerprint_version": {
+          "name": "fingerprint_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "read_set_fingerprint": {
+          "name": "read_set_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_schema_hash": {
+          "name": "source_schema_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_engine": {
+          "name": "source_engine",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "synthetic": {
+          "name": "synthetic",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "table_count": {
+          "name": "table_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "row_count": {
+          "name": "row_count",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "code_version": {
+          "name": "code_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "legacy_read_set_runs_tenant_recorded_idx": {
+          "name": "legacy_read_set_runs_tenant_recorded_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "recorded_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "legacy_read_set_runs_tenant_id_tenants_id_fk": {
+          "name": "legacy_read_set_runs_tenant_id_tenants_id_fk",
+          "tableFrom": "legacy_read_set_runs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "legacy_read_set_runs_tenant_id_key": {
+          "name": "legacy_read_set_runs_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "legacy_read_set_runs_observation_key": {
+          "name": "legacy_read_set_runs_observation_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "read_set",
+            "read_set_version",
+            "read_set_fingerprint",
+            "source_fingerprint"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "legacy_read_set_runs_read_set_check": {
+          "name": "legacy_read_set_runs_read_set_check",
+          "value": "read_set IN ('inventory')"
+        },
+        "legacy_read_set_runs_version_check": {
+          "name": "legacy_read_set_runs_version_check",
+          "value": "read_set_version BETWEEN 1 AND 9999 AND fingerprint_version = 'legacy-read-set:' || read_set || ':v' || read_set_version::text"
+        },
+        "legacy_read_set_runs_hashes_check": {
+          "name": "legacy_read_set_runs_hashes_check",
+          "value": "read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND source_schema_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "legacy_read_set_runs_engine_check": {
+          "name": "legacy_read_set_runs_engine_check",
+          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')"
+        },
+        "legacy_read_set_runs_counts_check": {
+          "name": "legacy_read_set_runs_counts_check",
+          "value": "table_count >= 0 AND row_count >= 0"
+        },
+        "legacy_read_set_runs_code_version_check": {
+          "name": "legacy_read_set_runs_code_version_check",
+          "value": "code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.legacy_trial_eligibility": {
       "name": "legacy_trial_eligibility",
       "schema": "",
@@ -28042,29 +28220,14 @@
           "name": "max_consecutive_replies",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": 4
-        },
-        "session_reply_budget": {
-          "name": "session_reply_budget",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 20
-        },
-        "max_auto_replies_per_hour": {
-          "name": "max_auto_replies_per_hour",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 30
+          "notNull": true
         },
         "max_consecutive_clarifying_questions": {
           "name": "max_consecutive_clarifying_questions",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "default": 3
+          "default": 2
         },
         "cooldown_seconds": {
           "name": "cooldown_seconds",
@@ -28194,14 +28357,6 @@
         "support_ai_configs_replies_check": {
           "name": "support_ai_configs_replies_check",
           "value": "max_consecutive_replies BETWEEN 1 AND 20"
-        },
-        "support_ai_configs_session_budget_check": {
-          "name": "support_ai_configs_session_budget_check",
-          "value": "session_reply_budget BETWEEN 5 AND 40"
-        },
-        "support_ai_configs_hourly_limit_check": {
-          "name": "support_ai_configs_hourly_limit_check",
-          "value": "max_auto_replies_per_hour BETWEEN 10 AND 60"
         },
         "support_ai_configs_clarifying_check": {
           "name": "support_ai_configs_clarifying_check",

@@ -239,6 +239,22 @@ import {
   LEGACY_IMPORT_REASON_CODES,
   LEGACY_IMPORT_RUN_FAILURE_CODES,
   LEGACY_IMPORT_RUN_MODES,
+  LEGACY_READ_SET_NAMES,
+  LEGACY_PRODUCT_REVIEW_STATES,
+  LEGACY_PRODUCT_REVIEW_DECIDED_STATES,
+  LEGACY_PRODUCT_SOURCE_CONFLICTS,
+  LEGACY_INVOICE_ARCHIVE_CLASSES,
+  LEGACY_WALLET_DEBT_CURRENCY,
+  LEGACY_WALLET_DEBT_STATES,
+  LEGACY_SERVICE_OUTCOMES,
+  LEGACY_CUTOVER_APPROVAL_KINDS,
+  LEGACY_CUTOVER_REASON_MAX_LENGTH,
+  LEGACY_SERVICE_REVIEW_STATES,
+  LEGACY_INVOICE_ARCHIVE_RUN_FAILURES,
+  LEGACY_INVOICE_ARCHIVE_RUN_STATES,
+  LEGACY_INVOICE_PARSE_NOTES,
+  LEGACY_INVOICE_PRODUCT_REFS,
+  LEGACY_INVOICE_REVISION_REASONS,
   LEGACY_IMPORT_RUN_STATUSES,
   LEGACY_IMPORT_SOURCE_TABLES,
   LEGACY_REVIEW_REASON_CODES,
@@ -13272,6 +13288,773 @@ export const legacyImportRunInputs = pgTable(
 );
 
 /**
+ * Mirza migration PR1 — one versioned READ SET of the legacy source, as a run observed it
+ * (`docs/legacy-migration/importer.md` §Read sets). Separate from
+ * `legacy_import_run_inputs`, which is per APPLY run and compared on resume: a read set is
+ * read by its own read-only session, and what binds it to the approved source is
+ * `source_fingerprint` — the v1 import fingerprint that SAME session recomputed and found
+ * equal to `--expected-fingerprint`.
+ *
+ * Fingerprints, counts, an engine name and a version — never a row, a table name list or
+ * a value. One row per (tenant, read set, version, read-set fingerprint, source
+ * fingerprint): observing the same thing again records nothing new. Append-only (0220).
+ */
+export const legacyReadSetRuns = pgTable(
+  'legacy_read_set_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    readSet: text('read_set').notNull(),
+    readSetVersion: integer('read_set_version').notNull(),
+    /** `legacy-read-set:<read_set>:v<read_set_version>`, stored so a reader needs no code. */
+    fingerprintVersion: text('fingerprint_version').notNull(),
+    readSetFingerprint: text('read_set_fingerprint').notNull(),
+    /** The v1 import fingerprint the same session recomputed: the approved source. */
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    sourceSchemaHash: text('source_schema_hash').notNull(),
+    sourceEngine: text('source_engine').notNull(),
+    synthetic: boolean('synthetic').notNull(),
+    tableCount: integer('table_count').notNull(),
+    rowCount: bigint('row_count', { mode: 'bigint' }).notNull(),
+    codeVersion: text('code_version'),
+    recordedAt: timestamptz('recorded_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_read_set_runs_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_read_set_runs_observation_key').on(
+      table.tenantId,
+      table.readSet,
+      table.readSetVersion,
+      table.readSetFingerprint,
+      table.sourceFingerprint,
+    ),
+    index('legacy_read_set_runs_tenant_recorded_idx').on(table.tenantId, table.recordedAt),
+    check('legacy_read_set_runs_read_set_check', enumCheck('read_set', LEGACY_READ_SET_NAMES)),
+    check(
+      'legacy_read_set_runs_version_check',
+      sql`read_set_version BETWEEN 1 AND 9999 AND fingerprint_version = 'legacy-read-set:' || read_set || ':v' || read_set_version::text`,
+    ),
+    check(
+      'legacy_read_set_runs_hashes_check',
+      sql`read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND source_schema_hash ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_read_set_runs_engine_check',
+      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')`,
+    ),
+    check('legacy_read_set_runs_counts_check', sql`table_count >= 0 AND row_count >= 0`),
+    check(
+      'legacy_read_set_runs_code_version_check',
+      sql`code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR2 — the legacy product review (`docs/legacy-product-review-design.md`).
+ *
+ * One row per legacy `code_product` (trimmed, as the importer matches it) per tenant: the
+ * legacy row's cells VERBATIM (`legacy_facts`, an array because a duplicated code keeps
+ * every row it has — `source_conflict`), their checksum, the fields parsed from them as a
+ * proposal (with closed `parse_notes`), and the operator's decision.
+ *
+ * NOT a product. Nothing here is listed, ordered, priced or renewed, and no column of
+ * `products` is touched by it except through the product service when an operator creates
+ * a draft. `historical_price_*` is METADATA — the owner states Mirza prices are Toman, so
+ * the normalised figure is IRT minor units (exponent 0) beside the raw text — and nothing
+ * copies it to `products.price_*`.
+ *
+ * Every state change is a conditional UPDATE naming its from-states. An approval binds to
+ * `facts_checksum` (`approved_facts_checksum`); a later read whose facts differ — or which
+ * no longer has the code (`missing_since_read_fingerprint`) — moves a decided row to
+ * SOURCE_CHANGED, remembering the decision it invalidated in `prior_state`.
+ */
+export const legacyProductReviews = pgTable(
+  'legacy_product_reviews',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    codeProduct: text('code_product').notNull(),
+    /** The legacy `product.id` (the first by byte order when the code is duplicated). */
+    legacyProductId: text('legacy_product_id').notNull(),
+    /** One object per legacy row naming this code: column name to the cell as read. */
+    legacyFacts: jsonb('legacy_facts').notNull(),
+    factsChecksum: text('facts_checksum').notNull(),
+    sourceConflict: text('source_conflict'),
+    title: text('title'),
+    trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }),
+    durationDays: integer('duration_days'),
+    /** The legacy `price_product` cell verbatim. */
+    historicalPriceRaw: text('historical_price_raw'),
+    /** Metadata only: whole Toman as IRT minor units. Never a selling price. */
+    historicalPriceMinor: bigint('historical_price_minor', { mode: 'bigint' }),
+    historicalPriceCurrency: text('historical_price_currency'),
+    parseNotes: jsonb('parse_notes').notNull(),
+    /** Live, non-test, non-custom invoices naming this code in the read's snapshot. */
+    liveInvoiceCount: integer('live_invoice_count').notNull(),
+    state: text('state').notNull(),
+    priorState: text('prior_state'),
+    approvedProductId: uuid('approved_product_id'),
+    approvedFactsChecksum: text('approved_facts_checksum'),
+    decisionReason: text('decision_reason'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    decidedAt: timestamptz('decided_at'),
+    /** The `products` read set fingerprint of the read that last saw this code. */
+    readFingerprint: text('read_fingerprint').notNull(),
+    /** The approved v1 source fingerprint that read was bound to. */
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    missingSinceReadFingerprint: text('missing_since_read_fingerprint'),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_product_reviews_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_product_reviews_tenant_code_key').on(table.tenantId, table.codeProduct),
+    index('legacy_product_reviews_tenant_state_idx').on(table.tenantId, table.state),
+    foreignKey({
+      name: 'legacy_product_reviews_tenant_product_fk',
+      columns: [table.tenantId, table.approvedProductId],
+      foreignColumns: [products.tenantId, products.id],
+    }),
+    foreignKey({
+      name: 'legacy_product_reviews_tenant_admin_fk',
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('legacy_product_reviews_state_check', enumCheck('state', LEGACY_PRODUCT_REVIEW_STATES)),
+    check(
+      'legacy_product_reviews_prior_state_check',
+      sql`(${nullableEnumCheck('prior_state', LEGACY_PRODUCT_REVIEW_DECIDED_STATES)}) AND ((state = 'SOURCE_CHANGED') = (prior_state IS NOT NULL))`,
+    ),
+    check(
+      'legacy_product_reviews_conflict_check',
+      sql`(${nullableEnumCheck('source_conflict', LEGACY_PRODUCT_SOURCE_CONFLICTS)}) AND jsonb_typeof(legacy_facts) = 'array' AND jsonb_array_length(legacy_facts) >= 1 AND ((source_conflict IS NULL) = (jsonb_array_length(legacy_facts) = 1))`,
+    ),
+    check(
+      'legacy_product_reviews_approval_check',
+      sql`((approved_product_id IS NULL) = (approved_facts_checksum IS NULL)) AND (state NOT IN ('APPROVED_EXISTING', 'APPROVED_NEW') OR approved_product_id IS NOT NULL) AND (state NOT IN ('PENDING_REVIEW', 'REJECTED') OR approved_product_id IS NULL)`,
+    ),
+    check(
+      'legacy_product_reviews_decision_check',
+      sql`(state NOT IN ('APPROVED_EXISTING', 'APPROVED_NEW', 'REJECTED') OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500)`,
+    ),
+    check(
+      'legacy_product_reviews_price_check',
+      sql`((historical_price_minor IS NULL) = (historical_price_currency IS NULL)) AND (historical_price_currency IS NULL OR historical_price_currency = 'IRT') AND (historical_price_minor IS NULL OR historical_price_minor >= 0)`,
+    ),
+    check(
+      'legacy_product_reviews_code_check',
+      sql`char_length(code_product) BETWEEN 1 AND 200 AND code_product !~ '[[:cntrl:]]' AND code_product = btrim(code_product)`,
+    ),
+    check(
+      'legacy_product_reviews_hashes_check',
+      sql`facts_checksum ~ '^[0-9a-f]{64}$' AND (approved_facts_checksum IS NULL OR approved_facts_checksum ~ '^[0-9a-f]{64}$') AND read_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND (missing_since_read_fingerprint IS NULL OR missing_since_read_fingerprint ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      'legacy_product_reviews_counts_check',
+      sql`(traffic_bytes IS NULL OR traffic_bytes >= 0) AND (duration_days IS NULL OR duration_days >= 0) AND live_invoice_count >= 0 AND version >= 1 AND jsonb_typeof(parse_notes) = 'object'`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR3 — one INGEST RUN of the legacy invoice archive
+ * (`docs/legacy-migration/importer.md` §Invoice archive). The run is the archive's unit of
+ * all-or-nothing:
+ *
+ * - STAGING: an APPROVED `invoice-archive` read is being delivered into
+ *   `legacy_invoice_archive_staging` under this run's id, one transaction per batch. No
+ *   archive row exists for it. A read that diverges, or a process that dies, leaves it
+ *   STAGING or FAILED and its staging rows are deleted: nothing of it is ever archived.
+ * - VERIFIED: the whole read was delivered, `readLegacyReadSet` proved the delivery equal
+ *   to the verified pass, and the staged rows add up to the read's exact row counts. Only
+ *   now are revisions written, a batch per transaction, behind `promoted_through` (the
+ *   last staged key promoted), so a crash resumes where it stopped.
+ * - COMPLETED: every staged invoice is accounted for — the CHECK below is the closure
+ *   equation — and its revisions become visible to readers.
+ *
+ * Every state change is a conditional UPDATE naming its `from` state; at most one run per
+ * tenant is open (STAGING or VERIFIED). Counts, hashes and codes — never a cell.
+ */
+export const legacyInvoiceArchiveRuns = pgTable(
+  'legacy_invoice_archive_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    state: text('state').notNull(),
+    failureCode: text('failure_code'),
+    readSetVersion: integer('read_set_version').notNull(),
+    readSetFingerprint: text('read_set_fingerprint').notNull(),
+    /** The v1 import fingerprint the read's own session recomputed: the approved source. */
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    sourceSchemaHash: text('source_schema_hash').notNull(),
+    sourceEngine: text('source_engine').notNull(),
+    synthetic: boolean('synthetic').notNull(),
+    /** The read's exact row counts, set when the run is VERIFIED. */
+    sourceInvoiceRows: bigint('source_invoice_rows', { mode: 'bigint' }),
+    sourceUserRows: bigint('source_user_rows', { mode: 'bigint' }),
+    sourceProductRows: bigint('source_product_rows', { mode: 'bigint' }),
+    /** The last staged invoice key whose revision decision is committed. */
+    promotedThrough: text('promoted_through'),
+    promotedRows: bigint('promoted_rows', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    insertedNew: bigint('inserted_new', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    insertedRevision: bigint('inserted_revision', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    unchanged: bigint('unchanged', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    /** Archived invoices this run's snapshot no longer has. Counted, never deleted. */
+    missingInSnapshot: bigint('missing_in_snapshot', { mode: 'bigint' }),
+    /** Distinct archived invoices once this run completed. */
+    archiveInvoicesAfter: bigint('archive_invoices_after', { mode: 'bigint' }),
+    codeVersion: text('code_version'),
+    startedAt: timestamptz('started_at').notNull(),
+    verifiedAt: timestamptz('verified_at'),
+    finishedAt: timestamptz('finished_at'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_invoice_archive_runs_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('legacy_invoice_archive_runs_one_open_idx')
+      .on(table.tenantId)
+      .where(sql`state IN ('STAGING', 'VERIFIED')`),
+    index('legacy_invoice_archive_runs_tenant_started_idx').on(table.tenantId, table.startedAt),
+    check(
+      'legacy_invoice_archive_runs_state_check',
+      enumCheck('state', LEGACY_INVOICE_ARCHIVE_RUN_STATES),
+    ),
+    check(
+      'legacy_invoice_archive_runs_failure_check',
+      sql`(${nullableEnumCheck('failure_code', LEGACY_INVOICE_ARCHIVE_RUN_FAILURES)}) AND ((state = 'FAILED') = (failure_code IS NOT NULL))`,
+    ),
+    check(
+      'legacy_invoice_archive_runs_lifecycle_check',
+      sql`((verified_at IS NOT NULL) = (state IN ('VERIFIED', 'COMPLETED'))) AND ((finished_at IS NOT NULL) = (state IN ('COMPLETED', 'FAILED'))) AND ((source_invoice_rows IS NOT NULL) = (verified_at IS NOT NULL)) AND ((source_user_rows IS NOT NULL) = (verified_at IS NOT NULL)) AND ((source_product_rows IS NOT NULL) = (verified_at IS NOT NULL)) AND (state IN ('VERIFIED', 'COMPLETED') OR (promoted_rows = 0 AND promoted_through IS NULL))`,
+    ),
+    check(
+      'legacy_invoice_archive_runs_closure_check',
+      sql`promoted_rows = inserted_new + inserted_revision + unchanged AND (source_invoice_rows IS NULL OR promoted_rows <= source_invoice_rows) AND ((state = 'COMPLETED') = (missing_in_snapshot IS NOT NULL)) AND ((state = 'COMPLETED') = (archive_invoices_after IS NOT NULL)) AND (state <> 'COMPLETED' OR (promoted_rows = source_invoice_rows AND archive_invoices_after = source_invoice_rows + missing_in_snapshot))`,
+    ),
+    check(
+      'legacy_invoice_archive_runs_counts_check',
+      sql`read_set_version BETWEEN 1 AND 9999 AND inserted_new >= 0 AND inserted_revision >= 0 AND unchanged >= 0 AND (source_invoice_rows IS NULL OR source_invoice_rows >= 0) AND (source_user_rows IS NULL OR source_user_rows >= 0) AND (source_product_rows IS NULL OR source_product_rows >= 0) AND (missing_in_snapshot IS NULL OR missing_in_snapshot >= 0)`,
+    ),
+    check(
+      'legacy_invoice_archive_runs_hashes_check',
+      sql`read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND source_schema_hash ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_invoice_archive_runs_engine_check',
+      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')`,
+    ),
+    check(
+      'legacy_invoice_archive_runs_code_version_check',
+      sql`code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR3 — SCRATCH rows of one STAGING or VERIFIED archive run: what an
+ * approved `invoice-archive` read delivered, before anything is archived. Not history and
+ * not evidence: deleted when the run completes or fails. `invoice` rows carry the cells
+ * verbatim and their checksum; `user` rows only the legacy id (owner detection) and
+ * `product` rows only the trimmed `code_product` (product reference) — the source-derived
+ * context the archive's classification reads from the SAME snapshot.
+ */
+export const legacyInvoiceArchiveStaging = pgTable(
+  'legacy_invoice_archive_staging',
+  {
+    runId: uuid('run_id').notNull(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    sourceTable: text('source_table').notNull(),
+    /** The source row's primary key as read. */
+    sourceKey: text('source_key').notNull(),
+    /** `user`: the id; `product`: the trimmed non-empty `code_product` (else NULL). */
+    lookup: text('lookup'),
+    /** `invoice` only: column name to cell as read. */
+    cells: jsonb('cells'),
+    rowChecksum: text('row_checksum'),
+  },
+  (table) => [
+    primaryKey({
+      name: 'legacy_invoice_archive_staging_pk',
+      columns: [table.runId, table.sourceTable, table.sourceKey],
+    }),
+    index('legacy_invoice_archive_staging_lookup_idx').on(
+      table.runId,
+      table.sourceTable,
+      table.lookup,
+    ),
+    foreignKey({
+      name: 'legacy_invoice_archive_staging_run_fk',
+      columns: [table.tenantId, table.runId],
+      foreignColumns: [legacyInvoiceArchiveRuns.tenantId, legacyInvoiceArchiveRuns.id],
+    }),
+    check(
+      'legacy_invoice_archive_staging_table_check',
+      sql`source_table IN ('invoice', 'user', 'product') AND ((source_table = 'invoice') = (cells IS NOT NULL)) AND ((source_table = 'invoice') = (row_checksum IS NOT NULL)) AND (cells IS NULL OR jsonb_typeof(cells) = 'object') AND (row_checksum IS NULL OR row_checksum ~ '^[0-9a-f]{64}$') AND (source_table <> 'user' OR lookup = source_key)`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR3 — the legacy invoice ARCHIVE: one row per REVISION of one legacy
+ * `invoice` row, kept as read-only history. APPEND-ONLY (0224): no UPDATE and no DELETE,
+ * whoever asks.
+ *
+ * - Keyed by (tenant, `id_invoice` exactly as read, revision). Any key shape is kept: an id
+ *   outside the importer's evidenced shape (`INVOICE_KEY_INVALID`, which the import map
+ *   cannot hold) is archived with `key_shape_evidenced = false`. Nothing is dropped.
+ * - A newer snapshot appends revision n+1 only when `archive_checksum` (the cells AND their
+ *   source-derived context) differs from revision n; an identical row writes nothing.
+ * - `raw_row` is the cells VERBATIM; beside it the validated normalised fields, each from
+ *   one named column by one deterministic rule, NULL with a closed note when the rule does
+ *   not read it. The historical price is METADATA in IRT minor units (owner decision 7);
+ *   `sold_at` is parsed only as unix seconds (the public sources' `time()`).
+ * - `classification` is source-derived only; the CHECK restates its decision order, so a
+ *   row whose class disagrees with its own facts cannot be written.
+ *
+ * NOT an order, a payment, a wallet entry, a service or revenue. Nothing here has a foreign
+ * key to any of those, and nothing reads this table but the archive's own service.
+ */
+export const legacyInvoiceArchive = pgTable(
+  'legacy_invoice_archive',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    runId: uuid('run_id').notNull(),
+    /** The legacy `id_invoice` exactly as read. */
+    invoiceKey: text('invoice_key').notNull(),
+    revision: integer('revision').notNull(),
+    revisionReason: text('revision_reason').notNull(),
+    /** Whether the key has the importer's evidenced shape (`LEGACY_ID_PATTERNS.invoice`). */
+    keyShapeEvidenced: boolean('key_shape_evidenced').notNull(),
+    /** Column name to cell as read: lossless. */
+    rawRow: jsonb('raw_row').notNull(),
+    /** SHA-256 over the canonical cells. */
+    rowChecksum: text('row_checksum').notNull(),
+    /** SHA-256 over the cells AND the source-derived context: what a revision compares. */
+    archiveChecksum: text('archive_checksum').notNull(),
+    classification: text('classification').notNull(),
+    live: boolean('live').notNull(),
+    /** `Status` verbatim. */
+    status: text('status'),
+    /** `is_test` read as 1 → true, 0 → false; anything else NULL (TEST_FLAG_INVALID). */
+    isTest: boolean('is_test'),
+    /** `id_user` verbatim (PII: a Telegram id). */
+    legacyUserId: text('legacy_user_id'),
+    /** `id_user` names a row of the legacy `user` table of the same snapshot. */
+    ownerPresent: boolean('owner_present').notNull(),
+    /** `username` verbatim (PII: the legacy account name). */
+    username: text('username'),
+    /** `code_panel` trimmed; NULL when NULL or blank (owner decision 8: NO_PANEL). */
+    panelCode: text('panel_code'),
+    /** `code_product` trimmed; NULL when NULL or blank. */
+    productCode: text('product_code'),
+    productRef: text('product_ref').notNull(),
+    productName: text('product_name'),
+    priceRaw: text('price_raw'),
+    /** Metadata only: whole Toman as IRT minor units. Never a price, a total or revenue. */
+    priceMinor: bigint('price_minor', { mode: 'bigint' }),
+    priceCurrency: text('price_currency'),
+    priceNote: text('price_note'),
+    soldAtRaw: text('sold_at_raw'),
+    soldAt: timestamptz('sold_at'),
+    soldAtNote: text('sold_at_note'),
+    readSetFingerprint: text('read_set_fingerprint').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    normalizationVersion: text('normalization_version').notNull(),
+    archivedAt: timestamptz('archived_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_invoice_archive_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_invoice_archive_revision_key').on(
+      table.tenantId,
+      table.invoiceKey,
+      table.revision,
+    ),
+    foreignKey({
+      name: 'legacy_invoice_archive_run_fk',
+      columns: [table.tenantId, table.runId],
+      foreignColumns: [legacyInvoiceArchiveRuns.tenantId, legacyInvoiceArchiveRuns.id],
+    }),
+    index('legacy_invoice_archive_run_idx').on(table.tenantId, table.runId),
+    index('legacy_invoice_archive_key_prefix_idx').on(
+      table.tenantId,
+      sql`invoice_key text_pattern_ops`,
+    ),
+    index('legacy_invoice_archive_user_idx').on(
+      table.tenantId,
+      table.legacyUserId,
+      table.invoiceKey,
+    ),
+    index('legacy_invoice_archive_username_idx').on(
+      table.tenantId,
+      sql`lower(username) text_pattern_ops`,
+    ),
+    index('legacy_invoice_archive_status_idx').on(table.tenantId, table.status, table.invoiceKey),
+    index('legacy_invoice_archive_panel_idx').on(table.tenantId, table.panelCode, table.invoiceKey),
+    index('legacy_invoice_archive_product_idx').on(
+      table.tenantId,
+      table.productCode,
+      table.invoiceKey,
+    ),
+    index('legacy_invoice_archive_class_idx').on(
+      table.tenantId,
+      table.classification,
+      table.invoiceKey,
+    ),
+    index('legacy_invoice_archive_test_idx').on(table.tenantId, table.isTest, table.invoiceKey),
+    check(
+      'legacy_invoice_archive_class_check',
+      sql`(${enumCheck('classification', LEGACY_INVOICE_ARCHIVE_CLASSES)}) AND classification = CASE WHEN NOT key_shape_evidenced THEN 'KEY_SHAPE_UNRECOGNISED' WHEN is_test IS TRUE THEN 'TEST' WHEN is_test IS NULL THEN 'TEST_FLAG_INVALID' WHEN NOT owner_present THEN 'ORPHAN_OWNER' WHEN NOT live THEN 'NOT_LIVE' WHEN panel_code IS NULL THEN 'NO_PANEL' ELSE 'LIVE_CANDIDATE' END`,
+    ),
+    check(
+      'legacy_invoice_archive_revision_check',
+      sql`revision >= 1 AND (${enumCheck('revision_reason', LEGACY_INVOICE_REVISION_REASONS)}) AND ((revision = 1) = (revision_reason = 'FIRST_SEEN'))`,
+    ),
+    check(
+      'legacy_invoice_archive_product_check',
+      sql`(${enumCheck('product_ref', LEGACY_INVOICE_PRODUCT_REFS)}) AND ((product_code IS NULL) = (product_ref = 'NONE'))`,
+    ),
+    check(
+      'legacy_invoice_archive_price_check',
+      sql`((price_minor IS NULL) = (price_currency IS NULL)) AND ((price_minor IS NULL) = (price_note IS NOT NULL)) AND (price_currency IS NULL OR price_currency = 'IRT') AND (price_minor IS NULL OR price_minor >= 0) AND (${nullableEnumCheck('price_note', LEGACY_INVOICE_PARSE_NOTES)})`,
+    ),
+    check(
+      'legacy_invoice_archive_sold_at_check',
+      sql`((sold_at IS NULL) = (sold_at_note IS NOT NULL)) AND (${nullableEnumCheck('sold_at_note', LEGACY_INVOICE_PARSE_NOTES)})`,
+    ),
+    check(
+      'legacy_invoice_archive_shape_check',
+      sql`jsonb_typeof(raw_row) = 'object' AND char_length(invoice_key) <= 1000 AND (panel_code IS NULL OR (panel_code <> '' AND panel_code = btrim(panel_code))) AND (product_code IS NULL OR (product_code <> '' AND product_code = btrim(product_code)))`,
+    ),
+    check(
+      'legacy_invoice_archive_hashes_check',
+      sql`row_checksum ~ '^[0-9a-f]{64}$' AND archive_checksum ~ '^[0-9a-f]{64}$' AND read_set_fingerprint ~ '^[0-9a-f]{64}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND normalization_version ~ '^legacy-invoice-archive:v[1-9][0-9]{0,3}$'`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR4 — a legacy wallet DEBT (owner decision 6, 2026-10-07;
+ * `docs/migration-opening-balance.md` §Negative balances).
+ *
+ * A negative legacy `user.Balance` is held for review instead of becoming a ledger DEBIT:
+ * this row records it — the exact magnitude owed, its currency, the legacy user id and the
+ * snapshot it was read from — and the customer's NEXA balance starts at 0. It is NOT a
+ * wallet entry and there is deliberately no foreign key to `wallet_entries`, orders or
+ * payments: no balance, purchase, top-up, refund or clawback reads it, so nothing nets it
+ * off. The owner's per-customer decision is a label (`state`) and moves no money.
+ *
+ * One debt per customer and per legacy user id (the importer's derived idempotency key,
+ * like the opening reference). The recorded facts are immutable and the row is never
+ * deleted (`0227`); only the decision columns move, by a conditional UPDATE naming its
+ * `from` state at the version the operator saw.
+ */
+export const legacyWalletDebts = pgTable(
+  'legacy_wallet_debts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** The legacy `user.id`: the customer's own Telegram id (checked by the writer). */
+    legacyUserId: text('legacy_user_id').notNull(),
+    /** The MAGNITUDE owed, in minor units of `currency`. Always > 0. */
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The v1 source fingerprint of the snapshot the debt was read from. */
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    /** The legacy user row's `user:v1` checksum in that snapshot. */
+    rowChecksum: text('row_checksum').notNull(),
+    /** The APPLY run that recorded it. */
+    runId: uuid('run_id').notNull(),
+    /** The source carried the synthetic-fixture marker: test data, never a real debt. */
+    synthetic: boolean('synthetic').notNull(),
+    state: text('state').notNull(),
+    decisionReason: text('decision_reason'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    decidedAt: timestamptz('decided_at'),
+    version: integer('version').notNull().default(1),
+    recordedAt: timestamptz('recorded_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_wallet_debts_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_wallet_debts_tenant_customer_key').on(table.tenantId, table.customerId),
+    unique('legacy_wallet_debts_tenant_legacy_user_key').on(table.tenantId, table.legacyUserId),
+    index('legacy_wallet_debts_tenant_state_idx').on(table.tenantId, table.state, table.id),
+    foreignKey({
+      name: 'legacy_wallet_debts_tenant_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    foreignKey({
+      name: 'legacy_wallet_debts_tenant_run_fk',
+      columns: [table.tenantId, table.runId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+    }),
+    foreignKey({
+      name: 'legacy_wallet_debts_tenant_admin_fk',
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('legacy_wallet_debts_state_check', enumCheck('state', LEGACY_WALLET_DEBT_STATES)),
+    check(
+      'legacy_wallet_debts_amount_check',
+      sql`amount_minor > 0 AND currency = ${sql.raw(`'${LEGACY_WALLET_DEBT_CURRENCY}'`)}`,
+    ),
+    check(
+      'legacy_wallet_debts_identity_check',
+      sql`legacy_user_id ~ '^[1-9][0-9]{0,19}$' AND source_fingerprint ~ '^[0-9a-f]{64}$' AND row_checksum ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_wallet_debts_decision_check',
+      sql`(state = 'PENDING_REVIEW' OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500) AND version >= 1`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR5 — one live legacy invoice considered as a service, with the ONE
+ * outcome the latest import run that decided it gave it, the evidence behind that outcome,
+ * and the operator's review (`docs/legacy-migration/service-review.md`).
+ *
+ * The importer writes the outcome and evidence on every APPLY run (insert, or a conditional
+ * update of this invoice's row — never a second row: `(tenant_id, invoice_key)` is unique).
+ * The operator writes only the review columns, bound to `version`. An invoice that was not
+ * adopted is history: `archive_id` names the invoice archive revision (PR3) it is kept in.
+ * Codes, NEXA ids, counts and hashes only — never a legacy username, a Telegram id or a
+ * subscription link (those stay in the archive, behind its own permission).
+ */
+export const legacyServiceCandidates = pgTable(
+  'legacy_service_candidates',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** `invoice.id_invoice` as read (the archive's bound; any shape — a bad key is an outcome). */
+    invoiceKey: text('invoice_key').notNull(),
+    /** The APPLY run that last decided it. */
+    runId: uuid('run_id').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    /** The source carried the synthetic-fixture marker. Never acted on in production. */
+    synthetic: boolean('synthetic').notNull(),
+    /** The importer's `invoice:v1` checksum of the source row that run decided from. */
+    invoiceChecksum: text('invoice_checksum').notNull(),
+    outcome: text('outcome').notNull(),
+    /** The raw map or adoption reason behind the outcome, when there is one. */
+    blocker: text('blocker'),
+    /** `LegacyServiceEvidence` (codes, NEXA ids, counts). */
+    evidence: jsonb('evidence').notNull(),
+    /** sha256 of the canonical evidence: a change of evidence is a new version. */
+    evidenceHash: text('evidence_hash').notNull(),
+    /** The legacy `code_panel` / `code_product`, trimmed as the importer reads them. */
+    panelCode: text('panel_code'),
+    productCode: text('product_code'),
+    /** The invoice archive revision this candidate is history in (null: not archived yet). */
+    archiveId: uuid('archive_id'),
+    /** The adopted NEXA service: exactly when the outcome is ADOPTED or ALREADY_ADOPTED. */
+    serviceId: uuid('service_id'),
+    reviewState: text('review_state').notNull(),
+    /** An ADOPT approval: the panel named (null: the map's), and what it was bound to. */
+    approvedPanelId: uuid('approved_panel_id'),
+    approvedChecksum: text('approved_checksum'),
+    approvedOutcome: text('approved_outcome'),
+    /** Why the last approval was not executed (an outcome or an approval refusal code). */
+    lastApprovalRefusal: text('last_approval_refusal'),
+    decisionReason: text('decision_reason'),
+    decidedByAdminId: uuid('decided_by_admin_id'),
+    decidedAt: timestamptz('decided_at'),
+    /** When the inventory walk that decided it finished; null when no inventory was read. */
+    observedAt: timestamptz('observed_at'),
+    version: integer('version').notNull().default(1),
+    firstDecidedAt: timestamptz('first_decided_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_service_candidates_tenant_id_key').on(table.tenantId, table.id),
+    unique('legacy_service_candidates_tenant_invoice_key').on(table.tenantId, table.invoiceKey),
+    index('legacy_service_candidates_outcome_idx').on(table.tenantId, table.outcome, table.id),
+    index('legacy_service_candidates_review_idx').on(table.tenantId, table.reviewState, table.id),
+    index('legacy_service_candidates_panel_idx').on(table.tenantId, table.panelCode, table.id),
+    index('legacy_service_candidates_product_idx').on(table.tenantId, table.productCode, table.id),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_run_fk',
+      columns: [table.tenantId, table.runId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+    }),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_archive_fk',
+      columns: [table.tenantId, table.archiveId],
+      foreignColumns: [legacyInvoiceArchive.tenantId, legacyInvoiceArchive.id],
+    }),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_service_fk',
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+    }),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_panel_fk',
+      columns: [table.tenantId, table.approvedPanelId],
+      foreignColumns: [panels.tenantId, panels.id],
+    }),
+    foreignKey({
+      name: 'legacy_service_candidates_tenant_admin_fk',
+      columns: [table.tenantId, table.decidedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('legacy_service_candidates_outcome_check', enumCheck('outcome', LEGACY_SERVICE_OUTCOMES)),
+    check(
+      'legacy_service_candidates_review_state_check',
+      enumCheck('review_state', LEGACY_SERVICE_REVIEW_STATES),
+    ),
+    check(
+      'legacy_service_candidates_adopted_check',
+      sql`((service_id IS NOT NULL) = (outcome IN ('ADOPTED', 'ALREADY_ADOPTED'))) AND ((review_state = 'ADOPTED') = (outcome IN ('ADOPTED', 'ALREADY_ADOPTED')))`,
+    ),
+    check(
+      'legacy_service_candidates_approval_check',
+      sql`((approved_checksum IS NOT NULL) = (review_state IN ('ADOPT_APPROVED', 'ADOPTING'))) AND ((approved_outcome IS NOT NULL) = (approved_checksum IS NOT NULL)) AND (approved_panel_id IS NULL OR approved_checksum IS NOT NULL) AND (approved_outcome IS NULL OR approved_outcome IN (${sql.raw(LEGACY_SERVICE_OUTCOMES.map((o) => `'${o}'`).join(', '))}))`,
+    ),
+    check(
+      'legacy_service_candidates_decision_check',
+      sql`(review_state NOT IN ('ACKNOWLEDGED', 'KEPT_AS_HISTORY', 'ADOPT_APPROVED', 'ADOPTING') OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL AND decision_reason IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500) AND version >= 1`,
+    ),
+    check(
+      'legacy_service_candidates_shape_check',
+      sql`char_length(invoice_key) BETWEEN 1 AND 1000 AND (panel_code IS NULL OR (panel_code <> '' AND panel_code = btrim(panel_code) AND char_length(panel_code) <= 1000)) AND (product_code IS NULL OR (product_code <> '' AND product_code = btrim(product_code) AND char_length(product_code) <= 1000)) AND jsonb_typeof(evidence) = 'object' AND (blocker IS NULL OR blocker ~ '^[A-Z_]{1,64}$') AND (last_approval_refusal IS NULL OR last_approval_refusal ~ '^[A-Z_]{1,64}$')`,
+    ),
+    check(
+      'legacy_service_candidates_hashes_check',
+      sql`source_fingerprint ~ '^[0-9a-f]{64}$' AND invoice_checksum ~ '^[0-9a-f]{64}$' AND evidence_hash ~ '^[0-9a-f]{64}$' AND (approved_checksum IS NULL OR approved_checksum ~ '^[0-9a-f]{64}$')`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR6 — the owner's approval of ONE legacy snapshot for import (owner
+ * constraint 3; `docs/legacy-migration/cutover-runbook.md` §Owner approval).
+ *
+ * Bound to seven exact values: the v1 source fingerprint, the panel-map fingerprint, the
+ * three read-set fingerprints (each recorded in `legacy_read_set_runs` for that source when
+ * the approval was made), the freeze proof file's SHA-256 and the final dump's SHA-256. A
+ * production-like import refuses without an UNREVOKED row matching every value it is given
+ * — so a changed value is no approval at all. `RERUN_OVER_PRIOR_IMPORT` additionally names
+ * the earlier source a re-run goes over (SOURCE_SUPERSEDED otherwise).
+ *
+ * Who and when are the authenticated owner and the Clock — never a typed name. Append-only
+ * (`0234`): a row is never edited or deleted; it is withdrawn by a row in
+ * `legacy_cutover_approval_revocations`. Fingerprints and digests only — no legacy row.
+ */
+export const legacyCutoverApprovals = pgTable(
+  'legacy_cutover_approvals',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    kind: text('kind').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    panelMapFingerprint: text('panel_map_fingerprint').notNull(),
+    inventoryFingerprint: text('inventory_fingerprint').notNull(),
+    productsFingerprint: text('products_fingerprint').notNull(),
+    invoiceArchiveFingerprint: text('invoice_archive_fingerprint').notNull(),
+    freezeProofSha256: text('freeze_proof_sha256').notNull(),
+    finalDumpSha256: text('final_dump_sha256').notNull(),
+    /** RERUN_OVER_PRIOR_IMPORT only: the earlier source this re-run goes over. */
+    priorSourceFingerprint: text('prior_source_fingerprint'),
+    /** The read sets it binds were read from a SYNTHETIC-marked source. */
+    synthetic: boolean('synthetic').notNull(),
+    reason: text('reason').notNull(),
+    approvedByAdminId: uuid('approved_by_admin_id').notNull(),
+    approvedAt: timestamptz('approved_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_cutover_approvals_tenant_id_key').on(table.tenantId, table.id),
+    index('legacy_cutover_approvals_tenant_source_idx').on(
+      table.tenantId,
+      table.sourceFingerprint,
+      table.id,
+    ),
+    foreignKey({
+      name: 'legacy_cutover_approvals_tenant_admin_fk',
+      columns: [table.tenantId, table.approvedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check('legacy_cutover_approvals_kind_check', enumCheck('kind', LEGACY_CUTOVER_APPROVAL_KINDS)),
+    check(
+      'legacy_cutover_approvals_hashes_check',
+      sql`source_fingerprint ~ '^[0-9a-f]{64}$' AND panel_map_fingerprint ~ '^[0-9a-f]{64}$' AND inventory_fingerprint ~ '^[0-9a-f]{64}$' AND products_fingerprint ~ '^[0-9a-f]{64}$' AND invoice_archive_fingerprint ~ '^[0-9a-f]{64}$' AND freeze_proof_sha256 ~ '^[0-9a-f]{64}$' AND final_dump_sha256 ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_cutover_approvals_prior_check',
+      sql`CASE kind WHEN 'CUTOVER' THEN prior_source_fingerprint IS NULL ELSE prior_source_fingerprint ~ '^[0-9a-f]{64}$' AND prior_source_fingerprint <> source_fingerprint END`,
+    ),
+    check(
+      'legacy_cutover_approvals_reason_check',
+      sql`char_length(reason) BETWEEN 1 AND ${sql.raw(String(LEGACY_CUTOVER_REASON_MAX_LENGTH))}`,
+    ),
+  ],
+);
+
+/**
+ * Mirza migration PR6 — the withdrawal of one cutover approval: at most one per approval,
+ * by the authenticated owner. Append-only (`0234`), so a withdrawn approval stays on the
+ * record as withdrawn and can never be un-withdrawn; a new approval is a new row.
+ */
+export const legacyCutoverApprovalRevocations = pgTable(
+  'legacy_cutover_approval_revocations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    approvalId: uuid('approval_id').notNull(),
+    reason: text('reason').notNull(),
+    revokedByAdminId: uuid('revoked_by_admin_id').notNull(),
+    revokedAt: timestamptz('revoked_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_cutover_approval_revocations_approval_key').on(table.tenantId, table.approvalId),
+    foreignKey({
+      name: 'legacy_cutover_approval_revocations_approval_fk',
+      columns: [table.tenantId, table.approvalId],
+      foreignColumns: [legacyCutoverApprovals.tenantId, legacyCutoverApprovals.id],
+    }),
+    foreignKey({
+      name: 'legacy_cutover_approval_revocations_tenant_admin_fk',
+      columns: [table.tenantId, table.revokedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    check(
+      'legacy_cutover_approval_revocations_reason_check',
+      sql`char_length(reason) BETWEEN 1 AND ${sql.raw(String(LEGACY_CUTOVER_REASON_MAX_LENGTH))}`,
+    ),
+  ],
+);
+
+/**
  * TB1 — one Telegram Business connection of one of this tenant's bots (ADR-0033 §2).
  *
  * Telegram creates the connection when a Business account owner connects the bot, and
@@ -13748,13 +14531,13 @@ export const supportAiConfigs = pgTable(
     timeoutMs: integer('timeout_ms').notNull(),
     maxOutputChars: integer('max_output_chars').notNull(),
     /**
-     * RETIRED by roadmap A1 (0219): no longer read or written by this release; its value is the
+     * RETIRED by roadmap A1 (0236): no longer read or written by this release; its value is the
      * old per-epoch limit. Kept (with a default so the new writer may omit it) because a column is
      * dropped only in the release after the one that stopped writing it.
      */
     maxConsecutiveReplies: integer('max_consecutive_replies').notNull().default(4),
     /**
-     * Roadmap A1 (0219): automatic replies per session, and per conversation per hour. Added with
+     * Roadmap A1 (0236): automatic replies per session, and per conversation per hour. Added with
      * the contract defaults, so every existing tenant reads 20 and 30.
      */
     sessionReplyBudget: integer('session_reply_budget').notNull().default(20),
@@ -13762,7 +14545,7 @@ export const supportAiConfigs = pgTable(
     /**
      * Hotfix (2026-10-06): sent automatic clarifying questions in a row before a handoff.
      * Added by 0218 with the contract default, so an existing tenant keeps a working limit.
-     * Roadmap A2 (0219): the column default is 3; stored values are left as they are.
+     * Roadmap A2 (0236): the column default is 3; stored values are left as they are.
      */
     maxConsecutiveClarifyingQuestions: integer('max_consecutive_clarifying_questions')
       .notNull()

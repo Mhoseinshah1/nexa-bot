@@ -29,6 +29,34 @@ else was writing (cutover step 6). Restoring it is exact by construction, and th
 lane keeps the post-import database as `nexa_pre_restore_<id>` — nothing is lost, and the
 rollback is itself reversible by two renames.
 
+The legacy product review (`legacy_product_reviews`, its `legacy_read_set_runs` rows and any
+draft products approve-as-new created, all INACTIVE and unpriced) lives in the same
+database: written at cutover step 10, which is after the step 6 backup, so a restore
+removes it with everything else, and `nexa_pre_restore_<id>` keeps it. Nothing drops it on
+its own — there is no separate delete path.
+
+The legacy invoice archive (`legacy_invoice_archive`, its runs and staging, Mirza PR3) is
+the same: written at cutover step 10, after the step 6 backup, so a restore removes it and
+`nexa_pre_restore_<id>` keeps it. Its rows are append-only (UPDATE and DELETE refused by
+trigger) and nothing else drops them; a later re-read appends revisions, never rewrites.
+
+The legacy wallet debts (PR4), the service candidates and their reviews (PR5), and the
+owner's cutover approvals and revocations (`legacy_cutover_approvals`,
+`legacy_cutover_approval_revocations`, Mirza PR6) are the same again: all of them live in the
+one database, so the restore removes them with the import and `nexa_pre_restore_<id>` keeps
+them. The approval tables are append-only (UPDATE and DELETE refused by trigger, `0234`):
+there is no path that drops or edits an approval, and none is added for a rollback.
+
+**After a rollback the owner's approval is gone with the import** (it was recorded after
+the step 6 backup). A second attempt is a new step 13: a new approval, bound to whatever
+the second attempt reads. The old approval survives only in the displaced database, as the
+record of what was approved the first time.
+
+**A rollback is the default answer to `SOURCE_SUPERSEDED`.** A production-like tenant that
+already holds a finished import of another snapshot refuses a new one; rather than
+acknowledging a re-run over it, restore the tenant to the backup taken before that earlier
+import, and import the approved snapshot once.
+
 ## When — triggers
 
 Roll back when any of these holds and the owner (or the operator the owner named for the
@@ -45,6 +73,7 @@ of no easy return" below.
 | T6  | duplicate money: an opening or adoption counted twice anywhere (W5, S5)                                                             | step 15         |
 | T7  | the window runs out before step 16 has passed                                                                                       | any             |
 | T8  | the owner decides                                                                                                                   | any             |
+| T9  | the cutover gate (`cutover-gate`, cutover step 15b) is `REFUSED` at `IMPORT_COMPLETED`, `RECONCILED` or `REPORT_V2_HOLDS`           | step 15b        |
 
 ### The point of no easy return: unfreeze
 
@@ -234,6 +263,8 @@ Check, every one:
   provisioning operations, hidden products, trial overrides, reminders, import runs and map;
 - the production import's `APPLY` run is **absent** from `legacy_import_runs` (it lives only
   in the displaced database); no run is `RUNNING`;
+- `legacy_cutover_approvals` holds no approval recorded after `<PRE_IMPORT_BACKUP_ID>` (it
+  lives only in the displaced database): a new attempt needs a new owner approval;
 - `nexa_pre_restore_<id>` exists — keep it until the incident review is closed;
 - in the Web Admin: a customer imported by the run is unknown to NEXA again (or, for an
   existing customer, shows the pre-import balance); the recovery request is `SUCCEEDED`;
@@ -262,8 +293,19 @@ longer hold; the owner settles them one by one.
 Only after R4 passes and the owner decides to give customers back to MirzaBot:
 
 1. Confirm the legacy database is unchanged since the freeze — the same SELECT-only
-   `CHECKSUM TABLE user, invoice` as cutover step 7, equal to the recorded values. (It was
-   read-only; this proves it.)
+   `scripts/legacy-freeze-checksum.sql` (every table) as cutover step 7, equal to the
+   recorded values. (It was read-only; this proves it.) Capture the client's own exit
+   status and let the checker compare, never a bare `diff`:
+
+   ```bash
+   mysql --user=oldbot_ro --password --batch oldbot \
+     < legacy-freeze-checksum.sql | tee freeze-checksum-R5.tsv; echo "exit ${PIPESTATUS[0]}"
+   bash legacy-freeze-checksum-verify.sh freeze-checksum-step7.tsv freeze-checksum-R5.tsv; echo "verify exit $?"
+   ```
+
+   Both `exit 0`, and `EQUAL`. An empty or partial file (a failed client) is refused by the
+   checker; it is no proof.
+
 2. Owner-operated on the legacy host: lift `read_only` / `super_read_only`, restart MirzaBot
    and its cron/webhook.
 3. Announce to customers that the old bot is back; resolve or update NEXA's maintenance

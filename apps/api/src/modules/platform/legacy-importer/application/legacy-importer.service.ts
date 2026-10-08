@@ -10,6 +10,12 @@ import {
   type CurrencyCode,
   type IdGenerator,
   type LegacyImportMapStatus,
+  isLegacyImportKey,
+  LEGACY_SERVICE_OUTCOMES,
+  LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS,
+  type LegacyReadSetName,
+  type LegacyServiceApprovalRefusal,
+  type LegacyServiceOutcome,
   type OperationalEventRecorder,
   type PermissionKey,
   type TenantContext,
@@ -22,9 +28,14 @@ import type { SessionRepository } from '../../identity/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
+  LegacyImportMapRecord,
   LegacyImportRepository,
   LegacyImportRunRecord,
 } from '../../legacy-import/application/legacy-import-ports.js';
+import {
+  buildUsersWalletsSection,
+  type UsersWalletsSection,
+} from './users-wallets-reconciliation.js';
 import {
   isReviewClosedToRerun,
   resumeDecision,
@@ -32,6 +43,18 @@ import {
 import type { MigrationOpeningBalanceService } from '../../../commerce/wallet/application/migration-opening-balance.service.js';
 import type { LegacyTrialEligibilityService } from '../../../commerce/trials/application/legacy-trial-eligibility.service.js';
 import type { LegacyProductService } from '../../../commerce/catalog/application/legacy-product.service.js';
+import type { LegacyProductReviewService } from '../../../commerce/legacy-product-review/application/legacy-product-review.service.js';
+import {
+  readLegacyProducts,
+  type ProductsReadInput,
+  type ProductsReadOutcome,
+} from './products-ingest.js';
+import {
+  readLegacyInvoiceArchive,
+  type InvoiceArchiveIngest,
+  type InvoicesReadInput,
+  type InvoicesReadOutcome,
+} from './invoice-archive-ingest.js';
 import { legacyProfileUsername, type ServiceCandidateCategory } from './decisions.js';
 import { crossCheckEvidence, type LegacyEvidence } from './evidence-runner.js';
 import {
@@ -51,13 +74,55 @@ import type {
   LegacyImportProcessLease,
   LegacyImportProcessLock,
   LegacyInventoryRead,
+  LegacyReadSetRun,
+  LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
+  RecordedDebt,
 } from './ports.js';
 import { buildFinalReport } from './final-report.js';
+import { buildFinalReportV2 } from './final-report-v2.js';
+import type { LegacyInventory } from './legacy-inventory.js';
 import { decideEvidenceClass, type EvidenceClass } from './production-guard.js';
 import { LEGACY_REPORT_FORMAT, type LegacyImportReport, type LegacyReportMode } from './report.js';
 import { sha256Hex, type LegacySnapshot } from './source-snapshot.js';
+import { productMapAgainstReview, productMapRefusalMessage } from './product-map-review.js';
+import {
+  approvalGate,
+  buildServiceOutcomesSection,
+  candidateEvidence,
+  candidateOutcome,
+  claimsByName,
+  observedAtFor,
+  recordableCode,
+  recordableKey,
+  type ApprovalGate,
+  type EligibleResult,
+  type ServiceOutcomesSection,
+} from './service-outcomes.js';
+import type { ServiceReviewInputs } from './plan.js';
+import type {
+  LegacyServiceCandidateRecord,
+  LegacyServiceCandidateStore,
+} from '../../legacy-service-review/application/ports.js';
+import {
+  evidenceHash,
+  initialReviewState,
+  isAdoptedOutcome,
+  isMaterialChange,
+  reviewStateAfterRun,
+} from '../../legacy-service-review/domain/candidate-rules.js';
+import type { LegacyCutoverService } from '../../legacy-cutover/application/legacy-cutover.service.js';
+import {
+  LegacyCutoverRefused,
+  stopSalesHolds,
+  type CutoverDecision,
+  type CutoverExpectation,
+} from '../../legacy-cutover/domain/cutover-rules.js';
+import { USER_STATUS_READ_SET } from './read-set.js';
+
+/** The `user-status` read set's recorded name (OQ-LWD-07). */
+const USER_STATUS_READ_SET_NAME: LegacyReadSetName = 'user-status';
 
 /**
  * Migration P7 — the legacy importer (`docs/legacy-migration/importer.md`).
@@ -98,6 +163,12 @@ export interface LegacyImporterDeps {
   readonly destination: LegacyImporterDestination;
   readonly runs: LegacyImportRepository;
   readonly runInputs: LegacyRunInputsRepository;
+  /** Mirza migration PR1: read set observations (`legacy_read_set_runs`). */
+  readonly readSetRuns: LegacyReadSetRunRepository;
+  /** Mirza migration PR2: the legacy product review the `products` read set is ingested into. */
+  readonly productReview: Pick<LegacyProductReviewService, 'ingestBatch' | 'markAbsent'>;
+  /** Mirza PR3: the legacy invoice archive's ingest steps (`invoices-read`). */
+  readonly invoiceArchive: InvoiceArchiveIngest;
   readonly customers: LegacyCustomerWriter;
   readonly inventory: LegacyInventoryPort;
   readonly openings: Pick<MigrationOpeningBalanceService, 'post'>;
@@ -108,6 +179,13 @@ export interface LegacyImporterDeps {
   >;
   /** P6. Null until agent ADOPT's service is wired; eligible candidates are then PENDING. */
   readonly adoption: LegacyAdoptionPort | null;
+  /** Mirza PR5: the service candidates — one outcome per live invoice, and the review's approvals. */
+  readonly serviceCandidates: LegacyServiceCandidateStore;
+  /**
+   * Mirza PR6: the owner's cutover approvals, read inside the start transaction of a gated
+   * import (`decideImport`), and the facts the final report v2 reads (`reportFacts`).
+   */
+  readonly cutover: Pick<LegacyCutoverService, 'decideImport' | 'reportFacts' | 'stopSalesFacts'>;
   /** WP-D3: one applying process per tenant; a second import or resume is refused. */
   readonly processLock: LegacyImportProcessLock;
   readonly guard: PermissionGuard;
@@ -127,6 +205,23 @@ export interface LegacyImportInput {
   readonly actor: ActorContext;
   readonly snapshot: LegacySnapshot;
   readonly mapping: PanelMapping;
+  /**
+   * Mirza PR5: whether the target is production-like (the CLI's guard decides it). A STORED
+   * approval is resumed without the source that made it, so its synthetic flag is checked
+   * against this before any run acts on it. Absent = production-like: fail closed.
+   */
+  readonly productionLikeTarget?: boolean;
+}
+
+/**
+ * Mirza PR6 — the cutover gate, as an import is given it: every `--expected-*` value (null
+ * where none was given). The gate APPLIES to an import or resume whenever the target is
+ * explicitly production-like (`productionLikeTarget: true`) or this is present (the CLI's
+ * `--cutover-gate`, to rehearse it on staging); where it applies, an absent expectation is
+ * an incomplete one and is refused.
+ */
+export interface LegacyCutoverGateInput {
+  readonly expectation: CutoverExpectation;
 }
 
 /** Test seam: called after each phase of `apply`. A throw here is an interruption. */
@@ -145,15 +240,33 @@ export class LegacyImportInterrupted extends Error {
   }
 }
 
+/** Mirza PR5: the operator's review of service candidates, as this run read it. */
+interface PreparedReview {
+  /** Candidate rows of this snapshot's live invoices, by invoice key. */
+  readonly candidates: ReadonlyMap<string, LegacyServiceCandidateRecord>;
+  /** Every approval waiting (ADOPT_APPROVED) or claimed (ADOPTING), live or not. */
+  readonly approvals: readonly LegacyServiceCandidateRecord[];
+  /** Each approval's gate, by candidate id. */
+  readonly gates: ReadonlyMap<string, ApprovalGate>;
+  /** What the plan uses: accepted approvals' panels; invoices kept as history. */
+  readonly inputs: ServiceReviewInputs;
+}
+
 interface Prepared {
   readonly plan: LegacyPlan;
+  readonly review: PreparedReview;
   readonly inventories: ReadonlyMap<string, LegacyInventoryRead>;
   readonly salesCurrency: string;
+  /** What NEXA had recorded when the plan was made: signed openings, debt magnitudes. */
+  readonly existingOpenings: ReadonlyMap<string, bigint>;
+  readonly existingDebts: ReadonlyMap<string, RecordedDebt>;
 }
 
 export interface ApplyTallies {
   customers: {
     created: number;
+    /** Of `created`: blocked in MirzaBot, so created BLOCKED (OQ-LWD-07). */
+    createdBlocked: number;
     matchedExisting: number;
     manualReviewRecorded: number;
     sourceChanged: number;
@@ -166,6 +279,13 @@ export interface ApplyTallies {
     ZERO_NO_ENTRY: number;
     CONFLICT: number;
     postedSumMinor: bigint;
+    /** Mirza PR4 (owner decision 6): negative balances recorded as legacy debts, no entry. */
+    DEBT_RECORDED: number;
+    DEBT_ALREADY_RECORDED: number;
+    /** Σ magnitude of the debts THIS run recorded. */
+    debtRecordedSumMinor: bigint;
+    /** A ledger DEBIT opening from before owner decision 6: left as it is, never doubled. */
+    PRIOR_DEBIT_OPENING: number;
   };
   trials: {
     APPLIED: number;
@@ -202,6 +322,38 @@ export interface ApplyTallies {
       alreadyAdoptedSourceChanged: number;
       reviewReasons: Record<string, number>;
       PENDING: number;
+      /** Mirza PR5: eligible, and a person kept it as history — never handed to (or by) P6. */
+      KEPT_AS_HISTORY: number;
+    };
+    /** Mirza PR5: the ONE outcome each live invoice got this run (Σ = live invoices). */
+    outcomes: Record<LegacyServiceOutcome, number>;
+    /** Mirza PR5: the candidate rows this run wrote. */
+    candidates: {
+      INSERTED: number;
+      UPDATED: number;
+      UNCHANGED: number;
+      /** A row of the other source class (synthetic vs real): never written over. */
+      sourceClassMismatch: number;
+      /** A key no row can hold (a NUL, or beyond the archive's bound). */
+      unrecordable: number;
+    };
+    /** Mirza PR5: the operators' ADOPT approvals this run met. */
+    approvals: {
+      executed: number;
+      refused: Record<string, number>;
+      /** Not acted on and not changed (synthetic on a production-like target; other class). */
+      left: Record<string, number>;
+      /** Reopened by a person between the run's read and its claim: not executed. */
+      claimLost: number;
+      /**
+       * A refusal the run decided but did not record: a person reopened the approval first
+       * (the version-guarded settle lost). Never counted as a refusal.
+       */
+      withdrawnDuringRun: number;
+      /** P6 said "adopted" and the map does not hold the service: settled OPEN, attention. */
+      unconfirmed: number;
+      /** A claim (ADOPTING) this run could not execute, released back to ADOPT_APPROVED. */
+      released: number;
     };
   };
 }
@@ -217,13 +369,45 @@ export function applyAttention(tallies: ApplyTallies) {
     customerSourceChanged: tallies.customers.sourceChanged,
     customerEntityMismatch: tallies.customers.entityMismatch,
     openingConflict: tallies.openings.CONFLICT,
+    // A rehearsal target that ran the code before owner decision 6 holds a ledger DEBIT the
+    // decision forbids. Never rewritten here — and never reported as success either.
+    priorDebitOpening: tallies.openings.PRIOR_DEBIT_OPENING,
     trialConflict: tallies.trials.CONFLICT,
     invoiceMapRefused: tallies.services.map.REFUSED,
     adoptionFailed: tallies.services.adoption.FAILED,
     adoptedSourceChanged: tallies.services.adoption.alreadyAdoptedSourceChanged,
+    // Mirza PR5: an outcome that could not be recorded, or an approval a person must look at.
+    candidateSourceClassMismatch: tallies.services.candidates.sourceClassMismatch,
+    candidateUnrecordable: tallies.services.candidates.unrecordable,
+    approvalLeft: Object.values(tallies.services.approvals.left).reduce((a, b) => a + b, 0),
+    approvalUnconfirmed: tallies.services.approvals.unconfirmed,
   };
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return { ...counts, total };
+}
+
+/**
+ * Mirza PR6 — what an APPLY run left for a person, as its finish audit row records it and the
+ * final report v2 reads it back: the approval counters (PR5, `withdrawnDuringRun` and
+ * `unconfirmed` among them) and every attention count. Counts only.
+ */
+export function applyOutcomeRecord(
+  tallies: ApplyTallies,
+  attention: ReturnType<typeof applyAttention>,
+) {
+  const a = tallies.services.approvals;
+  return {
+    serviceApprovals: {
+      executed: a.executed,
+      refused: Object.values(a.refused).reduce((x, y) => x + y, 0),
+      left: Object.values(a.left).reduce((x, y) => x + y, 0),
+      claimLost: a.claimLost,
+      withdrawnDuringRun: a.withdrawnDuringRun,
+      unconfirmed: a.unconfirmed,
+      released: a.released,
+    },
+    attention,
+  };
 }
 
 /** G10's blocker sentence, or null when every live real code_panel is accounted for. */
@@ -251,6 +435,8 @@ export class LegacyImporterService {
     scope: TenantContext,
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
+    productionLikeTarget = true,
+    options: { readonly forApply?: boolean } = {},
   ): Promise<Prepared> {
     const { destination } = this.deps;
     if (!(await destination.tenantExists(scope))) {
@@ -260,6 +446,18 @@ export class LegacyImporterService {
       mapping,
       await destination.productIds(scope, [...mapping.products.values()]),
     );
+    // aud5 F5 = aud6 F1 (PR2 Departure 9): an APPLY never attaches an invoice or a service
+    // to a product the approved legacy product review does not export for this source's
+    // CURRENT products read. Decided before any provider read and before any write.
+    if (options.forApply === true && mapping.products.size > 0) {
+      const verdict = productMapAgainstReview(
+        mapping.products,
+        await destination.productReviewRows(scope),
+        await destination.latestProductsReadFingerprint(scope, snapshot.fingerprint),
+      );
+      const refusal = productMapRefusalMessage(verdict);
+      if (refusal !== null) throw new PanelMappingRefused([refusal]);
+    }
     validatePanelMappingAgainstTenant(
       mapping,
       await destination.panels(scope, mapping.policy.productionPanelIds),
@@ -271,17 +469,20 @@ export class LegacyImporterService {
       .filter((id) => /^[1-9][0-9]{0,18}$/u.test(id));
     const existingCustomers = await destination.customersByTelegramIds(scope, telegramIds);
     const existingIds = [...existingCustomers.values()];
-    const [existingOpenings, trialOverrides, trialDecided, tariffCandidates] = await Promise.all([
-      destination.openingsByTelegramId(scope),
-      destination.trialOverrides(scope, existingIds),
-      destination.trialDecided(scope, existingIds),
-      destination.tariffCandidates(scope),
-    ]);
+    const [existingOpenings, existingDebts, trialOverrides, trialDecided, tariffCandidates] =
+      await Promise.all([
+        destination.openingsByTelegramId(scope),
+        destination.debtsByTelegramId(scope),
+        destination.trialOverrides(scope, existingIds),
+        destination.trialDecided(scope, existingIds),
+        destination.tariffCandidates(scope),
+      ]);
 
     const inventories = new Map<string, LegacyInventoryRead>();
     for (const panelId of mapping.policy.productionPanelIds) {
       inventories.set(panelId, await this.deps.inventory.read(scope, panelId));
     }
+    const review = await this.prepareReview(scope, snapshot, mapping, productionLikeTarget);
 
     // Shape keys first (from a plan with no shapes known), then the real plan.
     const draft = planLegacyImport({
@@ -290,11 +491,13 @@ export class LegacyImporterService {
       salesCurrency,
       existingCustomers,
       existingOpenings,
+      existingDebts,
       trialOverrides,
       trialDecided,
       existingShapes: new Map(),
       tariffCandidates,
       inventories,
+      review: review.inputs,
     });
     const existingShapes = await destination.shapesByKey(
       scope,
@@ -306,13 +509,57 @@ export class LegacyImporterService {
       salesCurrency,
       existingCustomers,
       existingOpenings,
+      existingDebts,
       trialOverrides,
       trialDecided,
       existingShapes,
       tariffCandidates,
       inventories,
+      review: review.inputs,
     });
-    return { plan, inventories, salesCurrency };
+    return { plan, review, inventories, salesCurrency, existingOpenings, existingDebts };
+  }
+
+  /**
+   * Mirza PR5 — the candidates of this snapshot's live invoices and every stored approval,
+   * each approval through its gate (synthetic against the target first; bound to this row;
+   * the panel mapped explicitly). Reads only: claiming is the apply's, under its lock.
+   */
+  private async prepareReview(
+    scope: TenantContext,
+    snapshot: LegacySnapshot,
+    mapping: PanelMapping,
+    productionLikeTarget: boolean,
+  ): Promise<PreparedReview> {
+    const live = new Map(snapshot.liveInvoices.map((i) => [i.idInvoice, i]));
+    const keys = [...live.keys()].filter(recordableKey);
+    const candidates = new Map(
+      (await this.deps.serviceCandidates.findByInvoiceKeys(scope, keys)).map((c) => [
+        c.invoiceKey,
+        c,
+      ]),
+    );
+    const approvals = await this.deps.serviceCandidates.listApprovals(scope);
+    const gates = new Map<string, ApprovalGate>();
+    const operatorPanels = new Map<string, string>();
+    for (const approval of approvals) {
+      const gate = approvalGate(approval, live.get(approval.invoiceKey), {
+        mapping,
+        productionLikeTarget,
+        snapshotSynthetic: snapshot.synthetic,
+      });
+      gates.set(approval.id, gate);
+      if (gate.kind === 'ACCEPT' && gate.panelId !== null) {
+        operatorPanels.set(approval.invoiceKey, gate.panelId);
+      }
+    }
+    const keptAsHistory = new Set(
+      [...candidates.values()]
+        // A row of another source class is never acted on (nor its decision taken over).
+        .filter((c) => c.reviewState === 'KEPT_AS_HISTORY' && c.synthetic === snapshot.synthetic)
+        .map((c) => c.invoiceKey),
+    );
+    return { candidates, approvals, gates, inputs: { operatorPanels, keptAsHistory } };
   }
 
   private providerSection(prepared: Prepared) {
@@ -337,6 +584,8 @@ export class LegacyImporterService {
       fingerprint: snapshot.fingerprint,
       schemaHash: snapshot.schemaHash,
       tables: snapshot.tables,
+      /** OQ-LWD-07: the `user-status` read set this snapshot decided statuses from. */
+      userStatus: snapshot.userStatus,
     };
   }
 
@@ -379,7 +628,12 @@ export class LegacyImporterService {
     input: LegacyImportInput & { readonly evidence: LegacyEvidence },
   ): Promise<LegacyImportReport> {
     const startedAt = this.deps.clock.now();
-    const prepared = await this.prepare(input.scope, input.snapshot, input.mapping);
+    const prepared = await this.prepare(
+      input.scope,
+      input.snapshot,
+      input.mapping,
+      input.productionLikeTarget,
+    );
     const blockers: string[] = [];
     if (prepared.salesCurrency !== LEGACY_BALANCE_CURRENCY) {
       blockers.push(`sales currency is ${prepared.salesCurrency}; legacy balances are Toman (IRT)`);
@@ -416,7 +670,7 @@ export class LegacyImporterService {
   async dryRun(input: LegacyImportInput): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
-    const prepared = await this.prepare(scope, snapshot, mapping);
+    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
     const runId = this.deps.ids.uuid();
     await this.mutate(scope, actor, 'legacy_import.run.start', runId, async (tx) => {
       const outcome = await this.deps.runs.startOrResume(
@@ -478,6 +732,7 @@ export class LegacyImporterService {
     input: LegacyImportInput & {
       readonly mode: 'IMPORT' | 'RESUME';
       readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
+      readonly cutoverGate?: LegacyCutoverGateInput;
     },
   ): Promise<LegacyImportReport> {
     // Claimed BEFORE anything is read, held until the last write: a second process is
@@ -501,12 +756,24 @@ export class LegacyImporterService {
     input: LegacyImportInput & {
       readonly mode: 'IMPORT' | 'RESUME';
       readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
+      readonly cutoverGate?: LegacyCutoverGateInput;
     },
     lease: LegacyImportProcessLease,
   ): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
-    const prepared = await this.prepare(scope, snapshot, mapping);
+    // Mirza PR6: the cutover gate, decided FIRST — before the inventory walk reads a single
+    // provider page — and again inside the start transaction, where it is authoritative.
+    const gate = cutoverGateOf(input);
+    if (gate !== null) {
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.requireCutover(input, gate, tx);
+        await this.requireStopSales(scope, 'START', tx);
+      });
+    }
+    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
+      forApply: true,
+    });
     // G10, the same predicate as the audit, decided again NOW: an import never starts on
     // a map that forgets a live code_panel — whatever the audit said earlier.
     const incomplete = incompletePanelMapMessage(
@@ -524,6 +791,10 @@ export class LegacyImporterService {
     });
     const runId = this.deps.ids.uuid();
     const run = await this.mutate(scope, actor, 'legacy_import.run.start', runId, async (tx) => {
+      const cutover = gate === null ? null : await this.requireCutover(input, gate, tx);
+      // aud6 F2: the freeze is measured in the import window itself, inside the transaction
+      // that starts (or resumes) the run — not only by the gate after it.
+      if (gate !== null) await this.requireStopSales(scope, 'START', tx);
       const outcome = await this.deps.runs.startOrResume(
         scope,
         {
@@ -547,6 +818,7 @@ export class LegacyImporterService {
           'There is no RUNNING import of this source to resume. Use --mode import.',
         );
       }
+      await this.bindUserStatus(scope, actor, snapshot, tx);
       const stored = await this.recordInputs(
         scope,
         outcome.run.id,
@@ -569,6 +841,15 @@ export class LegacyImporterService {
         outcome.run,
         mapping,
         tx,
+        cutover === null
+          ? undefined
+          : {
+              cutover: {
+                cutoverApprovalId: cutover.approvalId,
+                rerunApprovalIds: cutover.rerunApprovalIds,
+                supersededSources: cutover.supersededSources,
+              },
+            },
       );
       return outcome.run;
     });
@@ -576,13 +857,24 @@ export class LegacyImporterService {
     const tallies: ApplyTallies = {
       customers: {
         created: 0,
+        createdBlocked: 0,
         matchedExisting: 0,
         manualReviewRecorded: 0,
         sourceChanged: 0,
         entityMismatch: 0,
         reviewClosed: 0,
       },
-      openings: { POSTED: 0, ALREADY_POSTED: 0, ZERO_NO_ENTRY: 0, CONFLICT: 0, postedSumMinor: 0n },
+      openings: {
+        POSTED: 0,
+        ALREADY_POSTED: 0,
+        ZERO_NO_ENTRY: 0,
+        CONFLICT: 0,
+        postedSumMinor: 0n,
+        DEBT_RECORDED: 0,
+        DEBT_ALREADY_RECORDED: 0,
+        debtRecordedSumMinor: 0n,
+        PRIOR_DEBIT_OPENING: 0,
+      },
       trials: { APPLIED: 0, REPLAYED: 0, CONFLICT: 0, decisions: {} },
       products: { created: 0, existing: 0, unmappable: 0, tariff: {} },
       services: {
@@ -606,6 +898,27 @@ export class LegacyImporterService {
           alreadyAdoptedSourceChanged: 0,
           reviewReasons: {},
           PENDING: 0,
+          KEPT_AS_HISTORY: 0,
+        },
+        outcomes: Object.fromEntries(LEGACY_SERVICE_OUTCOMES.map((o) => [o, 0])) as Record<
+          LegacyServiceOutcome,
+          number
+        >,
+        candidates: {
+          INSERTED: 0,
+          UPDATED: 0,
+          UNCHANGED: 0,
+          sourceClassMismatch: 0,
+          unrecordable: 0,
+        },
+        approvals: {
+          executed: 0,
+          refused: {},
+          left: {},
+          claimLost: 0,
+          withdrawnDuringRun: 0,
+          unconfirmed: 0,
+          released: 0,
         },
       },
     };
@@ -625,7 +938,7 @@ export class LegacyImporterService {
       const imported = await this.customersPhase(scope, actor, run.id, prepared.plan, tallies);
       await hook('customers');
       phase = 'openings';
-      await this.openingsPhase(scope, actor, prepared, imported, tallies);
+      await this.openingsPhase(scope, actor, run.id, snapshot, prepared, imported, tallies);
       await hook('openings');
       phase = 'trials';
       await this.trialsPhase(scope, actor, run.id, prepared, snapshot, imported, tallies);
@@ -649,9 +962,22 @@ export class LegacyImporterService {
     } catch (error) {
       throw new LegacyImportInterrupted(run.id, phase, error);
     }
-    const finished = await this.finish(scope, actor, run.id, mapping, { status: 'COMPLETED' });
-    const adoptionPending = tallies.services.adoption.PENDING > 0;
     const attention = applyAttention(tallies);
+    // Mirza PR6: the counts a person must see are recorded with the run's finish, so the
+    // final report v2 READS them (`applyRun` section) instead of assuming a clean run.
+    const finished = await this.finish(
+      scope,
+      actor,
+      run.id,
+      mapping,
+      { status: 'COMPLETED' },
+      { applyOutcome: applyOutcomeRecord(tallies, attention) },
+      // aud6 F2: and again in the transaction that finishes it. A run whose sales were
+      // reopened meanwhile is never COMPLETED: it stays RUNNING, and a resume under a
+      // restored freeze finishes it.
+      gate === null ? undefined : (tx) => this.requireStopSales(scope, 'FINISH', tx),
+    );
+    const adoptionPending = tallies.services.adoption.PENDING > 0;
     return this.report(
       input.mode,
       scope,
@@ -680,6 +1006,96 @@ export class LegacyImporterService {
 
   runningRun(scope: TenantContext): Promise<string | null> {
     return this.deps.destination.runningRun(scope);
+  }
+
+  /**
+   * Mirza migration PR1 — records one read set observation (`legacy_read_set_runs`): the
+   * read set's fingerprint and the v1 source fingerprint the SAME read-only session
+   * recomputed and found equal to the approved value. The caller has already compared
+   * them; this writes nothing else, and observing the same thing twice writes no second row.
+   * Charged to `maintenance.run` like every importer write; the tenant must still accept
+   * work, read inside the transaction.
+   */
+  async recordReadSetRun(
+    scope: TenantContext,
+    actor: ActorContext,
+    observation: Omit<LegacyReadSetRun, 'id' | 'recordedAt' | 'codeVersion'>,
+  ): Promise<{ readonly run: LegacyReadSetRun; readonly created: boolean }> {
+    const id = this.deps.ids.uuid();
+    return this.mutate(
+      scope,
+      actor,
+      'legacy_import.read_set.record',
+      id,
+      async (tx) => {
+        const outcome = await this.deps.readSetRuns.recordReadSetRun(
+          scope,
+          {
+            ...observation,
+            id,
+            codeVersion: this.deps.codeVersion,
+            recordedAt: this.deps.clock.now(),
+          },
+          tx,
+        );
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'legacy_import.read_set.record',
+            entityType: 'LegacyReadSetRun',
+            entityId: outcome.run.id,
+            before: null,
+            after: {
+              readSet: outcome.run.readSet,
+              fingerprintVersion: outcome.run.fingerprintVersion,
+              readSetFingerprint: outcome.run.readSetFingerprint,
+              sourceFingerprint: outcome.run.sourceFingerprint,
+              created: outcome.created,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return outcome;
+      },
+      'LegacyReadSetRun',
+    );
+  }
+
+  /**
+   * Mirza migration PR2 — `legacy-import products-read` (`products-ingest.ts`): digest the
+   * `products` read set for approval, or, with that approval, ingest it into the legacy
+   * product review under this tenant's importer claim and record the read set run.
+   */
+  readProducts(input: ProductsReadInput): Promise<ProductsReadOutcome> {
+    return readLegacyProducts(
+      {
+        processLock: this.deps.processLock,
+        review: this.deps.productReview,
+        recordReadSetRun: (scope, actor, observation) =>
+          this.recordReadSetRun(scope, actor, observation),
+      },
+      input,
+    );
+  }
+
+  /**
+   * Mirza migration PR3 — `legacy-import invoices-read` (`invoice-archive-ingest.ts`): digest
+   * the `invoice-archive` read set for approval, or, with that approval, stage it, verify it
+   * and append its revisions to the legacy invoice archive under this tenant's importer
+   * claim, and record the read set run.
+   */
+  readInvoiceArchive(input: InvoicesReadInput): Promise<InvoicesReadOutcome> {
+    return readLegacyInvoiceArchive(
+      {
+        processLock: this.deps.processLock,
+        archive: this.deps.invoiceArchive,
+        recordReadSetRun: (scope, actor, observation) =>
+          this.recordReadSetRun(scope, actor, observation),
+      },
+      input,
+    );
   }
 
   /** Aborts the tenant's RUNNING run (any mode). The operator's exit from a stuck run. */
@@ -782,6 +1198,9 @@ export class LegacyImporterService {
                 id: this.deps.ids.uuid(),
                 telegramUserId: decision.telegramUserId,
                 username: legacyProfileUsername(row.username),
+                // OQ-LWD-07: a MirzaBot ban survives the cutover. Applies only to a customer
+                // this statement creates; an existing customer's status is never touched.
+                status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
                 now,
               },
               tx,
@@ -828,6 +1247,7 @@ export class LegacyImporterService {
             }
             if (created) {
               tallies.customers.created += 1;
+              if (decision.blocked) tallies.customers.createdBlocked += 1;
               await this.deps.audit.record(
                 scope,
                 actor,
@@ -836,7 +1256,11 @@ export class LegacyImporterService {
                   entityType: 'Customer',
                   entityId: customerId,
                   before: null,
-                  after: { source: 'LEGACY_MIGRATION', runId },
+                  after: {
+                    source: 'LEGACY_MIGRATION',
+                    runId,
+                    status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
+                  },
                   result: 'SUCCESS',
                 },
                 tx,
@@ -869,6 +1293,8 @@ export class LegacyImporterService {
   private async openingsPhase(
     scope: TenantContext,
     actor: ActorContext,
+    runId: string,
+    snapshot: LegacySnapshot,
     prepared: Prepared,
     imported: ReadonlyMap<string, { telegramUserId: string; customerId: string }>,
     tallies: ApplyTallies,
@@ -883,9 +1309,19 @@ export class LegacyImporterService {
           telegramUserId: who.telegramUserId,
           legacyBalanceMinor: planned.decision.balanceMinor,
           currency: prepared.salesCurrency as CurrencyCode,
+          // A negative balance is recorded as a legacy debt, with the snapshot it came from.
+          provenance: {
+            runId,
+            sourceFingerprint: snapshot.fingerprint,
+            rowChecksum: planned.row.checksum,
+            synthetic: snapshot.synthetic,
+          },
         });
         tallies.openings[outcome.kind] += 1;
         if (outcome.kind === 'POSTED') tallies.openings.postedSumMinor += outcome.signedAmountMinor;
+        if (outcome.kind === 'DEBT_RECORDED') {
+          tallies.openings.debtRecordedSumMinor += outcome.amountMinor;
+        }
       } catch (error) {
         if (
           isNexaError(error) &&
@@ -993,14 +1429,107 @@ export class LegacyImporterService {
     const importedUsers = new Map(
       [...imported.entries()].map(([legacyId, w]) => [legacyId, w.telegramUserId]),
     );
+    const review = prepared.review;
+    const keptAsHistory = review.inputs.keptAsHistory ?? new Set<string>();
+
+    // Mirza PR5, step 1: the operators' ADOPT approvals. A stored approval is resumed
+    // without the source that made it, so its gate (synthetic against the target first) was
+    // decided in `prepare`; here it is left, refused, or CLAIMED (ADOPT_APPROVED → ADOPTING,
+    // a conditional UPDATE at its version — a person's reopen in between wins). A claim a
+    // crashed run left ADOPTING is executed again: the adoption is idempotent per invoice.
+    const executing = new Map<string, LegacyServiceCandidateRecord>();
+    const operatorPanels = new Map<string, string>();
+    if (this.deps.adoption === null) {
+      // No adoption step: nothing can be executed. A claim an earlier run left ADOPTING is
+      // released back to ADOPT_APPROVED, so it is never stuck where no person can reopen it.
+      for (const approval of review.approvals) {
+        if (approval.reviewState !== 'ADOPTING') continue;
+        if (await this.releaseClaim(scope, actor, runId, approval, 'ADOPTION_NOT_WIRED')) {
+          tallies.services.approvals.released += 1;
+        }
+      }
+    } else {
+      for (const approval of review.approvals) {
+        const gate = review.gates.get(approval.id);
+        if (gate === undefined) continue;
+        if (gate.kind === 'LEAVE') {
+          tallies.services.approvals.left[gate.why] =
+            (tallies.services.approvals.left[gate.why] ?? 0) + 1;
+          // Not executed — and a claim an earlier run left is released, never stuck.
+          if (
+            approval.reviewState === 'ADOPTING' &&
+            (await this.releaseClaim(scope, actor, runId, approval, gate.why))
+          ) {
+            tallies.services.approvals.released += 1;
+          }
+          await this.mutate(scope, actor, 'legacy_import.service_approval', runId, (tx) =>
+            this.auditApproval(
+              scope,
+              actor,
+              LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS.approvalSyntheticRefused,
+              approval,
+              { runId, why: gate.why },
+              tx,
+            ),
+          );
+          continue;
+        }
+        if (gate.kind === 'REFUSE') {
+          if (await this.settleApproval(scope, actor, runId, approval, { refusal: gate.refusal })) {
+            tallies.services.approvals.refused[gate.refusal] =
+              (tallies.services.approvals.refused[gate.refusal] ?? 0) + 1;
+          } else {
+            tallies.services.approvals.withdrawnDuringRun += 1;
+          }
+          continue;
+        }
+        const claimed =
+          approval.reviewState === 'ADOPTING'
+            ? approval
+            : await this.mutate(scope, actor, 'legacy_import.service_approval', runId, (tx) =>
+                this.deps.serviceCandidates.transition(
+                  scope,
+                  approval.id,
+                  { from: ['ADOPT_APPROVED'], version: approval.version },
+                  { reviewState: 'ADOPTING', updatedAt: this.deps.clock.now() },
+                  tx,
+                ),
+              );
+        if (claimed === null) {
+          tallies.services.approvals.claimLost += 1;
+          continue;
+        }
+        executing.set(claimed.invoiceKey, claimed);
+        if (gate.panelId !== null) operatorPanels.set(claimed.invoiceKey, gate.panelId);
+      }
+    }
+
+    // Step 2: decide every live invoice — the claimed approvals on the operator's panel,
+    // everything else exactly as before (owner decision 8: no panel is never searched).
     const decided = decideAllServices(
       snapshot,
       mapping,
       inventoryIndexes(mapping, prepared.inventories),
       importedUsers,
       (key) => (shapes.get(key)?.resolved === true ? 'RESOLVED' : 'UNRESOLVED'),
+      { operatorPanels, keptAsHistory },
     );
     tallies.services.categories = { ...decided.categories };
+
+    // What the map said BEFORE this run wrote anything: an adopted invoice stays adopted.
+    const prior = new Map<string, LegacyImportMapRecord>();
+    const mapKeys = decided.services
+      .map((s) => s.invoice.idInvoice)
+      .filter((k) => isLegacyImportKey('invoice', k));
+    for (let i = 0; i < mapKeys.length; i += CUSTOMER_BATCH) {
+      const rows = await this.deps.runs.findByLegacyKeys(
+        scope,
+        'invoice',
+        mapKeys.slice(i, i + CUSTOMER_BATCH),
+      );
+      for (const row of rows) prior.set(row.legacyId, row);
+    }
+
     // Every decision the importer itself made is recorded on the invoice's map row, in
     // batches, each batch one transaction with its checkpoint.
     const toRecord = decided.services.flatMap(({ invoice, decision }) => {
@@ -1040,23 +1569,24 @@ export class LegacyImporterService {
       });
     }
 
-    // An eligible invoice whose map row a person closed is not handed to P6.
-    const eligible = decided.services.filter((s) => s.decision.category === 'ADOPTION_ELIGIBLE');
-    const closed = new Set<string>();
-    for (let i = 0; i < eligible.length; i += CUSTOMER_BATCH) {
-      const keys = eligible.slice(i, i + CUSTOMER_BATCH).map((s) => s.invoice.idInvoice);
-      for (const row of await this.deps.runs.findByLegacyKeys(scope, 'invoice', keys)) {
-        if (isReviewClosedToRerun(row)) closed.add(row.legacyId);
-      }
-    }
+    // An eligible invoice whose map row a person closed is not handed to P6, nor one a
+    // person kept as history (P6 also re-reads that under the invoice lock).
+    const eligibleResults = new Map<string, EligibleResult>();
     for (const { invoice, decision } of decided.services) {
       if (decision.category !== 'ADOPTION_ELIGIBLE') continue;
-      if (closed.has(invoice.idInvoice)) {
+      const before = prior.get(invoice.idInvoice);
+      if (before !== undefined && isReviewClosedToRerun(before)) {
         tallies.services.adoption.REVIEW_CLOSED += 1;
+        continue;
+      }
+      if (keptAsHistory.has(invoice.idInvoice)) {
+        tallies.services.adoption.KEPT_AS_HISTORY += 1;
+        eligibleResults.set(invoice.idInvoice, { kind: 'KEPT_AS_HISTORY' });
         continue;
       }
       if (this.deps.adoption === null) {
         tallies.services.adoption.PENDING += 1;
+        eligibleResults.set(invoice.idInvoice, { kind: 'PENDING' });
         continue;
       }
       const who = invoice.idUser === null ? undefined : imported.get(invoice.idUser);
@@ -1091,6 +1621,7 @@ export class LegacyImporterService {
                 subscriptionUrl: facts.subscriptionUrl,
               },
       });
+      eligibleResults.set(invoice.idInvoice, { kind: 'ADOPTION', outcome });
       // P6 wrote the invoice's map row for every one of these; P7 records nothing here.
       tallies.services.adoption[outcome.kind] += 1;
       if (outcome.kind === 'ALREADY_ADOPTED' && outcome.sourceChanged) {
@@ -1101,6 +1632,350 @@ export class LegacyImporterService {
           (tallies.services.adoption.reviewReasons[outcome.reason] ?? 0) + 1;
       }
     }
+
+    // Step 3: every live invoice's ONE outcome. "Adopted" is what the MAP says after the
+    // adoption, read now — never the adoption's word alone: the map row is written in the same
+    // transaction as the service, so it is the record a candidate may point at.
+    const claimedAdopted = [...eligibleResults]
+      .filter(([, r]) => r.kind === 'ADOPTION' && isAdoptedOutcomeKind(r.outcome.kind))
+      .map(([key]) => key);
+    const confirmed = new Map<string, string>();
+    for (let i = 0; i < claimedAdopted.length; i += CUSTOMER_BATCH) {
+      const rows = await this.deps.runs.findByLegacyKeys(
+        scope,
+        'invoice',
+        claimedAdopted.slice(i, i + CUSTOMER_BATCH),
+      );
+      for (const row of rows) {
+        if (row.status === 'IMPORTED' && row.entityType === 'SERVICE' && row.entityId !== null) {
+          confirmed.set(row.legacyId, row.entityId);
+        }
+      }
+    }
+    const outcomes = new Map(
+      decided.services.map(({ invoice, decision }) => {
+        const key = invoice.idInvoice;
+        const o = candidateOutcome(decision, prior.get(key), eligibleResults.get(key) ?? null);
+        if (!isAdoptedOutcome(o.outcome)) return [key, o] as const;
+        const before = prior.get(key);
+        const mapped =
+          confirmed.get(key) ??
+          (before?.status === 'IMPORTED' && before.entityType === 'SERVICE'
+            ? before.entityId
+            : null);
+        // The adoption said "adopted" and the map does not: never recorded as a service.
+        if (mapped === null) {
+          return [
+            key,
+            { outcome: 'ADOPTION_ELIGIBLE', blocker: 'ADOPTION_UNCONFIRMED', serviceId: null },
+          ] as const;
+        }
+        return [key, { ...o, serviceId: mapped }] as const;
+      }),
+    );
+    for (const o of outcomes.values()) tallies.services.outcomes[o.outcome] += 1;
+
+    // Step 4: settle each claimed approval — ADOPTED with its service, or back to OPEN with
+    // the outcome that refused it. Never left claimed by a run that finished.
+    for (const [key, claimed] of executing) {
+      const o = outcomes.get(key);
+      if (o !== undefined && isAdoptedOutcome(o.outcome) && o.serviceId !== null) {
+        if (
+          await this.settleApproval(scope, actor, runId, claimed, {
+            adopted: { outcome: o.outcome, serviceId: o.serviceId },
+          })
+        ) {
+          tallies.services.approvals.executed += 1;
+        } else {
+          tallies.services.approvals.withdrawnDuringRun += 1;
+        }
+        continue;
+      }
+      // Every other answer settles back to OPEN with an explicit code — no claimed approval
+      // outlives the run that claimed it. ADOPTION_ELIGIBLE here can only mean P6 said
+      // "adopted" and the map does not confirm it (the adoption step is wired, and a claimed
+      // approval is never kept as history): a broken invariant, counted as attention.
+      const refusal: LegacyServiceApprovalRefusal =
+        o === undefined
+          ? 'NOT_LIVE'
+          : o.outcome === 'ADOPTION_ELIGIBLE' || isAdoptedOutcome(o.outcome)
+            ? 'ADOPTION_UNCONFIRMED'
+            : (o.outcome as LegacyServiceApprovalRefusal);
+      if (refusal === 'ADOPTION_UNCONFIRMED') tallies.services.approvals.unconfirmed += 1;
+      if (await this.settleApproval(scope, actor, runId, claimed, { refusal })) {
+        tallies.services.approvals.refused[refusal] =
+          (tallies.services.approvals.refused[refusal] ?? 0) + 1;
+      } else {
+        tallies.services.approvals.withdrawnDuringRun += 1;
+      }
+    }
+
+    // Step 5: record every outcome on the invoice's candidate row, in batches.
+    await this.recordCandidates(
+      scope,
+      actor,
+      runId,
+      prepared,
+      snapshot,
+      mapping,
+      decided.services,
+      outcomes,
+      importedUsers,
+      keptAsHistory,
+      operatorPanels,
+      shapes,
+      tallies,
+    );
+  }
+
+  /** Mirza PR5 — the candidate rows: insert, or re-decide under the row lock. */
+  private async recordCandidates(
+    scope: TenantContext,
+    actor: ActorContext,
+    runId: string,
+    prepared: Prepared,
+    snapshot: LegacySnapshot,
+    mapping: PanelMapping,
+    services: LegacyPlan['services'],
+    outcomes: ReadonlyMap<string, ReturnType<typeof candidateOutcome>>,
+    importedUsers: ReadonlyMap<string, string>,
+    keptAsHistory: ReadonlySet<string>,
+    operatorPanels: ReadonlyMap<string, string>,
+    shapes: ReadonlyMap<string, { id: string; resolved: boolean }>,
+    tallies: ApplyTallies,
+  ): Promise<void> {
+    const ctx = {
+      mapping,
+      inventories: prepared.inventories,
+      userIds: new Set(snapshot.users.map((u) => u.id)),
+      importedUsers,
+      productCodes: snapshot.productCodes,
+      tariffOf: (key: string) =>
+        shapes.get(key)?.resolved === true ? ('RESOLVED' as const) : ('UNRESOLVED' as const),
+      claimsByName: claimsByName(snapshot.liveInvoices, keptAsHistory),
+    };
+    const recordable = services.filter(({ invoice }) => {
+      if (recordableKey(invoice.idInvoice)) return true;
+      tallies.services.candidates.unrecordable += 1;
+      return false;
+    });
+    for (let i = 0; i < recordable.length; i += CUSTOMER_BATCH) {
+      const batch = recordable.slice(i, i + CUSTOMER_BATCH);
+      await this.mutate(scope, actor, 'legacy_import.service_candidates', runId, async (tx) => {
+        const now = this.deps.clock.now();
+        const keys = batch.map((s) => s.invoice.idInvoice);
+        const existing = new Map(
+          (
+            await this.deps.serviceCandidates.findByInvoiceKeys(scope, keys, tx, {
+              forUpdate: true,
+            })
+          ).map((c) => [c.invoiceKey, c]),
+        );
+        const archive = await this.deps.serviceCandidates.latestArchiveIds(scope, keys, tx);
+        const counts: Record<string, number> = {};
+        for (const { invoice, decision } of batch) {
+          const o = outcomes.get(invoice.idInvoice);
+          if (o === undefined) continue;
+          const evidence = candidateEvidence(invoice, ctx);
+          const panelOfDecision =
+            decision.category === 'ADOPTION_ELIGIBLE'
+              ? decision.panelId
+              : (operatorPanels.get(invoice.idInvoice) ?? evidence.mappedPanelId);
+          const facts = {
+            runId,
+            sourceFingerprint: snapshot.fingerprint,
+            invoiceChecksum: invoice.checksum,
+            outcome: o.outcome,
+            blocker: o.blocker,
+            evidence,
+            evidenceHash: evidenceHash(evidence),
+            panelCode: recordableCode(invoice.codePanel),
+            productCode: recordableCode(invoice.codeProduct),
+            archiveId: archive.get(invoice.idInvoice) ?? null,
+            serviceId: o.serviceId,
+            observedAt: observedAtFor(panelOfDecision, prepared.inventories),
+          };
+          const before = existing.get(invoice.idInvoice);
+          if (before === undefined) {
+            await this.deps.serviceCandidates.insert(
+              scope,
+              {
+                ...facts,
+                id: this.deps.ids.uuid(),
+                invoiceKey: invoice.idInvoice,
+                synthetic: snapshot.synthetic,
+                reviewState: initialReviewState(o.outcome),
+                now,
+              },
+              tx,
+            );
+            tallies.services.candidates.INSERTED += 1;
+            counts[o.outcome] = (counts[o.outcome] ?? 0) + 1;
+            continue;
+          }
+          // A real snapshot never writes over test data, nor test data over a real decision.
+          if (before.synthetic !== snapshot.synthetic) {
+            tallies.services.candidates.sourceClassMismatch += 1;
+            continue;
+          }
+          const reviewState = reviewStateAfterRun(before, o.outcome);
+          const bump = isMaterialChange(before, { ...facts, reviewState });
+          if (!bump && before.runId === runId) {
+            tallies.services.candidates.UNCHANGED += 1;
+            continue;
+          }
+          const written = await this.deps.serviceCandidates.updateOutcome(
+            scope,
+            before.id,
+            before.version,
+            { ...facts, reviewState, bump, updatedAt: now },
+            tx,
+          );
+          if (written === null) {
+            throw new Error('a legacy service candidate moved under its row lock');
+          }
+          tallies.services.candidates.UPDATED += 1;
+          counts[o.outcome] = (counts[o.outcome] ?? 0) + 1;
+        }
+        // One audit row per batch: counts by outcome, never a key or a name.
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS.recorded,
+            entityType: 'LegacyImportRun',
+            entityId: runId,
+            before: null,
+            after: { written: counts },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+      });
+    }
+  }
+
+  /**
+   * Mirza PR5 — an approval leaves ADOPT_APPROVED/ADOPTING: to ADOPTED with its service, or
+   * back to OPEN with the code that refused it. A conditional UPDATE at its version; audited
+   * with codes and ids only.
+   */
+  private async settleApproval(
+    scope: TenantContext,
+    actor: ActorContext,
+    runId: string,
+    approval: LegacyServiceCandidateRecord,
+    result:
+      | { readonly refusal: LegacyServiceApprovalRefusal }
+      | {
+          readonly adopted: {
+            readonly outcome: LegacyServiceOutcome;
+            readonly serviceId: string;
+          };
+        },
+  ): Promise<boolean> {
+    return this.mutate(scope, actor, 'legacy_import.service_approval', runId, async (tx) => {
+      const now = this.deps.clock.now();
+      const cleared = { approvedPanelId: null, approvedChecksum: null, approvedOutcome: null };
+      const settled = await this.deps.serviceCandidates.transition(
+        scope,
+        approval.id,
+        { from: ['ADOPT_APPROVED', 'ADOPTING'], version: approval.version },
+        'adopted' in result
+          ? {
+              ...cleared,
+              reviewState: 'ADOPTED',
+              outcome: result.adopted.outcome,
+              blocker: null,
+              serviceId: result.adopted.serviceId,
+              lastApprovalRefusal: null,
+              updatedAt: now,
+            }
+          : {
+              ...cleared,
+              reviewState: 'OPEN',
+              lastApprovalRefusal: result.refusal,
+              updatedAt: now,
+            },
+        tx,
+      );
+      // A person moved it first (a reopen): their decision stands; nothing is recorded here.
+      if (settled === null) return false;
+      await this.auditApproval(
+        scope,
+        actor,
+        'adopted' in result
+          ? LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS.approvalExecuted
+          : LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS.approvalRefused,
+        approval,
+        'adopted' in result
+          ? { runId, serviceId: result.adopted.serviceId, outcome: result.adopted.outcome }
+          : { runId, refusal: result.refusal },
+        tx,
+      );
+      return true;
+    });
+  }
+
+  /**
+   * A claim (ADOPTING) this run will not execute goes back to ADOPT_APPROVED: the operator's
+   * approval still stands, a later run may execute it, and a person may reopen it meanwhile.
+   */
+  private async releaseClaim(
+    scope: TenantContext,
+    actor: ActorContext,
+    runId: string,
+    approval: LegacyServiceCandidateRecord,
+    why: string,
+  ): Promise<boolean> {
+    return this.mutate(scope, actor, 'legacy_import.service_approval', runId, async (tx) => {
+      const released = await this.deps.serviceCandidates.transition(
+        scope,
+        approval.id,
+        { from: ['ADOPTING'], version: approval.version },
+        { reviewState: 'ADOPT_APPROVED', updatedAt: this.deps.clock.now() },
+        tx,
+      );
+      if (released === null) return false;
+      await this.auditApproval(
+        scope,
+        actor,
+        LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS.approvalReleased,
+        approval,
+        { runId, why },
+        tx,
+      );
+      return true;
+    });
+  }
+
+  private async auditApproval(
+    scope: TenantContext,
+    actor: ActorContext,
+    action: string,
+    approval: LegacyServiceCandidateRecord,
+    after: Record<string, unknown>,
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action,
+        entityType: 'LegacyServiceCandidate',
+        entityId: approval.id,
+        before: {
+          reviewState: approval.reviewState,
+          approvedPanelId: approval.approvedPanelId,
+          approvedOutcome: approval.approvedOutcome,
+          synthetic: approval.synthetic,
+          version: approval.version,
+        },
+        after,
+        result: 'SUCCESS',
+      },
+      tx,
+    );
   }
 
   // --- reconcile -----------------------------------------------------------------------
@@ -1109,48 +1984,103 @@ export class LegacyImporterService {
     const { scope, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
     const { run, inputs } = await this.runMadeFrom(scope, snapshot, mapping, 'reconcile');
-    const prepared = await this.prepare(scope, snapshot, mapping);
+    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
     const { destination } = this.deps;
     const tallies = prepared.plan.tallies;
-    const [wallet, openings, native, trials, shapes] = await Promise.all([
+    const [wallet, openings, native, trials, shapes, since] = await Promise.all([
       destination.walletTotals(scope, inputs.walletCurrency),
       destination.openingAggregates(scope),
       destination.walletTotals(scope, inputs.walletCurrency, { excludeOpenings: true }),
       destination.trialDecisionCounts(scope),
       destination.shapeStatusCounts(scope),
+      destination.movementSince(scope, run.startedAt),
     ]);
     // Movement is measured against the SAME boundary as the pre-import total: both are the
     // non-opening total (`excludeOpenings`), so an entry is either in the pre-import figure
     // or in the movement, never in neither, whenever it committed (before the run row, or
     // concurrently with that measurement). There is no timestamp boundary to fall between.
+    //
+    // aud6 F2/F3: the movement is LISTED, never folded into the expected side. The import
+    // runs under a write freeze; a renewal, a receipt, a TonPays approval or an operator's
+    // credit that moved money in the window is the owner's question (the runbook's money
+    // paths), so reconcile is a DISCREPANCY until the movement is zero.
     const movement = native.totalMinor - inputs.preImportWalletTotalMinor;
     const importable = prepared.plan.users.filter((u) => u.decision.kind === 'IMPORT');
     const present = await destination.customersByTelegramIds(
       scope,
       importable.map((u) => (u.decision.kind === 'IMPORT' ? u.decision.telegramUserId : '')),
     );
-    const expectedWallet = inputs.preImportWalletTotalMinor + tallies.wallet.legacySumMinor;
+    // Owner decision 6: only POSITIVE legacy balances reach the ledger; a negative one is a
+    // legacy debt beside it. So the wallet moves by Σ positive, and Σ |negative| is debts.
+    const expectedWallet = inputs.preImportWalletTotalMinor + tallies.wallet.positive.sumMinor;
     const categorySum = Object.values(tallies.services.categories).reduce((a, b) => a + b, 0);
-    const nonZero = tallies.wallet.positive.count + tallies.wallet.negative.count;
+    const [debts, usersWallets] = await Promise.all([
+      destination.debtAggregates(scope),
+      this.usersWalletsSection(scope, snapshot, prepared, inputs.walletCurrency),
+    ]);
+    // Mirza PR5: the candidate rows this reconcile READ (in `prepare`), against the snapshot.
+    const serviceOutcomes = this.serviceOutcomesSection(snapshot, run.id, prepared);
     const counts = this.deps.inventory.requestCounts();
     const checks = [
       check(
+        'services.outcomes.closure',
+        'every live legacy invoice (service candidate) assigned exactly one deterministic outcome by this run',
+        true,
+        serviceOutcomes.invariant.holds,
+      ),
+      check(
         'wallet.equation',
-        'pre-import NEXA total + Σ legacy Balance (+ non-opening movement since the run) = current total',
-        expectedWallet + movement,
+        'pre-import NEXA total + Σ positive legacy Balance = current total (no movement absorbed)',
+        expectedWallet,
         wallet.totalMinor,
       ),
       check(
+        'wallet.no_movement',
+        'the non-opening wallet total is the pre-import one: no money moved in the import window',
+        0n,
+        movement,
+      ),
+      check(
+        'wallet.no_entries_since_run',
+        'no non-opening wallet ledger entry was created since the run started',
+        0,
+        since.walletEntries,
+      ),
+      check(
+        'payments.none_since_run',
+        'no payment was created since the run started',
+        0,
+        since.payments,
+      ),
+      check(
         'wallet.openings_sum',
-        'Σ migration openings = Σ legacy Balance of imported users',
-        tallies.wallet.legacySumMinor,
+        'Σ migration openings = Σ positive legacy Balance of imported users',
+        tallies.wallet.positive.sumMinor,
         openings.sumMinor,
       ),
       check(
         'wallet.openings_count',
-        'one opening per non-zero imported balance',
-        nonZero,
+        'one opening per positive imported balance',
+        tallies.wallet.positive.count,
         openings.count,
+      ),
+      check(
+        'wallet.no_debit_opening',
+        'no ledger DEBIT opening: a negative legacy balance is never a ledger entry',
+        0,
+        openings.negative,
+      ),
+      check(
+        'wallet.debts_sum',
+        'Σ legacy debts = Σ |negative legacy Balance| of imported users',
+        -tallies.wallet.negative.sumMinor,
+        debts.sumMinor,
+      ),
+      check(
+        'wallet.debts_count',
+        'one legacy debt per negative imported balance',
+        tallies.wallet.negative.count,
+        debts.count,
       ),
       check(
         'wallet.no_duplicate_opening',
@@ -1171,7 +2101,15 @@ export class LegacyImporterService {
         tallies.customers.importable +
           tallies.customers.manualReview.BALANCE_UNREADABLE +
           tallies.customers.manualReview.BALANCE_OUT_OF_RANGE +
+          tallies.customers.manualReview.DUPLICATE_SOURCE_ID +
+          tallies.customers.manualReview.STATUS_UNKNOWN +
           tallies.customers.invalidIdentity,
+      ),
+      check(
+        'users_wallets.section',
+        'the users-and-wallets section holds (U1–U7)',
+        true,
+        usersWallets.holds,
       ),
       check(
         'trials.decided',
@@ -1209,18 +2147,33 @@ export class LegacyImporterService {
           preImportTotalMinor: inputs.preImportWalletTotalMinor,
           legacySumMinor: tallies.wallet.legacySumMinor,
           nonOpeningMovementSinceRunMinor: movement,
-          expectedTotalMinor: expectedWallet + movement,
+          expectedTotalMinor: expectedWallet,
           actualTotalMinor: wallet.totalMinor,
+          /**
+           * aud6 F2/F3: what moved since the run started (`run.startedAt`), listed for the
+           * owner's decision and never folded into an equation. Counts and a net only.
+           */
+          movementSinceRun: {
+            since: run.startedAt.toISOString(),
+            nonOpeningWalletEntries: since.walletEntries,
+            nonOpeningWalletNetMinor: since.walletNetMinor,
+            payments: since.payments,
+          },
           openings,
           negativeLegacyBalances: tallies.wallet.negative,
-          note: 'An opening balance is not revenue: it is filed as OPENING_BALANCE and read by no sales figure.',
+          legacyDebts: debts,
+          note:
+            'An opening balance is not revenue: it is filed as OPENING_BALANCE and read by no sales figure. ' +
+            'A negative legacy balance is a legacy debt held for the owner, never a ledger entry and never collected.',
         },
+        usersWallets,
         trials,
         products: shapes,
         services: {
           candidates: tallies.services.candidates,
           categories: tallies.services.categories,
         },
+        serviceOutcomes,
         checks,
       },
       ok ? 'RECONCILED' : 'DISCREPANCY',
@@ -1234,7 +2187,21 @@ export class LegacyImporterService {
    * inputs, what NEXA holds now and a fresh plan over the same snapshot. Read only.
    */
   async finalReport(
-    input: LegacyImportInput & { readonly evidenceClass: EvidenceClass },
+    input: LegacyImportInput & {
+      readonly evidenceClass: EvidenceClass;
+      /**
+       * Mirza PR6: a fresh inventory, read by a session bound to this snapshot's source
+       * (`takeLegacyInventory` with the snapshot's fingerprint). Without one the v2 report's
+       * inventory section says `read: false` and does not hold — never assumed.
+       */
+      readonly inventory?: LegacyInventory | null;
+      /**
+       * Which document's verdict the report carries: 2 (default) the AND of every v2 section
+       * and invariant; 1 the closed v1 document with PR4's and PR5's sections, exactly as before
+       * PR6 — a consumer of version 1 keeps version 1's verdict, and no v2 document is built.
+       */
+      readonly reportSchema?: 1 | 2;
+    },
   ): Promise<LegacyImportReport> {
     const { scope, snapshot, mapping } = input;
     // The label a caller asks for is checked against the source's own marker HERE too, so
@@ -1248,7 +2215,7 @@ export class LegacyImporterService {
     const startedAt = this.deps.clock.now();
     const { run, inputs } = await this.runMadeFrom(scope, snapshot, mapping, 'report');
     const { destination } = this.deps;
-    const prepared = await this.prepare(scope, snapshot, mapping);
+    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
     const currency = inputs.walletCurrency;
     const [openings, trials, shapes, map, native, actual, resumes, tenantSlug] = await Promise.all([
       destination.openingAggregates(scope),
@@ -1294,15 +2261,96 @@ export class LegacyImporterService {
         inventoriesComplete: prepared.plan.inventories.every((p) => p.complete),
       },
     });
-    const holds = final.reconciliation.every((r) => r.holds);
+    // Mirza PR4: beside the closed v1 final report, never inside it (its schema is closed);
+    // PR6 folds this section into schema version 2. Its checks (U1–U8) are part of the
+    // verdict (Codex on #233): a failed U-check — a synthetic debt beside a real snapshot,
+    // a DEBIT opening, a per-user mismatch — is a discrepancy, never COMPLETED.
+    const usersWallets = await this.usersWalletsSection(scope, snapshot, prepared, currency);
+    // Mirza PR5: beside the closed v1 report too; PR6 folds it into schema version 2. Its
+    // closure is part of the verdict, as the users-and-wallets checks are.
+    const serviceOutcomes = this.serviceOutcomesSection(snapshot, run.id, prepared);
+    // Mirza PR6: version 2 carries the closed v1 document unchanged as `core` and folds in
+    // every section; its verdict is the AND of all of them and of the seven invariants.
+    if (input.reportSchema === 1) {
+      const v1Holds = reportHolds(final, usersWallets, serviceOutcomes);
+      return {
+        ...this.report('REPORT', scope, snapshot, startedAt, final, run.status),
+        verdict: `${run.status}${v1Holds ? '' : '_WITH_DISCREPANCY'}`,
+        final,
+        usersWallets,
+        serviceOutcomes,
+      };
+    }
+    const finalV2 = buildFinalReportV2({
+      core: final,
+      usersWallets,
+      serviceOutcomes,
+      snapshot,
+      inventory: input.inventory ?? null,
+      facts: await this.deps.cutover.reportFacts(scope, snapshot.fingerprint, run.id),
+      productMap: mapping.products,
+      openingsPerCustomerMax: openings.perCustomerMax,
+    });
+    const holds = reportHolds(final, usersWallets, serviceOutcomes) && finalV2.verdict.holds;
     return {
       ...this.report('REPORT', scope, snapshot, startedAt, final, run.status),
       verdict: `${run.status}${holds ? '' : '_WITH_DISCREPANCY'}`,
       final,
+      finalV2,
+      usersWallets,
+      serviceOutcomes,
     };
   }
 
   // --- helpers -------------------------------------------------------------------------
+
+  /** Mirza PR5 — the `serviceOutcomes` section: the rows `prepare` read, nothing assumed. */
+  private serviceOutcomesSection(
+    snapshot: LegacySnapshot,
+    runId: string,
+    prepared: Prepared,
+  ): ServiceOutcomesSection {
+    return buildServiceOutcomesSection({ snapshot, runId, rows: prepared.review.candidates });
+  }
+
+  /**
+   * Mirza PR4 — the users-and-wallets section (`users-wallets-reconciliation.ts`): the
+   * plan's users against their map rows and what NEXA recorded. Read only.
+   */
+  private async usersWalletsSection(
+    scope: TenantContext,
+    snapshot: LegacySnapshot,
+    prepared: Prepared,
+    currency: string,
+  ): Promise<UsersWalletsSection> {
+    const ids = [...new Set(prepared.plan.users.map((u) => u.row.id))].filter((id) =>
+      /^[1-9][0-9]{0,19}$/u.test(id),
+    );
+    const mapRows = new Map<string, LegacyImportMapRecord>();
+    for (let i = 0; i < ids.length; i += CUSTOMER_BATCH) {
+      const rows = await this.deps.runs.findByLegacyKeys(
+        scope,
+        'user',
+        ids.slice(i, i + CUSTOMER_BATCH),
+      );
+      for (const row of rows) mapRows.set(row.legacyId, row);
+    }
+    const [openingTotals, debtTotals] = await Promise.all([
+      this.deps.destination.openingAggregates(scope),
+      this.deps.destination.debtAggregates(scope),
+    ]);
+    return buildUsersWalletsSection({
+      sourceFingerprint: snapshot.fingerprint,
+      synthetic: snapshot.synthetic,
+      currency,
+      users: prepared.plan.users,
+      mapRows,
+      openings: prepared.existingOpenings,
+      debts: new Map([...prepared.existingDebts].map(([id, d]) => [id, d.amountMinor])),
+      openingTotals,
+      debtTotals,
+    });
+  }
 
   /**
    * The tenant's latest APPLY run, as reconcile and report may read it: made from THIS
@@ -1348,6 +2396,95 @@ export class LegacyImporterService {
     return { run, inputs };
   }
 
+  /**
+   * Mirza PR6 — the cutover gate's decision for this import, read-only, in its own
+   * transaction: what `legacy-import cutover-gate` reports. A gated `apply` decides the same
+   * thing again inside its start transaction (`requireCutover`).
+   */
+  async cutoverDecision(
+    input: LegacyImportInput & { readonly cutoverGate?: LegacyCutoverGateInput },
+  ): Promise<CutoverDecision> {
+    const gate = cutoverGateOf({ ...input, productionLikeTarget: true });
+    if (gate === null) throw new Error('unreachable: a production-like gate always applies');
+    return this.deps.uow.run(input.scope, (tx) => this.decideCutover(input, gate, tx));
+  }
+
+  /**
+   * aud6 F2 — a gated import's freeze, sampled inside `tx` with the gate's own predicate
+   * (`stopSalesHolds`): refused (`STOP_SALES_NOT_ACTIVE`, exit 65) unless an ACTIVE stop_sales
+   * MAINTENANCE incident holds, every ACTIVE panel is drained and no gateway is ACTIVE. At
+   * START nothing is written; at FINISH the run stays RUNNING (the transaction rolls back).
+   */
+  private async requireStopSales(
+    scope: TenantContext,
+    when: 'START' | 'FINISH',
+    tx: TransactionScope,
+  ): Promise<void> {
+    const sample = stopSalesHolds(await this.deps.cutover.stopSalesFacts(scope, tx));
+    if (sample.holds) return;
+    throw new LegacyCutoverRefused(
+      'STOP_SALES_NOT_ACTIVE',
+      when === 'START'
+        ? `sales are not stopped at the import's start (${sample.detail}). Stop sales (runbook step 1) and run again. Nothing was written.`
+        : `sales were reopened during the import (${sample.detail}). The run stays RUNNING, never COMPLETED: stop sales again, check the movement reconcile lists, and resume.`,
+    );
+  }
+
+  /** The decision, or a `LegacyCutoverRefused` (exit 65, nothing written). */
+  private async requireCutover(
+    input: LegacyImportInput,
+    gate: LegacyCutoverGateInput,
+    tx: TransactionScope,
+  ): Promise<Extract<CutoverDecision, { ok: true }>> {
+    const decision = await this.decideCutover(input, gate, tx);
+    if (!decision.ok) throw new LegacyCutoverRefused(decision.code, decision.message);
+    return decision;
+  }
+
+  /**
+   * The one evaluator over what `tx` reads. The expectation's source and panel map must also
+   * be the snapshot's and the mapping's: an approval binds what is imported, not what was
+   * typed.
+   */
+  private async decideCutover(
+    input: LegacyImportInput,
+    gate: LegacyCutoverGateInput,
+    tx: TransactionScope,
+  ): Promise<CutoverDecision> {
+    const { expectation } = gate;
+    if (
+      expectation.sourceFingerprint !== null &&
+      expectation.sourceFingerprint !== input.snapshot.fingerprint
+    ) {
+      return {
+        ok: false,
+        code: 'APPROVAL_MISSING',
+        message: `the snapshot's source fingerprint is ${input.snapshot.fingerprint}, not the expected ${expectation.sourceFingerprint}. Nothing was written.`,
+        detail: ['sourceFingerprint'],
+      };
+    }
+    if (
+      expectation.panelMapFingerprint !== null &&
+      expectation.panelMapFingerprint !== input.mapping.fingerprint
+    ) {
+      return {
+        ok: false,
+        code: 'APPROVAL_MISSING',
+        message: `the panel mapping fingerprint is ${input.mapping.fingerprint}, not the expected ${expectation.panelMapFingerprint}. Nothing was written.`,
+        detail: ['panelMapFingerprint'],
+      };
+    }
+    return this.deps.cutover.decideImport(
+      input.scope,
+      {
+        expectation,
+        snapshotSynthetic: input.snapshot.synthetic,
+        productionLikeTarget: input.productionLikeTarget === true,
+      },
+      tx,
+    );
+  }
+
   private async latestApplyRun(scope: TenantContext): Promise<LegacyImportRunRecord> {
     const latest = await this.deps.destination.latestRun(scope, 'APPLY');
     const run = latest === null ? null : await this.deps.runs.findRun(scope, latest.id);
@@ -1366,6 +2503,7 @@ export class LegacyImporterService {
     action: string,
     runId: string,
     fn: (tx: TransactionScope) => Promise<T>,
+    entityType = 'LegacyImportRun',
   ): Promise<T> {
     return runAuthorizedMutation(
       {
@@ -1379,7 +2517,7 @@ export class LegacyImporterService {
       scope,
       actor,
       LEGACY_IMPORT_PERMISSION,
-      { action, entityType: 'LegacyImportRun', entityId: runId },
+      { action, entityType, entityId: runId },
       async (tx) => {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
           throw errors.conflict(
@@ -1389,6 +2527,79 @@ export class LegacyImporterService {
         }
         return fn(tx);
       },
+    );
+  }
+
+  /**
+   * OQ-LWD-07 — binds the `user-status` read set this snapshot decided statuses from to its
+   * v1 source fingerprint, inside the run's start transaction. The v1 fingerprint does not
+   * cover `User_Status`, so two reads of "the same" approved source can disagree about who is
+   * blocked; a run (or a resume) never mixes them. A source that already has a DIFFERENT
+   * user-status observation is refused, and nothing is written; otherwise this one is
+   * recorded in `legacy_read_set_runs` (insert-or-nothing) and audited.
+   */
+  private async bindUserStatus(
+    scope: TenantContext,
+    actor: ActorContext,
+    snapshot: LegacySnapshot,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const status = snapshot.userStatus;
+    const recorded = await this.deps.readSetRuns.readSetFingerprintsOf(
+      scope,
+      USER_STATUS_READ_SET_NAME,
+      USER_STATUS_READ_SET.version,
+      snapshot.fingerprint,
+      tx,
+    );
+    const other = recorded.filter((f) => f !== status.fingerprint);
+    if (other.length > 0) {
+      throw errors.conflict(
+        LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+        `This source (${snapshot.fingerprint}) was imported with ${status.fingerprintVersion} ` +
+          `${other.join(', ')}, and reads ${status.fingerprint} now: a legacy User_Status ` +
+          'changed under an unchanged v1 fingerprint. Freeze the source and take a new snapshot; nothing was written.',
+      );
+    }
+    const userTable = status.tables['user'];
+    const outcome = await this.deps.readSetRuns.recordReadSetRun(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        readSet: USER_STATUS_READ_SET_NAME,
+        readSetVersion: USER_STATUS_READ_SET.version,
+        fingerprintVersion: status.fingerprintVersion,
+        readSetFingerprint: status.fingerprint,
+        sourceFingerprint: snapshot.fingerprint,
+        sourceSchemaHash: snapshot.schemaHash,
+        sourceEngine: snapshot.descriptor.engine,
+        synthetic: snapshot.synthetic,
+        tableCount: Object.keys(status.tables).length,
+        rowCount: BigInt(userTable?.rows ?? 0),
+        codeVersion: this.deps.codeVersion,
+        recordedAt: this.deps.clock.now(),
+      },
+      tx,
+    );
+    if (!outcome.created) return;
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'legacy_import.read_set.record',
+        entityType: 'LegacyReadSetRun',
+        entityId: outcome.run.id,
+        before: null,
+        after: {
+          readSet: outcome.run.readSet,
+          fingerprintVersion: outcome.run.fingerprintVersion,
+          readSetFingerprint: outcome.run.readSetFingerprint,
+          sourceFingerprint: outcome.run.sourceFingerprint,
+          created: true,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
     );
   }
 
@@ -1427,6 +2638,7 @@ export class LegacyImporterService {
     run: LegacyImportRunRecord,
     mapping: PanelMapping,
     tx: TransactionScope,
+    extra?: Readonly<Record<string, unknown>>,
   ): Promise<void> {
     await this.deps.audit.record(
       scope,
@@ -1441,6 +2653,9 @@ export class LegacyImporterService {
           status: run.status,
           sourceFingerprint: run.sourceFingerprint,
           panelMappingFingerprint: mapping.fingerprint,
+          // Mirza PR6: the approval (and re-run acknowledgements) a gated import ran under
+          // (start), and what the run left for a person (finish) — counts only.
+          ...(extra ?? {}),
         },
         result: 'SUCCESS',
       },
@@ -1454,13 +2669,37 @@ export class LegacyImporterService {
     runId: string,
     mapping: PanelMapping,
     outcome: { readonly status: 'COMPLETED' | 'ABORTED' },
+    extra?: Readonly<Record<string, unknown>>,
+    beforeFinish?: (tx: TransactionScope) => Promise<void>,
   ): Promise<LegacyImportRunRecord> {
     return this.mutate(scope, actor, 'legacy_import.run.finish', runId, async (tx) => {
+      if (beforeFinish !== undefined) await beforeFinish(tx);
       const run = await this.deps.runs.finish(scope, runId, outcome, this.deps.clock.now(), tx);
-      await this.auditRun(scope, actor, 'legacy_import.run.finish', run, mapping, tx);
+      await this.auditRun(scope, actor, 'legacy_import.run.finish', run, mapping, tx, extra);
       return run;
     });
   }
+}
+
+/**
+ * The report's verdict holds only when every v1 equation, every users-and-wallets check
+ * (PR4) and the service outcomes' closure (PR5) hold: a section beside the closed v1
+ * document is part of the verdict, never decoration.
+ */
+export function reportHolds(
+  final: { readonly reconciliation: readonly { readonly holds: boolean }[] },
+  usersWallets: { readonly holds: boolean },
+  serviceOutcomes: { readonly invariant: { readonly holds: boolean } },
+): boolean {
+  return (
+    final.reconciliation.every((r) => r.holds) &&
+    usersWallets.holds &&
+    serviceOutcomes.invariant.holds
+  );
+}
+
+function isAdoptedOutcomeKind(kind: string): boolean {
+  return kind === 'ADOPTED' || kind === 'ALREADY_ADOPTED';
 }
 
 function runSection(run: LegacyImportRunRecord) {
@@ -1487,4 +2726,28 @@ function check(
   actual: bigint | number | boolean,
 ) {
   return { id, what, expected, actual, ok: expected === actual };
+}
+
+/**
+ * Whether the cutover gate applies to this import, and with what: where the target is
+ * explicitly production-like, or a gate was asked for. Where it applies without an
+ * expectation, every value is missing — refused as incomplete, never skipped.
+ */
+export function cutoverGateOf(input: {
+  readonly productionLikeTarget?: boolean;
+  readonly cutoverGate?: LegacyCutoverGateInput;
+}): LegacyCutoverGateInput | null {
+  if (input.cutoverGate !== undefined) return input.cutoverGate;
+  if (input.productionLikeTarget !== true) return null;
+  return {
+    expectation: {
+      sourceFingerprint: null,
+      panelMapFingerprint: null,
+      inventoryFingerprint: null,
+      productsFingerprint: null,
+      invoiceArchiveFingerprint: null,
+      freezeProofSha256: null,
+      finalDumpSha256: null,
+    },
+  };
 }

@@ -1,4 +1,8 @@
-import type { LegacyTrialDecision } from '@nexa/contracts';
+import {
+  LEGACY_USER_STATUS_CLASSES,
+  type LegacyTrialDecision,
+  type LegacyUserStatusClass,
+} from '@nexa/contracts';
 import {
   legacyShapeKey,
   resolveCurrentTariff,
@@ -9,9 +13,11 @@ import {
 import { decideLegacyTrial } from '../../../commerce/trials/application/legacy-trial-eligibility.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
 import {
+  INVOICE_MAP_DECISIONS,
   SERVICE_CANDIDATE_CATEGORIES,
   decideLegacyUser,
   decideServiceCandidate,
+  legacyTelegramId,
   isQ1bPopulation,
   legacyIsAgent,
   needsHiddenShape,
@@ -20,8 +26,13 @@ import {
   type ServiceCandidateDecision,
 } from './decisions.js';
 import { unmappedCodePanels, type PanelMapping } from './panel-mapping.js';
-import type { LegacyInventoryRead } from './ports.js';
-import type { LegacyInvoiceRow, LegacySnapshot, LegacyUserRow } from './source-snapshot.js';
+import type { LegacyInventoryRead, RecordedDebt } from './ports.js';
+import {
+  sha256Hex,
+  type LegacyInvoiceRow,
+  type LegacySnapshot,
+  type LegacyUserRow,
+} from './source-snapshot.js';
 
 /**
  * Migration P7 — the complete decision plan for one snapshot, PURE
@@ -32,7 +43,28 @@ import type { LegacyInvoiceRow, LegacySnapshot, LegacyUserRow } from './source-s
  * decides, so a dry run and the import it previews cannot disagree about a row.
  */
 
-export type OpeningPlan = 'POST' | 'ALREADY_POSTED' | 'ZERO_NO_ENTRY' | 'CONFLICT';
+/**
+ * What the openings phase will do for an importable user. Since owner decision 6 a negative
+ * balance is `RECORD_DEBT` (a legacy debt, no ledger entry), and an existing ledger DEBIT
+ * opening from the code before it is `PRIOR_DEBIT_OPENING` (never rewritten, never doubled).
+ */
+export type OpeningPlan =
+  | 'POST'
+  | 'ALREADY_POSTED'
+  | 'ZERO_NO_ENTRY'
+  | 'CONFLICT'
+  | 'RECORD_DEBT'
+  | 'DEBT_ALREADY_RECORDED'
+  | 'PRIOR_DEBIT_OPENING';
+export const OPENING_PLANS: readonly OpeningPlan[] = [
+  'POST',
+  'ALREADY_POSTED',
+  'ZERO_NO_ENTRY',
+  'CONFLICT',
+  'RECORD_DEBT',
+  'DEBT_ALREADY_RECORDED',
+  'PRIOR_DEBIT_OPENING',
+];
 export type TrialPlan = LegacyTrialDecision | 'ALREADY_DECIDED';
 
 export interface PlannedUser {
@@ -79,7 +111,21 @@ export interface PlanTallies {
   readonly customers: {
     readonly source: number;
     readonly invalidIdentity: number;
-    readonly manualReview: Readonly<Record<'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE', number>>;
+    readonly manualReview: Readonly<
+      Record<
+        'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE' | 'DUPLICATE_SOURCE_ID' | 'STATUS_UNKNOWN',
+        number
+      >
+    >;
+    /** `User_Status` of every source row, classified (OQ-LWD-07). Σ = `source`. */
+    readonly legacyStatus: Readonly<Record<LegacyUserStatusClass, number>>;
+    /**
+     * Importable users blocked in MirzaBot: `new` are created BLOCKED; `existing` are NEXA
+     * customers the import never changes, so their NEXA status stands (owner decision).
+     */
+    readonly blocked: { readonly new: number; readonly existing: number };
+    /** Source ids on more than one row: how many ids, and how many rows carry them. */
+    readonly duplicateSourceIds: { readonly ids: number; readonly rows: number };
     readonly importable: number;
     readonly existing: number;
     readonly new: number;
@@ -120,6 +166,8 @@ export interface PlanInput {
   readonly salesCurrency: string;
   readonly existingCustomers: ReadonlyMap<string, string>;
   readonly existingOpenings: ReadonlyMap<string, bigint>;
+  /** Mirza PR4: Telegram id → the legacy debt already recorded (magnitude, evidence class). */
+  readonly existingDebts?: ReadonlyMap<string, RecordedDebt>;
   readonly trialOverrides: ReadonlyMap<string, number>;
   readonly trialDecided: ReadonlySet<string>;
   readonly existingShapes: ReadonlyMap<
@@ -128,6 +176,8 @@ export interface PlanInput {
   >;
   readonly tariffCandidates: readonly TariffCandidate[];
   readonly inventories: ReadonlyMap<string, LegacyInventoryRead>;
+  /** Mirza PR5: the operator's review, as the run accepted it (`ServiceReviewInputs`). */
+  readonly review?: ServiceReviewInputs;
 }
 
 const TRIAL_PLANS: readonly TrialPlan[] = [
@@ -143,9 +193,56 @@ function zeroes<K extends string>(keys: readonly K[]): Record<K, number> {
   return Object.fromEntries(keys.map((k) => [k, 0])) as Record<K, number>;
 }
 
-export function openingPlanFor(balanceMinor: bigint, existing: bigint | undefined): OpeningPlan {
+/**
+ * `existing` is the SIGNED ledger opening already posted; `existingDebt` the legacy debt
+ * already recorded. A figure that differs from what is recorded — in amount, in kind, or in
+ * evidence class (a synthetic debt met by a real snapshot, or the reverse) — is a CONFLICT,
+ * never re-applied: exactly the opening service's own "same debt" (Codex on #233).
+ */
+export function openingPlanFor(
+  balanceMinor: bigint,
+  existing: bigint | undefined,
+  existingDebt?: RecordedDebt,
+  synthetic = false,
+): OpeningPlan {
+  if (balanceMinor < 0n) {
+    if (existing !== undefined)
+      return existing === balanceMinor ? 'PRIOR_DEBIT_OPENING' : 'CONFLICT';
+    if (existingDebt !== undefined) {
+      return existingDebt.amountMinor === -balanceMinor && existingDebt.synthetic === synthetic
+        ? 'DEBT_ALREADY_RECORDED'
+        : 'CONFLICT';
+    }
+    return 'RECORD_DEBT';
+  }
+  if (existingDebt !== undefined) return 'CONFLICT';
   if (existing === undefined) return balanceMinor === 0n ? 'ZERO_NO_ENTRY' : 'POST';
   return existing === balanceMinor ? 'ALREADY_POSTED' : 'CONFLICT';
+}
+
+/**
+ * Mirza PR4 — the source ids that occur on more than one row. Only ids that ARE Telegram
+ * ids are counted (any other id is INVALID_IDENTITY whatever its multiplicity), and the
+ * comparison is exact: a Telegram id has one spelling.
+ */
+export function duplicateSourceIds(
+  users: readonly { readonly id: string; readonly checksum: string }[],
+): ReadonlyMap<string, string> {
+  const rows = new Map<string, string[]>();
+  for (const u of users) {
+    if (legacyTelegramId(u.id) === null) continue;
+    const list = rows.get(u.id);
+    if (list === undefined) rows.set(u.id, [u.checksum]);
+    else list.push(u.checksum);
+  }
+  // id → one checksum standing for every row of it: order-free, so the review row it keys
+  // is the same whichever order the source returned them in.
+  const out = new Map<string, string>();
+  for (const [id, checksums] of rows) {
+    if (checksums.length < 2) continue;
+    out.set(id, sha256Hex(`user-duplicate:v1\n${[...checksums].sort().join('\n')}`));
+  }
+  return out;
 }
 
 /**
@@ -153,12 +250,28 @@ export function openingPlanFor(balanceMinor: bigint, existing: bigint | undefine
  * which calls it again AFTER the products phase with the tariffs as they now are and the
  * users the customers phase actually imported.
  */
+/**
+ * Mirza PR5 — what the operator's review says about candidates, as the plan may use it.
+ *
+ * - `operatorPanels`: invoice key → the panel an explicit ADOPT approval names, ONLY for
+ *   approvals the run accepted (`approvalGate`: not synthetic on a production-like target,
+ *   bound to this very source row, the panel mapped explicitly). Matched on that panel with
+ *   every other rule unchanged.
+ * - `keptAsHistory`: invoice keys a person kept as history. They are still decided (and
+ *   reported), but they are no claim on an account: the ownership rule ignores them.
+ */
+export interface ServiceReviewInputs {
+  readonly operatorPanels?: ReadonlyMap<string, string>;
+  readonly keptAsHistory?: ReadonlySet<string>;
+}
+
 export function decideAllServices(
   snapshot: LegacySnapshot,
   mapping: PanelMapping,
   indexes: ReadonlyMap<string, PanelInventoryIndex>,
   importedUsers: ReadonlyMap<string, string>,
   tariffOf: (shapeKey: string) => 'RESOLVED' | 'UNRESOLVED',
+  review: ServiceReviewInputs = {},
 ): {
   readonly services: readonly PlannedService[];
   readonly categories: Readonly<Record<ServiceCandidateCategory, number>>;
@@ -166,25 +279,67 @@ export function decideAllServices(
 } {
   const userIds = new Set(snapshot.users.map((u) => u.id));
   const categories = zeroes<ServiceCandidateCategory>(SERVICE_CANDIDATE_CATEGORIES);
-  const services: PlannedService[] = [];
-  let namedProductCandidates = 0;
+  const decided: PlannedService[] = [];
   for (const invoice of snapshot.liveInvoices) {
-    const decision = decideServiceCandidate(invoice, {
-      userIds,
-      importedUsers,
-      policy: mapping.policy,
-      inventories: indexes,
-      productCodes: snapshot.productCodes,
-      productMap: mapping.products,
-      tariffOf,
-    });
+    const panelId = review.operatorPanels?.get(invoice.idInvoice);
+    const decision = decideServiceCandidate(
+      invoice,
+      {
+        userIds,
+        importedUsers,
+        policy: mapping.policy,
+        inventories: indexes,
+        productCodes: snapshot.productCodes,
+        productMap: mapping.products,
+        tariffOf,
+      },
+      panelId === undefined ? null : { panelId },
+    );
+    decided.push({ invoice, decision });
+  }
+  const services = withOwnershipRule(decided, review.keptAsHistory ?? new Set());
+  let namedProductCandidates = 0;
+  for (const { decision } of services) {
     categories[decision.category] += 1;
     if (decision.category === 'ADOPTION_ELIGIBLE' && decision.product.kind === 'NAMED_PRODUCT') {
       namedProductCandidates += 1;
     }
-    services.push({ invoice, decision });
   }
   return { services, categories, namedProductCandidates };
+}
+
+/**
+ * Mirza PR5 — the customer must be identified with confidence. When live invoices of two or
+ * more DIFFERENT legacy owners would adopt the same account (the same panel and lowercase
+ * name), every one of them is `AMBIGUOUS_OWNERSHIP`: which customer holds the account is a
+ * guess, and the first in key order is not an answer. An invoice a person kept as history is
+ * no claim. Invoices of ONE owner naming one account keep the P6 rule (the first adopts; the
+ * rest find the name taken, which P6 reports as a conflicting existing entity).
+ */
+export function withOwnershipRule(
+  services: readonly PlannedService[],
+  keptAsHistory: ReadonlySet<string>,
+): readonly PlannedService[] {
+  const owners = new Map<string, Set<string>>();
+  const accountOf = (s: PlannedService): string | null =>
+    s.decision.category === 'ADOPTION_ELIGIBLE' && !keptAsHistory.has(s.invoice.idInvoice)
+      ? JSON.stringify([s.decision.panelId, s.decision.providerUsername.toLowerCase()])
+      : null;
+  for (const s of services) {
+    const account = accountOf(s);
+    if (account === null || s.decision.category !== 'ADOPTION_ELIGIBLE') continue;
+    const set = owners.get(account) ?? new Set<string>();
+    set.add(s.decision.telegramUserId);
+    owners.set(account, set);
+  }
+  return services.map((s) => {
+    const account = accountOf(s);
+    if (account === null || (owners.get(account)?.size ?? 0) < 2) return s;
+    return {
+      invoice: s.invoice,
+      decision: { category: 'AMBIGUOUS_OWNERSHIP', map: INVOICE_MAP_DECISIONS.AMBIGUOUS_OWNERSHIP },
+    };
+  });
 }
 
 /** The complete indexes of the production panels whose inventory read is complete. */
@@ -207,7 +362,15 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
   const customers = {
     source: snapshot.users.length,
     invalidIdentity: 0,
-    manualReview: { BALANCE_UNREADABLE: 0, BALANCE_OUT_OF_RANGE: 0 },
+    manualReview: {
+      BALANCE_UNREADABLE: 0,
+      BALANCE_OUT_OF_RANGE: 0,
+      DUPLICATE_SOURCE_ID: 0,
+      STATUS_UNKNOWN: 0,
+    },
+    legacyStatus: zeroes<LegacyUserStatusClass>(LEGACY_USER_STATUS_CLASSES),
+    blocked: { new: 0, existing: 0 },
+    duplicateSourceIds: { ids: 0, rows: 0 },
     importable: 0,
     existing: 0,
     new: 0,
@@ -220,17 +383,28 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     positive: { count: 0, sumMinor: 0n },
     zero: 0,
     negative: { count: 0, sumMinor: 0n },
-    openings: zeroes<OpeningPlan>(['POST', 'ALREADY_POSTED', 'ZERO_NO_ENTRY', 'CONFLICT']),
+    openings: zeroes<OpeningPlan>(OPENING_PLANS),
   };
   const trials = zeroes<TrialPlan>(TRIAL_PLANS);
   const importedUsers = new Map<string, string>();
   const users: PlannedUser[] = [];
 
-  for (const row of snapshot.users) {
+  const duplicates = duplicateSourceIds(snapshot.users);
+  customers.duplicateSourceIds.ids = duplicates.size;
+  for (const row0 of snapshot.users) {
+    const duplicateChecksum = duplicates.get(row0.id);
+    // Every row of a duplicated id carries the same order-free checksum, so the ONE review
+    // row they key is written once and found unchanged by the others.
+    const row = duplicateChecksum === undefined ? row0 : { ...row0, checksum: duplicateChecksum };
     customers.phone[row.phone] += 1;
+    customers.legacyStatus[row.status] += 1;
     if (legacyIsAgent(row.agent)) customers.agents += 1;
     const existingCustomerId = input.existingCustomers.get(row.id) ?? null;
-    const decision = decideLegacyUser(row, existingCustomerId !== null);
+    const decision: LegacyUserDecision =
+      duplicateChecksum === undefined
+        ? decideLegacyUser(row, existingCustomerId !== null)
+        : { kind: 'MANUAL_REVIEW', reason: 'DUPLICATE_SOURCE_ID', mapReason: 'INVALID_SOURCE_ROW' };
+    if (duplicateChecksum !== undefined) customers.duplicateSourceIds.rows += 1;
     if (decision.kind === 'INVALID_IDENTITY') {
       customers.invalidIdentity += 1;
       users.push({ row, decision, existingCustomerId: null, opening: null, trial: null });
@@ -244,6 +418,10 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     customers.importable += 1;
     if (decision.customer === 'EXISTING') customers.existing += 1;
     else customers.new += 1;
+    if (decision.blocked) {
+      if (decision.customer === 'EXISTING') customers.blocked.existing += 1;
+      else customers.blocked.new += 1;
+    }
     importedUsers.set(row.id, decision.telegramUserId);
 
     wallet.legacySumMinor += decision.balanceMinor;
@@ -259,6 +437,8 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     const opening = openingPlanFor(
       decision.balanceMinor,
       input.existingOpenings.get(decision.telegramUserId),
+      input.existingDebts?.get(decision.telegramUserId),
+      snapshot.synthetic,
     );
     wallet.openings[opening] += 1;
 
@@ -356,6 +536,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     indexes,
     importedUsers,
     tariffOf,
+    input.review,
   );
   const realLive = snapshot.liveInvoices.filter((i) => i.isTest?.trim() === '0');
 

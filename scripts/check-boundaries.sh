@@ -672,6 +672,7 @@ apps/api/src/modules/commerce/payments/infrastructure/nowpayments-adapter.ts
 apps/api/src/modules/commerce/payments/infrastructure/centralpay-adapter.ts
 apps/api/src/modules/platform/legacy-importer/infrastructure/mysql-legacy-source.ts
 apps/api/src/infrastructure/ai/ai-http.ts
+apps/api/src/legacy-import-cutover.ts
 "
 UNGUARDED=""
 for sink in $SINK_FILES; do

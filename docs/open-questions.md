@@ -3218,7 +3218,9 @@ Still open:
   step 7 and rollback step R5 name the effect (no customer action reaches it; writes are
   refused; `CHECKSUM TABLE` proves nothing changed) but the commands belong to the legacy
   host, which this repository has never seen. **Settled by** the owner writing them into
-  those two steps before the production gate.
+  those two steps before the production gate. (Mirza PR6: still open. What IS enforced now:
+  the freeze proof over EVERY table is checked by PR1's checker inside the cutover gate,
+  and its file's SHA-256 is bound into the owner's recorded approval — OQ-LCO-04.)
 
 ## OQ-P7 — the legacy importer (Migration P7): decisions recorded, not guessed
 
@@ -3249,6 +3251,265 @@ HISTORY_NOT_IMPORTED` (not adopted by registered decision; it expires on the pan
 - **OQ-P7-04 — inventory reads do not take the tenant probe budget.** The importer is an
   operator-run CLI bounded by page size and `maxPages`; two full walks per production panel
   per mode. Whether a cutover-day run should share the monitor's budget is open.
+
+## OQ-MZ-INV — the legacy Mirza tables and columns the repository does not know (Mirza PR1)
+
+The repository knows three legacy tables through the v1 import read set (`user`, `invoice`,
+`product`), plus its own synthetic marker. Every other table is `UNCLASSIFIED` in
+`LEGACY_TABLE_CLASSIFICATION`, and that fails closed: `legacy-import inventory` reports
+`UNCLASSIFIED_TABLES`, and no read set may read its rows. Each item below is UNKNOWN, and
+none is to be guessed. They are settled from the real staging inventory
+(`docs/legacy-migration/table-inventory.md`, NOT RUN) and recorded in reviewed commits.
+Counts quoted from the historical staging snapshot are dated baselines, never expected
+values.
+
+- **OQ-MZ-INV-01 — UNKNOWN: the full table list and each table's class.** Other MirzaBot
+  revisions name `setting`, `marzban_panel` (and other panel tables), `Payment_report`,
+  `textbot`, `admin`, `channels`, `Discount`, gift, affiliate and support tables. In this
+  repository they appear only as refusal probes (`tests/unit/legacy-import-rules.test.ts`).
+  Their columns, keys and purpose are unknown.
+  **Settled by:** the inventory of the staging copy, then one catalogue commit per table
+  with its evidence.
+- **OQ-MZ-INV-02 — UNKNOWN: which tables and columns hold secrets.** Possible secrets
+  include panel passwords, the bot token, card numbers, gateway keys, subscription links,
+  config URIs and UUIDs. Whether `invoice` itself holds any of them is also unknown.
+  Until settled, no such table is `ARCHIVE` or `SUPPORTED`. A table holding any secret is
+  `SECRETS_MANUAL`: names and counts only.
+  **Settled by:** column names (`legacy-archive-inspect.mjs --columns`) plus an owner review.
+  Never by reading the values in NEXA.
+- **OQ-MZ-INV-03 — UNKNOWN: the real column types, charsets and collations.** For example,
+  whether `user.Balance` is `int` or `decimal` (Q4's note in `sql-evidence.md`). Also unknown
+  is whether a `latin1` table holds UTF-8 bytes; it would arrive as mojibake through the
+  utf8mb4 connection and enter checksums. The inventory reports `NOT_UTF8MB4` per table.
+- **OQ-MZ-INV-04 — UNKNOWN: whether any table is not InnoDB.** A MyISAM table is not under
+  the session's consistent snapshot. The inventory reports `NOT_SNAPSHOT_CONSISTENT`, and
+  the legacy freeze (`read_only`, cutover step 7) is what makes its reads stable.
+- **OQ-MZ-INV-05 — UNKNOWN: the non-live `invoice.Status` values.** The fixture uses
+  `removed`; the real set is unknown.
+- **OQ-MZ-INV-06 — UNKNOWN: the format of `invoice.time_sell` and the time zone of every
+  legacy timestamp.** The fixture's unix seconds are synthetic. `dateStrings` returns
+  `DATETIME` without a zone, so no conversion is made until the rule is evidenced.
+- **OQ-MZ-INV-07 — UNKNOWN: the unit and numeric shape of `price_product`, in both
+  `invoice` and `product`.** It may be Toman or Rial, and the legacy UI uses both words.
+  The same question is OQ-LPR-03. Raw text is kept until it is settled.
+- **OQ-MZ-INV-08 — UNKNOWN: the units of `Volume` and `Volume_constraint`, the meaning of
+  `0`, and the `time_unit` spellings.** The same questions are OQ-LPR-02 and OQ-I14-03.
+- **OQ-MZ-INV-09 — UNKNOWN: the real `product` columns.** The same question is OQ-LPR-01.
+  PR2's `products` read set is defined from the inventory's column list, not from the
+  public source.
+- **OQ-MZ-INV-10 — UNKNOWN: the cutover snapshot's row counts.** The historical staging
+  snapshot's figures (197,700 users quoted by the owner; 197,461 user ids in
+  `sql-evidence.md`; 127,611 invoices; 64 products) disagree with each other, and are
+  baselines of an older snapshot. They are never limits, expected values or test oracles.
+  The inventory's exact `COUNT(*)` of the final snapshot is the figure of record.
+- **OQ-MZ-INV-11 — DECISION: which `invoice` columns the archive keeps (PR3).** The archive
+  read set is an explicit column allowlist. Every column it lists must be classified
+  `ARCHIVE`-safe in a reviewed commit, and every column it leaves out is excluded on
+  purpose.
+
+## OQ-LPR — the legacy product review (Mirza PR2, `docs/legacy-product-review-design.md`)
+
+The review is built and fails closed on every item below: a cell is kept verbatim, a field
+the grammar cannot read is null with a closed parse note, and nothing is mapped, priced or
+sold without an operator's decision. Each item is settled from the real staging copy
+(WP G, NOT RUN) or by the owner — never by guessing. Counts from the historical staging
+snapshot (64 product rows) are dated baselines, never expected values.
+
+- **OQ-LPR-01 — UNKNOWN: the real `product` columns** (= OQ-MZ-INV-09). The `products`
+  read set reads `id`, `code_product` and, when present, the public `botmirzapanel`
+  columns plus the public `mirza_pro` fork's (`agent`, `note`, `data_limit_reset`,
+  `one_buy_status`, `category`, `hide_panel`). A real column outside that list is not read;
+  adding one is `legacy-read-set:products:v2` in a reviewed commit with the inventory's
+  evidence. `inbounds`/`proxies` stay unread until OQ-MZ-INV-02 says they hold no secret.
+- **OQ-LPR-02 — UNKNOWN: units of `Volume_constraint` and `Service_time`, and what `0`
+  means.** The review proposes GB (1 GiB) and whole days — the grammar the hidden-shape key
+  already applies to invoice `Volume`/`Service_time` — and a `0` is `ZERO_MEANING_UNKNOWN`,
+  never "unlimited". The operator types the draft's figures; nothing is inferred.
+- **OQ-LPR-03 — PARTLY DECIDED: `price_product`.** The owner decided the unit is Toman
+  (IRT, 2026-10-07). Still unknown: whether the real cells are ever non-integer, grouped
+  (`150,000`) or in Persian digits. Those are `NOT_A_NUMBER` and stay raw; the figure is
+  metadata in every case.
+- **OQ-LPR-04 — UNKNOWN: `Location`** — a panel name, a `code_panel`, a list, or free text?
+  Shown verbatim; never resolved to a panel.
+- **OQ-LPR-05 — DECISION: duplicate `code_product` rows.** Interim (fail closed): one review
+  row holding every legacy row, `CODE_DUPLICATED`, nothing parsed, approval refused (only
+  reject). The owner decides whether a duplicated code is ever mappable, and how.
+- **OQ-LPR-06 — DECISION: renew-only or sellable.** An approved-as-new draft is INACTIVE,
+  HIDDEN, unpriced, uncategorised and panel-less. Whether it becomes renew-only (ACTIVE +
+  HIDDEN with a current price) or public is the owner's later product edit; the review
+  never decides.
+- **OQ-LPR-07 — DECISION: reseller (`agent`) products.** They are review rows like any
+  other, `agent` kept verbatim (`f`, `n`, `n2` in the public fork). Whether an agent product
+  may be mapped at all (resellers were out of Phase 1 of the migration) is the owner's call;
+  the review does not filter them.
+- **OQ-LPR-08 — UNKNOWN: what "disabled" and "test" mean for a legacy product.** Neither
+  public source has a status or test column. The fork's `hide_panel` (per-panel hiding),
+  `one_buy_status`, `note` and `data_limit_reset` are kept verbatim and shown; none of them
+  changes a decision. If the real archive has a status column, it joins the read set in a
+  reviewed commit.
+- **OQ-LPR-09 — UNKNOWN: whether the real `product` table is utf8mb4.** A latin1 table
+  holding UTF-8 bytes would reach the facts and their checksum as mojibake (OQ-MZ-INV-03);
+  the inventory reports `NOT_UTF8MB4`.
+
+## OQ-LIA — the legacy invoice archive (Mirza PR3, `docs/legacy-migration/importer.md` §Invoice archive)
+
+The archive is built and fails closed on every item below: every cell is kept verbatim, a
+field its rule cannot read is NULL with a closed note, and nothing in it becomes an order,
+a payment, a wallet entry, a service or revenue. Counts from the historical staging snapshot
+(127,611 invoices) are dated baselines, never expected values. Each item is settled from the
+real staging copy (NOT RUN) or by the owner — never by guessing.
+
+- **OQ-LIA-01 — UNKNOWN: the deployed fork's real `invoice` columns** (OQ-MZ-INV-11). The
+  read set reads the v1 columns plus the public sources' `Service_location`, `time_sell`,
+  `name_product`, `note`, `refral`, `time_cron`, `notifctions` when present. It NEVER reads
+  `user_info` (a subscription link in the fork), `uuid` or `bottype` (a sub-bot token in the
+  fork). A real column outside the list is not read; adding one is
+  `legacy-read-set:invoice-archive:v2` in a reviewed commit, after the inventory's column
+  list and an owner review say it holds no secret.
+- **OQ-LIA-02 — DECISION (PR5): empty `code_panel`.** Owner decision 8 says such an invoice
+  is never adopted automatically; the archive classifies it `NO_PANEL`. The importer TODAY
+  still searches every production panel for a NULL/blank (and a declared-missing) code and
+  can adopt on a unique hit (`legacy-service-matching.ts`). PR5 must make that path an
+  explicit, audited operator review action, or stop it.
+- **OQ-LIA-03 — PARTLY EVIDENCED: `time_sell`.** Both public sources write `time()` (unix
+  seconds) before every `INSERT … time_sell`; the deployed fork is unproven. The archive
+  parses ASCII digits within [2015-01-01, 2100-01-01) UTC as unix seconds and nothing else
+  (`FORMAT_UNKNOWN` / `OUT_OF_RANGE`, raw kept). If the real data is a `DATETIME`, Jalali or
+  millisecond text, the rule is a new normalisation version — the stored raw cell makes
+  that possible without a re-read; an archived row is never rewritten.
+- **OQ-LIA-04 — PARTLY DECIDED: `price_product`.** The owner decided Toman (IRT) (decision
+  7). Whether real cells are ever grouped, decimal or in Persian digits is unknown; those
+  stay raw (`NOT_A_NUMBER`). The figure is metadata: never summed, never a price.
+- **OQ-LIA-05 — UNKNOWN: duplicate `id_invoice` values.** Both public sources declare
+  `id_invoice` the primary key, so the engine refuses duplicates. Should a real table lack
+  that key, the run FAILS `SOURCE_KEY_DUPLICATED` and archives nothing until a person
+  decides how two rows with one id are kept (the archive is keyed by the id).
+- **OQ-LIA-06 — UNKNOWN: cells PostgreSQL cannot hold verbatim.** A NUL character, or an
+  id / user id / username / status / panel / product cell over 1000 characters (every
+  public source declares them varchar(200)–(300)), fails the run `CELL_UNREPRESENTABLE`
+  rather than being altered. The command names the column, never the value.
+- **OQ-LIA-07 — UNKNOWN: the non-live statuses and `is_test` spellings** (OQ-MZ-INV-05).
+  The class compares `Status` exactly with the importer's live statuses (`end_of_time`,
+  `sendedwarn`, `send_on_hold`, `unpaid` … are NOT live there) and `is_test` as 1/0 only.
+  Whether the importer's live set is complete is the importer's question, not the archive's.
+- **OQ-LIA-08 — DECISION: retention and who sees personal data.** The archive keeps the
+  legacy owner's Telegram id, account username, referrer id and note for ever (append-only),
+  visible only with `legacy.invoices.pii.view` (owner-only by default). Whether those cells
+  should be kept at all after the migration, and for how long, is the owner's call.
+- **OQ-LIA-09 — UNKNOWN: charset.** A latin1 `invoice` table holding UTF-8 bytes would
+  reach the archive and its checksums as mojibake (OQ-MZ-INV-03); the inventory reports
+  `NOT_UTF8MB4`.
+
+## OQ-LWD — legacy users and wallets (Mirza PR4): what the evidence does not settle
+
+Owner decision 6 (2026-10-07) is implemented: a negative legacy balance is a legacy debt
+held for review, never a ledger entry, never collected (`docs/migration-opening-balance.md`).
+Counts from the historical staging snapshot (38 negative balances, 197,700 / 197,461 users)
+are dated baselines, never expected values. Each item is settled by the owner or from the
+real staging copy (NOT RUN) — never by guessing.
+
+- **OQ-LWD-01 — UNKNOWN: was a real-data rehearsal ever applied anywhere?** Before PR4 every
+  APPLY run wrote a negative balance as a `legacy:opening:<tg>` DEBIT. CI and local
+  synthetic rehearsals certainly did (throwaway). Whether a non-production target holds a
+  real-data rehearsal is not recorded in the repository (readiness G5–G18 open). Such rows
+  are never rewritten; a rerun reports `PRIOR_DEBIT_OPENING`, and the remedy is the
+  rollback runbook's restore of the pre-import state, then a fresh import.
+- **OQ-LWD-02 — DECISION: a changed balance in a newer snapshot.** A user imported from an
+  earlier snapshot whose balance changed is reported (`usersWallets.sourceChanged`, sign
+  flips listed by map ref) and never applied. Carrying a delta would need a new ledger reason
+  (e.g. `MIGRATION_OPENING_ADJUSTMENT`) and an owner instruction; the default is that only
+  the final frozen snapshot is applied to production (audit §6.2).
+- **OQ-LWD-03 — DECISION: legacy agents.** `user.agent` is counted and the agent is imported
+  as an ordinary customer: no reseller row, no tier, never credit. Whether a legacy agent
+  becomes a NEXA reseller (which tier, which terms) is the owner's; the per-user agent value
+  is not persisted in NEXA (the v1 read set is frozen; it stays in the source dump).
+- **OQ-LWD-04 — DECISION: collecting a legacy debt.** Out of scope by owner decision 6. If
+  the owner ever wants it, it needs a new ledger reason (a contract change), an explicit
+  instruction per customer or policy, and its own review — none exists.
+- **OQ-LWD-05 — UNKNOWN: the real user count.** The repository's 197,461 numeric ids and the
+  owner's 197,700 users are both staging baselines; `usersWallets.users.outcomes` closes over
+  whatever the cutover snapshot holds (U1). Re-evidenced on the cutover snapshot, never
+  assumed.
+- **OQ-LWD-06 — DECISION: who sees legacy debts.** `legacy.debts.view` (MEDIUM) shows the
+  legacy Telegram id and the amount owed; owner-only by default. Whether an operator role
+  should hold it, and for how long the list is kept, is the owner's.
+- **OQ-LWD-07 — DECIDED by the owner (2026-10-08): a user blocked in MirzaBot is imported
+  BLOCKED.** aud4 F1 found the importer never read `user.User_Status` and created every
+  customer ACTIVE, so an operator's ban was lifted at cutover and the banned user's credit
+  became spendable. Decision: `User_Status = 'block'` → a BLOCKED customer; the opening
+  CREDIT or legacy debt is recorded exactly as anybody's (reconciliation totals unchanged;
+  the block stops spending, not the balance); an existing NEXA customer's status is never
+  changed; any status other than exactly `Active` or `block` is manual review, never ACTIVE.
+  The v1 read set stays frozen: the column is the `user-status` read set
+  (`legacy-read-set:user-status:v1`). Counts: `plan.customers.legacyStatus`,
+  `usersWallets.users.legacyStatus` and `.blocked`. Still the owner's: whether a blocked
+  user's legacy debt or credit should be treated differently later (today it is not), and
+  whether the MirzaBot block reason text should ever be carried (today it is not read).
+
+## OQ-LSR — legacy service review (Mirza PR5): what the evidence does not settle
+
+Owner decision 8 (2026-10-07) is implemented: an invoice with an empty or NULL `code_panel`
+is never adopted automatically; only an explicit, audited operator approval executed by an
+import run may adopt it (`docs/legacy-migration/service-review.md`). Each item below is the
+owner's, or settled from the real staging copy (NOT RUN) — never by guessing.
+
+- **OQ-LSR-01 — DECISION: panel 8255.** It stays unmapped (recommended:
+  `unresolvedPanels` with `OWNER_DECIDES_LATER`) until the owner maps it explicitly in
+  `panels`. Never declared missing to let the search find its accounts, and never inferred
+  from the holders the evidence shows — nor approved onto one: since aud5 F2 an ADOPT
+  approval may name a panel only for an EMPTY `code_panel`, so an 8255 invoice is offered no
+  panel, a request naming one is refused, and the run's gate refuses an older approval
+  (`PANEL_UNMAPPED`).
+- **OQ-LSR-02 — DECISION: declared-missing codes.** A code the operator lists in
+  `missingPanels` is still searched across every production panel and adopted on a unique
+  hit (the map is explicit and fingerprinted). Decision 8 names empty codes only; whether a
+  declared-missing code should also become review-only (`NO_PANEL`-like, adopted only by
+  approval) is the owner's. Until then: do not list a code there that the owner has not
+  explicitly accepted to be searched.
+- **OQ-LSR-03 — UNKNOWN: several live invoices of ONE owner on one account.** Whether Mirza
+  writes a new invoice per renewal of the same account is not evidenced. Today the first in
+  key byte order adopts and the rest are `AMBIGUOUS_OWNERSHIP` (P6 finds the name taken);
+  invoices of DIFFERENT owners on one account are all `AMBIGUOUS_OWNERSHIP`. If renewals do
+  create invoices, the owner decides which one carries the product.
+- **OQ-LSR-04 — UNKNOWN: how many real invoices are `NO_PANEL`.** Before PR5 the
+  empty-code invoices of the staging snapshot were searched; the number that now stays
+  `NO_PANEL` must be re-evidenced by a dry-run on the cutover snapshot (a dated baseline,
+  never an oracle).
+- **OQ-LSR-05 — DECISION: who reviews.** `legacy.services.view` (MEDIUM) and
+  `legacy.services.decide` (HIGH) are owner-only by default. Whether an operator role should
+  hold them is the owner's.
+
+## OQ-LCO — the legacy cutover (Mirza PR6): what the evidence does not settle
+
+- **OQ-LCO-01 — DECISION (proposed): the owner's approval is recorded in the Web Admin, not
+  on the command line.** An approval is a statement about WHO consented; the CLI's
+  `SYSTEM_JOB` actor could only type a name, which CLAUDE.md forbids as a fabricated actor.
+  The production-target acknowledgement stays a CLI env/flag pair (it is about WHERE the CLI
+  writes). `legacy.cutover.approve` is CRITICAL and owner-only. **Settled by** the owner
+  accepting it, or naming another approver role in a reviewed commit.
+- **OQ-LCO-02 — DECISION (proposed): a FAILED APPLY run supersedes too.** The audit's policy
+  names COMPLETED and ABORTED runs; a run fails after phases that may already have written
+  customers and openings, so a FAILED run of another source is treated as a prior import
+  (SOURCE_SUPERSEDED). **Settled by** the owner confirming it.
+- **OQ-LCO-03 — DECISION (proposed): the default answer to SOURCE_SUPERSEDED is a rollback,
+  not an acknowledgement.** A production tenant holding a historical import is restored to
+  the backup taken before it, and the approved snapshot imported once; a re-run
+  acknowledgement exists for the case the owner chooses deliberately, and still applies no
+  balance delta (OQ-LWD-02 stays open).
+- **OQ-LCO-04 — UNKNOWN: the real freeze commands (OQ-REH-02) and the final dump tool.** The
+  gate verifies the freeze proof FILES with PR1's checker and binds the frozen file's and the
+  dump's SHA-256; it cannot prove MirzaBot was stopped or that `read_only` was set. The
+  synthetic rehearsal's "dump" is a TSV export (no dump binary in the CI's MySQL packages).
+  **Settled by** OQ-REH-02, and a staging rehearsal with the real `mysqldump`.
+- **OQ-LCO-05 — UNKNOWN: whether `stop_sales` covers every money path during the window.**
+  The gate's step 1 reads the existing mechanism: an ACTIVE MAINTENANCE incident with
+  `stop_sales`, every ACTIVE panel drained and every payment gateway disabled. A wallet
+  renewal of an EXISTING service on a drained panel is not a new allocation; whether it can
+  move wallet money in the window is not proven here (the wallet equation tolerates it as
+  "non-opening movement"). **Settled by** a staging check during a real window.
+- **OQ-LCO-06 — UNKNOWN: the real legacy table list.** Every table but `user`, `invoice`,
+  `product` is UNCLASSIFIED until `table-inventory.md` is filled from the real dump and a
+  reviewed commit classifies it (OQ-MZ-INV). The cutover refuses until then, by design.
 
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 

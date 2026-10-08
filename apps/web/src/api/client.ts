@@ -676,6 +676,73 @@ import {
   type MarkInboxResponse,
   type NotificationCategory,
 } from '@nexa/contracts';
+// Mirza PR2: the legacy product review.
+import {
+  LEGACY_PRODUCT_REVIEW_ROUTES,
+  legacyProductReviewListResponseSchema,
+  legacyProductReviewResponseSchema,
+  type LegacyProductApproveExistingRequest,
+  type LegacyProductApproveNewRequest,
+  type LegacyProductRejectRequest,
+  type LegacyProductReopenRequest,
+  type LegacyProductReviewListResponse,
+  type LegacyProductReviewResponse,
+  type LegacyProductReviewState,
+} from '@nexa/contracts';
+// Mirza PR3: the legacy invoice archive.
+import {
+  LEGACY_INVOICE_ARCHIVE_ROUTES,
+  legacyInvoiceArchiveDetailResponseSchema,
+  legacyInvoiceArchiveListResponseSchema,
+  legacyInvoiceArchiveSummaryResponseSchema,
+  type LegacyInvoiceArchiveClass,
+  type LegacyInvoiceArchiveDetailResponse,
+  type LegacyInvoiceArchiveListResponse,
+  type LegacyInvoiceArchiveSummaryResponse,
+} from '@nexa/contracts';
+// Mirza PR4: legacy wallet debts (negative legacy balances held for review).
+import {
+  LEGACY_WALLET_DEBT_ROUTES,
+  legacyWalletDebtListResponseSchema,
+  legacyWalletDebtResponseSchema,
+  legacyWalletDebtSummaryResponseSchema,
+  type LegacyWalletDebtDecideRequest,
+  type LegacyWalletDebtListResponse,
+  type LegacyWalletDebtReopenRequest,
+  type LegacyWalletDebtResponse,
+  type LegacyWalletDebtState,
+  type LegacyWalletDebtSummaryResponse,
+} from '@nexa/contracts';
+import {
+  LEGACY_CUTOVER_ROUTES,
+  legacyCutoverApplyRunListResponseSchema,
+  legacyCutoverApprovalListResponseSchema,
+  legacyCutoverApprovalResponseSchema,
+  legacyCutoverReadSetListResponseSchema,
+  type LegacyCutoverApplyRunListResponse,
+  type LegacyCutoverApprovalListResponse,
+  type LegacyCutoverApprovalResponse,
+  type LegacyCutoverApproveRequest,
+  type LegacyCutoverReadSetListResponse,
+  type LegacyCutoverRevokeRequest,
+} from '@nexa/contracts';
+// Mirza PR5: legacy service candidates (one outcome each) and their review.
+import {
+  LEGACY_SERVICE_REVIEW_ROUTES,
+  legacyServiceCandidateDetailResponseSchema,
+  legacyServiceCandidateListResponseSchema,
+  legacyServiceCandidateResponseSchema,
+  legacyServiceCandidateSummaryResponseSchema,
+  type LegacyServiceAdoptRequest,
+  type LegacyServiceCandidateDetailResponse,
+  type LegacyServiceCandidateListResponse,
+  type LegacyServiceCandidateResponse,
+  type LegacyServiceCandidateSummaryResponse,
+  type LegacyServiceDecideRequest,
+  type LegacyServiceOutcome,
+  type LegacyServiceReopenRequest,
+  type LegacyServiceReviewState,
+} from '@nexa/contracts';
 // Phase A2: a direct message from Customer 360.
 import {
   DIRECT_MESSAGE_ROUTES,
@@ -5166,4 +5233,305 @@ export function sendIncidentNotice(
 ): Promise<IncidentNoticeResponse> {
   const { id, ...body } = input;
   return post(INCIDENT_ROUTES.notice(encodeURIComponent(id)), body, incidentNoticeResponseSchema);
+}
+
+// --- Mirza PR2: the legacy product review -------------------------------------------------
+
+/**
+ * The legacy product review rows, by code (`legacy.products.view`). `attention` is the two
+ * states that still want a decision; `after` is the last code of the page before.
+ */
+export function fetchLegacyProductReviews(
+  query: {
+    readonly state?: LegacyProductReviewState;
+    readonly attention?: true;
+    readonly q?: string;
+    readonly after?: string;
+  } = {},
+): Promise<LegacyProductReviewListResponse> {
+  const params = new URLSearchParams();
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.attention === true) params.set('attention', 'true');
+  if (query.q !== undefined && query.q.trim() !== '') params.set('q', query.q.trim());
+  if (query.after !== undefined) params.set('after', query.after);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${LEGACY_PRODUCT_REVIEW_ROUTES.list}?${suffix}` : LEGACY_PRODUCT_REVIEW_ROUTES.list,
+    legacyProductReviewListResponseSchema,
+  );
+}
+
+export function fetchLegacyProductReview(id: string): Promise<LegacyProductReviewResponse> {
+  return authedGet(LEGACY_PRODUCT_REVIEW_ROUTES.detail(id), legacyProductReviewResponseSchema);
+}
+
+/** Maps the code to an existing product. `legacy.products.decide`; bound to the facts shown. */
+export function approveLegacyProductExisting(
+  input: LegacyProductApproveExistingRequest & { readonly id: string },
+): Promise<LegacyProductReviewResponse> {
+  const { id, ...body } = input;
+  return post(
+    LEGACY_PRODUCT_REVIEW_ROUTES.approveExisting(id),
+    body,
+    legacyProductReviewResponseSchema,
+  );
+}
+
+/**
+ * Creates a DRAFT product (inactive, hidden, unpriced, no category, no panel) and maps the
+ * code to it. `legacy.products.decide` AND `catalog.edit`. There is no price to send.
+ */
+export function approveLegacyProductNew(
+  input: LegacyProductApproveNewRequest & { readonly id: string },
+): Promise<LegacyProductReviewResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_PRODUCT_REVIEW_ROUTES.approveNew(id), body, legacyProductReviewResponseSchema);
+}
+
+export function rejectLegacyProduct(
+  input: LegacyProductRejectRequest & { readonly id: string },
+): Promise<LegacyProductReviewResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_PRODUCT_REVIEW_ROUTES.reject(id), body, legacyProductReviewResponseSchema);
+}
+
+export function reopenLegacyProduct(
+  input: LegacyProductReopenRequest & { readonly id: string },
+): Promise<LegacyProductReviewResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_PRODUCT_REVIEW_ROUTES.reopen(id), body, legacyProductReviewResponseSchema);
+}
+
+// --- Mirza PR3: the legacy invoice archive (read-only) ------------------------------------
+
+/** The archive's filters; every one optional. `legacyUserId`/`username` need PII. */
+export interface LegacyInvoiceArchiveQuery {
+  readonly invoiceId?: string;
+  readonly legacyUserId?: string;
+  readonly username?: string;
+  readonly status?: string;
+  readonly panelCode?: string;
+  readonly productCode?: string;
+  readonly classification?: LegacyInvoiceArchiveClass;
+  readonly test?: 'true' | 'false';
+  readonly after?: string;
+}
+
+/**
+ * One page of archived legacy invoices — the latest visible revision of each
+ * (`legacy.invoices.view`). Personal cells come back null unless the reader holds
+ * `legacy.invoices.pii.view`; `after` is the opaque cursor of the page before.
+ */
+export function fetchLegacyInvoices(
+  query: LegacyInvoiceArchiveQuery = {},
+): Promise<LegacyInvoiceArchiveListResponse> {
+  const params = new URLSearchParams();
+  // Sent exactly as given: the verbatim fields (invoice id, owner id, username, status) are
+  // compared as typed, spaces included (`queryOf` decides what is trimmed). Empty is no filter.
+  for (const [name, value] of Object.entries(query)) {
+    if (typeof value === 'string' && value !== '') params.set(name, value);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${LEGACY_INVOICE_ARCHIVE_ROUTES.list}?${suffix}` : LEGACY_INVOICE_ARCHIVE_ROUTES.list,
+    legacyInvoiceArchiveListResponseSchema,
+  );
+}
+
+/** Aggregates only: counts by class and the recent ingest runs. */
+export function fetchLegacyInvoiceSummary(): Promise<LegacyInvoiceArchiveSummaryResponse> {
+  return authedGet(
+    LEGACY_INVOICE_ARCHIVE_ROUTES.summary,
+    legacyInvoiceArchiveSummaryResponseSchema,
+  );
+}
+
+/** One archived revision with its raw cells, its revisions and the importer's outcome. */
+export function fetchLegacyInvoice(id: string): Promise<LegacyInvoiceArchiveDetailResponse> {
+  return authedGet(
+    LEGACY_INVOICE_ARCHIVE_ROUTES.detail(id),
+    legacyInvoiceArchiveDetailResponseSchema,
+  );
+}
+
+// --- Mirza PR4: legacy wallet debts (owner decision 6) -------------------------------------
+
+/**
+ * One page of legacy wallet debts (`legacy.debts.view`): negative legacy balances held for
+ * the owner's review, never a ledger entry and never collected. `after` is the last id of
+ * the page before.
+ */
+export function fetchLegacyDebts(
+  query: {
+    readonly state?: LegacyWalletDebtState;
+    readonly legacyUserId?: string;
+    readonly after?: string;
+  } = {},
+): Promise<LegacyWalletDebtListResponse> {
+  const params = new URLSearchParams();
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.legacyUserId !== undefined && query.legacyUserId.trim() !== '') {
+    params.set('legacyUserId', query.legacyUserId.trim());
+  }
+  if (query.after !== undefined) params.set('after', query.after);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${LEGACY_WALLET_DEBT_ROUTES.list}?${suffix}` : LEGACY_WALLET_DEBT_ROUTES.list,
+    legacyWalletDebtListResponseSchema,
+  );
+}
+
+/** Count and Σ owed per state. Aggregates only. */
+export function fetchLegacyDebtSummary(): Promise<LegacyWalletDebtSummaryResponse> {
+  return authedGet(LEGACY_WALLET_DEBT_ROUTES.summary, legacyWalletDebtSummaryResponseSchema);
+}
+
+/** ACKNOWLEDGED or WAIVED (`legacy.debts.decide`). A label: it moves no money. */
+export function decideLegacyDebt(
+  input: LegacyWalletDebtDecideRequest & { readonly id: string },
+): Promise<LegacyWalletDebtResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_WALLET_DEBT_ROUTES.decide(id), body, legacyWalletDebtResponseSchema);
+}
+
+/** A decided debt back to PENDING_REVIEW (`legacy.debts.decide`). */
+export function reopenLegacyDebt(
+  input: LegacyWalletDebtReopenRequest & { readonly id: string },
+): Promise<LegacyWalletDebtResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_WALLET_DEBT_ROUTES.reopen(id), body, legacyWalletDebtResponseSchema);
+}
+
+// --- Mirza PR5: legacy service candidates and their review (owner decision 8) ---------------
+
+/**
+ * One page of legacy service candidates (`legacy.services.view`). The invoice id is sent
+ * VERBATIM — never trimmed: a legacy id ` padded ` is found only by ` padded `. The panel and
+ * product codes are stored trimmed, so the server trims those itself.
+ */
+export function fetchLegacyServices(
+  query: {
+    readonly outcome?: LegacyServiceOutcome;
+    readonly reviewState?: LegacyServiceReviewState;
+    readonly panelCode?: string;
+    readonly productCode?: string;
+    readonly invoiceId?: string;
+    readonly after?: string;
+  } = {},
+): Promise<LegacyServiceCandidateListResponse> {
+  const params = new URLSearchParams();
+  if (query.outcome !== undefined) params.set('outcome', query.outcome);
+  if (query.reviewState !== undefined) params.set('reviewState', query.reviewState);
+  if (query.panelCode !== undefined && query.panelCode.trim() !== '') {
+    params.set('panelCode', query.panelCode);
+  }
+  if (query.productCode !== undefined && query.productCode.trim() !== '') {
+    params.set('productCode', query.productCode);
+  }
+  if (query.invoiceId !== undefined && query.invoiceId !== '') {
+    params.set('invoiceId', query.invoiceId);
+  }
+  if (query.after !== undefined) params.set('after', query.after);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${LEGACY_SERVICE_REVIEW_ROUTES.list}?${suffix}` : LEGACY_SERVICE_REVIEW_ROUTES.list,
+    legacyServiceCandidateListResponseSchema,
+  );
+}
+
+/** Counts by outcome and by review state. Aggregates only. */
+export function fetchLegacyServiceSummary(): Promise<LegacyServiceCandidateSummaryResponse> {
+  return authedGet(
+    LEGACY_SERVICE_REVIEW_ROUTES.summary,
+    legacyServiceCandidateSummaryResponseSchema,
+  );
+}
+
+/** One candidate, its archive revision (non-personal), the map row and the adoptable panels. */
+export function fetchLegacyService(id: string): Promise<LegacyServiceCandidateDetailResponse> {
+  return authedGet(
+    LEGACY_SERVICE_REVIEW_ROUTES.detail(id),
+    legacyServiceCandidateDetailResponseSchema,
+  );
+}
+
+/** ACKNOWLEDGE or KEEP_AS_HISTORY (`legacy.services.decide`). */
+export function decideLegacyService(
+  input: LegacyServiceDecideRequest & { readonly id: string },
+): Promise<LegacyServiceCandidateResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_SERVICE_REVIEW_ROUTES.decide(id), body, legacyServiceCandidateResponseSchema);
+}
+
+/**
+ * An explicit ADOPT approval (`legacy.services.decide`). It adopts nothing by itself: the
+ * next import run re-runs every adoption check and adopts, or refuses and says why.
+ */
+export function approveLegacyServiceAdoption(
+  input: LegacyServiceAdoptRequest & { readonly id: string },
+): Promise<LegacyServiceCandidateResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_SERVICE_REVIEW_ROUTES.adopt(id), body, legacyServiceCandidateResponseSchema);
+}
+
+/** Back to OPEN (`legacy.services.decide`). */
+export function reopenLegacyService(
+  input: LegacyServiceReopenRequest & { readonly id: string },
+): Promise<LegacyServiceCandidateResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_SERVICE_REVIEW_ROUTES.reopen(id), body, legacyServiceCandidateResponseSchema);
+}
+
+// --- Mirza PR6: the owner's cutover approval (owner constraint 3) --------------------------
+
+function pageOf(route: string, after?: string): string {
+  return after === undefined ? route : `${route}?after=${encodeURIComponent(after)}`;
+}
+
+/** One page of cutover approvals (`legacy.cutover.view`). Fingerprints and digests only. */
+export function fetchLegacyCutoverApprovals(
+  after?: string,
+): Promise<LegacyCutoverApprovalListResponse> {
+  return authedGet(
+    pageOf(LEGACY_CUTOVER_ROUTES.approvals, after),
+    legacyCutoverApprovalListResponseSchema,
+  );
+}
+
+/** One page of the recorded read set observations an approval can bind to. */
+export function fetchLegacyCutoverReadSets(
+  after?: string,
+): Promise<LegacyCutoverReadSetListResponse> {
+  return authedGet(
+    pageOf(LEGACY_CUTOVER_ROUTES.readSets, after),
+    legacyCutoverReadSetListResponseSchema,
+  );
+}
+
+/** One page of this tenant's APPLY runs (what a re-run acknowledgement names as prior). */
+export function fetchLegacyCutoverApplyRuns(
+  after?: string,
+): Promise<LegacyCutoverApplyRunListResponse> {
+  return authedGet(
+    pageOf(LEGACY_CUTOVER_ROUTES.applyRuns, after),
+    legacyCutoverApplyRunListResponseSchema,
+  );
+}
+
+/**
+ * Record an approval (`legacy.cutover.approve`, CRITICAL). Every value is sent EXACTLY as
+ * typed: a fingerprint is never trimmed or case-folded on its way to the server.
+ */
+export function approveLegacyCutover(
+  body: LegacyCutoverApproveRequest,
+): Promise<LegacyCutoverApprovalResponse> {
+  return post(LEGACY_CUTOVER_ROUTES.approvals, body, legacyCutoverApprovalResponseSchema);
+}
+
+/** Withdraw an approval, once, for good (`legacy.cutover.approve`). */
+export function revokeLegacyCutover(
+  input: LegacyCutoverRevokeRequest & { readonly id: string },
+): Promise<LegacyCutoverApprovalResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_CUTOVER_ROUTES.revoke(id), body, legacyCutoverApprovalResponseSchema);
 }

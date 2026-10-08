@@ -2,6 +2,8 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   money,
   type CurrencyCode,
+  type LegacyProductReviewState,
+  type LegacyReadSetName,
   type ProductAudience,
   type ProductCategoryStatus,
   type ProductStatus,
@@ -14,12 +16,16 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
 import type { PanelFacts } from '../application/panel-mapping.js';
+import type { ProductReviewRowFacts } from '../application/product-map-review.js';
 import type {
   LegacyCustomerInsert,
   LegacyCustomerWriter,
   LegacyImporterDestination,
+  LegacyReadSetRun,
+  LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
+  RecordedDebt,
 } from '../application/ports.js';
 import type { LegacySourceEngine } from '../application/source-port.js';
 
@@ -49,7 +55,11 @@ function list(values: readonly string[]): SQL {
 }
 
 export class DrizzleLegacyImporterRepository
-  implements LegacyImporterDestination, LegacyRunInputsRepository, LegacyCustomerWriter
+  implements
+    LegacyImporterDestination,
+    LegacyRunInputsRepository,
+    LegacyCustomerWriter,
+    LegacyReadSetRunRepository
 {
   constructor(
     private readonly db: Database,
@@ -110,6 +120,51 @@ export class DrizzleLegacyImporterRepository
     return out;
   }
 
+  async latestProductsReadFingerprint(
+    scope: TenantContext,
+    sourceFingerprint: string,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    // The same order as the cutover's `latestReadSetRun`: latest recorded, then id.
+    const result = await this.db.execute<{ read_set_fingerprint: string }>(sql`
+      SELECT read_set_fingerprint FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = 'products'
+         AND source_fingerprint = ${sourceFingerprint}
+       ORDER BY recorded_at DESC, id DESC
+       LIMIT 1
+    `);
+    return result.rows[0]?.read_set_fingerprint ?? null;
+  }
+
+  async productReviewRows(scope: TenantContext): Promise<readonly ProductReviewRowFacts[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{
+      code_product: string;
+      state: LegacyProductReviewState;
+      facts_checksum: string;
+      approved_facts_checksum: string | null;
+      approved_product_id: string | null;
+      read_fingerprint: string;
+      missing_since_read_fingerprint: string | null;
+      source_conflict: string | null;
+    }>(sql`
+      SELECT code_product, state, facts_checksum, approved_facts_checksum,
+             approved_product_id::text AS approved_product_id, read_fingerprint,
+             missing_since_read_fingerprint, source_conflict
+        FROM legacy_product_reviews WHERE tenant_id = ${tenantId}
+    `);
+    return result.rows.map((r) => ({
+      codeProduct: r.code_product,
+      state: r.state,
+      factsChecksum: r.facts_checksum,
+      approvedFactsChecksum: r.approved_facts_checksum,
+      approvedProductId: r.approved_product_id,
+      readFingerprint: r.read_fingerprint,
+      missingSinceReadFingerprint: r.missing_since_read_fingerprint,
+      sourceConflict: r.source_conflict,
+    }));
+  }
+
   async customersByTelegramIds(
     scope: TenantContext,
     telegramUserIds: readonly string[],
@@ -141,6 +196,59 @@ export class DrizzleLegacyImporterRepository
       }
     }
     return out;
+  }
+
+  /**
+   * Mirza PR4: Telegram id → the legacy debt recorded for it — its magnitude AND its
+   * evidence class (owner decision 6; Codex on #233: the plan must decide "the same debt"
+   * exactly as the opening service does). Read here for the plan and the reconciliation
+   * only; no balance query reads the table.
+   */
+  async debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, RecordedDebt>> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{
+      legacy_user_id: string;
+      amount_minor: string;
+      synthetic: boolean;
+    }>(sql`
+      SELECT legacy_user_id, amount_minor::text AS amount_minor, synthetic
+        FROM legacy_wallet_debts
+       WHERE tenant_id = ${tenantId}
+    `);
+    return new Map(
+      result.rows.map((r) => [
+        r.legacy_user_id,
+        { amountMinor: BigInt(r.amount_minor), synthetic: r.synthetic },
+      ]),
+    );
+  }
+
+  /** Mirza PR4: count and Σ of recorded legacy debts, in total and per owner-decision state. */
+  async debtAggregates(scope: TenantContext) {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{
+      state: string;
+      n: number;
+      total: string;
+      synthetic: number;
+    }>(sql`
+      SELECT state, count(*)::int AS n, COALESCE(sum(amount_minor), 0)::text AS total,
+             count(*) FILTER (WHERE synthetic)::int AS synthetic
+        FROM legacy_wallet_debts
+       WHERE tenant_id = ${tenantId}
+       GROUP BY state ORDER BY state
+    `);
+    const byState: Record<string, { count: number; sumMinor: bigint }> = {};
+    let count = 0;
+    let sumMinor = 0n;
+    let synthetic = 0;
+    for (const row of result.rows) {
+      synthetic += row.synthetic;
+      byState[row.state] = { count: row.n, sumMinor: BigInt(row.total) };
+      count += row.n;
+      sumMinor += BigInt(row.total);
+    }
+    return { count, sumMinor, byState, synthetic };
   }
 
   async trialOverrides(
@@ -232,6 +340,30 @@ export class DrizzleLegacyImporterRepository
       panelBound: r.panel_bound,
       categoryStatus: r.category_status as ProductCategoryStatus | null,
     }));
+  }
+
+  async movementSince(
+    scope: TenantContext,
+    since: Date,
+  ): Promise<{ walletEntries: number; walletNetMinor: bigint; payments: number }> {
+    const tenantId = requireTenantId(scope);
+    const at = since.toISOString();
+    const result = await this.db.execute<{ entries: number; net: string; payments: number }>(sql`
+      SELECT
+        (SELECT count(*)::int FROM wallet_entries WHERE tenant_id = ${tenantId}
+            AND reason <> ${OPENING_REASON} AND created_at >= ${at}::timestamptz) AS entries,
+        COALESCE((SELECT sum(CASE direction WHEN 'CREDIT' THEN amount ELSE -amount END)
+                    FROM wallet_entries WHERE tenant_id = ${tenantId}
+                     AND reason <> ${OPENING_REASON} AND created_at >= ${at}::timestamptz), 0)::text AS net,
+        (SELECT count(*)::int FROM payments WHERE tenant_id = ${tenantId}
+            AND created_at >= ${at}::timestamptz) AS payments
+    `);
+    const row = result.rows[0];
+    return {
+      walletEntries: row?.entries ?? 0,
+      walletNetMinor: BigInt(row?.net ?? '0'),
+      payments: row?.payments ?? 0,
+    };
   }
 
   async walletTotals(
@@ -424,6 +556,92 @@ export class DrizzleLegacyImporterRepository
     };
   }
 
+  // --- read set runs (Mirza migration PR1) -------------------------------------------------
+
+  async readSetFingerprintsOf(
+    scope: TenantContext,
+    readSet: LegacyReadSetName,
+    readSetVersion: number,
+    sourceFingerprint: string,
+    tx: TransactionScope,
+  ): Promise<readonly string[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute<{ read_set_fingerprint: string }>(sql`
+      SELECT DISTINCT read_set_fingerprint
+        FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = ${readSet}
+         AND read_set_version = ${readSetVersion}
+         AND source_fingerprint = ${sourceFingerprint}
+       ORDER BY read_set_fingerprint
+    `);
+    return result.rows.map((r) => r.read_set_fingerprint);
+  }
+
+  async recordReadSetRun(
+    scope: TenantContext,
+    run: LegacyReadSetRun,
+    tx: TransactionScope,
+  ): Promise<{ readonly run: LegacyReadSetRun; readonly created: boolean }> {
+    const tenantId = requireTenantId(scope);
+    const inserted = await this.exec(tx).execute<{ id: string }>(sql`
+      INSERT INTO legacy_read_set_runs (
+        id, tenant_id, read_set, read_set_version, fingerprint_version, read_set_fingerprint,
+        source_fingerprint, source_schema_hash, source_engine, synthetic, table_count,
+        row_count, code_version, recorded_at)
+      VALUES (${run.id}, ${tenantId}, ${run.readSet}, ${run.readSetVersion},
+              ${run.fingerprintVersion}, ${run.readSetFingerprint}, ${run.sourceFingerprint},
+              ${run.sourceSchemaHash}, ${run.sourceEngine}, ${run.synthetic}, ${run.tableCount},
+              ${run.rowCount.toString()}::bigint, ${run.codeVersion},
+              ${run.recordedAt.toISOString()}::timestamptz)
+      ON CONFLICT ON CONSTRAINT legacy_read_set_runs_observation_key DO NOTHING
+      RETURNING id
+    `);
+    const result = await this.exec(tx).execute<{
+      id: string;
+      read_set: string;
+      read_set_version: number;
+      fingerprint_version: string;
+      read_set_fingerprint: string;
+      source_fingerprint: string;
+      source_schema_hash: string;
+      source_engine: string;
+      synthetic: boolean;
+      table_count: number;
+      row_count: string;
+      code_version: string | null;
+      recorded_at: Date | string;
+    }>(sql`
+      SELECT id, read_set, read_set_version, fingerprint_version, read_set_fingerprint,
+             source_fingerprint, source_schema_hash, source_engine, synthetic, table_count,
+             row_count::text AS row_count, code_version, recorded_at
+        FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = ${run.readSet}
+         AND read_set_version = ${run.readSetVersion}
+         AND read_set_fingerprint = ${run.readSetFingerprint}
+         AND source_fingerprint = ${run.sourceFingerprint}
+    `);
+    const row = result.rows[0];
+    if (row === undefined) throw new Error('the read set run row was not written');
+    return {
+      created: inserted.rows.length === 1,
+      run: {
+        id: row.id,
+        readSet: row.read_set as LegacyReadSetName,
+        readSetVersion: row.read_set_version,
+        fingerprintVersion: row.fingerprint_version,
+        readSetFingerprint: row.read_set_fingerprint,
+        sourceFingerprint: row.source_fingerprint,
+        sourceSchemaHash: row.source_schema_hash,
+        sourceEngine: row.source_engine as LegacySourceEngine,
+        synthetic: row.synthetic,
+        tableCount: row.table_count,
+        rowCount: BigInt(row.row_count),
+        codeVersion: row.code_version,
+        recordedAt: new Date(row.recorded_at),
+      },
+    };
+  }
+
   // --- the customer insert ----------------------------------------------------------------
 
   /**
@@ -433,6 +651,11 @@ export class DrizzleLegacyImporterRepository
    * the customer just spoke to the bot. An imported customer did not.
    *
    * `first_bot_instance_id` is NULL: they arrived through no bot of this installation.
+   *
+   * `status` (OQ-LWD-07): a user blocked in MirzaBot is created BLOCKED, `blocked_at` the
+   * import's instant (`customers_blocked_at_check`) and no reason — the legacy reason text is
+   * not read, and a reason here would be shown to the customer. It applies to the INSERT
+   * only: the conflict path never touches the existing row.
    */
   async insertIfAbsent(
     scope: TenantContext,
@@ -441,10 +664,13 @@ export class DrizzleLegacyImporterRepository
   ): Promise<{ readonly customerId: string; readonly created: boolean }> {
     const tenantId = requireTenantId(scope);
     const at = input.now.toISOString();
+    const status = input.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE';
+    const blockedAt = status === 'BLOCKED' ? at : null;
     const inserted = await this.exec(tx).execute<{ id: string }>(sql`
-      INSERT INTO customers (id, tenant_id, telegram_user_id, username, status,
+      INSERT INTO customers (id, tenant_id, telegram_user_id, username, status, blocked_at,
                              first_seen_at, last_seen_at, created_at, updated_at)
-      VALUES (${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username}, 'ACTIVE',
+      VALUES (${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username},
+              ${status}, ${blockedAt}::timestamptz,
               ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz)
       ON CONFLICT (tenant_id, telegram_user_id) DO NOTHING
       RETURNING id

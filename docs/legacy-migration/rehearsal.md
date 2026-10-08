@@ -15,6 +15,9 @@ legacy dump or backup_*.zip ──► scripts/legacy-archive-inspect.mjs (blocke
 NEXA backup ──► nexa_rehearsal_<stamp> (real `backup restore`, then migrate forward)
                   │ or: fresh migrate + provision --tenant
                   ▼
+once, before the cycles: products-read (digest, approve, ingest) and — synthetic only — the
+            review decision behind the panel map's `products` entry (aud5 F5: an APPLY refuses
+            a map the approved review does not export; a staging backup carries the owner's)
 per cycle:  PRE snapshot + pg_dump ─► P7 audit ─► P7 dry-run ─► (no business row changed?)
             ─► P7 import, kill -9 once the run has checkpointed N rows ─► (run left RUNNING?)
             ─► P7 resume (same run id) ─► P7 reconcile ─► P7 report --format json
@@ -23,6 +26,19 @@ per cycle:  PRE snapshot + pg_dump ─► P7 audit ─► P7 dry-run ─► (no 
             ─► rollback: restore PRE into a candidate, validate, two renames, keep displaced
             ─► restored = PRE exactly?
 cycle 2:    the same from the clean restore; its POST must equal cycle 1's
+once (cycle 9, Mirza PR6), from the clean restore:
+  snapshot A (as loaded): audit ─► inventory ─► products-read (digest, approve, ingest)
+            ─► invoices-read (digest, approve, ingest) ─► gated import refused
+               (TABLES_UNCLASSIFIED on the fixture) ─► the historical import, ungated
+  snapshot B (newer, made from A on the throwaway engine): freeze proof ─► "dump" ─►
+            "restore" ─► PR1's freeze checker EQUAL ─► audit, inventory (COMPLETE), reads
+            ─► gated import refused APPROVAL_MISSING ─► owner approval (synthetic)
+            ─► refused SOURCE_SUPERSEDED ─► re-run acknowledgement ─► gated import with
+               sales open: refused STOP_SALES_NOT_ACTIVE (aud6 F2) ─► stop sales ─► gated
+               import: one new customer, one new opening, nothing else ─► again: nothing
+            ─► reconcile RECONCILED (no money moved in the window) ─► report v2
+               (schema-valid, holds) ─► cutover-gate CUTOVER_READY ─► with a wrong dump digest, and with an
+               edited dump file under the approved digest: REFUSED (FINAL_DUMP_VERIFIED)
 ```
 
 ## Run it
@@ -140,6 +156,59 @@ import, resume and report and checks it against the source). The target is the b
 database name, equal to the `DATABASE_URL` the harness sets; its
 `rehearsal` token keeps P7's production guard from refusing it, and the harness never
 passes `--allow-production-target`.
+
+### The migration program (Mirza PR6): cycle 9
+
+After its cycles the harness runs the whole program once, recorded as cycle 9 in
+`checks.tsv` (diagram above). It keeps `final-report-v2.json` and `cutover-gate.json` under
+`--out`. The cycles' own report checks read version 1 (`--report-schema 1`); cycle 9 reads
+version 2.
+
+- **Snapshot A** is the loaded dump as it is. On the synthetic fixture its inventory is
+  `UNCLASSIFIED_TABLES` (`nexa_synthetic_unclassified`, deliberately), so the gated import of
+  A is refused `TABLES_UNCLASSIFIED` with nothing written, and A is imported the staging way.
+- **Snapshot B** is a NEWER snapshot the harness makes from A on its own throwaway engine:
+  the unclassified table removed (as a reviewed classification would make it COMPLETE), the
+  non-Telegram id gone, one user, one product and one archived (not live) invoice added. Its
+  "final dump" is a stand-in — a byte-exact TSV export of every table, because the CI's MySQL
+  client packages carry no dump binary — and its "restore" a table-by-table copy into a third
+  schema; PR1's checker must find the frozen and restored proofs EQUAL. The owner's approvals
+  are recorded by `tests/support/legacy-rehearsal-cutover-approval.ts` as the rehearsal's
+  synthetic owner, through the service the Web Admin uses (it refuses any database that is
+  not a rehearsal's).
+- A changed existing balance is deliberately NOT part of B: a re-run never applies a balance
+  delta (OQ-LWD-02), so it leaves a SOURCE_CHANGED user the owner must decide, which is
+  pinned by the integration suites (PR4's `legacy-wallet-debts`, PR6's `legacy-cutover`), not
+  by a rehearsal that must end CUTOVER_READY.
+- **On staging** (`--evidence-class staging`) cycle 9 stops after A's reads: the inventory
+  verdict is recorded (PENDING unless COMPLETE) and the owner's approval is PENDING — it is a
+  person's act in the Web Admin, never the harness's. **NOT RUN on real data.**
+
+### The table inventory by hand
+
+Against the rehearsal's restored legacy copy, after the cycle's `audit`, the operator can
+also run it by hand, with the same source and target the harness uses and the cycle's own
+`source.fingerprint`:
+
+```
+NEXA_REHEARSAL_LEGACY_PASSWORD=… node apps/api/dist/legacy-import.cli.js inventory --tenant T \
+  --source mysql://legacy_ro@127.0.0.1:<port>/<schema> \
+  --source-password-env NEXA_REHEARSAL_LEGACY_PASSWORD \
+  --target nexa_rehearsal_<stamp> --expected-fingerprint <audit source.fingerprint> > inventory.md
+```
+
+It is read-only on the legacy copy. On the target it writes only the
+`legacy_read_set_runs` row for the bound observation. Exit 0 means every table is classified
+(`COMPLETE`). Exit 3 means at least one table is not, or the run is unbound; the synthetic
+fixture is deliberately in that state, with `nexa_synthetic_unclassified`. Exit 65 means
+the copy is not the audited source.
+
+Copy the table into `table-inventory.md`, and open an `OQ-MZ-INV` entry for every
+UNCLASSIFIED table. The freeze statement it prints is the one
+`scripts/legacy-freeze-checksum.sql` runs, and the cutover compares it at steps 7 and 9
+with `scripts/legacy-freeze-checksum-verify.sh`, which refuses an empty or partial output
+file (a failed client) instead of letting two of them compare equal.
+**NOT RUN on real data.**
 
 ### Exit codes
 

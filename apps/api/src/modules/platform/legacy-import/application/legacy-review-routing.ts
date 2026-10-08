@@ -9,6 +9,9 @@ import type { LegacyMatchReason, LegacyServiceMatch } from './legacy-service-mat
  * - `ELIGIBLE` → `null`: the caller adopts (P6) and records `IMPORTED` with what it created.
  * - `MANUAL_REVIEW` → `MANUAL_REVIEW` with the matcher's reason, unchanged.
  * - `SKIPPED` (test panel) → `SKIPPED / TEST_PANEL`.
+ * - `NO_PANEL` (owner decision 8: `code_panel` empty or NULL) → `MANUAL_REVIEW /
+ *   PANEL_UNMAPPED`: there is no mapped panel for it, and none is searched for. The
+ *   candidate's own outcome says `NO_PANEL`; the map keeps its closed review vocabulary.
  * - `INVALID` (a username the matcher will not compare) → `MANUAL_REVIEW /
  *   INVALID_SOURCE_ROW`: a person looks at it; it is not silently dropped.
  * - `UNDECIDABLE` (an incomplete inventory) → `MANUAL_REVIEW / INVENTORY_INCOMPLETE`. Never
@@ -23,6 +26,8 @@ export function decisionForLegacyMatch(match: LegacyServiceMatch): LegacyImportD
       return { status: 'MANUAL_REVIEW', reasonCode: reviewReasonOf(match.reason) };
     case 'SKIPPED':
       return { status: 'SKIPPED', reasonCode: 'TEST_PANEL' };
+    case 'NO_PANEL':
+      return { status: 'MANUAL_REVIEW', reasonCode: 'PANEL_UNMAPPED' };
     case 'INVALID':
       return { status: 'MANUAL_REVIEW', reasonCode: 'INVALID_SOURCE_ROW' };
     case 'UNDECIDABLE':
