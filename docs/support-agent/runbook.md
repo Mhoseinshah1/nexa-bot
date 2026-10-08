@@ -449,3 +449,39 @@ ticket, before any provider is paid.
    WHERE o.origin = 'AUTO' AND o.conversation_id = '<conversation id>'
    ORDER BY o.created_at;
   ```
+
+## 14. Progress guards, the handoff notice, NO_ACTION (roadmap A3–A6)
+
+Under `AUTO_REPLY_SAFE` three deterministic guards hand a conversation to a person (with a ticket,
+like any handoff), each with its own reason in «سپردن‌ها به پشتیبان» and «آمار پشتیبانی»:
+
+- **«مشتری چند بار گفت راهنمایی هوش مصنوعی جواب نداد»** (`NO_PROGRESS`, `guard_no_progress`):
+  three «نشد» / «هنوز وصل نمیشه» / «بازم همونه» in a row after the AI's advice. Read the
+  conversation: the knowledge does not cover this case (TB8/TB9).
+- **«هوش مصنوعی همان راهنمایی قبلی را تکرار می‌کرد»** (`REPEATED_ADVICE`,
+  `guard_repeated_advice`): the AI's new answer was nearly identical to one the customer already
+  had; it was not sent.
+- **«مشتری پیام تکراری یا پیام‌های پشت‌سرهم زیادی فرستاد»** (`INBOUND_FLOOD`,
+  `guard_inbound_flood`): the same message three times, or more than eight in a minute.
+
+**The customer is told.** Every handoff sends ONE message from the business account, the template
+`bot.support.handoff_notice` («پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد…», editable in
+`/templates`), shown in the conversation as «اطلاع ارجاع به پشتیبان». It is not sent if a person
+took the conversation first, if the mode was switched OFF, or twice for one handoff. If its
+outcome is unknown («تأییدنشده») it is never resent — check the chat on the phone.
+
+**The context.** Each handoff shows the AI's last note, the topic, the intent it understood and
+how many automatic replies the customer had this session — also for handoffs decided before the
+AI was asked (money, loop, an unreadable image, a stale job). Only `business_chats.view` sees them.
+
+**«بی‌پاسخ بسته شد (تشکر یا حل شد)»** (`no_action`): the customer only thanked or said it was
+solved; nothing was sent, nobody was paged, and the conversation stays with the AI.
+
+From the database (read-only), a conversation's notices:
+
+```sql
+SELECT created_at, control_epoch, state, failure_code, template_key
+  FROM business_outbound_messages
+ WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = '<conversation id>'
+ ORDER BY created_at;
+```

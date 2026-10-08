@@ -180,3 +180,49 @@ restores the file byte for byte). Run on 2026-10-07 against a dedicated database
 | SL-15 | Web: no widening warning for the hour                                     | maxAutoRepliesPerHour: an increase under AUTO_REPLY_SAFE warns                                        | KILLED |
 
 **16 of 16 killed.** `scripts/mutate-clarifying.py` CQ-19 now reverts the default 3 to 2.
+
+## Roadmap A3–A6 (2026-10-08): progress guards, the handoff notice, the handoff's context, NO_ACTION
+
+Driver: `scripts/mutate-sai-progress.py`. Each mutation replaces one exact string, runs the named
+suites, and restores the file byte for byte, also on SIGTERM. A missing anchor fails the run. The
+suites are `tests/unit/support-progress-guards.test.ts`, the `roadmap A3` cases of
+`tests/integration/support-auto-reply.test.ts` and, for the notice, TB2's
+`business-conversations.test.ts`. Run against `nexa_test_sai1b`.
+
+| #     | Mutation                                    | Killed by (examples)                               | Result |
+| ----- | ------------------------------------------- | -------------------------------------------------- | ------ |
+| SP-00 | «نشد» not failure feedback                  | 10 unit; A3 three «it did not work»                | KILLED |
+| SP-01 | no_progress at 4, not 3                     | unit; A3 three «it did not work»; A3 Finglish      | KILLED |
+| SP-02 | another message does not end the run        | unit; A3 Finglish … any other message ends the run | KILLED |
+| SP-03 | failures before any reply counted           | 5 unit                                             | KILLED |
+| SP-04 | the run reads past the epoch                | unit `since`; A3 … a resume starts again           | KILLED |
+| SP-05 | the same message needs 4                    | unit; A3 the same message three times              | KILLED |
+| SP-06 | the rate: 8 in a minute is already a flood  | unit                                               | KILLED |
+| SP-07 | the rate not bounded by the epoch           | unit                                               | KILLED |
+| SP-08 | repeated advice never matches               | unit; A3 a reply the customer already received     | KILLED |
+| SP-09 | greetings not exempt from repeated advice   | unit; A3 the same greeting twice                   | KILLED |
+| SP-10 | service: no_progress not applied            | A3 three «it did not work»; A3 Finglish            | KILLED |
+| SP-11 | service: flood not applied                  | A3 same message; A3 more than eight in a minute    | KILLED |
+| SP-12 | service: repeated advice not applied        | A3 a reply the customer already received           | KILLED |
+| SP-13 | the notice never enqueued                   | 8 A4 cases; TB2 UNKNOWN and stranded               | KILLED |
+| SP-14 | the notice sendable in any state            | unit `businessOutboundSendable`                    | KILLED |
+| SP-15 | mode OFF does not silence the notice        | A4 switching the mode OFF                          | KILLED |
+| SP-16 | the escalation ignores the recorded context | A5 money; A3 three «it did not work»               | KILLED |
+| SP-17 | steps tried not recorded                    | 6 A5 and A3 cases                                  | KILLED |
+| SP-18 | the ticket gate leaks the topic             | A5 tickets.view alone sees none of it              | KILLED |
+| SP-19 | intent not purged                           | A5 the intent is purged with the summary           | KILLED |
+| SP-20 | NO_ACTION: any closing line is enough       | unit                                               | KILLED |
+| SP-21 | NO_ACTION: allowlist skipped                | unit; A6 NO_ACTION on anything else                | KILLED |
+| SP-22 | NO_ACTION: a question closes                | unit «حل شد؟»                                      | KILLED |
+| SP-23 | service: NO_ACTION always hands off         | A6 «مرسی، حل شد»; A6 «اوکی درست شد», «ممنون»       | KILLED |
+
+**24 of 24 killed.**
+
+Notes:
+
+- SP-06, SP-07, SP-14, SP-20 and SP-22 are killed by unit tests only.
+- SP-14: the notice's state rule is redundant with its epoch rule in every integration path
+  (a takeover or a resume moves the epoch). The unit test pins the state rule on its own.
+- The first run showed the A6 «مرسی، حل شد» case failing under unrelated mutants. It was
+  timing-dependent: a customer line in the same second as the reply counts as after it (B1).
+  The test now ages the question by a minute, and its result no longer varies between runs.
