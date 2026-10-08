@@ -31,7 +31,9 @@
     "legacy-import:dev": "tsx src/legacy-import.cli.ts",
     "start:recovery": "node dist/main.recovery.js",
     "start:provisioner": "node dist/main.provisioner.js",
-    "start:assistant": "node dist/main.assistant.js"
+    "start:assistant": "node dist/main.assistant.js",
+    "support-ai-eval": "node dist/support-ai-eval.cli.js",
+    "support-ai-eval:dev": "tsx src/support-ai-eval.cli.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.0.1",

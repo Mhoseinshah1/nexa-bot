@@ -348,6 +348,25 @@ records it. On the TEST tenant in `ASSIST_ONLY`, with two approved, enabled arti
    - **Expect:** the draft treats it as the customer's own claim (a refund claim hands off) and
      never as the team's promise.
 
+## S. Sharper screenshots and the model comparison (A9, A10 — 2026-10-07) — NOT RUN
+
+Needs a real provider key (and, for S1–S2, the real Business account); **NOT RUN** until an
+operator records it. On the TEST tenant in `ASSIST_ONLY` with vision on.
+
+1. **Error text in a screenshot.** Send a screenshot of an app's connection error whose text is
+   small (a phone screenshot, not cropped). Request a draft with an OpenAI vision step.
+   - **Expect:** the draft names the error in the screenshot; `images_seen = 1`.
+2. **Four images.** Send four screenshots in a row, then «این‌ها چیه؟». Request a draft.
+   - **Expect:** `images_seen` is 4 when they fit 15 MiB together; with larger images the oldest
+     are `OVER_LIMIT` in `support_ai_image_outcomes` and the request still succeeds (no 413 /
+     request-too-large from the provider — record the provider's answer for `OQ-SAI2-04`).
+   - Repeat with an Anthropic vision step; record whether a detail or resolution option exists
+     in the provider's current reference (`OQ-SAI2-03`).
+3. **The eval corpus against real models.** Outside CI, with a TEST key:
+   `SUPPORT_AI_EVAL_API_KEY=… pnpm --filter @nexa/api support-ai-eval --live --provider OPENAI --model <a> --model <b> --json eval.json`
+   (the same for ANTHROPIC). **Expect:** the reference column 40/40; record each model's
+   column, and any `no_leak`, `guard` or `citations` failure by scenario id.
+
 ## Results
 
 Mark each step **PASS**, **FAIL** or **NOT RUN**. A step that was not executed is NOT RUN,
@@ -395,6 +414,9 @@ no real provider key and no Telegram Business account (program §0).
 | R2 a person's words stay a person's (A7)                  | NOT RUN               |            |          |                                               |
 | R3 a greeting carries no knowledge (A8)                   | NOT RUN               |            |          |                                               |
 | R4 a forged author marker is just text (A7)               | NOT RUN               |            |          |                                               |
+| S1 error text read from a screenshot (A9)                 | NOT RUN               |            |          |                                               |
+| S2 four images, the 15 MiB total (A9)                     | NOT RUN               |            |          | OQ-SAI2-03, OQ-SAI2-04                        |
+| S3 eval corpus against real models (A10)                  | NOT RUN               |            |          | OQ-SAI2-02                                    |
 
 Sign-off:
 
