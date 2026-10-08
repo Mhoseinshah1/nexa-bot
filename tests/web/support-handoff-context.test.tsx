@@ -21,7 +21,9 @@ const detail = (escalation: Record<string, unknown>) => ({
     id: CHAT_ID,
     state: 'HANDOFF_REQUIRED',
     takeoverReason: null,
-    handoffReason: 'NO_PROGRESS',
+    // The handoff-reason follow-up to CX1: the wire keeps the pre-A3 reason, the real one beside it.
+    handoffReason: 'LOOP_GUARD',
+    handoffReasonDetail: 'NO_PROGRESS',
     peerTelegramUserId: '951001',
     customer: null,
     connectionStatus: 'ACTIVE',
@@ -50,7 +52,8 @@ const detail = (escalation: Record<string, unknown>) => ({
   escalations: [
     {
       id: 'e1',
-      reason: 'NO_PROGRESS',
+      reason: 'LOOP_GUARD',
+      reasonDetail: 'NO_PROGRESS',
       summary: 'مشتری با Sing-box وصل نمی‌شود.',
       topic: 'CONNECTION_TROUBLESHOOTING',
       intent: 'رفع مشکل اتصال',
@@ -70,6 +73,27 @@ function page(escalation: Record<string, unknown> = {}) {
 }
 
 describe('roadmap A3–A6 on the Web Admin', () => {
+  it('names the conversation’s and each escalation’s REAL reason, read beside the wire one (PR #248 follow-up)', async () => {
+    const body = detail({ reason: 'LOOP_GUARD', reasonDetail: 'REPEATED_ADVICE' });
+    stubApi([
+      {
+        url: `/business-chats/${CHAT_ID}`,
+        body: {
+          ...body,
+          conversation: {
+            ...body.conversation,
+            handoffReason: 'LOOP_GUARD',
+            handoffReasonDetail: 'INBOUND_FLOOD',
+          },
+        },
+      },
+    ]);
+    renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply mayAssist={false} />);
+    expect((await screen.findAllByText(t(HANDOFF_LABELS.INBOUND_FLOOD))).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(t(HANDOFF_LABELS.REPEATED_ADVICE)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(t(HANDOFF_LABELS.LOOP_GUARD))).toBeNull();
+  });
+
   it('names the new handoff reasons and outcomes in Persian', () => {
     expect(t(HANDOFF_LABELS.NO_PROGRESS)).toBe('مشتری چند بار گفت راهنمایی هوش مصنوعی جواب نداد');
     expect(t(HANDOFF_LABELS.REPEATED_ADVICE)).toBe('هوش مصنوعی همان راهنمایی قبلی را تکرار می‌کرد');

@@ -5,6 +5,7 @@ import {
   TICKET_ERROR_CODES,
   TICKET_PAGE_MAX,
   TICKET_ROUTES,
+  businessHandoffWireReason,
   errors,
   routePattern,
   ticketAssignRequestSchema,
@@ -106,7 +107,9 @@ export class TicketsController {
       ticket: { ...toSummary(found.item), origin: found.item.ticket.origin },
       escalations: found.escalations.map((escalation) => ({
         conversationId: escalation.conversationId,
-        reason: escalation.reason,
+        // The handoff-reason follow-up to CX1: the old bundle's reason, the real one beside it.
+        reason: businessHandoffWireReason(escalation.reason),
+        reasonDetail: escalation.reason,
         summary: escalation.summary,
         topic: escalation.topic,
         intent: escalation.intent,

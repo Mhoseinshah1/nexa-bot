@@ -8,6 +8,7 @@ import {
   businessChatListQuerySchema,
   businessChatSendRequestSchema,
   businessConnectionStatus,
+  businessHandoffWireReason,
   businessInboxPriority,
   businessOutboundView,
   businessUnansweredSince,
@@ -100,7 +101,9 @@ export class BusinessChatsController {
       },
       escalations: found.escalations.map((escalation) => ({
         id: escalation.id,
-        reason: escalation.reason,
+        // The handoff-reason follow-up to CX1: the old bundle's reason, the real one beside it.
+        reason: businessHandoffWireReason(escalation.reason),
+        reasonDetail: escalation.reason,
         summary: escalation.summary,
         topic: escalation.topic,
         intent: escalation.intent,
@@ -192,7 +195,11 @@ function toSummary(item: BusinessConversationListItem): BusinessConversationSumm
     id: conversation.id,
     state: conversation.state,
     takeoverReason: conversation.takeoverReason,
-    handoffReason: conversation.handoffReason,
+    handoffReason:
+      conversation.handoffReason === null
+        ? null
+        : businessHandoffWireReason(conversation.handoffReason),
+    handoffReasonDetail: conversation.handoffReason,
     peerTelegramUserId: conversation.peerTelegramUserId,
     customer: item.customer,
     connectionStatus: businessConnectionStatus(item.connection),

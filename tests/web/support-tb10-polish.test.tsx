@@ -16,6 +16,7 @@ import {
 import { SupportAiPage } from '../../apps/web/src/pages/support-ai';
 import { CATEGORY_LABELS, pathOf, titleOf } from '../../apps/web/src/pages/notification-center';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { HANDOFF_LABELS } from '../../apps/web/src/pages/handoff-labels';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -48,6 +49,25 @@ const summary = (overrides: Record<string, unknown> = {}) => ({
 const inboxRoute = { path: '/business-chats', query: new URLSearchParams() };
 
 describe('the inbox: the customer’s wait and the ticket', () => {
+  it('names a handoff by its REAL reason, read beside the pre-A3 wire one (PR #248 follow-up)', async () => {
+    stubApi([
+      {
+        url: '/business-chats',
+        body: {
+          conversations: [
+            summary({ handoffReason: 'LOOP_GUARD', handoffReasonDetail: 'INBOUND_FLOOD' }),
+          ],
+          nextCursor: null,
+        },
+      },
+      { url: '/business-connections', body: { connections: [] } },
+    ]);
+    renderPage(<BusinessChatsPage route={inboxRoute} denied={false} />);
+    const table = await screen.findByRole('table', { name: t('web.bchats_title') });
+    expect(within(table).getByText(t(HANDOFF_LABELS.INBOUND_FLOOD))).toBeTruthy();
+    expect(within(table).queryByText(t(HANDOFF_LABELS.LOOP_GUARD))).toBeNull();
+  });
+
   it('says how long the customer has waited, in one unit, floored', () => {
     const now = Date.parse('2026-10-05T12:00:00.000Z');
     const ago = (ms: number) => new Date(now - ms).toISOString();

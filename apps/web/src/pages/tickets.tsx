@@ -9,6 +9,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
+  businessHandoffReasonOf,
   TICKET_MESSAGE_MAX_LENGTH,
   TICKET_PRIORITIES,
   TICKET_REPLY_FILE_MIME_TYPES,
@@ -972,7 +973,11 @@ function TicketEscalationsCard({ detail }: { detail: TicketDetailResponse }) {
       <ol className="stack">
         {detail.escalations.map((escalation) => (
           <li key={`${escalation.conversationId}:${escalation.createdAt}`}>
-            <strong>{t(HANDOFF_LABELS[escalation.reason])}</strong>{' '}
+            <strong>
+              {t(
+                HANDOFF_LABELS[businessHandoffReasonOf(escalation.reason, escalation.reasonDetail)],
+              )}
+            </strong>{' '}
             <span className="muted small">{formatTimestamp(escalation.createdAt)}</span>
             {escalation.summary !== null && <p className="muted small">{escalation.summary}</p>}
             <HandoffContextView

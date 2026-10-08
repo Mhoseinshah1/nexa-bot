@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   BUSINESS_CONVERSATION_STATES,
   BUSINESS_MESSAGE_TEXT_MAX,
+  businessHandoffReasonOf,
   businessOutboundOriginOf,
   businessTextSchema,
   type BusinessChatDetailResponse,
@@ -338,7 +339,11 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
         <span className="bchat-state-cell">
           <StateBadge value={row.state} />
           {row.handoffReason !== null && (
-            <span className="small muted">{t(HANDOFF_LABELS[row.handoffReason])}</span>
+            <span className="small muted">
+              {t(
+                HANDOFF_LABELS[businessHandoffReasonOf(row.handoffReason, row.handoffReasonDetail)],
+              )}
+            </span>
           )}
           {row.connectionStatus !== 'ACTIVE' && <ConnectionBadge status={row.connectionStatus} />}
           {row.ticketId !== null && (
@@ -645,7 +650,14 @@ function ControlCard({
             conversation.handoffReason === null ? (
               <Dash key="h" />
             ) : (
-              t(HANDOFF_LABELS[conversation.handoffReason])
+              t(
+                HANDOFF_LABELS[
+                  businessHandoffReasonOf(
+                    conversation.handoffReason,
+                    conversation.handoffReasonDetail,
+                  )
+                ],
+              )
             ),
           ],
           [
@@ -787,7 +799,13 @@ function EscalationsCard({ detail }: { detail: BusinessChatDetailResponse }) {
         {detail.escalations.map((escalation) => (
           <li key={escalation.id}>
             <div className="bchat-message-head">
-              <strong>{t(HANDOFF_LABELS[escalation.reason])}</strong>
+              <strong>
+                {t(
+                  HANDOFF_LABELS[
+                    businessHandoffReasonOf(escalation.reason, escalation.reasonDetail)
+                  ],
+                )}
+              </strong>
               <span className="muted small">{formatTimestamp(escalation.createdAt)}</span>
             </div>
             <div className="small">

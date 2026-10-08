@@ -1860,7 +1860,7 @@ wire form for their preview and their create (review of PR #248, CX3); before th
 every key, and the previous API refused every mass-operation preview. A bot filter is the one
 thing the previous API refuses.
 
-### During an update: the handoff notice in a business-chat detail (roadmap A4)
+### During an update: the handoff notice, handoff reasons and outcomes (roadmap A3, A4)
 
 Roadmap A4 adds an outbound origin, `HANDOFF_NOTICE` — the one templated message a handoff
 sends the customer. The Web Admin bundle before A4 parses a conversation's outbound rows with
@@ -1882,17 +1882,36 @@ replicas, so (review of PR #248, CX1):
   HTTP case in `tests/integration/support-tb10.test.ts` parse the server's answer with a frozen
   copy of the pre-A4 schema (`tests/support/frozen-business-chat-outbound.ts`).
 
-**Not covered by this mapping:** the three handoff reasons A3 added (`NO_PROGRESS`,
-`REPEATED_ADVICE`, `INBOUND_FLOOD`). The pre-A4 bundle parses a conversation's
-`handoffReason`, an escalation's `reason`, a ticket escalation's `reason` and the analytics'
-`handoffsByReason` with its own strict enum, so while it is still being served, a conversation
-handed off for one of those reasons makes the inbox list, that detail, that ticket and the
-support analytics answer a parse error in that tab. Nothing is stored or lost; a reload once
-every replica runs the new release answers all of them.
+**Handoff reasons and automatic outcomes take the same route** (review of PR #248, the
+follow-up to CX1). A3 added three handoff reasons — `NO_PROGRESS`, `REPEATED_ADVICE`,
+`INBOUND_FLOOD` — and A3/A6 four automatic outcomes. The pre-A3 bundle reads a reason with a
+strict enum in the inbox (`handoffReason`), a conversation's escalations (`reason`), a ticket's
+escalations (`reason`) and the support analytics (`handoffsByReason`), and an outcome in the
+analytics (`auto.byOutcome`); one value outside it failed the whole read — for the inbox, the
+inbox of the whole tenant. So:
+
+- **On the wire, a reason never leaves the pre-A3 set.** The three progress guards go as
+  `LOOP_GUARD` through one function, `businessHandoffWireReason`: each is the AI going round
+  without progress, which is what the old «loop» label says. The real reason travels beside it
+  in an optional, tolerant `handoffReasonDetail` / `reasonDetail`, which this bundle reads
+  (`businessHandoffReasonOf`); an older replica sends none, and a value this bundle does not know
+  reads as absent.
+- **The analytics fold.** `handoffsByReason` is keyed by the pre-A3 reasons only, the three
+  guards summed into `LOOP_GUARD`; `auto.byOutcome` likewise, the three guard outcomes summed into
+  `guard_consecutive` (the loop guard's) and `no_action` left out of the folded list, because no
+  pre-A3 outcome means "ended silently" (the `dropped` total still counts it). The true counts
+  travel in `handoffsByReasonDetail` and `auto.byOutcomeDetail`, which this bundle draws
+  (`supportHandoffCountsOf`, `supportAutoOutcomeCountsOf`). The old bundle shows `LOOP_GUARD` and
+  `guard_consecutive` larger than they were; nothing is lost, and a reload once every replica runs
+  this release shows the detail.
+- Like the outbound origin, the projection is permanent. `tests/support/frozen-pre-a3-schemas.ts`
+  freezes main's parsers for all four reads; `tests/integration/support-tb10.test.ts` serves each
+  over HTTP with a real row for every new reason and parses the answers with them.
 
 **A rollback** past A4 is not covered by this mapping: it lives in this release's server, and the
 previous release's server sends a stored origin as it is. Its own bundle then fails the detail of
-any conversation holding a notice row, as it fails one holding an A3 handoff reason.
+any conversation holding a notice row, and its inbox, tickets and analytics fail on a stored A3
+handoff reason or outcome in the same way.
 
 ### What a rollback leaves as text: appearance markers (round P, Premium UI)
 

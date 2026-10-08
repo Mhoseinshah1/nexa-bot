@@ -7,13 +7,18 @@ import {
   BUSINESS_CHAT_ROUTES,
   SESSION_COOKIE_NAME,
   SUPPORT_ANALYTICS_ROUTES,
+  TICKET_ROUTES,
   businessChatDetailResponseSchema,
+  businessHandoffReasonOf,
   businessChatListResponseSchema,
   businessOutboundOriginOf,
   businessUnansweredSince,
   isNexaError,
   supportAnalyticsResponseSchema,
+  supportAutoOutcomeCountsOf,
+  supportHandoffCountsOf,
   systemJobActor,
+  ticketDetailResponseSchema,
   type ActorContext,
   type BusinessBotRight,
   type CorrelationId,
@@ -43,6 +48,12 @@ import {
   type TestContext,
 } from './harness';
 import { frozenPreA4DetailOutbound } from '../support/frozen-business-chat-outbound';
+import {
+  frozenPreA3Analytics,
+  frozenPreA3ChatDetail,
+  frozenPreA3ChatList,
+  frozenPreA3TicketEscalations,
+} from '../support/frozen-pre-a3-schemas';
 
 /**
  * TB10 against a real PostgreSQL: the support notifications produced by their real
@@ -870,6 +881,126 @@ describe('TB10 — over HTTP', () => {
       });
       expect(bad.statusCode, cursor).toBe(400);
     }
+  });
+
+  it('serves the A3 handoff reasons in every read the pre-A3 bundle still parses (review of PR #248)', async () => {
+    const db = api.container.database.db;
+    const tenantId = tenantA.tenantId;
+    const REASONS = ['NO_PROGRESS', 'REPEATED_ADVICE', 'INBOUND_FLOOD'] as const;
+    const customerId = randomUUID();
+    await db.execute(sql`INSERT INTO customers (id, tenant_id, telegram_user_id, first_name)
+      VALUES (${customerId}, ${tenantId}, '7390001', 'Reasons')`);
+    const categoryId = randomUUID();
+    await db.execute(sql`INSERT INTO ticket_categories (id, tenant_id, title)
+      VALUES (${categoryId}, ${tenantId}, 'General')`);
+    // A v7 id: the ticket routes accept nothing else.
+    const ticketId = api.container.ids.uuid();
+    await db.execute(sql`INSERT INTO tickets (id, tenant_id, customer_id, bot_instance_id,
+        category_id, category_title, status, opening_key, origin)
+      VALUES (${ticketId}, ${tenantId}, ${customerId}, ${SEED_IDS.botA1}, ${categoryId}, 'General',
+              'OPEN', ${`a3-${ticketId}`}, 'BUSINESS_CHAT')`);
+    const conversations = new Map<string, (typeof REASONS)[number]>();
+    for (const [i, reason] of REASONS.entries()) {
+      const connectionRowId = randomUUID();
+      await db.execute(sql`
+        INSERT INTO telegram_business_connections
+          (id, tenant_id, bot_instance_id, connection_id, owner_telegram_user_id,
+           owner_user_chat_id, is_enabled, rights, connected_at, last_confirmed_at)
+        VALUES (${connectionRowId}, ${tenantId}, ${SEED_IDS.botA1}, ${`a3-${connectionRowId}`},
+                '5000009', '5000009', true, ARRAY['can_reply'], now(), now())`);
+      const conversationId = randomUUID();
+      const chat = String(7_310_001 + i);
+      await db.execute(sql`
+        INSERT INTO business_conversations
+          (id, tenant_id, bot_instance_id, owner_telegram_user_id, chat_id, connection_row_id,
+           peer_telegram_user_id, state, control_epoch, handoff_reason)
+        VALUES (${conversationId}, ${tenantId}, ${SEED_IDS.botA1}, '5000009', ${chat},
+                ${connectionRowId}, ${chat}, 'HANDOFF_REQUIRED', 1, ${reason})`);
+      await db.execute(sql`
+        INSERT INTO business_conversation_escalations
+          (id, tenant_id, conversation_id, control_epoch, reason, ticket_id, ticket_outcome)
+        VALUES (${randomUUID()}, ${tenantId}, ${conversationId}, 1, ${reason}, ${ticketId},
+                'LINKED')`);
+      const outcome = `guard_${reason.toLowerCase()}`;
+      for (const [k, jobOutcome] of [outcome, 'no_action'].entries()) {
+        await db.execute(sql`
+          INSERT INTO support_ai_jobs
+            (id, tenant_id, kind, conversation_id, idempotency_key, state, decision,
+             trigger_telegram_message_id, trigger_content_version, control_epoch, due_at, outcome)
+          VALUES (${randomUUID()}, ${tenantId}, 'AUTO_DECISION', ${conversationId},
+                  ${`a3-${conversationId}-${k}`}, 'DISCARDED', NULL, ${k + 1}, 1, 1, now(),
+                  ${jobOutcome})`);
+      }
+      conversations.set(conversationId, reason);
+    }
+    const read = async (url: string) => {
+      const response = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${url}`,
+        headers: { cookie },
+      });
+      expect(response.statusCode, `${url}: ${response.body}`).toBe(200);
+      return response.json() as unknown;
+    };
+    const parsesOld = (
+      schema: { safeParse: (v: unknown) => { success: boolean; error?: unknown } },
+      body: unknown,
+      what: string,
+    ) => {
+      const parsed = schema.safeParse(body);
+      expect(parsed.success, `${what}: ${JSON.stringify(parsed.error)}`).toBe(true);
+    };
+
+    // The inbox: the pre-A3 bundle parses it; this one reads every real reason.
+    const list = await read(BUSINESS_CHAT_ROUTES.list);
+    parsesOld(frozenPreA3ChatList, list, 'inbox');
+    const rows = businessChatListResponseSchema.parse(list).conversations;
+    for (const [id, reason] of conversations) {
+      const row = rows.find((one) => one.id === id);
+      expect(row?.handoffReason).toBe('LOOP_GUARD');
+      expect(businessHandoffReasonOf(row!.handoffReason, row!.handoffReasonDetail)).toBe(reason);
+    }
+    // Each conversation's detail: the conversation's reason and its escalation's.
+    for (const [id, reason] of conversations) {
+      const detail = await read(BUSINESS_CHAT_ROUTES.detail(id));
+      parsesOld(frozenPreA3ChatDetail, detail, `detail ${reason}`);
+      const current = businessChatDetailResponseSchema.parse(detail);
+      expect(
+        businessHandoffReasonOf(
+          current.conversation.handoffReason,
+          current.conversation.handoffReasonDetail,
+        ),
+      ).toBe(reason);
+      expect(
+        current.escalations.map((one) => businessHandoffReasonOf(one.reason, one.reasonDetail)),
+      ).toEqual([reason]);
+    }
+    // The ticket the three escalated to.
+    const ticket = await read(TICKET_ROUTES.detail(ticketId));
+    parsesOld(frozenPreA3TicketEscalations, ticket, 'ticket');
+    expect(
+      ticketDetailResponseSchema
+        .parse(ticket)
+        .escalations.map((one) => businessHandoffReasonOf(one.reason, one.reasonDetail))
+        .sort(),
+    ).toEqual([...REASONS].sort());
+    // The analytics: folded for the old bundle, true counts for this one.
+    const analytics = await read(`${SUPPORT_ANALYTICS_ROUTES.analytics}?range=TODAY`);
+    parsesOld(frozenPreA3Analytics, analytics, 'analytics');
+    const parsed = supportAnalyticsResponseSchema.parse(analytics);
+    expect(parsed.handoffsByReason).toEqual([{ reason: 'LOOP_GUARD', count: 3 }]);
+    expect(
+      [...supportHandoffCountsOf(parsed)].sort((a, b) => a.reason.localeCompare(b.reason)),
+    ).toEqual([...REASONS].sort().map((reason) => ({ reason, count: 1 })));
+    expect(parsed.auto.byOutcome).toEqual([{ outcome: 'guard_consecutive', count: 3 }]);
+    expect(
+      Object.fromEntries(supportAutoOutcomeCountsOf(parsed).map((row) => [row.outcome, row.count])),
+    ).toEqual({
+      no_action: 3,
+      guard_no_progress: 1,
+      guard_repeated_advice: 1,
+      guard_inbound_flood: 1,
+    });
   });
 
   it('serves a handoff notice in the detail that the pre-A4 bundle still parses (review of PR #248, CX1)', async () => {

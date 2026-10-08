@@ -9,6 +9,7 @@ import {
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { formatNumber } from '../../apps/web/src/format';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
+import { HANDOFF_LABELS } from '../../apps/web/src/pages/handoff-labels';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -88,6 +89,49 @@ const analyticsCalls = (api: ReturnType<typeof stubApi>) =>
   api.calls.filter((call) => call.url.includes('/support-ai/analytics'));
 
 describe('the support analytics page', () => {
+  it('draws the REAL handoff reasons and outcomes when sent, the folded wire ones otherwise (PR #248 follow-up)', async () => {
+    const folded = {
+      handoffsByReason: [{ reason: 'LOOP_GUARD', count: 3 }],
+      auto: {
+        sent: 0,
+        handedOff: 3,
+        dropped: 1,
+        pending: 0,
+        byOutcome: [{ outcome: 'guard_consecutive', count: 3 }],
+      },
+    };
+    stubApi([
+      {
+        url: '/support-ai/analytics',
+        body: analytics({
+          ...folded,
+          handoffsByReasonDetail: [
+            { reason: 'NO_PROGRESS', count: 2 },
+            { reason: 'LOOP_GUARD', count: 1 },
+          ],
+          auto: {
+            ...folded.auto,
+            byOutcomeDetail: [
+              { outcome: 'guard_no_progress', count: 2 },
+              { outcome: 'guard_consecutive', count: 1 },
+              { outcome: 'no_action', count: 1 },
+            ],
+          },
+        }),
+      },
+    ]);
+    const { unmount } = renderPage(<SupportAnalyticsPage route={route()} denied={false} />);
+    expect(await screen.findByText(t(HANDOFF_LABELS.NO_PROGRESS))).toBeTruthy();
+    expect(screen.getByText(t(AUTO_OUTCOME_LABELS.guard_no_progress))).toBeTruthy();
+    expect(screen.getByText(t(AUTO_OUTCOME_LABELS.no_action))).toBeTruthy();
+    unmount();
+    // An older replica sends no detail: the folded list is drawn, never a failed page.
+    stubApi([{ url: '/support-ai/analytics', body: analytics(folded) }]);
+    renderPage(<SupportAnalyticsPage route={route()} denied={false} />);
+    expect(await screen.findByText(t(HANDOFF_LABELS.LOOP_GUARD))).toBeTruthy();
+    expect(screen.queryByText(t(HANDOFF_LABELS.NO_PROGRESS))).toBeNull();
+  });
+
   it('asks for the range in the address, and the last seven days by default', async () => {
     const api = stubApi([{ url: '/support-ai/analytics', body: analytics() }]);
     renderPage(<SupportAnalyticsPage route={route()} denied={false} />);

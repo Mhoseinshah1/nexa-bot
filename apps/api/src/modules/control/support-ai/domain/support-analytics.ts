@@ -2,6 +2,8 @@ import {
   BUSINESS_CONVERSATION_STATES,
   SUPPORT_LEARNING_CANDIDATE_STATES,
   supportAutoOutcomeClass,
+  supportAutoOutcomeCountsOnWire,
+  supportHandoffCountsOnWire,
   type BusinessConversationState,
   type BusinessHandoffReason,
   type ReportRange,
@@ -141,12 +143,18 @@ export function assembleSupportAnalytics(
       state,
       count: conversations.get(state) ?? 0,
     })),
-    handoffsByReason: [...facts.handoffs]
+    // The handoff-reason follow-up to CX1 (review of PR #248): the pre-A3 bundle's keys, folded,
+    // and the true counts beside them.
+    handoffsByReason: supportHandoffCountsOnWire(facts.handoffs),
+    handoffsByReasonDetail: [...facts.handoffs]
       .filter((row) => row.count > 0)
       .sort(byCountThenKey((row) => row.reason)),
     auto: {
       ...auto,
-      byOutcome: [...autoByOutcome]
+      byOutcome: supportAutoOutcomeCountsOnWire(
+        [...autoByOutcome].map(([outcome, count]) => ({ outcome, count })),
+      ),
+      byOutcomeDetail: [...autoByOutcome]
         .map(([outcome, count]) => ({ outcome, count }))
         .sort(byCountThenKey((row) => row.outcome)),
     },

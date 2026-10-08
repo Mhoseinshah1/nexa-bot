@@ -10,6 +10,7 @@ import {
 import { ApiError } from '../../apps/web/src/api/client';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
+import { HANDOFF_LABELS } from '../../apps/web/src/pages/handoff-labels';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -309,6 +310,37 @@ describe('the ticket inbox', () => {
 });
 
 describe('one ticket', () => {
+  it('names an escalation by its REAL reason, read beside the pre-A3 wire one (PR #248 follow-up)', async () => {
+    stubApi([
+      {
+        url: `/tickets/${TICKET_ID}`,
+        body: {
+          ...detail(),
+          escalations: [
+            {
+              conversationId: '019350ab-cdef-7012-8345-6789abcdef01',
+              reason: 'LOOP_GUARD',
+              reasonDetail: 'REPEATED_ADVICE',
+              summary: null,
+              createdAt: '2026-09-20T10:05:00.000Z',
+            },
+          ],
+        },
+      },
+    ]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply={false}
+        mayAssign={false}
+        mayClose={false}
+      />,
+    );
+    expect(await screen.findByText(t(HANDOFF_LABELS.REPEATED_ADVICE))).toBeTruthy();
+    expect(screen.queryByText(t(HANDOFF_LABELS.LOOP_GUARD))).toBeNull();
+  });
+
   it('shows who wrote what, each reply’s delivery, and the attachment control', async () => {
     stubApi([{ url: `/tickets/${TICKET_ID}`, body: detail() }]);
     renderPage(
