@@ -38,8 +38,16 @@ export const PAYMENT_SITUATIONS = [
   'AWAITING_PAYMENT',
   /** PENDING gateway attempt whose invoice was refused or whose create answer was lost. */
   'INVOICE_NOT_ISSUED',
-  /** PENDING manual transfer the customer SAYS they sent. Their claim, never evidence. */
+  /**
+   * PENDING manual transfer the customer SAYS they sent, with no receipt filed yet. Their
+   * claim, never evidence; nothing for a reviewer to look at, so it waits for the customer.
+   */
   'CUSTOMER_SIGNALLED',
+  /**
+   * PENDING manual transfer holding at least one filed receipt: what a reviewer decides, in
+   * Telegram. Review round of PR #243 (CX2): a claim with no receipt is not this.
+   */
+  'RECEIPT_UNDER_REVIEW',
   /** PENDING inside the provider's own review window (TonPays Telegram, NOWPayments). */
   'PROVIDER_REVIEW',
   /** UNKNOWN with nothing more specific recorded: a lapsed review, a lost answer. */
@@ -54,13 +62,21 @@ export const PAYMENT_SITUATIONS = [
   'CONFIRMED',
   /** CONFIRMED with a refund still open (REQUESTED or AWAITING_EXTERNAL). */
   'REFUND_IN_PROGRESS',
-  /** CONFIRMED with at least one COMPLETED refund and none open. */
+  /**
+   * At least one COMPLETED refund and none open: a CONFIRMED payment refunded, or a FAILED one
+   * whose money went back to the wallet (`OQ-TPTG-17`: an approval for an order already
+   * settled is reconciled FAILED and returned by `refundUndeliverable`).
+   */
   'REFUNDED',
   /** FAILED by state, a reviewer credited the receipt to the wallet instead. */
   'CREDITED_TO_WALLET',
-  /** FAILED by an administrator's rejection. */
+  /**
+   * A manual transfer an administrator rejected: the receipt's REJECTED disposition, or a
+   * signal-only transfer an administrator failed. Never a gateway payment (review of PR #243,
+   * CX4): an operator reconciling a gateway payment to FAILED is `FAILED`.
+   */
   'REJECTED',
-  /** FAILED with no person deciding it: the gateway said unsuccessful, or reconciliation. */
+  /** FAILED by the gateway's own answer, or by an operator's reconciliation of one. */
   'FAILED',
   /** EXPIRED: the window closed with nothing confirmed. */
   'EXPIRED',
@@ -107,6 +123,8 @@ export type PaymentMoneySignal = (typeof PAYMENT_MONEY_SIGNALS)[number];
  */
 export const PAYMENT_CUSTOMER_GUIDANCE = [
   'PAY_WITHIN_WINDOW',
+  /** The claim is on record and no receipt arrived: send it through the bot. */
+  'SEND_RECEIPT',
   'START_AGAIN',
   'WAIT_DO_NOT_PAY_AGAIN',
   'MAY_PAY_AGAIN',
@@ -149,6 +167,8 @@ export interface PaymentSituationFacts {
   /** True for a payment that names no order: a wallet top-up. */
   readonly topup: boolean;
   readonly customerSignalled: boolean;
+  /** At least one `payment_receipts` row is filed against the payment. */
+  readonly receiptFiled: boolean;
   /** `providerReviewUntil` is set: the provider acknowledged a receipt and opened a review. */
   readonly providerReviewOpened: boolean;
   /** `resolvedByAdminId` is set: a person decided the resolution. */
@@ -162,10 +182,16 @@ export interface PaymentSituationFacts {
    * cannot disagree with the queue a chip opens.
    */
   readonly queues: readonly PaymentOpsQueue[];
-  /** At least one refund REQUESTED or AWAITING_EXTERNAL. */
+  /**
+   * At least one refund REQUESTED or AWAITING_EXTERNAL that an OPERATOR settles. A service
+   * refund request's reservation is not one: its workflow settles it, and `complete`/`fail`
+   * refuse it (review of PR #243, CX3).
+   */
   readonly refundOpen: boolean;
   /** At least one refund COMPLETED. */
   readonly refundCompleted: boolean;
+  /** Something is left to refund: the principal exceeds what consuming refunds hold. */
+  readonly refundRemaining: boolean;
 }
 
 export interface PaymentSituationGuide {
@@ -191,6 +217,12 @@ export function paymentSituationCode(facts: PaymentSituationFacts): PaymentSitua
       if (inQueue('MISMATCH')) return 'MISMATCH';
       return 'OUTCOME_UNKNOWN';
     case 'PENDING':
+      /*
+       * A late approval recorded while the payment is still PENDING (the sweep has not
+       * reached it): money at the provider. Saying "awaiting payment, pay within the window"
+       * here is the sentence that charges a customer twice (review of PR #243, M1).
+       */
+      if (inQueue('LATE_COMPLETION')) return 'LATE_COMPLETION';
       if (facts.providerReviewOpened) return 'PROVIDER_REVIEW';
       if (inQueue('PARTIAL')) return 'PARTIAL';
       if (
@@ -199,6 +231,7 @@ export function paymentSituationCode(facts: PaymentSituationFacts): PaymentSitua
       ) {
         return 'INVOICE_NOT_ISSUED';
       }
+      if (facts.method === 'MANUAL_TRANSFER' && facts.receiptFiled) return 'RECEIPT_UNDER_REVIEW';
       if (facts.method === 'MANUAL_TRANSFER' && facts.customerSignalled) {
         return 'CUSTOMER_SIGNALLED';
       }
@@ -209,14 +242,17 @@ export function paymentSituationCode(facts: PaymentSituationFacts): PaymentSitua
       /*
        * What the provider said AFTER the payment ended outranks how it ended: an expired
        * attempt the provider then approved is money at the provider, and showing it as
-       * "expired, nothing moved" is the sentence that loses it.
+       * "expired, nothing moved" is the sentence that loses it. And money already returned
+       * outranks both: a FAILED payment refunded to the wallet is not "no money".
        */
+      if (facts.refundCompleted && !facts.refundOpen) return 'REFUNDED';
       if (inQueue('LATE_COMPLETION')) return 'LATE_COMPLETION';
       if (inQueue('PARTIAL')) return 'PARTIAL';
       if (facts.state === 'EXPIRED') return 'EXPIRED';
       if (facts.state === 'CANCELLED') return 'CANCELLED';
       if (facts.receiptDisposition === 'CREDITED_TO_WALLET') return 'CREDITED_TO_WALLET';
-      if (facts.resolvedByAdmin) return 'REJECTED';
+      if (facts.receiptDisposition === 'REJECTED') return 'REJECTED';
+      if (facts.method === 'MANUAL_TRANSFER' && facts.resolvedByAdmin) return 'REJECTED';
       return 'FAILED';
   }
 }
@@ -225,6 +261,7 @@ const MONEY: Readonly<Record<PaymentSituation, PaymentMoneySignal>> = {
   AWAITING_PAYMENT: 'NOT_YET',
   INVOICE_NOT_ISSUED: 'NO',
   CUSTOMER_SIGNALLED: 'CLAIMED',
+  RECEIPT_UNDER_REVIEW: 'CLAIMED',
   PROVIDER_REVIEW: 'POSSIBLY',
   OUTCOME_UNKNOWN: 'POSSIBLY',
   MISMATCH: 'POSSIBLY',
@@ -243,7 +280,8 @@ const MONEY: Readonly<Record<PaymentSituation, PaymentMoneySignal>> = {
 const CUSTOMER: Readonly<Record<PaymentSituation, PaymentCustomerGuidance>> = {
   AWAITING_PAYMENT: 'PAY_WITHIN_WINDOW',
   INVOICE_NOT_ISSUED: 'START_AGAIN',
-  CUSTOMER_SIGNALLED: 'WAIT_DO_NOT_PAY_AGAIN',
+  CUSTOMER_SIGNALLED: 'SEND_RECEIPT',
+  RECEIPT_UNDER_REVIEW: 'WAIT_DO_NOT_PAY_AGAIN',
   PROVIDER_REVIEW: 'WAIT_DO_NOT_PAY_AGAIN',
   OUTCOME_UNKNOWN: 'WAIT_DO_NOT_PAY_AGAIN',
   MISMATCH: 'WAIT_DO_NOT_PAY_AGAIN',
@@ -264,8 +302,12 @@ const CUSTOMER: Readonly<Record<PaymentSituation, PaymentCustomerGuidance>> = {
  * in SQL. TRUE only where an existing command is the exit, so the queue drains:
  *
  * - every `UNKNOWN` (reconciliation, `payments.reconcile`);
- * - `CUSTOMER_SIGNALLED` (the receipt review in Telegram, or the payment's own expiry);
- * - `REFUND_IN_PROGRESS` (complete or fail the refund, `refunds.issue`).
+ * - `RECEIPT_UNDER_REVIEW` (the receipt review in Telegram);
+ * - `REFUND_IN_PROGRESS` (complete or fail an operator's refund, `refunds.issue`).
+ *
+ * Not `CUSTOMER_SIGNALLED`: with no receipt there is nothing to review, and its exit is the
+ * customer's upload or the payment's expiry. Not a PENDING late completion: its exit is the
+ * expiry sweep, after which it is an ended attempt (below).
  *
  * NOT a late completion or a partial payment on a payment that already ended (FAILED,
  * EXPIRED, CANCELLED): the domain has no operation that resolves one (`OQ-WP11A-03`), so in
@@ -276,7 +318,9 @@ const CUSTOMER: Readonly<Record<PaymentSituation, PaymentCustomerGuidance>> = {
  */
 export function paymentNeedsAction(situation: PaymentSituation, state: PaymentState): boolean {
   return (
-    state === 'UNKNOWN' || situation === 'CUSTOMER_SIGNALLED' || situation === 'REFUND_IN_PROGRESS'
+    state === 'UNKNOWN' ||
+    situation === 'RECEIPT_UNDER_REVIEW' ||
+    situation === 'REFUND_IN_PROGRESS'
   );
 }
 
@@ -286,11 +330,15 @@ function actionsFor(
 ): readonly PaymentOperatorAction[] {
   // Reconciliation exists for an UNKNOWN gateway payment and nothing else.
   const reconcilable = facts.state === 'UNKNOWN' && facts.method === 'GATEWAY';
-  // An operator refund needs a channel this release performs, and an order it bought.
+  // An operator refund needs a channel this release performs, an order it bought, and
+  // something left to give back.
   const refundable =
-    REFUND_METHOD_SUPPORT[facts.method].supported && !facts.topup && facts.state === 'CONFIRMED';
+    REFUND_METHOD_SUPPORT[facts.method].supported &&
+    !facts.topup &&
+    facts.state === 'CONFIRMED' &&
+    facts.refundRemaining;
   switch (situation) {
-    case 'CUSTOMER_SIGNALLED':
+    case 'RECEIPT_UNDER_REVIEW':
       return ['REVIEW_RECEIPT_IN_TELEGRAM'];
     case 'OUTCOME_UNKNOWN':
       return reconcilable ? ['ASK_PROVIDER_AGAIN', 'RECONCILE'] : ['VERIFY_AT_PROVIDER'];
@@ -356,11 +404,8 @@ export const PAYMENT_SITUATION_CUSTOMER_TEMPLATES: Readonly<
     'bot.payment.pending_reminder',
   ],
   INVOICE_NOT_ISSUED: ['bot.payment.gateway_unknown', 'bot.payment.gateway_unavailable'],
-  CUSTOMER_SIGNALLED: [
-    'bot.payment.receipt_prompt',
-    'bot.payment.received_for_review',
-    'bot.payment.receipt_received',
-  ],
+  CUSTOMER_SIGNALLED: ['bot.payment.receipt_prompt', 'bot.payment.received_for_review'],
+  RECEIPT_UNDER_REVIEW: ['bot.payment.receipt_received', 'bot.payment.received_for_review'],
   PROVIDER_REVIEW: ['bot.payment.gateway_in_review', 'bot.payment.nowpayments_in_review'],
   OUTCOME_UNKNOWN: [
     'bot.payment.gateway_review_unresolved',

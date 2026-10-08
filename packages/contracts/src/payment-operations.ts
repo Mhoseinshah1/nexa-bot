@@ -26,8 +26,11 @@ import { REPORT_RANGES, reportLocalDateSchema } from './reporting.js';
  *   reference). Any state: whether it is still open is the state column's answer.
  * - `PARTIAL` — the provider's recorded status is its own "partially paid" (NOWPayments'
  *   `partially_paid`). Only providers that expose one can land here.
- * - `LATE_COMPLETION` — the provider approved after the attempt stopped being eligible
- *   (`gateway_invoices.outcome = 'LATE_COMPLETION'`). Nothing moved; an operator decides.
+ * - `LATE_COMPLETION` — the provider approved after the attempt stopped being eligible: the
+ *   durable `gateway_invoices.late_completion_observed_at` marker, or
+ *   `outcome = 'LATE_COMPLETION'`. The marker matters where the outcome cannot say it: an
+ *   attempt the provider first refused (`UNSUCCESSFUL`, FAILED) and later approved keeps its
+ *   first outcome (review of PR #243, CX1). Nothing moved; an operator decides.
  * - `PROVIDER_ERROR` — the provider side recorded an error: a create refused
  *   (`CREATE_FAILED`) or lost (`CREATE_UNKNOWN`), or the latest inquiry ended in an error
  *   code (cleared by the next good answer).
@@ -35,8 +38,9 @@ import { REPORT_RANGES, reportLocalDateSchema } from './reporting.js';
  *   operator's, in any refund state.
  * - `NEEDS_ACTION` — roadmap E1/E2 (`docs/payments-under-review-ux.md`): the payments a PERSON
  *   must act on for them to move on — exactly `paymentNeedsAction` of `paymentSituationOf`, in
- *   SQL: a manual transfer the customer says they sent, still PENDING; every UNKNOWN; and a
- *   CONFIRMED payment with a refund still open. Each has an existing command as its exit, so
+ *   SQL: a PENDING manual transfer holding a filed receipt; every UNKNOWN; and a CONFIRMED
+ *   payment with an operator's refund still open (a service refund request's reservation is
+ *   its workflow's). Each has an existing command as its exit, so
  *   the queue drains; late or partial money on a payment that already ended has none
  *   (`OQ-WP11A-03`) and stays in its own facet. Listed oldest first, like every queue, which
  *   is the attention order: the oldest unresolved is the most at risk. An integration test
