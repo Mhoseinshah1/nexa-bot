@@ -318,6 +318,17 @@ export class CampaignService {
       };
     };
     const broadcastId = actions.find((a) => a.kind === 'ANNOUNCEMENT')?.broadcastId ?? null;
+    /*
+     * The announcement through Broadcast's own guarded read (`broadcasts.view`): null for a
+     * reader without it. PR #245 review CX1: the attribution below exposes the same
+     * recipient facts, so it is computed only when this read succeeded — never around it.
+     */
+    const announcement =
+      broadcastId === null
+        ? null
+        : ((await readableOrNull(this.deps.broadcasts.counts(scope, actor, [broadcastId])))?.get(
+            broadcastId,
+          ) ?? null);
     return {
       targeted: campaign.audienceConfirmedCount,
       discount:
@@ -326,17 +337,12 @@ export class CampaignService {
         cashbackRuleId === null
           ? null
           : await this.deps.campaigns.cashbackOutcome(scope, cashbackRuleId),
-      announcement:
-        broadcastId === null
-          ? null
-          : ((await readableOrNull(this.deps.broadcasts.counts(scope, actor, [broadcastId])))?.get(
-              broadcastId,
-            ) ?? null),
+      announcement,
       walletGift: await bulkOf('WALLET_GIFT'),
       trafficGift: await bulkOf('TRAFFIC_GIFT'),
       timeGift: await bulkOf('TIME_GIFT'),
       audienceAttribution:
-        broadcastId === null || discountId === null
+        broadcastId === null || discountId === null || announcement === null
           ? null
           : await this.deps.campaigns.announcementAttribution(scope, { broadcastId, discountId }),
     };
@@ -947,6 +953,20 @@ export class CampaignService {
       });
       // A retry after a launch that committed: the broadcast is already past DRAFT.
       if (draft.state !== 'DRAFT') return { broadcastId: draft.id };
+      /*
+       * PR #245 review m4: a replayed create answers the draft AS IT IS NOW. Between a refused
+       * launch and this retry, an operator with broadcast rights may have edited it on the
+       * Broadcast page — to a SERVICE_ANNOUNCEMENT that reaches opted-out customers, or to
+       * another text. The campaign launches only its own announcement: MARKETING, a plain
+       * text, this body and these buttons, no source and no pin. Anything else is refused on
+       * its merits (the action goes FAILED with the code), never sent under the campaign.
+       */
+      if (!isTheCampaignsAnnouncement(draft, config.terms)) {
+        throw errors.conflict(
+          CAMPAIGN_ERROR_CODES.CAMPAIGN_BINDING_INVALID,
+          'The announcement draft was changed since the campaign made it; it is not launched.',
+        );
+      }
       // Broadcast schedules at least a minute ahead; a start nearer than that sends now.
       const later =
         campaign.startsAt.getTime() >= this.deps.clock.now().getTime() + ANNOUNCEMENT_MIN_LEAD_MS;
@@ -2005,4 +2025,31 @@ export function assertAnnouncementPurpose<T extends readonly CampaignActionConfi
     );
   }
   return actions;
+}
+
+/** PR #245 review m4: the broadcast draft is still exactly what the hand-over wrote. */
+function isTheCampaignsAnnouncement(
+  draft: {
+    readonly purpose: string;
+    readonly contentKind: string;
+    readonly body: string;
+    readonly buttons: readonly { readonly label: string; readonly url: string }[];
+    readonly source: unknown;
+    readonly pin: boolean;
+  },
+  terms: {
+    readonly body: string;
+    readonly buttons: readonly { readonly label: string; readonly url: string }[];
+  },
+): boolean {
+  const trimmed = (buttons: readonly { readonly label: string; readonly url: string }[]) =>
+    JSON.stringify(buttons.map((b) => [b.label.trim(), b.url.trim()]));
+  return (
+    draft.purpose === 'MARKETING' &&
+    draft.contentKind === 'TEXT' &&
+    draft.body === terms.body &&
+    trimmed(draft.buttons) === trimmed(terms.buttons) &&
+    draft.source === null &&
+    !draft.pin
+  );
 }

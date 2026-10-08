@@ -107,6 +107,13 @@ describe('audience HTTP surface', () => {
     const parsed = audienceOptionsResponseSchema.parse(options.json());
     expect(parsed.currency).toBe('IRT');
     expect(parsed.resellerTiers.map((tier) => tier.name)).toEqual(['gold']);
+    // Roadmap C3 (PR #245 review m5): the tenant's bots ON THE WIRE — names and status only,
+    // never a token or its ciphertext, read from the raw response, not the parsed one.
+    const raw = options.json() as { bots: Record<string, unknown>[] };
+    expect(raw.bots.length).toBeGreaterThan(0);
+    for (const bot of raw.bots)
+      expect(Object.keys(bot).sort()).toEqual(['id', 'status', 'username']);
+    expect(options.body).not.toMatch(/token|ciphertext/i);
   });
 
   it('refuses an invalid definition as a 400 with the audience code', async () => {

@@ -323,8 +323,10 @@ export interface CampaignRepository {
 
 /** Roadmap C3: who was told, who was delivered to, and who of each redeemed. */
 export interface AnnouncementAttribution {
+  readonly audience: number;
   readonly told: number;
   readonly delivered: number;
+  readonly skipped: number;
   readonly redeemersTold: number;
   readonly redeemersDelivered: number;
   readonly redeemersNotTold: number;
