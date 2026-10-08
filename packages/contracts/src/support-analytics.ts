@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { BUSINESS_CONVERSATION_STATES, BUSINESS_HANDOFF_REASONS } from './business-chats.js';
+import {
+  BUSINESS_CONVERSATION_STATES,
+  BUSINESS_HANDOFF_REASONS,
+  BUSINESS_HANDOFF_WIRE_REASONS,
+  businessHandoffWireReason,
+  type BusinessHandoffReason,
+  type BusinessHandoffWireReason,
+} from './business-chats.js';
 import { REPORT_RANGES, reportRangeQuerySchema } from './reporting.js';
 import {
   SUPPORT_AI_AUTO_OUTCOMES,
@@ -99,6 +106,103 @@ export const SUPPORT_ANALYTICS_ROUTES = {
   analytics: '/support-ai/analytics',
 } as const;
 
+/**
+ * The automatic outcomes a pre-A3 Web Admin bundle accepts in `auto.byOutcome` (review of PR
+ * #248, the handoff-reason follow-up to CX1): one value outside it fails its whole analytics page.
+ */
+export const SUPPORT_AI_AUTO_WIRE_OUTCOMES = [
+  'sent',
+  'sent_clarifying',
+  'dropped_mode',
+  'dropped_epoch',
+  'dropped_state',
+  'dropped_coalesced',
+  'dropped_connection',
+  'dropped_scope',
+  'guard_content',
+  'guard_customer_blocked',
+  'guard_consecutive',
+  'guard_window',
+  'guard_decision',
+  'guard_handoff_topic',
+  'guard_human_requested',
+  'guard_topic_allowlist',
+  'guard_identity',
+  'guard_account_review',
+  'guard_confidence',
+  'guard_reply_bounds',
+  'guard_grounding',
+  'guard_clarifying_limit',
+  'handoff_ai_requested',
+  'handoff_output_invalid',
+  'handoff_ai_unavailable',
+  'handoff_stale',
+] as const;
+export type SupportAiAutoWireOutcome = (typeof SUPPORT_AI_AUTO_WIRE_OUTCOMES)[number];
+
+/**
+ * The ONE projection of an automatic outcome onto the pre-A3 wire, or null when the old bundle is
+ * not told it. The three progress guards go as `guard_consecutive` — the loop guard, as their
+ * handoff reason goes as `LOOP_GUARD`. `no_action` (A6, a matter the customer closed) is LEFT OUT
+ * of the folded list: no old outcome means "ended silently", and calling it a dropped job of
+ * another kind would be a fact nobody recorded. The totals (`auto.dropped`) still count it.
+ */
+export function supportAutoWireOutcome(
+  outcome: SupportAiAutoOutcome,
+): SupportAiAutoWireOutcome | null {
+  switch (outcome) {
+    case 'guard_no_progress':
+    case 'guard_repeated_advice':
+    case 'guard_inbound_flood':
+      return 'guard_consecutive';
+    case 'no_action':
+      return null;
+    default:
+      return outcome;
+  }
+}
+
+/** Largest count first, then by key: the order every count list on the page is sent in. */
+function byCountThenKey<T extends { readonly count: number }>(key: (row: T) => string) {
+  return (a: T, b: T): number => b.count - a.count || key(a).localeCompare(key(b));
+}
+
+/** Folds counts through `project`, summing what lands on one key; a null key is left out. */
+function foldCounts<K extends string, W extends string>(
+  rows: readonly { readonly key: K; readonly count: number }[],
+  project: (key: K) => W | null,
+): { readonly key: W; readonly count: number }[] {
+  const folded = new Map<W, number>();
+  for (const row of rows) {
+    const key = project(row.key);
+    if (key !== null) folded.set(key, (folded.get(key) ?? 0) + row.count);
+  }
+  return [...folded]
+    .map(([key, count]) => ({ key, count }))
+    .filter((row) => row.count > 0)
+    .sort(byCountThenKey((row) => row.key));
+}
+
+/** The handoff counts for the wire's `handoffsByReason` (`businessHandoffWireReason`). */
+export function supportHandoffCountsOnWire(
+  rows: readonly { readonly reason: BusinessHandoffReason; readonly count: number }[],
+): { readonly reason: BusinessHandoffWireReason; readonly count: number }[] {
+  return foldCounts(
+    rows.map((row) => ({ key: row.reason, count: row.count })),
+    businessHandoffWireReason,
+  ).map((row) => ({ reason: row.key, count: row.count }));
+}
+
+/** The outcome counts for the wire's `auto.byOutcome` (`supportAutoWireOutcome`). */
+export function supportAutoOutcomeCountsOnWire(
+  rows: readonly { readonly outcome: SupportAiAutoOutcome; readonly count: number }[],
+): { readonly outcome: SupportAiAutoWireOutcome; readonly count: number }[] {
+  return foldCounts(
+    rows.map((row) => ({ key: row.outcome, count: row.count })),
+    supportAutoWireOutcome,
+  ).map((row) => ({ outcome: row.key, count: row.count }));
+}
+
 /** The same period every business report takes; `from`/`to` exactly when CUSTOM. */
 export const supportAnalyticsQuerySchema = reportRangeQuerySchema;
 export type SupportAnalyticsQuery = z.infer<typeof supportAnalyticsQuerySchema>;
@@ -119,7 +223,21 @@ export const supportAnalyticsResponseSchema = z.object({
    */
   conversationsNow: z.array(z.object({ state: z.enum(BUSINESS_CONVERSATION_STATES), count })),
   /** `business_conversation_escalations` created in the window, by reason (one per handoff). */
-  handoffsByReason: z.array(z.object({ reason: z.enum(BUSINESS_HANDOFF_REASONS), count })),
+  /**
+   * Keyed by the pre-A3 bundle's reasons only (`supportHandoffCountsOnWire`): the three progress
+   * guards are folded into `LOOP_GUARD`, so the old analytics page still parses during a rolling
+   * update. The true counts are `handoffsByReasonDetail`; read `supportHandoffCountsOf`.
+   */
+  handoffsByReason: z.array(z.object({ reason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS), count })),
+  /**
+   * The same handoffs by their REAL reason. Optional when READ (an older replica does not send
+   * it), and absent when it names a reason this bundle does not know — the folded list is then
+   * what is shown, never a failed page.
+   */
+  handoffsByReasonDetail: z
+    .array(z.object({ reason: z.enum(BUSINESS_HANDOFF_REASONS), count }))
+    .optional()
+    .catch(undefined),
   /** `support_ai_jobs` of kind `AUTO_DECISION` created in the window. */
   auto: z.object({
     sent: count,
@@ -127,7 +245,16 @@ export const supportAnalyticsResponseSchema = z.object({
     dropped: count,
     /** Still queued or in flight: no outcome yet. */
     pending: count,
-    byOutcome: z.array(z.object({ outcome: z.enum(SUPPORT_AI_AUTO_OUTCOMES), count })),
+    /**
+     * Keyed by the pre-A3 bundle's outcomes only (`supportAutoOutcomeCountsOnWire`). The true
+     * counts are `byOutcomeDetail`; read `supportAutoOutcomeCountsOf`.
+     */
+    byOutcome: z.array(z.object({ outcome: z.enum(SUPPORT_AI_AUTO_WIRE_OUTCOMES), count })),
+    /** By the REAL outcome; tolerant like `handoffsByReasonDetail`. */
+    byOutcomeDetail: z
+      .array(z.object({ outcome: z.enum(SUPPORT_AI_AUTO_OUTCOMES), count }))
+      .optional()
+      .catch(undefined),
   }),
   /** `support_ai_jobs` of kind `ASSIST_DRAFT` created in the window, by their state now. */
   assist: z.object({
@@ -189,3 +316,17 @@ export const supportAnalyticsResponseSchema = z.object({
   ),
 });
 export type SupportAnalyticsResponse = z.infer<typeof supportAnalyticsResponseSchema>;
+
+/** The handoffs by their real reason when the server sent them, else the folded list. */
+export function supportHandoffCountsOf(
+  data: Pick<SupportAnalyticsResponse, 'handoffsByReason' | 'handoffsByReasonDetail'>,
+): readonly { readonly reason: BusinessHandoffReason; readonly count: number }[] {
+  return data.handoffsByReasonDetail ?? data.handoffsByReason;
+}
+
+/** The automatic outcomes by their real value when the server sent them, else the folded list. */
+export function supportAutoOutcomeCountsOf(
+  data: Pick<SupportAnalyticsResponse, 'auto'>,
+): readonly { readonly outcome: SupportAiAutoOutcome; readonly count: number }[] {
+  return data.auto.byOutcomeDetail ?? data.auto.byOutcome;
+}

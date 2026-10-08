@@ -280,6 +280,75 @@ export const BUSINESS_HANDOFF_REASONS = [
 export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
 
 /**
+ * The handoff reasons a Web Admin bundle from BEFORE roadmap A3 accepts. It reads a reason with a
+ * strict enum in the inbox, the conversation detail, a ticket's escalations and the support
+ * analytics, and one value outside it fails the WHOLE read — the inbox of the whole tenant, for one
+ * conversation handed off by a progress guard. During a rolling update that bundle reads from new
+ * replicas, so a reason on the wire stays inside this set for ever (review of PR #248, the
+ * handoff-reason follow-up to CX1).
+ */
+export const BUSINESS_HANDOFF_WIRE_REASONS = [
+  'SEND_OUTCOME_UNKNOWN',
+  'TRANSPORT_REFUSED',
+  'AI_REQUESTED',
+  'HANDOFF_TOPIC',
+  'HUMAN_REQUESTED',
+  'TOPIC_NOT_ALLOWED',
+  'LOW_CONFIDENCE',
+  'REPLY_OUT_OF_BOUNDS',
+  'DECISION_NOT_REPLY',
+  'AI_OUTPUT_INVALID',
+  'AI_UNAVAILABLE',
+  'ACCOUNT_UNDER_REVIEW',
+  'IDENTITY_UNVERIFIED',
+  'CUSTOMER_BLOCKED',
+  'INSUFFICIENT_GROUNDING',
+  'LOOP_GUARD',
+  'UNSUPPORTED_CONTENT',
+  'REPLY_STALE',
+  'CLARIFYING_LIMIT',
+] as const;
+export type BusinessHandoffWireReason = (typeof BUSINESS_HANDOFF_WIRE_REASONS)[number];
+
+/**
+ * The ONE compatibility projection of a handoff reason onto the wire (`docs/deployment.md`). The
+ * three A3 progress guards — `NO_PROGRESS`, `REPEATED_ADVICE`, `INBOUND_FLOOD` — go as
+ * `LOOP_GUARD`: each is the AI going round without progress, which is what the old bundle's
+ * «loop» label says. The real reason travels beside it (`…Detail`), which the old bundle strips
+ * and this one reads (`businessHandoffReasonOf`). A reason added later must be placed here before
+ * it compiles: the default branch returns only the reasons the old bundle knows.
+ */
+export function businessHandoffWireReason(
+  reason: BusinessHandoffReason,
+): BusinessHandoffWireReason {
+  switch (reason) {
+    case 'NO_PROGRESS':
+    case 'REPEATED_ADVICE':
+    case 'INBOUND_FLOOD':
+      return 'LOOP_GUARD';
+    default:
+      return reason;
+  }
+}
+
+/** The real reason as this bundle reads it: the detail when sent and known, else the wire one. */
+export function businessHandoffReasonOf<W extends BusinessHandoffWireReason | null>(
+  wire: W,
+  detail: BusinessHandoffReason | null | undefined,
+): BusinessHandoffReason | W {
+  return detail ?? wire;
+}
+
+/**
+ * The real reason beside the wire one. Optional when READ (an older replica does not send it),
+ * and a reason this bundle does not know reads as absent rather than failing the read.
+ */
+export const businessHandoffReasonDetailSchema = z
+  .enum(BUSINESS_HANDOFF_REASONS)
+  .nullish()
+  .catch(undefined);
+
+/**
  * TB7 — the operator-visible signal of a handoff. A CODE IS SCHEMA (CLAUDE.md): deduped per
  * conversation, and recovered by the recovery code when a person takes the conversation or
  * returns it to the AI.
@@ -473,7 +542,10 @@ const conversationSummarySchema = z.object({
   id: z.string(),
   state: z.enum(BUSINESS_CONVERSATION_STATES),
   takeoverReason: z.enum(BUSINESS_TAKEOVER_REASONS).nullable(),
-  handoffReason: z.enum(BUSINESS_HANDOFF_REASONS).nullable(),
+  /** Never outside `BUSINESS_HANDOFF_WIRE_REASONS`; read `businessHandoffReasonOf` instead. */
+  handoffReason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS).nullable(),
+  /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
+  handoffReasonDetail: businessHandoffReasonDetailSchema,
   peerTelegramUserId: z.string(),
   customer: z
     .object({ id: z.string(), username: z.string().nullable(), firstName: z.string().nullable() })
@@ -584,7 +656,10 @@ export function businessOutboundView(row: {
 
 export const businessEscalationViewSchema = z.object({
   id: z.string(),
-  reason: z.enum(BUSINESS_HANDOFF_REASONS),
+  /** Never outside `BUSINESS_HANDOFF_WIRE_REASONS`; read `businessHandoffReasonOf` instead. */
+  reason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS),
+  /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
+  reasonDetail: businessHandoffReasonDetailSchema,
   /**
    * The AI's short operator-facing note; null when none was produced, or once purged. Roadmap
    * A5: for a handoff decided before the provider was asked (loop, progress, money, provider

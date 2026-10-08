@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { uuidV7Schema, type Branded } from './ids.js';
-import { BUSINESS_HANDOFF_REASONS } from './business-chats.js';
+import {
+  BUSINESS_HANDOFF_WIRE_REASONS,
+  businessHandoffReasonDetailSchema,
+} from './business-chats.js';
 import type { StateMachineDefinition } from './state-machine.js';
 import {
   CUSTOMER_NOTIFICATION_STATES,
@@ -703,7 +706,10 @@ export type TicketOrigin = (typeof TICKET_ORIGINS)[number];
 /** TB7 — a handoff that opened or linked this ticket, with the AI's operator-facing note. */
 export const ticketEscalationViewSchema = z.object({
   conversationId: z.string(),
-  reason: z.enum(BUSINESS_HANDOFF_REASONS),
+  /** Never outside `BUSINESS_HANDOFF_WIRE_REASONS`; read `businessHandoffReasonOf` instead. */
+  reason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS),
+  /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
+  reasonDetail: businessHandoffReasonDetailSchema,
   summary: z.string().nullable(),
   /** Roadmap A5 — see `businessEscalationViewSchema`; gated like the summary. */
   // Optional when READ (review of the rolling deploy): an older replica does not send them.
