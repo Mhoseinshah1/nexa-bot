@@ -47,6 +47,7 @@ describe('Phase E2: the financial statement', () => {
   let foreignCookie: string;
   let observerCookie: string;
   let n = 0;
+  let ownerId = '';
   const ids = { panel: '', product: '', productB: '', c1: '', c2: '', b1: '', panelB: '' };
   const uuid = (): string => api.container.ids.uuid();
   const run = (query: ReturnType<typeof sql>) => api.container.database.db.execute(query);
@@ -127,12 +128,13 @@ describe('Phase E2: the financial statement', () => {
     tenantId?: string;
     customerId: string;
     orderId: string | null;
-    state?: 'CONFIRMED' | 'FAILED';
+    state?: 'CONFIRMED' | 'FAILED' | 'EXPIRED';
     method: 'WALLET' | 'MANUAL_TRANSFER' | 'GATEWAY';
     amount: number;
     currency?: string;
     at: string;
     feeBasisPoints?: number;
+    resolvedByAdminId?: string;
   }): Promise<string> {
     const id = uuid();
     n += 1;
@@ -156,12 +158,12 @@ describe('Phase E2: the financial statement', () => {
           ? 'GATEWAY_INQUIRY'
           : 'OPERATOR_REVIEW';
     await run(sql`INSERT INTO payments (id, tenant_id, customer_id, order_id, state, method, amount, currency,
-        reference, evidence_kind, confirmed_at, resolved_at, gateway_provider, created_at,
-        customer_fee_basis_points, customer_fee_amount, payable_amount)
+        reference, evidence_kind, confirmed_at, resolved_at, resolved_by_admin_id, gateway_provider,
+        created_at, customer_fee_basis_points, customer_fee_amount, payable_amount)
       VALUES (${id}, ${p.tenantId ?? tenantA.tenantId}, ${p.customerId}, ${p.orderId}, ${state}, ${p.method},
         ${p.amount}, ${p.currency ?? 'IRT'}, ${`FIN-${n}`}, ${evidence},
-        ${confirmed ? p.at : null}::timestamptz, ${state === 'FAILED' ? p.at : null}::timestamptz,
-        ${provider}, ${p.at}::timestamptz,
+        ${confirmed ? p.at : null}::timestamptz, ${confirmed ? null : p.at}::timestamptz,
+        ${p.resolvedByAdminId ?? null}, ${provider}, ${p.at}::timestamptz,
         ${p.feeBasisPoints ?? null}, ${fee}, ${fee === null ? null : p.amount + fee})`);
     return id;
   }
@@ -176,13 +178,15 @@ describe('Phase E2: the financial statement', () => {
     orderId?: string | null;
     paymentId?: string | null;
     at: string;
-  }): Promise<void> {
+  }): Promise<string> {
     n += 1;
+    const id = uuid();
     await run(sql`INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency,
         reference, order_id, payment_id, created_at)
-      VALUES (${uuid()}, ${e.tenantId ?? tenantA.tenantId}, ${e.customerId}, ${e.direction}, ${e.reason},
+      VALUES (${id}, ${e.tenantId ?? tenantA.tenantId}, ${e.customerId}, ${e.direction}, ${e.reason},
         ${e.amount}, ${e.currency ?? 'IRT'}, ${`fin-entry-${n}`}, ${e.orderId ?? null}, ${e.paymentId ?? null},
         ${e.at}::timestamptz)`);
+    return id;
   }
 
   async function refund(r: {
@@ -218,11 +222,12 @@ describe('Phase E2: the financial statement', () => {
       ['observer', ['observer'], tenantA],
       ['foreign', ['owner'], tenantB],
     ] as const) {
-      await createAdmin(api.container, scope, {
+      const admin = await createAdmin(api.container, scope, {
         username,
         password: `the-${username}-password`,
         roleKeys: [...roleKeys],
       });
+      if (username === 'owner') ownerId = admin.id;
     }
     ownerCookie = await cookieFor('owner');
     observerCookie = await cookieFor('observer');
@@ -297,8 +302,9 @@ describe('Phase E2: the financial statement', () => {
       method: 'MANUAL_TRANSFER',
       amount: 70_000,
       at: at(0, 12),
+      resolvedByAdminId: ownerId,
     });
-    await entry({
+    const credit = await entry({
       customerId: ids.c2,
       direction: 'CREDIT',
       reason: 'RECEIPT_CREDIT',
@@ -306,6 +312,11 @@ describe('Phase E2: the financial statement', () => {
       paymentId: failed,
       at: at(0, 12),
     });
+    // ...with the reviewer's disposition row, as the receipt lane writes it beside the entry.
+    await run(sql`INSERT INTO receipt_credits (tenant_id, payment_id, amount, currency,
+        wallet_entry_id, decided_by_admin_id, decided_at)
+      VALUES (${tenantA.tenantId}, ${failed}, 70000, 'IRT', ${credit}, ${ownerId},
+        ${at(0, 12)}::timestamptz)`);
     // A USD crypto top-up: its own currency, never added to Toman.
     const usd = await payment({
       customerId: ids.c2,
@@ -426,6 +437,22 @@ describe('Phase E2: the financial statement', () => {
       at: at(1),
     });
 
+    // A gateway top-up attempt that EXPIRED and was approved by the provider afterwards: a
+    // LATE_COMPLETION settles nothing, so it is in no cash or wallet line (PR #247 F2).
+    const late = await payment({
+      customerId: ids.c2,
+      orderId: null,
+      state: 'EXPIRED',
+      method: 'GATEWAY',
+      amount: 55_000,
+      at: at(1, 14),
+    });
+    await run(sql`INSERT INTO gateway_invoices (payment_id, tenant_id, provider, provider_order_id,
+        creation_state, provider_invoice_id, created_invoice_at, provider_unit, sent_amount,
+        provider_status, provider_paid, outcome, outcome_at, late_completion_observed_at, created_at)
+      VALUES (${late}, ${tenantA.tenantId}, 'TONPAYS', '3900000001', 'CREATED', 'fin-late-1',
+        ${at(1, 14)}::timestamptz, 'IRT', 55000, 'completed', true, 'LATE_COMPLETION',
+        ${at(1, 15)}::timestamptz, ${at(1, 15)}::timestamptz, ${at(1, 14)}::timestamptz)`);
     // --- Day 3 -------------------------------------------------------------------
     const o4 = await order({ customerId: ids.c1, subtotal: 400_000, settledAt: at(2, 9) });
     const p4 = await payment({
@@ -778,66 +805,104 @@ describe('Phase E2: the financial statement', () => {
 
   /*
    * Roadmap E4 (`docs/payment-fees-fx.md`): ONE source of truth for a payment's money. Every
-   * payment the cash section counts is fetched over HTTP, and the breakdown the server
-   * computed for its detail (`amounts`) is summed: the report's principal, customer fees and
-   * customer paid are exactly those sums, per currency; a confirmed payment's refund ceiling
-   * is its refund ledger's `paidMinor` and never includes the fee; and the fee-bearing
-   * gateway sale shows principal + fee = paid.
+   * tenant payment the period touches — in ANY state — is fetched over HTTP, and the
+   * breakdowns the server computed for their details (`amounts`) are summed. Per currency,
+   * the report's lines are exactly those sums (review of PR #247, F2):
+   *
+   * - principal received, customer fees and customer paid = Σ principal, fee and `received`
+   *   of the payments that received money (a confirmed wallet purchase received none);
+   * - wallet top-ups = Σ `walletCredit` of the confirmed top-ups;
+   * - receipt credits = Σ `walletCredit` of the FAILED transfers a reviewer credited;
+   * - wallet spending = Σ `walletDebit`.
+   *
+   * The fixture holds what could make them differ: a wallet purchase, partial and full
+   * refunds, a receipt credit and a LATE_COMPLETION (received nothing, credited nothing).
    */
-  it('reports exactly the sum of the payments’ own money breakdowns, and refunds against the principal only (E4)', async () => {
+  it('reports exactly the sum of the payments’ own money breakdowns, cash and wallet lines alike (E4)', async () => {
     const report = await financial(`${RANGE}&granularity=DAY`);
     const start = report.buckets[0]?.start as string;
     const end = report.buckets.at(-1)?.end as string;
     const rows = (
-      (await run(sql`SELECT id FROM payments
-         WHERE tenant_id = ${tenantA.tenantId} AND state = 'CONFIRMED' AND method <> 'WALLET'
-           AND confirmed_at >= ${start}::timestamptz AND confirmed_at < ${end}::timestamptz`)) as unknown as {
-        rows: { id: string }[];
+      (await run(sql`SELECT id, state FROM payments
+         WHERE tenant_id = ${tenantA.tenantId}
+           AND coalesce(confirmed_at, resolved_at, created_at) >= ${start}::timestamptz
+           AND coalesce(confirmed_at, resolved_at, created_at) < ${end}::timestamptz`)) as unknown as {
+        rows: { id: string; state: string }[];
       }
     ).rows;
-    expect(rows.length).toBeGreaterThan(2);
-    const sums = new Map<string, { principal: bigint; fees: bigint; paid: bigint }>();
-    let feeBearing = 0;
-    for (const { id } of rows) {
+    const states = new Set(rows.map((row) => row.state));
+    for (const state of ['CONFIRMED', 'FAILED', 'EXPIRED']) expect(states).toContain(state);
+    type Sums = Record<
+      'principal' | 'fees' | 'received' | 'topups' | 'receiptCredits' | 'spending',
+      bigint
+    >;
+    const zero = (): Sums => ({
+      principal: 0n,
+      fees: 0n,
+      received: 0n,
+      topups: 0n,
+      receiptCredits: 0n,
+      spending: 0n,
+    });
+    const sums = new Map<string, Sums>();
+    const seen = { feeBearing: 0, walletPurchase: 0, receiptCredit: 0, late: 0 };
+    for (const { id, state } of rows) {
       const detail = await get(`/payments/${id}`);
       expect(detail.statusCode, detail.body).toBe(200);
       const payment = (
         detail.json() as {
-          payment: { orderId: string | null; amounts: Record<string, unknown> | null };
+          payment: {
+            orderId: string | null;
+            method: string;
+            amounts: Record<string, string | number | null> | null;
+            gatewayInvoice: { outcome: string | null } | null;
+          };
         }
       ).payment;
       const amounts = payment.amounts;
       if (amounts === null) throw new Error(`no amounts on ${id}`);
-      const currency = amounts['currency'] as string;
-      const into = sums.get(currency) ?? { principal: 0n, fees: 0n, paid: 0n };
-      into.principal += BigInt(amounts['principal'] as string);
-      into.fees += BigInt(amounts['customerFee'] as string);
-      into.paid += BigInt(amounts['customerPaid'] as string);
-      sums.set(currency, into);
-      // Money that came from outside and was confirmed is exactly what the customer paid.
-      expect(amounts['received']).toBe(amounts['customerPaid']);
+      const figure = (key: string) => BigInt(amounts[key] as string);
+      const into = sums.get(amounts['currency'] as string) ?? zero();
+      // The cash section counts a payment that RECEIVED money, and only by what it received.
+      if (figure('received') > 0n) {
+        into.principal += figure('principal');
+        into.fees += figure('customerFee');
+        into.received += figure('received');
+      }
+      if (state === 'CONFIRMED')
+        into.topups += payment.orderId === null ? figure('walletCredit') : 0n;
+      else into.receiptCredits += figure('walletCredit');
+      into.spending += figure('walletDebit');
+      sums.set(amounts['currency'] as string, into);
+
       if (amounts['customerFee'] !== '0') {
-        feeBearing += 1;
-        expect(
-          BigInt(amounts['principal'] as string) + BigInt(amounts['customerFee'] as string),
-        ).toBe(BigInt(amounts['customerPaid'] as string));
+        seen.feeBearing += 1;
+        expect(figure('principal') + figure('customerFee')).toBe(figure('payable'));
       }
-      // The refund ceiling is the principal — never the fee — and it is the figure the refund
-      // ledger bounds by. (Read for the top-ups: this fixture's orders carry no real quote,
-      // which the ledger's delivery check parses; `payment-money-truth.test.ts` reads orders.)
-      expect(amounts['refundCeiling']).toBe(amounts['principal']);
-      if (payment.orderId === null) {
-        const ledger = await get(`/payments/${id}/refunds`);
-        expect(ledger.statusCode, ledger.body).toBe(200);
-        expect((ledger.json() as { paidMinor: string }).paidMinor).toBe(amounts['refundCeiling']);
+      if (payment.method === 'WALLET' && state === 'CONFIRMED') {
+        seen.walletPurchase += 1;
+        expect(amounts['received']).toBe('0');
+        expect(amounts['walletDebit']).toBe(amounts['principal']);
       }
+      if (state === 'FAILED' && amounts['walletCredit'] !== '0') seen.receiptCredit += 1;
+      if (payment.gatewayInvoice?.outcome === 'LATE_COMPLETION') {
+        seen.late += 1;
+        expect(amounts['received']).toBe('0');
+        expect(amounts['walletCredit']).toBe('0');
+      }
+      // No refund figure beside the breakdown: the refund ledger is the one answer (F1).
+      expect(Object.keys(amounts).some((key) => /refund/iu.test(key))).toBe(false);
     }
-    expect(feeBearing).toBeGreaterThan(0);
+    expect(seen).toEqual({ feeBearing: 1, walletPurchase: 2, receiptCredit: 1, late: 1 });
     for (const total of report.totals) {
-      const mine = sums.get(total.currency) ?? { principal: 0n, fees: 0n, paid: 0n };
+      const mine = sums.get(total.currency) ?? zero();
       expect(total.principalReceived, total.currency).toBe(mine.principal.toString());
       expect(total.customerFees, total.currency).toBe(mine.fees.toString());
-      expect(total.customerPaid, total.currency).toBe(mine.paid.toString());
+      expect(total.customerPaid, total.currency).toBe(mine.received.toString());
+      expect(total.walletTopups, total.currency).toBe(mine.topups.toString());
+      expect(total.receiptCredits, total.currency).toBe(mine.receiptCredits.toString());
+      expect(total.walletSpending, total.currency).toBe(mine.spending.toString());
     }
+    expect(report.totals.map((total) => total.currency).sort()).toEqual([...sums.keys()].sort());
   });
 });
