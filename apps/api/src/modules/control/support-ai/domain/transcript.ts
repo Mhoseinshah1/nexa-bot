@@ -17,16 +17,52 @@ import type {
  * — is that message, never a second line.
  */
 
+/**
+ * A7 — WHO wrote a line, as the model is told it. Decided by NEXA from the rows, never from the
+ * text: the customer; a person on the business's side; an AI reply sent automatically; an AI
+ * draft a person reviewed and sent; an automatic message no person wrote (Telegram's away
+ * message, another bot); or a send of this bot whose author the window does not show.
+ */
+export const SUPPORT_TRANSCRIPT_AUTHORS = [
+  'CUSTOMER',
+  'STAFF',
+  'AI_AUTO',
+  'AI_ASSIST',
+  'AUTOMATED',
+  'UNATTRIBUTED',
+] as const;
+export type SupportTranscriptAuthor = (typeof SUPPORT_TRANSCRIPT_AUTHORS)[number];
+
+/** A received message's author, from its classified origin alone. */
+const MESSAGE_AUTHOR: Readonly<Record<BusinessMessageOrigin, SupportTranscriptAuthor>> = {
+  INBOUND: 'CUSTOMER',
+  // The conservative rule (ADR-0033 §3): an outgoing message not provably ours is a person's.
+  HUMAN: 'STAFF',
+  OFFLINE: 'AUTOMATED',
+  OTHER_BOT: 'AUTOMATED',
+  // Ours, but which lane sent it is known only through the outbound row (see `mergeTranscript`).
+  OWN_ECHO: 'UNATTRIBUTED',
+};
+
+/** A reply's author, from the lane that sent it. */
+const REPLY_AUTHOR: Readonly<Record<BusinessOutboundOrigin, SupportTranscriptAuthor>> = {
+  OPERATOR: 'STAFF',
+  ASSIST: 'AI_ASSIST',
+  AUTO: 'AI_AUTO',
+};
+
 /** One line of the model's transcript; a reply line's id is never a message id. */
 export interface SupportTranscriptLine {
   readonly id: string;
   readonly origin: BusinessMessageOrigin;
+  /** A7: who wrote it, decided by NEXA (`SUPPORT_TRANSCRIPT_AUTHORS`). */
+  readonly author: SupportTranscriptAuthor;
   readonly kind: BusinessMessageKind;
   readonly text: string | null;
   readonly sentAt: Date;
 }
 
-export interface TranscriptMessageInput extends SupportTranscriptLine {
+export interface TranscriptMessageInput extends Omit<SupportTranscriptLine, 'author'> {
   readonly telegramMessageId: number;
 }
 
@@ -57,6 +93,10 @@ export const TRANSCRIPT_REPLY_ID_PREFIX = 'outbound:';
  *   writing in the very second our reply left — two messages that crossed, in either order.
  * - When `messages` filled its window, a reply older than the oldest message in it is outside
  *   the window too, so the transcript never has a hole in the middle.
+ * - A7: every line says who wrote it. A received business-side message that IS one of the
+ *   replies (the echo) takes the reply's lane — an automatic AI reply, an AI draft a person
+ *   sent, or a person's — so an echo classified `HUMAN` before the lane wrote its id is not
+ *   shown to the model as a person's words. A customer's message is never relabelled.
  */
 export function mergeTranscript(
   messages: readonly TranscriptMessageInput[],
@@ -64,6 +104,11 @@ export function mergeTranscript(
   limit: number,
 ): SupportTranscriptLine[] {
   const received = new Set(messages.map((message) => message.telegramMessageId));
+  // The lane of each reply Telegram gave an id to: an echo of it is that reply.
+  const replyLanes = new Map<number, BusinessOutboundOrigin>();
+  for (const reply of replies) {
+    if (reply.telegramMessageId !== null) replyLanes.set(reply.telegramMessageId, reply.origin);
+  }
   const windowStart = messages.length >= limit ? (messages[0]?.sentAt ?? null) : null;
   const lines: { readonly line: SupportTranscriptLine; readonly rank: number }[] = [];
   for (const message of messages) {
@@ -71,6 +116,7 @@ export function mergeTranscript(
       line: {
         id: message.id,
         origin: message.origin,
+        author: messageAuthor(message, replyLanes),
         kind: message.kind,
         text: message.text,
         sentAt: message.sentAt,
@@ -87,6 +133,7 @@ export function mergeTranscript(
       line: {
         id: `${TRANSCRIPT_REPLY_ID_PREFIX}${reply.id}`,
         origin: 'OWN_ECHO',
+        author: REPLY_AUTHOR[reply.origin],
         kind: 'TEXT',
         text: reply.body,
         sentAt: at,
@@ -106,6 +153,15 @@ export function mergeTranscript(
     )
     .map((entry) => entry.line)
     .slice(-limit);
+}
+
+function messageAuthor(
+  message: TranscriptMessageInput,
+  replyLanes: ReadonlyMap<number, BusinessOutboundOrigin>,
+): SupportTranscriptAuthor {
+  if (message.origin === 'INBOUND') return 'CUSTOMER';
+  const lane = replyLanes.get(message.telegramMessageId);
+  return lane === undefined ? MESSAGE_AUTHOR[message.origin] : REPLY_AUTHOR[lane];
 }
 
 /** How many of the customer's latest messages choose the knowledge a request carries (D2). */

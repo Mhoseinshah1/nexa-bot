@@ -3579,6 +3579,17 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
 - **OQ-TB-76 — the manual acceptance has not been run.** `docs/support-agent/acceptance-pack.md`
   is written and unrun. `OQ-TB-02`, `-03`, `-05`, `-19`, `-20`, `-22`, `-32` and `-47` are
   settled only by running it.
+- **OQ-SAI2-01 — CLOSED by the PR #236 review (N2): `finishAuto` now records the cited titles.**
+  Kept for the record: an automatic decision did not record the knowledge it cited (A8). The
+  knowledge query reads "the titles cited before" from `support_ai_jobs.knowledge_labels`, which
+  only Assist drafts fill; `finishAuto` stores `fact_refs` alone, and a `K…` alias is positional
+  per build, so it cannot be resolved later. An automatic decision still contributes its intent
+  and topic. Recording the titles belongs to the automatic reply's finish path.
+- **OQ-SAI2-02 — the knowledge match is lexical (A8).** No embeddings, by decision: an article is
+  found only when its title, tags or body share a (folded, lightly stemmed) word with the query.
+  A synonym the article does not use («کانکت» for «اتصال») is found only if a tag says it. Whether
+  real conversations need more than tags is settled by running the eval corpus against a real
+  model (A10), not by guessing.
 
 ## OQ-A4 — tutorial video and guide in one message (pre-support item A4)
 

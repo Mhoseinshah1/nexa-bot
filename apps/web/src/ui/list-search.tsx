@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { LIST_SEARCH_MAX_LENGTH, classifyListSearch, type ListSearchKind } from '@nexa/contracts';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, type Route } from '../router';
-import { Button, Field, Input } from './kit';
+import { Button, Field, IconButton, Input } from './kit';
 
 /**
  * The ONE free-text search box a list page draws (spec §10).
@@ -48,6 +48,19 @@ const KIND_LABELS: Readonly<Record<ListSearchKind, WebKey>> = {
 /** The applied search, from the URL: the one value a page puts in its query key and request. */
 export function appliedListSearch(route: Route): string {
   return route.query.get(LIST_SEARCH_PARAM) ?? '';
+}
+
+/*
+ * «پاک کردن همهٔ فیلترها» also empties the box (review of #242, N5). Clearing navigates,
+ * which cancels a pending automatic apply by design — but the half-typed text stayed in the
+ * box while no search was applied, suggesting a filter that was not in force. The button
+ * and the box share no parent state, so the button tells every mounted box to drop its
+ * draft; there is one per page.
+ */
+const draftResets = new Set<() => void>();
+
+function resetSearchDrafts(): void {
+  for (const reset of draftResets) reset();
 }
 
 export function ListSearchBox({
@@ -142,6 +155,14 @@ export function ListSearchBox({
     navigate(null);
   };
 
+  useEffect(() => {
+    const reset = () => setDraft((current) => ({ ...current, applied: '', text: '' }));
+    draftResets.add(reset);
+    return () => {
+      draftResets.delete(reset);
+    };
+  }, []);
+
   return (
     <form className="toolbar ca-search" onSubmit={apply} hidden={hidden} role="search">
       <Field compact label={t('web.list_search_label')} hint={hint} htmlFor={id}>
@@ -172,5 +193,94 @@ export function ListSearchBox({
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * «پاک کردن همهٔ فیلترها»: one press back to the unfiltered list (roadmap B4).
+ *
+ * Drawn only while one of `keys` is in the URL — a reset with nothing to reset is noise. A
+ * list's filters live in the URL beside its search, so clearing is one navigation: every
+ * key (and any `cursor` the page keeps there) goes in the same `setQueries`, never one
+ * `setQuery` per key (`router.ts` says why). The page passes the keys it filters on,
+ * the search's `q` included.
+ */
+export function ClearFiltersButton({
+  route,
+  keys,
+  hidden = false,
+}: {
+  route: Route;
+  keys: readonly string[];
+  hidden?: boolean;
+}) {
+  const active = keys.some((key) => (route.query.get(key) ?? '') !== '');
+  if (!active || hidden) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      icon="x"
+      onClick={() => {
+        resetSearchDrafts();
+        setQueries(
+          route,
+          [...keys, 'cursor'].map((key) => [key, null] as const),
+        );
+      }}
+    >
+      {t('web.list_filters_clear')}
+    </Button>
+  );
+}
+
+/** Time with seconds: a refresh within the same minute must still visibly change. */
+const READ_AT = new Intl.DateTimeFormat('fa-IR', {
+  dateStyle: 'medium',
+  timeStyle: 'medium',
+});
+
+/**
+ * How fresh a list is, and a way to ask again (roadmap B1, data freshness).
+ *
+ * The queue lists do not poll and do not refetch on window focus, so an operator who left
+ * /tickets open read a list of unknown age with nothing saying so. This states when the
+ * rows were read — the query's own `dataUpdatedAt`, never the time of the render — and
+ * offers a refresh that re-reads the same page under the same filters.
+ *
+ * Accessibility (review of #242, N6):
+ * - the `aria-live` region stays mounted from the start and only its TEXT changes, so the
+ *   new read time is announced (a region inserted with its text usually is not);
+ * - the button is never `disabled` — that would drop a keyboard user's focus to the page —
+ *   it says `aria-busy` while reading and ignores a press until the read settles;
+ * - the time has seconds, so a refresh within the same minute visibly changes it.
+ */
+export function ListFreshness({
+  query,
+  hidden = false,
+}: {
+  query: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown };
+  hidden?: boolean;
+}) {
+  const shown = !hidden && query.dataUpdatedAt !== 0;
+  return (
+    <span className="list-freshness">
+      <span className="muted small" aria-live="polite" data-testid="list-read-at">
+        {shown
+          ? t('web.list_read_at').replace('{time}', READ_AT.format(new Date(query.dataUpdatedAt)))
+          : ''}
+      </span>
+      {shown && (
+        <IconButton
+          icon="refresh"
+          size="sm"
+          label={query.isFetching ? t('web.list_refreshing') : t('web.list_refresh')}
+          aria-busy={query.isFetching}
+          onClick={() => {
+            if (!query.isFetching) void query.refetch();
+          }}
+        />
+      )}
+    </span>
   );
 }

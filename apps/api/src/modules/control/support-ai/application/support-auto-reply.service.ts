@@ -36,7 +36,6 @@ import {
   type AutoVerdict,
 } from '../domain/auto-reply-guards.js';
 import { planVision } from '../domain/vision.js';
-import { latestCustomerWords } from '../domain/transcript.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import {
   supportSystemPrompt,
@@ -49,7 +48,7 @@ import type {
   DrizzleSupportAiJobRepository,
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
-import type { SupportContextSource } from './support-assist.service.js';
+import { resolveKnowledgeLabels, type SupportContextSource } from './support-assist.service.js';
 import {
   chainFailureClass,
   type SupportAiChain,
@@ -263,7 +262,8 @@ export class SupportAutoReplyService {
     // latest words choose the knowledge the context carries (D2).
     const transcript = await readSupportTranscript(this.deps, scope, conversation.id);
     const context = await this.deps.context.build(scope, conversation.customerId, {
-      query: latestCustomerWords(transcript),
+      conversationId: conversation.id,
+      transcript,
     });
     const { verdict: preflight, trigger } = await this.preflight(
       scope,
@@ -327,6 +327,7 @@ export class SupportAutoReplyService {
     }
     const lines: TranscriptLine[] = transcript.map((m) => ({
       origin: m.origin,
+      author: m.author,
       text: m.text,
       kind: m.kind,
       image: loaded.get(m.id)?.image ?? null,
@@ -361,6 +362,7 @@ export class SupportAutoReplyService {
               transcriptMessages(
                 transcript.map((m) => ({
                   origin: m.origin,
+                  author: m.author,
                   text: m.text,
                   kind: m.kind,
                   image: seen.has(m.id) ? (loaded.get(m.id)?.image ?? null) : null,
@@ -470,7 +472,12 @@ export class SupportAutoReplyService {
       }),
     });
     if (!guards.pass) return this.handOff(scope, job, guards, decision, produced, images);
-    return this.enqueue(scope, job, decision, produced, grounding, images);
+    // A8 review N2: the titles it cited, so the next request's knowledge query can read them.
+    const knowledgeLabels = resolveKnowledgeLabels(
+      decision.knowledgeRefs,
+      context.knowledgeAliases,
+    );
+    return this.enqueue(scope, job, decision, produced, grounding, images, knowledgeLabels);
   }
 
   /**
@@ -593,6 +600,7 @@ export class SupportAutoReplyService {
       readonly knownKnowledgeAliases: ReadonlySet<string>;
     },
     images?: ImageWrite,
+    knowledgeLabels: readonly string[] = [],
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, async (tx, now) => {
       const { config } = await this.deps.configs.get(scope, tx);
@@ -658,6 +666,7 @@ export class SupportAutoReplyService {
           provider: produced.provider,
           model: produced.model,
           sentOutboundId: queued.row.id,
+          knowledgeLabels,
           now,
         },
         tx,
