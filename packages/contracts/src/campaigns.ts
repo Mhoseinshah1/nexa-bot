@@ -583,17 +583,27 @@ export const campaignResultsResponseSchema = z.object({
   timeGift: z.object({ counts: bulkCountsSchema }).nullable(),
   /**
    * Roadmap C3: the campaign's discount redemptions set against the announcement's FROZEN
-   * recipients — who was told, and who was delivered to — counted from persisted rows only.
-   * Distinct customers whose redemption's order is PAID. A redeemer who was told is not a
-   * purchase CAUSED by the announcement, and the page never says it is; the rule's scope is
-   * not the audience (OQ-C1-01), so a redeemer who was never told is counted apart. Null
-   * unless the campaign has both an announcement and a discount. Optional: an older server
-   * omits it.
+   * recipients, counted from persisted rows only, distinct customers on both sides. A
+   * redemption counts only on an order that is PAID now (a REFUNDED one never does) and was
+   * settled AT OR AFTER that recipient's own send (PR #245 review m1/m2):
+   *
+   * - `audience`: every frozen recipient row; `told`: SENT or UNCONFIRMED (delivered, or may
+   *   have been); `delivered`: SENT; `skipped`: SKIPPED at the send (opted out, blocked) —
+   *   frozen, never sent anything, so never told.
+   * - `redeemersTold` / `redeemersDelivered`: redeemers whose order was paid after they were
+   *   told / delivered to; `redeemersNotTold`: every other redeemer — never in the audience,
+   *   skipped, not reached, or paid before the message went.
+   *
+   * Not a purchase CAUSED by the announcement, and the page never says it is. Null unless the
+   * campaign has both an announcement and a discount, and the reader may read the
+   * announcement (`broadcasts.view`, review CX1). Optional: an older server omits it.
    */
   audienceAttribution: z
     .object({
+      audience: z.number().int().nonnegative(),
       told: z.number().int().nonnegative(),
       delivered: z.number().int().nonnegative(),
+      skipped: z.number().int().nonnegative(),
       redeemersTold: z.number().int().nonnegative(),
       redeemersDelivered: z.number().int().nonnegative(),
       redeemersNotTold: z.number().int().nonnegative(),
