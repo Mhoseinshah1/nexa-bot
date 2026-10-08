@@ -153,6 +153,27 @@ describe('backup delivery to Telegram', () => {
     expect(result.state).toBe('OUTCOME_UNKNOWN');
   });
 
+  // PR #238 review N4: the D1 defect in this lane's own copy of the call.
+  it.each([
+    ['no ok field', { description: 'proxy says hi' }],
+    ['a JSON null', null],
+    ['a bare value', 'ok'],
+  ])('treats a 2xx whose body is not a Bot API answer (%s) as unobserved', async (_l, body) => {
+    handler = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(body));
+    };
+    expect((await send()).state).toBe('OUTCOME_UNKNOWN');
+  });
+
+  it('still treats a 2xx that SAYS ok:false as definitive', async () => {
+    handler = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, error_code: 400, description: 'no' }));
+    };
+    expect((await send()).state).toBe('FAILED_DEFINITIVE');
+  });
+
   it('treats a dropped connection as unobserved', async () => {
     handler = (request, response) => {
       request.resume();
