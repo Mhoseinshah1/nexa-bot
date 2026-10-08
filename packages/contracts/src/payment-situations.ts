@@ -199,8 +199,17 @@ export interface PaymentSituationFacts {
    * rather than re-derived here (review of PR #248, CX4): a second copy without the delivery
    * and currency facts offered "issue refund" on payments the server refuses.
    */
-  readonly refundRefusal: RefundRefusalReason | null;
+  readonly refundRefusal: RefundRefusalReason | null | typeof REFUND_REFUSAL_UNDECIDED;
 }
+
+/**
+ * The refund service could not decide (CI failure on PR #248, shard 4/4): its decision reads the
+ * order a payment bought, and a row that cannot be read — a stored quote that does not parse — made
+ * the payment's detail and the payment LIST answer an error for one row. The guide is advisory, so
+ * it fails CLOSED instead: an undecided refusal offers no refund, and the server still decides on
+ * the write.
+ */
+export const REFUND_REFUSAL_UNDECIDED = 'UNDECIDED';
 
 export interface PaymentSituationGuide {
   readonly situation: PaymentSituation;
