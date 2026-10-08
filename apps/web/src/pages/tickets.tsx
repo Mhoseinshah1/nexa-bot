@@ -9,6 +9,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
+  businessHandoffReasonOf,
   TICKET_MESSAGE_MAX_LENGTH,
   TICKET_PRIORITIES,
   TICKET_REPLY_FILE_MIME_TYPES,
@@ -51,6 +52,7 @@ import {
 import { formatTimestamp, splitBytes } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { HandoffContextView } from './handoff-context';
 import { HANDOFF_LABELS } from './handoff-labels';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
@@ -80,7 +82,12 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import { ListFreshness } from '../ui/list-search';
 import { Icon } from '../ui/icons';
+// Review N8 (PR #240): the status vocabulary lives in its own module, shared with Customer 360.
+import { TICKET_STATUS_LABELS, TICKET_STATUS_TONES as STATUS_TONES } from '../ticket-labels';
+// Kept importable from this page under the names it exported before the move.
+export { TICKET_STATUS_LABELS, STATUS_TONES };
 
 /**
  * Support tickets (WP-A7) — the inbox, one conversation, and the categories customers
@@ -96,20 +103,6 @@ import { Icon } from '../ui/icons';
  * read from the customer notification lane, and a failed delivery never takes the reply
  * away: the customer reads it in the bot's ticket view either way.
  */
-
-export const TICKET_STATUS_LABELS: Readonly<Record<TicketStatus, WebKey>> = {
-  OPEN: 'web.ticket_status_open',
-  WAITING_FOR_CUSTOMER: 'web.ticket_status_waiting_for_customer',
-  WAITING_FOR_SUPPORT: 'web.ticket_status_waiting_for_support',
-  CLOSED: 'web.ticket_status_closed',
-};
-
-const STATUS_TONES: Readonly<Record<TicketStatus, Tone>> = {
-  OPEN: 'warn',
-  WAITING_FOR_CUSTOMER: 'info',
-  WAITING_FOR_SUPPORT: 'danger',
-  CLOSED: 'neutral',
-};
 
 const PRIORITY_LABELS: Readonly<Record<TicketPriority, WebKey>> = {
   LOW: 'web.ticket_priority_low',
@@ -327,6 +320,8 @@ export function TicketsPage({
 }) {
   const onLink = useLinkHandler();
   const status = statusOf(route.query.get('status'));
+  // Review N1: the "awaiting support" facet the sidebar's and Customer 360's counts open.
+  const awaiting = route.query.get('awaiting') === 'support' ? ('support' as const) : null;
   const categoryId = route.query.get('categoryId') ?? '';
   const customer = route.query.get('customer') ?? '';
   const assigned = route.query.get('assigned') ?? '';
@@ -351,6 +346,7 @@ export function TicketsPage({
 
   const filters: TicketFilters = {
     ...(status === null ? {} : { status }),
+    ...(awaiting === null ? {} : { awaiting }),
     ...(categoryId === '' ? {} : { categoryId }),
     ...(customer === '' ? {} : { customer }),
     ...(assigned === '' ? {} : { assigned }),
@@ -470,20 +466,48 @@ export function TicketsPage({
 
   return (
     <>
-      <PageHead title={t('web.tickets_title')} subtitle={t('web.tickets_intro')} />
+      <PageHead
+        title={t('web.tickets_title')}
+        subtitle={t('web.tickets_intro')}
+        actions={<ListFreshness query={tickets} hidden={!requestable} />}
+      />
 
       <Card>
         <FilterBar hidden={!requestable}>
           <FilterChips label={t('web.status')}>
-            <FilterChip pressed={status === null} onClick={() => setQuery(route, 'status', null)}>
+            <FilterChip
+              pressed={status === null && awaiting === null}
+              onClick={() =>
+                setQueries(route, [
+                  ['status', null],
+                  ['awaiting', null],
+                ])
+              }
+            >
               {t('web.ticket_filter_all')}
+            </FilterChip>
+            <FilterChip
+              pressed={status === null && awaiting === 'support'}
+              onClick={() =>
+                setQueries(route, [
+                  ['status', null],
+                  ['awaiting', 'support'],
+                ])
+              }
+            >
+              {t('web.ticket_filter_awaiting_support')}
             </FilterChip>
             <ChipDivider />
             {TICKET_STATUSES.map((value) => (
               <FilterChip
                 key={value}
-                pressed={status === value}
-                onClick={() => setQuery(route, 'status', value)}
+                pressed={status === value && awaiting === null}
+                onClick={() =>
+                  setQueries(route, [
+                    ['status', value],
+                    ['awaiting', null],
+                  ])
+                }
               >
                 {t(TICKET_STATUS_LABELS[value])}
               </FilterChip>
@@ -572,6 +596,7 @@ export function TicketsPage({
                 setDraft({ signature: '||', customer: '', fromDay: '', toDay: '' });
                 setQueries(route, [
                   ['status', null],
+                  ['awaiting', null],
                   ['categoryId', null],
                   ['customer', null],
                   ['assigned', null],
@@ -948,9 +973,18 @@ function TicketEscalationsCard({ detail }: { detail: TicketDetailResponse }) {
       <ol className="stack">
         {detail.escalations.map((escalation) => (
           <li key={`${escalation.conversationId}:${escalation.createdAt}`}>
-            <strong>{t(HANDOFF_LABELS[escalation.reason])}</strong>{' '}
+            <strong>
+              {t(
+                HANDOFF_LABELS[businessHandoffReasonOf(escalation.reason, escalation.reasonDetail)],
+              )}
+            </strong>{' '}
             <span className="muted small">{formatTimestamp(escalation.createdAt)}</span>
             {escalation.summary !== null && <p className="muted small">{escalation.summary}</p>}
+            <HandoffContextView
+              topic={escalation.topic}
+              intent={escalation.intent}
+              stepsTried={escalation.stepsTried}
+            />
             <a
               href={`/business-chats/${encodeURIComponent(escalation.conversationId)}`}
               onClick={onLink}

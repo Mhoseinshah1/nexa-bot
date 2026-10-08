@@ -149,6 +149,19 @@ export function customerSendConditionKey(botInstanceId: BotInstanceId): string {
   return `${CUSTOMER_SEND_FAILED_CODE}:${botInstanceId}`;
 }
 
+/**
+ * PR #238 review B1: the token condition is its OWN row under the same code.
+ *
+ * The recorder dedupes by key and, on a repeat, rewrites `context` but never `message` — and
+ * `message` is what the dashboard shows. Sharing the generic key meant the token remedy was
+ * either never shown (the row already existed from an ordinary refusal) or stuck to every
+ * later refusal after the token was replaced. A separate key keeps each row's sentence true
+ * for every occurrence it collects; a delivered send recovers both (`recordRecovery`).
+ */
+export function customerTokenConditionKey(botInstanceId: BotInstanceId): string {
+  return `${customerSendConditionKey(botInstanceId)}:token`;
+}
+
 /*
  * Premium UI: the decoration-failure condition's codes live in
  * `appearance-conditions.ts` (application), because the appearance service closes the
@@ -285,7 +298,24 @@ function rawIconSource(
 }
 
 /** Why a reply did not certainly reach the customer. Context, never a code. */
-type SendFailureReason = 'NO_BOT' | 'UNCERTAIN' | 'REFUSED';
+/**
+ * D3 (roadmap, Telegram robustness): `TOKEN_REJECTED` is a REFUSED whose code is Telegram's
+ * 401 — the stored token was revoked or reissued in BotFather. Same condition, same dedupe
+ * key; a different sentence, because its remedy is the Web Admin token replacement and not
+ * anything about the customer's chat.
+ */
+type SendFailureReason = 'NO_BOT' | 'UNCERTAIN' | 'REFUSED' | 'TOKEN_REJECTED';
+
+/**
+ * Telegram's answers to a token it does not accept: 401 for a revoked or unknown token, and
+ * 404 for a token path it does not recognise at all (a malformed token — every method this
+ * file calls exists, so a 404 is never "no such method"). The broadcast lane reads the same
+ * two as `BOT_UNAVAILABLE`. `OQ-TG-07` records the 404 half as evidence-limited.
+ */
+export const TELEGRAM_TOKEN_REJECTED_CODES: readonly string[] = [
+  'telegram.rejected.401',
+  'telegram.rejected.404',
+];
 
 /** What the customer is told about a send, and what the operator's log is told. */
 interface ClassifiedOutcome {
@@ -409,7 +439,45 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * stand-in, which draws every registry button with its default — no style on the wire.
      */
     private readonly inlineStyles?: InlineButtonStyleReader,
+    /**
+     * Roadmap D4: where best-effort bookkeeping failures go — an eligibility read that fell
+     * back to no decoration, or a condition write after a DELIVERED send. Absent in a
+     * stand-in, which drops them.
+     */
+    private readonly logger?: {
+      warn(context: Record<string, unknown>, message: string): void;
+    },
   ) {}
+
+  /**
+   * Roadmap D4: work that must never decide a send's outcome. Telegram's answer decides it;
+   * a failed eligibility read, refusal record or recovery record is logged and swallowed, so
+   * a message Telegram DELIVERED is never turned into an exception — which a caller could
+   * read as "not sent" and repeat.
+   */
+  private async bestEffort<T>(
+    what: string,
+    fallback: T,
+    work: () => Promise<T>,
+    context: Record<string, unknown> = {},
+  ): Promise<T> {
+    try {
+      return await work();
+    } catch (error: unknown) {
+      // The name and, for a database error, its SQLSTATE — never the message, which can
+      // quote a value. Review N3: `name` alone was usually just "Error".
+      const code = (error as { code?: unknown } | null)?.code;
+      this.logger?.warn(
+        {
+          ...context,
+          err: error instanceof Error ? error.name : 'unknown',
+          ...(typeof code === 'string' ? { code } : {}),
+        },
+        `customer messenger: could not ${what}`,
+      );
+      return fallback;
+    }
+  }
 
   async send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
@@ -615,7 +683,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     await this.recordFailure(
       scope,
       message,
-      worst.sent.outcome === 'UNKNOWN' ? 'UNCERTAIN' : 'REFUSED',
+      worst.sent.outcome === 'UNKNOWN'
+        ? 'UNCERTAIN'
+        : worst.errorCode !== null && TELEGRAM_TOKEN_REJECTED_CODES.includes(worst.errorCode)
+          ? 'TOKEN_REJECTED'
+          : 'REFUSED',
       worst.errorCode,
     );
     return worst.sent;
@@ -994,24 +1066,40 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     return this.classify(outcome).sent;
   }
 
+  /**
+   * Codex review of PR #238 (P1): BEST EFFORT. The send's outcome is already decided by
+   * Telegram's answer; a condition write that throws used to replace an UNKNOWN with an
+   * exception, and a caller that had stamped `markSendStarted` would then reclaim and resend
+   * a message that may have been delivered. The outcome always reaches the caller.
+   */
   private async recordFailure(
     scope: TenantContext,
     message: CustomerMessage,
     reason: SendFailureReason,
     errorCode: string | null,
   ): Promise<void> {
-    await this.opsLog.record(scope, {
-      code: CUSTOMER_SEND_FAILED_CODE,
-      severity: 'ERROR',
-      message: MESSAGE_FOR[reason],
-      dedupeKey: customerSendConditionKey(message.botInstanceId),
-      context: {
-        botInstanceId: message.botInstanceId,
-        templateKey: message.templateKey,
-        reason,
-        ...(errorCode === null ? {} : { errorCode }),
-      },
-    });
+    await this.bestEffort(
+      'record the send-failure condition',
+      undefined,
+      () =>
+        this.opsLog.record(scope, {
+          code: CUSTOMER_SEND_FAILED_CODE,
+          severity: 'ERROR',
+          message: MESSAGE_FOR[reason],
+          // B1: the token condition is its own row, so each row's sentence stays true.
+          dedupeKey:
+            reason === 'TOKEN_REJECTED'
+              ? customerTokenConditionKey(message.botInstanceId)
+              : customerSendConditionKey(message.botInstanceId),
+          context: {
+            botInstanceId: message.botInstanceId,
+            templateKey: message.templateKey,
+            reason,
+            ...(errorCode === null ? {} : { errorCode }),
+          },
+        }),
+      { botInstanceId: message.botInstanceId },
+    );
   }
 
   /**
@@ -1149,14 +1237,20 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     // Read once per keyboard, and only for a keyboard that names a registry button.
     const styles: InlineButtonStyles =
       this.inlineStyles !== undefined && namesRegistryButton
-        ? await this.inlineStyles.stylesFor(scope)
+        ? await this.bestEffort('read the inline button styles', {}, () =>
+            // Codex P2: a style read that fails draws the client default; never fails a keyboard.
+            (this.inlineStyles as InlineButtonStyleReader).stylesFor(scope),
+          )
         : {};
     // Item 3: read once, and only when a registry button could carry an icon from THIS bot.
     const icons: InlineButtonIcons =
       this.inlineStyles?.iconsFor !== undefined &&
       namesRegistryButton &&
       mayCarryCustomEmoji(decoration)
-        ? await this.inlineStyles.iconsFor(scope)
+        ? await this.bestEffort('read the inline button icons', {}, () =>
+            // D4: an icon read that fails draws the labels alone; it never fails the keyboard.
+            (this.inlineStyles as Required<InlineButtonStyleReader>).iconsFor(scope),
+          )
         : {};
     // UX Batch 01, item 2: read once, and only for a keyboard that lists categories.
     const categoryOf = (button: CustomerButton): string | undefined =>
@@ -1164,7 +1258,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const colors: CategoryColors =
       this.inlineStyles?.categoryColorsFor !== undefined &&
       buttons.some((button) => categoryOf(button) !== undefined)
-        ? await this.inlineStyles.categoryColorsFor(scope)
+        ? await this.bestEffort('read the category colours', {}, () =>
+            (this.inlineStyles as Required<InlineButtonStyleReader>).categoryColorsFor(scope),
+          )
         : {};
     /*
      * Phase 2 Item 2: read once, and only for a keyboard that lists categories. The `after`
@@ -1174,7 +1270,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const categoryIcons: CategoryIcons =
       this.inlineStyles?.categoryIconsFor !== undefined &&
       buttons.some((button) => categoryOf(button) !== undefined)
-        ? await this.inlineStyles.categoryIconsFor(scope)
+        ? await this.bestEffort('read the category icons', {}, () =>
+            (this.inlineStyles as Required<InlineButtonStyleReader>).categoryIconsFor(scope),
+          )
         : {};
     const iconsAllowed = mayCarryCustomEmoji(decoration);
     const ownIconCategories: string[] = [];
@@ -1332,10 +1430,16 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   }
 
   /** The decoration for one bot's messages; a stand-in without a reader decorates nothing. */
-  private async decorationFor(scope: TenantContext, botInstanceId: BotInstanceId) {
-    return this.appearance === undefined
-      ? NO_DECORATION
-      : this.appearance.decorationFor(scope, botInstanceId);
+  private async decorationFor(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+  ): Promise<AppearanceDecoration> {
+    const appearance = this.appearance;
+    if (appearance === undefined) return NO_DECORATION;
+    // D4: eligibility that cannot be read is no eligibility — the message goes undecorated.
+    return this.bestEffort('read the bot\u2019s decoration', NO_DECORATION, () =>
+      appearance.decorationFor(scope, botInstanceId),
+    );
   }
 
   /**
@@ -1389,42 +1493,61 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         : iconed.kind === 'RAW'
           ? false
           : isCustomEmojiDenial(first.errorMessage);
-    await this.opsLog.record(scope, {
-      code: APPEARANCE_DECORATION_FAILED_CODE,
-      severity: 'WARN',
-      message: denied
-        ? 'Telegram refused a message decorated with custom emoji and accepted it undecorated; ' +
-          'this bot\u2019s custom emoji are off until it is tested again.'
-        : iconed !== false && iconed.kind === 'RAW'
-          ? 'Telegram refused a message whose inline buttons carried premium icons and accepted ' +
-            'it without them; check the custom emoji ids of those buttons. This bot\u2019s ' +
-            'eligibility is unchanged: an icon id typed by an operator proves nothing about it.' +
-            (iconed.categories.length > 0
-              ? ' Product categories\u2019 own icons (bot.category_icons) were among them.'
-              : '')
-          : 'Telegram refused a message whose keyboard carried custom-emoji icons and accepted it ' +
-            'without them; the refusal did not name custom emoji, so this bot\u2019s eligibility ' +
-            'is unchanged.',
-      dedupeKey: appearanceDecorationConditionKey(message.botInstanceId),
-      context: {
-        botInstanceId: message.botInstanceId,
-        ...(message.templateKey === undefined ? {} : { templateKey: message.templateKey }),
-        errorCode: first.errorCode,
-        ...(iconed === false
-          ? {}
-          : {
-              keyboardIcons: true,
-              iconSource: iconed.kind,
-              eligibilityChanged: denied,
-              ...(iconed.kind === 'RAW' ? { inlineButtons: [...iconed.keys] } : {}),
-              // Phase 2 Item 2: which categories' own `before` ids to check.
-              ...(iconed.kind === 'RAW' && iconed.categories.length > 0
-                ? { categories: [...iconed.categories] }
-                : {}),
-            }),
-      },
-    });
-    if (denied) await this.appearance?.recordRuntimeRefusal(scope, message.botInstanceId);
+    /*
+     * D4: the message is DELIVERED; what follows is best effort. Review N3: the eligibility
+     * write goes FIRST and on its own, so an ops log that cannot be written does not leave
+     * the bot decorating — every later message paying a refusal and a plain resend.
+     */
+    const appearance = this.appearance;
+    if (denied && appearance !== undefined) {
+      await this.bestEffort(
+        'record the custom-emoji refusal',
+        undefined,
+        () => appearance.recordRuntimeRefusal(scope, message.botInstanceId),
+        { botInstanceId: message.botInstanceId },
+      );
+    }
+    await this.bestEffort(
+      'record a refused decoration',
+      undefined,
+      () =>
+        this.opsLog.record(scope, {
+          code: APPEARANCE_DECORATION_FAILED_CODE,
+          severity: 'WARN',
+          message: denied
+            ? 'Telegram refused a message decorated with custom emoji and accepted it undecorated; ' +
+              'this bot\u2019s custom emoji are off until it is tested again.'
+            : iconed !== false && iconed.kind === 'RAW'
+              ? 'Telegram refused a message whose inline buttons carried premium icons and accepted ' +
+                'it without them; check the custom emoji ids of those buttons. This bot\u2019s ' +
+                'eligibility is unchanged: an icon id typed by an operator proves nothing about it.' +
+                (iconed.categories.length > 0
+                  ? ' Product categories\u2019 own icons (bot.category_icons) were among them.'
+                  : '')
+              : 'Telegram refused a message whose keyboard carried custom-emoji icons and accepted it ' +
+                'without them; the refusal did not name custom emoji, so this bot\u2019s eligibility ' +
+                'is unchanged.',
+          dedupeKey: appearanceDecorationConditionKey(message.botInstanceId),
+          context: {
+            botInstanceId: message.botInstanceId,
+            ...(message.templateKey === undefined ? {} : { templateKey: message.templateKey }),
+            errorCode: first.errorCode,
+            ...(iconed === false
+              ? {}
+              : {
+                  keyboardIcons: true,
+                  iconSource: iconed.kind,
+                  eligibilityChanged: denied,
+                  ...(iconed.kind === 'RAW' ? { inlineButtons: [...iconed.keys] } : {}),
+                  // Phase 2 Item 2: which categories' own `before` ids to check.
+                  ...(iconed.kind === 'RAW' && iconed.categories.length > 0
+                    ? { categories: [...iconed.categories] }
+                    : {}),
+                }),
+          },
+        }),
+      { botInstanceId: message.botInstanceId },
+    );
     return { raw: second, decorationRefused: true };
   }
 
@@ -1445,8 +1568,26 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     });
   }
 
+  /** A delivered send closes BOTH of this bot's conditions — the generic one and the token one. */
   private async recordRecovery(scope: TenantContext, botInstanceId: BotInstanceId): Promise<void> {
-    const dedupeKey = customerSendConditionKey(botInstanceId);
+    for (const key of [
+      customerSendConditionKey(botInstanceId),
+      customerTokenConditionKey(botInstanceId),
+    ]) {
+      await this.bestEffort(
+        'record the send recovery',
+        undefined,
+        () => this.recordRecoveryOf(scope, botInstanceId, key),
+        { botInstanceId },
+      );
+    }
+  }
+
+  private async recordRecoveryOf(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    dedupeKey: string,
+  ): Promise<void> {
     if (!(await this.conditions.conditionIsOpen(scope, dedupeKey))) return;
 
     await this.opsLog.record(scope, {
@@ -1474,4 +1615,8 @@ const MESSAGE_FOR: Readonly<Record<SendFailureReason, string>> = {
   NO_BOT: 'A customer reply could not be sent: the bot instance has no usable token.',
   UNCERTAIN: 'A customer reply may or may not have been delivered; it was not retried.',
   REFUSED: 'Telegram refused a customer reply.',
+  TOKEN_REJECTED:
+    'Telegram rejected this bot\u2019s token (revoked or reissued in BotFather), so customer ' +
+    'replies through it are refused. Replace the token on the bot\u2019s page in the Web Admin; ' +
+    '`botctl telegram status` shows the same state.',
 };

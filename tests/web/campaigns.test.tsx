@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   CampaignDetailPage,
@@ -10,6 +10,21 @@ import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
+
+/** Holds every request whose URL contains `path` until `release` is called. */
+function holdRequests(path: string): { release: () => void } {
+  const inner = globalThis.fetch;
+  let open: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+    String(input).includes(path)
+      ? gate.then(() => inner(input as string, init))
+      : inner(input as string, init),
+  );
+  return { release: () => open() };
+}
 
 /**
  * Round N, C1 on the Web Admin: «کمپین‌ها».
@@ -307,6 +322,39 @@ describe('one campaign', () => {
     });
   });
 
+  it('re-reads the campaign when its confirmation is refused as stale (409, review m5 X11)', async () => {
+    const api = stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/preview`, body: preview },
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/schedule`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'campaign.transition_invalid',
+            message: 'The campaign moved.',
+            correlationId: 'test',
+          },
+        },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    const reads = () =>
+      api.calls.filter(
+        (call) => call.method === 'GET' && call.url.endsWith(`/campaigns/${CAMPAIGN_ID}`),
+      ).length;
+    await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
+    fireEvent.change(screen.getByLabelText('برای تأیید، تعداد را تایپ کنید'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByLabelText(/پیش‌نمایش را بررسی کردم/));
+    const before = reads();
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید و زمان‌بندی' }));
+    await waitFor(() => expect(posts(api, '/schedule')).toHaveLength(1));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
   it('starts the confirmation over when the preview comes back different', async () => {
     const previewRoute = { url: `/campaigns/${CAMPAIGN_ID}/preview`, body: preview as unknown };
     stubApi([
@@ -379,6 +427,53 @@ describe('one campaign', () => {
     expect(screen.getByText(/برگردانده نمی‌شود/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'بله، لغو شود' }));
     await waitFor(() => expect(posts(api, '/cancel')).toHaveLength(1));
+  });
+
+  it('reads the campaign again when a run command is refused as stale (409)', async () => {
+    const api = stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/pause`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'campaign.transition_invalid',
+            message: 'The campaign moved.',
+            correlationId: 'test',
+          },
+        },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    const reads = () =>
+      api.calls.filter(
+        (call) => call.method === 'GET' && call.url.endsWith(`/campaigns/${CAMPAIGN_ID}`),
+      ).length;
+    fireEvent.click(await screen.findByRole('button', { name: 'توقف موقت' }));
+    const before = reads();
+    await waitFor(() => expect(posts(api, '/pause')).toHaveLength(1));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
+  it('takes a run command once: its buttons wait while one is in flight', async () => {
+    const api = stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },
+      { url: `/campaigns/${CAMPAIGN_ID}/pause`, body: detail({ state: 'PAUSED' }) },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    const pause = await screen.findByRole('button', { name: 'توقف موقت' });
+    // A double click: the second lands while the first is pending and sends nothing.
+    const held = holdRequests('/pause');
+    fireEvent.click(pause);
+    // While the first is in flight every command button waits; a second click sends nothing.
+    await waitFor(() => expect(pause).toBeDisabled());
+    fireEvent.click(pause);
+    expect(screen.getByRole('button', { name: 'لغو کمپین' })).toBeDisabled();
+    held.release();
+    await waitFor(() => expect(posts(api, '/pause')).toHaveLength(1));
   });
 
   it('reports persisted facts only, with no revenue attributed to the campaign', async () => {
@@ -511,5 +606,91 @@ describe('the campaign editor', () => {
       fireEvent.click(within(nav).getByRole('button', { name: label }));
       await waitFor(() => expect(document.activeElement?.id).toBe(id));
     }
+  });
+});
+
+describe('roadmap C3/C4 on the campaign page', () => {
+  const pickers = [
+    {
+      url: '/audience/options',
+      body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
+    },
+    { url: '/products', body: { products: [], nextCursor: null } },
+    { url: '/product-categories', body: { categories: [] } },
+    listWithPresentation,
+  ];
+
+  it('offers no service-announcement purpose: a campaign’s announcement is promotional, and says so', async () => {
+    const api = stubApi([...pickers, { url: '/campaigns', body: detail() }]);
+    renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
+    await screen.findByText('چه کسانی');
+    const section = document.getElementById('campaign-section-announcement') as HTMLElement;
+    fireEvent.click(within(section).getByLabelText(t('web.campaign_action_on')));
+    expect(within(section).queryByRole('combobox')).toBeNull();
+    expect(within(section).queryByText(t('web.bc_purpose_service'))).toBeNull();
+    expect(
+      within(section).getByText(t('web.campaign_purpose_promotional_hint')),
+    ).toBeInTheDocument();
+
+    const inputs = screen.getAllByRole('textbox');
+    fireEvent.change(inputs[0] as HTMLElement, { target: { value: 'جشنواره' } });
+    fireEvent.change(screen.getByPlaceholderText('1405-07-10'), {
+      target: { value: '1405-07-10' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('1405-07-20'), {
+      target: { value: '1405-07-20' },
+    });
+    fireEvent.change(within(section).getByLabelText(t('web.campaign_announcement_body')), {
+      target: { value: 'سلام' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ پیش‌نویس' }));
+    await waitFor(() => expect(posts(api, '/campaigns')).toHaveLength(1));
+    const body = posts(api, '/campaigns')[0]?.body as { actions: Record<string, unknown> };
+    expect(body.actions['announcement']).toMatchObject({ purpose: 'MARKETING' });
+  });
+
+  it('sets the redeemers against who was told, and says it is not a cause', async () => {
+    stubApi([
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/results`,
+        body: {
+          ...results(),
+          audienceAttribution: {
+            audience: 130,
+            told: 120,
+            delivered: 97,
+            skipped: 6,
+            redeemersTold: 14,
+            redeemersDelivered: 11,
+            redeemersNotTold: 3,
+          },
+        },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} may={ALL} />);
+    const card = (await screen.findByText('نتایج')).closest('section') as HTMLElement;
+    await waitFor(() => expect(card.textContent).toContain(t('web.campaign_attr_title')));
+    expect(card.textContent).toContain(`${t('web.campaign_attr_audience')} 130`);
+    expect(card.textContent).toContain(`${t('web.campaign_attr_told')} 120`);
+    // Review m1: the opted-out and blocked are counted apart, never as told.
+    expect(card.textContent).toContain(`${t('web.campaign_attr_skipped')} 6`);
+    expect(card.textContent).toContain(`${t('web.campaign_attr_redeemers_delivered')} 11`);
+    expect(card.textContent).toContain(`${t('web.campaign_attr_redeemers_not_told')} 3`);
+    expect(card.textContent).toContain(t('web.campaign_attr_note'));
+    expect(card.textContent).not.toMatch(/درآمد کمپین|نرخ تبدیل/);
+  });
+
+  it('draws no attribution where the server gives none (an older server omits it)', async () => {
+    const older: Record<string, unknown> = { ...results() };
+    delete older['audienceAttribution'];
+    stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/results`, body: older },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} may={ALL} />);
+    const card = (await screen.findByText('نتایج')).closest('section') as HTMLElement;
+    await waitFor(() => expect(card.textContent).toContain('مبلغ واریزشده'));
+    expect(card.textContent).not.toContain(t('web.campaign_attr_title'));
   });
 });

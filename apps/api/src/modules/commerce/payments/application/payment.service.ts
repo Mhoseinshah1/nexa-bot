@@ -21,6 +21,11 @@ import {
   nextState,
   orderIdSchema,
   paymentIdSchema,
+  paymentSituationOf,
+  REFUND_REFUSAL_UNDECIDED,
+  type RefundRefusalReason,
+  type PaymentOpsQueue,
+  type PaymentSituationGuide,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
@@ -295,8 +300,13 @@ export interface PaymentServiceDeps {
    * The ONE credit path (`RefundService.refundUndeliverable`), for the reconciliation of an
    * UNKNOWN gateway payment whose order another payment has already settled: the money
    * moved, so it is returned to the wallet (OQ-TPTG-17, decided).
+   *
+   * And `refusalOf`: the refund service's own answer to "would an operator refund be refused",
+   * passed through to the situation guide (review of PR #248, CX4) rather than re-derived.
    */
-  readonly refunds: Pick<RefundService, 'refundUndeliverable'>;
+  readonly refunds: Pick<RefundService, 'refundUndeliverable' | 'refusalOf'>;
+  /** Where an undecided refund refusal is reported (`refundRefusalForGuide`). */
+  readonly logger?: { warn: (context: Record<string, unknown>, message: string) => void };
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
@@ -577,6 +587,12 @@ export interface TransferSignalResult {
   readonly receiptWindow: ReceiptWindow | null;
 }
 
+/** Roadmap E1: one payment's situation guide, and the queues it was derived beside. */
+export interface PaymentSituationRead {
+  readonly guide: PaymentSituationGuide;
+  readonly queues: readonly PaymentOpsQueue[];
+}
+
 export interface ReceiptWindow {
   readonly expiresAt: Date;
   /** What the customer is told, so the sentence and the deadline cannot disagree. */
@@ -737,6 +753,65 @@ export class PaymentService {
       scope,
       payments.filter((payment) => payment.method === 'GATEWAY').map((payment) => payment.id),
     );
+  }
+
+  /**
+   * Roadmap E1 (`docs/payments-under-review-ux.md`): each payment's situation, from the ONE
+   * classifier (`paymentSituationOf`) over facts read in ONE statement, plus the queues
+   * themselves. `payments.view`; read-only.
+   */
+  async situations(
+    scope: TenantContext,
+    actor: ActorContext,
+    records: readonly PaymentRecord[],
+  ): Promise<ReadonlyMap<PaymentId, PaymentSituationRead>> {
+    await this.deps.guard.check(scope, actor, PAYMENT_VIEW_PERMISSION);
+    const facts = await this.deps.repository.situationFacts(
+      scope,
+      records.map((record) => record.id),
+    );
+    const byId = new Map(records.map((record) => [record.id, record]));
+    const found = new Map<PaymentId, PaymentSituationRead>();
+    for (const [id, recorded] of facts) {
+      const record = byId.get(id);
+      if (record === undefined) continue;
+      // CX4: whether ISSUE_REFUND is offered is the refund service's decision, not a copy.
+      const refundRefusal = await this.refundRefusalForGuide(scope, record);
+      const guide = paymentSituationOf({ ...recorded, refundRefusal });
+      found.set(id, {
+        /*
+         * `needsAction` is the SQL facet's answer, from the same statement as every other
+         * fact: ONE definition of NEEDS_ACTION, so the badge and the queue that lists the
+         * payment cannot disagree (review of PR #243, m1). `paymentNeedsAction` is the
+         * specification both are tested against.
+         */
+        guide: { ...guide, needsAction: recorded.queues.includes('NEEDS_ACTION') },
+        queues: recorded.queues,
+      });
+    }
+    return found;
+  }
+
+  /**
+   * The refund service's refusal, for the advisory guide only. A decision that cannot be made
+   * (the order it reads does not load — CI on PR #248: a stored quote that does not parse) is
+   * UNDECIDED, which offers no refund, rather than an error for the whole page of payments: the
+   * guide never offered more than the server accepts, and the server decides again on the write.
+   * Logged, because a row the refund service cannot read is somebody's to look at.
+   */
+  private async refundRefusalForGuide(
+    scope: TenantContext,
+    record: PaymentRecord,
+  ): Promise<RefundRefusalReason | null | typeof REFUND_REFUSAL_UNDECIDED> {
+    try {
+      return await this.deps.refunds.refusalOf(scope, record);
+    } catch (error) {
+      this.deps.logger?.warn(
+        { paymentId: record.id, err: error instanceof Error ? error.message : String(error) },
+        'payment situation: refund refusal undecided; no refund offered',
+      );
+      return REFUND_REFUSAL_UNDECIDED;
+    }
   }
 
   async get(scope: TenantContext, actor: ActorContext, id: string): Promise<PaymentRecord> {

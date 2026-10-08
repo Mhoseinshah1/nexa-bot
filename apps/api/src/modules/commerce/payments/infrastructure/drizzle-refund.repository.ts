@@ -273,7 +273,15 @@ export class DrizzleRefundRepository implements RefundRepository {
     const rows = await this.exec(tx)
       .select({
         consumed: sql<string>`coalesce(sum(${refunds.amount}), 0)::text`,
-        currency: sql<string | null>`min(${refunds.currency})`,
+        /*
+         * The one currency the consuming refunds share, or a marker that matches no currency
+         * when they do not share one. `min` alone would hide an IRT row behind an EUR payment's
+         * own EUR row (`'EUR' < 'IRT'`), and the witness that refuses a mixed payment would
+         * pass it (review of PR #247, CX1/F3).
+         */
+        currency: sql<
+          string | null
+        >`CASE WHEN count(DISTINCT ${refunds.currency}) > 1 THEN 'MIXED' ELSE min(${refunds.currency}) END`,
         total: sql<number>`count(*)::int`,
       })
       .from(refunds)

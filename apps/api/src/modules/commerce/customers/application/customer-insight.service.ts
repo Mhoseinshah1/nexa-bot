@@ -1,7 +1,15 @@
 import {
   COMMERCE_ERROR_CODES,
   CUSTOMER_TIMELINE_LIMIT,
+  CUSTOMER_WORKSPACE_COUNT_CAP,
+  CUSTOMER_WORKSPACE_LATEST_LIMIT,
+  CUSTOMER_WORKSPACE_PERMISSIONS,
   errors,
+  type CustomerWorkspaceSection,
+  type OrderPurpose,
+  type OrderState,
+  type PaymentMethod,
+  type PaymentState,
   userIdSchema,
   type ActorContext,
   type PermissionKey,
@@ -51,6 +59,74 @@ export interface CustomerInsightReader {
   ): Promise<readonly { readonly state: string; readonly count: number }[]>;
 }
 
+/** One of the customer's newest orders, as the workspace lists it. */
+export interface WorkspaceOrderRow {
+  readonly id: string;
+  readonly lineTitle: string;
+  readonly purpose: OrderPurpose;
+  readonly state: OrderState;
+  readonly totalAmount: bigint;
+  readonly currency: string;
+  readonly createdAt: Date;
+}
+
+/** One of the customer's newest payments, as the workspace lists it. */
+export interface WorkspacePaymentRow {
+  readonly id: string;
+  readonly reference: string;
+  readonly method: PaymentMethod;
+  readonly state: PaymentState;
+  readonly amount: bigint;
+  readonly currency: string;
+  readonly createdAt: Date;
+}
+
+/**
+ * Customer 360's workspace reads (roadmap B5). Every count answers at most `cap` (a LIMIT
+ * bounds the rows that match; the work is bounded by reaching one customer's rows through a
+ * customer-leading index, which the adapter names per count), and every list is newest
+ * first, at most `limit`.
+ * Each is the predicate the page it deep-links to filters by, narrowed to one customer.
+ */
+export interface CustomerWorkspaceReader {
+  /** OPEN or WAITING_FOR_SUPPORT; and every status but CLOSED. */
+  tickets(
+    scope: TenantContext,
+    customerId: UserId,
+    cap: number,
+  ): Promise<{ readonly awaitingSupport: number; readonly open: number }>;
+  /** Business conversations with this customer in HANDOFF_REQUIRED, and the newest one's id. */
+  businessHandoffs(
+    scope: TenantContext,
+    customerId: UserId,
+    cap: number,
+  ): Promise<{ readonly count: number; readonly newestId: string | null }>;
+  unknownPayments(scope: TenantContext, customerId: UserId, cap: number): Promise<number>;
+  unreconciledServices(scope: TenantContext, customerId: UserId, cap: number): Promise<number>;
+  latestOrders(
+    scope: TenantContext,
+    customerId: UserId,
+    limit: number,
+  ): Promise<readonly WorkspaceOrderRow[]>;
+  latestPayments(
+    scope: TenantContext,
+    customerId: UserId,
+    limit: number,
+  ): Promise<readonly WorkspacePaymentRow[]>;
+}
+
+export interface CustomerWorkspace {
+  readonly tickets: { readonly awaitingSupport: number; readonly open: number } | null;
+  readonly businessHandoffs: number | null;
+  readonly businessHandoffConversationId: string | null;
+  readonly payments: {
+    readonly unknown: number;
+    readonly latest: readonly WorkspacePaymentRow[];
+  } | null;
+  readonly services: { readonly unreconciled: number } | null;
+  readonly orders: { readonly latest: readonly WorkspaceOrderRow[] } | null;
+}
+
 export interface PerCurrency {
   readonly currency: string;
   readonly count: number;
@@ -85,7 +161,7 @@ const SERVICES_VIEW: PermissionKey = 'services.view';
 const AUDIT_VIEW: PermissionKey = 'audit.view';
 
 export interface CustomerInsightDeps {
-  readonly reader: CustomerInsightReader;
+  readonly reader: CustomerInsightReader & CustomerWorkspaceReader;
   readonly customers: Pick<CustomerRepository, 'findById'>;
   readonly auditHistory: Pick<AuditHistoryReader, 'customerTimeline'>;
   readonly guard: PermissionGuard;
@@ -164,6 +240,55 @@ export class CustomerInsightService {
       ledger,
       services: services === null ? null : { byState: services, serviceCount: sumCount(services) },
       denied,
+    };
+  }
+
+  /**
+   * What about this customer waits for a person, and their newest orders and payments
+   * (roadmap B5, `GET /users/:id/workspace`).
+   *
+   * `users.view` is CHARGED (through `viewable`), as every per-customer read is. Each section
+   * is then computed only when the viewer holds the permission of the page it links to
+   * (`CUSTOMER_WORKSPACE_PERMISSIONS`), read once through the guard's own resolution rule,
+   * and is otherwise null — its query never runs and no denial is recorded, the financial
+   * summary's rule. Nothing is disclosed by the omission: a viewer's permission list is
+   * already theirs.
+   */
+  async workspace(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+  ): Promise<CustomerWorkspace> {
+    const customerId = await this.viewable(scope, actor, id);
+    const held = await this.deps.guard.permissionsOf(scope, actor);
+    const may = (section: CustomerWorkspaceSection): boolean =>
+      held.has(CUSTOMER_WORKSPACE_PERMISSIONS[section]);
+    const reader = this.deps.reader;
+    const cap = CUSTOMER_WORKSPACE_COUNT_CAP;
+    const limit = CUSTOMER_WORKSPACE_LATEST_LIMIT;
+
+    // ONE gate per section: a section whose reads were gated separately could be half
+    // computed, and its null would then depend on which half a later edit left gated.
+    const [tickets, businessHandoffs, payments, unreconciled, latestOrders] = await Promise.all([
+      may('tickets') ? reader.tickets(scope, customerId, cap) : null,
+      may('businessHandoffs') ? reader.businessHandoffs(scope, customerId, cap) : null,
+      may('payments')
+        ? Promise.all([
+            reader.unknownPayments(scope, customerId, cap),
+            reader.latestPayments(scope, customerId, limit),
+          ])
+        : null,
+      may('services') ? reader.unreconciledServices(scope, customerId, cap) : null,
+      may('orders') ? reader.latestOrders(scope, customerId, limit) : null,
+    ]);
+
+    return {
+      tickets,
+      businessHandoffs: businessHandoffs?.count ?? null,
+      businessHandoffConversationId: businessHandoffs?.newestId ?? null,
+      payments: payments === null ? null : { unknown: payments[0], latest: payments[1] },
+      services: unreconciled === null ? null : { unreconciled },
+      orders: latestOrders === null ? null : { latest: latestOrders },
     };
   }
 

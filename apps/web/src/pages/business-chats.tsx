@@ -3,6 +3,8 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   BUSINESS_CONVERSATION_STATES,
   BUSINESS_MESSAGE_TEXT_MAX,
+  businessHandoffReasonOf,
+  businessOutboundOriginOf,
   businessTextSchema,
   type BusinessChatDetailResponse,
   type BusinessConnectionStatus,
@@ -28,6 +30,7 @@ import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
 import { setQuery, useLinkHandler, type Route } from '../router';
+import { HandoffContextView } from './handoff-context';
 import { HANDOFF_LABELS } from './handoff-labels';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
@@ -172,6 +175,7 @@ const OUTBOUND_ORIGIN_LABELS: Readonly<Record<BusinessOutboundOrigin, WebKey>> =
   OPERATOR: 'web.bchat_outbound_origin_operator',
   ASSIST: 'web.bchat_outbound_origin_assist',
   AUTO: 'web.bchat_outbound_origin_auto',
+  HANDOFF_NOTICE: 'web.bchat_outbound_origin_handoff_notice',
 };
 
 /** The refusals this page can name better than the server's English sentence. */
@@ -335,7 +339,11 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
         <span className="bchat-state-cell">
           <StateBadge value={row.state} />
           {row.handoffReason !== null && (
-            <span className="small muted">{t(HANDOFF_LABELS[row.handoffReason])}</span>
+            <span className="small muted">
+              {t(
+                HANDOFF_LABELS[businessHandoffReasonOf(row.handoffReason, row.handoffReasonDetail)],
+              )}
+            </span>
           )}
           {row.connectionStatus !== 'ACTIVE' && <ConnectionBadge status={row.connectionStatus} />}
           {row.ticketId !== null && (
@@ -642,7 +650,14 @@ function ControlCard({
             conversation.handoffReason === null ? (
               <Dash key="h" />
             ) : (
-              t(HANDOFF_LABELS[conversation.handoffReason])
+              t(
+                HANDOFF_LABELS[
+                  businessHandoffReasonOf(
+                    conversation.handoffReason,
+                    conversation.handoffReasonDetail,
+                  )
+                ],
+              )
             ),
           ],
           [
@@ -784,7 +799,13 @@ function EscalationsCard({ detail }: { detail: BusinessChatDetailResponse }) {
         {detail.escalations.map((escalation) => (
           <li key={escalation.id}>
             <div className="bchat-message-head">
-              <strong>{t(HANDOFF_LABELS[escalation.reason])}</strong>
+              <strong>
+                {t(
+                  HANDOFF_LABELS[
+                    businessHandoffReasonOf(escalation.reason, escalation.reasonDetail)
+                  ],
+                )}
+              </strong>
               <span className="muted small">{formatTimestamp(escalation.createdAt)}</span>
             </div>
             <div className="small">
@@ -797,6 +818,11 @@ function EscalationsCard({ detail }: { detail: BusinessChatDetailResponse }) {
               )}
             </div>
             {escalation.summary !== null && <p className="muted small">{escalation.summary}</p>}
+            <HandoffContextView
+              topic={escalation.topic}
+              intent={escalation.intent}
+              stepsTried={escalation.stepsTried}
+            />
             {escalation.aiFailure !== null && (
               <FailureDiagnosticView failure={escalation.aiFailure} />
             )}
@@ -827,36 +853,41 @@ function OutboundCard({
         <p className="muted small">{t('web.bchat_outbound_empty')}</p>
       ) : (
         <ol className="bchat-outbound" aria-label={t('web.bchat_outbound')}>
-          {rows.map((row) => (
-            <li key={row.id} className="bchat-outbound-row" data-outbound={row.state}>
-              <div className="bchat-message-head">
-                <Badge tone={OUTBOUND_TONES[row.state]}>
-                  {t(BUSINESS_OUTBOUND_LABELS[row.state])}
-                </Badge>
-                <span className="small">{t(OUTBOUND_ORIGIN_LABELS[row.origin])}</span>
-                <span className="muted small">{formatTimestamp(row.createdAt)}</span>
-              </div>
-              {row.text === null ? (
-                <p className="bchat-body faint">{t('web.bchat_text_gone')}</p>
-              ) : (
-                <p className="bchat-body">{row.text}</p>
-              )}
-              {row.failureCode !== null && (
-                <span className="small muted">
-                  {t('web.bchat_outbound_failure')} <Ltr>{row.failureCode}</Ltr>
-                </span>
-              )}
-              {mayPropose &&
-                row.state === 'DELIVERED' &&
-                row.origin !== 'AUTO' &&
-                row.text !== null && (
-                  <ProposeKnowledgeButton
-                    conversationId={detail.conversation.id}
-                    outboundId={row.id}
-                  />
+          {rows.map((row) => {
+            // CX1: `origin` on the wire is the old bundle's; the real one is read beside it.
+            const origin = businessOutboundOriginOf(row);
+            return (
+              <li key={row.id} className="bchat-outbound-row" data-outbound={row.state}>
+                <div className="bchat-message-head">
+                  <Badge tone={OUTBOUND_TONES[row.state]}>
+                    {t(BUSINESS_OUTBOUND_LABELS[row.state])}
+                  </Badge>
+                  <span className="small">{t(OUTBOUND_ORIGIN_LABELS[origin])}</span>
+                  <span className="muted small">{formatTimestamp(row.createdAt)}</span>
+                </div>
+                {row.text === null ? (
+                  <p className="bchat-body faint">{t('web.bchat_text_gone')}</p>
+                ) : (
+                  <p className="bchat-body">{row.text}</p>
                 )}
-            </li>
-          ))}
+                {row.failureCode !== null && (
+                  <span className="small muted">
+                    {t('web.bchat_outbound_failure')} <Ltr>{row.failureCode}</Ltr>
+                  </span>
+                )}
+                {mayPropose &&
+                  row.state === 'DELIVERED' &&
+                  origin !== 'AUTO' &&
+                  origin !== 'HANDOFF_NOTICE' &&
+                  row.text !== null && (
+                    <ProposeKnowledgeButton
+                      conversationId={detail.conversation.id}
+                      outboundId={row.id}
+                    />
+                  )}
+              </li>
+            );
+          })}
         </ol>
       )}
     </Card>

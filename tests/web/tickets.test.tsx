@@ -10,6 +10,7 @@ import {
 import { ApiError } from '../../apps/web/src/api/client';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
+import { HANDOFF_LABELS } from '../../apps/web/src/pages/handoff-labels';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -179,6 +180,30 @@ describe('the ticket inbox', () => {
     ).toBe(24 * 60 * 60 * 1000);
   });
 
+  /*
+   * Review N1 (PR #240): the sidebar's, the dashboard's and Customer 360's "awaiting support"
+   * counts open `?awaiting=support`; the inbox sends it, presses its chip, and a status chip
+   * or «همه» clears it.
+   */
+  it('lists only what awaits support when linked there, and lets a status chip replace it', async () => {
+    const api = stubApi([
+      { url: '/tickets', body: { tickets: [], nextCursor: null } },
+      { url: '/ticket-categories', body: categories },
+    ]);
+    const at = route('awaiting=support');
+    renderPage(
+      <TicketsPage route={at} denied={false} mayAssign={false} mayEditCategories={false} />,
+    );
+    await screen.findByText(t('web.tickets_filter_empty'));
+    const list = api.calls.find((call) => call.url.includes('/tickets?'));
+    expect(new URL(list!.url, 'http://x').searchParams.get('awaiting')).toBe('support');
+    const chip = screen.getByRole('button', { name: t('web.ticket_filter_awaiting_support') });
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    expect(
+      screen.getByRole('button', { name: t('web.ticket_filter_all') }).getAttribute('aria-pressed'),
+    ).toBe('false');
+  });
+
   it('draws the category editor only for the key that edits categories', async () => {
     stubApi([
       { url: '/tickets', body: { tickets: [], nextCursor: null } },
@@ -285,6 +310,37 @@ describe('the ticket inbox', () => {
 });
 
 describe('one ticket', () => {
+  it('names an escalation by its REAL reason, read beside the pre-A3 wire one (PR #248 follow-up)', async () => {
+    stubApi([
+      {
+        url: `/tickets/${TICKET_ID}`,
+        body: {
+          ...detail(),
+          escalations: [
+            {
+              conversationId: '019350ab-cdef-7012-8345-6789abcdef01',
+              reason: 'LOOP_GUARD',
+              reasonDetail: 'REPEATED_ADVICE',
+              summary: null,
+              createdAt: '2026-09-20T10:05:00.000Z',
+            },
+          ],
+        },
+      },
+    ]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply={false}
+        mayAssign={false}
+        mayClose={false}
+      />,
+    );
+    expect(await screen.findByText(t(HANDOFF_LABELS.REPEATED_ADVICE))).toBeTruthy();
+    expect(screen.queryByText(t(HANDOFF_LABELS.LOOP_GUARD))).toBeNull();
+  });
+
   it('shows who wrote what, each reply’s delivery, and the attachment control', async () => {
     stubApi([{ url: `/tickets/${TICKET_ID}`, body: detail() }]);
     renderPage(

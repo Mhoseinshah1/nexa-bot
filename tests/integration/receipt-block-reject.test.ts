@@ -560,7 +560,10 @@ describe('Block User and the rejection reason, from the receipt message', () => 
       const lane = capturingLane(f.ctx);
       await lane.sweep(tenantA);
       const said = lane.sends.filter((one) => one.templateKey === 'bot.payment.rejected');
-      expect(said.map((one) => one.values)).toEqual([{ reason: 'مبلغ واریزی با سفارش نمی‌خواند' }]);
+      // Roadmap E6: with the payment's tracking code beside the reason.
+      expect(said.map((one) => one.values)).toEqual([
+        { reason: 'مبلغ واریزی با سفارش نمی‌خواند', reference: expect.any(String) },
+      ]);
       expect(lane.rendered().join('\n')).toContain('دلیل: مبلغ واریزی با سفارش نمی‌خواند');
     });
 

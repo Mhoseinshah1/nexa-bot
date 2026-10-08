@@ -124,6 +124,7 @@ function toOutbound(row: OutboundRow): BusinessOutboundRecord {
     conversationId: row.conversationId,
     origin: row.origin as BusinessOutboundOrigin,
     body: row.body,
+    templateKey: row.templateKey,
     createdByAdminId: row.createdByAdminId,
     controlEpoch: row.controlEpoch,
     idempotencyKey: row.idempotencyKey,
@@ -574,9 +575,10 @@ export class DrizzleBusinessMessageRepository implements BusinessMessageReposito
     scope: ScopeContext,
     conversationId: string,
     limit: number,
+    tx?: unknown,
   ): Promise<readonly BusinessMessageRecord[]> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.db
+    const rows = await executorOf(this.db, tx)
       .select()
       .from(businessMessages)
       .where(
@@ -709,6 +711,7 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
         conversationId: row.conversationId,
         origin: row.origin,
         body: row.body,
+        templateKey: row.templateKey ?? null,
         createdByAdminId: row.createdByAdminId,
         controlEpoch: row.controlEpoch,
         idempotencyKey: row.idempotencyKey,
@@ -781,10 +784,11 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
     scope: ScopeContext,
     conversationId: string,
     input: { readonly since: Date | null; readonly limit: number },
+    tx?: unknown,
   ): Promise<readonly BusinessOutboundRecord[]> {
     const tenantId = requireTenantId(scope);
     const at = sql`coalesce(${businessOutboundMessages.sendStartedAt}, ${businessOutboundMessages.resolvedAt}, ${businessOutboundMessages.createdAt})`;
-    const rows = await this.db
+    const rows = await executorOf(this.db, tx)
       .select()
       .from(businessOutboundMessages)
       .where(
@@ -792,7 +796,12 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
           eq(businessOutboundMessages.tenantId, tenantId),
           eq(businessOutboundMessages.conversationId, conversationId),
           eq(businessOutboundMessages.state, 'DELIVERED'),
-          isNotNull(businessOutboundMessages.body),
+          // Roadmap A4 (review of PR #246, CX4): a delivered handoff notice has no body, but its
+          // Telegram id is how the transcript recognises — and leaves out — its echo.
+          or(
+            isNotNull(businessOutboundMessages.body),
+            eq(businessOutboundMessages.origin, 'HANDOFF_NOTICE'),
+          ),
           input.since === null
             ? undefined
             : sql`${at} >= ${input.since.toISOString()}::timestamptz`,
@@ -1108,6 +1117,29 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
       );
     return { atEpoch: Number(row?.atEpoch ?? 0), inWindow: Number(row?.inWindow ?? 0) };
   }
+
+  async undeliveredAuto(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number },
+    tx?: unknown,
+  ): Promise<readonly BusinessOutboundRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .select()
+      .from(businessOutboundMessages)
+      .where(
+        and(
+          eq(businessOutboundMessages.tenantId, tenantId),
+          eq(businessOutboundMessages.conversationId, input.conversationId),
+          eq(businessOutboundMessages.origin, 'AUTO'),
+          eq(businessOutboundMessages.controlEpoch, input.epoch),
+          inArray(businessOutboundMessages.state, ['PENDING', 'UNCONFIRMED']),
+          isNotNull(businessOutboundMessages.body),
+        ),
+      )
+      .orderBy(businessOutboundMessages.createdAt, businessOutboundMessages.id);
+    return rows.map(toOutbound);
+  }
 }
 
 /** TB7 — one row per handoff, and the AI's operator-facing note. */
@@ -1130,6 +1162,10 @@ export class DrizzleBusinessEscalationRepository implements BusinessEscalationRe
         reason: row.reason,
         summary:
           row.summary === null ? null : row.summary.slice(0, BUSINESS_ESCALATION_SUMMARY_MAX),
+        topic: row.topic,
+        intent: row.intent === null ? null : row.intent.slice(0, BUSINESS_ESCALATION_SUMMARY_MAX),
+        stepsTried: row.stepsTried,
+        contextFrom: row.contextFrom,
         ticketId: row.ticketId,
         ticketOutcome: row.ticketOutcome,
         jobId: row.jobId,
@@ -1166,14 +1202,18 @@ export class DrizzleBusinessEscalationRepository implements BusinessEscalationRe
       .where(
         and(
           eq(businessConversationEscalations.tenantId, tenantId),
-          isNotNull(businessConversationEscalations.summary),
-          lt(businessConversationEscalations.createdAt, cutoff),
+          or(
+            isNotNull(businessConversationEscalations.summary),
+            isNotNull(businessConversationEscalations.intent),
+          ),
+          // M1: the older of the row and the decision its text was copied from.
+          sql`least(${businessConversationEscalations.contextFrom}, ${businessConversationEscalations.createdAt}) < ${cutoff}`,
         ),
       )
       .limit(limit);
     const rows = await executorOf(this.db, tx)
       .update(businessConversationEscalations)
-      .set({ summary: null, textPurgedAt: now })
+      .set({ summary: null, intent: null, textPurgedAt: now })
       .where(
         and(
           eq(businessConversationEscalations.tenantId, tenantId),
@@ -1205,6 +1245,9 @@ export class DrizzleBusinessEscalationRepository implements BusinessEscalationRe
       controlEpoch: row.controlEpoch,
       reason: row.reason as BusinessHandoffReason,
       summary: row.summary,
+      topic: row.topic,
+      intent: row.intent,
+      stepsTried: row.stepsTried,
       ticketId: row.ticketId,
       ticketOutcome: row.ticketOutcome as BusinessEscalationTicketOutcome,
       jobId: row.jobId,

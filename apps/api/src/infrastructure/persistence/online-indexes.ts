@@ -491,6 +491,21 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "payments" USING btree ("tenant_id","resolved_at") INCLUDE ("state") ' +
       'WHERE (resolved_at IS NOT NULL)',
   },
+  {
+    /*
+     * Roadmap B5 (review N4): one customer's business handoffs, for Customer 360's workspace.
+     * The only index that named the state, `business_conversations_inbox_priority_idx`, leads
+     * with the tenant, so a per-customer count walked the tenant's whole HANDOFF_REQUIRED
+     * backlog and filtered the customer afterwards; `business_conversations` has no
+     * customer-leading index at all. PARTIAL, so it holds only the conversations waiting for
+     * a person. (Payments UNKNOWN and services UNRECONCILED needed nothing: the planner
+     * serves those counts from the existing `(customer_id, created_at, id)` indexes.)
+     */
+    name: 'business_conversations_tenant_customer_handoff_idx',
+    definition:
+      'ON "business_conversations" USING btree ("tenant_id","customer_id") ' +
+      "WHERE (state = 'HANDOFF_REQUIRED'::text)",
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

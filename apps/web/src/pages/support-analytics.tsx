@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import {
   REPORT_REFRESH_INTERVAL_MS,
+  supportAutoOutcomeCountsOf,
+  supportHandoffCountsOf,
   type ReportRange,
   type SupportAiAutoOutcome,
   type SupportAnalyticsResponse,
@@ -92,6 +94,10 @@ export const AUTO_OUTCOME_LABELS: Readonly<Record<SupportAiAutoOutcome, WebKey>>
   handoff_output_invalid: 'web.sa_auto_handoff_output_invalid',
   handoff_ai_unavailable: 'web.sa_auto_handoff_ai_unavailable',
   handoff_stale: 'web.sa_auto_handoff_stale',
+  guard_no_progress: 'web.sa_auto_guard_no_progress',
+  guard_repeated_advice: 'web.sa_auto_guard_repeated_advice',
+  guard_inbound_flood: 'web.sa_auto_guard_inbound_flood',
+  no_action: 'web.sa_auto_no_action',
 };
 
 export function SupportAnalyticsPage({ route, denied }: { route: Route; denied: boolean }) {
@@ -176,11 +182,11 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
           />
         </Card>
         <Card title={t('web.sa_handoffs')} hint={t('web.sa_handoffs_hint')}>
-          {data.handoffsByReason.length === 0 ? (
+          {supportHandoffCountsOf(data).length === 0 ? (
             <Empty title={t('web.sa_none_in_period')} icon="check" />
           ) : (
             <Distribution
-              slices={data.handoffsByReason.map((row) => ({
+              slices={supportHandoffCountsOf(data).map((row) => ({
                 key: row.reason,
                 label: t(HANDOFF_LABELS[row.reason]),
                 count: row.count,
@@ -201,9 +207,9 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
               [t('web.sa_auto_pending'), <Num key="p" value={data.auto.pending} />],
             ]}
           />
-          {data.auto.byOutcome.length > 0 && (
+          {supportAutoOutcomeCountsOf(data).length > 0 && (
             <Distribution
-              slices={data.auto.byOutcome.map((row) => ({
+              slices={supportAutoOutcomeCountsOf(data).map((row) => ({
                 key: row.outcome,
                 label: t(AUTO_OUTCOME_LABELS[row.outcome]),
                 count: row.count,

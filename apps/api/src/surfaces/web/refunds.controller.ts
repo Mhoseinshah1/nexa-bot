@@ -56,6 +56,7 @@ export class RefundsController {
       refundableMinor: view.refundableMinor.toString(),
       currency: view.paid.currency,
       refundable: view.refundable,
+      refusalReason: view.refusalReason,
     };
   }
 

@@ -331,6 +331,16 @@ It never asks for a token and never replaces one. It:
    Telegram shows exactly that URL; anything else fails with the marker unwritten,
    so `status` keeps saying `incomplete`.
 
+A bot **renamed in BotFather** keeps its id, so `getMe` in step 1 still names the
+same bot — under a new username. `register` (and an installer rerun) records that
+name on the bot row, audited as `bot_instance.username_reconciled`; nothing about
+the webhook changes for it, and the run says "the stored username is now …". If
+another bot row still holds the new name, nothing is changed, the audit row is
+`FAILED` with the reason, and the run prints a WARNING naming the name it kept —
+rerunning will not help until that other row lets the name go. `status` only
+**shows** the drift, as a `username` line on stderr naming both names (and, in that
+case, saying `register` cannot record it); it never writes it.
+
 Both outcomes leave an audit row `bot_instance.webhook_registered`: `SUCCESS`
 with the URL, `verifiedBy`, the pending count and `dropPendingUpdates` (`false` on
 every reconcile, `true` only on the first registration of a brand-new bot row), or
@@ -745,6 +755,29 @@ A tenants table without a `kind` column, or no tenants table at all, passes:
 the check is about one condition and says nothing about anything older or
 newer. `runMigrations` itself runs the same check first, so the installer, CI
 and a developer's shell are under the same rule.
+
+**A migration history the release cannot account for is refused too** (final
+review of PR #248). drizzle's migrator compares one number — the greatest
+`created_at` in `drizzle.__drizzle_migrations` — with each journal entry's
+`when`, and never a tag or a hash. A database migrated from a branch this
+release does not descend from is therefore migrated wrong in silence: it
+skips migrations it believes applied and fails later on a relation one of
+them would have created. The preflight compares the recorded history with the
+release's journal by the same rule readiness and the restore validation use
+(`compareMigrations`) and refuses an applied row whose `created_at` the
+journal does not name, a known `created_at` with different content, or a
+gap. Rows newer than the whole journal — the shape a rollback leaves — still
+pass.
+
+**Databases migrated from the pre-sync roadmap branch must be rebuilt.** That
+branch shipped its support-AI migrations as `0219`–`0221`; the sync with main
+put main's `0219`–`0235` before them and renumbered them `0236`–`0238` with
+new stamps. A development or test database that applied the old three is
+refused with `not in this release's journal`; drop it and migrate it from
+scratch. Production and every database migrated from main are a prefix of
+the journal and are unaffected — `tests/integration/migration-preflight.test.ts`
+migrates one to main's head and then to this release, and one to the
+pre-sync roadmap journal and expects the refusal.
 
 ### The host assets move with the release
 
@@ -1774,6 +1807,112 @@ Before rolling back past round N close: pause sending FORWARD/COPY broadcasts, r
 cancel paused mass operations, and know that opted-out customers are not excluded until the
 roll-forward.
 
+### What an update and a rollback change: broadcast operator UX (roadmap C1/C2)
+
+There is no migration. These are reads and a page:
+
+- delivery per bot (`GET /broadcasts/:id/bots`);
+- the broadcast's own history (`GET /broadcasts/:id/history`);
+- a waiting recipient's `nextAttemptAt`.
+
+**During the update itself**, the new Web Admin can meet an old API replica.
+
+- The delivery-per-bot and history cards answer an error, because the old replica has neither
+  route.
+- The recipients card keeps working. `nextAttemptAt` is optional in the contract, so a row from
+  the old replica parses and shows no next attempt.
+- A reload after the update answers both cards.
+
+**A rollback** removes the two cards and the next-attempt time. Nothing is stored by them, so
+nothing is stranded.
+
+### Before rolling back past the audience by bot (roadmap C3)
+
+There is no migration. The audience definition gains one key, `botInstanceIds`. It is stored
+only when an operator ticked a bot.
+
+**Before rolling back**, clear the bot criterion on every draft broadcast and every draft
+campaign that has one. The previous release's audience schema is strict:
+
+- it refuses such a definition;
+- its broadcast LIST reads every row through that schema, so one bot-filtered broadcast makes
+  the list answer an error for the whole tenant;
+- a campaign hand-over on it refuses as well (`audience.definition_invalid`). That refusal is
+  fail-closed, and nothing is sent.
+
+Find the rows:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT 'broadcast' AS kind, id, state FROM broadcasts WHERE audience_definition ? 'botInstanceIds'
+   UNION ALL
+   SELECT 'campaign', id, state FROM campaigns WHERE audience ? 'botInstanceIds'"
+```
+
+Launched broadcasts and scheduled campaigns that name a bot cannot be edited. Each is
+cancelled, or left to finish, before the rollback.
+
+**During the update itself**, this bundle can meet the previous API. It sends the key only
+when a bot is ticked, and drops tags and active service at their default the same way
+(PR #245 review m3), so previews and saves keep working there. Mass operations send the same
+wire form for their preview and their create (review of PR #248, CX3); before that fix they sent
+every key, and the previous API refused every mass-operation preview. A bot filter is the one
+thing the previous API refuses.
+
+### During an update: the handoff notice, handoff reasons and outcomes (roadmap A3, A4)
+
+Roadmap A4 adds an outbound origin, `HANDOFF_NOTICE` — the one templated message a handoff
+sends the customer. The Web Admin bundle before A4 parses a conversation's outbound rows with
+a strict three-value origin (`OPERATOR`, `ASSIST`, `AUTO`), and one row outside it fails the
+parse of the WHOLE conversation detail. During a rolling update that bundle reads from new
+replicas, so (review of PR #248, CX1):
+
+- **`origin` on the wire never leaves the old three values.** A notice is sent as `AUTO`,
+  through one documented mapping (`businessOutboundWireOrigin` in
+  `packages/contracts/src/business-chats.ts`). The old bundle shows it as an automatic message
+  with no text (no body is stored for a notice) and, as for any automatic reply, offers no
+  knowledge proposal. `AUTO` is the nearest truth: no person wrote it, and `OPERATOR` would
+  show one.
+- **The real origin travels beside it**, in an optional `laneOrigin`. The old bundle strips the
+  unknown key; this bundle reads it (`businessOutboundOriginOf`) and labels the notice as a
+  notice. An older replica sends no `laneOrigin`, and this bundle falls back to `origin`.
+- The mapping is permanent, not a migration step: a bundle that predates A4 can be served at
+  any time a rollback or a mixed fleet allows. `tests/unit/business-chat-wire.test.ts` and the
+  HTTP case in `tests/integration/support-tb10.test.ts` parse the server's answer with a frozen
+  copy of the pre-A4 schema (`tests/support/frozen-business-chat-outbound.ts`).
+
+**Handoff reasons and automatic outcomes take the same route** (review of PR #248, the
+follow-up to CX1). A3 added three handoff reasons — `NO_PROGRESS`, `REPEATED_ADVICE`,
+`INBOUND_FLOOD` — and A3/A6 four automatic outcomes. The pre-A3 bundle reads a reason with a
+strict enum in the inbox (`handoffReason`), a conversation's escalations (`reason`), a ticket's
+escalations (`reason`) and the support analytics (`handoffsByReason`), and an outcome in the
+analytics (`auto.byOutcome`); one value outside it failed the whole read — for the inbox, the
+inbox of the whole tenant. So:
+
+- **On the wire, a reason never leaves the pre-A3 set.** The three progress guards go as
+  `LOOP_GUARD` through one function, `businessHandoffWireReason`: each is the AI going round
+  without progress, which is what the old «loop» label says. The real reason travels beside it
+  in an optional, tolerant `handoffReasonDetail` / `reasonDetail`, which this bundle reads
+  (`businessHandoffReasonOf`); an older replica sends none, and a value this bundle does not know
+  reads as absent.
+- **The analytics fold.** `handoffsByReason` is keyed by the pre-A3 reasons only, the three
+  guards summed into `LOOP_GUARD`; `auto.byOutcome` likewise, the three guard outcomes summed into
+  `guard_consecutive` (the loop guard's) and `no_action` left out of the folded list, because no
+  pre-A3 outcome means "ended silently" (the `dropped` total still counts it). The true counts
+  travel in `handoffsByReasonDetail` and `auto.byOutcomeDetail`, which this bundle draws
+  (`supportHandoffCountsOf`, `supportAutoOutcomeCountsOf`). The old bundle shows `LOOP_GUARD` and
+  `guard_consecutive` larger than they were; nothing is lost, and a reload once every replica runs
+  this release shows the detail.
+- Like the outbound origin, the projection is permanent. `tests/support/frozen-pre-a3-schemas.ts`
+  freezes main's parsers for all four reads; `tests/integration/support-tb10.test.ts` serves each
+  over HTTP with a real row for every new reason and parses the answers with them.
+
+**A rollback** past A4 is not covered by this mapping: it lives in this release's server, and the
+previous release's server sends a stored origin as it is. Its own bundle then fails the detail of
+any conversation holding a notice row, and its inbox, tickets and analytics fail on a stored A3
+handoff reason or outcome in the same way.
+
 ### What a rollback leaves as text: appearance markers (round P, Premium UI)
 
 The Premium UI release puts `{icon:…}` markers into the DEFAULT bodies of about forty
@@ -2097,6 +2236,37 @@ detail page for a CentralPay payment also fails on that binary (it reads the des
 4. Roll back. Closed CentralPay payments, their invoice rows and `gateway_customer_numbers`
    stay as history (keep the numbers: a customer's CentralPay `userId` must not change across
    a roll-forward). `botctl rollback` never restores the database.
+
+### Roadmap B5/B6: Customer 360 workspace and the attention queue
+
+No migration and no write path. This release adds `GET /users/:id/workspace`, a seventh
+sidebar counter, `businessHandoffs`, to `GET /nav-counters`, and a read-only `awaiting=support`
+facet to `GET /tickets` (`docs/web-redesign/dashboard.md` §7, `docs/web-redesign/commerce-a.md`
+§15). One ONLINE index, `business_conversations_tenant_customer_handoff_idx` — `(tenant_id,
+customer_id) WHERE state = 'HANDOFF_REQUIRED'`, so one customer's handoff count reads that
+customer's conversations — is built concurrently by `runMigrations` after the migrator (see
+"Indexes that must not lock the table they are built on" below); the table is never locked
+against writes. A rollback leaves it in place, unused and harmless.
+
+**During the update itself** the new Web Admin can meet an old API replica:
+
+- Its `/nav-counters` answer has six counters. The contract reads the missing
+  `businessHandoffs` as `null` ("not counted"), so the sidebar badges and the dashboard's
+  «صف رسیدگی» keep polling and simply draw no handoff row. The key is optional on the wire
+  precisely so this answer is not a parse failure — `polling.ts` treats a parse failure as
+  final, and a required key froze every badge until a reload (review B1, PR #240).
+- `/users/:id/workspace` answers 404. Customer 360's «نیازمند رسیدگی» and «آخرین سفارش‌ها و
+  پرداخت‌ها» cards show their error state and do not poll; every other card on the page,
+  the support card included (it reads `/tickets`), works. A reload after the update answers
+  them.
+- `/tickets?awaiting=support` reaching an old replica: the old query schema strips the
+  unknown key, so the inbox lists every status for that request (a wider list, never a
+  narrower one) until the next request lands on a new replica.
+
+All three last only as long as old and new replicas run side by side.
+
+**Rolling back** to the release before it: the old Web Admin asks for none of the three, and
+the online index stays behind unused. Nothing to do.
 
 ### How far back you can roll
 

@@ -5645,7 +5645,20 @@ export const TEMPLATES = [
       'review’s defect in a message — `PRBR-004`, where “receipt” and ' +
       '“payment” name one record and nobody can tell a claim from a check.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      /*
+       * Roadmap E6: the payment's tracking code, so the one code the customer quotes stays
+       * in the chat after the message that first carried it is edited away. OPTIONAL, so an
+       * override written before it stays valid; every producer supplies it.
+       */
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s tracking code (`payments.reference`).',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.sent_button',
@@ -5715,7 +5728,10 @@ export const TEMPLATES = [
     description:
       'The answer to a file that arrived after its window closed. Distinct from ' +
       '`bot.payment.receipt_not_expected` because the customer did what they were asked ' +
-      'and the remedy is to tap the button again, which that sentence does not say.',
+      'and the remedy is to tap the button again, which that sentence does not say.' +
+      ' Roadmap E6: the reply carries that button itself while the payment is still ' +
+      'pending, so the remedy the sentence names is under it rather than on a message the ' +
+      'prompt already edited away.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -5813,6 +5829,18 @@ export const TEMPLATES = [
         required: false,
         repeatable: false,
       },
+      /*
+       * Roadmap E6: the payment's tracking code, so the one code the customer quotes stays
+       * in the chat after the message that first carried it is edited away. OPTIONAL, so an
+       * override written before it stays valid; every producer supplies it.
+       */
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s tracking code (`payments.reference`).',
+        required: false,
+        repeatable: false,
+      },
     ],
   },
   {
@@ -5823,7 +5851,20 @@ export const TEMPLATES = [
       'person judged anything \u2014 a deadline passed \u2014 and a customer told ' +
       '"rejected" for a lapsed window would reasonably think somebody looked at it.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      /*
+       * Roadmap E6: the payment's tracking code, so the one code the customer quotes stays
+       * in the chat after the message that first carried it is edited away. OPTIONAL, so an
+       * override written before it stays valid; every producer supplies it.
+       */
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s tracking code (`payments.reference`).',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.withdraw_under_review',
@@ -8172,6 +8213,13 @@ export const TEMPLATES = [
     key: 'bot.support.unconfigured',
     description:
       'No support account is configured. Says so rather than drawing a button that opens nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.handoff_notice',
+    description:
+      'Roadmap A4: the one message a Telegram Business conversation gets when the support AI hands it to a person — sent from the business account at most once per handoff, never if a person answered first.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

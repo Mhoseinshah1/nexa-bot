@@ -759,11 +759,13 @@ describe('NOWPayments, through the one settlement path', () => {
       expect(await ipn(partial)).toBe('DUPLICATE');
       await pass();
       expect((await paymentOf(paymentId)).state).toBe('UNKNOWN');
+      // Roadmap E2: an UNKNOWN is work a person must do, so it is in NEEDS_ACTION too.
       expect(await queuesOf(paymentId)).toEqual([
         'UNKNOWN',
         'NEEDS_RECONCILIATION',
         'MISMATCH',
         'PARTIAL',
+        'NEEDS_ACTION',
       ]);
       expect(await nowPaymentsCounts()).toMatchObject({
         PENDING: 0,
@@ -885,7 +887,12 @@ describe('NOWPayments, through the one settlement path', () => {
       const { paymentId, invoiceId } = await createdAttempt();
       await ipn(fake.pay(invoiceId, 157, 'finished', 9.99));
       await pass();
-      expect(await queuesOf(paymentId)).toEqual(['UNKNOWN', 'NEEDS_RECONCILIATION', 'MISMATCH']);
+      expect(await queuesOf(paymentId)).toEqual([
+        'UNKNOWN',
+        'NEEDS_RECONCILIATION',
+        'MISMATCH',
+        'NEEDS_ACTION',
+      ]);
     });
 
     it('files a finish after the deadline under LATE_COMPLETION only — still PENDING, nothing moved', async () => {

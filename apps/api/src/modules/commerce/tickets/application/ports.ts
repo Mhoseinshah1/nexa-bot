@@ -132,6 +132,8 @@ export interface TicketListItem {
 /** The inbox's filter, already resolved to ids by the service. */
 export interface TicketListFilter {
   readonly status?: TicketStatus;
+  /** Any of these statuses (ANDed with `status`): the "awaiting support" facet. */
+  readonly statuses?: readonly TicketStatus[];
   readonly categoryId?: TicketCategoryId;
   /** A resolved customer. Null means "a customer was named and none matched": no rows. */
   readonly customerId?: UserId | null;
@@ -155,6 +157,10 @@ export interface TicketEscalationReader {
       readonly conversationId: string;
       readonly reason: BusinessHandoffReason;
       readonly summary: string | null;
+      /** Roadmap A5: the rest of the safe operator context; gated with the summary. */
+      readonly topic: string | null;
+      readonly intent: string | null;
+      readonly stepsTried: number | null;
       readonly createdAt: Date;
     }[]
   >;

@@ -8,6 +8,8 @@ import {
   audiencePreviewResponseSchema,
   broadcastListResponseSchema,
   broadcastRecipientListResponseSchema,
+  broadcastBotDeliveryResponseSchema,
+  broadcastHistoryResponseSchema,
   broadcastResponseSchema,
   bulkItemListResponseSchema,
   bulkOperationResponseSchema,
@@ -154,6 +156,24 @@ describe('broadcast and mass-operation HTTP surface', () => {
     expect((await post(BROADCAST_ROUTES.pause(draft.id), observer)).statusCode).toBe(403);
     const paused = await post(BROADCAST_ROUTES.pause(draft.id), owner);
     expect(broadcastResponseSchema.parse(paused.json()).broadcast.state).toBe('PAUSED');
+
+    // Roadmap C2: delivery per bot and the broadcast's own history, read on broadcasts.view.
+    const bots = broadcastBotDeliveryResponseSchema.parse(
+      (await get(BROADCAST_ROUTES.bots(draft.id), observer)).json(),
+    );
+    expect(bots.bots.reduce((sum, row) => sum + row.counts.total, 0)).toBe(2);
+    expect(recipients.recipients.every((row) => row.nextAttemptAt === null)).toBe(true);
+    const history = broadcastHistoryResponseSchema.parse(
+      (await get(BROADCAST_ROUTES.history(draft.id), observer)).json(),
+    );
+    expect(history.entries.map((row) => row.action)).toEqual(
+      expect.arrayContaining(['broadcast.create', 'broadcast.launch', 'broadcast.pause']),
+    );
+    expect(history.entries.find((row) => row.action === 'broadcast.pause')).toMatchObject({
+      result: 'SUCCESS',
+      fromState: 'SENDING',
+      toState: 'PAUSED',
+    });
   });
 
   it('refuses composing to a role without broadcasts.send', async () => {

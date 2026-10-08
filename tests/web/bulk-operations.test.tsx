@@ -134,6 +134,19 @@ describe('mass operations in the Web Admin', () => {
       note: 'Nowruz',
       confirmed: true,
     });
+    // CX3 (review of PR #248): both requests carry the WIRE form of the audience — no key added
+    // since the first release while it holds its default — so an older, strict API accepts them.
+    const preview = api.calls.find(
+      (call) => call.method === 'POST' && call.url.endsWith('/bulk-operations/preview'),
+    );
+    for (const call of [preview, create]) {
+      const definition = (call?.body as { definition?: Record<string, unknown> } | undefined)
+        ?.definition;
+      expect(definition).toMatchObject({ version: 1 });
+      expect(definition).not.toHaveProperty('botInstanceIds');
+      expect(definition).not.toHaveProperty('tags');
+      expect(definition).not.toHaveProperty('activeService');
+    }
   });
 
   it('says a grant is awaiting reconciliation rather than calling it done', async () => {

@@ -169,6 +169,8 @@ export interface RefundLedgerView {
   readonly refundableMinor: bigint;
   /** False when the payment cannot be refunded AT ALL, whatever the amount. */
   readonly refundable: boolean;
+  /** Roadmap E3: why `refundable` is false — the write path's own refusal — or null. */
+  readonly refusalReason: RefundRefusalReason | null;
 }
 
 /**
@@ -213,6 +215,21 @@ export interface RefundLedgerView {
 export const SUPERSEDED_BY_AUTOMATIC_REFUND =
   'Superseded by the automatic refund of an order that could not be delivered.';
 
+/**
+ * The currency witness (review of PR #247, CX1/F3): a payment whose consuming refunds are in
+ * another currency is refused by `request`, so it is not refundable on any read either.
+ */
+function currencyWitness(
+  payment: PaymentRecord,
+  rows: readonly RefundRecord[],
+): RefundRefusalReason | null {
+  return rows.some(
+    (refund) => refund.state !== 'FAILED' && refund.amount.currency !== payment.amount.currency,
+  )
+    ? 'CURRENCY_MISMATCH'
+    : null;
+}
+
 export class RefundService {
   constructor(private readonly deps: RefundServiceDeps) {}
 
@@ -234,6 +251,22 @@ export class RefundService {
     return this.deps.repository.listCompensations(scope, limit, query.cursor ?? null);
   }
 
+  /**
+   * Why an operator refund of this payment would be refused, or null — the SAME decision
+   * `ledgerFor` renders and `request` refuses with (`refusalFor`, then the currency witness over
+   * the consuming refunds). For the payment situation guide (review of PR #248, CX4), which
+   * passes it through rather than keeping a second copy. A read: the caller has already charged
+   * the permission for the payment it holds, and the write path decides again under its lock.
+   */
+  async refusalOf(
+    scope: TenantContext,
+    payment: PaymentRecord,
+  ): Promise<RefundRefusalReason | null> {
+    const refusal = await this.refusalFor(scope, payment);
+    if (refusal !== null) return refusal;
+    return currencyWitness(payment, await this.deps.repository.listForPayment(scope, payment.id));
+  }
+
   /** A payment's refunds, with what is left to refund. Charges `refunds.view`. */
   async ledgerFor(
     scope: TenantContext,
@@ -252,13 +285,21 @@ export class RefundService {
     const consumedMinor = rows
       .filter((refund) => refund.state !== 'FAILED')
       .reduce((total, refund) => total + refund.amount.amountMinor, 0n);
+    /*
+     * ONE decision for the flag and the reason, the same one the write path refuses with —
+     * the refusal, then the currency witness `request` checks after it over the CONSUMING
+     * refunds (review of PR #247, CX1/F3): a payment whose refunds are in another currency is
+     * refused there, so it is not "refundable" here.
+     */
+    const refusal = (await this.refusalFor(scope, payment)) ?? currencyWitness(payment, rows);
 
     return {
       refunds: rows,
       paid: payment.amount,
       consumedMinor,
       refundableMinor: refundableMinor(payment.amount.amountMinor, consumedMinor),
-      refundable: (await this.refusalFor(scope, payment)) === null,
+      refundable: refusal === null,
+      refusalReason: refusal,
     };
   }
 

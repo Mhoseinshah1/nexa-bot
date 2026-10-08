@@ -83,9 +83,49 @@ describe('classify', () => {
   });
 });
 
+describe('classify on a forward or copy (D2-F1)', () => {
+  const failed = (errorCode: string, errorMessage: string) =>
+    ({ outcome: 'FAILED_PERMANENT', errorCode, errorMessage }) as const;
+
+  it('does not call a recipient unreachable for an answer that may name the source chat', () => {
+    for (const message of ['Bad Request: chat not found', 'Bad Request: PEER_ID_INVALID']) {
+      // A refusal: FAILED, per bot, re-queueable once the bot can reach the source.
+      expect(classify(failed('telegram.rejected.400', message), { sourced: true })).toEqual({
+        outcome: 'REFUSED',
+        errorCode: 'telegram.rejected.400',
+      });
+      // A composed message names one chat: the same answer is the recipient's.
+      expect(classify(failed('telegram.rejected.400', message), { sourced: false })).toEqual({
+        outcome: 'UNREACHABLE',
+        errorCode: 'telegram.rejected.400',
+      });
+    }
+  });
+
+  it('keeps the answers that can only be about the recipient unreachable', () => {
+    for (const [code, message] of [
+      ['telegram.rejected.403', 'Forbidden: bot was blocked by the user'],
+      ['telegram.rejected.403', 'Forbidden: user is deactivated'],
+      ['telegram.rejected.403', "Forbidden: bot can't initiate conversation with a user"],
+    ] as const) {
+      expect(classify(failed(code, message), { sourced: true })).toEqual({
+        outcome: 'UNREACHABLE',
+        errorCode: code,
+      });
+    }
+    // And a bot that cannot authenticate is still the bot, sourced or not.
+    expect(classify(failed('telegram.rejected.401', 'Unauthorized'), { sourced: true })).toEqual({
+      outcome: 'BOT_UNAVAILABLE',
+      errorCode: 'telegram.rejected.401',
+    });
+  });
+});
+
 describe('TelegramBroadcastTransport', () => {
   let server: Server;
   let base: string;
+  /** When set, the fake Bot API answers 400 with this description. */
+  let refuseWith: string | null = null;
   const received: { path: string; contentType: string; body: string }[] = [];
 
   beforeAll(async () => {
@@ -99,6 +139,11 @@ describe('TelegramBroadcastTransport', () => {
           body: Buffer.concat(chunks).toString('utf8'),
         });
         response.setHeader('content-type', 'application/json');
+        if (refuseWith !== null) {
+          response.statusCode = 400;
+          response.end(JSON.stringify({ ok: false, error_code: 400, description: refuseWith }));
+          return;
+        }
         response.end(
           JSON.stringify({
             ok: true,
@@ -204,6 +249,34 @@ describe('TelegramBroadcastTransport', () => {
    * message_id)` takes no `reply_markup`; `copyMessage` takes the same three and an inline
    * keyboard; `pinChatMessage(chat_id, message_id, disable_notification)`.
    */
+  it('D2-F1: a "chat not found" on a copy is a refusal, on a text it is the recipient', async () => {
+    const t = transport();
+    refuseWith = 'Bad Request: chat not found';
+    try {
+      const copied = await t.deliver(scope, {
+        chatId: '42',
+        botInstanceId: 'bot',
+        rendered: {
+          contentKind: 'COPY',
+          text: '',
+          buttons: [],
+          source: { chatId: '-1001234567890', messageId: 42 },
+        },
+        media: null,
+      });
+      expect(copied).toEqual({ outcome: 'REFUSED', errorCode: 'telegram.rejected.400' });
+      const text = await t.deliver(scope, {
+        chatId: '42',
+        botInstanceId: 'bot',
+        rendered: { contentKind: 'TEXT', text: 'سلام', buttons: [], source: null },
+        media: null,
+      });
+      expect(text).toEqual({ outcome: 'UNREACHABLE', errorCode: 'telegram.rejected.400' });
+    } finally {
+      refuseWith = null;
+    }
+  });
+
   it('forwards and copies a source message by chat id and message id, and pins by message id', async () => {
     received.length = 0;
     const t = transport();

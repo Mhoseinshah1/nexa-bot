@@ -29,14 +29,18 @@ import type {
 import {
   autoDecisionGuards,
   autoImageGuard,
+  autoInboundFloodGuard,
   autoMoneyGuard,
+  autoNoActionAllowed,
+  autoNoActionVerdict,
+  autoNoProgressGuard,
   autoPreflight,
+  autoRepeatedAdviceGuard,
   customerTextsSinceReply,
   type AutoContextFlags,
   type AutoVerdict,
 } from '../domain/auto-reply-guards.js';
 import { planVision } from '../domain/vision.js';
-import { latestCustomerWords } from '../domain/transcript.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import {
   supportSystemPrompt,
@@ -49,14 +53,14 @@ import type {
   DrizzleSupportAiJobRepository,
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
-import type { SupportContextSource } from './support-assist.service.js';
+import { resolveKnowledgeLabels, type SupportContextSource } from './support-assist.service.js';
 import {
   chainFailureClass,
   type SupportAiChain,
   type SupportAiVisionVariant,
 } from './support-ai-chain.js';
 import type { SupportImageSource } from './ports.js';
-import { readSupportTranscript } from './support-transcript.js';
+import { SUPPORT_TRANSCRIPT_READ_LINES, readSupportTranscript } from './support-transcript.js';
 import { withKnowledgeCounts } from './knowledge-telemetry.js';
 
 /** The key that makes an automatic job idempotent on its message (and content version). */
@@ -163,7 +167,12 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
 export interface SupportAutoReplyServiceDeps {
   readonly jobs: Pick<
     DrizzleSupportAiJobRepository,
-    'finishAuto' | 'recordImageOutcomes' | 'recordKnowledgeCounts' | 'clarifyingStreak'
+    | 'finishAuto'
+    | 'recordImageOutcomes'
+    | 'recordKnowledgeCounts'
+    | 'clarifyingStreak'
+    | 'sessionReplyCount'
+    | 'epochStartedAt'
   >;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
@@ -171,10 +180,13 @@ export interface SupportAutoReplyServiceDeps {
   readonly images: SupportImageSource;
   readonly ids: IdGenerator;
   readonly context: SupportContextSource;
-  readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById'>;
+  readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById' | 'touch'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findByTelegramId'>;
   /** The loop guard's counts, and (D7) the delivered replies the transcript carries. */
-  readonly outbound: Pick<BusinessOutboundRepository, 'countAuto' | 'deliveredSince'>;
+  readonly outbound: Pick<
+    BusinessOutboundRepository,
+    'countAuto' | 'deliveredSince' | 'undeliveredAuto'
+  >;
   /**
    * The guards' account facts, read INSIDE the enqueue transaction (substitute review of
    * PR #202, finding 1): the decision guards run again on what is true at the enqueue, not on
@@ -259,7 +271,8 @@ export class SupportAutoReplyService {
     // latest words choose the knowledge the context carries (D2).
     const transcript = await readSupportTranscript(this.deps, scope, conversation.id);
     const context = await this.deps.context.build(scope, conversation.customerId, {
-      query: latestCustomerWords(transcript),
+      conversationId: conversation.id,
+      transcript,
     });
     const { verdict: preflight, trigger } = await this.preflight(
       scope,
@@ -286,8 +299,20 @@ export class SupportAutoReplyService {
       return this.drop(scope, job, 'dropped_connection');
     }
     // 3c. D9: money in what the customer wrote is a person's, whatever topic a model would pick.
-    const money = autoMoneyGuard(customerTextsSinceReply(transcript, trigger?.text ?? null));
+    const customerTexts = customerTextsSinceReply(transcript, trigger?.text ?? null);
+    const money = autoMoneyGuard(customerTexts);
     if (!money.pass) return this.handOff(scope, job, money, null, null);
+    // 3d. Roadmap A3 — the progress guards, deterministic and before any provider cost, on the
+    // transcript since the AI's part in this epoch began: three «نشد» in a row after its advice,
+    // or a customer repeating one message or flooding the chat, go to a person.
+    const since = await this.deps.jobs.epochStartedAt(scope, {
+      conversationId: conversation.id,
+      epoch,
+    });
+    const progress = autoNoProgressGuard(transcript, since);
+    if (!progress.pass) return this.handOff(scope, job, progress, null, null);
+    const flood = autoInboundFloodGuard(transcript, since);
+    if (!flood.pass) return this.handOff(scope, job, flood, null, null);
     // 4. TB6 — vision: the customer images the request may carry, fetched OUTSIDE any
     // transaction through the tenant-scoped source.
     const plan = planVision(transcript, {
@@ -323,6 +348,7 @@ export class SupportAutoReplyService {
     }
     const lines: TranscriptLine[] = transcript.map((m) => ({
       origin: m.origin,
+      author: m.author,
       text: m.text,
       kind: m.kind,
       image: loaded.get(m.id)?.image ?? null,
@@ -357,6 +383,7 @@ export class SupportAutoReplyService {
               transcriptMessages(
                 transcript.map((m) => ({
                   origin: m.origin,
+                  author: m.author,
                   text: m.text,
                   kind: m.kind,
                   image: seen.has(m.id) ? (loaded.get(m.id)?.image ?? null) : null,
@@ -450,6 +477,13 @@ export class SupportAutoReplyService {
     }
     const decision = parsed.decision;
 
+    // 5b. Roadmap A6 — «مرسی», «حل شد»: a NO_ACTION on an allowlisted, non-sensitive topic, when
+    // every customer line it would answer only thanks or says it is solved, ends the job
+    // silently. No reply, no handoff, no ticket; the conversation stays with the AI.
+    if (autoNoActionAllowed({ decision, config, flags: context.flags, customerTexts })) {
+      return this.closeSilently(scope, job, decision, produced, customerTexts, images);
+    }
+
     // 6. NEXA decides. The clarifying streak is read from the rows, never from the model.
     const grounding = {
       knownAliases: knownAliases(context),
@@ -466,7 +500,15 @@ export class SupportAutoReplyService {
       }),
     });
     if (!guards.pass) return this.handOff(scope, job, guards, decision, produced, images);
-    return this.enqueue(scope, job, decision, produced, grounding, images);
+    // 6b. Roadmap A3 — advice the customer already received in this epoch is not sent again.
+    const repeated = autoRepeatedAdviceGuard(decision, transcript, since);
+    if (!repeated.pass) return this.handOff(scope, job, repeated, decision, produced, images);
+    // A8 review N2: the titles it cited, so the next request's knowledge query can read them.
+    const knowledgeLabels = resolveKnowledgeLabels(
+      decision.knowledgeRefs,
+      context.knowledgeAliases,
+    );
+    return this.enqueue(scope, job, decision, produced, grounding, since, images, knowledgeLabels);
   }
 
   /**
@@ -478,13 +520,13 @@ export class SupportAutoReplyService {
     scope: ScopeContext,
     job: SupportAiJobRecord,
     conversationId: string,
-    config: { readonly maxConsecutiveReplies: number },
+    config: { readonly sessionReplyBudget: number; readonly maxAutoRepliesPerHour: number },
     customerBlocked: boolean,
     now: Date,
     tx?: unknown,
   ): Promise<{ readonly verdict: AutoVerdict; readonly trigger: BusinessMessageRecord | null }> {
     const epoch = job.controlEpoch ?? -1;
-    const [trigger, counts] = await Promise.all([
+    const [trigger, counts, sessionReplies] = await Promise.all([
       this.deps.messages.findByTelegramId(
         scope,
         conversationId,
@@ -500,6 +542,7 @@ export class SupportAutoReplyService {
         },
         tx,
       ),
+      this.deps.jobs.sessionReplyCount(scope, { conversationId, epoch, now }, tx),
     ]);
     const verdict = autoPreflight({
       trigger:
@@ -512,10 +555,10 @@ export class SupportAutoReplyService {
               deleted: trigger.deletedAt !== null,
             },
       customerBlocked,
-      autoAtEpoch: counts.atEpoch,
+      sessionReplies,
       autoInWindow: counts.inWindow,
-      maxConsecutiveReplies: config.maxConsecutiveReplies,
-      maxPerWindow: SUPPORT_AI_AUTO_WINDOW.maxPerWindow,
+      sessionReplyBudget: config.sessionReplyBudget,
+      maxPerWindow: config.maxAutoRepliesPerHour,
     });
     return { verdict, trigger };
   }
@@ -587,7 +630,10 @@ export class SupportAutoReplyService {
       readonly knownAliases: ReadonlySet<string>;
       readonly knownKnowledgeAliases: ReadonlySet<string>;
     },
+    /** Where this epoch's AI part began (`epochStartedAt`): the repeated-advice window. */
+    since: Date | null,
     images?: ImageWrite,
+    knowledgeLabels: readonly string[] = [],
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, async (tx, now) => {
       const { config } = await this.deps.configs.get(scope, tx);
@@ -625,6 +671,41 @@ export class SupportAutoReplyService {
           });
       if (!recheck.pass)
         return this.handOffChecked(scope, job, recheck, decision, produced, now, tx);
+      /*
+       * Review of PR #248, CX5 — repeated advice, decided again on what is DELIVERED now. The
+       * check before the provider call read the transcript as it was then; an earlier automatic
+       * reply can reach DELIVERED while the provider is thinking, and this reply would repeat
+       * it. Read again here, under the conversation's lock taken above, with the same predicate;
+       * a repeat hands off exactly as the earlier check does (or drops, if the conversation
+       * moved on).
+       */
+      const deliveredNow = await readSupportTranscript(
+        this.deps,
+        scope,
+        job.conversationId,
+        SUPPORT_TRANSCRIPT_READ_LINES,
+        tx,
+      );
+      /*
+       * The CX5 follow-up: an earlier automatic reply of this epoch still PENDING (or
+       * UNCONFIRMED — it may have reached the customer) is advice given too. Delivered or not,
+       * it is on its way; this reply would repeat it beside it.
+       */
+      const onItsWay = (
+        await this.deps.outbound.undeliveredAuto(
+          scope,
+          { conversationId: job.conversationId, epoch: job.controlEpoch ?? -1 },
+          tx,
+        )
+      ).map((row) => ({
+        origin: 'OWN_ECHO' as const,
+        author: 'AI_AUTO' as const,
+        text: row.body,
+        sentAt: row.createdAt,
+      }));
+      const repeated = autoRepeatedAdviceGuard(decision, [...deliveredNow, ...onItsWay], since);
+      if (!repeated.pass)
+        return this.handOffChecked(scope, job, repeated, decision, produced, now, tx);
       const queued = await this.deps.control.enqueueAutoSend(
         scope,
         {
@@ -653,12 +734,55 @@ export class SupportAutoReplyService {
           provider: produced.provider,
           model: produced.model,
           sentOutboundId: queued.row.id,
+          knowledgeLabels,
           now,
         },
         tx,
       );
       if (!ok) throw new JobGone();
       return outcome;
+    });
+  }
+
+  /**
+   * Roadmap A6 — the silent close, in ONE transaction that decides again on what is true now
+   * (review of PR #246, CX2), exactly as the reply path's enqueue does: the mode, then the
+   * conversation under its lock (epoch and state), then the configuration and the customer's
+   * account facts read in this transaction. If silence is no longer allowed — a customer blocked
+   * or put under payment review during the provider call, a topic removed from the allowlist —
+   * the conversation is handed off instead, with the specific reason.
+   *
+   * A closed matter is an ANSWERED one (CX1): `last_ai_at` is stamped, so the inbox does not show
+   * the customer's «مرسی» as a wait that keeps growing. (The next automatic reply's cooldown runs
+   * from it, as from any automatic answer.)
+   */
+  private async closeSilently(
+    scope: ScopeContext,
+    job: SupportAiJobRecord,
+    decision: SupportAiDecision,
+    produced: { readonly provider: SupportAiProvider; readonly model: string },
+    customerTexts: readonly (string | null)[],
+    images?: ImageWrite,
+  ): Promise<AutoJobResult> {
+    return this.inJobTransaction(scope, job, images, async (tx, now) => {
+      const { config } = await this.deps.configs.get(scope, tx);
+      if (config.mode !== 'AUTO_REPLY_SAFE') {
+        return this.finish(scope, job, 'dropped_mode', now, tx, { decision, produced });
+      }
+      const conversation = await this.deps.conversations.lockById(scope, job.conversationId, tx);
+      if (conversation === null || conversation.controlEpoch !== job.controlEpoch) {
+        return this.finish(scope, job, 'dropped_epoch', now, tx, { decision, produced });
+      }
+      if (conversation.state !== 'AI_ACTIVE') {
+        return this.finish(scope, job, 'dropped_state', now, tx, { decision, produced });
+      }
+      const flags = await this.deps.facts.autoGuardFlags(scope, conversation.customerId, tx);
+      const verdict = autoNoActionVerdict({ decision, config, flags, customerTexts });
+      if (!verdict.pass) {
+        return this.handOffChecked(scope, job, verdict, decision, produced, now, tx);
+      }
+      await this.deps.conversations.touch(scope, conversation.id, { lastAiAt: now, now }, tx);
+      return this.finish(scope, job, 'no_action', now, tx, { decision, produced });
     });
   }
 
@@ -706,6 +830,10 @@ export class SupportAutoReplyService {
       await this.deps.control.handOff(scope, conversation.id, failed.reason, now, tx, {
         summary: decision?.summary.trim() === '' ? null : (decision?.summary ?? null),
         jobId: job.id,
+        // Roadmap A5: the deciding decision's own topic and intent; without one, the
+        // escalation reads the latest the AI recorded (`SupportHandoffContext`).
+        topic: decision?.topic ?? null,
+        intent: decision === null || decision.intent.trim() === '' ? null : decision.intent,
       });
       const ok = await this.deps.jobs.finishAuto(
         scope,

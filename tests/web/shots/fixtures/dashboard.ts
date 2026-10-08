@@ -1,4 +1,6 @@
 import {
+  PAYMENT_OPS_QUEUES,
+  customerWorkspaceResponseSchema,
   dashboardOperationsResponseSchema,
   dashboardSummaryResponseSchema,
   navCountersResponseSchema,
@@ -6,6 +8,7 @@ import {
   reportProductsResponseSchema,
   reportSummaryResponseSchema,
   reportTrendResponseSchema,
+  paymentAttentionResponseSchema,
 } from '@nexa/contracts';
 import { SHOT_NOW, fixture, type ShotFixture } from '../fixture.ts';
 
@@ -453,6 +456,55 @@ export const DASHBOARD: readonly ShotFixture[] = [
       unreconciledServices: 2,
       refundRequestsAwaiting: 1,
       paymentsUnknown: 1,
+      businessHandoffs: 2,
+    },
+  }),
+  // Roadmap B6 (Agent 2b): the attention queue's payment source, the payments page's too.
+  fixture('/payment-operations/attention', paymentAttentionResponseSchema, {
+    window: null,
+    byGateway: [],
+    totals: {
+      ...Object.fromEntries(PAYMENT_OPS_QUEUES.map((queue) => [queue, 0])),
+      UNKNOWN: 1,
+      NEEDS_RECONCILIATION: 1,
+    },
+    generatedAt: SHOT_NOW,
+  }),
+  // Roadmap B5 (Agent 2b): Customer 360's workspace summary.
+  fixture('/users/:id/workspace', customerWorkspaceResponseSchema, {
+    workspace: {
+      generatedAt: SHOT_NOW,
+      tickets: { awaitingSupport: 1, open: 2 },
+      businessHandoffs: 1,
+      businessHandoffConversationId: '019210ab-cdef-7012-8345-6789abcd5101',
+      payments: {
+        unknown: 1,
+        latest: [
+          {
+            id: '019210ab-cdef-7012-8345-6789abcd5001',
+            reference: 'NX-7K2Q-91',
+            method: 'MANUAL_TRANSFER',
+            state: 'UNKNOWN',
+            amount: '450000',
+            currency: 'IRT',
+            createdAt: '2026-09-06T06:40:00.000Z',
+          },
+        ],
+      },
+      services: { unreconciled: 0 },
+      orders: {
+        latest: [
+          {
+            id: '019210ab-cdef-7012-8345-6789abcd5002',
+            lineTitle: 'پلن ۳۰ روزه — ۵۰ گیگ',
+            purpose: 'NEW_SERVICE',
+            state: 'PAID',
+            totalAmount: '450000',
+            currency: 'IRT',
+            createdAt: '2026-09-06T06:30:00.000Z',
+          },
+        ],
+      },
     },
   }),
 ];

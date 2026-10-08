@@ -30,7 +30,7 @@ M=[
  ('A10-05',[(BOT,"const RECEIPT_INVOICE_FINAL_KEY: TemplateKey = 'bot.payment.received_for_review';","const RECEIPT_INVOICE_FINAL_KEY: TemplateKey = 'bot.payment.receipt_received';")],T_I,'ends it button-less and sends ONE new message'),
  ('A10-06',[(BOT,"      return { key: 'bot.payment.receipt_received', values: {}, buttons: [], orderId: null };","      return { key: 'bot.payment.received_for_review', values: {}, buttons: [], orderId: null };")],T_I,'ends it button-less and sends ONE new message'),
  # The prompt turn that releases its hold ends the invoice in the same final state, sends nothing.
- ('A10-07',[(BOT,"          templateKey: RECEIPT_INVOICE_FINAL_KEY,\n          values: {},\n          buttons: [],\n        },\n        false,\n      );\n    }\n  }","          templateKey: 'bot.payment.receipt_received',\n          values: {},\n          buttons: [],\n        },\n        false,\n      );\n    }\n  }")],T_I,'receipt beat the tap'),
+ ('A10-07',[(BOT,"          templateKey: RECEIPT_INVOICE_FINAL_KEY,\n          values,\n          buttons: [],\n        },\n        false,\n      );\n    }\n  }","          templateKey: 'bot.payment.receipt_received',\n          values,\n          buttons: [],\n        },\n        false,\n      );\n    }\n  }")],T_I,'receipt beat the tap'),
  # --- an expired window still answers receipt_expired ----------------------------------------
  ('A10-08',[(SVC,"        if (open.expiresAt.getTime() <= now.getTime()) {","        if (open.expiresAt.getTime() <= now.getTime() && false) {")],T_I,'window closed'),
  # --- E7 and the copy -------------------------------------------------------------------------

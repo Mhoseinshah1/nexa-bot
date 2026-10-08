@@ -9,6 +9,7 @@ import {
   PAYMENT_STATES,
   RECEIPT_DISPOSITIONS,
   type RefundChannel,
+  type RefundRefusalReason,
   type RefundResponse,
   type RefundState,
   type RefundView,
@@ -23,6 +24,13 @@ import {
   type PaymentOpsQueue,
   type ReceiptDisposition,
   type ReportRange,
+  type PaymentSituation,
+  type PaymentMoneySignal,
+  type PaymentCustomerGuidance,
+  type PaymentOperatorAction,
+  type PaymentSituationView,
+  type GatewayRateAuthority,
+  type GatewayRateProvenance,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -39,7 +47,7 @@ import {
   reinquirePayment,
   requestRefund,
 } from '../api/client';
-import { formatMoneyText, formatTimestamp, splitBytes } from '../format';
+import { formatDecimalText, formatMoneyText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, staleAfterError } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -77,6 +85,15 @@ import {
   type Tone,
   Num,
 } from '../ui/kit';
+import {
+  PAYMENT_METHOD_LABELS as METHOD_LABELS,
+  PAYMENT_STATE_LABELS as STATE_LABELS,
+  PAYMENT_STATE_TONES as STATE_TONES,
+} from '../payment-labels';
+
+// Review N8: the vocabulary moved to `payment-labels.ts`; these names stay importable from
+// here under their old spelling, so a workstream that reads them from this page still builds.
+export { STATE_LABELS, STATE_TONES, METHOD_LABELS };
 
 /**
  * Payments — the money, and where it came from.
@@ -99,32 +116,6 @@ import {
  * it non-terminal precisely so reconciliation is legal, and the banner tells an operator
  * that it is neither a success nor a failure until somebody establishes which.
  */
-
-const STATE_LABELS: Readonly<Record<PaymentState, WebKey>> = {
-  PENDING: 'web.payment_state_pending',
-  CONFIRMED: 'web.payment_state_confirmed',
-  FAILED: 'web.payment_state_failed',
-  CANCELLED: 'web.payment_state_cancelled',
-  EXPIRED: 'web.payment_state_expired',
-  UNKNOWN: 'web.payment_state_unknown',
-};
-
-const STATE_TONES: Readonly<Record<PaymentState, Tone>> = {
-  PENDING: 'warn',
-  CONFIRMED: 'ok',
-  FAILED: 'danger',
-  CANCELLED: 'neutral',
-  EXPIRED: 'neutral',
-  // Not danger and not ok: it is neither, and a tone that implied either would be
-  // this page taking a position the system explicitly does not hold.
-  UNKNOWN: 'warn',
-};
-
-const METHOD_LABELS: Readonly<Record<PaymentMethod, WebKey>> = {
-  WALLET: 'web.payment_method_wallet',
-  MANUAL_TRANSFER: 'web.payment_method_manual',
-  GATEWAY: 'web.payment_method_gateway',
-};
 
 /** Package FX: how a gateway invoice's provider figure was derived from the payable. */
 const CONVERSION_POLICY_LABELS: Readonly<Record<GatewayConversionPolicy, WebKey>> = {
@@ -152,6 +143,20 @@ const REFUND_STATE_TONES: Readonly<Record<RefundState, Tone>> = {
   AWAITING_EXTERNAL: 'warn',
   COMPLETED: 'ok',
   FAILED: 'neutral',
+};
+
+/**
+ * Roadmap E3 (`docs/refund-audit.md`): why a payment cannot be refunded AT ALL, in the
+ * server's own words (`refusalReason`), each with what exists instead. Total over the
+ * contract's reasons. There is no control behind any of them: where no domain operation
+ * exists, the page says so rather than offering one.
+ */
+const REFUND_REFUSAL_TEXT: Readonly<Record<RefundRefusalReason, WebKey>> = {
+  PAYMENT_NOT_SETTLED: 'web.refund_refusal_not_settled',
+  CHANNEL_UNSUPPORTED: 'web.refund_refusal_channel_unsupported',
+  TOPUP_CREDITED_TO_WALLET: 'web.refund_refusal_topup',
+  CURRENCY_MISMATCH: 'web.refund_refusal_currency',
+  DELIVERY_IN_PROGRESS: 'web.refund_refusal_delivery',
 };
 
 const REFUND_CHANNEL_LABELS: Readonly<Record<RefundChannel, WebKey>> = {
@@ -297,10 +302,328 @@ function GatewayName({ provider }: { provider: string | null }) {
 }
 
 // ---------------------------------------------------------------------------
+// The situation guide (roadmap E1, `docs/payments-under-review-ux.md`)
+// ---------------------------------------------------------------------------
+
+/*
+ * Each map is TOTAL over its contract enum, so a situation added to the contract without
+ * words here is a compile error rather than a blank cell. The page renders the SERVER's
+ * classification (`payment.situation`) and never classifies: no state, receipt or provider
+ * status is read here to decide what a payment means.
+ */
+const SITUATION_LABELS: Readonly<Record<PaymentSituation, WebKey>> = {
+  AWAITING_PAYMENT: 'web.payment_situation_awaiting_payment',
+  INVOICE_NOT_ISSUED: 'web.payment_situation_invoice_not_issued',
+  CUSTOMER_SIGNALLED: 'web.payment_situation_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_receipt_under_review',
+  PROVIDER_REVIEW: 'web.payment_situation_provider_review',
+  OUTCOME_UNKNOWN: 'web.payment_situation_outcome_unknown',
+  MISMATCH: 'web.payment_situation_mismatch',
+  PARTIAL: 'web.payment_situation_partial',
+  LATE_COMPLETION: 'web.payment_situation_late_completion',
+  CONFIRMED: 'web.payment_situation_confirmed',
+  REFUND_IN_PROGRESS: 'web.payment_situation_refund_in_progress',
+  REFUNDED: 'web.payment_situation_refunded',
+  CREDITED_TO_WALLET: 'web.payment_situation_credited_to_wallet',
+  REJECTED: 'web.payment_situation_rejected',
+  FAILED: 'web.payment_situation_failed',
+  EXPIRED: 'web.payment_situation_expired',
+  CANCELLED: 'web.payment_situation_cancelled',
+};
+
+const SITUATION_WHAT: Readonly<Record<PaymentSituation, WebKey>> = {
+  AWAITING_PAYMENT: 'web.payment_situation_what_awaiting_payment',
+  INVOICE_NOT_ISSUED: 'web.payment_situation_what_invoice_not_issued',
+  CUSTOMER_SIGNALLED: 'web.payment_situation_what_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_what_receipt_under_review',
+  PROVIDER_REVIEW: 'web.payment_situation_what_provider_review',
+  OUTCOME_UNKNOWN: 'web.payment_situation_what_outcome_unknown',
+  MISMATCH: 'web.payment_situation_what_mismatch',
+  PARTIAL: 'web.payment_situation_what_partial',
+  LATE_COMPLETION: 'web.payment_situation_what_late_completion',
+  CONFIRMED: 'web.payment_situation_what_confirmed',
+  REFUND_IN_PROGRESS: 'web.payment_situation_what_refund_in_progress',
+  REFUNDED: 'web.payment_situation_what_refunded',
+  CREDITED_TO_WALLET: 'web.payment_situation_what_credited_to_wallet',
+  REJECTED: 'web.payment_situation_what_rejected',
+  FAILED: 'web.payment_situation_what_failed',
+  EXPIRED: 'web.payment_situation_what_expired',
+  CANCELLED: 'web.payment_situation_what_cancelled',
+};
+
+const SITUATION_SAFE: Readonly<Record<PaymentSituation, WebKey>> = {
+  AWAITING_PAYMENT: 'web.payment_situation_safe_awaiting_payment',
+  INVOICE_NOT_ISSUED: 'web.payment_situation_safe_invoice_not_issued',
+  CUSTOMER_SIGNALLED: 'web.payment_situation_safe_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_safe_receipt_under_review',
+  PROVIDER_REVIEW: 'web.payment_situation_safe_provider_review',
+  OUTCOME_UNKNOWN: 'web.payment_situation_safe_outcome_unknown',
+  MISMATCH: 'web.payment_situation_safe_mismatch',
+  PARTIAL: 'web.payment_situation_safe_partial',
+  LATE_COMPLETION: 'web.payment_situation_safe_late_completion',
+  CONFIRMED: 'web.payment_situation_safe_confirmed',
+  REFUND_IN_PROGRESS: 'web.payment_situation_safe_refund_in_progress',
+  REFUNDED: 'web.payment_situation_safe_refunded',
+  CREDITED_TO_WALLET: 'web.payment_situation_safe_credited_to_wallet',
+  REJECTED: 'web.payment_situation_safe_rejected',
+  FAILED: 'web.payment_situation_safe_failed',
+  EXPIRED: 'web.payment_situation_safe_expired',
+  CANCELLED: 'web.payment_situation_safe_cancelled',
+};
+
+/*
+ * The tone says how much attention, never which way the money went: every situation where
+ * money MAY have moved is `warn`, not `danger` and not `ok` — the rule `STATE_TONES` states
+ * for UNKNOWN.
+ */
+const SITUATION_TONES: Readonly<Record<PaymentSituation, Tone>> = {
+  AWAITING_PAYMENT: 'neutral',
+  INVOICE_NOT_ISSUED: 'neutral',
+  CUSTOMER_SIGNALLED: 'info',
+  RECEIPT_UNDER_REVIEW: 'warn',
+  PROVIDER_REVIEW: 'info',
+  OUTCOME_UNKNOWN: 'warn',
+  MISMATCH: 'warn',
+  PARTIAL: 'warn',
+  LATE_COMPLETION: 'warn',
+  CONFIRMED: 'ok',
+  REFUND_IN_PROGRESS: 'warn',
+  REFUNDED: 'neutral',
+  CREDITED_TO_WALLET: 'ok',
+  REJECTED: 'danger',
+  FAILED: 'danger',
+  EXPIRED: 'neutral',
+  CANCELLED: 'neutral',
+};
+
+const MONEY_LABELS: Readonly<Record<PaymentMoneySignal, WebKey>> = {
+  NOT_YET: 'web.payment_money_not_yet',
+  NO: 'web.payment_money_no',
+  CLAIMED: 'web.payment_money_claimed',
+  POSSIBLY: 'web.payment_money_possibly',
+  PARTIALLY: 'web.payment_money_partially',
+  AT_PROVIDER: 'web.payment_money_at_provider',
+  YES: 'web.payment_money_yes',
+  TO_WALLET: 'web.payment_money_to_wallet',
+  RETURNING: 'web.payment_money_returning',
+  RETURNED: 'web.payment_money_returned',
+};
+
+const CUSTOMER_GUIDANCE_LABELS: Readonly<Record<PaymentCustomerGuidance, WebKey>> = {
+  PAY_WITHIN_WINDOW: 'web.payment_customer_guidance_pay_within_window',
+  SEND_RECEIPT: 'web.payment_customer_guidance_send_receipt',
+  START_AGAIN: 'web.payment_customer_guidance_start_again',
+  WAIT_DO_NOT_PAY_AGAIN: 'web.payment_customer_guidance_wait_do_not_pay_again',
+  MAY_PAY_AGAIN: 'web.payment_customer_guidance_may_pay_again',
+  NOTHING: 'web.payment_customer_guidance_nothing',
+};
+
+const OPERATOR_ACTION_LABELS: Readonly<Record<PaymentOperatorAction, WebKey>> = {
+  REVIEW_RECEIPT_IN_TELEGRAM: 'web.payment_operator_action_review_receipt_in_telegram',
+  ASK_PROVIDER_AGAIN: 'web.payment_operator_action_ask_provider_again',
+  RECONCILE: 'web.payment_operator_action_reconcile',
+  VERIFY_AT_PROVIDER: 'web.payment_operator_action_verify_at_provider',
+  MANUAL_WALLET_ADJUSTMENT: 'web.payment_operator_action_manual_wallet_adjustment',
+  ISSUE_REFUND: 'web.payment_operator_action_issue_refund',
+  SETTLE_REFUND: 'web.payment_operator_action_settle_refund',
+};
+
+/** The server's situation, as a badge; a dash for a response from before it existed. */
+export function SituationBadge({ value }: { value: PaymentSituationView | null }) {
+  if (value === null) return <Dash />;
+  return (
+    <Badge tone={SITUATION_TONES[value.situation]} outline={!value.needsAction}>
+      {t(SITUATION_LABELS[value.situation])}
+    </Badge>
+  );
+}
+
+/**
+ * The guidance card: what happened, whether money probably moved, what the customer should
+ * do, which EXISTING operator actions apply, and what is safe. Every line is the server's
+ * classification rendered through a total map; the controls themselves stay on the cards
+ * that hold the evidence (reconcile, refunds), each still gated by its own permission.
+ */
+export function SituationCard({ value }: { value: PaymentSituationView | null }) {
+  if (value === null) return null;
+  const situation: PaymentSituation = value.situation;
+  return (
+    <Card
+      title={t('web.payment_situation_card')}
+      {...(value.needsAction
+        ? {
+            actions: (
+              <Badge tone="warn" dot>
+                {t('web.payment_situation_needs_action')}
+              </Badge>
+            ),
+          }
+        : {})}
+    >
+      <KV
+        items={[
+          [
+            t('web.payment_situation_what'),
+            <span key="s">
+              <SituationBadge value={value} /> {t(SITUATION_WHAT[situation])}
+            </span>,
+          ],
+          [t('web.payment_situation_money'), t(MONEY_LABELS[value.money])],
+          [t('web.payment_situation_customer'), t(CUSTOMER_GUIDANCE_LABELS[value.customer])],
+          [
+            t('web.payment_situation_actions'),
+            value.actions.length === 0 ? (
+              <span key="a" className="muted small">
+                {t('web.payment_situation_no_action')}
+              </span>
+            ) : (
+              <ul key="a" className="plain">
+                {value.actions.map((action) => (
+                  <li key={action}>{t(OPERATOR_ACTION_LABELS[action])}</li>
+                ))}
+              </ul>
+            ),
+          ],
+          [t('web.payment_situation_safe'), t(SITUATION_SAFE[situation])],
+        ]}
+      />
+      <p className="muted small">{t('web.payment_situation_state_note')}</p>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Money and rate provenance (roadmap E4, E5 — `docs/payment-fees-fx.md`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The payment's money as the server computed it (`paymentAmountsOf`): every figure is a
+ * decimal string the page renders with its currency and never adds, subtracts or derives a
+ * percentage from. Merchant net is named as not recorded, because no record holds it.
+ */
+export function AmountsCard({ value }: { value: PaymentDetailResponse['amounts'] }) {
+  if (value === null) return null;
+  const money = (key: string, amountMinor: string) => (
+    <Money key={key} value={{ amountMinor, currency: value.currency }} />
+  );
+  return (
+    <Card title={t('web.payment_amounts')} hint={t('web.payment_amounts_hint')}>
+      <KV
+        items={[
+          [t('web.payment_amounts_principal'), money('p', value.principal)],
+          // The rate the fee was snapshotted at (WP18), shown as stored — never recomputed.
+          ...(value.customerFeeBasisPoints === null
+            ? []
+            : ([
+                [
+                  t('web.payment_customer_fee_rate'),
+                  <Num
+                    key="b"
+                    value={`${formatBasisPointsPercent(value.customerFeeBasisPoints)}%`}
+                  />,
+                ],
+              ] as [ReactNode, ReactNode][])),
+          [t('web.payment_customer_fee_amount'), money('f', value.customerFee)],
+          // What the customer was ASKED to pay, in every state; `received` is what arrived.
+          [t('web.payment_customer_fee_payable'), money('c', value.payable)],
+          [t('web.payment_amounts_received'), money('r', value.received)],
+          [t('web.payment_amounts_wallet_credit'), money('w', value.walletCredit)],
+          [t('web.payment_amounts_wallet_debit'), money('d', value.walletDebit)],
+          [
+            t('web.payment_amounts_merchant_net'),
+            <span key="n" className="muted small">
+              {t('web.payment_amounts_merchant_net_not_recorded')}
+            </span>,
+          ],
+        ]}
+      />
+      {value.customerFeeBasisPoints !== null && (
+        <p className="muted small">{t('web.payment_customer_fee_hint')}</p>
+      )}
+    </Card>
+  );
+}
+
+const RATE_AUTHORITY_LABELS: Readonly<Record<GatewayRateAuthority, WebKey>> = {
+  NONE: 'web.payment_rate_authority_none',
+  OPERATOR: 'web.payment_rate_authority_operator',
+  MARKET: 'web.payment_rate_authority_market',
+};
+
+/**
+ * Which authority priced a gateway attempt, at what rate and when (E5), from the attempt's
+ * own frozen snapshot — never today's rate. A missing rate is said, not borrowed.
+ */
+export function RateProvenanceCard({ value }: { value: GatewayRateProvenance | null }) {
+  if (value === null) return null;
+  const when = (iso: string | null, key: string) =>
+    iso === null ? <Dash key={key} /> : <span key={key}>{formatTimestamp(iso)}</span>;
+  return (
+    <Card title={t('web.payment_rate_provenance')} hint={t('web.payment_rate_provenance_hint')}>
+      <KV
+        items={[
+          [t('web.payment_rate_authority'), t(RATE_AUTHORITY_LABELS[value.authority])],
+          ...(value.authority === 'NONE'
+            ? []
+            : ([
+                [
+                  t('web.payment_rate_value'),
+                  value.rate === null ? (
+                    <span key="v" className="muted small">
+                      {t('web.payment_rate_missing')}
+                    </span>
+                  ) : (
+                    <Num key="v" value={formatDecimalText(value.rate)} />
+                  ),
+                ],
+              ] as [ReactNode, ReactNode][])),
+          ...(value.authority === 'MARKET'
+            ? ([
+                [
+                  t('web.payment_rate_source'),
+                  value.source === null ? <Dash key="s" /> : <Ltr key="s">{value.source}</Ltr>,
+                ],
+                [t('web.payment_rate_quoted_at'), when(value.quotedAt, 'q')],
+                [t('web.payment_rate_fetched_at'), when(value.fetchedAt, 'g')],
+                [
+                  t('web.payment_rate_quote_state'),
+                  value.quoteState === null ? (
+                    <Dash key="st" />
+                  ) : (
+                    <Ltr key="st">{value.quoteState}</Ltr>
+                  ),
+                ],
+                [
+                  t('web.payment_rate_quote_id'),
+                  value.quoteId === null ? (
+                    <Dash key="id" />
+                  ) : (
+                    <Copyable key="id" value={value.quoteId} />
+                  ),
+                ],
+              ] as [ReactNode, ReactNode][])
+            : []),
+          [t('web.payment_rate_frozen_at'), formatTimestamp(value.frozenAt)],
+        ]}
+      />
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
 
-/** The queues, in the order the workspace shows them (program §10). */
+/**
+ * The chips, attention first (roadmap E2): `NEEDS_ACTION` — everything a person must act on,
+ * oldest first — leads, then the facets in the contract's own order. A display order only;
+ * every queue is the server's predicate.
+ */
+const QUEUE_ORDER: readonly PaymentOpsQueue[] = [
+  'NEEDS_ACTION',
+  ...PAYMENT_OPS_QUEUES.filter((one) => one !== 'NEEDS_ACTION'),
+];
+
 const QUEUE_LABELS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
   PENDING: 'web.payment_ops_queue_pending',
   UNKNOWN: 'web.payment_ops_queue_unknown',
@@ -310,6 +633,7 @@ const QUEUE_LABELS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
   LATE_COMPLETION: 'web.payment_ops_queue_late_completion',
   PROVIDER_ERROR: 'web.payment_ops_queue_provider_error',
   REFUND_RELATED: 'web.payment_ops_queue_refund_related',
+  NEEDS_ACTION: 'web.payment_ops_queue_needs_action',
 };
 
 const QUEUE_HINTS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
@@ -321,6 +645,7 @@ const QUEUE_HINTS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
   LATE_COMPLETION: 'web.payment_ops_queue_hint_late_completion',
   PROVIDER_ERROR: 'web.payment_ops_queue_hint_provider_error',
   REFUND_RELATED: 'web.payment_ops_queue_hint_refund_related',
+  NEEDS_ACTION: 'web.payment_ops_queue_hint_needs_action',
 };
 
 /** The created-at presets the workspace offers; the server resolves each in the tenant calendar. */
@@ -531,6 +856,12 @@ export function PaymentsPage({
       ),
     },
     {
+      // Roadmap E1: the server's situation, beside the state and never instead of it.
+      key: 'situation',
+      header: t('web.payment_situation_column'),
+      render: (row) => <SituationBadge value={row.situation} />,
+    },
+    {
       /*
        * How the receipt left review, beside the state rather than instead of it: the state
        * is the payment's, this is the receipt's (WP10 follow-up §5).
@@ -664,7 +995,7 @@ export function PaymentsPage({
             >
               {t('web.payment_ops_queue_all')}
             </FilterChip>
-            {PAYMENT_OPS_QUEUES.map((one) => (
+            {QUEUE_ORDER.map((one) => (
               <FilterChip
                 key={one}
                 pressed={queue === one}
@@ -1247,7 +1578,15 @@ function RefundsCard({
               return; a GATEWAY payment has no channel in this release, and a screen
               that offered a button for it would promise a reversal nobody can perform.
             */}
-            {!data.refundable && <Banner tone="info">{t('web.refund_unavailable')}</Banner>}
+            {!data.refundable && (
+              <Banner tone="info">
+                {t(
+                  data.refusalReason === null
+                    ? 'web.refund_unavailable'
+                    : REFUND_REFUSAL_TEXT[data.refusalReason],
+                )}
+              </Banner>
+            )}
 
             {/*
               What a full refund did and did NOT do (WP10 P3). The order's state is the
@@ -1523,6 +1862,7 @@ export function PaymentDetailPage({
             <TwoColumn
               main={
                 <>
+                  <SituationCard value={row.situation} />
                   <Card title={t('web.payment_detail')}>
                     <KV
                       items={[
@@ -1723,43 +2063,11 @@ export function PaymentDetailPage({
                     </Card>
                   )}
                   {/*
-              The customer's gateway fee this attempt was created with (WP18): the rate,
-              the fee and the payable, BESIDE the principal above and never added to it.
-              Null for every non-gateway payment, so the card is absent there.
-            */}
-                  {row.customerFee !== null && (
-                    <Card title={t('web.payment_customer_fee')}>
-                      <KV
-                        items={[
-                          [
-                            t('web.payment_customer_fee_rate'),
-                            <Num
-                              key="r"
-                              value={`${formatBasisPointsPercent(row.customerFee.basisPoints)}%`}
-                            />,
-                          ],
-                          [
-                            t('web.payment_customer_fee_amount'),
-                            <Money
-                              key="f"
-                              value={{ amountMinor: row.customerFee.fee, currency: row.currency }}
-                            />,
-                          ],
-                          [
-                            t('web.payment_customer_fee_payable'),
-                            <Money
-                              key="p"
-                              value={{
-                                amountMinor: row.customerFee.payable,
-                                currency: row.currency,
-                              }}
-                            />,
-                          ],
-                        ]}
-                      />
-                      <p className="muted small">{t('web.payment_customer_fee_hint')}</p>
-                    </Card>
-                  )}
+                    The payment's money, the gateway fee (WP18) included, as the server
+                    computed it: ONE card, so the fee is never shown twice (review of PR #247).
+                  */}
+                  <AmountsCard value={row.amounts} />
+                  <RateProvenanceCard value={row.gatewayInvoice?.rateProvenance ?? null} />
                   {/*
               The external gateway's side of this payment (WP11A): the provider's ids,
               what its INQUIRY last said, what its webhook last hinted and how the

@@ -300,17 +300,64 @@ export const SUPPORT_AI_LIMITS = {
   maxFallbacks: 2,
   timeoutMs: { min: 5_000, max: 120_000, default: 30_000 },
   maxOutputChars: { min: 200, max: 4_000, default: 1_200 },
-  maxConsecutiveReplies: { min: 1, max: 20, default: 4 },
+  /**
+   * Roadmap A1 (2026-10-07): how many automatic replies one SESSION may receive before the
+   * conversation is handed to a person (`consecutive`, `LOOP_GUARD`). A session is one control
+   * epoch with no gap of `SUPPORT_AI_SESSION_INACTIVITY_SECONDS` in the conversation's activity;
+   * a `GREETING` reply does not count. Replaces `maxConsecutiveReplies` (1–20, default 4), which
+   * counted for the whole lifetime of an epoch — weeks, for a customer who came back.
+   */
+  sessionReplyBudget: { min: 5, max: 40, default: 20 },
+  /**
+   * Roadmap A1: automatic replies per conversation in any `SUPPORT_AI_AUTO_WINDOW.windowSeconds`
+   * (`window`, `LOOP_GUARD`), every topic counted. Was a fixed 10.
+   */
+  maxAutoRepliesPerHour: { min: 10, max: 60, default: 30 },
   /**
    * Hotfix (2026-10-06): how many automatic `ASK_CLARIFYING_QUESTION` replies in a row, in one
    * control epoch, before the conversation is handed to a person (`clarifying_limit`). Separate
-   * from `maxConsecutiveReplies`, which bounds ALL automatic replies (loop safety).
+   * from `sessionReplyBudget`, which bounds ALL automatic replies (loop safety). Roadmap A2: the
+   * default is 3 (was 2); a tenant's STORED value is never changed by that.
    */
-  maxConsecutiveClarifyingQuestions: { min: 1, max: 10, default: 2 },
+  maxConsecutiveClarifyingQuestions: { min: 1, max: 10, default: 3 },
   cooldownSeconds: { min: 0, max: 3_600, default: 20 },
   toneInstructionsChars: 2_000,
   modelIdChars: 128,
 } as const;
+
+/**
+ * Roadmap A1 — six hours without any message in the conversation, either way, ends a session:
+ * the next automatic reply starts a fresh `sessionReplyBudget`.
+ */
+export const SUPPORT_AI_SESSION_INACTIVITY_SECONDS = 21_600;
+
+/**
+ * Review of PR #241 (N3) — a `GREETING` reply is free (it does not spend the session budget)
+ * only while its text is at most this long. The topic is the model's own label; a "greeting"
+ * longer than a greeting is an answer and counts. A purged body counts too (fail closed).
+ */
+export const SUPPORT_AI_FREE_GREETING_MAX_CHARS = 200;
+
+/**
+ * Review of PR #241 — the value the retired `maxConsecutiveReplies` column defaults to, and that
+ * the configuration response still carries for a compatibility window (an older web bundle
+ * requires the field when it reads the configuration). Never read or enforced by this release.
+ */
+export const SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT = 4;
+
+/** Roadmap A1 — the session reply budget's bounds. */
+const sessionBudgetSchema = z
+  .number()
+  .int()
+  .min(SUPPORT_AI_LIMITS.sessionReplyBudget.min)
+  .max(SUPPORT_AI_LIMITS.sessionReplyBudget.max);
+
+/** Roadmap A1 — the hourly automatic-reply limit's bounds. */
+const hourlyLimitSchema = z
+  .number()
+  .int()
+  .min(SUPPORT_AI_LIMITS.maxAutoRepliesPerHour.min)
+  .max(SUPPORT_AI_LIMITS.maxAutoRepliesPerHour.max);
 
 /** The clarifying-question streak limit's bounds (hotfix 2026-10-06). */
 const clarifyingLimitSchema = z
@@ -352,11 +399,13 @@ const supportAiConfigShape = z.object({
     .int()
     .min(SUPPORT_AI_LIMITS.maxOutputChars.min)
     .max(SUPPORT_AI_LIMITS.maxOutputChars.max),
-  maxConsecutiveReplies: z
-    .number()
-    .int()
-    .min(SUPPORT_AI_LIMITS.maxConsecutiveReplies.min)
-    .max(SUPPORT_AI_LIMITS.maxConsecutiveReplies.max),
+  /**
+   * Roadmap A1 — the session reply budget and the hourly limit; raising either under
+   * AUTO_REPLY_SAFE is a widening charged `support_ai.auto_reply`. Always present in a
+   * configuration; a SAVE may omit them (an older client), which keeps the stored values.
+   */
+  sessionReplyBudget: sessionBudgetSchema,
+  maxAutoRepliesPerHour: hourlyLimitSchema,
   /**
    * Hotfix — the clarifying-question streak limit; raising it under AUTO_REPLY_SAFE is a
    * widening charged `support_ai.auto_reply`. Always present in a configuration; a SAVE may
@@ -433,7 +482,12 @@ export type SupportAiConfigInput = z.infer<typeof supportAiConfigInputSchema>;
  * nobody asked for. Every other field is required as before.
  */
 export const supportAiConfigSaveSchema = supportAiConfigShape
-  .extend({ maxConsecutiveClarifyingQuestions: clarifyingLimitSchema.optional() })
+  .extend({
+    maxConsecutiveClarifyingQuestions: clarifyingLimitSchema.optional(),
+    // Roadmap A1: the same rule for the two limits it added.
+    sessionReplyBudget: sessionBudgetSchema.optional(),
+    maxAutoRepliesPerHour: hourlyLimitSchema.optional(),
+  })
   .superRefine(refineSupportAiConfig);
 export type SupportAiConfigSave = z.infer<typeof supportAiConfigSaveSchema>;
 
@@ -445,7 +499,8 @@ export const SUPPORT_AI_DEFAULT_CONFIG: SupportAiConfigInput = {
   visionEnabled: false,
   timeoutMs: SUPPORT_AI_LIMITS.timeoutMs.default,
   maxOutputChars: SUPPORT_AI_LIMITS.maxOutputChars.default,
-  maxConsecutiveReplies: SUPPORT_AI_LIMITS.maxConsecutiveReplies.default,
+  sessionReplyBudget: SUPPORT_AI_LIMITS.sessionReplyBudget.default,
+  maxAutoRepliesPerHour: SUPPORT_AI_LIMITS.maxAutoRepliesPerHour.default,
   maxConsecutiveClarifyingQuestions: SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.default,
   cooldownSeconds: SUPPORT_AI_LIMITS.cooldownSeconds.default,
   settleDelaySeconds: SUPPORT_AI_SETTLE_DELAY_DEFAULT_SECONDS,
@@ -455,10 +510,11 @@ export const SUPPORT_AI_DEFAULT_CONFIG: SupportAiConfigInput = {
 };
 
 /**
- * TB7 — the loop guard's window: at most `maxPerWindow` automatic replies per conversation in
- * any `windowSeconds`, whatever the consecutive limit (`maxConsecutiveReplies`) allows.
+ * TB7 — the loop guard's window: at most the tenant's `maxAutoRepliesPerHour` automatic replies
+ * per conversation in any `windowSeconds`, whatever the session budget allows (roadmap A1: the
+ * limit was a fixed 10 here).
  */
-export const SUPPORT_AI_AUTO_WINDOW = { windowSeconds: 3_600, maxPerWindow: 10 } as const;
+export const SUPPORT_AI_AUTO_WINDOW = { windowSeconds: 3_600 } as const;
 
 /**
  * TB7 — how late an automatic reply may still be (substitute review of PR #202). A job produced
@@ -474,6 +530,31 @@ export const SUPPORT_AI_AUTO_WINDOW = { windowSeconds: 3_600, maxPerWindow: 10 }
  * resume a person — not a reply about a conversation that moved on — answers them.
  */
 export const SUPPORT_AI_AUTO_STALE_SECONDS = 600;
+
+/**
+ * Roadmap A3 — `no_progress`: this many failure-feedback messages in a row («نشد», «هنوز وصل
+ * نمیشه», «بازم همونه», «جواب نداد», «درست نشد», and the Finglish forms), each after an
+ * automatic reply of the current epoch, hand off before the provider is asked again.
+ */
+export const SUPPORT_AI_NO_PROGRESS_LIMIT = 3;
+
+/**
+ * Roadmap A3 — `repeated_advice`: a reply whose normalised character-trigram similarity
+ * (Jaccard) to an automatic reply already delivered in this epoch is at least this is not
+ * sent; the conversation is handed off.
+ */
+export const SUPPORT_AI_REPEAT_SIMILARITY = 0.8;
+
+/**
+ * Roadmap A3 — `inbound_flood`: the same message (normalised) `sameMessage` times in the
+ * epoch, or more than `maxInbound` customer messages within `windowSeconds`, hand off instead
+ * of asking the provider again.
+ */
+export const SUPPORT_AI_INBOUND_FLOOD = {
+  sameMessage: 3,
+  maxInbound: 8,
+  windowSeconds: 60,
+} as const;
 
 const idempotencyKeySchema = z.string().min(8).max(128);
 
@@ -544,8 +625,28 @@ export const supportAiCredentialViewSchema = z.object({
 });
 export type SupportAiCredentialView = z.infer<typeof supportAiCredentialViewSchema>;
 
+/**
+ * The configuration as READ (review of PR #241). Two rolling-deploy directions:
+ *
+ * - an older web bundle reading a new replica requires `maxConsecutiveReplies` (1–20): the new
+ *   replica still projects the retired column into the response, and ignores it on a save
+ *   (the save schema strips unknown keys);
+ * - a newer web bundle reading an older replica gets no `sessionReplyBudget` or
+ *   `maxAutoRepliesPerHour`: both are optional HERE (a new replica always sends them), and the
+ *   page leaves an absent field out of its save, so the server keeps what it stores.
+ */
+export const supportAiConfigReadSchema = supportAiConfigShape
+  .extend({
+    sessionReplyBudget: sessionBudgetSchema.optional(),
+    maxAutoRepliesPerHour: hourlyLimitSchema.optional(),
+    /** Retired by roadmap A1: projected for older bundles, never enforced, never written. */
+    maxConsecutiveReplies: z.number().int().min(1).max(20).optional(),
+  })
+  .superRefine(refineSupportAiConfig);
+export type SupportAiConfigRead = z.infer<typeof supportAiConfigReadSchema>;
+
 export const supportAiConfigResponseSchema = z.object({
-  config: supportAiConfigInputSchema,
+  config: supportAiConfigReadSchema,
   version: z.number().int(),
   credentials: z.array(supportAiCredentialViewSchema),
   capabilities: z.record(
@@ -784,9 +885,18 @@ export type SupportAiJobState = (typeof SUPPORT_AI_JOB_STATES)[number];
 
 /**
  * At most this many images go with one request: the most recent ones. An older image is
- * marked unseen in the transcript, never silently dropped.
+ * marked unseen in the transcript, never silently dropped. A9 (2026-10-07): four, was two — a
+ * customer often sends the error, the settings screen and the app list in a row.
  */
-export const SUPPORT_AI_VISION_MAX_IMAGES = 2;
+export const SUPPORT_AI_VISION_MAX_IMAGES = 4;
+
+/**
+ * A9: the images of one request together, in decoded bytes. Four images at the per-image bound
+ * would be 20 MiB, about 28 MB once base64-encoded into a JSON body; this keeps the encoded total
+ * near 20 MB whatever the per-image bound of a step. The most recent images are kept first, and
+ * since one image is at most `SUPPORT_AI_VISION_MAX_BYTES` the latest one always fits.
+ */
+export const SUPPORT_AI_VISION_MAX_TOTAL_BYTES = 15 * 1024 * 1024;
 
 /**
  * The largest image NEXA will fetch from Telegram for a model, enforced on the declared size,
@@ -920,7 +1030,9 @@ export const SUPPORT_AI_ASSIST_ROUTES = {
 export const SUPPORT_AI_AUTO_GUARDS = [
   'content',
   'customer_blocked',
+  /** The session reply budget is spent (roadmap A1; before it, a per-epoch count). */
   'consecutive',
+  /** The tenant's hourly automatic-reply limit is reached. */
   'window',
   'decision',
   'handoff_topic',
@@ -937,6 +1049,22 @@ export const SUPPORT_AI_AUTO_GUARDS = [
    * `maxConsecutiveClarifyingQuestions`.
    */
   'clarifying_limit',
+  // --- Roadmap A3 (2026-10-07): deterministic progress guards, each its own code.
+  /**
+   * The customer said it still does not work (`SUPPORT_AI_NO_PROGRESS_LIMIT` failure-feedback
+   * messages in a row after an automatic reply in this epoch): decided BEFORE the provider.
+   */
+  'no_progress',
+  /**
+   * The new reply is near-identical (`SUPPORT_AI_REPEAT_SIMILARITY`) to an automatic reply the
+   * customer already received in this epoch: decided AFTER the provider; nothing is sent.
+   */
+  'repeated_advice',
+  /**
+   * The customer repeated one message `SUPPORT_AI_INBOUND_FLOOD.sameMessage` times this epoch,
+   * or sent more than `maxInbound` messages in `windowSeconds`: decided BEFORE the provider.
+   */
+  'inbound_flood',
 ] as const;
 export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
 
@@ -983,6 +1111,17 @@ export const SUPPORT_AI_AUTO_OUTCOMES = [
   'handoff_output_invalid',
   'handoff_ai_unavailable',
   'handoff_stale',
+  // --- Roadmap A3/A6 (2026-10-07).
+  'guard_no_progress',
+  'guard_repeated_advice',
+  'guard_inbound_flood',
+  /**
+   * A6 — the customer closed the matter («مرسی», «حل شد», «اوکی درست شد»), the model answered
+   * `NO_ACTION` on an allowlisted, non-sensitive topic and every guard a reply passes passed:
+   * the job ends silently. Nothing is sent, nobody is handed off, no ticket; the conversation
+   * stays `AI_ACTIVE` and the customer's next message is answered as usual.
+   */
+  'no_action',
 ] as const;
 export type SupportAiAutoOutcome = (typeof SUPPORT_AI_AUTO_OUTCOMES)[number];
 

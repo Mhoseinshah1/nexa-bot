@@ -1,6 +1,9 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import {
+  SUPPORT_AI_DRAFT_RETENTION_DAYS,
+  SUPPORT_AI_FREE_GREETING_MAX_CHARS,
   SUPPORT_AI_LIMITS,
+  SUPPORT_AI_SESSION_INACTIVITY_SECONDS,
   type BusinessHandoffReason,
   type ScopeContext,
   type SupportAiAutoOutcome,
@@ -14,12 +17,14 @@ import {
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
+  businessMessages,
   businessOutboundMessages,
   supportAiImageOutcomes,
   supportAiJobs,
   supportLearningJobs,
 } from '../../../../infrastructure/persistence/schema.js';
 import { clarifyingStreakOf } from '../domain/auto-reply-guards.js';
+import type { PriorDecisionFact } from '../domain/knowledge-query.js';
 import {
   requireTenantId,
   type TransactionScope,
@@ -215,6 +220,62 @@ export class DrizzleSupportAiJobRepository {
   }
 
   /**
+   * A8 — the conversation's latest DECIDED jobs, newest first, as the knowledge query reads
+   * them: an Assist draft or an automatic decision that carries a decision — a READY draft, or a
+   * SENT job whose lane row is PENDING, DELIVERED or UNCONFIRMED — and was not thrown
+   * away (`DISCARDED` — an operator's rejection, a superseded draft, a dropped or handed-off
+   * automatic job — and `FAILED` say nothing reliable about what the conversation is about).
+   * Tenant- and conversation-scoped; bounded by `limit`; `support_ai_jobs_conversation_idx`.
+   */
+  async priorDecisions(
+    scope: ScopeContext,
+    conversationId: string,
+    limit: number,
+  ): Promise<readonly PriorDecisionFact[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select({
+        decision: supportAiJobs.decision,
+        topic: supportAiJobs.topic,
+        intent: supportAiJobs.intent,
+        knowledgeLabels: supportAiJobs.knowledgeLabels,
+      })
+      .from(supportAiJobs)
+      // PR #244 (CX1): a SENT job counts only while its lane row could have reached the
+      // customer — the same states `clarifyingStreak` counts. A send Telegram refused (FAILED) or
+      // that the conversation moved past (SUPERSEDED) is not something the customer read.
+      .leftJoin(
+        businessOutboundMessages,
+        and(
+          eq(businessOutboundMessages.tenantId, supportAiJobs.tenantId),
+          eq(businessOutboundMessages.id, supportAiJobs.sentOutboundId),
+        ),
+      )
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, conversationId),
+          isNotNull(supportAiJobs.decision),
+          or(
+            eq(supportAiJobs.state, 'READY'),
+            and(
+              eq(supportAiJobs.state, 'SENT'),
+              inArray(businessOutboundMessages.state, ['PENDING', 'DELIVERED', 'UNCONFIRMED']),
+            ),
+          ),
+        ),
+      )
+      .orderBy(desc(supportAiJobs.createdAt), desc(supportAiJobs.id))
+      .limit(Math.max(0, limit));
+    return rows.map((row) => ({
+      decision: row.decision as PriorDecisionFact['decision'],
+      topic: row.topic as PriorDecisionFact['topic'],
+      intent: row.intent,
+      knowledgeLabels: row.knowledgeLabels ?? [],
+    }));
+  }
+
+  /**
    * Newer draft requested: every older QUEUED or READY draft of the conversation is discarded,
    * marked `job.superseded` (L1) so the analytics tell it from an operator's discard.
    */
@@ -327,12 +388,15 @@ export class DrizzleSupportAiJobRepository {
   ): Promise<number> {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
-      .select({ decision: supportAiJobs.decision })
+      .select({ decision: supportAiJobs.decision, topic: supportAiJobs.topic })
       .from(businessOutboundMessages)
       .innerJoin(
         supportAiJobs,
         and(
           eq(supportAiJobs.tenantId, businessOutboundMessages.tenantId),
+          // Review of PR #241 (N2): the conversation too, so the join is index-bounded
+          // (`support_ai_jobs_conversation_idx`) rather than over the tenant's every job.
+          eq(supportAiJobs.conversationId, businessOutboundMessages.conversationId),
           eq(supportAiJobs.sentOutboundId, businessOutboundMessages.id),
           eq(supportAiJobs.kind, 'AUTO_DECISION'),
           eq(supportAiJobs.state, 'SENT'),
@@ -345,12 +409,189 @@ export class DrizzleSupportAiJobRepository {
           eq(businessOutboundMessages.origin, 'AUTO'),
           eq(businessOutboundMessages.controlEpoch, input.epoch),
           inArray(businessOutboundMessages.state, ['PENDING', 'DELIVERED', 'UNCONFIRMED']),
+          // Roadmap A2: a GREETING reply neither counts nor resets, so it is not read at all —
+          // filtered HERE, not in the walk, so no number of greetings can push the questions
+          // before them out of the bounded read (review of PR #241, N1).
+          sql`${supportAiJobs.topic} IS DISTINCT FROM 'GREETING'`,
         ),
       )
       .orderBy(desc(businessOutboundMessages.createdAt), desc(businessOutboundMessages.id))
       // Past the highest limit there is nothing more to know.
       .limit(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.max + 1);
     return clarifyingStreakOf(rows);
+  }
+
+  /**
+   * Roadmap A3 — when the AI's part in this epoch began: the time (Telegram's) of the earliest
+   * message that triggered an automatic job at `epoch`, whatever became of the job (a coalesced
+   * one included, so the first message of a burst counts). Every customer message under
+   * `AUTO_REPLY_SAFE` in an `AI_ACTIVE` conversation enqueues one, so this is the epoch's first
+   * customer message the AI was asked about. Null when there is none. The progress guards read
+   * nothing older: a person's takeover or a return to the AI starts their count again.
+   */
+  async epochStartedAt(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number },
+    tx?: unknown,
+  ): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select({ at: sql<Date | null>`min(${businessMessages.sentAt})` })
+      .from(supportAiJobs)
+      .innerJoin(
+        businessMessages,
+        and(
+          eq(businessMessages.tenantId, supportAiJobs.tenantId),
+          eq(businessMessages.conversationId, supportAiJobs.conversationId),
+          eq(businessMessages.telegramMessageId, supportAiJobs.triggerTelegramMessageId),
+        ),
+      )
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, input.conversationId),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.controlEpoch, input.epoch),
+        ),
+      );
+    const at = row?.at ?? null;
+    return at === null ? null : new Date(at);
+  }
+
+  /**
+   * Roadmap A5 — the latest decision the AI recorded IN THE EPOCH THAT JUST ENDED (an automatic
+   * job at `epoch`), and only inside the text retention (review of PR #246, M1): an older issue's
+   * summary is not this handoff's context, and a copy must not outlive its source. Returns the
+   * decision's time with its text, so the escalation can purge the copy by the source's age.
+   * AI text only, never the customer's words; null fields when there is none.
+   */
+  async latestDecisionContext(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number; readonly now: Date },
+    tx?: unknown,
+  ): Promise<{
+    readonly summary: string | null;
+    readonly topic: string | null;
+    readonly intent: string | null;
+    readonly at: Date | null;
+  }> {
+    const tenantId = requireTenantId(scope);
+    const retained = new Date(input.now.getTime() - SUPPORT_AI_DRAFT_RETENTION_DAYS * 86_400_000);
+    const [row] = await exec(this.db, tx)
+      .select({
+        summary: supportAiJobs.summary,
+        topic: supportAiJobs.topic,
+        intent: supportAiJobs.intent,
+        at: supportAiJobs.createdAt,
+      })
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, input.conversationId),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.controlEpoch, input.epoch),
+          isNotNull(supportAiJobs.decision),
+          gte(supportAiJobs.createdAt, retained),
+        ),
+      )
+      .orderBy(desc(supportAiJobs.createdAt), desc(supportAiJobs.id))
+      .limit(1);
+    return {
+      summary: row?.summary?.trim() ? row.summary : null,
+      topic: row?.topic ?? null,
+      intent: row?.intent?.trim() ? row.intent : null,
+      at: row?.at ?? null,
+    };
+  }
+
+  /**
+   * Roadmap A1 — the automatic replies this SESSION has had, for the session reply budget.
+   *
+   * A session is derived, never stored: the AUTO lane rows at the job's control epoch (every
+   * human signal, takeover and resume moves it), after the latest gap of
+   * `SUPPORT_AI_SESSION_INACTIVITY_SECONDS` in the conversation's activity. Activity is every
+   * recorded message either way (`business_messages`, Telegram's time), every lane row of any
+   * origin, and `now` itself — so a customer who comes back after six hours, or a job produced
+   * six hours after anything happened, starts a fresh budget.
+   *
+   * What counts is what `countAuto` counts (every AUTO row but SUPERSEDED: FAILED and
+   * UNCONFIRMED are attempts the loop guard owes nothing for), except a reply whose job's topic
+   * is `GREETING` and whose text is at most `SUPPORT_AI_FREE_GREETING_MAX_CHARS` (the topic is
+   * the model's label: a long "greeting" is an answer, review of PR #241 N3). A row with no job,
+   * a job with no topic, or a purged body counts: unknown is fail closed.
+   *
+   * I/O (review N2): both joins and both activity reads are index-bounded by tenant and
+   * conversation, and the activity reads by time too — but from six hours before the epoch's
+   * FIRST automatic reply, so a long-lived epoch reads its whole lifetime (accepted: a person's
+   * action ends an epoch).
+   */
+  async sessionReplyCount(
+    scope: ScopeContext,
+    input: {
+      readonly conversationId: string;
+      readonly epoch: number;
+      readonly now: Date;
+      /**
+       * Review of PR #246 (CX5): only replies Telegram confirmed it DELIVERED — the "steps
+       * tried" a handoff reports. The budget itself counts every attempt (fail closed).
+       */
+      readonly deliveredOnly?: boolean;
+    },
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const gap = sql.raw(`interval '${SUPPORT_AI_SESSION_INACTIVITY_SECONDS} seconds'`);
+    const delivered =
+      input.deliveredOnly === true
+        ? sql`AND ${businessOutboundMessages.state} = 'DELIVERED'`
+        : sql``;
+    const o = businessOutboundMessages;
+    const m = businessMessages;
+    const j = supportAiJobs;
+    const result = await exec(this.db, tx).execute(sql`
+      WITH epoch_rows AS (
+        SELECT ${o.createdAt} AS created_at,
+          -- N3: a GREETING is free only while it reads like one; a purged body counts.
+          (${j.topic} = 'GREETING' AND ${o.body} IS NOT NULL
+            AND char_length(${o.body}) <= ${SUPPORT_AI_FREE_GREETING_MAX_CHARS}) AS free
+        FROM ${o}
+        LEFT JOIN ${j}
+          ON ${j.tenantId} = ${o.tenantId}
+         AND ${j.conversationId} = ${o.conversationId}
+         AND ${j.sentOutboundId} = ${o.id}
+         AND ${j.kind} = 'AUTO_DECISION'
+        WHERE ${o.tenantId} = ${tenantId}
+          AND ${o.conversationId} = ${input.conversationId}
+          AND ${o.origin} = 'AUTO'
+          AND ${o.controlEpoch} = ${input.epoch}
+          AND ${o.state} <> 'SUPERSEDED'
+          ${delivered}
+      ),
+      scan AS (SELECT min(created_at) - ${gap} AS since FROM epoch_rows),
+      activity AS (
+        -- N2: the bound as a scalar subquery, so it is an Index Cond, not a Join Filter.
+        SELECT ${m.sentAt} AS t FROM ${m}
+        WHERE ${m.tenantId} = ${tenantId}
+          AND ${m.conversationId} = ${input.conversationId}
+          AND ${m.sentAt} >= (SELECT since FROM scan)
+        UNION ALL
+        SELECT ${o.createdAt} FROM ${o}
+        WHERE ${o.tenantId} = ${tenantId}
+          AND ${o.conversationId} = ${input.conversationId}
+          AND ${o.createdAt} >= (SELECT since FROM scan)
+        UNION ALL
+        SELECT ${input.now.toISOString()}::timestamptz
+      ),
+      gaps AS (SELECT t, t - lag(t) OVER (ORDER BY t) AS idle FROM activity),
+      session AS (SELECT max(t) AS started FROM gaps WHERE idle >= ${gap})
+      SELECT count(*)::int AS replies
+      FROM epoch_rows, session
+      WHERE (session.started IS NULL OR epoch_rows.created_at >= session.started)
+        AND epoch_rows.free IS NOT TRUE
+    `);
+    const [row] = result.rows as unknown as { replies: number }[];
+    return Number(row?.replies ?? 0);
   }
 
   /**
@@ -370,6 +611,8 @@ export class DrizzleSupportAiJobRepository {
       readonly sentOutboundId?: string | null;
       /** A handoff because the AI failed: why (`AI_OUTPUT_INVALID` / `AI_UNAVAILABLE`). */
       readonly failureClass?: SupportAiFailureClass | null;
+      /** A8 review N2: the titles the decision cited (`resolveKnowledgeLabels`), as Assist records. */
+      readonly knowledgeLabels?: readonly string[];
       readonly now: Date;
     },
     tx?: unknown,
@@ -395,6 +638,7 @@ export class DrizzleSupportAiJobRepository {
               intent: decision.intent,
               suggestedReply: decision.replyText,
               factRefs: [...decision.factRefs],
+              knowledgeLabels: [...(result.knowledgeLabels ?? [])],
             }),
         provider: result.provider ?? null,
         model: result.model?.slice(0, 128) ?? null,

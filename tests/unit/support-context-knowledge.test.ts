@@ -160,14 +160,25 @@ describe('D2 — relevance', () => {
     expect(ranked[0]?.title).toMatch(/^وصل نمی/u);
   });
 
-  it('no match, or no query, keeps the given order (deterministic)', () => {
+  it('A8: no match, or no query, selects nothing — a zero score is never sent', () => {
     const rows = realisticArticles();
-    expect(selectRelevantKnowledge(rows, '', 20).map((r) => r.title)).toEqual(
-      rows.map((r) => r.title),
-    );
-    expect(selectRelevantKnowledge(rows, 'zzz qqq', 5).map((r) => r.title)).toEqual(
-      rows.slice(0, 5).map((r) => r.title),
-    );
+    expect(selectRelevantKnowledge(rows, '', 20)).toEqual([]);
+    expect(selectRelevantKnowledge(rows, 'zzz qqq', 5)).toEqual([]);
+    expect(selectRelevantKnowledge(rows, [], 5)).toEqual([]);
+  });
+
+  it('A8: a weak match is kept and an unmatched entry is not, however few match', () => {
+    const rows = realisticArticles();
+    // «نصب» matches the four installation articles only; the other sixteen score zero.
+    const ranked = selectRelevantKnowledge(rows, 'نصب', 20).map((r) => r.title);
+    expect(ranked).toEqual(['نصب روی تلویزیون', 'نصب روی ویندوز', 'نصب روی آیفون', 'نصب روی مک']);
+  });
+
+  it('equal scores keep the given order (deterministic)', () => {
+    const rows = realisticArticles();
+    const once = selectRelevantKnowledge(rows, 'نصب روی', 20).map((r) => r.title);
+    expect(selectRelevantKnowledge(rows, 'نصب روی', 20).map((r) => r.title)).toEqual(once);
+    expect(once.slice(0, 2)).toEqual(['نصب روی تلویزیون', 'نصب روی ویندوز']);
   });
 
   it('the query is the customer’s latest messages, oldest first', () => {
@@ -203,11 +214,11 @@ describe('D2 — the knowledge reserve in the byte budget', () => {
       payments: [],
       clientApps: [],
       incidents: [],
-      knowledge: Array.from({ length: 20 }, (_, i) => ({
+      knowledge: Array.from({ length: 8 }, (_, i) => ({
         alias: `K${String(i + 1)}`,
         source: 'KNOWLEDGE' as const,
         question: `k${String(i)}`,
-        answer: persian('متن', 1500),
+        answer: persian('متن', 2500),
       })),
       supportAccounts: [],
       flags: {
@@ -233,8 +244,8 @@ describe('D2 — the knowledge reserve in the byte budget', () => {
 
   it('under a budget that holds only the reserve, every other family goes first', () => {
     const big = bigPayload();
-    const fitted = fitPayload(big, 8 * 1024);
-    expect(payloadBytes(fitted)).toBeLessThanOrEqual(8 * 1024);
+    const fitted = fitPayload(big, 10 * 1024);
+    expect(payloadBytes(fitted)).toBeLessThanOrEqual(10 * 1024);
     // The orders gave way, and knowledge stopped at its reserve: the largest prefix within it.
     expect(fitted.orders.length).toBeLessThan(big.orders.length);
     const bytes = (n: number) =>
@@ -318,7 +329,7 @@ describe('D2 — the builder over realistic sizes', () => {
           { id: 'faq-2', question: 'چطور اشتراک را به‌روز کنم', answer: 'از منوی سرویس' },
         ],
       }),
-    ).build(scope, null, { query: 'اشتراک به‌روز' });
+    ).build(scope, null, { query: 'سؤال درباره اشتراک به‌روز' });
     expect(built.knowledgeAvailable).toBe(2);
     expect(built.payload.knowledge.map((k) => [k.source, k.question])).toEqual([
       ['FAQ', 'چطور اشتراک را به‌روز کنم'],

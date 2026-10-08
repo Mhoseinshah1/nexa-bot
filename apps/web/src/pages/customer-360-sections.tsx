@@ -800,7 +800,14 @@ export function ManualOrderModal({
     onSuccess: () => {
       submission.settle();
       notify({ tone: 'ok', message: t('web.c360_manual_order_done') });
-      for (const key of ['customer-orders', 'wallet', 'wallet-entries', 'customer-financial']) {
+      for (const key of [
+        'customer-orders',
+        'wallet',
+        'wallet-entries',
+        'customer-financial',
+        // Roadmap B5: the newest orders and payments.
+        'customer-workspace',
+      ]) {
         void queries.invalidateQueries({ queryKey: [key, customerId] });
       }
       void queries.invalidateQueries({ queryKey: ['customer-timeline', customerId] });
@@ -1005,6 +1012,7 @@ function ServicesToggleModal({
       void queries.invalidateQueries({ queryKey: ['customer-services', customerId] });
       void queries.invalidateQueries({ queryKey: ['customer-financial', customerId] });
       void queries.invalidateQueries({ queryKey: ['customer-timeline', customerId] });
+      void queries.invalidateQueries({ queryKey: ['customer-workspace', customerId] });
     },
     onError: (error) => submission.settleOn(error),
   });
@@ -1102,6 +1110,7 @@ function TransferModal({ customerId, onClose }: { customerId: string; onClose: (
         'wallet-entries',
         'customer-financial',
         'customer-timeline',
+        'customer-workspace',
       ]) {
         void queries.invalidateQueries({ queryKey: [key, customerId] });
       }

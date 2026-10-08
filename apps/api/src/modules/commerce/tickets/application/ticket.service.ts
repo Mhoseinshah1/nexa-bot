@@ -7,6 +7,7 @@ import {
   TICKET_ERROR_CODES,
   TICKET_MESSAGES_MAX_PER_TICKET,
   TICKET_OPEN_MAX_PER_CUSTOMER,
+  TICKET_AWAITING_SUPPORT_STATUSES,
   TICKET_PAGE_MAX,
   TICKET_REPLY_FILE_STAGED_MAX_BYTES,
   errors,
@@ -736,6 +737,8 @@ export class TicketService {
     actor: ActorContext,
     query: {
       readonly status?: TicketStatus;
+      /** Roadmap B5/B6 (review N1): only tickets whose next word is support's. */
+      readonly awaitingSupport?: boolean;
       readonly categoryId?: string;
       readonly customer?: string;
       readonly assigned?: string;
@@ -756,6 +759,7 @@ export class TicketService {
             : (query.assigned as AdminId);
     return this.deps.tickets.list(scope, {
       ...(query.status === undefined ? {} : { status: query.status }),
+      ...(query.awaitingSupport === true ? { statuses: TICKET_AWAITING_SUPPORT_STATUSES } : {}),
       ...(query.categoryId === undefined
         ? {}
         : { categoryId: query.categoryId as TicketCategoryId }),
@@ -782,14 +786,21 @@ export class TicketService {
     ]);
     // TB7: the AI's note is a summary of the customer's Telegram Business conversation, so it is
     // the conversation's to show: `tickets.view` alone sees that a handoff happened and why,
-    // never what the AI wrote about the chat (substitute review of PR #202, finding 5).
+    // never what the AI wrote about the chat (substitute review of PR #202, finding 5). Roadmap
+    // A5: the topic, intent and steps tried are the same note's, and gated with it.
     return {
       item,
       messages,
       customer,
       escalations: seesChats
         ? escalations
-        : escalations.map((escalation) => ({ ...escalation, summary: null })),
+        : escalations.map((escalation) => ({
+            ...escalation,
+            summary: null,
+            topic: null,
+            intent: null,
+            stepsTried: null,
+          })),
     };
   }
 

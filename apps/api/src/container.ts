@@ -648,6 +648,7 @@ import {
   SupportAutoEnqueuer,
   SupportAutoReplyService,
 } from './modules/control/support-ai/application/support-auto-reply.service.js';
+import { SupportHandoffContext } from './modules/control/support-ai/application/support-handoff-context.js';
 import { BusinessEscalationService } from './modules/commerce/business-chats/application/business-escalation.service.js';
 import {
   AssistantLoop,
@@ -1733,6 +1734,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
     telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+    // Roadmap D3 (PR #238 review N2): a rename that could not be recorded is logged.
+    logger,
   });
 
   /*
@@ -3166,6 +3169,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     undeliverable: undeliverableOrders,
     // The one credit path, for a reconciliation whose order another payment settled.
     refunds: refundService,
+    logger,
     repository: paymentRepository,
     /*
      * The two READ methods only. This module consults a route and cannot configure one
@@ -4764,6 +4768,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       categoryIconsFor: (scope) =>
         settingsResolver.valueOf<CategoryIcons>(scope, 'bot.category_icons'),
     },
+    // Roadmap D4: best-effort bookkeeping around a send is logged, never thrown.
+    logger,
   );
   const appearance = new AppearanceService({
     repository: appearanceRepository,
@@ -5066,6 +5072,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     // Broadcast V2: the preview's opted-out estimate only; the stamp still decides.
     marketingOptOut: marketingOptOutPolicy,
+    // Roadmap C2: the broadcast's own history card.
+    auditHistory: new DrizzleAuditHistoryReader(database.db),
   });
   const broadcastDispatcher = new BroadcastDispatcher({
     repository: broadcastRepository,
@@ -5820,6 +5828,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     escalations: businessEscalationRepository,
     conversations: businessConversationRepository,
     tickets: ticketService,
+    // Roadmap A5: every handoff's safe operator context, from the support AI's records.
+    context: new SupportHandoffContext({ jobs: supportAiJobs }),
     opsLog,
     ids,
   });
@@ -5904,7 +5914,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     escalations: businessEscalationRepository,
     learning: supportLearning,
   });
-  const supportContextSource = new TbSupportContextSource(supportContext);
+  // A8: the knowledge query also reads the conversation's earlier decisions.
+  const supportContextSource = new TbSupportContextSource(supportContext, supportAiJobs);
   const supportImages = new TelegramSupportImageSource({
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
@@ -5997,6 +6008,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       control: businessConversations,
       transport: businessTransport,
       autoMode: supportAutoEnqueuer,
+      // Roadmap A4: the handoff notice is a template, rendered at the send.
+      templates: templateResolver,
       escalations: businessEscalationRepository,
       uow,
       scopeActivity: tenants,

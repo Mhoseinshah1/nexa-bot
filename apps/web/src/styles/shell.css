@@ -630,3 +630,28 @@
 .screen-card form > * + * {
   margin-top: 0;
 }
+
+/*
+ * Touch: the rail, the topbar's icon-only search and every sidebar entry are a
+ * finger's target (44px, tokens.css), whether the sidebar is a drawer or a rail.
+ */
+@media (pointer: coarse) and (hover: none) {
+  .nav a,
+  .nav-group-head {
+    min-height: var(--ctl-h);
+  }
+  .collapsed .nav a {
+    min-width: var(--ctl-h);
+  }
+  .search-trigger {
+    min-width: var(--ctl-h);
+    justify-content: center;
+  }
+  .crumbs a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--ctl-h);
+    min-width: var(--ctl-h);
+  }
+}

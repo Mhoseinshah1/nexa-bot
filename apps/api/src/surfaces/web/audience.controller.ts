@@ -46,6 +46,7 @@ export class AudienceController {
       products: [...options.products],
       panels: [...options.panels],
       tags: [...options.tags],
+      bots: [...options.bots],
     };
   }
 

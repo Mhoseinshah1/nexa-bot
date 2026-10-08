@@ -96,7 +96,13 @@ export function openAiMessages(
               { type: 'text', text: message.text },
               ...message.images.map((image) => ({
                 type: 'image_url',
-                image_url: { url: `data:${image.mediaType};base64,${image.base64}`, detail: 'low' },
+                // A9: `high` — a screenshot's error text is unreadable at `low` (one
+                // 512×512 pass). The Chat Completions reference documents `low`, `high` and
+                // `auto` for `image_url.detail`.
+                image_url: {
+                  url: `data:${image.mediaType};base64,${image.base64}`,
+                  detail: 'high',
+                },
               })),
             ],
           },

@@ -37,7 +37,7 @@ import {
   moneyOf,
   remainingTrafficBytes,
 } from '../domain/support-context-payload.js';
-import { selectRelevantKnowledge } from '../domain/knowledge-relevance.js';
+import { selectRelevantKnowledge, type KnowledgeQuery } from '../domain/knowledge-relevance.js';
 import type {
   SupportContextReader,
   SupportKnowledgeReader,
@@ -111,8 +111,12 @@ export class SupportContextBuilder {
   async build(
     scope: TenantContext,
     customerId: string | null,
-    /** D2: the customer's latest words, which the knowledge is chosen by. */
-    options: { readonly query?: string | null } = {},
+    /**
+     * D2/A8: what the knowledge is chosen by — the customer's latest words, or the weighted
+     * query of `knowledgeQueryFor` (their words, the last intent and topic, the knowledge cited
+     * before, an open troubleshooting episode).
+     */
+    options: { readonly query?: KnowledgeQuery | null } = {},
   ): Promise<SupportContextBuild> {
     const now = this.deps.clock.now();
     const [articles, faqRows, accounts, appRows, customer] = await Promise.all([
@@ -266,8 +270,10 @@ type KnowledgeArticleFact = Awaited<ReturnType<SupportKnowledgeReader['activeFor
 /**
  * D2 — the knowledge a request carries: every approved article and every live FAQ entry (an FAQ
  * entry the build brought into knowledge is read as that reviewed article, once — TB9), ranked
- * by relevance to `query`, the most relevant `SUPPORT_CONTEXT_LIMITS.knowledge`. Ties keep the
- * reader's order: reviewed articles newest first, then the FAQ.
+ * by relevance to `query`, the most relevant `SUPPORT_CONTEXT_LIMITS.knowledge` (8). A8: only
+ * entries the query matched — an entry scoring zero is never sent, so a question nothing
+ * matches carries no knowledge at all. Ties keep the reader's order: reviewed articles newest
+ * first, then the FAQ.
  *
  * `builtAppIds`: the client apps whose guide a SELECTED article already carries (a NEXA_BUILD
  * `CLIENT_APP` article), so the app's own entry goes without its guide and the same text is not
@@ -276,7 +282,7 @@ type KnowledgeArticleFact = Awaited<ReturnType<SupportKnowledgeReader['activeFor
 export function selectKnowledge(
   articles: readonly KnowledgeArticleFact[],
   faqRows: readonly { readonly id: string; readonly question: string; readonly answer: string }[],
-  query: string,
+  query: KnowledgeQuery,
 ): {
   readonly entries: Omit<SupportContextKnowledge, 'alias'>[];
   readonly builtAppIds: ReadonlySet<string>;

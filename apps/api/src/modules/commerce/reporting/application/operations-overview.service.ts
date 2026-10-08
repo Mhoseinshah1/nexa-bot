@@ -104,12 +104,22 @@ export class OperationsOverviewService {
 
   async navCounters(scope: TenantContext, actor: ActorContext): Promise<NavCountersResponse> {
     const held = await this.deps.permissions.permissionsOf(scope, actor);
-    const counters = {} as Record<NavCounterKey, number | null>;
-    for (const key of NAV_COUNTER_KEYS) {
-      counters[key] = held.has(NAV_COUNTER_PERMISSIONS[key])
-        ? await this.deps.repository.navCounter(scope, key, this.deps.counterCap)
-        : null;
-    }
+    /*
+     * Concurrently (review N5). Each counter is its own read-only statement on the pool, in no
+     * transaction and sharing no snapshot — they never did; the loop only serialised them —
+     * so running them side by side changes no answer and saves six round trips per poll.
+     * A withheld counter still starts no query.
+     */
+    const values = await Promise.all(
+      NAV_COUNTER_KEYS.map((key) =>
+        held.has(NAV_COUNTER_PERMISSIONS[key])
+          ? this.deps.repository.navCounter(scope, key, this.deps.counterCap)
+          : null,
+      ),
+    );
+    const counters = Object.fromEntries(
+      NAV_COUNTER_KEYS.map((key, index) => [key, values[index] ?? null]),
+    ) as Record<NavCounterKey, number | null>;
     return { generatedAt: this.deps.clock.now().toISOString(), counters };
   }
 }

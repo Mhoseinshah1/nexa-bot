@@ -4,6 +4,7 @@ import {
   SUPPORT_AI_AUTO_STALE_SECONDS,
   SUPPORT_AI_DEFAULT_CONFIG,
   SUPPORT_AI_DRAFT_UNCLAIMED_SECONDS,
+  businessUnansweredSince,
   isNexaError,
   systemJobActor,
   type ActorContext,
@@ -18,6 +19,7 @@ import {
   SupportAutoReplyService,
 } from '../../apps/api/src/modules/control/support-ai/application/support-auto-reply.service';
 import type { AutoContextFlags } from '../../apps/api/src/modules/control/support-ai/domain/auto-reply-guards';
+import { SUPPORT_AI_AUTHOR_MARKERS } from '../../apps/api/src/modules/control/support-ai/domain/prompt';
 import type { SupportImageLoad } from '../../apps/api/src/modules/control/support-ai/application/ports';
 import { DrizzleSupportAiJobRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository';
 import { DrizzleSupportAiConfigRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
@@ -69,11 +71,29 @@ const grounded = {
   intent: 'اتصال',
 };
 
+/** Roadmap A4: the one message a handoff sends the customer (template `bot.support.handoff_notice`). */
+const HANDOFF_NOTICE =
+  'پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد. لطفاً همین‌جا ادامه بده؛ نیازی به ارسال دوباره نیست.';
+
+/**
+ * Telegram, scripted. Roadmap A4: the handoff notice is recorded apart (`notices`) and answered
+ * from its own script (`nextNotice`), so the cases about the AI's replies read `sent` as before
+ * and the notice is asserted where it is the subject.
+ */
 class ScriptedTransport {
   sent: { chatId: string; text: string }[] = [];
+  notices: { chatId: string; text: string }[] = [];
   next: BusinessSendOutcome[] = [];
+  nextNotice: BusinessSendOutcome[] = [];
   nextMessageId = 900;
   async sendText(_scope: unknown, _actor: unknown, input: { chatId: string; text: string }) {
+    if (input.text === HANDOFF_NOTICE) {
+      this.notices.push({ chatId: input.chatId, text: input.text });
+      const scripted = this.nextNotice.shift();
+      if (scripted !== undefined) return scripted;
+      this.nextMessageId += 1;
+      return { outcome: 'DELIVERED' as const, messageId: this.nextMessageId, sentAt: null };
+    }
     this.sent.push({ chatId: input.chatId, text: input.text });
     const scripted = this.next.shift();
     if (scripted !== undefined) return scripted;
@@ -98,7 +118,9 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   /** D7: the transcript each provider call was given, as role and text. */
   let requests: { role: string; text: string }[][];
   /** D2: the query the context was built with, last call. */
+  /** A8: the customer's words in the transcript the context source was given, and for which conversation. */
   let contextQuery: string | null | undefined;
+  let contextConversation: string | undefined;
   let duringCall: (() => Promise<void>) | null;
   let flags: AutoContextFlags;
   /** The knowledge aliases (`K…`) the scripted context carries, as the real source builds them. */
@@ -193,6 +215,29 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       body: string;
       failure_code: string | null;
     }[];
+  }
+
+  /**
+   * Roadmap A1 — `n` AUTO lane rows at `epoch`, `ago` before now, with no job (a row whose
+   * topic is unknown counts toward the session budget: fail closed).
+   */
+  async function seedAuto(
+    conversationId: string,
+    epoch: number,
+    n: number,
+    ago = "interval '1 minute'",
+    state = 'DELIVERED',
+  ) {
+    for (let i = 0; i < n; i += 1) {
+      await db().execute(
+        sql`INSERT INTO business_outbound_messages
+              (id, tenant_id, conversation_id, origin, body, control_epoch, idempotency_key,
+               request_hash, state, resolved_at, created_at, updated_at)
+            VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, ${conversationId}, 'AUTO',
+                    'x', ${epoch}, ${key('seed')}, 'h', ${state}, now(),
+                    now() - ${sql.raw(ago)}, now() - ${sql.raw(ago)})`,
+      );
+    }
   }
 
   /** The whole AUTO job row, to prove a stopped scope left it untouched. */
@@ -325,7 +370,11 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       ids: c.ids,
       context: {
         build: async (_scope, _customer, options) => {
-          contextQuery = options?.query;
+          contextQuery = options?.transcript
+            ?.filter((line) => line.origin === 'INBOUND')
+            .map((line) => line.text)
+            .join('\n');
+          contextConversation = options?.conversationId;
           return {
             json: '{"services":[{"alias":"S1"}]}',
             aliases: new Map([['S1', 'سرویس user123']]),
@@ -362,6 +411,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       control: c.businessConversations,
       transport,
       autoMode: new SupportAutoEnqueuer({ configs, jobs, ids: c.ids }),
+      templates: c.templateResolver,
       escalations: new DrizzleBusinessEscalationRepository(c.database.db),
       uow: c.uow,
       scopeActivity: c.tenants,
@@ -393,8 +443,9 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     await deliver();
     expect(transport.sent).toEqual([{ chatId: CUSTOMER, text: grounded.replyText }]);
     expect(await count('tickets')).toBe(0); // an ordinary answered question opens no ticket
-    // D2: the knowledge is chosen by the customer's own words.
+    // D2/A8: the knowledge is chosen from this conversation's transcript (the customer's words).
     expect(contextQuery).toBe('سلام، اینترنتم وصل نمی‌شود');
+    expect(contextConversation).toBe(first.conversationId);
     // D2 telemetry, recorded with the job's result.
     const telemetry = await db().execute(
       sql`SELECT knowledge_sent, knowledge_available FROM support_ai_jobs
@@ -402,6 +453,23 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     );
     expect(telemetry.rows).toEqual([{ knowledge_sent: 3, knowledge_available: 4 }]);
     expect(await count('business_conversation_escalations')).toBe(0);
+  });
+
+  it('A8 review N2: a sent automatic reply records the knowledge it cited, by title', async () => {
+    next = {
+      outcome: 'OK',
+      output: { ...grounded, knowledgeRefs: ['K1', 'K1'] },
+      usage: { inputTokens: 10, outputTokens: 10 },
+      model: 'gpt-5.5',
+    };
+    const first = await record(message());
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([{ state: 'SENT' }]);
+    const labels = await db().execute(
+      sql`SELECT knowledge_labels FROM support_ai_jobs WHERE conversation_id = ${first.conversationId}`,
+    );
+    // Cited twice, recorded once.
+    expect(labels.rows).toEqual([{ knowledge_labels: ['خطای اتصال در Sing-box'] }]);
   });
 
   it('D9: «وصل نمیشه، پولمو پس بدید» never auto-replies, whatever topic the model picks', async () => {
@@ -632,13 +700,18 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     await tick();
     await deliver();
     expect(transport.sent).toHaveLength(1);
-    // Telegram does not echo the bot's own send: nothing is recorded for it.
+    // Telegram does not echo the bot's own send: nothing is recorded for it. (A different next
+    // step: roadmap A3 refuses advice the customer already received.)
+    next = {
+      ...next,
+      output: { ...grounded, replyText: 'پروتکل را روی TCP بگذارید.' },
+    } as SupportAiOutcome;
     await record(message({ text: 'باز کردم، هنوز وصل نمیشه' }));
     await tick();
     expect(calls).toBe(2);
     expect(requests[1]).toEqual([
       { role: 'user', text: 'سلام، سرویسم وصل نمیشه' },
-      { role: 'assistant', text: grounded.replyText },
+      { role: 'assistant', text: `${SUPPORT_AI_AUTHOR_MARKERS.AI_AUTO}\n${grounded.replyText}` },
       { role: 'user', text: 'باز کردم، هنوز وصل نمیشه' },
     ]);
     expect((await autoJobs(first.conversationId))[1]).toMatchObject({ outcome: 'sent' });
@@ -668,19 +741,22 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(calls).toBe(2);
     expect(requests[1]).toEqual([
       { role: 'user', text: 'سلام، سرویسم وصل نمیشه' },
-      { role: 'assistant', text: grounded.replyText },
+      { role: 'assistant', text: `${SUPPORT_AI_AUTHOR_MARKERS.AI_AUTO}\n${grounded.replyText}` },
       { role: 'user', text: 'باز کردم، هنوز وصل نمیشه' },
     ]);
   });
 
   // --- the loop guard ----------------------------------------------------------------------
 
-  it('stops after N consecutive automatic replies with no person, before any provider cost', async () => {
-    await configure({ maxConsecutiveReplies: 1 });
+  it('stops when the session budget is spent, before any provider cost', async () => {
+    await configure({ sessionReplyBudget: 5 });
     const first = await record(message());
     await tick();
     await deliver();
     expect(transport.sent).toHaveLength(1);
+    // Four more in this session (seeded at the epoch, a minute ago): five in all.
+    const convo = await conversation(first.conversationId);
+    await seedAuto(convo.id, convo.controlEpoch, 4);
     await record(message({ text: 'باز هم وصل نشد' }));
     await tick();
     expect(calls).toBe(1);
@@ -701,6 +777,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   });
 
   it('caps automatic replies per window whatever the epoch', async () => {
+    await configure({ maxAutoRepliesPerHour: 10 });
     const first = await record(message());
     const convo = await conversation(first.conversationId);
     // Ten AUTO replies in the last hour, all under OLDER epochs (a person resumed in between).
@@ -1622,6 +1699,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
             jobs,
             ids: c.ids,
           }),
+          templates: c.templateResolver,
           escalations: new DrizzleBusinessEscalationRepository(c.database.db),
           uow: c.uow,
           scopeActivity: c.tenants,
@@ -1836,9 +1914,11 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('R10: a SUPERSEDED automatic reply never counts toward the loop guard', async () => {
-      await configure({ maxConsecutiveReplies: 1 });
+      await configure({ sessionReplyBudget: 5 });
       const first = await record(message());
       const convo = await conversation(first.conversationId);
+      // Four that count, at the current epoch; the fifth, superseded, does not.
+      await seedAuto(convo.id, convo.controlEpoch, 4);
       await db().execute(
         sql`INSERT INTO business_outbound_messages
               (id, tenant_id, conversation_id, origin, body, control_epoch, idempotency_key, request_hash, state, resolved_at)
@@ -1909,7 +1989,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       );
       const current = (await ctx.container.supportAiConfig.view(tenantA as never, owner)).config;
       for (const change of [
-        { maxConsecutiveReplies: current.maxConsecutiveReplies + 1 },
+        { sessionReplyBudget: current.sessionReplyBudget! + 1 },
+        { maxAutoRepliesPerHour: current.maxAutoRepliesPerHour! + 1 },
         { maxOutputChars: current.maxOutputChars + 100 },
         { cooldownSeconds: current.cooldownSeconds - 1 },
         { settleDelaySeconds: current.settleDelaySeconds - 1 },
@@ -1919,7 +2000,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         );
       }
       // Tightening is ordinary configuration.
-      await configure({ maxConsecutiveReplies: current.maxConsecutiveReplies - 1 }, admin);
+      await configure({ sessionReplyBudget: current.sessionReplyBudget! - 1 }, admin);
+      await configure({ maxAutoRepliesPerHour: current.maxAutoRepliesPerHour! - 1 }, admin);
       // Outside AUTO these shape only Assist drafts: ordinary configuration too.
       await configure({ mode: 'ASSIST_ONLY' });
       await configure({ maxOutputChars: current.maxOutputChars + 100 }, admin);
@@ -1955,6 +2037,12 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     };
     const outcomes = async (conversationId: string) =>
       (await autoJobs(conversationId)).map((j) => j.outcome);
+
+    // These cases were written at the hotfix's default of 2; roadmap A2 raised the default to 3
+    // and left stored values alone, so they run as a tenant still stored at 2 does.
+    beforeEach(async () => {
+      await configure({ maxConsecutiveClarifyingQuestions: 2 });
+    });
     const streak = async (conversationId: string) =>
       jobs.clarifyingStreak(scopeA, {
         conversationId,
@@ -2041,26 +2129,48 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       expect(transport.sent).toEqual([]);
     });
 
-    it('7: the clarifying limit defaults to 2, also for a row written before the column', async () => {
+    it('7 (A2): the clarifying limit defaults to 3, also for a row written before the column', async () => {
       const bOwner = adminActorFor(
         await createAdmin(ctx.container, tenantB, { username: 'bowner2', roleKeys: ['owner'] }),
       );
       // A fresh tenant: the contract default.
       expect(
-        (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config
-          .maxConsecutiveClarifyingQuestions,
-      ).toBe(2);
-      // A row written by a writer that does not know the column (an existing tenant's row as
-      // migration 0218 found it): the column's default.
+        (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config,
+      ).toMatchObject({
+        maxConsecutiveClarifyingQuestions: 3,
+        sessionReplyBudget: 20,
+        maxAutoRepliesPerHour: 30,
+      });
+      // A row written by a writer that knows none of these columns: the columns' defaults
+      // (0236: 3 for the clarifying limit, 20 and 30 for the two A1 limits).
       await db().execute(
         sql`INSERT INTO support_ai_configs (tenant_id, mode, timeout_ms, max_output_chars,
-              max_consecutive_replies, cooldown_seconds)
-            VALUES (${SEED_IDS.tenantB}, 'OFF', 30000, 1200, 4, 20)`,
+              cooldown_seconds)
+            VALUES (${SEED_IDS.tenantB}, 'OFF', 30000, 1200, 20)`,
+      );
+      expect(
+        (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config,
+      ).toMatchObject({
+        maxConsecutiveClarifyingQuestions: 3,
+        sessionReplyBudget: 20,
+        maxAutoRepliesPerHour: 30,
+      });
+      // A2: a value STORED before 0236 (the old default, 2) is not rewritten — the migration
+      // changes the column default only. Read back exactly as stored.
+      await db().execute(
+        sql`UPDATE support_ai_configs SET max_consecutive_clarifying_questions = 2
+            WHERE tenant_id = ${SEED_IDS.tenantB}`,
       );
       expect(
         (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config
           .maxConsecutiveClarifyingQuestions,
       ).toBe(2);
+      const column = await db().execute(
+        sql`SELECT column_default FROM information_schema.columns
+            WHERE table_name = 'support_ai_configs'
+              AND column_name = 'max_consecutive_clarifying_questions'`,
+      );
+      expect(column.rows).toEqual([{ column_default: '3' }]);
     });
 
     it('8: the setting round-trips, and saving another field preserves it', async () => {
@@ -2148,7 +2258,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('11: a higher limit (4) sends four clarifying questions and hands off the fifth', async () => {
-      await configure({ maxConsecutiveClarifyingQuestions: 4, maxConsecutiveReplies: 10 });
+      await configure({ maxConsecutiveClarifyingQuestions: 4, sessionReplyBudget: 10 });
       let id = '';
       for (let i = 1; i <= 5; i += 1) id = await turn(`پاسخ ${i}`, askOut(`سؤال ${i}؟`));
       expect(await outcomes(id)).toEqual([
@@ -2162,7 +2272,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('12/6: a REPLY resets the streak: ASK, ASK, REPLY, ASK, ASK are sent; the next ASK is not', async () => {
-      await configure({ maxConsecutiveReplies: 10 });
+      await configure({ sessionReplyBudget: 10 });
       const id = await turn('مشکل در اتصال دارم', askOut('سؤال ۱؟'));
       await turn('Sing-box', askOut('سؤال ۲؟'));
       expect(await streak(id)).toBe(2);
@@ -2279,7 +2389,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('13: a refused, superseded or failed reply, and a discarded job, never count', async () => {
-      await configure({ maxConsecutiveClarifyingQuestions: 1, maxConsecutiveReplies: 10 });
+      await configure({ maxConsecutiveClarifyingQuestions: 1, sessionReplyBudget: 10 });
       const id = await turn('مشکل در اتصال دارم', askOut('سؤال ۱؟'));
       expect(await streak(id)).toBe(1);
       const epoch = (await conversation(id)).controlEpoch;
@@ -2422,7 +2532,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       await turn('Sing-box', askOut('چه خطایی می‌بینید؟'));
       expect(requests[1]).toEqual([
         { role: 'user', text: 'مشکل در اتصال دارم' },
-        { role: 'assistant', text: QUESTION },
+        { role: 'assistant', text: `${SUPPORT_AI_AUTHOR_MARKERS.AI_AUTO}\n${QUESTION}` },
         { role: 'user', text: 'Sing-box' },
       ]);
       expect(await outcomes(id)).toEqual(['sent_clarifying', 'sent_clarifying']);
@@ -2448,7 +2558,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     });
 
     it('item 20: the acceptance flow — greeting, two questions, a grounded answer', async () => {
-      await configure({ maxConsecutiveReplies: 10 });
+      await configure({ sessionReplyBudget: 10 });
       const id = await turn(
         'سلام',
         replyOut({ topic: 'GREETING', replyText: 'سلام! چطور کمکتون کنم؟', factRefs: [] }),
@@ -2481,6 +2591,1214 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       expect(await conversation(id)).toMatchObject({ state: 'AI_ACTIVE' });
       expect(await count('tickets')).toBe(0);
       expect(await count('business_conversation_escalations')).toBe(0);
+    });
+  });
+
+  // ===========================================================================================
+  // Roadmap A1/A2 (2026-10-07) — a session reply budget that resets after six hours of
+  // inactivity and never counts a GREETING; a configurable hourly limit; clarifying default 3.
+  // ===========================================================================================
+  describe('roadmap A1/A2: session budget, hourly limit, clarifying default', () => {
+    /**
+     * Roadmap A3 refuses advice the customer already received, so each scripted answer here is a
+     * different step unless a case names its text.
+     */
+    const VARIANTS = [
+      'لطفاً برنامه را کامل ببندید و دوباره باز کنید.',
+      'از تنظیمات برنامه، پروتکل را روی TCP بگذارید.',
+      'لینک اشتراک را از ربات دوباره دریافت و جایگزین کنید.',
+      'سرور دیگری از فهرست انتخاب کنید و دوباره وصل شوید.',
+      'تاریخ و ساعت گوشی را روی خودکار بگذارید.',
+      'برنامه را به آخرین نسخه به‌روز کنید.',
+      'حالت هواپیما را یک بار روشن و خاموش کنید.',
+      'اگر وای‌فای دارید، یک بار با اینترنت همراه امتحان کنید.',
+      'در برنامه، گزینهٔ تست پینگ را بزنید و نتیجه را بگویید.',
+      'کش برنامه را از تنظیمات گوشی پاک کنید.',
+    ];
+    let variant = 0;
+    const scripted = (output: Record<string, unknown>): SupportAiOutcome => ({
+      outcome: 'OK',
+      output: { ...grounded, replyText: VARIANTS[variant++ % VARIANTS.length], ...output },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'gpt-5.5',
+    });
+    const greeting = scripted({
+      topic: 'GREETING',
+      replyText: 'سلام! چطور کمکتون کنم؟',
+      factRefs: [],
+    });
+    const ask = (replyText: string) =>
+      scripted({ decision: 'ASK_CLARIFYING_QUESTION', replyText, factRefs: [] });
+    const turn = async (text: string, output: SupportAiOutcome = next) => {
+      next = output;
+      const recorded = await record(message({ text }));
+      await tick();
+      await deliver();
+      return recorded.conversationId;
+    };
+    const outcomes = async (conversationId: string) =>
+      (await autoJobs(conversationId)).map((j) => j.outcome);
+    const session = async (conversationId: string) =>
+      jobs.sessionReplyCount(scopeA, {
+        conversationId,
+        epoch: (await conversation(conversationId)).controlEpoch,
+        now: new Date(),
+      });
+    /** Moves every recorded message and lane row of the conversation `hours` into the past. */
+    const age = async (conversationId: string, hours: number) => {
+      const by = sql.raw(`interval '${hours} hours'`);
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = sent_at - ${by}
+            WHERE conversation_id = ${conversationId}`,
+      );
+      await db().execute(
+        sql`UPDATE business_outbound_messages SET created_at = created_at - ${by}
+            WHERE conversation_id = ${conversationId}`,
+      );
+    };
+
+    it('A1: a budget of 5 sends five replies in a session and hands off the sixth', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      let id = '';
+      for (let i = 1; i <= 6; i += 1)
+        id = await turn(`سؤال شماره ${i} درباره تمدید سرویس`, scripted({}));
+      expect(await outcomes(id)).toEqual([
+        'sent',
+        'sent',
+        'sent',
+        'sent',
+        'sent',
+        'guard_consecutive',
+      ]);
+      expect(calls).toBe(5); // the sixth is refused before any provider cost
+      expect(transport.sent).toHaveLength(5);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'LOOP_GUARD',
+      });
+    });
+
+    it('A1: six hours of inactivity start a new session; five hours do not', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      // Five automatic replies, all spent, five hours ago; the conversation silent since.
+      await seedAuto(convo.id, convo.controlEpoch, 5, "interval '5 hours'");
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = now() - interval '5 hours'
+            WHERE conversation_id = ${convo.id}`,
+      );
+      expect(await session(convo.id)).toBe(5);
+      // Five hours and fifty-nine minutes of silence is still the same session.
+      await age(convo.id, 0.98);
+      expect(await session(convo.id)).toBe(5);
+      // One more minute: six hours without a message either way — a new session.
+      await age(convo.id, 0.02);
+      expect(await session(convo.id)).toBe(0);
+      // The customer comes back: answered, from a fresh budget (same epoch, nobody intervened).
+      await turn('سلام دوباره، باز وصل نمیشه', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ state: 'SENT', outcome: 'sent' });
+      expect(await session(convo.id)).toBe(1);
+      expect((await conversation(convo.id)).controlEpoch).toBe(convo.controlEpoch);
+    });
+
+    it('A1: the same five spent replies five hours ago, then a message: still one session, handed off', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await seedAuto(convo.id, convo.controlEpoch, 5, "interval '5 hours'");
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = now() - interval '5 hours'
+            WHERE conversation_id = ${convo.id}`,
+      );
+      await turn('باز وصل نمیشه', scripted({}));
+      expect(calls).toBe(0);
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({
+        outcome: 'guard_consecutive',
+        handoff_reason: 'LOOP_GUARD',
+      });
+    });
+
+    it('A1: GREETING replies never spend the session budget, but count toward the hour', async () => {
+      await configure({ sessionReplyBudget: 5, maxAutoRepliesPerHour: 10 });
+      let id = '';
+      for (let i = 1; i <= 6; i += 1) id = await turn(`سلام ${i}`, greeting);
+      expect(await outcomes(id)).toEqual(Array(6).fill('sent'));
+      expect(await session(id)).toBe(0);
+      // Roadmap A3: more than eight customer messages in a minute is a flood. These greetings
+      // happened two minutes ago (still this hour, still this session).
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = sent_at - interval '2 minutes'
+            WHERE conversation_id = ${id}`,
+      );
+      // Five troubleshooting replies spend it; greetings in between change nothing.
+      for (let i = 1; i <= 4; i += 1) await turn(`سؤال اتصال شمارهٔ ${i}`, scripted({}));
+      expect(await session(id)).toBe(4);
+      // The hour now holds ten automatic replies: the eleventh, even a greeting, is refused.
+      await turn('سلام دوباره', greeting);
+      expect((await autoJobs(id)).at(-1)).toMatchObject({
+        outcome: 'guard_window',
+        handoff_reason: 'LOOP_GUARD',
+      });
+      expect(transport.sent).toHaveLength(10);
+    });
+
+    it('A1: a greeting job with no recorded topic counts (fail closed)', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const id = await turn('سلام', greeting);
+      expect(await session(id)).toBe(0);
+      await db().execute(
+        sql`UPDATE support_ai_jobs SET topic = NULL WHERE conversation_id = ${id}`,
+      );
+      expect(await session(id)).toBe(1);
+    });
+
+    it('A1: a takeover and return to the AI start a new session at once', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await seedAuto(convo.id, convo.controlEpoch, 5);
+      await tick();
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'guard_consecutive' });
+      await resume(convo.id);
+      await turn('ممنون، یک سؤال دیگه', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'sent' });
+    });
+
+    it('A1: the hourly limit is the tenant’s and counts every epoch in the last hour only', async () => {
+      await configure({ maxAutoRepliesPerHour: 10 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      // Nine in the hour at an older epoch, and twenty more than an hour ago.
+      // (UNCONFIRMED: they count, and the transcript — DELIVERED replies only — stays readable.)
+      await seedAuto(convo.id, convo.controlEpoch + 100, 9, "interval '10 minutes'", 'UNCONFIRMED');
+      await seedAuto(
+        convo.id,
+        convo.controlEpoch + 100,
+        20,
+        "interval '61 minutes'",
+        'UNCONFIRMED',
+      );
+      await tick();
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'sent' });
+      // That made ten in the hour: the next is refused.
+      await turn('باز هم', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({
+        outcome: 'guard_window',
+        handoff_reason: 'LOOP_GUARD',
+      });
+    });
+
+    it('A1: the default limits are 20 per session and 30 per hour', async () => {
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await seedAuto(convo.id, convo.controlEpoch, 19);
+      await tick();
+      await deliver();
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'sent' });
+      await turn('باز هم', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'guard_consecutive' });
+      await resume(convo.id);
+      // A new epoch: the session is fresh, but the hour holds 20; nine more make 29, one fits.
+      await seedAuto(convo.id, convo.controlEpoch + 100, 9);
+      await turn('سؤال تازه', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'sent' });
+      await turn('یکی دیگه', scripted({}));
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({ outcome: 'guard_window' });
+    });
+
+    it('A1: the budget is decided again in the enqueue transaction', async () => {
+      await configure({ sessionReplyBudget: 5 });
+      const first = await record(message());
+      const convo = await conversation(first.conversationId);
+      await seedAuto(convo.id, convo.controlEpoch, 4);
+      // While the provider is thinking, a fifth reply lands in the session.
+      duringCall = () => seedAuto(convo.id, convo.controlEpoch, 1);
+      await tick();
+      expect(calls).toBe(1);
+      expect((await autoJobs(convo.id)).at(-1)).toMatchObject({
+        state: 'FAILED',
+        outcome: 'guard_consecutive',
+      });
+      expect(transport.sent).toEqual([]);
+    });
+
+    it('A1: a save without the new fields (an older client) keeps the stored values', async () => {
+      await configure({ sessionReplyBudget: 7, maxAutoRepliesPerHour: 12 });
+      const current = await ctx.container.supportAiConfig.view(tenantA as never, owner);
+      const { sessionReplyBudget: _s, maxAutoRepliesPerHour: _h, ...older } = current.config;
+      await ctx.container.supportAiConfig.update(tenantA as never, owner, {
+        idempotencyKey: key('cfg-old'),
+        expectedVersion: current.version,
+        config: { ...older, cooldownSeconds: 25 } as never,
+      });
+      expect(
+        (await ctx.container.supportAiConfig.view(tenantA as never, owner)).config,
+      ).toMatchObject({ sessionReplyBudget: 7, maxAutoRepliesPerHour: 12, cooldownSeconds: 25 });
+    });
+
+    it('A1: the bounds are refused by the service and by the CHECKs', async () => {
+      for (const change of [
+        { sessionReplyBudget: 4 },
+        { sessionReplyBudget: 41 },
+        { maxAutoRepliesPerHour: 9 },
+        { maxAutoRepliesPerHour: 61 },
+      ]) {
+        await expect(configure(change), JSON.stringify(change)).rejects.toThrow();
+      }
+      for (const column of [sql`session_reply_budget = 41`, sql`max_auto_replies_per_hour = 9`]) {
+        await expect(
+          db().execute(
+            sql`UPDATE support_ai_configs SET ${column} WHERE tenant_id = ${SEED_IDS.tenantA}`,
+          ),
+        ).rejects.toThrow();
+      }
+    });
+
+    it('A2: with the default (3), three questions in a row are sent and the fourth hands off', async () => {
+      // A tenant that never set the limit: delete the row's value back to the column default.
+      await db().execute(
+        sql`UPDATE support_ai_configs SET max_consecutive_clarifying_questions = DEFAULT
+            WHERE tenant_id = ${SEED_IDS.tenantA}`,
+      );
+      let id = '';
+      for (let i = 1; i <= 4; i += 1) id = await turn(`پاسخ ${i}`, ask(`سؤال ${i}؟`));
+      expect(await outcomes(id)).toEqual([
+        'sent_clarifying',
+        'sent_clarifying',
+        'sent_clarifying',
+        'guard_clarifying_limit',
+      ]);
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'CLARIFYING_LIMIT' });
+    });
+
+    // --- review of PR #241 -----------------------------------------------------------------
+
+    /** Copies a SENT automatic reply (its lane row and its job) `n` times, newest last. */
+    const cloneReply = async (conversationId: string, n: number) => {
+      const [source] = (
+        await db().execute(
+          sql`SELECT j.id AS job, j.sent_outbound_id AS row FROM support_ai_jobs j
+              WHERE j.conversation_id = ${conversationId} AND j.state = 'SENT'
+              ORDER BY j.created_at DESC LIMIT 1`,
+        )
+      ).rows as { job: string; row: string }[];
+      for (let i = 0; i < n; i += 1) {
+        const row = ctx.container.ids.uuid();
+        await db().execute(sql`
+          INSERT INTO business_outbound_messages
+          SELECT (jsonb_populate_record(NULL::business_outbound_messages,
+                   to_jsonb(o) || jsonb_build_object('id', ${row}::text,
+                     'idempotency_key', ${key('clone')}::text, 'created_at', now(), 'updated_at', now()))).*
+          FROM business_outbound_messages o WHERE o.id = ${source!.row}`);
+        await db().execute(sql`
+          INSERT INTO support_ai_jobs
+          SELECT (jsonb_populate_record(NULL::support_ai_jobs,
+                   to_jsonb(j) || jsonb_build_object('id', ${ctx.container.ids.uuid()}::text,
+                     'idempotency_key', ${key('clone')}::text, 'sent_outbound_id', ${row}::text,
+                     'created_at', now(), 'updated_at', now()))).*
+          FROM support_ai_jobs j WHERE j.id = ${source!.job}`);
+      }
+    };
+
+    it('N1: forty-five greetings between questions cannot push the questions out of the read', async () => {
+      await configure({ maxConsecutiveClarifyingQuestions: 2, maxAutoRepliesPerHour: 60 });
+      const id = await turn('مشکل دارم', ask('سؤال ۱؟'));
+      await turn('Sing-box', ask('سؤال ۲؟'));
+      await turn('سلام', greeting);
+      await cloneReply(id, 44); // 45 greetings after the two questions, more than any old bound
+      const epoch = (await conversation(id)).controlEpoch;
+      expect(await jobs.clarifyingStreak(scopeA, { conversationId: id, epoch })).toBe(2);
+      await turn('خطا میده', ask('سؤال ۳؟'));
+      expect((await outcomes(id)).at(-1)).toBe('guard_clarifying_limit');
+    });
+
+    it('N3: a "greeting" longer than a greeting is an answer, and spends the budget', async () => {
+      const id = await turn('سلام', greeting);
+      expect(await session(id)).toBe(0);
+      await turn(
+        'سلام، یه سؤال',
+        scripted({ topic: 'GREETING', factRefs: [], replyText: 'سلام! '.repeat(50) }),
+      );
+      expect(await session(id)).toBe(1);
+      // A purged body cannot show it was short: it counts.
+      await db().execute(
+        sql`UPDATE business_outbound_messages SET body = NULL, body_purged_at = now()
+            WHERE conversation_id = ${id}`,
+      );
+      expect(await session(id)).toBe(2);
+    });
+
+    it('rolling deploy: the read still carries the retired limit an older bundle requires; a save ignores it', async () => {
+      // What an OLDER web bundle (before roadmap A1) requires of the configuration it reads:
+      // every one of its fields, `maxConsecutiveReplies` an integer 1–20 among them.
+      const read = await ctx.container.supportAiConfig.view(tenantA as never, owner);
+      const olderBundleFields = [
+        'mode',
+        'primary',
+        'fallbacks',
+        'visionEnabled',
+        'timeoutMs',
+        'maxOutputChars',
+        'maxConsecutiveReplies',
+        'maxConsecutiveClarifyingQuestions',
+        'cooldownSeconds',
+        'settleDelaySeconds',
+        'toneInstructions',
+        'autoTopics',
+        'autoMinConfidence',
+      ];
+      for (const field of olderBundleFields) expect(read.config, field).toHaveProperty(field);
+      const retired = read.config.maxConsecutiveReplies!;
+      expect(Number.isInteger(retired) && retired >= 1 && retired <= 20).toBe(true);
+      expect(read.config.maxConsecutiveReplies).toBe(4);
+      // An older bundle echoes it back (any value): ignored, the column untouched.
+      await ctx.container.supportAiConfig.update(tenantA as never, owner, {
+        idempotencyKey: key('cfg-older'),
+        expectedVersion: read.version,
+        config: { ...read.config, maxConsecutiveReplies: 9, cooldownSeconds: 25 },
+      });
+      const column = await db().execute(
+        sql`SELECT max_consecutive_replies AS n, cooldown_seconds AS c FROM support_ai_configs
+            WHERE tenant_id = ${SEED_IDS.tenantA}`,
+      );
+      expect(column.rows).toEqual([{ n: 4, c: 25 }]);
+      // A tenant with no row reads the column's default.
+      const bOwner = adminActorFor(
+        await createAdmin(ctx.container, tenantB, { username: 'bowner-rd', roleKeys: ['owner'] }),
+      );
+      expect(
+        (await ctx.container.supportAiConfig.view(tenantB as never, bOwner)).config
+          .maxConsecutiveReplies,
+      ).toBe(4);
+    });
+
+    it('A2: a GREETING reply between questions does not reset the streak; a real REPLY does', async () => {
+      await configure({ maxConsecutiveClarifyingQuestions: 2 });
+      const id = await turn('مشکل دارم', ask('سؤال ۱؟'));
+      await turn('سلام', greeting);
+      await turn('Sing-box', ask('سؤال ۲؟'));
+      expect(
+        await jobs.clarifyingStreak(scopeA, {
+          conversationId: id,
+          epoch: (await conversation(id)).controlEpoch,
+        }),
+      ).toBe(2);
+      await turn('خطا میده', ask('سؤال ۳؟'));
+      expect(await outcomes(id)).toEqual([
+        'sent_clarifying',
+        'sent',
+        'sent_clarifying',
+        'guard_clarifying_limit',
+      ]);
+      // After a person returns it to the AI, a real REPLY then resets as before.
+      await resume(id);
+      await turn('ادامه', ask('سؤال ۴؟'));
+      await turn('باشه', scripted({}));
+      await turn('یک چیز دیگه', ask('سؤال ۵؟'));
+      await turn('و', ask('سؤال ۶؟'));
+      expect((await outcomes(id)).slice(-4)).toEqual([
+        'sent_clarifying',
+        'sent',
+        'sent_clarifying',
+        'sent_clarifying',
+      ]);
+    });
+  });
+
+  // ===========================================================================================
+  // Roadmap A3–A6 (2026-10-07) — the progress guards, the handoff notice, the handoff's operator
+  // context, and the silent NO_ACTION, each through the real AUTO path.
+  // ===========================================================================================
+  describe('roadmap A3–A6: progress guards, handoff notice and context, NO_ACTION', () => {
+    const scripted = (output: Record<string, unknown>): SupportAiOutcome => ({
+      outcome: 'OK',
+      output: { ...grounded, ...output },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'gpt-5.5',
+    });
+    /** A troubleshooting step, different each time (repeated advice is its own guard). */
+    const step = (n: number, over: Record<string, unknown> = {}) =>
+      scripted({
+        replyText: [
+          'لطفاً برنامه را کامل ببندید و دوباره باز کنید.',
+          'از تنظیمات برنامه، پروتکل را روی TCP بگذارید.',
+          'لینک اشتراک را از ربات دوباره دریافت و جایگزین کنید.',
+          'سرور دیگری از فهرست انتخاب کنید و دوباره وصل شوید.',
+          'تاریخ و ساعت گوشی را روی خودکار بگذارید.',
+          'برنامه را به آخرین نسخه به‌روز کنید.',
+        ][n % 6],
+        summary: `گام ${n} اتصال پیشنهاد شد.`,
+        intent: 'رفع مشکل اتصال',
+        ...over,
+      });
+    const turn = async (text: string, output: SupportAiOutcome = next) => {
+      next = output;
+      const recorded = await record(message({ text }));
+      await tick();
+      await deliver();
+      return recorded.conversationId;
+    };
+    const outcomes = async (conversationId: string) =>
+      (await autoJobs(conversationId)).map((j) => j.outcome);
+    const escalations = async (conversationId: string) =>
+      (
+        await db().execute(
+          sql`SELECT reason, summary, topic, intent, steps_tried FROM business_conversation_escalations
+              WHERE conversation_id = ${conversationId} ORDER BY created_at`,
+        )
+      ).rows as {
+        reason: string;
+        summary: string | null;
+        topic: string | null;
+        intent: string | null;
+        steps_tried: number | null;
+      }[];
+    const noticeRows = async (conversationId: string) =>
+      (
+        await db().execute(
+          sql`SELECT state, body, template_key, control_epoch, failure_code FROM business_outbound_messages
+              WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = ${conversationId}
+              ORDER BY created_at`,
+        )
+      ).rows as {
+        state: string;
+        body: string | null;
+        template_key: string | null;
+        control_epoch: number;
+        failure_code: string | null;
+      }[];
+    const takeOver = (conversationId: string) =>
+      ctx.container.businessConversations.takeOver(scopeA, operator, {
+        conversationId,
+        idempotencyKey: key('take'),
+      });
+
+    // --- A3: no progress ----------------------------------------------------------------
+
+    it('A3: three «it did not work» after the AI’s advice hand off before a fourth provider call', async () => {
+      const id = await turn('اینترنتم وصل نمیشه، کمک کنید', step(0));
+      await turn('نشد', step(1));
+      await turn('هنوز وصل نمیشه', step(2));
+      expect(calls).toBe(3);
+      await turn('بازم همونه', step(3));
+      expect(calls).toBe(3); // decided before any provider cost
+      expect(await outcomes(id)).toEqual(['sent', 'sent', 'sent', 'guard_no_progress']);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'NO_PROGRESS',
+      });
+      expect(transport.sent).toHaveLength(3);
+      // A5: the person picking it up sees where things stood, from what NEXA recorded.
+      expect(await escalations(id)).toEqual([
+        {
+          reason: 'NO_PROGRESS',
+          summary: 'گام 2 اتصال پیشنهاد شد.',
+          topic: 'CONNECTION_TROUBLESHOOTING',
+          intent: 'رفع مشکل اتصال',
+          steps_tried: 3,
+        },
+      ]);
+      // A4: and the customer is told, once.
+      expect(transport.notices.map((n) => n.text)).toEqual([HANDOFF_NOTICE]);
+    });
+
+    it('A3: Finglish feedback counts; any other message ends the run; a resume starts again', async () => {
+      const id = await turn('vasl nemisham', step(0));
+      await turn('nashod', step(1));
+      await turn('ba Sing-box hastam', step(2)); // not feedback: the run restarts
+      await turn('javab nadad', step(3));
+      await turn('hanooz vasl nemishe', step(4));
+      expect(await outcomes(id)).toEqual(['sent', 'sent', 'sent', 'sent', 'sent']);
+      await turn('bazam hamoone', step(5));
+      expect((await outcomes(id)).at(-1)).toBe('guard_no_progress');
+      // A person returns it to the AI: the earlier feedback belongs to the old epoch.
+      await resume(id);
+      await turn('نشد', step(0, { replyText: 'یک راه تازه: حالت هواپیما را روشن و خاموش کنید.' }));
+      expect((await outcomes(id)).at(-1)).toBe('sent');
+    });
+
+    // --- A3: repeated advice --------------------------------------------------------------
+
+    it('A3: a reply the customer already received is not sent again; a person continues', async () => {
+      const advice = 'لطفاً برنامه را کامل ببندید، لینک اشتراک را به‌روز کنید و دوباره وصل شوید.';
+      const id = await turn('وصل نمیشم', scripted({ replyText: advice }));
+      // The model, asked again, says nearly the same thing (Arabic letters, no joiner).
+      await turn(
+        'با Sing-box هستم',
+        scripted({
+          replyText: 'لطفا برنامه را کامل ببنديد، لينک اشتراک را بهروز کنيد و دوباره وصل شويد',
+        }),
+      );
+      expect(calls).toBe(2);
+      expect(await outcomes(id)).toEqual(['sent', 'guard_repeated_advice']);
+      expect(transport.sent.map((m) => m.text)).toEqual([advice]);
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'REPEATED_ADVICE' });
+      expect(await escalations(id)).toMatchObject([
+        { reason: 'REPEATED_ADVICE', topic: 'CONNECTION_TROUBLESHOOTING', steps_tried: 1 },
+      ]);
+    });
+
+    it('A3, review of PR #248 CX5: advice DELIVERED while the provider was thinking is not sent again', async () => {
+      const advice = 'لطفاً برنامه را کامل ببندید، لینک اشتراک را به‌روز کنید و دوباره وصل شوید.';
+      // The first reply is enqueued and NOT yet delivered when the second job asks the provider.
+      next = scripted({ replyText: advice });
+      const id = (await record(message({ text: 'وصل نمیشم' }))).conversationId;
+      await tick();
+      expect(transport.sent).toHaveLength(0);
+      // The second job's pre-call check reads no delivered advice; the first reply is delivered
+      // DURING its provider call, and the model then repeats it.
+      next = scripted({
+        replyText: 'لطفا برنامه را کامل ببنديد، لينک اشتراک را بهروز کنيد و دوباره وصل شويد',
+      });
+      duringCall = async () => {
+        duringCall = null;
+        await deliver();
+      };
+      await record(message({ text: 'با Sing-box هستم' }));
+      await tick();
+      await deliver();
+      expect(calls).toBe(2);
+      expect(await outcomes(id)).toEqual(['sent', 'guard_repeated_advice']);
+      // The advice reached the customer once; the conversation went to a person.
+      expect(transport.sent.map((m) => m.text)).toEqual([advice]);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'REPEATED_ADVICE',
+      });
+    });
+
+    it('A3, the CX5 follow-up: advice still PENDING when the next job enqueues is not sent again', async () => {
+      const advice = 'لطفاً برنامه را کامل ببندید، لینک اشتراک را به‌روز کنید و دوباره وصل شوید.';
+      next = scripted({ replyText: advice });
+      const id = (await record(message({ text: 'وصل نمیشم' }))).conversationId;
+      await tick();
+      // The first reply is enqueued and never delivered before the second job enqueues.
+      expect(transport.sent).toHaveLength(0);
+      next = scripted({
+        replyText: 'لطفا برنامه را کامل ببنديد، لينک اشتراک را بهروز کنيد و دوباره وصل شويد',
+      });
+      await record(message({ text: 'با Sing-box هستم' }));
+      await tick();
+      expect(calls).toBe(2);
+      expect(await outcomes(id)).toEqual(['sent', 'guard_repeated_advice']);
+      // One AUTO row was ever written: the repeat never reached the lane.
+      const autoRows = await db().execute(
+        sql`SELECT body FROM business_outbound_messages
+            WHERE origin = 'AUTO' AND conversation_id = ${id}`,
+      );
+      expect(autoRows.rows.map((row) => (row as { body: string }).body)).toEqual([advice]);
+      // The lane runs only now; a person holds the conversation, so the first reply is not sent
+      // automatically either (ADR-0033 §4) — and the advice is never sent twice.
+      await deliver();
+      expect(transport.sent.map((m) => m.text)).not.toContain(advice);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'REPEATED_ADVICE',
+      });
+    });
+
+    it('A3: the same greeting twice is courtesy, not repeated advice', async () => {
+      const hello = scripted({
+        topic: 'GREETING',
+        replyText: 'سلام! چطور کمکتون کنم؟',
+        factRefs: [],
+      });
+      const id = await turn('سلام', hello);
+      await turn('سلام وقت بخیر', hello);
+      expect(await outcomes(id)).toEqual(['sent', 'sent']);
+    });
+
+    // --- A3: inbound flood ----------------------------------------------------------------
+
+    it('A3: the same message three times hands off instead of asking the provider again', async () => {
+      const id = await turn('کسی هست؟', step(0));
+      await turn('کسی هست ؟', step(1));
+      expect(calls).toBe(2);
+      await turn('كسي هست؟', step(2)); // Arabic letters: the same message
+      expect(calls).toBe(2);
+      expect((await outcomes(id)).at(-1)).toBe('guard_inbound_flood');
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'INBOUND_FLOOD' });
+    });
+
+    it('A3: more than eight messages in a minute hand off with no provider call', async () => {
+      let id = '';
+      for (let i = 1; i <= 9; i += 1) {
+        id = (await record(message({ text: `پیام ${i}: کمک می‌خوام` }))).conversationId;
+      }
+      await tick();
+      expect(calls).toBe(0);
+      expect(await outcomes(id)).toContain('guard_inbound_flood');
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'INBOUND_FLOOD' });
+    });
+
+    // --- A4: the handoff notice -------------------------------------------------------------
+
+    it('A4: a handoff sends exactly one template notice, never AI text, never twice', async () => {
+      const id = await turn('وصل نمیشه، پولمو پس بدید', step(0));
+      expect(calls).toBe(0);
+      const [row] = await noticeRows(id);
+      expect(row).toMatchObject({
+        state: 'DELIVERED',
+        body: null, // the text is the template's, rendered at the send and never stored
+        template_key: 'bot.support.handoff_notice',
+        control_epoch: (await conversation(id)).controlEpoch,
+      });
+      expect(transport.notices).toEqual([{ chatId: CUSTOMER, text: HANDOFF_NOTICE }]);
+      // More lane passes, and more customer messages while handed off, add nothing.
+      await deliver();
+      await record(message({ text: 'کسی هست؟' }));
+      await tick();
+      await deliver();
+      expect(transport.notices).toHaveLength(1);
+      expect(await noticeRows(id)).toHaveLength(1);
+      expect(transport.sent).toEqual([]);
+    });
+
+    it('A4: a person who took over before the lane sent it means no notice', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick(); // handed off; the notice is queued
+      expect(await noticeRows(id)).toMatchObject([{ state: 'PENDING' }]);
+      await takeOver(id);
+      await deliver();
+      expect(transport.notices).toEqual([]);
+      expect(await noticeRows(id)).toMatchObject([{ state: 'SUPERSEDED' }]);
+    });
+
+    it('A4: an unknown send of the notice is UNCONFIRMED, never retried, and hands nothing off again', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      transport.nextNotice.push({ outcome: 'UNKNOWN', errorCode: 'telegram.unreachable' });
+      await deliver();
+      await deliver();
+      expect(transport.notices).toHaveLength(1);
+      expect(await noticeRows(id)).toMatchObject([{ state: 'UNCONFIRMED' }]);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'HANDOFF_TOPIC',
+      });
+      expect(await escalations(id)).toHaveLength(1);
+    });
+
+    it('A4: a refused notice is FAILED once and hands nothing off again', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      transport.nextNotice.push({
+        outcome: 'REFUSED',
+        reason: 'TELEGRAM_REJECTED',
+        errorCode: 'telegram.400',
+        connectionStatus: null,
+      });
+      await deliver();
+      await deliver();
+      expect(await noticeRows(id)).toMatchObject([{ state: 'FAILED' }]);
+      expect(await escalations(id)).toHaveLength(1);
+      expect(await conversation(id)).toMatchObject({ handoffReason: 'HANDOFF_TOPIC' });
+    });
+
+    it('A4: switching the mode OFF silences a queued notice', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await configure({ mode: 'ASSIST_ONLY' });
+      await deliver();
+      expect(transport.notices).toEqual([]);
+      expect(await noticeRows(id)).toMatchObject([
+        { state: 'SUPERSEDED', failure_code: 'support_ai.mode_off' },
+      ]);
+    });
+
+    it('A4: each handoff epoch gets its own one notice; a return to the AI and a second handoff send one more', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      await resume(id);
+      next = step(1, { topic: 'WALLET' });
+      await record(message({ text: 'یک سؤال دیگر' }));
+      await tick();
+      await deliver();
+      expect(transport.notices).toHaveLength(2);
+      const rows = await noticeRows(id);
+      expect(rows.map((r) => r.state)).toEqual(['DELIVERED', 'DELIVERED']);
+      expect(new Set(rows.map((r) => r.control_epoch)).size).toBe(2);
+    });
+
+    it('A4: the notice is customer text from a template — an owner override is what is sent', async () => {
+      await db().execute(sql`
+        INSERT INTO template_overrides (id, tenant_id, template_key, locale, body, revision, updated_by_admin_id)
+        VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, 'bot.support.handoff_notice', 'fa',
+                'یک همکار به‌زودی پاسخ می‌دهد.', 1, ${owner.id})`);
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      // Not the default text: the tenant's own body, rendered at the send.
+      expect(transport.notices).toEqual([]);
+      expect(transport.sent).toEqual([{ chatId: CUSTOMER, text: 'یک همکار به‌زودی پاسخ می‌دهد.' }]);
+      expect(await noticeRows(id)).toMatchObject([{ state: 'DELIVERED', body: null }]);
+    });
+
+    // --- A5: the handoff's operator context ----------------------------------------------
+
+    it('A5: a handoff decided before the provider (money) carries the last summary, topic, intent and steps', async () => {
+      const id = await turn('وصل نمیشم', step(0, { summary: 'مشتری با Sing-box وصل نمی‌شود.' }));
+      await turn('پولمو پس بدید', step(1));
+      expect(calls).toBe(1);
+      expect(await escalations(id)).toEqual([
+        {
+          reason: 'HANDOFF_TOPIC',
+          summary: 'مشتری با Sing-box وصل نمی‌شود.',
+          topic: 'CONNECTION_TROUBLESHOOTING',
+          intent: 'رفع مشکل اتصال',
+          steps_tried: 1,
+        },
+      ]);
+    });
+
+    it('A5: provider unavailable, an unseen image and the loop guard carry it too; a first message has none', async () => {
+      // Provider unavailable on the first message: nothing recorded yet, steps 0.
+      next = { outcome: 'TEMPORARY', code: 'overloaded' } as SupportAiOutcome;
+      const a = (await record(message({ text: 'سلام', chatId: '7000101', fromUserId: '7000101' })))
+        .conversationId;
+      await tick();
+      expect(await escalations(a)).toEqual([
+        { reason: 'AI_UNAVAILABLE', summary: null, topic: null, intent: null, steps_tried: 0 },
+      ]);
+      // An answered turn, then an image no model can see.
+      visionStep = false;
+      const id = await turn('وصل نمیشم', step(0));
+      await record(message({ kind: 'PHOTO', text: null }));
+      await tick();
+      expect(await escalations(id)).toMatchObject([
+        { reason: 'UNSUPPORTED_CONTENT', topic: 'CONNECTION_TROUBLESHOOTING', steps_tried: 1 },
+      ]);
+    });
+
+    it('A5: the context is the conversation’s to show — tickets.view alone sees none of it', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await turn('پولمو پس بدید', step(1));
+      const ticketId = (await conversation(id)).ticketId!;
+      const roleId = ctx.container.ids.uuid();
+      await db().execute(
+        sql`INSERT INTO roles (id, tenant_id, key, name) VALUES (${roleId}, ${SEED_IDS.tenantA}, 'ticket_reader2', 'Ticket reader')`,
+      );
+      await db().execute(
+        sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+            VALUES (${SEED_IDS.tenantA}, ${roleId}, 'tickets.view')`,
+      );
+      const reader = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'reader2',
+          roleKeys: ['ticket_reader2'],
+        }),
+      );
+      const seen = await ctx.container.tickets.detail(tenantA as never, reader, ticketId);
+      expect(seen.escalations).toMatchObject([
+        { reason: 'HANDOFF_TOPIC', summary: null, topic: null, intent: null, stepsTried: null },
+      ]);
+      const full = await ctx.container.tickets.detail(tenantA as never, owner, ticketId);
+      expect(full.escalations).toMatchObject([
+        { reason: 'HANDOFF_TOPIC', topic: 'CONNECTION_TROUBLESHOOTING', stepsTried: 1 },
+      ]);
+    });
+
+    it('A5: the intent is purged with the summary after 30 days', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await turn('پولمو پس بدید', step(1));
+      // The lane purges at most every ten minutes, and this test's lane already ran: the rule is
+      // the repository's, asked directly (R8 covers the lane calling it).
+      const purged = await new DrizzleBusinessEscalationRepository(db()).purgeText(
+        scopeA,
+        new Date(Date.now() - 30 * 86_400_000),
+        new Date(),
+        500,
+        undefined,
+      );
+      expect(purged).toBe(0); // nothing is old enough yet
+      await db().execute(
+        sql`UPDATE business_conversation_escalations SET created_at = now() - interval '31 days'
+            WHERE conversation_id = ${id}`,
+      );
+      await new DrizzleBusinessEscalationRepository(db()).purgeText(
+        scopeA,
+        new Date(Date.now() - 30 * 86_400_000),
+        new Date(),
+        500,
+        undefined,
+      );
+      expect(await escalations(id)).toMatchObject([
+        { summary: null, intent: null, topic: 'CONNECTION_TROUBLESHOOTING', steps_tried: 1 },
+      ]);
+    });
+
+    // --- A6: NO_ACTION --------------------------------------------------------------------
+
+    const closing = (over: Record<string, unknown> = {}) =>
+      scripted({
+        decision: 'NO_ACTION',
+        replyText: '',
+        factRefs: [],
+        summary: 'مشکل حل شد.',
+        intent: 'تشکر',
+        ...over,
+      });
+
+    it('A6: «مرسی، حل شد» ends silently — no reply, no handoff, no ticket — and the chat goes on', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      // The question was asked a minute before the answer (a customer line in the SAME second as
+      // the reply counts as after it — B1 — and this test is faster than any customer).
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = sent_at - interval '1 minute'
+            WHERE conversation_id = ${id}`,
+      );
+      await turn('مرسی، حل شد', closing());
+      expect(await autoJobs(id)).toMatchObject([
+        { state: 'SENT', outcome: 'sent' },
+        { state: 'DISCARDED', outcome: 'no_action', handoff_reason: null },
+      ]);
+      expect(await conversation(id)).toMatchObject({ state: 'AI_ACTIVE', handoffReason: null });
+      expect(await count('tickets')).toBe(0);
+      expect(await count('business_conversation_escalations')).toBe(0);
+      expect(transport.sent).toHaveLength(1);
+      expect(transport.notices).toEqual([]);
+      // The decision is kept on the job, for the analytics.
+      const decided = await db().execute(
+        sql`SELECT decision FROM support_ai_jobs WHERE conversation_id = ${id} ORDER BY created_at`,
+      );
+      expect(decided.rows.at(-1)).toEqual({ decision: 'NO_ACTION' });
+      // The conversation is still the AI's: the next message is answered.
+      await turn(
+        'یه سؤال دیگه: چطور تمدید کنم؟',
+        step(1, { topic: 'SERVICE_INFO', factRefs: ['S1'] }),
+      );
+      expect((await outcomes(id)).at(-1)).toBe('sent');
+    });
+
+    it('A6: «اوکی درست شد» and «ممنون» end silently too', async () => {
+      for (const [index, text] of ['اوکی درست شد', 'ممنون'].entries()) {
+        const chat = `70002${index}`;
+        next = closing();
+        const id = (await record(message({ text, chatId: chat, fromUserId: chat }))).conversationId;
+        await tick();
+        expect((await outcomes(id)).at(-1), text).toBe('no_action');
+      }
+    });
+
+    it('A6: NO_ACTION on anything else still hands off as before', async () => {
+      const cases: { text: string; output: SupportAiOutcome; reason: string }[] = [
+        // not a closing message
+        { text: 'یه سؤال دیگه دارم', output: closing(), reason: 'DECISION_NOT_REPLY' },
+        // closing, but a topic off the allowlist
+        { text: 'مرسی', output: closing({ topic: 'PLAN_INFO' }), reason: 'DECISION_NOT_REPLY' },
+        // closing, but a hard topic
+        { text: 'مرسی', output: closing({ topic: 'REFUND' }), reason: 'HANDOFF_TOPIC' },
+        // closing, but low confidence
+        { text: 'مرسی', output: closing({ confidence: 'MEDIUM' }), reason: 'DECISION_NOT_REPLY' },
+      ];
+      for (const [index, item] of cases.entries()) {
+        const chat = `70003${index}`;
+        next = item.output;
+        const id = (await record(message({ text: item.text, chatId: chat, fromUserId: chat })))
+          .conversationId;
+        await tick();
+        expect(await conversation(id), item.text).toMatchObject({
+          state: 'HANDOFF_REQUIRED',
+          handoffReason: item.reason,
+        });
+      }
+    });
+
+    // --- review of PR #246 -----------------------------------------------------------------
+
+    const customerRow = async () =>
+      (
+        (
+          await db().execute(
+            sql`SELECT id FROM customers WHERE telegram_user_id = ${CUSTOMER} AND tenant_id = ${SEED_IDS.tenantA}`,
+          )
+        ).rows[0] as { id: string }
+      ).id;
+    /** One answered turn, then «مرسی، حل شد» a minute later (the question is a minute older). */
+    const thankAfterAnswer = async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await db().execute(
+        sql`UPDATE business_messages SET sent_at = sent_at - interval '1 minute'
+            WHERE conversation_id = ${id}`,
+      );
+      await db().execute(
+        sql`UPDATE business_conversations
+            SET last_inbound_at = last_inbound_at - interval '1 minute',
+                last_ai_at = last_ai_at - interval '1 minute',
+                last_message_at = last_message_at - interval '1 minute'
+            WHERE id = ${id}`,
+      );
+      return id;
+    };
+
+    it('CX1: a silent close is an answered one — the inbox shows no growing wait', async () => {
+      const id = await thankAfterAnswer();
+      // Written ten seconds before the job ran (the settle delay does that in production; a
+      // reply in the message's own Telegram second would not count as answering it).
+      next = closing();
+      await record(message({ text: 'مرسی، حل شد', sentAt: new Date(Date.now() - 10_000) }));
+      await tick();
+      expect((await outcomes(id)).at(-1)).toBe('no_action');
+      const after = await conversation(id);
+      expect(after.lastAiAt).not.toBeNull();
+      expect(
+        businessUnansweredSince({
+          lastInboundAt: after.lastInboundAt,
+          lastHumanAt: after.lastHumanAt,
+          lastAiAt: after.lastAiAt,
+          firstUnansweredAt: after.lastInboundAt,
+        }),
+      ).toBeNull();
+    });
+
+    it('CX2: a customer blocked during the provider call is handed off, not closed silently', async () => {
+      const id = await thankAfterAnswer();
+      duringCall = async () => {
+        await db().execute(
+          sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now() WHERE telegram_user_id = ${CUSTOMER}`,
+        );
+      };
+      await turn('مرسی، حل شد', closing());
+      expect((await autoJobs(id)).at(-1)).toMatchObject({
+        state: 'FAILED',
+        outcome: 'guard_customer_blocked',
+        handoff_reason: 'CUSTOMER_BLOCKED',
+      });
+      expect(await conversation(id)).toMatchObject({ state: 'HANDOFF_REQUIRED' });
+    });
+
+    it('CX2: a payment put under review during the provider call hands off', async () => {
+      const id = await thankAfterAnswer();
+      const customer = await customerRow();
+      duringCall = async () => {
+        await db().execute(sql`
+          INSERT INTO payments (id, tenant_id, customer_id, order_id, state, method, amount, currency,
+                                reference, external_reference, gateway_provider, created_at)
+          VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, ${customer}, NULL, 'UNKNOWN',
+                  'GATEWAY', 250000, 'IRT', ${key('pay-ref')}, 'ext-1', 'TONPAYS', now())`);
+      };
+      await turn('مرسی، حل شد', closing());
+      expect((await autoJobs(id)).at(-1)).toMatchObject({
+        outcome: 'guard_account_review',
+        handoff_reason: 'ACCOUNT_UNDER_REVIEW',
+      });
+    });
+
+    it('CX2: the mode switched off, or a person who took over, during the call: dropped, nothing stamped', async () => {
+      const id = await thankAfterAnswer();
+      duringCall = async () => {
+        await configure({ mode: 'ASSIST_ONLY' });
+      };
+      await turn('مرسی، حل شد', closing());
+      expect((await autoJobs(id)).at(-1)).toMatchObject({ outcome: 'dropped_mode' });
+      await configure({ mode: 'AUTO_REPLY_SAFE' });
+      const before = (await conversation(id)).lastAiAt;
+      duringCall = async () => {
+        await takeOver(id);
+      };
+      await turn('ممنون', closing());
+      expect((await autoJobs(id)).at(-1)).toMatchObject({ outcome: 'dropped_epoch' });
+      expect((await conversation(id)).lastAiAt?.getTime()).toBe(before?.getTime());
+    });
+
+    it('CX4: the handoff notice and its Telegram echo are left out of what the model reads', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      const [row] = (
+        await db().execute(
+          sql`SELECT telegram_message_id FROM business_outbound_messages
+              WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = ${id}`,
+        )
+      ).rows as { telegram_message_id: number }[];
+      // Telegram echoes the notice back to the bot.
+      await record(
+        message({
+          messageId: Number(row!.telegram_message_id),
+          fromUserId: OWNER,
+          senderBusinessBotId: OUR_BOT,
+          text: HANDOFF_NOTICE,
+        }),
+      );
+      await resume(id);
+      await turn('سؤال تازه دارم', step(1));
+      const read = requests
+        .at(-1)!
+        .map((m) => m.text)
+        .join('\n');
+      expect(read).not.toContain(HANDOFF_NOTICE);
+      expect(read).toContain('سؤال تازه دارم');
+    });
+
+    it('CX5: steps tried counts only the replies the customer actually received', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      const convo = await conversation(id);
+      // Two more attempts this session that Telegram never confirmed.
+      await seedAuto(id, convo.controlEpoch, 2, "interval '30 seconds'", 'UNCONFIRMED');
+      await turn('پولمو پس بدید', step(1));
+      expect(await escalations(id)).toMatchObject([{ reason: 'HANDOFF_TOPIC', steps_tried: 1 }]);
+    });
+
+    it('M1: an earlier epoch’s decision is never this handoff’s context', async () => {
+      const id = await turn('وصل نمیشم', step(0, { summary: 'یک مشکل قدیمی.' }));
+      await takeOver(id);
+      await resume(id);
+      await turn('پولمو پس بدید', step(1));
+      expect(await escalations(id)).toMatchObject([
+        { reason: 'HANDOFF_TOPIC', summary: null, intent: null, topic: null },
+      ]);
+    });
+
+    it('M1: a decision past the retention is not copied; a copied one is purged by its source’s age', async () => {
+      const id = await turn('وصل نمیشم', step(0, { summary: 'یادداشت ۲۹ روزه.' }));
+      await db().execute(
+        sql`UPDATE support_ai_jobs SET created_at = now() - interval '29 days'
+            WHERE conversation_id = ${id}`,
+      );
+      await turn('پولمو پس بدید', step(1));
+      expect(await escalations(id)).toMatchObject([{ summary: 'یادداشت ۲۹ روزه.' }]);
+      const [contextRow] = (
+        await db().execute(
+          sql`SELECT context_from FROM business_conversation_escalations WHERE conversation_id = ${id}`,
+        )
+      ).rows as { context_from: Date | null }[];
+      expect(contextRow?.context_from).not.toBeNull();
+      // Two days later the SOURCE is 31 days old: the copy goes with it, though the row is new.
+      await new DrizzleBusinessEscalationRepository(db()).purgeText(
+        scopeA,
+        new Date(Date.now() + 2 * 86_400_000 - 30 * 86_400_000),
+        new Date(),
+        500,
+        undefined,
+      );
+      expect(await escalations(id)).toMatchObject([{ summary: null, intent: null }]);
+
+      // A decision already past the retention is not copied at all.
+      const other = (
+        await record(message({ text: 'وصل نمیشم', chatId: '7000501', fromUserId: '7000501' }))
+      ).conversationId;
+      next = step(0, { summary: 'یادداشت ۳۱ روزه.' });
+      await tick();
+      await deliver();
+      await db().execute(
+        sql`UPDATE support_ai_jobs SET created_at = now() - interval '31 days'
+            WHERE conversation_id = ${other}`,
+      );
+      next = step(1);
+      await record(message({ text: 'پولمو پس بدید', chatId: '7000501', fromUserId: '7000501' }));
+      await tick();
+      expect(await escalations(other)).toMatchObject([{ summary: null, intent: null }]);
+    });
+
+    it('m4: a connection that cannot send gets no notice row; the handoff still happens', async () => {
+      const id = (await record(message({ text: 'سؤال' }))).conversationId;
+      await db().execute(sql`UPDATE telegram_business_connections SET is_enabled = false`);
+      await ctx.container.uow.run(scopeA, (tx) =>
+        ctx.container.businessConversations.handOff(scopeA, id, 'HANDOFF_TOPIC', new Date(), tx),
+      );
+      expect(await conversation(id)).toMatchObject({ state: 'HANDOFF_REQUIRED' });
+      expect(await noticeRows(id)).toEqual([]);
+    });
+
+    it('m4: an override that renders blank fails the notice once, unsent', async () => {
+      await db().execute(sql`
+        INSERT INTO template_overrides (id, tenant_id, template_key, locale, body, revision, updated_by_admin_id)
+        VALUES (${ctx.container.ids.uuid()}, ${SEED_IDS.tenantA}, 'bot.support.handoff_notice', 'fa',
+                ' ', 1, ${owner.id})`);
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await deliver();
+      await deliver();
+      expect(await noticeRows(id)).toMatchObject([
+        { state: 'FAILED', failure_code: 'business.notice_template' },
+      ]);
+      expect(transport.notices).toEqual([]);
+      expect(transport.sent).toEqual([]);
+    });
+
+    it('m4: a delivered notice is neither a person’s answer nor the AI’s', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      const before = await conversation(id);
+      await deliver();
+      expect(transport.notices).toHaveLength(1);
+      const after = await conversation(id);
+      expect(after.lastHumanAt).toEqual(before.lastHumanAt);
+      expect(after.lastAiAt).toEqual(before.lastAiAt);
+      expect(after.lastMessageAt).not.toEqual(before.lastMessageAt);
+    });
+
+    it('m5: an escalation with an intent and no summary has its intent purged too', async () => {
+      const id = await turn('وصل نمیشم', step(0));
+      await turn('پولمو پس بدید', step(1));
+      await db().execute(
+        sql`UPDATE business_conversation_escalations
+            SET summary = NULL, intent = 'فقط قصد', context_from = NULL,
+                created_at = now() - interval '31 days'
+            WHERE conversation_id = ${id}`,
+      );
+      await new DrizzleBusinessEscalationRepository(db()).purgeText(
+        scopeA,
+        new Date(Date.now() - 30 * 86_400_000),
+        new Date(),
+        500,
+        undefined,
+      );
+      expect(await escalations(id)).toMatchObject([{ summary: null, intent: null }]);
+    });
+
+    it('m6: the deciding decision’s own intent is recorded, not the previous one’s', async () => {
+      const advice = 'لطفاً برنامه را کامل ببندید، لینک اشتراک را به‌روز کنید و دوباره وصل شوید.';
+      const id = await turn('وصل نمیشم', step(0, { replyText: advice, intent: 'قصد قبلی' }));
+      await turn(
+        'با Sing-box هستم',
+        step(1, { replyText: advice, intent: 'قصد همین تصمیم', summary: 'خلاصهٔ همین تصمیم.' }),
+      );
+      expect(await escalations(id)).toMatchObject([
+        { reason: 'REPEATED_ADVICE', intent: 'قصد همین تصمیم', summary: 'خلاصهٔ همین تصمیم.' },
+      ]);
+      const [contextRow] = (
+        await db().execute(
+          sql`SELECT context_from FROM business_conversation_escalations WHERE conversation_id = ${id}`,
+        )
+      ).rows as { context_from: Date | null }[];
+      expect(contextRow?.context_from).toBeNull(); // nothing was copied from an earlier decision
+    });
+
+    it('n3: a notice held past the staleness bound is never sent late', async () => {
+      next = step(0, { topic: 'REFUND' });
+      const id = (await record(message({ text: 'یک سؤال دارم' }))).conversationId;
+      await tick();
+      await db().execute(
+        sql`UPDATE business_outbound_messages SET created_at = now() - interval '11 minutes'
+            WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = ${id}`,
+      );
+      await deliver();
+      expect(transport.notices).toEqual([]);
+      expect(await noticeRows(id)).toMatchObject([
+        { state: 'SUPERSEDED', failure_code: 'support_ai.notice_stale' },
+      ]);
+      expect(await conversation(id)).toMatchObject({ state: 'HANDOFF_REQUIRED' });
+    });
+
+    it('m1: a third «مرسی» inside a minute still closes silently (not a flood)', async () => {
+      const id = await thankAfterAnswer();
+      await turn('مرسی', closing());
+      await turn('مرسی', closing());
+      await turn('مرسی', closing());
+      expect((await outcomes(id)).slice(-3)).toEqual(['no_action', 'no_action', 'no_action']);
+      expect(await conversation(id)).toMatchObject({ state: 'AI_ACTIVE' });
     });
   });
 });

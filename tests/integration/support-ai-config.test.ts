@@ -6,6 +6,7 @@ import {
   SUPPORT_AI_CREDENTIAL_REJECTED_CODE,
   SUPPORT_AI_DECISION_JSON_SCHEMA,
   SUPPORT_AI_DEFAULT_CONFIG,
+  SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
   isNexaError,
   type ActorContext,
   type SupportAiConfigInput,
@@ -177,7 +178,11 @@ describe('the support AI configuration (TB4)', () => {
 
   it('starts every tenant OFF with no row and no key', async () => {
     const view = await service.view(tenantA, owner);
-    expect(view.config).toEqual(SUPPORT_AI_DEFAULT_CONFIG);
+    // The retired per-epoch limit is still READ for older web bundles (review of PR #241).
+    expect(view.config).toEqual({
+      ...SUPPORT_AI_DEFAULT_CONFIG,
+      maxConsecutiveReplies: SUPPORT_AI_RETIRED_MAX_CONSECUTIVE_REPLIES_DEFAULT,
+    });
     expect(view.config.mode).toBe('OFF');
     expect(view.version).toBe(0);
     expect(view.credentials.every((credential) => !credential.configured)).toBe(true);

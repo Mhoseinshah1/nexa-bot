@@ -142,7 +142,8 @@ describe('the automatic outcome classes', () => {
         // A sent clarifying question (hotfix 2026-10-06) is a send too.
         outcome === 'sent' || outcome === 'sent_clarifying'
           ? 'SENT'
-          : outcome.startsWith('dropped_')
+          : // Roadmap A6: a closed matter ended silently — nothing sent, nobody handed off.
+            outcome.startsWith('dropped_') || outcome === 'no_action'
             ? 'DROPPED'
             : outcome.startsWith('guard_') || outcome.startsWith('handoff_')
               ? 'HANDED_OFF'

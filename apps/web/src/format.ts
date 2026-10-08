@@ -73,6 +73,20 @@ export function formatNumber(value: number): string {
 }
 
 /**
+ * A decimal STRING (a rate the server rendered exactly, e.g. `103500.0000`) grouped like
+ * every other figure, its fraction kept as written minus trailing zeros. Never through a
+ * `number`: the integer part is a `bigint`, so nothing is rounded on the way to the screen.
+ * Anything that is not a plain decimal is shown as given.
+ */
+export function formatDecimalText(text: string): string {
+  const match = /^(\d+)(?:\.(\d+))?$/u.exec(text);
+  if (match === null) return text;
+  const whole = GROUPED.format(BigInt(match[1] as string));
+  const fraction = (match[2] ?? '').replace(/0+$/u, '');
+  return fraction === '' ? whole : `${whole}.${fraction}`;
+}
+
+/**
  * What each currency is CALLED.
  *
  * A lookup keyed by the contract enum, because the one thing the owner's

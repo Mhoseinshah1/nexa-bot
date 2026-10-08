@@ -21,8 +21,8 @@ Conventions used below:
 - **Who may act.** Changing the mode, the chain or a key needs `support_ai.configure`
   (owner and admin). Entering `AUTO_REPLY_SAFE`, adding an automatic topic or lowering the
   confidence floor needs `support_ai.auto_reply` (owner only), and so does raising a limit
-  under `AUTO_REPLY_SAFE` — «بیشترین پاسخ خودکار پیاپی», «حداکثر سؤال تکمیلی پیاپی», the reply
-  length — or shortening its delays. Taking a conversation over or
+  under `AUTO_REPLY_SAFE` — «سقف پاسخ خودکار در هر جلسه», «سقف پاسخ خودکار در هر ساعت»,
+  «حداکثر سؤال تکمیلی پیاپی», the reply length — or shortening its delays. Taking a conversation over or
   replying needs `business_chats.reply`.
 
 ## 0. What the alerts mean
@@ -397,11 +397,12 @@ topic («با چه برنامه‌ای وصل می‌شید؟») instead of hand
 question is shown in «آمار پشتیبانی» as «سؤال تکمیلی فرستاده شد» (`sent_clarifying`), apart
 from an answer («فرستاده شد», `sent`), and opens no ticket.
 
-- **The limit.** «حداکثر سؤال تکمیلی پیاپی» on `/support-ai` (default 2, 1–10) is how many
-  questions in a row the AI may send before a person continues. The count runs from the AI's
-  last automatic answer; a customer's reply does not reset it, an AI answer does, and a
-  takeover or «سپردن دوباره به هوش مصنوعی» starts a new count. A refused or superseded send is
-  never counted.
+- **The limit.** «حداکثر سؤال تکمیلی پیاپی» on `/support-ai` (default 3 since roadmap A2, 1–10;
+  a tenant saved before it keeps its stored value, usually 2) is how many questions in a row
+  the AI may send before a person continues. The count runs from the AI's last automatic answer;
+  a customer's reply does not reset it, an AI answer does (a greeting does not), and a takeover
+  or «سپردن دوباره به هوش مصنوعی» starts a new count. A refused or superseded send is never
+  counted.
 - **At the limit** the conversation is handed off with «سؤال‌های تکمیلی پیاپی هوش مصنوعی به سقف
   رسید» (`CLARIFYING_LIMIT`, outcome `guard_clarifying_limit`) and a ticket, like any handoff.
   Nothing more is sent to the customer automatically.
@@ -417,3 +418,143 @@ from an answer («فرستاده شد», `sent`), and opens no ticket.
    WHERE j.kind = 'AUTO_DECISION' AND j.conversation_id = '<conversation id>'
    ORDER BY j.created_at;
   ```
+
+## 13. The session reply budget and the hourly limit (roadmap A1)
+
+Two limits on `/support-ai` bound how much the AI answers on its own; either one reached hands
+the conversation off with «پاسخ‌های خودکار جلسه یا ساعت به سقف رسید» (`LOOP_GUARD`) and a
+ticket, before any provider is paid.
+
+- **«سقف پاسخ خودکار در هر جلسه»** (`sessionReplyBudget`, default 20, 5–40): automatic replies
+  in one session, shown in «آمار پشتیبانی» as «سقف پاسخ در جلسه» (`guard_consecutive`). A session
+  ends when a person acts in the conversation (a message, a takeover, «سپردن دوباره به هوش
+  مصنوعی») or after **six hours with no message either way**. A greeting reply is not counted.
+- **«سقف پاسخ خودکار در هر ساعت»** (`maxAutoRepliesPerHour`, default 30, 10–60): automatic
+  replies to one conversation in the last 60 minutes, every kind counted, whatever happened in
+  between — «سقف پاسخ در یک ساعت» (`guard_window`). This is the loop safety a new session never
+  lifts.
+- **Existing tenants** read 20 and 30 from migration `0236`; the old «بیشترین پاسخ خودکار
+  پیاپی» (default 4, counted for as long as nobody touched the conversation) is gone from the
+  page and no longer applies.
+- **During the rollout** (review of PR #241): an `assistant` replica still on the previous
+  release enforces the old rules — 4 automatic replies per epoch and a fixed 10 per hour — so a
+  few extra `LOOP_GUARD` handoffs while the deploy rolls are expected and harmless. Either web
+  bundle works against either API: the new API still sends the retired value an older page
+  needs, and a new page leaves out the two limits an older API does not know.
+- **A greeting is free only while it is short** (≤ 200 characters): a reply the model labelled
+  «خوشامدگویی» but that is longer is an answer and spends the budget.
+- **If conversations hit the session budget often**, read them before raising it: a long
+  automatic exchange that does not end is usually a problem the knowledge does not cover
+  (TB8/TB9). Raising either limit under `AUTO_REPLY_SAFE` needs `support_ai.auto_reply`.
+- **From the database (read-only)**, the automatic replies of a conversation with their epoch
+  and topic, to see where its sessions began:
+
+  ```sql
+  SELECT o.created_at, o.control_epoch, o.state, j.topic, j.outcome
+    FROM business_outbound_messages o
+    LEFT JOIN support_ai_jobs j ON j.tenant_id = o.tenant_id AND j.sent_outbound_id = o.id
+   WHERE o.origin = 'AUTO' AND o.conversation_id = '<conversation id>'
+   ORDER BY o.created_at;
+  ```
+
+## 14. Conversation memory and knowledge selection (A7, A8 — 2026-10-07)
+
+- **What the AI reads.** The latest 40 lines of the conversation (60 are read so every reply in
+  the window is placed), each cut to 1,500 characters. Every support-side line is marked with who
+  wrote it — a person, an automatic AI reply, an AI draft a person sent, an automatic message —
+  so the AI does not repeat its own earlier step as if it were new, and does not contradict what
+  a person on the team said. Nothing new is stored: the transcript is read from the messages each
+  time, and follows their 30-day retention.
+- **Which knowledge goes with a request.** At most eight approved, enabled articles (and live FAQ
+  entries) that MATCH the conversation: the customer's latest words, the last intent and topic,
+  the titles an earlier draft cited, and — while a troubleshooting episode is open — the
+  customer's earlier description of the problem. An article that matches nothing is never sent,
+  so a greeting carries no knowledge at all.
+- **If the AI keeps missing an article that exists**, look at its title and tags first: the
+  match is lexical (Persian spelling variants and a few inflections are folded, no embeddings). A
+  title in the words customers actually write («وصل نمی‌شود», «قطعی») is found; a title like
+  «راهنمای شماره ۳» is not. `knowledge_sent` on the job says how many entries went with the request:
+
+  ```sql
+  SELECT created_at, kind, decision, topic, knowledge_sent, knowledge_available, knowledge_labels
+    FROM support_ai_jobs
+   WHERE conversation_id = '<conversation id>'
+   ORDER BY created_at;
+  ```
+
+  `knowledge_sent = 0` with `knowledge_available > 0` means nothing matched — rewrite the
+  article's title or tags (TB8 review), never widen anything in configuration.
+
+- **Policy version.** Telemetry records `sai4m-2026-10-07` (or later) for requests built with
+  these rules.
+- **Prompt size and cost.** The transcript the model reads doubled (20 → 40 lines) and the
+  context grew (16 → 24 KiB). The bounds, in the worst case: the transcript is at most 24,000
+  characters of line text plus NEXA's markers (about 48 KB of Persian UTF-8; 40 × 1,500 would
+  have been 60,000), and the context 24 KiB, so a request carries at most about 75 KB besides the
+  fixed policy (about 9 KB) and any images. A typical conversation is far smaller: the transcript
+  is what was actually said. Expect the input tokens per request to rise roughly in proportion
+  to how much longer conversations now reach the model — about double for long ones, unchanged
+  for short ones. `support_ai_runs` records the tokens of every call (`GET /support-ai/usage`):
+  compare a week before and after to see the real change. No price is computed (`OQ-TB-07`).
+
+## 15. Screenshots and the evaluation corpus (A9, A10 — 2026-10-07)
+
+- **Screenshots.** With vision on and a vision-capable step, up to the four most recent customer
+  images (at most 15 MiB together) go with a request; OpenAI reads them at high detail. An image
+  that could not be seen is never described; if it is the customer's latest message, the
+  conversation is handed off with no model asked (TB6, unchanged). Per-image outcomes are in
+  `support_ai_image_outcomes` as before; `OVER_LIMIT` now means a fifth image, or an older one
+  past the 15 MiB total.
+- **The cost of high detail** (PR #244, NIT-3). At `low` OpenAI charges a small flat number of
+  tokens per image; at `high` the image is tiled and one screenshot can cost an order of
+  magnitude more. With up to four images instead of two, the image tokens of an OpenAI request
+  with screenshots can grow well over tenfold. Read it in `support_ai_runs` (input tokens per
+  call, `GET /support-ai/usage`) before and after; no price is computed (`OQ-TB-07`).
+- **Comparing models before changing one.** `docs/support-agent/sai-eval.md`. The corpus runs in
+  CI against a fake provider. To compare real models, an operator with a TEST key (never a
+  tenant's) runs `support-ai-eval --live` outside CI; it reports and changes nothing. The
+  production model is changed only through `/support-ai` by the owner, after reading a report.
+
+## 16. Progress guards, the handoff notice, NO_ACTION (roadmap A3–A6)
+
+Under `AUTO_REPLY_SAFE` three deterministic guards hand a conversation to a person (with a ticket,
+like any handoff), each with its own reason in «سپردن‌ها به پشتیبان» and «آمار پشتیبانی»:
+
+- **«مشتری چند بار گفت راهنمایی هوش مصنوعی جواب نداد»** (`NO_PROGRESS`, `guard_no_progress`):
+  three «نشد» / «هنوز وصل نمیشه» / «بازم همونه» in a row after the AI's advice. Read the
+  conversation: the knowledge does not cover this case (TB8/TB9).
+- **«هوش مصنوعی همان راهنمایی قبلی را تکرار می‌کرد»** (`REPEATED_ADVICE`,
+  `guard_repeated_advice`): the AI's new answer was nearly identical to one the customer already
+  had; it was not sent.
+- **«مشتری پیام تکراری یا پیام‌های پشت‌سرهم زیادی فرستاد»** (`INBOUND_FLOOD`,
+  `guard_inbound_flood`): the same message three times, or more than eight in a minute.
+
+**The customer is told.** Every handoff sends ONE message from the business account, the template
+`bot.support.handoff_notice` («پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد…», editable in
+`/templates`), shown in the conversation as «اطلاع ارجاع به پشتیبان». It is not sent if a person
+took the conversation first, if the mode was switched OFF, or twice for one handoff. If its
+outcome is unknown («تأییدنشده») it is never resent — check the chat on the phone.
+
+**The context.** Each handoff shows the AI's last note, the topic, the intent it understood and
+how many automatic replies the customer had this session — also for handoffs decided before the
+AI was asked (money, loop, an unreadable image, a stale job). Only `business_chats.view` sees them.
+
+**«بی‌پاسخ بسته شد (تشکر یا حل شد)»** (`no_action`): the customer only thanked or said it was
+solved; nothing was sent, nobody was paged, and the conversation stays with the AI.
+
+**During the rollout** (review of PR #246), an older replica is still running:
+
+- **The notice.** An older lane worker supersedes a bodiless `HANDOFF_NOTICE` row as `conversation.moved_on`, so a few notices are lost during the deploy. Each handoff itself, with its ticket and its alert, is unaffected.
+- **Analytics.** An older replica's «آمار پشتیبانی» can answer an error once the range holds a `no_action` or a new guard outcome. A newer replica counts an unknown outcome by its family.
+- **An open browser tab.** An older bundle may draw a new reason or the «اطلاع ارجاع به پشتیبان» origin without its Persian label until the page is reloaded.
+
+**A notice is never sent late.** A notice held past 10 minutes (a stopped tenant, or a lane that was down) is superseded as `support_ai.notice_stale`.
+
+From the database (read-only), a conversation's notices:
+
+```sql
+SELECT created_at, control_epoch, state, failure_code, template_key
+  FROM business_outbound_messages
+ WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = '<conversation id>'
+ ORDER BY created_at;
+```

@@ -56,11 +56,11 @@
 }
 .btn.danger:hover:not(:disabled) {
   background: var(--danger);
-  color: var(--on-solid);
+  color: var(--on-danger);
 }
 .btn.danger.solid {
   background: var(--danger);
-  color: var(--on-solid);
+  color: var(--on-danger);
 }
 .btn.ghost {
   background: transparent;
@@ -1245,9 +1245,18 @@ textarea.input,
 .input-group {
   display: flex;
 }
+/*
+ * Only a DIRECT child grows along the row. A field nested in the group (label
+ * over input) is a column, where `flex: 1`'s zero basis squeezed the input to
+ * 24px tall; the field grows instead and its input keeps the control height.
+ */
+.input-group > .input,
+.input-group > input,
+.input-group > .field {
+  flex: 1;
+}
 .input-group .input,
 .input-group > input {
-  flex: 1;
   border-start-end-radius: 0;
   border-end-end-radius: 0;
 }
@@ -2448,4 +2457,123 @@ textarea.input,
 }
 .menu button svg.end {
   margin-inline-start: auto;
+}
+
+/*
+ * Touch (a phone, a tablet — a coarse primary pointer that cannot hover; a touch
+ * laptop or an iPad with a trackpad stays dense): the kit controls whose size is not the control
+ * token grow to the 44px target too (tokens.css). A mouse keeps them dense.
+ */
+@media (pointer: coarse) and (hover: none) {
+  .input.sm {
+    height: var(--ctl-h-sm);
+  }
+  .chip {
+    min-width: var(--ctl-h-sm);
+    justify-content: center;
+  }
+  .tabs button,
+  .pills button,
+  .menu button,
+  .menu a,
+  .palette .in input,
+  .palette .list a {
+    min-height: var(--ctl-h);
+  }
+  .disclosure > summary {
+    min-height: var(--ctl-h);
+  }
+  /* A one-word button («امروز», «حذف») is still a square target at least. */
+  .btn {
+    min-width: var(--ctl-h);
+  }
+  .tabs button,
+  .pills button {
+    min-width: var(--ctl-h);
+    justify-content: center;
+  }
+  input[type='file'] {
+    min-height: var(--ctl-h);
+  }
+  /*
+   * A link that is a row's or a value's way somewhere (a table cell, a definition, a
+   * link-styled button) is a target of its own on touch, not a line of text.
+   */
+  .tbl td a:not(.btn),
+  .kv dd a:not(.btn),
+  button.link {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--ctl-h);
+    min-width: var(--ctl-h);
+  }
+  /*
+   * The switch: a 44x26 track inside a 44px-tall target. The transparent block borders
+   * are the extra hit area; the background stops at the padding box, and the outline is
+   * an inset shadow so the borders stay invisible in every state.
+   */
+  .switch,
+  .switch[aria-checked='true'],
+  .switch.danger[aria-checked='true'] {
+    width: 44px;
+    height: 44px;
+    border-width: 9px 0;
+    border-color: transparent;
+    background-clip: padding-box;
+    border-radius: 13px / 22px;
+  }
+  .switch {
+    box-shadow: inset 0 0 0 1px var(--line-2);
+  }
+  .switch[aria-checked='true'] {
+    box-shadow: none;
+  }
+  .switch::after {
+    top: 3px;
+    inset-inline-start: 3px;
+    width: 20px;
+    height: 20px;
+  }
+  .switch[aria-checked='true']::after {
+    transform: translateX(-18px);
+  }
+  /*
+   * The focus ring belongs on the TRACK, not around the 44px hit box the transparent
+   * borders make: an inset ring at the track's edge, with a contrasting inner line so it
+   * reads on the accent-filled (on) track too.
+   */
+  .switch:focus-visible {
+    outline: none;
+    box-shadow:
+      inset 0 0 0 2px var(--accent),
+      inset 0 0 0 4px var(--bg-0);
+  }
+  /* A square icon button keeps its square when its row is tight (a copyable value). */
+  .btn.icon {
+    flex-shrink: 0;
+  }
+  /* A box whose label sits apart (`for=`) is hit on its own: at least 24px (WCAG 2.5.8). */
+  :where(input[type='checkbox'], input[type='radio']) {
+    width: 24px;
+    height: 24px;
+  }
+  /* A labelled checkbox or radio is hit through its label. */
+  .check,
+  .checkbox,
+  .radio {
+    min-height: var(--ctl-h);
+  }
+  /* A list's identity link is the row's way in: a whole target, not a line of text. */
+  .ident-cell .name {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--ctl-h);
+  }
+}
+
+/* `ListFreshness`: when the rows were read, and a refresh beside it. */
+.list-freshness {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }

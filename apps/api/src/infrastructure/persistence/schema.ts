@@ -14353,6 +14353,11 @@ export const businessOutboundMessages = pgTable(
     telegramMessageId: bigint('telegram_message_id', { mode: 'number' }),
     failureCode: text('failure_code'),
     bodyPurgedAt: timestamptz('body_purged_at'),
+    /**
+     * Roadmap A4: a `HANDOFF_NOTICE` row names its template instead of carrying a body — the
+     * text is rendered when the row is sent, never stored (CLAUDE.md, Phase 2).
+     */
+    templateKey: text('template_key'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -14391,10 +14396,15 @@ export const businessOutboundMessages = pgTable(
       'business_outbound_messages_body_check',
       sql`body IS NULL OR length(body) BETWEEN 1 AND 4096`,
     ),
-    // A person's send names the person; the AI's never does.
+    // A person's send names the person; the AI's and the handoff notice never do.
     check(
       'business_outbound_messages_author_check',
-      sql`(origin = 'AUTO') = (created_by_admin_id IS NULL)`,
+      sql`(origin IN ('AUTO', 'HANDOFF_NOTICE')) = (created_by_admin_id IS NULL)`,
+    ),
+    // Roadmap A4: the notice, and only the notice, is a template with no stored body.
+    check(
+      'business_outbound_messages_template_check',
+      sql`(origin = 'HANDOFF_NOTICE') = (template_key IS NOT NULL) AND (template_key IS NULL OR body IS NULL)`,
     ),
     // Resolved exactly when not PENDING; a delivered row knows its Telegram message.
     check(
@@ -14426,6 +14436,20 @@ export const businessConversationEscalations = pgTable(
     controlEpoch: integer('control_epoch').notNull(),
     reason: text('reason').notNull(),
     summary: text('summary'),
+    /**
+     * Roadmap A5: the safe operator context of the handoff — the latest AI decision's topic and
+     * intent in this conversation (the intent is AI text, purged with the summary) and the
+     * automatic replies of the session (steps tried). Never the customer's words.
+     */
+    topic: text('topic'),
+    intent: text('intent'),
+    stepsTried: integer('steps_tried'),
+    /**
+     * Review of PR #246 (M1): when the summary and intent were copied from an EARLIER decision
+     * rather than the deciding one, that decision's time. The text is purged 30 days after the
+     * older of this and `created_at`, so a copy never outlives its source.
+     */
+    contextFrom: timestamptz('context_from'),
     ticketId: uuid('ticket_id'),
     ticketOutcome: text('ticket_outcome').notNull(),
     jobId: uuid('job_id'),
@@ -14469,6 +14493,15 @@ export const businessConversationEscalations = pgTable(
       'business_conversation_escalations_summary_check',
       sql`summary IS NULL OR length(summary) <= 600`,
     ),
+    check('business_conversation_escalations_topic_check', enumCheck('topic', SUPPORT_AI_TOPICS)),
+    check(
+      'business_conversation_escalations_intent_check',
+      sql`intent IS NULL OR length(intent) <= 600`,
+    ),
+    check(
+      'business_conversation_escalations_steps_check',
+      sql`steps_tried IS NULL OR steps_tried >= 0`,
+    ),
     check('business_conversation_escalations_epoch_check', sql`control_epoch >= 1`),
   ],
 );
@@ -14497,14 +14530,26 @@ export const supportAiConfigs = pgTable(
     visionEnabled: boolean('vision_enabled').notNull().default(false),
     timeoutMs: integer('timeout_ms').notNull(),
     maxOutputChars: integer('max_output_chars').notNull(),
-    maxConsecutiveReplies: integer('max_consecutive_replies').notNull(),
+    /**
+     * RETIRED by roadmap A1 (0236): no longer read or written by this release; its value is the
+     * old per-epoch limit. Kept (with a default so the new writer may omit it) because a column is
+     * dropped only in the release after the one that stopped writing it.
+     */
+    maxConsecutiveReplies: integer('max_consecutive_replies').notNull().default(4),
+    /**
+     * Roadmap A1 (0236): automatic replies per session, and per conversation per hour. Added with
+     * the contract defaults, so every existing tenant reads 20 and 30.
+     */
+    sessionReplyBudget: integer('session_reply_budget').notNull().default(20),
+    maxAutoRepliesPerHour: integer('max_auto_replies_per_hour').notNull().default(30),
     /**
      * Hotfix (2026-10-06): sent automatic clarifying questions in a row before a handoff.
      * Added by 0218 with the contract default, so an existing tenant keeps a working limit.
+     * Roadmap A2 (0236): the column default is 3; stored values are left as they are.
      */
     maxConsecutiveClarifyingQuestions: integer('max_consecutive_clarifying_questions')
       .notNull()
-      .default(2),
+      .default(3),
     cooldownSeconds: integer('cooldown_seconds').notNull(),
     settleDelaySeconds: integer('settle_delay_seconds').notNull().default(6),
     toneInstructions: text('tone_instructions').notNull().default(''),
@@ -14546,6 +14591,11 @@ export const supportAiConfigs = pgTable(
     check('support_ai_configs_timeout_check', sql`timeout_ms BETWEEN 5000 AND 120000`),
     check('support_ai_configs_output_check', sql`max_output_chars BETWEEN 200 AND 4000`),
     check('support_ai_configs_replies_check', sql`max_consecutive_replies BETWEEN 1 AND 20`),
+    check('support_ai_configs_session_budget_check', sql`session_reply_budget BETWEEN 5 AND 40`),
+    check(
+      'support_ai_configs_hourly_limit_check',
+      sql`max_auto_replies_per_hour BETWEEN 10 AND 60`,
+    ),
     check(
       'support_ai_configs_clarifying_check',
       sql`max_consecutive_clarifying_questions BETWEEN 1 AND 10`,
@@ -14829,6 +14879,13 @@ export const supportAiJobs = pgTable(
     ),
     /** TB10 analytics: a tenant's jobs in a window (AUTO outcomes, Assist drafts). */
     index('support_ai_jobs_created_idx').on(table.tenantId, table.createdAt),
+    /**
+     * Roadmap A3 (review of PR #246, n4): `epochStartedAt` — an epoch's automatic jobs, exactly,
+     * rather than every job the conversation ever had.
+     */
+    index('support_ai_jobs_auto_epoch_idx')
+      .on(table.tenantId, table.conversationId, table.controlEpoch)
+      .where(sql`kind = 'AUTO_DECISION'`),
     foreignKey({
       columns: [table.tenantId, table.conversationId],
       foreignColumns: [businessConversations.tenantId, businessConversations.id],

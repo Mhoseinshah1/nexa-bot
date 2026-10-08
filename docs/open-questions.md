@@ -1088,7 +1088,13 @@ message names this entry rather than implying a command that ships.
 
 ## OQ-TG-02 — a BotFather rename is not picked up after the first bootstrap
 
-Status: OPEN, and small.
+Status: RESOLVED by roadmap D3 (`docs/telegram-robustness-audit.md` §D3). `botctl telegram
+register` and an installer rerun now record the username `getMe` reports for the SAME bot id
+(audited `bot_instance.username_reconciled`; a name another row still holds is left alone
+and audited FAILED), and `botctl telegram status` shows the drift on stderr without writing
+it. The Web Admin token replacement already refreshed it. The original entry follows.
+
+Status (original): OPEN, and small.
 
 `bot_instances.username` is written from `getMe` when the row is created, and
 refreshed only on the path that fills a NULL `telegram_bot_id` — a row that
@@ -3698,9 +3704,11 @@ TB7 (AUTO_REPLY_SAFE, handoff and tickets, `docs/support-agent/tb7-auto-reply.md
   as `UNSUPPORTED_CONTENT` (fail closed) rather than dropping quietly. An edit re-enqueues
   only while the conversation still has a pending job; an edit of an already-answered message
   starts nothing.
-- **OQ-TB-45 — the loop guard's window is a constant.** At most 10 automatic replies per
-  conversation per hour (`SUPPORT_AI_AUTO_WINDOW`), beside the configurable consecutive limit
-  (`maxConsecutiveReplies`). Whether the window should be a setting is open.
+- **OQ-TB-45 — the loop guard's window is a constant (resolved, roadmap A1, 2026-10-07).** The
+  hourly limit is the tenant's `maxAutoRepliesPerHour` (default 30, 10–60) over
+  `SUPPORT_AI_AUTO_WINDOW.windowSeconds` (3600 s), and the per-epoch `maxConsecutiveReplies` is
+  replaced by a session reply budget (`sessionReplyBudget`, default 20, 5–40; a session ends after
+  six hours of inactivity; greetings not counted). `docs/support-agent/tb7-auto-reply.md`.
 - **OQ-TB-46 — images in automatic replies (resolved by integrating TB6).** A customer photo
   is no longer refused outright. It goes through TB6's vision path: the tenant's
   `visionEnabled`, a vision-capable configured step, and the bounded, sniffed fetch. An AUTO job
@@ -3832,6 +3840,25 @@ TB10 (polish, analytics and final QA, `docs/support-agent/tb10-polish-analytics.
 - **OQ-TB-76 — the manual acceptance has not been run.** `docs/support-agent/acceptance-pack.md`
   is written and unrun. `OQ-TB-02`, `-03`, `-05`, `-19`, `-20`, `-22`, `-32` and `-47` are
   settled only by running it.
+- **OQ-SAI2-01 — CLOSED by the PR #236 review (N2): `finishAuto` now records the cited titles.**
+  Kept for the record: an automatic decision did not record the knowledge it cited (A8). The
+  knowledge query reads "the titles cited before" from `support_ai_jobs.knowledge_labels`, which
+  only Assist drafts fill; `finishAuto` stores `fact_refs` alone, and a `K…` alias is positional
+  per build, so it cannot be resolved later. An automatic decision still contributes its intent
+  and topic. Recording the titles belongs to the automatic reply's finish path.
+- **OQ-SAI2-02 — the knowledge match is lexical (A8).** No embeddings, by decision: an article is
+  found only when its title, tags or body share a (folded, lightly stemmed) word with the query.
+  A synonym the article does not use («کانکت» for «اتصال») is found only if a tag says it. Whether
+  real conversations need more than tags is settled by running the eval corpus against a real
+  model (`docs/support-agent/sai-eval.md`), not by guessing.
+- **OQ-SAI2-03 — an image resolution option for Anthropic (A9).** OpenAI's `image_url.detail` is
+  documented (`low`/`high`/`auto`) and A9 sends `high`. The Anthropic Messages reference the
+  adapter was audited against documents no such field for an image block, so none is sent. If the
+  current reference documents one, it is added with a fixture from a real call — never guessed.
+- **OQ-SAI2-04 — four images against the real request-size limits (A9).** Four images are bounded
+  to 15 MiB decoded together (about 20 MB of base64). That this is inside each provider's
+  request-size limit is the provider's documentation, not yet a real call; acceptance step S2
+  records it. Z.AI is blind and unaffected.
 
 ## OQ-A4 — tutorial video and guide in one message (pre-support item A4)
 
@@ -3981,3 +4008,71 @@ and `OQ-T-4` are live again and apply to inline buttons too.
     (`boundedLastSeen`). Either refusal stores nothing, so the card keeps the LAST KNOWN
     value. If a panel spells it differently, correct `readLastSeen` AND the fake in one
     commit.
+
+## OQ-E — payments roadmap E1–E6 (2026-10-07)
+
+- **OQ-E6-01 — one label for the tracking code.** The invoice labels the payment's code
+  «شناسه فاکتور» (the owner's invoice layout) while every later message labels the same
+  `payments.reference` «کد پیگیری پرداخت». Unifying the label is the owner's copy decision
+  (`docs/payments-under-review-ux.md` §6). Also: `bot.payment.expired` now quotes the code
+  of a closed payment, while `bot.payment.cancelled` says the old code is no longer valid; the
+  owner may want the expiry copy to say the code is for support only (review of PR #243).
+- **OQ-E2-01 — late or partial money on an ended attempt has no work-queue exit.** It is kept
+  out of `NEEDS_ACTION` (which must drain) and visible in its own facets until `OQ-WP11A-03`
+  decides between "credit by hand" and "nothing"; a domain resolution, if decided, joins the
+  queue with its exit.
+- **OQ-E4-01 — merchant net.** No provider adapter records what a provider kept; the money
+  card names merchant net as not recorded. A merchant-net line needs the provider's own
+  settlement report read as evidence, per provider, with its own acceptance
+  (`docs/payment-fees-fx.md` §5).
+- **OQ-E3-01 — provider refunds and wallet withdrawals.** Neither exists as a domain
+  operation; the refund ledger names the refusal and no control is offered. The domain
+  requirements are in `docs/refund-audit.md` §2.
+
+## OQ-TG-06 — a network error that certainly sent nothing is still filed UNKNOWN
+
+Status: OPEN, deliberately conservative (roadmap D1, `docs/telegram-robustness-audit.md`).
+
+`telegramCall` files every thrown `fetch` as `telegram.unreachable`, which every customer
+lane reads as UNKNOWN and never re-sends. Some of those certainly sent nothing — a DNS
+failure, a refused connection before the TLS handshake — and re-sending them would be safe;
+others (a reset after the body was written, the abort timer) may have been delivered. The
+code does not split them because undici reports the difference through `error.cause.code`
+values that are not a documented contract, and filing a delivered message as "not sent" is
+the one mistake that duplicates a customer message. **Decide** whether to add a fourth code
+(`telegram.not_sent`, retryable) for an allow-list of pre-connect causes, with a real-network
+acceptance proving each cause, before any lane treats it as safe to repeat.
+
+## OQ-TG-07 — is every Bot API 404 a token problem?
+
+Status: OPEN, decided provisionally (PR #238 review N6, `docs/telegram-robustness-audit.md`).
+
+The customer messenger now names a 404 `TOKEN_REJECTED`, beside the 401. Evidence for it:
+the Bot API answers `/bot<token>/<method>` with 404 "Not Found" when the path is not a bot it
+knows (a malformed token) and for an unknown method; every method the messenger calls exists,
+so the second cannot occur from it, and the broadcast lane already reads 401 and 404 alike
+as `BOT_UNAVAILABLE`. Not evidenced: whether Telegram ever answers 404 for anything else on a
+valid token (it is not documented either way). If a real run shows a 404 that is not about
+the token, narrow the messenger back to 401 and record the sentence Telegram used.
+
+## OQ-CB-01 — which Bot API answers on a forward or copy are about the SOURCE chat?
+
+Status: OPEN (roadmap C1, D2-F1; PR #245 review m6; `docs/campaign-broadcast-readiness.md`).
+
+On a `forwardMessage`/`copyMessage` the broadcast transport now reads `Bad Request: chat not
+found` and `PEER_ID_INVALID` as a refusal (FAILED, re-queueable) instead of the recipient's
+unreachability. That fix rests on this repository's own reading of Telegram's descriptions,
+not on a real run. Two things are unproven and are NOT guessed:
+
+- A source the recipient's bot cannot reach may be answered with a **403** instead (for
+  example `Forbidden: bot is not a member of the channel chat`, or `CHANNEL_PRIVATE`). The
+  transport still files every 403 as UNREACHABLE, which is final, so such a source would again
+  mark every recipient of that bot unreachable.
+- A genuine recipient "chat not found" on a sourced send is now FAILED, and stays FAILED
+  through every operator "retry failed" (harmless: a 400 delivered nothing, and the stamp
+  re-reads the opt-out each time, but those rows never clear).
+
+**Decide** after manual acceptance step 10 (`docs/campaign-broadcast-readiness.md`): copy a
+post from a channel the second bot is not in, record the exact status and description
+Telegram answers, and narrow or widen the sourced-send rule to exactly those answers in the
+same commit that records them.

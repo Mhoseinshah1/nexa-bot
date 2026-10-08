@@ -2003,7 +2003,6 @@ export const WEB_FA = {
   'web.payment_gateway': 'درگاه',
   'web.payment_external_reference': 'شناسهٔ پیگیری بیرونی',
   'web.payment_updated_at': 'آخرین تغییر',
-  'web.payment_customer_fee': 'کارمزد درگاه',
   'web.payment_customer_fee_rate': 'نرخ کارمزد مشتری',
   'web.payment_customer_fee_amount': 'کارمزد درگاه',
   'web.payment_customer_fee_payable': 'مبلغ قابل پرداخت',
@@ -2084,6 +2083,155 @@ export const WEB_FA = {
   'web.payment_ops_queue_hint_provider_error':
     'ساخت فاکتور رد شد یا پاسخش گم شد، یا آخرین استعلام با خطا تمام شد.',
   'web.payment_ops_queue_hint_refund_related': 'پرداخت‌هایی که دست‌کم یک بازپرداخت دارند.',
+  // --- roadmap E1/E2 (Agent 5, payments): the situation guide and the NEEDS_ACTION queue ---
+  'web.payment_ops_queue_needs_action': 'نیازمند اقدام',
+  'web.payment_ops_queue_hint_needs_action':
+    'پرداخت‌هایی که تا کسی اقدام نکند جلو نمی‌روند؛ قدیمی‌ترین اول نمایش داده می‌شود.',
+  'web.payment_situation_column': 'وضعیت عملیاتی',
+  'web.payment_situation_card': 'چه شده و چه باید کرد',
+  'web.payment_situation_what': 'چه شده',
+  'web.payment_situation_money': 'پول',
+  'web.payment_situation_customer': 'مشتری باید',
+  'web.payment_situation_actions': 'اقدام‌های موجود برای اپراتور',
+  'web.payment_situation_no_action': 'اقدامی لازم نیست.',
+  'web.payment_situation_safe': 'کار امن',
+  'web.payment_situation_needs_action': 'نیازمند اقدام',
+  'web.payment_situation_state_note':
+    'این راهنما از رویدادهای ثبت‌شده استخراج می‌شود و جای وضعیت حسابداری پرداخت را نمی‌گیرد.',
+  'web.payment_situation_awaiting_payment': 'در انتظار پرداخت مشتری',
+  'web.payment_situation_invoice_not_issued': 'فاکتور درگاه صادر نشد',
+  'web.payment_situation_customer_signalled': 'مشتری اعلام واریز کرده است (بدون رسید)',
+  'web.payment_situation_receipt_under_review': 'رسید در انتظار بررسی',
+  'web.payment_situation_provider_review': 'در بررسی درگاه',
+  'web.payment_situation_outcome_unknown': 'نتیجه نامعلوم',
+  'web.payment_situation_mismatch': 'مغایرت',
+  'web.payment_situation_partial': 'پرداخت ناقص',
+  'web.payment_situation_late_completion': 'تأیید دیرهنگام درگاه',
+  'web.payment_situation_confirmed': 'تأییدشده',
+  'web.payment_situation_refund_in_progress': 'بازپرداخت در جریان',
+  'web.payment_situation_refunded': 'بازپرداخت‌شده',
+  'web.payment_situation_credited_to_wallet': 'واریز به کیف پول',
+  'web.payment_situation_rejected': 'ردشده توسط بازبین',
+  'web.payment_situation_failed': 'ناموفق',
+  'web.payment_situation_expired': 'منقضی‌شده',
+  'web.payment_situation_cancelled': 'لغوشده',
+  'web.payment_situation_what_awaiting_payment':
+    'دستورالعمل یا لینک پرداخت برای مشتری فرستاده شده و مشتری هنوز چیزی اعلام نکرده است.',
+  'web.payment_situation_what_invoice_not_issued':
+    'درگاه ساخت فاکتور را رد کرد یا پاسخ آن دریافت نشد؛ لینکی به مشتری داده نشده است.',
+  'web.payment_situation_what_customer_signalled':
+    'مشتری می‌گوید مبلغ را واریز کرده است، اما هنوز رسیدی نفرستاده است. این ادعای مشتری است و چیزی برای بررسی وجود ندارد.',
+  'web.payment_situation_what_receipt_under_review':
+    'مشتری رسید واریز را فرستاده است و پرداخت منتظر تصمیم بازبین است. رسید ادعای مشتری است، نه تأیید.',
+  'web.payment_situation_what_provider_review':
+    'درگاه رسید مشتری را دریافت کرده و پرداخت در مهلت بررسی خود درگاه است.',
+  'web.payment_situation_what_outcome_unknown':
+    'ممکن است درگاه پول را گرفته باشد و این سامانه نمی‌تواند بگوید. تا تطبیق، نه موفق است نه ناموفق.',
+  'web.payment_situation_what_mismatch':
+    'پاسخ درگاه با این پرداخت جور نبود (مبلغ، مشتری یا شناسهٔ دیگر) و سامانه آن را برای بررسی نگه داشت.',
+  'web.payment_situation_what_partial':
+    'درگاه پرداخت ناقص ثبت کرده است. هیچ تسویه‌ای انجام نشده است.',
+  'web.payment_situation_what_late_completion':
+    'درگاه پس از پایان مهلت پرداخت را تأیید کرد. پول نزد درگاه است و در این سامانه چیزی تسویه نشده است.',
+  'web.payment_situation_what_confirmed':
+    'پول با شواهدی که این سامانه به آن اعتماد دارد تأیید شده است.',
+  'web.payment_situation_what_refund_in_progress':
+    'پرداخت تأیید شده است و یک بازپرداخت هنوز باز است.',
+  'web.payment_situation_what_refunded':
+    'تمام یا بخشی از مبلغ این پرداخت بازپرداخت شده است (برای پرداختی که به سفارش نرسید، به کیف پول مشتری).',
+  'web.payment_situation_what_credited_to_wallet':
+    'بازبین رسید را بررسی کرد و مبلغی را که دید به کیف پول مشتری واریز کرد؛ سفارش با این پرداخت پرداخت نشد.',
+  'web.payment_situation_what_rejected':
+    'مدیر این واریز کارت‌به‌کارت را بررسی کرد و آن را نپذیرفت.',
+  'web.payment_situation_what_failed':
+    'درگاه پرداخت را ناموفق اعلام کرد یا پرداخت با تطبیق ناموفق بسته شد.',
+  'web.payment_situation_what_expired': 'مهلت پرداخت تمام شد و چیزی تأیید نشد.',
+  'web.payment_situation_what_cancelled': 'پرداخت پیش از تأیید پس گرفته شد.',
+  'web.payment_situation_safe_awaiting_payment':
+    'کاری لازم نیست؛ سامانه پرداخت را در پایان مهلت خودش می‌بندد.',
+  'web.payment_situation_safe_invoice_not_issued':
+    'از اینجا نمی‌توان فاکتور را دوباره ساخت؛ مشتری می‌تواند پرداخت تازه‌ای آغاز کند.',
+  'web.payment_situation_safe_customer_signalled':
+    'کاری لازم نیست تا رسید برسد؛ اگر نرسد، پرداخت در پایان مهلت خودش بسته می‌شود.',
+  'web.payment_situation_safe_receipt_under_review':
+    'پیش از تأیید، واریز را در صورت‌حساب بانک ببینید. تأیید، رد یا واریز به کیف پول فقط در تلگرام انجام می‌شود.',
+  'web.payment_situation_safe_provider_review':
+    'تا پایان مهلت بررسی درگاه منتظر بمانید و پرداخت را دستی تأیید یا رد نکنید.',
+  'web.payment_situation_safe_outcome_unknown':
+    'بازپرداخت یا واریز دستی نکنید. ابتدا از درگاه دوباره بپرسید و فقط بر پایهٔ پاسخ ثبت‌شده تطبیق دهید.',
+  'web.payment_situation_safe_mismatch':
+    'تا پاسخ ثبت‌شدهٔ درگاه تطبیق را پشتیبانی نکند کاری نکنید، و پول دیگری را به این پرداخت نسبت ندهید.',
+  'web.payment_situation_safe_partial':
+    'سامانه پرداخت ناقص را تسویه نمی‌کند. در پنل درگاه بررسی کنید؛ اگر پرداخت دیگر «نامعلوم» نیست، واریز دستی به کیف پول تنها راه موجود است و سیاست آن هنوز تصمیم‌گیری نشده است.',
+  'web.payment_situation_safe_late_completion':
+    'هیچ‌چیز خودکار تسویه نمی‌شود. در پنل درگاه بررسی کنید؛ اگر پرداخت هنوز «نامعلوم» است با تطبیق، وگرنه تنها با واریز دستی به کیف پول که سیاست آن هنوز تصمیم‌گیری نشده است.',
+  'web.payment_situation_safe_confirmed':
+    'هر بازپرداخت از سقف همین پرداخت کم می‌شود؛ کارمزد درگاه بازپرداخت‌پذیر نیست.',
+  'web.payment_situation_safe_refund_in_progress':
+    'بازپرداخت دستی را فقط پس از انجام واقعی انتقال «تکمیل» کنید.',
+  'web.payment_situation_safe_refunded':
+    'باقی‌ماندهٔ قابل بازپرداخت را سرور حساب می‌کند، نه این صفحه.',
+  'web.payment_situation_safe_credited_to_wallet':
+    'این یک رد نیست؛ پول به کیف پول رسیده است. دوباره واریز نکنید.',
+  'web.payment_situation_safe_rejected':
+    'مبلغی را دستی جابه‌جا نکنید؛ مشتری می‌تواند تا پایان مهلت سفارش دوباره پرداخت کند.',
+  'web.payment_situation_safe_failed': 'مشتری می‌تواند دوباره پرداخت کند.',
+  'web.payment_situation_safe_expired':
+    'اگر پس از این پولی از درگاه برسد، به‌صورت «تأیید دیرهنگام» نشان داده می‌شود.',
+  'web.payment_situation_safe_cancelled': 'کاری لازم نیست.',
+  'web.payment_money_not_yet': 'هنوز پرداخت نشده است',
+  'web.payment_money_no': 'پولی دریافت نشده است',
+  'web.payment_money_claimed': 'مشتری ادعای واریز دارد (تأییدنشده)',
+  'web.payment_money_possibly': 'شاید پول جابه‌جا شده باشد',
+  'web.payment_money_partially': 'بخشی از مبلغ نزد درگاه است',
+  'web.payment_money_at_provider': 'پول نزد درگاه است، نه در این سامانه',
+  'web.payment_money_yes': 'پول دریافت شده است',
+  'web.payment_money_to_wallet': 'به کیف پول مشتری واریز شد',
+  'web.payment_money_returning': 'بازپرداخت در جریان است',
+  'web.payment_money_returned': 'تمام یا بخشی بازپرداخت شد',
+  'web.payment_customer_guidance_pay_within_window': 'تا پایان مهلت پرداخت کند',
+  'web.payment_customer_guidance_send_receipt': 'رسید واریز را از طریق ربات بفرستد',
+  'web.payment_customer_guidance_start_again': 'می‌تواند پرداخت تازه‌ای آغاز کند',
+  'web.payment_customer_guidance_wait_do_not_pay_again': 'منتظر بماند و دوباره پرداخت نکند',
+  'web.payment_customer_guidance_may_pay_again': 'در صورت تمایل دوباره پرداخت کند',
+  'web.payment_customer_guidance_nothing': 'کاری لازم نیست',
+  'web.payment_operator_action_review_receipt_in_telegram':
+    'بررسی رسید (تأیید، رد یا واریز به کیف پول) — فقط در تلگرام',
+  'web.payment_operator_action_ask_provider_again': 'پرسش دوباره از درگاه — کارت تطبیق',
+  'web.payment_operator_action_reconcile': 'تطبیق از روی پاسخ ثبت‌شدهٔ درگاه — کارت تطبیق',
+  'web.payment_operator_action_verify_at_provider': 'بررسی در پنل خود درگاه',
+  'web.payment_operator_action_manual_wallet_adjustment':
+    'واریز دستی به کیف پول از صفحهٔ مشتری — سیاست آن تصمیم‌گیری نشده است',
+  'web.payment_operator_action_issue_refund': 'بازپرداخت — کارت بازپرداخت‌ها',
+  'web.payment_operator_action_settle_refund': 'تکمیل یا لغو بازپرداخت باز — کارت بازپرداخت‌ها',
+  // --- end roadmap E1/E2 block ---
+  // --- roadmap E4/E5 (Agent 5, payments): one money breakdown, one rate provenance ---
+  'web.payment_amounts': 'مبالغ این پرداخت',
+  'web.payment_amounts_hint':
+    'همهٔ مبالغ را سرور از تصویر ثبت‌شدهٔ همین پرداخت حساب کرده است؛ این صفحه چیزی محاسبه نمی‌کند.',
+  'web.payment_amounts_principal': 'مبلغ اصل (سفارش یا شارژ)',
+  'web.payment_amounts_received': 'دریافت‌شده از بیرون (تأییدشده)',
+  'web.payment_amounts_wallet_credit': 'واریز به کیف پول با این پرداخت',
+  'web.payment_amounts_wallet_debit': 'برداشت از کیف پول با این پرداخت',
+  'web.payment_amounts_merchant_net': 'خالص دریافتی فروشنده',
+  'web.payment_amounts_merchant_net_not_recorded':
+    'ثبت نشده — هیچ درگاهی سهم خود را گزارش نمی‌کند و این عدد ساخته نمی‌شود.',
+  'web.payment_rate_provenance': 'منشأ نرخ تبدیل',
+  'web.payment_rate_provenance_hint':
+    'نرخی که هنگام ساخت این فاکتور ثبت و قفل شد؛ نرخ امروز آن را تغییر نمی‌دهد.',
+  'web.payment_rate_authority': 'مرجع نرخ',
+  'web.payment_rate_authority_none': 'بدون تبدیل (درگاه به ارز فروش صورت‌حساب می‌دهد)',
+  'web.payment_rate_authority_operator': 'نرخ ثابت تعیین‌شده توسط اپراتور',
+  'web.payment_rate_authority_market': 'نرخ مرکزی بازار',
+  'web.payment_rate_value': 'نرخ (واحد خرد ارز فروش به ازای هر واحد درگاه)',
+  'web.payment_rate_missing': 'نرخی ثبت نشده است؛ هیچ نرخ دیگری جایگزین نمی‌شود.',
+  'web.payment_rate_source': 'منبع',
+  'web.payment_rate_quoted_at': 'زمان دفتر سفارش منبع',
+  'web.payment_rate_fetched_at': 'زمان دریافت نرخ',
+  'web.payment_rate_quote_state': 'وضعیت نرخ هنگام قیمت‌گذاری',
+  'web.payment_rate_quote_id': 'شناسهٔ نرخ',
+  'web.payment_rate_frozen_at': 'زمان قفل شدن نرخ روی فاکتور',
+  // --- end roadmap E4/E5 block ---
   'web.payment_ops_gateway_all': 'همهٔ درگاه‌ها',
   'web.payment_ops_range': 'بازهٔ ایجاد',
   'web.payment_ops_range_all': 'همهٔ زمان‌ها',
@@ -2749,6 +2897,18 @@ export const WEB_FA = {
    * and the two must not be merged: the first is a payment that never نشست or a
    * روش that has no channel in this release.
    */
+  // --- roadmap E3 (Agent 5, payments): why a payment cannot be refunded, and what exists ---
+  'web.refund_refusal_not_settled':
+    'این پرداخت تأیید نشده است و پولی از آن دریافت نشده که بازگردانده شود. اگر پول نزد درگاه است (تأیید دیرهنگام یا پرداخت ناقص)، بازپرداخت درگاه در این نسخه وجود ندارد؛ راهنمای وضعیت بالای صفحه می‌گوید چه راهی هست.',
+  'web.refund_refusal_channel_unsupported':
+    'این پرداخت از درگاه آمده و برای بازگرداندن پول از طریق درگاه هیچ مسیر واقعی در این نسخه وجود ندارد؛ چیزی وانمود نمی‌شود. اگر سفارش تحویل نشود، مبلغ خودکار به کیف پول مشتری برمی‌گردد.',
+  'web.refund_refusal_topup':
+    'این شارژ کیف پول است و مبلغ آن پیش‌تر به کیف پول مشتری رفته است؛ بازپرداخت آن پول را دو بار برمی‌گرداند. برداشت از کیف پول به حساب بانکی عملیات جداگانه‌ای است که در این نسخه وجود ندارد.',
+  'web.refund_refusal_currency':
+    'بازپرداخت‌های این پرداخت با ارز دیگری ثبت شده‌اند؛ سامانه برای ایمنی آن را متوقف می‌کند. این را به پشتیبانی فنی گزارش دهید.',
+  'web.refund_refusal_delivery':
+    'ساخت سرویس این سفارش هنوز به نتیجهٔ قطعی نرسیده است و بازپرداخت پولِ سرویسی که شاید ساخته شده باشد مجاز نیست. با پایان ساخت، این محدودیت خودبه‌خود برطرف می‌شود.',
+  // --- end roadmap E3 block ---
   'web.refund_unavailable':
     'در حال حاضر این پرداخت قابل بازگشت نیست. یا هنوز تأیید نشده است، یا روش پرداخت آن در این نسخه مسیر بازگشتی ندارد، یا مبلغ آن پیش‌تر به کیف پول مشتری رفته است، یا ساخت سرویس سفارش آن هنوز به نتیجهٔ قطعی نرسیده است. مورد آخر با پایان ساخت خودبه‌خود برطرف می‌شود.',
   /*
@@ -4468,7 +4628,6 @@ export const WEB_FA = {
   'web.campaign_announcement_hint':
     'پیام با ارسال همگانی و در زمان شروع کمپین فرستاده می‌شود. شکست ارسال پیام هیچ اقدام مالی را برنمی‌گرداند.',
   'web.campaign_announcement_body': 'متن پیام',
-  'web.campaign_announcement_purpose': 'نوع پیام',
   'web.campaign_placeholders': 'متغیرهای مجاز: {firstName}، {username}، {walletBalance}',
   'web.campaign_button_label': 'متن دکمه',
   'web.campaign_button_url': 'پیوند دکمه',
@@ -6108,13 +6267,21 @@ export const WEB_FA = {
   'web.bchat_handoff_reply_bounds': 'متن پاسخ خالی یا بیش از حد بلند بود',
   'web.bchat_handoff_not_reply': 'هوش مصنوعی پاسخ مستقیمی نداشت',
   'web.bchat_handoff_clarifying_limit': 'سؤال‌های تکمیلی پیاپی هوش مصنوعی به سقف رسید',
+  // Roadmap A3–A5 (2026-10-07).
+  'web.bchat_handoff_no_progress': 'مشتری چند بار گفت راهنمایی هوش مصنوعی جواب نداد',
+  'web.bchat_handoff_repeated_advice': 'هوش مصنوعی همان راهنمایی قبلی را تکرار می‌کرد',
+  'web.bchat_handoff_inbound_flood': 'مشتری پیام تکراری یا پیام‌های پشت‌سرهم زیادی فرستاد',
+  'web.bchat_handoff_context_topic': 'موضوع:',
+  'web.bchat_handoff_context_intent': 'خواستهٔ مشتری به برداشت هوش مصنوعی:',
+  'web.bchat_handoff_context_steps': 'پاسخ‌های خودکار این جلسه:',
+  'web.bchat_outbound_origin_handoff_notice': 'اطلاع ارجاع به پشتیبان',
   'web.bchat_handoff_output_invalid': 'خروجی هوش مصنوعی معتبر نبود',
   'web.bchat_handoff_ai_unavailable': 'سرویس هوش مصنوعی در دسترس نبود',
   'web.bchat_handoff_account_review': 'پرداخت در حال بررسی یا سرویس ناهماهنگ دارد',
   'web.bchat_handoff_identity': 'مشتری به حسابی در ربات متصل نیست',
   'web.bchat_handoff_customer_blocked': 'حساب مشتری مسدود است',
   'web.bchat_handoff_grounding': 'پاسخ به اطلاعاتی استناد کرد که در دست نبود',
-  'web.bchat_handoff_loop_guard': 'پاسخ‌های خودکار پشت‌سرهم به سقف رسید',
+  'web.bchat_handoff_loop_guard': 'پاسخ‌های خودکار جلسه یا ساعت به سقف رسید',
   'web.bchat_handoff_unsupported': 'پیامی که هوش مصنوعی نمی‌تواند بخواند (عکس یا فایل)',
   'web.bchat_handoff_stale': 'دیرتر از آن که هوش مصنوعی خودکار پاسخ دهد',
   'web.bchat_escalations': 'سپردن‌ها به پشتیبان',
@@ -6530,7 +6697,7 @@ export const WEB_FA = {
   'web.bc_r_unconfirmed': 'نامشخص (شاید رسیده باشد)',
   'web.bc_r_failed': 'ناموفق',
   'web.bc_r_unreachable': 'ربات را مسدود کرده یا در دسترس نیست',
-  'web.bc_r_skipped': 'رد شده (کاربر مسدود است)',
+  'web.bc_r_skipped': 'کنار گذاشته شد (مسدود یا انصراف از پیام تبلیغاتی)',
   'web.bc_r_cancelled': 'لغو شده (ارسال نشده)',
   'web.bc_paused_bot':
     'ارسال متوقف شد چون ربات این گیرندگان در دسترس نیست. پس از رفع مشکل ربات، ادامه دهید.',
@@ -7644,14 +7811,19 @@ export const WEB_FA = {
   'web.sai_auto_min_confidence_hint':
     'پاسخی که هوش مصنوعی به آن کمتر از این مقدار مطمئن باشد خودکار فرستاده نمی‌شود و به پشتیبان سپرده می‌شود.',
   'web.sai_auto_widen_entering':
-    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی به اجازهٔ جداگانهٔ «پاسخ خودکار» نیاز دارد و سرور هنگام ذخیره آن را بررسی می‌کند.',
+    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی، سقف پاسخ در هر جلسه یا سقف پاسخ در هر ساعت به اجازهٔ جداگانهٔ «پاسخ خودکار» نیاز دارد و سرور هنگام ذخیره آن را بررسی می‌کند.',
   'web.sai_auto_widen_needs_owner':
-    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی به اجازهٔ «پاسخ خودکار» نیاز دارد که معمولاً فقط مالک دارد؛ اگر این اجازه را ندارید، سرور ذخیره را رد می‌کند.',
+    'افزودن موضوع، پایین آوردن حداقل اطمینان یا بالا بردن سقف سؤال تکمیلی، سقف پاسخ در هر جلسه یا سقف پاسخ در هر ساعت به اجازهٔ «پاسخ خودکار» نیاز دارد که معمولاً فقط مالک دارد؛ اگر این اجازه را ندارید، سرور ذخیره را رد می‌کند.',
   'web.sai_invalid_auto_topics': 'هر موضوع پاسخ خودکار فقط یک بار می‌تواند انتخاب شود.',
   'web.sai_range': 'بازهٔ مجاز:',
   'web.sai_timeout_ms': 'مهلت هر درخواست (میلی‌ثانیه)',
   'web.sai_max_output_chars': 'بیشترین طول پاسخ (نویسه)',
-  'web.sai_max_consecutive_replies': 'بیشترین پاسخ خودکار پیاپی',
+  'web.sai_session_reply_budget': 'سقف پاسخ خودکار در هر جلسه',
+  'web.sai_session_reply_budget_hint':
+    'بیشترین تعداد پاسخ خودکار در یک جلسهٔ گفتگو؛ پس از رسیدن به آن، گفتگو به پشتیبان ارجاع می‌شود. جلسه با ورود همکار یا پس از ۶ ساعت بی‌فعالیتی از نو شروع می‌شود و پاسخ‌های خوشامدگویی شمرده نمی‌شوند.',
+  'web.sai_max_auto_replies_per_hour': 'سقف پاسخ خودکار در هر ساعت',
+  'web.sai_max_auto_replies_per_hour_hint':
+    'بیشترین تعداد پاسخ خودکار به یک گفتگو در هر ۶۰ دقیقه، از هر نوع؛ پس از رسیدن به آن، گفتگو به پشتیبان ارجاع می‌شود.',
   'web.sai_max_consecutive_clarifying': 'حداکثر سؤال تکمیلی پیاپی',
   'web.sai_max_consecutive_clarifying_hint':
     'حداکثر تعداد سؤال‌های تکمیلی متوالی که هوش مصنوعی می‌تواند در پاسخ خودکار از مشتری بپرسد. پس از رسیدن به این حد، گفتگو به پشتیبان ارجاع می‌شود.',
@@ -7758,7 +7930,7 @@ export const WEB_FA = {
   'web.sa_auto_dropped_scope': 'فعالیت مجموعه متوقف بود',
   'web.sa_auto_guard_content': 'پیام مشتری متن خوانا نداشت',
   'web.sa_auto_guard_customer_blocked': 'مشتری مسدود است',
-  'web.sa_auto_guard_consecutive': 'سقف پاسخ‌های پیاپی',
+  'web.sa_auto_guard_consecutive': 'سقف پاسخ در جلسه',
   'web.sa_auto_guard_window': 'سقف پاسخ در یک ساعت',
   'web.sa_auto_guard_decision': 'تصمیم مدل پاسخ نبود',
   'web.sa_auto_guard_handoff_topic': 'موضوع همیشه به همکار می‌رسد',
@@ -7770,6 +7942,10 @@ export const WEB_FA = {
   'web.sa_auto_guard_reply_bounds': 'پاسخ خالی یا بیش از اندازه بود',
   'web.sa_auto_guard_grounding': 'پاسخ به داده‌های موجود تکیه نداشت',
   'web.sa_auto_guard_clarifying_limit': 'سقف سؤال‌های تکمیلی پیاپی',
+  'web.sa_auto_guard_no_progress': 'راهنمایی جواب نداد (سه بار پیاپی)',
+  'web.sa_auto_guard_repeated_advice': 'پاسخ تکراری فرستاده نشد',
+  'web.sa_auto_guard_inbound_flood': 'پیام تکراری یا پیام‌های پشت‌سرهم مشتری',
+  'web.sa_auto_no_action': 'بی‌پاسخ بسته شد (تشکر یا حل شد)',
   'web.sa_auto_handoff_ai_requested': 'مدل خواست به همکار سپرده شود',
   'web.sa_auto_handoff_output_invalid': 'خروجی مدل نامعتبر بود',
   'web.sa_auto_handoff_ai_unavailable': 'هیچ سرویسی پاسخ نداد',
@@ -8101,6 +8277,155 @@ export const WEB_FA = {
   'web.kb_fault_base_moved': 'مطلب پس از اجرای ساخت تغییر کرده است. ساخت را دوباره اجرا کنید.',
   'web.kb_fault_not_conflict': 'این پیشنهاد تعارض در انتظار انتخاب نیست.',
   'web.kb_fault_not_found': 'این ساخت پیدا نشد.',
+  // --- roadmap web-route-polish (Agent 2a) ---
+  'web.inc_form_reloaded':
+    'رخداد در این فاصله تغییر کرده بود. فرم با مقادیر کنونی دوباره پر شد و تغییرهای شما ذخیره نشد؛ بررسی کنید و دوباره ذخیره کنید.',
+  'web.list_filters_clear': 'پاک کردن همهٔ فیلترها',
+  'web.list_read_at': 'خوانده‌شده در {time}',
+  'web.list_refresh': 'خواندن دوباره',
+  'web.list_refreshing': 'در حال خواندن…',
+  'web.referral_banner_clear_question':
+    'بنر معرفی حذف شود؟ فایل آن از این نصب پاک می‌شود و برای برگرداندنش باید دوباره بارگذاری شود.',
+  // --- Roadmap C2: broadcast operator UX (campaign & broadcast workstream) ---------------
+  'web.bcx_reason_blocked_bot': 'کاربر ربات را مسدود کرده است',
+  'web.bcx_reason_bad_request':
+    'تلگرام درخواست را نپذیرفت (مثلاً ربات این گیرنده به پیام مبدأ دسترسی ندارد)',
+  'web.bcx_reason_bot_token': 'توکن ربات معتبر نیست',
+  'web.bcx_reason_rate_limited': 'محدودیت سرعت تلگرام؛ بعداً دوباره تلاش می‌شود',
+  'web.bcx_reason_unknown_outcome': 'نتیجه نامشخص؛ دوباره فرستاده نمی‌شود',
+  'web.bcx_reason_bot_unavailable': 'ربات این گیرنده در دسترس نیست',
+  'web.bcx_reason_no_bot_recorded': 'این مشتری هرگز به رباتی پیام نداده است',
+  'web.bcx_reason_customer_blocked': 'مشتری توسط اپراتور مسدود شده است',
+  'web.bcx_reason_opted_out': 'مشتری از پیام‌های تبلیغاتی انصراف داده است',
+  'web.bcx_reason_media_unavailable': 'فایل رسانه دیگر نگه‌داری نمی‌شود',
+  'web.bcx_test_unconfirmed':
+    'پاسخ تلگرام نامشخص بود؛ شاید پیام رسیده باشد. تلگرام خود را ببینید — مبدأ تأیید نشد.',
+  'web.bcx_test_rate_limited':
+    'تلگرام فعلاً اجازهٔ ارسال نداد (محدودیت سرعت). کمی بعد دوباره امتحان کنید.',
+  'web.bcx_test_last': 'نتیجهٔ آخرین ارسال آزمایشی',
+  'web.bcx_save_before_test':
+    'تغییرات ذخیره‌نشده دارید. ارسال آزمایشی و شمارش، پیش‌نویس ذخیره‌شده را می‌خوانند؛ اول ذخیره کنید.',
+  'web.bcx_source_per_bot':
+    'آزمایش از رباتی انجام می‌شود که شما به آن پیام داده‌اید. هر گیرنده از ربات خودش پیام می‌گیرد؛ اگر ربات دیگری به مبدأ دسترسی نداشته باشد، فقط گیرندگان همان ربات «ناموفق» می‌شوند و در جدول «تحویل به تفکیک ربات» دیده می‌شوند و می‌توان دوباره در صفشان گذاشت.',
+  'web.bcx_no_bot': 'بدون ربات (نمی‌رسد)',
+  'web.bcx_no_bot_hint': 'در شمارش هستند و همان لحظه «در دسترس نیست» ثبت می‌شوند.',
+  'web.bcx_retry_question': '{count} گیرندهٔ ناموفق دوباره در صف ارسال قرار بگیرند؟',
+  'web.bcx_retry_detail':
+    'فقط گیرندگان «ناموفق» (تلگرام پیامشان را نپذیرفته) دوباره فرستاده می‌شوند. «نامشخص»ها (شاید رسیده باشند)، تحویل‌شده‌ها، نرسیده‌ها و کنارگذاشته‌شده‌ها (مسدود یا انصراف) هرگز دوباره فرستاده نمی‌شوند.',
+  'web.bcx_retry_confirm': 'بله، دوباره در صف بگذار',
+  'web.bcx_next_attempt': 'تلاش بعدی:',
+  'web.bcx_bots_title': 'تحویل به تفکیک ربات',
+  'web.bcx_bots_hint':
+    'هر گیرنده از رباتی پیام می‌گیرد که اول به آن پیام داده است. سرعت و توقف ۴۲۹ برای هر ربات جداست.',
+  'web.bcx_bots_empty': 'هنوز گیرنده‌ای ثبت نشده است.',
+  'web.bcx_bot': 'ربات',
+  'web.bcx_bot_none': 'بدون ربات ثبت‌شده',
+  'web.bcx_bot_active': 'فعال',
+  'web.bcx_bot_stopped': 'متوقف',
+  'web.bcx_bot_disabled': 'غیرفعال',
+  'web.bcx_waiting_retry': 'در انتظار تلاش دوباره',
+  'web.bcx_unconfirmed_short': 'نامشخص',
+  'web.bcx_unreachable_short': 'نرسید / کنار گذاشته شد',
+  'web.bcx_held': 'توقف تلگرام',
+  'web.bcx_held_until': 'تا',
+  'web.bcx_history_title': 'تاریخچهٔ این ارسال',
+  'web.bcx_history_empty': 'هنوز کاری ثبت نشده است.',
+  'web.bcx_draft_changed':
+    'این پیش‌نویس در این فاصله تغییر کرده است. تغییرات ذخیره‌نشدهٔ شما نگه داشته شده؛ پیش از ذخیره انتخاب کنید:',
+  'web.bcx_draft_load_latest': 'بارگذاری نسخهٔ تازه (تغییرات من کنار گذاشته شود)',
+  'web.bcx_draft_keep_mine': 'نگه‌داشتن تغییرات من روی نسخهٔ تازه',
+  'web.bcx_history_truncated':
+    'فقط تازه‌ترین موارد نشان داده شده است؛ موارد قدیمی‌تر در گزارش رویدادها (Audit log) هست.',
+  'web.bcx_h_create': 'ساخت پیش‌نویس',
+  'web.bcx_h_update': 'ویرایش پیش‌نویس',
+  'web.bcx_h_media_set': 'بارگذاری رسانه',
+  'web.bcx_h_media_remove': 'حذف رسانه',
+  'web.bcx_h_test': 'ارسال آزمایشی',
+  'web.bcx_h_launch': 'تأیید و شروع',
+  'web.bcx_h_pause': 'توقف موقت',
+  'web.bcx_h_resume': 'ادامه',
+  'web.bcx_h_cancel': 'لغو',
+  'web.bcx_h_retry_failed': 'ارسال دوباره به ناموفق‌ها',
+  'web.bcx_h_requeued': '{count} گیرنده دوباره در صف',
+  'web.bcx_h_refused': 'اجازه داده نشد',
+  // --- Roadmap C3/C4: audience by bot, attribution, the announcement's purpose --------
+  'web.aud_bots': 'ربات',
+  'web.aud_bot_not_active':
+    'این ربات فعال نیست؛ گیرندگانش ارسال را برای همه متوقف می‌کنند تا ربات درست شود.',
+  'web.aud_bots_hint':
+    'مشتریانی که از این ربات‌ها پیام می‌گیرند (رباتی که اول به آن پیام داده‌اند). هیچ‌کدام انتخاب نشود یعنی همهٔ ربات‌ها.',
+  'web.campaign_error_purpose_promotional':
+    'اطلاعیهٔ کمپین همیشه تبلیغاتی است تا انصراف مشتریان رعایت شود. برای اطلاع‌رسانی خدماتی، یک «ارسال همگانی» جدا با هدف اطلاع‌رسانی خدمات بسازید.',
+  'web.campaign_purpose_promotional_hint':
+    'اطلاعیهٔ کمپین تبلیغاتی است و به مشتریانی که از پیام تبلیغاتی انصراف داده‌اند نمی‌رسد. برای اطلاع‌رسانی خدماتی (مثلاً جبران قطعی) یک «ارسال همگانی» جدا بسازید.',
+  'web.campaign_attr_title': 'اطلاعیه و استفاده از تخفیف',
+  'web.campaign_attr_audience': 'مخاطبان ثبت‌شدهٔ اطلاعیه:',
+  'web.campaign_attr_told': 'پیام را گرفتند (یا شاید گرفته باشند):',
+  'web.campaign_attr_delivered': 'تحویل قطعی:',
+  'web.campaign_attr_skipped': 'کنار گذاشته شد (انصراف یا مسدود):',
+  'web.campaign_attr_redeemers_told':
+    'پس از گرفتن پیام، تخفیف را در سفارش پرداخت‌شده استفاده کردند:',
+  'web.campaign_attr_redeemers_delivered': 'از آن‌ها، با تحویل قطعی:',
+  'web.campaign_attr_redeemers_not_told':
+    'سایر استفاده‌کنندگان (پیام را نگرفتند، یا پیش از آن پرداخت کردند):',
+  'web.campaign_attr_note':
+    'شمارش افراد از ردیف‌های ثبت‌شده است و فقط سفارش‌های پرداخت‌شده (نه بازپرداخت‌شده) پس از ارسال پیام را می‌شمارد؛ این اعداد نمی‌گویند اطلاعیه باعث خرید شده است.',
+  'web.attn_at_least': 'یا بیشتر',
+  'web.attn_open': 'رسیدگی',
+  'web.c360_nav_attention': 'نیازمند رسیدگی',
+  'web.c360_nav_support': 'پشتیبانی',
+  'web.c360ws_attention_title': 'نیازمند رسیدگی',
+  'web.c360ws_attention_hint':
+    'هر عدد شمارش سرور از ردیف‌های ذخیره‌شدهٔ همین مشتری است و به صفحه‌ای می‌رود که در آن رسیدگی می‌شود.',
+  'web.c360ws_nothing': 'برای این مشتری چیزی در انتظار رسیدگی نیست.',
+  'web.c360ws_withheld': 'بخش‌هایی که مجوز صفحهٔ آن‌ها را ندارید در این خلاصه شمرده نشده‌اند.',
+  'web.c360ws_tickets_awaiting': 'تیکت در انتظار پاسخ پشتیبانی',
+  'web.c360ws_handoffs': 'گفتگوی بیزینس در انتظار اپراتور',
+  'web.c360ws_payments_unknown': 'پرداخت با نتیجهٔ نامعلوم (در انتظار تطبیق)',
+  'web.c360ws_services_unreconciled': 'سرویس تطبیق‌نشده',
+  'web.c360ws_latest_title': 'آخرین سفارش‌ها و پرداخت‌ها',
+  'web.c360ws_latest_hint':
+    'جدیدترین ردیف‌ها، جدیدترین اول. فهرست کامل با صفحه‌بندی در صفحهٔ هر کدام است.',
+  'web.c360ws_latest_orders': 'آخرین سفارش‌ها',
+  'web.c360ws_latest_payments': 'آخرین پرداخت‌ها',
+  'web.c360ws_latest_orders_empty': 'این مشتری سفارشی ندارد.',
+  'web.c360ws_latest_payments_empty': 'این مشتری پرداختی ندارد.',
+  'web.c360ws_payments_all': 'همهٔ پرداخت‌های این مشتری',
+  'web.c360ws_tickets_title': 'تیکت‌های پشتیبانی',
+  'web.c360ws_tickets_hint': 'جدیدترین تیکت‌های این مشتری، جدیدترین اول.',
+  'web.c360ws_tickets_empty': 'این مشتری تیکتی ندارد.',
+  'web.c360ws_tickets_all': 'همهٔ تیکت‌های این مشتری',
+  'web.c360ws_tickets_denied': 'برای دیدن تیکت‌های این مشتری دسترسی tickets.view لازم است.',
+  'web.c360ws_tickets_open': 'تیکت باز',
+  'web.c360ws_shortcuts_title': 'میان‌برهای اپراتور',
+  'web.c360ws_shortcuts_hint': 'هر پیوند همان فهرست را با فیلتر همین مشتری باز می‌کند.',
+  'web.c360ws_shortcut_orders': 'باز کردن سفارش‌ها',
+  'web.c360ws_shortcut_services': 'باز کردن سرویس‌ها',
+  'web.c360ws_shortcut_payments': 'باز کردن پرداخت‌ها',
+  'web.c360ws_shortcut_tickets': 'باز کردن تیکت‌ها',
+  'web.c360ws_shortcut_wallet': 'رفتن به کیف پول و دفتر حساب',
+  'web.c360ws_shortcut_handoffs': 'صندوق گفتگوهای بیزینس',
+  'web.c360ws_shortcuts_none': 'با دسترسی‌های شما میان‌بری برای این مشتری وجود ندارد.',
+  'web.dash_attn_title': 'صف رسیدگی',
+  'web.dash_attn_hint':
+    'آنچه همین حالا منتظر یک نفر است، از شمارش‌های سرور. هر مورد به صفحه‌ای می‌رود که در آن رسیدگی می‌شود.',
+  'web.dash_attn_clear': 'صف رسیدگی خالی است.',
+  'web.dash_attn_clear_hint': 'در بخش‌هایی که به آن‌ها دسترسی دارید چیزی منتظر نیست.',
+  'web.dash_attn_stuck_operations': 'عملیات تأمین گیرکرده',
+  'web.dash_attn_unknown_operations': 'عملیات تأمین با نتیجهٔ نامعلوم',
+  'web.dash_attn_outbox_exhausted': 'رویداد ارسال‌نشده با تلاش‌های تمام‌شده',
+  'web.dash_attn_unreconciled': 'سرویس تطبیق‌نشده',
+  'web.dash_attn_payments_unknown': 'پرداخت نامعلوم در انتظار تطبیق',
+  'web.dash_attn_payments_reconcilable': 'پرداخت آمادهٔ تطبیق',
+  'web.dash_attn_refund_requests': 'درخواست بازپرداخت در انتظار',
+  'web.dash_attn_handoffs': 'گفتگوی بیزینس در انتظار اپراتور',
+  'web.dash_attn_tickets': 'تیکت در انتظار پشتیبانی',
+  'web.dash_attn_panels': 'پنل ناسالم',
+  'web.dash_attn_conditions': 'هشدار مدیریتی باز',
+  'web.dash_attn_partial':
+    'بخشی از صف خوانده نشد؛ موارد آن بخش در این فهرست نیامده‌اند و «خالی» بودن صف قطعی نیست.',
+  'web.ticket_filter_awaiting_support': 'در انتظار پشتیبانی',
+  // --- end Roadmap B5/B6 (Agent 2b) ---
   // Mirza migration PR2: the legacy product review.
   'web.nav_legacy_products': 'بازبینی محصولات قدیمی',
   'web.perm_legacy_products_view': 'دیدن بازبینی محصولات ربات قدیمی (میرزا)',

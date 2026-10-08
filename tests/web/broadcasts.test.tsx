@@ -279,3 +279,129 @@ describe('broadcast in the Web Admin', () => {
     }
   });
 });
+
+describe('a draft that moved on while it was being edited (PR #245, Codex CX2 and review M1)', () => {
+  const conflict = {
+    error: {
+      kind: 'CONFLICT',
+      code: 'broadcast.version_conflict',
+      message: 'The draft changed.',
+      correlationId: 'test',
+    },
+  };
+
+  /** The server's draft: v3 until a save is refused, v4 (another operator's text) after. */
+  function moving() {
+    let refused = false;
+    const routes = [
+      OPTIONS,
+      {
+        url: `/broadcasts/${ID}/draft`,
+        status: 409,
+        get body() {
+          refused = true;
+          return conflict;
+        },
+      },
+      {
+        url: `/broadcasts/${ID}`,
+        get body() {
+          return {
+            broadcast: refused
+              ? broadcast({ version: 4, body: 'متن همکار' })
+              : broadcast({ version: 3 }),
+          };
+        },
+      },
+    ];
+    return routes;
+  }
+
+  const drafts = () => document.querySelectorAll('#bc-body');
+
+  it('keeps the operator’s text after a 409, with ONE editor, and asks before replacing it', async () => {
+    const api = stubApi(moving());
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const reads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(`/broadcasts/${ID}`))
+        .length;
+    const body = (await screen.findByLabelText('متن پیام')) as HTMLTextAreaElement;
+    fireEvent.change(body, { target: { value: 'متن من' } });
+    const before = reads();
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ تغییرات' }));
+    // The 409 re-reads the draft (the onConflict the web foundation added).
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    expect(
+      (await screen.findAllByText(/این پیش‌نویس در این فاصله تغییر کرده است/)).length,
+    ).toBeGreaterThan(0);
+    // One editor, still holding what the operator typed.
+    expect(drafts()).toHaveLength(1);
+    expect((drafts()[0] as HTMLTextAreaElement).value).toBe('متن من');
+    // Save waits for the choice; loading the latest replaces the text only when asked.
+    expect(screen.getByRole('button', { name: 'ذخیرهٔ تغییرات' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /بارگذاری نسخهٔ تازه/ }));
+    await waitFor(() => expect((drafts()[0] as HTMLTextAreaElement).value).toBe('متن همکار'));
+    expect(drafts()).toHaveLength(1);
+  });
+
+  it('keeps the operator’s text on the latest version when they choose to, and saves against it', async () => {
+    const api = stubApi(moving());
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const body = (await screen.findByLabelText('متن پیام')) as HTMLTextAreaElement;
+    fireEvent.change(body, { target: { value: 'متن من' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ تغییرات' }));
+    fireEvent.click(await screen.findByRole('button', { name: /نگه‌داشتن تغییرات من/ }));
+    expect((drafts()[0] as HTMLTextAreaElement).value).toBe('متن من');
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ تغییرات' }));
+    await waitFor(() =>
+      expect(
+        api.calls.filter((call) => call.method === 'POST' && call.url.endsWith('/draft')),
+      ).toHaveLength(2),
+    );
+    const second = api.calls.filter((call) => call.url.endsWith('/draft'))[1];
+    expect(second?.body).toMatchObject({ expectedVersion: 4, body: 'متن من' });
+  });
+
+  it('sends no audience key at its default, so an older server accepts the save (review m3)', async () => {
+    const api = stubApi([
+      OPTIONS,
+      { url: `/broadcasts/${ID}/draft`, body: { broadcast: broadcast({ version: 4 }) } },
+      { url: `/broadcasts/${ID}`, body: { broadcast: broadcast() } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    fireEvent.change(await screen.findByLabelText('متن پیام'), { target: { value: 'تازه' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ تغییرات' }));
+    await waitFor(() => expect(api.calls.some((call) => call.url.endsWith('/draft'))).toBe(true));
+    const audience = (
+      api.calls.find((call) => call.url.endsWith('/draft'))?.body as {
+        audience: Record<string, unknown>;
+      }
+    ).audience;
+    expect(Object.keys(audience)).not.toContain('botInstanceIds');
+    expect(Object.keys(audience)).not.toContain('tags');
+    expect(Object.keys(audience)).not.toContain('activeService');
+  });
+
+  it('re-reads the draft when a launch is refused as stale (409)', async () => {
+    const api = stubApi([
+      OPTIONS,
+      { url: `/broadcasts/${ID}/preview`, body: preview(12) },
+      { url: `/broadcasts/${ID}/launch`, status: 409, body: conflict },
+      { url: `/broadcasts/${ID}`, body: { broadcast: broadcast() } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const reads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(`/broadcasts/${ID}`))
+        .length;
+    fireEvent.click(await screen.findByRole('button', { name: 'شمارش دقیق گیرندگان' }));
+    const send = await screen.findByRole('button', { name: 'ارسال همین حالا' });
+    fireEvent.click(screen.getByLabelText(/ارسال را تأیید می‌کنم/u));
+    fireEvent.click(send);
+    const before = reads();
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، ارسال شود' }),
+    );
+    await waitFor(() => expect(api.calls.some((call) => call.url.endsWith('/launch'))).toBe(true));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+});

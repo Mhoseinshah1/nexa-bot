@@ -14,7 +14,7 @@ import {
   USERNAME_TEMPLATE_MAX_LENGTH,
 } from './service-username.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
-import { refundChannelSchema, refundStateSchema } from './refunds.js';
+import { REFUND_REFUSAL_REASONS, refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
   serviceRefundRequestStateSchema,
   serviceRefundRequestOriginSchema,
@@ -42,6 +42,8 @@ import {
   paymentOpsWindowShape,
   refinePaymentOpsWindow,
 } from './payment-operations.js';
+import { paymentSituationViewSchema } from './payment-situations.js';
+import { paymentAmountsViewSchema } from './payment-amounts.js';
 import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
@@ -4387,6 +4389,20 @@ export const paymentSummarySchema = z.object({
    * payment that is not a `GATEWAY` payment. Defaulted on parse, like the D7 fields.
    */
   gatewaySignal: paymentGatewaySignalSchema.nullable().default(null),
+  /**
+   * Roadmap E1 (`docs/payments-under-review-ux.md`): the situation the ONE classifier
+   * (`paymentSituationOf`) derived on the server — what happened, whether money probably
+   * moved, what the customer should do and which existing operator actions apply. Never a
+   * state: `state` above is still the answer to where the payment is. Defaulted on parse,
+   * like the D7 fields, so a reader holding the previous release's response reads "not
+   * known" rather than failing.
+   */
+  situation: paymentSituationViewSchema.nullable().default(null),
+  /**
+   * The Payment Operations Center queues this payment is in, from the same SQL predicates
+   * the queue list and counts use. Defaulted on parse.
+   */
+  queues: z.array(paymentOpsQueueSchema).default([]),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
@@ -4469,6 +4485,13 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
     })
     .nullable()
     .default(null),
+  /**
+   * Roadmap E4 (`docs/payment-fees-fx.md`): the payment's money as ONE breakdown —
+   * principal, fee, payable, received, wallet credit and debit, and merchant net named as
+   * not recorded (no refund figure: that is the refund ledger's, with its reason) — from `paymentAmountsOf` on the server. The Web
+   * Admin renders it and computes nothing. Defaulted on parse for older responses.
+   */
+  amounts: paymentAmountsViewSchema.nullable().default(null),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
@@ -5023,6 +5046,14 @@ export const refundListResponseSchema = z.object({
   refundableMinor: z.string(),
   currency: z.enum(CURRENCY_CODES),
   refundable: z.boolean(),
+  /**
+   * Roadmap E3 (`docs/refund-audit.md`): WHY `refundable` is false — the same reason the
+   * write path refuses with (`REFUND_NOT_PERMITTED`'s `reason`), from the one decision
+   * (`RefundService.refusalFor`). Null when the payment can be refunded. A surface names the
+   * reason and what exists instead, rather than a sentence listing every possibility.
+   * Defaulted on parse, so a reader holding the previous release's response reads "not said".
+   */
+  refusalReason: z.enum(REFUND_REFUSAL_REASONS).nullable().default(null),
 });
 export type RefundListResponse = z.infer<typeof refundListResponseSchema>;
 

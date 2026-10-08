@@ -8,7 +8,9 @@ import {
   businessChatListQuerySchema,
   businessChatSendRequestSchema,
   businessConnectionStatus,
+  businessHandoffWireReason,
   businessInboxPriority,
+  businessOutboundView,
   businessUnansweredSince,
   routePattern,
   type BusinessChatControlResponse,
@@ -99,8 +101,13 @@ export class BusinessChatsController {
       },
       escalations: found.escalations.map((escalation) => ({
         id: escalation.id,
-        reason: escalation.reason,
+        // The handoff-reason follow-up to CX1: the old bundle's reason, the real one beside it.
+        reason: businessHandoffWireReason(escalation.reason),
+        reasonDetail: escalation.reason,
         summary: escalation.summary,
+        topic: escalation.topic,
+        intent: escalation.intent,
+        stepsTried: escalation.stepsTried,
         ticketId: escalation.ticketId,
         ticketOutcome: escalation.ticketOutcome,
         createdAt: escalation.createdAt.toISOString(),
@@ -115,15 +122,9 @@ export class BusinessChatsController {
         edited: message.editedAt !== null,
         deleted: message.deletedAt !== null,
       })),
-      outbound: found.outbound.map((row) => ({
-        id: row.id,
-        origin: row.origin,
-        state: row.state,
-        text: row.body,
-        createdAt: row.createdAt.toISOString(),
-        resolvedAt: row.resolvedAt?.toISOString() ?? null,
-        failureCode: row.failureCode,
-      })),
+      // CX1 (review of PR #248): the one projection, which keeps `origin` readable by the
+      // pre-A4 bundle a rolling deploy can still be serving.
+      outbound: found.outbound.map(businessOutboundView),
     };
   }
 
@@ -194,7 +195,11 @@ function toSummary(item: BusinessConversationListItem): BusinessConversationSumm
     id: conversation.id,
     state: conversation.state,
     takeoverReason: conversation.takeoverReason,
-    handoffReason: conversation.handoffReason,
+    handoffReason:
+      conversation.handoffReason === null
+        ? null
+        : businessHandoffWireReason(conversation.handoffReason),
+    handoffReasonDetail: conversation.handoffReason,
     peerTelegramUserId: conversation.peerTelegramUserId,
     customer: item.customer,
     connectionStatus: businessConnectionStatus(item.connection),

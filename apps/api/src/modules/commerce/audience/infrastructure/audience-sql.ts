@@ -233,6 +233,16 @@ export function audienceCustomerPredicate(
    * service the expiry sweep has not reached yet does not count as active (the `expired`
    * service criterion treats it the same way).
    */
+  /*
+   * Roadmap C3: the bot the customer is reached through — the column a broadcast freezes onto
+   * each recipient row. A customer who never wrote to a bot has none and is selected by no
+   * bot; an id of another tenant's bot matches no customer of this one.
+   */
+  const bots = d.botInstanceIds ?? null;
+  if (bots !== null) {
+    parts.push(sql`${c}.first_bot_instance_id = ANY(${uuids(bots)})`);
+  }
+
   const activeService = d.activeService ?? 'ANY';
   if (activeService !== 'ANY') {
     const active = sql`EXISTS (

@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, lte, or } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import {
   isSystemContext,
   asId,
@@ -525,6 +525,67 @@ export class DrizzleBotInstanceRepository
     } catch (error: unknown) {
       rethrowAlreadyBound(error, input.telegramBotId, input.username, 'LEGACY_IDENTITY_FILL');
     }
+  }
+
+  async usernameHeldByAnotherRow(
+    _scope: ScopeContext,
+    id: BotInstanceId,
+    username: string,
+  ): Promise<boolean> {
+    // Installation-wide on purpose, like `bot_instances_username_key`: a name is a name.
+    const [row] = await this.db
+      .select({ id: botInstances.id })
+      .from(botInstances)
+      .where(and(eq(botInstances.username, username), ne(botInstances.id, id)))
+      .limit(1);
+    return row !== undefined;
+  }
+
+  async reconcileUsername(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: { readonly telegramBotId: string; readonly username: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<
+    | { readonly outcome: 'UPDATED'; readonly before: string }
+    | { readonly outcome: 'UNCHANGED' }
+    | { readonly outcome: 'TAKEN'; readonly before: string }
+  > {
+    const tenantId = requireTenantId(scope);
+    const executor = executorOf(this.db, tx);
+    // The row's lock first, so `before` is the name this transaction replaces.
+    const [row] = await executor
+      .select({ username: botInstances.username })
+      .from(botInstances)
+      .where(
+        and(
+          eq(botInstances.tenantId, tenantId),
+          eq(botInstances.id, id),
+          eq(botInstances.telegramBotId, input.telegramBotId),
+        ),
+      )
+      .for('update');
+    if (row === undefined || row.username === input.username) return { outcome: 'UNCHANGED' };
+    // A stale copy on another row keeps the name; the conditional UPDATE below refuses it
+    // in the same statement, so a concurrent writer cannot slip between check and write.
+    const updated = await executor
+      .update(botInstances)
+      .set({ username: input.username, updatedAt: input.now })
+      .where(
+        and(
+          eq(botInstances.tenantId, tenantId),
+          eq(botInstances.id, id),
+          eq(botInstances.telegramBotId, input.telegramBotId),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${botInstances} AS other
+             WHERE other.username = ${input.username} AND other.id <> ${id}
+          )`,
+        ),
+      )
+      .returning({ id: botInstances.id });
+    return updated.length === 1
+      ? { outcome: 'UPDATED', before: row.username }
+      : { outcome: 'TAKEN', before: row.username };
   }
 }
 

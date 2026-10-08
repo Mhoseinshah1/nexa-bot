@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   BROADCAST_FAILURE_STATES,
   canonicalAudienceDefinition,
+  type BotInstanceStatus,
   type BroadcastButton,
   type BroadcastContentKind,
   type BroadcastCounts,
@@ -28,6 +29,7 @@ import {
   type AudienceEvaluation,
 } from '../../audience/infrastructure/audience-sql.js';
 import type {
+  BotDeliveryRow,
   BroadcastContent,
   BroadcastDraftInput,
   BroadcastMediaInput,
@@ -638,9 +640,11 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       resolved_at: Date | string | null;
       pin_state: BroadcastPinState | null;
       pin_error_code: string | null;
+      next_attempt_at: Date | string | null;
     }>(
       sql`SELECT r.customer_id, c.first_name, c.username, r.state, r.attempts, r.error_code,
-                 r.resolved_at, r.pin_state, r.pin_error_code
+                 r.resolved_at, r.pin_state, r.pin_error_code,
+                 CASE WHEN r.state = 'PENDING' THEN r.next_attempt_at END AS next_attempt_at
             FROM broadcast_recipients r
             JOIN customers c ON c.tenant_id = r.tenant_id AND c.id = r.customer_id
            WHERE r.tenant_id = ${tenantId}::uuid AND r.broadcast_id = ${id}::uuid
@@ -659,7 +663,74 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       resolvedAt: maybeDate(row.resolved_at),
       pinState: row.pin_state,
       pinErrorCode: row.pin_error_code,
+      nextAttemptAt: maybeDate(row.next_attempt_at),
     }));
+  }
+
+  async botDelivery(
+    scope: TenantContext,
+    id: string,
+    now: Date,
+  ): Promise<readonly BotDeliveryRow[]> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Roadmap C2. Grouped by the bot FROZEN on each recipient row — the one the dispatcher
+     * claims and sends through — never the customer's current bot. The bot's own row and its
+     * pacing row are LEFT joined: a recipient with no bot recorded has neither, and a bot
+     * that never claimed has no pacing row. The hold is reported only while in force.
+     */
+    const rows = await this.rows<{
+      bot_instance_id: string | null;
+      username: string | null;
+      status: BotInstanceStatus | null;
+      state: string;
+      n: number;
+      pinned: number;
+      pin_failed: number;
+      waiting_retry: number;
+      hold_until: Date | string | null;
+    }>(
+      sql`SELECT r.bot_instance_id, bi.username, bi.status, r.state, count(*)::int AS n,
+                 count(*) FILTER (WHERE r.pin_state = 'PINNED')::int AS pinned,
+                 count(*) FILTER (WHERE r.pin_state IN ('FAILED', 'UNCONFIRMED'))::int AS pin_failed,
+                 count(*) FILTER (WHERE r.state = 'PENDING' AND r.error_code IS NOT NULL)::int
+                   AS waiting_retry,
+                 CASE WHEN p.hold_until > ${now.toISOString()}::timestamptz THEN p.hold_until END
+                   AS hold_until
+            FROM broadcast_recipients r
+            LEFT JOIN bot_instances bi
+                   ON bi.tenant_id = r.tenant_id AND bi.id = r.bot_instance_id
+            LEFT JOIN broadcast_bot_pacing p
+                   ON p.tenant_id = r.tenant_id AND p.bot_instance_id = r.bot_instance_id
+           WHERE r.tenant_id = ${tenantId}::uuid AND r.broadcast_id = ${id}::uuid
+           GROUP BY r.bot_instance_id, bi.username, bi.status, r.state, p.hold_until
+           ORDER BY bi.username NULLS LAST, r.bot_instance_id NULLS LAST`,
+    );
+    const bots = new Map<string, BotDeliveryRow & { counts: BroadcastCounts }>();
+    for (const row of rows) {
+      const keyOf = row.bot_instance_id ?? '';
+      const current = bots.get(keyOf) ?? {
+        botInstanceId: row.bot_instance_id,
+        botUsername: row.username,
+        botStatus: row.status,
+        counts: { ...EMPTY_COUNTS },
+        waitingRetry: 0,
+        heldUntil: maybeDate(row.hold_until),
+      };
+      const state = row.state.toLowerCase() as keyof BroadcastCounts;
+      bots.set(keyOf, {
+        ...current,
+        counts: {
+          ...current.counts,
+          [state]: current.counts[state] + row.n,
+          total: current.counts.total + row.n,
+          pinned: current.counts.pinned + row.pinned,
+          pinFailed: current.counts.pinFailed + row.pin_failed,
+        },
+        waitingRetry: current.waitingRetry + row.waiting_retry,
+      });
+    }
+    return [...bots.values()];
   }
 
   async failureReasons(

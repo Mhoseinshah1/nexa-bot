@@ -269,8 +269,84 @@ export const BUSINESS_HANDOFF_REASONS = [
    * `maxConsecutiveClarifyingQuestions` sent in a row: a person continues (hotfix 2026-10-06).
    */
   'CLARIFYING_LIMIT',
+  // --- Roadmap A3 (2026-10-07): the deterministic progress guards.
+  /** The customer said three times in a row that the AI's advice did not work. */
+  'NO_PROGRESS',
+  /** The AI's new reply repeated advice the customer already received; it was not sent. */
+  'REPEATED_ADVICE',
+  /** The customer repeated one message, or sent many in a minute: a person reads them. */
+  'INBOUND_FLOOD',
 ] as const;
 export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
+
+/**
+ * The handoff reasons a Web Admin bundle from BEFORE roadmap A3 accepts. It reads a reason with a
+ * strict enum in the inbox, the conversation detail, a ticket's escalations and the support
+ * analytics, and one value outside it fails the WHOLE read — the inbox of the whole tenant, for one
+ * conversation handed off by a progress guard. During a rolling update that bundle reads from new
+ * replicas, so a reason on the wire stays inside this set for ever (review of PR #248, the
+ * handoff-reason follow-up to CX1).
+ */
+export const BUSINESS_HANDOFF_WIRE_REASONS = [
+  'SEND_OUTCOME_UNKNOWN',
+  'TRANSPORT_REFUSED',
+  'AI_REQUESTED',
+  'HANDOFF_TOPIC',
+  'HUMAN_REQUESTED',
+  'TOPIC_NOT_ALLOWED',
+  'LOW_CONFIDENCE',
+  'REPLY_OUT_OF_BOUNDS',
+  'DECISION_NOT_REPLY',
+  'AI_OUTPUT_INVALID',
+  'AI_UNAVAILABLE',
+  'ACCOUNT_UNDER_REVIEW',
+  'IDENTITY_UNVERIFIED',
+  'CUSTOMER_BLOCKED',
+  'INSUFFICIENT_GROUNDING',
+  'LOOP_GUARD',
+  'UNSUPPORTED_CONTENT',
+  'REPLY_STALE',
+  'CLARIFYING_LIMIT',
+] as const;
+export type BusinessHandoffWireReason = (typeof BUSINESS_HANDOFF_WIRE_REASONS)[number];
+
+/**
+ * The ONE compatibility projection of a handoff reason onto the wire (`docs/deployment.md`). The
+ * three A3 progress guards — `NO_PROGRESS`, `REPEATED_ADVICE`, `INBOUND_FLOOD` — go as
+ * `LOOP_GUARD`: each is the AI going round without progress, which is what the old bundle's
+ * «loop» label says. The real reason travels beside it (`…Detail`), which the old bundle strips
+ * and this one reads (`businessHandoffReasonOf`). A reason added later must be placed here before
+ * it compiles: the default branch returns only the reasons the old bundle knows.
+ */
+export function businessHandoffWireReason(
+  reason: BusinessHandoffReason,
+): BusinessHandoffWireReason {
+  switch (reason) {
+    case 'NO_PROGRESS':
+    case 'REPEATED_ADVICE':
+    case 'INBOUND_FLOOD':
+      return 'LOOP_GUARD';
+    default:
+      return reason;
+  }
+}
+
+/** The real reason as this bundle reads it: the detail when sent and known, else the wire one. */
+export function businessHandoffReasonOf<W extends BusinessHandoffWireReason | null>(
+  wire: W,
+  detail: BusinessHandoffReason | null | undefined,
+): BusinessHandoffReason | W {
+  return detail ?? wire;
+}
+
+/**
+ * The real reason beside the wire one. Optional when READ (an older replica does not send it),
+ * and a reason this bundle does not know reads as absent rather than failing the read.
+ */
+export const businessHandoffReasonDetailSchema = z
+  .enum(BUSINESS_HANDOFF_REASONS)
+  .nullish()
+  .catch(undefined);
 
 /**
  * TB7 — the operator-visible signal of a handoff. A CODE IS SCHEMA (CLAUDE.md): deduped per
@@ -314,7 +390,16 @@ export type BusinessMessageKind = (typeof BUSINESS_MESSAGE_KINDS)[number];
  * signal (ADR-0033 §4, TB0 review F7) and it is sent on an equal epoch alone. `AUTO` is the
  * AI (TB7) and additionally needs the conversation to be `AI_ACTIVE` at the final check.
  */
-export const BUSINESS_OUTBOUND_ORIGINS = ['OPERATOR', 'ASSIST', 'AUTO'] as const;
+/**
+ * Who wrote a lane row. Roadmap A4 (2026-10-07): `HANDOFF_NOTICE` is the ONE customer message a
+ * handoff produces — a template (`BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY`), never AI text, rendered
+ * when it is sent (no body is stored), at most one per handoff epoch (its idempotency key), sent
+ * only while the conversation is still `HANDOFF_REQUIRED` at that epoch.
+ */
+export const BUSINESS_OUTBOUND_ORIGINS = ['OPERATOR', 'ASSIST', 'AUTO', 'HANDOFF_NOTICE'] as const;
+
+/** Roadmap A4 — the handoff notice's template (customer text is a key, never a string). */
+export const BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY = 'bot.support.handoff_notice';
 export type BusinessOutboundOrigin = (typeof BUSINESS_OUTBOUND_ORIGINS)[number];
 
 /**
@@ -352,6 +437,8 @@ export function businessOutboundSendable(input: {
 }): boolean {
   if (input.rowEpoch !== input.conversationEpoch) return false;
   if (input.origin === 'AUTO') return input.conversationState === 'AI_ACTIVE';
+  // A4: the notice says "a person will answer" — true only while nobody has yet.
+  if (input.origin === 'HANDOFF_NOTICE') return input.conversationState === 'HANDOFF_REQUIRED';
   return true;
 }
 
@@ -455,7 +542,10 @@ const conversationSummarySchema = z.object({
   id: z.string(),
   state: z.enum(BUSINESS_CONVERSATION_STATES),
   takeoverReason: z.enum(BUSINESS_TAKEOVER_REASONS).nullable(),
-  handoffReason: z.enum(BUSINESS_HANDOFF_REASONS).nullable(),
+  /** Never outside `BUSINESS_HANDOFF_WIRE_REASONS`; read `businessHandoffReasonOf` instead. */
+  handoffReason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS).nullable(),
+  /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
+  handoffReasonDetail: businessHandoffReasonDetailSchema,
   peerTelegramUserId: z.string(),
   customer: z
     .object({ id: z.string(), username: z.string().nullable(), firstName: z.string().nullable() })
@@ -489,21 +579,105 @@ const messageViewSchema = z.object({
   deleted: z.boolean(),
 });
 
+/**
+ * The outbound origins a Web Admin bundle from BEFORE roadmap A4 accepts: its `origin` is a
+ * strict three-value enum, and one value outside it fails the parse of the WHOLE conversation
+ * detail. During a rolling update that bundle reads from a new replica, so `origin` on the wire
+ * stays inside this set for ever (review of PR #248, CX1).
+ */
+export const BUSINESS_OUTBOUND_WIRE_ORIGINS = ['OPERATOR', 'ASSIST', 'AUTO'] as const;
+export type BusinessOutboundWireOrigin = (typeof BUSINESS_OUTBOUND_WIRE_ORIGINS)[number];
+
+/**
+ * The explicit compatibility mapping (CX1, `docs/deployment.md`): a lane origin the old bundle
+ * cannot read goes on the wire as the old value closest to what it is.
+ *
+ * `HANDOFF_NOTICE` → `AUTO`: the notice is a template NEXA sent, not a person's message, so
+ * the old bundle labels it automatic — and, like an automatic reply, never offers it as a
+ * knowledge proposal. (`OPERATOR` would show a person's message nobody wrote.) Its text is
+ * null on the wire (no body is stored), so nothing else about it is misread. The real origin
+ * travels beside it in `laneOrigin`, which the old bundle strips and the new one reads.
+ */
+export function businessOutboundWireOrigin(
+  origin: BusinessOutboundOrigin,
+): BusinessOutboundWireOrigin {
+  return origin === 'HANDOFF_NOTICE' ? 'AUTO' : origin;
+}
+
 const outboundViewSchema = z.object({
   id: z.string(),
-  origin: z.enum(BUSINESS_OUTBOUND_ORIGINS),
+  /** Never outside `BUSINESS_OUTBOUND_WIRE_ORIGINS`; read `businessOutboundOriginOf` instead. */
+  origin: z.enum(BUSINESS_OUTBOUND_WIRE_ORIGINS),
+  /**
+   * CX1 — the row's real lane origin. Optional when READ (an older replica does not send it),
+   * and an origin this bundle does not know reads as absent rather than failing the detail:
+   * the same tolerance, in the other direction, that `origin` keeps for the old bundle.
+   */
+  laneOrigin: z.enum(BUSINESS_OUTBOUND_ORIGINS).optional().catch(undefined),
   state: z.enum(BUSINESS_OUTBOUND_STATES),
   text: z.string().nullable(),
   createdAt: z.string(),
   resolvedAt: z.string().nullable(),
   failureCode: z.string().nullable(),
 });
+export type BusinessOutboundView = z.infer<typeof outboundViewSchema>;
+
+/** CX1 — who wrote an outbound row, as the new bundle reads it: the real origin when sent. */
+export function businessOutboundOriginOf(
+  view: Pick<BusinessOutboundView, 'origin' | 'laneOrigin'>,
+): BusinessOutboundOrigin {
+  return view.laneOrigin ?? view.origin;
+}
+
+/**
+ * CX1 — the ONE projection of a lane row onto the wire; the controller sends exactly this.
+ * Its output parses under the pre-A4 bundle's schema (`tests/unit/business-chat-wire.test.ts`).
+ */
+export function businessOutboundView(row: {
+  readonly id: string;
+  readonly origin: BusinessOutboundOrigin;
+  readonly state: BusinessOutboundState;
+  readonly body: string | null;
+  readonly createdAt: Date;
+  readonly resolvedAt: Date | null;
+  readonly failureCode: string | null;
+}): BusinessOutboundView {
+  return {
+    id: row.id,
+    origin: businessOutboundWireOrigin(row.origin),
+    laneOrigin: row.origin,
+    state: row.state,
+    text: row.body,
+    createdAt: row.createdAt.toISOString(),
+    resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    failureCode: row.failureCode,
+  };
+}
 
 export const businessEscalationViewSchema = z.object({
   id: z.string(),
-  reason: z.enum(BUSINESS_HANDOFF_REASONS),
-  /** The AI's short operator-facing note; null when none was produced, or once purged. */
+  /** Never outside `BUSINESS_HANDOFF_WIRE_REASONS`; read `businessHandoffReasonOf` instead. */
+  reason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS),
+  /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
+  reasonDetail: businessHandoffReasonDetailSchema,
+  /**
+   * The AI's short operator-facing note; null when none was produced, or once purged. Roadmap
+   * A5: for a handoff decided before the provider was asked (loop, progress, money, provider
+   * unavailable, unsupported image, stale), the last useful note the AI wrote in this
+   * conversation, so the person picking it up is not starting from nothing.
+   */
   summary: z.string().nullable(),
+  /**
+   * Roadmap A5 — the rest of the safe operator context, from what NEXA already recorded (never
+   * the customer's words): the topic and the intent of the latest AI decision in this
+   * conversation (a `SupportAiTopic`, pinned by a CHECK; the intent is AI text, purged with the
+   * summary), and how many automatic replies the customer received this session (the steps
+   * tried). Each null when there is nothing to say.
+   */
+  // Optional when READ (review of the rolling deploy): an older replica does not send them.
+  topic: z.string().nullish(),
+  intent: z.string().nullish(),
+  stepsTried: z.number().int().min(0).nullish(),
   ticketId: z.string().nullable(),
   ticketOutcome: z.enum(BUSINESS_ESCALATION_TICKET_OUTCOMES),
   createdAt: z.string(),

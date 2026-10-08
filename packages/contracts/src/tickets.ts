@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { uuidV7Schema, type Branded } from './ids.js';
-import { BUSINESS_HANDOFF_REASONS } from './business-chats.js';
+import {
+  BUSINESS_HANDOFF_WIRE_REASONS,
+  businessHandoffReasonDetailSchema,
+} from './business-chats.js';
 import type { StateMachineDefinition } from './state-machine.js';
 import {
   CUSTOMER_NOTIFICATION_STATES,
@@ -703,8 +706,16 @@ export type TicketOrigin = (typeof TICKET_ORIGINS)[number];
 /** TB7 — a handoff that opened or linked this ticket, with the AI's operator-facing note. */
 export const ticketEscalationViewSchema = z.object({
   conversationId: z.string(),
-  reason: z.enum(BUSINESS_HANDOFF_REASONS),
+  /** Never outside `BUSINESS_HANDOFF_WIRE_REASONS`; read `businessHandoffReasonOf` instead. */
+  reason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS),
+  /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
+  reasonDetail: businessHandoffReasonDetailSchema,
   summary: z.string().nullable(),
+  /** Roadmap A5 — see `businessEscalationViewSchema`; gated like the summary. */
+  // Optional when READ (review of the rolling deploy): an older replica does not send them.
+  topic: z.string().nullish(),
+  intent: z.string().nullish(),
+  stepsTried: z.number().int().min(0).nullish(),
   createdAt: z.iso.datetime(),
 });
 export type TicketEscalationView = z.infer<typeof ticketEscalationViewSchema>;
@@ -733,6 +744,13 @@ export type TicketDetailResponse = z.infer<typeof ticketDetailResponseSchema>;
 export const ticketListQuerySchema = z
   .object({
     status: ticketStatusSchema.optional(),
+    /**
+     * Roadmap B5/B6 (review N1): `support` keeps only the tickets whose next word is
+     * support's — `TICKET_AWAITING_SUPPORT_STATUSES`, the predicate the sidebar's and
+     * Customer 360's "awaiting support" counts use — so a count and the list it links to
+     * agree. ANDed with `status` when both are given.
+     */
+    awaiting: z.literal('support').optional(),
     categoryId: uuidV7Schema.optional(),
     customer: z.string().trim().min(1).max(64).optional(),
     assigned: z.union([z.enum(['me', 'none']), uuidV7Schema]).optional(),

@@ -143,6 +143,20 @@ export interface BotWebhookStatusDetail {
   };
   /** `liveProblems` — the Web Admin live check's verdict, so "ready" means one thing. */
   readonly problems: readonly BotLiveProblem[];
+  /**
+   * D3 (roadmap): present only when `getMe` named THIS bot under a username other than the
+   * stored one — a BotFather rename. Shown, never written: `status` is read-only, and
+   * `botctl telegram register` records it. Not a problem: the webhook does not depend on it.
+   */
+  readonly usernameDrift?: {
+    readonly stored: string;
+    readonly reported: string;
+    /**
+     * PR #238 review N1: another bot row on this installation still holds `reported`, so
+     * `register` cannot record it (the column is unique) and must not be prescribed.
+     */
+    readonly heldByAnotherRow: boolean;
+  };
 }
 
 export interface BotBootstrapStatusReport {
@@ -178,10 +192,19 @@ export type BotBootstrapOutcomeKind =
   /** The row existed and Telegram was already pointed here. Nothing was done. */
   | 'ALREADY_COMPLETE';
 
+/**
+ * D3 / PR #238 (Codex P2, review N1, N2): what a run did about a BotFather rename.
+ * `UPDATED` — the new name is recorded; `TAKEN` — another bot row holds it, nothing changed;
+ * `UNRESOLVED` — the write failed for another reason, nothing changed. Absent: no rename.
+ */
+export type BotUsernameReconcile = 'UPDATED' | 'TAKEN' | 'UNRESOLVED';
+
 export interface BotBootstrapResult {
   readonly kind: BotBootstrapOutcomeKind;
   readonly botInstanceId: BotInstanceId;
+  /** The username STORED after this run — the old one when a rename could not be recorded. */
   readonly username: string;
+  readonly usernameReconcile?: BotUsernameReconcile;
   readonly telegramBotId: string;
   readonly webhookUrl: string;
 }
@@ -226,6 +249,16 @@ export interface BotBootstrapDeps {
    * token-replacement claim this registration takes is derived.
    */
   readonly telegramCallTimeoutMs: number;
+  /** D3 (PR #238 review N2): where a rename that could not be recorded is reported. */
+  readonly logger?: { warn(context: Record<string, unknown>, message: string): void };
+}
+
+/** The SQLSTATE of a driver error, down a short `cause` chain (Drizzle wraps `pg`'s). */
+function sqlStateOf(error: unknown, depth = 0): string | undefined {
+  if (typeof error !== 'object' || error === null || depth > 5) return undefined;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'string') return code;
+  return sqlStateOf((error as { cause?: unknown }).cause, depth + 1);
 }
 
 /**
@@ -303,7 +336,11 @@ export class BotBootstrapService {
     if (local.view === null || local.url === null) {
       return { state: local.state, reason: local.reason, detail: null };
     }
-    const detail = await this.remoteDetail(scope, local.view, local.url);
+    const detail = await this.withHeldName(
+      scope,
+      local.view.id,
+      await this.remoteDetail(scope, local.view, local.url),
+    );
     const verdict = this.verdict(detail);
     return { ...verdict, detail };
   }
@@ -371,6 +408,22 @@ export class BotBootstrapService {
    * (`resolveToken`), lives in this frame, and appears in nothing returned: Telegram's error
    * text is stripped of it and redacted by content, and a foreign URL is cut to its origin.
    */
+  /** PR #238 review N1: whether `register` could record the drift at all. A read only. */
+  private async withHeldName(
+    scope: TenantContext,
+    id: BotInstanceId,
+    detail: BotWebhookStatusDetail,
+  ): Promise<BotWebhookStatusDetail> {
+    const drift = detail.usernameDrift;
+    if (drift === undefined) return detail;
+    const heldByAnotherRow = await this.deps.bots.usernameHeldByAnotherRow(
+      scope,
+      id,
+      drift.reported,
+    );
+    return { ...detail, usernameDrift: { ...drift, heldByAnotherRow } };
+  }
+
   private async remoteDetail(
     scope: TenantContext,
     view: BotBootstrapView,
@@ -397,11 +450,26 @@ export class BotBootstrapService {
       read: Extract<BotWebhookRead, { outcome: 'READ' }> | null,
     ): BotWebhookStatusDetail => {
       const identified = probe !== null && probe.outcome === 'IDENTIFIED' ? probe : null;
+      const renamed =
+        identified !== null &&
+        view.telegramBotId !== null &&
+        identified.botId === view.telegramBotId &&
+        identified.username !== view.username;
       return {
         botInstanceId: view.id,
         expectedUrl: url,
         local,
         remote,
+        ...(renamed
+          ? {
+              usernameDrift: {
+                stored: view.username,
+                reported: identified.username,
+                // Filled by `withHeldName`, a read made outside this synchronous closure.
+                heldByAnotherRow: false,
+              },
+            }
+          : {}),
         problems: liveProblems({
           // The three local causes were refused before this was reached.
           webhookRouteEnabled: true,
@@ -729,6 +797,11 @@ export class BotBootstrapService {
         ? await this.getMe(scope, view, token)
         : { identity: ensured.identity, filledLegacyIdentity: false };
     const { identity } = probed;
+    // Codex P2 / N1: the name actually stored, and what the run did about a rename.
+    const reconcile = 'usernameReconcile' in probed ? probed.usernameReconcile : undefined;
+    const storedUsername =
+      reconcile === 'TAKEN' || reconcile === 'UNRESOLVED' ? view.username : identity.username;
+    const renamed = reconcile === undefined ? {} : { usernameReconcile: reconcile };
 
     /*
      * The supplied token is compared AGAIN, now that the bot's identity is known.
@@ -798,7 +871,8 @@ export class BotBootstrapService {
       return {
         kind: 'ALREADY_COMPLETE',
         botInstanceId: view.id,
-        username: identity.username,
+        username: storedUsername,
+        ...renamed,
         telegramBotId: identity.botId,
         webhookUrl: url,
       };
@@ -966,7 +1040,8 @@ export class BotBootstrapService {
     return {
       kind: ensured.createdNow ? 'CREATED' : 'RECONCILED',
       botInstanceId: view.id,
-      username: identity.username,
+      username: storedUsername,
+      ...renamed,
       telegramBotId: identity.botId,
       webhookUrl: url,
     };
@@ -1264,7 +1339,11 @@ export class BotBootstrapService {
     scope: TenantContext,
     existing: BotBootstrapView | null,
     token: string,
-  ): Promise<{ readonly identity: BotIdentity; readonly filledLegacyIdentity: boolean }> {
+  ): Promise<{
+    readonly identity: BotIdentity;
+    readonly filledLegacyIdentity: boolean;
+    readonly usernameReconcile?: BotUsernameReconcile;
+  }> {
     const probe = await this.deps.telegram.identify(token);
 
     if (probe.outcome === 'REJECTED') {
@@ -1371,6 +1450,12 @@ export class BotBootstrapService {
             'every stored Telegram user and chat attached to a bot that has never spoken to them.',
         );
       }
+      if (identity.username !== existing.username) {
+        const usernameReconcile = await this.reconcileRenamedUsername(scope, existing, identity);
+        if (usernameReconcile !== null) {
+          return { identity, filledLegacyIdentity: false, usernameReconcile };
+        }
+      }
       return { identity, filledLegacyIdentity: false };
     }
 
@@ -1431,6 +1516,93 @@ export class BotBootstrapService {
     }
 
     return { identity, filledLegacyIdentity: false };
+  }
+
+  /**
+   * D3 (roadmap, Telegram robustness): a bot renamed in BotFather.
+   *
+   * `getMe` with the stored token named the SAME bot id under a different username. The
+   * stored copy is what the ops-group connect command (`/connect@<username>`), the Web
+   * Admin's `t.me/<username>` links and every operator listing print, so until now a rename
+   * left all of them pointing at a name Telegram no longer routes — and nothing reconciled
+   * it short of a token replacement. A register (or installer rerun) is the operator's
+   * "reconcile with Telegram", so it records the name here: same bot, audited, in a
+   * transaction that takes the tenant's bot-change lock and reads scope activity, exactly
+   * like the legacy identity fill beside it.
+   *
+   * Never fatal (PR #238 review N2: now true of the code too). A name another row still
+   * holds (`TAKEN`) changes nothing and is audited as FAILED with the reason. The `NOT
+   * EXISTS` cannot see an uncommitted writer of the same name on another row (another
+   * tenant's lock does not serialise with this one), so the global unique index may still
+   * raise `23505`: that is the same TAKEN, rolled back, and logged rather than audited. Any
+   * other failure is UNRESOLVED and logged. A stopped scope changes nothing (null). The
+   * webhook is what this run is for, and a stale display name must not stand between an
+   * operator and a working bot. `botctl telegram status` stays read-only.
+   */
+  private async reconcileRenamedUsername(
+    scope: TenantContext,
+    existing: BotBootstrapView,
+    identity: BotIdentity,
+  ): Promise<BotUsernameReconcile | null> {
+    try {
+      return await this.writeRenamedUsername(scope, existing, identity);
+    } catch (error: unknown) {
+      const code = sqlStateOf(error);
+      const outcome: BotUsernameReconcile = code === '23505' ? 'TAKEN' : 'UNRESOLVED';
+      this.deps.logger?.warn(
+        {
+          botInstanceId: existing.id,
+          outcome,
+          err: error instanceof Error ? error.name : 'unknown',
+          ...(code === undefined ? {} : { code }),
+        },
+        'telegram bootstrap: a BotFather rename could not be recorded; nothing was changed',
+      );
+      return outcome;
+    }
+  }
+
+  private async writeRenamedUsername(
+    scope: TenantContext,
+    existing: BotBootstrapView,
+    identity: BotIdentity,
+  ): Promise<BotUsernameReconcile | null> {
+    const now = this.deps.clock.now();
+    const actor = this.systemActor();
+    return this.deps.uow.run(scope, async (tx): Promise<BotUsernameReconcile | null> => {
+      await this.deps.bots.lockTenantForBotChange(scope, tx);
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return null;
+      const reconciled = await this.deps.bots.reconcileUsername(
+        scope,
+        existing.id,
+        { telegramBotId: identity.botId, username: identity.username, now },
+        tx,
+      );
+      if (reconciled.outcome === 'UNCHANGED') return null;
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'bot_instance.username_reconciled',
+          entityType: 'BotInstance',
+          entityId: existing.id,
+          before: { telegramBotId: identity.botId, username: reconciled.before },
+          after: {
+            telegramBotId: identity.botId,
+            username: reconciled.outcome === 'UPDATED' ? identity.username : reconciled.before,
+            reported: identity.username,
+          },
+          reason:
+            reconciled.outcome === 'UPDATED'
+              ? 'Telegram reports this bot under a new username (renamed in BotFather).'
+              : 'Telegram reports this bot under a username another bot row still holds; ' +
+                'nothing was changed.',
+          result: reconciled.outcome === 'UPDATED' ? 'SUCCESS' : 'FAILED',
+        },
+        tx,
+      );
+      return reconciled.outcome;
+    });
   }
 
   /**
