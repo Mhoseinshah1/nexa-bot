@@ -101,4 +101,14 @@ describe('roadmap A3–A6 on the Web Admin', () => {
     expect(body).not.toContain(t('web.bchat_handoff_context_intent'));
     expect(body).not.toContain(t('web.bchat_handoff_context_steps'));
   });
+
+  it('an older replica that sends no context at all still draws the handoff', async () => {
+    const older = detail({});
+    const [first] = older.escalations;
+    const { topic: _t, intent: _i, stepsTried: _s, ...rest } = first!;
+    stubApi([{ url: `/business-chats/${CHAT_ID}`, body: { ...older, escalations: [rest] } }]);
+    renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply mayAssist={false} />);
+    expect((await screen.findAllByText(t(HANDOFF_LABELS.NO_PROGRESS))).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain(t('web.bchat_handoff_context_topic'));
+  });
 });

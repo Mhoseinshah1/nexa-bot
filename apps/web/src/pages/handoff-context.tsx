@@ -13,15 +13,15 @@ export function HandoffContextView({
   intent,
   stepsTried,
 }: {
-  readonly topic: string | null;
-  readonly intent: string | null;
-  readonly stepsTried: number | null;
+  readonly topic?: string | null | undefined;
+  readonly intent?: string | null | undefined;
+  readonly stepsTried?: number | null | undefined;
 }) {
   const topicLabel =
-    topic !== null && topic in ASSIST_TOPIC_LABELS
+    topic != null && topic in ASSIST_TOPIC_LABELS
       ? t(ASSIST_TOPIC_LABELS[topic as SupportAiTopic])
       : null;
-  if (topicLabel === null && intent === null && stepsTried === null) return null;
+  if (topicLabel === null && intent == null && stepsTried == null) return null;
   return (
     <ul className="muted small">
       {topicLabel !== null && (
@@ -29,12 +29,12 @@ export function HandoffContextView({
           {t('web.bchat_handoff_context_topic')} {topicLabel}
         </li>
       )}
-      {intent !== null && (
+      {intent != null && (
         <li>
           {t('web.bchat_handoff_context_intent')} {intent}
         </li>
       )}
-      {stepsTried !== null && (
+      {stepsTried != null && (
         <li>
           {t('web.bchat_handoff_context_steps')} {stepsTried.toLocaleString('fa-IR')}
         </li>
