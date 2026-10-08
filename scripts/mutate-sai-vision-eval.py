@@ -36,10 +36,10 @@ M=[
  ('SAI-V04',[(VISION,"    if (index >= SUPPORT_AI_VISION_MAX_IMAGES) skipped.set(image.id, 'OVER_LIMIT');","    if (index >= 2) skipped.set(image.id, 'OVER_LIMIT');")],V,'the four most recent customer images'),
  ('SAI-V05',[(VISION,"    if (index >= SUPPORT_AI_VISION_MAX_IMAGES) skipped.set(image.id, 'OVER_LIMIT');","    if (index >= 2) skipped.set(image.id, 'OVER_LIMIT');")],I,'at most the four most recent images'),
  # --- A10: evaluation ---
- ('SAI-E01',[(ARGS,"  if (env.CI !== undefined && env.CI !== '') return 'refused under CI: a live run is a paid call';\n","")],E,'every condition is required'),
+ ('SAI-E01',[(ARGS,"  if (isCiEnvironment(env)) return 'refused under CI: a live run is a paid call';\n","")],E,'every condition is required'),
  ('SAI-E02',[(ARGS,"  if ((env.SUPPORT_AI_EVAL_API_KEY ?? '') === '') {","  if (false) {")],E,'every condition is required'),
  ('SAI-E03',[(ARGS,"  if (!args.live) return 'not requested (--live)';\n","")],E,'every condition is required'),
- ('SAI-E04',[(RUNNER,"      const leaked = [...EVAL_NEVER_SAY, ...(expect.mustNotSay ?? [])].filter((text) =>\n        written.includes(text),\n      );","      const leaked = [...EVAL_NEVER_SAY, ...(expect.mustNotSay ?? [])].filter(\n        (text) => written.length < 0 && written.includes(text),\n      );")],E,'a leak of the canary'),
+ ('SAI-E04',[(RUNNER,"        written.includes(normaliseForLeak(text)),","        written.length < 0,")],E,'a leak of the canary'),
  ('SAI-E05',[(RUNNER,"  if (prepared.failClosed || prepared.moneyHandoff) {","  if (prepared.moneyHandoff) {")],E,'ask no model at all'),
  ('SAI-E06',[(RUNNER,"        decision.factRefs.every((ref) => prepared.factAliases.has(ref)) &&","        decision.factRefs.every(() => true) &&")],E,'an invented citation'),
  ('SAI-E07',[(RUNNER,"  if (expect.guard !== 'EITHER') {","  if (expect.guard === ('NEVER' as string)) {")],E,'a person must answer'),
@@ -55,7 +55,7 @@ M=[
  ('SAI-E13',[(QUERY,"      if (supportSeen > steps) break;\n","")],Q,'CX2'),
  ('SAI-E14',[(QUERY,"      if (isPersonOrAutomated(line)) break;\n","")],Q,'CX2'),
  # CX3/MINOR-2: the step's own capabilities choose the images (production stepSight)
- ('SAI-E15',[(RUNNER,"    { capabilities },","    { capabilities: REFERENCE_CAPABILITIES },")],E,'a blind adapter is never given an image'),
+ ('SAI-E15',[(RUNNER,"    { capabilities },","    { capabilities: REFERENCE_CAPABILITIES },")],E,'the per-adapter fit decides too'),
  # MINOR-2: the production autoImageGuard decides an image that was never loaded
  ('SAI-E16',[(RUNNER,"    !autoImageGuard({ required, loaded: new Set(loaded.keys()) }).pass ||","    false ||")],E,'through autoImageGuard'),
  # CX4: no_leak compares normalised text
