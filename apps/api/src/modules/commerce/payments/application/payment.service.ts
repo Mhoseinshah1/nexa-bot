@@ -22,6 +22,8 @@ import {
   orderIdSchema,
   paymentIdSchema,
   paymentSituationOf,
+  REFUND_REFUSAL_UNDECIDED,
+  type RefundRefusalReason,
   type PaymentOpsQueue,
   type PaymentSituationGuide,
   type ActorContext,
@@ -303,6 +305,8 @@ export interface PaymentServiceDeps {
    * passed through to the situation guide (review of PR #248, CX4) rather than re-derived.
    */
   readonly refunds: Pick<RefundService, 'refundUndeliverable' | 'refusalOf'>;
+  /** Where an undecided refund refusal is reported (`refundRefusalForGuide`). */
+  readonly logger?: { warn: (context: Record<string, unknown>, message: string) => void };
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
@@ -772,7 +776,7 @@ export class PaymentService {
       const record = byId.get(id);
       if (record === undefined) continue;
       // CX4: whether ISSUE_REFUND is offered is the refund service's decision, not a copy.
-      const refundRefusal = await this.deps.refunds.refusalOf(scope, record);
+      const refundRefusal = await this.refundRefusalForGuide(scope, record);
       const guide = paymentSituationOf({ ...recorded, refundRefusal });
       found.set(id, {
         /*
@@ -786,6 +790,28 @@ export class PaymentService {
       });
     }
     return found;
+  }
+
+  /**
+   * The refund service's refusal, for the advisory guide only. A decision that cannot be made
+   * (the order it reads does not load — CI on PR #248: a stored quote that does not parse) is
+   * UNDECIDED, which offers no refund, rather than an error for the whole page of payments: the
+   * guide never offered more than the server accepts, and the server decides again on the write.
+   * Logged, because a row the refund service cannot read is somebody's to look at.
+   */
+  private async refundRefusalForGuide(
+    scope: TenantContext,
+    record: PaymentRecord,
+  ): Promise<RefundRefusalReason | null | typeof REFUND_REFUSAL_UNDECIDED> {
+    try {
+      return await this.deps.refunds.refusalOf(scope, record);
+    } catch (error) {
+      this.deps.logger?.warn(
+        { paymentId: record.id, err: error instanceof Error ? error.message : String(error) },
+        'payment situation: refund refusal undecided; no refund offered',
+      );
+      return REFUND_REFUSAL_UNDECIDED;
+    }
   }
 
   async get(scope: TenantContext, actor: ActorContext, id: string): Promise<PaymentRecord> {

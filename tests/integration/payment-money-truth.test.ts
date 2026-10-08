@@ -99,6 +99,8 @@ describe('refund refusal reasons and rate provenance', () => {
     state: 'CONFIRMED' | 'PENDING';
     order: boolean;
     provider?: string;
+    /** A stored quote that does not parse (the snapshot guard freezes it once written). */
+    unparseableQuote?: boolean;
   }): Promise<string> {
     const customerId = await customer();
     let orderId: string | null = null;
@@ -129,7 +131,7 @@ describe('refund refusal reasons and rate provenance', () => {
         VALUES (${orderId}, ${tenantA.tenantId}, ${customerId},
           ${p.state === 'CONFIRMED' ? 'PAID' : 'AWAITING_PAYMENT'}, 'NEW_SERVICE', ${productId},
           ${panelId}, 'Plan',
-          30, 1073741824, 1, 100000, 100000, 0, 100000, 'IRT', ${JSON.stringify(quote)}::jsonb, now(),
+          30, 1073741824, 1, 100000, 100000, 0, 100000, 'IRT', ${p.unparseableQuote === true ? '{}' : JSON.stringify(quote)}::jsonb, now(),
           ${p.state === 'CONFIRMED' ? new Date() : null})`);
     }
     const id = uuid();
@@ -249,6 +251,27 @@ describe('refund refusal reasons and rate provenance', () => {
       return id;
     },
   } satisfies Record<RefundRefusalReason, () => Promise<string>>;
+
+  /*
+   * CI on PR #248 (shard 4/4): the guide's refusal reads the order the payment bought, and an order
+   * whose stored quote does not parse threw — the payment's detail AND the whole payment list then
+   * answered 500 for one row. The guide is advisory: undecided offers no refund, and the pages read.
+   */
+  it('answers the payment and the list when the refusal cannot be decided, offering no refund (CX4 follow-up)', async () => {
+    const id = await payment({
+      method: 'WALLET',
+      state: 'CONFIRMED',
+      order: true,
+      unparseableQuote: true,
+    });
+    const detail = await get(`/payments/${id}`);
+    expect(detail.statusCode, detail.body).toBe(200);
+    const situation = paymentResponseSchema.parse(detail.json()).payment.situation;
+    expect(situation).not.toBeNull();
+    expect(situation?.actions).not.toContain('ISSUE_REFUND');
+    const list = await get('/payments');
+    expect(list.statusCode, list.body).toBe(200);
+  });
 
   it('names every refusal reason, and the write refuses with exactly that reason (E3, F6)', async () => {
     expect(Object.keys(reasons).sort()).toEqual([...REFUND_REFUSAL_REASONS].sort());

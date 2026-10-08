@@ -6,6 +6,7 @@ import {
   PAYMENT_SITUATION_CUSTOMER_TEMPLATES,
   PAYMENT_STATES,
   REFUND_REFUSAL_REASONS,
+  REFUND_REFUSAL_UNDECIDED,
   paymentSituationCode,
   paymentNeedsAction,
   paymentSituationOf,
@@ -353,6 +354,8 @@ describe('the payment situation classifier', () => {
     }
     // Nothing left after a full refund: the guide does not promise one the server refuses.
     expect(confirmed({ refundCompleted: true, refundRemaining: false })).toEqual([]);
+    // A refusal the service could not decide offers nothing (CI on PR #248, shard 4/4).
+    expect(confirmed({ refundRefusal: REFUND_REFUSAL_UNDECIDED })).toEqual([]);
     expect(
       everyRow().filter(
         ({ f, g }) =>
