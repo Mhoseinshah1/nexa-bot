@@ -476,6 +476,7 @@ export const DASHBOARD: readonly ShotFixture[] = [
       generatedAt: SHOT_NOW,
       tickets: { awaitingSupport: 1, open: 2 },
       businessHandoffs: 1,
+      businessHandoffConversationId: '019210ab-cdef-7012-8345-6789abcd5101',
       payments: {
         unknown: 1,
         latest: [
