@@ -183,7 +183,10 @@ export interface SupportAutoReplyServiceDeps {
   readonly conversations: Pick<BusinessConversationRepository, 'findById' | 'lockById' | 'touch'>;
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findByTelegramId'>;
   /** The loop guard's counts, and (D7) the delivered replies the transcript carries. */
-  readonly outbound: Pick<BusinessOutboundRepository, 'countAuto' | 'deliveredSince'>;
+  readonly outbound: Pick<
+    BusinessOutboundRepository,
+    'countAuto' | 'deliveredSince' | 'undeliveredAuto'
+  >;
   /**
    * The guards' account facts, read INSIDE the enqueue transaction (substitute review of
    * PR #202, finding 1): the decision guards run again on what is true at the enqueue, not on
@@ -683,7 +686,24 @@ export class SupportAutoReplyService {
         SUPPORT_TRANSCRIPT_READ_LINES,
         tx,
       );
-      const repeated = autoRepeatedAdviceGuard(decision, deliveredNow, since);
+      /*
+       * The CX5 follow-up: an earlier automatic reply of this epoch still PENDING (or
+       * UNCONFIRMED — it may have reached the customer) is advice given too. Delivered or not,
+       * it is on its way; this reply would repeat it beside it.
+       */
+      const onItsWay = (
+        await this.deps.outbound.undeliveredAuto(
+          scope,
+          { conversationId: job.conversationId, epoch: job.controlEpoch ?? -1 },
+          tx,
+        )
+      ).map((row) => ({
+        origin: 'OWN_ECHO' as const,
+        author: 'AI_AUTO' as const,
+        text: row.body,
+        sentAt: row.createdAt,
+      }));
+      const repeated = autoRepeatedAdviceGuard(decision, [...deliveredNow, ...onItsWay], since);
       if (!repeated.pass)
         return this.handOffChecked(scope, job, repeated, decision, produced, now, tx);
       const queued = await this.deps.control.enqueueAutoSend(

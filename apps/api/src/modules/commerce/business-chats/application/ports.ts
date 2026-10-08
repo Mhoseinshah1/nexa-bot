@@ -606,6 +606,18 @@ export interface BusinessOutboundRepository {
     input: { readonly conversationId: string; readonly epoch: number; readonly since: Date },
     tx?: unknown,
   ): Promise<{ readonly atEpoch: number; readonly inWindow: number }>;
+
+  /**
+   * The conversation's AUTO rows of `epoch` that may yet reach, or may already have reached, the
+   * customer without being DELIVERED: `PENDING` (not sent yet) and `UNCONFIRMED` (a send whose
+   * answer was lost), with their text, oldest first. The auto-reply's final repeated-advice
+   * recheck counts them as advice given (review of PR #248, the CX5 follow-up).
+   */
+  undeliveredAuto(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number },
+    tx?: unknown,
+  ): Promise<readonly BusinessOutboundRecord[]>;
 }
 
 // ---------------------------------------------------------------------------

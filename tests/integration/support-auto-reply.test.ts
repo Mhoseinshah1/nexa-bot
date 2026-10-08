@@ -3168,6 +3168,36 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       });
     });
 
+    it('A3, the CX5 follow-up: advice still PENDING when the next job enqueues is not sent again', async () => {
+      const advice = 'لطفاً برنامه را کامل ببندید، لینک اشتراک را به‌روز کنید و دوباره وصل شوید.';
+      next = scripted({ replyText: advice });
+      const id = (await record(message({ text: 'وصل نمیشم' }))).conversationId;
+      await tick();
+      // The first reply is enqueued and never delivered before the second job enqueues.
+      expect(transport.sent).toHaveLength(0);
+      next = scripted({
+        replyText: 'لطفا برنامه را کامل ببنديد، لينک اشتراک را بهروز کنيد و دوباره وصل شويد',
+      });
+      await record(message({ text: 'با Sing-box هستم' }));
+      await tick();
+      expect(calls).toBe(2);
+      expect(await outcomes(id)).toEqual(['sent', 'guard_repeated_advice']);
+      // One AUTO row was ever written: the repeat never reached the lane.
+      const autoRows = await db().execute(
+        sql`SELECT body FROM business_outbound_messages
+            WHERE origin = 'AUTO' AND conversation_id = ${id}`,
+      );
+      expect(autoRows.rows.map((row) => (row as { body: string }).body)).toEqual([advice]);
+      // The lane runs only now; a person holds the conversation, so the first reply is not sent
+      // automatically either (ADR-0033 §4) — and the advice is never sent twice.
+      await deliver();
+      expect(transport.sent.map((m) => m.text)).not.toContain(advice);
+      expect(await conversation(id)).toMatchObject({
+        state: 'HANDOFF_REQUIRED',
+        handoffReason: 'REPEATED_ADVICE',
+      });
+    });
+
     it('A3: the same greeting twice is courtesy, not repeated advice', async () => {
       const hello = scripted({
         topic: 'GREETING',

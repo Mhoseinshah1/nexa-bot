@@ -1117,6 +1117,29 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
       );
     return { atEpoch: Number(row?.atEpoch ?? 0), inWindow: Number(row?.inWindow ?? 0) };
   }
+
+  async undeliveredAuto(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number },
+    tx?: unknown,
+  ): Promise<readonly BusinessOutboundRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .select()
+      .from(businessOutboundMessages)
+      .where(
+        and(
+          eq(businessOutboundMessages.tenantId, tenantId),
+          eq(businessOutboundMessages.conversationId, input.conversationId),
+          eq(businessOutboundMessages.origin, 'AUTO'),
+          eq(businessOutboundMessages.controlEpoch, input.epoch),
+          inArray(businessOutboundMessages.state, ['PENDING', 'UNCONFIRMED']),
+          isNotNull(businessOutboundMessages.body),
+        ),
+      )
+      .orderBy(businessOutboundMessages.createdAt, businessOutboundMessages.id);
+    return rows.map(toOutbound);
+  }
 }
 
 /** TB7 — one row per handoff, and the AI's operator-facing note. */
