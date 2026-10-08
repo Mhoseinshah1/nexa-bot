@@ -412,6 +412,23 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     expect(await count('business_conversation_escalations')).toBe(0);
   });
 
+  it('A8 review N2: a sent automatic reply records the knowledge it cited, by title', async () => {
+    next = {
+      outcome: 'OK',
+      output: { ...grounded, knowledgeRefs: ['K1', 'K1'] },
+      usage: { inputTokens: 10, outputTokens: 10 },
+      model: 'gpt-5.5',
+    };
+    const first = await record(message());
+    await tick();
+    expect(await autoJobs(first.conversationId)).toMatchObject([{ state: 'SENT' }]);
+    const labels = await db().execute(
+      sql`SELECT knowledge_labels FROM support_ai_jobs WHERE conversation_id = ${first.conversationId}`,
+    );
+    // Cited twice, recorded once.
+    expect(labels.rows).toEqual([{ knowledge_labels: ['خطای اتصال در Sing-box'] }]);
+  });
+
   it('D9: «وصل نمیشه، پولمو پس بدید» never auto-replies, whatever topic the model picks', async () => {
     // The model would label it a safe, confident, grounded connection answer.
     const first = await record(message({ text: 'وصل نمیشه، پولمو پس بدید' }));

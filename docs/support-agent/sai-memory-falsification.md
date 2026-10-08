@@ -35,15 +35,24 @@ decisions off at the context source, and the four were run again.
 | SAI-M19 | `priorDecisions` is tenant-scoped                                           | A8: priorDecisions reads decided jobs … never … another tenant's                                  | KILLED |
 | SAI-M20 | The earlier decisions reach the query, end to end through the database      | A8 end to end: on a repeated failure the draft still carries the article                          | KILLED |
 
-**20 of 20 killed.**
+| SAI-M21 | Each message is bounded before the join (PR #236 review, P2) | three long messages never push the newest one out of the customer part | KILLED |
+
+| SAI-M22 | Brackets neutralised by category (back to the pre-review list) | ⁅…⁆ / ⦋…⦌ / ⌈…⌉ / 〈…〉 … around a marker never forges one, in any line (10 failed) | KILLED |
+| SAI-M23 | A moved version must name the text it ships (version moved, text not) | pins the policy text to its version, in both directions | KILLED |
+| SAI-M24 | A sent automatic decision records the titles it cited | A8 review N2: a sent automatic reply records the knowledge it cited, by title | KILLED |
+| SAI-M25 | The customer's words leave a reserve of terms for the other parts | N3: a long customer message leaves terms for the intent, the titles cited and the topic | KILLED |
+| SAI-M26 | Topic words count only in a title or a tag | N4: after a vague «باز هم نشد», a topic word matches a title, never a body | KILLED |
+| SAI-M27 | The container gives the source its memory | PR #236 review N5: the ASSEMBLED container gives both AI paths a context source with memory | KILLED |
+| SAI-M28 | The transcript's character ceiling | past 24,000 characters the oldest lines leave first; the latest always stays | KILLED |
+
+**28 of 28 killed.** After the PR #236 independent review the whole driver was run again on
+the review fix: SAI-M11–M13 had to be restated for the reworked scorer (their first anchors no
+longer existed), and SAI-M27 first SURVIVED — the wiring probe's article said «باز», which the
+vague message matched on its own; the probe article was changed and M27 then died. TB6-22
+(`scripts/mutate-tb6.py`) was restated for the line now bounded again after NFKC, and killed.
 
 ## Not covered by a mutant
 
-- The container passes the job repository to `TbSupportContextSource`. The integration suites
-  build their services themselves, so no test runs the container's wiring of this source;
-  removing the second argument silently turns the memory off in production (the D2 behaviour,
-  the customer's words alone). Pinning it needs a test over the container's assembled
-  assistant, which no suite has today.
 - The contract bounds (eight entries, 24 KiB, 12 KiB) are asserted by value in the unit suites
   (`SUPPORT_CONTEXT_LIMITS.knowledge` is 8; the budget tests fit to the constants) but were not
   mutated: the tests import the built contracts package, so a source mutant needs a rebuild.

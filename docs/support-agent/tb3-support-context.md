@@ -223,10 +223,18 @@ rows each time — `business_messages` plus the delivered `business_outbound_mes
 - **Markers nobody can type.** Each support-side line opens with a square-bracketed marker
   (`SUPPORT_AI_AUTHOR_MARKERS`, e.g. `[support staff (a person) wrote]`,
   `[earlier automatic AI reply]`). Like the TB6 image markers they are written only by the server:
-  every square bracket in a line's own text — ASCII, full-width, white, lenticular — becomes a
-  parenthesis first, so a customer, a caption or a business message cannot forge "a person
-  wrote this". Policy rule 13 explains the markers, forbids repeating a step an earlier line
-  gave, forbids contradicting what a person said, and forbids writing a marker into a reply.
+  a line's own text is NFKC-normalised and then every opening and closing punctuation
+  (`\p{Ps}`/`\p{Pe}`) and the bracket pieces U+23A1–U+23A6 and U+23B4–U+23B5 become parentheses
+  (PR #236 review, B1: the earlier LIST of bracket characters let `⁅…⁆`, `⦋…⦌`, `⌈…⌉`, `〈…〉`
+  and others through). A customer, a caption or a business message therefore cannot forge "a
+  person wrote this". Persian quotation marks («») are quotes, not brackets, and stay. Policy rule
+  13 explains the markers, forbids repeating a step an earlier line gave, forbids contradicting
+  what a person said, and forbids writing a marker into a reply.
+- **A character ceiling** (PR #236 review, N6). Past `SUPPORT_AI_TRANSCRIPT_MAX_CHARS` (24,000
+  characters of line text) the oldest lines leave the window first; the latest always stays.
+  `promptWindow` is the one definition of the window: the transcript, the vision plan and the
+  draft's unseen-image count all read it, so no image is fetched for a line the model is not
+  shown.
 
 ## A8 — knowledge retrieval with conversation memory (2026-10-07)
 
@@ -246,6 +254,8 @@ model, no I/O) and changes three things:
    | the troubleshooting episode | up to six earlier customer messages, while an episode is open     | 0.5    |
    | the last topic              | a fixed Persian vocabulary per safe topic (`TOPIC_QUERY_TERMS`)   | 0.4    |
 
+   Since the PR #236 review an automatic decision records the titles it cited too (`finishAuto`
+   takes the resolved labels, as `markReady` does), so continuity works under `AUTO_REPLY_SAFE`.
    A "decided job" is an `ASSIST_DRAFT` or `AUTO_DECISION` row with a decision in `READY` or
    `SENT` — never `DISCARDED` (an operator's rejection, a superseded draft, a handed-off or
    dropped automatic job) or `FAILED`. `DrizzleSupportAiJobRepository.priorDecisions` reads at
@@ -254,8 +264,12 @@ model, no I/O) and changes three things:
    question (`REPLY`, `ASK_CLARIFYING_QUESTION`) on a troubleshooting topic
    (`CONNECTION_TROUBLESHOOTING`, `APP_SETUP`, `SUBSCRIPTION_UPDATE`, `KNOWN_ERROR`). A term in two
    parts counts once, at the higher weight. At most `KNOWLEDGE_QUERY_MAX_TERMS` (64) distinct
-   terms are scored, the highest-priority part's first, and each part is clipped, so scoring a
-   thousand candidates is bounded whatever the transcript holds.
+   terms are scored; the customer's words take at most 48 before every later part has had four of
+   its own (PR #236 review, N3: a long pasted log no longer switches memory off), and each part is
+   clipped, so scoring a
+   thousand candidates is bounded whatever the transcript holds. A part made of several
+   messages holds each one to an equal share before joining them, so a long older message never
+   pushes the newest question out (PR #236 review).
 
 2. **A zero score is never sent.** An entry the query does not match at all is excluded from the
    top-k, so a greeting, an image with no caption or a question nothing answers carries no
@@ -271,17 +285,15 @@ Only `APPROVED` and enabled articles are candidates (`activeForContext`), with t
 that is unchanged. Policy rule 4b tells the model the entries are the few that match, most
 relevant first, and that an entry that does not fit is never a reason to answer.
 
-**Known gap.** An automatic decision does not record the titles it cited (`finishAuto` stores
-`fact_refs` only; the knowledge aliases are positional per build), so the "knowledge cited
-before" part reads Assist drafts only. An automatic decision still contributes its intent and
-topic. Recording the titles belongs to the automatic reply's finish path (owned by the handoff
-work) and is left as a follow-up.
+**Generic topic words** («سرویس», «خطا») count only where they match a title or a tag, never a
+body (PR #236 review, N4), so a vague «باز هم نشد» after a `SERVICE_INFO` decision does not fill
+the request with every article that mentions a service.
 
 A7/A8 tests: `tests/unit/support-ai-transcript.test.ts` (authors, markers, the window),
 `tests/unit/support-knowledge-query.test.ts` (the weighted query, the episode, continuity, the
 bounds, the source), `tests/unit/support-ai-prompt.test.ts` (rules 4b and 13, the policy digest)
 and `tests/integration/support-assist.test.ts` (`priorDecisions` and the end-to-end repeated
-failure). Mutation results are in `sai-memory-falsification.md` (20 of 20 killed).
+failure). Mutation results are in `sai-memory-falsification.md` (28 of 28 killed).
 
 ## Tests
 

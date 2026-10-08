@@ -14,6 +14,7 @@ import {
 import {
   SUPPORT_ASSIST_ERROR_CODES,
   SupportAssistService,
+  type SupportContextSource,
   type SupportAssistServiceDeps,
 } from '../../apps/api/src/modules/control/support-ai/application/support-assist.service';
 import {
@@ -476,6 +477,43 @@ describe('Assist Mode (TB5)', () => {
     const third = await readyDraft(forgetful, forgetfulLoop);
     expect(chainSystems.at(-1)).not.toContain('اینترنت وصل نمی‌شود');
     expect(await jobs.findById(scopeA, third.id)).toMatchObject({ knowledgeSent: 0 });
+  });
+
+  it('PR #236 review N5: the ASSEMBLED container gives both AI paths a context source with memory', async () => {
+    const c = ctx.container;
+    const owner = adminActorFor(
+      await createAdmin(c, tenantA, { username: 'owner-n5', roleKeys: ['owner'] }),
+    );
+    await c.supportKnowledge.createArticle(tenantA, owner, {
+      idempotencyKey: key('article'),
+      content: {
+        title: 'اینترنت وصل نمی‌شود',
+        body: 'برنامه را ببندید، اینترنت گوشی را خاموش و روشن کنید.',
+        category: 'CONNECTION',
+        tags: ['اتصال'],
+      },
+      publish: true,
+    });
+    // A decided job in this conversation: topic CONNECTION_TROUBLESHOOTING, intent «اتصال».
+    await readyDraft();
+    const transcript = [
+      {
+        id: 'x',
+        origin: 'INBOUND' as const,
+        author: 'CUSTOMER' as const,
+        kind: 'TEXT' as const,
+        text: 'باز هم نشد',
+        sentAt: new Date(),
+      },
+    ];
+    // The services' own sources, as the container wired them (private deps, read for the test).
+    type Wired = { readonly deps: { readonly context: SupportContextSource } };
+    for (const service of [c.supportAssist, c.supportAutoReply]) {
+      const source = (service as unknown as Wired).deps.context;
+      const built = await source.build(scopeA, null, { conversationId, transcript });
+      // «باز هم نشد» matches nothing: only the conversation's earlier decision finds it.
+      expect([...(built.knowledgeAliases?.values() ?? [])]).toEqual(['اینترنت وصل نمی‌شود']);
+    }
   });
 
   it('review item 6: newer undelivered rows never push a delivered reply out of the transcript', async () => {

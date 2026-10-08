@@ -95,7 +95,8 @@ M=[
             (MSGS,"photoFileUniqueId: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' AND ${businessMessages.textPurgedAt} IS NULL THEN","photoFileUniqueId: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' THEN"),
             (MSGS,"photoFileSize: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' AND ${businessMessages.textPurgedAt} IS NULL THEN","photoFileSize: sql`CASE WHEN ${businessMessages.kind} = 'PHOTO' THEN")],I,'S2: an edit after'),
  # 22 (S3). only the server writes a marker: a line's own text is neutralised
- ('TB6-22',[(PROMPT,"        : neutraliseMarkers(line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS));","        : line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS);")],U,'never forges it'),
+ # (anchor restated by the PR #236 review fix, which bounds the line again after NFKC)
+ ('TB6-22',[(PROMPT,"          neutraliseMarkers(line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS)).slice(","          line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS).slice(")],U,'never forges it'),
  # 23 (N1). Anthropic's raw bound encodes within its 5 MB base64 limit
  ('TB6-23',[(ANTHROPIC,"    maxImageBytes: 3_750_000,","    maxImageBytes: 3_750_001,")],U,'encodes within the 5 MB'),
  # 24 (N2). the lease covers every image download leg

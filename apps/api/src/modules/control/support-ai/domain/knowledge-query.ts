@@ -1,6 +1,6 @@
 import type { SupportAiDecisionKind, SupportAiTopic } from '@nexa/contracts';
 import type { KnowledgeQueryPart } from '../../../commerce/support-context/domain/knowledge-relevance.js';
-import { latestCustomerWords, type SupportTranscriptLine } from './transcript.js';
+import { KNOWLEDGE_QUERY_MESSAGES, type SupportTranscriptLine } from './transcript.js';
 
 /**
  * A8 — what the knowledge a request carries is chosen BY. Before this it was the customer's
@@ -93,11 +93,11 @@ export function troubleshootingState(prior: readonly PriorDecisionFact[]): {
 }
 
 /** The customer's messages with text, oldest first, skipping the latest `skip`. */
-function earlierCustomerWords(
+function customerMessages(
   lines: readonly Pick<SupportTranscriptLine, 'origin' | 'text'>[],
   skip: number,
   count: number,
-): string {
+): string[] {
   const words: string[] = [];
   let seen = 0;
   for (let index = lines.length - 1; index >= 0 && words.length < count; index -= 1) {
@@ -106,7 +106,18 @@ function earlierCustomerWords(
     seen += 1;
     if (seen > skip) words.unshift(line.text);
   }
-  return words.join('\n');
+  return words;
+}
+
+/**
+ * Messages joined within `max` characters, EACH held to an equal share, so a long older message
+ * can never push the newest one out of the part (review of PR #236): clipping the joined text
+ * from its start would keep the oldest words and drop the latest question.
+ */
+export function joinBounded(messages: readonly string[], max: number): string {
+  if (messages.length === 0) return '';
+  const share = Math.max(1, Math.floor((max - (messages.length - 1)) / messages.length));
+  return messages.map((message) => message.slice(0, share)).join('\n');
 }
 
 /**
@@ -123,7 +134,10 @@ export function knowledgeQueryFor(
     if (clipped !== '') parts.push({ text: clipped, weight });
   };
   add(
-    latestCustomerWords(transcript),
+    joinBounded(
+      customerMessages(transcript, 0, KNOWLEDGE_QUERY_MESSAGES),
+      PART_MAX_CHARS.latestCustomer,
+    ),
     PART_MAX_CHARS.latestCustomer,
     KNOWLEDGE_QUERY_WEIGHTS.latestCustomer,
   );
@@ -143,13 +157,19 @@ export function knowledgeQueryFor(
   const episode = troubleshootingState(recent);
   if (episode.open) {
     add(
-      earlierCustomerWords(transcript, 3, KNOWLEDGE_QUERY_EPISODE_MESSAGES),
+      joinBounded(
+        customerMessages(transcript, KNOWLEDGE_QUERY_MESSAGES, KNOWLEDGE_QUERY_EPISODE_MESSAGES),
+        PART_MAX_CHARS.troubleshooting,
+      ),
       PART_MAX_CHARS.troubleshooting,
       KNOWLEDGE_QUERY_WEIGHTS.troubleshooting,
     );
   }
   const topicTerms =
     last === undefined || last.topic === null ? undefined : TOPIC_QUERY_TERMS[last.topic];
-  if (topicTerms !== undefined) add(topicTerms, 200, KNOWLEDGE_QUERY_WEIGHTS.topic);
+  // N4: generic topic words count only in a title or a tag, never in a body.
+  if (topicTerms !== undefined) {
+    parts.push({ text: topicTerms, weight: KNOWLEDGE_QUERY_WEIGHTS.topic, titleAndTagsOnly: true });
+  }
   return parts;
 }

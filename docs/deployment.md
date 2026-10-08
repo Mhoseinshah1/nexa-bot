@@ -331,6 +331,16 @@ It never asks for a token and never replaces one. It:
    Telegram shows exactly that URL; anything else fails with the marker unwritten,
    so `status` keeps saying `incomplete`.
 
+A bot **renamed in BotFather** keeps its id, so `getMe` in step 1 still names the
+same bot — under a new username. `register` (and an installer rerun) records that
+name on the bot row, audited as `bot_instance.username_reconciled`; nothing about
+the webhook changes for it, and the run says "the stored username is now …". If
+another bot row still holds the new name, nothing is changed, the audit row is
+`FAILED` with the reason, and the run prints a WARNING naming the name it kept —
+rerunning will not help until that other row lets the name go. `status` only
+**shows** the drift, as a `username` line on stderr naming both names (and, in that
+case, saying `register` cannot record it); it never writes it.
+
 Both outcomes leave an audit row `bot_instance.webhook_registered`: `SUCCESS`
 with the URL, `verifiedBy`, the pending count and `dropPendingUpdates` (`false` on
 every reconcile, `true` only on the first registration of a brand-new bot row), or
@@ -1773,6 +1783,25 @@ CHECKs on `content_kind` and `state` are widened, never narrowed). While the rel
 Before rolling back past round N close: pause sending FORWARD/COPY broadcasts, resume or
 cancel paused mass operations, and know that opted-out customers are not excluded until the
 roll-forward.
+
+### What an update and a rollback change: broadcast operator UX (roadmap C1/C2)
+
+There is no migration. These are reads and a page:
+
+- delivery per bot (`GET /broadcasts/:id/bots`);
+- the broadcast's own history (`GET /broadcasts/:id/history`);
+- a waiting recipient's `nextAttemptAt`.
+
+**During the update itself**, the new Web Admin can meet an old API replica.
+
+- The delivery-per-bot and history cards answer an error, because the old replica has neither
+  route.
+- The recipients card keeps working. `nextAttemptAt` is optional in the contract, so a row from
+  the old replica parses and shows no next attempt.
+- A reload after the update answers both cards.
+
+**A rollback** removes the two cards and the next-attempt time. Nothing is stored by them, so
+nothing is stranded.
 
 ### What a rollback leaves as text: appearance markers (round P, Premium UI)
 

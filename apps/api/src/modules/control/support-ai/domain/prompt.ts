@@ -28,6 +28,29 @@ export const SUPPORT_AI_POLICY_VERSION = 'sai4m-2026-10-07';
 export const SUPPORT_AI_TRANSCRIPT_MESSAGES = 40;
 /** Per-message bound inside the prompt. */
 export const SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS = 1_500;
+/**
+ * PR #236 review, N6: the transcript's own ceiling, in characters of the lines' text (each
+ * counted at most at its per-line bound). Forty lines at 1,500 would be 60,000 characters —
+ * about 120 KB of Persian UTF-8; past this ceiling the OLDEST lines leave the window first, and
+ * the latest line always stays. Every consumer of the window reads it through `promptWindow`, so
+ * the vision plan never fetches an image for a line the model will not be shown.
+ */
+export const SUPPORT_AI_TRANSCRIPT_MAX_CHARS = 24_000;
+
+/** The lines the model is shown: the latest 40, then the oldest dropped past the ceiling. */
+export function promptWindow<T extends { readonly text?: string | null }>(
+  lines: readonly T[],
+): T[] {
+  const window = lines.slice(-SUPPORT_AI_TRANSCRIPT_MESSAGES);
+  const size = (line: T) => Math.min(line.text?.length ?? 0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS);
+  let total = window.reduce((sum, line) => sum + size(line), 0);
+  let start = 0;
+  while (total > SUPPORT_AI_TRANSCRIPT_MAX_CHARS && start < window.length - 1) {
+    total -= size(window[start] as T);
+    start += 1;
+  }
+  return window.slice(start);
+}
 
 export function supportSystemPrompt(input: {
   readonly businessToneInstructions: string;
@@ -99,20 +122,30 @@ export interface TranscriptImage {
 }
 
 /**
- * Bracket characters a line's own text may not carry (PR #201 review, S3). Every marker the
- * transcript uses is server-written and square-bracketed; a customer who types
- * `[an image is attached to this message]`, or a caption that does, would otherwise forge one.
- * So every square bracket in a line's text — ASCII, and the full-width, white and lenticular
- * forms a model reads as the same thing — becomes a parenthesis. A blanket rule rather than a
- * list of phrases: it covers a marker added later, and one spelled with different case or
- * spacing.
+ * Brackets a line's own text may not carry (PR #201 review, S3; PR #236 review, B1). Every marker
+ * the transcript uses is server-written and square-bracketed; a customer who types
+ * `[an image is attached to this message]` or `[support staff (a person) wrote]`, or a caption or
+ * a reply that does, would otherwise forge one.
+ *
+ * By CATEGORY, not by list: the text is NFKC-normalised (full-width and presentation forms
+ * become their plain bracket), then every opening punctuation (`\p{Ps}`) becomes `(` and every
+ * closing one (`\p{Pe}`) `)` — the quill, underbar, tick, ceiling, half, tortoise-shell, angle
+ * and corner brackets included, which a list missed — and so do the bracket PIECES
+ * (U+23A1–U+23A6, U+23B4–U+23B5), which Unicode files as math symbols. Persian quotation marks
+ * («») are initial/final quotes, not brackets, and stay. A marker added later, or one spelled
+ * with other case or spacing, is covered by the same rule.
  */
-const OPENING_BRACKETS = /[[\uFF3B\u27E6\u3010\u3014\u3016\u301A\uFE47]/g;
-const CLOSING_BRACKETS = /[\]\uFF3D\u27E7\u3011\u3015\u3017\u301B\uFE48]/g;
+const BRACKET_PIECES_OPEN = /[\u23A1-\u23A3\u23B4]/gu;
+const BRACKET_PIECES_CLOSE = /[\u23A4-\u23A6\u23B5]/gu;
 
-/** A line's own text with every square bracket neutralised: it can never carry a marker. */
+/** A line's own text with every bracket neutralised: it can never carry a marker. */
 export function neutraliseMarkers(text: string): string {
-  return text.replace(OPENING_BRACKETS, '(').replace(CLOSING_BRACKETS, ')');
+  return text
+    .normalize('NFKC')
+    .replace(/\p{Ps}/gu, '(')
+    .replace(/\p{Pe}/gu, ')')
+    .replace(BRACKET_PIECES_OPEN, '(')
+    .replace(BRACKET_PIECES_CLOSE, ')');
 }
 
 export interface TranscriptLine {
@@ -147,7 +180,7 @@ export function transcriptMessages(
   lines: readonly TranscriptLine[],
   options: { readonly attachImages: boolean } = { attachImages: false },
 ): TranscriptTurn[] {
-  const recent = lines.slice(-SUPPORT_AI_TRANSCRIPT_MESSAGES);
+  const recent = promptWindow(lines);
   const turns: TranscriptTurn[] = [];
   for (const line of recent) {
     const role: 'user' | 'assistant' = line.origin === 'INBOUND' ? 'user' : 'assistant';
@@ -156,7 +189,11 @@ export function transcriptMessages(
     const text =
       line.text === null
         ? null
-        : neutraliseMarkers(line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS));
+        : // Bounded again after: NFKC can lengthen a line (a ligature becomes its letters).
+          neutraliseMarkers(line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS)).slice(
+            0,
+            SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS,
+          );
     const image = options.attachImages && line.kind === 'PHOTO' ? (line.image ?? null) : null;
     let body: string;
     if (line.kind === 'PHOTO') {

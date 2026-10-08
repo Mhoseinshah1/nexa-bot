@@ -630,3 +630,24 @@
 .report-donut {
   max-width: 440px;
 }
+
+/* Roadmap C2 — broadcast operator UX: a reason's sentence beside its code, the per-bot row,
+   and the broadcast's own history list. */
+.bcx-reason {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
+}
+.bcx-bot {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+.bcx-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}

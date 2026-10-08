@@ -3,7 +3,7 @@ import {
   type BusinessMessageOrigin,
   type SupportAiImageSkipReason,
 } from '@nexa/contracts';
-import { SUPPORT_AI_TRANSCRIPT_MESSAGES } from './prompt.js';
+import { promptWindow } from './prompt.js';
 
 /**
  * TB6 — the pure half of vision (program §28, §36): which bytes are an image, and which of a
@@ -49,6 +49,8 @@ export function base64ByteLength(base64: string): number {
 
 export interface VisionLine {
   readonly id: string;
+  /** The line's text, which the prompt window's character ceiling counts. */
+  readonly text?: string | null;
   readonly origin: BusinessMessageOrigin;
   readonly kind: 'TEXT' | 'PHOTO' | 'OTHER';
 }
@@ -65,7 +67,7 @@ export interface VisionPlan {
 /**
  * Which of the transcript's customer images a request may carry.
  *
- * Only the window the prompt shows is considered (`SUPPORT_AI_TRANSCRIPT_MESSAGES`), and only
+ * Only the window the prompt shows is considered (`promptWindow`), and only
  * the CUSTOMER's images: an image the business sent is not what the customer is asking about.
  * The `SUPPORT_AI_VISION_MAX_IMAGES` most recent are candidates; every older one is
  * `OVER_LIMIT`. Nothing is fetched when vision is off for the tenant, or when no configured
@@ -76,7 +78,7 @@ export function planVision(
   lines: readonly VisionLine[],
   options: { readonly visionEnabled: boolean; readonly visionStepConfigured: boolean },
 ): VisionPlan {
-  const window = lines.slice(-SUPPORT_AI_TRANSCRIPT_MESSAGES);
+  const window = promptWindow(lines);
   const images = window.filter((line) => line.origin === 'INBOUND' && line.kind === 'PHOTO');
   const latestInbound = [...window].reverse().find((line) => line.origin === 'INBOUND');
   const latestInboundImageId =

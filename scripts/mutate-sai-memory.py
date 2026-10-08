@@ -31,23 +31,39 @@ M=[
  ('SAI-M01',[(TRANSCRIPT,"  const lane = replyLanes.get(message.telegramMessageId);","  const lane = undefined as BusinessOutboundOrigin | undefined;")],T,'an echo takes the lane'),
  ('SAI-M02',[(TRANSCRIPT,"  ASSIST: 'AI_ASSIST',","  ASSIST: 'STAFF',")],T,'a reply line is authored by its lane'),
  ('SAI-M03',[(PROMPT,"    if (role === 'assistant') body = `${authorMarker(line.author)}\\n${body}`;\n","")],T,'every support line opens with its author marker'),
- ('SAI-M04',[(PROMPT,"        : neutraliseMarkers(line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS));","        : line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS);")],T,'never forges one'),
+ ('SAI-M04',[(PROMPT,"          neutraliseMarkers(line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS)).slice(","          line.text.slice(0, SUPPORT_AI_TRANSCRIPT_MESSAGE_CHARS).slice(")],T,'never forges one'),
  ('SAI-M05',[(TRANSCRIPT,"  if (message.origin === 'INBOUND') return 'CUSTOMER';\n","")],T,'a customer message is never relabelled'),
  ('SAI-M06',[(READ,"export const SUPPORT_TRANSCRIPT_READ_LINES = 60;","export const SUPPORT_TRANSCRIPT_READ_LINES = 40;")],T,'asks both repositories for 60'),
  ('SAI-M07',[(PROMPT,"export const SUPPORT_AI_TRANSCRIPT_MESSAGES = 40;","export const SUPPORT_AI_TRANSCRIPT_MESSAGES = 20;")],T,'the 40 most recent of the 60 lines'),
  ('SAI-M08',[(PROMPT,"never write one in replyText.","you may quote one.")],P,'explains every author marker'),
- ('SAI-M09',[(PROMPT,"(K1 is the closest match)","(K1 is the best match)")],P,'pins the policy text to its version'),
+ ('SAI-M09',[(PROMPT,"(K1 is the closest match)","(K1 is the best match)")],P,'in both directions'),
  # --- A8: knowledge retrieval ---
  ('SAI-M10',[(RELEVANCE,"    .filter(({ score }) => score > 0)\n","")],D,'no match, or no query, selects nothing'),
- ('SAI-M11',[(RELEVANCE,"      score += weight * (termWeights.get(term) ?? 0) * (rarity.get(term) ?? 0);","      score += weight * (rarity.get(term) ?? 0);")],K,'a weighted part scores less'),
- ('SAI-M12',[(RELEVANCE,"      weights.set(term, Math.max(known ?? 0, part.weight));","      weights.set(term, part.weight);")],K,'at the highest weight'),
- ('SAI-M13',[(RELEVANCE,"      if (known === undefined && weights.size >= KNOWLEDGE_QUERY_MAX_TERMS) continue;\n","")],K,'the term bound keeps'),
+ ('SAI-M11',[(RELEVANCE,"      score += where * termWeight * (rarity.get(term) ?? 0);","      score += where * (rarity.get(term) ?? 0);")],K,'a weighted part scores less'),
+ ('SAI-M12',[(RELEVANCE,"        known.weight = Math.max(known.weight, part.weight);","        known.weight = part.weight;")],K,'at the highest weight'),
+ ('SAI-M13',[(RELEVANCE,"      if (added >= limit || terms.size >= KNOWLEDGE_QUERY_MAX_TERMS) continue;","      if (added >= limit) continue;")],K,'the term bound keeps'),
  ('SAI-M14',[(QUERY,"  if (episode.open) {","  if (episode.open && false) {")],K,'THE EPISODE'),
  ('SAI-M15',[(QUERY,"  const stepOrQuestion = last.decision === 'REPLY' || last.decision === 'ASK_CLARIFYING_QUESTION';","  const stepOrQuestion = true;")],K,'troubleshooting is open only after'),
  ('SAI-M16',[(QUERY,"      .flatMap((job) => job.knowledgeLabels)","      .flatMap(() => [] as string[])")],K,'CONTINUITY'),
  ('SAI-M17',[(SOURCE,"      this.prior === null || options.conversationId === undefined","      true")],K,'reads the conversation'),
  ('SAI-M18',[(JOBS,"          inArray(supportAiJobs.state, ['READY', 'SENT']),","          inArray(supportAiJobs.state, ['READY', 'SENT', 'DISCARDED', 'FAILED']),")],I,'A8: priorDecisions'),
  ('SAI-M19',[(JOBS,"          eq(supportAiJobs.tenantId, tenantId),\n          eq(supportAiJobs.conversationId, conversationId),\n          isNotNull(supportAiJobs.decision),","          eq(supportAiJobs.conversationId, conversationId),\n          isNotNull(supportAiJobs.decision),")],I,'A8: priorDecisions'),
+ ('SAI-M21',[(QUERY,"  return messages.map((message) => message.slice(0, share)).join('\\n');","  return messages.join('\\n');")],K,'three long messages never push'),
+ # --- PR #236 review ---
+ # B1: back to a LIST of bracket characters (the pre-review neutraliser)
+ ('SAI-M22',[(PROMPT,"    .normalize('NFKC')\n    .replace(/\\p{Ps}/gu, '(')\n    .replace(/\\p{Pe}/gu, ')')","    .replace(/[[\\uFF3B\\u27E6\\u3010\\u3014\\u3016\\u301A\\uFE47]/g, '(')\n    .replace(/[\\]\\uFF3D\\u27E7\\u3011\\u3015\\u3017\\u301B\\uFE48]/g, ')')")],T,'around a marker never forges one'),
+ # N1: a version moved over unchanged text (the table must name the text's version)
+ ('SAI-M23',[(PROMPT,"export const SUPPORT_AI_POLICY_VERSION = 'sai4m-2026-10-07';","export const SUPPORT_AI_POLICY_VERSION = 'sai9-2026-12-31';")],P,'in both directions'),
+ # N2: an automatic decision's cited titles are not recorded
+ ('SAI-M24',[(JOBS,"              factRefs: [...decision.factRefs],\n              knowledgeLabels: [...(result.knowledgeLabels ?? [])],","              factRefs: [...decision.factRefs],")],('integration','tests/integration/support-auto-reply.test.ts'),'records the knowledge it cited'),
+ # N3: the customer's words may take every term again
+ ('SAI-M25',[(RELEVANCE,"  if (first !== undefined) take(first, KNOWLEDGE_QUERY_MAX_TERMS - KNOWLEDGE_QUERY_RESERVED_TERMS);","  if (first !== undefined) take(first, KNOWLEDGE_QUERY_MAX_TERMS);")],K,'N3: a long customer message'),
+ # N4: topic words count in bodies again
+ ('SAI-M26',[(RELEVANCE,"      body: part.titleAndTagsOnly !== true,","      body: true,")],K,'N4: after a vague'),
+ # N5: the container wires the source without its memory
+ ('SAI-M27',[('apps/api/src/container.ts',"new TbSupportContextSource(supportContext, supportAiJobs);","new TbSupportContextSource(supportContext);")],I,'the ASSEMBLED container'),
+ # N6: no character ceiling on the transcript
+ ('SAI-M28',[(PROMPT,"  while (total > SUPPORT_AI_TRANSCRIPT_MAX_CHARS && start < window.length - 1) {","  while (total < 0 && start < window.length - 1) {")],T,'character ceiling'),
  ('SAI-M20',[(SOURCE,"    return knowledgeQueryFor(options.transcript, prior);","    return knowledgeQueryFor(options.transcript, prior.slice(0, 0));")],I,'A8 end to end'),
 ]
 
