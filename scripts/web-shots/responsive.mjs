@@ -41,7 +41,8 @@ function allRoutes() {
   const block = /export const ROUTE_PATTERNS[^=]*=\s*\[([\s\S]*?)\];/.exec(app);
   if (block === null) throw new Error('ROUTE_PATTERNS not found in apps/web/src/app.tsx');
   return [...block[1].matchAll(/'(\/[^']*)'/g)].map((m) =>
-    m[1].replace(':id', ID).replace(':provider', 'TONPAYS'),
+    // The payment-method route takes the provider's lower-case slug (`providerOfSlug`).
+    m[1].replace(':id', ID).replace(':provider', 'tonpays'),
   );
 }
 
@@ -70,7 +71,8 @@ const SCENARIOS = [
     name: 'tablet navigation rail opens as a drawer',
     device: 'tablet',
     route: '/orders',
-    clicks: ['.menu-toggle'],
+    // On a tablet the topbar's menu button is hidden; the rail's own toggle is what shows.
+    clicks: ['.sidebar-foot button[aria-controls="app-sidebar"]'],
     expect: `(() => { const s = document.querySelector('#app-sidebar'); return !!s && s.getBoundingClientRect().width > 100; })()`,
   },
   {
@@ -185,18 +187,34 @@ const MEASURE = `(() => {
       else if (el.labels && el.labels.length > 0) kind = 'labelled-box';
     }
     if (seen.has(node)) continue;
-    // A ::before laid over the control widens what a finger hits (the bot builder's grips).
+    // A ::before laid over the control widens what a finger hits (the bot builder's grips) —
+    // but only one that takes pointer events and actually overlaps the control: a 3px
+    // current-page bar beside a link is not a target.
     const pseudo = getComputedStyle(node, '::before');
-    if (pseudo.content !== 'none' && pseudo.position === 'absolute') {
-      const out = (v) => Math.max(0, -(parseFloat(v) || 0));
-      box = {
-        left: box.left - out(pseudo.left),
-        right: box.right + out(pseudo.right),
-        top: box.top - out(pseudo.top),
-        bottom: box.bottom + out(pseudo.bottom),
-        width: box.width + out(pseudo.left) + out(pseudo.right),
-        height: box.height + out(pseudo.top) + out(pseudo.bottom),
-      };
+    if (
+      pseudo.content !== 'none' &&
+      pseudo.position === 'absolute' &&
+      pseudo.pointerEvents !== 'none' &&
+      pseudo.display !== 'none' &&
+      getComputedStyle(node).position !== 'static'
+    ) {
+      const own = node.getBoundingClientRect();
+      const width = parseFloat(pseudo.width) || 0;
+      const height = parseFloat(pseudo.height) || 0;
+      // Resolved offsets are relative to the control's padding box (it is the positioned one).
+      const left = own.left + node.clientLeft + (parseFloat(pseudo.left) || 0);
+      const top = own.top + node.clientTop + (parseFloat(pseudo.top) || 0);
+      const right = left + width;
+      const bottom = top + height;
+      const overlaps =
+        width > 0 && height > 0 && left < own.right && right > own.left && top < own.bottom && bottom > own.top;
+      if (overlaps) {
+        const l = Math.min(box.left, left);
+        const r = Math.max(box.right, right);
+        const tp = Math.min(box.top, top);
+        const b = Math.max(box.bottom, bottom);
+        box = { left: l, right: r, top: tp, bottom: b, width: r - l, height: b - tp };
+      }
     }
     seen.add(node);
     const style = getComputedStyle(node);
@@ -253,10 +271,14 @@ async function measure(cdp, server, options, job) {
     timeoutMs: options.timeoutMs,
   });
   try {
-    await page.settle();
+    // A page that never settles is not certified, whatever its measurements say.
+    const unsettled = [];
+    if (!(await page.settle())) unsettled.push(`never settled within ${options.timeoutMs}ms`);
     const missed = [];
     for (const selector of job.clicks ?? []) {
       if (!(await page.click(selector))) missed.push(`click found nothing for ${selector}`);
+      else if (!(await page.settle()))
+        unsettled.push(`never settled within ${options.timeoutMs}ms after ${selector}`);
     }
     await delay(250);
     const facts = await page.evaluate(MEASURE);
@@ -264,6 +286,7 @@ async function measure(cdp, server, options, job) {
     const { data } = await page.send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(job.file, Buffer.from(data, 'base64'));
     const problems = [
+      ...unsettled,
       ...missed,
       ...(reached === true ? [] : ['the scenario did not reach its expected state']),
       ...responsiveProblems({

@@ -1,6 +1,8 @@
 import {
   PERMISSION_KEYS,
   auditLogListResponseSchema,
+  paymentAttentionResponseSchema,
+  PAYMENT_OPS_QUEUES,
   customerTagListResponseSchema,
   inboxListResponseSchema,
   incidentListResponseSchema,
@@ -85,5 +87,12 @@ export const SHELL: readonly ShotFixture[] = [
   fixture('/notification-center', inboxListResponseSchema, {
     notifications: [],
     nextCursor: null,
+  }),
+  // The payments page's attention counts (review of #242, N8): every queue empty.
+  fixture('/payment-operations/attention', paymentAttentionResponseSchema, {
+    window: null,
+    byGateway: [],
+    totals: Object.fromEntries(PAYMENT_OPS_QUEUES.map((queue) => [queue, 0])),
+    generatedAt: ago(1),
   }),
 ];
