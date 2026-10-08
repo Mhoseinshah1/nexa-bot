@@ -16,8 +16,18 @@ PAGE='apps/web/src/pages/broadcasts.tsx'
 CPAGE='apps/web/src/pages/campaigns.tsx'
 T_R=('integration','tests/integration/broadcast-readiness.test.ts')
 T_B=('integration','tests/integration/broadcasts.test.ts')
+T_BW=('web','tests/web/broadcasts.test.tsx')
+T_ABW=('web','tests/web/audience-bots.test.tsx')
+AB='apps/web/src/pages/audience-builder.tsx'
 T_W=('web','tests/web/broadcast-readiness.test.tsx')
 T_CW=('web','tests/web/campaigns.test.tsx')
+AUD='apps/api/src/modules/commerce/audience/infrastructure/audience-sql.ts'
+CSVC='apps/api/src/modules/commerce/campaigns/application/campaign.service.ts'
+CREPO='apps/api/src/modules/commerce/campaigns/infrastructure/drizzle-campaign.repository.ts'
+T_AB=('integration','tests/integration/audience-bots.test.ts')
+T_C=('integration','tests/integration/campaigns.test.ts')
+TRANSPORT='apps/api/src/modules/commerce/broadcasts/infrastructure/telegram-broadcast.transport.ts'
+T_U=('unit','tests/unit/broadcast-transport.test.ts')
 
 M=[
  # Opt-out authority: the stamp re-reads the preference in its own transaction, so a refused
@@ -52,8 +62,19 @@ M=[
  # Web: the test and the count never read a draft with unsaved edits.
  ('CB-09',[(PAGE,"          disabled={blocked || test.isPending}","          disabled={test.isPending}")],T_W,'withholds the test and the count'),
  # Web: a re-queue is asked first.
+ # C3: the bot dimension narrows the ONE audience builder.
+ ('CB-12',[(AUD,"    parts.push(sql`${c}.first_bot_instance_id = ANY(${uuids(bots)})`);","    void bots;")],T_AB,'selects the customers of the named bots only'),
+ # C4: a campaign announcement is never a service announcement...
+ ('CB-13',[(CSVC,"announcement.terms.purpose !== 'MARKETING') {","announcement.terms.purpose === 'NEVER') {")],T_C,'refuses a campaign announcement called a service announcement'),
+ # ...and a draft stored before the rule is refused at the confirmation.
+ ('CB-14',[(CSVC,"        assertAnnouncementPurpose(actions.map((a) => a.config));\n","")],T_C,'refuses to schedule a draft saved before the rule'),
+ # C3 attribution: only PAID redemptions, and "delivered" means the announcement was SENT.
+ ('CB-15',[(CREPO,"           AND o.state = 'PAID'\n","")],T_C,'counts a redeemer as told only when told'),
+ ('CB-16',[(CREPO,"(SELECT count(*) FROM audience WHERE state = 'SENT')::int AS delivered","(SELECT count(*) FROM audience)::int AS delivered")],T_C,'counts a redeemer as told only when told'),
  # Web: a test send is a history row; the history is read again after it (Codex P2, PR #237).
  ('CB-17',[(PAGE,"      void client.invalidateQueries({ queryKey: ['broadcast-history', record.id] });\n    },\n  });\n  const large","    },\n  });\n  const large")],T_W,'reads the history again after a test'),
+ # D2-F1: on a forward/copy, "chat not found" may name the SOURCE: a refusal, not unreachable.
+ ('CB-18',[(TRANSPORT,"  if (request.sourced && AMBIGUOUS_ON_SOURCED_SEND.test(outcome.errorMessage)) {","  if (false && AMBIGUOUS_ON_SOURCED_SEND.test(outcome.errorMessage)) {")],T_U,'D2-F1|may name the source chat'),
  # Review N2: "waiting for a retry" is a PENDING row with an answer on record, not every PENDING.
  ('CB-19',[(REPO,"count(*) FILTER (WHERE r.state = 'PENDING' AND r.error_code IS NOT NULL)::int","count(*) FILTER (WHERE r.state = 'PENDING')::int")],T_R,'a 429 holds the bot that got it'),
  # Review N1: without audit.view, no refused rows and no operator identity.
@@ -61,6 +82,45 @@ M=[
  ('CB-21',[(SVC,"        actorLabel: audited ? row.actorLabel : null,","        actorLabel: row.actorLabel,")],T_R,'without audit.view'),
  # Review N4: the history says when older rows exist.
  ('CB-22',[(SVC,"    const truncated = rows.length > BROADCAST_HISTORY_MAX;","    const truncated = false;")],T_R,'beyond the cap'),
+ # Web foundation: a 409 on a campaign run command re-reads the campaign (settleOn onConflict).
+ ('CB-23',[(CPAGE,"""      submission.settleOn(error, {
+        onConflict: () => void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] }),
+      });
+      notify(""","""      submission.settleOn(error);
+      notify(""")],T_CW,'refused as stale'),
+ # PR #245 Codex CX1: no attribution around Broadcast's guarded read.
+ ('CB-24',[(CSVC,"broadcastId === null || discountId === null || announcement === null","broadcastId === null || discountId === null")],T_C,'may not read the announcement'),
+ # Review m1: "told" is SENT or UNCONFIRMED, never a SKIPPED or failed row.
+ ('CB-25',[(CREPO,"(SELECT count(*) FROM audience WHERE state IN ('SENT', 'UNCONFIRMED'))::int AS told","(SELECT count(*) FROM audience)::int AS told")],T_C,'counts a redeemer as told only when told'),
+ ('CB-26',[(CREPO,"""               WHERE a.state IN ('SENT', 'UNCONFIRMED')
+                 AND p.settled_at >= a.send_started_at)::int AS redeemers_told""","""               WHERE true
+                 AND p.settled_at >= a.send_started_at)::int AS redeemers_told""")],T_C,'counts a redeemer as told only when told'),
+ # Review m2: only an order paid after the send; never a refunded one (X14).
+ ('CB-27',[(CREPO,"""                 AND p.settled_at >= a.send_started_at)::int AS redeemers_told""","""                 AND true)::int AS redeemers_told""")],T_C,'counts a redeemer as told only when told'),
+ ('CB-28',[(CREPO,"           AND o.state = 'PAID'\n","           AND o.state IN ('PAID', 'REFUNDED')\n")],T_C,'counts a redeemer as told only when told'),
+ # Review m4: a replayed hand-over launches only the campaign's own draft.
+ ('CB-29',[(CSVC,"      if (!isTheCampaignsAnnouncement(draft, config.terms)) {","      if (false) {")],T_C,'never launches a draft someone edited'),
+ # Review m5 X5: the hand-over's MARKETING is the campaign's, not a stored purpose.
+ ('CB-30',[(CSVC,"        purpose: 'MARKETING',\n        frozenAudienceId,","        purpose: config.terms.purpose,\n        frozenAudienceId,")],T_C,'launches MARKETING even if a stored purpose'),
+ # Review M1: the Composer is not remounted (and duplicated) by a version bump.
+ ('CB-31',[(PAGE,"                    key={`composer-${record.id}`}","                    key={record.version}"),(PAGE,"                    key={`launch-${String(record.version)}`}","                    key={record.version}")],T_BW,'with ONE editor'),
+ # Codex CX2: unsaved edits are never replaced silently.
+ ('CB-32',[(PAGE,"    if (dirty) {\n      setStale(true);","    if (false) {\n      setStale(true);")],T_BW,'with ONE editor'),
+ # Review m5 X10/X9/X11: a 409 re-reads the record on composer save, launch and confirmation.
+ ('CB-33',[(PAGE,"""        onConflict: () => {
+          if (record !== null) {
+            void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
+          }
+        },""","""        onConflict: () => undefined,""")],T_BW,'with ONE editor'),
+ ('CB-34',[(PAGE,"        onConflict: () => void client.invalidateQueries({ queryKey: ['broadcast', record.id] }),","        onConflict: () => undefined,")],T_BW,'launch is refused as stale'),
+ ('CB-35',[(CPAGE,"""      // A 409 (the campaign or its audience moved on): read both again.
+      submission.settleOn(error, {
+        onConflict: () => void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] }),
+      });""","""      submission.settleOn(error);""")],T_CW,'confirmation is refused as stale'),
+ # Review m3: a default-valued audience key is not sent to the server.
+ ('CB-36',[(AB,"    ...(botInstanceIds === null ? {} : { botInstanceIds }),","    botInstanceIds,")],T_BW,'no audience key at its default'),
+ # Review m5 X12: the bot section only where there is a choice.
+ ('CB-37',[(AB,"      {(opts?.bots.length ?? 0) > 1 && (","      {(opts?.bots.length ?? 0) > 0 && (")],T_ABW,'one bot'),
  ('CB-10',[(PAGE,"              onClick={() => setRetryAsked(true)}","              onClick={() => steer.mutate('retryFailed')}")],T_W,'asks before a re-queue'),
 ]
 

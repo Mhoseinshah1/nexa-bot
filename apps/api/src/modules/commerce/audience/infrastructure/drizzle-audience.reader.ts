@@ -1,5 +1,10 @@
 import { sql, type SQL } from 'drizzle-orm';
-import type { AudienceDefinition, AudienceSampleCustomer, TenantContext } from '@nexa/contracts';
+import type {
+  AudienceDefinition,
+  AudienceSampleCustomer,
+  BotInstanceStatus,
+  TenantContext,
+} from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -86,7 +91,7 @@ export class DrizzleAudienceReader implements AudienceReader {
 
   async options(scope: TenantContext): Promise<AudienceOptions> {
     const tenantId = requireTenantId(scope);
-    const [tiers, products, panels, tags] = await Promise.all([
+    const [tiers, products, panels, tags, bots] = await Promise.all([
       this.rows<{ id: string; name: string }>(
         sql`SELECT id, name FROM reseller_tiers WHERE tenant_id = ${tenantId}::uuid
              ORDER BY lower(name), id`,
@@ -105,7 +110,12 @@ export class DrizzleAudienceReader implements AudienceReader {
               FROM customer_tags WHERE tenant_id = ${tenantId}::uuid
              ORDER BY archived_at IS NOT NULL, lower(label), id`,
       ),
+      // Roadmap C3: the tenant's bots, by name and status. Never a token or its ciphertext.
+      this.rows<{ id: string; username: string; status: BotInstanceStatus }>(
+        sql`SELECT id, username, status FROM bot_instances WHERE tenant_id = ${tenantId}::uuid
+             ORDER BY lower(username), id`,
+      ),
     ]);
-    return { resellerTiers: tiers, products, panels, tags };
+    return { resellerTiers: tiers, products, panels, tags, bots };
   }
 }
