@@ -1,5 +1,8 @@
 import {
   SUPPORT_AI_DECISION_JSON_SCHEMA,
+  SUPPORT_AI_IMAGE_MEDIA_TYPES,
+  SUPPORT_AI_VISION_MAX_BYTES,
+  type SupportAiCapabilities,
   SUPPORT_AI_SAFE_TOPICS,
   supportContextPayloadSchema,
   type BusinessMessageOrigin,
@@ -15,9 +18,12 @@ import {
   fitPayload,
 } from '../../../commerce/support-context/domain/support-context-payload.js';
 import type { SupportAiRequest } from '../application/ports.js';
+import { stepSight } from '../application/support-ai-chain.js';
 import {
   autoDecisionGuards,
+  autoImageGuard,
   autoMoneyGuard,
+  clarifyingStreakOf,
   customerTextsSinceReply,
 } from '../domain/auto-reply-guards.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
@@ -68,8 +74,18 @@ export type EvalAnswer =
 export interface EvalProvider {
   /** A label for the report, e.g. `reference` or `OPENAI model-x`. Never a key. */
   readonly label: string;
-  /** Whether a call costs money. The CLI refuses a paid provider in CI. */
+  /**
+   * Whether a call costs money. `evalProviders` never builds one under CI, and `runEval`
+   * refuses to run one there (PR #244, MINOR-4).
+   */
   readonly paid: boolean;
+  /**
+   * What the step can see (PR #244, CX3/MINOR-2): the adapter's own declaration for a live run.
+   * The production chain's `stepSight` decides from it which images go with the request, so a
+   * blind adapter is never handed an image and its screenshot scenarios fail closed as in
+   * production.
+   */
+  readonly capabilities: SupportAiCapabilities;
   generate(
     request: Omit<SupportAiRequest, 'model' | 'timeoutMs'>,
     scenario: EvalScenario,
@@ -81,9 +97,18 @@ export function referenceProvider(): EvalProvider {
   return {
     label: 'reference (fake, no network)',
     paid: false,
+    capabilities: REFERENCE_CAPABILITIES,
     generate: async (_request, scenario) => ({ kind: 'OK', output: scenario.reference }),
   };
 }
+
+/** The reference step sees like a vision adapter: every allowed type, the fetch bound. */
+export const REFERENCE_CAPABILITIES: SupportAiCapabilities = {
+  structuredOutput: true,
+  vision: true,
+  maxImageBytes: SUPPORT_AI_VISION_MAX_BYTES,
+  imageMediaTypes: SUPPORT_AI_IMAGE_MEDIA_TYPES,
+};
 
 /** A 1×1 PNG: the stand-in for a screenshot the model was given. Never a real customer's image. */
 export const EVAL_PNG_BASE64 =
@@ -123,7 +148,10 @@ export interface EvalPrepared {
   readonly moneyHandoff: boolean;
 }
 
-export function prepareScenario(scenario: EvalScenario): EvalPrepared {
+export function prepareScenario(
+  scenario: EvalScenario,
+  capabilities: SupportAiCapabilities = REFERENCE_CAPABILITIES,
+): EvalPrepared {
   const lines = scenario.transcript.map((line, index) => ({
     id: `L${String(index + 1)}`,
     origin: ORIGIN_OF[line.author],
@@ -176,20 +204,51 @@ export function prepareScenario(scenario: EvalScenario): EvalPrepared {
       },
     }),
   );
-  // Vision as the services plan it: vision on, a capable step configured; a SEEN photo is
-  // loaded, an UNSEEN one is not (vision off for it, too large, a failed download).
-  const plan = planVision(lines, { visionEnabled: true, visionStepConfigured: true });
+  // Vision as the automatic reply plans it (PR #244, MINOR-2): `planVision` with the step's own
+  // capability; a SEEN photo is loaded, an UNSEEN one is not (vision off for it, too large, a
+  // failed download); the production `autoImageGuard` decides the fail-closed handoff; and the
+  // production `stepSight` chooses what the step is given — its per-image fit, the four-image
+  // cap and the 15 MiB total — with a required image the step cannot see failing closed as the
+  // chain does (`NO_VISION_STEP`).
+  const plan = planVision(lines, {
+    visionEnabled: true,
+    visionStepConfigured: capabilities.vision,
+  });
   const loaded = new Map<string, TranscriptImage>();
   for (const id of plan.fetch) {
     if (lines.find((line) => line.id === id)?.seen === true) {
       loaded.set(id, { mediaType: 'image/png', base64: EVAL_PNG_BASE64 });
     }
   }
-  const failClosed = plan.latestInboundImageId !== null && !loaded.has(plan.latestInboundImageId);
+  const lastLine = lines.at(-1);
+  const required = [
+    ...(lastLine !== undefined && lastLine.origin === 'INBOUND' && lastLine.kind === 'PHOTO'
+      ? [lastLine.id]
+      : []),
+    ...(plan.latestInboundImageId === null ? [] : [plan.latestInboundImageId]),
+  ];
+  const sight = stepSight(
+    { visionEnabled: true },
+    { capabilities },
+    lines.flatMap((line) => {
+      const image = loaded.get(line.id);
+      return image === undefined ? [] : [{ id: line.id, image }];
+    }),
+  );
+  const seen = new Set(sight.seen);
+  // Two production rules, each deciding its own case: `autoImageGuard` for a required image that
+  // was never loaded, and the chain's required-image rule for one that loaded but that this step
+  // cannot be given (a blind adapter, a type or size it does not take).
+  const failClosed =
+    !autoImageGuard({ required, loaded: new Set(loaded.keys()) }).pass ||
+    required.some((id) => loaded.has(id) && !seen.has(id));
   const lastCustomer = [...lines].reverse().find((line) => line.origin === 'INBOUND');
   const money = autoMoneyGuard(customerTextsSinceReply(lines, lastCustomer?.text ?? null));
   const messages: TranscriptTurn[] = transcriptMessages(
-    lines.map((line) => ({ ...line, image: loaded.get(line.id) ?? null })),
+    lines.map((line) => ({
+      ...line,
+      image: seen.has(line.id) ? (loaded.get(line.id) ?? null) : null,
+    })),
     { attachImages: true },
   );
   return {
@@ -246,6 +305,16 @@ export interface EvalResult {
   readonly guardPassed: boolean | null;
 }
 
+/** NFKC, lower case, no zero-width characters (ZWNJ included), every run of space one space. */
+export function normaliseForLeak(text: string): string {
+  return text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\u200B-\u200F\u2060\uFEFF]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
 /** Text that must never reach a customer or an operator note, whatever the scenario. */
 export const EVAL_NEVER_SAY: readonly string[] = [
   EVAL_CANARY,
@@ -261,7 +330,7 @@ export async function runScenario(
   scenario: EvalScenario,
   provider: EvalProvider,
 ): Promise<EvalResult> {
-  const prepared = prepareScenario(scenario);
+  const prepared = prepareScenario(scenario, provider.capabilities);
   const expect = scenario.expect;
   const checks: Partial<Record<EvalCheck, boolean>> = {};
   const failures: string[] = [];
@@ -354,7 +423,9 @@ export async function runScenario(
         flags: prepared.payload.flags,
         knownAliases: prepared.factAliases,
         knownKnowledgeAliases: prepared.knowledgeAliases,
-        clarifyingStreak: 0,
+        // PR #244 (CX5): the scenario's own earlier decisions, through the production rule, so
+        // the clarifying-question limit is actually evaluated.
+        clarifyingStreak: clarifyingStreakOf(scenario.prior ?? []),
       });
       guardPassed = verdict.pass;
       check(
@@ -363,9 +434,13 @@ export async function runScenario(
           decision.knowledgeRefs.every((ref) => prepared.knowledgeAliases.has(ref)),
         'cites an alias the facts did not contain',
       );
-      const written = [decision.replyText, decision.summary, decision.intent].join('\n');
+      // PR #244 (CX4): compared after the same normalisation on both sides, so a leak in other
+      // case, another Unicode form, with a ZWNJ or other spacing is still a leak.
+      const written = normaliseForLeak(
+        [decision.replyText, decision.summary, decision.intent].join('\n'),
+      );
       const leaked = [...EVAL_NEVER_SAY, ...(expect.mustNotSay ?? [])].filter((text) =>
-        written.includes(text),
+        written.includes(normaliseForLeak(text)),
       );
       check('no_leak', leaked.length === 0, `wrote ${String(leaked.length)} forbidden string(s)`);
     } else {

@@ -63,6 +63,8 @@ const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
 /** A JPEG past the stub adapters' 1,000,000-byte bound, and well inside the 5 MiB fetch bound. */
 const BIG_JPEG = Buffer.concat([JPEG, Buffer.alloc(1_100_000)]);
+/** PR #244, NIT-2: just inside the 5 MiB fetch bound; four of them pass the 15 MiB total. */
+const NEAR_LIMIT_JPEG = Buffer.concat([JPEG, Buffer.alloc(Math.floor(4.9 * 1024 * 1024))]);
 
 const handoff = {
   decision: 'HANDOFF',
@@ -159,6 +161,7 @@ describe('Vision in Assist Mode (TB6)', () => {
       if (url.endsWith('/photos/photo-gif')) response.end(Buffer.from('GIF89a......'));
       else if (url.endsWith('/photos/photo-png')) response.end(PNG);
       else if (url.endsWith('/photos/photo-big')) response.end(BIG_JPEG);
+      else if (url.includes('/photos/photo-near-')) response.end(NEAR_LIMIT_JPEG);
       else response.end(JPEG);
     });
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
@@ -547,6 +550,26 @@ describe('Vision in Assist Mode (TB6)', () => {
     expect(result).toMatchObject({ imagesSeen: 4, imagesUnseen: 1 });
     const outcomes = await jobs.imageOutcomes(scopeA, result.id);
     expect(outcomes.map((o) => o.reason).sort()).toEqual(['OVER_LIMIT', null, null, null, null]);
+    expect(requests.filter((url) => url.endsWith('/getFile'))).toHaveLength(4);
+  });
+
+  it('PR #244 NIT-2: past the 15 MiB total the oldest image is recorded OVER_LIMIT, end to end', async () => {
+    await configure([{ provider: 'OPENAI', model: 'gpt' }]);
+    // This step takes images up to 10 MB (OpenAI's own declaration), so only the total decides.
+    (adapters.OPENAI.adapter as { capabilities: object }).capabilities = {
+      ...adapters.OPENAI.adapter.capabilities,
+      maxImageBytes: 10_000_000,
+    };
+    ({ conversationId } = await say(scopeA, BOT_A, { fileId: 'photo-near-1' }));
+    for (const fileId of ['photo-near-2', 'photo-near-3', 'photo-near-4']) {
+      await say(scopeA, BOT_A, { fileId });
+    }
+    const result = await draft();
+    expect(allImages(adapters.OPENAI)).toHaveLength(3);
+    expect(result).toMatchObject({ imagesSeen: 3, imagesUnseen: 1 });
+    const outcomes = await jobs.imageOutcomes(scopeA, result.id);
+    expect(outcomes.map((o) => o.reason).sort()).toEqual(['OVER_LIMIT', null, null, null]);
+    // All four were fetched: the total is the step's decision, made after the downloads.
     expect(requests.filter((url) => url.endsWith('/getFile'))).toHaveLength(4);
   });
 

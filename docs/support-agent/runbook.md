@@ -466,6 +466,11 @@ from an answer («فرستاده شد», `sent`), and opens no ticket.
   conversation is handed off with no model asked (TB6, unchanged). Per-image outcomes are in
   `support_ai_image_outcomes` as before; `OVER_LIMIT` now means a fifth image, or an older one
   past the 15 MiB total.
+- **The cost of high detail** (PR #244, NIT-3). At `low` OpenAI charges a small flat number of
+  tokens per image; at `high` the image is tiled and one screenshot can cost an order of
+  magnitude more. With up to four images instead of two, the image tokens of an OpenAI request
+  with screenshots can grow well over tenfold. Read it in `support_ai_runs` (input tokens per
+  call, `GET /support-ai/usage`) before and after; no price is computed (`OQ-TB-07`).
 - **Comparing models before changing one.** `docs/support-agent/sai-eval.md`. The corpus runs in
   CI against a fake provider. To compare real models, an operator with a TEST key (never a
   tenant's) runs `support-ai-eval --live` outside CI; it reports and changes nothing. The

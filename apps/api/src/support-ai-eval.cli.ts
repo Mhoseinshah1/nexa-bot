@@ -11,12 +11,12 @@ import { EVAL_SCENARIOS } from './modules/control/support-ai/eval/corpus.js';
 import {
   EVAL_USAGE,
   UsageError,
-  liveRunRefusal,
+  assertNoPaidProviderUnderCi,
+  evalProviders,
   parseEvalArgs,
 } from './modules/control/support-ai/eval/live-args.js';
 import {
   formatReports,
-  referenceProvider,
   runEval,
   type EvalProvider,
   type EvalReport,
@@ -57,6 +57,7 @@ function adapterProvider(
   return {
     label: `${adapter.provider} ${model}`,
     paid: true,
+    capabilities: adapter.capabilities,
     generate: async (request) => {
       const outcome = await adapter.generate(credential, { ...request, model, timeoutMs });
       return outcome.outcome === 'OK'
@@ -78,24 +79,28 @@ async function main(argv: readonly string[]): Promise<number> {
       ? EVAL_SCENARIOS
       : EVAL_SCENARIOS.filter((s) => args.only.includes(s.id));
   if (scenarios.length === 0) throw new UsageError('--only matched no scenario');
-  const providers: EvalProvider[] = [referenceProvider()];
-  if (args.live) {
-    const refusal = liveRunRefusal(args, process.env);
-    if (refusal !== null) {
-      process.stderr.write(`support-ai-eval: live run refused: ${refusal}\n`);
-      return 2;
-    }
-    const provider = args.provider as SupportAiProvider;
-    const credential: SupportAiCredential = {
-      apiKey: process.env.SUPPORT_AI_EVAL_API_KEY ?? '',
-      region: provider === 'ZAI' ? args.region : null,
-    };
+  // The paid-call gate (`evalProviders`): the factory, which reads the key, runs only when
+  // `liveRunRefusal` allowed the run; and no paid provider is ever run under CI.
+  const { providers, refusal } = evalProviders(args, process.env, (provider, model) =>
+    adapterProvider(
+      adapterFor(provider),
+      {
+        apiKey: process.env.SUPPORT_AI_EVAL_API_KEY ?? '',
+        region: provider === 'ZAI' ? args.region : null,
+      },
+      model,
+      args.timeoutMs,
+    ),
+  );
+  if (refusal !== null) {
+    process.stderr.write(`support-ai-eval: live run refused: ${refusal}\n`);
+    return 2;
+  }
+  assertNoPaidProviderUnderCi(providers, process.env);
+  if (providers.some((provider) => provider.paid)) {
     process.stderr.write(
-      `support-ai-eval: LIVE run against ${provider}, ${String(args.models.length)} model(s) × ${String(scenarios.length)} scenario(s): this is a paid call.\n`,
+      `support-ai-eval: LIVE run, ${String(providers.length - 1)} model(s) × ${String(scenarios.length)} scenario(s): this is a paid call.\n`,
     );
-    for (const model of args.models) {
-      providers.push(adapterProvider(adapterFor(provider), credential, model, args.timeoutMs));
-    }
   }
   const reports: EvalReport[] = [];
   for (const provider of providers) reports.push(await runEval(scenarios, provider));

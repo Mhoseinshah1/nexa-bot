@@ -156,7 +156,9 @@ export function stepSight(
   const over = Math.max(0, fits.length - SUPPORT_AI_VISION_MAX_IMAGES);
   for (const { id } of fits.slice(0, over)) unseen.set(id, 'OVER_LIMIT');
   // A9: the images together stay within `SUPPORT_AI_VISION_MAX_TOTAL_BYTES`, the most recent
-  // kept first; an older one that would pass the total is OVER_LIMIT like an older fifth image.
+  // kept first; an older one that would pass the total is OVER_LIMIT like an older fifth image,
+  // and the walk goes ON (skip, not stop): a still older, smaller image may still fit, so the
+  // seen set can have a gap (PR #244, NIT-1).
   const seen: string[] = [];
   let total = 0;
   for (const { id, image } of fits.slice(over).reverse()) {

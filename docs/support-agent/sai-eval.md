@@ -28,7 +28,10 @@ Telegram handle or a long digit run anywhere in the corpus.
 
 ### What one scenario goes through
 
-The runner calls the SAME functions a production request does, in the same order:
+The runner calls the SAME functions a production request does, in the same order (since PR #244
+the vision half is production's too: `planVision` with the step's own capability, `autoImageGuard`
+for an image never loaded, and the chain's `stepSight` — per-adapter fit, four images, the 15 MiB
+total — with a required image the step cannot be given failing closed as the chain does):
 `knowledgeQueryFor` and `selectKnowledge` (A8), `fitPayload` and the strict payload schema,
 `planVision` and the fail-closed rule (TB6), the money check (`autoMoneyGuard` over
 `customerTextsSinceReply`), `transcriptMessages` with the author and image markers (A7),
@@ -36,6 +39,13 @@ The runner calls the SAME functions a production request does, in the same order
 `autoDecisionGuards` under an evaluation configuration (every safe topic allowed, minimum
 confidence `MEDIUM`, 800 characters, two clarifying questions). A fail-closed image or a money
 mention hands off before any provider is asked, exactly as in production.
+
+Each provider carries the adapter's own `capabilities`: a blind adapter (Z.AI) is never handed an
+image, and its latest-screenshot scenarios fail closed exactly as production would — the report
+shows that as a `fail_closed` difference, which is the honest answer for a step that cannot see.
+The clarifying-question limit is evaluated from each scenario's earlier decisions
+(`clarifyingStreakOf`), and `no_leak` compares after NFKC, lower case, without zero-width
+characters and with spacing collapsed, on both sides.
 
 ### What is scored
 
@@ -75,7 +85,10 @@ SUPPORT_AI_EVAL_API_KEY=<a test key, never a tenant's> \
 ```
 
 - `--live` is required, and so are `--provider`, at least one `--model` and the key; Z.AI also
-  needs `--region`. With `CI` set to anything the live run is **refused** (exit 2).
+  needs `--region`. With any of `CI`, `GITHUB_ACTIONS`, `BUILDKITE`, `GITLAB_CI` or
+  `CONTINUOUS_INTEGRATION` SET — to anything, the empty string included — the live run is
+  **refused** (exit 2): `evalProviders` never calls the factory that holds the key, and no paid
+  provider is run under CI however it was built (both tested).
 - Each model is called once per scenario that reaches a model (fail-closed and money scenarios
   do not), sequentially, with `--timeout-ms` (default 60 s). This is a paid call.
 - The key is read from the environment for the run and never printed, logged or written. The
@@ -94,8 +107,17 @@ A model change is still the owner's decision through the ordinary configuration 
 
 Running it against the reference provider found one retrieval defect before any model was
 asked: «سلام وقت بخیر» selected the expiry article, because «وقت بخیر» (a greeting) met «وقتی»
-(when) in its body. «وقت», «وقتی», «بخیر» and «درود» are now stop words
-(`knowledge-relevance.ts`), pinned by `support-knowledge-query.test.ts`.
+(when) in its body. The first fix made «وقت» a stop word, which broke real expiry questions
+(«وقتم تموم شد», «چقدر وقت دارم» — PR #244, MAJOR-1: production retrieval was tuned to the
+corpus). Now the greeting «وقت بخیر» (and «وقتتون بخیر», «وقت شما بخیر») is removed as a PHRASE
+before the words are split, «وقت» counts again, and «بخیر», «درود» stay stop words. Pinned by
+`support-knowledge-query.test.ts` (four expiry questions rank the expiry article first; the
+greeting selects nothing) and the corpus scenario `connection-05`.
+
+**Personal data.** The unit test folds Persian and Arabic-Indic digits, removes spaces and dashes
+between digits, and refuses a phone (with `+98`/`0098`), a run of eight or more digits, an e-mail
+address, a link or a `@handle` (the demo support handle allowed) anywhere in the corpus — every
+field, byte counts and instants excluded — and proves each shape with a planted positive.
 
 Mutation results are in `sai-vision-eval-falsification.md`.
 

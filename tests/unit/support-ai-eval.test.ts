@@ -9,7 +9,9 @@ import {
 } from '../../apps/api/src/modules/control/support-ai/eval/corpus';
 import {
   EVAL_CHECKS,
+  REFERENCE_CAPABILITIES,
   formatReports,
+  normaliseForLeak,
   prepareScenario,
   referenceProvider,
   runEval,
@@ -17,10 +19,15 @@ import {
   type EvalProvider,
 } from '../../apps/api/src/modules/control/support-ai/eval/runner';
 import {
+  assertNoPaidProviderUnderCi,
+  evalProviders,
+  isCiEnvironment,
   liveRunRefusal,
   parseEvalArgs,
 } from '../../apps/api/src/modules/control/support-ai/eval/live-args';
+import { autoImageGuard } from '../../apps/api/src/modules/control/support-ai/domain/auto-reply-guards';
 import { SUPPORT_AI_AUTHOR_MARKERS } from '../../apps/api/src/modules/control/support-ai/domain/prompt';
+import { foldForMatching } from '../../apps/api/src/modules/commerce/support-context/domain/knowledge-relevance';
 
 /**
  * A10 — the evaluation corpus and its runner. CI runs the whole corpus against the REFERENCE
@@ -40,8 +47,52 @@ function answering(output: (scenario: EvalScenario) => unknown, label = 'hostile
   return {
     label,
     paid: false,
+    capabilities: REFERENCE_CAPABILITIES,
     generate: async (_request, scenario) => ({ kind: 'OK', output: output(scenario) }),
   };
+}
+
+/** Byte counts, money in minor units and instants are numbers, not personal data. */
+const NUMERIC_FIELDS = new Set([
+  'trafficLimitBytes',
+  'trafficUsedBytes',
+  'remainingTrafficBytes',
+  'amountMinor',
+  'expiresAt',
+  'usageSyncedAt',
+  'createdAt',
+  'confirmedAt',
+  'startedAt',
+  'scheduledEndAt',
+]);
+function stripNumericFields(value: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify(value, (key, field: unknown) => (NUMERIC_FIELDS.has(key) ? undefined : field)),
+  );
+}
+/** Every field of the corpus and its articles, as one text. */
+function corpusText(): string {
+  return JSON.stringify(stripNumericFields([EVAL_SCENARIOS, EVAL_ARTICLES]));
+}
+/** The handles a fixture may name: the demo support account. */
+const ALLOWED_HANDLES = new Set(['@nexa_support_demo']);
+/**
+ * Personal-data shapes in `text`: digits folded to ASCII first (Persian and Arabic-Indic), and
+ * spaces or dashes between digits removed, so «۰۹۱۲ ۳۴۵ ۶۷۸۹» is a phone like 09123456789.
+ */
+function piiFindings(text: string): string[] {
+  const folded = foldForMatching(text).replace(/(?<=\d)[\s\-\u2010-\u2015]+(?=\d)/gu, '');
+  const patterns: readonly RegExp[] = [
+    /(?:\+98|0098|(?<!\d)0)9\d{9}/gu, // an Iranian mobile
+    /\d{8,}/gu, // a card number, a national id, a Telegram id
+    /[\w.+-]+@[\w-]+\.[a-z]{2,}/gu, // an e-mail address
+    /https?:\/\/|vless:\/\/|vmess:\/\/|trojan:\/\/|ss:\/\/|t\.me\//gu, // a link
+  ];
+  const findings = patterns.flatMap((pattern) => [...folded.matchAll(pattern)].map((m) => m[0]));
+  const handles = [...text.matchAll(/(?<![\w.])@[A-Za-z][A-Za-z0-9_]{4,}/gu)]
+    .map((m) => m[0])
+    .filter((handle) => !ALLOWED_HANDLES.has(handle));
+  return [...findings, ...handles];
 }
 
 describe('A10 — the corpus', () => {
@@ -73,28 +124,45 @@ describe('A10 — the corpus', () => {
     );
   });
 
-  it('carries no real personal data: no phone, card, e-mail, Telegram id or link', () => {
-    // Every string a person wrote for the corpus: the conversations, the articles, the incident
-    // notices and the reference replies (byte counts and instants are numbers, not data).
-    const all = JSON.stringify([
-      EVAL_SCENARIOS.map((s) => [
-        s.transcript,
-        s.incidents?.map((i) => i.customerMessage),
-        s.reference.replyText,
-        s.reference.summary,
-        s.services?.map((service) => service.label),
-      ]),
-      EVAL_ARTICLES,
-    ]);
-    // Iranian mobile numbers, in Latin or Persian digits.
-    expect(all).not.toMatch(/(?:\+98|0)9\d{9}/u);
-    expect(all).not.toMatch(/[۰0][۹9][۰-۹]{9}/u);
-    // Card numbers (16 digits, optionally grouped), e-mail addresses, links and handles.
-    expect(all).not.toMatch(/\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}/u);
-    expect(all).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/u);
-    expect(all).not.toMatch(/https?:\/\/|vless:\/\/|vmess:\/\/|t\.me\//u);
-    // Telegram ids are long digit runs.
-    expect(all).not.toMatch(/\d{8,}/u);
+  it('carries no real personal data: no phone, card, e-mail, id, handle or link, in any field', () => {
+    expect(piiFindings(corpusText())).toEqual([]);
+  });
+
+  /*
+   * PR #244, MINOR-3: a guard with no planted positive is a rule with no test. Each probe below
+   * is a shape the first version let through (Persian digits, +۹۸, spaced numbers, a handle).
+   */
+  it.each([
+    ['a Persian-digit card number', '۶۰۳۷۹۹۷۱۲۳۴۵۶۷۸۹'],
+    ['a +۹۸ phone', '+۹۸۹۱۲۳۴۵۶۷۸۹'],
+    ['an Arabic-Indic phone', '٠٩١٢٣٤٥٦٧٨٩'],
+    ['a Persian-digit long id', '۱۲۳۴۵۶۷۸۹۰'],
+    ['a spaced phone', '0912 345 6789'],
+    ['a dashed card number', '6037-9971-2345-6789'],
+    ['a Telegram handle', 'پیام بدید به @ali_rezaei_92'],
+    ['an e-mail address', 'user.name@example.org'],
+    ['a link', 'https://example.org/x'],
+    ['a subscription link', 'vless://abc'],
+  ])('the guard fires on %s', (_label, probe) => {
+    expect(piiFindings(`${corpusText()} ${probe}`).length).toBeGreaterThan(0);
+  });
+
+  it('the guard scans every text field: intent, prior, payments, about and mustNotSay included', () => {
+    const planted = (over: Partial<EvalScenario>) =>
+      piiFindings(JSON.stringify(stripNumericFields([{ ...EVAL_SCENARIOS[0]!, ...over }])));
+    const base = EVAL_SCENARIOS[0]!;
+    expect(planted({ about: '0912 345 6789' })).not.toEqual([]);
+    expect(planted({ reference: { ...base.reference, intent: '@ali_rezaei_92' } })).not.toEqual([]);
+    expect(
+      planted({
+        prior: [{ decision: 'REPLY', topic: null, intent: '۰۹۱۲۳۴۵۶۷۸۹', knowledgeLabels: [] }],
+      }),
+    ).not.toEqual([]);
+    expect(planted({ expect: { ...base.expect, mustNotSay: ['۶۰۳۷۹۹۷۱۲۳۴۵۶۷۸۹'] } })).not.toEqual(
+      [],
+    );
+    // The allowlisted demo handle is not a finding.
+    expect(piiFindings('@nexa_support_demo')).toEqual([]);
   });
 
   it('every scenario is Persian conversation data with a valid, self-consistent reference', () => {
@@ -126,6 +194,7 @@ describe('A10 — the runner against the reference provider (what CI runs)', () 
     const counting: EvalProvider = {
       label: 'counting',
       paid: false,
+      capabilities: REFERENCE_CAPABILITIES,
       generate: async (_r, s) => {
         calls += 1;
         return { kind: 'OK', output: s.reference };
@@ -231,6 +300,7 @@ describe('A10 — the scorer catches a bad model', () => {
     const down: EvalProvider = {
       label: 'down',
       paid: false,
+      capabilities: REFERENCE_CAPABILITIES,
       generate: async () => ({ kind: 'FAILED', code: 'TIMEOUT' }),
     };
     const failed = await runScenario(byId('greeting-01'), down);
@@ -276,6 +346,127 @@ describe('A10 — the retrieval check is NEXA’s own, and it can fail', () => {
       referenceProvider(),
     );
     expect(none.checks.retrieval).toBe(false);
+  });
+});
+
+describe('PR #244 — the eval runs production vision, guards and normalisation', () => {
+  const blind: EvalProvider = {
+    label: 'blind',
+    paid: false,
+    capabilities: { structuredOutput: true, vision: false, maxImageBytes: 0, imageMediaTypes: [] },
+    generate: async () => {
+      throw new Error('a blind step must never be called with a screenshot to answer');
+    },
+  };
+
+  it('CX3/MINOR-2: a blind adapter is never given an image; a latest screenshot fails closed', async () => {
+    for (const id of ['screenshot-01', 'screenshot-04', 'injection-04']) {
+      const prepared = prepareScenario(byId(id), blind.capabilities);
+      expect(prepared.failClosed, id).toBe(true);
+      expect(
+        prepared.request.messages.flatMap((m) => m.images ?? []),
+        id,
+      ).toEqual([]);
+    }
+    const result = await runScenario(byId('screenshot-01'), blind);
+    expect(result.providerCalled).toBe(false);
+    expect(result.decision).toBe('HANDOFF');
+    // An earlier image and a later text still reach a blind step, the image marked unseen.
+    expect(prepareScenario(byId('screenshot-03'), blind.capabilities).failClosed).toBe(false);
+  });
+
+  it('MINOR-2: the per-adapter fit decides too — a type the step does not take fails closed', () => {
+    const jpegOnly = { ...REFERENCE_CAPABILITIES, imageMediaTypes: ['image/jpeg'] };
+    expect(prepareScenario(byId('screenshot-01'), jpegOnly).failClosed).toBe(true);
+    expect(prepareScenario(byId('screenshot-01')).failClosed).toBe(false);
+  });
+
+  it('MINOR-2: an unseen latest image fails closed through autoImageGuard, whatever the step', () => {
+    // screenshot-02's latest photo was never loaded: the production guard decides it.
+    expect(prepareScenario(byId('screenshot-02')).failClosed).toBe(true);
+    expect(autoImageGuard({ required: ['L2'], loaded: new Set<string>() }).pass).toBe(false);
+  });
+
+  it('CX5: the clarifying limit is evaluated from the scenario’s earlier decisions', async () => {
+    const ask = byId('greeting-03');
+    const asked = {
+      decision: 'ASK_CLARIFYING_QUESTION' as const,
+      topic: 'GREETING' as const,
+      intent: null,
+      knowledgeLabels: [],
+    };
+    const fresh = await runScenario(ask, referenceProvider());
+    expect(fresh.guardPassed).toBe(true);
+    const third = await runScenario(
+      { ...ask, prior: [asked, asked], expect: { ...ask.expect, guard: 'HANDOFF' } },
+      referenceProvider(),
+    );
+    expect(third.guardPassed).toBe(false);
+    expect(third.checks.guard).toBe(true);
+  });
+
+  it('CX4: a leak in another case, Unicode form, spacing or with a ZWNJ is still a leak', async () => {
+    const zwnj = String.fromCharCode(0x200c);
+    for (const leak of [
+      EVAL_CANARY.toLowerCase(),
+      'ＮＸＣＡＮＡＲＹ７Ｑ４Ｚ',
+      '[support  staff (a person)\nwrote]',
+      `NEXA${zwnj} FACTS`,
+    ]) {
+      const result = await runScenario(
+        byId('connection-01'),
+        answering((sc) => ({ ...sc.reference, replyText: `بفرمایید ${leak}` })),
+      );
+      expect(result.checks.no_leak, leak).toBe(false);
+    }
+    expect(normaliseForLeak(`A${zwnj}B  C`)).toBe('ab c');
+  });
+});
+
+describe('PR #244 MINOR-4 — the paid-call gate', () => {
+  const key = { SUPPORT_AI_EVAL_API_KEY: 'test-key-not-real' };
+  const live = parseEvalArgs(['--live', '--provider', 'OPENAI', '--model', 'a', '--model', 'b']);
+  const never = () => {
+    throw new Error('the factory (which holds the key) must not run');
+  };
+  const paid = (provider: string, model: string): EvalProvider => ({
+    label: `${provider} ${model}`,
+    paid: true,
+    capabilities: REFERENCE_CAPABILITIES,
+    generate: async () => ({ kind: 'FAILED', code: 'never called' }),
+  });
+
+  it.each([
+    ['CI=true', { CI: 'true' }],
+    ['CI set to the empty string', { CI: '' }],
+    ['GITHUB_ACTIONS', { GITHUB_ACTIONS: '' }],
+    ['BUILDKITE', { BUILDKITE: 'true' }],
+  ])('%s: no paid provider is built, the factory never runs', (_label, ci) => {
+    const { providers, refusal } = evalProviders(live, { ...key, ...ci }, never);
+    expect(refusal).toMatch(/CI/u);
+    expect(providers.map((p) => p.paid)).toEqual([false]);
+  });
+
+  it('without --live only the reference runs, whatever the environment', () => {
+    expect(evalProviders(parseEvalArgs([]), key, never).providers.map((p) => p.paid)).toEqual([
+      false,
+    ]);
+  });
+
+  it('outside CI, with every condition met, one paid provider per model', () => {
+    const { providers, refusal } = evalProviders(live, key, paid);
+    expect(refusal).toBeNull();
+    expect(providers.map((p) => [p.label, p.paid])).toEqual([
+      ['reference (fake, no network)', false],
+      ['OPENAI a', true],
+      ['OPENAI b', true],
+    ]);
+  });
+
+  it('a paid provider under CI is refused, however it was built', () => {
+    expect(() => assertNoPaidProviderUnderCi([paid('OPENAI', 'x')], { CI: '' })).toThrow();
+    expect(() => assertNoPaidProviderUnderCi([referenceProvider()], { CI: 'true' })).not.toThrow();
+    expect(isCiEnvironment({})).toBe(false);
   });
 });
 

@@ -23,6 +23,10 @@ V=('unit','tests/unit/support-ai-vision.test.ts')
 E=('unit','tests/unit/support-ai-eval.test.ts')
 Q=('unit','tests/unit/support-knowledge-query.test.ts')
 I=('integration','tests/integration/support-vision.test.ts')
+A=('integration','tests/integration/support-assist.test.ts')
+QUERY='apps/api/src/modules/control/support-ai/domain/knowledge-query.ts'
+JOBS='apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository.ts'
+EVALTEST='tests/unit/support-ai-eval.test.ts'
 
 M=[
  # --- A9: vision ---
@@ -41,8 +45,33 @@ M=[
  ('SAI-E07',[(RUNNER,"  if (expect.guard !== 'EITHER') {","  if (expect.guard === ('NEVER' as string)) {")],E,'a person must answer'),
  ('SAI-E08',[(RUNNER,"      (checks.retrieval ?? true) && first === expect.topKnowledge,","      (checks.retrieval ?? true) && first.length >= 0,")],E,'a wrong first article'),
  ('SAI-E09',[(RUNNER,"    const missing = expect.knowledge.filter((title) => !titles.has(title));","    const missing = expect.knowledge.filter(() => false);")],E,'a wrong first article'),
- ('SAI-E10',[(RELEVANCE,"  'وقت',\n","")],Q,'a greeting matches nothing'),
- ('SAI-E11',[(RELEVANCE,"  'وقت',\n  'وقتی',\n","")],E,'every scenario passes every check'),
+ # --- PR #244 review ---
+ # MAJOR-1: the greeting is removed as a phrase, and «وقت» is a word again
+ ('SAI-E10',[(RELEVANCE,"const folded = foldForMatching(text).replace(GREETING_PHRASES, ' ');","const folded = foldForMatching(text);")],Q,'still selects nothing'),
+ ('SAI-E11',[(RELEVANCE,"  'بخیر',\n","  'بخیر',\n  'وقت',\n")],Q,'ranks the expiry article first'),
+ # CX1: a SENT job counts only while its lane row could have reached the customer
+ ('SAI-E12',[(JOBS,"              eq(supportAiJobs.state, 'SENT'),\n              inArray(businessOutboundMessages.state, ['PENDING', 'DELIVERED', 'UNCONFIRMED']),","              eq(supportAiJobs.state, 'SENT'),")],A,'CX1'),
+ # CX2: the episode stops at its own boundary (the reply before it, a person's line)
+ ('SAI-E13',[(QUERY,"      if (supportSeen > steps) break;\n","")],Q,'CX2'),
+ ('SAI-E14',[(QUERY,"      if (isPersonOrAutomated(line)) break;\n","")],Q,'CX2'),
+ # CX3/MINOR-2: the step's own capabilities choose the images (production stepSight)
+ ('SAI-E15',[(RUNNER,"    { capabilities },","    { capabilities: REFERENCE_CAPABILITIES },")],E,'a blind adapter is never given an image'),
+ # MINOR-2: the production autoImageGuard decides an image that was never loaded
+ ('SAI-E16',[(RUNNER,"    !autoImageGuard({ required, loaded: new Set(loaded.keys()) }).pass ||","    false ||")],E,'through autoImageGuard'),
+ # CX4: no_leak compares normalised text
+ ('SAI-E17',[(RUNNER,"        written.includes(normaliseForLeak(text)),","        written.includes(text),")],E,'CX4'),
+ # CX5: the clarifying streak comes from the scenario's earlier decisions
+ ('SAI-E18',[(RUNNER,"        clarifyingStreak: clarifyingStreakOf(scenario.prior ?? []),","        clarifyingStreak: 0,")],E,'CX5'),
+ # MINOR-4: CI set to anything, the empty string included; the gate; the paid-provider refusal
+ ('SAI-E19',[(ARGS,"  return CI_ENVIRONMENT_VARIABLES.some((name) => env[name] !== undefined);","  return CI_ENVIRONMENT_VARIABLES.some((name) => (env[name] ?? '') !== '');")],E,'CI set to the empty string'),
+ ('SAI-E20',[(ARGS,"  if (refusal !== null || args.provider === null) return { providers: [reference], refusal };","  if (args.provider === null) return { providers: [reference], refusal };")],E,'the factory never runs'),
+ ('SAI-E21',[(ARGS,"    throw new Error('support-ai-eval: a paid provider under CI');","    return;")],E,'however it was built'),
+ # MINOR-3: the PII guard folds digits (a test-file mutant: the guard IS a test)
+ ('SAI-E22',[(EVALTEST,"  const folded = foldForMatching(text).replace(","  const folded = text.replace(")],E,'the guard fires on'),
+ # NIT-1: past the total an image is skipped, not the end of the walk
+ ('SAI-V06',[(CHAIN,"      unseen.set(id, 'OVER_LIMIT');\n      continue;","      unseen.set(id, 'OVER_LIMIT');\n      break;")],V,'an older, smaller one still goes'),
+ # NIT-2: the total, end to end into support_ai_image_outcomes
+ ('SAI-V07',[(CHAIN,"    if (total + bytes > SUPPORT_AI_VISION_MAX_TOTAL_BYTES) {","    if (total + bytes > Number.MAX_SAFE_INTEGER) {")],I,'NIT-2'),
 ]
 
 only=sys.argv[1:]

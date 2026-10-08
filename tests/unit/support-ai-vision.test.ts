@@ -643,6 +643,29 @@ describe('images go only to a step that can see them', () => {
   });
 
   /*
+   * PR #244, NIT-1: an older image that would pass the total is SKIPPED, not the end of the
+   * walk — a still older, smaller one can still go. Fail closed either way: the skipped image is
+   * OVER_LIMIT and rendered unseen. The seen set may therefore have a gap.
+   */
+  it('A9: past the total an image is skipped, and an older, smaller one still goes', () => {
+    const MiB = 1024 * 1024;
+    const sized = (mib: number) => {
+      const bytes = new Uint8Array(mib * MiB);
+      bytes.set(JPEG);
+      return bytes;
+    };
+    const list: SupportAiVisionImage[] = [1, 2, 6, 8].map((mib, index) => ({
+      id: `m${String(index + 1)}`,
+      image: { mediaType: 'image/jpeg', base64: b64(sized(mib)) },
+    }));
+    const wide = recordingAdapter('OPENAI', { vision: true, maxImageBytes: 10 * MiB });
+    const sight = stepSight({ visionEnabled: true }, wide.adapter, list);
+    // Newest first: m4 (8) and m3 (6) make 14; m2 (2) would make 16 and is skipped; m1 (1) fits.
+    expect(sight.seen).toEqual(['m1', 'm3', 'm4']);
+    expect([...sight.unseen]).toEqual([['m2', 'OVER_LIMIT']]);
+  });
+
+  /*
    * PR #201 review, N3: one image that does not fit a step is dropped FOR THAT STEP, and never
    * blinds it to the latest image. Before, an oversized older image made the step "unable to
    * see" the whole variant, so a required latest image that fitted handed off.

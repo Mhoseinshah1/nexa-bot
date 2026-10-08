@@ -473,6 +473,34 @@ export const EVAL_SCENARIOS: readonly EvalScenario[] = [
     ),
   },
 
+  {
+    id: 'connection-05',
+    category: 'CONNECTION',
+    about: '«my time ran out»: «وقت» is how customers say remaining time (PR #244, MAJOR-1)',
+    linked: true,
+    services: [
+      evalService({
+        state: 'EXPIRED',
+        displayStatus: 'EXPIRED',
+        expiresAt: new Date(EVAL_NOW.getTime() - DAY).toISOString(),
+      }),
+    ],
+    transcript: [c('وقت سرویسم تموم شده؟ چقدر وقت دارم؟')],
+    expect: {
+      decisions: ['REPLY'],
+      topics: ['TRAFFIC_AND_EXPIRY', 'SERVICE_INFO'],
+      guard: 'SEND',
+      knowledge: ['تمام شدن حجم یا زمان'],
+      topKnowledge: 'تمام شدن حجم یا زمان',
+    },
+    reference: decide(
+      'REPLY',
+      'TRAFFIC_AND_EXPIRY',
+      'بله، زمان سرویس شما دیروز تمام شده است؛ از منوی «سرویس‌های من» می‌توانید تمدید کنید.',
+      { factRefs: ['S1'], knowledgeRefs: ['K1'] },
+    ),
+  },
+
   // REPEATED_FAILURE
   {
     id: 'repeated-01',
