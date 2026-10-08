@@ -34,6 +34,9 @@ T_RB='tests/web/referral-banner.test.tsx'
 TOK=W+'styles/tokens.css'
 KCSS=W+'styles/kit.css'
 T_CON='tests/unit/web-token-contrast.test.ts'
+SVC=W+'pages/services.tsx'
+USR=W+'pages/users.tsx'
+CA=W+'styles/pages/commerce-a.css'
 
 M=[
  # --- B3: one idempotency key per logical attempt -------------------------------------------
@@ -79,6 +82,17 @@ M=[
  ('WRP-30',[(TOK,"  --fg-3: #8c94a0;","  --fg-3: #6f7784;")],T_CON,'fg-3'),
  ('WRP-31',[(TOK,"  --fg-3: #646d7b;","  --fg-3: #8b94a3;")],T_CON,'fg-3'),
  ('WRP-32',[(TOK,"  --on-danger: #0b1220;","  --on-danger: #ffffff;")],T_CON,'solid fills'),
+ # --- review of #242 -------------------------------------------------------------------------
+ ('WRP-33',[(LS,"READ_AT.format(new Date(query.dataUpdatedAt))","READ_AT.format(new Date())")],T_LP,'never the time of the render'),
+ ('WRP-34',[(ORD,"  if (trail.signature !== searchSignature) setTrail({ signature: searchSignature, cursors: [] });\n","")],T_LP,'orders list again'),
+ ('WRP-35',[(USR,"  if (trail.signature !== searchSignature) setTrail({ signature: searchSignature, cursors: [] });\n","")],T_LP,'customer list again'),
+ ('WRP-36',[(LS,"        resetSearchDrafts();\n","")],T_LP,'empties the box too'),
+ ('WRP-37',[(SVC,"          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).\n          autoApply\n","")],T_LP,'service search applies itself'),
+ ('WRP-38',[(SVC,"          resetKeys={['cursor']}","          resetKeys={[]}")],T_LP,'service search applies itself'),
+ ('WRP-39',[(REF,"  const clearKey = useSubmissionKey();","  const clearKey = submission;")],T_RB,'clear key held across'),
+ ('WRP-40',[(CA,"  color: var(--on-warn);","  color: var(--on-solid);")],T_CON,'pairs every solid'),
+ ('WRP-41',[(TOK,"  --teal: #126e69;","  --teal: #178f89;")],T_CON,'teal'),
+ ('WRP-42',[(LS,"aria-busy={query.isFetching}","disabled={query.isFetching}")],T_LP,'never disables the refresh'),
 ]
 
 def run_one(mid,edits,test,filt):
