@@ -21,6 +21,7 @@ import {
 import type { SupportTranscriptLine } from '../../apps/api/src/modules/control/support-ai/domain/transcript';
 import { TbSupportContextSource } from '../../apps/api/src/modules/control/support-ai/infrastructure/support-context-source';
 import { SUPPORT_AI_SAFE_TOPICS, SUPPORT_CONTEXT_LIMITS } from '@nexa/contracts';
+import { EVAL_ARTICLES } from '../../apps/api/src/modules/control/support-ai/eval/corpus';
 
 /**
  * A8 — knowledge retrieval without embeddings: the query is the customer's latest words PLUS
@@ -29,9 +30,11 @@ import { SUPPORT_AI_SAFE_TOPICS, SUPPORT_CONTEXT_LIMITS } from '@nexa/contracts'
  * is never sent; at most eight. Deterministic and bounded.
  */
 
-type Line = Pick<SupportTranscriptLine, 'origin' | 'text'>;
+type Line = Pick<SupportTranscriptLine, 'origin' | 'text'> & {
+  readonly author?: SupportTranscriptLine['author'];
+};
 const customer = (text: string): Line => ({ origin: 'INBOUND', text });
-const support = (text: string): Line => ({ origin: 'OWN_ECHO', text });
+const support = (text: string): Line => ({ origin: 'OWN_ECHO', author: 'AI_AUTO', text });
 
 const prior = (over: Partial<PriorDecisionFact> = {}): PriorDecisionFact => ({
   decision: 'REPLY',
@@ -100,7 +103,8 @@ describe('A8 — the weighted query', () => {
       customer('باز هم نشد'),
       customer('هنوز'),
     ];
-    const open = knowledgeQueryFor(transcript, [prior()]);
+    // Two AI steps in the transcript: two troubleshooting decisions in a row.
+    const open = knowledgeQueryFor(transcript, [prior(), prior()]);
     expect(open.find((p) => p.weight === KNOWLEDGE_QUERY_WEIGHTS.troubleshooting)?.text).toBe(
       'سلام، روی آیفون وصل نمیشه\nبستم',
     );
@@ -111,8 +115,42 @@ describe('A8 — the weighted query', () => {
     }
   });
 
+  it('PR #244 CX2: the episode stops at its own boundary; an older, unrelated problem stays out', () => {
+    const transcript = [
+      customer('سرویسم رو چطور تمدید کنم؟ قبلی تموم شد'),
+      support('از منوی سرویس‌های من، تمدید را بزنید.'),
+      customer('ممنون، تمدید شد'),
+      customer('حالا روی آیفون وصل نمیشه'),
+      support('برنامه را کامل ببندید و دوباره باز کنید.'),
+      customer('بستم'),
+      customer('انجام دادم'),
+      customer('باز هم نشد'),
+    ];
+    // One troubleshooting step: the episode is that step and the description before it.
+    const episode = knowledgeQueryFor(transcript, [prior()]).find(
+      (part) => part.weight === KNOWLEDGE_QUERY_WEIGHTS.troubleshooting,
+    );
+    expect(episode?.text).toBe('ممنون، تمدید شد\nحالا روی آیفون وصل نمیشه');
+    expect(episode?.text).not.toContain('تمدید کنم');
+    // A person's line is a boundary too: nothing before it joins the episode.
+    const withStaff = [
+      customer('وصل نمیشه روی ویندوز'),
+      { origin: 'HUMAN' as const, author: 'STAFF' as const, text: 'بررسی کردم' },
+      customer('هنوز مشکل دارم'),
+      support('برنامه را ببندید.'),
+      customer('a1'),
+      customer('a2'),
+      customer('a3'),
+    ];
+    const afterStaff = knowledgeQueryFor(withStaff, [prior(), prior()]).find(
+      (part) => part.weight === KNOWLEDGE_QUERY_WEIGHTS.troubleshooting,
+    );
+    expect(afterStaff?.text).toBe('هنوز مشکل دارم');
+  });
+
   it('troubleshooting is open only after a step or a question on a troubleshooting topic', () => {
-    expect(troubleshootingState([])).toEqual({ open: false, topic: null });
+    expect(troubleshootingState([])).toEqual({ open: false, topic: null, steps: 0 });
+    expect(troubleshootingState([prior(), prior(), prior({ topic: 'PLAN_INFO' })]).steps).toBe(2);
     expect(troubleshootingState([prior()]).open).toBe(true);
     expect(troubleshootingState([prior({ decision: 'ASK_CLARIFYING_QUESTION' })]).open).toBe(true);
     expect(troubleshootingState([prior({ decision: 'NO_ACTION' })]).open).toBe(false);
@@ -340,9 +378,37 @@ describe('A8 — scoring and selection', () => {
 
   it('a greeting matches nothing and carries no knowledge', () => {
     expect(matchTerms('سلام')).toEqual(new Set());
-    // A10 found «وقت بخیر» matching an expiry article through «وقتی» (when).
+    // The greeting «وقت بخیر» is removed as a phrase (PR #244, MAJOR-1).
     expect(matchTerms('سلام وقت بخیر، درود')).toEqual(new Set());
-    expect(matchTerms('وقتی حجم تمام شود').has('وقت')).toBe(false);
+    expect(matchTerms('وقتتون بخیر')).toEqual(new Set());
+  });
+
+  /*
+   * PR #244, MAJOR-1: «وقت» is how a customer says a service's remaining time. Making it a stop
+   * word (to keep a greeting off the expiry article) killed every one of these; the greeting is
+   * removed as a phrase instead, and «وقت» counts again.
+   */
+  it.each(['وقتم تموم شد', 'چقدر وقت دارم', 'وقت سرویسم کی تموم میشه؟', 'چطور وقت اضافه بخرم'])(
+    '«%s» ranks the expiry article first',
+    (question) => {
+      const ranked = selectRelevantKnowledge(
+        EVAL_ARTICLES.map((a) => ({ ...a, tags: a.tags ?? [] })),
+        knowledgeQueryFor([customer(question)], []),
+        8,
+      );
+      expect(ranked[0]?.title).toBe('تمام شدن حجم یا زمان');
+    },
+  );
+
+  it('«سلام وقت بخیر» still selects nothing', () => {
+    expect(
+      selectRelevantKnowledge(
+        EVAL_ARTICLES.map((a) => ({ ...a, tags: a.tags ?? [] })),
+        knowledgeQueryFor([customer('سلام وقت بخیر')], []),
+        8,
+      ),
+    ).toEqual([]);
+    expect(matchTerms('وقتی حجم تمام شود').has('وقت')).toBe(true);
     expect(selectRelevantKnowledge(ARTICLES, knowledgeQueryFor([customer('سلام')], []), 8)).toEqual(
       [],
     );

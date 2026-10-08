@@ -85,11 +85,57 @@ export const TOPIC_QUERY_TERMS: Readonly<Partial<Record<SupportAiTopic, string>>
 export function troubleshootingState(prior: readonly PriorDecisionFact[]): {
   readonly open: boolean;
   readonly topic: SupportAiTopic | null;
+  /** PR #244 (CX2): how many of the latest decisions, in a row, were troubleshooting steps. */
+  readonly steps: number;
 } {
+  const isStep = (job: PriorDecisionFact) =>
+    job.topic !== null &&
+    TROUBLESHOOTING_TOPICS.has(job.topic) &&
+    (job.decision === 'REPLY' || job.decision === 'ASK_CLARIFYING_QUESTION');
   const last = prior[0];
-  if (last === undefined || last.topic === null) return { open: false, topic: null };
-  const stepOrQuestion = last.decision === 'REPLY' || last.decision === 'ASK_CLARIFYING_QUESTION';
-  return { open: stepOrQuestion && TROUBLESHOOTING_TOPICS.has(last.topic), topic: last.topic };
+  if (last === undefined || last.topic === null) return { open: false, topic: null, steps: 0 };
+  let steps = 0;
+  while (steps < prior.length && isStep(prior[steps] as PriorDecisionFact)) steps += 1;
+  return { open: steps > 0, topic: last.topic, steps };
+}
+
+/** A transcript line as the knowledge query reads it; `author` when the merge decided one. */
+type QueryLine = Pick<SupportTranscriptLine, 'origin' | 'text'> & {
+  readonly author?: SupportTranscriptLine['author'];
+};
+
+/** A line a person or an automatic message wrote: a boundary no AI episode crosses. */
+function isPersonOrAutomated(line: QueryLine): boolean {
+  if (line.author !== undefined) return line.author === 'STAFF' || line.author === 'AUTOMATED';
+  return line.origin === 'HUMAN' || line.origin === 'OFFLINE' || line.origin === 'OTHER_BOT';
+}
+
+/**
+ * PR #244 (CX2) — the customer's words of the OPEN episode only, oldest first, without the latest
+ * `skip`: walking back, the episode spans the `steps` support replies the streak gave and the
+ * customer's messages just before the first of them (the description that opened it). It stops at
+ * the support reply before the episode, and at any line a person or an automatic message wrote,
+ * so an older, unrelated problem never enters at the episode's weight.
+ */
+function episodeMessages(
+  lines: readonly QueryLine[],
+  steps: number,
+  skip: number,
+  count: number,
+): string[] {
+  const words: string[] = [];
+  let supportSeen = 0;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] as QueryLine;
+    if (line.origin !== 'INBOUND') {
+      if (isPersonOrAutomated(line)) break;
+      supportSeen += 1;
+      if (supportSeen > steps) break;
+      continue;
+    }
+    if (line.text !== null && line.text.trim() !== '') words.unshift(line.text);
+  }
+  return words.slice(0, Math.max(0, words.length - skip)).slice(-count);
 }
 
 /** The customer's messages with text, oldest first, skipping the latest `skip`. */
@@ -125,7 +171,7 @@ export function joinBounded(messages: readonly string[], max: number): string {
  * text are left out; the order is the priority the term bound keeps.
  */
 export function knowledgeQueryFor(
-  transcript: readonly Pick<SupportTranscriptLine, 'origin' | 'text'>[],
+  transcript: readonly QueryLine[],
   prior: readonly PriorDecisionFact[],
 ): KnowledgeQueryPart[] {
   const parts: KnowledgeQueryPart[] = [];
@@ -158,7 +204,12 @@ export function knowledgeQueryFor(
   if (episode.open) {
     add(
       joinBounded(
-        customerMessages(transcript, KNOWLEDGE_QUERY_MESSAGES, KNOWLEDGE_QUERY_EPISODE_MESSAGES),
+        episodeMessages(
+          transcript,
+          episode.steps,
+          KNOWLEDGE_QUERY_MESSAGES,
+          KNOWLEDGE_QUERY_EPISODE_MESSAGES,
+        ),
         PART_MAX_CHARS.troubleshooting,
       ),
       PART_MAX_CHARS.troubleshooting,

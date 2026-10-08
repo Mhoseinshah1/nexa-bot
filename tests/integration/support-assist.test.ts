@@ -410,6 +410,41 @@ describe('Assist Mode (TB5)', () => {
     expect(await jobs.priorDecisions(tenantB as never, conversationId, 3)).toEqual([]);
   });
 
+  it('PR #244 CX1: a SENT job whose lane row FAILED or was SUPERSEDED is not memory', async () => {
+    next = {
+      outcome: 'OK',
+      output: { ...valid, topic: 'APP_SETUP', intent: 'نصب برنامه' },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const job = await readyDraft();
+    const sent = await service.send(scopeA, operator, job.id, {
+      idempotencyKey: key('s'),
+      text: 'متن',
+    });
+    const topics = async () =>
+      (await jobs.priorDecisions(scopeA, conversationId, 3)).map((d) => d.topic);
+    // PENDING, DELIVERED and UNCONFIRMED could have reached the customer.
+    for (const state of ['PENDING', 'DELIVERED', 'UNCONFIRMED']) {
+      await ctx.container.database.db.execute(
+        sql`UPDATE business_outbound_messages
+               SET state = ${state},
+                   resolved_at = CASE WHEN ${state} = 'PENDING' THEN NULL ELSE now() END
+             WHERE id = ${sent.outboundId}`,
+      );
+      expect(await topics(), state).toEqual(['APP_SETUP']);
+    }
+    for (const state of ['FAILED', 'SUPERSEDED']) {
+      await ctx.container.database.db.execute(
+        sql`UPDATE business_outbound_messages
+               SET state = ${state},
+                   resolved_at = CASE WHEN ${state} = 'PENDING' THEN NULL ELSE now() END
+             WHERE id = ${sent.outboundId}`,
+      );
+      expect(await topics(), state).toEqual([]);
+    }
+  });
+
   it('A8 end to end: on a repeated failure the draft still carries the article the conversation is about', async () => {
     const c = ctx.container;
     const owner = adminActorFor(
