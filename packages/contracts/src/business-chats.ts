@@ -534,9 +534,10 @@ export const businessEscalationViewSchema = z.object({
    * summary), and how many automatic replies the customer received this session (the steps
    * tried). Each null when there is nothing to say.
    */
-  topic: z.string().nullable(),
-  intent: z.string().nullable(),
-  stepsTried: z.number().int().min(0).nullable(),
+  // Optional when READ (review of the rolling deploy): an older replica does not send them.
+  topic: z.string().nullish(),
+  intent: z.string().nullish(),
+  stepsTried: z.number().int().min(0).nullish(),
   ticketId: z.string().nullable(),
   ticketOutcome: z.enum(BUSINESS_ESCALATION_TICKET_OUTCOMES),
   createdAt: z.string(),

@@ -706,9 +706,10 @@ export const ticketEscalationViewSchema = z.object({
   reason: z.enum(BUSINESS_HANDOFF_REASONS),
   summary: z.string().nullable(),
   /** Roadmap A5 — see `businessEscalationViewSchema`; gated like the summary. */
-  topic: z.string().nullable(),
-  intent: z.string().nullable(),
-  stepsTried: z.number().int().min(0).nullable(),
+  // Optional when READ (review of the rolling deploy): an older replica does not send them.
+  topic: z.string().nullish(),
+  intent: z.string().nullish(),
+  stepsTried: z.number().int().min(0).nullish(),
   createdAt: z.iso.datetime(),
 });
 export type TicketEscalationView = z.infer<typeof ticketEscalationViewSchema>;
