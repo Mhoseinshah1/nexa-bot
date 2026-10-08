@@ -56,11 +56,11 @@
 }
 .btn.danger:hover:not(:disabled) {
   background: var(--danger);
-  color: var(--on-solid);
+  color: var(--on-danger);
 }
 .btn.danger.solid {
   background: var(--danger);
-  color: var(--on-solid);
+  color: var(--on-danger);
 }
 .btn.ghost {
   background: transparent;
@@ -2569,4 +2569,11 @@ textarea.input,
     align-items: center;
     min-height: var(--ctl-h);
   }
+}
+
+/* `ListFreshness`: when the rows were read, and a refresh beside it. */
+.list-freshness {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
