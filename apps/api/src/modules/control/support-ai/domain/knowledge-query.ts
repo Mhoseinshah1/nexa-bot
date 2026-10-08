@@ -104,9 +104,15 @@ type QueryLine = Pick<SupportTranscriptLine, 'origin' | 'text'> & {
   readonly author?: SupportTranscriptLine['author'];
 };
 
-/** A line a person or an automatic message wrote: a boundary no AI episode crosses. */
+/**
+ * A line a person or an automatic message wrote: a boundary no AI episode crosses. An AI draft a
+ * person reviewed and sent (`AI_ASSIST`) is a person's answer too (review of PR #248, CX6): the
+ * episode is the AUTOMATIC replies' streak, and a person stepping in ends it.
+ */
 function isPersonOrAutomated(line: QueryLine): boolean {
-  if (line.author !== undefined) return line.author === 'STAFF' || line.author === 'AUTOMATED';
+  if (line.author !== undefined) {
+    return line.author === 'STAFF' || line.author === 'AI_ASSIST' || line.author === 'AUTOMATED';
+  }
   return line.origin === 'HUMAN' || line.origin === 'OFFLINE' || line.origin === 'OTHER_BOT';
 }
 

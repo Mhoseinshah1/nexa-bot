@@ -146,6 +146,21 @@ describe('A8 — the weighted query', () => {
       (part) => part.weight === KNOWLEDGE_QUERY_WEIGHTS.troubleshooting,
     );
     expect(afterStaff?.text).toBe('هنوز مشکل دارم');
+    // Review of PR #248, CX6: an AI draft a person reviewed and sent is a person's answer — the
+    // same boundary, so the customer's words before it stay out of the automatic episode.
+    const withAssist = [
+      customer('وصل نمیشه روی ویندوز'),
+      { origin: 'OWN_ECHO' as const, author: 'AI_ASSIST' as const, text: 'تنظیمات را بررسی کنید' },
+      customer('هنوز مشکل دارم'),
+      support('برنامه را ببندید.'),
+      customer('a1'),
+      customer('a2'),
+      customer('a3'),
+    ];
+    const afterAssist = knowledgeQueryFor(withAssist, [prior(), prior()]).find(
+      (part) => part.weight === KNOWLEDGE_QUERY_WEIGHTS.troubleshooting,
+    );
+    expect(afterAssist?.text).toBe('هنوز مشکل دارم');
   });
 
   it('troubleshooting is open only after a step or a question on a troubleshooting topic', () => {
