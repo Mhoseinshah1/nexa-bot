@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { createDatabase } from './database.js';
+import { compareMigrations, expectedMigrations, migrationsFolder } from './migration-state.js';
 
 /**
  * Conditions a database can be in that a migration will not survive, checked
@@ -32,11 +33,19 @@ export interface PreflightReport {
   readonly checks: readonly string[];
 }
 
-export async function preflightMigrations(databaseUrl: string): Promise<PreflightReport> {
+export async function preflightMigrations(
+  databaseUrl: string,
+  options: {
+    /** The journal the migrator is about to apply; the release's own unless a test names one. */
+    readonly migrationsFolder?: string;
+  } = {},
+): Promise<PreflightReport> {
   const handle = createDatabase(databaseUrl, 1);
   const checks: string[] = [];
   try {
     await handle.withClient(async (client) => {
+      // FIRST: every other check reads a schema this release can account for.
+      await checkMigrationHistory(client, checks, options.migrationsFolder ?? migrationsFolder());
       // TWO checks, run independently.
       //
       // The primary-tenant check `return`s early when the tenants table is
@@ -51,6 +60,58 @@ export async function preflightMigrations(databaseUrl: string): Promise<Prefligh
     await handle.close();
   }
   return { checks };
+}
+
+/**
+ * The database's migration history is one this release's journal can account for.
+ *
+ * drizzle's migrator compares ONE number — the greatest `created_at` applied — with each journal
+ * entry's `when`, and applies the entries newer than it. Nothing compares tags or hashes. So a
+ * database migrated from a branch this release does not descend from is migrated WRONG, in
+ * silence: the database that applied the roadmap branch's pre-sync `0219`–`0221` (stamped later
+ * than main's `0219`–`0235`, which the sync placed before them and renumbered the roadmap's
+ * three to `0236`–`0238`) had main's seventeen skipped as "already applied", and `0229` then
+ * failed with `relation "legacy_read_set_runs" does not exist` and nothing saying why (final
+ * review of PR #248).
+ *
+ * Refused by the SAME comparison readiness and the restore validation use
+ * (`compareMigrations`): an applied row whose `created_at` the journal does not name (and is not
+ * newer than all of it — the rollback shape, which stays allowed), a known `created_at` with a
+ * different hash, or a gap. A database at any commit of main is a prefix of the journal and
+ * passes; a fresh one has no table and passes.
+ */
+async function checkMigrationHistory(
+  client: PoolClient,
+  checks: string[],
+  folder: string,
+): Promise<void> {
+  const table = await client.query<{ present: boolean }>(
+    `SELECT to_regclass('drizzle.__drizzle_migrations') IS NOT NULL AS present`,
+  );
+  if (table.rows[0]?.present !== true) {
+    checks.push('migration history: none recorded, nothing to check');
+    return;
+  }
+  const rows = await client.query<{ hash: string; created_at: string }>(
+    'SELECT hash, created_at::text AS created_at FROM drizzle.__drizzle_migrations',
+  );
+  const verdict = compareMigrations(
+    rows.rows.map((row) => ({ hash: row.hash, createdAt: Number(row.created_at) })),
+    expectedMigrations(folder),
+  );
+  checks.push(`migration history: ${verdict.state}`);
+  if (verdict.state === 'diverged') {
+    throw new MigrationPreflightError(
+      "Migration preflight failed: this database's migration history does not match this " +
+        `release's migration journal (${verdict.reason}). It was migrated by a build this ` +
+        'release does not descend from — typically a branch before it was merged, whose ' +
+        'migrations were later renumbered — and the migrator, which orders by timestamp alone, ' +
+        'would skip migrations it believes applied and then fail on a missing relation. ' +
+        'Nothing was migrated. A development or test database: drop it and migrate it from ' +
+        'scratch. A database whose data matters: stop, and restore it to a release on main. ' +
+        "See docs/deployment.md, 'Migration preflight'.",
+    );
+  }
 }
 
 /** Migration 0015 requires exactly one PRIMARY tenant. */

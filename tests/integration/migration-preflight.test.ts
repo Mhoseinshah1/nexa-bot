@@ -1,11 +1,19 @@
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { createDatabase } from '../../apps/api/src/infrastructure/persistence/database';
 import { testConfig } from './harness';
 import {
   MigrationPreflightError,
   preflightMigrations,
 } from '../../apps/api/src/infrastructure/persistence/preflight';
-import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
+import {
+  migrationsFolder,
+  runMigrations,
+} from '../../apps/api/src/infrastructure/persistence/migrate';
 
 /**
  * The pre-migration preflight (B-EXTRA-1), against real databases.
@@ -222,4 +230,175 @@ describe('the migration preflight', () => {
     expect(report.checks.some((check) => /^PRIMARY tenants: [01]$/.test(check))).toBe(true);
     expect(report.checks).toContain('Telegram bot ids bound more than once: 0');
   });
+});
+
+/*
+ * Final review of PR #248 — a database migrated from a branch this release does not descend
+ * from. The roadmap branch, before it was synced with main, shipped its three support-AI
+ * migrations as 0219–0221 with the `when` stamps below. The sync put main's 0219–0235 (older
+ * stamps) before them and renumbered the roadmap's three to 0236–0238 with new stamps, the SQL
+ * unchanged. drizzle's migrator orders by the greatest applied `created_at` alone, so on such a
+ * database it skips main's earlier-stamped migrations as "applied" and fails at 0229 on a
+ * relation one of them creates. The preflight refuses it first, and says why.
+ *
+ * Both journals are rebuilt here from this tree, so the test needs no git history: the pre-sync
+ * roadmap journal is the merged one up to 0218 plus those three entries under their OLD tags and
+ * stamps, and main's head is the merged one without 0236–0238.
+ */
+const PRE_SYNC_ROADMAP = [
+  {
+    tag: '0219_support_ai_session_budget',
+    when: 1791401305405,
+    now: '0236_support_ai_session_budget',
+  },
+  {
+    tag: '0220_support_ai_progress_handoff',
+    when: 1791406164078,
+    now: '0237_support_ai_progress_handoff',
+  },
+  {
+    tag: '0221_support_ai_handoff_context_age',
+    when: 1791431732630,
+    now: '0238_support_ai_handoff_context_age',
+  },
+] as const;
+
+interface JournalEntry {
+  readonly idx: number;
+  readonly version: string;
+  readonly when: number;
+  readonly tag: string;
+  readonly breakpoints: boolean;
+}
+
+describe('the migration preflight refuses a history this release cannot account for', () => {
+  const source = migrationsFolder();
+  const journal = JSON.parse(readFileSync(join(source, 'meta', '_journal.json'), 'utf8')) as {
+    readonly version: string;
+    readonly dialect: string;
+    readonly entries: readonly JournalEntry[];
+  };
+  const index = (tag: string) => journal.entries.findIndex((entry) => entry.tag === tag);
+  let root: string;
+
+  /** A migrations folder holding `entries`, each file copied from this tree under `from`. */
+  const folderOf = (name: string, entries: readonly (JournalEntry & { from: string })[]) => {
+    const folder = join(root, name);
+    mkdirSync(join(folder, 'meta'), { recursive: true });
+    for (const entry of entries) {
+      copyFileSync(join(source, `${entry.from}.sql`), join(folder, `${entry.tag}.sql`));
+    }
+    writeFileSync(
+      join(folder, 'meta', '_journal.json'),
+      JSON.stringify({
+        version: journal.version,
+        dialect: journal.dialect,
+        entries: entries.map(({ from: _from, ...entry }, idx) => ({ ...entry, idx })),
+      }),
+    );
+    return folder;
+  };
+  const applyFolder = async (url: string, folder: string) => {
+    const handle = createDatabase(url, 1);
+    try {
+      await migrate(handle.db, { migrationsFolder: folder });
+    } finally {
+      await handle.close();
+    }
+  };
+
+  const ROADMAP_DB = 'nexa_preflight_roadmap';
+  const MAIN_DB = 'nexa_preflight_main';
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), 'nexa-preflight-'));
+    for (const name of [ROADMAP_DB, MAIN_DB]) await dropScratch(name);
+  }, 60_000);
+  afterAll(async () => {
+    for (const name of [ROADMAP_DB, MAIN_DB, 'nexa_preflight_fresh']) await dropScratch(name);
+    rmSync(root, { recursive: true, force: true });
+  }, 60_000);
+
+  it('the journal this test rebuilds from is the one the sync produced', () => {
+    // The anchors the rebuild relies on; if a later change moves them, this says so first.
+    expect(journal.entries[index('0219_legacy_read_set_runs')]?.tag).toBe(
+      '0219_legacy_read_set_runs',
+    );
+    expect(index('0235_legacy_cutover_grants')).toBe(235);
+    expect(journal.entries.slice(236, 239).map((entry) => entry.tag)).toEqual(
+      PRE_SYNC_ROADMAP.map((entry) => entry.now),
+    );
+  });
+
+  it('refuses a database migrated from the pre-sync roadmap branch, before anything is migrated', async () => {
+    const roadmap = folderOf('roadmap', [
+      ...journal.entries.slice(0, index('0219_legacy_read_set_runs')).map((entry) => ({
+        ...entry,
+        from: entry.tag,
+      })),
+      ...PRE_SYNC_ROADMAP.map(({ tag, when, now }) => ({
+        idx: 0,
+        version: '7',
+        when,
+        tag,
+        breakpoints: true,
+        from: now,
+      })),
+    ]);
+    await createScratch(ROADMAP_DB, async () => {});
+    const url = urlFor(ROADMAP_DB);
+    await applyFolder(url, roadmap);
+
+    // What the migrator does to it on its own: skips main's earlier-stamped migrations and
+    // fails on a relation one of them creates. This is the failure with no explanation.
+    await expect(applyFolder(url, source)).rejects.toThrow(/legacy_read_set_runs/);
+
+    // The preflight names it instead, and `runMigrations` stops on it before the migrator.
+    await expect(preflightMigrations(url)).rejects.toBeInstanceOf(MigrationPreflightError);
+    await expect(preflightMigrations(url)).rejects.toThrow(
+      /does not match this release's migration journal/,
+    );
+    await expect(preflightMigrations(url)).rejects.toThrow(/not in this release's journal/);
+    await expect(preflightMigrations(url)).rejects.toThrow(/Nothing was migrated/);
+    await expect(runMigrations(url)).rejects.toBeInstanceOf(MigrationPreflightError);
+    const client = new Client({ connectionString: url });
+    await client.connect();
+    try {
+      const rows = await client.query(
+        `SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`,
+      );
+      expect(rows.rows[0]?.n).toBe(index('0219_legacy_read_set_runs') + PRE_SYNC_ROADMAP.length);
+    } finally {
+      await client.end();
+    }
+  }, 300_000);
+
+  it('passes a database at main’s head, which then migrates to this release', async () => {
+    const main = folderOf(
+      'main',
+      journal.entries.slice(0, index('0235_legacy_cutover_grants') + 1).map((entry) => ({
+        ...entry,
+        from: entry.tag,
+      })),
+    );
+    await createScratch(MAIN_DB, async () => {});
+    const url = urlFor(MAIN_DB);
+    await applyFolder(url, main);
+
+    const before = await preflightMigrations(url);
+    expect(before.checks).toContain('migration history: behind');
+    await expect(runMigrations(url)).resolves.toBeUndefined();
+    const after = await preflightMigrations(url);
+    expect(after.checks).toContain('migration history: current');
+  }, 300_000);
+
+  it('passes the ordinary test database, and a fresh one, by their history', async () => {
+    expect((await preflightMigrations(config.DATABASE_URL)).checks).toContain(
+      'migration history: current',
+    );
+    await createScratch('nexa_preflight_fresh', async () => {});
+    expect((await preflightMigrations(urlFor('nexa_preflight_fresh'))).checks).toContain(
+      'migration history: none recorded, nothing to check',
+    );
+  }, 60_000);
 });

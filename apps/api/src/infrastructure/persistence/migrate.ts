@@ -1,8 +1,7 @@
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import { createDatabase } from './database.js';
+import { migrationsFolder } from './migration-state.js';
 import { ensureOnlineIndexes } from './online-indexes.js';
 import { MigrationPreflightError, preflightMigrations } from './preflight.js';
 
@@ -18,11 +17,9 @@ import { MigrationPreflightError, preflightMigrations } from './preflight.js';
  * the only thing a migration needs.
  */
 
-/** Resolved from this module's own location so it works from src and from dist. */
-export function migrationsFolder(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, '../../../drizzle');
-}
+// Declared beside the journal reader (`migration-state.ts`), so the preflight can read the same
+// folder without importing this module, which imports it.
+export { migrationsFolder };
 
 export async function runMigrations(databaseUrl: string): Promise<void> {
   // Before the migrator, every time, whoever the caller is. `botctl update`

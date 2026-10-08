@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * What "the schema this code expects" means, stated once.
@@ -21,6 +22,12 @@ import { join } from 'node:path';
  * journal entry's `when` as `created_at` and the file's sha256 as `hash`, and
  * that pair is what is checked.
  */
+
+/** The release's migrations folder, resolved from this module's own location (src and dist). */
+export function migrationsFolder(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '../../../drizzle');
+}
 
 export interface ExpectedMigration {
   readonly tag: string;

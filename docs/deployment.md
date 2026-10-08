@@ -756,6 +756,29 @@ the check is about one condition and says nothing about anything older or
 newer. `runMigrations` itself runs the same check first, so the installer, CI
 and a developer's shell are under the same rule.
 
+**A migration history the release cannot account for is refused too** (final
+review of PR #248). drizzle's migrator compares one number — the greatest
+`created_at` in `drizzle.__drizzle_migrations` — with each journal entry's
+`when`, and never a tag or a hash. A database migrated from a branch this
+release does not descend from is therefore migrated wrong in silence: it
+skips migrations it believes applied and fails later on a relation one of
+them would have created. The preflight compares the recorded history with the
+release's journal by the same rule readiness and the restore validation use
+(`compareMigrations`) and refuses an applied row whose `created_at` the
+journal does not name, a known `created_at` with different content, or a
+gap. Rows newer than the whole journal — the shape a rollback leaves — still
+pass.
+
+**Databases migrated from the pre-sync roadmap branch must be rebuilt.** That
+branch shipped its support-AI migrations as `0219`–`0221`; the sync with main
+put main's `0219`–`0235` before them and renumbered them `0236`–`0238` with
+new stamps. A development or test database that applied the old three is
+refused with `not in this release's journal`; drop it and migrate it from
+scratch. Production and every database migrated from main are a prefix of
+the journal and are unaffected — `tests/integration/migration-preflight.test.ts`
+migrates one to main's head and then to this release, and one to the
+pre-sync roadmap journal and expects the refusal.
+
 ### The host assets move with the release
 
 Most of a release lives in the immutable image. Six files do not:
