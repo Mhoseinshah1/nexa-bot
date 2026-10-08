@@ -26,8 +26,8 @@ settlement lane and the provisioner, and one operator path, `RefundService.reque
 | Receipt **credited to the wallet** instead of approved   | Not a refund: a `RECEIPT_CREDIT` entry for what the reviewer saw; the payment is FAILED                                                            | Read-only                                                                                     | Not applicable               |
 | **Compensation** (goodwill, not tied to a payment)       | `ADMIN_CREDIT` on the customer's wallet (`users.wallet.credit`), audited, bounded by the large-credit permission                                   | Customer page wallet credit                                                                   | Supported — **not a refund** |
 | Service refund request (customer asks, WP19)             | `ServiceRefundRequestService`: approved amount credited to the wallet                                                                              | Service refund requests page                                                                  | Supported                    |
-| Refund in a **different currency**                       | Refused: `CURRENCY_MISMATCH`, fail closed                                                                                                          | Refusal named                                                                                 | By design                    |
-| The **gateway fee**                                      | Never refundable: the refund ceiling is the principal (WP18 O9)                                                                                    | Money card: refund ceiling                                                                    | By design                    |
+| Refund in a **different currency**                       | Refused: `CURRENCY_MISMATCH`, fail closed; the ledger names it too (any consuming refund in another currency), so read and write agree             | Refusal named                                                                                 | By design                    |
+| The **gateway fee**                                      | Never refundable: the refund bound is the principal (WP18 O9)                                                                                      | Refund ledger: `refundableMinor` (the money card carries no refund figure)                    | By design                    |
 
 ## 2. Future domain requirements (not built, and why)
 
@@ -62,9 +62,13 @@ commissions may be withdrawn at all.
 ## 3. Tests
 
 - `tests/integration/payment-money-truth.test.ts` — over HTTP: a gateway payment, a top-up and
-  an unsettled payment each name their reason; a delivered wallet-funded order names none; a
-  refund request for the gateway payment is refused with exactly the reason the ledger named,
-  and writes nothing.
+  an unsettled payment each name their reason; a delivered wallet-funded order names none.
+  Read equals write over EVERY `REFUND_REFUSAL_REASONS` member (the test fails if a reason is
+  added without a case): a refund request is refused with exactly 409
+  `REFUND_NOT_PERMITTED`, `details.reason` is the reason the ledger named, and nothing is
+  written — including CURRENCY_MISMATCH (refunds in two currencies; the write's witness
+  reports a mixture rather than `min` of it) and DELIVERY_IN_PROGRESS (an UNKNOWN purchase
+  operation). Review of PR #247, CX1/F3/F6.
 - `tests/web/payment-money.test.tsx` — the page names the server's reason, distinctly per
   reason, offers no control, and falls back to the general sentence for an older ledger.
 - Existing: `refunds.test.ts`, `automatic-refund.test.ts`, `service-delete-refund.test.ts`,
