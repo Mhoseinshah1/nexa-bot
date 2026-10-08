@@ -101,6 +101,11 @@ export const LEGACY_USER_OUTCOMES = [
   'SKIPPED_BALANCE_OUT_OF_RANGE',
   /** The id occurs on more than one source row: nothing is written for any of them. */
   'SKIPPED_DUPLICATE_SOURCE_ID',
+  /**
+   * `User_Status` is neither `Active` nor `block` (OQ-LWD-07): held in the Manual Review
+   * Queue, never imported as an ACTIVE customer on a guess.
+   */
+  'SKIPPED_STATUS_UNKNOWN',
   /** A person closed the user's review row; a rerun never acts on it. */
   'SKIPPED_REVIEW_CLOSED',
   /** Imported from an earlier snapshot, and this snapshot's row differs: reported, never re-applied. */
@@ -109,6 +114,25 @@ export const LEGACY_USER_OUTCOMES = [
   'NOT_YET_IMPORTED',
 ] as const;
 export type LegacyUserOutcome = (typeof LEGACY_USER_OUTCOMES)[number];
+
+/**
+ * The legacy account status a source `user` row carries (`User_Status`, the `user-status`
+ * read set; owner decision 2026-10-08, OQ-LWD-07). MirzaBot writes exactly two spellings
+ * (UBR-018): `Active`, and `block` for an operator's ban. They are compared EXACTLY; any
+ * other value — NULL, empty, another case or word — is UNKNOWN and goes to manual review,
+ * never to ACTIVE.
+ *
+ * A BLOCKED user is imported as a BLOCKED customer, and their money is recorded exactly as
+ * anybody's (the opening CREDIT, or the legacy debt): a block freezes spending, it does not
+ * erase a balance. An EXISTING NEXA customer's status is never changed by the import.
+ */
+export const LEGACY_USER_STATUS_CLASSES = ['ACTIVE', 'BLOCKED', 'UNKNOWN'] as const;
+export type LegacyUserStatusClass = (typeof LEGACY_USER_STATUS_CLASSES)[number];
+
+/** The only spellings that are not UNKNOWN, compared exactly (no trim, no case folding). */
+export const LEGACY_USER_STATUS_SPELLINGS: Readonly<
+  Record<string, Exclude<LegacyUserStatusClass, 'UNKNOWN'>>
+> = Object.freeze({ Active: 'ACTIVE', block: 'BLOCKED' });
 
 /**
  * How a SOURCE_CHANGED user's balance differs from the figure NEXA recorded (the opening
