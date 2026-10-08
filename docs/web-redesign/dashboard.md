@@ -449,3 +449,16 @@ section once, and the re-run killed it.
 | W12 | the route derives the handoff shortcut from `users.view`     | killed                          |
 | W13 | the sidebar drops the handoff badge                          | killed                          |
 | W14 | the latest card links a withheld half to its list            | killed                          |
+| A11 | the named handoff is the oldest, not the newest              | killed                          |
+| A12 | the awaiting-support facet ignored by the ticket list        | killed                          |
+| W15 | B1: the handoff counter required on the wire again           | killed                          |
+| W16 | N3: "nothing waits" drawn over a withheld counting section   | killed                          |
+| W17 | N3: the latest orders reported as a withheld count           | killed                          |
+| W18 | N1: the tickets row links to every status                    | killed                          |
+| W19 | N2: a single handoff links to the tenant inbox               | killed                          |
+| W20 | N1: the inbox drops the awaiting facet                       | killed                          |
+| W21 | N5: the sidebar counters asked one after another             | killed                          |
+
+Review round (PR #240), re-run after merging `parallel/roadmap-2-7`: the web suites gained
+`tickets.test.tsx` and `tests/unit/dashboard-aggregates.test.ts` (W15 rebuilds the contracts
+package around the mutant). **33 of 33 killed.**
