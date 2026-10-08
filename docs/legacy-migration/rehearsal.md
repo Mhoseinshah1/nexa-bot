@@ -33,10 +33,11 @@ once (cycle 9, Mirza PR6), from the clean restore:
   snapshot B (newer, made from A on the throwaway engine): freeze proof ─► "dump" ─►
             "restore" ─► PR1's freeze checker EQUAL ─► audit, inventory (COMPLETE), reads
             ─► gated import refused APPROVAL_MISSING ─► owner approval (synthetic)
-            ─► refused SOURCE_SUPERSEDED ─► re-run acknowledgement ─► gated import:
-               one new customer, one new opening, nothing else ─► again: nothing
-            ─► reconcile RECONCILED ─► report v2 (schema-valid, holds) ─► stop sales
-            ─► cutover-gate CUTOVER_READY ─► with a wrong dump digest, and with an
+            ─► refused SOURCE_SUPERSEDED ─► re-run acknowledgement ─► gated import with
+               sales open: refused STOP_SALES_NOT_ACTIVE (aud6 F2) ─► stop sales ─► gated
+               import: one new customer, one new opening, nothing else ─► again: nothing
+            ─► reconcile RECONCILED (no money moved in the window) ─► report v2
+               (schema-valid, holds) ─► cutover-gate CUTOVER_READY ─► with a wrong dump digest, and with an
                edited dump file under the approved digest: REFUSED (FINAL_DUMP_VERIFIED)
 ```
 

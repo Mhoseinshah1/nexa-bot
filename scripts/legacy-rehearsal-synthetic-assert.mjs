@@ -123,6 +123,7 @@ export const EXPECTED_PASS_PROGRAM = [
   'b_source_superseded_refused',
   'b_superseded_wrote_nothing',
   'b_rerun_acknowledged',
+  'b_gated_import_sales_open_refused',
   'b_rerun_import_completed',
   'b_rerun_one_new_customer',
   'b_rerun_one_new_opening',

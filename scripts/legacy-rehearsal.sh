@@ -1653,6 +1653,13 @@ SQL
   check "$P" b_superseded_wrote_nothing "$counts_a" "$(p_counts)"
   p_approve b-rerun-ack RERUN_OVER_PRIOR_IMPORT "$fp_a"
   check "$P" b_rerun_acknowledged 0 "$P_RC"
+  # aud6 F2: approved and acknowledged, but sales are open: a gated import measures the freeze
+  # in its own start transaction and refuses, writing nothing.
+  p_call b-sales-open importer import "${P_EXPECTED[@]}" --cutover-gate --format json
+  check "$P" b_gated_import_sales_open_refused "65 STOP_SALES_NOT_ACTIVE $runs_before" \
+    "$P_RC $(p_refusal b-sales-open) $(p_apply_runs)"
+  # The runbook's step 1, now: it holds through the import, reconcile, the report and the gate.
+  p_stop_sales
   p_call b-import importer import "${P_EXPECTED[@]}" --cutover-gate --format json
   check "$P" b_rerun_import_completed "COMPLETED" "$(json_get "$(p_out b-import)" verdict)"
   # A re-run, never a merge: exactly the one new user, and its one opening; nothing else.
@@ -1681,7 +1688,6 @@ SQL
   check "$P" b_report_v2_holds "0 true" "$P_RC $(json_get "$OUT/final-report-v2.json" verdict.holds)"
   check "$P" b_report_v2_rerun_acknowledged true \
     "$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.sections.cutover.supersededSources.length===1&&r.sections.cutover.supersededSources[0].acknowledged)' "$OUT/final-report-v2.json")"
-  p_stop_sales
   p_call b-cutover-gate legacy_sub cutover-gate --panel-map "$PANEL_MAP" \
     --evidence-class "$EVIDENCE_CLASS" "${P_EXPECTED[@]}" \
     --freeze-proof "$OUT/snapshots/p-b-freeze-frozen.tsv" \
