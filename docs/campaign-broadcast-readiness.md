@@ -193,30 +193,31 @@ to one chat. Pausing every bot for that is the over-reach this record already no
 The driver is `scripts/mutate-campaign-broadcast.py`. It reverts each rule in place, runs the
 named test, and restores the file from the copy it read. Every mutant below was KILLED.
 
-| #     | Rule reverted                                                                    | Test that failed                                                         |
-| ----- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| CB-01 | the stamp's in-transaction opt-out read (`if (input.marketing)` → `false`)       | refused recipient who opts out before the re-queue                       |
-| CB-02 | the claim returns the customer's CURRENT bot instead of the frozen one           | sends and pins each recipient through its own FROZEN bot                 |
-| CB-03 | the re-queue also moves UNCONFIRMED                                              | re-sends only the refusals                                               |
-| CB-04 | the re-queue also moves an in-flight SENDING row                                 | re-sends only the refusals                                               |
-| CB-05 | a 429 hold applied to every bot of the tenant                                    | a 429 holds the bot that got it and no other                             |
-| CB-06 | the per-bot read loses the bot's own row                                         | …counts the delivery per bot                                             |
-| CB-07 | broadcast pause button not disabled while pending                                | web: takes a steer once                                                  |
-| CB-08 | campaign pause button not disabled while pending                                 | web: takes a run command once                                            |
-| CB-09 | test enabled with unsaved edits                                                  | web: withholds the test and the count                                    |
-| CB-10 | re-queue without asking                                                          | web: asks before a re-queue                                              |
-| CB-11 | the launch's count/fingerprint comparison removed (frozen audience)              | broadcasts.test: freezes exactly the previewed audience                  |
-| CB-17 | a test send no longer refreshes the history (Codex P2 on PR #237)                | web: reads the history again after a test                                |
-| CB-19 | "waiting for a retry" counts every PENDING row (review N2)                       | a 429 holds the bot that got it and no other                             |
-| CB-20 | refused rows shown without `audit.view` (review N1)                              | without audit.view, shows the successful facts only                      |
-| CB-21 | operator names shown without `audit.view` (review N1)                            | the same                                                                 |
-| CB-22 | the history never says it is truncated (review N4)                               | says when older history rows exist beyond the cap                        |
-| CB-12 | the bot predicate dropped from the one audience builder                          | audience-bots: selects the customers of the named bots only              |
-| CB-13 | a campaign announcement may be a service announcement                            | campaigns: refuses a campaign announcement called a service announcement |
-| CB-14 | schedule no longer re-checks a stored announcement's purpose                     | campaigns: refuses to schedule a draft saved before the rule             |
-| CB-15 | attribution counts unpaid redemptions                                            | campaigns: sets the discount's PAID redeemers against who was told       |
-| CB-16 | attribution's "delivered" ignores the recipient's state                          | the same                                                                 |
-| CB-18 | a sourced send's "chat not found" read as the recipient's unreachability (D2-F1) | unit: broadcast-transport, both D2-F1 cases                              |
+| #     | Rule reverted                                                                               | Test that failed                                                         |
+| ----- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| CB-01 | the stamp's in-transaction opt-out read (`if (input.marketing)` → `false`)                  | refused recipient who opts out before the re-queue                       |
+| CB-02 | the claim returns the customer's CURRENT bot instead of the frozen one                      | sends and pins each recipient through its own FROZEN bot                 |
+| CB-03 | the re-queue also moves UNCONFIRMED                                                         | re-sends only the refusals                                               |
+| CB-04 | the re-queue also moves an in-flight SENDING row                                            | re-sends only the refusals                                               |
+| CB-05 | a 429 hold applied to every bot of the tenant                                               | a 429 holds the bot that got it and no other                             |
+| CB-06 | the per-bot read loses the bot's own row                                                    | …counts the delivery per bot                                             |
+| CB-07 | broadcast pause button not disabled while pending                                           | web: takes a steer once                                                  |
+| CB-08 | campaign pause button not disabled while pending                                            | web: takes a run command once                                            |
+| CB-09 | test enabled with unsaved edits                                                             | web: withholds the test and the count                                    |
+| CB-10 | re-queue without asking                                                                     | web: asks before a re-queue                                              |
+| CB-11 | the launch's count/fingerprint comparison removed (frozen audience)                         | broadcasts.test: freezes exactly the previewed audience                  |
+| CB-17 | a test send no longer refreshes the history (Codex P2 on PR #237)                           | web: reads the history again after a test                                |
+| CB-19 | "waiting for a retry" counts every PENDING row (review N2)                                  | a 429 holds the bot that got it and no other                             |
+| CB-20 | refused rows shown without `audit.view` (review N1)                                         | without audit.view, shows the successful facts only                      |
+| CB-21 | operator names shown without `audit.view` (review N1)                                       | the same                                                                 |
+| CB-22 | the history never says it is truncated (review N4)                                          | says when older history rows exist beyond the cap                        |
+| CB-12 | the bot predicate dropped from the one audience builder                                     | audience-bots: selects the customers of the named bots only              |
+| CB-13 | a campaign announcement may be a service announcement                                       | campaigns: refuses a campaign announcement called a service announcement |
+| CB-14 | schedule no longer re-checks a stored announcement's purpose                                | campaigns: refuses to schedule a draft saved before the rule             |
+| CB-15 | attribution counts unpaid redemptions                                                       | campaigns: sets the discount's PAID redeemers against who was told       |
+| CB-16 | attribution's "delivered" ignores the recipient's state                                     | the same                                                                 |
+| CB-18 | a sourced send's "chat not found" read as the recipient's unreachability (D2-F1)            | unit: broadcast-transport, both D2-F1 cases                              |
+| CB-23 | a 409 on a campaign run command no longer re-reads the campaign (web foundation `settleOn`) | web: reads the campaign again when a run command is refused as stale     |
 
 ## Manual acceptance — NOT RUN
 
