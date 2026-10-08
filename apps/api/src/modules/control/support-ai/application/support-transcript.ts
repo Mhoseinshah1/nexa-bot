@@ -5,8 +5,13 @@ import type {
 } from '../../../commerce/business-chats/application/ports.js';
 import { mergeTranscript, type SupportTranscriptLine } from '../domain/transcript.js';
 
-/** How many lines are read for one AI request; the prompt shows the most recent of them. */
-export const SUPPORT_TRANSCRIPT_READ_LINES = 40;
+/**
+ * How many lines are read for one AI request (A7: 60, was 40); the prompt shows the most recent
+ * `SUPPORT_AI_TRANSCRIPT_MESSAGES` (40) of them. The rest is read so the merge places every
+ * reply of the window and the knowledge query can reach an earlier description of a problem.
+ * Nothing is stored: the rows are the transcript, read each time (no second copy of it).
+ */
+export const SUPPORT_TRANSCRIPT_READ_LINES = 60;
 
 /**
  * D7 — the transcript an AI request reads: received messages and NEXA's delivered replies

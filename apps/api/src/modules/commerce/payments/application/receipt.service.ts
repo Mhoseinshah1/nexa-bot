@@ -278,15 +278,30 @@ export class ReceiptService {
            * nowhere. A read, not a lock: the tap that follows decides again.
            */
           const expiredFor = await this.deps.payments.findById(scope, open.paymentId, tx);
-          const reopenable =
+          const pending =
             expiredFor !== null &&
             expiredFor.customerId === customerId &&
-            expiredFor.state === 'PENDING' &&
+            expiredFor.state === 'PENDING';
+          const reopenable =
+            pending &&
             (expiredFor.expiresAt === null || expiredFor.expiresAt.getTime() > now.getTime());
+          /*
+           * Past its own deadline but holding a filed receipt, the payment is NOT closed: a
+           * receipted transfer never expires (`expireDue`), it waits for a reviewer. Telling
+           * that customer "no longer pending" invites a second payment (review of PR #243, m2).
+           */
+          const underReview =
+            pending &&
+            !reopenable &&
+            (await this.deps.receipts.countForPayment(scope, open.paymentId, tx)) > 0;
           throw errors.conflict(
             COMMERCE_ERROR_CODES.RECEIPT_WINDOW_EXPIRED,
             'The window to send this receipt has closed.',
-            { paymentId: open.paymentId, reopenable },
+            {
+              paymentId: open.paymentId,
+              next: reopenable ? 'REOPEN' : underReview ? 'UNDER_REVIEW' : 'CLOSED',
+              ...(underReview && expiredFor !== null ? { reference: expiredFor.reference } : {}),
+            },
           );
         }
 

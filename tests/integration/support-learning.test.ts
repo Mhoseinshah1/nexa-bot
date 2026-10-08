@@ -151,8 +151,16 @@ describe('controlled learning (TB8)', () => {
     return (rows.rows[0] as { n: number }).n;
   }
 
+  /**
+   * A8: the context carries only knowledge the query MATCHES, so the probe asks with every title
+   * these tests publish — and with the titles of the articles that must stay out (off, gone), so
+   * an article missing from the answer is missing because of its state, never for want of a
+   * matching word.
+   */
+  const EVERY_TITLE =
+    'چطور لینک اشتراک v2rayNG وارد کردن سیاست بازگشت وجه تماس کارت واریز پرداخت پشتیبانی live draft off gone';
   async function knowledgeInContext(scope: never) {
-    const built = await ctx.container.supportContext.build(scope, null);
+    const built = await ctx.container.supportContext.build(scope, null, { query: EVERY_TITLE });
     return built.payload.knowledge.filter((entry) => entry.source === 'KNOWLEDGE');
   }
 

@@ -14,6 +14,7 @@ import {
 import {
   SUPPORT_ASSIST_ERROR_CODES,
   SupportAssistService,
+  type SupportContextSource,
   type SupportAssistServiceDeps,
 } from '../../apps/api/src/modules/control/support-ai/application/support-assist.service';
 import {
@@ -23,6 +24,7 @@ import {
   AssistantLoop,
 } from '../../apps/api/src/modules/control/support-ai/application/assistant-loop';
 import { BUSINESS_CHAT_ERROR_CODES } from '../../apps/api/src/modules/commerce/business-chats/application/business-conversation.service';
+import { SUPPORT_AI_AUTHOR_MARKERS } from '../../apps/api/src/modules/control/support-ai/domain/prompt';
 import { TbSupportContextSource } from '../../apps/api/src/modules/control/support-ai/infrastructure/support-context-source';
 import { DrizzleSupportAiJobRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository';
 import {
@@ -40,6 +42,7 @@ import {
   createAdmin,
   createTestContext,
   tenantA,
+  tenantB,
   type TestContext,
 } from './harness';
 
@@ -78,6 +81,8 @@ describe('Assist Mode (TB5)', () => {
   let chainCalls: string[];
   /** D7: the transcript each call was given, as role and text. */
   let chainTurns: { role: string; text: string }[][];
+  /** A8: the system prompt (rules and NEXA facts) each call was given. */
+  let chainSystems: string[];
   /** Runs inside the fake provider call, before it answers. */
   let duringCall: ((conversationId: string) => Promise<void>) | null;
   let build: (overrides?: Partial<SupportAssistServiceDeps>) => SupportAssistService;
@@ -119,6 +124,7 @@ describe('Assist Mode (TB5)', () => {
     conversationId = await newConversation('7000001');
     chainCalls = [];
     chainTurns = [];
+    chainSystems = [];
     duringCall = null;
     next = {
       outcome: 'OK',
@@ -136,6 +142,7 @@ describe('Assist Mode (TB5)', () => {
           generate: async (_scope, input) => {
             chainCalls.push(input.conversationId ?? '');
             chainTurns.push(input.request.messages.map((m) => ({ role: m.role, text: m.text })));
+            chainSystems.push(input.request.system);
             if (duringCall !== null) await duringCall(input.conversationId ?? '');
             return {
               outcome: next,
@@ -287,7 +294,8 @@ describe('Assist Mode (TB5)', () => {
     await readyDraft();
     expect(chainTurns.at(-1)).toEqual([
       { role: 'user', text: 'سلام، اینترنتم وصل نمی‌شود' },
-      { role: 'assistant', text: 'متن ویرایش‌شده' },
+      // A7: an AI draft a person reviewed (here, edited) and sent.
+      { role: 'assistant', text: `${SUPPORT_AI_AUTHOR_MARKERS.AI_ASSIST}\nمتن ویرایش‌شده` },
     ]);
   });
 
@@ -344,6 +352,170 @@ describe('Assist Mode (TB5)', () => {
     });
   });
 
+  /** A customer's next message in the test conversation (chat 7000001). */
+  async function customerSays(messageId: number, text: string) {
+    await ctx.container.businessConversations.recordMessage(scopeA, system(), {
+      idempotencyKey: key('msg'),
+      botInstanceId: BOT,
+      edited: false,
+      message: {
+        connectionId: 'conn-1',
+        chatId: '7000001',
+        chatType: 'private',
+        messageId,
+        fromUserId: '7000001',
+        senderBusinessBotId: null,
+        isFromOffline: false,
+        sentAt: new Date(),
+        editedAt: null,
+        kind: 'TEXT',
+        text,
+        photo: null,
+      },
+    });
+  }
+
+  it('A8: priorDecisions reads decided jobs, newest first — never discarded, failed or another tenant’s', async () => {
+    const superseded = await readyDraft();
+    next = {
+      outcome: 'OK',
+      output: { ...valid, topic: 'APP_SETUP', intent: 'نصب برنامه', knowledgeRefs: ['K2'] },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const second = await readyDraft();
+    expect((await jobs.findById(scopeA, superseded.id))?.state).toBe('DISCARDED');
+    expect(await jobs.priorDecisions(scopeA, conversationId, 3)).toEqual([
+      {
+        decision: 'REPLY',
+        topic: 'APP_SETUP',
+        intent: 'نصب برنامه',
+        knowledgeLabels: ['نصب روی آیفون'],
+      },
+    ]);
+    // Sent, it still counts; a failed draft after it does not.
+    await service.send(scopeA, operator, second.id, { idempotencyKey: key('s'), text: 'متن' });
+    next = { outcome: 'REFUSED_BY_PROVIDER', code: 'openai.refusal' };
+    const failed = await service.request(scopeA, operator, {
+      conversationId,
+      idempotencyKey: key('f'),
+    });
+    await loop.tick();
+    expect((await jobs.findById(scopeA, failed.id))?.state).toBe('FAILED');
+    expect((await jobs.priorDecisions(scopeA, conversationId, 3)).map((d) => d.topic)).toEqual([
+      'APP_SETUP',
+    ]);
+    // Bounded, and tenant-scoped: tenant B asking for tenant A's conversation reads nothing.
+    expect(await jobs.priorDecisions(scopeA, conversationId, 0)).toEqual([]);
+    expect(await jobs.priorDecisions(tenantB as never, conversationId, 3)).toEqual([]);
+  });
+
+  it('A8 end to end: on a repeated failure the draft still carries the article the conversation is about', async () => {
+    const c = ctx.container;
+    const owner = adminActorFor(
+      await createAdmin(c, tenantA, { username: 'owner-a8', roleKeys: ['owner'] }),
+    );
+    for (const content of [
+      {
+        title: 'اینترنت وصل نمی‌شود',
+        body: 'برنامه را ببندید، اینترنت گوشی را خاموش و روشن کنید و دوباره وصل شوید.',
+        category: 'CONNECTION' as const,
+        tags: ['اتصال'],
+      },
+      {
+        title: 'تمدید سرویس',
+        body: 'از منوی سرویس‌های من، تمدید را بزنید.',
+        category: 'GENERAL' as const,
+        tags: [],
+      },
+    ]) {
+      await c.supportKnowledge.createArticle(tenantA, owner, {
+        idempotencyKey: key('article'),
+        content,
+        publish: true,
+      });
+    }
+    next = {
+      outcome: 'OK',
+      output: { ...valid, factRefs: [], knowledgeRefs: ['K1'] },
+      usage: { inputTokens: 1, outputTokens: 1 },
+      model: 'm',
+    };
+    const withMemory = build({ context: new TbSupportContextSource(c.supportContext, jobs) });
+    const memoryLoop = new AssistantLoop(withMemory, {
+      scope: () => scopeA,
+      intervalMs: 1000,
+      now: () => c.clock.now(),
+      logger: c.logger,
+    });
+    const first = await readyDraft(withMemory, memoryLoop);
+    expect((await jobs.findById(scopeA, first.id))?.knowledgeLabels).toEqual([
+      'اینترنت وصل نمی‌شود',
+    ]);
+    await withMemory.send(scopeA, operator, first.id, { idempotencyKey: key('s'), text: 'متن' });
+    // Three short follow-ups push the description out of the latest three customer messages.
+    await customerSays(12, 'بستم');
+    await customerSays(13, 'انجام دادم');
+    await customerSays(14, 'باز هم نشد');
+
+    const second = await readyDraft(withMemory, memoryLoop);
+    expect(chainSystems.at(-1)).toContain('اینترنت وصل نمی‌شود');
+    expect(chainSystems.at(-1)).not.toContain('تمدید سرویس');
+    expect(await jobs.findById(scopeA, second.id)).toMatchObject({
+      knowledgeSent: 1,
+      knowledgeAvailable: 2,
+    });
+
+    // Without the conversation's memory, the same words match nothing and carry no knowledge.
+    const forgetful = build({ context: new TbSupportContextSource(c.supportContext) });
+    const forgetfulLoop = new AssistantLoop(forgetful, {
+      scope: () => scopeA,
+      intervalMs: 1000,
+      now: () => c.clock.now(),
+      logger: c.logger,
+    });
+    const third = await readyDraft(forgetful, forgetfulLoop);
+    expect(chainSystems.at(-1)).not.toContain('اینترنت وصل نمی‌شود');
+    expect(await jobs.findById(scopeA, third.id)).toMatchObject({ knowledgeSent: 0 });
+  });
+
+  it('PR #236 review N5: the ASSEMBLED container gives both AI paths a context source with memory', async () => {
+    const c = ctx.container;
+    const owner = adminActorFor(
+      await createAdmin(c, tenantA, { username: 'owner-n5', roleKeys: ['owner'] }),
+    );
+    await c.supportKnowledge.createArticle(tenantA, owner, {
+      idempotencyKey: key('article'),
+      content: {
+        title: 'اینترنت وصل نمی‌شود',
+        body: 'برنامه را ببندید، اینترنت گوشی را خاموش و روشن کنید.',
+        category: 'CONNECTION',
+        tags: ['اتصال'],
+      },
+      publish: true,
+    });
+    // A decided job in this conversation: topic CONNECTION_TROUBLESHOOTING, intent «اتصال».
+    await readyDraft();
+    const transcript = [
+      {
+        id: 'x',
+        origin: 'INBOUND' as const,
+        author: 'CUSTOMER' as const,
+        kind: 'TEXT' as const,
+        text: 'باز هم نشد',
+        sentAt: new Date(),
+      },
+    ];
+    // The services' own sources, as the container wired them (private deps, read for the test).
+    type Wired = { readonly deps: { readonly context: SupportContextSource } };
+    for (const service of [c.supportAssist, c.supportAutoReply]) {
+      const source = (service as unknown as Wired).deps.context;
+      const built = await source.build(scopeA, null, { conversationId, transcript });
+      // «باز هم نشد» matches nothing: only the conversation's earlier decision finds it.
+      expect([...(built.knowledgeAliases?.values() ?? [])]).toEqual(['اینترنت وصل نمی‌شود']);
+    }
+  });
+
   it('review item 6: newer undelivered rows never push a delivered reply out of the transcript', async () => {
     const first = await readyDraft();
     const sent = await service.send(scopeA, operator, first.id, {
@@ -356,7 +528,7 @@ describe('Assist Mode (TB5)', () => {
                  send_started_at = now(), resolved_at = now()
            WHERE id = ${sent.outboundId}`,
     );
-    // Forty-five newer rows that were never delivered (a failing lane).
+    // Sixty-five newer rows that were never delivered (a failing lane): more than the 60 read.
     await ctx.container.database.db.execute(
       sql`INSERT INTO business_outbound_messages (id, tenant_id, conversation_id, origin, body,
             created_by_admin_id, control_epoch, idempotency_key, request_hash, state, attempts,
@@ -364,13 +536,13 @@ describe('Assist Mode (TB5)', () => {
           SELECT gen_random_uuid(), tenant_id, conversation_id, origin, 'نرسید',
                  created_by_admin_id, control_epoch, 'failed-' || g, request_hash, 'FAILED', 1,
                  now(), now() + (g || ' seconds')::interval, now()
-            FROM business_outbound_messages, generate_series(1, 45) AS g
+            FROM business_outbound_messages, generate_series(1, 65) AS g
            WHERE id = ${sent.outboundId}`,
     );
     await readyDraft();
     expect(chainTurns.at(-1)).toEqual([
       { role: 'user', text: 'سلام، اینترنتم وصل نمی‌شود' },
-      { role: 'assistant', text: 'متن تحویل‌شده' },
+      { role: 'assistant', text: `${SUPPORT_AI_AUTHOR_MARKERS.AI_ASSIST}\nمتن تحویل‌شده` },
     ]);
   });
 

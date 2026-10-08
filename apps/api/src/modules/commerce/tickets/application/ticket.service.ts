@@ -7,6 +7,7 @@ import {
   TICKET_ERROR_CODES,
   TICKET_MESSAGES_MAX_PER_TICKET,
   TICKET_OPEN_MAX_PER_CUSTOMER,
+  TICKET_AWAITING_SUPPORT_STATUSES,
   TICKET_PAGE_MAX,
   TICKET_REPLY_FILE_STAGED_MAX_BYTES,
   errors,
@@ -736,6 +737,8 @@ export class TicketService {
     actor: ActorContext,
     query: {
       readonly status?: TicketStatus;
+      /** Roadmap B5/B6 (review N1): only tickets whose next word is support's. */
+      readonly awaitingSupport?: boolean;
       readonly categoryId?: string;
       readonly customer?: string;
       readonly assigned?: string;
@@ -756,6 +759,7 @@ export class TicketService {
             : (query.assigned as AdminId);
     return this.deps.tickets.list(scope, {
       ...(query.status === undefined ? {} : { status: query.status }),
+      ...(query.awaitingSupport === true ? { statuses: TICKET_AWAITING_SUPPORT_STATUSES } : {}),
       ...(query.categoryId === undefined
         ? {}
         : { categoryId: query.categoryId as TicketCategoryId }),

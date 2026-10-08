@@ -222,6 +222,75 @@ describe('a customer sending a receipt', () => {
     expect(await receiptRows(payment.id)).toHaveLength(0);
   });
 
+  /*
+   * Roadmap E6 and the review of PR #243 (m2, R4): an expired window says what comes NEXT —
+   * a new window while the payment can take one, "still under review" for a receipted
+   * payment past its deadline (a receipted transfer never expires), and "closed" otherwise.
+   */
+  const expireWindow = (paymentId: string) =>
+    ctx.container.database.db.execute(sql`
+      UPDATE receipt_captures
+         SET opened_at = now() - interval '2 hours', expires_at = now() - interval '1 minute'
+       WHERE payment_id = ${paymentId} AND closed_at IS NULL`);
+  const refusalDetails = async (running: Promise<unknown>) => {
+    const outcome = await outcomeOf(running);
+    if (outcome.ok) throw new Error('the receipt was filed');
+    expect(isNexaError(outcome.error)).toBe(true);
+    return (outcome.error as { details?: Record<string, unknown> }).details ?? {};
+  };
+
+  it('names what comes next for a late receipt: a new window, a review, or nothing (E6)', async () => {
+    const reopen = await pending('n1');
+    await signal(reopen.id, 'n1-signal');
+    await expireWindow(reopen.id);
+    expect(await refusalDetails(submit(reopen.id, photo('u-n1'), 'n1-file'))).toMatchObject({
+      paymentId: reopen.id,
+      next: 'REOPEN',
+    });
+
+    // Withdrawn INSIDE its own deadline: no new window, though the deadline has not passed.
+    await ctx.container.database.db.execute(sql`
+      UPDATE payments SET state = 'CANCELLED', resolved_at = now() WHERE id = ${reopen.id}`);
+    expect(await refusalDetails(submit(reopen.id, photo('u-n1b'), 'n1b-file'))).toMatchObject({
+      next: 'CLOSED',
+    });
+  });
+
+  it('answers a late receipt for a receipted payment past its deadline as still under review (m2)', async () => {
+    const payment = await pending('n2');
+    await signal(payment.id, 'n2-signal');
+    await submit(payment.id, photo('u-n2'), 'n2-file');
+    await expireWindow(payment.id);
+    await ctx.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment.id}`,
+    );
+    const details = await refusalDetails(submit(payment.id, photo('u-n2b'), 'n2b-file'));
+    const row = (await ctx.container.database.db.execute(
+      sql`SELECT reference FROM payments WHERE id = ${payment.id}`,
+    )) as unknown as { rows: { reference: string }[] };
+    expect(details).toMatchObject({ next: 'UNDER_REVIEW', reference: row.rows[0]?.reference });
+  });
+
+  it('reads a tracking code only for the customer whose payment it is (R1)', async () => {
+    const payment = await pending('n3');
+    const other = await customer(tenantA, botA, '920177');
+    const mine = await ctx.container.receipts.trackingCodeForCustomer(
+      tenantA,
+      systemActor('n3-own'),
+      customerA,
+      payment.id as PaymentId,
+    );
+    expect(mine).toEqual(expect.any(String));
+    expect(
+      await ctx.container.receipts.trackingCodeForCustomer(
+        tenantA,
+        systemActor('n3-other'),
+        other,
+        payment.id as PaymentId,
+      ),
+    ).toBeNull();
+  });
+
   it('refuses the sixth receipt and closes the window at the cap', async () => {
     const payment = await pending('r5');
     await signal(payment.id, 'r5-signal');

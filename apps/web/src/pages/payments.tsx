@@ -85,6 +85,15 @@ import {
   type Tone,
   Num,
 } from '../ui/kit';
+import {
+  PAYMENT_METHOD_LABELS as METHOD_LABELS,
+  PAYMENT_STATE_LABELS as STATE_LABELS,
+  PAYMENT_STATE_TONES as STATE_TONES,
+} from '../payment-labels';
+
+// Review N8: the vocabulary moved to `payment-labels.ts`; these names stay importable from
+// here under their old spelling, so a workstream that reads them from this page still builds.
+export { STATE_LABELS, STATE_TONES, METHOD_LABELS };
 
 /**
  * Payments — the money, and where it came from.
@@ -107,32 +116,6 @@ import {
  * it non-terminal precisely so reconciliation is legal, and the banner tells an operator
  * that it is neither a success nor a failure until somebody establishes which.
  */
-
-const STATE_LABELS: Readonly<Record<PaymentState, WebKey>> = {
-  PENDING: 'web.payment_state_pending',
-  CONFIRMED: 'web.payment_state_confirmed',
-  FAILED: 'web.payment_state_failed',
-  CANCELLED: 'web.payment_state_cancelled',
-  EXPIRED: 'web.payment_state_expired',
-  UNKNOWN: 'web.payment_state_unknown',
-};
-
-const STATE_TONES: Readonly<Record<PaymentState, Tone>> = {
-  PENDING: 'warn',
-  CONFIRMED: 'ok',
-  FAILED: 'danger',
-  CANCELLED: 'neutral',
-  EXPIRED: 'neutral',
-  // Not danger and not ok: it is neither, and a tone that implied either would be
-  // this page taking a position the system explicitly does not hold.
-  UNKNOWN: 'warn',
-};
-
-const METHOD_LABELS: Readonly<Record<PaymentMethod, WebKey>> = {
-  WALLET: 'web.payment_method_wallet',
-  MANUAL_TRANSFER: 'web.payment_method_manual',
-  GATEWAY: 'web.payment_method_gateway',
-};
 
 /** Package FX: how a gateway invoice's provider figure was derived from the payable. */
 const CONVERSION_POLICY_LABELS: Readonly<Record<GatewayConversionPolicy, WebKey>> = {
@@ -332,6 +315,7 @@ const SITUATION_LABELS: Readonly<Record<PaymentSituation, WebKey>> = {
   AWAITING_PAYMENT: 'web.payment_situation_awaiting_payment',
   INVOICE_NOT_ISSUED: 'web.payment_situation_invoice_not_issued',
   CUSTOMER_SIGNALLED: 'web.payment_situation_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_receipt_under_review',
   PROVIDER_REVIEW: 'web.payment_situation_provider_review',
   OUTCOME_UNKNOWN: 'web.payment_situation_outcome_unknown',
   MISMATCH: 'web.payment_situation_mismatch',
@@ -351,6 +335,7 @@ const SITUATION_WHAT: Readonly<Record<PaymentSituation, WebKey>> = {
   AWAITING_PAYMENT: 'web.payment_situation_what_awaiting_payment',
   INVOICE_NOT_ISSUED: 'web.payment_situation_what_invoice_not_issued',
   CUSTOMER_SIGNALLED: 'web.payment_situation_what_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_what_receipt_under_review',
   PROVIDER_REVIEW: 'web.payment_situation_what_provider_review',
   OUTCOME_UNKNOWN: 'web.payment_situation_what_outcome_unknown',
   MISMATCH: 'web.payment_situation_what_mismatch',
@@ -370,6 +355,7 @@ const SITUATION_SAFE: Readonly<Record<PaymentSituation, WebKey>> = {
   AWAITING_PAYMENT: 'web.payment_situation_safe_awaiting_payment',
   INVOICE_NOT_ISSUED: 'web.payment_situation_safe_invoice_not_issued',
   CUSTOMER_SIGNALLED: 'web.payment_situation_safe_customer_signalled',
+  RECEIPT_UNDER_REVIEW: 'web.payment_situation_safe_receipt_under_review',
   PROVIDER_REVIEW: 'web.payment_situation_safe_provider_review',
   OUTCOME_UNKNOWN: 'web.payment_situation_safe_outcome_unknown',
   MISMATCH: 'web.payment_situation_safe_mismatch',
@@ -393,7 +379,8 @@ const SITUATION_SAFE: Readonly<Record<PaymentSituation, WebKey>> = {
 const SITUATION_TONES: Readonly<Record<PaymentSituation, Tone>> = {
   AWAITING_PAYMENT: 'neutral',
   INVOICE_NOT_ISSUED: 'neutral',
-  CUSTOMER_SIGNALLED: 'warn',
+  CUSTOMER_SIGNALLED: 'info',
+  RECEIPT_UNDER_REVIEW: 'warn',
   PROVIDER_REVIEW: 'info',
   OUTCOME_UNKNOWN: 'warn',
   MISMATCH: 'warn',
@@ -424,6 +411,7 @@ const MONEY_LABELS: Readonly<Record<PaymentMoneySignal, WebKey>> = {
 
 const CUSTOMER_GUIDANCE_LABELS: Readonly<Record<PaymentCustomerGuidance, WebKey>> = {
   PAY_WITHIN_WINDOW: 'web.payment_customer_guidance_pay_within_window',
+  SEND_RECEIPT: 'web.payment_customer_guidance_send_receipt',
   START_AGAIN: 'web.payment_customer_guidance_start_again',
   WAIT_DO_NOT_PAY_AGAIN: 'web.payment_customer_guidance_wait_do_not_pay_again',
   MAY_PAY_AGAIN: 'web.payment_customer_guidance_may_pay_again',
@@ -611,7 +599,6 @@ export function RateProvenanceCard({ value }: { value: GatewayRateProvenance | n
 // List
 // ---------------------------------------------------------------------------
 
-/** The queues, in the order the workspace shows them (program §10). */
 /**
  * The chips, attention first (roadmap E2): `NEEDS_ACTION` — everything a person must act on,
  * oldest first — leads, then the facets in the contract's own order. A display order only;

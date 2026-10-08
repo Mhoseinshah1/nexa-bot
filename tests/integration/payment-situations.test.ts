@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   TONPAYS_TELEGRAM_REVIEW_WINDOW_HOURS,
+  paymentNeedsAction,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -258,6 +259,90 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
       }),
       'CUSTOMER_SIGNALLED',
     );
+    // A claim WITH a filed receipt: what a reviewer acts on (review of PR #243, CX2).
+    const third = (
+      await ctx.container.customers.resolveFromUpdate(tenantA, system('sd'), {
+        idempotencyKey: 'resolve-sit-d',
+        telegramUserId: '7300004',
+        from: { id: 7300004, first_name: 'نیما' },
+        botInstanceId: BOT_A,
+      })
+    ).customer.id;
+    const receipted = await payment({
+      provider: 'MANUAL_TRANSFER',
+      state: 'PENDING',
+      ageMinutes: next(),
+      customer: third,
+      extra: { customer_signalled_at: new Date() },
+    });
+    await insertRow('payment_receipts', {
+      id: ctx.container.ids.uuid(),
+      tenant_id: tenantA.tenantId,
+      bot_instance_id: BOT_A,
+      customer_id: third,
+      payment_id: receipted,
+      kind: 'PHOTO',
+      file_id: `file-${receipted}`,
+      file_unique_id: `uniq-${receipted}`,
+    });
+    expected.set(receipted, 'RECEIPT_UNDER_REVIEW');
+
+    // A late approval recorded while the payment is still PENDING (review M1).
+    const pendingLate = await payment({
+      provider: 'NOWPAYMENTS',
+      state: 'PENDING',
+      ageMinutes: next(),
+    });
+    await invoice(pendingLate, 'NOWPAYMENTS', {
+      provider_status: 'finished',
+      outcome: 'LATE_COMPLETION',
+      outcome_at: new Date(),
+      late_completion_observed_at: new Date(),
+    });
+    expected.set(pendingLate, 'LATE_COMPLETION');
+
+    // Refused first, approved later: the outcome stays UNSUCCESSFUL, the marker says it (CX1).
+    const refusedThenPaid = await payment({
+      provider: 'TONPAYS',
+      state: 'FAILED',
+      ageMinutes: next(),
+    });
+    await invoice(refusedThenPaid, 'TONPAYS', {
+      provider_status: 'completed',
+      provider_paid: true,
+      outcome: 'UNSUCCESSFUL',
+      outcome_at: new Date(),
+      late_completion_observed_at: new Date(),
+    });
+    expected.set(refusedThenPaid, 'LATE_COMPLETION');
+
+    // An operator's reconciliation of a gateway payment to FAILED is not a rejection (CX4)…
+    const reconciled = await payment({
+      provider: 'TONPAYS',
+      state: 'FAILED',
+      ageMinutes: next(),
+      extra: { resolved_by_admin_id: owner.id },
+    });
+    await invoice(reconciled, 'TONPAYS', {
+      provider_status: 'failed',
+      outcome: 'UNSUCCESSFUL',
+      outcome_at: new Date(),
+    });
+    expected.set(reconciled, 'FAILED');
+    // …and one whose money went back to the wallet is REFUNDED, not "no money" (M2).
+    const returned = await payment({
+      provider: 'TONPAYS',
+      state: 'FAILED',
+      ageMinutes: next(),
+      extra: { resolved_by_admin_id: owner.id },
+    });
+    await invoice(returned, 'TONPAYS', {
+      provider_status: 'completed',
+      provider_paid: true,
+    });
+    await refund(returned, 'COMPLETED');
+    expected.set(returned, 'REFUNDED');
+
     const acknowledged = new Date(Date.now() - 60_000);
     const review = await payment({
       provider: 'TONPAYS_TELEGRAM',
@@ -402,21 +487,16 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
     for (const id of expected.keys()) {
       records.push(await ctx.container.payments.get(tenantA, owner, id));
     }
-    const dispositions = await ctx.container.payments.receiptDispositions(tenantA, owner, records);
-    const situations = await ctx.container.payments.situations(
-      tenantA,
-      owner,
-      records,
-      dispositions,
-    );
+    const situations = await ctx.container.payments.situations(tenantA, owner, records);
     const needing: string[] = [];
     for (const [id, situation] of expected) {
       const read = situations.get(id);
       expect(read?.guide.situation, id).toBe(situation);
-      // The row's own queues carry NEEDS_ACTION exactly when the classifier says so.
+      // The SQL facet (the badge's source) agrees with the specification, arm by arm.
       expect(read?.queues.includes('NEEDS_ACTION'), situation).toBe(
-        read?.guide.needsAction ?? false,
+        paymentNeedsAction(situation, (await ctx.container.payments.get(tenantA, owner, id)).state),
       );
+      expect(read?.guide.needsAction).toBe(read?.queues.includes('NEEDS_ACTION'));
       if (read?.guide.needsAction === true) needing.push(id);
     }
 
@@ -427,11 +507,11 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
     // The count is the list's own predicate.
     const attention = await ops().attention(tenantA, owner, {});
     expect(attention.totals.NEEDS_ACTION).toBe(needing.length);
-    // CUSTOMER_SIGNALLED, every UNKNOWN (a late approval on one included) and
-    // REFUND_IN_PROGRESS — and NOT the late or partial money on attempts that already ended,
-    // which no command resolves, nor a PENDING partial the lane moves on by itself.
+    // A filed receipt, every UNKNOWN (a late approval on one included) and an operator's open
+    // refund — and NOT a claim with no receipt, a PENDING late approval, nor late or partial
+    // money on attempts that already ended, which no command resolves.
     expect(needing.map((id) => expected.get(id as PaymentId))).toEqual([
-      'CUSTOMER_SIGNALLED',
+      'RECEIPT_UNDER_REVIEW',
       'OUTCOME_UNKNOWN',
       'MISMATCH',
       'LATE_COMPLETION',
@@ -456,9 +536,7 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
     expect(page.items.map((one) => one.id)).toEqual([id]);
 
     const records = [await ctx.container.payments.get(tenantA, owner, id)];
-    const read = (await ctx.container.payments.situations(tenantA, owner, records, new Map())).get(
-      id,
-    );
+    const read = (await ctx.container.payments.situations(tenantA, owner, records)).get(id);
     expect(read?.guide).toEqual({
       situation: 'OUTCOME_UNKNOWN',
       money: 'POSSIBLY',
@@ -477,8 +555,6 @@ describe('the payment situation guide and the NEEDS_ACTION queue', () => {
     const clerk = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'no-view', roleKeys: [] }),
     );
-    await expect(
-      ctx.container.payments.situations(tenantA, clerk, records, new Map()),
-    ).rejects.toThrow();
+    await expect(ctx.container.payments.situations(tenantA, clerk, records)).rejects.toThrow();
   });
 });

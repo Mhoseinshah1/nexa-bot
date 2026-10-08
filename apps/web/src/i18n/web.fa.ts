@@ -2101,7 +2101,8 @@ export const WEB_FA = {
     'این راهنما از رویدادهای ثبت‌شده استخراج می‌شود و جای وضعیت حسابداری پرداخت را نمی‌گیرد.',
   'web.payment_situation_awaiting_payment': 'در انتظار پرداخت مشتری',
   'web.payment_situation_invoice_not_issued': 'فاکتور درگاه صادر نشد',
-  'web.payment_situation_customer_signalled': 'مشتری اعلام واریز کرده است',
+  'web.payment_situation_customer_signalled': 'مشتری اعلام واریز کرده است (بدون رسید)',
+  'web.payment_situation_receipt_under_review': 'رسید در انتظار بررسی',
   'web.payment_situation_provider_review': 'در بررسی درگاه',
   'web.payment_situation_outcome_unknown': 'نتیجه نامعلوم',
   'web.payment_situation_mismatch': 'مغایرت',
@@ -2120,7 +2121,9 @@ export const WEB_FA = {
   'web.payment_situation_what_invoice_not_issued':
     'درگاه ساخت فاکتور را رد کرد یا پاسخ آن دریافت نشد؛ لینکی به مشتری داده نشده است.',
   'web.payment_situation_what_customer_signalled':
-    'مشتری می‌گوید مبلغ را واریز کرده است. این ادعای مشتری است و هنوز کسی آن را بررسی نکرده است.',
+    'مشتری می‌گوید مبلغ را واریز کرده است، اما هنوز رسیدی نفرستاده است. این ادعای مشتری است و چیزی برای بررسی وجود ندارد.',
+  'web.payment_situation_what_receipt_under_review':
+    'مشتری رسید واریز را فرستاده است و پرداخت منتظر تصمیم بازبین است. رسید ادعای مشتری است، نه تأیید.',
   'web.payment_situation_what_provider_review':
     'درگاه رسید مشتری را دریافت کرده و پرداخت در مهلت بررسی خود درگاه است.',
   'web.payment_situation_what_outcome_unknown':
@@ -2136,10 +2139,11 @@ export const WEB_FA = {
   'web.payment_situation_what_refund_in_progress':
     'پرداخت تأیید شده است و یک بازپرداخت هنوز باز است.',
   'web.payment_situation_what_refunded':
-    'پرداخت تأیید شده است و تمام یا بخشی از آن بازپرداخت شده است.',
+    'تمام یا بخشی از مبلغ این پرداخت بازپرداخت شده است (برای پرداختی که به سفارش نرسید، به کیف پول مشتری).',
   'web.payment_situation_what_credited_to_wallet':
     'بازبین رسید را بررسی کرد و مبلغی را که دید به کیف پول مشتری واریز کرد؛ سفارش با این پرداخت پرداخت نشد.',
-  'web.payment_situation_what_rejected': 'بازبین رسید را بررسی کرد و آن را نپذیرفت.',
+  'web.payment_situation_what_rejected':
+    'مدیر این واریز کارت‌به‌کارت را بررسی کرد و آن را نپذیرفت.',
   'web.payment_situation_what_failed':
     'درگاه پرداخت را ناموفق اعلام کرد یا پرداخت با تطبیق ناموفق بسته شد.',
   'web.payment_situation_what_expired': 'مهلت پرداخت تمام شد و چیزی تأیید نشد.',
@@ -2149,6 +2153,8 @@ export const WEB_FA = {
   'web.payment_situation_safe_invoice_not_issued':
     'از اینجا نمی‌توان فاکتور را دوباره ساخت؛ مشتری می‌تواند پرداخت تازه‌ای آغاز کند.',
   'web.payment_situation_safe_customer_signalled':
+    'کاری لازم نیست تا رسید برسد؛ اگر نرسد، پرداخت در پایان مهلت خودش بسته می‌شود.',
+  'web.payment_situation_safe_receipt_under_review':
     'پیش از تأیید، واریز را در صورت‌حساب بانک ببینید. تأیید، رد یا واریز به کیف پول فقط در تلگرام انجام می‌شود.',
   'web.payment_situation_safe_provider_review':
     'تا پایان مهلت بررسی درگاه منتظر بمانید و پرداخت را دستی تأیید یا رد نکنید.',
@@ -2185,6 +2191,7 @@ export const WEB_FA = {
   'web.payment_money_returning': 'بازپرداخت در جریان است',
   'web.payment_money_returned': 'تمام یا بخشی بازپرداخت شد',
   'web.payment_customer_guidance_pay_within_window': 'تا پایان مهلت پرداخت کند',
+  'web.payment_customer_guidance_send_receipt': 'رسید واریز را از طریق ربات بفرستد',
   'web.payment_customer_guidance_start_again': 'می‌تواند پرداخت تازه‌ای آغاز کند',
   'web.payment_customer_guidance_wait_do_not_pay_again': 'منتظر بماند و دوباره پرداخت نکند',
   'web.payment_customer_guidance_may_pay_again': 'در صورت تمایل دوباره پرداخت کند',
@@ -8258,6 +8265,15 @@ export const WEB_FA = {
   'web.kb_fault_base_moved': 'مطلب پس از اجرای ساخت تغییر کرده است. ساخت را دوباره اجرا کنید.',
   'web.kb_fault_not_conflict': 'این پیشنهاد تعارض در انتظار انتخاب نیست.',
   'web.kb_fault_not_found': 'این ساخت پیدا نشد.',
+  // --- roadmap web-route-polish (Agent 2a) ---
+  'web.inc_form_reloaded':
+    'رخداد در این فاصله تغییر کرده بود. فرم با مقادیر کنونی دوباره پر شد و تغییرهای شما ذخیره نشد؛ بررسی کنید و دوباره ذخیره کنید.',
+  'web.list_filters_clear': 'پاک کردن همهٔ فیلترها',
+  'web.list_read_at': 'خوانده‌شده در {time}',
+  'web.list_refresh': 'خواندن دوباره',
+  'web.list_refreshing': 'در حال خواندن…',
+  'web.referral_banner_clear_question':
+    'بنر معرفی حذف شود؟ فایل آن از این نصب پاک می‌شود و برای برگرداندنش باید دوباره بارگذاری شود.',
   // --- Roadmap C2: broadcast operator UX (campaign & broadcast workstream) ---------------
   'web.bcx_reason_blocked_bot': 'کاربر ربات را مسدود کرده است',
   'web.bcx_reason_bad_request':
@@ -8317,6 +8333,64 @@ export const WEB_FA = {
   'web.bcx_h_requeued': '{count} گیرنده دوباره در صف',
   'web.bcx_h_refused': 'اجازه داده نشد',
   // --- end roadmap C2 block -----------------------------------------------------------
+
+  // --- Roadmap B5/B6 (Agent 2b): Customer 360 workspace and the attention-first dashboard ---
+  'web.attn_at_least': 'یا بیشتر',
+  'web.attn_open': 'رسیدگی',
+  'web.c360_nav_attention': 'نیازمند رسیدگی',
+  'web.c360_nav_support': 'پشتیبانی',
+  'web.c360ws_attention_title': 'نیازمند رسیدگی',
+  'web.c360ws_attention_hint':
+    'هر عدد شمارش سرور از ردیف‌های ذخیره‌شدهٔ همین مشتری است و به صفحه‌ای می‌رود که در آن رسیدگی می‌شود.',
+  'web.c360ws_nothing': 'برای این مشتری چیزی در انتظار رسیدگی نیست.',
+  'web.c360ws_withheld': 'بخش‌هایی که مجوز صفحهٔ آن‌ها را ندارید در این خلاصه شمرده نشده‌اند.',
+  'web.c360ws_tickets_awaiting': 'تیکت در انتظار پاسخ پشتیبانی',
+  'web.c360ws_handoffs': 'گفتگوی بیزینس در انتظار اپراتور',
+  'web.c360ws_payments_unknown': 'پرداخت با نتیجهٔ نامعلوم (در انتظار تطبیق)',
+  'web.c360ws_services_unreconciled': 'سرویس تطبیق‌نشده',
+  'web.c360ws_latest_title': 'آخرین سفارش‌ها و پرداخت‌ها',
+  'web.c360ws_latest_hint':
+    'جدیدترین ردیف‌ها، جدیدترین اول. فهرست کامل با صفحه‌بندی در صفحهٔ هر کدام است.',
+  'web.c360ws_latest_orders': 'آخرین سفارش‌ها',
+  'web.c360ws_latest_payments': 'آخرین پرداخت‌ها',
+  'web.c360ws_latest_orders_empty': 'این مشتری سفارشی ندارد.',
+  'web.c360ws_latest_payments_empty': 'این مشتری پرداختی ندارد.',
+  'web.c360ws_payments_all': 'همهٔ پرداخت‌های این مشتری',
+  'web.c360ws_tickets_title': 'تیکت‌های پشتیبانی',
+  'web.c360ws_tickets_hint': 'جدیدترین تیکت‌های این مشتری، جدیدترین اول.',
+  'web.c360ws_tickets_empty': 'این مشتری تیکتی ندارد.',
+  'web.c360ws_tickets_all': 'همهٔ تیکت‌های این مشتری',
+  'web.c360ws_tickets_denied': 'برای دیدن تیکت‌های این مشتری دسترسی tickets.view لازم است.',
+  'web.c360ws_tickets_open': 'تیکت باز',
+  'web.c360ws_shortcuts_title': 'میان‌برهای اپراتور',
+  'web.c360ws_shortcuts_hint': 'هر پیوند همان فهرست را با فیلتر همین مشتری باز می‌کند.',
+  'web.c360ws_shortcut_orders': 'باز کردن سفارش‌ها',
+  'web.c360ws_shortcut_services': 'باز کردن سرویس‌ها',
+  'web.c360ws_shortcut_payments': 'باز کردن پرداخت‌ها',
+  'web.c360ws_shortcut_tickets': 'باز کردن تیکت‌ها',
+  'web.c360ws_shortcut_wallet': 'رفتن به کیف پول و دفتر حساب',
+  'web.c360ws_shortcut_handoffs': 'صندوق گفتگوهای بیزینس',
+  'web.c360ws_shortcuts_none': 'با دسترسی‌های شما میان‌بری برای این مشتری وجود ندارد.',
+  'web.dash_attn_title': 'صف رسیدگی',
+  'web.dash_attn_hint':
+    'آنچه همین حالا منتظر یک نفر است، از شمارش‌های سرور. هر مورد به صفحه‌ای می‌رود که در آن رسیدگی می‌شود.',
+  'web.dash_attn_clear': 'صف رسیدگی خالی است.',
+  'web.dash_attn_clear_hint': 'در بخش‌هایی که به آن‌ها دسترسی دارید چیزی منتظر نیست.',
+  'web.dash_attn_stuck_operations': 'عملیات تأمین گیرکرده',
+  'web.dash_attn_unknown_operations': 'عملیات تأمین با نتیجهٔ نامعلوم',
+  'web.dash_attn_outbox_exhausted': 'رویداد ارسال‌نشده با تلاش‌های تمام‌شده',
+  'web.dash_attn_unreconciled': 'سرویس تطبیق‌نشده',
+  'web.dash_attn_payments_unknown': 'پرداخت نامعلوم در انتظار تطبیق',
+  'web.dash_attn_payments_reconcilable': 'پرداخت آمادهٔ تطبیق',
+  'web.dash_attn_refund_requests': 'درخواست بازپرداخت در انتظار',
+  'web.dash_attn_handoffs': 'گفتگوی بیزینس در انتظار اپراتور',
+  'web.dash_attn_tickets': 'تیکت در انتظار پشتیبانی',
+  'web.dash_attn_panels': 'پنل ناسالم',
+  'web.dash_attn_conditions': 'هشدار مدیریتی باز',
+  'web.dash_attn_partial':
+    'بخشی از صف خوانده نشد؛ موارد آن بخش در این فهرست نیامده‌اند و «خالی» بودن صف قطعی نیست.',
+  'web.ticket_filter_awaiting_support': 'در انتظار پشتیبانی',
+  // --- end Roadmap B5/B6 (Agent 2b) ---
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

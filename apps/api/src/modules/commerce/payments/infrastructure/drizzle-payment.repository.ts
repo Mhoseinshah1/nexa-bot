@@ -55,6 +55,8 @@ import {
   completedRefundCondition,
   openRefundCondition,
   paymentOpsQueueCondition,
+  receiptFiledCondition,
+  refundRemainingCondition,
 } from './payment-ops-queue-sql.js';
 import type {
   PaymentConfirmation,
@@ -754,9 +756,10 @@ export class DrizzlePaymentRepository implements PaymentRepository {
   }
 
   /**
-   * Roadmap E1: every queue predicate, the two refund facts and the invoice's creation state,
-   * as booleans of ONE statement over the page — the same predicates the queue list and the
-   * counts run, so a situation and the queue it lists under cannot disagree.
+   * Roadmap E1: EVERY fact the classifier reads — the payment's own columns, its receipt
+   * disposition, every queue predicate, the refund facts and the invoice's creation state —
+   * from ONE statement, so the situation, its `needsAction` and the queues it lists under are
+   * one snapshot and cannot disagree (review of PR #243, m1).
    */
   async situationFacts(
     scope: TenantContext,
@@ -775,9 +778,18 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     const rows = (await this.exec(tx)
       .select({
         id: payments.id,
+        state: payments.state,
+        method: payments.method,
+        orderId: payments.orderId,
+        customerSignalledAt: payments.customerSignalledAt,
+        providerReviewUntil: payments.providerReviewUntil,
+        resolvedByAdminId: payments.resolvedByAdminId,
+        disposition: sql<string | null>`${receiptDispositionSql()}`,
         ...flags,
+        receiptFiled: sql<boolean>`(${receiptFiledCondition()})`,
         refundOpen: sql<boolean>`(${openRefundCondition()})`,
         refundCompleted: sql<boolean>`(${completedRefundCondition()})`,
+        refundRemaining: sql<boolean>`(${refundRemainingCondition()})`,
         invoiceCreation: sql<string | null>`(
           SELECT gi.creation_state FROM gateway_invoices gi
            WHERE gi.tenant_id = ${payments.tenantId} AND gi.payment_id = ${payments.id})`,
@@ -788,6 +800,15 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       )) as unknown as readonly Record<string, unknown>[];
     for (const row of rows) {
       found.set(row['id'] as PaymentId, {
+        state: row['state'] as PaymentState,
+        method: row['method'] as PaymentMethod,
+        topup: row['orderId'] === null,
+        customerSignalled: row['customerSignalledAt'] !== null,
+        providerReviewOpened: row['providerReviewUntil'] !== null,
+        resolvedByAdmin: row['resolvedByAdminId'] !== null,
+        receiptDisposition: (row['disposition'] ?? null) as ReceiptDisposition | null,
+        receiptFiled: row['receiptFiled'] === true,
+        refundRemaining: row['refundRemaining'] === true,
         queues: PAYMENT_OPS_QUEUES.filter(
           (queue): queue is PaymentOpsQueue => row[`q_${queue}`] === true,
         ),

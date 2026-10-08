@@ -670,7 +670,20 @@ function ActionModal({
       await refresh(queries, incident.id);
       onClose();
     },
-    onError: (error: unknown) => submission.settleOn(error),
+    /*
+     * A 409 means the incident moved on: re-read it, so the next press acts on what is there
+     * now. Awaited, so the button stays disabled until the fresh version is installed — a
+     * press in between would carry the stale one again.
+     */
+    onError: async (error: unknown) => {
+      let conflicted = false;
+      submission.settleOn(error, {
+        onConflict: () => {
+          conflicted = true;
+        },
+      });
+      if (conflicted) await refresh(queries, incident.id);
+    },
   });
   const close = () => {
     if (!run.isPending) onClose();
@@ -863,23 +876,37 @@ function IncidentFormModal({
   onClose: () => void;
   onSaved: (saved: IncidentItem) => void;
 }) {
-  const [form, setForm] = useState<FormState>(() => initialForm(incident));
+  /*
+   * The form and the version it was BASED ON travel together. The edit sends the whole
+   * incident (kind, targets, stopSales, the schedule…), so the version it claims to have
+   * read must be the one its fields came from — never the one the page re-read since.
+   * Sending a fresh version with stale fields would pass the server's check and silently
+   * revert another operator's change.
+   */
+  const [draft, setDraft] = useState<{ form: FormState; basedOn: number | null }>(() => ({
+    form: initialForm(incident),
+    basedOn: incident?.version ?? null,
+  }));
+  const form = draft.form;
+  /** Set when a conflict replaced the operator's draft with the incident as it is now. */
+  const [reloaded, setReloaded] = useState(false);
   const queries = useQueryClient();
   const toast = useToast();
   const submission = useSubmissionKey();
   // An ACTIVE incident has started; its start is history, not a field.
   const startEditable = incident === null || incident.status === 'SCHEDULED';
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
-    setForm((previous) => ({ ...previous, [key]: value }));
+    setDraft((previous) => ({ ...previous, form: { ...previous.form, [key]: value } }));
   const save = useMutation({
     mutationFn: () => {
       const body = formBody(form, startEditable);
       if (incident === null) {
         return createIncident({ ...body, idempotencyKey: submission.current(body) });
       }
-      const edit = { ...body, id: incident.id, expectedVersion: incident.version };
+      const edit = { ...body, id: incident.id, expectedVersion: draft.basedOn ?? incident.version };
       return updateIncident({ ...edit, idempotencyKey: submission.current(edit) });
     },
+    onMutate: () => setReloaded(false),
     onSuccess: async (result) => {
       submission.settle();
       toast({ tone: 'ok', message: t(incident === null ? 'web.inc_created' : 'web.inc_saved') });
@@ -887,7 +914,29 @@ function IncidentFormModal({
       onSaved(result.incident);
       onClose();
     },
-    onError: (error: unknown) => submission.settleOn(error),
+    /*
+     * A 409 means the incident changed since the form was filled. The form is REFILLED from
+     * the incident as it is now, with that version as its basis, and the operator is told
+     * their edits were not saved: re-applying them is their decision, made against what
+     * the other operator did. Awaited, so Save stays disabled until the fresh form is in.
+     */
+    onError: async (error: unknown) => {
+      let conflicted = false;
+      submission.settleOn(error, {
+        onConflict: () => {
+          conflicted = true;
+        },
+      });
+      if (!conflicted || incident === null) return;
+      const fresh = await queries.fetchQuery({
+        queryKey: ['incident', incident.id],
+        queryFn: () => fetchIncident(incident.id),
+        staleTime: 0,
+      });
+      setDraft({ form: initialForm(fresh.incident), basedOn: fresh.incident.version });
+      setReloaded(true);
+      await refresh(queries, incident.id);
+    },
   });
   const close = () => {
     if (!save.isPending) onClose();
@@ -914,10 +963,16 @@ function IncidentFormModal({
         </>
       }
     >
-      {save.isError && (
-        <Banner tone="danger" role="alert">
-          {incidentMessageFor(save.error)}
+      {reloaded ? (
+        <Banner tone="warn" role="alert">
+          {t('web.inc_form_reloaded')}
         </Banner>
+      ) : (
+        save.isError && (
+          <Banner tone="danger" role="alert">
+            {incidentMessageFor(save.error)}
+          </Banner>
+        )
       )}
       <div className="incident-form">
         <Field label={t('web.inc_col_kind')} htmlFor="inc-kind">

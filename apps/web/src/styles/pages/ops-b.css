@@ -425,7 +425,7 @@ form.set-row > * + * {
 }
 .ticket-avatar.support {
   background: var(--accent);
-  color: var(--on-solid);
+  color: var(--accent-fg);
 }
 .ticket-body {
   margin: 0;
@@ -1102,7 +1102,7 @@ form.set-row > * + * {
 }
 .recovery-steps li.current .recovery-step-n {
   background: var(--accent);
-  color: var(--on-solid);
+  color: var(--accent-fg);
 }
 .recovery-steps li.done .recovery-step-n {
   background: var(--ok-soft);
@@ -1115,7 +1115,7 @@ form.set-row > * + * {
 }
 .recovery-steps li.failed .recovery-step-n {
   background: var(--danger);
-  color: var(--on-solid);
+  color: var(--on-danger);
 }
 .recovery-step-state {
   margin-inline-start: auto;
@@ -1402,4 +1402,12 @@ form.set-row > * + * {
   margin-block: 12px;
   padding: 12px;
   min-inline-size: 0;
+}
+
+/* Touch: the section navigation is a column of 44px targets (tokens.css). */
+@media (pointer: coarse) and (hover: none) {
+  .ob-secnav button,
+  .tcat-chip {
+    min-height: var(--ctl-h);
+  }
 }

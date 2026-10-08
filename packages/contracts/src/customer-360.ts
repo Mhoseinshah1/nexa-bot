@@ -1,9 +1,13 @@
 import { z } from 'zod';
 import { ACTOR_TYPES, SOURCE_SURFACES } from './actor.js';
+import { ORDER_PURPOSES, ORDER_STATES } from './commerce.js';
+import { COUNTER_CAP } from './dashboard.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import { uuidV7Schema } from './ids.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 import { CURRENCY_CODES } from './money.js';
+import { PAYMENT_METHODS, PAYMENT_STATES } from './payment.js';
+import type { PermissionKey } from './permissions.js';
 import { AUDIT_RESULTS } from './ports.js';
 import {
   SERVICE_LOCATION_COOLDOWN_HOURS_MAX,
@@ -423,6 +427,118 @@ export const customerTimelineResponseSchema = z.object({
 });
 export type CustomerTimelineResponse = z.infer<typeof customerTimelineResponseSchema>;
 
+// --- Workspace (roadmap B5) ---------------------------------------------------------
+
+/**
+ * Customer 360's workspace summary: what about THIS customer is waiting for a person, and
+ * their newest orders and payments — `GET /users/:id/workspace`.
+ *
+ * Read-only and tenant-scoped. The route is charged `users.view` through the guard (a
+ * refusal is the guard's recorded 403, like every other per-customer read); each section is
+ * then computed ONLY when the viewer holds the permission of the page it deep-links to, and
+ * is otherwise `null` — the financial summary's rule, and the dashboard's: a withheld
+ * section's query never runs and records no denial.
+ *
+ * Every count is one indexed predicate over persisted rows, and the SAME predicate the page
+ * it links to filters by (the sidebar's, narrowed to the customer), bounded by
+ * `CUSTOMER_WORKSPACE_COUNT_CAP` rows: the value at the cap means "this many or more". The
+ * two lists are the customer's newest rows, newest first, at most
+ * `CUSTOMER_WORKSPACE_LATEST_LIMIT` — a glance, not a history; the full, keyset-paged lists
+ * stay on `/orders` and `/payments`, which the page links to.
+ */
+export const CUSTOMER_WORKSPACE_LATEST_LIMIT = 5;
+
+/**
+ * The most any one workspace count reads: the sidebar's `COUNTER_CAP`, the same bound with the
+ * same meaning. One customer rarely nears it; a bound is a bound.
+ */
+export const CUSTOMER_WORKSPACE_COUNT_CAP = COUNTER_CAP;
+
+export const CUSTOMER_WORKSPACE_SECTIONS = [
+  'tickets',
+  'businessHandoffs',
+  'payments',
+  'services',
+  'orders',
+] as const;
+export type CustomerWorkspaceSection = (typeof CUSTOMER_WORKSPACE_SECTIONS)[number];
+
+/** The permission each section is computed under: the page its deep link opens. */
+export const CUSTOMER_WORKSPACE_PERMISSIONS: Readonly<
+  Record<CustomerWorkspaceSection, PermissionKey>
+> = {
+  /** `/tickets?customer=…` */
+  tickets: 'tickets.view',
+  /** `/business-chats?state=HANDOFF_REQUIRED` */
+  businessHandoffs: 'business_chats.view',
+  /** `/payments?q=…` and `/payments/:id` */
+  payments: 'payments.view',
+  /** `/services?q=…&state=UNRECONCILED` */
+  services: 'services.view',
+  /** `/orders/:id` and `/orders?q=…` */
+  orders: 'orders.view',
+};
+
+const workspaceCount = z.number().int().min(0).max(CUSTOMER_WORKSPACE_COUNT_CAP);
+
+export const customerWorkspaceOrderSchema = z.object({
+  id: z.string(),
+  /** The snapshot title: what the customer bought, never a lookup of today's product. */
+  lineTitle: z.string(),
+  purpose: z.enum(ORDER_PURPOSES),
+  state: z.enum(ORDER_STATES),
+  totalAmount: z.string().regex(/^\d+$/),
+  currency: z.enum(CURRENCY_CODES),
+  createdAt: z.iso.datetime(),
+});
+export type CustomerWorkspaceOrder = z.infer<typeof customerWorkspaceOrderSchema>;
+
+export const customerWorkspacePaymentSchema = z.object({
+  id: z.string(),
+  /** The code the customer quotes. */
+  reference: z.string(),
+  method: z.enum(PAYMENT_METHODS),
+  state: z.enum(PAYMENT_STATES),
+  amount: z.string().regex(/^\d+$/),
+  currency: z.enum(CURRENCY_CODES),
+  createdAt: z.iso.datetime(),
+});
+export type CustomerWorkspacePayment = z.infer<typeof customerWorkspacePaymentSchema>;
+
+export const customerWorkspaceSchema = z.object({
+  generatedAt: z.iso.datetime(),
+  /**
+   * `awaitingSupport`: OPEN or WAITING_FOR_SUPPORT (`TICKET_AWAITING_SUPPORT_STATUSES`, the
+   * sidebar's rule); `open`: every status but CLOSED.
+   */
+  tickets: z.object({ awaitingSupport: workspaceCount, open: workspaceCount }).nullable(),
+  /** Business conversations with this customer in `HANDOFF_REQUIRED`. */
+  businessHandoffs: workspaceCount.nullable(),
+  /**
+   * The newest of those conversations' id, so a single handoff links to the conversation
+   * itself rather than to the tenant's inbox (review N2). Null when there is none, or when
+   * the section is withheld (`businessHandoffs` is then null too).
+   */
+  businessHandoffConversationId: z.string().nullable(),
+  payments: z
+    .object({
+      /** `state = 'UNKNOWN'`: no outcome; only a reconciliation decides. */
+      unknown: workspaceCount,
+      latest: z.array(customerWorkspacePaymentSchema).max(CUSTOMER_WORKSPACE_LATEST_LIMIT),
+    })
+    .nullable(),
+  /** `state = 'UNRECONCILED'`: a create whose answer was lost; a READ decides. */
+  services: z.object({ unreconciled: workspaceCount }).nullable(),
+  orders: z
+    .object({
+      latest: z.array(customerWorkspaceOrderSchema).max(CUSTOMER_WORKSPACE_LATEST_LIMIT),
+    })
+    .nullable(),
+});
+export type CustomerWorkspaceResponse = z.infer<typeof customerWorkspaceSchema>;
+
+export const customerWorkspaceResponseSchema = z.object({ workspace: customerWorkspaceSchema });
+
 export const CUSTOMER_360_ROUTES = {
   overview: (id: string) => `/users/${encodeURIComponent(id)}/overview`,
   channelExemption: (id: string) => `/users/${encodeURIComponent(id)}/channel-exemption`,
@@ -435,4 +551,6 @@ export const CUSTOMER_360_ROUTES = {
   manualOrder: (id: string) => `/users/${encodeURIComponent(id)}/manual-order`,
   financialSummary: (id: string) => `/users/${encodeURIComponent(id)}/financial-summary`,
   timeline: (id: string) => `/users/${encodeURIComponent(id)}/timeline`,
+  /** Roadmap B5: the workspace summary. */
+  workspace: (id: string) => `/users/${encodeURIComponent(id)}/workspace`,
 } as const;

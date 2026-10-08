@@ -868,6 +868,67 @@ describe('the customer payment flow over Telegram', () => {
     expect(await receiptsFiled(payment)).toBe(0);
   });
 
+  it('answers a late receipt for a receipted payment past its deadline as under review, with its code (m2)', async () => {
+    const { payment } = await atReceiptPrompt();
+    await photo('first-before-deadline');
+    await api.container.database.db.execute(sql`
+      UPDATE receipt_captures
+         SET opened_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'
+       WHERE payment_id = ${payment}`);
+    await api.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${payment}`,
+    );
+    sent = [];
+    await photo('clearer-copy-later');
+    expect(newMessages()).toHaveLength(1);
+    // Still waiting for a reviewer — never "no longer pending", which invites a second payment.
+    expect(String(newMessages()[0]?.body['text'])).toBe(
+      invoiceFinalText(String((await payments())[0]?.['reference'])),
+    );
+    expect(buttonsOf(newMessages()[0])).toEqual([]);
+  });
+
+  it('still edits the invoice into its final state when reading the code throws (m4)', async () => {
+    const { invoice } = await atReceiptPrompt();
+    const receipts = (
+      api.container.botRuntime as unknown as {
+        deps: { receipts: { trackingCodeForCustomer: (...args: unknown[]) => Promise<unknown> } };
+      }
+    ).deps.receipts;
+    const spy = vi
+      .spyOn(receipts, 'trackingCodeForCustomer')
+      .mockRejectedValue(new Error('code unreadable'));
+    try {
+      sent = [];
+      await photo('code-unreadable');
+    } finally {
+      spy.mockRestore();
+    }
+    const final = sent.filter(
+      (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
+    );
+    // The edit happened, button-less, with the code's line dropped rather than the edit.
+    expect(String(final.at(-1)?.body['text'])).toBe(invoiceFinalText('X').split('\n\n')[0]);
+    expect(final.at(-1)?.body['reply_markup']).toEqual({ inline_keyboard: [] });
+  });
+
+  it('keeps the tracking code on the claim reply when no window can open (R8)', async () => {
+    const orderId = await awaitingPayment();
+    const invoiceTap = (updateId += 1);
+    await tap(`m:${orderId}`, { update: invoiceTap });
+    const payment = String((await payments())[0]?.['id']);
+    // Past its own deadline, not yet swept: the claim is recorded, no window is promised.
+    await api.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = now() - interval '1 second' WHERE id = ${payment}`,
+    );
+    sent = [];
+    await tap(`i:${payment}`, { message: invoiceTap });
+    const reply = messages().at(-1);
+    expect(String(reply?.body['text'])).toBe(
+      invoiceFinalText(String((await payments())[0]?.['reference'])),
+    );
+  });
+
   /*
    * Review fix 1: the invoice finalisation is BEST EFFORT. The receipt has committed, so a
    * throw there must not fail the turn — its redelivery answers `first: false`, and the one

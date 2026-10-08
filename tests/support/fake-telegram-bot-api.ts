@@ -36,6 +36,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  * such). Every message accepted is kept (`delivered`), so a test can count what LANDED —
  * which is the only honest way to assert "never sent twice".
  *
+ * Roadmap D2 adds `sendPhoto`/`sendVideo`/`sendDocument` BY `file_id` and
+ * `copyMessage`/`forwardMessage`, each answering for ONE bot: a `file_id` is valid only for
+ * the bot that received it (documented: "file_id is unique for each individual bot and can't
+ * be transferred from one bot to another"), and a copy reads only a chat this bot can read.
+ * The refusals' sentences are the fake's own (`FAKE_WRONG_FILE`, `FAKE_SOURCE_CHAT_UNREADABLE`).
+ *
  * What the Bot API does NOT document is not decided here. Whether a BotFather revocation
  * keeps the bot's webhook (`OQ-WP13-02`) is a parameter every caller of `revoke` must
  * state, never a default.
@@ -68,7 +74,34 @@ interface BotState {
   customEmoji: FakeCustomEmojiAnswer;
   /** Every `sendMessage` this bot accepted, in order. */
   delivered: FakeDeliveredMessage[];
+  /**
+   * Roadmap D2: the `file_id`s THIS bot may send. The Bot API: "file_id is unique for each
+   * individual bot and can't be transferred from one bot to another" — so a handle another
+   * bot received is refused here even though it is a perfectly good handle.
+   */
+  files: Set<string>;
+  /** Roadmap D2: the chats whose messages THIS bot can read, for `copyMessage`/`forwardMessage`. */
+  readableChats: Set<string>;
+  /** Roadmap D2: every media send, copy or forward this bot accepted, in order. */
+  sentMedia: FakeSentMedia[];
 }
+
+/** Roadmap D2: one `sendPhoto`/`sendVideo`/`sendDocument`/`copyMessage`/`forwardMessage` accepted. */
+export interface FakeSentMedia {
+  readonly method: string;
+  readonly messageId: number;
+  readonly chatId: string;
+  /** The `file_id` sent, or `<from_chat_id>:<message_id>` for a copy or forward. */
+  readonly source: string;
+}
+
+/**
+ * The fake's OWN wording for a `file_id` the sending bot does not hold, and for a source chat
+ * the bot cannot read. The REFUSAL (a 400) is documented; these sentences are not asserted by
+ * any test — they are marked as the fake's so nobody mistakes them for Telegram's.
+ */
+export const FAKE_WRONG_FILE = 'Bad Request: wrong file identifier/HTTP URL specified (fake)';
+export const FAKE_SOURCE_CHAT_UNREADABLE = 'Bad Request: chat not found (fake)';
 
 /** Round T (T2): how the fake answers a custom emoji from one bot. */
 export type FakeCustomEmojiAnswer =
@@ -154,6 +187,14 @@ export interface FakeTelegramBotApi {
   setCustomEmoji(botId: number, answer: FakeCustomEmojiAnswer): void;
   /** Round T (T2): every message this bot accepted, in order. For assertions only. */
   delivered(botId: number): readonly FakeDeliveredMessage[];
+  /** Roadmap D3: BotFather `/setusername` — same bot id and token, a new username. */
+  rename(botId: number, username: string): void;
+  /** Roadmap D2: this bot received the file `fileId` (and may therefore send it). */
+  giveFile(botId: number, fileId: string): void;
+  /** Roadmap D2: this bot can read the messages of `chatId` (a member of that channel). */
+  letRead(botId: number, chatId: string): void;
+  /** Roadmap D2: every media send, copy or forward this bot accepted. For assertions only. */
+  sentMedia(botId: number): readonly FakeSentMedia[];
   /** The next call of `method` misbehaves once. */
   failNext(method: string, fault: FakeTelegramFault): void;
   /** Every call of `method` waits until the returned function is called. */
@@ -454,6 +495,80 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
           },
         };
       }
+      case 'sendPhoto':
+      case 'sendVideo':
+      case 'sendDocument': {
+        // Roadmap D2: by `file_id` only (a JSON body); an upload is not modelled here.
+        const field =
+          method === 'sendPhoto' ? 'photo' : method === 'sendVideo' ? 'video' : 'document';
+        const fileId = body[field];
+        if (typeof body.chat_id !== 'string' && typeof body.chat_id !== 'number') {
+          return {
+            status: 400,
+            payload: { ok: false, error_code: 400, description: 'Bad Request: chat not found' },
+          };
+        }
+        if (typeof fileId !== 'string' || !bot.files.has(fileId)) {
+          return {
+            status: 400,
+            payload: { ok: false, error_code: 400, description: FAKE_WRONG_FILE },
+          };
+        }
+        messageSerial += 1;
+        bot.sentMedia.push({
+          method,
+          messageId: messageSerial,
+          chatId: String(body.chat_id),
+          source: fileId,
+        });
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            result: {
+              message_id: messageSerial,
+              date: 1_790_000_000,
+              chat: { id: Number(body.chat_id), type: 'private' },
+              [field]:
+                field === 'photo'
+                  ? [{ file_id: fileId, file_unique_id: `u-${fileId}` }]
+                  : { file_id: fileId, file_unique_id: `u-${fileId}` },
+            },
+          },
+        };
+      }
+      case 'copyMessage':
+      case 'forwardMessage': {
+        const from = String(body.from_chat_id ?? '');
+        if (!bot.readableChats.has(from)) {
+          return {
+            status: 400,
+            payload: { ok: false, error_code: 400, description: FAKE_SOURCE_CHAT_UNREADABLE },
+          };
+        }
+        messageSerial += 1;
+        bot.sentMedia.push({
+          method,
+          messageId: messageSerial,
+          chatId: String(body.chat_id),
+          source: `${from}:${String(body.message_id)}`,
+        });
+        // `copyMessage` answers a MessageId; `forwardMessage` the Message. Both carry the id.
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            result:
+              method === 'copyMessage'
+                ? { message_id: messageSerial }
+                : {
+                    message_id: messageSerial,
+                    date: 1_790_000_000,
+                    chat: { id: Number(body.chat_id), type: 'private' },
+                  },
+          },
+        };
+      }
       case 'getMyCommands':
         return {
           status: 200,
@@ -553,6 +668,9 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
         commands: [],
         customEmoji: { kind: 'ACCEPT' },
         delivered: [],
+        files: new Set(),
+        readableChats: new Set(),
+        sentMedia: [],
       });
       return token;
     },
@@ -591,6 +709,18 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
     },
     delivered(botId) {
       return [...require(botId).delivered];
+    },
+    rename(botId, username) {
+      require(botId).username = username;
+    },
+    giveFile(botId, fileId) {
+      require(botId).files.add(fileId);
+    },
+    letRead(botId, chatId) {
+      require(botId).readableChats.add(chatId);
+    },
+    sentMedia(botId) {
+      return [...require(botId).sentMedia];
     },
     failNext(method, fault) {
       const list = faults.get(method) ?? [];
