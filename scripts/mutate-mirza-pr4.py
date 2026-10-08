@@ -86,7 +86,7 @@ M = [
      T_DEBTS, 'ORIGINAL response'),
     # aud4 F1 / OQ-LWD-07 (owner decision 2026-10-08): a MirzaBot ban survives the cutover.
     ('B-01', [(IREPO, "    const status = input.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE';", "    const status = 'ACTIVE';")], T_IMP, 'OQ-LWD-07: a user blocked'),
-    ('B-02', [(SERVICE, "                status: decision.blocked ? 'BLOCKED' : 'ACTIVE',", "                status: 'ACTIVE',")], T_IMP, 'OQ-LWD-07: a user blocked'),
+    ('B-02', [(SERVICE, "                status: decision.blocked ? 'BLOCKED' : 'ACTIVE',\n                now,", "                status: 'ACTIVE',\n                now,")], T_IMP, 'OQ-LWD-07: a user blocked'),
     ('B-03', [(DEC, "    blocked: row.status === 'BLOCKED',", "    blocked: false,")], T_DEC, 'blocked legacy user is imported blocked'),
     ('B-04', [(DEC, "  if (row.status === 'UNKNOWN') {", "  if (false) {")], T_DEC, 'unknown User_Status'),
     ('B-05', [(DEC, "  if (row.status === 'UNKNOWN') {", "  if (false) {")], T_IMP, 'OQ-LWD-07: a user blocked'),
