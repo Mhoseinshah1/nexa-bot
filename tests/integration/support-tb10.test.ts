@@ -7,7 +7,9 @@ import {
   BUSINESS_CHAT_ROUTES,
   SESSION_COOKIE_NAME,
   SUPPORT_ANALYTICS_ROUTES,
+  businessChatDetailResponseSchema,
   businessChatListResponseSchema,
+  businessOutboundOriginOf,
   businessUnansweredSince,
   isNexaError,
   supportAnalyticsResponseSchema,
@@ -40,6 +42,7 @@ import {
   tenantB,
   type TestContext,
 } from './harness';
+import { frozenPreA4DetailOutbound } from '../support/frozen-business-chat-outbound';
 
 /**
  * TB10 against a real PostgreSQL: the support notifications produced by their real
@@ -867,5 +870,44 @@ describe('TB10 — over HTTP', () => {
       });
       expect(bad.statusCode, cursor).toBe(400);
     }
+  });
+
+  it('serves a handoff notice in the detail that the pre-A4 bundle still parses (review of PR #248, CX1)', async () => {
+    const db = api.container.database.db;
+    const tenantId = tenantA.tenantId;
+    const connectionRowId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO telegram_business_connections
+        (id, tenant_id, bot_instance_id, connection_id, owner_telegram_user_id,
+         owner_user_chat_id, is_enabled, rights, connected_at, last_confirmed_at)
+      VALUES (${connectionRowId}, ${tenantId}, ${SEED_IDS.botA1}, ${`cx1-${connectionRowId}`},
+              '5000009', '5000009', true, ARRAY['can_reply'], now(), now())`);
+    const conversationId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO business_conversations
+        (id, tenant_id, bot_instance_id, owner_telegram_user_id, chat_id, connection_row_id,
+         peer_telegram_user_id, state, control_epoch, handoff_reason)
+      VALUES (${conversationId}, ${tenantId}, ${SEED_IDS.botA1}, '5000009', '7300001',
+              ${connectionRowId}, '7300001', 'HANDOFF_REQUIRED', 2, 'HANDOFF_TOPIC')`);
+    await db.execute(sql`
+      INSERT INTO business_outbound_messages
+        (id, tenant_id, conversation_id, origin, body, template_key, control_epoch,
+         idempotency_key, request_hash, state, resolved_at)
+      VALUES (${randomUUID()}, ${tenantId}, ${conversationId}, 'HANDOFF_NOTICE', NULL,
+              'bot.support.handoff_notice', 2, ${`cx1-${randomUUID()}`}, 'h', 'DELIVERED', now())`);
+    const detail = await inject({
+      method: 'GET',
+      url: `${API_PREFIX}${BUSINESS_CHAT_ROUTES.detail(conversationId)}`,
+      headers: { cookie },
+    });
+    expect(detail.statusCode, detail.body).toBe(200);
+    const body = detail.json() as unknown;
+    // The bundle a rolling deploy may still be serving: its strict three-value origin.
+    const old = frozenPreA4DetailOutbound.safeParse(body);
+    expect(old.success, JSON.stringify(old.error?.issues)).toBe(true);
+    expect(old.data?.outbound.map((row) => row.origin)).toEqual(['AUTO']);
+    // This bundle reads the real origin back.
+    const current = businessChatDetailResponseSchema.parse(body);
+    expect(current.outbound.map(businessOutboundOriginOf)).toEqual(['HANDOFF_NOTICE']);
   });
 });

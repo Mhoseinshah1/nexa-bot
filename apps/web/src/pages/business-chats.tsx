@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   BUSINESS_CONVERSATION_STATES,
   BUSINESS_MESSAGE_TEXT_MAX,
+  businessOutboundOriginOf,
   businessTextSchema,
   type BusinessChatDetailResponse,
   type BusinessConnectionStatus,
@@ -834,36 +835,41 @@ function OutboundCard({
         <p className="muted small">{t('web.bchat_outbound_empty')}</p>
       ) : (
         <ol className="bchat-outbound" aria-label={t('web.bchat_outbound')}>
-          {rows.map((row) => (
-            <li key={row.id} className="bchat-outbound-row" data-outbound={row.state}>
-              <div className="bchat-message-head">
-                <Badge tone={OUTBOUND_TONES[row.state]}>
-                  {t(BUSINESS_OUTBOUND_LABELS[row.state])}
-                </Badge>
-                <span className="small">{t(OUTBOUND_ORIGIN_LABELS[row.origin])}</span>
-                <span className="muted small">{formatTimestamp(row.createdAt)}</span>
-              </div>
-              {row.text === null ? (
-                <p className="bchat-body faint">{t('web.bchat_text_gone')}</p>
-              ) : (
-                <p className="bchat-body">{row.text}</p>
-              )}
-              {row.failureCode !== null && (
-                <span className="small muted">
-                  {t('web.bchat_outbound_failure')} <Ltr>{row.failureCode}</Ltr>
-                </span>
-              )}
-              {mayPropose &&
-                row.state === 'DELIVERED' &&
-                row.origin !== 'AUTO' &&
-                row.text !== null && (
-                  <ProposeKnowledgeButton
-                    conversationId={detail.conversation.id}
-                    outboundId={row.id}
-                  />
+          {rows.map((row) => {
+            // CX1: `origin` on the wire is the old bundle's; the real one is read beside it.
+            const origin = businessOutboundOriginOf(row);
+            return (
+              <li key={row.id} className="bchat-outbound-row" data-outbound={row.state}>
+                <div className="bchat-message-head">
+                  <Badge tone={OUTBOUND_TONES[row.state]}>
+                    {t(BUSINESS_OUTBOUND_LABELS[row.state])}
+                  </Badge>
+                  <span className="small">{t(OUTBOUND_ORIGIN_LABELS[origin])}</span>
+                  <span className="muted small">{formatTimestamp(row.createdAt)}</span>
+                </div>
+                {row.text === null ? (
+                  <p className="bchat-body faint">{t('web.bchat_text_gone')}</p>
+                ) : (
+                  <p className="bchat-body">{row.text}</p>
                 )}
-            </li>
-          ))}
+                {row.failureCode !== null && (
+                  <span className="small muted">
+                    {t('web.bchat_outbound_failure')} <Ltr>{row.failureCode}</Ltr>
+                  </span>
+                )}
+                {mayPropose &&
+                  row.state === 'DELIVERED' &&
+                  origin !== 'AUTO' &&
+                  origin !== 'HANDOFF_NOTICE' &&
+                  row.text !== null && (
+                    <ProposeKnowledgeButton
+                      conversationId={detail.conversation.id}
+                      outboundId={row.id}
+                    />
+                  )}
+              </li>
+            );
+          })}
         </ol>
       )}
     </Card>

@@ -1835,6 +1835,40 @@ when a bot is ticked, and drops tags and active service at their default the sam
 (PR #245 review m3), so previews and saves keep working there. A bot filter is the one thing
 the previous API refuses.
 
+### During an update: the handoff notice in a business-chat detail (roadmap A4)
+
+Roadmap A4 adds an outbound origin, `HANDOFF_NOTICE` — the one templated message a handoff
+sends the customer. The Web Admin bundle before A4 parses a conversation's outbound rows with
+a strict three-value origin (`OPERATOR`, `ASSIST`, `AUTO`), and one row outside it fails the
+parse of the WHOLE conversation detail. During a rolling update that bundle reads from new
+replicas, so (review of PR #248, CX1):
+
+- **`origin` on the wire never leaves the old three values.** A notice is sent as `AUTO`,
+  through one documented mapping (`businessOutboundWireOrigin` in
+  `packages/contracts/src/business-chats.ts`). The old bundle shows it as an automatic message
+  with no text (no body is stored for a notice) and, as for any automatic reply, offers no
+  knowledge proposal. `AUTO` is the nearest truth: no person wrote it, and `OPERATOR` would
+  show one.
+- **The real origin travels beside it**, in an optional `laneOrigin`. The old bundle strips the
+  unknown key; this bundle reads it (`businessOutboundOriginOf`) and labels the notice as a
+  notice. An older replica sends no `laneOrigin`, and this bundle falls back to `origin`.
+- The mapping is permanent, not a migration step: a bundle that predates A4 can be served at
+  any time a rollback or a mixed fleet allows. `tests/unit/business-chat-wire.test.ts` and the
+  HTTP case in `tests/integration/support-tb10.test.ts` parse the server's answer with a frozen
+  copy of the pre-A4 schema (`tests/support/frozen-business-chat-outbound.ts`).
+
+**Not covered by this mapping:** the three handoff reasons A3 added (`NO_PROGRESS`,
+`REPEATED_ADVICE`, `INBOUND_FLOOD`). The pre-A4 bundle parses a conversation's
+`handoffReason`, an escalation's `reason`, a ticket escalation's `reason` and the analytics'
+`handoffsByReason` with its own strict enum, so while it is still being served, a conversation
+handed off for one of those reasons makes the inbox list, that detail, that ticket and the
+support analytics answer a parse error in that tab. Nothing is stored or lost; a reload once
+every replica runs the new release answers all of them.
+
+**A rollback** past A4 is not covered by this mapping: it lives in this release's server, and the
+previous release's server sends a stored origin as it is. Its own bundle then fails the detail of
+any conversation holding a notice row, as it fails one holding an A3 handoff reason.
+
 ### What a rollback leaves as text: appearance markers (round P, Premium UI)
 
 The Premium UI release puts `{icon:…}` markers into the DEFAULT bodies of about forty

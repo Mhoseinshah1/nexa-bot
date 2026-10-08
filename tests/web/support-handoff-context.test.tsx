@@ -37,7 +37,9 @@ const detail = (escalation: Record<string, unknown>) => ({
   outbound: [
     {
       id: 'o1',
-      origin: 'HANDOFF_NOTICE',
+      // CX1 (review of PR #248): the wire keeps the pre-A4 bundle's origin; the real one beside it.
+      origin: 'AUTO',
+      laneOrigin: 'HANDOFF_NOTICE',
       state: 'DELIVERED',
       text: null,
       createdAt: '2026-10-07T10:00:00.000Z',

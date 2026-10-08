@@ -9,6 +9,7 @@ import {
   businessChatSendRequestSchema,
   businessConnectionStatus,
   businessInboxPriority,
+  businessOutboundView,
   businessUnansweredSince,
   routePattern,
   type BusinessChatControlResponse,
@@ -118,15 +119,9 @@ export class BusinessChatsController {
         edited: message.editedAt !== null,
         deleted: message.deletedAt !== null,
       })),
-      outbound: found.outbound.map((row) => ({
-        id: row.id,
-        origin: row.origin,
-        state: row.state,
-        text: row.body,
-        createdAt: row.createdAt.toISOString(),
-        resolvedAt: row.resolvedAt?.toISOString() ?? null,
-        failureCode: row.failureCode,
-      })),
+      // CX1 (review of PR #248): the one projection, which keeps `origin` readable by the
+      // pre-A4 bundle a rolling deploy can still be serving.
+      outbound: found.outbound.map(businessOutboundView),
     };
   }
 
