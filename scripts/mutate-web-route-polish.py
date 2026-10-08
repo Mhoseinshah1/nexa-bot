@@ -79,8 +79,8 @@ M=[
  ('WRP-28',[(ORD,"          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).\n          autoApply\n","")],T_LP,'applies itself'),
  ('WRP-29',[(REF,"onClick={() => setConfirmingClear(true)}","onClick={() => clear.mutate()}")],T_RB,'after asking'),
  # --- B7: token contrast --------------------------------------------------------------------
- ('WRP-30',[(TOK,"  --fg-3: #8c94a0;","  --fg-3: #6f7784;")],T_CON,'fg-3'),
- ('WRP-31',[(TOK,"  --fg-3: #646d7b;","  --fg-3: #8b94a3;")],T_CON,'fg-3'),
+ ('WRP-30',[(TOK,"  --fg-3: #9098a4;","  --fg-3: #6f7784;")],T_CON,'fg-3'),
+ ('WRP-31',[(TOK,"  --fg-3: #616a78;","  --fg-3: #8b94a3;")],T_CON,'fg-3'),
  ('WRP-32',[(TOK,"  --on-danger: #0b1220;","  --on-danger: #ffffff;")],T_CON,'solid fills'),
  # --- review of #242 -------------------------------------------------------------------------
  ('WRP-33',[(LS,"READ_AT.format(new Date(query.dataUpdatedAt))","READ_AT.format(new Date())")],T_LP,'never the time of the render'),
