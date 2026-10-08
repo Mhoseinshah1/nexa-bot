@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { OrdersPage } from '../../apps/web/src/pages/orders';
 import { ServicesPage } from '../../apps/web/src/pages/services';
-import { LIST_SEARCH_DEBOUNCE_MS } from '../../apps/web/src/ui/list-search';
+import { LIST_SEARCH_DEBOUNCE_MS, ListFreshness } from '../../apps/web/src/ui/list-search';
 import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, order, renderPage, stubApi } from './harness';
@@ -192,5 +192,86 @@ describe('the cursor trail after a filter change', () => {
       expect(screen.getByRole('button', { name: t('web.older') })).toBeDisabled(),
     );
     expect(lastRead(api.calls, '/users').url).not.toContain('cursor=');
+  });
+});
+
+/** Review of #242 (N3, N6): what `ListFreshness` reads and how it behaves for a keyboard. */
+describe('the freshness line', () => {
+  const READ = Date.UTC(2026, 0, 1, 10, 0, 5);
+
+  it("states the query's own read time, never the time of the render", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.UTC(2026, 5, 1, 12, 0, 0)));
+    const query = { dataUpdatedAt: READ, isFetching: false, refetch: vi.fn() };
+    const view = renderPage(<ListFreshness query={query} />);
+    const before = screen.getByTestId('list-read-at').textContent;
+    vi.setSystemTime(new Date(Date.UTC(2026, 5, 1, 12, 5, 0)));
+    view.rerender(<ListFreshness query={{ ...query }} />);
+    expect(screen.getByTestId('list-read-at').textContent).toBe(before);
+    // The read instant itself, with its seconds.
+    expect(before).toContain(
+      new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'medium' }).format(
+        new Date(READ),
+      ),
+    );
+  });
+
+  it('keeps its live region mounted before the first answer, and only changes its text', () => {
+    const view = renderPage(
+      <ListFreshness query={{ dataUpdatedAt: 0, isFetching: true, refetch: vi.fn() }} />,
+    );
+    const region = screen.getByTestId('list-read-at');
+    expect(region.getAttribute('aria-live')).toBe('polite');
+    expect(region.textContent).toBe('');
+    view.rerender(
+      <ListFreshness query={{ dataUpdatedAt: READ, isFetching: false, refetch: vi.fn() }} />,
+    );
+    expect(screen.getByTestId('list-read-at')).toBe(region);
+    expect(region.textContent).not.toBe('');
+  });
+
+  it('never disables the refresh (focus stays); a press while reading is ignored', () => {
+    const refetch = vi.fn();
+    renderPage(<ListFreshness query={{ dataUpdatedAt: READ, isFetching: true, refetch }} />);
+    const button = screen.getByRole('button', { name: t('web.list_refreshing') });
+    expect(button).not.toBeDisabled();
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    button.focus();
+    fireEvent.click(button);
+    expect(refetch).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button);
+  });
+});
+
+describe('clearing filters while a search is still being typed (N5)', () => {
+  it('empties the box too, so no unapplied text suggests a search', async () => {
+    navigate('/orders?state=PAID', { replace: true, force: true });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi(ordersList);
+    renderPage(<LiveOrders />);
+    const box = (await screen.findByLabelText(t('web.list_search_label'))) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: 'ab' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.list_filters_clear') }));
+    await waitFor(() => expect(window.location.search).toBe(''));
+    await act(() => vi.advanceTimersByTimeAsync(LIST_SEARCH_DEBOUNCE_MS + 250));
+    expect(box.value).toBe('');
+    expect(window.location.search).toBe('');
+  });
+});
+
+describe('the service search applies itself (N3)', () => {
+  it('debounces into q and drops the cursor the old search held', async () => {
+    navigate('/services?cursor=c9', { replace: true, force: true });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([{ url: '/services', body: { services: [], nextCursor: null } }]);
+    renderPage(<LiveServices />);
+    const box = await screen.findByLabelText(t('web.list_search_label'));
+    const before = api.calls.length;
+    fireEvent.change(box, { target: { value: 'ali' } });
+    await act(() => vi.advanceTimersByTimeAsync(LIST_SEARCH_DEBOUNCE_MS - 250));
+    expect(api.calls.length).toBe(before);
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('q')).toBe('ali'));
+    expect(window.location.search).not.toContain('cursor=');
   });
 });

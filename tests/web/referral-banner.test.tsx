@@ -133,6 +133,52 @@ describe('the referral banner card', () => {
     expect(await screen.findByText('بنر حذف شد.')).toBeInTheDocument();
   });
 
+  /**
+   * Review of #242 (N3): the clear has its OWN key holder. Sharing the upload's, an upload's
+   * success retired the key a clear held after an unanswered failure, and the clear's
+   * re-press became a new command.
+   */
+  it('keeps the clear key held across an upload that succeeds in between', async () => {
+    const api = stubApi([
+      ...routes(banner()),
+      {
+        url: '/media/REFERRAL_BANNER/clear',
+        method: 'POST',
+        status: 503,
+        body: { error: { kind: 'unavailable', code: 'x', message: 'x', correlationId: 'c' } },
+      },
+      { url: '/media/REFERRAL_BANNER', method: 'POST', body: { media: banner({ version: 4 }) } },
+    ]);
+    render();
+    const section = await card();
+    const askAndClear = async () => {
+      fireEvent.click(within(section).getByRole('button', { name: 'حذف بنر' }));
+      fireEvent.click(
+        within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'حذف بنر' }),
+      );
+    };
+    await within(section).findByRole('button', { name: 'حذف بنر' });
+    await askAndClear();
+    await waitFor(() => expect(posts(api, '/media/REFERRAL_BANNER/clear')).toHaveLength(1));
+
+    const input = within(section).getByLabelText('فایل بنر') as HTMLInputElement;
+    const upload = within(section).getByRole('button', { name: 'بارگذاری بنر' });
+    fireEvent.change(input, {
+      target: { files: [new File([PNG_BYTES], 'banner.png', { type: 'image/png' })] },
+    });
+    await waitFor(() => expect(upload).not.toBeDisabled());
+    fireEvent.click(upload);
+    await waitFor(() => expect(posts(api, '/media/REFERRAL_BANNER')).toHaveLength(1));
+    await screen.findByText('بنر ذخیره شد.');
+
+    await askAndClear();
+    await waitFor(() => expect(posts(api, '/media/REFERRAL_BANNER/clear')).toHaveLength(2));
+    const [first, second] = posts(api, '/media/REFERRAL_BANNER/clear').map(
+      (call) => (call.body as { idempotencyKey: string }).idempotencyKey,
+    );
+    expect(second).toBe(first);
+  });
+
   it('draws no control without settings.edit, and says why', async () => {
     const api = stubApi(routes(banner()));
     render({ mayEditBanner: false });
