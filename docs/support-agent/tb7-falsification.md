@@ -257,3 +257,56 @@ Notes:
 - The first run showed the A6 «مرسی، حل شد» case failing under unrelated mutants. It was
   timing-dependent: a customer line in the same second as the reply counts as after it (B1).
   The test now ages the question by a minute, and its result no longer varies between runs.
+
+### Review of PR #246 (2026-10-08)
+
+`scripts/mutate-sai-progress.py` now holds 50 mutants: SP-00..SP-23 above, the two A10 eval
+mutants added when the runner adopted the production guards (SP-24, SP-25), and one or more
+for every review finding that changed a rule. Run in two batches (0–24, 25–49) against
+`nexa_test_sai1b`, after the merge of `origin/parallel/roadmap-2-7` at f6a392b0.
+
+| #     | Mutant                                                   | Killed by                                                       | Result     |
+| ----- | -------------------------------------------------------- | --------------------------------------------------------------- | ---------- |
+| SP-24 | eval: progress guards not applied before the model       | eval unit: roadmap A3 production progress guards                | KILLED     |
+| SP-25 | eval: repeated advice not applied                        | eval unit: roadmap A3 production progress guards                | KILLED     |
+| SP-26 | CX3: any OWN_ECHO is AI advice (no_progress)             | unit CX3: only AI_AUTO is the AI's advice                       | KILLED     |
+| SP-27 | CX3: any OWN_ECHO is AI advice (repeated_advice)         | unit CX3: only the AI's automatic replies are compared          | KILLED     |
+| SP-28 | m7: every reply is a round, failure or not               | unit m7: a reply nobody answered with «it did not work»         | KILLED     |
+| SP-29 | m1: a closing acknowledgement can be a flood             | unit m1; A6 a third «مرسی» inside a minute                      | KILLED     |
+| SP-30 | m1: repeats counted over the whole epoch                 | unit: the same message 3 times within 60 s                      | KILLED     |
+| SP-31 | m9: similar is enough (a correction is a repeat)         | unit m9: کنید → نکنید                                           | KILLED     |
+| SP-32 | m2: question words ignored                               | none                                                            | EQUIVALENT |
+| SP-33 | m2: a bare status word closes                            | unit «وصل», «درست»                                              | KILLED     |
+| SP-34 | m2: only ASCII and Arabic question marks                 | unit «ok？», «مرسی⁇»                                            | KILLED     |
+| SP-35 | CX2: silence not decided again in the transaction        | CX2 blocked during the call; CX2 payment under review           | KILLED     |
+| SP-36 | CX2: the mode not read again                             | CX2 mode switched off, or a person took over                    | KILLED     |
+| SP-37 | CX1: a silent close stamps no answer                     | CX1 the inbox shows no growing wait                             | KILLED     |
+| SP-38 | CX4: the notice echo is read by the model                | CX4 the notice and its echo are left out                        | KILLED     |
+| SP-39 | CX5: steps tried counts undelivered attempts             | CX5 only the replies the customer received                      | KILLED     |
+| SP-40 | M1: context from any epoch                               | M1 an earlier epoch's decision is never the context             | KILLED     |
+| SP-41 | M1: context past the retention copied                    | M1 past the retention not copied                                | KILLED     |
+| SP-42 | M1: a copy purged by its own age only                    | M1 a copy is purged by its source's age                         | KILLED     |
+| SP-43 | m4: the notice ignores the connection                    | m4 a connection that cannot send gets no notice row             | KILLED     |
+| SP-44 | m4: a blank render is sent                               | m4 an override that renders blank fails once, unsent            | KILLED     |
+| SP-45 | m4: a delivered notice stamps lastHumanAt                | m4 a delivered notice is neither a person's answer nor the AI's | KILLED     |
+| SP-46 | m5: an intent-only row not selected for purge            | m5 intent and no summary: intent purged too                     | KILLED     |
+| SP-47 | m6: the deciding intent dropped (the previous one shows) | m6 the deciding decision's own intent is recorded               | KILLED     |
+| SP-48 | n3: a stale notice still sent                            | n3 a notice held past the staleness bound is never sent late    | KILLED     |
+| SP-49 | m8: an unknown guard outcome is DROPPED                  | unit: a newer replica's unknown outcome is classified by family | KILLED     |
+
+**25 of 26 killed; 1 equivalent.** All 50: 49 killed, 1 equivalent.
+
+Notes:
+
+- SP-28 survived the first run. The m7 tests only had several «نشد» after ONE reply, which a
+  count of replies also gets right. The unit test added for it has several replies before one
+  «نشد», and a newest reply nobody has answered yet. Re-run: killed.
+- SP-32 is equivalent by construction. No question word is in the closing vocabulary, so
+  `words.every(known)` already refuses a message that holds one. The explicit check stays as a
+  second line of defence in case someone later adds a softener that is also a question word.
+  The unit cases «کی درست شد», «چطور وصل شد» and «why ok» pin the behaviour: every other word
+  is closing vocabulary, and the message is still a question.
+- The gate's integration run found one stale A1 fixture. «هنوز مشکل دارم» is failure feedback
+  under the lexicon extended for m7, so after three replies no_progress fired before the
+  session budget. The text now says something neutral. The budget behaves as before, and the
+  failure was the lexicon doing its job.

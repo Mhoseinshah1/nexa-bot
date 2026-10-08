@@ -92,7 +92,10 @@ M = [
   "    const repeats = recent.filter(", "    const repeats = inbound.filter(", [UNIT]),
  ('m9: similar is enough (a correction is a repeat)', G,
   "      sameTokens(words, tokenSet(text))", "      true", [UNIT]),
- ('m2: question words ignored', G,
+ # EQUIVALENT by construction, kept so a re-run shows it: no question word is closing vocabulary,
+ # so `words.every(known)` refuses one too. The check is a second line of defence for a softener
+ # added later; the unit cases «کی درست شد», «چطور وصل شد», «why ok» pin the behaviour.
+ ('m2: question words ignored (EQUIVALENT)', G,
   "  if (words.some((word) => QUESTION_WORDS.has(word))) return false;\n", "", [UNIT]),
  ('m2: a bare status word closes', G,
   "  return thanked || completed;", "  return thanked || words.some((word) => STATUS_WORDS.has(word));", [UNIT]),

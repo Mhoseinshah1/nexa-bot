@@ -142,6 +142,25 @@ describe('A3: no_progress, in rounds', () => {
     expect(autoNoProgressGuard(lines, null)).toEqual({ pass: true });
   });
 
+  it('m7: a reply nobody answered with «it did not work» is not a round', () => {
+    // Several automatic replies in a row and then one «نشد»: one round, not three. Counting the
+    // replies instead of the feedback would hand off at the first failure.
+    const split = [customer('مشکل دارم'), ai('اول'), ai('دوم'), ai('سوم'), customer('نشد')];
+    expect(failureFeedbackRun(split, null)).toBe(1);
+    expect(autoNoProgressGuard(split, null)).toEqual({ pass: true });
+    // The newest reply has not been answered yet: two rounds, not three.
+    const unanswered = [
+      customer('مشکل دارم'),
+      ai('اول'),
+      customer('نشد'),
+      ai('دوم'),
+      customer('نشد'),
+      ai('سوم'),
+    ];
+    expect(failureFeedbackRun(unanswered, null)).toBe(2);
+    expect(autoNoProgressGuard(unanswered, null)).toEqual({ pass: true });
+  });
+
   it('failure messages BEFORE any AI reply are not feedback on advice', () => {
     expect(
       failureFeedbackRun([customer('نشد'), customer('نشد'), ai(), customer('نشد')], null),
@@ -354,6 +373,10 @@ describe('A6: closing acknowledgements and the silent NO_ACTION', () => {
     'الان درست شد',
     'آیا حل شد',
     'solved',
+    // every other word closing vocabulary, one question word: a question, with no mark
+    'کی درست شد',
+    'چطور وصل شد',
+    'why ok',
   ]) {
     it(`«${text}» does not close`, () => expect(isClosingAcknowledgement(text)).toBe(false));
   }

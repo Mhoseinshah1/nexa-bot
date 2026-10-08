@@ -2660,7 +2660,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     it('A1: a budget of 5 sends five replies in a session and hands off the sixth', async () => {
       await configure({ sessionReplyBudget: 5 });
       let id = '';
-      for (let i = 1; i <= 6; i += 1) id = await turn(`هنوز مشکل دارم ${i}`, scripted({}));
+      for (let i = 1; i <= 6; i += 1)
+        id = await turn(`سؤال شماره ${i} درباره تمدید سرویس`, scripted({}));
       expect(await outcomes(id)).toEqual([
         'sent',
         'sent',
