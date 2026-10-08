@@ -4487,8 +4487,8 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
     .default(null),
   /**
    * Roadmap E4 (`docs/payment-fees-fx.md`): the payment's money as ONE breakdown —
-   * principal, fee, customer paid, received, wallet credit and debit, refund ceiling, and
-   * merchant net named as not recorded — from `paymentAmountsOf` on the server. The Web
+   * principal, fee, payable, received, wallet credit and debit, and merchant net named as
+   * not recorded (no refund figure: that is the refund ledger's, with its reason) — from `paymentAmountsOf` on the server. The Web
    * Admin renders it and computes nothing. Defaulted on parse for older responses.
    */
   amounts: paymentAmountsViewSchema.nullable().default(null),

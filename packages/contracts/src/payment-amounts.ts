@@ -6,8 +6,8 @@ import type { PaymentMethod, PaymentState } from './payment.js';
  * One payment's money, as ONE breakdown (roadmap E4, `docs/payment-fees-fx.md`).
  *
  * Every figure an operator reads about a payment's money — what the order cost or the
- * wallet receives, the gateway fee, what the customer paid, what reached the wallet, what
- * may be refunded — is computed HERE, from the payment's own frozen snapshot, by one pure
+ * wallet receives, the gateway fee, what the customer was asked to pay, what arrived, what
+ * reached or left the wallet — is computed HERE, from the payment's own frozen snapshot, by one pure
  * function. The server sends its answer; the Web Admin renders it and never computes a
  * percentage, a sum or a difference. The financial report reads the same snapshot columns
  * (`payments.amount`, `customer_fee_amount`, `payable_amount`), and an integration test
@@ -16,11 +16,17 @@ import type { PaymentMethod, PaymentState } from './payment.js';
  * The rules it states are WP18's, unchanged:
  *
  * - `principal` is `payments.amount`: the order's total or the top-up's amount. It is the
- *   revenue basis, the wallet credit of a top-up and the refund ceiling.
+ *   revenue basis and the wallet credit of a top-up.
  * - `customerFee` is the gateway fee snapshotted on the attempt (0 when none). It is never
  *   revenue, never credited, never refundable.
- * - `customerPaid` is the payable snapshot — principal plus fee — or the principal when the
- *   payment carries no fee snapshot.
+ * - `payable` is what the customer was ASKED to pay — the payable snapshot (principal plus
+ *   fee), or the principal when the payment carries no fee snapshot — whatever the state.
+ *   What actually arrived is `received`, non-zero only once confirmed.
+ *
+ * There is deliberately NO refund figure here (review of PR #247, F1). How much may still be
+ * refunded is one decision, `RefundService` (`refusalFor`, then `refundableMinor` over the
+ * committed refunds), served by the refund ledger with its reason; a second number on the
+ * money card would be a second answer that can contradict it.
  *
  * And it names, rather than invents, the one figure no record holds: **merchant net**. What
  * the provider kept for itself and paid out is not recorded by any adapter (a provider's
@@ -51,15 +57,14 @@ export interface PaymentAmounts {
   readonly customerFeeMinor: bigint;
   /** Null when the payment carries no fee snapshot: no rate was ever applied. */
   readonly customerFeeBasisPoints: number | null;
-  readonly customerPaidMinor: bigint;
-  /** Money that arrived from OUTSIDE and was confirmed: the customer paid amount, or 0. */
+  /** What the customer was asked to pay, in every state. */
+  readonly payableMinor: bigint;
+  /** Money that arrived from OUTSIDE and was confirmed: the payable, or 0. */
   readonly receivedMinor: bigint;
   /** What this payment put on the customer's wallet: a top-up's principal, a receipt credit. */
   readonly walletCreditMinor: bigint;
   /** What this payment took FROM the wallet: a wallet settlement's principal. */
   readonly walletDebitMinor: bigint;
-  /** What may ever be refunded against it: the principal of a confirmed payment. */
-  readonly refundCeilingMinor: bigint;
   readonly merchantNetMinor: null;
   readonly merchantNetReason: MerchantNetUnavailableReason;
 }
@@ -74,14 +79,13 @@ export function paymentAmountsOf(input: PaymentAmountsInput): PaymentAmounts {
     principalMinor: input.principalMinor,
     customerFeeMinor: fee,
     customerFeeBasisPoints: input.customerFee?.basisPoints ?? null,
-    customerPaidMinor: paid,
+    payableMinor: paid,
     receivedMinor: confirmed && external ? paid : 0n,
     walletCreditMinor:
       confirmed && input.topup && external
         ? input.principalMinor
         : (input.receiptCreditMinor ?? 0n),
     walletDebitMinor: confirmed && input.method === 'WALLET' ? input.principalMinor : 0n,
-    refundCeilingMinor: confirmed ? input.principalMinor : 0n,
     merchantNetMinor: null,
     merchantNetReason: 'NOT_RECORDED',
   };
@@ -95,12 +99,16 @@ export const paymentAmountsViewSchema = z.object({
   principal: minor,
   customerFee: minor,
   customerFeeBasisPoints: z.number().int().nullable(),
-  customerPaid: minor,
+  payable: minor,
   received: minor,
   walletCredit: minor,
   walletDebit: minor,
-  refundCeiling: minor,
-  merchantNet: z.null(),
+  /*
+   * Nullable rather than `z.null()`: when a provider's settlement is one day recorded
+   * (OQ-E4-01) the server sends a figure, and a previous bundle must still parse the page
+   * during a rolling deploy (review of PR #247, F7).
+   */
+  merchantNet: minor.nullable(),
   merchantNetReason: z.enum(MERCHANT_NET_UNAVAILABLE_REASONS),
 });
 export type PaymentAmountsView = z.infer<typeof paymentAmountsViewSchema>;
