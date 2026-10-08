@@ -65,6 +65,7 @@ evidence, a Q1–Q7 result, a C1/C3 result or a staging rehearsal.
 | this branch `2042656c`              | MariaDB 10.11.14 | AES-256 zip (`backup_2026-01-01.zip`) | 127  | 0    | 6       | 110 s     |
 | this branch `2042656c`              | MySQL 8.0.46     | AES-256 zip (`backup_2026-01-01.zip`) | 127  | 0    | 6       | 114 s     |
 | Mirza PR6 `bea404eb`                | MariaDB 10.11.14 | AES-256 zip, plus cycle 9 (program)   | 162  | 0    | 6       | 292 s     |
+| Mirza PR6 `f1da89cf`                | MariaDB 10.11.14 | AES-256 zip, plus cycle 9 (program)   | 163  | 0    | 6       | 243 s     |
 
 Both rows are the same final code, run one after the other with the asserted wrapper
 (`pnpm rehearsal:synthetic`, which also checks every expected PASS check by name). An
@@ -73,7 +74,9 @@ fixed in `a23105a0`.
 
 The Mirza PR6 row adds cycle 9, the migration program: gated import refusals, SOURCE_SUPERSEDED,
 the acknowledged re-run over a second snapshot with no duplicate, report v2 holding and
-`cutover-gate` CUTOVER_READY. Its approval is recorded by
+`cutover-gate` CUTOVER_READY. The `f1da89cf` row adds one check: the gate hashes the final dump
+FILE, so an edited dump under the approved hash is refused at `FINAL_DUMP_VERIFIED`, as is a
+wrong approved hash. The cycle's approval is recorded by
 `tests/support/legacy-rehearsal-cutover-approval.ts` as a synthetic owner, so it can never
 open a production-like target. The MySQL 8.0 run of this PR is CI's, NOT RUN here.
 

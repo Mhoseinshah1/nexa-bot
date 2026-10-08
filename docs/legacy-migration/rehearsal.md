@@ -33,7 +33,8 @@ once (cycle 9, Mirza PR6), from the clean restore:
             ─► refused SOURCE_SUPERSEDED ─► re-run acknowledgement ─► gated import:
                one new customer, one new opening, nothing else ─► again: nothing
             ─► reconcile RECONCILED ─► report v2 (schema-valid, holds) ─► stop sales
-            ─► cutover-gate CUTOVER_READY ─► with a wrong dump digest: REFUSED
+            ─► cutover-gate CUTOVER_READY ─► with a wrong dump digest, and with an
+               edited dump file under the approved digest: REFUSED (FINAL_DUMP_VERIFIED)
 ```
 
 ## Run it
