@@ -142,9 +142,11 @@ describe('decideAdoptRequest', () => {
       expect(adoptPanelsOf(e), panelCodeClass).toEqual([]);
       for (const outcome of ['PANEL_UNMAPPED', 'PROVIDER_MISSING', 'NO_PANEL'] as const) {
         const c = { outcome, evidence: e };
+        // Refused for the code, not merely for the panel: the remedy named is the panel map.
         expect(decideAdoptRequest(c, PANEL_B), panelCodeClass).toMatchObject({
           ok: false,
           code: 'PANEL_REFUSED',
+          message: expect.stringContaining('names a panel the map does not map'),
         });
         expect(decideAdoptRequest(c, undefined), panelCodeClass).toMatchObject({
           ok: false,
