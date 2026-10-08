@@ -47,7 +47,7 @@ import {
   reinquirePayment,
   requestRefund,
 } from '../api/client';
-import { formatMoneyText, formatTimestamp, splitBytes } from '../format';
+import { formatDecimalText, formatMoneyText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, staleAfterError } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -511,12 +511,24 @@ export function AmountsCard({ value }: { value: PaymentDetailResponse['amounts']
       <KV
         items={[
           [t('web.payment_amounts_principal'), money('p', value.principal)],
-          [t('web.payment_amounts_customer_fee'), money('f', value.customerFee)],
-          [t('web.payment_amounts_customer_paid'), money('c', value.customerPaid)],
+          // The rate the fee was snapshotted at (WP18), shown as stored — never recomputed.
+          ...(value.customerFeeBasisPoints === null
+            ? []
+            : ([
+                [
+                  t('web.payment_customer_fee_rate'),
+                  <Num
+                    key="b"
+                    value={`${formatBasisPointsPercent(value.customerFeeBasisPoints)}%`}
+                  />,
+                ],
+              ] as [ReactNode, ReactNode][])),
+          [t('web.payment_customer_fee_amount'), money('f', value.customerFee)],
+          // What the customer was ASKED to pay, in every state; `received` is what arrived.
+          [t('web.payment_customer_fee_payable'), money('c', value.payable)],
           [t('web.payment_amounts_received'), money('r', value.received)],
           [t('web.payment_amounts_wallet_credit'), money('w', value.walletCredit)],
           [t('web.payment_amounts_wallet_debit'), money('d', value.walletDebit)],
-          [t('web.payment_amounts_refund_ceiling'), money('x', value.refundCeiling)],
           [
             t('web.payment_amounts_merchant_net'),
             <span key="n" className="muted small">
@@ -525,6 +537,9 @@ export function AmountsCard({ value }: { value: PaymentDetailResponse['amounts']
           ],
         ]}
       />
+      {value.customerFeeBasisPoints !== null && (
+        <p className="muted small">{t('web.payment_customer_fee_hint')}</p>
+      )}
     </Card>
   );
 }
@@ -558,7 +573,7 @@ export function RateProvenanceCard({ value }: { value: GatewayRateProvenance | n
                       {t('web.payment_rate_missing')}
                     </span>
                   ) : (
-                    <Num key="v" value={value.rate} />
+                    <Num key="v" value={formatDecimalText(value.rate)} />
                   ),
                 ],
               ] as [ReactNode, ReactNode][])),
@@ -2048,43 +2063,9 @@ export function PaymentDetailPage({
                     </Card>
                   )}
                   {/*
-              The customer's gateway fee this attempt was created with (WP18): the rate,
-              the fee and the payable, BESIDE the principal above and never added to it.
-              Null for every non-gateway payment, so the card is absent there.
-            */}
-                  {row.customerFee !== null && (
-                    <Card title={t('web.payment_customer_fee')}>
-                      <KV
-                        items={[
-                          [
-                            t('web.payment_customer_fee_rate'),
-                            <Num
-                              key="r"
-                              value={`${formatBasisPointsPercent(row.customerFee.basisPoints)}%`}
-                            />,
-                          ],
-                          [
-                            t('web.payment_customer_fee_amount'),
-                            <Money
-                              key="f"
-                              value={{ amountMinor: row.customerFee.fee, currency: row.currency }}
-                            />,
-                          ],
-                          [
-                            t('web.payment_customer_fee_payable'),
-                            <Money
-                              key="p"
-                              value={{
-                                amountMinor: row.customerFee.payable,
-                                currency: row.currency,
-                              }}
-                            />,
-                          ],
-                        ]}
-                      />
-                      <p className="muted small">{t('web.payment_customer_fee_hint')}</p>
-                    </Card>
-                  )}
+                    The payment's money, the gateway fee (WP18) included, as the server
+                    computed it: ONE card, so the fee is never shown twice (review of PR #247).
+                  */}
                   <AmountsCard value={row.amounts} />
                   <RateProvenanceCard value={row.gatewayInvoice?.rateProvenance ?? null} />
                   {/*

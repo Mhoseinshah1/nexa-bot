@@ -1544,18 +1544,35 @@ describe('the payment diagnostics (§21)', () => {
   });
 
   it('shows a gateway fee beside the principal, never inside it, and no fee card elsewhere (WP18)', async () => {
+    const amounts = (bps: number | null, fee: string, payable: string) => ({
+      currency: 'IRT',
+      principal: '200000',
+      customerFee: fee,
+      customerFeeBasisPoints: bps,
+      payable,
+      received: payable,
+      walletCredit: '0',
+      walletDebit: '0',
+      merchantNet: null,
+      merchantNetReason: 'NOT_RECORDED',
+    });
     const gateway = renderDetail({
       method: 'GATEWAY',
       amount: '200000',
       customerFee: { basisPoints: 525, fee: '10500', payable: '210500' },
+      amounts: amounts(525, '10500', '210500'),
     });
     await screen.findByText('نرخ کارمزد مشتری');
     expect(gateway.container.textContent).toContain('5.25%');
     expect(gateway.container.textContent).toContain('مبلغ قابل پرداخت');
     expect(gateway.container.textContent).toContain('قابل بازگشت نیست');
+    // ONE card shows the fee (review of PR #247): the rate, the fee and the payable once each.
+    expect(screen.getAllByText('نرخ کارمزد مشتری')).toHaveLength(1);
+    expect(screen.getAllByText(t('web.payment_customer_fee_amount'))).toHaveLength(1);
+    expect(screen.getAllByText('مبلغ قابل پرداخت')).toHaveLength(1);
     gateway.unmount();
 
-    const manual = renderDetail({ customerFee: null });
+    const manual = renderDetail({ customerFee: null, amounts: amounts(null, '0', '200000') });
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
     expect(manual.container.textContent).not.toContain('نرخ کارمزد مشتری');
   });

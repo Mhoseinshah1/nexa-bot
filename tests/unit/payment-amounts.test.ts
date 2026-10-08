@@ -11,10 +11,11 @@ import {
  * Roadmap E4 — one payment's money as ONE breakdown (`payment-amounts.ts`).
  *
  * What this file defends: the gateway fee (the customer surcharge) is never credited,
- * never refundable and never part of the principal; what the customer paid is principal
+ * never part of the principal; what the customer was asked to pay (payable) is principal
  * plus fee and nothing else; money counts as received only when confirmed and from outside;
- * a partial or late payment (never confirmed) has received nothing and can refund nothing;
- * and merchant net is never invented.
+ * a partial or late payment (never confirmed) has received nothing; and merchant net is
+ * never invented. How much may be refunded is NOT here: the refund ledger is the one answer
+ * (`RefundService.ledgerFor`), and this breakdown deliberately carries no second one.
  */
 
 const fee = (principal: bigint, bps: number) => {
@@ -32,27 +33,26 @@ const base: PaymentAmountsInput = {
 };
 
 describe('the payment money breakdown', () => {
-  it('keeps the gateway fee beside the principal: paid by the customer, never refundable', () => {
+  it('keeps the gateway fee beside the principal: payable by the customer, never credited', () => {
     const amounts = paymentAmountsOf(base);
     expect(amounts.customerFeeMinor).toBe(6_250n);
     expect(amounts.customerFeeBasisPoints).toBe(250);
-    expect(amounts.customerPaidMinor).toBe(256_250n);
+    expect(amounts.payableMinor).toBe(256_250n);
     expect(amounts.receivedMinor).toBe(256_250n);
-    expect(amounts.refundCeilingMinor).toBe(250_000n);
     expect(amounts.walletCreditMinor).toBe(0n);
   });
 
   it('credits a gateway top-up with the principal only, never the fee', () => {
     const amounts = paymentAmountsOf({ ...base, topup: true });
     expect(amounts.walletCreditMinor).toBe(250_000n);
-    expect(amounts.customerPaidMinor).toBe(256_250n);
+    expect(amounts.payableMinor).toBe(256_250n);
   });
 
   it('reads a payment with no fee snapshot as fee zero and paid equal to the principal', () => {
     const amounts = paymentAmountsOf({ ...base, method: 'MANUAL_TRANSFER', customerFee: null });
     expect(amounts.customerFeeMinor).toBe(0n);
     expect(amounts.customerFeeBasisPoints).toBeNull();
-    expect(amounts.customerPaidMinor).toBe(250_000n);
+    expect(amounts.payableMinor).toBe(250_000n);
     expect(amounts.receivedMinor).toBe(250_000n);
   });
 
@@ -60,17 +60,15 @@ describe('the payment money breakdown', () => {
     const amounts = paymentAmountsOf({ ...base, method: 'WALLET', customerFee: null });
     expect(amounts.receivedMinor).toBe(0n);
     expect(amounts.walletDebitMinor).toBe(250_000n);
-    expect(amounts.refundCeilingMinor).toBe(250_000n);
   });
 
-  it('counts nothing received and nothing refundable for a partial or late payment that never confirmed', () => {
+  it('counts nothing received and nothing credited for a partial or late payment that never confirmed', () => {
     for (const state of ['UNKNOWN', 'FAILED', 'EXPIRED'] as const) {
       const amounts = paymentAmountsOf({ ...base, state });
       expect(amounts.receivedMinor, state).toBe(0n);
-      expect(amounts.refundCeilingMinor, state).toBe(0n);
       expect(amounts.walletCreditMinor, state).toBe(0n);
       // What the customer was ASKED to pay is still shown, as it was frozen.
-      expect(amounts.customerPaidMinor, state).toBe(256_250n);
+      expect(amounts.payableMinor, state).toBe(256_250n);
     }
   });
 
@@ -84,7 +82,10 @@ describe('the payment money breakdown', () => {
     });
     expect(amounts.walletCreditMinor).toBe(120_000n);
     expect(amounts.receivedMinor).toBe(0n);
-    expect(amounts.refundCeilingMinor).toBe(0n);
+  });
+
+  it('carries no refund figure of its own: the refund ledger is the one answer', () => {
+    expect(Object.keys(paymentAmountsOf(base)).some((key) => /refund/i.test(key))).toBe(false);
   });
 
   it('never invents merchant net', () => {
@@ -107,12 +108,11 @@ describe('the payment money breakdown', () => {
                 customerFee: bps === null ? null : fee(principal, bps),
                 receiptCreditMinor: null,
               });
-              expect(a.customerPaidMinor).toBe(a.principalMinor + a.customerFeeMinor);
-              expect([0n, a.customerPaidMinor]).toContain(a.receivedMinor);
-              expect(a.refundCeilingMinor <= a.principalMinor).toBe(true);
+              expect(a.payableMinor).toBe(a.principalMinor + a.customerFeeMinor);
+              expect([0n, a.payableMinor]).toContain(a.receivedMinor);
               expect(a.walletCreditMinor <= a.principalMinor).toBe(true);
               if (state !== 'CONFIRMED') {
-                expect(a.receivedMinor + a.refundCeilingMinor + a.walletDebitMinor).toBe(0n);
+                expect(a.receivedMinor + a.walletDebitMinor).toBe(0n);
               }
             }
           }

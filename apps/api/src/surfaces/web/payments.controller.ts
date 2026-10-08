@@ -688,11 +688,10 @@ function toAmountsView(
     principal: amounts.principalMinor.toString(),
     customerFee: amounts.customerFeeMinor.toString(),
     customerFeeBasisPoints: amounts.customerFeeBasisPoints,
-    customerPaid: amounts.customerPaidMinor.toString(),
+    payable: amounts.payableMinor.toString(),
     received: amounts.receivedMinor.toString(),
     walletCredit: amounts.walletCreditMinor.toString(),
     walletDebit: amounts.walletDebitMinor.toString(),
-    refundCeiling: amounts.refundCeilingMinor.toString(),
     merchantNet: amounts.merchantNetMinor,
     merchantNetReason: amounts.merchantNetReason,
   };

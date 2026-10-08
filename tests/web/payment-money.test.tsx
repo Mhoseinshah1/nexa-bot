@@ -48,11 +48,10 @@ function detail(over: Record<string, unknown> = {}): Record<string, unknown> {
       customerFee: '6250',
       customerFeeBasisPoints: 250,
       // Deliberately NOT principal + fee: the page must show what the server said.
-      customerPaid: '777777',
+      payable: '777777',
       received: '777777',
       walletCredit: '0',
       walletDebit: '0',
-      refundCeiling: '250000',
       merchantNet: null,
       merchantNetReason: 'NOT_RECORDED',
     },
@@ -104,6 +103,10 @@ describe('the payment’s money on the Web Admin', () => {
     // The sum the browser could have computed is nowhere on the page.
     expect(text).not.toContain(figure('256250'));
     expect(screen.getByText(t('web.payment_amounts_merchant_net_not_recorded'))).toBeTruthy();
+    // The figure is labelled what it is — what the customer was asked to pay — and no
+    // refund figure stands beside it: the refund ledger is the one answer (PR #247 F1, F4).
+    expect(screen.getByText(t('web.payment_customer_fee_payable'))).toBeTruthy();
+    expect(text).not.toContain('سقف');
   });
 
   it('names the rate’s authority and its evidence from the attempt’s snapshot', async () => {
@@ -154,6 +157,9 @@ describe('the payment’s money on the Web Admin', () => {
     expect(screen.getByText('NOBITEX')).toBeTruthy();
     expect(screen.getByText('v1:NOBITEX:USDTIRT:q-77')).toBeTruthy();
     expect(screen.getByText('FRESH')).toBeTruthy();
+    // The rate is grouped like every other figure, exactly, with no trailing zeros.
+    expect(screen.getByText('103,500')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('103500.0000');
   });
 
   it('says why a payment cannot be refunded, by the server’s reason, and offers nothing', async () => {

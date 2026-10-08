@@ -2003,7 +2003,6 @@ export const WEB_FA = {
   'web.payment_gateway': 'درگاه',
   'web.payment_external_reference': 'شناسهٔ پیگیری بیرونی',
   'web.payment_updated_at': 'آخرین تغییر',
-  'web.payment_customer_fee': 'کارمزد درگاه',
   'web.payment_customer_fee_rate': 'نرخ کارمزد مشتری',
   'web.payment_customer_fee_amount': 'کارمزد درگاه',
   'web.payment_customer_fee_payable': 'مبلغ قابل پرداخت',
@@ -2211,12 +2210,9 @@ export const WEB_FA = {
   'web.payment_amounts_hint':
     'همهٔ مبالغ را سرور از تصویر ثبت‌شدهٔ همین پرداخت حساب کرده است؛ این صفحه چیزی محاسبه نمی‌کند.',
   'web.payment_amounts_principal': 'مبلغ اصل (سفارش یا شارژ)',
-  'web.payment_amounts_customer_fee': 'کارمزد درگاه (درآمد نیست، بازپرداخت‌پذیر نیست)',
-  'web.payment_amounts_customer_paid': 'پرداختی مشتری',
   'web.payment_amounts_received': 'دریافت‌شده از بیرون (تأییدشده)',
   'web.payment_amounts_wallet_credit': 'واریز به کیف پول با این پرداخت',
   'web.payment_amounts_wallet_debit': 'برداشت از کیف پول با این پرداخت',
-  'web.payment_amounts_refund_ceiling': 'سقف بازپرداخت',
   'web.payment_amounts_merchant_net': 'خالص دریافتی فروشنده',
   'web.payment_amounts_merchant_net_not_recorded':
     'ثبت نشده — هیچ درگاهی سهم خود را گزارش نمی‌کند و این عدد ساخته نمی‌شود.',
