@@ -1,6 +1,6 @@
 {
-  "id": "b424750f-23b8-4084-8847-6afc5d29fade",
-  "prevId": "7f4fcdee-5d6b-4ac8-b312-5cc97c6c7c4f",
+  "id": "d8eccfbe-62e4-4b8e-bf0b-7547b830da8c",
+  "prevId": "98ab3ed5-f4d9-4bbb-96fa-f34d34a52299",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -15941,7 +15941,7 @@
       "checkConstraints": {
         "legacy_read_set_runs_read_set_check": {
           "name": "legacy_read_set_runs_read_set_check",
-          "value": "read_set IN ('inventory', 'products', 'invoice-archive')"
+          "value": "read_set IN ('inventory', 'products', 'invoice-archive', 'user-status')"
         },
         "legacy_read_set_runs_version_check": {
           "name": "legacy_read_set_runs_version_check",

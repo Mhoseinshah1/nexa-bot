@@ -65,11 +65,18 @@ export interface LegacyCutoverServiceDeps {
   readonly ids: IdGenerator;
 }
 
+/** The read sets a cutover approval binds (`LEGACY_CUTOVER_READ_SET_FIELDS`). */
+export type CutoverReadSetName = keyof typeof LEGACY_CUTOVER_READ_SET_FIELDS;
+
 /** What the final report v2 and the cutover gate read about one source. Read only. */
 export interface LegacyCutoverReportFacts {
   readonly approvals: readonly LegacyCutoverApprovalRecord[];
   readonly applyRuns: readonly LegacyCutoverApplyRunRecord[];
-  readonly readSets: Readonly<Record<LegacyReadSetName, LegacyCutoverReadSetRecord | null>>;
+  /**
+   * The read sets the approval binds. `user-status` (OQ-LWD-07) is not one of them: the
+   * import records and pins it itself, and the bound freeze proof covers its column.
+   */
+  readonly readSets: Readonly<Record<CutoverReadSetName, LegacyCutoverReadSetRecord | null>>;
   readonly productRows: readonly LegacyCutoverProductRow[];
   readonly archive: LegacyCutoverArchiveFacts | null;
   readonly duplicates: LegacyCutoverDuplicateFacts;
@@ -400,8 +407,8 @@ export class LegacyCutoverService {
     });
     if (!decision.ok || source === null) return decision;
     for (const [readSet, field] of Object.entries(LEGACY_CUTOVER_READ_SET_FIELDS) as [
-      LegacyReadSetName,
-      (typeof LEGACY_CUTOVER_READ_SET_FIELDS)[LegacyReadSetName],
+      CutoverReadSetName,
+      (typeof LEGACY_CUTOVER_READ_SET_FIELDS)[CutoverReadSetName],
     ][]) {
       const fingerprint = input.expectation[field];
       const run =

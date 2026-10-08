@@ -337,9 +337,16 @@ Shape (`LEGACY_USERS_WALLETS_SECTION_VERSION` = `nexa-legacy-users-wallets/v1`):
     "sourceRows": 0,
     // one key per LEGACY_USER_OUTCOMES, all present: IMPORTED_NEW, IMPORTED_EXISTING,
     // SKIPPED_INVALID_IDENTITY, SKIPPED_BALANCE_UNREADABLE, SKIPPED_BALANCE_OUT_OF_RANGE,
-    // SKIPPED_DUPLICATE_SOURCE_ID, SKIPPED_REVIEW_CLOSED, SOURCE_CHANGED, NOT_YET_IMPORTED
+    // SKIPPED_DUPLICATE_SOURCE_ID, SKIPPED_STATUS_UNKNOWN, SKIPPED_REVIEW_CLOSED,
+    // SOURCE_CHANGED, NOT_YET_IMPORTED
     "outcomes": { "IMPORTED_NEW": 0 },
     "agents": { "sourceRows": 0, "importedAsCustomers": 0, "resellerGrants": "NONE" },
+    // OQ-LWD-07: User_Status of every source row (Σ = sourceRows), and where the users
+    // blocked in MirzaBot ended: created BLOCKED, matched to an existing NEXA customer whose
+    // status the import never changes, or not imported. Their money is in the wallet
+    // figures below exactly like anybody's.
+    "legacyStatus": { "ACTIVE": 0, "BLOCKED": 0, "UNKNOWN": 0 },
+    "blocked": { "sourceRows": 0, "importedNew": 0, "importedExisting": 0, "notImported": 0 },
   },
   "wallet": {
     "currency": "IRT",

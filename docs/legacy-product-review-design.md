@@ -318,12 +318,26 @@ refusal of a decision is a `DENIED` row.
    a lost race leaves no orphan product. The request carries title, days and traffic (the
    page prefills them from the parsed proposal); there is no price, panel, category,
    audience or status field, and the strict schema refuses one. Device limit is null.
-9. **Export consistency check at export time, not at `prepare`.** `products-export
---panel-map FILE` refuses (65) a hand-written map entry for a reviewed code that
-   contradicts the review, keeps entries for codes the review has no row for, and prints
-   the merged map and its new fingerprint. The `prepare` check (§9) and the `audit`
-   per-code `PRODUCT_UNRESOLVED` aggregates (§9) are NOT built — PR5/PR6 own the
-   importer's review and report surfaces.
+9. **Export consistency check at export time — and, since the final audit, at `prepare` and
+   in the final report.** `products-export --panel-map FILE` refuses (65) a hand-written map
+   entry for a reviewed code that contradicts the review, keeps entries for codes the review
+   has no row for, and prints the merged map and its new fingerprint. This departure first
+   deferred the import-time check to PR5/PR6; neither built it (aud5 F5 = aud6 F1), so a
+   decision changed after export, or a hand-edited map, was imported as it stood. It now
+   lives in ONE place, `legacy-importer/application/product-map-review.ts`
+   (`productMapAgainstReview`, over this PR's own `isExportable` — never a copy), with two
+   callers:
+   - **PR5, `LegacyImporterService.prepare` for APPLY** (import and resume): every
+     `mapping.products` entry must name a code whose review row is exportable under the
+     CURRENT products read of the source being imported (the latest `products` read set
+     recorded against its v1 fingerprint) and must name exactly the product that row
+     approved. Otherwise the run is refused before any provider read or write
+     (`PanelMappingRefused`, exit 65), naming each code with `NO_PRODUCTS_READ`,
+     `NO_REVIEW_ROW` (so an entry `products-export` kept for an unreviewed code is refused
+     here), `NOT_EXPORTABLE` or `TARGET_DIFFERS`. Audit and dry-run do not refuse on it.
+   - **PR6, report v2's products section**, check `PR5` (see `final-report-v2.ts`), so
+     `REPORT_V2_HOLDS` and the cutover gate carry it.
+     The per-code `PRODUCT_UNRESOLVED` audit aggregates (§9) are still not built.
 10. **The list is ordered by code** (keyset on the immutable code), not by live-invoice
     count: a keyset over a count that changes on every read skips or repeats rows. The count
     is a column. The default view is the rows that want a decision (PENDING_REVIEW and

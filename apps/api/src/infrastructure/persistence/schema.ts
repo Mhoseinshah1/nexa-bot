@@ -13964,7 +13964,7 @@ export const legacyServiceCandidates = pgTable(
  * the earlier source a re-run goes over (SOURCE_SUPERSEDED otherwise).
  *
  * Who and when are the authenticated owner and the Clock — never a typed name. Append-only
- * (`0233`): a row is never edited or deleted; it is withdrawn by a row in
+ * (`0234`): a row is never edited or deleted; it is withdrawn by a row in
  * `legacy_cutover_approval_revocations`. Fingerprints and digests only — no legacy row.
  */
 export const legacyCutoverApprovals = pgTable(
@@ -14020,7 +14020,7 @@ export const legacyCutoverApprovals = pgTable(
 
 /**
  * Mirza migration PR6 — the withdrawal of one cutover approval: at most one per approval,
- * by the authenticated owner. Append-only (`0233`), so a withdrawn approval stays on the
+ * by the authenticated owner. Append-only (`0234`), so a withdrawn approval stays on the
  * record as withdrawn and can never be un-withdrawn; a new approval is a new row.
  */
 export const legacyCutoverApprovalRevocations = pgTable(

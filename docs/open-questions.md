@@ -3427,6 +3427,18 @@ real staging copy (NOT RUN) — never by guessing.
 - **OQ-LWD-06 — DECISION: who sees legacy debts.** `legacy.debts.view` (MEDIUM) shows the
   legacy Telegram id and the amount owed; owner-only by default. Whether an operator role
   should hold it, and for how long the list is kept, is the owner's.
+- **OQ-LWD-07 — DECIDED by the owner (2026-10-08): a user blocked in MirzaBot is imported
+  BLOCKED.** aud4 F1 found the importer never read `user.User_Status` and created every
+  customer ACTIVE, so an operator's ban was lifted at cutover and the banned user's credit
+  became spendable. Decision: `User_Status = 'block'` → a BLOCKED customer; the opening
+  CREDIT or legacy debt is recorded exactly as anybody's (reconciliation totals unchanged;
+  the block stops spending, not the balance); an existing NEXA customer's status is never
+  changed; any status other than exactly `Active` or `block` is manual review, never ACTIVE.
+  The v1 read set stays frozen: the column is the `user-status` read set
+  (`legacy-read-set:user-status:v1`). Counts: `plan.customers.legacyStatus`,
+  `usersWallets.users.legacyStatus` and `.blocked`. Still the owner's: whether a blocked
+  user's legacy debt or credit should be treated differently later (today it is not), and
+  whether the MirzaBot block reason text should ever be carried (today it is not read).
 
 ## OQ-LSR — legacy service review (Mirza PR5): what the evidence does not settle
 
@@ -3438,7 +3450,10 @@ owner's, or settled from the real staging copy (NOT RUN) — never by guessing.
 - **OQ-LSR-01 — DECISION: panel 8255.** It stays unmapped (recommended:
   `unresolvedPanels` with `OWNER_DECIDES_LATER`) until the owner maps it explicitly in
   `panels`. Never declared missing to let the search find its accounts, and never inferred
-  from the holders the evidence shows.
+  from the holders the evidence shows — nor approved onto one: since aud5 F2 an ADOPT
+  approval may name a panel only for an EMPTY `code_panel`, so an 8255 invoice is offered no
+  panel, a request naming one is refused, and the run's gate refuses an older approval
+  (`PANEL_UNMAPPED`).
 - **OQ-LSR-02 — DECISION: declared-missing codes.** A code the operator lists in
   `missingPanels` is still searched across every production panel and adopted on a unique
   hit (the map is explicit and fingerprinted). Decision 8 names empty codes only; whether a

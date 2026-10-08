@@ -282,7 +282,9 @@ export type ApprovalGate =
  * made it, so its synthetic flag is checked against the target first (the PR3 lesson): a
  * synthetic approval in a production-like database is never executed. Then the approval must
  * still describe THIS row (bound to its checksum), and the panel it names must be one the
- * run's panel map maps explicitly, never one the invoice's own code maps elsewhere.
+ * run's panel map maps explicitly, never one the invoice's own code maps elsewhere — and
+ * only for an invoice whose code is EMPTY: a non-empty code the map does not map is refused
+ * `PANEL_UNMAPPED` (aud5 F2, OQ-LSR-01).
  */
 export function approvalGate(
   approval: Pick<
@@ -312,9 +314,15 @@ export function approvalGate(
     return { kind: 'REFUSE', refusal: 'PANEL_NOT_MAPPED' };
   }
   const code = legacyCodePanel(invoice.codePanel);
-  const mappedTo = code === null ? undefined : context.mapping.policy.knownPanels.get(code);
-  if (mappedTo !== undefined && mappedTo !== panelId) {
-    return { kind: 'REFUSE', refusal: 'PANEL_CONFLICTS_WITH_MAP' };
+  if (code !== null) {
+    const mappedTo = context.mapping.policy.knownPanels.get(code);
+    if (mappedTo !== undefined && mappedTo !== panelId) {
+      return { kind: 'REFUSE', refusal: 'PANEL_CONFLICTS_WITH_MAP' };
+    }
+    // aud5 F2 / OQ-LSR-01: a named panel is for an EMPTY code only. A non-empty code the
+    // run's map does not map (unmapped, unresolved, declared missing, test) names a real
+    // panel, and is never adopted onto another one.
+    if (mappedTo === undefined) return { kind: 'REFUSE', refusal: 'PANEL_UNMAPPED' };
   }
   return { kind: 'ACCEPT', panelId };
 }

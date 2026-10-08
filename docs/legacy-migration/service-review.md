@@ -4,7 +4,7 @@ Area D of the Mirza migration; owner decision 8 (2026-10-07). Code:
 `apps/api/src/modules/platform/legacy-service-review/` (the review),
 `apps/api/src/modules/platform/legacy-importer/application/service-outcomes.ts` (outcomes,
 evidence, the approval gate, the report section), the importer's adoption phase, and the Web
-Admin page `/legacy-services`. Tables: `legacy_service_candidates` (migrations 0229–0231).
+Admin page `/legacy-services`. Tables: `legacy_service_candidates` (migrations 0230–0232).
 
 Everything here was exercised against SYNTHETIC data only (`tests/integration/legacy-service-review.test.ts`,
 fake RickPanels on real sockets, the real P6). Nothing was run against the real Mirza dump,
@@ -97,7 +97,7 @@ new version (`evidence_hash`).
 | `KEPT_AS_HISTORY` | operator                  | never adopted (auto or otherwise) and no claim on its account, until reopened                         |
 | `ADOPT_APPROVED`  | operator                  | an explicit ADOPT approval, bound to the invoice checksum, the outcome seen and (when needed) a panel |
 | `ADOPTING`        | the importer (a claim)    | a run claimed the approval; a crash leaves it here and the resume executes it                         |
-| `ADOPTED`         | the importer              | a NEXA service; terminal (0230 refuses any change of state or service, and any DELETE)                |
+| `ADOPTED`         | the importer              | a NEXA service; terminal (0231 refuses any change of state or service, and any DELETE)                |
 
 The importer is the ONE writer of outcomes and evidence (`maintenance.run`). The operator writes
 only the review columns (`legacy.services.decide`), each decision ONE conditional UPDATE naming
@@ -121,10 +121,15 @@ two interact only through the map: an invoice whose map row a person closed in t
    ACKNOWLEDGED, at the version shown, for an outcome a person can clear
    (`LEGACY_SERVICE_ADOPTABLE_OUTCOMES`: `ADOPTION_ELIGIBLE`, `NO_PANEL`, `PANEL_UNMAPPED`,
    `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`, `PRODUCT_UNRESOLVED`, `INVENTORY_INCOMPLETE`,
-   `PROVIDER_READ_FAILED`, `CUSTOMER_NOT_IMPORTED`). When the map gives the invoice no panel the
-   operator MUST name one, and it must be a mapped panel whose complete inventory held exactly one
-   spelling of the account in the latest run (`adoptPanelsOf`); when the map gives one, naming a
-   different panel is refused — an explicit mapping is never overridden by a click. **Nothing is
+   `PROVIDER_READ_FAILED`, `CUSTOMER_NOT_IMPORTED`). When the invoice's `code_panel` is EMPTY the
+   operator MUST name a panel, and it must be a mapped panel whose complete inventory held exactly
+   one spelling of the account in the latest run (`adoptPanelsOf`); when the map gives the code a
+   panel, naming a different one is refused — an explicit mapping is never overridden by a click.
+   **A non-empty code the map does not map** (unmapped, `unresolvedPanels`, `missingPanels`, a test
+   code) **is never approved onto any panel** and is offered none (aud5 F2, `OQ-LSR-01`): the code
+   names a real panel, and an account of the same name on another server is another account. Its
+   remedy is the panel map. The request check (`decideAdoptRequest`), the offer
+   (`adoptPanelsOf`) and the run's gate (`approvalGate`, refusal `PANEL_UNMAPPED`) all hold it. **Nothing is
    adopted by the request**: no service, order or map row, no provider call.
 2. **Execution** — by the next `import` or `resume` (the CLI, SYSTEM_JOB, `maintenance.run`),
    which walks every production panel's inventory twice as it always does:
@@ -133,7 +138,9 @@ two interact only through the map: an invoice whose map row a person closed in t
      source class likewise; the invoice must still be live (`NOT_LIVE`) and its checksum the one
      approved (`SOURCE_CHANGED`); the panel must be one the run's panel map maps explicitly
      (`PANEL_NOT_MAPPED`) and not one the invoice's own code maps elsewhere
-     (`PANEL_CONFLICTS_WITH_MAP`);
+     (`PANEL_CONFLICTS_WITH_MAP`), and a named panel is accepted only for an invoice whose code
+     is EMPTY — a non-empty code the run's map does not map is `PANEL_UNMAPPED` (an approval
+     recorded before aud5 F2 is refused here, never executed);
    - the claim: ADOPT_APPROVED → ADOPTING, conditional on the version (a person's reopen in between
      wins; counted `claimLost`);
    - EVERY adoption check again, through the one plan and the one adopter: `decideServiceCandidate`
@@ -226,7 +233,7 @@ tallies: `applied.services.outcomes` (Σ = live invoices), `candidates`
 exactly; ownership; both KEPT layers; every gate branch; adopted precedence and map
 confirmation; the request's panel and outcome rules; review-state and version rules; the
 service's version, scope, view permission, invoice lock, map refusal, tenancy and stored
-replay; the claim; the closure, its reconcile check and the report verdict; both 0230
+replay; the claim; the closure, its reconcile check and the report verdict; both 0231
 triggers). Run on 2026-10-07 against a private database: 33 of 33 killed, and the Codex #234 fixes' I-20..I-22 3 of 3 (the first run's
 one survivor, the report verdict, became the pure `reportHolds` and its unit test).
 

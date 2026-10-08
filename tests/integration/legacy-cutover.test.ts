@@ -506,7 +506,7 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     await db().execute(
       sql`DELETE FROM role_permissions WHERE permission_key LIKE 'legacy.cutover.%'`,
     );
-    const migration = readFileSync('apps/api/drizzle/0234_legacy_cutover_grants.sql', 'utf8');
+    const migration = readFileSync('apps/api/drizzle/0235_legacy_cutover_grants.sql', 'utf8');
     const backfill = migration.slice(migration.indexOf('INSERT INTO "role_permissions"'));
     await db().execute(sql.raw(backfill));
     await db().execute(sql.raw(backfill));

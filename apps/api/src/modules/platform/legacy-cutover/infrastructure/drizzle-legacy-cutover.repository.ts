@@ -93,7 +93,7 @@ const big = (value: string | number | null | undefined): bigint => BigInt(value 
 const num = (value: string | number | null | undefined): number => Number(value ?? 0);
 
 /**
- * Mirza migration PR6 — the cutover approvals (append-only, `0233`) and the read-only facts
+ * Mirza migration PR6 — the cutover approvals (append-only, `0234`) and the read-only facts
  * the cutover gate and the final report v2 read. Every statement is tenant-scoped; there is
  * no UPDATE and no DELETE here.
  */

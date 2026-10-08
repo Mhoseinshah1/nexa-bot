@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   money,
   type CurrencyCode,
+  type LegacyProductReviewState,
   type LegacyReadSetName,
   type ProductAudience,
   type ProductCategoryStatus,
@@ -15,6 +16,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
 import type { PanelFacts } from '../application/panel-mapping.js';
+import type { ProductReviewRowFacts } from '../application/product-map-review.js';
 import type {
   LegacyCustomerInsert,
   LegacyCustomerWriter,
@@ -116,6 +118,51 @@ export class DrizzleLegacyImporterRepository
       for (const row of result.rows) out.add(row.id);
     }
     return out;
+  }
+
+  async latestProductsReadFingerprint(
+    scope: TenantContext,
+    sourceFingerprint: string,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    // The same order as the cutover's `latestReadSetRun`: latest recorded, then id.
+    const result = await this.db.execute<{ read_set_fingerprint: string }>(sql`
+      SELECT read_set_fingerprint FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = 'products'
+         AND source_fingerprint = ${sourceFingerprint}
+       ORDER BY recorded_at DESC, id DESC
+       LIMIT 1
+    `);
+    return result.rows[0]?.read_set_fingerprint ?? null;
+  }
+
+  async productReviewRows(scope: TenantContext): Promise<readonly ProductReviewRowFacts[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{
+      code_product: string;
+      state: LegacyProductReviewState;
+      facts_checksum: string;
+      approved_facts_checksum: string | null;
+      approved_product_id: string | null;
+      read_fingerprint: string;
+      missing_since_read_fingerprint: string | null;
+      source_conflict: string | null;
+    }>(sql`
+      SELECT code_product, state, facts_checksum, approved_facts_checksum,
+             approved_product_id::text AS approved_product_id, read_fingerprint,
+             missing_since_read_fingerprint, source_conflict
+        FROM legacy_product_reviews WHERE tenant_id = ${tenantId}
+    `);
+    return result.rows.map((r) => ({
+      codeProduct: r.code_product,
+      state: r.state,
+      factsChecksum: r.facts_checksum,
+      approvedFactsChecksum: r.approved_facts_checksum,
+      approvedProductId: r.approved_product_id,
+      readFingerprint: r.read_fingerprint,
+      missingSinceReadFingerprint: r.missing_since_read_fingerprint,
+      sourceConflict: r.source_conflict,
+    }));
   }
 
   async customersByTelegramIds(
@@ -487,6 +534,25 @@ export class DrizzleLegacyImporterRepository
 
   // --- read set runs (Mirza migration PR1) -------------------------------------------------
 
+  async readSetFingerprintsOf(
+    scope: TenantContext,
+    readSet: LegacyReadSetName,
+    readSetVersion: number,
+    sourceFingerprint: string,
+    tx: TransactionScope,
+  ): Promise<readonly string[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute<{ read_set_fingerprint: string }>(sql`
+      SELECT DISTINCT read_set_fingerprint
+        FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = ${readSet}
+         AND read_set_version = ${readSetVersion}
+         AND source_fingerprint = ${sourceFingerprint}
+       ORDER BY read_set_fingerprint
+    `);
+    return result.rows.map((r) => r.read_set_fingerprint);
+  }
+
   async recordReadSetRun(
     scope: TenantContext,
     run: LegacyReadSetRun,
@@ -561,6 +627,11 @@ export class DrizzleLegacyImporterRepository
    * the customer just spoke to the bot. An imported customer did not.
    *
    * `first_bot_instance_id` is NULL: they arrived through no bot of this installation.
+   *
+   * `status` (OQ-LWD-07): a user blocked in MirzaBot is created BLOCKED, `blocked_at` the
+   * import's instant (`customers_blocked_at_check`) and no reason — the legacy reason text is
+   * not read, and a reason here would be shown to the customer. It applies to the INSERT
+   * only: the conflict path never touches the existing row.
    */
   async insertIfAbsent(
     scope: TenantContext,
@@ -569,10 +640,13 @@ export class DrizzleLegacyImporterRepository
   ): Promise<{ readonly customerId: string; readonly created: boolean }> {
     const tenantId = requireTenantId(scope);
     const at = input.now.toISOString();
+    const status = input.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE';
+    const blockedAt = status === 'BLOCKED' ? at : null;
     const inserted = await this.exec(tx).execute<{ id: string }>(sql`
-      INSERT INTO customers (id, tenant_id, telegram_user_id, username, status,
+      INSERT INTO customers (id, tenant_id, telegram_user_id, username, status, blocked_at,
                              first_seen_at, last_seen_at, created_at, updated_at)
-      VALUES (${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username}, 'ACTIVE',
+      VALUES (${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username},
+              ${status}, ${blockedAt}::timestamptz,
               ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz)
       ON CONFLICT (tenant_id, telegram_user_id) DO NOTHING
       RETURNING id

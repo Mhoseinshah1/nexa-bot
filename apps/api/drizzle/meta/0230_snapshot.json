@@ -1,6 +1,6 @@
 {
-  "id": "34c60943-05a4-483d-af14-6afea1c7153c",
-  "prevId": "88267d8b-0a5a-4715-ac74-666f80681f44",
+  "id": "98ab3ed5-f4d9-4bbb-96fa-f34d34a52299",
+  "prevId": "34c60943-05a4-483d-af14-6afea1c7153c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -15669,6 +15669,426 @@
         "legacy_read_set_runs_code_version_check": {
           "name": "legacy_read_set_runs_code_version_check",
           "value": "code_version IS NULL OR code_version ~ '^[A-Za-z0-9._+-]{1,64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.legacy_service_candidates": {
+      "name": "legacy_service_candidates",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "invoice_key": {
+          "name": "invoice_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "synthetic": {
+          "name": "synthetic",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "invoice_checksum": {
+          "name": "invoice_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "blocker": {
+          "name": "blocker",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "evidence": {
+          "name": "evidence",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence_hash": {
+          "name": "evidence_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "panel_code": {
+          "name": "panel_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "product_code": {
+          "name": "product_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "archive_id": {
+          "name": "archive_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "review_state": {
+          "name": "review_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approved_panel_id": {
+          "name": "approved_panel_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_checksum": {
+          "name": "approved_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_outcome": {
+          "name": "approved_outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_approval_refusal": {
+          "name": "last_approval_refusal",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decision_reason": {
+          "name": "decision_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_by_admin_id": {
+          "name": "decided_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "first_decided_at": {
+          "name": "first_decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "legacy_service_candidates_outcome_idx": {
+          "name": "legacy_service_candidates_outcome_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "outcome",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_service_candidates_review_idx": {
+          "name": "legacy_service_candidates_review_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "review_state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_service_candidates_panel_idx": {
+          "name": "legacy_service_candidates_panel_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "panel_code",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "legacy_service_candidates_product_idx": {
+          "name": "legacy_service_candidates_product_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "product_code",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "legacy_service_candidates_tenant_id_tenants_id_fk": {
+          "name": "legacy_service_candidates_tenant_id_tenants_id_fk",
+          "tableFrom": "legacy_service_candidates",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_service_candidates_tenant_run_fk": {
+          "name": "legacy_service_candidates_tenant_run_fk",
+          "tableFrom": "legacy_service_candidates",
+          "tableTo": "legacy_import_runs",
+          "columnsFrom": [
+            "tenant_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_service_candidates_tenant_archive_fk": {
+          "name": "legacy_service_candidates_tenant_archive_fk",
+          "tableFrom": "legacy_service_candidates",
+          "tableTo": "legacy_invoice_archive",
+          "columnsFrom": [
+            "tenant_id",
+            "archive_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_service_candidates_tenant_service_fk": {
+          "name": "legacy_service_candidates_tenant_service_fk",
+          "tableFrom": "legacy_service_candidates",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_service_candidates_tenant_panel_fk": {
+          "name": "legacy_service_candidates_tenant_panel_fk",
+          "tableFrom": "legacy_service_candidates",
+          "tableTo": "panels",
+          "columnsFrom": [
+            "tenant_id",
+            "approved_panel_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "legacy_service_candidates_tenant_admin_fk": {
+          "name": "legacy_service_candidates_tenant_admin_fk",
+          "tableFrom": "legacy_service_candidates",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "decided_by_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "legacy_service_candidates_tenant_id_key": {
+          "name": "legacy_service_candidates_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "legacy_service_candidates_tenant_invoice_key": {
+          "name": "legacy_service_candidates_tenant_invoice_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "invoice_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "legacy_service_candidates_outcome_check": {
+          "name": "legacy_service_candidates_outcome_check",
+          "value": "outcome IN ('ADOPTED', 'ALREADY_ADOPTED', 'ADOPTION_ELIGIBLE', 'INVOICE_KEY_INVALID', 'TEST_INVOICE_SKIPPED', 'TEST_PANEL_SKIPPED', 'INVALID_SOURCE_ROW', 'ORPHAN', 'CUSTOMER_NOT_IMPORTED', 'INVALID_USERNAME', 'INVENTORY_INCOMPLETE', 'NO_PANEL', 'PANEL_UNMAPPED', 'PROVIDER_MISSING', 'AMBIGUOUS_PANEL', 'USERNAME_CASE_COLLISION', 'AMBIGUOUS_OWNERSHIP', 'UNSUPPORTED_SHAPE', 'PRODUCT_UNRESOLVED', 'SUBSCRIPTION_REF_BLOCKED', 'PROVIDER_READ_FAILED', 'REVIEW_CLOSED')"
+        },
+        "legacy_service_candidates_review_state_check": {
+          "name": "legacy_service_candidates_review_state_check",
+          "value": "review_state IN ('OPEN', 'ACKNOWLEDGED', 'KEPT_AS_HISTORY', 'ADOPT_APPROVED', 'ADOPTING', 'ADOPTED')"
+        },
+        "legacy_service_candidates_adopted_check": {
+          "name": "legacy_service_candidates_adopted_check",
+          "value": "((service_id IS NOT NULL) = (outcome IN ('ADOPTED', 'ALREADY_ADOPTED'))) AND ((review_state = 'ADOPTED') = (outcome IN ('ADOPTED', 'ALREADY_ADOPTED')))"
+        },
+        "legacy_service_candidates_approval_check": {
+          "name": "legacy_service_candidates_approval_check",
+          "value": "((approved_checksum IS NOT NULL) = (review_state IN ('ADOPT_APPROVED', 'ADOPTING'))) AND ((approved_outcome IS NOT NULL) = (approved_checksum IS NOT NULL)) AND (approved_panel_id IS NULL OR approved_checksum IS NOT NULL) AND (approved_outcome IS NULL OR approved_outcome IN ('ADOPTED', 'ALREADY_ADOPTED', 'ADOPTION_ELIGIBLE', 'INVOICE_KEY_INVALID', 'TEST_INVOICE_SKIPPED', 'TEST_PANEL_SKIPPED', 'INVALID_SOURCE_ROW', 'ORPHAN', 'CUSTOMER_NOT_IMPORTED', 'INVALID_USERNAME', 'INVENTORY_INCOMPLETE', 'NO_PANEL', 'PANEL_UNMAPPED', 'PROVIDER_MISSING', 'AMBIGUOUS_PANEL', 'USERNAME_CASE_COLLISION', 'AMBIGUOUS_OWNERSHIP', 'UNSUPPORTED_SHAPE', 'PRODUCT_UNRESOLVED', 'SUBSCRIPTION_REF_BLOCKED', 'PROVIDER_READ_FAILED', 'REVIEW_CLOSED'))"
+        },
+        "legacy_service_candidates_decision_check": {
+          "name": "legacy_service_candidates_decision_check",
+          "value": "(review_state NOT IN ('ACKNOWLEDGED', 'KEPT_AS_HISTORY', 'ADOPT_APPROVED', 'ADOPTING') OR (decided_at IS NOT NULL AND decided_by_admin_id IS NOT NULL AND decision_reason IS NOT NULL)) AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 500) AND version >= 1"
+        },
+        "legacy_service_candidates_shape_check": {
+          "name": "legacy_service_candidates_shape_check",
+          "value": "char_length(invoice_key) BETWEEN 1 AND 1000 AND (panel_code IS NULL OR (panel_code <> '' AND panel_code = btrim(panel_code) AND char_length(panel_code) <= 1000)) AND (product_code IS NULL OR (product_code <> '' AND product_code = btrim(product_code) AND char_length(product_code) <= 1000)) AND jsonb_typeof(evidence) = 'object' AND (blocker IS NULL OR blocker ~ '^[A-Z_]{1,64}$') AND (last_approval_refusal IS NULL OR last_approval_refusal ~ '^[A-Z_]{1,64}$')"
+        },
+        "legacy_service_candidates_hashes_check": {
+          "name": "legacy_service_candidates_hashes_check",
+          "value": "source_fingerprint ~ '^[0-9a-f]{64}$' AND invoice_checksum ~ '^[0-9a-f]{64}$' AND evidence_hash ~ '^[0-9a-f]{64}$' AND (approved_checksum IS NULL OR approved_checksum ~ '^[0-9a-f]{64}$')"
         }
       },
       "isRLSEnabled": false

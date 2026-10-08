@@ -1,4 +1,5 @@
 import {
+  LEGACY_USER_STATUS_CLASSES,
   LEGACY_BALANCE_CHANGE_CLASSES,
   LEGACY_BALANCE_CHANGE_OWNER_REVIEW,
   LEGACY_USERS_WALLETS_SECTION_VERSION,
@@ -99,7 +100,9 @@ export function userOutcome(
   if (decision.kind === 'MANUAL_REVIEW') {
     return decision.reason === 'BALANCE_UNREADABLE'
       ? 'SKIPPED_BALANCE_UNREADABLE'
-      : 'SKIPPED_BALANCE_OUT_OF_RANGE';
+      : decision.reason === 'STATUS_UNKNOWN'
+        ? 'SKIPPED_STATUS_UNKNOWN'
+        : 'SKIPPED_BALANCE_OUT_OF_RANGE';
   }
   if (map?.status !== 'IMPORTED') return 'NOT_YET_IMPORTED';
   return map.reasonCode === 'EXISTING_CUSTOMER' ? 'IMPORTED_EXISTING' : 'IMPORTED_NEW';
@@ -111,6 +114,17 @@ const zeroOutcomes = () =>
 export function buildUsersWalletsSection(input: UsersWalletsInput) {
   const outcomes = zeroOutcomes();
   const agents = { sourceRows: 0, importedAsCustomers: 0 };
+  /**
+   * OQ-LWD-07: `User_Status` of every source row, and where the BLOCKED ones ended. A blocked
+   * user's money is in the equations below exactly like anybody's; these figures say how
+   * many there are, how many the import created BLOCKED, and how many matched an existing
+   * NEXA customer whose status the import never changes.
+   */
+  const legacyStatus = Object.fromEntries(LEGACY_USER_STATUS_CLASSES.map((k) => [k, 0])) as Record<
+    (typeof LEGACY_USER_STATUS_CLASSES)[number],
+    number
+  >;
+  const blocked = { sourceRows: 0, importedNew: 0, importedExisting: 0, notImported: 0 };
   const positive = { users: 0, sumMinor: 0n };
   const negative = { users: 0, sumMinor: 0n };
   let zero = 0;
@@ -155,6 +169,13 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
     const map = input.mapRows.get(planned.row.id);
     const outcome = userOutcome(planned, map);
     outcomes[outcome] += 1;
+    legacyStatus[planned.row.status] += 1;
+    if (planned.row.status === 'BLOCKED') {
+      blocked.sourceRows += 1;
+      if (outcome === 'IMPORTED_NEW') blocked.importedNew += 1;
+      else if (outcome === 'IMPORTED_EXISTING') blocked.importedExisting += 1;
+      else blocked.notImported += 1;
+    }
     const agent = legacyIsAgent(planned.row.agent);
     if (agent) agents.sourceRows += 1;
 
@@ -337,6 +358,8 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
         /** A legacy agent is an ordinary customer: never a reseller row, never credit. */
         resellerGrants: 'NONE' as const,
       },
+      legacyStatus,
+      blocked,
     },
     wallet: {
       currency: input.currency,

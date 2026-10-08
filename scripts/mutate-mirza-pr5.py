@@ -28,11 +28,14 @@ P6 = f'{MOD}/commerce/legacy-adoption/application/legacy-adoption.service.ts'
 RULES = f'{MOD}/platform/legacy-service-review/domain/candidate-rules.ts'
 SVC = f'{MOD}/platform/legacy-service-review/application/legacy-service-review.service.ts'
 REPO = f'{MOD}/platform/legacy-service-review/infrastructure/drizzle-legacy-service-candidate.repository.ts'
+PMR = f'{MOD}/platform/legacy-importer/application/product-map-review.ts'
+IREPO = f'{MOD}/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.ts'
 
 T_MATCH = ('unit', 'tests/unit/legacy-service-matching.test.ts')
 T_RULES = ('unit', 'tests/unit/legacy-service-review-rules.test.ts')
 T_INT = ('integration', 'tests/integration/legacy-service-review.test.ts')
 T_IMP = ('integration', 'tests/integration/legacy-importer.test.ts')
+T_PMR = ('unit', 'tests/unit/legacy-product-map-review.test.ts')
 
 NO_PANEL_SEARCH = [
     (MATCH, "  if (row.codePanel === null) return { kind: 'NO_PANEL' };\n\n", ""),
@@ -100,6 +103,22 @@ M = [
     ('U-12', [(OUT, "        decidedByAnotherRun === 0 &&\n", "")], T_RULES, 'the closure'),
     ('U-13', [(IMP, "    usersWallets.holds &&\n    serviceOutcomes.invariant.holds\n", "    usersWallets.holds\n")], T_RULES, 'report verdict'),
     ('I-17', [(IMP, "        serviceOutcomes.invariant.holds,", "        true,")], T_INT, 'exactly ONE outcome'),
+    # aud5 F2 / OQ-LSR-01: a named panel is for an EMPTY code only — offer, request and gate.
+    ('F2-01', [(RULES, "  if (evidence.panelCodeClass !== 'EMPTY') return [];\n", "")], T_RULES, 'aud5 F2'),
+    ('F2-02', [(RULES, "    if (candidate.evidence.panelCodeClass !== 'EMPTY') {", "    if (false) {")], T_RULES, 'aud5 F2'),
+    ('F2-03', [(OUT, "    if (mappedTo === undefined) return { kind: 'REFUSE', refusal: 'PANEL_UNMAPPED' };\n", "")], T_RULES, 'bound to the very row'),
+    ('F2-04', [(OUT, "    if (mappedTo === undefined) return { kind: 'REFUSE', refusal: 'PANEL_UNMAPPED' };\n", "")], T_INT, 'aud5 F2'),
+    ('F2-05', [(RULES, "  if (evidence.panelCodeClass !== 'EMPTY') return [];\n", ""),
+               (RULES, "    if (candidate.evidence.panelCodeClass !== 'EMPTY') {", "    if (false) {")], T_INT, 'aud5 F2'),
+    # aud5 F5 = aud6 F1: the import's mapping.products against the approved product review.
+    ('C-01', [(IMP, "    if (options.forApply === true && mapping.products.size > 0) {", "    if (false) {")], T_IMP, 'aud6 F1'),
+    ('C-02', [(IMP, "      forApply: true,\n", "      forApply: false,\n")], T_IMP, 'aud6 F1'),
+    ('C-03', [(PMR, "            : row.approvedProductId !== productId", "            : false")], T_PMR, 'refuses another target'),
+    ('C-04', [(PMR, "            : row.approvedProductId !== productId", "            : false")], T_IMP, 'aud6 F1'),
+    ('C-05', [(PMR, "          : !isExportable(row, productsReadFingerprint)", "          : false")], T_PMR, 'refuses another target'),
+    ('C-06', [(PMR, "          : !isExportable(row, productsReadFingerprint)", "          : false")], T_IMP, 'aud6 F1'),
+    ('C-07', [(IREPO, "         AND source_fingerprint = ${sourceFingerprint}\n       ORDER BY recorded_at DESC", "       ORDER BY recorded_at DESC")], T_IMP, 'aud6 F1'),
+    ('C-08', [(PMR, "        : row === undefined\n          ? 'NO_REVIEW_ROW'", "        : row === undefined\n          ? 'NOT_EXPORTABLE'")], T_PMR, 'refuses another target'),
 ]
 
 S = [

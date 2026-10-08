@@ -44,7 +44,7 @@ The legacy wallet debts (PR4), the service candidates and their reviews (PR5), a
 owner's cutover approvals and revocations (`legacy_cutover_approvals`,
 `legacy_cutover_approval_revocations`, Mirza PR6) are the same again: all of them live in the
 one database, so the restore removes them with the import and `nexa_pre_restore_<id>` keeps
-them. The approval tables are append-only (UPDATE and DELETE refused by trigger, `0233`):
+them. The approval tables are append-only (UPDATE and DELETE refused by trigger, `0234`):
 there is no path that drops or edits an approval, and none is added for a rollback.
 
 **After a rollback the owner's approval is gone with the import** (it was recorded after

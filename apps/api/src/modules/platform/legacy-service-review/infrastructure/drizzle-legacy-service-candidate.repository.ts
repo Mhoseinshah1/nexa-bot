@@ -72,7 +72,7 @@ function prefixPattern(prefix: string): string {
 /**
  * Mirza migration PR5 — `legacy_service_candidates`. Every statement is tenant-scoped. The
  * importer inserts and re-decides; the review moves only by a conditional UPDATE naming its
- * from-states and the version. There is no DELETE (0230 refuses one).
+ * from-states and the version. There is no DELETE (0231 refuses one).
  */
 export class DrizzleLegacyServiceCandidateRepository implements LegacyServiceCandidateRepository {
   constructor(private readonly db: Database) {}

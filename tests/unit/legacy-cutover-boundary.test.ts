@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
  *    no adoption, no opening balance, no provider client, no network API.
  * 2. Its surfaces name neither the importer nor the terminal review queue.
  * 3. Its repository never UPDATEs or DELETEs: approvals and revocations are append-only, and
- *    the database refuses both anyway (0233).
+ *    the database refuses both anyway (0234).
  */
 function sources(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
