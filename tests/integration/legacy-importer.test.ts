@@ -602,9 +602,18 @@ describe('Migration P7: the legacy importer', () => {
       SKIPPED_BALANCE_UNREADABLE: 1,
       SKIPPED_BALANCE_OUT_OF_RANGE: 1,
       SKIPPED_DUPLICATE_SOURCE_ID: 0,
+      SKIPPED_STATUS_UNKNOWN: 0,
       SKIPPED_REVIEW_CLOSED: 0,
       SOURCE_CHANGED: 0,
       NOT_YET_IMPORTED: 0,
+    });
+    // OQ-LWD-07: every synthetic user is `Active`.
+    expect(uw.users.legacyStatus).toEqual({ ACTIVE: users.source, BLOCKED: 0, UNKNOWN: 0 });
+    expect(uw.users.blocked).toEqual({
+      sourceRows: 0,
+      importedNew: 0,
+      importedExisting: 0,
+      notImported: 0,
     });
     expect(uw.wallet.positive).toMatchObject({
       users: users.opening.POSITIVE,
@@ -2207,6 +2216,143 @@ describe('Migration P7: the legacy importer', () => {
       })
     ).final as Record<string, any>;
     expect(final['reconciliation'].find((r: { id: string }) => r.id === 'C1').holds).toBe(true);
+  });
+
+  /** The synthetic dataset with some `User_Status` values replaced (OQ-LWD-07). */
+  function withStatuses(statuses: Readonly<Record<string, string | null>>) {
+    const base = buildSyntheticLegacyDataset();
+    const user = base.tables.user.map((row) => {
+      const id = (row as Record<string, unknown>)['id'] as string;
+      return id in statuses ? ({ ...row, User_Status: statuses[id] } as never) : row;
+    });
+    return { ...base, tables: { ...base.tables, user } };
+  }
+
+  async function customerStatus(telegramUserId: string) {
+    const result = await ctx.container.database.db.execute<{
+      status: string;
+      blocked_at: Date | null;
+      blocked_reason: string | null;
+    }>(sql`
+      SELECT status, blocked_at, blocked_reason FROM customers
+       WHERE tenant_id = ${tenantA.tenantId as unknown as string}
+         AND telegram_user_id = ${telegramUserId}
+    `);
+    return result.rows[0] ?? null;
+  }
+
+  it('OQ-LWD-07: a user blocked in MirzaBot is imported BLOCKED with their money recorded exactly; an existing customer is never changed; an unknown status is reviewed', async () => {
+    const dataset = withStatuses({
+      '100000001': 'block', // new, positive balance
+      '100000003': 'block', // new, legacy debt
+      [SYNTHETIC_EXISTING_CUSTOMER]: 'block', // an EXISTING NEXA customer: left ACTIVE
+      '100000010': 'Blocked', // not a MirzaBot spelling: UNKNOWN
+    });
+    const snap = await snapshot(dataset);
+    // The status is NOT in the frozen v1 fingerprint: only the user-status read set moves.
+    const plain = await snapshot();
+    expect(snap.fingerprint).toBe(plain.fingerprint);
+    expect(snap.userStatus.fingerprint).not.toBe(plain.userStatus.fingerprint);
+    expect(snap.userStatus.fingerprintVersion).toBe('legacy-read-set:user-status:v1');
+
+    const audit = await importer().audit({
+      ...input('audit', snap),
+      evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+    });
+    const auditPlan = (audit.sections as Record<string, any>)['plan'].customers;
+    expect(auditPlan.legacyStatus).toEqual({ ACTIVE: 7, BLOCKED: 3, UNKNOWN: 1 });
+    expect(auditPlan.blocked).toEqual({ new: 2, existing: 1 });
+    expect(auditPlan.manualReview.STATUS_UNKNOWN).toBe(1);
+    expect((audit.sections as Record<string, any>)['source'].userStatus.fingerprint).toBe(
+      snap.userStatus.fingerprint,
+    );
+
+    const report = await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
+    const applied = (report.sections as Record<string, any>)['applied'];
+    expect(applied.customers.createdBlocked).toBe(2);
+
+    for (const id of ['100000001', '100000003']) {
+      const row = await customerStatus(id);
+      expect(row?.status, id).toBe('BLOCKED');
+      expect(row?.blocked_at, id).not.toBeNull();
+      expect(row?.blocked_reason, id).toBeNull();
+    }
+    expect((await customerStatus('100000002'))?.status).toBe('ACTIVE');
+    // Never changed: the existing NEXA customer keeps its own status.
+    expect((await customerStatus(SYNTHETIC_EXISTING_CUSTOMER))?.status).toBe('ACTIVE');
+    // The money is recorded exactly as for anybody: a CREDIT opening, a legacy debt.
+    expect(
+      await count(
+        'wallet_entries',
+        "reference = 'legacy:opening:100000001' AND direction = 'CREDIT' AND amount = 50000",
+      ),
+    ).toBe(1);
+    expect(
+      await count('legacy_wallet_debts', "legacy_user_id = '100000003' AND amount_minor = 20000"),
+    ).toBe(1);
+    // UNKNOWN: no customer, no money, one review row.
+    expect(await customerStatus('100000010')).toBeNull();
+    expect(await count('wallet_entries', "reference = 'legacy:opening:100000010'")).toBe(0);
+    expect(
+      await count(
+        'legacy_import_map',
+        "legacy_table = 'user' AND legacy_id = '100000010' AND status = 'MANUAL_REVIEW' AND reason_code = 'INVALID_SOURCE_ROW'",
+      ),
+    ).toBe(1);
+    // The read set the statuses came from is recorded against the v1 source.
+    expect(
+      await count(
+        'legacy_read_set_runs',
+        `read_set = 'user-status' AND read_set_fingerprint = '${snap.userStatus.fingerprint}' AND source_fingerprint = '${snap.fingerprint}'`,
+      ),
+    ).toBe(1);
+
+    const reconcile = await importer().reconcile(input('reconcile', snap));
+    const sections = reconcile.sections as Record<string, any>;
+    const uw = sections['usersWallets'];
+    expect(uw.users.outcomes.SKIPPED_STATUS_UNKNOWN).toBe(1);
+    expect(uw.users.legacyStatus).toEqual({ ACTIVE: 7, BLOCKED: 3, UNKNOWN: 1 });
+    expect(uw.users.blocked).toEqual({
+      sourceRows: 3,
+      importedNew: 2,
+      importedExisting: 1,
+      notImported: 0,
+    });
+    expect(uw.holds).toBe(true);
+    expect(sections['checks'].find((c: { id: string }) => c.id === 'customers.categories').ok).toBe(
+      true,
+    );
+    expectOnlyReads();
+  });
+
+  it('OQ-LWD-07: a User_Status that changed under an unchanged v1 fingerprint is refused, with zero writes', async () => {
+    const first = await snapshot(withStatuses({ '100000001': 'block' }));
+    await importer().apply({ ...input('import', first), mode: 'IMPORT' });
+    const unblocked = await snapshot();
+    expect(unblocked.fingerprint).toBe(first.fingerprint);
+    const before = await databaseFingerprint(ctx.container.database.db);
+    await expect(
+      importer().apply({ ...input('rerun', unblocked), mode: 'IMPORT' }),
+    ).rejects.toMatchObject({ code: 'legacy_import.run_conflict' });
+    expect(changedTables(before, await databaseFingerprint(ctx.container.database.db))).toEqual({});
+    expect((await customerStatus('100000001'))?.status).toBe('BLOCKED');
+    // The same statuses again are not a conflict.
+    const again = await importer().apply({
+      ...input('rerun-same', await snapshot(withStatuses({ '100000001': 'block' }))),
+      mode: 'IMPORT',
+    });
+    expect(again.verdict).not.toBeNull();
+  });
+
+  it('OQ-LWD-07: a source without User_Status is refused before any row is decided', async () => {
+    const base = buildSyntheticLegacyDataset();
+    const dataset = {
+      ...base,
+      schema: base.schema.filter((c) => !(c.table === 'user' && c.column === 'User_Status')),
+    };
+    await expect(snapshot(dataset as never)).rejects.toMatchObject({
+      code: 'SOURCE_SCHEMA_MISSING_COLUMN',
+    });
   });
 
   it('PR4: a ledger DEBIT opening left by the code before owner decision 6 is never rewritten nor doubled', async () => {

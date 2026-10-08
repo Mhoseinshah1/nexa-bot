@@ -13,6 +13,7 @@ import {
   isLegacyImportKey,
   LEGACY_SERVICE_OUTCOMES,
   LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS,
+  type LegacyReadSetName,
   type LegacyServiceApprovalRefusal,
   type LegacyServiceOutcome,
   type OperationalEventRecorder,
@@ -109,6 +110,10 @@ import {
   isMaterialChange,
   reviewStateAfterRun,
 } from '../../legacy-service-review/domain/candidate-rules.js';
+import { USER_STATUS_READ_SET } from './read-set.js';
+
+/** The `user-status` read set's recorded name (OQ-LWD-07). */
+const USER_STATUS_READ_SET_NAME: LegacyReadSetName = 'user-status';
 
 /**
  * Migration P7 — the legacy importer (`docs/legacy-migration/importer.md`).
@@ -235,6 +240,8 @@ interface Prepared {
 export interface ApplyTallies {
   customers: {
     created: number;
+    /** Of `created`: blocked in MirzaBot, so created BLOCKED (OQ-LWD-07). */
+    createdBlocked: number;
     matchedExisting: number;
     manualReviewRecorded: number;
     sourceChanged: number;
@@ -528,6 +535,8 @@ export class LegacyImporterService {
       fingerprint: snapshot.fingerprint,
       schemaHash: snapshot.schemaHash,
       tables: snapshot.tables,
+      /** OQ-LWD-07: the `user-status` read set this snapshot decided statuses from. */
+      userStatus: snapshot.userStatus,
     };
   }
 
@@ -745,6 +754,7 @@ export class LegacyImporterService {
           'There is no RUNNING import of this source to resume. Use --mode import.',
         );
       }
+      await this.bindUserStatus(scope, actor, snapshot, tx);
       const stored = await this.recordInputs(
         scope,
         outcome.run.id,
@@ -774,6 +784,7 @@ export class LegacyImporterService {
     const tallies: ApplyTallies = {
       customers: {
         created: 0,
+        createdBlocked: 0,
         matchedExisting: 0,
         manualReviewRecorded: 0,
         sourceChanged: 0,
@@ -1101,6 +1112,9 @@ export class LegacyImporterService {
                 id: this.deps.ids.uuid(),
                 telegramUserId: decision.telegramUserId,
                 username: legacyProfileUsername(row.username),
+                // OQ-LWD-07: a MirzaBot ban survives the cutover. Applies only to a customer
+                // this statement creates; an existing customer's status is never touched.
+                status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
                 now,
               },
               tx,
@@ -1147,6 +1161,7 @@ export class LegacyImporterService {
             }
             if (created) {
               tallies.customers.created += 1;
+              if (decision.blocked) tallies.customers.createdBlocked += 1;
               await this.deps.audit.record(
                 scope,
                 actor,
@@ -1155,7 +1170,11 @@ export class LegacyImporterService {
                   entityType: 'Customer',
                   entityId: customerId,
                   before: null,
-                  after: { source: 'LEGACY_MIGRATION', runId },
+                  after: {
+                    source: 'LEGACY_MIGRATION',
+                    runId,
+                    status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
+                  },
                   result: 'SUCCESS',
                 },
                 tx,
@@ -1973,6 +1992,7 @@ export class LegacyImporterService {
           tallies.customers.manualReview.BALANCE_UNREADABLE +
           tallies.customers.manualReview.BALANCE_OUT_OF_RANGE +
           tallies.customers.manualReview.DUPLICATE_SOURCE_ID +
+          tallies.customers.manualReview.STATUS_UNKNOWN +
           tallies.customers.invalidIdentity,
       ),
       check(
@@ -2261,6 +2281,79 @@ export class LegacyImporterService {
         }
         return fn(tx);
       },
+    );
+  }
+
+  /**
+   * OQ-LWD-07 — binds the `user-status` read set this snapshot decided statuses from to its
+   * v1 source fingerprint, inside the run's start transaction. The v1 fingerprint does not
+   * cover `User_Status`, so two reads of "the same" approved source can disagree about who is
+   * blocked; a run (or a resume) never mixes them. A source that already has a DIFFERENT
+   * user-status observation is refused, and nothing is written; otherwise this one is
+   * recorded in `legacy_read_set_runs` (insert-or-nothing) and audited.
+   */
+  private async bindUserStatus(
+    scope: TenantContext,
+    actor: ActorContext,
+    snapshot: LegacySnapshot,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const status = snapshot.userStatus;
+    const recorded = await this.deps.readSetRuns.readSetFingerprintsOf(
+      scope,
+      USER_STATUS_READ_SET_NAME,
+      USER_STATUS_READ_SET.version,
+      snapshot.fingerprint,
+      tx,
+    );
+    const other = recorded.filter((f) => f !== status.fingerprint);
+    if (other.length > 0) {
+      throw errors.conflict(
+        LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+        `This source (${snapshot.fingerprint}) was imported with ${status.fingerprintVersion} ` +
+          `${other.join(', ')}, and reads ${status.fingerprint} now: a legacy User_Status ` +
+          'changed under an unchanged v1 fingerprint. Freeze the source and take a new snapshot; nothing was written.',
+      );
+    }
+    const userTable = status.tables['user'];
+    const outcome = await this.deps.readSetRuns.recordReadSetRun(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        readSet: USER_STATUS_READ_SET_NAME,
+        readSetVersion: USER_STATUS_READ_SET.version,
+        fingerprintVersion: status.fingerprintVersion,
+        readSetFingerprint: status.fingerprint,
+        sourceFingerprint: snapshot.fingerprint,
+        sourceSchemaHash: snapshot.schemaHash,
+        sourceEngine: snapshot.descriptor.engine,
+        synthetic: snapshot.synthetic,
+        tableCount: Object.keys(status.tables).length,
+        rowCount: BigInt(userTable?.rows ?? 0),
+        codeVersion: this.deps.codeVersion,
+        recordedAt: this.deps.clock.now(),
+      },
+      tx,
+    );
+    if (!outcome.created) return;
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'legacy_import.read_set.record',
+        entityType: 'LegacyReadSetRun',
+        entityId: outcome.run.id,
+        before: null,
+        after: {
+          readSet: outcome.run.readSet,
+          fingerprintVersion: outcome.run.fingerprintVersion,
+          readSetFingerprint: outcome.run.readSetFingerprint,
+          sourceFingerprint: outcome.run.sourceFingerprint,
+          created: true,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
     );
   }
 

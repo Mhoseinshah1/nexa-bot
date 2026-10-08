@@ -1,4 +1,8 @@
-import type { LegacyTrialDecision } from '@nexa/contracts';
+import {
+  LEGACY_USER_STATUS_CLASSES,
+  type LegacyTrialDecision,
+  type LegacyUserStatusClass,
+} from '@nexa/contracts';
 import {
   legacyShapeKey,
   resolveCurrentTariff,
@@ -108,8 +112,18 @@ export interface PlanTallies {
     readonly source: number;
     readonly invalidIdentity: number;
     readonly manualReview: Readonly<
-      Record<'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE' | 'DUPLICATE_SOURCE_ID', number>
+      Record<
+        'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE' | 'DUPLICATE_SOURCE_ID' | 'STATUS_UNKNOWN',
+        number
+      >
     >;
+    /** `User_Status` of every source row, classified (OQ-LWD-07). Σ = `source`. */
+    readonly legacyStatus: Readonly<Record<LegacyUserStatusClass, number>>;
+    /**
+     * Importable users blocked in MirzaBot: `new` are created BLOCKED; `existing` are NEXA
+     * customers the import never changes, so their NEXA status stands (owner decision).
+     */
+    readonly blocked: { readonly new: number; readonly existing: number };
     /** Source ids on more than one row: how many ids, and how many rows carry them. */
     readonly duplicateSourceIds: { readonly ids: number; readonly rows: number };
     readonly importable: number;
@@ -348,7 +362,14 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
   const customers = {
     source: snapshot.users.length,
     invalidIdentity: 0,
-    manualReview: { BALANCE_UNREADABLE: 0, BALANCE_OUT_OF_RANGE: 0, DUPLICATE_SOURCE_ID: 0 },
+    manualReview: {
+      BALANCE_UNREADABLE: 0,
+      BALANCE_OUT_OF_RANGE: 0,
+      DUPLICATE_SOURCE_ID: 0,
+      STATUS_UNKNOWN: 0,
+    },
+    legacyStatus: zeroes<LegacyUserStatusClass>(LEGACY_USER_STATUS_CLASSES),
+    blocked: { new: 0, existing: 0 },
     duplicateSourceIds: { ids: 0, rows: 0 },
     importable: 0,
     existing: 0,
@@ -376,6 +397,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     // row they key is written once and found unchanged by the others.
     const row = duplicateChecksum === undefined ? row0 : { ...row0, checksum: duplicateChecksum };
     customers.phone[row.phone] += 1;
+    customers.legacyStatus[row.status] += 1;
     if (legacyIsAgent(row.agent)) customers.agents += 1;
     const existingCustomerId = input.existingCustomers.get(row.id) ?? null;
     const decision: LegacyUserDecision =
@@ -396,6 +418,10 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     customers.importable += 1;
     if (decision.customer === 'EXISTING') customers.existing += 1;
     else customers.new += 1;
+    if (decision.blocked) {
+      if (decision.customer === 'EXISTING') customers.blocked.existing += 1;
+      else customers.blocked.new += 1;
+    }
     importedUsers.set(row.id, decision.telegramUserId);
 
     wallet.legacySumMinor += decision.balanceMinor;

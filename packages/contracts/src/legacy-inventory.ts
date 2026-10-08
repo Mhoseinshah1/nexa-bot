@@ -123,8 +123,18 @@ export function isLegacyTableRowReadable(name: string): boolean {
  *   legacy invoice archive (`legacy_invoice_archive`, Mirza PR3,
  *   `docs/legacy-migration/importer.md` §Invoice archive). History only: never an order, a
  *   payment, a ledger entry, a service or revenue.
+ * - `user-status` — the legacy `user` table's `id` and `User_Status`, nothing else. Read by
+ *   the users import (Mirza PR4 fix, owner decision 2026-10-08, OQ-LWD-07): a user blocked
+ *   in MirzaBot (`User_Status = 'block'`) is imported as a BLOCKED customer. The frozen v1
+ *   import read set does not carry the column, so it is its own versioned read set, read in
+ *   the import's own snapshot session and recorded against the v1 source fingerprint.
  */
-export const LEGACY_READ_SET_NAMES = ['inventory', 'products', 'invoice-archive'] as const;
+export const LEGACY_READ_SET_NAMES = [
+  'inventory',
+  'products',
+  'invoice-archive',
+  'user-status',
+] as const;
 export type LegacyReadSetName = (typeof LEGACY_READ_SET_NAMES)[number];
 
 /** `legacy-read-set:<name>:v<version>`: a read set fingerprint's version string. */

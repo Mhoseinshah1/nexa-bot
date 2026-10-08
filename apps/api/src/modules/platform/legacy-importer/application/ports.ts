@@ -172,6 +172,18 @@ export interface LegacyReadSetRunRepository {
     run: LegacyReadSetRun,
     tx: TransactionScope,
   ): Promise<{ readonly run: LegacyReadSetRun; readonly created: boolean }>;
+
+  /**
+   * Every read set fingerprint recorded for `readSet` at `readSetVersion` against this v1
+   * source fingerprint (OQ-LWD-07: the import refuses a second user-status of one source).
+   */
+  readSetFingerprintsOf(
+    scope: TenantContext,
+    readSet: LegacyReadSetName,
+    readSetVersion: number,
+    sourceFingerprint: string,
+    tx: TransactionScope,
+  ): Promise<readonly string[]>;
 }
 
 /** One legacy user, as the customer phase writes it. */
@@ -179,6 +191,8 @@ export interface LegacyCustomerInsert {
   readonly id: string;
   readonly telegramUserId: string;
   readonly username: string | null;
+  /** The status a NEW customer is created with (OQ-LWD-07); never applied to an existing one. */
+  readonly status: 'ACTIVE' | 'BLOCKED';
   readonly now: Date;
 }
 

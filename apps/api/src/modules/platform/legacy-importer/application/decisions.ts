@@ -4,6 +4,7 @@ import {
   PAYMENT_AMOUNT_MAX_MINOR,
   telegramUserIdSchema,
   type LegacyImportReasonCode,
+  type LegacyUserStatusClass,
 } from '@nexa/contracts';
 import {
   legacyCustomFlag,
@@ -65,14 +66,23 @@ export type LegacyUserDecision =
        * `DUPLICATE_SOURCE_ID` (Mirza PR4): the id is on more than one source row. Which
        * row's balance is the customer's is unknowable, so none is imported: one review row
        * (`INVALID_SOURCE_ROW`) stands for all of them, decided by the plan.
+       *
+       * `STATUS_UNKNOWN` (OQ-LWD-07): `User_Status` is neither `Active` nor `block`. Whether
+       * the operator banned this person is unknowable, so they are never imported ACTIVE.
        */
-      readonly reason: 'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE' | 'DUPLICATE_SOURCE_ID';
+      readonly reason:
+        'BALANCE_UNREADABLE' | 'BALANCE_OUT_OF_RANGE' | 'DUPLICATE_SOURCE_ID' | 'STATUS_UNKNOWN';
       readonly mapReason: LegacyImportReasonCode;
     }
   | {
       readonly kind: 'IMPORT';
       readonly telegramUserId: string;
       readonly customer: 'NEW' | 'EXISTING';
+      /**
+       * Blocked in MirzaBot (`User_Status = 'block'`, OQ-LWD-07). A NEW customer is created
+       * BLOCKED; an EXISTING one is never changed. The money is recorded either way.
+       */
+      readonly blocked: boolean;
       readonly openingKind: LegacyOpeningKind;
       /** Signed legacy `Balance`, Toman = IRT minor units. */
       readonly balanceMinor: bigint;
@@ -99,7 +109,11 @@ export function legacyTelegramId(raw: string): string | null {
 }
 
 export function decideLegacyUser(
-  row: { readonly id: string; readonly balance: string | null },
+  row: {
+    readonly id: string;
+    readonly balance: string | null;
+    readonly status: LegacyUserStatusClass;
+  },
   existingCustomer: boolean,
 ): LegacyUserDecision {
   const telegramUserId = legacyTelegramId(row.id);
@@ -116,12 +130,17 @@ export function decideLegacyUser(
       mapReason: 'INVALID_SOURCE_ROW',
     };
   }
+  // OQ-LWD-07: a status that is not exactly `Active` or `block` is never read as ACTIVE.
+  if (row.status === 'UNKNOWN') {
+    return { kind: 'MANUAL_REVIEW', reason: 'STATUS_UNKNOWN', mapReason: 'INVALID_SOURCE_ROW' };
+  }
   const openingKind: LegacyOpeningKind =
     balanceMinor > 0n ? 'POSITIVE' : balanceMinor < 0n ? 'NEGATIVE' : 'ZERO';
   return {
     kind: 'IMPORT',
     telegramUserId,
     customer: existingCustomer ? 'EXISTING' : 'NEW',
+    blocked: row.status === 'BLOCKED',
     openingKind,
     balanceMinor,
     mapReason: existingCustomer

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { LEGACY_USER_STATUS_SPELLINGS, type LegacyUserStatusClass } from '@nexa/contracts';
 import {
   IMPORT_READ_SET_V1,
   LEGACY_LIVE_STATUSES,
@@ -14,6 +15,7 @@ import {
   type LegacySourceTableName,
 } from './source-port.js';
 import { classifyLegacyPhone, type LegacyPhoneClass } from './decisions.js';
+import { readUserStatusInSnapshot, type LegacyReadSetResult } from './read-set.js';
 
 /**
  * Migration P7 — one read of the legacy source, and its fingerprint
@@ -52,6 +54,12 @@ export interface LegacyUserRow {
   readonly username: LegacyCell;
   /** The legacy phone, CLASSIFIED and then dropped: the value itself is never kept. */
   readonly phone: LegacyPhoneClass;
+  /**
+   * `User_Status`, CLASSIFIED (OQ-LWD-07), from the `user-status` read set of the same
+   * snapshot. Not part of `checksum` (the `user:v1` facts are frozen): a status is decided
+   * once, when the customer is created, and an existing customer's is never changed.
+   */
+  readonly status: LegacyUserStatusClass;
   /** SHA-256 of the facts the import decides from: the `legacy_import_map.checksum`. */
   readonly checksum: string;
 }
@@ -97,6 +105,22 @@ export interface LegacySnapshot {
   readonly syntheticLabel: string | null;
   /** `user.Balance`'s DATA_TYPE (Q4's reading note asks for it): schema evidence. */
   readonly balanceColumnType: string | null;
+  /**
+   * The `user-status` read set (`legacy-read-set:user-status:v1`) read in THIS snapshot's
+   * session: its fingerprint, schema hash and table evidence. Counts and hashes only.
+   */
+  readonly userStatus: Pick<
+    LegacyReadSetResult,
+    'fingerprintVersion' | 'fingerprint' | 'schemaHash' | 'tables'
+  >;
+}
+
+/** `User_Status` as a class: the two MirzaBot spellings exactly, anything else UNKNOWN. */
+export function classifyLegacyUserStatus(raw: LegacyCell): LegacyUserStatusClass {
+  if (raw === null) return 'UNKNOWN';
+  return Object.hasOwn(LEGACY_USER_STATUS_SPELLINGS, raw)
+    ? (LEGACY_USER_STATUS_SPELLINGS[raw] ?? 'UNKNOWN')
+    : 'UNKNOWN';
 }
 
 export function sha256Hex(text: string): string {
@@ -264,6 +288,7 @@ export async function readFromSession(
       agent,
       username,
       phone: classifyLegacyPhone(cellOf(userColumns, row, 'number')),
+      status: 'UNKNOWN',
       checksum: '',
     });
   });
@@ -312,9 +337,18 @@ export async function readFromSession(
     if (code !== null && code.trim() !== '') productCodes.add(code.trim());
   });
 
+  // OQ-LWD-07: `User_Status`, through its own read set, in this same session. An id the
+  // read set does not carry (it cannot: the same table, the same snapshot) stays UNKNOWN.
+  // An id on more than one row is a DUPLICATE_SOURCE_ID review row whatever its statuses.
+  const statusById = new Map<string, LegacyUserStatusClass>();
+  const userStatus = await readUserStatusInSnapshot(session, (id, raw) => {
+    if (id !== null) statusById.set(id, classifyLegacyUserStatus(raw));
+  });
+
   // The user checksum needs had_trial, which is known only after the invoice scan.
   const withChecksums = users.map((u) => ({
     ...u,
+    status: statusById.get(u.id) ?? ('UNKNOWN' as const),
     checksum: legacyRowChecksum('user:v1', [
       u.id,
       u.balance,
@@ -339,6 +373,12 @@ export async function readFromSession(
     productCodes,
     balanceColumnType:
       schema.find((c) => c.table === 'user' && c.column === 'Balance')?.dataType ?? null,
+    userStatus: {
+      fingerprintVersion: userStatus.fingerprintVersion,
+      fingerprint: userStatus.fingerprint,
+      schemaHash: userStatus.schemaHash,
+      tables: userStatus.tables,
+    },
   };
 }
 

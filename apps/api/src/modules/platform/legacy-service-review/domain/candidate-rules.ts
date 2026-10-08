@@ -56,7 +56,7 @@ export function adoptPanelsOf(evidence: LegacyServiceEvidence): readonly string[
  *
  * - An adopted outcome is `ADOPTED`, always.
  * - An `ADOPTED` row receiving anything else is a broken invariant (a service is never
- *   unadopted; 0230 refuses it too): thrown, never absorbed.
+ *   unadopted; 0231 refuses it too): thrown, never absorbed.
  * - `ACKNOWLEDGED` was of the facts the person saw: a different outcome puts it back OPEN.
  * - `KEPT_AS_HISTORY` is a person's decision about the invoice: it holds until reopened.
  * - `ADOPT_APPROVED` / `ADOPTING` belong to the approval executor, which settles them.

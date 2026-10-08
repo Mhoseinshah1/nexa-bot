@@ -324,11 +324,33 @@ whose checksum is order-free over every row of that id, so a rerun with the rows
 order writes nothing. The legacy `user.id` PK makes this impossible in a sane dump; the plan
 fails closed anyway. The final report's C1 adds the extra rows back (`duplicateSourceIds`).
 
+Blocked users (`User_Status`; owner decision 2026-10-08, `OQ-LWD-07`, aud4 F1): the frozen
+v1 read set does not carry the column, so it is read through its own versioned read set,
+`user-status` (`legacy-read-set:user-status:v1`: `user.id`, `user.User_Status`), in the
+SAME read-only session as the v1 snapshot, decided from the bytes it fingerprints. Exactly
+`Active` → ACTIVE, exactly `block` (UBR-018) → BLOCKED, anything else (NULL, empty, another
+case or word) → UNKNOWN. A source without the column is refused
+(`SOURCE_SCHEMA_MISSING_COLUMN`). A BLOCKED user is imported as a **BLOCKED customer**
+(`blocked_at` = the import's instant, no reason — a reason would be shown to the customer)
+with their opening CREDIT or legacy debt recorded exactly as anybody's: the block stops
+ordering and paying (`assertCustomerMayOrder`, `assertCustomerMayPay`), it does not erase
+money, and every reconciliation total is unchanged. An EXISTING NEXA customer's status is
+never changed. UNKNOWN is manual review (`INVALID_SOURCE_ROW`, plan reason
+`STATUS_UNKNOWN`, outcome `SKIPPED_STATUS_UNKNOWN`), never ACTIVE. The plan prints
+`customers.legacyStatus` and `customers.blocked {new, existing}`; `source.userStatus`
+prints the read set's fingerprint. An APPLY run records it in `legacy_read_set_runs`
+against the v1 source fingerprint inside its start transaction, and refuses
+(`legacy_import.run_conflict`, nothing written) when that source already has a DIFFERENT
+user-status observation: a status flipped under an unchanged v1 fingerprint is a second
+snapshot, never interleaved with the first. (The final report v1's `customers.blocked` is
+older and means "not a Telegram id"; v1 is closed. The blocked users are
+`usersWallets.users.blocked`.)
+
 Legacy agents (`user.agent`): counted (`plan.customers.agents`, `usersWallets.users.agents`)
 and imported as ORDINARY customers — never a reseller row, a tier or credit (there is no
 reseller credit). Whether a legacy agent becomes a NEXA reseller is the owner's
 (`OQ-LWD-03`). The agent value itself is not persisted per customer (it is in the source
-dump and the v1 user digest); the v1 read set is frozen, so no other `user` column is read.
+dump and the v1 user digest); the v1 read set is frozen; the only other `user` column read is `User_Status`, through its own `user-status` read set (`OQ-LWD-07`).
 
 Openings: `MigrationOpeningBalanceService.post` — positive (one CREDIT), zero (no entry),
 negative: **a legacy debt, never a ledger entry** (owner decision 6, Mirza PR4;

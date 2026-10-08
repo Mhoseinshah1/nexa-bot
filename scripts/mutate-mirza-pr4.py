@@ -27,6 +27,10 @@ PLAN = f'{IMP}/plan.ts'
 UW = f'{IMP}/users-wallets-reconciliation.ts'
 SERVICE = f'{IMP}/legacy-importer.service.ts'
 FINAL = f'{IMP}/final-report.ts'
+DEC = f'{IMP}/decisions.ts'
+SNAP = f'{IMP}/source-snapshot.ts'
+RS = f'{IMP}/read-set.ts'
+IREPO = 'apps/api/src/modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.ts'
 
 T_OPEN = ('integration', 'tests/integration/migration-opening-balance.test.ts')
 T_DEBTS = ('integration', 'tests/integration/legacy-wallet-debts.test.ts')
@@ -34,6 +38,7 @@ T_IMP = ('integration', 'tests/integration/legacy-importer.test.ts')
 T_BOUND = ('unit', 'tests/unit/legacy-wallet-debts-boundary.test.ts')
 T_UW = ('unit', 'tests/unit/legacy-users-wallets.test.ts')
 T_DEC = ('unit', 'tests/unit/legacy-importer-decisions.test.ts')
+T_RS = ('unit', 'tests/unit/legacy-read-set.test.ts')
 
 NEG = "        if (command.legacyBalanceMinor < 0n) {\n          return this.holdNegative("
 M = [
@@ -79,6 +84,22 @@ M = [
     ('D-05', [(SVC, "    if (found !== null) return reviveDebt(found.result);",
                "    if (found !== null) {\n      const now = await this.deps.repository.findById(scope, id);\n      if (now !== null) return now;\n    }")],
      T_DEBTS, 'ORIGINAL response'),
+    # aud4 F1 / OQ-LWD-07 (owner decision 2026-10-08): a MirzaBot ban survives the cutover.
+    ('B-01', [(IREPO, "    const status = input.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE';", "    const status = 'ACTIVE';")], T_IMP, 'OQ-LWD-07: a user blocked'),
+    ('B-02', [(SERVICE, "                status: decision.blocked ? 'BLOCKED' : 'ACTIVE',\n                now,", "                status: 'ACTIVE',\n                now,")], T_IMP, 'OQ-LWD-07: a user blocked'),
+    ('B-03', [(DEC, "    blocked: row.status === 'BLOCKED',", "    blocked: false,")], T_DEC, 'blocked legacy user is imported blocked'),
+    ('B-04', [(DEC, "  if (row.status === 'UNKNOWN') {", "  if (false) {")], T_DEC, 'unknown User_Status'),
+    ('B-05', [(DEC, "  if (row.status === 'UNKNOWN') {", "  if (false) {")], T_IMP, 'OQ-LWD-07: a user blocked'),
+    ('B-06', [(SNAP, "  if (raw === null) return 'UNKNOWN';", "  if (raw === null) return 'ACTIVE';")], T_DEC, 'only the two MirzaBot spellings'),
+    ('B-07', [(SNAP, "  return Object.hasOwn(LEGACY_USER_STATUS_SPELLINGS, raw)\n    ? (LEGACY_USER_STATUS_SPELLINGS[raw] ?? 'UNKNOWN')",
+               "  return Object.hasOwn(LEGACY_USER_STATUS_SPELLINGS, raw.trim())\n    ? (LEGACY_USER_STATUS_SPELLINGS[raw.trim()] ?? 'UNKNOWN')")], T_DEC, 'only the two MirzaBot spellings'),
+    ('B-08', [(SNAP, "    status: statusById.get(u.id) ?? ('UNKNOWN' as const),\n", "")], T_RS, 'travels with the import snapshot'),
+    ('B-09', [(RS, "columns: ['id', 'User_Status'] }],", "columns: ['id'], optionalColumns: ['User_Status'] }],")], T_IMP, 'without User_Status is refused'),
+    ('B-10', [(SERVICE, "    if (other.length > 0) {", "    if (false) {")], T_IMP, 'changed under an unchanged v1 fingerprint'),
+    ('B-11', [(SERVICE, "      await this.bindUserStatus(scope, actor, snapshot, tx);\n", "")], T_IMP, 'OQ-LWD-07: a user blocked'),
+    ('B-12', [(UW, "      : decision.reason === 'STATUS_UNKNOWN'\n        ? 'SKIPPED_STATUS_UNKNOWN'\n", "      : false\n        ? 'SKIPPED_STATUS_UNKNOWN'\n")], T_UW, 'gives every source row exactly one outcome'),
+    ('B-13', [(SERVICE, "          tallies.customers.manualReview.STATUS_UNKNOWN +\n", "")], T_IMP, 'OQ-LWD-07: a user blocked'),
+    ('B-14', [(UW, "      if (outcome === 'IMPORTED_NEW') blocked.importedNew += 1;", "      if (outcome === 'IMPORTED_EXISTING') blocked.importedNew += 1;")], T_UW, 'blocked users are counted'),
 ]
 
 FACTS_TRIGGER = ('CREATE TRIGGER legacy_wallet_debts_facts_immutable BEFORE UPDATE ON legacy_wallet_debts '

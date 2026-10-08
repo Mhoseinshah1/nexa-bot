@@ -1138,7 +1138,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       sql`DELETE FROM role_permissions WHERE permission_key LIKE 'legacy.services.%'`,
     );
     const migration = readFileSync(
-      'apps/api/drizzle/0231_legacy_service_review_grants.sql',
+      'apps/api/drizzle/0232_legacy_service_review_grants.sql',
       'utf8',
     );
     const backfill = migration.slice(migration.indexOf('INSERT INTO "role_permissions"'));
