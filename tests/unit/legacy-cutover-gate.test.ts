@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LEGACY_CUTOVER_GATE_STEPS } from '@nexa/contracts';
 import {
@@ -153,7 +153,12 @@ describe('the freeze proof: PR1 checker, pinned', () => {
     // refused, whatever spelling of the path is used.
     const self = await runFreezeChecker(CHECKER, a, a);
     expect(self.exitCode).toBe(0);
-    for (const restoredPath of [a, join(dir, '.', 'a.tsv'), join(dir, 'x', '..', 'a.tsv')]) {
+    for (const restoredPath of [
+      a,
+      `${dir}/./a.tsv`,
+      `${dir}/x/../a.tsv`,
+      relative(process.cwd(), a),
+    ]) {
       expect(
         freezeProofHolds({
           ...base,
