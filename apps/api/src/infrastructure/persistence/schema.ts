@@ -13661,6 +13661,12 @@ export const businessConversationEscalations = pgTable(
     topic: text('topic'),
     intent: text('intent'),
     stepsTried: integer('steps_tried'),
+    /**
+     * Review of PR #246 (M1): when the summary and intent were copied from an EARLIER decision
+     * rather than the deciding one, that decision's time. The text is purged 30 days after the
+     * older of this and `created_at`, so a copy never outlives its source.
+     */
+    contextFrom: timestamptz('context_from'),
     ticketId: uuid('ticket_id'),
     ticketOutcome: text('ticket_outcome').notNull(),
     jobId: uuid('job_id'),
@@ -14090,6 +14096,13 @@ export const supportAiJobs = pgTable(
     ),
     /** TB10 analytics: a tenant's jobs in a window (AUTO outcomes, Assist drafts). */
     index('support_ai_jobs_created_idx').on(table.tenantId, table.createdAt),
+    /**
+     * Roadmap A3 (review of PR #246, n4): `epochStartedAt` — an epoch's automatic jobs, exactly,
+     * rather than every job the conversation ever had.
+     */
+    index('support_ai_jobs_auto_epoch_idx')
+      .on(table.tenantId, table.conversationId, table.controlEpoch)
+      .where(sql`kind = 'AUTO_DECISION'`),
     foreignKey({
       columns: [table.tenantId, table.conversationId],
       foreignColumns: [businessConversations.tenantId, businessConversations.id],
