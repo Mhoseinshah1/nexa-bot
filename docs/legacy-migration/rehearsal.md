@@ -141,6 +141,32 @@ database name, equal to the `DATABASE_URL` the harness sets; its
 `rehearsal` token keeps P7's production guard from refusing it, and the harness never
 passes `--allow-production-target`.
 
+### The table inventory (Mirza PR1): run by hand, not by the harness yet
+
+The harness does not yet run `inventory`. PR6 adds it as a stage. Against the rehearsal's
+restored legacy copy, after the cycle's `audit`, the operator runs it by hand, with the
+same source and target the harness uses and the cycle's own `source.fingerprint`:
+
+```
+NEXA_REHEARSAL_LEGACY_PASSWORD=… node apps/api/dist/legacy-import.cli.js inventory --tenant T \
+  --source mysql://legacy_ro@127.0.0.1:<port>/<schema> \
+  --source-password-env NEXA_REHEARSAL_LEGACY_PASSWORD \
+  --target nexa_rehearsal_<stamp> --expected-fingerprint <audit source.fingerprint> > inventory.md
+```
+
+It is read-only on the legacy copy. On the target it writes only the
+`legacy_read_set_runs` row for the bound observation. Exit 0 means every table is classified
+(`COMPLETE`). Exit 3 means at least one table is not, or the run is unbound; the synthetic
+fixture is deliberately in that state, with `nexa_synthetic_unclassified`. Exit 65 means
+the copy is not the audited source.
+
+Copy the table into `table-inventory.md`, and open an `OQ-MZ-INV` entry for every
+UNCLASSIFIED table. The freeze statement it prints is the one
+`scripts/legacy-freeze-checksum.sql` runs, and the cutover compares it at steps 7 and 9
+with `scripts/legacy-freeze-checksum-verify.sh`, which refuses an empty or partial output
+file (a failed client) instead of letting two of them compare equal.
+**NOT RUN on real data.**
+
 ### Exit codes
 
 P7: `0` done; `3` done but a person must decide; `4` interrupted; `64`/`65` refused; `73`

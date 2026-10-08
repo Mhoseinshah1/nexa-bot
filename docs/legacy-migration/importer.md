@@ -184,6 +184,67 @@ and the in-memory fixture produce the same fingerprint for the same data (tested
 Row checksums (`legacy_import_map.checksum`): `user:v1` over id, Balance, limit, had-trial,
 username; `invoice:v1` over the invoice's decision columns.
 
+### 3.1 The v1 import read set is frozen; everything else is a versioned read set (Mirza PR1)
+
+Everything that feeds v1 lives in ONE deep-frozen object, `IMPORT_READ_SET_V1`
+(`source-port.ts`): the version string, tables, primary keys, required and optional columns,
+and the not-fingerprinted column. `LEGACY_SOURCE_TABLES` and the other old names are its
+members. `tests/unit/legacy-import-read-set-v1.test.ts` pins the following literally:
+
+- the synthetic v1 fingerprint, its schema hash, every table digest and the unmarked form;
+- the object itself.
+
+So adding a column or a table to the import read set fails CI. It cannot silently void an
+approval. If v1 must ever change, it becomes `legacy-source-fingerprint:v2` with an owner
+decision.
+
+Any other read of the legacy database is a **versioned read set** (`read-set.ts`):
+
+- `defineLegacyReadSet({ name, version, tables })` defines it; each table entry is
+  `{ table, primaryKey, columns, optionalColumns }`. Every table must be one the catalogue
+  lets a read set read: `SUPPORTED` or `ARCHIVE`
+  (`packages/contracts/src/legacy-inventory.ts`). The adapter refuses rows of any other
+  table as well (`SOURCE_TABLE_NOT_READABLE`).
+- Its fingerprint, `legacy-read-set:<name>:v<n>`, is
+  `sha256(JSON{v, [synthetic], schema, tables:{…}})`. `schema` covers every column of the
+  read set's tables, and each digest is v1's `TableDigest` over the allowlisted columns,
+  read in v1's `ORDER BY CAST(pk AS BINARY)` order.
+- `readLegacyReadSet(session, def)` is the digest-only read: one pass, no row delivered,
+  the read set fingerprint to approve. With `{ expectedFingerprint }` it also refuses
+  (`READ_SET_FINGERPRINT_MISMATCH`) unless the result equals it.
+- `readLegacyReadSet(session, def, { expectedFingerprint, onBatch, batchSize })` delivers
+  rows, and verification precedes every side effect. `expectedFingerprint` (the operator's
+  `--expected-<set>-fingerprint`) is REQUIRED with `onBatch`; without it the call is
+  refused before any read. In the same session (the same READ ONLY snapshot) it:
+  1. runs a digest-only pass and compares it with `expectedFingerprint`; a mismatch is
+     refused with `READ_SET_FINGERPRINT_MISMATCH` and `onBatch` is never called;
+  2. runs the delivery pass, streaming rows to `onBatch` at most `batchSize` at a time
+     (default 1000, maximum 5000), and recomputes the digest as it goes. If the result
+     differs from pass 1, the call fails with `READ_SET_SNAPSHOT_DIVERGED` after the last
+     batch. So a consumer that writes must do it in a transaction that this error rolls
+     back.
+
+  Each pass awaits each batch before reading on and keeps no rows itself. A test proves
+  that no row is read ahead of the batch being handed over. The v1 binding below does not
+  cover a read set's own tables and columns, which is why delivery needs the read set's
+  own approved value as well.
+
+- `withBoundReadSetSession(connector, approvedV1, work)` opens one READ ONLY session and
+  recomputes the v1 fingerprint in it (`readImportV1Identity`, the same walk as
+  `readFromSession`, with no row kept). It refuses with `SOURCE_FINGERPRINT_MISMATCH` unless
+  the result equals the approved value, and only then hands that same snapshot to `work`.
+  Approval stays one value for the source; each read set prints its own fingerprint for its
+  own `--expected-<set>-fingerprint`.
+- An observation is recorded in `legacy_read_set_runs` (migrations 0219 and 0220):
+  - append-only;
+  - one row per (tenant, read set, version, read-set fingerprint, source fingerprint);
+  - read set names pinned by `LEGACY_READ_SET_NAMES`;
+  - never in `legacy_import_run_inputs`, which is per APPLY run and compared on resume.
+
+The first read set is `inventory` (below). `products` (PR2) and `invoice-archive` (PR3)
+each add their definition, their name in `LEGACY_READ_SET_NAMES` (a contract change) and
+the CHECK's widening.
+
 ## 4. The panel mapping file (Item 6)
 
 ```json
@@ -325,6 +386,38 @@ and `--format` are refused, and nothing it prints reaches a report, an audit row
 (the queue audits a row by its uuid). The production guard applies to its target as to
 every mode. Each `resolve`/`reopen` invocation uses a fresh idempotency key.
 
+### Inventory subcommand (read-only)
+
+```bash
+pnpm legacy-import inventory --tenant T --source SOURCE --target TARGET \
+     [--expected-fingerprint HEX] [--format md|json] [--source-password-env NAME] [--allow-production-target]
+```
+
+It lists every table of the legacy database: name, class from the reviewed catalogue,
+column count, a hash of its sorted `name:data_type` lines, the exact `COUNT(*)` inside the
+snapshot (never `TABLE_ROWS`), storage engine, charset, collation and text-column charsets.
+It never prints a row value. It also prints the `legacy-read-set:inventory:v1` fingerprint,
+the v1 import fingerprint check, and the freeze-proof statement (`CHECKSUM TABLE` over
+every base table). See `docs/legacy-migration/table-inventory.md`.
+
+`--panel-map` and `--out` are refused, and so is any password on argv; capture stdout
+instead.
+
+What it writes depends on the fingerprint:
+
+- With `--expected-fingerprint` equal to the v1 fingerprint the same session recomputes,
+  the inventory's fingerprint is recorded in `legacy_read_set_runs`. The write is
+  insert-or-nothing, audited as `legacy_import.read_set.record`, under `maintenance.run`,
+  and refused for a stopped tenant. That row and its audit row are the only writes, tested
+  over every table.
+- Without the flag nothing is written and the verdict is `FINGERPRINT_UNBOUND`.
+- A mismatch is refused before any table is counted (exit 65).
+
+A SYNTHETIC-marked source is never recorded against a production-like target.
+
+The verdict fails closed. Exit 0 means `COMPLETE`. Exit 3 means `UNCLASSIFIED_TABLES`,
+`BLOCKED` (a view, or a name no statement can carry) or `FINGERPRINT_UNBOUND`.
+
 ### Actors
 
 The CLI acts as `SYSTEM_JOB` (`legacy-import:<mode>`), which holds `maintenance.run` only.
@@ -435,6 +528,36 @@ every user) against the importer's own decisions. A disagreement is reported, no
   (`legacy-mysql`, a `mariadb:10.11` service) rather than a fails-not-skips opt-in: unlike
   a real panel, a database server is something CI can provide on every pull request.
   Without `NEXA_LEGACY_MYSQL_ADMIN_DSN` it FAILS, never skips.
+- Mirza PR1: the following tests cover the frozen v1, the versioned read sets, the
+  inventory and its CLI, and the catalogue:
+  - `tests/unit/legacy-import-read-set-v1.test.ts`
+  - `tests/unit/legacy-read-set.test.ts`
+  - `tests/unit/legacy-inventory.test.ts`
+  - `tests/unit/legacy-table-classification.test.ts`
+
+  `tests/integration/legacy-read-set-runs.test.ts` covers the following:
+  - only `legacy_read_set_runs` and `audit_logs` change, over every table;
+  - unbound and mismatched runs write nothing;
+  - idempotency and tenant isolation;
+  - a stopped tenant;
+  - append-only rows and the CHECKs.
+
+  `tests/legacy-mysql/legacy-mysql-inventory.test.ts` runs on both CI engines and covers
+  the following:
+  - `tables()` and exact counts;
+  - a commit after the session opened is not counted;
+  - engine and fixture inventories agree, and so do read-set fingerprints;
+  - the adapter refuses unclassified rows;
+  - `scripts/legacy-freeze-checksum.sql` covers every base table and notices a write to
+    `product` and to the unclassified table;
+  - a read set's delivery pass on the engine delivers every row only after the verifying
+    pass matched, and a mismatch delivers none.
+
+  `tests/unit/legacy-inventory.test.ts` runs `scripts/legacy-freeze-checksum-verify.sh`
+  over a well-formed file, an empty one, a header-only one, a short one, a NULL checksum
+  and a duplicated table, and pins that the runbooks capture the client's own exit status
+  and compare through the checker.
+
 - Mutation-checked: the acknowledgement requirement, the READ ONLY transaction, the
   resume's mapping check, the rerun keeping a created customer's own map reason, the
   insert never touching an existing customer, an unmapped named product held for review.
@@ -482,11 +605,17 @@ and a unit test holds them equal.
    (`COLLATION_REQUIRES_MYSQL8`) or taken from a MySQL ≥ 8 server (`ENGINE_MISMATCH`):
    the collation is never rewritten — MySQL 8 is the engine for it.
 
+   Add `--columns` to list each table's column NAMES from the dump (Mirza PR1). This is the
+   input for `docs/legacy-migration/table-inventory.md` before anything is loaded.
+
 1. Restore the archive into MySQL 8 (the CI covers MariaDB 10.11 and MySQL 8.0 with the
    SYNTHETIC dataset — `legacy-mysql` job, OQ-P7-03; the real dump's first MySQL 8 load
    is this step), create `oldbot_ro` (SELECT only).
 2. `audit` against staging with the real mapping file: record the evidence and the
    cross-checks into `sql-evidence.md` in their own commit — those, not the synthetic
    figures, are Item 1's result.
+   Then run `inventory --expected-fingerprint <audit's source.fingerprint>` and fill
+   `table-inventory.md` from it (Mirza PR1). This step is NOT RUN: no real data has been
+   inventoried.
 3. `dry-run`, `import`, kill it, `resume`, `reconcile`, `report --format json` — the
    REHEARSE runbook (`docs/legacy-migration/rehearsal.md`).

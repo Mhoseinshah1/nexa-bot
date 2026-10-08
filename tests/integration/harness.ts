@@ -176,7 +176,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- Migration P4: the import map before the runs it names.
        legacy_import_map, legacy_import_runs,
        -- Migration P7: the run inputs, before the runs they name.
-       legacy_import_run_inputs,
+       legacy_import_run_inputs, legacy_read_set_runs,
        -- TB1: Telegram Business connections, before the bots and tenants they name.
        -- TB4: the support AI's runs, keys and configuration.
        support_knowledge_build_proposals, support_knowledge_builds, support_knowledge_revisions, support_knowledge_articles, support_learning_candidates, support_learning_jobs,

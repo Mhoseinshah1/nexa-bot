@@ -28,7 +28,8 @@ Each legacy customer's `user.Balance` (Toman) becomes **one** wallet ledger entr
   the balance is already right. The service answers `ZERO_NO_ENTRY` (never a fake
   "posted"); the importer's run metadata (P4) records the decision. A zero after a non-zero
   opening was already posted is a payload mismatch, not a silent no-op.
-- **Negative (38 legacy users):** a `DEBIT` written **without** the overdraft check. This is
+- **Negative (38 legacy users in the historical staging snapshot — a dated baseline, never
+  an expected count; the cutover snapshot is newer):** a `DEBIT` written **without** the overdraft check. This is
   the only path that may take a wallet below zero: the debt already exists and is recorded,
   not created. Every ordinary debit (`WalletService.adjust`, purchases, clawbacks) still runs
   `canCover` with a zero allowance, so a wallet that opens negative refuses the next ordinary

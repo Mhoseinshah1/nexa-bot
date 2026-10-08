@@ -1,19 +1,23 @@
 import mysqlCallback from 'mysql2';
 import type mysql from 'mysql2/promise';
+import { isLegacyTableRowReadable } from '@nexa/contracts';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import {
+  LEGACY_IDENTIFIER_PATTERN,
   LEGACY_OPTIONAL_COLUMNS,
   LEGACY_PRIMARY_KEYS,
   LEGACY_REQUIRED_COLUMNS,
   LEGACY_SOURCE_TABLES,
   LEGACY_SYNTHETIC_MARKER_TABLE,
   LegacySourceRefused,
+  type LegacyCatalogColumn,
   type LegacyCell,
   type LegacySchemaColumn,
   type LegacySourceConnector,
   type LegacySourceDescriptor,
   type LegacySourceSession,
   type LegacySourceTableName,
+  type LegacyTableInfo,
 } from '../application/source-port.js';
 
 /**
@@ -108,7 +112,7 @@ export function mysqlSourceLabel(options: MysqlSourceOptions): string {
 }
 
 function quoteIdentifier(name: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(name)) {
+  if (!LEGACY_IDENTIFIER_PATTERN.test(name)) {
     throw new Error('not an identifier the legacy vocabulary contains');
   }
   return `\`${name}\``;
@@ -261,6 +265,79 @@ class MysqlLegacySourceSession implements LegacySourceSession {
       `SELECT ${select} FROM ${quoteIdentifier(table)} ` +
       `ORDER BY CAST(${quoteIdentifier(LEGACY_PRIMARY_KEYS[table])} AS BINARY)`;
     // Streamed: one ordered pass, never the whole table in one result buffer.
+    const stream = this.raw.query({ sql, rowsAsArray: true }).stream();
+    for await (const row of stream as AsyncIterable<unknown[]>) {
+      yield row.map(cellOf);
+    }
+  }
+
+  async tables(): Promise<readonly LegacyTableInfo[]> {
+    // The charset is the one the table's collation belongs to, as the engine itself says —
+    // never a prefix cut from the collation's name.
+    const [rows] = await this.connection.query<mysql.RowDataPacket[]>(
+      `SELECT t.TABLE_NAME AS n, t.TABLE_TYPE AS ty, t.ENGINE AS e, t.TABLE_COLLATION AS co,
+              (SELECT MIN(a.CHARACTER_SET_NAME)
+                 FROM information_schema.COLLATION_CHARACTER_SET_APPLICABILITY a
+                WHERE a.COLLATION_NAME = t.TABLE_COLLATION) AS cs
+         FROM information_schema.TABLES t
+        WHERE t.TABLE_SCHEMA = DATABASE()`,
+    );
+    return rows.map((row) => ({
+      name: cellOf(row['n']) ?? '',
+      tableType: cellOf(row['ty']) ?? '',
+      storageEngine: cellOf(row['e']),
+      charset: cellOf(row['cs']),
+      collation: cellOf(row['co']),
+    }));
+  }
+
+  async catalogColumns(): Promise<readonly LegacyCatalogColumn[]> {
+    const [rows] = await this.connection.query<mysql.RowDataPacket[]>(
+      `SELECT TABLE_NAME AS t, COLUMN_NAME AS c, DATA_TYPE AS d, ORDINAL_POSITION AS o,
+              CHARACTER_SET_NAME AS cs
+         FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()`,
+    );
+    return rows.map((row) => ({
+      table: cellOf(row['t']) ?? '',
+      column: cellOf(row['c']) ?? '',
+      dataType: (cellOf(row['d']) ?? '').toLowerCase(),
+      ordinal: Number(cellOf(row['o']) ?? 0),
+      charset: cellOf(row['cs']),
+    }));
+  }
+
+  async countRows(table: string): Promise<number> {
+    // Exact, and inside the snapshot: COUNT(*), never TABLE_ROWS (an InnoDB estimate).
+    const [rows] = await this.connection.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS n FROM ${quoteIdentifier(table)}`,
+    );
+    const text = cellOf(rows[0]?.['n']) ?? '';
+    if (!/^[0-9]{1,15}$/u.test(text)) {
+      throw new LegacySourceRefused('SOURCE_UNREADABLE', 'a row count is not a safe integer');
+    }
+    return Number(text);
+  }
+
+  async *readSetRows(
+    table: string,
+    primaryKey: string,
+    columns: readonly string[],
+  ): AsyncIterable<readonly LegacyCell[]> {
+    if (!isLegacyTableRowReadable(table)) {
+      throw new LegacySourceRefused(
+        'SOURCE_TABLE_NOT_READABLE',
+        `the table catalogue does not let a read set read rows of ${table}`,
+      );
+    }
+    if (columns.length === 0) throw new Error('a read set reads at least one column');
+    const select = columns.map((c) => `CAST(${quoteIdentifier(c)} AS CHAR)`).join(', ');
+    // The v1 order, byte for byte: ORDER BY CAST(pk AS BINARY).
+    const sql =
+      `SELECT ${select} FROM ${quoteIdentifier(table)} ` +
+      `ORDER BY CAST(${quoteIdentifier(primaryKey)} AS BINARY)`;
+    // Streamed: the driver pauses the socket while the consumer holds a batch, so at most
+    // a stream buffer and the caller's batch are ever in memory.
     const stream = this.raw.query({ sql, rowsAsArray: true }).stream();
     for await (const row of stream as AsyncIterable<unknown[]>) {
       yield row.map(cellOf);

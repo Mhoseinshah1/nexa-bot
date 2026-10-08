@@ -1,4 +1,4 @@
-import type { ActorContext, TenantContext } from '@nexa/contracts';
+import type { ActorContext, LegacyReadSetName, TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
@@ -110,6 +110,38 @@ export interface LegacyRunInputsRepository {
     tx: TransactionScope,
   ): Promise<LegacyRunInputs>;
   find(scope: TenantContext, runId: string): Promise<LegacyRunInputs | null>;
+}
+
+/**
+ * Mirza migration PR1 — one observation of a versioned read set (`legacy_read_set_runs`),
+ * bound to the approved v1 source by `sourceFingerprint`. Hashes and counts only.
+ */
+export interface LegacyReadSetRun {
+  readonly id: string;
+  readonly readSet: LegacyReadSetName;
+  readonly readSetVersion: number;
+  readonly fingerprintVersion: string;
+  readonly readSetFingerprint: string;
+  readonly sourceFingerprint: string;
+  readonly sourceSchemaHash: string;
+  readonly sourceEngine: LegacySourceEngine;
+  readonly synthetic: boolean;
+  readonly tableCount: number;
+  readonly rowCount: bigint;
+  readonly codeVersion: string | null;
+  readonly recordedAt: Date;
+}
+
+export interface LegacyReadSetRunRepository {
+  /**
+   * Insert-or-nothing on the observation key (tenant, read set, version, read-set
+   * fingerprint, source fingerprint). Returns the stored row and whether THIS call wrote it.
+   */
+  recordReadSetRun(
+    scope: TenantContext,
+    run: LegacyReadSetRun,
+    tx: TransactionScope,
+  ): Promise<{ readonly run: LegacyReadSetRun; readonly created: boolean }>;
 }
 
 /** One legacy user, as the customer phase writes it. */

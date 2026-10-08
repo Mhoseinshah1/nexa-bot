@@ -7164,6 +7164,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         destination: importerRepository,
         runs: new DrizzleLegacyImportRepository(database.db),
         runInputs: importerRepository,
+        readSetRuns: importerRepository,
         customers: importerRepository,
         inventory: legacyInventory(options),
         openings: migrationOpeningBalance,

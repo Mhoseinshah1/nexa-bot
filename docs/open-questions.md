@@ -3244,6 +3244,61 @@ HISTORY_NOT_IMPORTED` (not adopted by registered decision; it expires on the pan
   operator-run CLI bounded by page size and `maxPages`; two full walks per production panel
   per mode. Whether a cutover-day run should share the monitor's budget is open.
 
+## OQ-MZ-INV — the legacy Mirza tables and columns the repository does not know (Mirza PR1)
+
+The repository knows three legacy tables through the v1 import read set (`user`, `invoice`,
+`product`), plus its own synthetic marker. Every other table is `UNCLASSIFIED` in
+`LEGACY_TABLE_CLASSIFICATION`, and that fails closed: `legacy-import inventory` reports
+`UNCLASSIFIED_TABLES`, and no read set may read its rows. Each item below is UNKNOWN, and
+none is to be guessed. They are settled from the real staging inventory
+(`docs/legacy-migration/table-inventory.md`, NOT RUN) and recorded in reviewed commits.
+Counts quoted from the historical staging snapshot are dated baselines, never expected
+values.
+
+- **OQ-MZ-INV-01 — UNKNOWN: the full table list and each table's class.** Other MirzaBot
+  revisions name `setting`, `marzban_panel` (and other panel tables), `Payment_report`,
+  `textbot`, `admin`, `channels`, `Discount`, gift, affiliate and support tables. In this
+  repository they appear only as refusal probes (`tests/unit/legacy-import-rules.test.ts`).
+  Their columns, keys and purpose are unknown.
+  **Settled by:** the inventory of the staging copy, then one catalogue commit per table
+  with its evidence.
+- **OQ-MZ-INV-02 — UNKNOWN: which tables and columns hold secrets.** Possible secrets
+  include panel passwords, the bot token, card numbers, gateway keys, subscription links,
+  config URIs and UUIDs. Whether `invoice` itself holds any of them is also unknown.
+  Until settled, no such table is `ARCHIVE` or `SUPPORTED`. A table holding any secret is
+  `SECRETS_MANUAL`: names and counts only.
+  **Settled by:** column names (`legacy-archive-inspect.mjs --columns`) plus an owner review.
+  Never by reading the values in NEXA.
+- **OQ-MZ-INV-03 — UNKNOWN: the real column types, charsets and collations.** For example,
+  whether `user.Balance` is `int` or `decimal` (Q4's note in `sql-evidence.md`). Also unknown
+  is whether a `latin1` table holds UTF-8 bytes; it would arrive as mojibake through the
+  utf8mb4 connection and enter checksums. The inventory reports `NOT_UTF8MB4` per table.
+- **OQ-MZ-INV-04 — UNKNOWN: whether any table is not InnoDB.** A MyISAM table is not under
+  the session's consistent snapshot. The inventory reports `NOT_SNAPSHOT_CONSISTENT`, and
+  the legacy freeze (`read_only`, cutover step 7) is what makes its reads stable.
+- **OQ-MZ-INV-05 — UNKNOWN: the non-live `invoice.Status` values.** The fixture uses
+  `removed`; the real set is unknown.
+- **OQ-MZ-INV-06 — UNKNOWN: the format of `invoice.time_sell` and the time zone of every
+  legacy timestamp.** The fixture's unix seconds are synthetic. `dateStrings` returns
+  `DATETIME` without a zone, so no conversion is made until the rule is evidenced.
+- **OQ-MZ-INV-07 — UNKNOWN: the unit and numeric shape of `price_product`, in both
+  `invoice` and `product`.** It may be Toman or Rial, and the legacy UI uses both words.
+  The same question is OQ-LPR-03. Raw text is kept until it is settled.
+- **OQ-MZ-INV-08 — UNKNOWN: the units of `Volume` and `Volume_constraint`, the meaning of
+  `0`, and the `time_unit` spellings.** The same questions are OQ-LPR-02 and OQ-I14-03.
+- **OQ-MZ-INV-09 — UNKNOWN: the real `product` columns.** The same question is OQ-LPR-01.
+  PR2's `products` read set is defined from the inventory's column list, not from the
+  public source.
+- **OQ-MZ-INV-10 — UNKNOWN: the cutover snapshot's row counts.** The historical staging
+  snapshot's figures (197,700 users quoted by the owner; 197,461 user ids in
+  `sql-evidence.md`; 127,611 invoices; 64 products) disagree with each other, and are
+  baselines of an older snapshot. They are never limits, expected values or test oracles.
+  The inventory's exact `COUNT(*)` of the final snapshot is the figure of record.
+- **OQ-MZ-INV-11 — DECISION: which `invoice` columns the archive keeps (PR3).** The archive
+  read set is an explicit column allowlist. Every column it lists must be classified
+  `ARCHIVE`-safe in a reviewed commit, and every column it leaves out is excluded on
+  purpose.
+
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 
 Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.

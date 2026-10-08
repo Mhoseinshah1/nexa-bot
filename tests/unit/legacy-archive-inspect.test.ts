@@ -16,6 +16,7 @@ import { gzipSync } from 'node:zlib';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { LEGACY_REQUIRED_COLUMNS } from '../../apps/api/src/modules/platform/legacy-importer/application/source-port';
 import { REQUIRED_COLUMNS, inspect } from '../../scripts/legacy-archive-inspect.mjs';
+import { buildSyntheticLegacyDataset } from '../fixtures/legacy/synthetic-legacy';
 
 /**
  * WP-D1a — `scripts/legacy-archive-inspect.mjs`, run as the operator runs it.
@@ -149,13 +150,13 @@ describe('the committed fixtures are what make-fixtures.php wrote', () => {
   // Pinned, so a fixture swapped for one this repository's own code wrote is visible in
   // review. Regenerating them (random AES salts) changes these values deliberately.
   const PINNED: Record<string, string> = {
-    'backup_2026-01-01.zip': '6b90365bbd8ae0379464a8832a42c087389403cee78fd36bf30dfc4910d5b58c',
-    'backup_2026-01-02.zip': '5597a035ac5158deb50645f929a05633df96972b61bd3e7b6aea702eb917e7f0',
-    'backup_2026-01-03.zip': '5e4a21de412c49226b91461e1e3d993d07a758642224b06f5eb35c751457c028',
-    'two-entries.zip': '5d768560cc6ce41fa266e20a76d99ced506368b3fce41b785f24331fed355519',
-    'wrong-entry-name.zip': '49a623c3bb4c6ad622741cdcb32d695150980ffe72484c050b513c592530954a',
-    'zipcrypto.zip': '0304b4b89127960dc1f296059efda061cc0271e14b159357930d2478fcaef2cf',
-    'aes128.zip': '4799ea91a72ccd58964b6bcabf49cde75648e173c80254bd68f277eae49ce3bb',
+    'backup_2026-01-01.zip': '009d457a9eb1975a89797b79dc6bd63f9a6d62aef277d7cede1f18784e1eef9e',
+    'backup_2026-01-02.zip': '199582a42c771008a4c8a3cf47a2d5834cc36c22078d4b799afef4551a82e3d3',
+    'backup_2026-01-03.zip': 'ba83902448525c0b12e26bd55d27247f4ac58dcbdeb105eae9b320f844e894a1',
+    'two-entries.zip': '901784156067a856c2385a6ca5c049801910d7cca77adf601e5d15b4f902cd5d',
+    'wrong-entry-name.zip': 'a0529691a9ad32702942c8a313c8409e3e0c967232f977e65c063c11f76c1bed',
+    'zipcrypto.zip': '22e00345e8f11e5bcb4da65030ba5a3930a9e3c7b822b8eeee425aa24eb0a843',
+    'aes128.zip': 'b5cff590f8ba143c87f3506ebfdf671d5cce7217e890d78810aaac498fa7e70d',
   };
 
   it('pins every zip in the fixture directory', () => {
@@ -575,5 +576,33 @@ describe('a dump cannot expand without bound, and no unauthenticated plaintext s
     ]);
     expect(report.extracted).toBeNull();
     expect(readdirSync(out)).toEqual(['archive.json']);
+  });
+});
+
+describe('--columns: column names per table, for the table inventory (Mirza PR1)', () => {
+  it('lists every table of the dump with its column names in declaration order, no values', () => {
+    const { status, report, stdout } = run(['--archive', SYNTHETIC_SQL, '--columns']);
+    expect(status).toBe(0);
+    const dataset = buildSyntheticLegacyDataset();
+    const expected: Record<string, string[]> = {};
+    for (const c of dataset.schema) (expected[c.table] ??= []).push(c.column);
+    const listed = (report?.dump as { tableColumns?: Record<string, string[]> } | null)
+      ?.tableColumns;
+    expect(listed).toEqual(
+      Object.fromEntries(
+        Object.keys(expected)
+          .sort()
+          .map((t) => [t, expected[t]]),
+      ),
+    );
+    // Names, never a value: no row of the dump reaches the report.
+    for (const value of ['alice_legacy', '989121234567', '99999999999999', 'svc_nullmatch']) {
+      expect(stdout).not.toContain(value);
+    }
+  });
+
+  it('is opt-in: the default report carries no column list', () => {
+    const { report } = run(['--archive', SYNTHETIC_SQL]);
+    expect(report?.dump).not.toHaveProperty('tableColumns');
   });
 });

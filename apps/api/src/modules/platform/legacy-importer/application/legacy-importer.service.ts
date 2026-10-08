@@ -51,6 +51,8 @@ import type {
   LegacyImportProcessLease,
   LegacyImportProcessLock,
   LegacyInventoryRead,
+  LegacyReadSetRun,
+  LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
 } from './ports.js';
@@ -98,6 +100,8 @@ export interface LegacyImporterDeps {
   readonly destination: LegacyImporterDestination;
   readonly runs: LegacyImportRepository;
   readonly runInputs: LegacyRunInputsRepository;
+  /** Mirza migration PR1: read set observations (`legacy_read_set_runs`). */
+  readonly readSetRuns: LegacyReadSetRunRepository;
   readonly customers: LegacyCustomerWriter;
   readonly inventory: LegacyInventoryPort;
   readonly openings: Pick<MigrationOpeningBalanceService, 'post'>;
@@ -680,6 +684,61 @@ export class LegacyImporterService {
 
   runningRun(scope: TenantContext): Promise<string | null> {
     return this.deps.destination.runningRun(scope);
+  }
+
+  /**
+   * Mirza migration PR1 — records one read set observation (`legacy_read_set_runs`): the
+   * read set's fingerprint and the v1 source fingerprint the SAME read-only session
+   * recomputed and found equal to the approved value. The caller has already compared
+   * them; this writes nothing else, and observing the same thing twice writes no second row.
+   * Charged to `maintenance.run` like every importer write; the tenant must still accept
+   * work, read inside the transaction.
+   */
+  async recordReadSetRun(
+    scope: TenantContext,
+    actor: ActorContext,
+    observation: Omit<LegacyReadSetRun, 'id' | 'recordedAt' | 'codeVersion'>,
+  ): Promise<{ readonly run: LegacyReadSetRun; readonly created: boolean }> {
+    const id = this.deps.ids.uuid();
+    return this.mutate(
+      scope,
+      actor,
+      'legacy_import.read_set.record',
+      id,
+      async (tx) => {
+        const outcome = await this.deps.readSetRuns.recordReadSetRun(
+          scope,
+          {
+            ...observation,
+            id,
+            codeVersion: this.deps.codeVersion,
+            recordedAt: this.deps.clock.now(),
+          },
+          tx,
+        );
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'legacy_import.read_set.record',
+            entityType: 'LegacyReadSetRun',
+            entityId: outcome.run.id,
+            before: null,
+            after: {
+              readSet: outcome.run.readSet,
+              fingerprintVersion: outcome.run.fingerprintVersion,
+              readSetFingerprint: outcome.run.readSetFingerprint,
+              sourceFingerprint: outcome.run.sourceFingerprint,
+              created: outcome.created,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return outcome;
+      },
+      'LegacyReadSetRun',
+    );
   }
 
   /** Aborts the tenant's RUNNING run (any mode). The operator's exit from a stuck run. */
@@ -1366,6 +1425,7 @@ export class LegacyImporterService {
     action: string,
     runId: string,
     fn: (tx: TransactionScope) => Promise<T>,
+    entityType = 'LegacyImportRun',
   ): Promise<T> {
     return runAuthorizedMutation(
       {
@@ -1379,7 +1439,7 @@ export class LegacyImporterService {
       scope,
       actor,
       LEGACY_IMPORT_PERMISSION,
-      { action, entityType: 'LegacyImportRun', entityId: runId },
+      { action, entityType, entityId: runId },
       async (tx) => {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
           throw errors.conflict(

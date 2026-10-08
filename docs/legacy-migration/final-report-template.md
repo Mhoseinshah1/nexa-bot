@@ -34,16 +34,16 @@ pasted log. NEXA row ids (uuids), run ids, backup ids, checksums and counts are 
 
 ## 2. Source
 
-| field                                                       | value |
-| ----------------------------------------------------------- | ----- |
-| final dump file name, size, SHA-256                         |       |
-| dump taken at (UTC)                                         |       |
-| source fingerprint (P7)                                     |       |
-| `CHECKSUM TABLE user, invoice` at freeze / on restored copy | /     |
-| legacy server version                                       |       |
-| `user.Balance` column type                                  |       |
-| tables read                                                 |       |
-| SQL evidence Q1–Q7 recorded in `sql-evidence.md` (commit)   |       |
+| field                                                                                                                                                                                                                   | value |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| final dump file name, size, SHA-256                                                                                                                                                                                     |       |
+| dump taken at (UTC)                                                                                                                                                                                                     |       |
+| source fingerprint (P7)                                                                                                                                                                                                 |       |
+| `scripts/legacy-freeze-checksum.sql` (every table) at freeze / on restored copy: files and SHA-256, client exit status (`PIPESTATUS[0]`) of each, `legacy-freeze-checksum-verify.sh` result (`EQUAL`, base table count) | /     |
+| legacy server version                                                                                                                                                                                                   |       |
+| `user.Balance` column type                                                                                                                                                                                              |       |
+| tables read                                                                                                                                                                                                             |       |
+| SQL evidence Q1–Q7 recorded in `sql-evidence.md` (commit)                                                                                                                                                               |       |
 
 ## 3. Customers
 
