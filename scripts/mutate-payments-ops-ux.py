@@ -105,28 +105,33 @@ only=sys.argv[1:]
 killed=0; ran=0
 for mid,edits,(project,test),filt in M:
   if only and mid not in only: continue
-  originals={}; ok=True
-  for f,a,b in edits:
-    s=originals.get(f) or open(f,encoding='utf-8').read()
-    originals.setdefault(f,s)
-    cur=open(f,encoding='utf-8').read()
-    if cur.count(a)!=1:
-      print(mid,'ANCHOR MISSING in',f,cur.count(a),flush=True); ok=False; break
-    open(f,'w',encoding='utf-8').write(cur.replace(a,b))
-  pkgs=sorted({PKG[p] for p in PKG for f in originals if f.startswith(p)})
-  if ok and not all(build_package(p) for p in pkgs):
-    print(mid,'DOES NOT COMPILE',flush=True); ok=False
-  if ok:
-    ran+=1
-    r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
-    out=r.stdout+r.stderr
-    failed=[l.strip() for l in out.splitlines() if '×' in l]
-    summ=[l.strip() for l in out.splitlines() if 'Tests ' in l]
-    ran_any=any('passed' in l or 'failed' in l for l in summ)
-    # KILLED only when a named test FAILED: a non-zero exit with no × line is a broken run.
-    dead=r.returncode!=0 and ran_any and len(failed)>0
-    if dead: killed+=1
-    print(mid,'KILLED' if dead else 'SURVIVED',summ,failed[:2],flush=True)
-  for f,s in originals.items(): open(f,'w',encoding='utf-8').write(s)
-  for p in pkgs: build_package(p)
+  originals={}
+  # try/finally (review of PR #247, CX2): a failed build, an exception or an interrupt still
+  # restores every file this mutant touched and rebuilds every package it dirtied.
+  try:
+    ok=True
+    for f,a,b in edits:
+      cur=open(f,encoding='utf-8').read()
+      originals.setdefault(f,cur)
+      if cur.count(a)!=1:
+        print(mid,'ANCHOR MISSING in',f,cur.count(a),flush=True); ok=False; break
+      open(f,'w',encoding='utf-8').write(cur.replace(a,b))
+    pkgs=sorted({PKG[p] for p in PKG for f in originals if f.startswith(p)})
+    if ok and not all(build_package(p) for p in pkgs):
+      print(mid,'DOES NOT COMPILE',flush=True); ok=False
+    if ok:
+      ran+=1
+      r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
+      out=r.stdout+r.stderr
+      failed=[l.strip() for l in out.splitlines() if '×' in l]
+      summ=[l.strip() for l in out.splitlines() if 'Tests ' in l]
+      ran_any=any('passed' in l or 'failed' in l for l in summ)
+      # KILLED only when a named test FAILED: a non-zero exit with no × line is a broken run.
+      dead=r.returncode!=0 and ran_any and len(failed)>0
+      if dead: killed+=1
+      print(mid,'KILLED' if dead else 'SURVIVED',summ,failed[:2],flush=True)
+  finally:
+    for f,s in originals.items(): open(f,'w',encoding='utf-8').write(s)
+    for p in sorted({PKG[p] for p in PKG for f in originals if f.startswith(p)}):
+      build_package(p)
 print(f'{killed} of {ran} killed',flush=True)

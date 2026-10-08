@@ -9,6 +9,7 @@ import {
   PAYMENT_STATES,
   RECEIPT_DISPOSITIONS,
   type RefundChannel,
+  type RefundRefusalReason,
   type RefundResponse,
   type RefundState,
   type RefundView,
@@ -28,6 +29,8 @@ import {
   type PaymentCustomerGuidance,
   type PaymentOperatorAction,
   type PaymentSituationView,
+  type GatewayRateAuthority,
+  type GatewayRateProvenance,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -44,7 +47,7 @@ import {
   reinquirePayment,
   requestRefund,
 } from '../api/client';
-import { formatMoneyText, formatTimestamp, splitBytes } from '../format';
+import { formatDecimalText, formatMoneyText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, staleAfterError } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -140,6 +143,20 @@ const REFUND_STATE_TONES: Readonly<Record<RefundState, Tone>> = {
   AWAITING_EXTERNAL: 'warn',
   COMPLETED: 'ok',
   FAILED: 'neutral',
+};
+
+/**
+ * Roadmap E3 (`docs/refund-audit.md`): why a payment cannot be refunded AT ALL, in the
+ * server's own words (`refusalReason`), each with what exists instead. Total over the
+ * contract's reasons. There is no control behind any of them: where no domain operation
+ * exists, the page says so rather than offering one.
+ */
+const REFUND_REFUSAL_TEXT: Readonly<Record<RefundRefusalReason, WebKey>> = {
+  PAYMENT_NOT_SETTLED: 'web.refund_refusal_not_settled',
+  CHANNEL_UNSUPPORTED: 'web.refund_refusal_channel_unsupported',
+  TOPUP_CREDITED_TO_WALLET: 'web.refund_refusal_topup',
+  CURRENCY_MISMATCH: 'web.refund_refusal_currency',
+  DELIVERY_IN_PROGRESS: 'web.refund_refusal_delivery',
 };
 
 const REFUND_CHANNEL_LABELS: Readonly<Record<RefundChannel, WebKey>> = {
@@ -471,6 +488,124 @@ export function SituationCard({ value }: { value: PaymentSituationView | null })
         ]}
       />
       <p className="muted small">{t('web.payment_situation_state_note')}</p>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Money and rate provenance (roadmap E4, E5 — `docs/payment-fees-fx.md`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The payment's money as the server computed it (`paymentAmountsOf`): every figure is a
+ * decimal string the page renders with its currency and never adds, subtracts or derives a
+ * percentage from. Merchant net is named as not recorded, because no record holds it.
+ */
+export function AmountsCard({ value }: { value: PaymentDetailResponse['amounts'] }) {
+  if (value === null) return null;
+  const money = (key: string, amountMinor: string) => (
+    <Money key={key} value={{ amountMinor, currency: value.currency }} />
+  );
+  return (
+    <Card title={t('web.payment_amounts')} hint={t('web.payment_amounts_hint')}>
+      <KV
+        items={[
+          [t('web.payment_amounts_principal'), money('p', value.principal)],
+          // The rate the fee was snapshotted at (WP18), shown as stored — never recomputed.
+          ...(value.customerFeeBasisPoints === null
+            ? []
+            : ([
+                [
+                  t('web.payment_customer_fee_rate'),
+                  <Num
+                    key="b"
+                    value={`${formatBasisPointsPercent(value.customerFeeBasisPoints)}%`}
+                  />,
+                ],
+              ] as [ReactNode, ReactNode][])),
+          [t('web.payment_customer_fee_amount'), money('f', value.customerFee)],
+          // What the customer was ASKED to pay, in every state; `received` is what arrived.
+          [t('web.payment_customer_fee_payable'), money('c', value.payable)],
+          [t('web.payment_amounts_received'), money('r', value.received)],
+          [t('web.payment_amounts_wallet_credit'), money('w', value.walletCredit)],
+          [t('web.payment_amounts_wallet_debit'), money('d', value.walletDebit)],
+          [
+            t('web.payment_amounts_merchant_net'),
+            <span key="n" className="muted small">
+              {t('web.payment_amounts_merchant_net_not_recorded')}
+            </span>,
+          ],
+        ]}
+      />
+      {value.customerFeeBasisPoints !== null && (
+        <p className="muted small">{t('web.payment_customer_fee_hint')}</p>
+      )}
+    </Card>
+  );
+}
+
+const RATE_AUTHORITY_LABELS: Readonly<Record<GatewayRateAuthority, WebKey>> = {
+  NONE: 'web.payment_rate_authority_none',
+  OPERATOR: 'web.payment_rate_authority_operator',
+  MARKET: 'web.payment_rate_authority_market',
+};
+
+/**
+ * Which authority priced a gateway attempt, at what rate and when (E5), from the attempt's
+ * own frozen snapshot — never today's rate. A missing rate is said, not borrowed.
+ */
+export function RateProvenanceCard({ value }: { value: GatewayRateProvenance | null }) {
+  if (value === null) return null;
+  const when = (iso: string | null, key: string) =>
+    iso === null ? <Dash key={key} /> : <span key={key}>{formatTimestamp(iso)}</span>;
+  return (
+    <Card title={t('web.payment_rate_provenance')} hint={t('web.payment_rate_provenance_hint')}>
+      <KV
+        items={[
+          [t('web.payment_rate_authority'), t(RATE_AUTHORITY_LABELS[value.authority])],
+          ...(value.authority === 'NONE'
+            ? []
+            : ([
+                [
+                  t('web.payment_rate_value'),
+                  value.rate === null ? (
+                    <span key="v" className="muted small">
+                      {t('web.payment_rate_missing')}
+                    </span>
+                  ) : (
+                    <Num key="v" value={formatDecimalText(value.rate)} />
+                  ),
+                ],
+              ] as [ReactNode, ReactNode][])),
+          ...(value.authority === 'MARKET'
+            ? ([
+                [
+                  t('web.payment_rate_source'),
+                  value.source === null ? <Dash key="s" /> : <Ltr key="s">{value.source}</Ltr>,
+                ],
+                [t('web.payment_rate_quoted_at'), when(value.quotedAt, 'q')],
+                [t('web.payment_rate_fetched_at'), when(value.fetchedAt, 'g')],
+                [
+                  t('web.payment_rate_quote_state'),
+                  value.quoteState === null ? (
+                    <Dash key="st" />
+                  ) : (
+                    <Ltr key="st">{value.quoteState}</Ltr>
+                  ),
+                ],
+                [
+                  t('web.payment_rate_quote_id'),
+                  value.quoteId === null ? (
+                    <Dash key="id" />
+                  ) : (
+                    <Copyable key="id" value={value.quoteId} />
+                  ),
+                ],
+              ] as [ReactNode, ReactNode][])
+            : []),
+          [t('web.payment_rate_frozen_at'), formatTimestamp(value.frozenAt)],
+        ]}
+      />
     </Card>
   );
 }
@@ -1443,7 +1578,15 @@ function RefundsCard({
               return; a GATEWAY payment has no channel in this release, and a screen
               that offered a button for it would promise a reversal nobody can perform.
             */}
-            {!data.refundable && <Banner tone="info">{t('web.refund_unavailable')}</Banner>}
+            {!data.refundable && (
+              <Banner tone="info">
+                {t(
+                  data.refusalReason === null
+                    ? 'web.refund_unavailable'
+                    : REFUND_REFUSAL_TEXT[data.refusalReason],
+                )}
+              </Banner>
+            )}
 
             {/*
               What a full refund did and did NOT do (WP10 P3). The order's state is the
@@ -1920,43 +2063,11 @@ export function PaymentDetailPage({
                     </Card>
                   )}
                   {/*
-              The customer's gateway fee this attempt was created with (WP18): the rate,
-              the fee and the payable, BESIDE the principal above and never added to it.
-              Null for every non-gateway payment, so the card is absent there.
-            */}
-                  {row.customerFee !== null && (
-                    <Card title={t('web.payment_customer_fee')}>
-                      <KV
-                        items={[
-                          [
-                            t('web.payment_customer_fee_rate'),
-                            <Num
-                              key="r"
-                              value={`${formatBasisPointsPercent(row.customerFee.basisPoints)}%`}
-                            />,
-                          ],
-                          [
-                            t('web.payment_customer_fee_amount'),
-                            <Money
-                              key="f"
-                              value={{ amountMinor: row.customerFee.fee, currency: row.currency }}
-                            />,
-                          ],
-                          [
-                            t('web.payment_customer_fee_payable'),
-                            <Money
-                              key="p"
-                              value={{
-                                amountMinor: row.customerFee.payable,
-                                currency: row.currency,
-                              }}
-                            />,
-                          ],
-                        ]}
-                      />
-                      <p className="muted small">{t('web.payment_customer_fee_hint')}</p>
-                    </Card>
-                  )}
+                    The payment's money, the gateway fee (WP18) included, as the server
+                    computed it: ONE card, so the fee is never shown twice (review of PR #247).
+                  */}
+                  <AmountsCard value={row.amounts} />
+                  <RateProvenanceCard value={row.gatewayInvoice?.rateProvenance ?? null} />
                   {/*
               The external gateway's side of this payment (WP11A): the provider's ids,
               what its INQUIRY last said, what its webhook last hinted and how the
