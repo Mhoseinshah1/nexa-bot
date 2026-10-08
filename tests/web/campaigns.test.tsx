@@ -396,6 +396,34 @@ describe('one campaign', () => {
     await waitFor(() => expect(posts(api, '/cancel')).toHaveLength(1));
   });
 
+  it('reads the campaign again when a run command is refused as stale (409)', async () => {
+    const api = stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/pause`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'campaign.transition_invalid',
+            message: 'The campaign moved.',
+            correlationId: 'test',
+          },
+        },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    const reads = () =>
+      api.calls.filter(
+        (call) => call.method === 'GET' && call.url.endsWith(`/campaigns/${CAMPAIGN_ID}`),
+      ).length;
+    fireEvent.click(await screen.findByRole('button', { name: 'توقف موقت' }));
+    const before = reads();
+    await waitFor(() => expect(posts(api, '/pause')).toHaveLength(1));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
   it('takes a run command once: its buttons wait while one is in flight', async () => {
     const api = stubApi([
       { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },

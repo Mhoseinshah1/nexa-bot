@@ -79,6 +79,12 @@ M=[
  ('CB-21',[(SVC,"        actorLabel: audited ? row.actorLabel : null,","        actorLabel: row.actorLabel,")],T_R,'without audit.view'),
  # Review N4: the history says when older rows exist.
  ('CB-22',[(SVC,"    const truncated = rows.length > BROADCAST_HISTORY_MAX;","    const truncated = false;")],T_R,'beyond the cap'),
+ # Web foundation: a 409 on a campaign run command re-reads the campaign (settleOn onConflict).
+ ('CB-23',[(CPAGE,"""      submission.settleOn(error, {
+        onConflict: () => void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] }),
+      });
+      notify(""","""      submission.settleOn(error);
+      notify(""")],T_CW,'refused as stale'),
  ('CB-10',[(PAGE,"              onClick={() => setRetryAsked(true)}","              onClick={() => steer.mutate('retryFailed')}")],T_W,'asks before a re-queue'),
 ]
 

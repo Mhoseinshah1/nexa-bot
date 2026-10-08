@@ -474,7 +474,15 @@ function Composer({
         navigate(`/broadcasts/${encodeURIComponent(response.broadcast.id)}`, { force: true });
       }
     },
-    onError: (error) => submission.settleOn(error),
+    // A 409 (the draft moved on): read it again, so the next save is against what is there.
+    onError: (error) =>
+      submission.settleOn(error, {
+        onConflict: () => {
+          if (record !== null) {
+            void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
+          }
+        },
+      }),
   });
 
   const saveDisabled =
@@ -863,7 +871,10 @@ function LaunchCard({
       void client.invalidateQueries({ queryKey: ['broadcasts'] });
     },
     onError: (error) => {
-      submission.settleOn(error);
+      // A 409 (the draft or its audience moved on): read the draft again before a new count.
+      submission.settleOn(error, {
+        onConflict: () => void client.invalidateQueries({ queryKey: ['broadcast', record.id] }),
+      });
       setPreview(null);
     },
   });

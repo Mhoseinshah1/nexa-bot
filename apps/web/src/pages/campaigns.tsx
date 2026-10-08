@@ -1772,7 +1772,10 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
       notify({ tone: 'ok', message: t('web.campaign_scheduled') });
     },
     onError: (error) => {
-      submission.settleOn(error);
+      // A 409 (the campaign or its audience moved on): read both again.
+      submission.settleOn(error, {
+        onConflict: () => void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] }),
+      });
       void preview.refetch();
       notify({ tone: 'danger', message: campaignErrorMessage(error) });
     },
@@ -1930,7 +1933,10 @@ function CommandsCard({ campaign }: { campaign: CampaignDetail }) {
       notify({ tone: 'ok', message: t('web.campaign_command_done') });
     },
     onError: (error) => {
-      submission.settleOn(error);
+      // A 409 (another operator moved the campaign): read it again before the next command.
+      submission.settleOn(error, {
+        onConflict: () => void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] }),
+      });
       notify({ tone: 'danger', message: campaignErrorMessage(error) });
     },
   });
