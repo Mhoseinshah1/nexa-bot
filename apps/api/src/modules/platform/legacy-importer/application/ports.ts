@@ -1,6 +1,7 @@
 import type { ActorContext, LegacyReadSetName, TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
+import type { ProductReviewRowFacts } from './product-map-review.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
 import type {
   AdoptionRuntimeFacts,
@@ -31,6 +32,16 @@ export interface LegacyImporterDestination {
   panels(scope: TenantContext, panelIds: readonly string[]): Promise<readonly PanelFacts[]>;
   /** Which of these product ids are products of this tenant. */
   productIds(scope: TenantContext, productIds: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * aud5 F5 / aud6 F1: the fingerprint of the latest `products` read set recorded against this
+   * v1 source fingerprint — the CURRENT products read of that source — or null.
+   */
+  latestProductsReadFingerprint(
+    scope: TenantContext,
+    sourceFingerprint: string,
+  ): Promise<string | null>;
+  /** Every legacy product review row of the tenant, as PR2's export predicate reads it. */
+  productReviewRows(scope: TenantContext): Promise<readonly ProductReviewRowFacts[]>;
   /** Telegram id → customer id, for the ids that are customers of this tenant. */
   customersByTelegramIds(
     scope: TenantContext,

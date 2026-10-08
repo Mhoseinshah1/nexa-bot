@@ -73,6 +73,10 @@ import {
   validatePanelConnection,
   type TestContext,
 } from './harness';
+import {
+  approveSyntheticProductReview,
+  recordSyntheticProductsRead,
+} from './legacy-product-review-fixture';
 
 /**
  * Migration P7 — the legacy importer end to end, against PostgreSQL, two fake RickPanels
@@ -177,6 +181,14 @@ describe('Migration P7: the legacy importer', () => {
       product.id,
     );
     mapping = parsePanelMapping(mappingText, tenantA.tenantId as unknown as string);
+    // aud5 F5: the map's p1 entry is backed by the approved product review, as products-export
+    // would write it.
+    await approveSyntheticProductReview(ctx, {
+      scope: tenantA,
+      owner,
+      job: importerActor('products'),
+      productId: product.id,
+    });
 
     // A legacy user who already used NEXA: matched, never re-created, never overwritten.
     await ctx.container.customers.resolveFromUpdate(tenantA, importerActor('webhook'), {
@@ -192,11 +204,28 @@ describe('Migration P7: the legacy importer', () => {
   }
   beforeEach(setup);
 
-  async function snapshot(
+  /** A snapshot WITHOUT a products read of its source (the default dataset has one). */
+  async function rawSnapshot(
     dataset: SyntheticLegacyDataset = buildSyntheticLegacyDataset(),
   ): Promise<LegacySnapshot> {
     const connector = new FixtureLegacySourceConnector(dataset as never);
     return readFromSession(connector.label, await connector.open());
+  }
+
+  /**
+   * A snapshot of `dataset`. Another dataset is another source: its products read is
+   * recorded first, as the runbook's products-read is, so an APPLY of it finds the current
+   * products read the approved review answers for (aud5 F5).
+   */
+  async function snapshot(dataset?: SyntheticLegacyDataset): Promise<LegacySnapshot> {
+    if (dataset !== undefined) {
+      await recordSyntheticProductsRead(ctx, {
+        scope: tenantA,
+        job: importerActor('products'),
+        dataset,
+      });
+    }
+    return rawSnapshot(dataset);
   }
 
   function importer(adoption: LegacyAdoptionPort | null = null): LegacyImporterService {
@@ -319,6 +348,82 @@ describe('Migration P7: the legacy importer', () => {
     expect((withStale.sections as Record<string, any>)['panelMapping'].completeness.stale).toEqual([
       'old-test',
     ]);
+    expectOnlyReads();
+  });
+
+  it('aud5 F5 / aud6 F1: APPLY refuses a products entry the approved review does not export for this source, writing nothing', async () => {
+    const snap = await snapshot();
+    const tenant = tenantA.tenantId as unknown as string;
+    const refused = async (map: PanelMapping, snapshotToUse: LegacySnapshot, reason: string) => {
+      const before = await databaseFingerprint(ctx.container.database.db);
+      const error = await importer()
+        .apply({ ...input('import', snapshotToUse, map), mode: 'IMPORT' })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(error).toBeInstanceOf(PanelMappingRefused);
+      expect((error as PanelMappingRefused).problems.join('\n')).toContain(`"p1": ${reason}`);
+      expect(changedTables(before, await databaseFingerprint(ctx.container.database.db))).toEqual(
+        {},
+      );
+    };
+    const remap = (patch: Record<string, unknown>) =>
+      parsePanelMapping(JSON.stringify({ ...JSON.parse(mappingText), ...patch }), tenant);
+
+    // A hand-edited map binding p1 to a product the review did not approve.
+    const other = await new DrizzleProductRepository(ctx.container.database.db).create(tenantA, {
+      id: ctx.container.ids.uuid() as ProductId,
+      draft: {
+        title: 'پلن دیگر',
+        description: null,
+        audience: 'EVERYONE',
+        sortOrder: 2,
+        panelId: panelAId as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
+        specification: { durationDays: 30, trafficBytes: 30n * GIB, deviceLimit: null },
+        price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
+      },
+      now: ctx.container.clock.now(),
+    });
+    await refused(
+      remap({ products: [{ codeProduct: 'p1', productId: other.id }] }),
+      snap,
+      'TARGET_DIFFERS',
+    );
+
+    // A source no products read was recorded for (another v1 fingerprint).
+    await refused(
+      mapping,
+      await rawSnapshot(buildSyntheticLegacyDataset({ extraUsers: 1 })),
+      'NO_PRODUCTS_READ',
+    );
+
+    // The decision reopened after export: no longer exportable.
+    const row = (
+      await ctx.container.legacyProductReviews.list(tenantA, owner, { q: 'p1' })
+    ).items.find((i) => i.review.codeProduct === 'p1')?.review;
+    if (row === undefined) throw new Error('no p1 review row');
+    await ctx.container.legacyProductReviews.reopen(tenantA, owner, row.id, {
+      idempotencyKey: `reopen-${row.id}`,
+      expectedVersion: row.version,
+      reason: 'changed my mind after export',
+    });
+    await refused(mapping, snap, 'NOT_EXPORTABLE');
+    expect(await count('legacy_import_runs')).toBe(0);
+
+    // A code the review has no row for.
+    const unknownCode = remap({
+      products: [
+        { codeProduct: 'p1', productId: JSON.parse(mappingText).products[0].productId },
+        { codeProduct: 'p-none', productId: other.id },
+      ],
+    });
+    const error = await importer()
+      .apply({ ...input('import', snap, unknownCode), mode: 'IMPORT' })
+      .catch((e: unknown) => e);
+    expect((error as PanelMappingRefused).problems.join('\n')).toContain('"p-none": NO_REVIEW_ROW');
     expectOnlyReads();
   });
 
@@ -620,9 +725,10 @@ describe('Migration P7: the legacy importer', () => {
       },
     };
     // WP-D3: refused for THAT reason (any error used to pass here), and before any write.
+    const driftedSnap = await snapshot(drifted);
     const beforeDrift = await databaseFingerprint(ctx.container.database.db);
     const drift = importer()
-      .apply({ ...input('drift', await snapshot(drifted)), mode: 'RESUME' })
+      .apply({ ...input('drift', driftedSnap), mode: 'RESUME' })
       .catch((e: unknown) => e);
     expect(await drift).toMatchObject({
       code: 'legacy_import.run_conflict',

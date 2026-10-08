@@ -83,6 +83,7 @@ import { buildFinalReport } from './final-report.js';
 import { decideEvidenceClass, type EvidenceClass } from './production-guard.js';
 import { LEGACY_REPORT_FORMAT, type LegacyImportReport, type LegacyReportMode } from './report.js';
 import { sha256Hex, type LegacySnapshot } from './source-snapshot.js';
+import { productMapAgainstReview, productMapRefusalMessage } from './product-map-review.js';
 import {
   approvalGate,
   buildServiceOutcomesSection,
@@ -379,6 +380,7 @@ export class LegacyImporterService {
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
     productionLikeTarget = true,
+    options: { readonly forApply?: boolean } = {},
   ): Promise<Prepared> {
     const { destination } = this.deps;
     if (!(await destination.tenantExists(scope))) {
@@ -388,6 +390,18 @@ export class LegacyImporterService {
       mapping,
       await destination.productIds(scope, [...mapping.products.values()]),
     );
+    // aud5 F5 = aud6 F1 (PR2 Departure 9): an APPLY never attaches an invoice or a service
+    // to a product the approved legacy product review does not export for this source's
+    // CURRENT products read. Decided before any provider read and before any write.
+    if (options.forApply === true && mapping.products.size > 0) {
+      const verdict = productMapAgainstReview(
+        mapping.products,
+        await destination.productReviewRows(scope),
+        await destination.latestProductsReadFingerprint(scope, snapshot.fingerprint),
+      );
+      const refusal = productMapRefusalMessage(verdict);
+      if (refusal !== null) throw new PanelMappingRefused([refusal]);
+    }
     validatePanelMappingAgainstTenant(
       mapping,
       await destination.panels(scope, mapping.policy.productionPanelIds),
@@ -688,7 +702,9 @@ export class LegacyImporterService {
   ): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
-    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
+    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
+      forApply: true,
+    });
     // G10, the same predicate as the audit, decided again NOW: an import never starts on
     // a map that forgets a live code_panel — whatever the audit said earlier.
     const incomplete = incompletePanelMapMessage(

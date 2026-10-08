@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   money,
   type CurrencyCode,
+  type LegacyProductReviewState,
   type LegacyReadSetName,
   type ProductAudience,
   type ProductCategoryStatus,
@@ -15,6 +16,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
 import type { PanelFacts } from '../application/panel-mapping.js';
+import type { ProductReviewRowFacts } from '../application/product-map-review.js';
 import type {
   LegacyCustomerInsert,
   LegacyCustomerWriter,
@@ -116,6 +118,51 @@ export class DrizzleLegacyImporterRepository
       for (const row of result.rows) out.add(row.id);
     }
     return out;
+  }
+
+  async latestProductsReadFingerprint(
+    scope: TenantContext,
+    sourceFingerprint: string,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    // The same order as the cutover's `latestReadSetRun`: latest recorded, then id.
+    const result = await this.db.execute<{ read_set_fingerprint: string }>(sql`
+      SELECT read_set_fingerprint FROM legacy_read_set_runs
+       WHERE tenant_id = ${tenantId} AND read_set = 'products'
+         AND source_fingerprint = ${sourceFingerprint}
+       ORDER BY recorded_at DESC, id DESC
+       LIMIT 1
+    `);
+    return result.rows[0]?.read_set_fingerprint ?? null;
+  }
+
+  async productReviewRows(scope: TenantContext): Promise<readonly ProductReviewRowFacts[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute<{
+      code_product: string;
+      state: LegacyProductReviewState;
+      facts_checksum: string;
+      approved_facts_checksum: string | null;
+      approved_product_id: string | null;
+      read_fingerprint: string;
+      missing_since_read_fingerprint: string | null;
+      source_conflict: string | null;
+    }>(sql`
+      SELECT code_product, state, facts_checksum, approved_facts_checksum,
+             approved_product_id::text AS approved_product_id, read_fingerprint,
+             missing_since_read_fingerprint, source_conflict
+        FROM legacy_product_reviews WHERE tenant_id = ${tenantId}
+    `);
+    return result.rows.map((r) => ({
+      codeProduct: r.code_product,
+      state: r.state,
+      factsChecksum: r.facts_checksum,
+      approvedFactsChecksum: r.approved_facts_checksum,
+      approvedProductId: r.approved_product_id,
+      readFingerprint: r.read_fingerprint,
+      missingSinceReadFingerprint: r.missing_since_read_fingerprint,
+      sourceConflict: r.source_conflict,
+    }));
   }
 
   async customersByTelegramIds(

@@ -61,6 +61,10 @@ import {
   validatePanelConnection,
   type TestContext,
 } from './harness';
+import {
+  approveSyntheticProductReview,
+  recordSyntheticProductsRead,
+} from './legacy-product-review-fixture';
 
 /**
  * Mirza migration PR5 — service adoption outcomes and the operator's review (Area D; owner
@@ -156,6 +160,14 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       syntheticMappingFile(tenantA.tenantId as unknown as string, panelAId, panelBId, product.id),
       tenantA.tenantId as unknown as string,
     );
+    // aud5 F5: the map's p1 entry is backed by the approved product review, as products-export
+    // would write it.
+    await approveSyntheticProductReview(ctx, {
+      scope: tenantA,
+      owner,
+      job: job('products'),
+      productId: product.id,
+    });
     await ctx.container.customers.resolveFromUpdate(tenantA, job('webhook'), {
       idempotencyKey: 'pr5-existing',
       telegramUserId: SYNTHETIC_EXISTING_CUSTOMER,
@@ -164,11 +176,24 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     });
   });
 
-  async function snapshot(
+  /** A snapshot WITHOUT a products read of its source (the default dataset has one). */
+  async function rawSnapshot(
     dataset: SyntheticLegacyDataset = buildSyntheticLegacyDataset(),
   ): Promise<LegacySnapshot> {
     const connector = new FixtureLegacySourceConnector(dataset as never);
     return readFromSession(connector.label, await connector.open());
+  }
+
+  /**
+   * A snapshot of `dataset`. Another dataset is another source: its products read is
+   * recorded first, as the runbook's products-read is, so an APPLY of it finds the current
+   * products read the approved review answers for (aud5 F5).
+   */
+  async function snapshot(dataset?: SyntheticLegacyDataset): Promise<LegacySnapshot> {
+    if (dataset !== undefined) {
+      await recordSyntheticProductsRead(ctx, { scope: tenantA, job: job('products'), dataset });
+    }
+    return rawSnapshot(dataset);
   }
 
   /** The real P6 (the container default) unless a port is given. */
@@ -531,6 +556,59 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     await apply('import-3', snap);
     expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(1);
     expect((await candidate(before.invoiceKey)).outcome).toBe('ALREADY_ADOPTED');
+    expectOnlyReads();
+  });
+
+  it('aud5 F2 / OQ-LSR-01: an invoice whose code names an UNMAPPED panel is never adopted onto another panel holding the name — refused at the request and at the gate', async () => {
+    const snap = await snapshot();
+    await apply('import', snap);
+    const invoice = snap.liveInvoices.find(
+      (i) => i.codePanel === SYNTHETIC_PANEL_CODES.unmapped && i.isTest === '0',
+    );
+    if (invoice === undefined)
+      throw new Error('the synthetic dataset has an unmapped live invoice');
+    const before = await candidate(invoice.idInvoice);
+    expect(before.outcome).toBe('PANEL_UNMAPPED');
+    expect(before.evidence.panelCodeClass).toBe('DECLARED_UNRESOLVED');
+    // Panel A (mapped) holds exactly this name: evidence, never an offer.
+    expect(before.evidence.holders).toContainEqual(
+      expect.objectContaining({ panelId: panelAId, mapped: true, spellings: 1 }),
+    );
+    expect((await review().get(tenantA, owner, before.id)).adoptPanels).toEqual([]);
+    for (const panelId of [panelAId, panelBId, undefined]) {
+      await expect(approve(before, panelId)).rejects.toMatchObject({
+        code: LEGACY_SERVICE_REVIEW_ERROR_CODES.PANEL_REFUSED,
+      });
+    }
+    expect((await candidate(invoice.idInvoice)).reviewState).toBe('OPEN');
+
+    // An approval recorded before this rule (the request check could not stop it) is refused
+    // by the run's gate: it goes back OPEN with PANEL_UNMAPPED, and nothing is adopted.
+    await db().execute(sql`
+      UPDATE legacy_service_candidates
+         SET review_state = 'ADOPT_APPROVED', approved_panel_id = ${panelAId},
+             approved_checksum = invoice_checksum, approved_outcome = outcome,
+             decision_reason = 'recorded before aud5 F2',
+             decided_by_admin_id = (SELECT id FROM admins WHERE tenant_id = ${tenantA.tenantId} ORDER BY created_at LIMIT 1),
+             decided_at = now(), version = version + 1
+       WHERE tenant_id = ${tenantA.tenantId} AND id = ${before.id}
+    `);
+    const run = await apply('import-2', snap);
+    const after = await candidate(invoice.idInvoice);
+    expect(after).toMatchObject({
+      reviewState: 'OPEN',
+      lastApprovalRefusal: 'PANEL_UNMAPPED',
+      serviceId: null,
+    });
+    expect(
+      await count(
+        'legacy_import_map',
+        `legacy_id = '${invoice.idInvoice}' AND status = 'IMPORTED'`,
+      ),
+    ).toBe(0);
+    expect((run.sections as Record<string, any>)['applied'].services.approvals).toMatchObject({
+      executed: 0,
+    });
     expectOnlyReads();
   });
 
