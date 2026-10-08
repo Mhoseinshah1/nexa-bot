@@ -11,6 +11,7 @@ import type {
   AdoptionPanel,
   LegacyAdoptionStore,
 } from '../application/legacy-adoption-ports.js';
+import { legacyInvoiceLockName } from '../../../platform/legacy-import/application/legacy-import-ports.js';
 
 /**
  * Migration P6 — the adoption's storage, in PostgreSQL.
@@ -39,8 +40,25 @@ export class DrizzleLegacyAdoptionStore implements LegacyAdoptionStore {
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
     await tx.tx.execute(
-      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`legacy-adoption:${tenantId}:invoice:${legacyInvoiceKey}`}, 0))`,
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${legacyInvoiceLockName(tenantId, legacyInvoiceKey)}, 0))`,
     );
+  }
+
+  /**
+   * Mirza PR5: whether a person kept this invoice's service candidate as history. Read under
+   * the invoice lock, which every operator decision on the candidate also takes first.
+   */
+  async keptAsHistory(
+    scope: TenantContext,
+    legacyInvoiceKey: string,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await tx.tx.execute<{ held: boolean }>(
+      sql`SELECT review_state = 'KEPT_AS_HISTORY' AS held FROM legacy_service_candidates
+          WHERE tenant_id = ${tenantId} AND invoice_key = ${legacyInvoiceKey}`,
+    );
+    return rows.rows[0]?.held === true;
   }
 
   async findCustomerByTelegramId(

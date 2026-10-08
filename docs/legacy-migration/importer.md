@@ -253,9 +253,11 @@ in `LEGACY_READ_SET_NAMES` (a contract change) and the CHECK's widening the same
   "tenantId": "<tenant uuid>",
   "panels": [{ "codePanel": "bac6", "panelId": "<NEXA RickPanel uuid>" }],
   "testPanels": ["<code>"],
-  "missingPanels": ["<code searched by username across productionPanels>"],
+  "missingPanels": [
+    "<a code the operator DECLARES missing: searched by username across productionPanels>"
+  ],
   "unresolvedPanels": [{ "codePanel": "<code>", "reason": "OWNER_DECIDES_LATER" }],
-  "productionPanels": ["<every NEXA RickPanel uuid a missing code_panel is searched across>"],
+  "productionPanels": ["<every NEXA RickPanel uuid a declared-missing code is searched across>"],
   "products": [{ "codeProduct": "<legacy code_product>", "productId": "<NEXA product uuid>" }]
 }
 ```
@@ -277,9 +279,14 @@ panel. Before any run every named panel must exist **in this tenant**, be `rickp
 in `legacy_import_run_inputs`; a resume under a different mapping is refused. A `code_panel`
 in none of the lists is `PANEL_UNMAPPED` and listed with its count in the report — as a
 key only if a mapping file could name it (the file's own code rule); any other source value
-is counted under `(invalid code_panel)` and never echoed. Missing
-`code_panel` goes through P5's matcher (exact lowercase username, complete inventories
-only, case collision → review). Example: `tests/fixtures/legacy/synthetic-support.ts`.
+is counted under `(invalid code_panel)` and never echoed. A code listed in `missingPanels`
+goes through P5's cross-panel search (exact lowercase username, complete inventories only,
+case collision → review). **An empty or NULL `code_panel` is never searched** (owner
+decision 8, Mirza PR5): it is `NO_PANEL` — map `MANUAL_REVIEW / PANEL_UNMAPPED` — and only an
+operator's explicit ADOPT approval naming a mapped panel may adopt it
+([`service-review.md`](service-review.md)). Panel 8255, or any code nobody has decided, is
+never guessed: declare it in `unresolvedPanels` (`OWNER_DECIDES_LATER`) until the owner maps it
+explicitly in `panels` (service-review.md §1). Example: `tests/fixtures/legacy/synthetic-support.ts`.
 
 **Completeness (WP-D2, G10).** `unresolvedPanels` (optional) is how a live `code_panel`
 nobody has decided yet is _declared_ rather than forgotten: `{codePanel, reason}`, with the
@@ -366,8 +373,12 @@ never overwritten by a match (`OPERATOR_STATED_KEPT`).
 Service candidates (live invoices) fall in exactly one category, in this order:
 `INVOICE_KEY_INVALID`, `TEST_INVOICE_SKIPPED`, `INVALID_SOURCE_ROW`, `ORPHAN`,
 `CUSTOMER_NOT_IMPORTED`, the matcher's outcomes (`TEST_PANEL_SKIPPED`, `INVALID_USERNAME`,
-`INVENTORY_INCOMPLETE`, `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`, `PANEL_UNMAPPED`,
-`USERNAME_CASE_COLLISION`), `UNSUPPORTED_SHAPE`, `PRODUCT_UNRESOLVED`, `ADOPTION_ELIGIBLE`.
+`INVENTORY_INCOMPLETE`, `NO_PANEL`, `PROVIDER_MISSING`, `AMBIGUOUS_PANEL`, `PANEL_UNMAPPED`,
+`USERNAME_CASE_COLLISION`), `UNSUPPORTED_SHAPE`, `PRODUCT_UNRESOLVED`, `ADOPTION_ELIGIBLE` —
+then the ownership rule (Mirza PR5): eligible invoices of different legacy owners claiming one
+account are all `AMBIGUOUS_OWNERSHIP` (map `CONFLICTING_EXISTING_ENTITY`). `NO_PANEL` is
+recorded as `MANUAL_REVIEW / PANEL_UNMAPPED`. Each live invoice's ONE outcome, its evidence and
+its review are on `legacy_service_candidates` ([`service-review.md`](service-review.md)).
 `is_custom` is read before the product, by the shape key's own parser (`legacyCustomFlag`):
 a value outside 0/1 is `UNSUPPORTED_SHAPE / IS_CUSTOM_INVALID` on every path, never a named
 product decided on a flag nobody read.
@@ -410,6 +421,19 @@ those totals, and only an invoice with no row counts as `ADOPTION_PENDING_P6`.
 never retried and never overwritten — even when the source row changed. A user so closed
 gets no customer, opening or trial; an eligible invoice so closed is not handed to P6.
 `RETRY_AFTER_FIX` invites the next run to decide again (tested both ways).
+
+### Service outcomes and the operator's review (Mirza PR5)
+
+Every APPLY run records each live invoice's ONE outcome (`LEGACY_SERVICE_OUTCOMES`) with its
+evidence on `legacy_service_candidates`, linked to the invoice archive revision (run
+`invoices-read` first). The Web Admin page `/legacy-services` (`legacy.services.view` MEDIUM;
+decisions `legacy.services.decide` HIGH, owner-only by default) lists them by outcome, review
+state, panel and product, and records ACKNOWLEDGE, KEEP_AS_HISTORY, reopen and the explicit
+ADOPT approval. No CLI flag was added: an approval is executed by the next `import` or
+`resume` against the inventory that run walks — gate (synthetic on a production-like target is
+left untouched), claim, every adoption check again, P6, settle. A candidate kept as history is
+never handed to P6 (P6 also re-reads it under the invoice lock). Details, the report section and
+the NOT RUN list: [`service-review.md`](service-review.md).
 
 ### Review subcommand (terminal only)
 
@@ -738,6 +762,10 @@ server version, `Balance` type), customers, wallet, services, products, trials,
 `provider.reads` / `provider.writes` (requests the read guard refused — 0 by construction),
 manual review by closed reason (every `MANUAL_REVIEW` map row, user and invoice, plus
 `INVOICE_KEY_INVALID` and `ADOPTION_PENDING_P6`), and the C1/C3/W1/W4/W5/S3/P3 equations.
+v1 is closed, so Mirza PR5's two new categories are folded into its existing fields: `NO_PANEL`
+into `services.mappingMissing`, `AMBIGUOUS_OWNERSHIP` into `services.ambiguous` (S3 still
+closes). The `serviceOutcomes` section (`nexa-legacy-service-outcomes/v1`) is printed beside it
+by `report` and inside `sections` by `reconcile` (service-review.md §6).
 `wallet.preImportTotalMinor` is the NEXA-native total (every entry but the openings), so
 `pre + imported = expected = actual` holds even with activity after the import. Every
 key, value, column header and heading in the markdown is made inert (`markdownText`): a

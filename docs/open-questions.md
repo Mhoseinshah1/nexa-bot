@@ -3438,6 +3438,39 @@ real staging copy (NOT RUN) — never by guessing.
   user's legacy debt or credit should be treated differently later (today it is not), and
   whether the MirzaBot block reason text should ever be carried (today it is not read).
 
+## OQ-LSR — legacy service review (Mirza PR5): what the evidence does not settle
+
+Owner decision 8 (2026-10-07) is implemented: an invoice with an empty or NULL `code_panel`
+is never adopted automatically; only an explicit, audited operator approval executed by an
+import run may adopt it (`docs/legacy-migration/service-review.md`). Each item below is the
+owner's, or settled from the real staging copy (NOT RUN) — never by guessing.
+
+- **OQ-LSR-01 — DECISION: panel 8255.** It stays unmapped (recommended:
+  `unresolvedPanels` with `OWNER_DECIDES_LATER`) until the owner maps it explicitly in
+  `panels`. Never declared missing to let the search find its accounts, and never inferred
+  from the holders the evidence shows — nor approved onto one: since aud5 F2 an ADOPT
+  approval may name a panel only for an EMPTY `code_panel`, so an 8255 invoice is offered no
+  panel, a request naming one is refused, and the run's gate refuses an older approval
+  (`PANEL_UNMAPPED`).
+- **OQ-LSR-02 — DECISION: declared-missing codes.** A code the operator lists in
+  `missingPanels` is still searched across every production panel and adopted on a unique
+  hit (the map is explicit and fingerprinted). Decision 8 names empty codes only; whether a
+  declared-missing code should also become review-only (`NO_PANEL`-like, adopted only by
+  approval) is the owner's. Until then: do not list a code there that the owner has not
+  explicitly accepted to be searched.
+- **OQ-LSR-03 — UNKNOWN: several live invoices of ONE owner on one account.** Whether Mirza
+  writes a new invoice per renewal of the same account is not evidenced. Today the first in
+  key byte order adopts and the rest are `AMBIGUOUS_OWNERSHIP` (P6 finds the name taken);
+  invoices of DIFFERENT owners on one account are all `AMBIGUOUS_OWNERSHIP`. If renewals do
+  create invoices, the owner decides which one carries the product.
+- **OQ-LSR-04 — UNKNOWN: how many real invoices are `NO_PANEL`.** Before PR5 the
+  empty-code invoices of the staging snapshot were searched; the number that now stays
+  `NO_PANEL` must be re-evidenced by a dry-run on the cutover snapshot (a dated baseline,
+  never an oracle).
+- **OQ-LSR-05 — DECISION: who reviews.** `legacy.services.view` (MEDIUM) and
+  `legacy.services.decide` (HIGH) are owner-only by default. Whether an operator role should
+  hold them is the owner's.
+
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 
 Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.

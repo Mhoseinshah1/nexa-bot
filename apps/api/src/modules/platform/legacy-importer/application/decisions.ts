@@ -15,6 +15,7 @@ import type { LegacyImportDecision } from '../../legacy-import/application/legac
 import { decisionForLegacyMatch } from '../../legacy-import/application/legacy-review-routing.js';
 import {
   matchLegacyService,
+  matchOnPanel,
   type LegacyPanelPolicy,
   type PanelInventoryIndex,
 } from '../../legacy-import/application/legacy-service-matching.js';
@@ -192,10 +193,21 @@ export const SERVICE_CANDIDATE_CATEGORIES = [
   'INVALID_USERNAME',
   /** A panel the decision depends on has no complete inventory. */
   'INVENTORY_INCOMPLETE',
+  /**
+   * Owner decision 8 (Mirza PR5): `code_panel` empty or NULL. Never searched for, never
+   * adopted automatically; only an operator's explicit approval naming a mapped panel may.
+   */
+  'NO_PANEL',
   'PROVIDER_MISSING',
   'AMBIGUOUS_PANEL',
   'PANEL_UNMAPPED',
   'USERNAME_CASE_COLLISION',
+  /**
+   * Mirza PR5: live invoices of two or more DIFFERENT legacy owners claim the same account
+   * (panel and lowercase name). Which customer owns it is a guess, so none is adopted; a
+   * person keeps the wrong claims as history and the remaining one is decided again.
+   */
+  'AMBIGUOUS_OWNERSHIP',
   /** Productless/custom, and the shape key refuses it (Q1b's non-MAPPABLE rows). */
   'UNSUPPORTED_SHAPE',
   /** Productless/custom, the shape is mappable, and it has no current tariff. */
@@ -253,6 +265,15 @@ export function legacyCodePanel(raw: string | null): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
+/**
+ * Mirza PR5: an operator's explicit ADOPT approval, already checked against the run's panel
+ * map (the panel is mapped explicitly; the invoice's own code does not map elsewhere). The
+ * candidate is matched on THIS panel, with every other rule unchanged.
+ */
+export interface OperatorPanelOverride {
+  readonly panelId: string;
+}
+
 export function decideServiceCandidate(
   invoice: {
     readonly idInvoice: string;
@@ -267,6 +288,7 @@ export function decideServiceCandidate(
     readonly isCustom: string | null;
   },
   ctx: ServiceDecisionContext,
+  override: OperatorPanelOverride | null = null,
 ): ServiceCandidateDecision {
   // The row identity first, as a user's Telegram id is: a key the import map refuses
   // (`LEGACY_ID_PATTERNS.invoice`) cannot carry a decision, so a person looks at it.
@@ -281,11 +303,11 @@ export function decideServiceCandidate(
   const telegramUserId = ctx.importedUsers.get(invoice.idUser);
   if (telegramUserId === undefined) return held('CUSTOMER_NOT_IMPORTED');
 
-  const match = matchLegacyService(
-    { codePanel: legacyCodePanel(invoice.codePanel), username: invoice.username ?? '' },
-    ctx.policy,
-    ctx.inventories,
-  );
+  const row = { codePanel: legacyCodePanel(invoice.codePanel), username: invoice.username ?? '' };
+  const match =
+    override === null
+      ? matchLegacyService(row, ctx.policy, ctx.inventories)
+      : matchOnPanel(row, override.panelId, ctx.policy, ctx.inventories);
   // The matcher's outcome is recorded exactly as the review queue's one translation says
   // (`decisionForLegacyMatch`); the category is only its name in the report.
   if (match.kind !== 'ELIGIBLE') {
@@ -297,7 +319,9 @@ export function decideServiceCandidate(
           ? 'INVALID_USERNAME'
           : match.kind === 'UNDECIDABLE'
             ? 'INVENTORY_INCOMPLETE'
-            : match.reason;
+            : match.kind === 'NO_PANEL'
+              ? 'NO_PANEL'
+              : match.reason;
     return { category, map };
   }
 
@@ -390,6 +414,8 @@ export const INVOICE_MAP_DECISIONS = {
   CUSTOMER_NOT_IMPORTED: { status: 'MANUAL_REVIEW', reasonCode: 'CUSTOMER_MISSING' },
   UNSUPPORTED_SHAPE: { status: 'MANUAL_REVIEW', reasonCode: 'UNSUPPORTED_SHAPE' },
   PRODUCT_UNRESOLVED: { status: 'MANUAL_REVIEW', reasonCode: 'PRODUCT_MAPPING_UNRESOLVED' },
+  // Mirza PR5: several owners claim one account — the existing entity conflict, never a pick.
+  AMBIGUOUS_OWNERSHIP: { status: 'MANUAL_REVIEW', reasonCode: 'CONFLICTING_EXISTING_ENTITY' },
 } as const satisfies Readonly<Record<string, LegacyImportDecision>>;
 
 type HeldCategory = keyof typeof INVOICE_MAP_DECISIONS;

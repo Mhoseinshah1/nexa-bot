@@ -253,6 +253,8 @@ import { LegacyProductService } from './modules/commerce/catalog/application/leg
 import { LegacyProductReviewService } from './modules/commerce/legacy-product-review/application/legacy-product-review.service.js';
 import { LegacyWalletDebtService } from './modules/commerce/legacy-wallet-debts/application/legacy-wallet-debt.service.js';
 import { DrizzleLegacyWalletDebtRepository } from './modules/commerce/legacy-wallet-debts/infrastructure/drizzle-legacy-wallet-debt.repository.js';
+import { LegacyServiceReviewService } from './modules/platform/legacy-service-review/application/legacy-service-review.service.js';
+import { DrizzleLegacyServiceCandidateRepository } from './modules/platform/legacy-service-review/infrastructure/drizzle-legacy-service-candidate.repository.js';
 import { DrizzleLegacyProductReviewRepository } from './modules/commerce/legacy-product-review/infrastructure/drizzle-legacy-product-review.repository.js';
 import { LegacyInvoiceArchiveService } from './modules/platform/legacy-invoice-archive/application/legacy-invoice-archive.service.js';
 import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy-invoice-archive/infrastructure/drizzle-legacy-invoice-archive.repository.js';
@@ -959,6 +961,13 @@ export interface Container {
    * `migrationOpeningBalance`, never through this.
    */
   readonly legacyWalletDebts: LegacyWalletDebtService;
+  /**
+   * Mirza PR5 (Area D; owner decision 8): the operator's review of legacy service candidates —
+   * one outcome per live legacy invoice. Reads under `legacy.services.view`, decisions and ADOPT
+   * approvals under `legacy.services.decide`. It adopts nothing: the importer records outcomes
+   * and executes approvals through P6, never through this.
+   */
+  readonly legacyServiceReview: LegacyServiceReviewService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   /** Discount rules, as an operator manages them (WP8). */
@@ -2294,6 +2303,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const legacyWalletDebtRepository = new DrizzleLegacyWalletDebtRepository(database.db);
   const legacyWalletDebts = new LegacyWalletDebtService({
     repository: legacyWalletDebtRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
+  const legacyServiceCandidateRepository = new DrizzleLegacyServiceCandidateRepository(database.db);
+  const legacyServiceReview = new LegacyServiceReviewService({
+    repository: legacyServiceCandidateRepository,
     guard,
     uow,
     audit,
@@ -6863,6 +6884,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletService,
     migrationOpeningBalance,
     legacyWalletDebts,
+    legacyServiceReview,
     legacyReviewQueue,
     legacyAdoption,
     payments: paymentService,
@@ -7245,6 +7267,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
                   legacyAdoption.adoptCandidate(scope, actor, candidate),
               }
             : options.adoption,
+        serviceCandidates: legacyServiceCandidateRepository,
         guard,
         uow,
         audit,

@@ -343,6 +343,15 @@ export class LegacyAdoptionService {
       return { kind: 'REVIEW_CLOSED', reason: reviewReasonOf(existing.reasonCode) };
     }
 
+    /*
+     * Mirza PR5: a person kept this invoice as history (its service candidate's review).
+     * Read under the invoice lock the operator's decision also takes first, so a keep and an
+     * adoption of the same invoice cannot both win. Nothing is written.
+     */
+    if (await this.deps.store.keptAsHistory(scope, command.legacyInvoiceKey, tx)) {
+      return { kind: 'KEPT_AS_HISTORY' };
+    }
+
     const decided = await this.decide(scope, command, tx);
     if ('kind' in decided) {
       if (decided.kind === 'READ_FAILED') {

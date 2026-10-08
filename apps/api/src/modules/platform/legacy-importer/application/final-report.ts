@@ -122,8 +122,11 @@ export function buildFinalReport(input: FinalReportInput) {
     alreadyMapped: 0,
     testSkipped: cat('TEST_INVOICE_SKIPPED') + cat('TEST_PANEL_SKIPPED') + input.eligible.SKIPPED,
     providerMissing: cat('PROVIDER_MISSING'),
-    ambiguous: cat('AMBIGUOUS_PANEL') + cat('USERNAME_CASE_COLLISION'),
-    mappingMissing: cat('PANEL_UNMAPPED'),
+    // Mirza PR5: ambiguous ownership (several owners claim one account) is an ambiguity too,
+    // and NO_PANEL (owner decision 8) is a missing mapping — so the closed v1 fields still
+    // add up to the candidates (S3) without a new field.
+    ambiguous: cat('AMBIGUOUS_PANEL') + cat('USERNAME_CASE_COLLISION') + cat('AMBIGUOUS_OWNERSHIP'),
+    mappingMissing: cat('PANEL_UNMAPPED') + cat('NO_PANEL'),
     productUnresolved: cat('PRODUCT_UNRESOLVED'),
     unsupported: cat('UNSUPPORTED_SHAPE') + cat('INVALID_USERNAME') + cat('INVALID_SOURCE_ROW'),
     // An incomplete inventory is held for review (INVENTORY_INCOMPLETE) and decided again by

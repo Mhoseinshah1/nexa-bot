@@ -709,6 +709,23 @@ import {
   type LegacyWalletDebtState,
   type LegacyWalletDebtSummaryResponse,
 } from '@nexa/contracts';
+// Mirza PR5: legacy service candidates (one outcome each) and their review.
+import {
+  LEGACY_SERVICE_REVIEW_ROUTES,
+  legacyServiceCandidateDetailResponseSchema,
+  legacyServiceCandidateListResponseSchema,
+  legacyServiceCandidateResponseSchema,
+  legacyServiceCandidateSummaryResponseSchema,
+  type LegacyServiceAdoptRequest,
+  type LegacyServiceCandidateDetailResponse,
+  type LegacyServiceCandidateListResponse,
+  type LegacyServiceCandidateResponse,
+  type LegacyServiceCandidateSummaryResponse,
+  type LegacyServiceDecideRequest,
+  type LegacyServiceOutcome,
+  type LegacyServiceReopenRequest,
+  type LegacyServiceReviewState,
+} from '@nexa/contracts';
 // Phase A2: a direct message from Customer 360.
 import {
   DIRECT_MESSAGE_ROUTES,
@@ -5337,4 +5354,84 @@ export function reopenLegacyDebt(
 ): Promise<LegacyWalletDebtResponse> {
   const { id, ...body } = input;
   return post(LEGACY_WALLET_DEBT_ROUTES.reopen(id), body, legacyWalletDebtResponseSchema);
+}
+
+// --- Mirza PR5: legacy service candidates and their review (owner decision 8) ---------------
+
+/**
+ * One page of legacy service candidates (`legacy.services.view`). The invoice id is sent
+ * VERBATIM — never trimmed: a legacy id ` padded ` is found only by ` padded `. The panel and
+ * product codes are stored trimmed, so the server trims those itself.
+ */
+export function fetchLegacyServices(
+  query: {
+    readonly outcome?: LegacyServiceOutcome;
+    readonly reviewState?: LegacyServiceReviewState;
+    readonly panelCode?: string;
+    readonly productCode?: string;
+    readonly invoiceId?: string;
+    readonly after?: string;
+  } = {},
+): Promise<LegacyServiceCandidateListResponse> {
+  const params = new URLSearchParams();
+  if (query.outcome !== undefined) params.set('outcome', query.outcome);
+  if (query.reviewState !== undefined) params.set('reviewState', query.reviewState);
+  if (query.panelCode !== undefined && query.panelCode.trim() !== '') {
+    params.set('panelCode', query.panelCode);
+  }
+  if (query.productCode !== undefined && query.productCode.trim() !== '') {
+    params.set('productCode', query.productCode);
+  }
+  if (query.invoiceId !== undefined && query.invoiceId !== '') {
+    params.set('invoiceId', query.invoiceId);
+  }
+  if (query.after !== undefined) params.set('after', query.after);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${LEGACY_SERVICE_REVIEW_ROUTES.list}?${suffix}` : LEGACY_SERVICE_REVIEW_ROUTES.list,
+    legacyServiceCandidateListResponseSchema,
+  );
+}
+
+/** Counts by outcome and by review state. Aggregates only. */
+export function fetchLegacyServiceSummary(): Promise<LegacyServiceCandidateSummaryResponse> {
+  return authedGet(
+    LEGACY_SERVICE_REVIEW_ROUTES.summary,
+    legacyServiceCandidateSummaryResponseSchema,
+  );
+}
+
+/** One candidate, its archive revision (non-personal), the map row and the adoptable panels. */
+export function fetchLegacyService(id: string): Promise<LegacyServiceCandidateDetailResponse> {
+  return authedGet(
+    LEGACY_SERVICE_REVIEW_ROUTES.detail(id),
+    legacyServiceCandidateDetailResponseSchema,
+  );
+}
+
+/** ACKNOWLEDGE or KEEP_AS_HISTORY (`legacy.services.decide`). */
+export function decideLegacyService(
+  input: LegacyServiceDecideRequest & { readonly id: string },
+): Promise<LegacyServiceCandidateResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_SERVICE_REVIEW_ROUTES.decide(id), body, legacyServiceCandidateResponseSchema);
+}
+
+/**
+ * An explicit ADOPT approval (`legacy.services.decide`). It adopts nothing by itself: the
+ * next import run re-runs every adoption check and adopts, or refuses and says why.
+ */
+export function approveLegacyServiceAdoption(
+  input: LegacyServiceAdoptRequest & { readonly id: string },
+): Promise<LegacyServiceCandidateResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_SERVICE_REVIEW_ROUTES.adopt(id), body, legacyServiceCandidateResponseSchema);
+}
+
+/** Back to OPEN (`legacy.services.decide`). */
+export function reopenLegacyService(
+  input: LegacyServiceReopenRequest & { readonly id: string },
+): Promise<LegacyServiceCandidateResponse> {
+  const { id, ...body } = input;
+  return post(LEGACY_SERVICE_REVIEW_ROUTES.reopen(id), body, legacyServiceCandidateResponseSchema);
 }

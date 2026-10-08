@@ -49,6 +49,7 @@ import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-kn
 import { LegacyProductsPage } from './pages/legacy-products';
 import { LegacyInvoicesPage } from './pages/legacy-invoices';
 import { LegacyDebtsPage } from './pages/legacy-debts';
+import { LegacyServicesPage } from './pages/legacy-services';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -184,6 +185,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/legacy-invoices',
   // Mirza PR4: legacy wallet debts held for the owner's review.
   '/legacy-debts',
+  // Mirza PR5: legacy service candidates — one outcome each — and their review.
+  '/legacy-services',
   '/extra-devices',
   '/service-locations',
   '/orders',
@@ -454,6 +457,21 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.lwd_title') }],
       title: t('web.lwd_title'),
+    };
+  }
+  // Mirza PR5: legacy service candidates (an ADOPT here is an approval; a run executes it).
+  if (route.path === '/legacy-services') {
+    return {
+      element: (
+        <LegacyServicesPage
+          denied={!may('legacy.services.view')}
+          mayDecide={may('legacy.services.decide')}
+          mayViewPanels={may('panels.view')}
+          mayViewArchive={may('legacy.invoices.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.lsr_title') }],
+      title: t('web.lsr_title'),
     };
   }
   if (route.path === '/product-categories') {

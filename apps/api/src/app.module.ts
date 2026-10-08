@@ -53,6 +53,7 @@ import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServiceRefundRequestsController } from './surfaces/web/service-refund-requests.controller.js';
 import { LegacyProductsController } from './surfaces/web/legacy-products.controller.js';
 import { LegacyDebtsController } from './surfaces/web/legacy-debts.controller.js';
+import { LegacyServicesController } from './surfaces/web/legacy-services.controller.js';
 import { LegacyInvoicesController } from './surfaces/web/legacy-invoices.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
@@ -158,6 +159,7 @@ export class AppModule implements NestModule {
         ServiceRefundRequestsController as never,
         LegacyProductsController as never,
         LegacyDebtsController as never,
+        LegacyServicesController as never,
         LegacyInvoicesController as never,
         ServicesController as never,
         PanelsController as never,

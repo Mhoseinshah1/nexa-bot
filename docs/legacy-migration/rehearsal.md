@@ -15,6 +15,9 @@ legacy dump or backup_*.zip ──► scripts/legacy-archive-inspect.mjs (blocke
 NEXA backup ──► nexa_rehearsal_<stamp> (real `backup restore`, then migrate forward)
                   │ or: fresh migrate + provision --tenant
                   ▼
+once, before the cycles: products-read (digest, approve, ingest) and — synthetic only — the
+            review decision behind the panel map's `products` entry (aud5 F5: an APPLY refuses
+            a map the approved review does not export; a staging backup carries the owner's)
 per cycle:  PRE snapshot + pg_dump ─► P7 audit ─► P7 dry-run ─► (no business row changed?)
             ─► P7 import, kill -9 once the run has checkpointed N rows ─► (run left RUNNING?)
             ─► P7 resume (same run id) ─► P7 reconcile ─► P7 report --format json

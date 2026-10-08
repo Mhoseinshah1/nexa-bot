@@ -585,6 +585,35 @@ export const PERMISSIONS = [
     'Record the owner decision on a legacy wallet debt (acknowledge, waive, reopen; never collects)',
     'HIGH',
   ),
+  /*
+   * Mirza migration PR5 — legacy service candidates (Area D; owner decision 8, 2026-10-07).
+   * Every live legacy invoice the importer considered as a service gets exactly one
+   * deterministic outcome; one that was not adopted stays archived history. A candidate names
+   * a legacy invoice, a panel and product code, and the inventory evidence behind its outcome,
+   * so:
+   *
+   * - VIEW (MEDIUM, never auto-granted to `observer` with the LOW keys) lists the candidates,
+   *   their outcomes and evidence. Personal data (the legacy user id and username) is shown
+   *   only to a holder of `legacy.invoices.pii.view` as well.
+   * - DECIDE (HIGH) records the operator's review decision: ACKNOWLEDGE, KEEP_AS_HISTORY,
+   *   reopen, or an explicit ADOPT approval — the only way an invoice with an empty
+   *   `code_panel` may ever be adopted (owner decision 8). An approval is executed by the
+   *   next import run, which re-runs every adoption check against the inventory it walks
+   *   and adopts through the one P6 path. No provider write, ever.
+   *
+   * Owner-only by default. Neither is a SYSTEM_JOB permission; the importer records outcomes
+   * and executes approvals under maintenance.run.
+   */
+  p(
+    'legacy.services.view',
+    'View the legacy service candidates and their adoption outcomes',
+    'MEDIUM',
+  ),
+  p(
+    'legacy.services.decide',
+    'Review a legacy service candidate (acknowledge, keep as history, reopen, approve an adoption)',
+    'HIGH',
+  ),
 
   // Platform
   p('tenant.cross_read', 'Read data across tenants', 'CRITICAL'),
@@ -1010,6 +1039,8 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'legacy.invoices.pii.view': 'legacy.invoices.view',
   /* Mirza PR4. A decision is made FROM the debt row `legacy.debts.view` reads. */
   'legacy.debts.decide': 'legacy.debts.view',
+  /* Mirza PR5. A decision is made FROM the candidate `legacy.services.view` reads. */
+  'legacy.services.decide': 'legacy.services.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass

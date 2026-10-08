@@ -7,10 +7,17 @@
  * - **Panel known** — the legacy `code_panel` is in the operator's EXPLICIT
  *   `code_panel → NEXA panel UUID` map. Match `lower(username)` on that panel's
  *   inventory: present → eligible; absent → `manual_review / PROVIDER_MISSING`.
- * - **Panel missing** — the legacy row names no panel, or one the operator declared
- *   missing. Search the exact lowercase username across every configured production
- *   RickPanel: exactly one → eligible on that panel; none → `PROVIDER_MISSING`; more than
- *   one → `AMBIGUOUS_PANEL`.
+ * - **No panel** — the legacy row names no panel (`code_panel` empty or NULL). Owner
+ *   decision 8 (2026-10-07, Mirza PR5): such a row is NEVER adopted automatically and NEVER
+ *   searched for: `NO_PANEL`, whatever the inventories hold. Only an operator's explicit
+ *   approval, naming a mapped panel, may adopt it (`matchOnPanel`, executed by an import run
+ *   that re-runs every check). Before PR5 this row was searched across every production
+ *   panel and adopted on a unique hit — a panel guessed from a username.
+ * - **Panel declared missing** — a code the operator listed in the map's `missingPanels`:
+ *   the operator explicitly asked for its rows to be searched across every configured
+ *   production RickPanel: exactly one → eligible on that panel; none → `PROVIDER_MISSING`;
+ *   more than one → `AMBIGUOUS_PANEL`. (Whether this explicit declaration should also become
+ *   review-only is the owner's question, `OQ-LSR-02`.)
  * - **Test panel** — skipped, checked FIRST: whatever the row holds, it is not imported.
  * - Anything else (a `code_panel` that is neither mapped, nor test, nor declared missing)
  *   is `PANEL_UNMAPPED`: an operator forgot a mapping, and searching every panel for it
@@ -82,6 +89,11 @@ export type LegacyServiceMatch =
       readonly candidatePanels: number;
     }
   | { readonly kind: 'SKIPPED'; readonly reason: 'TEST_PANEL' }
+  /**
+   * Owner decision 8: the row names no panel. Never searched, never eligible; recorded for
+   * review (`PANEL_UNMAPPED` on the map row: no mapped panel exists for it).
+   */
+  | { readonly kind: 'NO_PANEL' }
   /** A legacy username this matcher will not compare (empty, non-ASCII, too long). */
   | { readonly kind: 'INVALID'; readonly reason: 'INVALID_SOURCE_ROW' }
   /**
@@ -111,6 +123,37 @@ function onePanel(
   return { kind: 'ELIGIBLE', panelId, username, providerUsername: spellings[0] as string };
 }
 
+function onMappedPanel(
+  panelId: string,
+  username: string,
+  inventories: ReadonlyMap<string, PanelInventoryIndex>,
+): LegacyServiceMatch {
+  const inventory = inventories.get(panelId);
+  if (inventory === undefined) return { kind: 'UNDECIDABLE', reason: 'INVENTORY_INCOMPLETE' };
+  return onePanel(panelId, username, inventory.usernames.get(username));
+}
+
+/**
+ * Mirza PR5 — the match on ONE panel an operator named in an explicit ADOPT approval, with
+ * exactly the rules a mapped code gets: a test code is still skipped, the username must be
+ * one the matcher compares, and the panel's COMPLETE inventory must hold exactly one
+ * spelling. The caller has already refused a panel the map does not map, and a code the map
+ * maps to a different panel (an explicit mapping is never overridden).
+ */
+export function matchOnPanel(
+  row: LegacyServiceRow,
+  panelId: string,
+  policy: Pick<LegacyPanelPolicy, 'testPanels'>,
+  inventories: ReadonlyMap<string, PanelInventoryIndex>,
+): LegacyServiceMatch {
+  if (row.codePanel !== null && policy.testPanels.has(row.codePanel)) {
+    return { kind: 'SKIPPED', reason: 'TEST_PANEL' };
+  }
+  const username = canonicalLegacyUsername(row.username);
+  if (username === null) return { kind: 'INVALID', reason: 'INVALID_SOURCE_ROW' };
+  return onMappedPanel(panelId, username, inventories);
+}
+
 export function matchLegacyService(
   row: LegacyServiceRow,
   policy: LegacyPanelPolicy,
@@ -126,17 +169,17 @@ export function matchLegacyService(
   if (username === null) return { kind: 'INVALID', reason: 'INVALID_SOURCE_ROW' };
 
   if (row.codePanel !== null && policy.knownPanels.has(row.codePanel)) {
-    const panelId = policy.knownPanels.get(row.codePanel) as string;
-    const inventory = inventories.get(panelId);
-    if (inventory === undefined) return { kind: 'UNDECIDABLE', reason: 'INVENTORY_INCOMPLETE' };
-    return onePanel(panelId, username, inventory.usernames.get(username));
+    return onMappedPanel(policy.knownPanels.get(row.codePanel) as string, username, inventories);
   }
 
-  if (row.codePanel !== null && !policy.missingPanels.has(row.codePanel)) {
+  // Owner decision 8: no panel is never searched for — not even a unique hit is adopted.
+  if (row.codePanel === null) return { kind: 'NO_PANEL' };
+
+  if (!policy.missingPanels.has(row.codePanel)) {
     return { kind: 'MANUAL_REVIEW', reason: 'PANEL_UNMAPPED', candidatePanels: 0 };
   }
 
-  // Missing panel: exact lowercase username across every configured production panel.
+  // Declared missing: exact lowercase username across every configured production panel.
   // The AVAILABLE inventories are scanned first: two known holders are ambiguous whatever
   // a panel without a complete inventory might add. Only while zero or one holder is
   // known can an unavailable inventory change the answer, so only then is it UNDECIDABLE.

@@ -604,6 +604,16 @@ R1–R3, S1–S5, P1–P4, and the `usersWallets` section's U1–U8 from `reconc
 §2. **Every one must hold exactly.** Any failure is a rollback trigger to be decided now,
 before customers return (rollback runbook § Triggers).
 
+Service outcomes (Mirza PR5): `services.outcomes.closure` must be among the passing checks;
+record `serviceOutcomes.outcomes`, `adopted` and `archivedHistory` (aggregates only).
+Candidates that were not adopted — `NO_PANEL` above all (owner decision 8: never adopted
+automatically) — are reviewed in the Web Admin (`/legacy-services`) after cutover, at the
+owner's pace; none blocks unfreezing. An explicit ADOPT approval made there is executed only by
+a later `p7 resume`/`import` against the SAME approved source and panel map, which re-runs every
+adoption check against a fresh inventory walk and writes nothing on any panel
+([`service-review.md`](service-review.md) §4). A synthetic approval left in this database is
+reported as `attention.approvalLeft` and never executed — investigate it, do not delete it.
+
 Legacy debts (owner decision 6): record `usersWallets.wallet.legacyDebts` (count and Σ,
 aggregates only) in the report. The debts are now listed in the Web Admin
 (`/legacy-debts`) for the owner's per-customer decision — after cutover, at the owner's

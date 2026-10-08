@@ -42,6 +42,13 @@ export interface LegacyImportReport {
    * the same section in its JSON `sections`. PR6 folds it into schema version 2.
    */
   readonly usersWallets?: unknown;
+  /**
+   * `report` mode only (Mirza PR5): the service outcomes section
+   * (`LEGACY_SERVICE_OUTCOMES_SECTION_VERSION`), rendered after the users-and-wallets one in
+   * markdown and, like it, NOT in `--format json` (the closed v1 document); `reconcile`
+   * carries it in its JSON `sections`. PR6 folds it into schema version 2.
+   */
+  readonly serviceOutcomes?: unknown;
 }
 
 export interface LegacyReportInvocation {
@@ -151,5 +158,8 @@ export function reportMarkdown(report: LegacyImportReport): string {
   out.push('');
   for (const [name, value] of Object.entries(report.sections)) renderValue(name, value, 0, out);
   if (report.usersWallets !== undefined) renderValue('usersWallets', report.usersWallets, 0, out);
+  if (report.serviceOutcomes !== undefined) {
+    renderValue('serviceOutcomes', report.serviceOutcomes, 0, out);
+  }
   return `${out.join('\n').replace(/\n{3,}/gu, '\n\n')}\n`;
 }

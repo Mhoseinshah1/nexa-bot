@@ -457,13 +457,20 @@ export const SYNTHETIC_EXPECTED = {
       CUSTOMER_NOT_IMPORTED: 1,
       INVALID_USERNAME: 1,
       INVENTORY_INCOMPLETE: 0,
-      PROVIDER_MISSING: 2,
-      AMBIGUOUS_PANEL: 1,
+      /**
+       * Mirza PR5 (owner decision 8): the three empty/NULL `code_panel` invoices. Before PR5
+       * they were searched across every production panel — one ELIGIBLE, one
+       * AMBIGUOUS_PANEL, one PROVIDER_MISSING. Changed deliberately; the dataset is not.
+       */
+      NO_PANEL: 3,
+      PROVIDER_MISSING: 1,
+      AMBIGUOUS_PANEL: 0,
       PANEL_UNMAPPED: 1,
       USERNAME_CASE_COLLISION: 1,
+      AMBIGUOUS_OWNERSHIP: 0,
       UNSUPPORTED_SHAPE: 2,
       PRODUCT_UNRESOLVED: 1,
-      ADOPTION_ELIGIBLE: 4,
+      ADOPTION_ELIGIBLE: 3,
     },
   },
 } as const;
@@ -516,16 +523,17 @@ export function buildSyntheticLegacyDataset(
     invoice({ idUser: '100000001', username: 'svc_a1', codePanel: C.mappedA }),
     // PROVIDER_MISSING on a mapped panel (a 4-hex key, the older MirzaBot shape)
     invoice({ id: '7c1f', idUser: '100000001', username: 'svc_missing', codePanel: C.mappedA }),
-    // NULL code_panel, exactly one holder (B): ELIGIBLE (a key with the 7-digit prefix)
+    // NULL code_panel, exactly one holder (B). Before Mirza PR5 this was searched and ELIGIBLE;
+    // owner decision 8: NO_PANEL, never adopted automatically (a key with the 7-digit prefix)
     invoice({
       id: '1700001b2c3d4e5',
       idUser: '100000002',
       username: 'svc_nullmatch',
       codePanel: null,
     }),
-    // NULL code_panel, two holders: AMBIGUOUS_PANEL
+    // NULL code_panel, two holders: was AMBIGUOUS_PANEL; NO_PANEL since owner decision 8
     invoice({ idUser: '100000003', username: 'svc_shared', codePanel: null }),
-    // empty code_panel, no holder: PROVIDER_MISSING
+    // empty code_panel, no holder: was PROVIDER_MISSING; NO_PANEL since owner decision 8
     invoice({ idUser: '100000003', username: 'svc_nowhere', codePanel: '' }),
     // a test panel: skipped whatever else holds
     invoice({ idUser: SYNTHETIC_EXISTING_CUSTOMER, username: 'whatever', codePanel: C.test }),
