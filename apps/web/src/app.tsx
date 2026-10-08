@@ -47,6 +47,7 @@ import { SupportAiPage } from './pages/support-ai';
 import { SupportAnalyticsPage } from './pages/support-analytics';
 import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
 import { LegacyProductsPage } from './pages/legacy-products';
+import { LegacyInvoicesPage } from './pages/legacy-invoices';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -178,6 +179,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/product-categories',
   // Mirza PR2: the legacy product review.
   '/legacy-products',
+  // Mirza PR3: the legacy invoice archive (read-only).
+  '/legacy-invoices',
   '/extra-devices',
   '/service-locations',
   '/orders',
@@ -422,6 +425,19 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.lpr_title') }],
       title: t('web.lpr_title'),
+    };
+  }
+  // Mirza PR3: the legacy invoice archive (read-only; personal data behind its own key).
+  if (route.path === '/legacy-invoices') {
+    return {
+      element: (
+        <LegacyInvoicesPage
+          denied={!may('legacy.invoices.view')}
+          mayViewPii={may('legacy.invoices.pii.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.lia_title') }],
+      title: t('web.lia_title'),
     };
   }
   if (route.path === '/product-categories') {

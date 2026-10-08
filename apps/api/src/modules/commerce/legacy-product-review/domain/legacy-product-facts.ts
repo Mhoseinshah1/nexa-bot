@@ -136,18 +136,26 @@ function parseDuration(row: LegacyProductFactRow): Parsed<number> {
 }
 
 /**
- * A whole, non-negative number of Toman in ASCII digits. `150000.5`, `150,000`, `۱۵۰۰۰۰`,
- * `-1` and `1e5` are NOT_A_NUMBER: each needs a person to say what it meant. A zero is a
- * stated price of zero and is kept as such (it is never a tariff either way).
+ * A whole, non-negative number of Toman in ASCII digits, as IRT minor units (exponent 0).
+ * `150000.5`, `150,000`, `۱۵۰۰۰۰`, `-1` and `1e5` are NOT_A_NUMBER: each needs a person to
+ * say what it meant. A zero is a stated price of zero and is kept as such (it is never a
+ * tariff either way). The ONE grammar for a legacy Mirza price (owner decision 7): the
+ * product review and the invoice archive (Mirza PR3) both read `price_product` by it.
  */
+export function parseLegacyTomanMinor(
+  text: string,
+): { readonly value: bigint } | { readonly note: 'NOT_A_NUMBER' | 'OUT_OF_RANGE' } {
+  const trimmed = text.trim();
+  if (!/^[0-9]{1,19}$/u.test(trimmed)) return { note: 'NOT_A_NUMBER' };
+  const amount = BigInt(trimmed);
+  if (amount > MAX_MONEY_AMOUNT_MINOR) return { note: 'OUT_OF_RANGE' };
+  return { value: amount };
+}
+
 function parsePrice(row: LegacyProductFactRow): Parsed<bigint> {
   const cell = cellOf(row, LEGACY_PRODUCT_FIELD_COLUMNS.historicalPrice);
   if ('note' in cell) return cell;
-  const text = cell.value.trim();
-  if (!/^[0-9]{1,19}$/u.test(text)) return { note: 'NOT_A_NUMBER' };
-  const amount = BigInt(text);
-  if (amount > MAX_MONEY_AMOUNT_MINOR) return { note: 'OUT_OF_RANGE' };
-  return { value: amount };
+  return parseLegacyTomanMinor(cell.value);
 }
 
 /** Parses one code's facts. A duplicated code parses nothing: the rows disagree or may. */

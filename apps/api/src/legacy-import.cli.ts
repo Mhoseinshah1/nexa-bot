@@ -36,6 +36,16 @@ import {
   runProductsRead,
 } from './legacy-import-products.js';
 import {
+  INVOICES_READ_USAGE,
+  InvoicesUsageError,
+  invoicesReadExitCode,
+  invoicesReadReport,
+  parseInvoicesReadArgs,
+  runInvoicesRead,
+} from './legacy-import-invoices.js';
+import { InvoiceArchiveRefused } from './modules/platform/legacy-importer/application/invoice-archive-ingest.js';
+import { InvoiceArchiveStagingRefused } from './modules/platform/legacy-invoice-archive/application/legacy-invoice-archive.service.js';
+import {
   REVIEW_USAGE,
   ReviewUsageError,
   parseReviewArgs,
@@ -123,6 +133,7 @@ export const USAGE = [
   '  Review queue (terminal only): legacy-import review counts|list|resolve|reopen …',
   '  Table inventory (read-only):   legacy-import inventory --tenant … --source … --target …',
   '  Legacy product review:         legacy-import products-read|products-export --help',
+  '  Legacy invoice archive:        legacy-import invoices-read --help',
   '',
   `  --inventory-page-size N             rows per RickPanel list page, 1-${String(INVENTORY_MAX_PAGE_SIZE)}. Default here:`,
   `                                      ${String(INVENTORY_MAX_PAGE_SIZE)}, the reader's maximum (fewest provider reads, shortest`,
@@ -749,6 +760,34 @@ async function productsReadMain(argv: readonly string[]): Promise<number> {
 }
 
 /**
+ * `legacy-import invoices-read …` (Mirza PR3, `legacy-import-invoices.ts`): every legacy
+ * invoice into the append-only legacy invoice archive, bound to both approvals. Returns the
+ * exit code.
+ */
+async function invoicesReadMain(argv: readonly string[]): Promise<number> {
+  const args = parseInvoicesReadArgs(argv);
+  const env = process.env;
+  const targetUrl = resolveTarget(args.target, env);
+  const target = guardTarget(args, targetUrl, env);
+  const connector = await sourceConnector(args, env);
+  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  try {
+    const importer = container.legacyImporter();
+    const tenantId = await importer.resolveTenant(args.tenant);
+    if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
+    const outcome = await runInvoicesRead(importer, connector, args, {
+      scope: { tenantId: tenantId as never, botInstanceId: null },
+      actor: systemJobActor('legacy-import:invoices-read', container.ids.uuid() as CorrelationId),
+      productionLikeTarget: target.productionLike,
+    });
+    process.stdout.write(invoicesReadReport(outcome, args.format));
+    return invoicesReadExitCode(outcome);
+  } finally {
+    await container.shutdown();
+  }
+}
+
+/**
  * `legacy-import products-export …` (Mirza PR2): the panel map `products` section from the
  * approved review rows. Read-only on every database; it never writes the map file.
  */
@@ -830,12 +869,18 @@ export function exitCodeForError(error: unknown): number {
     error instanceof UsageError ||
     error instanceof ReviewUsageError ||
     error instanceof InventoryUsageError ||
-    error instanceof ProductsUsageError
+    error instanceof ProductsUsageError ||
+    error instanceof InvoicesUsageError
   ) {
     console.error(error.message);
     return 64;
   }
-  if (error instanceof PanelMappingRefused || error instanceof LegacySourceRefused) {
+  if (
+    error instanceof PanelMappingRefused ||
+    error instanceof LegacySourceRefused ||
+    error instanceof InvoiceArchiveRefused ||
+    error instanceof InvoiceArchiveStagingRefused
+  ) {
     console.error(error.message);
     return 65;
   }
@@ -881,13 +926,16 @@ async function main(): Promise<number> {
             ? PRODUCTS_READ_USAGE
             : process.argv[2] === 'products-export'
               ? PRODUCTS_EXPORT_USAGE
-              : USAGE;
+              : process.argv[2] === 'invoices-read'
+                ? INVOICES_READ_USAGE
+                : USAGE;
     process.stdout.write(`${usage}\n`);
     return 0;
   }
   if (process.argv[2] === 'inventory') return inventoryMain(process.argv.slice(3));
   if (process.argv[2] === 'products-read') return productsReadMain(process.argv.slice(3));
   if (process.argv[2] === 'products-export') return productsExportMain(process.argv.slice(3));
+  if (process.argv[2] === 'invoices-read') return invoicesReadMain(process.argv.slice(3));
   if (process.argv[2] === 'review') {
     await reviewMain(process.argv.slice(3));
     return 0;

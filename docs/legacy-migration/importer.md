@@ -462,6 +462,149 @@ the owner approves the new map exactly as before. An approved-as-new draft is IN
 unpriced, so P6 leaves its services `PRODUCT_MAPPING_UNRESOLVED` until the owner prices and
 activates it — the intended order.
 
+### Invoice archive (`invoices-read`, Mirza PR3)
+
+```bash
+pnpm legacy-import invoices-read --tenant T --source SOURCE --target TARGET \
+     --expected-fingerprint HEX [--expected-invoice-archive-fingerprint HEX] \
+     [--batch-size N] [--format md|json] [--source-password-env NAME] [--allow-production-target]
+```
+
+Every legacy `invoice` row — every status, every key shape — is kept as read-only HISTORY in
+the append-only `legacy_invoice_archive` (migrations 0223–0225). Nothing archived ever
+becomes an order, a payment, a wallet entry, a service, a provisioning operation or
+revenue, and no report reads the archive (`tests/unit/legacy-invoice-archive-boundary.test.ts`,
+and the integration test's every-table fingerprint: an approved read changes only
+`legacy_invoice_archive`, `legacy_invoice_archive_runs`, `legacy_read_set_runs` and
+`audit_logs`).
+
+**The read set** — `legacy-read-set:invoice-archive:v1` (`invoice-archive-read-set.ts`):
+
+- `invoice`: the v1 import read set's twelve required columns, plus, when present,
+  `Service_location`, `time_sell`, `name_product`, `note`, `refral`, `time_cron`,
+  `notifctions` (named by `mahdiMGF2/botmirzapanel` @ 92c0ed06 `table.php` and
+  `mahdiMGF2/mirza_pro` @ 8e551ecf `db/tables/invoice.php`);
+- **never read**: `user_info` (the fork writes the panel's `subscription_url` into it),
+  `uuid` (an account UUID), `bottype` (the fork stores a reseller sub-bot's BOT TOKEN in it),
+  nor any other column. The excluded values never reach PostgreSQL, a report, a log or an
+  audit row (integration + engine tests seed recognisable markers in them);
+- `user`: `id` only (owner detection); `product`: `id`, `code_product` only.
+
+Reading it never changes the v1 fingerprint (unit test against the pinned synthetic value).
+An absent optional column is simply not read.
+
+**Approval and refusal.** `--expected-fingerprint` is always required: the session that
+reads the archive recomputes v1 first. Without `--expected-invoice-archive-fingerprint` the
+command prints that fingerprint for the owner and writes NOTHING (exit 3). With it, PR1's
+verified delivery refuses another fingerprint before any row is delivered (exit 65, nothing
+written — not even a run row). A SYNTHETIC source is refused against a production-like
+target before any write — and so is a SYNTHETIC run left open in the target (a restored or
+promoted staging database): it would otherwise be resumed from what it stored, without the
+source. It is neither promoted nor discarded there (`SYNTHETIC_RUN_ON_PRODUCTION_TARGET`,
+exit 65, nothing written, the source not opened); a person investigates how it got there.
+The report lists the `invoice` columns the read actually delivered (its table evidence),
+never the allowlist; a run finished without reading claims none.
+
+**All-or-nothing without one transaction, in bounded memory (the STAGING design).** The
+MySQL source refuses to run inside a PostgreSQL transaction, and a read may still fail after
+its last batch (`READ_SET_SNAPSHOT_DIVERGED`). PR2 holds a delivered read in memory until it
+has been verified; that is right for 64-ish products and wrong for 10^5+ invoices. Here:
+
+1. The run row (`legacy_invoice_archive_runs`, state `STAGING`) is created by the FIRST
+   delivered batch — pass 1's verification precedes it, so a mismatch writes nothing.
+2. Each delivered batch is ONE transaction into `legacy_invoice_archive_staging` (scratch
+   rows keyed by run, table and key; memory is one batch). A key staged twice is
+   `SOURCE_KEY_DUPLICATED`; a NUL character, or an indexed cell over 1000 characters, is
+   `CELL_UNREPRESENTABLE`.
+3. Any error during the read (divergence, a refused batch, a lost claim, a stopped tenant)
+   FAILS the run and deletes its staging. A process that dies leaves `STAGING`; the next
+   invocation fails it as `ABANDONED` first. Nothing of either read is ever archived.
+4. After the read returned, `verifyRun` requires the staged counts to equal the read's
+   exact counts per table AND the v1 identity's invoice count (`STAGED_COUNT_MISMATCH`
+   otherwise) → `VERIFIED`.
+5. Promotion: batches of at most 1000 staged invoices, each ONE transaction that classifies,
+   normalises, decides each revision and advances `promoted_through` conditionally on where it
+   was. A crash resumes at the cursor; the next invocation finishes a `VERIFIED` run FIRST,
+   from staging, without the source — and when it is the approved read, without reading the
+   source again.
+6. `completeRun` asserts the closure (below), marks `COMPLETED` — only now are the run's
+   revisions visible — and deletes the staging.
+
+A resumed read is a fresh read (the approval has to be proven over the whole snapshot in the
+new session), but staging writes are cheap and promotion is resumable. Measured on the
+synthetic fixture with 130,024 invoices (batch 500, local PostgreSQL 16): one approved
+ingest end to end in about 56 s. A dated, synthetic figure — not an expectation.
+
+**Revisions, never updates.** Keyed by (tenant, `id_invoice` exactly as read, revision), with
+no key-shape CHECK: an id the import map refuses (`INVOICE_KEY_INVALID`) is archived with
+`key_shape_evidenced = false`. A newer snapshot appends revision n+1 only when
+`archive_checksum` (the cells AND their source-derived context: owner present, product
+named) differs — `ROW_CHANGED` or `CONTEXT_CHANGED` — and writes nothing for an identical
+invoice. An invoice the newer snapshot no longer has stays archived and is counted
+(`missing_in_snapshot`). UPDATE and DELETE are refused by triggers for every role (0224).
+
+**Each revision** keeps the raw cells verbatim (`raw_row`), the validated normalised fields —
+legacy user id, username, `panel_code` (trimmed; blank is NULL), `product_code` (trimmed) and
+its reference to the legacy product table, `Status` and `live` (exact compare with the
+importer's live statuses), `is_test` (1/0 only), the historical price as raw text AND whole
+Toman as IRT minor units (owner decision 7; the product review's one grammar; anything else
+NULL with a closed note), `time_sell` raw AND parsed only as unix seconds within
+[2015, 2100) — the public sources write `time()`; any other format is `FORMAT_UNKNOWN` — and
+its provenance: the v1 source fingerprint, the read-set fingerprint, the run.
+
+**Classification** (source-derived only; first match wins; the archive's CHECK restates the
+order so a row whose class disagrees with its facts cannot be written):
+
+| Class                    | Rule                                                                              | Importer equivalent                                     |
+| ------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `KEY_SHAPE_UNRECOGNISED` | `id_invoice` outside `LEGACY_ID_PATTERNS.invoice`                                 | `INVOICE_KEY_INVALID` (no map row)                      |
+| `TEST`                   | `is_test` = 1                                                                     | `TEST_INVOICE_SKIPPED` / `SKIPPED HISTORY_NOT_IMPORTED` |
+| `TEST_FLAG_INVALID`      | `is_test` neither 0 nor 1                                                         | `INVALID_SOURCE_ROW`                                    |
+| `ORPHAN_OWNER`           | `id_user` NULL or not in the snapshot's `user` table — kept, never given an owner | `ORPHAN` / `CUSTOMER_MISSING`                           |
+| `NOT_LIVE`               | `Status` not a live status                                                        | — (the importer never decides it)                       |
+| `NO_PANEL`               | live, `code_panel` NULL or blank — owner decision 8: never adopted automatically  | — (see OQ-LIA-02)                                       |
+| `LIVE_CANDIDATE`         | every source-derived check holds                                                  | the importer's adoption outcome (PR5)                   |
+
+For a live invoice the first four are exactly `decideServiceCandidate`'s source-only steps,
+in its order (`tests/unit/legacy-invoice-archive-domain.test.ts` cross-checks every live
+synthetic invoice). Outcomes that need the panel map or the live inventory —
+`PANEL_UNMAPPED`, `PROVIDER_MISSING`, `PRODUCT_UNRESOLVED`, `AMBIGUOUS_PANEL`,
+`ADOPTION_ELIGIBLE`, `CUSTOMER_NOT_IMPORTED` — are NOT stored here; they are the importer's,
+and PR5's review workflows. The archive's detail view shows the importer's map row for the
+key (status, reason, review state: codes only) when one exists.
+
+**Reconciliation — every source invoice accounted for.** Per COMPLETED run, enforced by the
+run's CHECK and printed by the command:
+
+    inserted_new + inserted_revision + unchanged = promoted_rows = source_invoice_rows
+    archive_invoices_after = source_invoice_rows + missing_in_snapshot
+
+and `source_invoice_rows` is both the read set's and the v1 identity's exact `invoice` count
+in the same snapshot. Check a run by hand:
+
+```sql
+SELECT id, state, source_invoice_rows, inserted_new, inserted_revision, unchanged,
+       missing_in_snapshot, archive_invoices_after, read_set_fingerprint, source_fingerprint
+  FROM legacy_invoice_archive_runs WHERE tenant_id = :tenant ORDER BY started_at;
+SELECT count(DISTINCT invoice_key) FROM legacy_invoice_archive WHERE tenant_id = :tenant;
+```
+
+**Web Admin** `/legacy-invoices` (under Sales, beside the legacy product review), read-only:
+keyset pages of the latest visible revision per invoice; filters for invoice id (prefix),
+legacy user id, username (prefix, case-insensitive), status, panel code, product code,
+class and test flag, each served by a tenant-led index (`legacy-invoice-archive-plan.test.ts`
+asks the planner at 200,000 synthetic rows); a detail with the raw cells, every revision,
+the importer outcome and the provenance; a summary of counts by class and the recent runs
+(no id or username). `legacy.invoices.view` (MEDIUM; never an observer's) redacts
+`id_user`, `username`, `refral` and `note`; `legacy.invoices.pii.view` (HIGH) shows them and
+is required to SEARCH by them. Every reveal is audited (`legacy.invoice_archive.pii_view`):
+an unredacted detail, and every unredacted LIST page (its row ids, count and filter NAMES —
+never a value); a search by personal data is also audited (`pii_search`, filter names), and a
+refused one `DENIED`. Owner-only by default (0225). The invoice id, owner id, username and
+status filters compare exactly as typed (a legacy id `padded` keeps its spaces); the panel
+and product codes, stored trimmed, are trimmed. The keyset cursor is sized for the longest
+archivable key (1000 code points).
+
 ### Actors
 
 The CLI acts as `SYSTEM_JOB` (`legacy-import:<mode>`), which holds `maintenance.run` only.
@@ -602,6 +745,26 @@ every user) against the importer's own decisions. A disagreement is reported, no
   and a duplicated table, and pins that the runbooks capture the client's own exit status
   and compare through the checker.
 
+- Mirza PR3 (the invoice archive):
+  - `tests/unit/legacy-invoice-archive-domain.test.ts` — classification order (and its
+    agreement with `decideServiceCandidate` on every live synthetic invoice),
+    normalisation, price and time grammars, checksums, revisions, redaction;
+  - `tests/unit/legacy-invoice-archive-read-set.test.ts` — the allowlist, v1 unmoved, the
+    excluded columns' values never in the fingerprint, the command line, the report;
+  - `tests/unit/legacy-invoice-archive-boundary.test.ts` — no business module or table;
+  - `tests/integration/legacy-invoice-archive.test.ts` — digest-only and mismatches write
+    nothing; an approved read changes exactly four tables; secrets never stored; every
+    class; idempotent rerun; one changed invoice = one revision; snapshot B (revisions,
+    new, missing kept); crash mid-staging and mid-promotion; a lost batch; divergence;
+    duplicate keys; an unrepresentable cell; a stopped tenant; append-only and class
+    CHECK; foreign keys; the grants backfill; keyset and every filter; PII redaction,
+    refusal and audit; operator/observer denied; tenant isolation; the HTTP surface;
+  - `tests/integration/legacy-invoice-archive-plan.test.ts` — every filter on its index at
+    200,000 rows (`NEXA_LEGACY_ARCHIVE_PLAN_ROWS`);
+  - `tests/legacy-mysql/legacy-mysql-invoice-archive.test.ts` — engine and fixture agree
+    (odd keys' byte order included), no secret column delivered, a mismatch delivers none;
+  - `tests/web/legacy-invoices.test.tsx`;
+  - `scripts/mutate-mirza-pr3.py` — the mutation driver.
 - Mutation-checked: the acknowledgement requirement, the READ ONLY transaction, the
   resume's mapping check, the rerun keeping a created customer's own map reason, the
   insert never touching an existing customer, an unmapped named product held for review.

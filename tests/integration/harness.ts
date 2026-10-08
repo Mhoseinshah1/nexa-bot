@@ -179,6 +179,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        legacy_import_map, legacy_import_runs,
        -- Migration P7: the run inputs, before the runs they name.
        legacy_import_run_inputs, legacy_read_set_runs,
+       -- Mirza PR3: the invoice archive and its staging, before the runs they name.
+       legacy_invoice_archive, legacy_invoice_archive_staging, legacy_invoice_archive_runs,
        -- TB1: Telegram Business connections, before the bots and tenants they name.
        -- TB4: the support AI's runs, keys and configuration.
        support_knowledge_build_proposals, support_knowledge_builds, support_knowledge_revisions, support_knowledge_articles, support_learning_candidates, support_learning_jobs,

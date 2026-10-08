@@ -254,6 +254,17 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    // Mirza migration PR3: every legacy (Mirza) invoice, kept as read-only history — beside
+    // the legacy product review, the other half of what a migration operator reviews. Its
+    // own MEDIUM permission (observers do not see it); personal data needs a second key.
+    id: 'legacy-invoices',
+    path: '/legacy-invoices',
+    label: 'web.nav_legacy_invoices',
+    icon: 'clock',
+    permission: 'legacy.invoices.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'custom-service',
     path: '/custom-service',
     label: 'web.nav_custom_service',

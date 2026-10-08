@@ -252,6 +252,8 @@ import { ProductService } from './modules/commerce/catalog/application/product.s
 import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
 import { LegacyProductReviewService } from './modules/commerce/legacy-product-review/application/legacy-product-review.service.js';
 import { DrizzleLegacyProductReviewRepository } from './modules/commerce/legacy-product-review/infrastructure/drizzle-legacy-product-review.repository.js';
+import { LegacyInvoiceArchiveService } from './modules/platform/legacy-invoice-archive/application/legacy-invoice-archive.service.js';
+import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy-invoice-archive/infrastructure/drizzle-legacy-invoice-archive.repository.js';
 import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
 import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
 import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
@@ -946,6 +948,8 @@ export interface Container {
    * under `maintenance.run`. Never a price, a panel or a sale.
    */
   readonly legacyProductReviews: LegacyProductReviewService;
+  /** Mirza PR3: the append-only legacy invoice archive (Web Admin reads; CLI ingest steps). */
+  readonly legacyInvoiceArchive: LegacyInvoiceArchiveService;
   readonly productCategories: ProductCategoryService;
   readonly serviceAddons: ServiceAddonService;
   /** Discount rules, as an operator manages them (WP8). */
@@ -2076,6 +2080,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     clock,
     ids,
+  });
+
+  const legacyInvoiceArchiveService = new LegacyInvoiceArchiveService({
+    repository: new DrizzleLegacyInvoiceArchiveRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    clock,
+    ids,
+    codeVersion: config.BUILD_VERSION,
   });
 
   const legacyProductReviewService = new LegacyProductReviewService({
@@ -6779,6 +6796,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     products: productService,
     legacyProducts: legacyProductService,
     legacyProductReviews: legacyProductReviewService,
+    legacyInvoiceArchive: legacyInvoiceArchiveService,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,
@@ -7189,6 +7207,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         runInputs: importerRepository,
         readSetRuns: importerRepository,
         productReview: legacyProductReviewService,
+        invoiceArchive: legacyInvoiceArchiveService,
         customers: importerRepository,
         inventory: legacyInventory(options),
         openings: migrationOpeningBalance,

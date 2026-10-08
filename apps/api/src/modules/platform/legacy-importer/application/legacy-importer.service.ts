@@ -38,6 +38,12 @@ import {
   type ProductsReadInput,
   type ProductsReadOutcome,
 } from './products-ingest.js';
+import {
+  readLegacyInvoiceArchive,
+  type InvoiceArchiveIngest,
+  type InvoicesReadInput,
+  type InvoicesReadOutcome,
+} from './invoice-archive-ingest.js';
 import { legacyProfileUsername, type ServiceCandidateCategory } from './decisions.js';
 import { crossCheckEvidence, type LegacyEvidence } from './evidence-runner.js';
 import {
@@ -110,6 +116,8 @@ export interface LegacyImporterDeps {
   readonly readSetRuns: LegacyReadSetRunRepository;
   /** Mirza migration PR2: the legacy product review the `products` read set is ingested into. */
   readonly productReview: Pick<LegacyProductReviewService, 'ingestBatch' | 'markAbsent'>;
+  /** Mirza PR3: the legacy invoice archive's ingest steps (`invoices-read`). */
+  readonly invoiceArchive: InvoiceArchiveIngest;
   readonly customers: LegacyCustomerWriter;
   readonly inventory: LegacyInventoryPort;
   readonly openings: Pick<MigrationOpeningBalanceService, 'post'>;
@@ -759,6 +767,24 @@ export class LegacyImporterService {
       {
         processLock: this.deps.processLock,
         review: this.deps.productReview,
+        recordReadSetRun: (scope, actor, observation) =>
+          this.recordReadSetRun(scope, actor, observation),
+      },
+      input,
+    );
+  }
+
+  /**
+   * Mirza migration PR3 — `legacy-import invoices-read` (`invoice-archive-ingest.ts`): digest
+   * the `invoice-archive` read set for approval, or, with that approval, stage it, verify it
+   * and append its revisions to the legacy invoice archive under this tenant's importer
+   * claim, and record the read set run.
+   */
+  readInvoiceArchive(input: InvoicesReadInput): Promise<InvoicesReadOutcome> {
+    return readLegacyInvoiceArchive(
+      {
+        processLock: this.deps.processLock,
+        archive: this.deps.invoiceArchive,
         recordReadSetRun: (scope, actor, observation) =>
           this.recordReadSetRun(scope, actor, observation),
       },

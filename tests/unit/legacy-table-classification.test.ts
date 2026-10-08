@@ -86,7 +86,7 @@ describe('the legacy table catalogue', () => {
 
 describe('read set names and versions', () => {
   it('names the recorded read sets and builds their version strings', () => {
-    expect([...LEGACY_READ_SET_NAMES]).toEqual(['inventory', 'products']);
+    expect([...LEGACY_READ_SET_NAMES]).toEqual(['inventory', 'products', 'invoice-archive']);
     expect(legacyReadSetFingerprintVersion('inventory', 1)).toBe('legacy-read-set:inventory:v1');
     expect(legacyReadSetFingerprintVersion('invoice-archive', 2)).toBe(
       'legacy-read-set:invoice-archive:v2',
