@@ -3436,7 +3436,10 @@ owner's, or settled from the real staging copy (NOT RUN) — never by guessing.
 - **OQ-LSR-01 — DECISION: panel 8255.** It stays unmapped (recommended:
   `unresolvedPanels` with `OWNER_DECIDES_LATER`) until the owner maps it explicitly in
   `panels`. Never declared missing to let the search find its accounts, and never inferred
-  from the holders the evidence shows.
+  from the holders the evidence shows — nor approved onto one: since aud5 F2 an ADOPT
+  approval may name a panel only for an EMPTY `code_panel`, so an 8255 invoice is offered no
+  panel, a request naming one is refused, and the run's gate refuses an older approval
+  (`PANEL_UNMAPPED`).
 - **OQ-LSR-02 — DECISION: declared-missing codes.** A code the operator lists in
   `missingPanels` is still searched across every production panel and adopted on a unique
   hit (the map is explicit and fingerprinted). Decision 8 names empty codes only; whether a

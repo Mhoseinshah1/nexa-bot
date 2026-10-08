@@ -29,6 +29,7 @@ import { SERVICE_CANDIDATE_CATEGORIES } from '../../apps/api/src/modules/platfor
 import { parsePanelMapping } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
 import type { LegacyInvoiceRow } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import { syntheticMappingFile, syntheticInventories } from '../fixtures/legacy/synthetic-support';
+import { SYNTHETIC_PANEL_CODES } from '../fixtures/legacy/synthetic-legacy';
 
 /**
  * Mirza migration PR5 — the pure rules of service outcomes and the operator's review
@@ -127,6 +128,32 @@ describe('decideAdoptRequest', () => {
     };
     expect(decideAdoptRequest(unmapped, PANEL_B)).toMatchObject({ ok: false });
     expect(adoptPanelsOf(evidence())).toEqual([PANEL_B]);
+  });
+
+  it('aud5 F2 / OQ-LSR-01: a non-empty code the map does not map is never adopted onto another panel', () => {
+    for (const panelCodeClass of [
+      'UNMAPPED',
+      'DECLARED_UNRESOLVED',
+      'DECLARED_MISSING',
+      'TEST',
+    ] as const) {
+      // PANEL_B is a mapped panel holding exactly the account — and still never offered.
+      const e = evidence({ panelCodeClass, mappedPanelId: null });
+      expect(adoptPanelsOf(e), panelCodeClass).toEqual([]);
+      for (const outcome of ['PANEL_UNMAPPED', 'PROVIDER_MISSING', 'NO_PANEL'] as const) {
+        const c = { outcome, evidence: e };
+        expect(decideAdoptRequest(c, PANEL_B), panelCodeClass).toMatchObject({
+          ok: false,
+          code: 'PANEL_REFUSED',
+        });
+        expect(decideAdoptRequest(c, undefined), panelCodeClass).toMatchObject({
+          ok: false,
+          code: 'PANEL_REFUSED',
+        });
+      }
+    }
+    // The EMPTY code keeps its explicit approval.
+    expect(adoptPanelsOf(evidence({ panelCodeClass: 'EMPTY' }))).toEqual([PANEL_B]);
   });
 
   it('an explicit mapping is never overridden by a click; the same panel is the map’s', () => {
@@ -340,6 +367,23 @@ describe('the approval gate', () => {
       refusal: 'PANEL_CONFLICTS_WITH_MAP',
     });
     expect(approvalGate(approval, row(), context)).toEqual({ kind: 'ACCEPT', panelId: PANEL_B });
+    // aud5 F2 / OQ-LSR-01: a named panel is for an EMPTY code only. A real code the map does
+    // not map — unresolved, declared missing, test, or never listed — is refused.
+    for (const codePanel of [
+      SYNTHETIC_PANEL_CODES.unmapped,
+      SYNTHETIC_PANEL_CODES.declaredMissing,
+      SYNTHETIC_PANEL_CODES.test,
+      'never-listed',
+    ]) {
+      expect(approvalGate(approval, row({ codePanel }), context), codePanel).toEqual({
+        kind: 'REFUSE',
+        refusal: 'PANEL_UNMAPPED',
+      });
+    }
+    // The code that maps to the approved panel itself is the map's, not an override.
+    expect(
+      approvalGate(approval, row({ codePanel: SYNTHETIC_PANEL_CODES.mappedB }), context),
+    ).toEqual({ kind: 'ACCEPT', panelId: PANEL_B });
     expect(approvalGate({ ...approval, approvedPanelId: null }, row(), context)).toEqual({
       kind: 'ACCEPT',
       panelId: null,

@@ -37,8 +37,14 @@ export function evidenceHash(evidence: LegacyServiceEvidence): string {
  * The panels an ADOPT approval may name: a production panel the map maps EXPLICITLY whose
  * complete inventory, in the run that decided the candidate, held exactly one spelling of the
  * invoice's name. Never a panel guessed for the operator; never one without the account.
+ *
+ * Only for an EMPTY `code_panel` (owner decision 8; OQ-LSR-01, aud5 F2). A non-empty code
+ * names a real panel — mapped, unmapped, unresolved, declared missing or a test panel — and
+ * an account of the same name on ANOTHER panel is a different account: such an invoice is
+ * never offered a panel. Its remedy is the panel map, never a click.
  */
 export function adoptPanelsOf(evidence: LegacyServiceEvidence): readonly string[] {
+  if (evidence.panelCodeClass !== 'EMPTY') return [];
   return evidence.holders
     .filter((h) => h.mapped && h.spellings === 1)
     .map((h) => h.panelId)
@@ -132,9 +138,12 @@ export type AdoptRequestDecision =
  * authoritatively, against the inventory it walks.
  *
  * - The outcome must be one a person can clear (`LEGACY_SERVICE_ADOPTABLE_OUTCOMES`).
- * - When the map gives the invoice NO panel (empty code — owner decision 8 —, an unmapped,
- *   unresolved or declared-missing code), the operator MUST name one, and it must be a
- *   mapped panel holding the account (`adoptPanelsOf`). Never guessed for them.
+ * - When the invoice's `code_panel` is EMPTY (owner decision 8), the operator MUST name a
+ *   panel, and it must be a mapped panel holding the account (`adoptPanelsOf`). Never
+ *   guessed for them.
+ * - When the code is NOT empty and the map gives it no panel (unmapped, unresolved, declared
+ *   missing), nothing may be approved: the code names a real panel, and an account of that
+ *   name elsewhere is another account (aud5 F2, OQ-LSR-01). The remedy is the panel map.
  * - When the map gives a panel, a different one is refused: an explicit mapping is never
  *   overridden by a click. Naming the same one is accepted and recorded as "the map's".
  */
@@ -151,6 +160,16 @@ export function decideAdoptRequest(
   }
   const mapped = candidate.evidence.mappedPanelId;
   if (mapped === null) {
+    // aud5 F2 / OQ-LSR-01: a non-empty code the map does not map (unmapped, unresolved,
+    // declared missing) names a real panel; it is never adopted onto another one.
+    if (candidate.evidence.panelCodeClass !== 'EMPTY') {
+      return {
+        ok: false,
+        code: 'PANEL_REFUSED',
+        message:
+          "This invoice's code_panel names a panel the map does not map. Map that code in the panel map; an account on another panel is never adopted for it.",
+      };
+    }
     if (panelId === undefined) {
       return {
         ok: false,
