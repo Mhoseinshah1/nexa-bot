@@ -137,9 +137,9 @@ expected and actual figure. Any `holds = no` must name its cause and its decisio
 | ------------------------------------------------------------------- | --------------------------------------- | ----- |
 | `core` (v1: C1, C3, W1, W4, W5, S3, P3)                             | schemaVersion 1                         |       |
 | `inventory` (fresh, bound; UNCLASSIFIED = 0)                        | `nexa-legacy-inventory/v1` I1–I4        |       |
-| `products` (rows by state, export readiness)                        | `nexa-legacy-products/v1` PR1–PR4       |       |
+| `products` (rows by state, export readiness, panel map vs review)   | `nexa-legacy-products/v1` PR1–PR5       |       |
 | `invoiceArchive` (archived = source rows + missing)                 | `nexa-legacy-invoice-archive/v1` A1–A6  |       |
-| `usersWallets` (debts, conflicts, source changes reported)          | `nexa-legacy-users-wallets/v1` U1–U8    |       |
+| `usersWallets` (debts, conflicts, source changes, blocked users)    | `nexa-legacy-users-wallets/v1` U1–U8    |       |
 | `serviceOutcomes` (one outcome per candidate)                       | `nexa-legacy-service-outcomes/v1`       |       |
 | `cutover` (approvals, prior APPLY runs, superseded sources)         | `nexa-legacy-cutover/v1` X1             |       |
 | `applyRun` (`withdrawnDuringRun`, `approvalUnconfirmed`, attention) | `nexa-legacy-apply-run/v1` R1–R2        |       |

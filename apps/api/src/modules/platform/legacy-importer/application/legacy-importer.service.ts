@@ -2243,6 +2243,7 @@ export class LegacyImporterService {
       snapshot,
       inventory: input.inventory ?? null,
       facts: await this.deps.cutover.reportFacts(scope, snapshot.fingerprint, run.id),
+      productMap: mapping.products,
       openingsPerCustomerMax: openings.perCustomerMax,
     });
     const holds = reportHolds(final, usersWallets, serviceOutcomes) && finalV2.verdict.holds;

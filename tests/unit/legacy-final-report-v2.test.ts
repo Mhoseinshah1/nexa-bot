@@ -120,6 +120,7 @@ function holdingInput(): Mutable<FinalReportV2Input> {
       },
       runCutoverApprovalId: null,
     },
+    productMap: new Map<string, string>(),
     openingsPerCustomerMax: 1,
   } as Mutable<FinalReportV2Input>;
 }
@@ -395,6 +396,47 @@ describe('final report v2: the verdict is the AND of every section and every inv
       },
     ],
   ];
+
+  it('aud5 F5 / aud6 F1: a panel-map products entry the review does not export flips the products section (PR5)', () => {
+    const P = '0190aaaa-0000-7000-8000-0000000000f1';
+    const input = holdingInput();
+    // p1 is PENDING_REVIEW: the map naming it is refused.
+    input.productMap = new Map([['p1', P]]);
+    let v = buildFinalReportV2(input as never);
+    expect(v.sections.products.panelMap).toEqual({
+      entries: 1,
+      refused: 1,
+      byReason: { NO_PRODUCTS_READ: 0, NO_REVIEW_ROW: 0, NOT_EXPORTABLE: 1, TARGET_DIFFERS: 0 },
+    });
+    expect(v.sections.products.checks.find((c) => c.id === 'PR5')?.holds).toBe(false);
+    expect(v.verdict.failedSections).toEqual(['products']);
+    // Approved to P, under the recorded read: holds. Approved to another product: refused.
+    const approve = (productId: string) => {
+      input.facts.productRows = input.facts.productRows.map((r) =>
+        r.codeProduct === 'p1'
+          ? {
+              ...r,
+              state: 'APPROVED_EXISTING',
+              approvedProductId: productId,
+              approvedFactsChecksum: r.factsChecksum,
+            }
+          : r,
+      );
+    };
+    approve(P);
+    v = buildFinalReportV2(input as never);
+    expect(v.sections.products.panelMap.refused).toBe(0);
+    expect(v.verdict.holds).toBe(true);
+    approve('0190aaaa-0000-7000-8000-0000000000f2');
+    v = buildFinalReportV2(input as never);
+    expect(v.sections.products.panelMap.byReason.TARGET_DIFFERS).toBe(1);
+    expect(v.verdict.failedSections).toEqual(['products']);
+    // No products read recorded for the source.
+    approve(P);
+    input.facts.readSets.products = null;
+    v = buildFinalReportV2(input as never);
+    expect(v.sections.products.panelMap.byReason.NO_PRODUCTS_READ).toBe(1);
+  });
 
   for (const [section, what, mutate] of sectionCases) {
     it(`section ${section} flips the verdict: ${what}`, () => {

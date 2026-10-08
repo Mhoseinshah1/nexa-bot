@@ -21,6 +21,13 @@ import {
  * as check PR5 (so `REPORT_V2_HOLDS` and the cutover gate carry it too).
  */
 
+export const PRODUCT_MAP_REVIEW_REASONS = [
+  'NO_PRODUCTS_READ',
+  'NO_REVIEW_ROW',
+  'NOT_EXPORTABLE',
+  'TARGET_DIFFERS',
+] as const;
+
 export type ProductMapReviewReason =
   /** No `products` read set is recorded for this source: no review can vouch for an entry. */
   | 'NO_PRODUCTS_READ'

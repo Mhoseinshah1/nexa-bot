@@ -248,6 +248,7 @@
             "byState",
             "sourceConflicts",
             "exportReadiness",
+            "panelMap",
             "checks",
             "holds"
           ],
@@ -332,6 +333,44 @@
                   },
                   "additionalProperties": {
                     "$ref": "#/$defs/count"
+                  }
+                }
+              }
+            },
+            "panelMap": {
+              "description": "aud5 F5 = aud6 F1: the panel map's products entries against the approved review under this source's latest products read (check PR5). Counts only — no code.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["entries", "refused", "byReason"],
+              "properties": {
+                "entries": {
+                  "$ref": "#/$defs/count"
+                },
+                "refused": {
+                  "$ref": "#/$defs/count"
+                },
+                "byReason": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "NO_PRODUCTS_READ",
+                    "NO_REVIEW_ROW",
+                    "NOT_EXPORTABLE",
+                    "TARGET_DIFFERS"
+                  ],
+                  "properties": {
+                    "NO_PRODUCTS_READ": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "NO_REVIEW_ROW": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "NOT_EXPORTABLE": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "TARGET_DIFFERS": {
+                      "$ref": "#/$defs/count"
+                    }
                   }
                 }
               }
@@ -454,7 +493,7 @@
             "users": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["sourceRows", "outcomes", "agents"],
+              "required": ["sourceRows", "outcomes", "agents", "legacyStatus", "blocked"],
               "properties": {
                 "sourceRows": {
                   "$ref": "#/$defs/count"
@@ -469,6 +508,7 @@
                     "SKIPPED_BALANCE_UNREADABLE",
                     "SKIPPED_BALANCE_OUT_OF_RANGE",
                     "SKIPPED_DUPLICATE_SOURCE_ID",
+                    "SKIPPED_STATUS_UNKNOWN",
                     "SKIPPED_REVIEW_CLOSED",
                     "SOURCE_CHANGED",
                     "NOT_YET_IMPORTED"
@@ -490,6 +530,9 @@
                       "$ref": "#/$defs/count"
                     },
                     "SKIPPED_DUPLICATE_SOURCE_ID": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "SKIPPED_STATUS_UNKNOWN": {
                       "$ref": "#/$defs/count"
                     },
                     "SKIPPED_REVIEW_CLOSED": {
@@ -516,6 +559,43 @@
                     },
                     "resellerGrants": {
                       "const": "NONE"
+                    }
+                  }
+                },
+                "legacyStatus": {
+                  "description": "OQ-LWD-07: User_Status of every source row, classified (exactly Active, exactly block, anything else). Sum = sourceRows.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["ACTIVE", "BLOCKED", "UNKNOWN"],
+                  "properties": {
+                    "ACTIVE": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "BLOCKED": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "UNKNOWN": {
+                      "$ref": "#/$defs/count"
+                    }
+                  }
+                },
+                "blocked": {
+                  "description": "OQ-LWD-07: where the users blocked in MirzaBot ended — created BLOCKED, matched to an existing NEXA customer whose status is never changed, or not imported. Their money is in the wallet figures like anybody's.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["sourceRows", "importedNew", "importedExisting", "notImported"],
+                  "properties": {
+                    "sourceRows": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "importedNew": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "importedExisting": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "notImported": {
+                      "$ref": "#/$defs/count"
                     }
                   }
                 }

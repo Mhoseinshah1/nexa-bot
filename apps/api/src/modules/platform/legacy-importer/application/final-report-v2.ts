@@ -18,6 +18,11 @@ import {
   supersededSources,
 } from '../../legacy-cutover/domain/cutover-rules.js';
 import type { FinalReport } from './final-report.js';
+import {
+  PRODUCT_MAP_REVIEW_REASONS,
+  productMapAgainstReview,
+  type ProductMapReviewReason,
+} from './product-map-review.js';
 import type { LegacyInventory } from './legacy-inventory.js';
 import type { ServiceOutcomesSection } from './service-outcomes.js';
 import type { LegacySnapshot } from './source-snapshot.js';
@@ -50,6 +55,8 @@ export interface FinalReportV2Input {
   /** A fresh inventory read in a session bound to this source, or null when none was read. */
   readonly inventory: LegacyInventory | null;
   readonly facts: LegacyCutoverReportFacts;
+  /** The panel map's `products` section (code → NEXA product): judged by check PR5. */
+  readonly productMap: ReadonlyMap<string, string>;
   /** The most migration openings any one customer holds (the v1 W5 figure). */
   readonly openingsPerCustomerMax: number;
 }
@@ -135,6 +142,7 @@ export function buildInventorySection(
 export function buildProductsSection(
   snapshot: Pick<LegacySnapshot, 'fingerprint' | 'productCodes'>,
   facts: LegacyCutoverReportFacts,
+  productMap: ReadonlyMap<string, string>,
 ) {
   const readSet = facts.readSets.products;
   const rows = facts.productRows;
@@ -165,6 +173,13 @@ export function buildProductsSection(
     }
   }
   const stale = present.filter((r) => r.readFingerprint !== fingerprint).length;
+  const panelMap = productMapAgainstReview(productMap, rows, fingerprint);
+  const byReason = Object.fromEntries(
+    PRODUCT_MAP_REVIEW_REASONS.map((r) => [
+      r,
+      panelMap.refused.filter((x) => x.reason === r).length,
+    ]),
+  ) as Record<ProductMapReviewReason, number>;
   const checks = [
     check(
       'PR1',
@@ -185,6 +200,13 @@ export function buildProductsSection(
       str(notInSource),
     ),
     check('PR4', 'every present review row was read by that products read', '0', str(stale)),
+    // aud5 F5 = aud6 F1 (PR2 Departure 9): the same answer the APPLY prepare refuses on.
+    check(
+      'PR5',
+      'every panel-map products entry is exported by the approved review under that read, to the same product',
+      '0',
+      str(panelMap.refused.length),
+    ),
   ];
   return {
     version: LEGACY_PRODUCTS_SECTION_VERSION,
@@ -210,6 +232,7 @@ export function buildProductsSection(
       exportable,
       notExported,
     },
+    panelMap: { entries: panelMap.entries, refused: panelMap.refused.length, byReason },
     checks,
     holds: checks.every((c) => c.holds),
   };
@@ -425,7 +448,7 @@ export function buildApplyRunSection(runId: string, facts: LegacyCutoverReportFa
 export function buildFinalReportV2(input: FinalReportV2Input) {
   const { core, usersWallets, serviceOutcomes, snapshot, facts } = input;
   const inventory = buildInventorySection(input.inventory, facts, snapshot.fingerprint);
-  const products = buildProductsSection(snapshot, facts);
+  const products = buildProductsSection(snapshot, facts, input.productMap);
   const invoiceArchive = buildInvoiceArchiveSection(snapshot, facts);
   const cutover = buildCutoverSection(snapshot.fingerprint, facts);
   const applyRun = buildApplyRunSection(core.run.runId, facts);
