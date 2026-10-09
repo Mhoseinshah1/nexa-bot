@@ -110,11 +110,27 @@ export type GatewayCreateOutcome =
       readonly instructions?: GatewayCardInstructions | null;
       /** What the provider said about changing that card, when it said anything. */
       readonly cardChange?: GatewayCardChangePolicy | null;
+      /**
+       * FIX-04: the provider DID return a link and it was refused as unsafe (not an https
+       * URL), which is why both links are null. Absent or false: no link was returned. Only
+       * the fact — the refused value itself is never carried.
+       */
+      readonly linkRejected?: boolean;
     }
-  | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
-  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
-  | { readonly kind: 'AMBIGUOUS'; readonly code: string }
-  | { readonly kind: 'UNKNOWN'; readonly code: string };
+  /*
+   * FIX-04: `httpStatus` is the status the provider answered with, when the adapter knows
+   * it and its code does not already carry it (`http.<status>…`). Metadata for the
+   * operations log; nothing decides on it.
+   */
+  | {
+      readonly kind: 'REFUSED';
+      readonly code: string;
+      readonly configuration: boolean;
+      readonly httpStatus?: number;
+    }
+  | { readonly kind: 'RATE_LIMITED'; readonly code: string; readonly httpStatus?: number }
+  | { readonly kind: 'AMBIGUOUS'; readonly code: string; readonly httpStatus?: number }
+  | { readonly kind: 'UNKNOWN'; readonly code: string; readonly httpStatus?: number };
 
 /** A payee card, exactly as the provider sent it (format undocumented, `OQ-TPTG-06`). */
 export interface GatewayCardInstructions {

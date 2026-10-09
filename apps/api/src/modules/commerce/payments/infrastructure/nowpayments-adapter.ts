@@ -230,12 +230,15 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
       if (parsed.data.order_id !== request.orderId) {
         return { kind: 'UNKNOWN', code: 'nexa.order_id_mismatch' };
       }
+      const invoiceUrl = safeLink(parsed.data.invoice_url);
       return {
         kind: 'CREATED',
         invoiceId: parsed.data.id,
         orderId: parsed.data.order_id,
-        invoiceUrl: safeLink(parsed.data.invoice_url),
+        invoiceUrl,
         webInvoiceUrl: null,
+        // FIX-04: a link was sent and refused as unsafe — the fact, never the value.
+        ...(parsed.data.invoice_url != null && invoiceUrl === null ? { linkRejected: true } : {}),
         status: null,
         // Metadata only: the price the provider echoed, in cents, when it reads exactly.
         requestAmount: centsOfPriceAmount(parsed.data.price_amount),
@@ -251,15 +254,19 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
     if (raw.status >= 500) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
     if (raw.status === 429) return { kind: 'RATE_LIMITED', code: 'http.429' };
     const code = errorCodeOf(raw.body);
+    // FIX-04 (Codex P2 on #251): a readable refusal's code is the provider's word and its
+    // status is metadata the operations log needs — `INVALID_API_KEY` on a 401 is told
+    // apart from one on a 403 only by it. Nothing decides on it.
     if (refusesKey(raw.status)) {
       return {
         kind: 'REFUSED',
         code: code ?? `http.${String(raw.status)}`,
         configuration: true,
+        httpStatus: raw.status,
       };
     }
     if (code === null) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
-    return { kind: 'REFUSED', code, configuration: false };
+    return { kind: 'REFUSED', code, configuration: false, httpStatus: raw.status };
   }
 
   async inquire(

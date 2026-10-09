@@ -368,6 +368,8 @@ describe('creating the hosted invoice', () => {
       const outcome = await adapter.createInvoice(API_KEY, request);
       expect(outcome.kind).toBe(kind);
       expect('code' in outcome ? outcome.code : null).toBe(code);
+      // FIX-04: every readable refusal carries the status it came with.
+      if (outcome.kind === 'REFUSED') expect(outcome.httpStatus).toBe(response.status);
       expect(JSON.stringify(outcome)).not.toContain(API_KEY);
     }
     const { adapter: refused } = adapterWith(() => json(401, { code: 'INVALID_API_KEY' }));

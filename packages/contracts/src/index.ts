@@ -169,3 +169,5 @@ export * from './support-ai.js';
 export * from './support-knowledge.js';
 /** TB10: read-only support analytics over a half-open report window. */
 export * from './support-analytics.js';
+/** FIX-04/05: the one taxonomy of reportable operational events and their group presentation. */
+export * from './ops-error-events.js';

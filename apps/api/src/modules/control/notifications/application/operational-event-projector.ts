@@ -1,5 +1,7 @@
 import {
   isSystemContext,
+  opsErrorClassOf,
+  opsErrorPresentationOf,
   opsLogTopicForCode,
   type Logger,
   type UnitOfWork,
@@ -18,6 +20,7 @@ import {
   contextBotInstanceId,
   operationalEventDetails,
 } from './event-details.js';
+import { paymentLinkFailureValues } from './payment-link-presentation.js';
 
 /**
  * Projects operational events into notifications.
@@ -206,6 +209,44 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
       // No severity threshold (WP-A4): routing decides WHERE, never whether.
       const details = operationalEventDetails(event.context);
       const botInstanceId = scope.botInstanceId ?? contextBotInstanceId(event.context);
+      /*
+       * FIX-04: a payment-link failure built by its one mapping is laid out as the
+       * operator-facing report the owner asked for. Anything else — including an event of
+       * the same code recorded in an older shape — keeps the generic layout, so a code's
+       * presentation can never make an event unrenderable.
+       */
+      const paymentLink =
+        opsErrorPresentationOf(recorded.code) === 'PAYMENT_LINK'
+          ? paymentLinkFailureValues(event.context, {
+              eventId: recorded.id,
+              at: recorded.lastSeenAt,
+              tenantId: String(scope.tenantId),
+              ...(botInstanceId ? { botInstanceId: String(botInstanceId) } : {}),
+              ...(event.correlationId
+                ? {
+                    correlationId: boundedForTelegram(
+                      String(event.correlationId),
+                      OPERATIONAL_ID_MAX,
+                    ),
+                  }
+                : {}),
+            })
+          : null;
+      if (paymentLink !== null) {
+        await this.notifications.queue(
+          scope,
+          {
+            kind: 'OPERATIONAL_EVENT',
+            dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
+            templateKey: 'ops.notification.payment_link_failed',
+            values: paymentLink,
+            ...(event.correlationId ? { correlationId: event.correlationId } : {}),
+            opsTopic: opsLogTopicForCode(recorded.code),
+          },
+          nested,
+        );
+        return;
+      }
       await this.notifications.queue(
         scope,
         {
@@ -216,7 +257,8 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
           dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
           templateKey: 'ops.notification.operational_event',
           values: {
-            severity: recorded.severity,
+            // FIX-05: the CLASS (`SECURITY` for an access or abuse event), not the raw column.
+            severity: opsErrorClassOf(recorded.code, recorded.severity),
             code: recorded.code,
             // Bounded, like the detail, so the whole message fits Telegram's 4096.
             message: boundedForTelegram(recorded.message, OPERATIONAL_MESSAGE_BUDGET),

@@ -4,6 +4,7 @@ import {
   BOT_ERROR_CODES,
   errors,
   NexaError,
+  opsAggregationKey,
   PLATFORM_ERROR_CODES,
   systemJobActor,
   TELEGRAM_SECRET_TOKEN_HEADER,
@@ -14,6 +15,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { recordQuietly } from '../../modules/platform/opslog/application/error-events.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import { STARS_CHARGE_UNMATCHED_CODE } from '../../modules/commerce/payments/application/telegram-stars-payment.service.js';
 import {
@@ -271,17 +273,27 @@ export class TelegramWebhookController {
     const connectAttempt = opsConnectAttemptOf(update);
     const membership = connectAttempt === null ? opsMembershipChangeOf(update) : null;
     const recordOpsGroupFailure = async (error: unknown): Promise<void> => {
-      await this.container.opsLog.record(scope, {
-        code: 'telegram.ops_group_update_failed',
-        severity: 'ERROR',
-        message: 'A Telegram update for the operations log group could not be handled.',
-        dedupeKey: `telegram.ops_group_update_failed:${botInstance.id}`,
-        context: {
-          botInstanceId: botInstance.id,
-          updateId,
-          error: error instanceof Error ? error.name : 'unknown',
+      // FIX-05: windowed (one message an hour while it keeps failing, not one ever), and
+      // quiet — a log that cannot be written must not turn this 2xx into a redelivery.
+      await recordQuietly(
+        this.container.opsLog,
+        scope,
+        {
+          code: 'telegram.ops_group_update_failed',
+          severity: 'ERROR',
+          message: 'A Telegram update for the operations log group could not be handled.',
+          dedupeKey: opsAggregationKey(
+            `telegram.ops_group_update_failed:${botInstance.id}`,
+            this.container.clock.now(),
+          ),
+          context: {
+            botInstanceId: botInstance.id,
+            updateId,
+            error: error instanceof Error ? error.name : 'unknown',
+          },
         },
-      });
+        this.container.logger,
+      );
     };
     if (connectAttempt !== null) {
       try {
@@ -388,20 +400,30 @@ export class TelegramWebhookController {
           from: telegramFromOf(update),
         });
       } catch (error) {
-        await this.container.opsLog.record(scope, {
-          code: 'telegram.turn_failed',
-          severity: 'ERROR',
-          message: 'A Telegram update could not be handled.',
-          dedupeKey: `telegram.turn_failed:${botInstance.id}`,
-          // The update id and the bot, and nothing out of the update itself. A
-          // customer's message text in an operational event is the hazard
-          // `docs/open-questions.md` records for this phase.
-          context: {
-            botInstanceId: botInstance.id,
-            updateId,
-            error: error instanceof Error ? error.name : 'unknown',
+        // FIX-05: windowed and quiet, for the reasons the ops-group failure above gives —
+        // a throw here would be the non-2xx this wrapping exists to prevent.
+        await recordQuietly(
+          this.container.opsLog,
+          scope,
+          {
+            code: 'telegram.turn_failed',
+            severity: 'ERROR',
+            message: 'A Telegram update could not be handled.',
+            dedupeKey: opsAggregationKey(
+              `telegram.turn_failed:${botInstance.id}`,
+              this.container.clock.now(),
+            ),
+            // The update id and the bot, and nothing out of the update itself. A
+            // customer's message text in an operational event is the hazard
+            // `docs/open-questions.md` records for this phase.
+            context: {
+              botInstanceId: botInstance.id,
+              updateId,
+              error: error instanceof Error ? error.name : 'unknown',
+            },
           },
-        });
+          this.container.logger,
+        );
       }
     }
 

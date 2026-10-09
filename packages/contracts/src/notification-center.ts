@@ -211,6 +211,16 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
     link: 'PAYMENT_GATEWAYS',
     minSeverity: 'WARN',
   },
+  // FIX-04: a payment link that could not be made. The group is told once per window; THIS
+  // is where the live occurrence counter is read, which is what the group message points at
+  // (Codex P2 on #251). Its UNKNOWN sibling, `payments.gateway_create_unknown`, already has
+  // a rule above, under PAYMENTS.
+  {
+    code: 'payments.gateway_link_create_failed',
+    category: 'GATEWAYS',
+    link: 'PAYMENT_GATEWAYS',
+    minSeverity: 'WARN',
+  },
   // --- panels down, degraded or full -----------------------------------------------------
   { prefix: 'panel.health.', category: 'PANELS', link: 'PANEL', minSeverity: 'WARN' },
   { prefix: 'panel.capacity.', category: 'PANELS', link: 'PANEL', minSeverity: 'WARN' },

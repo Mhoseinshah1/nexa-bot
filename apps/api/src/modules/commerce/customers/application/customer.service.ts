@@ -1,4 +1,7 @@
 import {
+  ANTI_SPAM_CUSTOMER_BLOCKED_CODE,
+  OPS_ERROR_CLASS_POLICY,
+  opsAggregationKey,
   ANTI_SPAM_BLOCK_REASON,
   COMMERCE_ERROR_CODES,
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
@@ -26,6 +29,10 @@ import type { OutboxWriter } from '../../../platform/eventing/infrastructure/out
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
+import {
+  UNWIRED_LOGGER,
+  recordQuietly,
+} from '../../../platform/opslog/application/error-events.js';
 /*
  * The store's OWN hash, not a second one written here.
  *
@@ -113,6 +120,12 @@ export interface CustomerServiceDeps {
   };
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * FIX-05: where an anti-spam block's operational event is reported when it could not be
+   * written. Optional so a unit test of the status rules need not supply one; the block
+   * itself never depends on it.
+   */
+  readonly logger?: { warn: (context: Record<string, unknown>, message: string) => void };
   /**
    * Spec §9: whether this installation lets a customer stop promotional messages at all
    * (`customer_marketing_opt_out`). Optional so a narrow test wiring need not supply it;
@@ -515,13 +528,16 @@ export class CustomerService {
       readonly context?: CustomerStatusContext;
     },
   ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
-    return this.setStatus(scope, actor, {
+    const { customer, changed } = await this.setStatus(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       customerId: input.customerId,
       to: 'BLOCKED',
       reason: input.reason,
       ...(input.context === undefined ? {} : { context: input.context }),
     });
+    // `replayed` is internal to anti-spam's reporting; a replay answers exactly as the
+    // first call did.
+    return { customer, changed };
   }
 
   /**
@@ -547,7 +563,7 @@ export class CustomerService {
       readonly interactions: number;
     },
   ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
-    return this.setStatus(scope, actor, {
+    const outcome = await this.setStatus(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       customerId: input.customerId,
       to: 'BLOCKED',
@@ -555,6 +571,37 @@ export class CustomerService {
       context: { source: 'ANTI_SPAM', interactions: input.interactions },
       permission: ANTI_SPAM_BLOCK_PERMISSION,
     });
+    /*
+     * FIX-05: an actionable abuse fact for the operations log group (SECURITY). Only when
+     * THIS call's transaction blocked the customer — a replay (which repeats the first
+     * call's `changed: true` without doing anything), a concurrent block or an
+     * administrator's earlier one changed nothing now and reports nothing — and after the block committed, so
+     * the block never waits on, or fails because of, the log. One row per customer per
+     * window: a flood that re-triggers it is one message with a counter.
+     */
+    if (outcome.changed && !outcome.replayed) {
+      await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        {
+          code: ANTI_SPAM_CUSTOMER_BLOCKED_CODE,
+          severity: OPS_ERROR_CLASS_POLICY.SECURITY.storedSeverity,
+          message: 'Anti-spam blocked a customer for flooding the bot.',
+          dedupeKey: opsAggregationKey(
+            `${ANTI_SPAM_CUSTOMER_BLOCKED_CODE}:${input.customerId}`,
+            this.deps.clock.now(),
+          ),
+          context: {
+            customerId: input.customerId,
+            telegramUserId: outcome.customer.telegramUserId,
+            reason: 'ANTI_SPAM',
+            attempt: input.interactions,
+          },
+        },
+        this.deps.logger ?? UNWIRED_LOGGER,
+      );
+    }
+    return { customer: outcome.customer, changed: outcome.changed };
   }
 
   /** Unblock. The same machinery, so neither direction can forget a step. */
@@ -732,7 +779,16 @@ export class CustomerService {
       /** `users.block` unless the caller is anti-spam. See `blockForSpam`. */
       readonly permission?: PermissionKey;
     },
-  ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
+  ): Promise<{
+    readonly customer: CustomerRecord;
+    readonly changed: boolean;
+    /**
+     * True when this call was answered from the idempotency store: `changed` is then what
+     * the FIRST call did, and nothing happened now (Codex P2 on #251 — a replayed anti-spam
+     * block was reported a second time).
+     */
+    readonly replayed: boolean;
+  }> {
     const permission = input.permission ?? CUSTOMER_BLOCK_PERMISSION;
     // Before the hash, so a re-cased id cannot produce a second idempotency record for
     // the same command against the same row.
@@ -779,7 +835,7 @@ export class CustomerService {
       // `changed` is what the FIRST call did; a record from before it was remembered did
       // change something, or it would not have been the call it replays.
       if (replayed !== null) {
-        return { customer: replayed, changed: replay.result.changed ?? true };
+        return { customer: replayed, changed: replay.result.changed ?? true, replayed: true };
       }
       // The idempotency row outlived its customer, which a restore can produce.
       // Falling through redoes a command that is idempotent by construction; the
@@ -913,7 +969,7 @@ export class CustomerService {
           tx,
         );
 
-        return { customer: after, changed };
+        return { customer: after, changed, replayed: false };
       },
     );
   }

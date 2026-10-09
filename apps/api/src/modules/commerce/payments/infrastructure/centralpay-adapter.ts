@@ -208,6 +208,8 @@ export class CentralPayAdapter implements ExternalGatewayAdapter {
         orderId: request.orderId,
         invoiceUrl: safeLink(data.data.redirectUrl),
         webInvoiceUrl: null,
+        // FIX-04: a redirect URL was sent and refused as unsafe — the fact, never the value.
+        ...(safeLink(data.data.redirectUrl) === null ? { linkRejected: true } : {}),
         status: null,
         requestAmount: null,
         finalAmount: null,
@@ -220,7 +222,13 @@ export class CentralPayAdapter implements ExternalGatewayAdapter {
      * told the method is unavailable rather than that a payment failed (`OQ-CP-03`).
      */
     if (envelope.data.success === false) {
-      return { kind: 'REFUSED', code: 'centralpay.not_success', configuration: true };
+      // FIX-04 (Codex P2 on #251): the status beside the fixed code, for the operations log.
+      return {
+        kind: 'REFUSED',
+        code: 'centralpay.not_success',
+        configuration: true,
+        httpStatus: raw.status,
+      };
     }
     return { kind: 'UNKNOWN', code: `http.${String(raw.status)}.unexpected_body:success` };
   }
