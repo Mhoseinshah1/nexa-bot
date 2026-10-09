@@ -15,6 +15,8 @@ import {
 } from 'drizzle-orm';
 import {
   money,
+  paymentTrackingCode,
+  trackingCodeFromSearch,
   PAYMENT_GATEWAY_PROVIDERS,
   PAYMENT_OPS_QUEUES,
   PROVIDER_REVIEW_GATEWAY_PROVIDERS,
@@ -248,7 +250,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     if (search.customerId !== undefined)
       conditions.push(eq(payments.customerId, search.customerId));
     if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
-    if (search.reference !== undefined) conditions.push(eq(payments.reference, search.reference));
+    if (search.reference !== undefined) conditions.push(referenceCondition(search.reference));
     if (search.text !== undefined) conditions.push(paymentTextCondition(tenantId, search.text));
     if (search.disposition !== undefined) {
       conditions.push(sql`(${receiptDispositionSql()}) = ${search.disposition}`);
@@ -1084,7 +1086,8 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       .from(payments)
       .where(and(eq(payments.tenantId, tenantId), eq(payments.id, paymentId)))
       .limit(1);
-    return row?.reference ?? null;
+    // FIX-02: the PUBLIC code, never the role-suffixed reference it is derived from.
+    return row === undefined ? null : paymentTrackingCode(row.reference);
   }
 
   async rejectionReasonFor(
@@ -1276,7 +1279,7 @@ function paymentTextCondition(tenantId: string, term: ListSearchTerm): SQL {
       // payment id).
       return or(
         sql`${payments.customerId} = ANY(${customerIdsWithTelegramId(tenantId, term.value)})`,
-        eq(payments.reference, term.value),
+        referenceCondition(term.value),
         eq(payments.externalReference, term.value),
         sql`${payments.id} = ANY(${paymentIdsWithProviderReference(tenantId, term.value)})`,
       ) as SQL;
@@ -1293,11 +1296,31 @@ function paymentTextCondition(tenantId: string, term: ListSearchTerm): SQL {
       return sql`${payments.customerId} = ANY(${customerIdsWithUsernamePrefix(tenantId, term.value)})`;
     case 'TEXT':
       return or(
-        eq(payments.reference, term.value),
+        referenceCondition(term.value),
         eq(payments.externalReference, term.value),
         sql`${payments.id} = ANY(${paymentIdsWithProviderReference(tenantId, term.value)})`,
       ) as SQL;
   }
+}
+
+/**
+ * A payment by what an operator was QUOTED (FIX-02): the stored reference exactly, as before,
+ * or — when the term is shaped like one — the public tracking code the customer was shown,
+ * which is the reference's operation-id half (`paymentTrackingCode`). An old suffixed reference
+ * pasted from an earlier screen is reduced to its code too, so both shapes find the payment.
+ *
+ * `split_part(reference, ':', 1)` is the code for every reference `referenceFor` writes, and
+ * `payments_tenant_tracking_code_idx` indexes exactly that expression, so the arm is an index
+ * scan beside `payments_tenant_reference_key`. A code is not a unique key — it is 64 bits of a
+ * hash — so this is a predicate that may match more than one row, and the list shows them all.
+ */
+function referenceCondition(value: string): SQL {
+  const code = trackingCodeFromSearch(value);
+  if (code === null) return eq(payments.reference, value);
+  return or(
+    eq(payments.reference, value),
+    sql`split_part(${payments.reference}, ':', 1) = ${code}`,
+  ) as SQL;
 }
 
 /**

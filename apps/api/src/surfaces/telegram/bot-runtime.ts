@@ -9,6 +9,7 @@ import {
   PANEL_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   providerDescriptor,
+  paymentTrackingCode,
   isNexaError,
   currencyCodeSchema,
   money,
@@ -4241,7 +4242,7 @@ export interface BotRuntimeDeps {
    */
   readonly gatewayReceipts?: Pick<
     GatewayReceiptCaptureService,
-    'openReceiptCapture' | 'requestCardChange' | 'receivePhoto'
+    'openReceiptCapture' | 'requestCardChange' | 'receivePhoto' | 'openCaptureFor'
   >;
   readonly screens: CustomerScreenComposer;
   readonly counters: CustomerCountersReader;
@@ -5053,7 +5054,7 @@ function receiptRefusal(error: unknown): PendingReply {
     if (next === 'UNDER_REVIEW') {
       return {
         key: 'bot.payment.received_for_review',
-        values: typeof reference === 'string' ? { reference } : {},
+        values: typeof reference === 'string' ? { reference: paymentTrackingCode(reference) } : {},
         buttons: [],
         orderId: null,
       };
@@ -6636,7 +6637,11 @@ export class BotRuntime {
       key: 'bot.admin.receipts_list',
       values: {},
       buttons: items.map((item) => ({
-        label: { kind: 'TEXT' as const, text: item.payment.reference, amount: item.payment.amount },
+        label: {
+          kind: 'TEXT' as const,
+          text: paymentTrackingCode(item.payment.reference),
+          amount: item.payment.amount,
+        },
         data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${item.payment.id}`,
       })),
       orderId: null,
@@ -6768,7 +6773,7 @@ export class BotRuntime {
       return {
         key: 'bot.admin.credit_amount_prompt',
         values: {
-          reference: opened.payment.reference,
+          reference: paymentTrackingCode(opened.payment.reference),
           total: opened.payment.amount,
           minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
         },
@@ -6840,7 +6845,7 @@ export class BotRuntime {
             key: 'bot.admin.credit_confirm',
             values: {
               amount: result.amount,
-              reference: result.payment.reference,
+              reference: paymentTrackingCode(result.payment.reference),
               customer: result.customer?.telegramUserId ?? result.payment.customerId,
               total: result.payment.amount,
             },
@@ -6874,7 +6879,10 @@ export class BotRuntime {
       if (result.outcome === 'CREDITED') {
         return {
           key: 'bot.admin.credited',
-          values: { amount: result.amount, reference: result.result.payment.reference },
+          values: {
+            amount: result.amount,
+            reference: paymentTrackingCode(result.result.payment.reference),
+          },
           buttons: [],
           orderId: null,
           // R2: this confirmation in place, and the receipt it came from into its one line.
@@ -7335,7 +7343,10 @@ export class BotRuntime {
         case 'ENTERED':
           return {
             key: 'bot.admin.reject_confirm',
-            values: { reference: result.payment.reference, reason: result.reason },
+            values: {
+              reference: paymentTrackingCode(result.payment.reference),
+              reason: result.reason,
+            },
             buttons: [
               {
                 label: { kind: 'TEMPLATE', key: 'bot.admin.reject_confirm_button' },
@@ -7519,7 +7530,7 @@ export class BotRuntime {
         return {
           key: 'bot.admin.reject_reason_prompt',
           values: {
-            reference: opened.payment.reference,
+            reference: paymentTrackingCode(opened.payment.reference),
             minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
           },
           buttons: [rejectCancelButton(opened.capture.id)],
@@ -15109,7 +15120,7 @@ export class BotRuntime {
     }
     return {
       key: 'bot.payment.gateway_closed',
-      values: {},
+      values: { reference: paymentTrackingCode(view.payment.reference) },
       buttons: [mainMenuButton()],
       orderId: null,
     };
@@ -15127,6 +15138,16 @@ export class BotRuntime {
     file: InboundReceiptFile,
   ): Promise<PendingReply | null> {
     if (this.deps.gatewayReceipts === undefined) return null;
+    /*
+     * FIX-02 (Codex review of #253): the window's payment, read BEFORE the photo can close it,
+     * so a photo that arrives after the window's deadline is answered with the code the
+     * invoice carried. Only a read; `receivePhoto` decides everything, again, under its lock.
+     */
+    const window = await this.deps.gatewayReceipts.openCaptureFor(
+      scope,
+      botInstanceId,
+      customer.id,
+    );
     const result = await this.deps.gatewayReceipts.receivePhoto(scope, actor, {
       customerId: customer.id,
       botInstanceId,
@@ -15151,8 +15172,28 @@ export class BotRuntime {
       case 'TOO_LARGE':
         return reply('bot.payment.gateway_receipt_too_large');
       case 'CLOSED':
-        return reply('bot.payment.gateway_closed');
+        return {
+          ...reply('bot.payment.gateway_closed'),
+          values: await this.ownedTrackingCode(scope, customer, botInstanceId, window?.paymentId),
+        };
     }
+  }
+
+  /**
+   * FIX-02: `{ reference }` for a gateway attempt that is THIS customer's, in THIS bot — the
+   * ownership check `attemptFor` makes — else `{}`, whose optional line is then dropped. A
+   * payment that is not theirs is never named (TPTG-19).
+   */
+  private async ownedTrackingCode(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    paymentId: string | undefined,
+  ): Promise<TemplateValues> {
+    if (paymentId === undefined) return {};
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    if (view === null || view.invoice.botInstanceId !== botInstanceId) return {};
+    return { reference: paymentTrackingCode(view.payment.reference) };
   }
 
   /**
@@ -15207,7 +15248,7 @@ export class BotRuntime {
           : 'bot.payment.transfer_instructions',
       values: {
         total: payment.amount,
-        reference: payment.reference,
+        reference: paymentTrackingCode(payment.reference),
         /*
          * Composed behind the application layer, by the renderer this surface is
          * handed. A surface may not resolve the catalogue — `check-boundaries.sh`
@@ -15310,7 +15351,8 @@ export class BotRuntime {
     }
     return {
       key: 'bot.payment.cancel_confirm',
-      values: {},
+      // FIX-02: the question replaces the invoice; the code it carried stays on the message.
+      values: { reference: paymentTrackingCode(payment.reference) },
       buttons: [
         {
           ...inlineLabel('payment.cancel_confirm'),
@@ -15392,7 +15434,7 @@ export class BotRuntime {
         return {
           key: 'bot.payment.received_for_review',
           // Roadmap E6: the code the invoice carried stays on the message that replaces it.
-          values: { reference: payment.reference },
+          values: { reference: paymentTrackingCode(payment.reference) },
           // Nothing more to do on this message: no button, as the receipt's final state.
           buttons: [],
           orderId: null,
@@ -15408,7 +15450,11 @@ export class BotRuntime {
          * whole render, which the webhook then swallowed: the claim committed and the
          * customer was told nothing at all after tapping the button.
          */
-        values: { minutes: receiptWindow.minutes },
+        values: {
+          minutes: receiptWindow.minutes,
+          // FIX-02: this edits the invoice — the code it carried stays on the message.
+          reference: paymentTrackingCode(payment.reference),
+        },
         /*
          * Owner spec §2.4, state 2: the receipt is asked for, with no card details and no
          * copy buttons. The withdrawal stays — the invoice it replaced offered it, and a
@@ -16310,13 +16356,22 @@ function starsInvoiceBody(
 ): Pick<PendingReply, 'key' | 'values'> {
   const fee = payment.customerFee;
   const expiresAt = payment.expiresAt ?? new Date(0);
+  // FIX-02: the payment's one public code, on the invoice before anything is paid.
+  const reference = paymentTrackingCode(payment.reference);
   if (fee !== null && fee.fee.amountMinor > 0n) {
     return {
       key:
         payment.orderId === null
           ? 'bot.payment.stars_invoice_topup_fee'
           : 'bot.payment.stars_invoice_order_fee',
-      values: { principal: payment.amount, fee: fee.fee, payable: fee.payable, stars, expiresAt },
+      values: {
+        principal: payment.amount,
+        fee: fee.fee,
+        payable: fee.payable,
+        stars,
+        expiresAt,
+        reference,
+      },
     };
   }
   return {
@@ -16324,7 +16379,7 @@ function starsInvoiceBody(
       payment.orderId === null
         ? 'bot.payment.stars_invoice_topup'
         : 'bot.payment.stars_invoice_order',
-    values: { payable: fee?.payable ?? payment.amount, stars, expiresAt },
+    values: { payable: fee?.payable ?? payment.amount, stars, expiresAt, reference },
   };
 }
 
@@ -16428,11 +16483,13 @@ function cardTransferScreen(
   const retry: CustomerButton =
     payment.orderId === null ? topupButton() : payMethodsButton(payment.orderId);
   const wizard = { kind, step: 'INVOICE' as const, paymentId: payment.id };
+  // FIX-02: every screen of this attempt quotes the same public code.
+  const reference = paymentTrackingCode(payment.reference);
   if (invoice.creationErrorCode !== null) {
     // Created without a card: it cannot be paid from here, and a new attempt is the way on.
     return {
       key: 'bot.payment.gateway_card_missing',
-      values: {},
+      values: { reference },
       buttons: [retry, mainMenuButton()],
       orderId,
       wizard: { kind, step: 'NOTICE', paymentId: payment.id },
@@ -16464,7 +16521,7 @@ function cardTransferScreen(
     cardCheck(payment.id),
     mainMenuButton(),
   ];
-  const brief = { payable, expiresAt };
+  const brief = { payable, expiresAt, reference };
   const newest = submissions.at(-1) ?? null;
   // A receipt on its way, accepted without a review, or whose answer was lost: shown as sent.
   if (
@@ -16611,6 +16668,12 @@ export function gatewayAttemptScreen(
 ): PendingReply {
   const { payment, invoice } = attempt;
   const kind = payment.orderId === null ? ('TOPUP' as const) : ('ORDER' as const);
+  /*
+   * FIX-02: the payment's ONE public tracking code, on every screen of this attempt — the
+   * preparing screen, the invoice, the review and every end — computed from the payment's
+   * own stored reference, so a re-render, a worker edit or a replayed tap shows the same code.
+   */
+  const reference = paymentTrackingCode(payment.reference);
   const check: CustomerButton = {
     ...inlineLabel('payment.gateway_check'),
     data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${payment.id}`,
@@ -16624,7 +16687,7 @@ export function gatewayAttemptScreen(
     pending = false,
   ): PendingReply => ({
     key,
-    values: {},
+    values: { reference },
     buttons: [...buttons, mainMenuButton()],
     orderId,
     wizard: {
@@ -16657,6 +16720,7 @@ export function gatewayAttemptScreen(
         values: {
           payable: payment.customerFee?.payable ?? payment.amount,
           reviewUntil,
+          reference,
         },
         buttons: [cardCheck(payment.id), mainMenuButton()],
         orderId,
@@ -16761,11 +16825,12 @@ export function gatewayAttemptScreen(
             fee: fee.fee,
             payable: fee.payable,
             expiresAt: payment.expiresAt,
+            reference,
           },
         }
       : {
           key: 'bot.payment.gateway_invoice',
-          values: { total: payment.amount, expiresAt: payment.expiresAt },
+          values: { total: payment.amount, expiresAt: payment.expiresAt, reference },
         };
   return {
     ...invoiceBody,

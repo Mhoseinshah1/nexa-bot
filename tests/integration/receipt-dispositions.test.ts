@@ -13,6 +13,7 @@ import {
   type PaymentId,
   type ProductId,
   type UserId,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
@@ -593,10 +594,11 @@ describe('a submitted receipt and its three dispositions', () => {
         sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
       );
       expect(said.map((one) => one.values)).toEqual([
-        { amount: money(240_000n, 'IRT'), reference: payment?.reference },
+        // FIX-02: the public code, never the stored `:topup`/`:manual` reference.
+        { amount: money(240_000n, 'IRT'), reference: paymentTrackingCode(payment!.reference) },
       ]);
       expect(lane.rendered().join('\n')).toContain(
-        `اضافه شد.\n\n\nکد پیگیری پرداخت: ${payment?.reference ?? 'MISSING'}`,
+        `اضافه شد.\n\n\nکد پیگیری پرداخت: ${paymentTrackingCode(payment?.reference ?? 'MISSING')}`,
       );
       // Owner spec §2.2: the reviewer's figure in the approved credit copy, and no command.
       expect(lane.rendered().join('\n')).toContain(

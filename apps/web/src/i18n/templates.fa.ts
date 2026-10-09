@@ -1141,7 +1141,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.payment.transfer_instructions': [
     'فاکتور کارت‌به‌کارت',
-    'فاکتور پرداخت: شناسهٔ فاکتور، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
+    'فاکتور پرداخت: کد پیگیری پرداخت، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
   ],
   'bot.payment.destination.bank': [
     'خط نام بانک در فاکتور',
@@ -1218,6 +1218,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.payment.cancel_confirm': [
     'پرسش تأیید انصراف از پرداخت',
     'پیش از انصراف می‌گوید کد پیگیری باطل می‌شود و این کار برگشت‌پذیر نیست.',
+  ],
+  'bot.payment.tracking_code_line': [
+    'سطر کد پیگیری پرداخت',
+    'سطر «کد پیگیری پرداخت» که هنگام ارسال به متن سفارشی‌شدهٔ قدیمی یک فاکتور درگاه افزوده می‌شود، اگر آن متن کد پیگیری را نداشته باشد.',
   ],
   'bot.payment.cancel_confirm_button': [
     'دکمهٔ تأیید انصراف از پرداخت',

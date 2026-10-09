@@ -447,6 +447,22 @@ describe('a customer pays through the approved screens', () => {
       const orderId = await draftTo(productId);
       const result = await handle(tap(`m:${orderId}`));
       expect(result.replyKey).toBe('bot.payment.transfer_instructions');
+      // FIX-02: the order's card-to-card invoice carries the public code before payment.
+      const issued = await ctx.container.database.db.execute(
+        sql`SELECT reference FROM payments WHERE order_id = ${orderId}`,
+      );
+      const reference = String((issued.rows[0] as { reference: string }).reference);
+      expect(reference).toMatch(/^[0-9a-f]{16}:manual$/u);
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${reference.split(':')[0]!}`);
+      expect(lastText()).not.toContain(':manual');
+      // Asking again hands back the live payment: the same code, never a second one.
+      const again = await handle(tap(`m:${orderId}`));
+      expect(again.replyKey).toBe('bot.payment.transfer_instructions');
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${reference.split(':')[0]!}`);
+      const count = await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM payments WHERE order_id = ${orderId}`,
+      );
+      expect((count.rows[0] as { n: number }).n).toBe(1);
       const rows = await ctx.container.database.db.execute(
         sql`SELECT state FROM orders WHERE id = ${orderId}`,
       );
@@ -520,6 +536,16 @@ describe('a customer pays through the approved screens', () => {
       );
       expect(payment.rows).toHaveLength(1);
       expect(payment.rows[0]).toMatchObject({ amount: '50000', pct: 10, order_id: null });
+      // FIX-02: the top-up invoice carries the public code under the exact label — never the
+      // stored `<code>:topup` reference — before anything is paid.
+      const stored = await ctx.container.database.db.execute(
+        sql`SELECT reference FROM payments WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      const reference = String((stored.rows[0] as { reference: string }).reference);
+      expect(reference).toMatch(/^[0-9a-f]{16}:topup$/u);
+      const code = reference.split(':')[0]!;
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+      expect(lastText()).not.toContain(':topup');
 
       // The same button tapped again: the same payment, not a second one.
       await handle(tap(route ?? ''));

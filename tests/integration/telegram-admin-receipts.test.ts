@@ -13,6 +13,7 @@ import {
   type ProductCategoryId,
   type ProductId,
   type UserId,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { InboundReceiptFile } from '../../apps/api/src/modules/commerce/payments/application/receipt-ports';
@@ -576,7 +577,8 @@ describe('the Telegram receipt review, as one message with three decisions', () 
     const rows = await ctx.container.database.db.execute<{ reference: string }>(
       sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
     );
-    return rows.rows[0]?.reference ?? 'MISSING';
+    // FIX-02: reviewers are shown the PUBLIC code, never the stored `:manual` reference.
+    return paymentTrackingCode(rows.rows[0]?.reference ?? 'MISSING');
   }
 
   async function captureCount(): Promise<number> {

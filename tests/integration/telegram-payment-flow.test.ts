@@ -6,6 +6,7 @@ import {
   EMPTY_PRODUCT_DISPLAY,
   TELEGRAM_SECRET_TOKEN_HEADER,
   money,
+  paymentTrackingCode,
   type ProductId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatDateOnly, formatMoney } from '@nexa/i18n';
@@ -64,8 +65,9 @@ const RECEIPT_RECEIVED_TEXT =
 const invoiceFinalText = (reference: string): string =>
   plain(CATALOGUE_FA['bot.payment.received_for_review'])
     .replace('{icon:info}', 'ℹ️')
-    // Roadmap E6: the tracking code the invoice carried stays on its final state.
-    .replace('{reference}', reference);
+    // Roadmap E6: the tracking code the invoice carried stays on its final state — FIX-02: the
+    // PUBLIC code, never the stored `:manual` reference.
+    .replace('{reference}', paymentTrackingCode(reference));
 
 interface Sent {
   readonly url: string;
@@ -678,7 +680,12 @@ describe('the customer payment flow over Telegram', () => {
 
     const text = String(lastMessage()?.body['text']);
     expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
-    expect(text).toContain(String(payment?.['reference'] ?? ''));
+    // FIX-02: the invoice carries the public code under the exact label, and no suffix.
+    const reference = String(payment?.['reference'] ?? '');
+    expect(reference).toMatch(/^[0-9a-f]{16}:manual$/u);
+    expect(text).toContain(`کد پیگیری پرداخت: ${paymentTrackingCode(reference)}`);
+    expect(text).not.toContain(reference);
+    expect(text).not.toContain(':manual');
 
     // The wallet is untouched and the order is unsettled. Money arrived nowhere yet.
     expect(await entries()).toHaveLength(0);
@@ -712,6 +719,10 @@ describe('the customer payment flow over Telegram', () => {
     // E7: image only — the prompt no longer advertises a file.
     expect(promptText).not.toContain('فایل');
     expect(promptText).not.toContain('6037991234567893');
+    // FIX-02 (Codex review of #253): the prompt EDITS the invoice, so it keeps the code.
+    const issued = String((await payments())[0]?.['reference']);
+    expect(promptText).toContain(`کد پیگیری پرداخت: ${paymentTrackingCode(issued)}`);
+    expect(promptText).not.toContain(':manual');
     const promptButtons = buttonsOf(prompt);
     expect(promptButtons.map((b) => b.callback_data)).toEqual([`x:${payment}`]);
     expect(JSON.stringify(prompt?.body['reply_markup'])).not.toContain('copy_text');
@@ -1175,6 +1186,10 @@ describe('the customer payment flow over Telegram', () => {
       { inline_keyboard: { text: string; callback_data: string }[][] } | undefined;
     const confirm = (question?.inline_keyboard ?? []).flat();
     expect(String(lastMessage()?.body['text'])).toContain('برگشت‌پذیر نیست');
+    // FIX-02 (Codex review of #253): the question replaces the invoice and keeps its code.
+    expect(String(lastMessage()?.body['text'])).toContain(
+      `کد پیگیری پرداخت: ${paymentTrackingCode(String(payment?.['reference']))}`,
+    );
     expect(confirm[0]?.callback_data).toBe(`z:${String(payment?.['id'])}`);
 
     sent = [];
@@ -1285,7 +1300,13 @@ describe('the customer payment flow over Telegram', () => {
      * `g:` tap is re-decided on the server and answered as the gateway being unavailable
      * — "choose another way" — never as the customer's payment failing.
      */
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.payment.gateway_unavailable']);
+    // FIX-02: no payment exists here, so the optional tracking-code line is dropped whole.
+    expect(lastMessage()?.body['text']).toBe(
+      CATALOGUE_FA['bot.payment.gateway_unavailable'].replace(
+        '\n\nکد پیگیری پرداخت: {reference}',
+        '',
+      ),
+    );
     expect(await payments()).toHaveLength(0);
     expect(await entries()).toHaveLength(0);
   });

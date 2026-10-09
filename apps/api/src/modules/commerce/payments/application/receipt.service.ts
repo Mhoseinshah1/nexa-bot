@@ -2,6 +2,7 @@ import {
   COMMERCE_ERROR_CODES,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   errors,
+  paymentTrackingCode,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
@@ -601,8 +602,9 @@ export class ReceiptService {
   }
 
   /**
-   * Roadmap E6: the tracking code of the customer's OWN payment — its `reference`, the one
-   * code they quote — for the bot to keep on the invoice it edits into its final state.
+   * Roadmap E6: the tracking code of the customer's OWN payment — `paymentTrackingCode` of its
+   * `reference` (FIX-02: never the stored, role-suffixed reference itself), the one code they
+   * quote — for the bot to keep on the invoice it edits into its final state.
    * Charged the permission the customer files with; another customer's payment is `null`.
    */
   async trackingCodeForCustomer(
@@ -614,7 +616,7 @@ export class ReceiptService {
     await this.deps.guard.check(scope, actor, RECEIPT_SUBMIT_PERMISSION);
     const payment = await this.deps.payments.findById(scope, paymentId);
     if (payment === null || payment.customerId !== customerId) return null;
-    return payment.reference;
+    return paymentTrackingCode(payment.reference);
   }
 
   async listForPayment(

@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  classifyListSearch,
   COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
   isNexaError,
@@ -1147,6 +1148,148 @@ describe('TonPays, through the one settlement path', () => {
       expect(tonpays.creates).toHaveLength(2);
       expect(tonpays.creates[1]!.body.order_id).toBe(tonpays.creates[0]!.body.order_id);
       expect((await invoiceOf(paymentId)).creation_state).toBe('CREATED');
+    });
+
+    /*
+     * FIX-02 (2026-10-09): the public tracking code — the operation-id half of the stored
+     * `<id>:gateway` reference — is on the invoice before anything is paid, on every later
+     * screen of the same payment, through a rate-limited retry, and findable by an operator.
+     * The stored reference itself, suffix and all, never reaches the customer.
+     */
+    async function codeOf(paymentId: string): Promise<{ code: string; reference: string }> {
+      const [row] = await rows<{ reference: string }>(
+        sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
+      );
+      if (row === undefined) throw new Error('no payment');
+      expect(row.reference).toMatch(/^[0-9a-f]{16}:gateway$/u);
+      return { code: row.reference.split(':')[0]!, reference: row.reference };
+    }
+
+    it('FIX-02: the preparing screen, the invoice and the confirmation carry ONE code, never the stored reference', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const { code, reference } = await codeOf(paymentId);
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+      expect(lastText()).not.toContain(reference);
+      expect(lastText()).not.toContain(':gateway');
+
+      await pass();
+      await tap(`gc:${paymentId}`);
+      expect(lastMarkup()).toContain('"url"');
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+      expect(lastText()).not.toContain(':gateway');
+
+      const invoice = await invoiceOf(paymentId);
+      tonpays.invoices.get(invoice.provider_invoice_id!)!.status = 'completed';
+      tonpays.invoices.get(invoice.provider_invoice_id!)!.paid = true;
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      await tap(`gc:${paymentId}`);
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+      expect((await codeOf(paymentId)).reference).toBe(reference);
+    });
+
+    it('FIX-02: a rate-limited create retried later keeps the SAME payment and the SAME code', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      tonpays.createMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429 };
+      const { paymentId } = await payWithGateway(orderId);
+      const { code } = await codeOf(paymentId);
+      await pass();
+      await tap(`gc:${paymentId}`);
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+
+      tonpays.createMode = 'OK';
+      offsetMs += 20_000;
+      await pass();
+      await tap(`gc:${paymentId}`);
+      expect(lastMarkup()).toContain('"url"');
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+      const payments = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM payments WHERE order_id = ${orderId}`,
+      );
+      expect(payments[0]?.n).toBe(1);
+      // A second tap of the gateway button hands back the open attempt: no second code.
+      await tap(`g:${orderId}`);
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+    });
+
+    it('FIX-02: a create whose answer was lost says so with the attempt’s code; the next attempt is a new payment with its own', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      tonpays.createMode = 'TIMEOUT_AFTER_CREATING';
+      const { paymentId } = await payWithGateway(orderId);
+      const { code } = await codeOf(paymentId);
+      await pass();
+      await tap(`gc:${paymentId}`);
+      expect((await invoiceOf(paymentId)).creation_state).toBe('CREATE_UNKNOWN');
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+      // The lost create is never re-sent and its code never changes.
+      await inquireNow();
+      expect((await codeOf(paymentId)).code).toBe(code);
+
+      // Choosing the gateway again opens a NEW attempt — a new payment, so its own code —
+      // and the old one keeps the code its screens showed.
+      tonpays.createMode = 'OK';
+      const next = await payWithGateway(orderId);
+      expect(next.paymentId).not.toBe(paymentId);
+      const fresh = await codeOf(next.paymentId);
+      expect(fresh.code).not.toBe(code);
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${fresh.code}`);
+      expect((await codeOf(paymentId)).code).toBe(code);
+    });
+
+    it('FIX-02: a tenant override saved before the code was required still shows it, once; the stored body is not rewritten', async () => {
+      await enableTonPays();
+      // Saved through the service (which now requires {reference}), then set back to the shape
+      // an override stored before FIX-02 has: no {reference} at all.
+      await ctx.container.templatesService.set(tenantA, owner, {
+        key: 'bot.payment.gateway_invoice',
+        body: 'فاکتور قدیمی: {total} تا {expiresAt} — {reference}',
+        expectedVersion: null,
+        expectedRevision: null,
+        idempotencyKey: 'fix02-override',
+      });
+      const oldBody = 'فاکتور قدیمی: {total} تا {expiresAt}';
+      await ctx.container.database.db.execute(
+        sql`UPDATE template_overrides SET body = ${oldBody}
+             WHERE tenant_id = ${tenantA.tenantId} AND template_key = 'bot.payment.gateway_invoice'`,
+      );
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const { code } = await codeOf(paymentId);
+      await pass();
+      await tap(`gc:${paymentId}`);
+      expect(lastText()).toContain('فاکتور قدیمی:');
+      expect(lastText().split(`کد پیگیری پرداخت: ${code}`)).toHaveLength(2);
+      const [stored] = await rows<{ body: string }>(
+        sql`SELECT body FROM template_overrides
+             WHERE tenant_id = ${tenantA.tenantId} AND template_key = 'bot.payment.gateway_invoice'`,
+      );
+      expect(stored?.body).toBe(oldBody);
+    });
+
+    it('FIX-02: an operator finds the payment by the code the customer quotes, and by an old suffixed reference', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const { code, reference } = await codeOf(paymentId);
+      for (const typed of [code, code.toUpperCase(), ` ${code} `, reference]) {
+        const page = await ctx.container.payments.list(tenantA, owner, {
+          limit: 20,
+          search: { text: classifyListSearch(typed)! },
+        });
+        expect(
+          page.items.map((item) => item.id),
+          typed,
+        ).toEqual([paymentId]);
+      }
+      const byFilter = await ctx.container.payments.list(tenantA, owner, {
+        limit: 20,
+        search: { reference: code },
+      });
+      expect(byFilter.items.map((item) => item.id)).toEqual([paymentId]);
     });
 
     it('treats a 5xx create as CREATE_UNKNOWN even when its body carries a rate-limit code, and never re-sends it', async () => {

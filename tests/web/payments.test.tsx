@@ -43,6 +43,7 @@ function payment(overrides: Record<string, unknown> = {}): Record<string, unknow
     method: 'MANUAL_TRANSFER',
     amount: '250000',
     currency: 'IRT',
+    // FIX-02: the page shows the PUBLIC code — this reference without its `:manual` suffix.
     reference: 'a1b2c3d4e5f60718:manual',
     evidenceKind: null,
     confirmedAt: null,
@@ -98,7 +99,8 @@ describe('the payment list', () => {
     stubApi(list([payment()]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
 
-    expect(await screen.findByText('a1b2c3d4e5f60718:manual')).toBeInTheDocument();
+    expect(await screen.findByText('a1b2c3d4e5f60718')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('a1b2c3d4e5f60718:manual');
     // Inside the TABLE, not the filter pills above it — both carry these labels, and a
     // loose query would pass on a page whose rows rendered nothing at all.
     const table = screen.getByRole('table');
@@ -146,14 +148,14 @@ describe('the payment list', () => {
     // can reach it by summing many movements even though one is bounded below it.
     stubApi(list([payment({ amount: '9007199254740993' })]));
     const { container } = renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
     expect(container.textContent).not.toContain('9007199254740992');
   });
 
   it('offers every FROZEN state and method as a filter', async () => {
     stubApi(list([payment()]));
     const { container } = renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
 
     // Including the ones nothing reaches yet: a state in the contract with no filter is
     // an option nobody notices is missing.
@@ -173,7 +175,7 @@ describe('the payment list', () => {
   it('says that nothing on the page marks a payment paid, and where the real actions are', async () => {
     stubApi(list([payment()]));
     const { container } = renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
     expect(container.textContent).toContain('تأیید یک پرداخت فقط از راه تسویه و با مدرک');
     expect(container.textContent).not.toContain('هیچ درگاه پرداختی ثبت یا تعریف نشده است');
   });
@@ -192,7 +194,7 @@ describe('the payment list', () => {
       query: new URLSearchParams({ cursor: 'stale-page', state: 'PENDING' }),
     };
     renderPage(<PaymentsPage route={route} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
 
     fireEvent.change(screen.getByLabelText('جست‌وجو'), { target: { value: '5550001234' } });
     fireEvent.click(screen.getByRole('button', { name: 'جست‌وجو' }));
@@ -217,7 +219,7 @@ describe('the payment list', () => {
       query: new URLSearchParams({ q: 'abc:manual', method: 'MANUAL_TRANSFER' }),
     };
     renderPage(<PaymentsPage route={route} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
     // The list request, not the queue counts read beside it.
     const url = [...api.calls].reverse().find((call) => call.url.includes('/payments?'))?.url ?? '';
     expect(url).toContain('q=abc%3Amanual');
@@ -229,7 +231,7 @@ describe('the payment list', () => {
     // is the thing most likely to end up on a shared screen.
     stubApi(list([payment()]));
     const { container } = renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
     expect(container.textContent).not.toContain('یادداشت بررسی');
   });
 
@@ -272,7 +274,7 @@ describe('the payment list', () => {
   it('shows that a customer said they paid, and still calls the payment pending', async () => {
     stubApi(list([payment({ customerSignalledAt: '2026-09-10T13:00:00.000Z' })]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
 
     // A real instant in the cell — the SAME text `formatTimestamp` renders elsewhere,
     // which is how this knows a time was drawn and not a label or a placeholder.
@@ -286,7 +288,7 @@ describe('the payment list', () => {
   it('leaves the signal column empty for a payment no customer has claimed', async () => {
     stubApi(list([payment()]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
 
     // The dash, in the same cell — so the case above cannot pass by rendering a
     // constant, and this one cannot pass by rendering nothing at all.
@@ -352,7 +354,7 @@ describe('the payment detail', () => {
       { state: 'EXPIRED' },
     ]) {
       const view = render(overrides);
-      await screen.findAllByText('a1b2c3d4e5f60718:manual');
+      await screen.findAllByText('a1b2c3d4e5f60718');
       expect(
         view.container.textContent,
         `a review notice was drawn for ${JSON.stringify(overrides)}`,
@@ -379,7 +381,7 @@ describe('the payment detail', () => {
       // page head and renders before the fetch, so awaiting it asserts against a
       // loading screen — which contains none of the forbidden strings either, and would
       // pass no matter what the page said.
-      await screen.findAllByText('a1b2c3d4e5f60718:manual');
+      await screen.findAllByText('a1b2c3d4e5f60718');
       const text = view.container.textContent ?? '';
       for (const claim of ['در حال آماده‌سازی', 'سرویس ساخته', 'تحویل شد', 'در حال ساخت']) {
         expect(text, `the payment page claims "${claim}"`).not.toContain(claim);
@@ -408,7 +410,7 @@ describe('the payment detail', () => {
    */
   it('draws no control that could confirm, reject, cancel, retry or refund a payment', async () => {
     const view = render();
-    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+    await screen.findAllByText('a1b2c3d4e5f60718');
     const labels = [...view.container.querySelectorAll('button')]
       .map((b) => b.textContent?.trim())
       // The history's refresh only reads again; it is not a control over the payment.
@@ -809,7 +811,7 @@ describe('the receipts an operator can read', () => {
     ]);
     const view = renderPage(reviewer.element as ReactElement);
     await waitFor(() => {
-      expect(view.container.textContent).toContain('a1b2c3d4e5f60718:manual');
+      expect(view.container.textContent).toContain('a1b2c3d4e5f60718');
     });
     // Holding review without view draws no evidence — and, since D3, no decision either.
     expect(view.container.textContent).not.toContain('رسیدهای ارسالی مشتری');
@@ -1420,7 +1422,7 @@ describe('the payment diagnostics (§21)', () => {
   it('lists the payment id, the Telegram id and username, the gateway, the external reference and updated-at', async () => {
     stubApi(list([diagnosed]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
 
     const table = screen.getByRole('table');
     const headers = within(table)
@@ -1464,7 +1466,7 @@ describe('the payment diagnostics (§21)', () => {
       ]),
     );
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('a1b2c3d4e5f60718:manual');
+    await screen.findByText('a1b2c3d4e5f60718');
     const table = screen.getByRole('table');
     expect(within(table).getByText('5550001234')).toBeInTheDocument();
     expect(table.textContent).not.toContain('@');
@@ -1539,7 +1541,7 @@ describe('the payment diagnostics (§21)', () => {
     topup.unmount();
 
     const order = renderDetail({ topupCashbackPercent: null });
-    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+    await screen.findAllByText('a1b2c3d4e5f60718');
     expect(order.container.textContent).not.toContain('هدیهٔ شارژ این پرداخت');
   });
 
@@ -1573,7 +1575,7 @@ describe('the payment diagnostics (§21)', () => {
     gateway.unmount();
 
     const manual = renderDetail({ customerFee: null, amounts: amounts(null, '0', '200000') });
-    await screen.findAllByText('a1b2c3d4e5f60718:manual');
+    await screen.findAllByText('a1b2c3d4e5f60718');
     expect(manual.container.textContent).not.toContain('نرخ کارمزد مشتری');
   });
 });

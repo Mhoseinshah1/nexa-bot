@@ -31,6 +31,7 @@ import {
   type PaymentSituationView,
   type GatewayRateAuthority,
   type GatewayRateProvenance,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -836,7 +837,7 @@ export function PaymentsPage({
       header: t('web.payment_reference'),
       render: (row) => (
         <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          <Ltr>{row.reference}</Ltr>
+          <Ltr>{paymentTrackingCode(row.reference)}</Ltr>
         </a>
       ),
     },
@@ -1840,8 +1841,8 @@ export function PaymentDetailPage({
         <PageHead
           title={
             <span className="ca-title-id">
-              <Ltr>{row.reference}</Ltr>
-              <CopyButton value={row.reference} />
+              <Ltr>{paymentTrackingCode(row.reference)}</Ltr>
+              <CopyButton value={paymentTrackingCode(row.reference)} />
             </span>
           }
           badge={<StateBadge value={row.state} />}

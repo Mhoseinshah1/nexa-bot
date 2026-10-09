@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { TemplateValues, TenantContext } from '@nexa/contracts';
+import { paymentTrackingCode, type TemplateValues, type TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 
@@ -73,7 +73,7 @@ export class DrizzleRenewalFactsReader {
           ? {}
           : { durationDays: Number(row.line_duration_days) }),
         ...(row.expires_at === null ? {} : { expiresAt: new Date(row.expires_at) }),
-        ...(row.reference === null ? {} : { reference: row.reference }),
+        ...(row.reference === null ? {} : { reference: paymentTrackingCode(row.reference) }),
       },
     };
   }

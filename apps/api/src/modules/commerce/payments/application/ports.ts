@@ -579,8 +579,9 @@ export interface PaymentRepository {
   rejectionReasonFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
 
   /**
-   * B14: the payment's tracking code — its own `reference`, NOT NULL, unique per tenant and
-   * never rewritten — for the wallet-credit messages to quote: an approved receipt or a
+   * B14: the payment's tracking code — `paymentTrackingCode` of its own `reference` (FIX-02: never the
+   * stored reference, whose role suffix is an operational key), stable because that reference
+   * is never rewritten — for the wallet-credit messages to quote: an approved receipt or a
    * gateway top-up (both `WALLET_TOPUP_CREDITED`) and a receipt credited to the wallet.
    * Null only for a payment this tenant does not have.
    */

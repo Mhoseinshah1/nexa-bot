@@ -801,9 +801,14 @@ export class CustomerNotificationService {
     /*
      * Roadmap E6: the expiry and the claim's lane fallback quote the payment's tracking code,
      * read from the payment the notification names — the same reader the credits use. Absent,
-     * the template's optional line is dropped rather than drawn empty.
+     * the template's optional line is dropped rather than drawn empty. FIX-02: a gateway
+     * attempt's failure quotes the same code its invoice carried.
      */
-    if (row.kind === 'PAYMENT_EXPIRED' || row.kind === 'PAYMENT_TRANSFER_RECORDED') {
+    if (
+      row.kind === 'PAYMENT_EXPIRED' ||
+      row.kind === 'PAYMENT_TRANSFER_RECORDED' ||
+      row.kind === 'GATEWAY_PAYMENT_FAILED'
+    ) {
       const reference = await this.paymentTrackingCode(scope, row.subjectId);
       return reference === null ? {} : { reference };
     }

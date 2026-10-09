@@ -351,6 +351,17 @@ describe('the list-search query plans', () => {
         'payments_tenant_external_reference_idx',
       ]);
     }, 60_000);
+
+    it('serves a public tracking code (FIX-02) from its expression index, not a walk', async () => {
+      const plan = await planFor(
+        payments().listStatement(tenantA, { text: term('7d433a363380f69e') }, PAGE, null),
+      );
+      expectBounded(plan, [
+        'payments_tenant_tracking_code_idx',
+        'payments_tenant_reference_key',
+        'payments_tenant_external_reference_idx',
+      ]);
+    }, 60_000);
   });
 
   describe('services', () => {

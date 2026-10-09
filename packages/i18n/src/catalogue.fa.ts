@@ -56,19 +56,19 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'ops.group.test':
     '🧪 پیام آزمایشی گروه گزارش‌های مدیریتی\nتاپیک: {topic}\nدرخواست‌کننده: {requestedBy}\nزمان: {at}',
   'ops.financial.order_paid':
-    '✅ پرداخت سفارش تأیید شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
+    '✅ پرداخت سفارش تأیید شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
   'ops.financial.topup_credited':
-    '✅ شارژ کیف پول تأیید و واریز شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n💰 مبلغ واریز به کیف پول: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مجموع پرداختی: {payable}\n🎁 هدیهٔ شارژ: {gift}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
+    '✅ شارژ کیف پول تأیید و واریز شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n💰 مبلغ واریز به کیف پول: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مجموع پرداختی: {payable}\n🎁 هدیهٔ شارژ: {gift}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
   'ops.financial.payment_failed':
-    '❌ پرداخت ناموفق/رد شد\n\n⚠️ علت: {cause}\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
+    '❌ پرداخت ناموفق/رد شد\n\n⚠️ علت: {cause}\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
   'ops.financial.late_completion':
-    '⚠️ تأیید دیرهنگام درگاه پس از بسته‌شدن پرداخت\n\nاین پرداخت در Nexa بسته شده بود و هیچ مبلغی ثبت نشد؛ نیاز به بررسی دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
+    '⚠️ تأیید دیرهنگام درگاه پس از بسته‌شدن پرداخت\n\nاین پرداخت در Nexa بسته شده بود و هیچ مبلغی ثبت نشد؛ نیاز به بررسی دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
   'ops.financial.outcome_unknown':
-    '❓ نتیجهٔ پرداخت درگاه نامعلوم ماند\n\nمهلت بررسی درگاه بدون پاسخ قطعی تمام شد. هیچ مبلغی ثبت یا رد نشده است؛ نیاز به تطبیق دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
+    '❓ نتیجهٔ پرداخت درگاه نامعلوم ماند\n\nمهلت بررسی درگاه بدون پاسخ قطعی تمام شد. هیچ مبلغی ثبت یا رد نشده است؛ نیاز به تطبیق دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
   'ops.financial.refund_completed':
-    '↩️ بازگشت وجه انجام شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ بازگشتی: {amount}\n🕒 زمان: {at}',
+    '↩️ بازگشت وجه انجام شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ بازگشتی: {amount}\n🕒 زمان: {at}',
   'ops.financial.refund_failed':
-    '⛔️ بازگشت وجه ناموفق/لغو شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n⚠️ علت: {cause}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ: {amount}\n🕒 زمان: {at}',
+    '⛔️ بازگشت وجه ناموفق/لغو شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n⚠️ علت: {cause}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ: {amount}\n🕒 زمان: {at}',
   'bot.service.refund_request_button': 'درخواست بازگشت وجه',
   'bot.service.refund_request_ask':
     'درخواست بازگشت وجه برای سرویس {service} ({product})\n\nپس از ثبت درخواست، مدیریت آن را بررسی می‌کند و مبلغ قابل بازگشت را تعیین می‌کند. در صورت تأیید، این سرویس حذف می‌شود و مبلغ تعیین‌شده به کیف پول شما در ربات واریز می‌شود. کارمزد درگاه پرداخت قابل بازگشت نیست.\n\nآیا درخواست بازگشت وجه را تأیید می‌کنید؟',
@@ -743,7 +743,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * attempt for ever without anything happening. 4H gives them the step that exists.
    */
   'bot.payment.manual_instructions':
-    'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nکد پیگیری این پرداخت: {reference}',
+    'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nکد پیگیری پرداخت: {reference}',
   /*
    * The invoice layout the owner specified: heading, invoice id, payable amount, then
    * the destination lines, then the instructions.
@@ -756,7 +756,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * account afterwards does not change what this customer was told.
    */
   'bot.payment.transfer_instructions':
-    '{icon:invoice} جزئیات فاکتور پرداخت شما\n\nشناسه فاکتور: {reference}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
+    '{icon:invoice} جزئیات فاکتور پرداخت شما\n\nکد پیگیری پرداخت: {reference}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
   'bot.payment.destination.bank': 'بانک: {value}',
   'bot.payment.destination.holder': 'به نام: {value}',
   'bot.payment.destination.card': 'شماره کارت: {value}',
@@ -802,7 +802,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.received_for_review':
     '{icon:info} اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.receipt_prompt':
-    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.',
+    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.\n\nکد پیگیری پرداخت: {reference}',
   /*
    * A10 (pre-support brief §10, which supersedes owner spec §2.4 "state 3"): the ONE new
    * message the first receipt of a payment sends, word for word the brief's copy, with a
@@ -822,7 +822,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'مهلت این سفارش برای پرداخت کارت به کارت کافی نیست. لطفاً دوباره سفارش دهید.',
   'bot.payment.cancel_button': 'انصراف از پرداخت',
   'bot.payment.cancel_confirm':
-    'آیا از انصراف این پرداخت مطمئن هستید؟ کد پیگیری فعلی باطل می‌شود و اگر پس از آن مبلغی واریز کنید، قابل پیگیری نخواهد بود. این کار برگشت‌پذیر نیست.',
+    'آیا از انصراف این پرداخت مطمئن هستید؟ کد پیگیری فعلی باطل می‌شود و اگر پس از آن مبلغی واریز کنید، قابل پیگیری نخواهد بود. این کار برگشت‌پذیر نیست.\n\nکد پیگیری پرداخت: {reference}',
+  /* FIX-02: appended to an old tenant override of an invoice that lacks {reference}. */
+  'bot.payment.tracking_code_line': 'کد پیگیری پرداخت: {reference}',
   'bot.payment.cancel_confirm_button': 'بله، انصراف بده',
   'bot.payment.cancelled':
     '{icon:warning} پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',
@@ -999,7 +1001,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:error} درخواست شما اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.',
   // R2 (item 11): the dedicated renewal result, and what the paid renewal's message becomes.
   'bot.service.renewed':
-    '{icon:success} سرویس شما با موفقیت تمدید شد\n\n{icon:user} نام کاربری: {username}\n{icon:time} مدت تمدید: {durationDays}\n{icon:date} تاریخ انقضای جدید: {expiresAt}\n{icon:invoice} کد پیگیری: {reference}',
+    '{icon:success} سرویس شما با موفقیت تمدید شد\n\n{icon:user} نام کاربری: {username}\n{icon:time} مدت تمدید: {durationDays}\n{icon:date} تاریخ انقضای جدید: {expiresAt}\n{icon:invoice} کد پیگیری پرداخت: {reference}',
   'bot.service.renewed_details_button': '📊 مشخصات سرویس',
   'bot.service.renew_paid':
     '{icon:success} پرداخت تمدید انجام شد. نتیجهٔ تمدید سرویس در پیام جداگانه برای شما ارسال می‌شود.',
@@ -1176,22 +1178,22 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.route_name_nowpayments': 'پرداخت با ارز دیجیتال',
   'bot.payment.nowpayments_pay_button': '💳 پرداخت با ارز دیجیتال',
   'bot.payment.nowpayments_in_review':
-    '🕓 پرداخت ارز دیجیتال شما دریافت شده و در انتظار تأیید شبکه است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت تأیید: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید نهایی درگاه در همین پیام نمایش داده می‌شود.',
+    '🕓 پرداخت ارز دیجیتال شما دریافت شده و در انتظار تأیید شبکه است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت تأیید: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید نهایی درگاه در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.nowpayments_review_unresolved':
-    'پرداخت ارز دیجیتال شما نیاز به بررسی دارد؛ مبلغ دریافتی با فاکتور مطابقت ندارد یا تأیید نهایی آن هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.',
+    'پرداخت ارز دیجیتال شما نیاز به بررسی دارد؛ مبلغ دریافتی با فاکتور مطابقت ندارد یا تأیید نهایی آن هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.route_name_centralpay': 'پرداخت با CentralPay',
   'bot.payment.centralpay_pay_button': '💳 پرداخت با CentralPay',
   'bot.payment.centralpay_review_unresolved':
-    'پرداخت شما از طریق CentralPay نیاز به بررسی دارد؛ اطلاعات تأیید درگاه با این پرداخت مطابقت ندارد. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.',
+    'پرداخت شما از طریق CentralPay نیاز به بررسی دارد؛ اطلاعات تأیید درگاه با این پرداخت مطابقت ندارد. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.route_name_telegram_stars': '⭐ تلگرام استارز',
   'bot.payment.stars_invoice_order':
-    '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:wallet} مبلغ سفارش: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',
+    '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:wallet} مبلغ سفارش: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.stars_invoice_order_fee':
-    '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',
+    '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.stars_invoice_topup':
-    '{icon:invoice} فاکتور شارژ کیف پول با تلگرام استارز\n\n{icon:wallet} مبلغ شارژ: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',
+    '{icon:invoice} فاکتور شارژ کیف پول با تلگرام استارز\n\n{icon:wallet} مبلغ شارژ: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.stars_invoice_topup_fee':
-    '{icon:invoice} فاکتور شارژ کیف پول با تلگرام استارز\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. فاکتور استارز در پیام بعدی برای شما ارسال می‌شود.',
+    '{icon:invoice} فاکتور شارژ کیف پول با تلگرام استارز\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. فاکتور استارز در پیام بعدی برای شما ارسال می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.checkout_in_progress':
     'پرداخت شما با تلگرام استارز در حال انجام است. لطفاً یک دقیقه صبر کنید و دوباره بررسی کنید.',
   'bot.payment.stars_invoice_title': 'پرداخت با تلگرام استارز',
@@ -1203,42 +1205,43 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.fx_unavailable':
     'نرخ ارز در این لحظه در دسترس نیست و فاکتور جدید با این روش صادر نمی‌شود.\n\nلطفاً چند دقیقهٔ دیگر دوباره تلاش کنید یا روش پرداخت دیگری را انتخاب کنید.',
   'bot.payment.gateway_preparing':
-    '{icon:time} فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند لحظه صبر کنید؛ لینک پرداخت به‌محض آماده شدن در همین پیام نمایش داده می‌شود.',
+    '{icon:time} فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند لحظه صبر کنید؛ لینک پرداخت به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_invoice':
-    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ: {total}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
+    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ: {total}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_invoice_order_fee':
-    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
+    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_invoice_topup_fee':
-    '{icon:invoice} فاکتور شارژ آنلاین کیف پول\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
+    '{icon:invoice} فاکتور شارژ آنلاین کیف پول\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_pay_button': '💳 پرداخت آنلاین',
   'bot.payment.gateway_check_button': '🔄 بررسی وضعیت پرداخت',
-  'bot.payment.gateway_confirmed': '{icon:success} پرداخت شما توسط درگاه تأیید و ثبت شد.',
+  'bot.payment.gateway_confirmed':
+    '{icon:success} پرداخت شما توسط درگاه تأیید و ثبت شد.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_failed':
-    '{icon:error} پرداخت آنلاین شما توسط درگاه تأیید نشد و از این پرداخت مبلغی ثبت نشد.\n\nدر صورت تمایل می‌توانید دوباره پرداخت کنید.',
+    '{icon:error} پرداخت آنلاین شما توسط درگاه تأیید نشد و از این پرداخت مبلغی ثبت نشد.\n\nدر صورت تمایل می‌توانید دوباره پرداخت کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_unavailable':
-    'این روش پرداخت در حال حاضر در دسترس نیست. لطفاً روش دیگری را انتخاب کنید یا کمی بعد دوباره تلاش کنید.',
+    'این روش پرداخت در حال حاضر در دسترس نیست. لطفاً روش دیگری را انتخاب کنید یا کمی بعد دوباره تلاش کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_unknown':
-    'پاسخ درگاه برای ساخت این فاکتور دریافت نشد و لینکی برای آن در دسترس نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید.',
+    'پاسخ درگاه برای ساخت این فاکتور دریافت نشد و لینکی برای آن در دسترس نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_no_link':
-    'درگاه ساخت این فاکتور را اعلام کرد اما لینک پرداختی برای آن نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.',
+    'درگاه ساخت این فاکتور را اعلام کرد اما لینک پرداختی برای آن نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_closed':
-    'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.',
+    'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_invoice':
-    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون پی\n\n{icon:wallet} مبلغ اصلی: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ اعلام‌شده توسط تون پی برای واریز: {transferAmount}\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال فیش: {expiresAt}\n\nمبلغ را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال فیش واریزی» عکس فیش را بفرستید. پرداخت شما فقط پس از تأیید تون پی ثبت می‌شود.',
+    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون پی\n\n{icon:wallet} مبلغ اصلی: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ اعلام‌شده توسط تون پی برای واریز: {transferAmount}\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال فیش: {expiresAt}\n\nمبلغ را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال فیش واریزی» عکس فیش را بفرستید. پرداخت شما فقط پس از تأیید تون پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_sent':
-    '📤 فیش واریزی شما برای تون پی ارسال شده و در انتظار پاسخ است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.',
+    '📤 فیش واریزی شما برای تون پی ارسال شده و در انتظار پاسخ است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_refused':
-    '{icon:warning} تون پی آخرین تصویر را به‌عنوان فیش نپذیرفت یا ارسال آن ممکن نشد. لطفاً عکس واضح فیش واریزی را دوباره بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال فیش: {expiresAt}',
+    '{icon:warning} تون پی آخرین تصویر را به‌عنوان فیش نپذیرفت یا ارسال آن ممکن نشد. لطفاً عکس واضح فیش واریزی را دوباره بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال فیش: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_changing':
-    '🔄 درخواست کارت جدید برای تون پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}',
+    '🔄 درخواست کارت جدید برای تون پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_unconfirmed':
-    'پاسخ تون پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، فیش آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.',
+    'پاسخ تون پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، فیش آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_missing':
-    'تون پی ساخت این فاکتور را اعلام کرد اما شماره کارتی برای واریز نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.',
+    'تون پی ساخت این فاکتور را اعلام کرد اما شماره کارتی برای واریز نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_in_review':
-    '🕓 تون پی فیش واریزی شما را دریافت کرده و در حال بررسی آن است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت بررسی: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید تون پی در همین پیام نمایش داده می‌شود.',
+    '🕓 تون پی فیش واریزی شما را دریافت کرده و در حال بررسی آن است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت بررسی: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید تون پی در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_review_unresolved':
-    'نتیجهٔ بررسی تون پی هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و در حال پیگیری است.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.',
+    'نتیجهٔ بررسی تون پی هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و در حال پیگیری است.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_receipt_button': '📤 ارسال فیش واریزی',
   'bot.payment.gateway_change_card_button': '🔄 تعویض کارت',
   'bot.payment.gateway_card_check_button': '🔎 بررسی وضعیت',
