@@ -280,7 +280,12 @@ describe('a customer sending a receipt', () => {
       customerA,
       payment.id as PaymentId,
     );
-    expect(mine).toEqual(expect.any(String));
+    // FIX-02: the PUBLIC code — the operation-id half of the stored `<id>:manual` reference.
+    const stored = (await ctx.container.database.db.execute(
+      sql`SELECT reference FROM payments WHERE id = ${payment.id}`,
+    )) as unknown as { rows: { reference: string }[] };
+    expect(stored.rows[0]?.reference).toMatch(/^[0-9a-f]{16}:manual$/u);
+    expect(mine).toBe(stored.rows[0]?.reference.split(':')[0]);
     expect(
       await ctx.container.receipts.trackingCodeForCustomer(
         tenantA,

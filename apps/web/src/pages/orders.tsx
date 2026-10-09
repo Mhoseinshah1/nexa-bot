@@ -12,6 +12,7 @@ import {
   type OrderSummaryResponse,
   type PaymentState,
   type ServiceOperationResponse,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import {
   fetchOrder,
@@ -889,7 +890,7 @@ function OrderPayments({ orderId, mayView }: { orderId: string; mayView: boolean
             {payments.data.payments.map((one) => (
               <li key={one.id}>
                 <a href={`/payments/${encodeURIComponent(one.id)}`} onClick={onLink}>
-                  <Ltr>{one.reference}</Ltr>
+                  <Ltr>{paymentTrackingCode(one.reference)}</Ltr>
                 </a>
                 <Badge tone="neutral">{t(PAYMENT_STATE_LABELS[one.state])}</Badge>
                 <Money value={{ amountMinor: one.amount, currency: one.currency }} />

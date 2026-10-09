@@ -1981,7 +1981,7 @@ export const WEB_FA = {
   'web.payment_method_manual': 'کارت به کارت',
   'web.payment_method_gateway': 'درگاه',
   'web.payment_amount': 'مبلغ',
-  'web.payment_reference': 'کد پیگیری',
+  'web.payment_reference': 'کد پیگیری پرداخت',
   'web.payment_customer': 'مشتری',
   'web.payment_order': 'سفارش',
   /*

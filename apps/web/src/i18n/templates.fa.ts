@@ -1141,7 +1141,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.payment.transfer_instructions': [
     'فاکتور کارت‌به‌کارت',
-    'فاکتور پرداخت: شناسهٔ فاکتور، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
+    'فاکتور پرداخت: کد پیگیری پرداخت، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
   ],
   'bot.payment.destination.bank': [
     'خط نام بانک در فاکتور',

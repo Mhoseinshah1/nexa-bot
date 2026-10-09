@@ -3,6 +3,7 @@ import {
   type CustomerWorkspaceOrder,
   type CustomerWorkspacePayment,
   type TicketSummary,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import { fetchCustomerWorkspace, fetchTickets } from '../api/client';
 import { customerAttentionItems, workspaceWithheld } from '../attention-view';
@@ -134,7 +135,7 @@ export function CustomerLatestCard({ customerId }: { customerId: string }) {
       header: t('web.payment_reference'),
       render: (row) => (
         <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          <Ltr>{row.reference}</Ltr>
+          <Ltr>{paymentTrackingCode(row.reference)}</Ltr>
         </a>
       ),
     },

@@ -41,7 +41,7 @@ describe('the manual-transfer invoice', () => {
     );
   }
 
-  it('renders the owner layout in order: heading, invoice id, amount, card, holder', async () => {
+  it('renders the owner layout in order: heading, tracking code, amount, card, holder', async () => {
     const body = await invoice();
     const at = (needle: string): number => {
       const index = body.indexOf(needle);
@@ -52,7 +52,7 @@ describe('the manual-transfer invoice', () => {
     expect(body.startsWith('🧾')).toBe(true);
     const order = [
       at('جزئیات فاکتور پرداخت شما'),
-      at('شناسه فاکتور'),
+      at('کد پیگیری پرداخت: '),
       at('مبلغ قابل پرداخت'),
       at('شماره کارت'),
       at('به نام'),
