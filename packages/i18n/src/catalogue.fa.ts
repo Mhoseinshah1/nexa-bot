@@ -999,7 +999,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:error} درخواست شما اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.',
   // R2 (item 11): the dedicated renewal result, and what the paid renewal's message becomes.
   'bot.service.renewed':
-    '{icon:success} سرویس شما با موفقیت تمدید شد\n\n{icon:user} نام کاربری: {username}\n{icon:time} مدت تمدید: {durationDays}\n{icon:date} تاریخ انقضای جدید: {expiresAt}\n{icon:invoice} کد پیگیری: {reference}',
+    '{icon:success} سرویس شما با موفقیت تمدید شد\n\n{icon:user} نام کاربری: {username}\n{icon:time} مدت تمدید: {durationDays}\n{icon:date} تاریخ انقضای جدید: {expiresAt}\n{icon:invoice} کد پیگیری پرداخت: {reference}',
   'bot.service.renewed_details_button': '📊 مشخصات سرویس',
   'bot.service.renew_paid':
     '{icon:success} پرداخت تمدید انجام شد. نتیجهٔ تمدید سرویس در پیام جداگانه برای شما ارسال می‌شود.',
