@@ -22,7 +22,11 @@ const CODE = '7d433a363380f69e';
 const LINE = `کد پیگیری پرداخت: ${CODE}`;
 const AT = new Date('2026-10-09T10:00:00Z');
 
-function resolver(overrides: Partial<Record<TemplateKey, string>>, enabled = true) {
+function resolver(
+  overrides: Partial<Record<TemplateKey, string>>,
+  enabled = true,
+  catalogue: I18nTemplateCatalogue = new I18nTemplateCatalogue(),
+) {
   const stored = new Map(Object.entries(overrides));
   const repository = {
     findOverride: async (_scope: unknown, key: TemplateKey) => {
@@ -33,7 +37,7 @@ function resolver(overrides: Partial<Record<TemplateKey, string>>, enabled = tru
     },
   } as unknown as TemplateRepository;
   const features = { isEnabled: async () => enabled } as unknown as FeatureFlagResolver;
-  return new TemplateResolver(repository, features, new I18nTemplateCatalogue(), {
+  return new TemplateResolver(repository, features, catalogue, {
     presentationFor: async () => ({ timezone: 'UTC', calendar: 'gregorian' }) as never,
   });
 }
@@ -83,6 +87,19 @@ describe('the tracking-code line on an old invoice override', () => {
     const text = await resolver({ [key]: 'فاکتور قدیمی مدیر' }, false).render(scope, key, VALUES);
     expect(text).not.toContain('فاکتور قدیمی مدیر');
     expect(count(text)).toBe(1);
+  });
+
+  it('appends to an OVERRIDE only: a default body is never appended to, even one without the code', async () => {
+    // A catalogue whose default lacks {reference} — the rule is about overrides, and must not
+    // lean on the shipped defaults happening to carry the line.
+    const bare = new I18nTemplateCatalogue();
+    const catalogue = Object.assign(Object.create(bare) as I18nTemplateCatalogue, {
+      defaultBody: (key: TemplateKey, locale: 'fa') =>
+        key === 'bot.payment.gateway_invoice' ? 'فاکتور پیش‌فرض' : bare.defaultBody(key, locale),
+    });
+    const key = 'bot.payment.gateway_invoice' as TemplateKey;
+    const text = await resolver({}, true, catalogue).render(scope, key, VALUES);
+    expect(text).toBe('فاکتور پیش‌فرض');
   });
 
   it('uses the tenant’s own override of the line itself', async () => {
