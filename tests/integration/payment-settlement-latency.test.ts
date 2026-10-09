@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
+  paymentTrackingCode,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -398,10 +399,13 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
     expect(sends[0]!.message.templateKey).toBe('bot.wallet.topup_credited');
     expect(sends[0]!.message.values).toEqual({
       amount: money(amountMinor, 'IRT'),
-      // The tracking code as `PaymentRepository.trackingCodeFor` reads it today; FIX-02
-      // defines the public code and this switches to its one function when that merges.
-      reference,
+      // FIX-02: the public tracking code, never the stored `<code>:<role>` reference.
+      reference: paymentTrackingCode(reference),
     });
+    expect(
+      String(sends[0]!.message.values['reference']),
+      'a role suffix reached the customer',
+    ).not.toContain(':');
   }
 
   // --- the rails ---------------------------------------------------------------------
