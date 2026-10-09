@@ -2308,6 +2308,55 @@ above) with a margin of 4–16 and save it (the old release reports the stored r
 so the save is accepted). After a
 roll-forward, a template that was not re-saved is read again exactly as stored.
 
+### What an update and a rollback leave as text: the payment tracking code (FIX-02, FIX-04)
+
+FIX-02 shows one suffix-free tracking code («کد پیگیری پرداخت: 7d433a363380f69e») on every
+payment invoice. It needs no migration and changes no stored reference: the code is derived
+from `payments.reference` at render time. What it changes is the template contract: 27
+`bot.payment.*` keys that did not declare `{reference}` before now do. Nine of them — the
+invoices, `TRACKING_CODE_LINE_KEYS` in `packages/contracts/src/payment-tracking.ts` — REQUIRE
+it; the other eighteen (the gateway status and review messages, `receipt_prompt`,
+`cancel_confirm`) declare it as optional.
+
+- **An override carrying `{reference}` in one of those 27 keys is sent literally by the old
+  release.** The new editor refuses to save an invoice key without `{reference}`, so every
+  override of the nine saved after the update carries it. During the update an OLD replica,
+  and after a rollback every replica, leaves the undeclared placeholder as written, and a
+  customer reads `کد پیگیری پرداخت: {reference}`. Before rolling back, list them:
+
+  ```bash
+  docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+    exec -T postgres psql -U nexa -d nexa -c \
+    "SELECT tenant_id, template_key FROM template_overrides
+      WHERE body LIKE '%{reference}%' AND template_key IN (
+        'bot.payment.cancel_confirm', 'bot.payment.centralpay_review_unresolved', 'bot.payment.gateway_card_changing',
+        'bot.payment.gateway_card_invoice', 'bot.payment.gateway_card_missing', 'bot.payment.gateway_card_receipt_refused',
+        'bot.payment.gateway_card_receipt_sent', 'bot.payment.gateway_card_unconfirmed', 'bot.payment.gateway_closed',
+        'bot.payment.gateway_confirmed', 'bot.payment.gateway_failed', 'bot.payment.gateway_in_review',
+        'bot.payment.gateway_invoice', 'bot.payment.gateway_invoice_order_fee', 'bot.payment.gateway_invoice_topup_fee',
+        'bot.payment.gateway_no_link', 'bot.payment.gateway_preparing', 'bot.payment.gateway_review_unresolved',
+        'bot.payment.gateway_unavailable', 'bot.payment.gateway_unknown', 'bot.payment.nowpayments_in_review',
+        'bot.payment.nowpayments_review_unresolved', 'bot.payment.receipt_prompt', 'bot.payment.stars_invoice_order',
+        'bot.payment.stars_invoice_order_fee', 'bot.payment.stars_invoice_topup', 'bot.payment.stars_invoice_topup_fee')"
+  ```
+
+  and either revert those keys to the default from the texts page, or remove the placeholder
+  from the override, before the rollback. Keys outside this list (the receipt, manual-transfer
+  and reminder keys) declared `{reference}` before FIX-02 and are read the same by both
+  releases. To keep the update window clean, save overrides of these keys only after every
+  replica runs the new release.
+
+- **An override saved BEFORE FIX-02 keeps working** on the new release:
+  `TemplateResolver.withTrackingCodeLine` appends the code line to a tenant override of the
+  nine invoice keys that lacks `{reference}`, so the customer still sees the code. The
+  editor's preview of such an override is refused (`MISSING_REQUIRED_PLACEHOLDER`) until
+  `{reference}` is added — add it, then preview and save.
+- **A link-failure message queued for the operations group** (FIX-04,
+  `ops.notification.payment_link_failed`) uses a template the old release does not know. An
+  old dispatcher that claims one ends it `FAILED_PERMANENT` (`notification.render_failed`)
+  rather than sending it; the operational event itself stays in the log and in «مرکز
+  اعلان‌ها».
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
