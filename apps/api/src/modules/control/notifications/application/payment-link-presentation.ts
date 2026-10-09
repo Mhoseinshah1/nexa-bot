@@ -26,7 +26,6 @@ export function paymentLinkFailureValues(
   context: Record<string, unknown> | undefined,
   frame: {
     readonly eventId: string;
-    readonly occurrences: number;
     readonly at: Date;
     readonly tenantId: string;
     readonly botInstanceId?: string;
@@ -45,7 +44,9 @@ export function paymentLinkFailureValues(
     gateway,
     phase: 'PAYMENT_LINK_CREATE',
     eventId: frame.eventId,
-    occurrences: frame.occurrences,
+    // No counter (Codex P2 on #251): this is queued at the FIRST occurrence and never
+    // updated, so a count here would read 1 for ever. The template says it is the first
+    // and points at the notification centre, which reads the live `occurrence_count`.
     at: frame.at,
     tenantId: frame.tenantId,
   };

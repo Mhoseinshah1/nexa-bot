@@ -219,7 +219,6 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
         opsErrorPresentationOf(recorded.code) === 'PAYMENT_LINK'
           ? paymentLinkFailureValues(event.context, {
               eventId: recorded.id,
-              occurrences: recorded.occurrenceCount,
               at: recorded.lastSeenAt,
               tenantId: String(scope.tenantId),
               ...(botInstanceId ? { botInstanceId: String(botInstanceId) } : {}),

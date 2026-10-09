@@ -273,7 +273,11 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       confirmKey: 'ops_notifications',
       reason: 'Test setup.',
     });
-    return { bot, customerId: await customer(scope, scope === tenantA ? MARYAM : ALI, bot) };
+    return {
+      bot,
+      owner,
+      customerId: await customer(scope, scope === tenantA ? MARYAM : ALI, bot),
+    };
   }
 
   async function topup(scope: TenantContext, customerId: UserId, key: string, amount = 100_000n) {
@@ -530,7 +534,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
   });
 
   it('aggregates a storm: two customers’ identical failures are one row, one message, counted twice', async () => {
-    const { customerId } = await setUp();
+    const { customerId, owner } = await setUp();
     const ali = await customer(tenantA, ALI, SEED_IDS.botA1);
     mode = { status: 401, code: 'INVALID_API_KEY' };
     await topup(tenantA, customerId, 'storm-1', 100_000n);
@@ -541,7 +545,22 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]!.occurrence_count).toBe(2);
-    expect(await messages()).toHaveLength(1);
+    const sent = await messages();
+    expect(sent).toHaveLength(1);
+    // Codex P2 #251: the message is the FIRST occurrence and carries no counter that would
+    // stay at 1; it points at the notification centre, where the live count is 2.
+    expect(sent[0]).toContain('این پیام نخستین رخداد است');
+    expect(sent[0]).not.toMatch(/تعداد رخداد/);
+    const inbox = await ctx.container.notificationCenter.list(tenantA, owner, {
+      limit: 20,
+      unreadOnly: false,
+      before: null,
+    });
+    expect(
+      inbox
+        .filter((item) => item.code === 'payments.gateway_link_create_failed')
+        .map((item) => item.occurrenceCount),
+    ).toEqual([2]);
     // The per-attempt evidence is all still there: one audit row per attempt.
     const audit = await ctx.container.database.db.execute(
       sql`SELECT count(*)::int AS n FROM audit_logs

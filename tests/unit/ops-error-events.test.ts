@@ -519,7 +519,6 @@ describe('FIX-04: a payment link failure, classified once', () => {
 function renderPaymentLink(event: OperationalEventInput): string {
   const values = paymentLinkFailureValues(event.context, {
     eventId: 'evt_01900000-0000-7000-8000-00000000e001',
-    occurrences: 1,
     at: AT,
     tenantId: '01900000-0000-7000-8000-000000000001',
   });
@@ -568,7 +567,7 @@ describe('FIX-04: the Persian report in the group', () => {
           classification: kind === 'UNKNOWN' ? 'UNKNOWN' : 'FINAL',
           creationState: 'CREATE_FAILED',
         },
-        { eventId: 'e', occurrences: 3, at: AT, tenantId: 't' },
+        { eventId: 'e', at: AT, tenantId: 't' },
       )!;
       const text = renderTemplateBody(
         templateDefinition('ops.notification.payment_link_failed'),
@@ -579,7 +578,10 @@ describe('FIX-04: the Persian report in the group', () => {
       expect(causes, kind).toHaveLength(1);
       expect(causes[0], kind).toContain(`code.${kind.toLowerCase()}`);
       expect(text, kind).not.toMatch(/\{[A-Za-z]+\}/);
-      expect(text, kind).toContain('تعداد رخداد در این بازه: 3');
+      // The FIRST occurrence, never a frozen counter (Codex P2 #251).
+      expect(text, kind).toContain('این پیام نخستین رخداد است');
+      expect(text, kind).toContain('«مرکز اعلان‌ها»');
+      expect(text, kind).not.toMatch(/تعداد رخداد/);
     }
   });
 
@@ -612,14 +614,14 @@ describe('FIX-04: the Persian report in the group', () => {
     expect(
       paymentLinkFailureValues(
         { paymentId: 'p', provider: 'TONPAYS', reason: 'http.timeout' },
-        { eventId: 'e', occurrences: 1, at: AT, tenantId: 't' },
+        { eventId: 'e', at: AT, tenantId: 't' },
       ),
     ).toBeNull();
     // Even one that names a failure kind: without the mapping's phase it is not its shape.
     expect(
       paymentLinkFailureValues(
         { paymentId: 'p', provider: 'TONPAYS', failureKind: 'TIMEOUT', reason: 'http.timeout' },
-        { eventId: 'e', occurrences: 1, at: AT, tenantId: 't' },
+        { eventId: 'e', at: AT, tenantId: 't' },
       ),
     ).toBeNull();
   });
