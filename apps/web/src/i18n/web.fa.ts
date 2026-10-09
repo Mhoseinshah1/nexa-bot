@@ -7070,6 +7070,9 @@ export const WEB_FA = {
   'web.nc_t_receipt_push_failed': 'رسید در انتظار بررسی به بررسی‌کننده‌ها نرسید',
   'web.nc_t_refund_push_failed': 'درخواست بازگشت وجه به مدیران نرسید',
   'web.nc_t_gateway_misconfigured': 'درگاه پرداخت درست پیکربندی نشده است',
+  // --- FIX-04 opsevents ---
+  'web.nc_t_gateway_link_create_failed': 'لینک پرداخت از درگاه ساخته نشد',
+  // --- end FIX-04 opsevents ---
   'web.nc_t_webhook_unverified': 'وب‌هوک درگاه تأیید نمی‌شود',
   'web.nc_t_panel': 'وضعیت پنل نیاز به بررسی دارد',
   'web.nc_t_panel_capacity': 'ظرفیت پنل رو به پایان است',
