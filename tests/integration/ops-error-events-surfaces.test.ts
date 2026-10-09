@@ -230,6 +230,14 @@ describe('FIX-05: the surfaces report through the one recorder', () => {
       interactions: 25,
     });
     expect([first.changed, second.changed]).toEqual([true, false]);
+    // Codex P2 #251: an EXACT replay of the first block (a redelivered update) answers
+    // `changed: true` from the idempotency store — and must not be reported again.
+    const replay = await api.container.customers.blockForSpam(tenantA, system, {
+      idempotencyKey: 'fix05-spam-block-1',
+      customerId,
+      interactions: 21,
+    });
+    expect(replay.changed).toBe(true);
 
     const found = await rows('antispam.customer_blocked');
     expect(found).toHaveLength(1);

@@ -570,12 +570,13 @@ export class CustomerService {
     });
     /*
      * FIX-05: an actionable abuse fact for the operations log group (SECURITY). Only when
-     * THIS call blocked the customer — a replay, a concurrent block or an administrator's
-     * earlier one changed nothing and reports nothing — and after the block committed, so
+     * THIS call's transaction blocked the customer — a replay (which repeats the first
+     * call's `changed: true` without doing anything), a concurrent block or an
+     * administrator's earlier one changed nothing now and reports nothing — and after the block committed, so
      * the block never waits on, or fails because of, the log. One row per customer per
      * window: a flood that re-triggers it is one message with a counter.
      */
-    if (outcome.changed) {
+    if (outcome.changed && !outcome.replayed) {
       await recordQuietly(
         this.deps.opsLog,
         scope,
@@ -597,7 +598,7 @@ export class CustomerService {
         this.deps.logger ?? UNWIRED_LOGGER,
       );
     }
-    return outcome;
+    return { customer: outcome.customer, changed: outcome.changed };
   }
 
   /** Unblock. The same machinery, so neither direction can forget a step. */
@@ -775,7 +776,16 @@ export class CustomerService {
       /** `users.block` unless the caller is anti-spam. See `blockForSpam`. */
       readonly permission?: PermissionKey;
     },
-  ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
+  ): Promise<{
+    readonly customer: CustomerRecord;
+    readonly changed: boolean;
+    /**
+     * True when this call was answered from the idempotency store: `changed` is then what
+     * the FIRST call did, and nothing happened now (Codex P2 on #251 — a replayed anti-spam
+     * block was reported a second time).
+     */
+    readonly replayed: boolean;
+  }> {
     const permission = input.permission ?? CUSTOMER_BLOCK_PERMISSION;
     // Before the hash, so a re-cased id cannot produce a second idempotency record for
     // the same command against the same row.
@@ -822,7 +832,7 @@ export class CustomerService {
       // `changed` is what the FIRST call did; a record from before it was remembered did
       // change something, or it would not have been the call it replays.
       if (replayed !== null) {
-        return { customer: replayed, changed: replay.result.changed ?? true };
+        return { customer: replayed, changed: replay.result.changed ?? true, replayed: true };
       }
       // The idempotency row outlived its customer, which a restore can produce.
       // Falling through redoes a command that is idempotent by construction; the
@@ -956,7 +966,7 @@ export class CustomerService {
           tx,
         );
 
-        return { customer: after, changed };
+        return { customer: after, changed, replayed: false };
       },
     );
   }
