@@ -470,3 +470,53 @@ export function redactRecord(
 ): Record<string, unknown> | null {
   return value === null ? null : (redactSecrets(value) as Record<string, unknown>);
 }
+
+/**
+ * FIX-04/05: a payment card number in free text — 13 to 19 digits, optionally grouped by
+ * single spaces or hyphens, and Luhn-valid. The Luhn check is what keeps an order id, an
+ * amount in minor units or a Telegram id (all digit runs) out of the redaction: a random
+ * digit run passes it one time in ten, a real card number always.
+ */
+const CARD_CANDIDATE = /(?<![0-9])[0-9](?:[ -]?[0-9]){12,18}(?![0-9])/g;
+
+function luhnValid(digits: string): boolean {
+  let sum = 0;
+  let double = false;
+  for (let index = digits.length - 1; index >= 0; index -= 1) {
+    let digit = digits.charCodeAt(index) - 48;
+    if (double) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+    double = !double;
+  }
+  return sum % 10 === 0;
+}
+
+export function redactCardNumbers(text: string): string {
+  return text.replace(CARD_CANDIDATE, (match) => {
+    const digits = match.replace(/[ -]/g, '');
+    return digits.length >= 13 && digits.length <= 19 && luhnValid(digits) ? REDACTED : match;
+  });
+}
+
+/**
+ * Any URL in free text. A payment link is signed or is a bearer capability, a callback URL
+ * names the tenant's webhook, and a provider's error page can quote the request — none of
+ * them belongs in an operator channel, so the whole URL goes, scheme included.
+ */
+const ANY_URL = /\b[a-z][a-z0-9+.-]{1,16}:\/\/[^\s"'<>]{1,2048}/gi;
+
+export function redactUrls(text: string): string {
+  return text.replace(ANY_URL, REDACTED);
+}
+
+/**
+ * Text bound for the operations log group or any other operator channel: every secret the
+ * text rule finds, then every URL, then every card number. The ONE composition, so a
+ * caller cannot apply two of the three and believe it applied all of them.
+ */
+export function redactOperatorText(text: string): string {
+  return redactCardNumbers(redactUrls(redactSecretText(text)));
+}

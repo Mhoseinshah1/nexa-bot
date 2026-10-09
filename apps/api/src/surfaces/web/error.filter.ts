@@ -1,8 +1,16 @@
 import { Catch, Inject, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
 import { HttpException } from '@nestjs/common';
-import type { FastifyReply } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
-import { isNexaError, type ErrorResponse } from '@nexa/contracts';
+import {
+  INTERNAL_UNHANDLED_CODE,
+  OPS_ERROR_CLASS_POLICY,
+  isNexaError,
+  opsAggregationKey,
+  type CorrelationId,
+  type ErrorResponse,
+} from '@nexa/contracts';
+import { recordQuietly } from '../../modules/platform/opslog/application/error-events.js';
 import { CONTAINER, type Container } from '../../container.js';
 import { currentCorrelationId } from '../../infrastructure/logging/logger.js';
 
@@ -30,9 +38,51 @@ export class DomainErrorFilter implements ExceptionFilter {
         { err: exception instanceof Error ? exception.stack : String(exception) },
         'Unhandled failure',
       );
+      // FIX-05: and to the operations log. Not awaited — the answer to the client never
+      // waits on it — and it never throws (`recordQuietly`).
+      void this.reportUnhandled(exception, host, status, correlationId);
     }
 
     void reply.status(status).send(body);
+  }
+
+  /**
+   * One row per route and failure name per aggregation window: a broken endpoint hit a
+   * thousand times is one message with a counter. The ROUTE PATTERN (`/api/payments/:id`),
+   * never the URL — a URL carries ids and, on the webhook paths, tenant ids — and the
+   * failure's NAME, never its message, which is for the process log alone.
+   */
+  private async reportUnhandled(
+    exception: unknown,
+    host: ArgumentsHost,
+    status: number,
+    correlationId: string,
+  ): Promise<void> {
+    const tenantId = this.container.installationTenantId;
+    if (tenantId === null) return;
+    const request = host.switchToHttp().getRequest<FastifyRequest | undefined>();
+    const route = request?.routeOptions?.url ?? 'unrouted';
+    const name = exception instanceof Error ? exception.name : 'unknown';
+    await recordQuietly(
+      this.container.opsLog,
+      { tenantId, botInstanceId: null },
+      {
+        code: INTERNAL_UNHANDLED_CODE,
+        severity: OPS_ERROR_CLASS_POLICY.ERROR.storedSeverity,
+        message: `An API request failed with ${String(status)}.`,
+        dedupeKey: opsAggregationKey(
+          `${INTERNAL_UNHANDLED_CODE}:${route}:${name}`,
+          this.container.clock.now(),
+        ),
+        ...(correlationId === 'unknown' ? {} : { correlationId: correlationId as CorrelationId }),
+        context: {
+          method: `${request?.method ?? 'UNKNOWN'} ${route}`,
+          kind: name,
+          httpStatus: status,
+        },
+      },
+      this.container.logger,
+    );
   }
 
   private toStatus(exception: unknown): number {

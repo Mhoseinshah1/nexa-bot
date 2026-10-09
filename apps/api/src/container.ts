@@ -2017,6 +2017,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     // Spec §9: whether a customer may stop promotional messages at all.
     features: featureFlagResolver,
+    // FIX-05: where an anti-spam block's operational event goes when it cannot be written.
+    logger,
   });
 
   /**

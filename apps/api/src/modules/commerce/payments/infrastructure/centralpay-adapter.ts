@@ -208,6 +208,8 @@ export class CentralPayAdapter implements ExternalGatewayAdapter {
         orderId: request.orderId,
         invoiceUrl: safeLink(data.data.redirectUrl),
         webInvoiceUrl: null,
+        // FIX-04: a redirect URL was sent and refused as unsafe — the fact, never the value.
+        ...(safeLink(data.data.redirectUrl) === null ? { linkRejected: true } : {}),
         status: null,
         requestAmount: null,
         finalAmount: null,

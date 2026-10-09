@@ -373,30 +373,39 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
       if (parsed.data.order_id !== request.orderId) {
         return { kind: 'UNKNOWN', code: 'nexa.order_id_mismatch' };
       }
+      const invoiceUrl = safeLink(parsed.data.invoice_url);
+      const webInvoiceUrl = safeLink(parsed.data.web_invoice_url);
       return {
         kind: 'CREATED',
         invoiceId: parsed.data.invoice_id,
         orderId: parsed.data.order_id,
-        invoiceUrl: safeLink(parsed.data.invoice_url),
-        webInvoiceUrl: safeLink(parsed.data.web_invoice_url),
+        invoiceUrl,
+        webInvoiceUrl,
         status: metadataStatus(parsed.data.status),
         requestAmount: metadataAmount(parsed.data.request_amount),
         finalAmount: metadataAmount(parsed.data.final_amount),
+        // FIX-04: a link WAS sent and refused as unsafe — the fact, never the value.
+        ...((parsed.data.invoice_url != null && invoiceUrl === null) ||
+        (parsed.data.web_invoice_url != null && webInvoiceUrl === null)
+          ? { linkRejected: true }
+          : {}),
       };
     }
     const answered = tonpaysWriteAnswer(raw, REQUEST_FIELDS);
     if (answered.kind === 'UNKNOWN') return answered;
     const code = answered.code;
+    // FIX-04: a readable refusal's code is the provider's word; its status is metadata.
+    const httpStatus = raw.status;
     switch (classifyTonPaysError(code)) {
       case 'CONFIGURATION':
-        return { kind: 'REFUSED', code: boundedCode(code), configuration: true };
+        return { kind: 'REFUSED', code: boundedCode(code), configuration: true, httpStatus };
       case 'RATE_LIMITED':
-        return { kind: 'RATE_LIMITED', code: boundedCode(code) };
+        return { kind: 'RATE_LIMITED', code: boundedCode(code), httpStatus };
       case 'AMBIGUOUS':
-        return { kind: 'AMBIGUOUS', code: boundedCode(code) };
+        return { kind: 'AMBIGUOUS', code: boundedCode(code), httpStatus };
       case 'NOT_FOUND':
       case 'REFUSED':
-        return { kind: 'REFUSED', code: boundedCode(code), configuration: false };
+        return { kind: 'REFUSED', code: boundedCode(code), configuration: false, httpStatus };
     }
   }
 

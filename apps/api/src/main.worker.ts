@@ -6,6 +6,8 @@ import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { stalledLoops, type LoopHealth } from './infrastructure/lifecycle/loop-health.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { LoopStallReporter } from './modules/platform/opslog/application/loop-stall-reporter.js';
+import { DrizzleOperationalConditionReader } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
 
 /**
  * Process role: `worker`.
@@ -35,6 +37,17 @@ async function main(): Promise<void> {
   // not merely that its process exists. Stopped first on shutdown, so a worker
   // that is draining is not reported as alive after it has stopped taking
   // work.
+  // FIX-05: a stalled loop is also an operational condition, opened and closed here.
+  const loopStalls = new LoopStallReporter({
+    recorder: container.opsLog,
+    conditions: new DrizzleOperationalConditionReader(container.database.db),
+    scope: () =>
+      container.installationTenantId === null
+        ? null
+        : { tenantId: container.installationTenantId, botInstanceId: null },
+    clock: container.clock,
+    logger: container.logger,
+  });
   const heartbeat = startHeartbeat({
     path: config.WORKER_HEARTBEAT_PATH,
     intervalMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
@@ -174,6 +187,12 @@ async function main(): Promise<void> {
         ['backup-housekeeping', true, () => container.backupHousekeeping.isFresh(now)],
       ];
       const stalled = stalledLoops(loops);
+      // Not awaited, and it never throws: reporting must not slow or fail the heartbeat.
+      void loopStalls.observe(
+        loops
+          .filter(([, enabled]) => enabled)
+          .map(([name]) => ({ name, stalled: stalled.includes(name) })),
+      );
       if (stalled.length > 0) {
         // Named, because "the worker is unhealthy" sends an operator looking at
         // the whole process when one loop is the answer.

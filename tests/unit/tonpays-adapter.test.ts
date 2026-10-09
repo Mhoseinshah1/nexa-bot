@@ -155,7 +155,13 @@ describe('the TonPays create request', () => {
         json(201, { ...CREATED, web_invoice_url: 'javascript:alert(1)', invoice_url: 'http://x' }),
       ).fetch,
     }).createInvoice(API_KEY, request());
-    expect(outcome).toMatchObject({ kind: 'CREATED', webInvoiceUrl: null, invoiceUrl: null });
+    expect(outcome).toMatchObject({
+      kind: 'CREATED',
+      webInvoiceUrl: null,
+      invoiceUrl: null,
+      // FIX-04: the operations log is told a link came back and was refused — not its value.
+      linkRejected: true,
+    });
   });
 
   it('treats a create answer for ANOTHER order id as unknown, never as this invoice', async () => {
@@ -216,6 +222,8 @@ describe('what a create outcome may conclude', () => {
         kind: 'REFUSED',
         code,
         configuration: true,
+        // FIX-04: the status beside the provider's code, for the operations log only.
+        httpStatus: 401,
       });
     }
     for (const code of ['AMOUNT_TOO_LOW', 'AMOUNT_TOO_HIGH', 'INVALID_BUYER_CHAT_ID']) {
@@ -223,6 +231,7 @@ describe('what a create outcome may conclude', () => {
         kind: 'REFUSED',
         code,
         configuration: false,
+        httpStatus: 400,
       });
     }
   });
@@ -230,10 +239,10 @@ describe('what a create outcome may conclude', () => {
   it('reports RATE_LIMIT_EXCEEDED as rate-limited and DUPLICATE_ORDER_ID as ambiguous, never as a success', async () => {
     expect(
       await create(() => json(429, { detail: { code: 'RATE_LIMIT_EXCEEDED', message: 'x' } })),
-    ).toEqual({ kind: 'RATE_LIMITED', code: 'RATE_LIMIT_EXCEEDED' });
+    ).toEqual({ kind: 'RATE_LIMITED', code: 'RATE_LIMIT_EXCEEDED', httpStatus: 429 });
     expect(
       await create(() => json(409, { detail: { code: 'DUPLICATE_ORDER_ID', message: 'x' } })),
-    ).toEqual({ kind: 'AMBIGUOUS', code: 'DUPLICATE_ORDER_ID' });
+    ).toEqual({ kind: 'AMBIGUOUS', code: 'DUPLICATE_ORDER_ID', httpStatus: 409 });
   });
 
   it('calls every 5xx UNKNOWN whatever code its body carries — a rate limit, a configuration refusal or a duplicate', async () => {

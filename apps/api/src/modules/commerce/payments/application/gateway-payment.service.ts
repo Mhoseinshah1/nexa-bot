@@ -52,6 +52,15 @@ import type {
 } from './gateway-invoice-ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { GatewayConfirmation, PaymentService } from './payment.service.js';
+import {
+  GATEWAY_CREATE_UNKNOWN_EVENT_CODE,
+  paymentLinkConfigurationFailure,
+  paymentLinkFailureEvent,
+  paymentLinkFailureOf,
+  paymentLinkInterruptedFailure,
+  type PaymentLinkFailure,
+} from './payment-link-failure.js';
+import { recordQuietly } from '../../../platform/opslog/application/error-events.js';
 
 /**
  * Operational codes this lane raises. Declared beside their producer, and each is part
@@ -69,7 +78,7 @@ import type { GatewayConfirmation, PaymentService } from './payment.service.js';
  */
 export const GATEWAY_MISCONFIGURED_CODE = 'payments.gateway_misconfigured';
 export const GATEWAY_CONFIGURED_CODE = 'payments.gateway_configured';
-export const GATEWAY_CREATE_UNKNOWN_CODE = 'payments.gateway_create_unknown';
+export const GATEWAY_CREATE_UNKNOWN_CODE = GATEWAY_CREATE_UNKNOWN_EVENT_CODE;
 export const GATEWAY_LATE_COMPLETION_CODE = 'payments.gateway_late_completion';
 export const GATEWAY_IDENTITY_MISMATCH_CODE = 'payments.gateway_identity_mismatch';
 /**
@@ -516,6 +525,11 @@ export class GatewayPaymentService {
      */
     if (invoice.creationSentAt !== null) {
       await this.endCreation(scope, actor, invoice, 'CREATE_UNKNOWN', 'nexa.send_interrupted');
+      await this.reportLinkFailure(
+        scope,
+        claimed,
+        paymentLinkInterruptedFailure('nexa.send_interrupted'),
+      );
       return 'createUnknown';
     }
 
@@ -542,6 +556,11 @@ export class GatewayPaymentService {
         notifyCustomer: false,
       });
       await this.misconfigured(scope, invoice, 'nexa.credential_missing');
+      await this.reportLinkFailure(
+        scope,
+        claimed,
+        paymentLinkConfigurationFailure('nexa.credential_missing'),
+      );
       return 'createFailed';
     }
 
@@ -618,6 +637,14 @@ export class GatewayPaymentService {
             ? NO_PAYMENT_CARD_CODE
             : null;
     const unpayable = unpayableNote !== null;
+    /*
+     * FIX-04: the one classification of this answer for the operations log — null when the
+     * customer got a usable invoice, or when a rate limit will be asked again (a retry in
+     * progress is nothing an operator can act on yet).
+     */
+    const linkFailure = paymentLinkFailureOf(outcome, descriptor.invoiceForm, {
+      rateLimitIsFinal: invoice.creationAttempts + 1 >= TONPAYS_CREATE_MAX_ATTEMPTS,
+    });
     const logContext = {
       paymentId: invoice.paymentId,
       provider: invoice.provider,
@@ -693,6 +720,13 @@ export class GatewayPaymentService {
           );
         });
         await this.configured(scope, invoice.provider);
+        if (unpayable) {
+          await this.reportLinkFailure(scope, claimed, linkFailure, {
+            elapsedMs,
+            providerInvoiceId: outcome.invoiceId,
+            telegramUserId: buyerChatId,
+          });
+        }
         return 'created';
       }
       case 'RATE_LIMITED': {
@@ -715,6 +749,10 @@ export class GatewayPaymentService {
           // The provider's capacity, not the customer's payment.
           notifyCustomer: false,
         });
+        await this.reportLinkFailure(scope, claimed, linkFailure, {
+          elapsedMs,
+          telegramUserId: buyerChatId,
+        });
         return 'createFailed';
       }
       case 'REFUSED': {
@@ -724,25 +762,20 @@ export class GatewayPaymentService {
           notifyCustomer: !outcome.configuration,
         });
         if (outcome.configuration) await this.misconfigured(scope, invoice, outcome.code);
+        await this.reportLinkFailure(scope, claimed, linkFailure, {
+          elapsedMs,
+          telegramUserId: buyerChatId,
+        });
         return 'createFailed';
       }
       case 'AMBIGUOUS':
       case 'UNKNOWN': {
         await this.endCreation(scope, actor, invoice, 'CREATE_UNKNOWN', outcome.code);
-        await this.deps.opsLog.record(scope, {
-          code: GATEWAY_CREATE_UNKNOWN_CODE,
-          severity: 'WARN',
-          message:
-            'A payment gateway invoice may or may not have been created; nothing was charged ' +
-            'through it by this installation, and it expires at its deadline.',
-          dedupeKey: `${GATEWAY_CREATE_UNKNOWN_CODE}:${invoice.paymentId}`,
-          context: {
-            paymentId: invoice.paymentId,
-            provider: invoice.provider,
-            providerOrderId: invoice.providerOrderId,
-            reason: outcome.code,
-            elapsedMs,
-          },
+        // FIX-04: `GATEWAY_CREATE_UNKNOWN_CODE`, per payment as before, now with the facts an
+        // operator needs — built by the one mapping every create failure goes through.
+        await this.reportLinkFailure(scope, claimed, linkFailure, {
+          elapsedMs,
+          telegramUserId: buyerChatId,
         });
         return 'createUnknown';
       }
@@ -2428,6 +2461,60 @@ export class GatewayPaymentService {
         });
       }
     });
+  }
+
+  /**
+   * FIX-04: tells the operations log that this attempt's payment link could not be made.
+   *
+   * ONE place, called from every exit of `processCreation` that leaves the customer without
+   * a usable invoice, after that exit's own outcome has committed. Best effort by
+   * construction: the reads and the write are each allowed to fail, and none of them can
+   * change what the lane already decided or stop the next attempt in the pass.
+   */
+  private async reportLinkFailure(
+    scope: TenantContext,
+    claimed: ClaimedGatewayInvoice,
+    failure: PaymentLinkFailure | null,
+    known: {
+      readonly elapsedMs?: number;
+      readonly providerInvoiceId?: string;
+      /** The customer's Telegram id when the caller already read it; read here otherwise. */
+      readonly telegramUserId?: string | null;
+    } = {},
+  ): Promise<void> {
+    if (failure === null) return;
+    const { invoice } = claimed;
+    let event;
+    try {
+      const payment = await this.deps.paymentRecords.findById(scope, invoice.paymentId);
+      const telegramUserId =
+        known.telegramUserId !== undefined
+          ? known.telegramUserId
+          : ((await this.deps.customers.findById(scope, claimed.customerId as UserId))
+              ?.telegramUserId ?? null);
+      event = paymentLinkFailureEvent(failure, {
+        provider: invoice.provider,
+        paymentId: invoice.paymentId,
+        orderId: payment?.orderId ?? null,
+        providerOrderId: invoice.providerOrderId,
+        providerInvoiceId: known.providerInvoiceId ?? invoice.providerInvoiceId,
+        // FIX-02 owns the public tracking code's exact form. Until its exported function
+        // lands, the payment's own `reference` — the existing accessor — and this is the
+        // ONE call site to switch.
+        trackingCode: payment?.reference ?? null,
+        telegramUserId,
+        botInstanceId: invoice.botInstanceId,
+        elapsedMs: known.elapsedMs ?? null,
+        at: this.deps.clock.now(),
+      });
+    } catch (error: unknown) {
+      this.deps.logger.warn(
+        { paymentId: invoice.paymentId, error: error instanceof Error ? error.name : 'unknown' },
+        'payment link failure could not be described for the operations log',
+      );
+      return;
+    }
+    await recordQuietly(this.deps.opsLog, scope, event, this.deps.logger);
   }
 
   private async misconfigured(

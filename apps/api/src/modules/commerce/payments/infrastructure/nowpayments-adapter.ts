@@ -230,12 +230,15 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
       if (parsed.data.order_id !== request.orderId) {
         return { kind: 'UNKNOWN', code: 'nexa.order_id_mismatch' };
       }
+      const invoiceUrl = safeLink(parsed.data.invoice_url);
       return {
         kind: 'CREATED',
         invoiceId: parsed.data.id,
         orderId: parsed.data.order_id,
-        invoiceUrl: safeLink(parsed.data.invoice_url),
+        invoiceUrl,
         webInvoiceUrl: null,
+        // FIX-04: a link was sent and refused as unsafe — the fact, never the value.
+        ...(parsed.data.invoice_url != null && invoiceUrl === null ? { linkRejected: true } : {}),
         status: null,
         // Metadata only: the price the provider echoed, in cents, when it reads exactly.
         requestAmount: centsOfPriceAmount(parsed.data.price_amount),
