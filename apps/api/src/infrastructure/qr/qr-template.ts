@@ -33,6 +33,10 @@ import { encodeQrModulesPng, qrModules } from './qr-png.js';
  * - every module is an exact `scale × scale` block: nothing is resampled or stretched;
  * - the white around the code is at least `quiet` modules on every side (the remainder of
  *   the floor only adds to it), so the background never touches a finder pattern;
+ * - with a quiet zone of 0 (FIX-06) there is NO white around the code: only the code's own
+ *   `count × scale` square is painted white under its dark modules, and the remainder of the
+ *   floor is left as background. A region of exactly `count × scale` px is then the code edge
+ *   to edge. The operator chose that, knowing a scanner may find it less reliably;
  * - the code is black on white whatever the background is, so the background's colours
  *   cannot lower the contrast a camera needs.
  *
@@ -97,13 +101,22 @@ function composeModules(
   const { width, height } = background;
   const rgb = Buffer.from(background.rgb);
   const stride = width * 3;
-  // The whole region white: the quiet zone, and the remainder of the floor.
-  for (let y = template.y; y < template.y + template.size; y += 1) {
-    rgb.fill(0xff, y * stride + template.x * 3, y * stride + (template.x + template.size) * 3);
-  }
   const side = count * scale;
   const left = template.x + Math.floor((template.size - side) / 2);
   const top = template.y + Math.floor((template.size - side) / 2);
+  /*
+   * The white: with a quiet zone, the whole region — the quiet zone, and the remainder of the
+   * floor (exactly what every template drew before FIX-06, byte for byte). With none, the
+   * code's own square only, so 0 really draws no white border. Compared with `> 0`, never by
+   * truthiness, and the quiet zone is never defaulted here: 0 is a value.
+   */
+  const white =
+    template.quietZoneModules > 0
+      ? { x: template.x, y: template.y, side: template.size }
+      : { x: left, y: top, side };
+  for (let y = white.y; y < white.y + white.side; y += 1) {
+    rgb.fill(0xff, y * stride + white.x * 3, y * stride + (white.x + white.side) * 3);
+  }
   for (let row = 0; row < count; row += 1) {
     const cells = modules[row] as readonly boolean[];
     for (let col = 0; col < count; col += 1) {
@@ -164,6 +177,11 @@ export interface QrRenderOutcome {
   readonly background: { readonly width: number; readonly height: number } | null;
 }
 
+/**
+ * The plain QR (no template, or a template that could not be used): `encodeQrModulesPng`'s
+ * defaults, which no setting changes. FIX-06 widened the TEMPLATE's quiet zone to 0..16; the
+ * plain QR every tenant has always received keeps the standard's 4.
+ */
 const PLAIN_SCALE = 8;
 const PLAIN_MARGIN = 4;
 
@@ -174,7 +192,7 @@ function plain(
 ): QrRenderOutcome {
   const side = (modules.length + 2 * PLAIN_MARGIN) * PLAIN_SCALE;
   return {
-    bytes: encodeQrModulesPng(modules),
+    bytes: encodeQrModulesPng(modules, { scale: PLAIN_SCALE, margin: PLAIN_MARGIN }),
     templated: false,
     fallback,
     scale: PLAIN_SCALE,

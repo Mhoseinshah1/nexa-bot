@@ -2,7 +2,9 @@ import { inflateSync } from 'node:zlib';
 import jsQR from 'jsqr';
 import { describe, expect, it } from 'vitest';
 import { isNexaError } from '@nexa/contracts';
+import { readPngPixels } from '../support/qr-decode';
 import {
+  encodeQrModulesPng,
   encodeQrPng,
   PngQrCodeEncoder,
   QR_TEXT_MAX_LENGTH,
@@ -158,5 +160,66 @@ describe('the QR PNG encoder', () => {
     expect(() => encodeQrPng('x', { scale: 1.5 })).toThrow();
     expect(() => encodeQrPng('x', { margin: -1 })).toThrow();
     expect(() => encodeQrPng('x', { margin: 0 })).not.toThrow();
+  });
+
+  /*
+   * FIX-06 (2026-10-09): a margin of 0 is a real margin of 0 — never "unset", never the
+   * default 4. The guard against `options.margin || DEFAULT_MARGIN` and against a
+   * truthiness test anywhere between the option and the scanlines.
+   */
+  it('draws margin 0 with no white border: the first pixel row and column are the code', () => {
+    const modules = qrModules(SUBSCRIPTION_URL);
+    const count = modules.length;
+    const scale = 3;
+    const png = encodeQrModulesPng(modules, { scale, margin: 0 });
+    expect(readHeader(png).width).toBe(count * scale);
+    const image = readPngPixels(png);
+    if (image === null) throw new Error('unreadable');
+    expect(image.width).toBe(count * scale);
+    const at = (x: number, y: number) => image.rgba[(y * image.width + x) * 4] ?? -1;
+    // The top-left finder pattern's corner is dark and sits on the bitmap's own edge.
+    expect(modules[0]?.[0]).toBe(true);
+    expect(at(0, 0)).toBe(0);
+    // Every pixel of the first row and the first column is exactly its module: dark where the
+    // code is dark, never a white margin pixel standing in front of it.
+    for (let i = 0; i < count * scale; i += 1) {
+      const module = Math.floor(i / scale);
+      expect(at(i, 0), `row 0, x ${i}`).toBe(modules[0]?.[module] === true ? 0 : 255);
+      expect(at(0, i), `column 0, y ${i}`).toBe(modules[module]?.[0] === true ? 0 : 255);
+    }
+    // And the last row and column, so the code is not shifted inside an unchanged canvas.
+    const last = count * scale - 1;
+    expect(at(last, 0)).toBe(0); // the top-right finder
+    expect(at(0, last)).toBe(0); // the bottom-left finder
+  });
+
+  it('draws margin 16, and refuses 17, -1 and 1.5', () => {
+    const modules = qrModules(SUBSCRIPTION_URL);
+    const count = modules.length;
+    const png = encodeQrModulesPng(modules, { scale: 2, margin: 16 });
+    expect(readHeader(png).width).toBe((count + 32) * 2);
+    const image = readPngPixels(png);
+    if (image === null) throw new Error('unreadable');
+    const at = (x: number, y: number) => image.rgba[(y * image.width + x) * 4] ?? -1;
+    expect(at(0, 0)).toBe(255);
+    expect(at(16 * 2 - 1, 16 * 2 - 1)).toBe(255);
+    expect(at(16 * 2, 16 * 2)).toBe(0); // the finder's corner, just inside the margin
+    expect(jsQR(image.rgba, image.width, image.height)?.data).toBe(SUBSCRIPTION_URL);
+    for (const margin of [17, -1, 1.5]) {
+      try {
+        encodeQrPng('x', { margin });
+        expect.unreachable(`margin ${margin} was drawn`);
+      } catch (error) {
+        expect(isNexaError(error) && error.code === 'qr.margin_invalid', String(margin)).toBe(
+          true,
+        );
+      }
+    }
+  });
+
+  it('keeps the default plain QR at margin 4 when no margin is given', () => {
+    const modules = qrModules(SUBSCRIPTION_URL);
+    expect(readHeader(encodeQrModulesPng(modules)).width).toBe((modules.length + 8) * 8);
+    expect(readHeader(encodeQrModulesPng(modules, {})).width).toBe((modules.length + 8) * 8);
   });
 });
