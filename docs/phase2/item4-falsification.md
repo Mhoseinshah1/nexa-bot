@@ -71,6 +71,10 @@ Unit: `tests/unit/delivery-qr-template.test.ts` (U), `tests/unit/delivery-qr-con
 
 53 of 53 killed (the second round, after the review of PR #218, on `nexa_test_p2c2`).
 
+FIX-06 (2026-10-09) superseded Q-21: the quiet zone is now 0–16 whole modules, not 4–16. Its
+mutants (the bounds, `||` defaults that turn 0 into 4, the white fill at 0, migration 0239's
+CHECK) are listed in the FIX-06 commit messages and killed by the tests named there.
+
 ## History
 
 Second round (review of PR #218: caches, a 1.5 MiB cap, the downscale rule, the decoder's
