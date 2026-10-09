@@ -210,9 +210,7 @@ describe('the QR PNG encoder', () => {
         encodeQrPng('x', { margin });
         expect.unreachable(`margin ${margin} was drawn`);
       } catch (error) {
-        expect(isNexaError(error) && error.code === 'qr.margin_invalid', String(margin)).toBe(
-          true,
-        );
+        expect(isNexaError(error) && error.code === 'qr.margin_invalid', String(margin)).toBe(true);
       }
     }
   });
