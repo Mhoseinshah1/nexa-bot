@@ -269,7 +269,9 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
   }
 
   /** The dispatcher with the production readers; only the messenger is ours. */
-  function dispatcher(): CustomerNotificationService {
+  function dispatcher(
+    extra: Partial<ConstructorParameters<typeof CustomerNotificationService>[0]> = {},
+  ): CustomerNotificationService {
     const db = ctx.container.database.db;
     const wallet = new DrizzleWalletRepository(db);
     const payments = new DrizzlePaymentRepository(db);
@@ -304,6 +306,7 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
       clock: ctx.container.clock,
       scopeIsActive: async () => true,
       logger: { info: record('info'), error: record('error'), warn: record('warn') },
+      ...extra,
     });
   }
 
@@ -851,6 +854,56 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
         CUSTOMER_NOTIFICATION_LATENCY_WARN_MS,
       );
       expect(logs.filter((line) => line.level === 'warn')).toEqual([]);
+    });
+    it('counts a renewal’s slow screen-closing as pre-send work, never as the Telegram call (Codex #252)', async () => {
+      // A renewal result closes its order's payment screens first: Telegram `clearButtons`
+      // calls, made after the send stamp and before the send itself. Here they take 400 ms.
+      const operationId = ctx.container.ids.uuid();
+      await ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.customerNotifications.enqueue(
+          tenantA,
+          {
+            id: ctx.container.ids.uuid(),
+            customerId: maryam,
+            botInstanceId: BOT_A,
+            kind: 'SERVICE_RENEWED',
+            subjectId: operationId,
+          },
+          ctx.container.clock.now(),
+          tx,
+        ),
+      );
+      let closed = 0;
+      await sweep(
+        dispatcher({
+          renewals: {
+            notificationFacts: async () => ({
+              values: {},
+              serviceId: ctx.container.ids.uuid(),
+              orderId: ctx.container.ids.uuid(),
+            }),
+          },
+          orderScreens: {
+            close: async () => {
+              closed += 1;
+              await new Promise((resolve) => setTimeout(resolve, 400));
+            },
+          },
+        }),
+      );
+      expect(closed).toBe(1);
+      expect(sends).toHaveLength(1);
+      const [line] = logs.filter(
+        (one) =>
+          one.message === 'customer notification latency' && one.context.kind === 'SERVICE_RENEWED',
+      );
+      expect(line, 'no latency line for the renewal').toBeDefined();
+      // The fake Telegram answers at once: the call itself is near zero, the closing is not.
+      expect(
+        Number(line!.context.sendMs),
+        'screen-closing counted as the Telegram call',
+      ).toBeLessThan(200);
+      expect(Number(line!.context.preSendMs)).toBeGreaterThanOrEqual(390);
     });
   });
 });

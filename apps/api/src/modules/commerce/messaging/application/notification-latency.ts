@@ -34,20 +34,36 @@ export const CUSTOMER_NOTIFICATION_LATENCY_WARN_MS = 10_000;
 export interface NotificationLatency {
   /** From the producer's commit (`created_at`) to the dispatcher's send stamp. */
   readonly queuedMs: number;
-  /** The Telegram call itself: the stamp to the observed outcome. */
+  /**
+   * The send stamp to the Telegram call: the stamp's own transaction and any work the kind
+   * does first (a renewal closes its order's payment screens, one `clearButtons` each).
+   */
+  readonly preSendMs: number;
+  /** The Telegram call itself: the moment it was made to the observed outcome. */
   readonly sendMs: number;
   /** Commit to outcome. */
   readonly totalMs: number;
 }
 
+/**
+ * The breakdown of one send. `callStartedAt` is taken immediately before
+ * `messenger.send` / `sendFile`, so `sendMs` is the Telegram call and nothing else (Codex
+ * review of #252: measured from the stamp, a renewal's screen-closing calls were counted
+ * as Telegram's).
+ */
 export function notificationLatency(
   createdAt: Date,
   sendStartedAt: Date,
+  callStartedAt: Date,
   outcomeAt: Date,
 ): NotificationLatency {
-  const queuedMs = Math.max(0, sendStartedAt.getTime() - createdAt.getTime());
-  const sendMs = Math.max(0, outcomeAt.getTime() - sendStartedAt.getTime());
-  return { queuedMs, sendMs, totalMs: Math.max(0, outcomeAt.getTime() - createdAt.getTime()) };
+  const span = (from: Date, to: Date) => Math.max(0, to.getTime() - from.getTime());
+  return {
+    queuedMs: span(createdAt, sendStartedAt),
+    preSendMs: span(sendStartedAt, callStartedAt),
+    sendMs: span(callStartedAt, outcomeAt),
+    totalMs: span(createdAt, outcomeAt),
+  };
 }
 
 /**

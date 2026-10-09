@@ -130,17 +130,19 @@ describe('the customer notification lane is prompt (FIX-03)', () => {
 describe('the notification latency breakdown (FIX-03 instrumentation)', () => {
   const at = (ms: number) => new Date(Date.UTC(2026, 9, 9, 9, 37, 0) + ms);
 
-  it('splits enqueue-to-send-start from the Telegram call itself', () => {
-    expect(notificationLatency(at(0), at(1_400), at(1_650))).toEqual({
+  it('splits the queue, the pre-send work and the Telegram call itself', () => {
+    expect(notificationLatency(at(0), at(1_400), at(1_900), at(2_150))).toEqual({
       queuedMs: 1_400,
+      preSendMs: 500,
       sendMs: 250,
-      totalMs: 1_650,
+      totalMs: 2_150,
     });
   });
 
   it('never reports a negative figure from a clock that stepped back', () => {
-    expect(notificationLatency(at(2_000), at(1_000), at(500))).toEqual({
+    expect(notificationLatency(at(2_000), at(1_000), at(800), at(500))).toEqual({
       queuedMs: 0,
+      preSendMs: 0,
       sendMs: 0,
       totalMs: 0,
     });
@@ -148,7 +150,7 @@ describe('the notification latency breakdown (FIX-03 instrumentation)', () => {
 
   it('calls a first attempt slow only past the documented threshold', () => {
     const slow = CUSTOMER_NOTIFICATION_LATENCY_WARN_MS;
-    const waited = (ms: number) => ({ queuedMs: ms, sendMs: 0, totalMs: ms });
+    const waited = (ms: number) => ({ queuedMs: ms, preSendMs: 0, sendMs: 0, totalMs: ms });
     expect(notificationLatencyIsSlow(waited(slow), 0, true)).toBe(false);
     expect(notificationLatencyIsSlow(waited(slow + 1), 0, true)).toBe(true);
     // A retry after a refusal waits the lane's back-off by design: not an anomaly.

@@ -1077,6 +1077,9 @@ export class CustomerNotificationService {
         }
       }
 
+      // FIX-03: the Telegram call starts HERE — after the stamp and any screen-closing.
+      const callStartedAt = this.deps.clock.now();
+
       /*
        * HF-A7: a kind that carries a FILE goes up as one upload, its template the caption.
        * Still ONE Telegram request for one row, so the outcome below means exactly what it
@@ -1111,7 +1114,7 @@ export class CustomerNotificationService {
 
       const at = this.deps.clock.now();
       // FIX-03: where the wait went — the queue, or the Telegram call — one line per send.
-      this.observeLatency(row, sendStartedAt, at, result.outcome);
+      this.observeLatency(row, sendStartedAt, callStartedAt, at, result.outcome);
 
       /*
        * A rate limit: back on the queue, at Telegram's own time, with NO attempt spent.
@@ -1209,11 +1212,12 @@ export class CustomerNotificationService {
   private observeLatency(
     row: CustomerNotificationRecord,
     sendStartedAt: Date,
+    callStartedAt: Date,
     outcomeAt: Date,
     outcome: string,
   ): void {
     try {
-      const latency = notificationLatency(row.createdAt, sendStartedAt, outcomeAt);
+      const latency = notificationLatency(row.createdAt, sendStartedAt, callStartedAt, outcomeAt);
       const context = {
         notificationId: row.id,
         kind: row.kind,
