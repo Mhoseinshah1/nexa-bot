@@ -7,8 +7,10 @@ import {
   AUTH_ROUTES,
   COMMERCE_ERROR_CODES,
   CONTROL_ERROR_CODES,
+  CONTROL_ROUTES,
   DELIVERY_QR_ROUTES,
   PLATFORM_ERROR_CODES,
+  QR_TEMPLATE_PREVIEW_TEXT,
   SESSION_COOKIE_NAME,
   type ActorContext,
   type QrTemplate,
@@ -272,11 +274,18 @@ describe('the QR background and template (Phase 2 item 4)', () => {
     ).rejects.toMatchObject({ code: CONTROL_ERROR_CODES.INVALID_VALUE });
   });
 
-  it('refuses a quiet zone under four modules and a fractional size at the schema', async () => {
+  it('refuses a quiet zone outside 0..16 or not whole, and a fractional size, at the schema', async () => {
     await upload(gradientBackground(800, 700));
-    await expect(setTemplate({ ...TEMPLATE, quietZoneModules: 3 })).rejects.toMatchObject({
-      code: CONTROL_ERROR_CODES.INVALID_VALUE,
-    });
+    for (const quietZoneModules of [-1, 17, 1.5]) {
+      await expect(
+        setTemplate({ ...TEMPLATE, quietZoneModules }),
+        String(quietZoneModules),
+      ).rejects.toMatchObject({ code: CONTROL_ERROR_CODES.INVALID_VALUE });
+    }
+    // FIX-06: 0 and 16 are values an operator may store.
+    for (const quietZoneModules of [0, 16, 3]) {
+      expect((await setTemplate({ ...TEMPLATE, quietZoneModules })).changed).toBe(true);
+    }
     await expect(setTemplate({ ...TEMPLATE, size: 300.5 })).rejects.toMatchObject({
       code: CONTROL_ERROR_CODES.INVALID_VALUE,
     });
@@ -341,6 +350,47 @@ describe('the QR background and template (Phase 2 item 4)', () => {
     await expect(setTemplate(TEMPLATE, tenantA, observer)).rejects.toMatchObject({
       code: PLATFORM_ERROR_CODES.PERMISSION_DENIED,
     });
+  });
+
+  /*
+   * FIX-06 (2026-10-09): migration 0239 is the same rule as the registry's schema for a
+   * writer that forgets it — 0..16 whole modules, null for no template, any other key free.
+   */
+  it('migration 0239: the database refuses a stored quiet zone outside 0..16 or not whole', async () => {
+    await upload(gradientBackground(800, 700));
+    await setTemplate(TEMPLATE);
+    const write = (quiet: string) =>
+      rows(
+        sql`UPDATE setting_values
+               SET value = jsonb_set(value, '{quietZoneModules}', ${quiet}::jsonb)
+             WHERE tenant_id = ${tenantA.tenantId} AND setting_key = 'delivery.qr_template'
+         RETURNING value`,
+      );
+    for (const refused of ['-1', '17', '1.5', '"4"', 'null', 'true']) {
+      await expect(write(refused), refused).rejects.toMatchObject({
+        cause: expect.objectContaining({
+          constraint: 'setting_values_qr_template_quiet_zone_check',
+        }),
+      });
+    }
+    for (const accepted of ['0', '16', '4', '4.0']) {
+      expect(await write(accepted), accepted).toHaveLength(1);
+    }
+    // A template with no quiet zone at all is refused; clearing the template is not.
+    await expect(
+      rows(
+        sql`UPDATE setting_values SET value = value - 'quietZoneModules'
+             WHERE tenant_id = ${tenantA.tenantId} AND setting_key = 'delivery.qr_template'`,
+      ),
+    ).rejects.toMatchObject({
+      cause: expect.objectContaining({ constraint: 'setting_values_qr_template_quiet_zone_check' }),
+    });
+    expect((await setTemplate(null)).changed).toBe(true);
+    const stored = await rows<{ value: unknown }>(
+      sql`SELECT value FROM setting_values
+           WHERE tenant_id = ${tenantA.tenantId} AND setting_key = 'delivery.qr_template'`,
+    );
+    expect(stored.every((row) => row.value === null)).toBe(true);
   });
 
   it('previews a draft without storing it, under settings.view', async () => {
@@ -414,5 +464,100 @@ describe('the QR preview route', () => {
     const body = response.json<{ templated: boolean; fallback: string; pngBase64: string }>();
     expect(body).toMatchObject({ templated: false, fallback: 'NO_TEMPLATE' });
     expect(decodeQrPng(Buffer.from(body.pngBase64, 'base64'))).not.toBeNull();
+  });
+
+  /*
+   * FIX-06 (2026-10-09): a white margin of 0 end to end over HTTP — saved, read back as 0,
+   * previewed edge to edge, and delivered as the very image the preview showed. -1, 17 and
+   * 1.5 are refused at the route and leave the stored 0 alone.
+   */
+  it('saves a quiet zone of 0, reloads it as 0, previews and generates it with no margin', async () => {
+    const admin = await createAdmin(api.container, tenantA, {
+      username: 'owner-qr-zero',
+      roleKeys: ['owner'],
+      password: 'correct horse battery staple',
+    });
+    await api.container.tenantMedia.upload(tenantA, adminActorFor(admin), 'QR_BACKGROUND', {
+      mimeType: 'image/png',
+      contentBase64: gradientBackground(800, 700).toString('base64'),
+      idempotencyKey: 'qr-zero-upload',
+    });
+    const inject = (options: Record<string, unknown>) =>
+      api.app
+        .getHttpAdapter()
+        .getInstance()
+        .inject(options as never);
+    const login = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+      headers: { origin: ORIGIN },
+      payload: { username: 'owner-qr-zero', password: 'correct horse battery staple' },
+    });
+    const cookie = (login.headers['set-cookie'] as string | string[] | undefined) ?? '';
+    const token = (Array.isArray(cookie) ? cookie : [cookie])
+      .map((one) => new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(one)?.[1])
+      .find((one) => one !== undefined);
+    const headers = { origin: ORIGIN, cookie: `${SESSION_COOKIE_NAME}=${String(token)}` };
+
+    // The preview text has 41 modules: 41 × 9 px is a region the code fills edge to edge.
+    const zero: QrTemplate = { x: 100, y: 100, size: 41 * 9, quietZoneModules: 0 };
+    const saved = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${CONTROL_ROUTES.setting('delivery.qr_template')}`,
+      headers,
+      payload: { value: zero, expectedVersion: null, idempotencyKey: 'qr-zero-save' },
+    });
+    expect(saved.statusCode, saved.body).toBe(201);
+    expect(saved.json<{ changed: boolean }>().changed).toBe(true);
+
+    for (const [i, quietZoneModules] of [-1, 17, 1.5].entries()) {
+      const refused = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${CONTROL_ROUTES.setting('delivery.qr_template')}`,
+        headers,
+        payload: {
+          value: { ...zero, quietZoneModules },
+          expectedVersion: 1,
+          idempotencyKey: `qr-zero-refused-${i}`,
+        },
+      });
+      expect(refused.statusCode, String(quietZoneModules)).toBeGreaterThanOrEqual(400);
+      expect(refused.statusCode, String(quietZoneModules)).toBeLessThan(500);
+    }
+
+    const reloaded = await inject({
+      method: 'GET',
+      url: `${API_PREFIX}${CONTROL_ROUTES.settings}`,
+      headers,
+    });
+    expect(reloaded.statusCode).toBe(200);
+    const stored = reloaded
+      .json<{ settings: { key: string; value: unknown; version: number | null }[] }>()
+      .settings.find((one) => one.key === 'delivery.qr_template');
+    expect(stored).toMatchObject({ value: zero, version: 1 });
+
+    const preview = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${DELIVERY_QR_ROUTES.preview}`,
+      headers,
+      payload: { template: stored?.value },
+    });
+    expect(preview.statusCode, preview.body).toBe(200);
+    const body = preview.json<{ templated: boolean; moduleScale: number; pngBase64: string }>();
+    expect(body).toMatchObject({ templated: true, fallback: null, moduleScale: 9 });
+    const png = Buffer.from(body.pngBase64, 'base64');
+    // The region's corner is the finder's dark corner, and the pixel beside it is background.
+    expect(pixelAt(png, zero.x, zero.y)).toEqual([0, 0, 0]);
+    expect(pixelAt(png, zero.x + zero.size - 1, zero.y)).toEqual([0, 0, 0]);
+    expect(pixelAt(png, zero.x - 1, zero.y)).not.toEqual([255, 255, 255]);
+    expect(pixelAt(png, zero.x, zero.y - 1)).not.toEqual([255, 255, 255]);
+
+    // The delivery lane, reading the STORED setting, draws the very image the preview showed.
+    const delivered = await api.container.deliveryQr.render(tenantA, {
+      kind: 'PAYLOAD',
+      text: QR_TEMPLATE_PREVIEW_TEXT,
+    });
+    expect(delivered.templated).toBe(true);
+    expect(Buffer.from(delivered.bytes).equals(png)).toBe(true);
   });
 });

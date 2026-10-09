@@ -5,7 +5,10 @@ import {
   qrEffectiveModulePx,
   QR_BACKGROUND_MAX_SIDE,
   QR_BACKGROUND_MIN_SIDE,
+  QR_TEMPLATE_QUIET_ZONE_DEFAULT,
+  QR_TEMPLATE_QUIET_ZONE_MAX,
   QR_TEMPLATE_QUIET_ZONE_MIN,
+  deliveryQrPreviewRequestSchema,
   QR_TEMPLATE_REGION_MIN,
   TENANT_MEDIA_MAX_BYTES,
   TENANT_MEDIA_PURPOSES,
@@ -37,11 +40,9 @@ describe('the delivery.qr_template setting', () => {
     });
   });
 
-  it('refuses a quiet zone under four modules, a region under the minimum, and fractions', () => {
+  it('refuses a region under the minimum, and fractions', () => {
     const bad = (patch: Record<string, unknown>) =>
       parseSettingValue('delivery.qr_template', { ...TEMPLATE, ...patch }).ok;
-    expect(bad({ quietZoneModules: QR_TEMPLATE_QUIET_ZONE_MIN - 1 })).toBe(false);
-    expect(bad({ quietZoneModules: QR_TEMPLATE_QUIET_ZONE_MIN })).toBe(true);
     expect(bad({ size: QR_TEMPLATE_REGION_MIN - 1 })).toBe(false);
     expect(bad({ size: QR_TEMPLATE_REGION_MIN })).toBe(true);
     expect(bad({ size: 400.5 })).toBe(false);
@@ -49,6 +50,37 @@ describe('the delivery.qr_template setting', () => {
     expect(bad({ x: QR_BACKGROUND_MAX_SIDE + 1 })).toBe(false);
     // Width and height are one number: the region is a square, so the code cannot be stretched.
     expect(bad({ width: 400 })).toBe(false);
+  });
+
+  /*
+   * FIX-06 (2026-10-09): the white margin is the operator's choice from 0 to 16 whole
+   * modules. 0 is a real value — no margin at all — not "unset"; the default a NEW template
+   * starts from stays 4, the ISO/IEC 18004 minimum, and nothing stored changes.
+   */
+  it('accepts a quiet zone of 0..16 whole modules and refuses -1, 17 and 1.5', () => {
+    expect(QR_TEMPLATE_QUIET_ZONE_MIN).toBe(0);
+    expect(QR_TEMPLATE_QUIET_ZONE_MAX).toBe(16);
+    expect(QR_TEMPLATE_QUIET_ZONE_DEFAULT).toBe(4);
+    const accepts = (quietZoneModules: unknown) =>
+      parseSettingValue('delivery.qr_template', { ...TEMPLATE, quietZoneModules }).ok;
+    const previewAccepts = (quietZoneModules: unknown) =>
+      deliveryQrPreviewRequestSchema.safeParse({ template: { ...TEMPLATE, quietZoneModules } })
+        .success;
+    for (const check of [accepts, previewAccepts]) {
+      for (const ok of [0, 1, 3, 4, 15, 16]) expect(check(ok), String(ok)).toBe(true);
+      for (const no of [-1, 17, 1.5, 0.5, '0', null, Number.NaN]) {
+        expect(check(no), String(no)).toBe(false);
+      }
+    }
+    // A value stored before this change reads back exactly as it was.
+    for (const stored of [4, 8, 16]) {
+      expect(
+        parseSettingValue('delivery.qr_template', { ...TEMPLATE, quietZoneModules: stored }),
+      ).toEqual({ ok: true, value: { ...TEMPLATE, quietZoneModules: stored } });
+    }
+    expect(parseSettingValue('delivery.qr_template', { ...TEMPLATE, quietZoneModules: 0 })).toEqual(
+      { ok: true, value: { ...TEMPLATE, quietZoneModules: 0 } },
+    );
   });
 
   it('places the region wholly inside the background, and nowhere else', () => {
@@ -66,6 +98,10 @@ describe('the delivery.qr_template setting', () => {
     expect(qrModuleScale(400, 29, 4)).toBe(10);
     expect(qrModuleScale(370, 29, 4)).toBe(10);
     expect(qrModuleScale(369, 29, 4)).toBe(9);
+    // With no quiet zone the whole region is the code: 29 modules in 290 px is 10 px each.
+    expect(qrModuleScale(290, 29, 0)).toBe(10);
+    expect(qrModuleScale(289, 29, 0)).toBe(9);
+    expect(qrModuleScale(400, 29, 16)).toBe(6);
   });
 });
 

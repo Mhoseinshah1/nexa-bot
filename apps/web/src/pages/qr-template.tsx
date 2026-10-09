@@ -4,6 +4,7 @@ import {
   QR_BACKGROUND_MAX_SIDE,
   QR_BACKGROUND_MIN_SIDE,
   QR_TEMPLATE_MODULE_MIN_PX,
+  QR_TEMPLATE_QUIET_ZONE_DEFAULT,
   QR_TEMPLATE_QUIET_ZONE_MAX,
   QR_TEMPLATE_QUIET_ZONE_MIN,
   QR_TEMPLATE_REGION_MIN,
@@ -178,7 +179,8 @@ function centred(background: { width: number; height: number }): QrTemplate {
     x: Math.max(0, Math.floor((background.width - size) / 2)),
     y: Math.max(0, Math.floor((background.height - size) / 2)),
     size,
-    quietZoneModules: QR_TEMPLATE_QUIET_ZONE_MIN,
+    // The recommended 4, not the minimum: 0 is allowed, never a default (FIX-06).
+    quietZoneModules: QR_TEMPLATE_QUIET_ZONE_DEFAULT,
   };
 }
 
@@ -205,7 +207,8 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
     readonly basis: number | null;
   } | null>(null);
   const fields: Draft =
-    draft?.fields ?? toDraft(stored ?? { x: 0, y: 0, size: 400, quietZoneModules: 4 });
+    draft?.fields ??
+    toDraft(stored ?? { x: 0, y: 0, size: 400, quietZoneModules: QR_TEMPLATE_QUIET_ZONE_DEFAULT });
   const parsedDraft = parseDraft(fields);
 
   /*
@@ -246,6 +249,14 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
           : tooSmall
             ? t('web.qrt_too_small')
             : undefined;
+
+  /*
+   * FIX-06: under the recommended quiet zone — 0 included — a scanner may find the code less
+   * reliably. Said, never refused: the value is the operator's to choose. Compared as a
+   * number, so 0 warns rather than reading as "nothing typed".
+   */
+  const quietLow =
+    parsedDraft !== null && parsedDraft.quietZoneModules < QR_TEMPLATE_QUIET_ZONE_DEFAULT;
 
   const unsaved = draft !== null && JSON.stringify(parsedDraft) !== JSON.stringify(stored);
   useUnsavedChanges(mayEdit && unsaved);
@@ -470,7 +481,8 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
               label={t('web.qrt_quiet')}
               hint={t('web.qrt_quiet_hint')
                 .replace('{min}', String(QR_TEMPLATE_QUIET_ZONE_MIN))
-                .replace('{max}', String(QR_TEMPLATE_QUIET_ZONE_MAX))}
+                .replace('{max}', String(QR_TEMPLATE_QUIET_ZONE_MAX))
+                .replace('{recommended}', String(QR_TEMPLATE_QUIET_ZONE_DEFAULT))}
               htmlFor="qrt-quiet"
             >
               <input
@@ -483,6 +495,14 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
               />
             </Field>
           </div>
+          {quietLow && (
+            <p className="muted small" data-testid="qrt-quiet-warning">
+              {t('web.qrt_quiet_low').replace(
+                '{recommended}',
+                String(QR_TEMPLATE_QUIET_ZONE_DEFAULT),
+              )}
+            </p>
+          )}
           {fieldError !== undefined && (
             <p className="danger small" role="alert" data-testid="qrt-field-error">
               {fieldError}

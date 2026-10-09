@@ -1,5 +1,5 @@
 import { deflateSync, crc32 } from 'node:zlib';
-import { errors } from '@nexa/contracts';
+import { errors, QR_TEMPLATE_QUIET_ZONE_MAX } from '@nexa/contracts';
 import qrcode from 'qrcode-generator';
 import type { QrCodeEncoder } from '../../modules/commerce/provisioning/application/ports.js';
 
@@ -66,7 +66,10 @@ const DEFAULT_MARGIN = 4;
 export interface QrPngOptions {
   /** Pixels per module. Default 8. */
   readonly scale?: number;
-  /** Quiet zone, in modules, on every side. Default 4, the standard's minimum. */
+  /**
+   * Quiet zone, in whole modules, on every side: 0..16. Default 4, the standard's minimum.
+   * 0 is no margin at all — read with `??`, never `||`, so it is never taken for "unset".
+   */
   readonly margin?: number;
 }
 
@@ -180,10 +183,12 @@ export function encodeQrModulesPng(
   if (!Number.isInteger(scale) || scale < 1) {
     throw errors.validation('qr.scale_invalid', 'A QR scale is a positive integer.', { scale });
   }
-  if (!Number.isInteger(margin) || margin < 0) {
-    throw errors.validation('qr.margin_invalid', 'A QR margin is a non-negative integer.', {
-      margin,
-    });
+  if (!Number.isInteger(margin) || margin < 0 || margin > QR_TEMPLATE_QUIET_ZONE_MAX) {
+    throw errors.validation(
+      'qr.margin_invalid',
+      `A QR margin is a whole number of modules from 0 to ${QR_TEMPLATE_QUIET_ZONE_MAX}.`,
+      { margin, max: QR_TEMPLATE_QUIET_ZONE_MAX },
+    );
   }
 
   const { raw, size } = scanlines(modules, scale, margin);

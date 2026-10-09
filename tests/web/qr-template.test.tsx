@@ -165,7 +165,7 @@ describe('«پس‌زمینهٔ QR اشتراک»', () => {
     expect(save().disabled).toBe(true);
 
     fireEvent.change(input('qrt-size'), { target: { value: '300' } });
-    fireEvent.change(input('qrt-quiet'), { target: { value: '3' } });
+    fireEvent.change(input('qrt-quiet'), { target: { value: '17' } });
     expect(screen.getByTestId('qrt-field-error').textContent).toBe(t('web.qrt_invalid_fields'));
     expect(save().disabled).toBe(true);
 
@@ -177,6 +177,88 @@ describe('«پس‌زمینهٔ QR اشتراک»', () => {
       value: { x: 500, y: 0, size: 300, quietZoneModules: 4 },
       expectedVersion: null,
     });
+  });
+
+  /*
+   * FIX-06 (2026-10-09): the white margin is 0..16 whole modules, and 0 is a value the form
+   * accepts, previews and saves as 0 — with a warning that never blocks it.
+   */
+  it('accepts a white margin of 0: warns, previews and saves 0, never the default', async () => {
+    const calls = api({ media: MEDIA });
+    renderPage(<QrTemplateSection mayEdit />);
+    await waitFor(() =>
+      expect(screen.getByTestId('qrt-background').textContent).toContain('800 × 700'),
+    );
+    const save = () => screen.getByRole('button', { name: t('web.qrt_save') }) as HTMLButtonElement;
+    // A new template starts at the recommended 4: no warning.
+    expect(input('qrt-quiet').value).toBe('4');
+    expect(screen.queryByTestId('qrt-quiet-warning')).toBeNull();
+
+    fireEvent.change(input('qrt-x'), { target: { value: '100' } });
+    fireEvent.change(input('qrt-quiet'), { target: { value: '0' } });
+    await waitFor(() => expect(screen.queryByTestId('qrt-field-error')).toBeNull());
+    expect(screen.getByTestId('qrt-quiet-warning').textContent).toBe(
+      t('web.qrt_quiet_low').replace('{recommended}', '4'),
+    );
+    expect(save().disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.qrt_preview_draft') }));
+    await waitFor(() =>
+      expect(
+        posts(calls, '/delivery-qr/preview').some(
+          (call) =>
+            (call.body as { template: { quietZoneModules: number } | null }).template
+              ?.quietZoneModules === 0,
+        ),
+      ).toBe(true),
+    );
+    // The draft's preview answered (it re-reads the background); 0 is still accepted.
+    await waitFor(() => expect(save().disabled).toBe(false));
+    expect(screen.queryByTestId('qrt-field-error')).toBeNull();
+
+    fireEvent.click(save());
+    await waitFor(() => expect(posts(calls, '/settings/delivery.qr_template')).toHaveLength(1));
+    expect(posts(calls, '/settings/delivery.qr_template')[0]?.body).toMatchObject({
+      value: { x: 100, y: 0, size: 400, quietZoneModules: 0 },
+    });
+  });
+
+  it('accepts 16 and Persian ۰, refuses -1, 17 and 1.5 before saving', async () => {
+    api({ media: MEDIA });
+    renderPage(<QrTemplateSection mayEdit />);
+    await waitFor(() =>
+      expect(screen.getByTestId('qrt-background').textContent).toContain('800 × 700'),
+    );
+    const save = () => screen.getByRole('button', { name: t('web.qrt_save') }) as HTMLButtonElement;
+    fireEvent.change(input('qrt-x'), { target: { value: '100' } });
+    for (const refused of ['-1', '17', '1.5', '']) {
+      fireEvent.change(input('qrt-quiet'), { target: { value: refused } });
+      expect(screen.getByTestId('qrt-field-error').textContent, refused).toBe(
+        t('web.qrt_invalid_fields'),
+      );
+      expect(save().disabled, refused).toBe(true);
+      expect(screen.queryByTestId('qrt-quiet-warning'), refused).toBeNull();
+    }
+    for (const accepted of ['16', '1', '۰']) {
+      fireEvent.change(input('qrt-quiet'), { target: { value: accepted } });
+      await waitFor(() => expect(screen.queryByTestId('qrt-field-error'), accepted).toBeNull());
+      expect(save().disabled, accepted).toBe(false);
+    }
+    expect(screen.getByTestId('qrt-quiet-warning')).toBeTruthy();
+    fireEvent.change(input('qrt-quiet'), { target: { value: '16' } });
+    expect(screen.queryByTestId('qrt-quiet-warning')).toBeNull();
+  });
+
+  it('shows a stored 0 as 0, and «وسط تصویر» proposes the recommended 4', async () => {
+    api({ media: MEDIA, template: { ...TEMPLATE, quietZoneModules: 0 }, version: 2 });
+    renderPage(<QrTemplateSection mayEdit />);
+    await waitFor(() => expect(input('qrt-quiet').value).toBe('0'));
+    expect(screen.getByTestId('qrt-quiet-warning')).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByTestId('qrt-background').textContent).toContain('800 × 700'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.qrt_centre') }));
+    expect(input('qrt-quiet').value).toBe('4');
   });
 
   it('refuses a region whose modules Telegram would shrink under 4 px, before saving', async () => {
