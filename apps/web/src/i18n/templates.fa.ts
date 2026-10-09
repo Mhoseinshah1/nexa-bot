@@ -471,6 +471,32 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   walletAfter: 'موجودی کیف پول پس از واریز',
   walletBalance: 'موجودی کیف پول',
   walletBefore: 'موجودی کیف پول پیش از واریز',
+  // --- FIX-04 opsevents: the payment-link failure message's facts. ---
+  gateway: 'درگاه پرداخت',
+  telegramUserId: 'شناسهٔ عددی تلگرام کاربر',
+  trackingCode: 'کد پیگیری پرداخت',
+  providerOrderId: 'شناسهٔ سفارش نزد درگاه',
+  phase: 'مرحلهٔ خطا',
+  causeNoLink: 'علت: لینک پرداخت برنگشت',
+  causeMalformedLink: 'علت: لینک پرداخت نامعتبر',
+  causeNoCard: 'علت: کارت مقصد برنگشت',
+  causeBadRequest: 'علت: درخواست پذیرفته نشد',
+  causeUnauthorized: 'علت: احراز هویت رد شد (401)',
+  causeForbidden: 'علت: دسترسی رد شد (403)',
+  causeConfiguration: 'علت: تنظیمات درگاه',
+  causeRateLimited: 'علت: محدودیت تعداد درخواست (429)',
+  causeProviderError: 'علت: خطای سمت درگاه (5xx)',
+  causeBadResponse: 'علت: پاسخ ناخوانا',
+  causeTimeout: 'علت: پایان مهلت پاسخ',
+  causeUnreachable: 'علت: عدم اتصال به درگاه',
+  causeUnknown: 'علت: نتیجهٔ نامشخص',
+  httpStatus: 'وضعیت HTTP درگاه',
+  retryable: 'نشانهٔ «تلاش بعدی ممکن است موفق شود»',
+  notRetryable: 'نشانهٔ «تا رفع مشکل موفق نمی‌شود»',
+  finalState: 'وضعیت نهایی تلاش',
+  unknownState: 'وضعیت نامشخص تلاش',
+  eventId: 'شناسهٔ رخداد',
+  // --- end FIX-04 opsevents ---
 };
 
 /**
@@ -3402,4 +3428,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'اطلاع هدیهٔ حجم یا زمان',
     'فقط پس از اعمال قطعی هدیهٔ گروهی حجم یا زمان روی پنل، و اگر مدیر اطلاع‌رسانی را انتخاب کرده بود، فرستاده می‌شود.',
   ],
+  // --- FIX-04 opsevents ---
+  'ops.notification.payment_link_failed': [
+    'گزارش خطای ساخت لینک پرداخت',
+    'وقتی درخواست ساخت پیش‌فاکتور یا لینک پرداخت از درگاه بی‌نتیجه بماند به تاپیک پرداخت‌های گروه گزارش‌ها فرستاده می‌شود؛ فقط یکی از خطوط «علت» نمایش داده می‌شود.',
+  ],
+  // --- end FIX-04 opsevents ---
 };

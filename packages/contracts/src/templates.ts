@@ -454,7 +454,9 @@ export const TEMPLATES = [
       {
         token: 'severity',
         type: 'STRING',
-        description: 'DEBUG, INFO, WARN, ERROR or CRITICAL.',
+        description:
+          'The class the event is presented as (FIX-05): SECURITY, CRITICAL, ERROR, WARN or ' +
+          'INFO — the code\u2019s own class from `OPS_ERROR_EVENTS`, else its stored severity.',
         required: true,
         repeatable: false,
       },
@@ -524,6 +526,264 @@ export const TEMPLATES = [
         token: 'correlationId',
         type: 'STRING',
         description: 'The correlation id of the transaction that recorded the event.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  // FIX-04 — a payment link could not be created. Addressed to the payments topic.
+  {
+    key: 'ops.notification.payment_link_failed',
+    description:
+      'FIX-04: a gateway create-invoice / payment-link request produced no link a customer can ' +
+      'use. One message per gateway and failure kind per aggregation window (the counter says ' +
+      'how many), or per payment when the outcome is unknown. Exactly ONE of the `cause*` lines ' +
+      'is filled — the one naming why — and the renderer drops the rest, so each line can be ' +
+      'reworded alone. `retryable` and `notRetryable` are flags: present (empty) selects the ' +
+      'line. Never a credential, a link, a card number or a provider body.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'gateway',
+        type: 'STRING',
+        description: 'The gateway, as its machine name (`TONPAYS`, `NOWPAYMENTS`, …).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'method',
+        type: 'STRING',
+        description: 'The payment method (`GATEWAY`).',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'telegramUserId',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id. Never a name or a phone number.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trackingCode',
+        type: 'STRING',
+        description: 'The payment\u2019s public tracking code, as the customer was shown it.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'paymentId',
+        type: 'STRING',
+        description: 'The internal payment id.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'orderId',
+        type: 'STRING',
+        description: 'The order the payment is for; absent for a wallet top-up.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'providerOrderId',
+        type: 'STRING',
+        description: 'The order id Nexa sent the provider for this attempt.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'providerInvoiceId',
+        type: 'STRING',
+        description: 'The provider\u2019s invoice id, when it made one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'phase',
+        type: 'STRING',
+        description: 'The phase that failed: `PAYMENT_LINK_CREATE`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'causeNoLink',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider created the invoice and returned no payment link. The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeMalformedLink',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider returned a link that is not a safe https URL. The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeNoCard',
+        type: 'STRING',
+        description:
+          'Selects the line for: a card-transfer provider created the invoice and returned no card. The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeBadRequest',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider refused the request (a 4xx other than 401, 403 or 429). The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeUnauthorized',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider refused the credential (401). The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeForbidden',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider refused access (403). The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeConfiguration',
+        type: 'STRING',
+        description:
+          'Selects the line for: the installation\u2019s own gateway configuration is incomplete or was refused. The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeRateLimited',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider\u2019s rate limit, after every allowed attempt. The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeProviderError',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider answered 5xx. The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeBadResponse',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider\u2019s answer could not be read (HTML, wrong shape, empty). The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeTimeout',
+        type: 'STRING',
+        description:
+          'Selects the line for: no answer within the timeout. The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeUnreachable',
+        type: 'STRING',
+        description:
+          'Selects the line for: the provider could not be reached (DNS, refused connection, TLS). The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'causeUnknown',
+        type: 'STRING',
+        description:
+          'Selects the line for: the outcome is unknown: the provider may have made an invoice. The sanitized machine error code.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'httpStatus',
+        type: 'STRING',
+        description: 'The provider\u2019s HTTP status, when it answered with one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'retryable',
+        type: 'STRING',
+        description: 'Flag: a later attempt may succeed without anybody changing anything.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'notRetryable',
+        type: 'STRING',
+        description: 'Flag: it will keep failing until somebody fixes something.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'finalState',
+        type: 'STRING',
+        description: 'Set when the outcome is FINAL: the attempt\u2019s creation state.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'unknownState',
+        type: 'STRING',
+        description: 'Set when the outcome is UNKNOWN: the attempt\u2019s creation state.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'occurrences',
+        type: 'NUMBER',
+        description: 'How many times this failure was recorded in its window.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'eventId',
+        type: 'STRING',
+        description: 'The operational event id, to find the row in the Web Admin.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'correlationId',
+        type: 'STRING',
+        description: 'The correlation id of the transaction that recorded it.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'tenantId',
+        type: 'STRING',
+        description: 'The tenant the event belongs to.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'botInstanceId',
+        type: 'STRING',
+        description: 'The bot the customer was using, when known.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When this occurrence was recorded.',
         required: false,
         repeatable: false,
       },
