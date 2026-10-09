@@ -269,6 +269,9 @@ describe('FIX-02: the manual transfer and custom-instruction invoices', () => {
 
   it.each([
     ['bot.payment.received_for_review', {}],
+    // Codex review of #253: both EDIT the invoice, so both must keep its code.
+    ['bot.payment.receipt_prompt', { minutes: 10 }],
+    ['bot.payment.cancel_confirm', {}],
     ['bot.payment.expired', {}],
     ['bot.payment.rejected', { reason: 'رسید ناخوانا' }],
     ['bot.wallet.topup_credited', { amount: total }],

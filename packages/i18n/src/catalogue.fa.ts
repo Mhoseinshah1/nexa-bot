@@ -802,7 +802,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.received_for_review':
     '{icon:info} اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.receipt_prompt':
-    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.',
+    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.\n\nکد پیگیری پرداخت: {reference}',
   /*
    * A10 (pre-support brief §10, which supersedes owner spec §2.4 "state 3"): the ONE new
    * message the first receipt of a payment sends, word for word the brief's copy, with a
@@ -822,7 +822,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'مهلت این سفارش برای پرداخت کارت به کارت کافی نیست. لطفاً دوباره سفارش دهید.',
   'bot.payment.cancel_button': 'انصراف از پرداخت',
   'bot.payment.cancel_confirm':
-    'آیا از انصراف این پرداخت مطمئن هستید؟ کد پیگیری فعلی باطل می‌شود و اگر پس از آن مبلغی واریز کنید، قابل پیگیری نخواهد بود. این کار برگشت‌پذیر نیست.',
+    'آیا از انصراف این پرداخت مطمئن هستید؟ کد پیگیری فعلی باطل می‌شود و اگر پس از آن مبلغی واریز کنید، قابل پیگیری نخواهد بود. این کار برگشت‌پذیر نیست.\n\nکد پیگیری پرداخت: {reference}',
+  /* FIX-02: appended to an old tenant override of an invoice that lacks {reference}. */
+  'bot.payment.tracking_code_line': 'کد پیگیری پرداخت: {reference}',
   'bot.payment.cancel_confirm_button': 'بله، انصراف بده',
   'bot.payment.cancelled':
     '{icon:warning} پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',

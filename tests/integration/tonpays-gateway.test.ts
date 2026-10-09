@@ -1240,6 +1240,36 @@ describe('TonPays, through the one settlement path', () => {
       expect((await codeOf(paymentId)).code).toBe(code);
     });
 
+    it('FIX-02: a tenant override saved before the code was required still shows it, once; the stored body is not rewritten', async () => {
+      await enableTonPays();
+      // Saved through the service (which now requires {reference}), then set back to the shape
+      // an override stored before FIX-02 has: no {reference} at all.
+      await ctx.container.templatesService.set(tenantA, owner, {
+        key: 'bot.payment.gateway_invoice',
+        body: 'فاکتور قدیمی: {total} تا {expiresAt} — {reference}',
+        expectedVersion: null,
+        expectedRevision: null,
+        idempotencyKey: 'fix02-override',
+      });
+      const oldBody = 'فاکتور قدیمی: {total} تا {expiresAt}';
+      await ctx.container.database.db.execute(
+        sql`UPDATE template_overrides SET body = ${oldBody}
+             WHERE tenant_id = ${tenantA.tenantId} AND template_key = 'bot.payment.gateway_invoice'`,
+      );
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const { code } = await codeOf(paymentId);
+      await pass();
+      await tap(`gc:${paymentId}`);
+      expect(lastText()).toContain('فاکتور قدیمی:');
+      expect(lastText().split(`کد پیگیری پرداخت: ${code}`)).toHaveLength(2);
+      const [stored] = await rows<{ body: string }>(
+        sql`SELECT body FROM template_overrides
+             WHERE tenant_id = ${tenantA.tenantId} AND template_key = 'bot.payment.gateway_invoice'`,
+      );
+      expect(stored?.body).toBe(oldBody);
+    });
+
     it('FIX-02: an operator finds the payment by the code the customer quotes, and by an old suffixed reference', async () => {
       await enableTonPays();
       const orderId = await draftOrder();

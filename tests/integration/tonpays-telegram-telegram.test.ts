@@ -301,6 +301,28 @@ describe('TonPays Telegram in the bot', () => {
     expect(markupOf(review)).not.toContain('gk:');
   });
 
+  it('FIX-02: a photo after the receipt window’s deadline is answered closed WITH the payment’s code', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    const [stored] = await rows<{ reference: string }>(
+      sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
+    );
+    const code = stored!.reference.split(':')[0]!;
+    // The card invoice already carries it, before anything is paid.
+    expect(String(lastOn(message)?.['text'])).toContain(`کد پیگیری پرداخت: ${code}`);
+    await tapOn(message, `gr:${paymentId}`);
+    // The window's own deadline passes before the photo arrives.
+    await ctx.container.database.db.execute(
+      sql`UPDATE gateway_receipt_captures SET opened_at = now() - interval '2 minutes', expires_at = now() - interval '1 minute'
+           WHERE payment_id = ${paymentId}`,
+    );
+    const before = telegram.sent.length;
+    const late = await sendPhoto('ph-late');
+    expect(late.replyKey).toBe('bot.payment.gateway_closed');
+    const answer = telegram.sent.slice(before).at(-1);
+    expect(String(answer?.['text'])).toContain(`کد پیگیری پرداخت: ${code}`);
+    expect(String(answer?.['text'])).not.toContain(stored!.reference);
+  });
+
   it('the card change: gk: redraws the message as "changing", and the worker edits the new card in', async () => {
     const { paymentId, message } = await cardOnScreen();
     clock.shift(61_000);

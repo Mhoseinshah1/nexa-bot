@@ -4242,7 +4242,7 @@ export interface BotRuntimeDeps {
    */
   readonly gatewayReceipts?: Pick<
     GatewayReceiptCaptureService,
-    'openReceiptCapture' | 'requestCardChange' | 'receivePhoto'
+    'openReceiptCapture' | 'requestCardChange' | 'receivePhoto' | 'openCaptureFor'
   >;
   readonly screens: CustomerScreenComposer;
   readonly counters: CustomerCountersReader;
@@ -15138,6 +15138,16 @@ export class BotRuntime {
     file: InboundReceiptFile,
   ): Promise<PendingReply | null> {
     if (this.deps.gatewayReceipts === undefined) return null;
+    /*
+     * FIX-02 (Codex review of #253): the window's payment, read BEFORE the photo can close it,
+     * so a photo that arrives after the window's deadline is answered with the code the
+     * invoice carried. Only a read; `receivePhoto` decides everything, again, under its lock.
+     */
+    const window = await this.deps.gatewayReceipts.openCaptureFor(
+      scope,
+      botInstanceId,
+      customer.id,
+    );
     const result = await this.deps.gatewayReceipts.receivePhoto(scope, actor, {
       customerId: customer.id,
       botInstanceId,
@@ -15162,8 +15172,28 @@ export class BotRuntime {
       case 'TOO_LARGE':
         return reply('bot.payment.gateway_receipt_too_large');
       case 'CLOSED':
-        return reply('bot.payment.gateway_closed');
+        return {
+          ...reply('bot.payment.gateway_closed'),
+          values: await this.ownedTrackingCode(scope, customer, botInstanceId, window?.paymentId),
+        };
     }
+  }
+
+  /**
+   * FIX-02: `{ reference }` for a gateway attempt that is THIS customer's, in THIS bot — the
+   * ownership check `attemptFor` makes — else `{}`, whose optional line is then dropped. A
+   * payment that is not theirs is never named (TPTG-19).
+   */
+  private async ownedTrackingCode(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    paymentId: string | undefined,
+  ): Promise<TemplateValues> {
+    if (paymentId === undefined) return {};
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    if (view === null || view.invoice.botInstanceId !== botInstanceId) return {};
+    return { reference: paymentTrackingCode(view.payment.reference) };
   }
 
   /**
@@ -15321,7 +15351,8 @@ export class BotRuntime {
     }
     return {
       key: 'bot.payment.cancel_confirm',
-      values: {},
+      // FIX-02: the question replaces the invoice; the code it carried stays on the message.
+      values: { reference: paymentTrackingCode(payment.reference) },
       buttons: [
         {
           ...inlineLabel('payment.cancel_confirm'),
@@ -15419,7 +15450,11 @@ export class BotRuntime {
          * whole render, which the webhook then swallowed: the claim committed and the
          * customer was told nothing at all after tapping the button.
          */
-        values: { minutes: receiptWindow.minutes },
+        values: {
+          minutes: receiptWindow.minutes,
+          // FIX-02: this edits the invoice — the code it carried stays on the message.
+          reference: paymentTrackingCode(payment.reference),
+        },
         /*
          * Owner spec §2.4, state 2: the receipt is asked for, with no card details and no
          * copy buttons. The withdrawal stays — the invoice it replaced offered it, and a

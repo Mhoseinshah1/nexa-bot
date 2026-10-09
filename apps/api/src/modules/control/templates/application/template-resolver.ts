@@ -1,7 +1,10 @@
 import {
   CONTROL_ERROR_CODES,
   errors,
+  placeholderTokensIn,
   templateDefinition,
+  TRACKING_CODE_LINE_KEY,
+  TRACKING_CODE_LINE_KEYS,
   validateTemplateValues,
   type ScopeContext,
   type TemplateKey,
@@ -124,10 +127,43 @@ export class TemplateResolver {
     }
 
     const resolved = await this.resolve(scope, key, locale, tx);
+    const body = await this.withTrackingCodeLine(scope, key, resolved, values, locale, tx);
     // The tenant's zone and calendar, resolved HERE so every DATETIME in the message
     // is shown the same way, and so a caller cannot render one for a tenant with a
     // presentation that belongs to another.
     const presentation = await this.presentation.presentationFor(scope, tx);
-    return this.catalogue.render(definition, resolved.body, values, locale, presentation);
+    return this.catalogue.render(definition, body, values, locale, presentation);
+  }
+
+  /**
+   * FIX-02 (Codex review of #253): an invoice must carry the payment's tracking code, and a
+   * tenant override of one of `TRACKING_CODE_LINE_KEYS` saved before the code was required
+   * cannot. The override is NOT rewritten — bodies are stored raw and edited only by their
+   * administrator — so its rendering gets `bot.payment.tracking_code_line` (itself a
+   * template, resolved like any other) appended as its last paragraph.
+   *
+   * Only an OVERRIDE, only of those keys, only when its body has no `{reference}` of its own,
+   * and only when a code is in hand: a default body already carries the line, so the code
+   * is never shown twice. The line's `{reference}` is declared by every one of those keys,
+   * so the joined body renders under the key's own declaration.
+   */
+  private async withTrackingCodeLine(
+    scope: ScopeContext,
+    key: TemplateKey,
+    resolved: ResolvedTemplate,
+    values: TemplateValues,
+    locale: Locale,
+    tx: unknown,
+  ): Promise<string> {
+    if (
+      resolved.source !== 'TENANT' ||
+      !(TRACKING_CODE_LINE_KEYS as readonly string[]).includes(key) ||
+      typeof values['reference'] !== 'string' ||
+      placeholderTokensIn(resolved.body).includes('reference')
+    ) {
+      return resolved.body;
+    }
+    const line = await this.resolve(scope, TRACKING_CODE_LINE_KEY, locale, tx);
+    return `${resolved.body}\n\n${line.body}`;
   }
 }
