@@ -536,8 +536,11 @@ export const TEMPLATES = [
     key: 'ops.notification.payment_link_failed',
     description:
       'FIX-04: a gateway create-invoice / payment-link request produced no link a customer can ' +
-      'use. One message per gateway and failure kind per aggregation window (the counter says ' +
-      'how many), or per payment when the outcome is unknown. Exactly ONE of the `cause*` lines ' +
+      'use. One message per gateway and failure kind per aggregation window, or per payment ' +
+      'when the outcome is unknown. It is the FIRST occurrence: repeats increment the row and ' +
+      'send nothing, so the message carries no counter (one queued at the first occurrence ' +
+      'would read 1 for ever) and points at the notification centre, which has the live one. ' +
+      'Exactly ONE of the `cause*` lines ' +
       'is filled — the one naming why — and the renderer drops the rest, so each line can be ' +
       'reworded alone. `retryable` and `notRetryable` are flags: present (empty) selects the ' +
       'line. Never a credential, a link, a card number or a provider body.',
@@ -742,13 +745,6 @@ export const TEMPLATES = [
         token: 'unknownState',
         type: 'STRING',
         description: 'Set when the outcome is UNKNOWN: the attempt\u2019s creation state.',
-        required: false,
-        repeatable: false,
-      },
-      {
-        token: 'occurrences',
-        type: 'NUMBER',
-        description: 'How many times this failure was recorded in its window.',
         required: false,
         repeatable: false,
       },
