@@ -1,0 +1,156 @@
+# Payment settlement latency (FIX-03, 2026-10-09)
+
+The owner's report: «پرداخت شما توسط درگاه تأیید شد» arrived at 09:37, and the message
+with the amount and the tracking code at about 09:39. This document traces the path from a
+gateway's answer to the customer's final message, names the delay, and records what was
+changed and what remains outside our control.
+
+## 1. Root cause
+
+The two messages come from two different lanes, and the second one waited for a timer.
+
+1. **«تأیید شد» is an edit, made in the settling pass.** The gateway lane
+   (`GatewayPaymentService.runOnce`, every `GATEWAY_PAYMENT_INTERVAL_MS` = 3 s) asks the
+   provider, hands an approval to `PaymentService.confirmGatewayPayment`, and — once that
+   transaction has committed — calls `refreshScreens`, which edits the customer's invoice
+   message into `bot.payment.gateway_confirmed`. Telegram shows an edited message with the
+   time it was first SENT (the invoice), not the time of the edit, so «09:37» is the
+   invoice's time, not the approval's.
+2. **The amount and the tracking code are a notification row.** The same transaction that
+   credits the wallet (`confirmAndCredit`: the payment `CONFIRMED`, the `TOPUP_GATEWAY` or
+   `TOPUP_RECEIPT` entry, the gift, the outbox events) enqueues `WALLET_TOPUP_CREDITED`,
+   due at once (`next_attempt_at` NULL). The ledger and the row commit together; nothing in
+   the money path waits.
+3. **The row then waited for the customer notification lane's next pass.**
+   `CustomerNotificationLoop` ran every `CUSTOMER_NOTIFICATION_INTERVAL_MS` = **60 s**, so a
+   credit committed just after a pass was sent up to a minute later — uniformly 0–60 s,
+   30 s on average, plus the pass's own work.
+
+Measured against a real database with the production loop (§4): 60.03–60.06 s from the
+credit's commit to the send when the commit falls right after a pass. Read on a phone that
+shows minutes, a 60 s wait after an approval made in the minute after the invoice was sent
+is «09:37» then «09:39».
+
+Not the cause, checked: the outbox relay (1 s, and the customer's message does not go
+through it), the operator notification dispatcher (2 s, operator messages only), the
+provisioner (5 s, orders only), the ledger posting (same transaction as the approval), and
+retries (a healthy send is a first attempt).
+
+## 2. The path, per rail
+
+Each row is one stage; the right-hand column is what schedules the next stage.
+
+| Stage                      | TonPays / TonPays Telegram / NOWPayments / CentralPay                                                                                                                                                                                                                                                                                                                                      | Telegram Stars                                                                            | Card to card (manual receipt)                     |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| 1. Approval reaches us     | The lane's inquiry: first at `FIRST_INQUIRY_DELAY_MS` (20 s) after the invoice is created, then `inquiryBackoffMs` (40 s, 80 s, 160 s, then 300 s), one last ask 15 s before the deadline. A webhook (NOWPayments IPN, TonPays callback), a CentralPay browser return or the customer's «بررسی وضعیت» tap brings it forward, no sooner than `INQUIRY_MIN_SPACING_MS` (5 s) after the last. | Telegram's `successful_payment` update, recorded on arrival.                              | An operator approves the receipt.                 |
+| 2. Authoritative decision  | The provider's own inquiry (only the inquiry decides; a webhook is a hint).                                                                                                                                                                                                                                                                                                                | The recorded charge (Telegram's authenticated update).                                    | The operator's decision.                          |
+| 3. State + ledger + notice | One transaction: `confirmGatewayPayment` → `confirmAndCredit` (top-up) or `confirmAndSettle` (order).                                                                                                                                                                                                                                                                                      | Same, via `settleRecorded`, straight after the update; the worker's pass is the backstop. | Same, via `confirmManualTransfer`.                |
+| 4. «Approved» on screen    | `refreshScreens`, in the same lane pass, after the commit (edit in place).                                                                                                                                                                                                                                                                                                                 | —                                                                                         | The review card is answered in place.             |
+| 5. Final message           | `WALLET_TOPUP_CREDITED`, sent by the customer notification lane's next pass.                                                                                                                                                                                                                                                                                                               | Same.                                                                                     | Same (`RECEIPT_CREDITED_TO_WALLET` for a credit). |
+
+Order payments are not top-ups and are never announced as one: `confirmAndSettle` marks the
+order `PAID` and writes `OrderSettled`; the provisioner (`PROVISIONER_TICK_MS`, 5 s) creates
+the service and delivers it in the same tick. Renewal and add-on results go through the
+customer notification lane and gain the same promptness as a top-up.
+
+## 3. The change
+
+- `CUSTOMER_NOTIFICATION_INTERVAL_MS`: 60 s → **2 s**. Shorter than the gateway lane's 3 s
+  so the final message follows the approval it confirms rather than trailing it by a
+  gateway interval. An idle pass is the stranded-send reap, the lapsed-subject read, the
+  quiet-hours release and the claim — a handful of indexed statements against partial
+  indexes built for them, the same order of work the gateway lane already does every 3 s.
+- `CUSTOMER_NOTIFICATION_STALE_AFTER_MS` = 180 s: the worker's readiness tolerance for this
+  lane, stated in time. It was three one-minute intervals; three two-second intervals would
+  call a one-minute send backlog a stalled loop and fail a rollout.
+- Unchanged, deliberately: the retry back-off and the attempt ceiling, the lease, the
+  429 rule (the later of Telegram's `retry_after` and the lane's own 60 s back-off, WP20),
+  the rule that an unknown send is never repeated, the claim's ordering (immediate kinds
+  before reminders), quiet hours, and every money rule. No nudge across processes was
+  added: the approval can commit in the API (Stars, an operator's approval) or the worker
+  (the gateway lane), and the short pass covers both with no new mechanism.
+- Not consolidated: the «approved» edit stays. It is the invoice message's own truthful end
+  (it removes the pay button) and edits in place as before; the amount and the tracking
+  code are a separate fact read from the ledger at send time. They now arrive seconds apart.
+
+A defect found by the crash case and fixed in the same change: a worker that died between
+the settlement's commit and the lane's `recordOutcome` left the approval scheduled against
+a `CONFIRMED` payment, and the restarted pass recorded it as a `LATE_COMPLETION` — the
+operator was told a paid invoice could no longer be settled, and the financial log carried
+a late approval, for money credited exactly once. `settleApproved` now hands a confirmed
+payment to the settlement path, which answers `ALREADY_CONFIRMED` under the payment's lock;
+every other ineligible payment is still a late completion.
+
+## 4. Measured
+
+`tests/integration/payment-settlement-latency.test.ts`, the production loop and real
+timers against a real PostgreSQL, the loop started at the commit (its worst phase: the first
+pass is a whole interval away). Time from the credit's commit to the send handed to Telegram:
+
+| Rail                  | Before (60 s cadence) | After (2 s cadence), three runs |
+| --------------------- | --------------------- | ------------------------------- |
+| Card to card (manual) | 60 057 ms             | 2 041 / 2 041 / 2 034 ms        |
+| TonPays (full lane)   | 60 045 ms             | 2 056 / 2 053 / 2 038 ms        |
+| NOWPayments           | 60 037 ms             | 2 031 / 2 021 / 2 033 ms        |
+| CentralPay            | 60 027 ms             | 2 028 / 2 039 / 2 026 ms        |
+| Telegram Stars        | 60 037 ms             | 2 032 / 2 050 / 2 072 ms        |
+
+These are the WORST phase — a commit just after a pass. Over a uniformly random phase the
+wait is half an interval on average: about 30 s before and about 1 s after, with the pass's
+own work (20–70 ms here, a local database and a fake Telegram) on top. The "before" column
+was measured by reverting the one constant; the per-rail tests time out at the old cadence.
+
+A real Telegram call adds its own round trip (`sendMs` in the log line, §5), and a real
+provider adds its confirmation time before any of this starts (§6).
+
+## 5. Instrumentation and threshold
+
+Every send logs one line, `customer notification latency`, with `queuedMs` (commit to the
+send stamp), `sendMs` (the Telegram call) and `totalMs`, the kind, the subject and the
+outcome (`notification-latency.ts`). A first attempt of an immediate kind whose `queuedMs`
+exceeds `CUSTOMER_NOTIFICATION_LATENCY_WARN_MS` = **10 s** is logged at `warn` as
+`customer notification waited longer than expected`, with the threshold.
+
+The threshold is five intervals: the healthy worst case is one interval (2 s) plus the
+pass's work (well under a second here), and ten seconds leaves room for a busy database and
+a small backlog while still flagging every one-minute wait the old cadence produced. A
+reminder held by quiet hours and a retry after a refusal wait by design and are not judged;
+a send after a 429 is — that wait is Telegram's, and it should be seen.
+
+The persisted breakdown, from existing columns, for one payment:
+
+```sql
+SELECT p.reference,
+       gi.last_webhook_at,                           -- the provider's hint, if any
+       gi.last_inquiry_at,                           -- the inquiry that decided
+       p.confirmed_at,                               -- ledger + notice committed (one tx)
+       gi.outcome_at,                                -- the lane recorded its outcome
+       n.created_at   AS notice_queued_at,           -- = confirmed_at
+       n.resolved_at  AS notice_sent_at,             -- Telegram's answer observed
+       n.state, n.attempts,
+       n.resolved_at - p.confirmed_at AS commit_to_message
+  FROM payments p
+  LEFT JOIN gateway_invoices gi ON gi.payment_id = p.id AND gi.tenant_id = p.tenant_id
+  LEFT JOIN customer_notifications n
+         ON n.tenant_id = p.tenant_id AND n.subject_id = p.id::text
+        AND n.kind IN ('WALLET_TOPUP_CREDITED', 'RECEIPT_CREDITED_TO_WALLET')
+ WHERE p.tenant_id = $1 AND p.id = $2;
+```
+
+## 6. What stays external, and is reported rather than hidden
+
+- **The provider's confirmation time.** Without a webhook, an approval is seen at the next
+  scheduled inquiry (20 s, then 40 s, 80 s, 160 s, 300 s). A webhook or the customer's
+  status tap brings it to within 5 s. That is before the «approved» message and before the
+  credit; this change does not touch it, because asking a provider more often spends the
+  tenant's call budget and TonPays' own rate limit.
+- **Telegram 429.** A rate-limited send is retried at the later of `retry_after` and 60 s,
+  with no attempt spent. The send after it is logged at `warn` with its `queuedMs`.
+- **An unknown Telegram outcome.** `UNCONFIRMED`, never resent: the customer may already
+  have the message. The credit is unaffected.
+- **A stopped or restarting worker.** Rows wait; a send stamped by a dead process is
+  resolved `UNCONFIRMED`, never repeated; everything else is sent by the next pass after
+  the restart.
+
+No figure here is a promise of "the same second": the bound is one lane interval plus the
+pass's work on a healthy installation.
