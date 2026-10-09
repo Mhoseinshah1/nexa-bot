@@ -357,6 +357,49 @@ describe('FIX-04: a payment link failure, classified once', () => {
     });
   }
 
+  it('tells a refused key on a 401 from one on a 403, through each adapter that reads one (Codex P2 #251)', async () => {
+    const { NowPaymentsAdapter } =
+      await import('../../apps/api/src/modules/commerce/payments/infrastructure/nowpayments-adapter');
+    const { CentralPayAdapter } =
+      await import('../../apps/api/src/modules/commerce/payments/infrastructure/centralpay-adapter');
+    const answer = (status: number, body: unknown) => async () =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      });
+    for (const [status, kind] of [
+      [401, 'UNAUTHORIZED'],
+      [403, 'FORBIDDEN'],
+      [400, 'BAD_REQUEST'],
+    ] as const) {
+      const now = new NowPaymentsAdapter({
+        fetch: answer(status, {
+          code: status === 400 ? 'AMOUNT_MINIMAL_ERROR' : 'INVALID_API_KEY',
+        }),
+      } as never);
+      const outcome = await now.createInvoice('k', {
+        orderId: 'NPORDER00000000000001',
+        amount: 1000n,
+        callbackUrl: null,
+        buyerChatId: null,
+        presentation: null,
+      });
+      const failure = paymentLinkFailureOf(outcome, 'LINK', { rateLimitIsFinal: true });
+      expect(failure, `NOWPayments ${String(status)}`).toMatchObject({ kind, httpStatus: status });
+    }
+    const central = new CentralPayAdapter({ fetch: answer(400, { success: false }) } as never);
+    const refused = await central.createInvoice('k', {
+      orderId: '1234567890',
+      amount: 150_000n,
+      callbackUrl: 'https://bot.example.com/r',
+      buyerChatId: null,
+      presentation: null,
+      providerUserId: '1987654321',
+    });
+    expect(refused).toMatchObject({ kind: 'REFUSED', httpStatus: 400 });
+    expect(paymentLinkFailureOf(refused, 'LINK', { rateLimitIsFinal: true })?.httpStatus).toBe(400);
+  });
+
   it('reports nothing for a usable invoice, or for a rate limit that will be asked again', () => {
     expect(
       paymentLinkFailureOf(created({ invoiceUrl: 'https://t.me/x' }), 'LINK', {

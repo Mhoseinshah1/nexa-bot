@@ -254,15 +254,19 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
     if (raw.status >= 500) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
     if (raw.status === 429) return { kind: 'RATE_LIMITED', code: 'http.429' };
     const code = errorCodeOf(raw.body);
+    // FIX-04 (Codex P2 on #251): a readable refusal's code is the provider's word and its
+    // status is metadata the operations log needs — `INVALID_API_KEY` on a 401 is told
+    // apart from one on a 403 only by it. Nothing decides on it.
     if (refusesKey(raw.status)) {
       return {
         kind: 'REFUSED',
         code: code ?? `http.${String(raw.status)}`,
         configuration: true,
+        httpStatus: raw.status,
       };
     }
     if (code === null) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
-    return { kind: 'REFUSED', code, configuration: false };
+    return { kind: 'REFUSED', code, configuration: false, httpStatus: raw.status };
   }
 
   async inquire(
