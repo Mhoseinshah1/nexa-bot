@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { LIST_SEARCH_MAX_LENGTH, classifyListSearch, type ListSearchKind } from '@nexa/contracts';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, type Route } from '../router';
@@ -22,7 +22,7 @@ import { Button, Field, IconButton, Input } from './kit';
  * applied value — derived, not initialised — because the sidebar link re-renders a page with
  * an empty query instead of remounting it (`users.tsx` records that defect).
  *
- * With `autoApply` (UX batch 02, issue 13; `/users` today) the draft is applied by itself
+ * With `autoApply` (UX batch 02, issue 13; every list since FIX-01) the draft is applied by itself
  * once it has been still for `LIST_SEARCH_DEBOUNCE_MS`: typing or pasting searches, and a
  * burst of keystrokes is ONE navigation and so one request. Enter and the button still apply
  * at once. What keeps an older answer from replacing a newer one is not here: the applied
@@ -63,6 +63,88 @@ function resetSearchDrafts(): void {
   for (const reset of draftResets) reset();
 }
 
+/**
+ * The debounce itself, for every search box in the admin (FIX-01, 2026-10-09).
+ *
+ * `ListSearchBox` uses it, and so does every page whose search is not that box — a title
+ * search, a reseller search, a ticket's customer field, the audit log's filters, the
+ * customer picker. One implementation, so "typing searches by itself" means the same thing
+ * on every list: one wait, one navigation per burst, nothing while an input method is
+ * composing, and nothing carried into a list the operator navigated to some other way.
+ *
+ * - `wanted` is what applying would put in force now and `applied` what is in force, each
+ *   as one comparable string (a multi-field form passes a signature of its fields). Nothing
+ *   is scheduled while they agree, so an applied search issues no second request.
+ * - `ready` is the page's own gate: false while the draft is invalid (an incomplete id, a
+ *   reversed date range) or the list cannot answer. An invalid draft is never applied by
+ *   itself; Enter still reports the problem as before.
+ * - `edited()` is called from the inputs' `onChange`. The apply runs only while the route
+ *   is still the one the draft was last edited under: a navigation the box did not make —
+ *   a sidebar link, a status chip — cancels the pending apply instead of carrying
+ *   half-typed text into the new list a moment later.
+ * - `composition` goes on each input: an input method (Persian, among others) fires
+ *   `change` with a half-composed word, and a pause mid-composition must not search for it.
+ *
+ * What keeps an older answer from replacing a newer one is not here: the applied text is
+ * part of each page's query key, so a slow response for a superseded term lands in that
+ * term's cache entry and is never drawn under the current one.
+ */
+export function useDebouncedApply({
+  wanted,
+  applied,
+  routeKey,
+  ready = true,
+  apply,
+}: {
+  wanted: string;
+  applied: string;
+  /** The whole URL the page sits under (`listRouteKey`). */
+  routeKey: string;
+  ready?: boolean;
+  apply: () => void;
+}): {
+  edited: () => void;
+  composition: { onCompositionStart: () => void; onCompositionEnd: () => void };
+} {
+  /*
+   * The route the draft was last edited under, or `null` once nothing is armed. It is
+   * DISARMED the moment the route moves away, not merely compared: an operator who typed
+   * on `/products`, pressed a status chip inside the wait and later came back to
+   * `/products` would otherwise see the cancelled draft apply itself with no new edit
+   * (Codex P2 on #249). Only `edited()` arms it again.
+   */
+  const [editedAt, setEditedAt] = useState<string | null>(null);
+  if (editedAt !== null && editedAt !== routeKey) setEditedAt(null);
+  const [composing, setComposing] = useState(false);
+  /*
+   * The latest `apply`, read when the timer fires. It is not a dependency of the timer:
+   * a page re-renders while its list is fetching, and a timer restarted by every render
+   * would never fire while a request was in flight.
+   */
+  const latest = useRef(apply);
+  useEffect(() => {
+    latest.current = apply;
+  });
+  const typedHere = editedAt === routeKey;
+  useEffect(() => {
+    if (!ready || composing || !typedHere || wanted === applied) return undefined;
+    const timer = setTimeout(() => latest.current(), LIST_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [ready, composing, typedHere, wanted, applied, routeKey]);
+  return {
+    edited: () => setEditedAt(routeKey),
+    composition: {
+      onCompositionStart: () => setComposing(true),
+      onCompositionEnd: () => setComposing(false),
+    },
+  };
+}
+
+/** The key `useDebouncedApply` compares: the path and the whole query string. */
+export function listRouteKey(route: Route): string {
+  return `${route.path}?${route.query.toString()}`;
+}
+
 export function ListSearchBox({
   route,
   id,
@@ -86,27 +168,17 @@ export function ListSearchBox({
   autoApply?: boolean;
 }) {
   const applied = appliedListSearch(route);
-  /** The whole URL the box sits under, so the draft knows which one it was typed against. */
-  const routeKey = `${route.path}?${route.query.toString()}`;
   /*
-   * `at` is the route the draft was last edited under. The automatic apply runs only while
-   * the route is still that one: a navigation the box did not make — the sidebar «کاربران»
-   * link, a status chip — cancels a pending apply instead of carrying the half-typed text
-   * into the new list a moment later (which would defeat the link meant to reset it). The
-   * text stays in the box, unapplied, exactly as before auto-search existed; the next
+   * The draft FOLLOWS the applied value: it is kept only while `applied` is the value it
+   * was typed against. Navigating away from the current route — the sidebar «کاربران»
+   * link, a status chip — cancels a pending automatic apply (`useDebouncedApply`); the
+   * text stays in the box, unapplied, exactly as before auto-search existed, and the next
    * keystroke or Enter applies it under the new route.
    */
-  const [draft, setDraft] = useState<{ applied: string; text: string; at: string }>({
+  const [draft, setDraft] = useState<{ applied: string; text: string }>({
     applied,
     text: applied,
-    at: routeKey,
   });
-  /*
-   * An input method (Persian, among others) fires `change` with a half-composed word; a
-   * pause mid-composition must not search for it. Nothing is scheduled while composing, and
-   * the end of the composition schedules the finished word.
-   */
-  const [composing, setComposing] = useState(false);
   const text = draft.applied === applied ? draft.text : applied;
   const term = classifyListSearch(text);
   /** What applying the draft would put in the URL: trimmed, and `''` for "no search". */
@@ -136,22 +208,22 @@ export function ListSearchBox({
   };
 
   /*
-   * The debounce: every change of the draft restarts the wait; nothing is scheduled while
-   * the draft already reads as the applied search, while composing, or once the route has
-   * moved away from the one the draft was typed under (see `at`). Any of those changing
-   * clears the pending timer — which is also why Enter, by changing `applied`, cancels it.
-   * Emptying the box applies "no search", which sends no `q` at all.
+   * The debounce (`useDebouncedApply`): every change of the draft restarts the wait;
+   * nothing is scheduled while the draft already reads as the applied search, while
+   * composing, or once the route has moved away from the one the draft was typed under.
+   * Enter, by changing `applied`, cancels it. Emptying the box applies "no search", which
+   * sends no `q` at all.
    */
-  const typedHere = draft.at === routeKey;
-  useEffect(() => {
-    if (!autoApply || hidden || composing || !typedHere || wanted === applied) return undefined;
-    const timer = setTimeout(() => commit(wanted), LIST_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-    // `commit` closes over this render's `route`, which `routeKey` stands for in the list.
-  }, [autoApply, hidden, composing, typedHere, wanted, applied, routeKey]);
+  const debounce = useDebouncedApply({
+    wanted,
+    applied,
+    routeKey: listRouteKey(route),
+    ready: autoApply && !hidden,
+    apply: () => commit(wanted),
+  });
 
   const clear = () => {
-    setDraft({ applied, text: '', at: routeKey });
+    setDraft({ applied, text: '' });
     navigate(null);
   };
 
@@ -174,9 +246,11 @@ export function ListSearchBox({
           type="search"
           maxLength={LIST_SEARCH_MAX_LENGTH}
           value={text}
-          onChange={(event) => setDraft({ applied, text: event.target.value, at: routeKey })}
-          onCompositionStart={() => setComposing(true)}
-          onCompositionEnd={() => setComposing(false)}
+          onChange={(event) => {
+            setDraft({ applied, text: event.target.value });
+            debounce.edited();
+          }}
+          {...debounce.composition}
         />
       </Field>
       {term !== null && (

@@ -69,6 +69,7 @@ import {
   Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { FormSection, SaveBar, SectionNav, revealField } from './editor-layout';
 
 /**
@@ -379,6 +380,24 @@ export function ProductsPage({
     setQuery(route, 'title', draftTitle === '' ? null : draftTitle);
   };
 
+  /*
+   * FIX-01: typing or pasting searches by itself, debounced, as on /users. The automatic
+   * apply sends the trimmed title and records it as the draft's own signature, so the URL
+   * catching up does not reset the box under the caret (`ListSearchBox` records why).
+   * The cursor trail is keyed by the title, so a new title starts at the first page.
+   */
+  const wantedTitle = draftTitle.trim();
+  const debounce = useDebouncedApply({
+    wanted: wantedTitle,
+    applied: appliedTitle,
+    routeKey: listRouteKey(route),
+    ready: mayRequest(products, denied),
+    apply: () => {
+      setDraft({ signature: wantedTitle, title: draftTitle });
+      setQuery(route, 'title', wantedTitle === '' ? null : wantedTitle);
+    },
+  });
+
   const columns: readonly Column<ProductSummaryResponse>[] = [
     {
       key: 'title',
@@ -501,9 +520,11 @@ export function ProductsPage({
                 value={draftTitle}
                 maxLength={PRODUCT_TITLE_MAX_LENGTH}
                 placeholder={t('web.products_search_title_hint')}
-                onChange={(event) =>
-                  setDraft({ signature: appliedTitle, title: event.target.value })
-                }
+                onChange={(event) => {
+                  setDraft({ signature: appliedTitle, title: event.target.value });
+                  debounce.edited();
+                }}
+                {...debounce.composition}
               />
             </div>
             <button type="submit" className="btn primary sm">

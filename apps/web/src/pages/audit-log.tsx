@@ -15,6 +15,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
 import { mayRequest } from '../view-state';
+import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { dayEnd, dayStart } from './tickets';
 import {
   Badge,
@@ -234,18 +235,55 @@ export function AuditLogPage({
   const filtering = signature !== '{}';
   const requestable = mayRequest(log, denied);
 
+  const navigateTo = (next: Draft) => {
+    const value = (text: string) => (text === '' ? null : text);
+    setQueries(route, [
+      ['actor', value(next.actor)],
+      ['action', value(next.action)],
+      ['entityId', value(next.entityId)],
+      ['customerId', value(next.customerId)],
+      ['from', value(next.fromDay)],
+      ['to', value(next.toDay)],
+    ]);
+  };
+  /** The draft as applying it would put it in the URL: every field trimmed. */
+  const wanted: Draft = {
+    actor: draft.actor.trim(),
+    action: draft.action.trim(),
+    entityId: draft.entityId.trim(),
+    customerId: draft.customerId.trim(),
+    fromDay: draft.fromDay.trim(),
+    toDay: draft.toDay.trim(),
+  };
   const apply = (event: FormEvent) => {
     event.preventDefault();
     if (blocked) return;
-    const value = (text: string) => (text.trim() === '' ? null : text.trim());
-    setQueries(route, [
-      ['actor', value(draft.actor)],
-      ['action', value(draft.action)],
-      ['entityId', value(draft.entityId)],
-      ['customerId', value(draft.customerId)],
-      ['from', value(draft.fromDay)],
-      ['to', value(draft.toDay)],
-    ]);
+    navigateTo(wanted);
+  };
+
+  /*
+   * FIX-01: the typed filters apply themselves, debounced, as the /users search does —
+   * Enter and «اعمال فیلتر» still apply at once. A draft with a problem (an action that
+   * is not a code, a customer id that is not one, an entity id without its type, a reversed
+   * range) is never applied by itself: it waits, with its error under the field. The
+   * automatic apply records the trimmed draft as its own signature, so the URL catching up
+   * keeps what the operator typed under the caret. The cursor trail is keyed by the
+   * filters, so a new filter starts at the newest page.
+   */
+  const wantedSignature = JSON.stringify(wanted);
+  const debounce = useDebouncedApply({
+    wanted: wantedSignature,
+    applied: appliedSignature,
+    routeKey: listRouteKey(route),
+    ready: requestable && !blocked,
+    apply: () => {
+      setDraftState({ signature: wantedSignature, draft });
+      navigateTo(wanted);
+    },
+  });
+  const editField = (patch: Partial<Draft>) => {
+    edit(patch);
+    debounce.edited();
   };
   const clear = () =>
     setQueries(
@@ -384,7 +422,8 @@ export function AuditLogPage({
               className="input sm"
               dir="ltr"
               value={draft.actor}
-              onChange={(event) => edit({ actor: event.target.value })}
+              onChange={(event) => editField({ actor: event.target.value })}
+              {...debounce.composition}
             />
           </Field>
           <Field label={t('web.audit_filter_actor_type')} htmlFor="audit-actor-type" compact>
@@ -414,7 +453,8 @@ export function AuditLogPage({
               className="input sm"
               dir="ltr"
               value={draft.action}
-              onChange={(event) => edit({ action: event.target.value })}
+              onChange={(event) => editField({ action: event.target.value })}
+              {...debounce.composition}
             />
           </Field>
           <Field label={t('web.audit_filter_entity_type')} htmlFor="audit-entity-type" compact>
@@ -447,7 +487,8 @@ export function AuditLogPage({
               className="input sm"
               dir="ltr"
               value={draft.entityId}
-              onChange={(event) => edit({ entityId: event.target.value })}
+              onChange={(event) => editField({ entityId: event.target.value })}
+              {...debounce.composition}
             />
           </Field>
           <Field
@@ -461,7 +502,8 @@ export function AuditLogPage({
               className="input sm"
               dir="ltr"
               value={draft.customerId}
-              onChange={(event) => edit({ customerId: event.target.value })}
+              onChange={(event) => editField({ customerId: event.target.value })}
+              {...debounce.composition}
             />
           </Field>
           <Field label={t('web.audit_filter_result')} htmlFor="audit-result" compact>
@@ -485,7 +527,7 @@ export function AuditLogPage({
               className="input sm"
               type="date"
               value={draft.fromDay}
-              onChange={(event) => edit({ fromDay: event.target.value })}
+              onChange={(event) => editField({ fromDay: event.target.value })}
             />
           </Field>
           <Field
@@ -499,7 +541,7 @@ export function AuditLogPage({
               className="input sm"
               type="date"
               value={draft.toDay}
-              onChange={(event) => edit({ toDay: event.target.value })}
+              onChange={(event) => editField({ toDay: event.target.value })}
             />
           </Field>
           <div className="audit-filter-actions">

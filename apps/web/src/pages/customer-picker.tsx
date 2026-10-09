@@ -5,6 +5,7 @@ import { fetchCustomers } from '../api/client';
 import { t } from '../i18n/web.fa';
 import { Banner, Button, Field, Ltr } from '../ui/kit';
 import { messageFor } from './settings';
+import { useDebouncedApply } from '../ui/list-search';
 import { displayName, StatusBadge } from './customer-parts';
 
 /**
@@ -52,6 +53,19 @@ export function CustomerPicker({
     queryFn: () => fetchCustomers({ q: applied, limit: CUSTOMER_PICKER_LIMIT }),
     enabled: maySearch && applied !== '',
   });
+  /*
+   * FIX-01: typing or pasting searches by itself, debounced, as the customer list's own box
+   * does — Enter and the button still search at once. The picker is not in the URL, so it
+   * names no route; the term is part of the query key, so a slower answer for an older
+   * term is never drawn under the newer one. Emptying the box withdraws the results.
+   */
+  const debounce = useDebouncedApply({
+    wanted: draft.trim(),
+    applied,
+    routeKey: 'customer-picker',
+    ready: maySearch,
+    apply: () => setApplied(draft.trim()),
+  });
 
   if (!maySearch) {
     return (
@@ -84,7 +98,11 @@ export function CustomerPicker({
           maxLength={64}
           autoComplete="off"
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            debounce.edited();
+          }}
+          {...debounce.composition}
           onKeyDown={onKeyDown}
         />
         <Button size="sm" icon="search" disabled={draft.trim() === ''} onClick={search}>
