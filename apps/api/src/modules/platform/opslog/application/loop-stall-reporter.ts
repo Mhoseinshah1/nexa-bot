@@ -39,6 +39,12 @@ export interface LoopStatus {
  */
 export class LoopStallReporter {
   private readonly recordedAt = new Map<string, number>();
+  /**
+   * Stalls another process left open, found by the startup check, that this process has not
+   * yet managed to close. Kept until the recovery is RECORDED (Codex P2 on #251): marking
+   * them handled when found meant one failed write left the condition open for good.
+   */
+  private readonly inherited = new Set<string>();
   private startupChecked = false;
   private running = false;
 
@@ -97,19 +103,19 @@ export class LoopStallReporter {
     // Recoveries: the ones this process opened, and — once, on its first observation —
     // any another process left open for a loop that is fresh here.
     const fresh = loops.filter((loop) => !loop.stalled).map((loop) => loop.name);
-    let toClose = fresh.filter((name) => this.recordedAt.has(name));
     if (!this.startupChecked) {
-      const inherited: string[] = [];
+      const found: string[] = [];
       for (const name of fresh) {
         if (this.recordedAt.has(name)) continue;
         const open = await this.deps.conditions.openConditions(scope, [
           loopStallConditionKey(name),
         ]);
-        if (open.includes(JOB_LOOP_STALLED_CODE)) inherited.push(name);
+        if (open.includes(JOB_LOOP_STALLED_CODE)) found.push(name);
       }
+      for (const name of found) this.inherited.add(name);
       this.startupChecked = true;
-      toClose = [...toClose, ...inherited];
     }
+    const toClose = fresh.filter((name) => this.recordedAt.has(name) || this.inherited.has(name));
     for (const name of toClose) {
       const recorded = await recordQuietly(
         this.deps.recorder,
@@ -124,7 +130,25 @@ export class LoopStallReporter {
         },
         this.deps.logger,
       );
-      if (recorded !== null) this.recordedAt.delete(name);
+      if (recorded !== null) {
+        this.recordedAt.delete(name);
+        this.inherited.delete(name);
+      }
     }
   }
+}
+
+/**
+ * What the reporter is told about each loop the heartbeat knows (Codex P2 on #251).
+ *
+ * EVERY loop, enabled or not. A disabled loop is never stalled — the heartbeat does not
+ * consult it, and its freshness thunk is never called here either — but it IS reported, as
+ * not stalled, so a stall that opened while it ran is closed once an operator switches it
+ * off. Passing only enabled loops left such a condition open for ever.
+ */
+export function loopStatusesForReporting(
+  loops: readonly (readonly [name: string, enabled: boolean, ...rest: unknown[]])[],
+  stalled: readonly string[],
+): LoopStatus[] {
+  return loops.map(([name, enabled]) => ({ name, stalled: enabled && stalled.includes(name) }));
 }

@@ -6,7 +6,10 @@ import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { stalledLoops, type LoopHealth } from './infrastructure/lifecycle/loop-health.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
-import { LoopStallReporter } from './modules/platform/opslog/application/loop-stall-reporter.js';
+import {
+  LoopStallReporter,
+  loopStatusesForReporting,
+} from './modules/platform/opslog/application/loop-stall-reporter.js';
 import { DrizzleOperationalConditionReader } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
 
 /**
@@ -188,11 +191,8 @@ async function main(): Promise<void> {
       ];
       const stalled = stalledLoops(loops);
       // Not awaited, and it never throws: reporting must not slow or fail the heartbeat.
-      void loopStalls.observe(
-        loops
-          .filter(([, enabled]) => enabled)
-          .map(([name]) => ({ name, stalled: stalled.includes(name) })),
-      );
+      // Every loop, disabled ones as not stalled, so switching one off closes its condition.
+      void loopStalls.observe(loopStatusesForReporting(loops, stalled));
       if (stalled.length > 0) {
         // Named, because "the worker is unhealthy" sends an operator looking at
         // the whole process when one loop is the answer.

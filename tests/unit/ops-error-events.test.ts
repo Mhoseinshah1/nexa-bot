@@ -43,6 +43,7 @@ import {
   LOOP_STALL_RERECORD_MS,
   LoopStallReporter,
   loopStallConditionKey,
+  loopStatusesForReporting,
 } from '../../apps/api/src/modules/platform/opslog/application/loop-stall-reporter';
 import {
   GATEWAY_CREATE_UNKNOWN_EVENT_CODE,
@@ -818,6 +819,66 @@ describe('a stalled worker loop is a condition in the operations log', () => {
     ]);
     expect(events.map((event) => [event.code, event.recoversDedupeKey])).toEqual([
       [JOB_LOOP_RECOVERED_CODE, loopStallConditionKey('fx-refresh')],
+    ]);
+  });
+
+  it('keeps an inherited stall pending until its recovery is actually recorded (Codex P2 #251)', async () => {
+    let failNext = true;
+    const events: OperationalEventInput[] = [];
+    const reporter = new LoopStallReporter({
+      recorder: {
+        record: async (_scope: unknown, event: OperationalEventInput) => {
+          if (failNext) {
+            failNext = false;
+            throw new Error('operations log unavailable');
+          }
+          events.push(event);
+          return {} as never;
+        },
+      },
+      conditions: {
+        openConditions: async (_scope: TenantContext, keys: readonly string[]) =>
+          keys.includes(loopStallConditionKey('fx-refresh')) ? [JOB_LOOP_STALLED_CODE] : [],
+      },
+      scope: () => tenant,
+      clock: { now: () => AT },
+      logger: { warn: vi.fn() },
+    });
+    await reporter.observe([{ name: 'fx-refresh', stalled: false }]);
+    expect(events).toEqual([]);
+    await reporter.observe([{ name: 'fx-refresh', stalled: false }]);
+    expect(events.map((event) => [event.code, event.recoversDedupeKey])).toEqual([
+      [JOB_LOOP_RECOVERED_CODE, loopStallConditionKey('fx-refresh')],
+    ]);
+    await reporter.observe([{ name: 'fx-refresh', stalled: false }]);
+    expect(events).toHaveLength(1);
+  });
+
+  it('closes a stall when its loop is switched off, without ever calling it stalled (Codex P2 #251)', async () => {
+    const isFresh = vi.fn(() => false);
+    const statuses = loopStatusesForReporting(
+      [
+        ['relay', false, isFresh],
+        ['gateway-payments', true, () => true],
+        ['broadcasts', true, () => false],
+      ],
+      ['broadcasts'],
+    );
+    expect(statuses).toEqual([
+      { name: 'relay', stalled: false },
+      { name: 'gateway-payments', stalled: false },
+      { name: 'broadcasts', stalled: true },
+    ]);
+    // A disabled loop's freshness is never consulted.
+    expect(isFresh).not.toHaveBeenCalled();
+
+    const { reporter, events } = reporterWith();
+    await reporter.observe([{ name: 'relay', stalled: true }]);
+    // The operator switches the relay off: it is reported as not stalled, and closes.
+    await reporter.observe(loopStatusesForReporting([['relay', false, isFresh]], []));
+    expect(events.map((event) => event.code)).toEqual([
+      JOB_LOOP_STALLED_CODE,
+      JOB_LOOP_RECOVERED_CODE,
     ]);
   });
 
