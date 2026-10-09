@@ -71,6 +71,7 @@ export * from './appearance.js';
 export * from './payment.js';
 export * from './payment-accounts.js';
 export * from './payment-gateways.js';
+export * from './payment-tracking.js';
 export * from './gateway-invoices.js';
 export * from './tonpays.js';
 export * from './tonpays-telegram.js';

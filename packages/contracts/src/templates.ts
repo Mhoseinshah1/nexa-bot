@@ -8609,6 +8609,15 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [
       {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'payable',
         type: 'MONEY',
         description:
@@ -8631,7 +8640,17 @@ export const TEMPLATES = [
     description:
       'NOWPayments: the payment needs a person — the provider reported an amount that does not match the invoice (a partial payment), or the confirmation window ended without a final answer. Nothing has failed and nothing was settled; the operator is reconciling it. It must tell the customer not to pay again, and never says failed or closed.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   /*
    * CentralPay (`docs/centralpay-gateway-audit.md` §5.8). None of these says paid until the
@@ -8656,7 +8675,17 @@ export const TEMPLATES = [
     description:
       'CentralPay: the payment needs a person — CentralPay’s verify reported an amount, a customer or a reference that does not match this payment. Nothing has failed and nothing was settled; the operator is reconciling it. It must tell the customer not to pay again, and never says failed or closed.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   /*
    * Package A — Telegram Stars (`docs/package-a-telegram-stars-audit.md`). A Star is never
@@ -8676,6 +8705,15 @@ export const TEMPLATES = [
       'The Telegram Stars invoice summary for an ORDER with no gateway fee: the amount in the sales currency, the Stars asked for, and the deadline. The invoice itself arrives as its own Telegram message. It must say the payment counts only once Telegram confirms it.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
       {
         token: 'payable',
         type: 'MONEY',
@@ -8705,6 +8743,15 @@ export const TEMPLATES = [
       'The Telegram Stars invoice summary for an ORDER whose route charges a customer fee: the order amount, the fee, the payable, the Stars and the deadline.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
       {
         token: 'principal',
         type: 'MONEY',
@@ -8750,6 +8797,15 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [
       {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
+      {
         token: 'payable',
         type: 'MONEY',
         description: 'Principal plus fee, in the sales currency, from the snapshot.',
@@ -8778,6 +8834,15 @@ export const TEMPLATES = [
       'The Telegram Stars invoice summary for a wallet TOP-UP whose route charges a customer fee: the top-up amount, the fee, the payable, the Stars and the deadline. It must say the fee is not credited to the wallet.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
       {
         token: 'principal',
         type: 'MONEY',
@@ -8874,7 +8939,17 @@ export const TEMPLATES = [
       'so it says the link will appear here; the check button stays as a fallback. It must ' +
       'not say anything was paid or charged.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.gateway_invoice',
@@ -8884,6 +8959,15 @@ export const TEMPLATES = [
       'must say that a payment counts only once the gateway has confirmed it.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
       {
         token: 'total',
         type: 'MONEY',
@@ -8906,6 +8990,15 @@ export const TEMPLATES = [
       'The external gateway invoice for an ORDER whose route charges a customer fee (WP18): the order amount, the gateway fee and the payable, as three lines. Used only when the snapshotted fee is above zero.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
       {
         token: 'principal',
         type: 'MONEY',
@@ -8943,6 +9036,15 @@ export const TEMPLATES = [
       'The external gateway invoice for a WALLET TOP-UP whose route charges a customer fee (WP18): the top-up amount the wallet receives, the gateway fee and the payable. Used only when the snapshotted fee is above zero.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
       {
         token: 'principal',
         type: 'MONEY',
@@ -8996,7 +9098,17 @@ export const TEMPLATES = [
       'The gateway’s inquiry confirmed the payment and it has been recorded. For an order, ' +
       'delivery follows separately; for a top-up, the wallet is credited.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.gateway_failed',
@@ -9005,7 +9117,17 @@ export const TEMPLATES = [
       'notification lane and shown on a check. Says nothing was recorded from this attempt ' +
       'and that the customer may pay again; it never says an order was cancelled.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.gateway_unavailable',
@@ -9013,7 +9135,17 @@ export const TEMPLATES = [
       'The gateway cannot be used right now because of the installation’s own configuration ' +
       '(or the gateway account). Never phrased as the customer’s payment failing.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.gateway_unknown',
@@ -9021,7 +9153,17 @@ export const TEMPLATES = [
       'The gateway’s answer to creating the invoice was lost, so no payment link can be ' +
       'shown for this attempt. Nothing is recorded as paid; the customer may start again.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   /*
    * F3 (round N): the gateway answered that it created the invoice, but returned no link a
@@ -9035,7 +9177,17 @@ export const TEMPLATES = [
       'opened, so it cannot be paid from here. Nothing is recorded as paid; the customer may ' +
       'start again, which opens a new attempt rather than handing this one back.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.gateway_closed',
@@ -9043,7 +9195,17 @@ export const TEMPLATES = [
       'This attempt can no longer be paid: its deadline passed or it was closed. The order, ' +
       'when there is one, is not cancelled by this; the customer may start a new payment.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   /*
    * TonPays Telegram (`TONPAYS_TELEGRAM`, `docs/tonpays-telegram-gateway-audit.md` §8, §9.6).
@@ -9057,6 +9219,15 @@ export const TEMPLATES = [
       'The TonPays Telegram card-to-card invoice (`docs/tonpays-telegram-gateway-audit.md` §8.1): the payable from Nexa’s snapshot, the provider’s transfer figure when it differs, the payee card and the deadline, with the receipt, change-card and check buttons beneath. It must say a payment counts only once TonPays has confirmed it, and never that anything was paid.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'never the stored reference itself. The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
       {
         token: 'principal',
         type: 'MONEY',
@@ -9119,6 +9290,15 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [
       {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'payable',
         type: 'MONEY',
         description:
@@ -9142,6 +9322,15 @@ export const TEMPLATES = [
       'TonPays Telegram: TonPays did not accept the last image as a receipt (or it could not be sent), so the customer is asked to send a clear photo again before the deadline. The card is shown again.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
       {
         token: 'payable',
         type: 'MONEY',
@@ -9181,6 +9370,15 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [
       {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'payable',
         type: 'MONEY',
         description:
@@ -9205,6 +9403,15 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [
       {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'payable',
         type: 'MONEY',
         description:
@@ -9227,7 +9434,17 @@ export const TEMPLATES = [
     description:
       'TonPays Telegram: TonPays reported the invoice created but sent no card to transfer to, so it cannot be paid from here. Nothing is recorded as paid; starting again opens a new attempt.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.gateway_in_review',
@@ -9235,6 +9452,15 @@ export const TEMPLATES = [
       'TonPays Telegram, owner decision of 2026-10-01: TonPays acknowledged the customer’s receipt before the deadline and is reviewing it. Shows the payable and the end of the review window. It invites no new payment, no new receipt and no card change, and never says paid, failed or closed.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
       {
         token: 'payable',
         type: 'MONEY',
@@ -9258,7 +9484,17 @@ export const TEMPLATES = [
     description:
       'TonPays Telegram: the review window ended without a trustworthy answer from TonPays. The outcome is not confirmed yet and nothing has failed; the payment is being checked by the operator. It must tell the customer not to pay again, and never says failed or closed.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.gateway_receipt_button',
