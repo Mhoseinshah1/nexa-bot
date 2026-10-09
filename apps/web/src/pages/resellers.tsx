@@ -57,6 +57,7 @@ import {
   Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { SaveBar, revealField } from './editor-layout';
 import {
   ResellerBalanceCard,
@@ -325,6 +326,24 @@ export function ResellersPage({
     setQueries(route, [['search', draft.value.trim() === '' ? null : draft.value.trim()]]);
   };
 
+  /*
+   * FIX-01: typing or pasting searches by itself, debounced, as on /users. The automatic
+   * apply records the trimmed value as the draft's own `applied`, so the URL catching up
+   * keeps what the operator typed under the caret. The trail is keyed by the search, so a
+   * new search starts at the first page.
+   */
+  const wanted = draft.value.trim();
+  const debounce = useDebouncedApply({
+    wanted,
+    applied,
+    routeKey: listRouteKey(route),
+    ready: mayRequest(resellers, denied),
+    apply: () => {
+      setDraft({ applied: wanted, value: draft.value });
+      setQueries(route, [['search', wanted === '' ? null : wanted]]);
+    },
+  });
+
   const columns: readonly Column<ResellerSummaryResponse>[] = [
     {
       key: 'reseller',
@@ -451,7 +470,11 @@ export function ResellersPage({
                 value={draft.value}
                 maxLength={64}
                 placeholder={t('web.resellers_search_hint')}
-                onChange={(event) => setDraft({ applied, value: event.target.value })}
+                onChange={(event) => {
+                  setDraft({ applied, value: event.target.value });
+                  debounce.edited();
+                }}
+                {...debounce.composition}
               />
             </div>
             <Button type="submit" size="sm" variant="primary">
