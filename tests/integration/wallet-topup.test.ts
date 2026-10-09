@@ -8,6 +8,7 @@ import {
   type CorrelationId,
   type PaymentId,
   type UserId,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import type { PaymentRepository } from '../../apps/api/src/modules/commerce/payments/application/ports';
 import type { TransactionScope } from '../../apps/api/src/infrastructure/persistence/unit-of-work';
@@ -1013,7 +1014,7 @@ describe('a customer topping up their wallet', () => {
       expect(lane.sends.map((one) => [one.templateKey, one.values])).toEqual([
         [
           'bot.wallet.topup_credited',
-          { amount: money(500_000n, 'IRT'), reference: payment.reference },
+          { amount: money(500_000n, 'IRT'), reference: paymentTrackingCode(payment.reference) },
         ],
         ['bot.wallet.topup_gift_credited', { amount: money(50_000n, 'IRT') }],
       ]);
@@ -1046,7 +1047,7 @@ describe('a customer topping up their wallet', () => {
       const [first] = lane.rendered();
       expect(first).toBe(
         '✅ پرداخت شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما اضافه شد.' +
-          `\n\n\nکد پیگیری پرداخت: ${stored?.reference ?? 'MISSING'}`,
+          `\n\n\nکد پیگیری پرداخت: ${paymentTrackingCode(stored?.reference ?? 'MISSING')}`,
       );
 
       // The same notification dispatched again (a redelivery, a re-armed row).

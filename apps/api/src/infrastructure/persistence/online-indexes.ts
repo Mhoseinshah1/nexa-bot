@@ -320,6 +320,16 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
   },
   {
     /*
+     * A payment by its PUBLIC tracking code (FIX-02): the operation-id half of `reference`,
+     * which is what every invoice shows and what a customer quotes to support. The expression
+     * is exactly the one `referenceCondition` asks, so the planner can match it. Not unique:
+     * a code is 64 bits of a hash, and the search shows every match rather than one.
+     */
+    name: 'payments_tenant_tracking_code_idx',
+    definition: 'ON "payments" USING btree ("tenant_id", split_part("reference", \':\', 1))',
+  },
+  {
+    /*
      * A service by its panel, every state. `services_panel_capacity_idx` is partial on
      * `state <> 'TERMINATED'` for the capacity count, so it cannot serve a uuid arm that
      * must also find terminated services — the ones a support question is often about.

@@ -5,6 +5,7 @@ import {
   type AdminId,
   type DomainEvent,
   type PaymentId,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../apps/api/src/infrastructure/persistence/unit-of-work';
 import {
@@ -692,7 +693,9 @@ describe('the administrators’ receipt push', () => {
       expect(caption).toContain(TG.customer); // numeric id
       expect(caption).toContain('@zahra_pay'); // username
       expect(caption).toContain('250,000'); // amount
-      expect(caption).toContain(String(reference)); // tracking code
+      // FIX-02: the public tracking code, never the stored `:manual` reference.
+      expect(caption).toContain(paymentTrackingCode(String(reference)));
+      expect(caption).not.toContain(String(reference));
       expect(caption).toContain('یادداشت مشتری'); // the customer's note
       expect(caption).not.toContain('file-caption'); // never a file id
       // The order's frozen volume and duration (1 byte, 30 days), typed through their labels.

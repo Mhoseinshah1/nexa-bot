@@ -310,6 +310,46 @@ describe('the customer notification lane', () => {
     });
   });
 
+  it('FIX-02: quotes the PUBLIC code — never the stored `:manual`/`:topup`/`:gateway` reference — on every payment kind', async () => {
+    const id = await customer(tenantA, '5091');
+    const paymentRow = async (
+      state: 'FAILED' | 'EXPIRED' | 'PENDING',
+      method: 'MANUAL_TRANSFER' | 'GATEWAY',
+      reference: string,
+    ) => {
+      const paymentId = ctx.container.ids.uuid();
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO payments (id, tenant_id, customer_id, method, state, amount, currency,
+                              reference, resolved_at, expires_at, gateway_provider)
+        VALUES (${paymentId}, ${tenantA.tenantId}, ${id}, ${method}, ${state}, 1000,
+                'IRT', ${reference}, ${state === 'PENDING' ? null : new Date()},
+                ${new Date(Date.now() + 3_600_000)},
+                ${method === 'GATEWAY' ? 'TONPAYS' : null})`);
+      return paymentId;
+    };
+    const rejected = await paymentRow('FAILED', 'MANUAL_TRANSFER', 'aaaaaaaaaaaaaaa1:manual');
+    const expired = await paymentRow('EXPIRED', 'MANUAL_TRANSFER', 'aaaaaaaaaaaaaaa2:topup');
+    const claimed = await paymentRow('PENDING', 'MANUAL_TRANSFER', 'aaaaaaaaaaaaaaa3:manual');
+    const failed = await paymentRow('FAILED', 'GATEWAY', 'aaaaaaaaaaaaaaa4:gateway-topup');
+    await enqueue(tenantA, id, 'PAYMENT_REJECTED', rejected);
+    await enqueue(tenantA, id, 'PAYMENT_EXPIRED', expired);
+    await enqueue(tenantA, id, 'PAYMENT_TRANSFER_RECORDED', claimed);
+    await enqueue(tenantA, id, 'GATEWAY_PAYMENT_FAILED', failed);
+
+    await sweep(lane({ references: true }));
+    const byKey = new Map(sends.map((one) => [one.templateKey, one.values]));
+    expect(byKey.get('bot.payment.rejected')).toEqual({
+      reason: '\u2014',
+      reference: 'aaaaaaaaaaaaaaa1',
+    });
+    expect(byKey.get('bot.payment.expired')).toEqual({ reference: 'aaaaaaaaaaaaaaa2' });
+    expect(byKey.get('bot.payment.received_for_review')).toEqual({
+      reference: 'aaaaaaaaaaaaaaa3',
+    });
+    // A gateway attempt's failure quotes the code its invoice carried.
+    expect(byKey.get('bot.payment.gateway_failed')).toEqual({ reference: 'aaaaaaaaaaaaaaa4' });
+  });
+
   it('a rate limit spends NO attempt and leaves the row claimable at Telegram’s time', async () => {
     /*
      * The defect `docs/phase4h-audit.md` §6b measured, in the new lane. A 429 is

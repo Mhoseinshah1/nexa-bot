@@ -11,7 +11,7 @@ import type {
   TenantContext,
   UserId,
 } from '@nexa/contracts';
-import { money } from '@nexa/contracts';
+import { money, paymentTrackingCode } from '@nexa/contracts';
 import type { CustomerRecord } from '../../customers/application/ports.js';
 import type { PaymentRecord } from './ports.js';
 import type { PaymentReceiptRecord } from './receipt-ports.js';
@@ -189,7 +189,7 @@ export class ReceiptReviewCaption {
           });
 
     return {
-      reference: payment.reference,
+      reference: paymentTrackingCode(payment.reference),
       total: payment.amount,
       // The customer's Telegram id, which is the identity this installation holds for them,
       // and the username beside it when they have one — a name is chosen by the person it
@@ -252,7 +252,7 @@ export class ReceiptReviewCaption {
       operation,
       customer: customer?.telegramUserId ?? payment.customerId,
       total: payment.amount,
-      reference: payment.reference,
+      reference: paymentTrackingCode(payment.reference),
     };
     if (facts.productTitle !== null) values['order'] = facts.productTitle;
     if (facts.trafficBytes !== null) values['trafficBytes'] = facts.trafficBytes;

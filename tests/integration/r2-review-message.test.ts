@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { money } from '@nexa/contracts';
+import { money, paymentTrackingCode } from '@nexa/contracts';
 import {
   BOT_A,
   bindNewAdmin,
@@ -65,7 +65,8 @@ describe('the receipt-review message is edited into its decision, once', () => {
       f,
       sql`SELECT reference FROM payments WHERE id = ${payment}`,
     );
-    return found[0]?.reference ?? 'MISSING';
+    // FIX-02: what a reviewer is shown is the PUBLIC code, never the `:manual`/`:topup` reference.
+    return paymentTrackingCode(found[0]?.reference ?? 'MISSING');
   }
 
   async function notices(kind: string): Promise<number> {

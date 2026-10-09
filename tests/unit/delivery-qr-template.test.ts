@@ -882,3 +882,142 @@ describe('review of PR #218: size, downscaling, the decoder’s bounds, the prev
     expect(rendered).toBe(1);
   });
 });
+
+/*
+ * FIX-06 (2026-10-09): the white margin around a templated code is the operator's choice from
+ * 0 to 16 modules, and 0 means NO white border — not the default 4, and not the region's
+ * leftover painted white either. Every value an operator could store before (4..16) draws
+ * byte for byte what it drew before this change.
+ */
+describe('FIX-06: a quiet zone of 0..16 modules', () => {
+  const backgroundPng = gradientBackground(800, 700);
+  const background = decodePngToRgb(backgroundPng);
+  const modules = qrModules(URL);
+  const count = modules.length;
+  /** The background's own pixel at (x, y), before anything was drawn on it. */
+  const original = (x: number, y: number): [number, number, number] => {
+    const i = (y * background.width + x) * 3;
+    return [background.rgb[i] ?? -1, background.rgb[i + 1] ?? -1, background.rgb[i + 2] ?? -1];
+  };
+
+  it('at 0, the code fills a region of exactly its size: the first row and column are the code', () => {
+    const scale = 10;
+    const region: QrTemplate = { x: 100, y: 100, size: count * scale, quietZoneModules: 0 };
+    const composed = composeQrOnBackground(URL, background, region);
+    if (!composed.ok) throw new Error(composed.reason);
+    expect(composed.scale).toBe(scale);
+    const image = readPngPixels(composed.png);
+    if (image === null) throw new Error('unreadable');
+    const at = (x: number, y: number) => image.rgba[(y * image.width + x) * 4] ?? -1;
+    // The region's first pixel row and first pixel column are the code's first module row and
+    // column — dark where the code is dark — never a white margin.
+    expect(modules[0]?.[0]).toBe(true);
+    for (let i = 0; i < region.size; i += 1) {
+      const module = Math.floor(i / scale);
+      expect(at(region.x + i, region.y), `row 0, +${i}`).toBe(
+        modules[0]?.[module] === true ? 0 : 255,
+      );
+      expect(at(region.x, region.y + i), `column 0, +${i}`).toBe(
+        modules[module]?.[0] === true ? 0 : 255,
+      );
+    }
+    // The three finder corners touch the region's edges.
+    const last = region.size - 1;
+    expect(at(region.x, region.y)).toBe(0);
+    expect(at(region.x + last, region.y)).toBe(0);
+    expect(at(region.x, region.y + last)).toBe(0);
+    // Immediately outside the region is the background, untouched: no white ring.
+    expect(pixelAt(composed.png, region.x - 1, region.y)).toEqual(original(region.x - 1, region.y));
+    expect(pixelAt(composed.png, region.x, region.y - 1)).toEqual(original(region.x, region.y - 1));
+  });
+
+  it('at 0, a region larger than the code leaves its remainder as background, not white', () => {
+    // 37 modules in 375 px: 10 px each, 5 px of remainder, 2 px before the code and 3 after.
+    const region: QrTemplate = { x: 100, y: 100, size: count * 10 + 5, quietZoneModules: 0 };
+    const composed = composeQrOnBackground(URL, background, region);
+    if (!composed.ok) throw new Error(composed.reason);
+    expect(composed.scale).toBe(10);
+    const left = region.x + 2;
+    const top = region.y + 2;
+    for (const [x, y] of [
+      [region.x, region.y],
+      [region.x + 1, top + 50],
+      [left + 50, region.y + 1],
+      [left + count * 10, top + 50],
+      [region.x + region.size - 1, region.y + region.size - 1],
+    ] as const) {
+      expect(pixelAt(composed.png, x, y), `${x},${y}`).toEqual(original(x, y));
+    }
+    // The code itself starts exactly at the offset, finder first.
+    expect(pixelAt(composed.png, left, top)).toEqual([0, 0, 0]);
+    // Its light modules are still white: the code is black on white whatever lies behind it.
+    const lightCol = modules[1]?.findIndex((dark) => !dark) ?? -1;
+    expect(lightCol).toBeGreaterThan(0);
+    expect(pixelAt(composed.png, left + lightCol * 10, top + 10)).toEqual([255, 255, 255]);
+  });
+
+  it('at 16, composes, keeps at least 16 white modules on every side, and decodes', () => {
+    const region: QrTemplate = { x: 150, y: 120, size: 420, quietZoneModules: 16 };
+    const composed = composeQrOnBackground(URL, background, region);
+    if (!composed.ok) throw new Error(composed.reason);
+    const scale = qrModuleScale(420, count, 16);
+    expect(composed.scale).toBe(scale);
+    const side = count * scale;
+    const left = region.x + Math.floor((region.size - side) / 2);
+    expect(left - region.x).toBeGreaterThanOrEqual(16 * scale);
+    expect(pixelAt(composed.png, region.x, region.y)).toEqual([255, 255, 255]);
+    expect(pixelAt(composed.png, left - 1, left - region.x + region.y)).toEqual([255, 255, 255]);
+    expect(decodeAnyQrPng(composed.png)).toBe(URL);
+  });
+
+  it('draws every value an operator could store before byte for byte as it did', () => {
+    // SHA-256 of the composition on origin/main eb139bef, before FIX-06.
+    const before: Record<number, string> = {
+      1: '81322970c9ee351a707fe89ab7e5397013356cd48671772b001acea26d3c2d72',
+      4: '763172f0af2ceab3128ea0c64e80f7ad6b14e6a62090ca0ebfa620a31915664a',
+      7: '0f36ebbff92a113eebb382cdc97a77156b54338431ce5cdb03ae23062ff40c93',
+      16: '60f2c1b9e04a9c827018251ccf514e07964d72b312a0cb4be3218a6071983fc2',
+    };
+    for (const [quiet, digest] of Object.entries(before)) {
+      const composed = composeQrOnBackground(URL, background, {
+        x: 150,
+        y: 120,
+        size: 420,
+        quietZoneModules: Number(quiet),
+      });
+      if (!composed.ok) throw new Error(composed.reason);
+      expect(createHash('sha256').update(composed.png).digest('hex'), `quiet ${quiet}`).toBe(
+        digest,
+      );
+    }
+    // And the plain QR, which no template setting changes.
+    expect(createHash('sha256').update(encodeQrPng(URL)).digest('hex')).toBe(
+      '6dfff250775ac20d1b3599a57153f0760741c4e50db5d2290c88b9d342a68f2e',
+    );
+  });
+
+  it('previews and delivers a stored 0 as 0, never as the default', async () => {
+    const zero: QrTemplate = { x: 100, y: 100, size: 41 * 9, quietZoneModules: 0 };
+    const renderer = new PngDeliveryQrRenderer(
+      sources({ 'tenant-a': { template: zero, background: backgroundPng } }),
+    );
+    // The preview of a draft 0, and the delivery of a stored 0: one image.
+    const preview = await renderer.renderText(A, QR_TEMPLATE_PREVIEW_TEXT, zero, {
+      describeBackground: true,
+    });
+    expect(preview).toMatchObject({ templated: true, fallback: null, scale: 9 });
+    expect(pixelAt(preview.bytes, zero.x, zero.y)).toEqual([0, 0, 0]);
+    const delivered = await renderer.renderText(A, QR_TEMPLATE_PREVIEW_TEXT);
+    expect(Buffer.from(delivered.bytes).equals(Buffer.from(preview.bytes))).toBe(true);
+    // A draft of 4 on the same region is a different image (a different cache key), with
+    // white where 0 drew the finder.
+    const four = await renderer.renderText(A, QR_TEMPLATE_PREVIEW_TEXT, {
+      ...zero,
+      quietZoneModules: 4,
+    });
+    expect(four.scale).toBe(qrModuleScale(zero.size, 41, 4));
+    expect(pixelAt(four.bytes, zero.x, zero.y)).toEqual([255, 255, 255]);
+    // The save guard's probe accepts 0.
+    expect(probeQrTemplate(zero, backgroundPng)).toBeNull();
+  });
+});

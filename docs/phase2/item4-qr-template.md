@@ -60,7 +60,9 @@ BEFORE anything is inflated, and `inflateSync` is given exactly the size the hea
 `maxOutputLength`; more output is a refusal, not a truncation.
 
 At save (`QrTemplateGuard`, inside the settings write's transaction): the schema demands whole
-numbers, a region of at least 128 px and a quiet zone of 4–16 modules; the guard demands a
+numbers, a region of at least 128 px and a quiet zone of 0–16 modules (FIX-06, 2026-10-09:
+was 4–16; a new template still starts at 4, and the database repeats the 0–16 whole-number rule
+as `setting_values_qr_template_quiet_zone_check`, migration 0239); the guard demands a
 stored background and a region wholly inside it, and composes a link of typical length
 (`probeQrTemplate`, 41 modules) on it: a region whose modules would reach the customer under
 4 px, or a composite over 1.5 MiB, is refused at save. Clearing (null) is never refused.
@@ -69,9 +71,13 @@ At render (`composeQrOnBackground`), every delivery:
 
 - the module scale is `floor(size / (modules + 2 × quiet))` — an integer, the same both ways,
   so the code is never stretched, distorted or resampled;
-- the whole region is painted white, so the quiet zone is at least the configured number of
-  modules on every side (the floor's remainder only adds to it) and the background never
-  touches a finder pattern;
+- with a quiet zone of 1 or more the whole region is painted white, so the quiet zone is at
+  least the configured number of modules on every side (the floor's remainder only adds to it)
+  and the background never touches a finder pattern;
+- with a quiet zone of 0 (FIX-06) only the code's own `modules × scale` square is painted
+  white: there is no white border, the floor's remainder stays background, and a region of
+  exactly `modules × scale` px is the code edge to edge. The Web Admin warns that a code with
+  little or no margin may scan less reliably, and does not refuse it;
 - the code is black on white whatever the background, so contrast does not depend on it;
 - a module under 4 px **as the customer receives it** — Telegram serves a photo at most
   1280 px on its longest side, so the rule is `scale × min(1, 1280 / longest side) ≥ 4`

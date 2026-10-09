@@ -10,6 +10,7 @@ import {
   type BotInstanceId,
   type CorrelationId,
   type UserId,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
@@ -572,12 +573,14 @@ describe('the customer Telegram turn', () => {
     // being answered with something else that also happens to carry no buttons.
     sent = [];
     await tap(5550000001, `C:${payment.id}`);
-    expect(lastText()).toContain(payment.reference);
+    // FIX-02: the reviewer sees the public code, never the stored role-suffixed reference.
+    expect(lastText()).toContain(paymentTrackingCode(payment.reference));
+    expect(lastText()).not.toContain(payment.reference);
     expect(decisionButtons(), 'the observer was drawn decision buttons').toEqual([]);
 
     sent = [];
     await tap(5550000002, `C:${payment.id}`);
-    expect(lastText()).toContain(payment.reference);
+    expect(lastText()).toContain(paymentTrackingCode(payment.reference));
     expect(decisionButtons().sort()).toEqual([`D:${payment.id}`, `E:${payment.id}`].sort());
   });
 

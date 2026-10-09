@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   minutesLeft,
   money,
+  paymentTrackingCode,
   type CurrencyCode,
   type CustomerNotificationKind,
   type TemplateValues,
@@ -41,7 +42,11 @@ export class DrizzleCustomerReminderFactsReader {
       const row = result.rows[0] as { reference: string; expires_at: string } | undefined;
       if (row === undefined) return null;
       const expiresAt = new Date(row.expires_at);
-      return { reference: row.reference, expiresAt, minutes: minutesLeft(expiresAt, now) };
+      return {
+        reference: paymentTrackingCode(row.reference),
+        expiresAt,
+        minutes: minutesLeft(expiresAt, now),
+      };
     }
     if (kind === 'ORDER_PENDING_REMINDER') {
       const result = await this.db.execute(sql`

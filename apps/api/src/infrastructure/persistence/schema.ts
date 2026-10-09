@@ -1599,6 +1599,17 @@ export const settingValues = pgTable(
   (table) => [
     uniqueIndex('setting_values_key').on(table.tenantId, table.settingKey),
     check('setting_values_version_check', sql`version >= 1`),
+    /*
+     * FIX-06 (2026-10-09): the QR template's quiet zone is a whole number of modules, 0..16
+     * (`QR_TEMPLATE_QUIET_ZONE_MIN`..`_MAX`) — the registry's zod schema says so on the way in
+     * and out, and this is the same rule for a writer that forgets it. Null is no template.
+     * The CASE orders the type test before the cast: AND/OR do not short-circuit in SQL, and
+     * a cast of a non-number must fail the check, never throw. 0 is a value, not "unset".
+     */
+    check(
+      'setting_values_qr_template_quiet_zone_check',
+      sql`setting_key <> 'delivery.qr_template' OR jsonb_typeof(value) = 'null' OR (CASE WHEN jsonb_typeof(value -> 'quietZoneModules') = 'number' THEN ((value ->> 'quietZoneModules')::numeric BETWEEN 0 AND 16 AND (value ->> 'quietZoneModules')::numeric = trunc((value ->> 'quietZoneModules')::numeric)) ELSE false END)`,
+    ),
     foreignKey({
       name: 'setting_values_tenant_admin_fk',
       columns: [table.tenantId, table.updatedByAdminId],

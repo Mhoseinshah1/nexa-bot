@@ -146,7 +146,8 @@ describe('the gateway invoice screen', () => {
       at,
     );
     expect(screen.key).toBe('bot.payment.gateway_invoice');
-    expect(Object.keys(screen.values).sort()).toEqual(['expiresAt', 'total']);
+    // FIX-02: the invoice carries the payment's public tracking code before anything is paid.
+    expect(Object.keys(screen.values).sort()).toEqual(['expiresAt', 'reference', 'total']);
     expect(data(screen)).toEqual([
       'url:https://pay.tonpays.online/i/1',
       'gc:01900000-0000-7000-8000-00000000aaaa',

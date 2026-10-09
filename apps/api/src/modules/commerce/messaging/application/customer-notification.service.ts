@@ -23,6 +23,11 @@ import type {
   CustomerNotificationRepository,
 } from './ports.js';
 import type { ServiceReminderSnapshotReader } from '../../provisioning/application/service-reminder.ports.js';
+import {
+  CUSTOMER_NOTIFICATION_LATENCY_WARN_MS,
+  notificationLatency,
+  notificationLatencyIsSlow,
+} from './notification-latency.js';
 
 /**
  * Whether a kind's fact is still true, asked of the subject itself.
@@ -463,6 +468,8 @@ export interface CustomerNotificationDeps {
   readonly logger: {
     info: (context: Record<string, unknown>, message: string) => void;
     error: (context: Record<string, unknown>, message: string) => void;
+    /** FIX-03: a first attempt that waited past `CUSTOMER_NOTIFICATION_LATENCY_WARN_MS`. */
+    warn?: (context: Record<string, unknown>, message: string) => void;
   };
 }
 
@@ -794,9 +801,14 @@ export class CustomerNotificationService {
     /*
      * Roadmap E6: the expiry and the claim's lane fallback quote the payment's tracking code,
      * read from the payment the notification names — the same reader the credits use. Absent,
-     * the template's optional line is dropped rather than drawn empty.
+     * the template's optional line is dropped rather than drawn empty. FIX-02: a gateway
+     * attempt's failure quotes the same code its invoice carried.
      */
-    if (row.kind === 'PAYMENT_EXPIRED' || row.kind === 'PAYMENT_TRANSFER_RECORDED') {
+    if (
+      row.kind === 'PAYMENT_EXPIRED' ||
+      row.kind === 'PAYMENT_TRANSFER_RECORDED' ||
+      row.kind === 'GATEWAY_PAYMENT_FAILED'
+    ) {
       const reference = await this.paymentTrackingCode(scope, row.subjectId);
       return reference === null ? {} : { reference };
     }
@@ -1048,8 +1060,9 @@ export class CustomerNotificationService {
        * A crash must not roll it back: the crash is the case it records. `false` means
        * another pass moved the row first, and this caller must send nothing.
        */
+      const sendStartedAt = this.deps.clock.now();
       const started = await this.deps.uow.run(scope, async (tx) =>
-        this.deps.notifications.markSendStarted(scope, row.id, this.deps.clock.now(), tx),
+        this.deps.notifications.markSendStarted(scope, row.id, sendStartedAt, tx),
       );
       if (!started) return 'lost';
 
@@ -1068,6 +1081,9 @@ export class CustomerNotificationService {
           );
         }
       }
+
+      // FIX-03: the Telegram call starts HERE — after the stamp and any screen-closing.
+      const callStartedAt = this.deps.clock.now();
 
       /*
        * HF-A7: a kind that carries a FILE goes up as one upload, its template the caption.
@@ -1102,6 +1118,8 @@ export class CustomerNotificationService {
             });
 
       const at = this.deps.clock.now();
+      // FIX-03: where the wait went — the queue, or the Telegram call — one line per send.
+      this.observeLatency(row, sendStartedAt, callStartedAt, at, result.outcome);
 
       /*
        * A rate limit: back on the queue, at Telegram's own time, with NO attempt spent.
@@ -1182,6 +1200,51 @@ export class CustomerNotificationService {
         'customer notification send failed',
       );
       return 'errored';
+    }
+  }
+
+  /**
+   * FIX-03: the latency breakdown of one send, from the three instants this pass holds —
+   * the producer's commit (`created_at`, the same transaction as the fact), this pass's send
+   * stamp, and Telegram's answer. Logged, never stored: the persisted columns already carry
+   * `created_at` and `resolved_at` (`docs/payment-settlement-latency.md`), and a write here
+   * would be a write on the hot path for a number nobody decides anything on.
+   *
+   * A first attempt that waited past the threshold is a WARNING, with the outcome on the
+   * line, so a delay that is Telegram's (a 429, an unknown answer) reads differently from
+   * one that is the dispatcher's. Never thrown: an observation cannot fail a send.
+   */
+  private observeLatency(
+    row: CustomerNotificationRecord,
+    sendStartedAt: Date,
+    callStartedAt: Date,
+    outcomeAt: Date,
+    outcome: string,
+  ): void {
+    try {
+      const latency = notificationLatency(row.createdAt, sendStartedAt, callStartedAt, outcomeAt);
+      const context = {
+        notificationId: row.id,
+        kind: row.kind,
+        subjectId: row.subjectId,
+        attemptsBefore: row.attempts,
+        outcome,
+        ...latency,
+      };
+      const immediate = !CUSTOMER_NOTIFICATION_QUIET_HOURS[row.kind];
+      if (
+        notificationLatencyIsSlow(latency, row.attempts, immediate) &&
+        this.deps.logger.warn !== undefined
+      ) {
+        this.deps.logger.warn(
+          { ...context, thresholdMs: CUSTOMER_NOTIFICATION_LATENCY_WARN_MS },
+          'customer notification waited longer than expected',
+        );
+        return;
+      }
+      this.deps.logger.info(context, 'customer notification latency');
+    } catch {
+      // An observation never costs a customer their message.
     }
   }
 }

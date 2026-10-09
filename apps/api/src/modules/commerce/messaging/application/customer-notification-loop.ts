@@ -28,13 +28,40 @@ import type { CustomerNotificationService } from './customer-notification.servic
 /**
  * How often the lane runs.
  *
- * A constant rather than a config key, and the same one minute
- * `PAYMENT_EXPIRY_INTERVAL_MS` uses. There is nothing an operator would tune it for:
- * every kind this lane carries is a fact the customer should already have, so the only
- * defensible cadence is "as promptly as is cheap", and a pass that finds nothing is one
- * indexed lookup against a partial index built for exactly this query.
+ * TWO SECONDS (FIX-03, 2026-10-09). It was one minute — "the same one minute
+ * `PAYMENT_EXPIRY_INTERVAL_MS` uses" — and that minute is what the owner read between
+ * «your payment was approved by the gateway» and the message with the amount and the
+ * tracking code. The approval is the gateway worker's edit of the invoice message, made in
+ * the pass that committed the credit; the amount is `WALLET_TOPUP_CREDITED`, enqueued in
+ * the credit's own transaction and due at once, and it then waited up to a whole interval
+ * for this timer. Every kind this lane carries is a fact the customer should already have,
+ * so "as promptly as is cheap" was always the rule; a minute was simply not prompt.
+ *
+ * Still a constant rather than a config key: there is nothing an operator would tune it
+ * for. The gateway lane runs every three seconds and the broadcast lane every second; an
+ * idle pass here is a handful of indexed statements against partial indexes built for
+ * exactly these queries (`docs/payment-settlement-latency.md` counts them). Faster than the
+ * gateway lane, so the final message follows the approval it confirms rather than trailing
+ * it by a gateway interval.
+ *
+ * What it does NOT change: the lane's health tolerance (`CUSTOMER_NOTIFICATION_STALE_AFTER_MS`),
+ * the retry back-off, the 429 rule (the later of Telegram's `retry_after` and the back-off),
+ * the lease, or the rule that an unknown send is never repeated. Those are per row, not per
+ * pass, and none of them was ever derived from this number.
  */
-export const CUSTOMER_NOTIFICATION_INTERVAL_MS = 60_000;
+export const CUSTOMER_NOTIFICATION_INTERVAL_MS = 2_000;
+
+/**
+ * How long the lane may go without completing a pass before the worker reports it stalled:
+ * three minutes, which is what three one-minute intervals always gave it.
+ *
+ * Stated in TIME, not in intervals, so the faster cadence above does not shrink it. A pass
+ * sends its batch one message after another, and a backlog after an outage can hold one
+ * pass for a minute; three two-second intervals would call that a stalled loop, stop the
+ * heartbeat and roll a healthy release back — the failure `gatewayLoopSlackIntervals`
+ * exists to avoid for the gateway lane.
+ */
+export const CUSTOMER_NOTIFICATION_STALE_AFTER_MS = 180_000;
 
 export class CustomerNotificationLoop {
   private timer: NodeJS.Timeout | null = null;
@@ -53,7 +80,10 @@ export class CustomerNotificationLoop {
       };
     },
   ) {
-    this.progress = new LoopProgress(options.intervalMs);
+    this.progress = new LoopProgress(
+      options.intervalMs,
+      Math.max(1, Math.ceil(CUSTOMER_NOTIFICATION_STALE_AFTER_MS / options.intervalMs)),
+    );
   }
 
   /** Whether a pass has completed recently enough. See `LoopProgress`. */

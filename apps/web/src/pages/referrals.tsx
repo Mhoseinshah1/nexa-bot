@@ -26,6 +26,7 @@ import {
 import { formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
+import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
@@ -209,6 +210,21 @@ export function ReferralsPage({
     setQueries(route, [['referrerId', draft.value === '' ? null : draft.value]]);
   };
 
+  /*
+   * FIX-01: a pasted referrer id applies itself, debounced, as the /users search does —
+   * Enter and «اعمال» still apply at once. Only a complete id (or an emptied box) is ever
+   * applied by itself: a half-typed one waits, with its error under the field, and sends
+   * nothing. Both lists below key their trails by the referrer, so each starts again at
+   * its first page.
+   */
+  const debounce = useDebouncedApply({
+    wanted: draft.value,
+    applied,
+    routeKey: listRouteKey(route),
+    ready: !denied && problem === undefined,
+    apply: () => setQueries(route, [['referrerId', draft.value === '' ? null : draft.value]]),
+  });
+
   return (
     <>
       <PageHead title={t('web.referrals_title')} subtitle={t('web.referrals_intro')} />
@@ -228,7 +244,10 @@ export function ReferralsPage({
                 className="referrals-referrer"
                 dir="ltr"
                 value={draft.value}
-                onChange={(event) => setDraft({ applied, value: event.target.value.trim() })}
+                onChange={(event) => {
+                  setDraft({ applied, value: event.target.value.trim() });
+                  debounce.edited();
+                }}
               />
             </Field>
             <Button type="submit" size="sm" variant="primary" icon="filter">

@@ -12,6 +12,7 @@ import {
   type ProductCategoryId,
   type ProductId,
   type UserId,
+  paymentTrackingCode,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
@@ -613,7 +614,9 @@ describe('the wizard is one message, edited in place', () => {
       sql`SELECT p.reference FROM payments p JOIN orders o ON o.id = p.order_id
           WHERE o.purpose = 'RENEW' AND p.state = 'CONFIRMED' AND p.tenant_id = ${tenantA.tenantId}`,
     );
-    expect(text).toContain(paid?.reference ?? 'no reference');
+    // FIX-02: the renewal quotes the public code under the exact label, never `:wallet`.
+    expect(text).toContain(`کد پیگیری پرداخت: ${paymentTrackingCode(paid?.reference ?? 'none')}`);
+    expect(text).not.toContain(':wallet');
     const after = await services.findById(tenantA, service.id);
     expect(after?.expiresAt?.getTime()).toBeGreaterThan(before?.expiresAt?.getTime() ?? 0);
     // One button, opening the renewed service directly.
