@@ -156,9 +156,8 @@ export interface PaymentLinkFailureFacts {
   readonly providerOrderId: string;
   readonly providerInvoiceId: string | null;
   /**
-   * The public tracking code. FIX-02 owns its exact form: until its exported function
-   * lands this is the payment's own `reference`, read through ONE call site
-   * (`GatewayPaymentService.reportLinkFailure`).
+   * The public tracking code, `paymentTrackingCode` of the payment's `reference` (FIX-02),
+   * read through ONE call site (`GatewayPaymentService.reportLinkFailure`).
    */
   readonly trackingCode: string | null;
   readonly telegramUserId: string | null;

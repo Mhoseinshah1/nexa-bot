@@ -146,10 +146,9 @@ Telegram id, the sanitized error code, the remote HTTP status when there was one
 retryability, FINAL/UNKNOWN, the creation state, and the elapsed time. Correlation: the
 event id is printed (`شناسه رخداد`) and is the row's primary key.
 
-**Tracking code (coordination with FIX-02).** Until FIX-02's exported public-tracking-code
-function merges, the code is the payment's own `reference`, read at ONE call site
-(`GatewayPaymentService.reportLinkFailure`, comment `FIX-02 owns…`). Switching it is a
-one-line change there.
+**Tracking code.** The event carries FIX-02's public code, `paymentTrackingCode(reference)`
+— the suffix-free value the customer's invoice shows, never the stored `<code>:<role>`
+reference — read at ONE call site (`GatewayPaymentService.reportLinkFailure`).
 
 ### Example (synthetic data)
 

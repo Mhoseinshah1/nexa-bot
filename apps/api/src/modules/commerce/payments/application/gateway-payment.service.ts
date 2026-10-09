@@ -4,6 +4,7 @@ import {
   TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS,
   TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
+  paymentTrackingCode,
   systemJobActor,
   type ActorContext,
   type AuditWriter,
@@ -2510,10 +2511,9 @@ export class GatewayPaymentService {
         orderId: payment?.orderId ?? null,
         providerOrderId: invoice.providerOrderId,
         providerInvoiceId: known.providerInvoiceId ?? invoice.providerInvoiceId,
-        // FIX-02 owns the public tracking code's exact form. Until its exported function
-        // lands, the payment's own `reference` — the existing accessor — and this is the
-        // ONE call site to switch.
-        trackingCode: payment?.reference ?? null,
+        // The public code the customer's invoice shows (FIX-02), never the stored
+        // `<code>:<role>` reference — an operator matches the two by eye.
+        trackingCode: payment === null ? null : paymentTrackingCode(payment.reference),
         telegramUserId,
         botInstanceId: invoice.botInstanceId,
         elapsedMs: known.elapsedMs ?? null,

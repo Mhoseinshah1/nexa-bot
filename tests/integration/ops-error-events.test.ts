@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   money,
+  paymentTrackingCode,
   templateDefinition,
   type ActorContext,
   type BotInstanceId,
@@ -454,11 +455,12 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
         provider: 'TONPAYS',
         method: 'GATEWAY',
         paymentId: attempt.payment.id,
-        trackingCode: attempt.payment.reference,
+        trackingCode: paymentTrackingCode(attempt.payment.reference),
         telegramUserId: MARYAM,
         failureKind: c.kind,
         classification: c.code.endsWith('unknown') ? 'UNKNOWN' : 'FINAL',
       });
+      expect(String(context['trackingCode']), 'the stored role suffix leaked').not.toContain(':');
       if (c.status === null) expect(context).not.toHaveProperty('httpStatus');
       else expect(context['httpStatus']).toBe(c.status);
       expectNoSecret(JSON.stringify(rows));
@@ -468,7 +470,9 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       expect(text).toContain('🚨 خطای ساخت لینک پرداخت');
       expect(text).toContain('درگاه: TONPAYS');
       expect(text).toContain(`کاربر: <code>${MARYAM}</code>`);
-      expect(text).toContain(`کد پیگیری پرداخت: <code>${attempt.payment.reference}</code>`);
+      expect(text).toContain(
+        `کد پیگیری پرداخت: <code>${paymentTrackingCode(attempt.payment.reference)}</code>`,
+      );
       expect(text).toContain(c.line);
       expect(text).toContain(`شناسه رخداد: <code>${rows[0]!.id}</code>`);
       if (c.status !== null) expect(text).toContain(`وضعیت HTTP درگاه: ${String(c.status)}`);
