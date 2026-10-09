@@ -72,3 +72,25 @@ export function trackingCodeFromSearch(term: string): string | null {
   const derived = DERIVED_REFERENCE.exec(value);
   return derived === null ? null : (derived[1] as string);
 }
+
+/**
+ * The invoice templates that REQUIRE `{reference}` since FIX-02 — every invoice shown before
+ * a gateway payment is made. A tenant override of one of them saved before that requirement
+ * cannot carry the code, and template bodies are stored raw and never rewritten, so the
+ * resolver appends `bot.payment.tracking_code_line` to such an override at render time —
+ * for these keys only, and only when the override's body has no `{reference}` of its own.
+ */
+export const TRACKING_CODE_LINE_KEYS = [
+  'bot.payment.gateway_preparing',
+  'bot.payment.gateway_invoice',
+  'bot.payment.gateway_invoice_order_fee',
+  'bot.payment.gateway_invoice_topup_fee',
+  'bot.payment.stars_invoice_order',
+  'bot.payment.stars_invoice_order_fee',
+  'bot.payment.stars_invoice_topup',
+  'bot.payment.stars_invoice_topup_fee',
+  'bot.payment.gateway_card_invoice',
+] as const;
+
+/** The line itself, as a template key, so its words live in the catalogue. */
+export const TRACKING_CODE_LINE_KEY = 'bot.payment.tracking_code_line' as const;

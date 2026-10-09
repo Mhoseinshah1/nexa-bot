@@ -4,7 +4,10 @@ import {
   operationIdFrom,
   paymentTrackingCode,
   PAYMENT_TRACKING_CODE_PATTERN,
+  templateDefinition,
   trackingCodeFromSearch,
+  TRACKING_CODE_LINE_KEY,
+  TRACKING_CODE_LINE_KEYS,
 } from '@nexa/contracts';
 
 /**
@@ -68,5 +71,14 @@ describe('trackingCodeFromSearch', () => {
     expect(trackingCodeFromSearch('7d433a363380f69e0')).toBeNull();
     expect(trackingCodeFromSearch('zzzzzzzzzzzzzzzz')).toBeNull();
     expect(trackingCodeFromSearch('@someone')).toBeNull();
+  });
+});
+
+describe('TRACKING_CODE_LINE_KEYS', () => {
+  it('names only invoice templates that REQUIRE {reference}, and the line key requires it too', () => {
+    for (const key of [...TRACKING_CODE_LINE_KEYS, TRACKING_CODE_LINE_KEY]) {
+      const reference = templateDefinition(key).placeholders.find((p) => p.token === 'reference');
+      expect(reference?.required, key).toBe(true);
+    }
   });
 });

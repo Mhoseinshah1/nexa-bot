@@ -5691,6 +5691,16 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [
       {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'This reply EDITS the invoice message, so without it the code the invoice carried ' +
+          'would vanish from the chat. Optional: a line holding only it is dropped when absent.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'minutes',
         type: 'NUMBER',
         description:
@@ -5784,7 +5794,37 @@ export const TEMPLATES = [
       'is one mis-touch away from a message the customer reads every time they open the ' +
       'chat is not a decision they have made.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'This reply EDITS the invoice message, so without it the code the invoice carried ' +
+          'would vanish from the chat. Optional: a line holding only it is dropped when absent.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.tracking_code_line',
+    description:
+      'FIX-02: the one tracking-code line, «کد پیگیری پرداخت: …», appended at render time to a ' +
+      'TENANT OVERRIDE of an invoice template (`TRACKING_CODE_LINE_KEYS`) whose body does not ' +
+      'carry {reference} — an override saved before the invoices required the code. The ' +
+      'stored override is never rewritten; a default body, or an override that already ' +
+      'carries {reference}, never gets it, so the code is shown exactly once.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment’s public tracking code, `paymentTrackingCode` of its reference.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.payment.cancel_confirm_button',
