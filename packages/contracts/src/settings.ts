@@ -1101,7 +1101,8 @@ export const SETTINGS = [
     description:
       'Where the subscription QR is drawn on the tenant\u2019s QR background: the top-left ' +
       'corner (x, y) and side (size) of a square region in background pixels, and the white ' +
-      'quiet zone around the code in modules (at least 4). The code is drawn black on white, ' +
+      'quiet zone around the code in whole modules (0 to 16; 0 is no margin, under 4 may scan ' +
+      'less reliably). The code is drawn black on white, ' +
       'centred in the region at a whole number of pixels per module, never stretched; only ' +
       'its look changes, never what it encodes. Empty means no template: the plain QR. With ' +
       'no background stored, a region outside the background, or a link whose modules would ' +
