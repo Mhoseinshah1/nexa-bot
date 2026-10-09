@@ -528,13 +528,16 @@ export class CustomerService {
       readonly context?: CustomerStatusContext;
     },
   ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
-    return this.setStatus(scope, actor, {
+    const { customer, changed } = await this.setStatus(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       customerId: input.customerId,
       to: 'BLOCKED',
       reason: input.reason,
       ...(input.context === undefined ? {} : { context: input.context }),
     });
+    // `replayed` is internal to anti-spam's reporting; a replay answers exactly as the
+    // first call did.
+    return { customer, changed };
   }
 
   /**
