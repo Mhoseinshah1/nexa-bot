@@ -4106,7 +4106,8 @@ export const WEB_FA = {
   'web.qrt_size': 'ضلع مربع',
   'web.qrt_size_hint': 'دست‌کم {min} پیکسل.',
   'web.qrt_quiet': 'حاشیهٔ سفید (خانه)',
-  'web.qrt_quiet_hint': 'بین {min} و {max} خانه؛ کمتر از ۴ اسکن را دشوار می‌کند.',
+  'web.qrt_quiet_hint':
+    'عدد صحیح بین {min} و {max} خانه؛ ۰ یعنی بدون حاشیه. کمتر از {recommended} ممکن است اسکن را دشوارتر کند.',
   'web.qrt_invalid_fields': 'همهٔ مقادیر باید عدد صحیح و در محدودهٔ مجاز باشند.',
   'web.qrt_needs_background': 'برای تعیین جای QR ابتدا پس‌زمینه را بارگذاری کنید.',
   'web.qrt_outside': 'مربع QR باید کاملاً داخل تصویر پس‌زمینه باشد.',
@@ -8892,6 +8893,10 @@ export const WEB_FA = {
   'web.lco_fault_revoked': 'این تأیید قبلاً لغو شده است.',
   'web.lco_fault_not_found': 'این تأیید پیدا نشد.',
   'web.lco_fault_stopped': 'این نصب دیگر کار تازه نمی‌پذیرد.',
+  // --- FIX-06 (qr): the QR template's quiet zone may be 0..16 ---------------------------
+  'web.qrt_quiet_low':
+    'حاشیهٔ سفید کمتر از {recommended} خانه است. بعضی دوربین‌ها و برنامه‌ها QR بدون حاشیه یا با حاشیهٔ کم را سخت‌تر می‌خوانند؛ پیش از ذخیره پیش‌نمایش را با گوشی امتحان کنید. انتخاب این مقدار مجاز است.',
+  // --- end FIX-06 (qr) ------------------------------------------------------------------
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

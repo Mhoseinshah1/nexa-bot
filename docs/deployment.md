@@ -2268,6 +2268,46 @@ All three last only as long as old and new replicas run side by side.
 **Rolling back** to the release before it: the old Web Admin asks for none of the three, and
 the online index stays behind unused. Nothing to do.
 
+### What an update and a rollback degrade: a QR template with a white margin under 4 (FIX-06)
+
+FIX-06 widens the subscription QR template's white margin («حاشیهٔ سفید» on «🎨 ظاهر ربات» →
+«پس‌زمینهٔ QR») from 4–16 to 0–16 modules, and migration `0239` adds
+`setting_values_qr_template_quiet_zone_check`, which holds the stored value to whole numbers
+0–16. The release before FIX-06 reads `delivery.qr_template` with a STRICT schema whose
+minimum is 4, so a template stored with a margin of 0–3 does not parse there. A strict schema
+also refuses any extra key, so there is no representation both releases read; the
+degradation below is the fail-safe one, pinned by `tests/unit/qr-margin-rollback.test.ts`.
+
+**During the update**, while old and new replicas run side by side:
+
+- A template saved with a margin of 0–3 on a new replica is, on an OLD replica, a stored value
+  that does not match its declaration. The old replica records the WARN operational event
+  `settings.stored_value_invalid` (deduplicated per key), uses the default — no template —
+  and sends the **plain QR**: the black-on-white code of the exact link, scannable, never an
+  error. So two replicas can send two different-looking QRs of the same link until the update
+  finishes. A margin of 4–16 is read identically by both.
+- An old replica refuses to SAVE a margin under 4, and the old Web Admin bundle shows such a
+  stored template as no template: the «پیش‌فرض» badge and the starting fields (0, 0, 400, 4).
+  Save margins under 4 after the update has finished.
+
+**After rolling back** past FIX-06, every template with a margin of 0–3 stays disabled — the
+plain QR is sent — until it is saved again; nothing repairs it on its own. Migration `0239`'s
+CHECK stays and admits everything the old release writes (4–16). To find the affected tenants:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT tenant_id, value FROM setting_values
+    WHERE setting_key = 'delivery.qr_template' AND jsonb_typeof(value) = 'object'
+      AND (value->>'quietZoneModules')::numeric < 4"
+```
+
+Either, **before rolling back**, set those templates' margin to 4 or more, or, **after it**,
+open «پس‌زمینهٔ QR» in the old Web Admin, enter the template again (x, y, size from the query
+above) with a margin of 4–16 and save it (the old release reports the stored row's version,
+so the save is accepted). After a
+roll-forward, a template that was not re-saved is read again exactly as stored.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

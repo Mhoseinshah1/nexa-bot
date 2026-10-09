@@ -1088,7 +1088,19 @@ export class GatewayPaymentService {
     /** The provider reference bound to this attempt (CentralPay), re-checked under the lock. */
     providerReference: string | null = null,
   ): Promise<'SETTLED' | 'LATE' | 'ERROR' | 'HELD'> {
-    if (!eligible) {
+    /*
+     * FIX-03: an attempt this lane ALREADY settled is not a late completion. A worker that
+     * died between the settlement's commit and `recordOutcome` leaves the approval scheduled
+     * against a CONFIRMED payment; judged ineligible here, the restarted pass recorded
+     * `LATE_COMPLETION`, raised the "paid invoice we can no longer settle" alarm and logged a
+     * late approval — for money that had been credited exactly once. A confirmed payment goes
+     * to the settlement path instead, which answers `ALREADY_CONFIRMED` under the payment's
+     * lock and moves nothing. Every other ineligible payment is still a late completion.
+     */
+    const settledBefore =
+      !eligible &&
+      (await this.deps.paymentRecords.findById(scope, invoice.paymentId))?.state === 'CONFIRMED';
+    if (!eligible && !settledBefore) {
       await this.lateCompletion(scope, actor, invoice, 'DEADLINE_PASSED');
       return 'LATE';
     }

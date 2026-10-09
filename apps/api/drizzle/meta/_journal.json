@@ -1674,6 +1674,13 @@
       "when": 1791460353017,
       "tag": "0238_support_ai_handoff_context_age",
       "breakpoints": true
+    },
+    {
+      "idx": 239,
+      "version": "7",
+      "when": 1791531383174,
+      "tag": "0239_qr_template_quiet_zone_check",
+      "breakpoints": true
     }
   ]
 }

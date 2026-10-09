@@ -17,7 +17,9 @@ import { TENANT_MEDIA_MAX_BYTES } from './customer-ux.js';
  * - the background is a PNG within `QR_BACKGROUND_MIN_SIDE`..`QR_BACKGROUND_MAX_SIDE` pixels a
  *   side, 8 bits per channel, non-interlaced, greyscale / RGB / palette / grey+alpha / RGBA;
  * - the region is a square of `QR_TEMPLATE_REGION_MIN`.. px, wholly inside the background;
- * - the quiet zone is at least `QR_TEMPLATE_QUIET_ZONE_MIN` modules (the standard's minimum);
+ * - the quiet zone is a whole number of modules from `QR_TEMPLATE_QUIET_ZONE_MIN` (0, no white
+ *   margin at all) to `QR_TEMPLATE_QUIET_ZONE_MAX`; a new template starts at
+ *   `QR_TEMPLATE_QUIET_ZONE_DEFAULT` (4, the standard's minimum);
  * - the code is drawn at a WHOLE number of pixels per module — never stretched, never
  *   resampled — and refused below `QR_TEMPLATE_MODULE_MIN_PX`, in which case the plain QR is
  *   sent instead.
@@ -35,9 +37,21 @@ export const QR_BACKGROUND_MIN_SIDE = 128;
 export const QR_BACKGROUND_MAX_SIDE = 2048;
 /** The smallest QR region side, in pixels. */
 export const QR_TEMPLATE_REGION_MIN = 128;
-/** The quiet zone, in modules: 4 is ISO/IEC 18004's minimum. */
-export const QR_TEMPLATE_QUIET_ZONE_MIN = 4;
+/**
+ * The quiet zone, in whole modules: 0..16, the operator's choice (FIX-06, 2026-10-09).
+ *
+ * 0 is a real value — no white margin at all, the code's finder patterns on the region's own
+ * edge — never "unset": nothing may read it with `||` or a truthiness test. Below 4 a scanner
+ * may find the code less reliably (ISO/IEC 18004 asks for 4); the Web Admin says so and does
+ * not refuse it.
+ */
+export const QR_TEMPLATE_QUIET_ZONE_MIN = 0;
 export const QR_TEMPLATE_QUIET_ZONE_MAX = 16;
+/**
+ * The quiet zone a NEW template starts from, and the smallest the standard recommends. Not a
+ * floor: a value from `QR_TEMPLATE_QUIET_ZONE_MIN` up is stored and drawn as it is.
+ */
+export const QR_TEMPLATE_QUIET_ZONE_DEFAULT = 4;
 /**
  * The smallest module, in pixels, a templated code is drawn at. Telegram recompresses a
  * photo; under 4 px a module's edges blur into its neighbours and the decode rate drops.
@@ -93,7 +107,7 @@ export const qrTemplateSchema = z
     y: pixel,
     /** The region's side. The code is centred in it. */
     size: z.number().int().min(QR_TEMPLATE_REGION_MIN).max(QR_BACKGROUND_MAX_SIDE),
-    /** The white margin around the code, in modules. */
+    /** The white margin around the code, in whole modules, 0..16; 0 is no margin. */
     quietZoneModules: z
       .number()
       .int()
@@ -121,7 +135,8 @@ export function qrTemplatePlacementProblem(
 /**
  * Pixels per module for a code of `moduleCount` modules in a region of `regionSize` px with
  * `quietZoneModules` of white on every side: the WHOLE number that fits, never a fraction —
- * a fractional scale is a resampled, distorted code.
+ * a fractional scale is a resampled, distorted code. With a quiet zone of 0 the divisor is the
+ * module count alone, which a QR code never has as 0 (the smallest symbol is 21 modules).
  */
 export function qrModuleScale(
   regionSize: number,

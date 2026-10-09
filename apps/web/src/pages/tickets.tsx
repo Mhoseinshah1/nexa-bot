@@ -82,7 +82,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
-import { ListFreshness } from '../ui/list-search';
+import { ListFreshness, listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { Icon } from '../ui/icons';
 // Review N8 (PR #240): the status vocabulary lives in its own module, shared with Customer 360.
 import { TICKET_STATUS_LABELS, TICKET_STATUS_TONES as STATUS_TONES } from '../ticket-labels';
@@ -464,6 +464,39 @@ export function TicketsPage({
 
   const requestable = mayRequest(tickets, denied);
 
+  /*
+   * FIX-01: the customer field and the two dates apply themselves, debounced, as the
+   * /users search does — Enter and «اعمال» still apply at once. A reversed or invalid range
+   * is never applied by itself; it waits, with its error under the field. The automatic
+   * apply records the trimmed customer as the draft's own signature, so the URL catching up
+   * keeps what the operator typed under the caret. The trail is keyed by the filters, so a
+   * new search starts at the first page.
+   */
+  const wantedCustomer = draftCustomer.trim();
+  const debounce = useDebouncedApply({
+    wanted: [wantedCustomer, draftFrom, draftTo].join('|'),
+    applied: appliedSignature,
+    routeKey: listRouteKey(route),
+    ready: requestable && !dateProblem,
+    apply: () => {
+      setDraft({
+        signature: [wantedCustomer, draftFrom, draftTo].join('|'),
+        customer: draftCustomer,
+        fromDay: draftFrom,
+        toDay: draftTo,
+      });
+      setQueries(route, [
+        ['customer', wantedCustomer === '' ? null : wantedCustomer],
+        ['from', draftFrom === '' ? null : draftFrom],
+        ['to', draftTo === '' ? null : draftTo],
+      ]);
+    },
+  });
+  const editField = (patch: Partial<{ customer: string; fromDay: string; toDay: string }>) => {
+    edit(patch);
+    debounce.edited();
+  };
+
   return (
     <>
       <PageHead
@@ -558,7 +591,8 @@ export function TicketsPage({
               className="input sm"
               dir="ltr"
               value={draftCustomer}
-              onChange={(event) => edit({ customer: event.target.value })}
+              onChange={(event) => editField({ customer: event.target.value })}
+              {...debounce.composition}
             />
           </Field>
           <Field label={t('web.ticket_filter_from')} htmlFor="tickets-from" compact>
@@ -567,7 +601,7 @@ export function TicketsPage({
               className="input sm"
               type="date"
               value={draftFrom}
-              onChange={(event) => edit({ fromDay: event.target.value })}
+              onChange={(event) => editField({ fromDay: event.target.value })}
             />
           </Field>
           <Field
@@ -581,7 +615,7 @@ export function TicketsPage({
               className="input sm"
               type="date"
               value={draftTo}
-              onChange={(event) => edit({ toDay: event.target.value })}
+              onChange={(event) => editField({ toDay: event.target.value })}
             />
           </Field>
           <div className="tickets-filter-actions">

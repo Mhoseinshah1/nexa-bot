@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CustomerNotificationLoop,
   CUSTOMER_NOTIFICATION_INTERVAL_MS,
+  CUSTOMER_NOTIFICATION_STALE_AFTER_MS,
 } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification-loop';
 import type { CustomerNotificationService } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification.service';
 import type { TenantContext } from '@nexa/contracts';
@@ -107,7 +108,8 @@ describe('the customer notification loop', () => {
     expect(loop.isFresh(clock)).toBe(true);
 
     fail = true;
-    clock += CUSTOMER_NOTIFICATION_INTERVAL_MS * 4;
+    // Past the lane's tolerance, which is stated in time (FIX-03), not in intervals.
+    clock += CUSTOMER_NOTIFICATION_STALE_AFTER_MS + CUSTOMER_NOTIFICATION_INTERVAL_MS;
     await loop.tick();
     expect(loop.isFresh(clock), 'a loop whose every pass throws reported itself fresh').toBe(false);
     await loop.stop();

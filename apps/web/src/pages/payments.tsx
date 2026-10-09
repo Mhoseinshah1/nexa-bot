@@ -977,6 +977,8 @@ export function PaymentsPage({
         <ListSearchBox
           route={route}
           id="payments-search"
+          // FIX-01: typing or pasting searches by itself, debounced, as on /users.
+          autoApply
           hint={t('web.payments_search_hint')}
           hidden={toolbarHidden}
           // A new search starts at the first page: this list keeps its cursor in the URL.
