@@ -1232,6 +1232,9 @@ describe('TonPays, through the one settlement path', () => {
       );
       expect(settled[0]!.n).toBe(1);
       expect((await invoiceOf(paymentId)).outcome).toBe('SETTLED');
+      // FIX-03: an order's payment is never announced, or credited, as a wallet top-up.
+      expect(await notified(paymentId)).not.toContain('WALLET_TOPUP_CREDITED');
+      expect((await ledger()).filter((entry) => entry.payment_id === paymentId)).toEqual([]);
     });
 
     it('never settles pending, processing, need_action, or completed without paid === true', async () => {
