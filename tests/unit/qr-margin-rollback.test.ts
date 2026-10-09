@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import type * as Contracts from '@nexa/contracts';
 import type { OperationalEventInput, QrTemplate, TenantContext } from '@nexa/contracts';
 
 /**
@@ -8,8 +9,8 @@ import type { OperationalEventInput, QrTemplate, TenantContext } from '@nexa/con
  * reads it) and after `botctl rollback` (the old release reads it).
  *
  * The old `qrTemplateSchema` (origin/main eb139bef, `packages/contracts/src/delivery-qr.ts`)
- * is a STRICT object with a quiet-zone minimum of 4; `oldSchemaFrom` below reproduces it. Strict is
- * why an old-readable representation (a clamped `quietZoneModules` plus an extra exact key)
+ * is a STRICT object with a quiet-zone minimum of 4; `oldSchemaFrom` below reproduces it.
+ * Strict is why an old-readable representation (a clamped `quietZoneModules` plus an extra exact key)
  * is not available — the extra key fails the old parse exactly as 0 does — and this file
  * pins both facts. What it then proves is the degradation is fail-safe: the old release's
  * resolver does not throw, reports the row as invalid with an operational event, and the
@@ -22,7 +23,7 @@ import type { OperationalEventInput, QrTemplate, TenantContext } from '@nexa/con
  * still fails it. The test package has no direct `zod` dependency to rebuild it from scratch.
  */
 const OLD_QR_TEMPLATE_QUIET_ZONE_MIN = 4;
-function oldSchemaFrom(contracts: typeof import('@nexa/contracts')) {
+function oldSchemaFrom(contracts: typeof Contracts) {
   return contracts.qrTemplateSchema
     .refine((value) => value.quietZoneModules >= OLD_QR_TEMPLATE_QUIET_ZONE_MIN)
     .nullable();
@@ -30,7 +31,7 @@ function oldSchemaFrom(contracts: typeof import('@nexa/contracts')) {
 
 // The old release's registry entry: this release's, with the old schema in it.
 vi.mock('@nexa/contracts', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@nexa/contracts')>();
+  const actual = await importOriginal<typeof Contracts>();
   return {
     ...actual,
     settingDefinition: (key: string) => {
