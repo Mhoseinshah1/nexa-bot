@@ -563,6 +563,52 @@ describe('a draft with a problem is never applied by itself', () => {
 });
 
 // ---------------------------------------------------------------------------
+// A cancelled draft stays cancelled (Codex P2 on #249)
+// ---------------------------------------------------------------------------
+
+describe('a draft cancelled by another navigation is not revived by returning', () => {
+  const spec = () => SPECS.find((one) => one.name === '/products')!;
+  const status = () => new URLSearchParams(window.location.search).get('status');
+
+  it('/products: a status chip inside the wait, then the chip back to «همه»', async () => {
+    navigate('/products', { replace: true, force: true });
+    const calls = serve(spec());
+    await open(spec(), () => calls);
+    type(spec(), 'پلن');
+    await advance(SHORT);
+    fireEvent.click(screen.getByRole('button', { name: t('web.product_status_active') }));
+    await waitFor(() => expect(status()).toBe('ACTIVE'));
+    await advance(50);
+    fireEvent.click(screen.getAllByRole('button', { name: t('web.users_filter_all') })[0]!);
+    await waitFor(() => expect(status()).toBeNull());
+    const before = calls.length;
+    await advance(PAST * 2);
+    expect(inUrl(spec())).toBeNull();
+    expect(sent(calls.slice(before), spec()).filter((term) => term !== null)).toEqual([]);
+  });
+
+  it('/products: another list inside the wait, then the browser Back button', async () => {
+    navigate('/products', { replace: true, force: true });
+    const calls = serve(spec());
+    await open(spec(), () => calls);
+    type(spec(), 'پلن');
+    await advance(SHORT);
+    act(() => navigate('/products?status=ACTIVE', { force: true }));
+    await waitFor(() => expect(status()).toBe('ACTIVE'));
+    await advance(50);
+    await act(async () => {
+      window.history.back();
+      await new Promise((resolve) => window.addEventListener('popstate', resolve, { once: true }));
+    });
+    await waitFor(() => expect(status()).toBeNull());
+    const before = calls.length;
+    await advance(PAST * 2);
+    expect(inUrl(spec())).toBeNull();
+    expect(sent(calls.slice(before), spec()).filter((term) => term !== null)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The customer picker (the reseller register form): not a list, not in the URL
 // ---------------------------------------------------------------------------
 
@@ -723,6 +769,19 @@ describe('useDebouncedApply', () => {
     const onApply = vi.fn();
     render(<Probe routeKey="/a" ready={false} onApply={onApply} />);
     fireEvent.change(probe(), { target: { value: 'ab' } });
+    await advance(PAST * 2);
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('does not revive a cancelled draft when the route comes back to the same key', async () => {
+    // Codex P2 on #249: typed on /a, moved to /b inside the wait, back on /a later.
+    const onApply = vi.fn();
+    const { rerender } = render(<Probe routeKey="/a" onApply={onApply} />);
+    fireEvent.change(probe(), { target: { value: 'ab' } });
+    await advance(SHORT);
+    rerender(<Probe routeKey="/b" onApply={onApply} />);
+    await advance(50);
+    rerender(<Probe routeKey="/a" onApply={onApply} />);
     await advance(PAST * 2);
     expect(onApply).not.toHaveBeenCalled();
   });

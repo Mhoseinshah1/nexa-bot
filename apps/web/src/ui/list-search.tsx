@@ -106,7 +106,15 @@ export function useDebouncedApply({
   edited: () => void;
   composition: { onCompositionStart: () => void; onCompositionEnd: () => void };
 } {
-  const [editedAt, setEditedAt] = useState(routeKey);
+  /*
+   * The route the draft was last edited under, or `null` once nothing is armed. It is
+   * DISARMED the moment the route moves away, not merely compared: an operator who typed
+   * on `/products`, pressed a status chip inside the wait and later came back to
+   * `/products` would otherwise see the cancelled draft apply itself with no new edit
+   * (Codex P2 on #249). Only `edited()` arms it again.
+   */
+  const [editedAt, setEditedAt] = useState<string | null>(null);
+  if (editedAt !== null && editedAt !== routeKey) setEditedAt(null);
   const [composing, setComposing] = useState(false);
   /*
    * The latest `apply`, read when the timer fires. It is not a dependency of the timer:
