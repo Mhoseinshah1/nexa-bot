@@ -17,17 +17,20 @@ import {
 } from '../../apps/api/src/modules/platform/legacy-importer/application/nxpkg-acceptance';
 import {
   nxpkgOwnershipHold,
+  ownershipHoldDigest,
   type VerifiedOwnershipDecisions,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/nxpkg-ownership';
 import {
   NxpkgImportRefused,
   buildPanelMappingFromTargets,
+  validatePanelMappingAgainstTargets,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/nxpkg-panel-binding';
 import { parsePanelMapping } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
 import {
   decideAllServices,
   inventoryIndexes,
   planLegacyImport,
+  planTalliesDigest,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/plan';
 import { readFromSession } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import { FixtureLegacySourceConnector } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/fixture-legacy-source';
@@ -428,6 +431,108 @@ describe('buildPanelMappingFromTargets', () => {
 
 // --- ownership decisions ----------------------------------------------------------------------
 
+describe('validatePanelMappingAgainstTargets (H2: a given --panel-map for a package)', () => {
+  const targets = [
+    targetRecord('rp1', {}),
+    targetRecord('rp2', { nexa_panel_id: PANEL_B }),
+    targetRecord('later', null),
+    targetRecord('(no code_panel)', null),
+  ];
+  const built = buildPanelMappingFromTargets({
+    tenantId: TENANT,
+    targets,
+    bindings: { rp1: PANEL_A, rp2: PANEL_B },
+    tenantPanels: PANELS,
+    products: [{ codeProduct: 'p1', productId: PANEL_A }],
+  });
+  const check = (file: Record<string, unknown>) =>
+    validatePanelMappingAgainstTargets({
+      tenantId: TENANT,
+      targets,
+      mapping: parsePanelMapping(JSON.stringify(file), TENANT),
+      tenantPanels: PANELS,
+    });
+  const base = JSON.parse(built.text) as Record<string, any>;
+
+  it("accepts exactly the targets' own map, reformatted or reordered, products passed through", () => {
+    expect(check(base).mapping.fingerprint).toBe(built.mapping.fingerprint);
+    expect(check({ ...base, panels: [...base['panels']].reverse() }).mapping.fingerprint).toBe(
+      built.mapping.fingerprint,
+    );
+  });
+
+  it('refuses a test or missing panel, a moved unresolved code, an unbound target, a non-RickPanel or another panel', () => {
+    const refused = (file: Record<string, unknown>) => refusedWith(() => check(file));
+    const noLater = { ...base, unresolvedPanels: undefined };
+    refused({ ...noLater, testPanels: ['later'] });
+    refused({ ...noLater, missingPanels: ['later'] });
+    refused({
+      ...base,
+      unresolvedPanels: [
+        ...base['unresolvedPanels'],
+        { codePanel: 'extra', reason: 'UNKNOWN_ORIGIN' },
+      ],
+    });
+    refused({
+      ...base,
+      panels: [{ codePanel: 'rp2', panelId: PANEL_B }],
+      unresolvedPanels: [
+        { codePanel: 'later', reason: 'OWNER_DECIDES_LATER' },
+        { codePanel: 'rp1', reason: 'OWNER_DECIDES_LATER' },
+      ],
+      productionPanels: [PANEL_B],
+    });
+    refused({
+      ...base,
+      panels: [
+        { codePanel: 'rp1', panelId: MARZBAN },
+        { codePanel: 'rp2', panelId: PANEL_B },
+      ],
+      productionPanels: [MARZBAN, PANEL_B].sort(),
+    });
+    refused({
+      ...base,
+      panels: [
+        { codePanel: 'rp1', panelId: PANEL_A },
+        { codePanel: 'rp2', panelId: PANEL_A },
+      ],
+      productionPanels: [PANEL_A],
+    });
+  });
+});
+
+describe('legacy-import --expected-plan-tallies-digest', () => {
+  const argv = (mode: string, ...extra: string[]) => [
+    mode,
+    '--tenant',
+    'acme',
+    '--target',
+    'nexa_test',
+    '--panel-map',
+    'map.json',
+    '--source',
+    'nxpkg:/srv/p.nxpkg',
+    '--package-key-env',
+    'K',
+    '--evidence-class',
+    'synthetic',
+    ...extra,
+  ];
+  it('import only, a lowercase SHA-256', () => {
+    const d = 'a'.repeat(64);
+    expect(parseArgs(argv('import', '--expected-plan-tallies-digest', d))).toMatchObject({
+      expectedPlanTalliesDigest: d,
+    });
+    expect(parseArgs(argv('import'))).toMatchObject({ expectedPlanTalliesDigest: null });
+    expect(() => parseArgs(argv('resume', '--expected-plan-tallies-digest', d))).toThrow(
+      /import only/u,
+    );
+    expect(() =>
+      parseArgs(argv('import', '--expected-plan-tallies-digest', 'A'.repeat(64))),
+    ).toThrow(UsageError);
+  });
+});
+
 describe('verifyOwnershipDecisions', () => {
   const secret = () => ({ keyFileText });
   const doc = () => parseStrictJson(decisionsText) as Record<string, any>;
@@ -561,19 +666,42 @@ describe('verifyOwnershipDecisions', () => {
     });
     const classOf = (invoice: string) =>
       [...verified.entries.values()].find((e) => e.invoiceKey === invoice)?.class;
+    const baselineHeld = (invoice: { idInvoice: string; idUser: string | null }) => {
+      const f = facts.filter((r) => r.invoiceKey === invoice.idInvoice);
+      return !(
+        f.length === 1 &&
+        ['CONFIRMED_CURRENT_OWNER', 'CONFIRMED_TRANSFER', 'NO_CONFLICT'].includes(
+          f[0]?.decision ?? '',
+        ) &&
+        f[0]?.finalOwner === invoice.idUser
+      );
+    };
+    let attestedHeld = 0;
     for (const invoice of snapshot.liveInvoices) {
       const cls = classOf(invoice.idInvoice);
       if (cls === 'PENDING' || cls === 'QUARANTINED' || cls === 'REJECTED') {
         expect(out.hold.has(invoice.idInvoice), cls).toBe(true);
       }
       if (cls === 'ADMIN_APPROVED_UNVERIFIED') {
+        // Reported as attested, never proven — and the attestation never lifts the
+        // package evidence's own hold.
         expect(out.attested.has(invoice.idInvoice)).toBe(true);
-        expect(out.hold.has(invoice.idInvoice)).toBe(false);
         expect(out.proven.has(invoice.idInvoice)).toBe(false);
+        expect(out.hold.has(invoice.idInvoice)).toBe(baselineHeld(invoice));
+        if (baselineHeld(invoice)) attestedHeld += 1;
       }
-      if (cls === 'PROVEN') expect(out.proven.has(invoice.idInvoice)).toBe(true);
+      if (cls === 'PROVEN') {
+        expect(out.proven.has(invoice.idInvoice)).toBe(!baselineHeld(invoice));
+        expect(out.hold.has(invoice.idInvoice)).toBe(baselineHeld(invoice));
+      }
     }
-    expect(out.hold.size + out.attested.size + out.proven.size).toBe(snapshot.liveInvoices.length);
+    // The converter's fixture attests unproven (AMBIGUOUS_*) records: they stay held.
+    expect(attestedHeld).toBeGreaterThan(0);
+    // Every live invoice is exactly one of: held, proven, attested (and not held).
+    expect(out.hold.size + out.proven.size + out.attested.size - attestedHeld).toBe(
+      snapshot.liveInvoices.length,
+    );
+    expect(Object.values(out.reasons).reduce((a, b) => a + (b ?? 0), 0)).toBe(out.hold.size);
     expect(out.reasons).toMatchObject({ DECISION_PENDING: 2 });
 
     // A stale entry is held whatever its class.
@@ -695,6 +823,148 @@ describe('decideAllServices with an ownership hold', () => {
     ).toBe('AMBIGUOUS_OWNERSHIP');
     expect(withHold.categories.ADOPTION_ELIGIBLE).toBe(unheld.categories.ADOPTION_ELIGIBLE - 1);
     expect(withHold.categories.AMBIGUOUS_OWNERSHIP).toBe(unheld.categories.AMBIGUOUS_OWNERSHIP + 1);
+    // `sections.ownershipHold.changedCategory`: only an ELIGIBLE invoice the hold changed.
+    expect(unheld.ownershipHoldChanged).toBe(0);
+    expect(withHold.ownershipHoldChanged).toBe(1);
+    expect(before.out.ownershipHoldChanged).toBe(0);
+    expect(after.out.ownershipHoldChanged).toBe(1);
+    // A hold only on an invoice that was not eligible changes no category.
+    expect(direct(new Set([notEligible?.invoice.idInvoice as string])).ownershipHoldChanged).toBe(
+      0,
+    );
+  });
+
+  it('planTalliesDigest: stable, key-order free, and moved by any tally (the hold included)', async () => {
+    const before = await plan();
+    const d = planTalliesDigest(before.out);
+    expect(d).toMatch(/^[0-9a-f]{64}$/u);
+    expect(planTalliesDigest((await plan()).out)).toBe(d);
+    // Key order does not matter; a bigint is not a number.
+    const reordered = JSON.parse(
+      JSON.stringify(before.out.tallies, (_k, v: unknown) =>
+        typeof v === 'bigint' ? { __big: v.toString() } : v,
+      ),
+      (_k, v: unknown) =>
+        v !== null && typeof v === 'object' && '__big' in (v as object)
+          ? BigInt((v as { __big: string }).__big)
+          : v,
+    ) as Record<string, unknown>;
+    const reversed = Object.fromEntries(Object.entries(reordered).reverse());
+    expect(planTalliesDigest({ tallies: reversed as never })).toBe(d);
+    const wallet = before.out.tallies.wallet;
+    expect(
+      planTalliesDigest({
+        tallies: {
+          ...before.out.tallies,
+          wallet: { ...wallet, legacySumMinor: wallet.legacySumMinor + 1n },
+        },
+      }),
+    ).not.toBe(d);
+    expect(
+      planTalliesDigest({
+        tallies: {
+          ...before.out.tallies,
+          wallet: { ...wallet, legacySumMinor: Number(wallet.legacySumMinor) as never },
+        },
+      }),
+    ).not.toBe(d);
+    const eligible = before.out.services.find((s) => s.decision.category === 'ADOPTION_ELIGIBLE');
+    expect(
+      planTalliesDigest((await plan(new Set([eligible?.invoice.idInvoice as string]))).out),
+    ).not.toBe(d);
+  });
+});
+
+// --- the hold, record by record (H3) -------------------------------------------------------------
+
+describe('nxpkgOwnershipHold: a decision only ever adds to the evidence hold', () => {
+  const invoice = { idInvoice: 'i1', idUser: '100' };
+  const record = (decision: string | null, finalOwner: string | null = '100') => ({
+    key: 'k1',
+    invoiceKey: 'i1',
+    decision,
+    finalOwner,
+  });
+  const decisions = (
+    cls: VerifiedOwnershipDecisions['entries'] extends ReadonlyMap<string, infer E>
+      ? E extends { class: infer C }
+        ? C
+        : never
+      : never,
+    stale = false,
+  ): VerifiedOwnershipDecisions => ({
+    summary: {
+      items: 1,
+      PROVEN: 0,
+      ADMIN_APPROVED_UNVERIFIED: 0,
+      PENDING: 0,
+      REJECTED: 0,
+      QUARANTINED: 0,
+      stale: 0,
+    },
+    entriesDigest: 'e'.repeat(64),
+    auditHead: null,
+    entries: new Map([
+      ['k1', { key: 'k1', invoiceKey: 'i1', class: cls, basis: 'X', batchId: null, stale }],
+    ]),
+  });
+  const hold = (r: ReturnType<typeof record>, d: VerifiedOwnershipDecisions | null) =>
+    nxpkgOwnershipHold({ records: [r], decisions: d, liveInvoices: [invoice] });
+
+  it('no decisions: an unproven record is held; a proven one for id_user is not', () => {
+    expect(hold(record('AMBIGUOUS_OWNER', null), null)).toMatchObject({
+      reasons: { OWNERSHIP_NOT_PROVEN: 1 },
+    });
+    expect(hold(record('AMBIGUOUS_OWNER', null), null).hold.has('i1')).toBe(true);
+    const proven = hold(record('CONFIRMED_CURRENT_OWNER'), null);
+    expect(proven.hold.size).toBe(0);
+    expect(proven.proven.has('i1')).toBe(true);
+    expect(hold(record('CONFIRMED_CURRENT_OWNER', '999'), null).reasons).toEqual({
+      PROVEN_OWNER_IS_NOT_INVOICE_OWNER: 1,
+    });
+  });
+
+  it('ADMIN_APPROVED_UNVERIFIED never removes the baseline hold; it is still reported as attested', () => {
+    const attested = hold(record('AMBIGUOUS_OWNER', null), decisions('ADMIN_APPROVED_UNVERIFIED'));
+    expect(attested.hold.has('i1')).toBe(true);
+    expect(attested.attested.has('i1')).toBe(true);
+    expect(attested.proven.size).toBe(0);
+    expect(attested.reasons).toEqual({ OWNERSHIP_NOT_PROVEN: 1 });
+    // Attested over a proof for another owner: still held.
+    expect(
+      hold(record('CONFIRMED_TRANSFER', '999'), decisions('ADMIN_APPROVED_UNVERIFIED')).hold.has(
+        'i1',
+      ),
+    ).toBe(true);
+    // Only where the evidence itself proves the record for id_user is it left to NEXA's rules,
+    // and even then it is attested, never proven.
+    const clean = hold(record('NO_CONFLICT'), decisions('ADMIN_APPROVED_UNVERIFIED'));
+    expect(clean.hold.size).toBe(0);
+    expect(clean.attested.has('i1')).toBe(true);
+    expect(clean.proven.size).toBe(0);
+  });
+
+  it('a PROVEN decision does not lift the baseline either; a REJECTED / stale decision holds a proven record', () => {
+    expect(hold(record('AMBIGUOUS_OWNER', null), decisions('PROVEN')).hold.has('i1')).toBe(true);
+    const rejected = hold(record('CONFIRMED_CURRENT_OWNER'), decisions('REJECTED'));
+    expect(rejected.hold.has('i1')).toBe(true);
+    expect(rejected.reasons).toEqual({ DECISION_REJECTED: 1 });
+    expect(rejected.proven.size).toBe(0);
+    expect(hold(record('CONFIRMED_CURRENT_OWNER'), decisions('PROVEN', true)).reasons).toEqual({
+      DECISION_STALE: 1,
+    });
+    const ok = hold(record('CONFIRMED_CURRENT_OWNER'), decisions('PROVEN'));
+    expect(ok.hold.size).toBe(0);
+    expect(ok.proven.has('i1')).toBe(true);
+  });
+
+  it('ownershipHoldDigest binds the sorted hold and the decisions digest', () => {
+    const a = ownershipHoldDigest(new Set(['b', 'a']), null);
+    expect(a).toMatch(/^[0-9a-f]{64}$/u);
+    expect(ownershipHoldDigest(new Set(['a', 'b']), null)).toBe(a);
+    expect(ownershipHoldDigest(new Set(['a']), null)).not.toBe(a);
+    expect(ownershipHoldDigest(new Set(['a', 'b']), 'e'.repeat(64))).not.toBe(a);
+    expect(ownershipHoldDigest(new Set(), null)).not.toBe(ownershipHoldDigest(new Set(), 'none2'));
   });
 });
 

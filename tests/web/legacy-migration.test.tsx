@@ -37,6 +37,8 @@ const capabilities = (overrides: Record<string, unknown> = {}) => ({
 const progress = {
   phase: null,
   applyAttempts: 0,
+  verifyAttempts: 0,
+  dryRunAttempts: 0,
   importerVerdict: null,
   reconcileVerdict: null,
   history: [],
@@ -83,6 +85,7 @@ const dryRunReport = {
     freezeProofSha256: 'f'.repeat(64),
     finalDumpSha256: '1'.repeat(64),
   },
+  planTalliesDigest: '2'.repeat(64),
 };
 
 const view = (overrides: Record<string, unknown> = {}) => ({
@@ -217,6 +220,24 @@ describe('the legacy migration page', () => {
     // The idempotency key is not derived from the secret.
     expect(String(sent['idempotencyKey'])).not.toContain(PASSPHRASE);
     await waitFor(() => expect(document.body.textContent ?? '').not.toContain(PASSPHRASE));
+  });
+
+  it('asks for the key again after the server erased an idle one', async () => {
+    const api = page(
+      view({
+        status: 'DRY_RUN_DONE',
+        keyPresent: false,
+        keyKind: 'KEY_FILE',
+        verifyReport,
+        dryRunReport,
+        dryRunSha256: H('d'),
+      }),
+    );
+    expect(await screen.findByText(t('web.lmg_key_expired'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.lmg_key_save') })).toBeInTheDocument();
+    // No dry run is offered without the key.
+    expect(screen.queryByRole('button', { name: t('web.lmg_dry_run_again') })).toBeNull();
+    expect(api.calls.filter((c) => c.method !== 'GET')).toEqual([]);
   });
 
   it('offers only ACTIVE RickPanels, by name, for each package panel', async () => {

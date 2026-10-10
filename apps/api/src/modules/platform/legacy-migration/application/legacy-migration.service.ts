@@ -41,7 +41,11 @@ import type { SessionRepository } from '../../identity/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { sanitiseFilename } from '../../recovery/application/recovery.service.js';
-import { digestsEqual, LEGACY_MIGRATION_COMMAND_FROM } from '../domain/import-lifecycle.js';
+import {
+  digestsEqual,
+  errorKind,
+  LEGACY_MIGRATION_COMMAND_FROM,
+} from '../domain/import-lifecycle.js';
 import type {
   LegacyNxpkgImportPatch,
   LegacyNxpkgImportRepository,
@@ -265,7 +269,8 @@ export class LegacyMigrationService {
   async failUpload(upload: PendingPackageUpload): Promise<void> {
     await this.deps.workspaces.discard(upload.importId).catch((error: unknown) => {
       this.deps.logger.error(
-        { importId: upload.importId, err: error instanceof Error ? error.message : String(error) },
+        // The type and code only: a filesystem error's message names the upload's path (L3).
+        { importId: upload.importId, err: errorKind(error) },
         'an abandoned legacy migration upload could not be removed',
       );
     });
@@ -273,7 +278,11 @@ export class LegacyMigrationService {
 
   // --- configuration (legacy.migration.manage) ---------------------------------------------
 
-  /** The package key or passphrase, sealed. UPLOADED only, before the worker takes it. */
+  /**
+   * The package key or passphrase, sealed. UPLOADED, before the worker takes it; or VERIFIED /
+   * DRY_RUN_DONE while the import holds NO key — the `migration` role erased an idle one
+   * (`LEGACY_MIGRATION_KEY_IDLE_MS`). A key held there is never replaced.
+   */
   async setKey(
     scope: TenantContext,
     actor: ActorContext,
@@ -305,6 +314,7 @@ export class LegacyMigrationService {
       { idempotencyKey: command.idempotencyKey, requestHash, id, action },
       async (tx) => {
         const row = await this.lockFor(scope, id, LEGACY_MIGRATION_COMMAND_FROM.setKey, tx);
+        if (row.status !== 'UPLOADED' && row.keyCiphertext !== null) throw invalidState(row.status);
         const sealed = this.deps.cipher.encrypt(secret, {
           purpose: LEGACY_MIGRATION_KEY_PURPOSE,
           tenantId: scope.tenantId,
@@ -477,6 +487,14 @@ export class LegacyMigrationService {
       { idempotencyKey: command.idempotencyKey, requestHash, id, action },
       async (tx) => {
         const row = await this.lockFor(scope, id, LEGACY_MIGRATION_COMMAND_FROM.requestDryRun, tx);
+        // An idle key was erased (L4): the dry run would wait for it unseen. Say so now.
+        if (row.keyCiphertext === null) {
+          throw errors.conflict(
+            CODES.INVALID_STATE,
+            'Give the package key again before a dry run: the idle one was erased.',
+            { status: row.status, reason: 'PACKAGE_KEY_MISSING' },
+          );
+        }
         if (row.panelBindings === null || row.panelBindings.length === 0) {
           throw errors.conflict(
             CODES.INVALID_STATE,

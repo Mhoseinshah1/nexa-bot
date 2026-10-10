@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import {
   isNexaError,
   LEGACY_IMPORT_ERROR_CODES,
+  LEGACY_NXPKG_ERROR_CODES,
   type ActorContext,
   type LegacyMigrationApplyReport,
   type LegacyMigrationCodeCount,
@@ -16,9 +17,11 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { and, desc, eq } from 'drizzle-orm';
+import { errorKind } from '../domain/import-lifecycle.js';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { runInventory } from '../../../../legacy-import-inventory.js';
+import { freshCutoverFingerprints } from '../../../../legacy-import-cutover.js';
 import type { LegacyCutoverService } from '../../legacy-cutover/application/legacy-cutover.service.js';
 import { stopSalesHolds } from '../../legacy-cutover/domain/cutover-rules.js';
 import {
@@ -64,6 +67,7 @@ import {
 import type { LegacyHistoryIngest } from '../../legacy-history/application/legacy-history-ingest.js';
 import {
   LegacyMigrationBlocked,
+  LegacyMigrationRetry,
   LegacyMigrationStepFailure,
   type FreshTargetGuard,
   type HistoryIngestPort,
@@ -224,8 +228,16 @@ export class NxpkgMigrationAdapters
         await session.close();
       }
       const panelTargets = await selectedTargets(pkg);
+      const packageImportId = connector.identity.importId;
+      if (packageImportId === null) {
+        throw new LegacyMigrationStepFailure('NXPKG_CONTAINER_INVALID', 'No package import id.');
+      }
+      // The history archive's planner and its FIRST pass (every record validated, keys unique,
+      // no live flag), writing nothing: a package whose history the apply would refuse fails
+      // HERE, before anyone reviews a dry run of it.
+      await this.historyCounts(context, pkg, packageImportId);
       return {
-        packageImportId: connector.identity.importId ?? 'unknown',
+        packageImportId,
         sourceFingerprint: fingerprint,
         packageSchemaVersion: connector.identity.contractVersion,
         converterVersion: connector.identity.converterVersion,
@@ -254,40 +266,117 @@ export class NxpkgMigrationAdapters
 
   // --- fresh target (§6) ------------------------------------------------------------------
 
-  async check(scope: TenantContext) {
-    const result = await checkFreshTarget(this.deps.db, scope.tenantId);
+  async check(scope: TenantContext, sourceFingerprint: string | null) {
+    const result = await checkFreshTarget(this.deps.db, scope.tenantId, { sourceFingerprint });
     return result.fresh
       ? ({ fresh: true } as const)
-      : ({ fresh: false, counts: result.counts } as const);
+      : ({ fresh: false, counts: nonZero(result.counts) } as const);
   }
 
   // --- the importer ------------------------------------------------------------------------
 
   /**
-   * The read sets the import needs (products, invoice archive — the UNRESOLVED_RETAINED
-   * invariant), then the importer's dry run, plus the history ingest counted with `dryRun`.
+   * The importer's dry run, the read-set FINGERPRINTS (digest only: nothing recorded, nothing
+   * ingested — H4), the history counted with `dryRun`, and the converter's own operational
+   * totals compared with the importer's plan (M8).
    */
   async dryRun(context: MigrationStepContext) {
     return this.withPackage(context, async (opened) => {
       const fingerprint = requireFingerprint(context);
-      const readSets = await this.readSets(context, opened.connector, fingerprint);
+      const observed = await this.observeReadSets(context, opened.connector, fingerprint);
       const run = await this.run('dry-run', context, opened);
       const history = await this.history(context, opened.pkg, true);
       const tallies = (run.report.sections['plan'] ?? {}) as PlanShape;
+      const converter = await converterTotals(opened.pkg);
+      const absent = this.compareWithConverter(context, converter, tallies);
       const cutover: LegacyMigrationCutoverValues = {
         sourceFingerprint: fingerprint,
         panelMapFingerprint: (await this.binding(context, opened.pkg)).mapping.fingerprint,
-        ...readSets,
+        inventoryFingerprint: observed.inventoryFingerprint,
+        productsFingerprint: observed.productsFingerprint,
+        invoiceArchiveFingerprint: observed.invoiceArchiveFingerprint,
         freezeProofSha256: opened.pkg.payloadSha256,
         finalDumpSha256: opened.pkg.fileSha256,
       };
+      const digest = run.report.sections['planTalliesDigest'];
+      const holdSection = run.report.sections['ownershipHold'] as
+        { readonly changedCategory?: unknown } | undefined;
       return {
         report: {
-          ...dryRunReportOf(run.report, tallies, run.hold, run.decisions, history),
+          ...dryRunReportOf(run.report, tallies, run.hold, run.decisions, history, {
+            invoiceArchiveRows: observed.invoiceArchiveRows,
+            holdChangedCategory:
+              typeof holdSection?.changedCategory === 'number' ? holdSection.changedCategory : null,
+            converterTotalsAbsent: absent,
+          }),
           cutover,
+          planTalliesDigest:
+            typeof digest === 'string' && /^[0-9a-f]{64}$/u.test(digest) ? digest : null,
         },
         legacyRunId: runIdOf(run.report),
       };
+    });
+  }
+
+  /**
+   * The APPROVED reads (design §4: products and invoice archive before the import, the
+   * UNRESOLVED_RETAINED invariant; the inventory a cutover approval binds), each bound to the
+   * fingerprint the approved dry run observed. Ingested and RECORDED here, at the apply's
+   * start — never by the dry run.
+   */
+  async recordReadSets(context: MigrationStepContext): Promise<void> {
+    await this.withPackage(context, async ({ connector }) => {
+      const fingerprint = requireFingerprint(context);
+      const approved = context.dryRunReport?.cutover;
+      if (approved === undefined || approved.sourceFingerprint !== fingerprint) {
+        throw new LegacyMigrationStepFailure(
+          'DRY_RUN_MISMATCH',
+          'The apply has no approved dry run of this source.',
+        );
+      }
+      const importer = this.deps.importer();
+      const common = {
+        scope: context.scope,
+        actor: context.actor,
+        connector,
+        expectedFingerprint: fingerprint,
+        productionLikeTarget: this.productionLikeTarget,
+      };
+      context.signal.throwIfAborted();
+      const inventory = await runInventory(
+        importer,
+        connector,
+        { expectedFingerprint: fingerprint },
+        {
+          scope: context.scope,
+          actor: context.actor,
+          productionLikeTarget: this.productionLikeTarget,
+        },
+      );
+      if (inventory.inventory.fingerprint !== approved.inventoryFingerprint) {
+        throw new LegacyMigrationStepFailure(
+          'DRY_RUN_MISMATCH',
+          'The inventory read now is not the one the approved dry run observed.',
+        );
+      }
+      if (inventory.recorded === null) {
+        throw new LegacyMigrationStepFailure(
+          'IMPORT_FAILED',
+          'The inventory read set was not recorded.',
+        );
+      }
+      context.signal.throwIfAborted();
+      // `expected*` = the approved fingerprint: the read ingests and records only when it
+      // reads exactly that; anything else is refused before a row is written.
+      await importer.readProducts({
+        ...common,
+        expectedProductsFingerprint: approved.productsFingerprint,
+      });
+      context.signal.throwIfAborted();
+      await importer.readInvoiceArchive({
+        ...common,
+        expectedInvoiceArchiveFingerprint: approved.invoiceArchiveFingerprint,
+      });
     });
   }
 
@@ -304,7 +393,13 @@ export class NxpkgMigrationAdapters
       if (input.mode === 'RESUME') {
         if ((await this.deps.importer().runningRun(context.scope)) !== null) {
           mode = 'resume';
-        } else if (!(await checkFreshTarget(this.deps.db, context.scope.tenantId)).fresh) {
+        } else if (
+          !(
+            await checkFreshTarget(this.deps.db, context.scope.tenantId, {
+              sourceFingerprint: requireFingerprint(context),
+            })
+          ).fresh
+        ) {
           const finished = await this.finishedApplyRun(context);
           if (finished === null) {
             throw new LegacyMigrationStepFailure(
@@ -315,6 +410,7 @@ export class NxpkgMigrationAdapters
           return finished;
         }
       }
+      context.signal.throwIfAborted();
       const run = await this.run(mode, context, opened);
       const verdict = run.report.verdict ?? 'UNKNOWN';
       if (verdict === 'BLOCKED') {
@@ -347,17 +443,26 @@ export class NxpkgMigrationAdapters
   ): Promise<LegacyMigrationApplyReport> {
     return this.withPackage(context, async (opened) => {
       const run = await this.run('report', context, opened);
-      const final = (run.report.final ?? {}) as {
-        verdict?: { holds?: unknown; failedInvariants?: unknown };
-      };
-      const failed = Array.isArray(final.verdict?.failedInvariants)
-        ? final.verdict.failedInvariants.filter((v): v is string => typeof v === 'string')
-        : [];
+      // `--report-schema 2`: the v2 document is `finalV2` (`final` is the closed v1 core and
+      // carries no verdict of its own). Its verdict is the AND of every section and of the
+      // seven invariants; the report's own verdict also folds in the v1 checks.
+      const v2 = (run.report as { finalV2?: unknown }).finalV2 as
+        | {
+            verdict?: { holds?: unknown; failedSections?: unknown; failedInvariants?: unknown };
+          }
+        | undefined;
+      const strings = (value: unknown): string[] =>
+        Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+      const holds =
+        v2?.verdict?.holds === true &&
+        typeof run.report.verdict === 'string' &&
+        !run.report.verdict.endsWith('_WITH_DISCREPANCY');
       return {
         importerVerdict: input.importerVerdict,
         reconcileVerdict: input.reconcileVerdict,
-        reportHolds: final.verdict?.holds === true,
-        failedInvariants: failed,
+        reportHolds: holds,
+        failedInvariants: strings(v2?.verdict?.failedInvariants),
+        failedSections: strings(v2?.verdict?.failedSections),
         sections: input.history.map((h) => ({
           section: `history:${h.code}`,
           source: h.count,
@@ -470,6 +575,14 @@ export class NxpkgMigrationAdapters
       {
         tenantId: context.scope.tenantId,
         productionLikeTarget: this.productionLikeTarget,
+        // M7: the hold is bound into the run with the decisions file it came from.
+        ownershipDecisionsDigest: decisions?.entriesDigest ?? null,
+        // DRY_RUN_MISMATCH: an import starts only on the plan the owner approved — the
+        // APPROVED dry run's tallies digest (the executor checked the approval binds this
+        // very report). A resume continues its own run and is not asked.
+        ...(mode === 'import' && context.dryRunReport?.planTalliesDigest != null
+          ? { dryRunTalliesDigest: context.dryRunReport.planTalliesDigest }
+          : {}),
         ownershipHoldFor: (snapshot: LegacySnapshot) => {
           hold = nxpkgOwnershipHold({
             records: facts,
@@ -590,9 +703,29 @@ export class NxpkgMigrationAdapters
     if (context.packageImportId === null) {
       throw new LegacyMigrationStepFailure('NXPKG_CONTAINER_INVALID', 'No package import id.');
     }
+    return dryRun
+      ? this.historyCounts(context, pkg, context.packageImportId)
+      : this.historyIngest(context, pkg, context.packageImportId, false);
+  }
+
+  /** The ingest's planner and its validating first pass, writing nothing (`dryRun`). */
+  private historyCounts(
+    context: Context,
+    pkg: NxpkgPackage,
+    packageImportId: string,
+  ): Promise<LegacyMigrationCodeCount[]> {
+    return this.historyIngest(context, pkg, packageImportId, true);
+  }
+
+  private async historyIngest(
+    context: Context,
+    pkg: NxpkgPackage,
+    packageImportId: string,
+    dryRun: boolean,
+  ): Promise<LegacyMigrationCodeCount[]> {
     const result = await this.deps.history().ingest(context.scope, context.actor as ActorContext, {
       nxpkgImportId: context.importId,
-      packageImportId: context.packageImportId,
+      packageImportId,
       source: pkg,
       dryRun,
       signal: context.signal,
@@ -619,26 +752,188 @@ export class NxpkgMigrationAdapters
       .orderBy(desc(legacyImportRuns.startedAt))
       .limit(1);
     if (row === undefined || row.status !== 'COMPLETED') return null;
-    return { legacyRunId: row.id, importerVerdict: row.status };
+    // The run's STATUS is not the importer's verdict (COMPLETED_WITH_FAILURES and
+    // COMPLETED_ADOPTION_PENDING_P6 are COMPLETED runs). What it left for a person is read
+    // back from its finish record; without the verdict itself the outcome is never called
+    // clean: the executor reports COMPLETED_WITH_DISCREPANCY for a person to read.
+    const facts = await this.deps
+      .cutover()
+      .reportFacts(context.scope, requireFingerprint(context), row.id);
+    const attention = facts.applyOutcome?.attention['total'] ?? null;
+    return {
+      legacyRunId: row.id,
+      importerVerdict:
+        attention !== null && attention > 0
+          ? 'COMPLETED_WITH_FAILURES'
+          : 'COMPLETED_VERDICT_NOT_RECORDED',
+    };
+  }
+
+  /**
+   * The read sets' fingerprints, OBSERVED only (`expected = null`: a digest, nothing written
+   * anywhere — no product review, no invoice archive, no read-set run) and the inventory
+   * taken the same way. The approved reads that record them run at the apply's start.
+   */
+  private async observeReadSets(
+    context: Context,
+    connector: NxpkgLegacySourceConnector,
+    fingerprint: string,
+  ): Promise<{
+    readonly inventoryFingerprint: string;
+    readonly productsFingerprint: string;
+    readonly invoiceArchiveFingerprint: string;
+    readonly invoiceArchiveRows: number;
+  }> {
+    const importer = this.deps.importer();
+    const fresh = await freshCutoverFingerprints(importer, connector, fingerprint, {
+      scope: context.scope,
+      actor: context.actor,
+      productionLikeTarget: this.productionLikeTarget,
+    });
+    // The cutover gate refuses an import whose fresh inventory is not COMPLETE (every legacy
+    // table classified in a reviewed commit). Said at the dry run, so no owner approves a
+    // package the gate will refuse at the apply.
+    if (this.productionLikeTarget && fresh.inventory.verdict !== 'COMPLETE') {
+      this.deps.logger.warn(
+        { importId: context.importId, verdict: fresh.inventory.verdict },
+        'the package inventory is not complete; a production-like import would be refused',
+      );
+      throw new LegacyMigrationStepFailure('IMPORT_FAILED', 'The inventory is not complete.');
+    }
+    // A second observation, for the row count the dry run reports (a digest read as well).
+    const invoices = await importer.readInvoiceArchive({
+      scope: context.scope,
+      actor: context.actor,
+      connector,
+      expectedFingerprint: fingerprint,
+      productionLikeTarget: this.productionLikeTarget,
+      expectedInvoiceArchiveFingerprint: null,
+    });
+    if (invoices.fingerprint !== fresh.invoiceArchive.fingerprint) {
+      throw new LegacyMigrationStepFailure(
+        'PACKAGE_CHANGED',
+        'The invoice archive read twice from one package differs.',
+      );
+    }
+    return {
+      inventoryFingerprint: fresh.inventory.fingerprint,
+      productsFingerprint: fresh.products.fingerprint,
+      invoiceArchiveFingerprint: fresh.invoiceArchive.fingerprint,
+      invoiceArchiveRows: invoices.rows.invoice,
+    };
+  }
+
+  /**
+   * M8: the converter's operational records against the importer's plan. Customers
+   * (`records/customers.jsonl`) = the plan's importable users; openings
+   * (`records/wallet_opening_balances.jsonl`) = its positive balances, count and sum; debts
+   * (`records/legacy_debts.jsonl`, magnitudes) = its negative balances. Any difference is
+   * `DRY_RUN_MISMATCH` with both numbers. A package without the files (an older converter, or
+   * a test package) is compared with nothing: refused on a production-like target, reported
+   * as a warning elsewhere. Returns whether the files were absent.
+   */
+  private compareWithConverter(
+    context: Context,
+    converter: ConverterTotals | null,
+    plan: PlanShape,
+  ): boolean {
+    if (converter === null) {
+      if (this.productionLikeTarget) {
+        throw new LegacyMigrationStepFailure(
+          'DRY_RUN_MISMATCH',
+          'The package carries no converter totals to compare the plan with.',
+        );
+      }
+      return true;
+    }
+    const importer = {
+      customers: BigInt(n(plan.customers?.importable)),
+      openings: BigInt(n(plan.wallet?.positive?.count)),
+      openingsSum: bigintOf(plan.wallet?.positive?.sumMinor),
+      debts: BigInt(n(plan.wallet?.negative?.count)),
+      debtsSum: -bigintOf(plan.wallet?.negative?.sumMinor),
+    };
+    const pairs: [string, bigint, bigint][] = [
+      ['customers', converter.customers, importer.customers],
+      ['wallet_openings', converter.openings.count, importer.openings],
+      ['wallet_openings_sum_minor', converter.openings.sumMinor, importer.openingsSum],
+      ['legacy_debts', converter.debts.count, importer.debts],
+      ['legacy_debts_sum_minor', converter.debts.sumMinor, importer.debtsSum],
+    ];
+    const differ = pairs.filter(([, a, b]) => a !== b);
+    if (differ.length === 0) return false;
+    const counts: LegacyMigrationCodeCount[] = [];
+    for (const [code, a, b] of differ) {
+      for (const [side, value] of [
+        ['converter', a],
+        ['importer', b],
+      ] as const) {
+        // A count must fit the contract's integer; a sum that does not is logged only.
+        if (value >= 0n && value <= BigInt(Number.MAX_SAFE_INTEGER)) {
+          counts.push({ code: `${side}:${code}`, count: Number(value) });
+        }
+      }
+    }
+    this.deps.logger.warn(
+      {
+        importId: context.importId,
+        differ: differ.map(([code, a, b]) => ({
+          code,
+          converter: a.toString(),
+          importer: b.toString(),
+        })),
+      },
+      "the converter's totals and the importer's plan disagree; the dry run is refused",
+    );
+    throw new LegacyMigrationStepFailure(
+      'DRY_RUN_MISMATCH',
+      "The converter's operational totals differ from the importer's plan.",
+      { counts },
+    );
   }
 
   /** A refusal becomes a step verdict with its contract code; anything else passes through. */
   private classify(error: unknown, context: Context): unknown {
     if (error instanceof LegacyMigrationStepFailure) return error;
-    const fail = (code: LegacyNxpkgErrorCode, why: string) => {
+    if (error instanceof LegacyMigrationRetry) return error;
+    // Only the code and the error's type are logged: a refusal's message can name a path or
+    // a value from the package (L3).
+    const fail = (code: LegacyNxpkgErrorCode, counts?: readonly LegacyMigrationCodeCount[]) => {
       this.deps.logger.warn(
-        { importId: context.importId, code, reason: why },
+        { importId: context.importId, code, err: errorKind(error) },
         'a Mirza package step refused',
       );
-      return new LegacyMigrationStepFailure(code, 'The package step refused.', { cause: error });
+      return new LegacyMigrationStepFailure(code, 'The package step refused.', {
+        cause: error,
+        ...(counts === undefined ? {} : { counts }),
+      });
     };
-    if (error instanceof NxpkgError) return fail(error.code, error.reason);
-    if (error instanceof NxpkgImportRefused) return fail(error.code, error.problems.join('; '));
-    if (error instanceof PanelMappingRefused) return fail('PANEL_TARGET_MISMATCH', error.message);
-    if (error instanceof LegacySourceRefused) return fail('IMPORT_FAILED', error.message);
+    if (error instanceof NxpkgError) return fail(error.code);
+    if (error instanceof NxpkgImportRefused) {
+      return fail(
+        error.code,
+        error.counts === null
+          ? undefined
+          : Object.entries(nonZero(error.counts)).map(([code, count]) => ({ code, count })),
+      );
+    }
+    if (error instanceof PanelMappingRefused) return fail('PANEL_TARGET_MISMATCH');
+    if (error instanceof LegacySourceRefused) return fail('IMPORT_FAILED');
     if (error instanceof Error && error.name === 'LegacyImportInterrupted') return error;
     if (isNexaError(error) && error.code === LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT) {
-      return fail('IMPORT_FAILED', error.message);
+      if (isTransientRunConflict(error.message)) {
+        return new LegacyMigrationRetry('RUN_CONFLICT', { cause: error });
+      }
+      return fail('IMPORT_FAILED');
+    }
+    // Any other typed refusal that names its contract code (`LegacyHistoryIngestRefused`, …).
+    const code = (error as { code?: unknown } | null)?.code;
+    if (
+      error instanceof Error &&
+      typeof code === 'string' &&
+      (LEGACY_NXPKG_ERROR_CODES as readonly string[]).includes(code)
+    ) {
+      return fail(code as LegacyNxpkgErrorCode);
     }
     // A CLI refusal (usage, guard, archive, cutover): the importer said no, nothing written.
     if (
@@ -651,10 +946,28 @@ export class NxpkgMigrationAdapters
         'InventoryUsageError',
       ].includes(error.constructor.name)
     ) {
-      return fail('IMPORT_FAILED', error.message);
+      return fail('IMPORT_FAILED');
     }
     return error;
   }
+}
+
+/**
+ * The importer's `RUN_CONFLICT`s that pass on their own: another process holds the tenant's
+ * importer claim (the CLI, or a replica whose lease expired while its importer still ran), or
+ * another run is RUNNING. Every other `RUN_CONFLICT` (another mapping, a changed source, a
+ * different ownership hold, …) is a verdict. Matched on the importer's own fixed sentences.
+ */
+export const TRANSIENT_RUN_CONFLICT_PREFIXES = [
+  'Another importer process is applying',
+  "Another importer process holds this tenant's import claim",
+  'Another legacy import run is RUNNING for this tenant',
+  'A concurrent legacy import run started and finished',
+  "The importer's claim on this tenant was lost",
+] as const;
+
+export function isTransientRunConflict(message: string): boolean {
+  return TRANSIENT_RUN_CONFLICT_PREFIXES.some((prefix) => message.startsWith(prefix));
 }
 
 /** The CLI's `--expected-*` flags for the six values beside the source (production-like). */
@@ -708,6 +1021,7 @@ function runIdOf(report: LegacyImportReport): string | null {
 interface PlanShape {
   readonly customers?: {
     readonly source?: number;
+    readonly importable?: number;
     readonly new?: number;
     readonly existing?: number;
     readonly invalidIdentity?: number;
@@ -717,6 +1031,15 @@ interface PlanShape {
     readonly currency?: string;
     readonly positive?: { readonly count?: number; readonly sumMinor?: bigint | string | number };
     readonly negative?: { readonly count?: number; readonly sumMinor?: bigint | string | number };
+    readonly openings?: Readonly<Record<string, number>>;
+  };
+  readonly trials?: Readonly<Record<string, number>>;
+  readonly products?: {
+    readonly distinctShapes?: number;
+    readonly existingShapes?: number;
+    readonly newShapes?: number;
+    readonly unmappable?: Readonly<Record<string, number>>;
+    readonly predictedTariff?: Readonly<Record<string, number>>;
   };
   readonly services?: {
     readonly candidates?: number;
@@ -725,14 +1048,36 @@ interface PlanShape {
 }
 
 const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-const minor = (v: unknown): string =>
-  typeof v === 'bigint'
-    ? v.toString()
-    : typeof v === 'number'
-      ? String(Math.trunc(v))
-      : typeof v === 'string' && /^-?\d+$/u.test(v)
-        ? v
-        : '0';
+
+/** Minor units as the importer reported them: a bigint, a safe integer, or a decimal string. */
+function bigintOf(v: unknown): bigint {
+  if (typeof v === 'bigint') return v;
+  if (typeof v === 'number' && Number.isSafeInteger(v)) return BigInt(v);
+  if (typeof v === 'string' && /^-?(0|[1-9][0-9]*)$/u.test(v)) return BigInt(v);
+  // Never a guessed 0: an amount nobody can read is a refusal (L5).
+  throw new LegacyMigrationStepFailure(
+    'IMPORT_FAILED',
+    'The importer reported an unreadable amount.',
+  );
+}
+
+/** Money stays a decimal string of minor units (L5). */
+const minor = (v: unknown): string => bigintOf(v).toString();
+
+const sum = (record: Readonly<Record<string, number>> | undefined, keys?: readonly string[]) =>
+  Object.entries(record ?? {})
+    .filter(([key]) => keys === undefined || keys.includes(key))
+    .reduce((a, [, b]) => a + n(b), 0);
+
+const byCode = (a: { readonly code: string }, b: { readonly code: string }) =>
+  a.code < b.code ? -1 : a.code > b.code ? 1 : 0;
+
+function nonZero(counts: Readonly<Record<string, number>>): Record<string, number> {
+  return Object.fromEntries(Object.entries(counts).filter(([, count]) => count > 0));
+}
+
+/** The trial plans that write an override; the rest leave NEXA's policy (or a decision) alone. */
+const TRIAL_WRITES = ['LEGACY_NO_TRIALS', 'LEGACY_TRIAL_CONSUMED', 'LEGACY_LIMIT_UNREADABLE'];
 
 /** The importer's dry run, summarised as the contract's counts. Never a row. */
 function dryRunReportOf(
@@ -741,13 +1086,36 @@ function dryRunReportOf(
   hold: NxpkgOwnershipHold | null,
   decisions: VerifiedOwnershipDecisions | null,
   history: readonly LegacyMigrationCodeCount[],
-): Omit<LegacyMigrationDryRunReport, 'cutover'> {
+  extra: {
+    readonly invoiceArchiveRows: number;
+    /** The importer's count of held invoices it would otherwise have adopted, if reported. */
+    readonly holdChangedCategory: number | null;
+    readonly converterTotalsAbsent: boolean;
+  },
+): Omit<LegacyMigrationDryRunReport, 'cutover' | 'planTalliesDigest'> {
+  // L5: the currency is the importer's, stated — never assumed. A Fresh Migration's ledger is
+  // Toman (IRT): legacy balances are Toman, and the importer's audit blocks any other.
+  const currency = plan.wallet?.currency;
+  if (typeof currency !== 'string' || currency.length === 0) {
+    throw new LegacyMigrationStepFailure('IMPORT_FAILED', 'The importer reported no currency.');
+  }
+  if (currency !== 'IRT') {
+    throw new LegacyMigrationStepFailure('NXPKG_MONEY_UNIT', 'The wallet currency is not IRT.');
+  }
   const customers = plan.customers ?? {};
-  const manual = Object.values(customers.manualReview ?? {}).reduce((a, b) => a + n(b), 0);
+  const manual = sum(customers.manualReview);
   const categories = plan.services?.categories ?? {};
   const eligible = n(categories['ADOPTION_ELIGIBLE']);
   const candidates = n(plan.services?.candidates);
-  const held = hold?.hold.size ?? 0;
+  // M9: quarantined = the holds that CHANGED a category (an eligible invoice held back), as
+  // the importer counted them; without that count, at most every AMBIGUOUS_OWNERSHIP invoice.
+  const changed =
+    extra.holdChangedCategory ??
+    Math.min(hold?.hold.size ?? 0, n(categories['AMBIGUOUS_OWNERSHIP']));
+  const openings = plan.wallet?.openings ?? {};
+  const trials = plan.trials ?? {};
+  const products = plan.products ?? {};
+  const historyTotal = history.reduce((a, h) => a + h.count, 0);
   const sections: LegacyMigrationSectionCounts[] = [
     {
       section: 'customers',
@@ -757,13 +1125,82 @@ function dryRunReportOf(
       skipped: n(customers.existing) + n(customers.invalidIdentity),
       quarantined: manual,
     },
+    // Fresh Migration: an existing customer cannot be (the fresh guard), but it is reported
+    // apart from a legacy row whose identity is invalid — two different facts.
+    {
+      section: 'customers:existing',
+      source: n(customers.existing),
+      imported: 0,
+      archived: 0,
+      skipped: n(customers.existing),
+      quarantined: 0,
+    },
+    {
+      section: 'customers:invalid_identity',
+      source: n(customers.invalidIdentity),
+      imported: 0,
+      archived: 0,
+      skipped: n(customers.invalidIdentity),
+      quarantined: 0,
+    },
+    {
+      section: 'wallet_openings',
+      source: n(plan.wallet?.positive?.count),
+      imported: n(openings['POST']),
+      archived: 0,
+      skipped: n(openings['ALREADY_POSTED']),
+      quarantined: n(openings['CONFLICT']) + n(openings['PRIOR_DEBIT_OPENING']),
+    },
+    {
+      section: 'legacy_debts',
+      source: n(plan.wallet?.negative?.count),
+      imported: n(openings['RECORD_DEBT']),
+      archived: 0,
+      skipped: n(openings['DEBT_ALREADY_RECORDED']),
+      quarantined: 0,
+    },
+    {
+      section: 'trials',
+      source: sum(trials),
+      imported: sum(trials, TRIAL_WRITES),
+      archived: 0,
+      skipped: sum(trials) - sum(trials, TRIAL_WRITES),
+      quarantined: 0,
+    },
+    {
+      section: 'products',
+      source: n(products.distinctShapes),
+      imported: n(products.newShapes),
+      archived: 0,
+      skipped: n(products.existingShapes),
+      // A shape with no (or several) current tariffs stays UNRESOLVED: manual review.
+      quarantined:
+        n(products.predictedTariff?.['NO_CURRENT_TARIFF']) +
+        n(products.predictedTariff?.['AMBIGUOUS_TARIFF']),
+    },
+    {
+      section: 'invoice_archive',
+      source: extra.invoiceArchiveRows,
+      imported: 0,
+      archived: extra.invoiceArchiveRows,
+      skipped: 0,
+      quarantined: 0,
+    },
     {
       section: 'services',
       source: candidates,
       imported: eligible,
-      archived: Math.max(0, candidates - eligible - held),
+      archived: Math.max(0, candidates - eligible - changed),
       skipped: 0,
-      quarantined: held,
+      quarantined: changed,
+    },
+    {
+      section: 'history',
+      source: historyTotal,
+      imported: 0,
+      archived: historyTotal,
+      skipped: 0,
+      quarantined: 0,
     },
     ...history.map((h) => ({
       section: `history:${h.code}`,
@@ -784,30 +1221,102 @@ function dryRunReportOf(
     pending: n(reasons.DECISION_PENDING),
     stale: n(reasons.DECISION_STALE),
   };
-  const currency = plan.wallet?.currency ?? 'IRT';
+  const warnings = [
+    ...Object.entries(categories)
+      .filter(([code, count]) => code !== 'ADOPTION_ELIGIBLE' && n(count) > 0)
+      .map(([code, count]) => ({ code, count: n(count) })),
+    ...Object.entries(products.unmappable ?? {})
+      .filter(([, count]) => n(count) > 0)
+      .map(([code, count]) => ({ code: `PRODUCT_${code}`, count: n(count) })),
+    ...(extra.holdChangedCategory === null && (hold?.hold.size ?? 0) > 0
+      ? [{ code: 'OWNERSHIP_HOLD_CHANGED_NOT_REPORTED', count: hold?.hold.size ?? 0 }]
+      : []),
+    ...(extra.converterTotalsAbsent ? [{ code: 'CONVERTER_TOTALS_ABSENT', count: 1 }] : []),
+  ].sort(byCode);
   return {
     importerVerdict: report.verdict ?? 'DRY_RUN',
     sections,
-    warnings: Object.entries(categories)
-      .filter(([code, count]) => code !== 'ADOPTION_ELIGIBLE' && n(count) > 0)
-      .map(([code, count]) => ({ code, count: n(count) }))
-      .sort((a, b) => (a.code < b.code ? -1 : 1)),
+    warnings,
     quarantine: Object.entries({ ...(customers.manualReview ?? {}), ...reasons })
       .filter(([, count]) => n(count) > 0)
       .map(([code, count]) => ({ code, count: n(count) }))
-      .sort((a, b) => (a.code < b.code ? -1 : 1)),
+      .sort(byCode),
     // A Fresh Migration starts from an empty ledger: "before" is zero by the §6 guard.
     wallets: {
       currency,
       customers: n(plan.wallet?.positive?.count),
       beforeTotalMinor: '0',
-      afterTotalMinor: minor(plan.wallet?.positive?.sumMinor),
+      afterTotalMinor: minor(plan.wallet?.positive?.sumMinor ?? 0n),
     },
+    // Magnitudes, as the legacy debt record stores them and the converter writes them.
     debts: {
       currency,
       count: n(plan.wallet?.negative?.count),
-      totalMinor: minor(plan.wallet?.negative?.sumMinor),
+      totalMinor: (-bigintOf(plan.wallet?.negative?.sumMinor ?? 0n)).toString(),
     },
     ownership,
+  };
+}
+
+// --- the converter's own totals (M8) ---------------------------------------------------------
+
+const CUSTOMERS_PATH = 'records/customers.jsonl';
+const OPENINGS_PATH = 'records/wallet_opening_balances.jsonl';
+const DEBTS_PATH = 'records/legacy_debts.jsonl';
+
+interface ConverterTotals {
+  readonly customers: bigint;
+  readonly openings: { readonly count: bigint; readonly sumMinor: bigint };
+  readonly debts: { readonly count: bigint; readonly sumMinor: bigint };
+}
+
+/**
+ * What the converter itself wrote as operational records: null when the package carries none
+ * of the three files (an older converter); a refusal when it carries only some, or a record
+ * whose type, currency or amount is not what the content contract says.
+ */
+async function converterTotals(pkg: NxpkgPackage): Promise<ConverterTotals | null> {
+  const present = [CUSTOMERS_PATH, OPENINGS_PATH, DEBTS_PATH].map((path) => pkg.has(path));
+  if (present.every((p) => !p)) return null;
+  if (!present.every(Boolean)) {
+    throw new LegacyMigrationStepFailure(
+      'DRY_RUN_MISMATCH',
+      'The package carries only some of its operational record files.',
+    );
+  }
+  let customers = 0n;
+  for await (const record of pkg.iterJsonl(CUSTOMERS_PATH)) {
+    if (record['record_type'] !== 'customer') {
+      throw new LegacyMigrationStepFailure('NXPKG_TAMPERED', 'A customer record has another type.');
+    }
+    customers += 1n;
+  }
+  const money = async (path: string, type: string) => {
+    let count = 0n;
+    let total = 0n;
+    for await (const record of pkg.iterJsonl(path)) {
+      if (record['record_type'] !== type) {
+        throw new LegacyMigrationStepFailure('NXPKG_TAMPERED', 'A money record has another type.');
+      }
+      const amount = record['amount_minor'];
+      if (
+        record['currency'] !== 'IRT' ||
+        typeof amount !== 'string' ||
+        !/^(0|[1-9][0-9]*)$/u.test(amount)
+      ) {
+        throw new LegacyMigrationStepFailure(
+          'NXPKG_MONEY_UNIT',
+          'A money record is not IRT minor units.',
+        );
+      }
+      count += 1n;
+      total += BigInt(amount);
+    }
+    return { count, sumMinor: total };
+  };
+  return {
+    customers,
+    openings: await money(OPENINGS_PATH, 'wallet_opening_balance'),
+    debts: await money(DEBTS_PATH, 'legacy_debt'),
   };
 }

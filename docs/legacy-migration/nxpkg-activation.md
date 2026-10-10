@@ -48,19 +48,58 @@ writes = 0.
    window; set it back to `false` afterwards.
 4. On the production-like target set `NEXA_LEGACY_IMPORT_TARGET_ACK` in the `migration` process's
    environment to the value the page shows (guard digest of host/port/database/tenant).
-5. Upload, verify, dry run, review. Record the cutover approval (`/legacy-cutover`) for the seven
-   values the dry run lists, stop sales, approve the import.
+5. Upload, verify, dry run, review, approve the import (typed confirmation). The dry run
+   records nothing: the read sets the cutover approval binds are recorded when the approved
+   import starts, and the import then waits (`CUTOVER_APPROVAL_MISSING`). Record the cutover
+   approval (`/legacy-cutover`) for exactly the seven values the dry run listed, stop sales; the
+   import continues by itself.
 6. After COMPLETED: check the reconciliation (RECONCILED) and the v2 report invariants, keep the
    standard backup the migration took, then resume sales.
 
 ## 4. Recovery
 
-- A crashed `migration` process: the lease expires (5 min) and the next claim resumes the same run
-  (the importer's resume is idempotent; history ingest is idempotent by key).
-- A failed import (`FAILED`, `COMPLETED_WITH_DISCREPANCY`): nothing is rolled back automatically.
-  Restore the backup taken **before** the import (NEXA Backup & Restore), fix the cause, upload
-  again. The importer never deletes data to retry.
-- The key is erased on every terminal state; a new attempt needs it again.
+- **A crashed `migration` process**: the lease expires (5 min) and the next claim resumes the same
+  run (the importer's resume is idempotent; history ingest is idempotent by key). Every step is
+  bounded: VERIFY and the DRY RUN are failed after 5 starts (`VERIFY_FAILED` / `DRY_RUN_FAILED`,
+  `IMPORT_FAILED`), an apply after 5 (`FAILED`, `IMPORT_FAILED`) — a crash loop is a verdict to
+  read, not a process that retries for ever.
+- **Another importer process holds the tenant** (`RUN_CONFLICT` from the importer's process lock,
+  or another legacy run RUNNING): NOT a failure. The step is released, the attempt is not counted,
+  and it runs again on a later tick; the log says `another importer process holds the tenant`.
+  The operator's action:
+  1. find what holds it — a `legacy-import` CLI run on the server, or a second `migration`
+     replica: `docker compose ps` / `ps aux | grep legacy-import`;
+  2. let a CLI run finish, or stop it (its claim ends with its database connection);
+  3. a run left RUNNING by a dead process of ANOTHER source or mode is aborted from the terminal:
+     `legacy-import <mode> --tenant <tenant> --abort-running …` (`importer.md` §6); the migration
+     then continues by itself. Never abort the import's own RUNNING apply run — the next tick
+     resumes it.
+- **A lost lease** (a replica stalled past 5 minutes and another took the import over): the
+  first process's step is aborted through its signal and it writes nothing more; the importer's
+  own process lock refuses it as a second writer meanwhile. Nothing to do.
+- **A failed import** (`FAILED`, `COMPLETED_WITH_DISCREPANCY`): nothing is rolled back
+  automatically. Read `errorCode`, the refusal counts and the apply report (`failedSections`,
+  `failedInvariants`). Restore the backup taken **before** the import (NEXA Backup & Restore),
+  fix the cause, upload again. The importer never deletes data to retry. COMPLETED is reached only
+  when the importer said `COMPLETED`, the reconcile is RECONCILED and the v2 report holds.
+- **The key** is erased on every terminal state, and BEFORE the post-import backup is requested
+  (the backup never holds it). A key left idle in VERIFIED or DRY_RUN_DONE longer than
+  `LEGACY_MIGRATION_KEY_IDLE_MS` (one day) is erased too; the page asks for it again (the same
+  key file or passphrase) and the dry run or approval continues.
+- **Files**: decrypted step directories are removed after every step, at the role's start and on
+  every tick (for every finished import, and for a directory no import names). A finished
+  import's encrypted package and decisions file are deleted unless
+  `LEGACY_MIGRATION_RETAIN_PACKAGE=true`.
+
+### Configuration keys of the `migration` role
+
+| Key                                                           | Default                                  | Meaning                                                                 |
+| ------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------- |
+| `LEGACY_MIGRATION_ENABLED`                                    | `false`                                  | the feature, for the API and the role                                   |
+| `LEGACY_MIGRATION_WORK_DIR`                                   | `/var/lib/nexa/legacy-migration`         | packages and private step directories                                   |
+| `LEGACY_MIGRATION_RETAIN_PACKAGE`                             | `false`                                  | keep a finished import's encrypted package and decisions file           |
+| `LEGACY_MIGRATION_KEY_IDLE_MS`                                | `86400000`                               | erase a key idle this long in VERIFIED / DRY_RUN_DONE (1 min … 30 days) |
+| `LEGACY_MIGRATION_TICK_MS`, `LEGACY_MIGRATION_HEARTBEAT_PATH` | `15000`, `/tmp/nexa-migration.heartbeat` | the loop                                                                |
 
 ## 5. Owner decisions still open
 
@@ -68,7 +107,9 @@ writes = 0.
    for the cutover approval of a package import.
 2. The CRITICAL web approval standing in for the CLI's `--allow-production-target` (the env target
    ack is still required).
-3. Retention of the encrypted package and decisions files after the import.
+3. Retention of the encrypted package and decisions files after the import — built as
+   `LEGACY_MIGRATION_RETAIN_PACKAGE` (default `false`: deleted at the terminal state); the owner
+   decides whether a migration window turns it on.
 4. The `migration` service in `deploy/`.
 5. Existing-customer handling is moot in Fresh Migration (a non-empty target is refused); merging
    into a live NEXA stays unsupported.

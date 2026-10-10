@@ -20,9 +20,17 @@ import { buildPanelMappingFromTargets } from '../../apps/api/src/modules/platfor
 import { readImportV1Identity } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import { FixtureLegacySourceConnector } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/fixture-legacy-source';
 import {
+  FRESH_TARGET_TABLES,
   checkFreshTarget,
   tenantPanelFacts,
 } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/nxpkg-fresh-target';
+import { NxpkgImportRefused } from '../../apps/api/src/modules/platform/legacy-importer/application/nxpkg-panel-binding';
+import { parsePanelMapping } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
+import { planTalliesDigest } from '../../apps/api/src/modules/platform/legacy-importer/application/plan';
+import {
+  readFromSession,
+  type LegacySnapshot,
+} from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import {
   nxpkgSourceConnector,
   type NxpkgLegacySourceConnector,
@@ -248,17 +256,10 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect(fresh).toEqual({
       fresh: true,
       code: null,
-      counts: {
-        customers: 0,
-        orders: 0,
-        services: 0,
-        payments: 0,
-        wallet_entries: 0,
-        legacy_wallet_debts: 0,
-        legacy_import_runs_apply: 0,
-        legacy_history_records: 0,
-      },
+      counts: Object.fromEntries(FRESH_TARGET_TABLES.map((t) => [t, 0])),
     });
+    // Products are configuration (the product review maps onto them): this tenant has one.
+    expect(await count('products')).toBe(1);
     await ctx.container.customers.resolveFromUpdate(tenantA, job('webhook'), {
       idempotencyKey: 'nxpkg-existing',
       telegramUserId: '555000555',
@@ -273,7 +274,8 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect(await count('customers')).toBe(1);
   });
 
-  it('dry run and import through the NXPKG connector: customers, openings, debts, adoption; the held service is never adopted; reconcile RECONCILED; provider writes 0', async () => {
+  /** The package, its products read and p1 decision, the binding, the CLI glue. */
+  async function setup() {
     const pkgFile = await writePackage('svc_a2');
     connector = await nxpkgSourceConnector(
       pkgFile.path,
@@ -330,12 +332,18 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     });
     expect(binding.unresolved).toEqual(['gone', 'tst', 'zzz']);
 
-    // §6: fresh.
-    expect((await checkFreshTarget(ctx.container.database.db, TENANT)).fresh).toBe(true);
+    // §6: fresh — but for this source's own read sets (the products read above), which the
+    // guard does not count when it is told the source; without it, every read set counts.
+    expect(
+      (await checkFreshTarget(ctx.container.database.db, TENANT, { sourceFingerprint: v1 })).fresh,
+    ).toBe(true);
+    const unscoped = await checkFreshTarget(ctx.container.database.db, TENANT);
+    expect(unscoped.fresh).toBe(false);
+    expect(unscoped.counts.legacy_read_set_runs).toBeGreaterThan(0);
 
     // The CLI's own glue: argv, runMode, the ownership hold from the package's records.
     const holdFor = await nxpkgOwnershipHoldFor(connector, null);
-    const argv = (mode: string) =>
+    const argv = (mode: string, ...extra: string[]) =>
       parseArgs([
         mode,
         '--tenant',
@@ -350,24 +358,32 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
         'NXPKG_TEST_KEY',
         '--evidence-class',
         'synthetic',
+        ...extra,
       ]);
     const importer = ctx.container.legacyImporter({ inventoryPageSize: 3 });
     const context = { tenantId: TENANT, productionLikeTarget: false, ownershipHoldFor: holdFor };
-
-    const dry = await runMode(
+    return {
+      connector: connector as NxpkgLegacySourceConnector,
+      v1,
+      binding,
+      holdFor,
+      argv,
       importer,
-      argv('dry-run'),
-      connector,
-      binding.text,
-      'corr-dry',
       context,
-    );
+    };
+  }
+
+  it('dry run and import through the NXPKG connector: customers, openings, debts, adoption; the held service is never adopted; reconcile RECONCILED; provider writes 0', async () => {
+    const { connector: c, v1, binding, argv, importer, context } = await setup();
+
+    const dry = await runMode(importer, argv('dry-run'), c, binding.text, 'corr-dry', context);
     if (dry === null) throw new Error('no dry run report');
     const drySections = dry.sections as Record<string, any>;
     expect(dry.synthetic).toBe(true);
     expect(drySections['source'].engine).toBe('NXPKG');
     expect(drySections['source'].fingerprint).toBe(v1);
-    expect(drySections['ownershipHold']).toEqual({ invoices: 1 });
+    expect(drySections['ownershipHold']).toEqual({ invoices: 1, changedCategory: 1 });
+    expect(drySections['planTalliesDigest']).toMatch(/^[0-9a-f]{64}$/u);
     const categories = drySections['plan'].services.categories as Record<string, number>;
     expect(categories['ADOPTION_ELIGIBLE']).toBe(1);
     expect(categories['AMBIGUOUS_OWNERSHIP']).toBe(1);
@@ -375,8 +391,8 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
 
     const applied = await runMode(
       importer,
-      argv('import'),
-      connector,
+      argv('import', '--expected-plan-tallies-digest', drySections['planTalliesDigest']),
+      c,
       binding.text,
       'corr-imp',
       context,
@@ -409,7 +425,7 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     const reconciled = await runMode(
       importer,
       argv('reconcile'),
-      connector,
+      c,
       binding.text,
       'corr-rec',
       context,
@@ -427,6 +443,135 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
       legacy_import_runs_apply: 1,
     });
     expect((applied.sections as Record<string, any>)['provider']).toMatchObject({ writes: 0 });
+    expectOnlyReads();
+  });
+
+  it("guards: the panel map must be the targets' own; DRY_RUN_MISMATCH; FRESH_TARGET_NOT_EMPTY inside the start transaction", async () => {
+    const { connector: c, binding, holdFor, argv, importer, context } = await setup();
+
+    // H2: a map the package targets do not make (a test panel declared, an unresolved code
+    // moved) is refused before the snapshot is read — whoever wrote it.
+    const file = JSON.parse(binding.text) as Record<string, any>;
+    const tampered = JSON.stringify({
+      ...file,
+      testPanels: ['tst'],
+      unresolvedPanels: file['unresolvedPanels'].filter((u: any) => u.codePanel !== 'tst'),
+    });
+    await expect(
+      runMode(importer, argv('dry-run'), c, tampered, 'corr-map', context),
+    ).rejects.toMatchObject({ code: 'PANEL_TARGET_MISMATCH' });
+
+    const dry = await runMode(importer, argv('dry-run'), c, binding.text, 'corr-dry', context);
+    const digest = (dry?.sections as Record<string, any>)['planTalliesDigest'] as string;
+    expect(digest).toMatch(/^[0-9a-f]{64}$/u);
+
+    // DRY_RUN_MISMATCH: another approved digest is refused before any write.
+    await expect(
+      runMode(
+        importer,
+        argv('import', '--expected-plan-tallies-digest', '0'.repeat(64)),
+        c,
+        binding.text,
+        'corr-mm',
+        context,
+      ),
+    ).rejects.toMatchObject({ code: 'DRY_RUN_MISMATCH' });
+    expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(0);
+
+    // H1: the importer itself, past the CLI's courtesy read — a customer lands after it. The
+    // run-start transaction counts again with the tenant locked and refuses; no run row stays.
+    const session = await c.open();
+    let snapshot: LegacySnapshot;
+    try {
+      snapshot = await readFromSession(c.label, session);
+    } finally {
+      await session.close();
+    }
+    const hold = await holdFor(snapshot);
+    const input = {
+      scope: tenantA,
+      actor: job('apply'),
+      snapshot,
+      mapping: parsePanelMapping(binding.text, TENANT),
+      productionLikeTarget: false,
+      ownershipHold: hold,
+      ownershipDecisionsDigest: null,
+    };
+    expect(
+      planTalliesDigest(
+        (await importer.prepare(tenantA, snapshot, input.mapping, false, { ownershipHold: hold }))
+          .plan,
+      ),
+    ).toBe(digest);
+    await ctx.container.customers.resolveFromUpdate(tenantA, job('webhook'), {
+      idempotencyKey: 'nxpkg-late-customer',
+      telegramUserId: '555000556',
+      from: { id: 555000556, first_name: 'Late' },
+      botInstanceId: SEED_IDS.botA1 as never,
+    });
+    const refused = await importer.apply({ ...input, mode: 'IMPORT' }).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(NxpkgImportRefused);
+    expect(refused).toMatchObject({ code: 'FRESH_TARGET_NOT_EMPTY', counts: { customers: 1 } });
+    expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(0);
+    expect(await count('customers')).toBe(1);
+    expectOnlyReads();
+  });
+
+  it('a resume is not refused by its own writes; one ownership hold per run (resume, reconcile)', async () => {
+    const { connector: c, binding, holdFor, importer } = await setup();
+    const session = await c.open();
+    let snapshot: LegacySnapshot;
+    try {
+      snapshot = await readFromSession(c.label, session);
+    } finally {
+      await session.close();
+    }
+    const hold = await holdFor(snapshot);
+    const mapping = parsePanelMapping(binding.text, TENANT);
+    const input = {
+      scope: tenantA,
+      actor: job('apply'),
+      snapshot,
+      mapping,
+      productionLikeTarget: false,
+      ownershipHold: hold,
+      ownershipDecisionsDigest: null,
+    };
+    const digest = planTalliesDigest(
+      (await importer.prepare(tenantA, snapshot, mapping, false, { ownershipHold: hold })).plan,
+    );
+
+    // A run interrupted after its customers phase: a RESUME is not refused by those writes.
+    await expect(
+      importer.apply({
+        ...input,
+        mode: 'IMPORT',
+        freshTarget: true,
+        dryRunTalliesDigest: digest,
+        afterPhase: (phase) => {
+          if (phase === 'customers') throw new Error('simulated crash');
+        },
+      }),
+    ).rejects.toThrow(/interrupted in the customers phase/u);
+    expect(await count('customers')).toBe(8);
+
+    // M7: the same run under another hold is refused — resume, then reconcile and report.
+    await expect(
+      importer.apply({ ...input, ownershipHold: new Set<string>(), mode: 'RESUME' }),
+    ).rejects.toThrow(/OWNERSHIP_HOLD_MISMATCH/u);
+    await expect(
+      importer.apply({ ...input, ownershipDecisionsDigest: 'f'.repeat(64), mode: 'RESUME' }),
+    ).rejects.toThrow(/OWNERSHIP_HOLD_MISMATCH/u);
+    const resumed = await importer.apply({ ...input, mode: 'RESUME', freshTarget: true });
+    expect(resumed.verdict).toBe('COMPLETED');
+    expect((resumed.sections as Record<string, any>)['ownershipHold']).toEqual({
+      invoices: 1,
+      changedCategory: 1,
+    });
+    await expect(
+      importer.reconcile({ ...input, ownershipHold: new Set<string>() }),
+    ).rejects.toThrow(/OWNERSHIP_HOLD_MISMATCH/u);
+    expect((await importer.reconcile(input)).verdict).toBe('RECONCILED');
     expectOnlyReads();
   });
 });

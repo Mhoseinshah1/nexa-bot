@@ -17,6 +17,7 @@ import {
   canonicalJson,
   canTransition,
   digestsEqual,
+  errorKind,
   LEGACY_MIGRATION_COMMAND_FROM,
   LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS,
   LEGACY_MIGRATION_TRANSITIONS,
@@ -26,10 +27,15 @@ import {
   LegacyMigrationService,
   legacyMigrationView,
 } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration.service';
-import { LegacyMigrationExecutor } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
+import {
+  completedStatusOf,
+  LegacyMigrationExecutor,
+} from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
+import { isTransientRunConflict } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters';
 import {
   LegacyMigrationBlocked,
   LegacyMigrationNotWired,
+  LegacyMigrationRetry,
   LegacyMigrationStepFailure,
   type MigrationRunner,
   type MigrationStepContext,
@@ -110,6 +116,7 @@ const dryRunReport: LegacyMigrationDryRunReport = {
     freezeProofSha256: 'f'.repeat(64),
     finalDumpSha256: '1'.repeat(64),
   },
+  planTalliesDigest: '2'.repeat(64),
 };
 
 // --- the lifecycle ------------------------------------------------------------------------
@@ -375,6 +382,49 @@ describe('LegacyMigrationService', () => {
     );
   });
 
+  it('takes the key again only where an idle one was erased, never over a held one', async () => {
+    const h = harness();
+    const id = await uploaded(h);
+    const row = h.repository.rows.get(id)!;
+    // DRY_RUN_DONE with its key held: refused, nothing replaced.
+    h.repository.put({
+      ...row,
+      status: 'DRY_RUN_DONE',
+      keyCiphertext: 'held',
+      keyKeyId: 'k',
+      keyKind: 'KEY_FILE',
+    });
+    expect(
+      await codeOf(
+        h.service.setKey(scope, actor, id, { idempotencyKey: key(), passphrase: SECRET }),
+      ),
+    ).toBe(LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE);
+    expect(h.repository.rows.get(id)?.keyCiphertext).toBe('held');
+    // The idle key was erased: no dry run until it is given again, then it is taken.
+    h.repository.put({ ...h.repository.rows.get(id)!, keyCiphertext: null, keyKeyId: null });
+    expect(await codeOf(h.service.requestDryRun(scope, actor, id, { idempotencyKey: key() }))).toBe(
+      LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+    );
+    await h.service.setKey(scope, actor, id, { idempotencyKey: key(), passphrase: SECRET });
+    expect(h.repository.rows.get(id)).toMatchObject({
+      status: 'DRY_RUN_DONE',
+      keyKind: 'PASSPHRASE',
+    });
+    expect(h.repository.rows.get(id)?.keyCiphertext).not.toBeNull();
+    // Never after the apply was approved.
+    h.repository.put({
+      ...h.repository.rows.get(id)!,
+      status: 'APPROVED',
+      keyCiphertext: null,
+      keyKeyId: null,
+    });
+    expect(
+      await codeOf(
+        h.service.setKey(scope, actor, id, { idempotencyKey: key(), passphrase: SECRET }),
+      ),
+    ).toBe(LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE);
+  });
+
   it('builds a view with no key, no path and no unvalidated report', () => {
     const view = legacyMigrationView(
       {
@@ -429,6 +479,8 @@ function emptyRow() {
     progress: {
       phase: null,
       applyAttempts: 0,
+      verifyAttempts: 0,
+      dryRunAttempts: 0,
       importerVerdict: null,
       reconcileVerdict: null,
       history: [],
@@ -458,9 +510,12 @@ interface ExecutorHarness {
   runner: MigrationRunner;
   fresh: boolean;
   now: Date;
+  backupSawKey: boolean | null;
 }
 
-function executorHarness(options: { leaseOwner?: string } = {}): ExecutorHarness {
+function executorHarness(
+  options: { leaseOwner?: string; retainPackage?: boolean; keyIdleMs?: number } = {},
+): ExecutorHarness {
   const repository = new InMemoryLegacyNxpkgImports();
   const workspaces = new InMemoryMigrationWorkspaces();
   const calls: string[] = [];
@@ -468,9 +523,13 @@ function executorHarness(options: { leaseOwner?: string } = {}): ExecutorHarness
   const log = (context: unknown, message: string) => logs.push({ context, message });
   const state = {
     fresh: true,
+    backupSawKey: null as boolean | null,
     now: new Date('2026-10-10T10:00:00.000Z'),
     runner: {
       precheck: async () => undefined,
+      recordReadSets: async () => {
+        calls.push('readSets');
+      },
       dryRun: async (context: MigrationStepContext) => {
         calls.push(`dryRun:${secretKind(context)}`);
         return { report: dryRunReport, legacyRunId: null };
@@ -490,6 +549,7 @@ function executorHarness(options: { leaseOwner?: string } = {}): ExecutorHarness
           reconcileVerdict: 'RECONCILED' as const,
           reportHolds: true,
           failedInvariants: [],
+          failedSections: [],
           sections: [],
           history: [],
         };
@@ -520,6 +580,12 @@ function executorHarness(options: { leaseOwner?: string } = {}): ExecutorHarness
     set now(value) {
       state.now = value;
     },
+    get backupSawKey() {
+      return state.backupSawKey;
+    },
+    set backupSawKey(value) {
+      state.backupSawKey = value;
+    },
   };
   const executor = new LegacyMigrationExecutor({
     repository,
@@ -537,6 +603,7 @@ function executorHarness(options: { leaseOwner?: string } = {}): ExecutorHarness
     },
     runner: {
       precheck: (c, step) => state.runner.precheck(c, step),
+      recordReadSets: (c) => state.runner.recordReadSets(c),
       dryRun: (c) => state.runner.dryRun(c),
       apply: (c, i) => state.runner.apply(c, i),
       reconcile: (c) => state.runner.reconcile(c),
@@ -555,6 +622,10 @@ function executorHarness(options: { leaseOwner?: string } = {}): ExecutorHarness
     backup: {
       runAfterImport: async () => {
         calls.push('backup');
+        // M5: what the row holds at the moment the backup is requested.
+        state.backupSawKey = [...repository.rows.values()].some(
+          (row) => row.keyCiphertext !== null,
+        );
         return { outcome: 'TAKEN' as const, runId: '019600ab-cdef-7012-8345-6789abcdbbbb' };
       },
     },
@@ -563,6 +634,8 @@ function executorHarness(options: { leaseOwner?: string } = {}): ExecutorHarness
     leaseOwner: options.leaseOwner ?? 'migration:test',
     tickIntervalMs: 1000,
     enabled: true,
+    ...(options.retainPackage === undefined ? {} : { retainPackage: options.retainPackage }),
+    ...(options.keyIdleMs === undefined ? {} : { keyIdleMs: options.keyIdleMs }),
     logger: { info: log, warn: log, error: log },
   });
   (h as { executor: LegacyMigrationExecutor }).executor = executor;
@@ -620,9 +693,11 @@ describe('LegacyMigrationExecutor', () => {
     expect(finished.backupRunId).toBe('019600ab-cdef-7012-8345-6789abcdbbbb');
     expect(finished.progress).toMatchObject({ backup: 'TAKEN', applyAttempts: 1 });
     expect(finished.progress.history).toEqual([{ code: 'payment', count: 7 }]);
+    expect(h.backupSawKey).toBe(false);
     expect(h.calls).toEqual([
       'verify:ok',
       'dryRun:ok',
+      'readSets',
       'apply:IMPORT',
       'history',
       'reconcile',
@@ -812,7 +887,8 @@ describe('LegacyMigrationExecutor', () => {
       ...h.runner,
       precheck: async (_c, step) => {
         steps.push(step);
-        if (blocker !== null) throw new LegacyMigrationBlocked(blocker);
+        // The cutover approval and stop-sales are APPLY gates (the acknowledgement is held).
+        if (blocker !== null && step === 'APPLY') throw new LegacyMigrationBlocked(blocker);
       },
     };
     await h.executor.tick();
@@ -820,7 +896,8 @@ describe('LegacyMigrationExecutor', () => {
     expect(row).toMatchObject({ status: 'APPROVED', claimedBy: null, errorCode: null });
     expect(row.progress.blocker).toBe('CUTOVER_APPROVAL_MISSING');
     expect(row.keyCiphertext).not.toBeNull();
-    expect(h.calls).toEqual([]);
+    // The approved reads ran (the cutover approval needs them recorded); nothing imported.
+    expect(h.calls).toEqual(['readSets']);
 
     blocker = 'STOP_SALES_NOT_ACTIVE';
     await h.executor.tick();
@@ -831,7 +908,7 @@ describe('LegacyMigrationExecutor', () => {
     row = h.repository.rows.get(id)!;
     expect(row.status).toBe('COMPLETED');
     expect(row.progress.blocker).toBeNull();
-    expect(steps.every((step) => step === 'APPLY')).toBe(true);
+    expect(new Set(steps)).toEqual(new Set(['DRY_RUN', 'APPLY']));
   });
 
   it('a dry run waits in DRY_RUN_REQUESTED on a missing acknowledgement; a never-allowed package fails it', async () => {
@@ -902,6 +979,276 @@ describe('LegacyMigrationExecutor', () => {
     expect(row.keyCiphertext).toBeNull();
   });
 
+  it('bounds VERIFY and the DRY RUN like the apply: past the bound the step is failed', async () => {
+    const h = executorHarness();
+    const verifying = seed(h, {
+      status: 'VERIFYING',
+      progress: { ...emptyRow().progress, phase: 'VERIFY', verifyAttempts: 5 },
+    });
+    await h.executor.tick();
+    expect(h.repository.rows.get(verifying)).toMatchObject({
+      status: 'VERIFY_FAILED',
+      errorCode: 'IMPORT_FAILED',
+      keyCiphertext: null,
+    });
+    const running = seed(h, {
+      status: 'DRY_RUN_RUNNING',
+      progress: { ...emptyRow().progress, phase: 'DRY_RUN', dryRunAttempts: 5 },
+    });
+    await h.executor.tick();
+    expect(h.repository.rows.get(running)).toMatchObject({
+      status: 'DRY_RUN_FAILED',
+      errorCode: 'IMPORT_FAILED',
+      keyCiphertext: null,
+    });
+    expect(h.calls).toEqual([]);
+  });
+
+  it('an unclassified dry-run error runs again, counted, and is failed at the bound', async () => {
+    const h = executorHarness();
+    const id = seed(h, { status: 'DRY_RUN_REQUESTED' });
+    h.runner = {
+      ...h.runner,
+      dryRun: async () => {
+        throw Object.assign(new Error('EACCES: permission denied, open /srv/secret-dir/x'), {
+          code: 'EACCES',
+        });
+      },
+    };
+    for (let i = 0; i < 5; i += 1) {
+      await h.executor.tick();
+      expect(status(h, id)).toBe('DRY_RUN_RUNNING');
+    }
+    expect(h.repository.rows.get(id)?.progress.dryRunAttempts).toBe(5);
+    await h.executor.tick();
+    expect(h.repository.rows.get(id)).toMatchObject({
+      status: 'DRY_RUN_FAILED',
+      errorCode: 'IMPORT_FAILED',
+    });
+    // L3: the error's type and code are logged, never its message (it names a path).
+    const logged = JSON.stringify(h.logs);
+    expect(logged).not.toContain('/srv/secret-dir');
+    expect(logged).toContain('EACCES');
+  });
+
+  it('a RUN_CONFLICT (another importer process) is transient: released, uncounted, never FAILED', async () => {
+    const h = executorHarness();
+    const digest = reportDigest(dryRunReport);
+    const id = seed(h, {
+      status: 'APPROVED',
+      dryRunReport,
+      dryRunSha256: digest,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
+      approvedAt: h.now,
+    });
+    const healthy = h.runner;
+    h.runner = {
+      ...healthy,
+      apply: async () => {
+        throw new LegacyMigrationRetry('RUN_CONFLICT');
+      },
+    };
+    for (let i = 0; i < LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS + 3; i += 1) {
+      await h.executor.tick();
+      const row = h.repository.rows.get(id)!;
+      expect(row.status).toBe('APPLYING');
+      expect(row.claimedBy).toBeNull();
+      expect(row.progress.applyAttempts).toBe(0);
+    }
+    h.runner = healthy;
+    await h.executor.tick();
+    expect(status(h, id)).toBe('COMPLETED');
+  });
+
+  it('is COMPLETED only for the importer verdict COMPLETED, a RECONCILED reconcile and a report that holds', async () => {
+    const cases: [string, Partial<MigrationRunner>, string][] = [
+      [
+        'importer left failures',
+        {
+          apply: async () => ({
+            legacyRunId: '019600ab-cdef-7012-8345-6789abcd0aaa',
+            importerVerdict: 'COMPLETED_WITH_FAILURES',
+          }),
+        },
+        'COMPLETED_WITH_DISCREPANCY',
+      ],
+      [
+        'adoption pending',
+        {
+          apply: async () => ({
+            legacyRunId: '019600ab-cdef-7012-8345-6789abcd0aaa',
+            importerVerdict: 'COMPLETED_ADOPTION_PENDING_P6',
+          }),
+        },
+        'COMPLETED_WITH_DISCREPANCY',
+      ],
+      [
+        'report does not hold',
+        {
+          finalReport: async () => ({
+            importerVerdict: 'COMPLETED',
+            reconcileVerdict: 'RECONCILED' as const,
+            reportHolds: false,
+            failedInvariants: ['I3'],
+            failedSections: ['usersWallets'],
+            sections: [],
+            history: [],
+          }),
+        },
+        'COMPLETED_WITH_DISCREPANCY',
+      ],
+      ['clean', {}, 'COMPLETED'],
+    ];
+    for (const [name, override, expected] of cases) {
+      const h = executorHarness();
+      const digest = reportDigest(dryRunReport);
+      const id = seed(h, {
+        status: 'APPROVED',
+        dryRunReport,
+        dryRunSha256: digest,
+        approvedDryRunSha256: digest,
+        approvedByAdminId: ADMIN,
+        approvedAt: h.now,
+      });
+      h.runner = { ...h.runner, ...override };
+      await h.executor.tick();
+      expect(status(h, id), name).toBe(expected);
+    }
+  });
+
+  it('keeps a verdict recorded before a crash: the import is not asked again', async () => {
+    const h = executorHarness();
+    const digest = reportDigest(dryRunReport);
+    const id = seed(h, {
+      status: 'APPLYING',
+      dryRunReport,
+      dryRunSha256: digest,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
+      approvedAt: h.now,
+      applyLegacyRunId: '019600ab-cdef-7012-8345-6789abcd0aaa',
+      progress: {
+        ...emptyRow().progress,
+        phase: 'APPLY_IMPORT',
+        applyAttempts: 1,
+        importerVerdict: 'COMPLETED_WITH_FAILURES',
+      },
+    });
+    await h.executor.tick();
+    expect(h.calls.filter((c) => c.startsWith('apply:'))).toEqual([]);
+    expect(h.repository.rows.get(id)).toMatchObject({ status: 'COMPLETED_WITH_DISCREPANCY' });
+  });
+
+  it('erases the key before the backup; a crash after that finishes with no key', async () => {
+    const h = executorHarness();
+    const digest = reportDigest(dryRunReport);
+    const id = seed(h, {
+      status: 'APPLYING',
+      dryRunReport,
+      dryRunSha256: digest,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
+      approvedAt: h.now,
+      keyCiphertext: null,
+      keyKeyId: null,
+      applyReport: {
+        importerVerdict: 'COMPLETED',
+        reconcileVerdict: 'RECONCILED',
+        reportHolds: true,
+        failedInvariants: [],
+        failedSections: [],
+        sections: [],
+        history: [],
+      },
+      progress: {
+        ...emptyRow().progress,
+        phase: 'BACKUP',
+        applyAttempts: LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS,
+        importerVerdict: 'COMPLETED',
+        reconcileVerdict: 'RECONCILED',
+      },
+    });
+    await h.executor.tick();
+    expect(h.calls).toEqual(['backup']);
+    expect(h.backupSawKey).toBe(false);
+    expect(h.repository.rows.get(id)).toMatchObject({ status: 'COMPLETED', keyCiphertext: null });
+  });
+
+  it('records the numbers a refusal measured beside its code', async () => {
+    const h = executorHarness();
+    const id = seed(h, { status: 'DRY_RUN_REQUESTED' });
+    h.runner = {
+      ...h.runner,
+      dryRun: async () => {
+        throw new LegacyMigrationStepFailure('DRY_RUN_MISMATCH', 'totals differ', {
+          counts: [
+            { code: 'converter:customers', count: 9 },
+            { code: 'importer:customers', count: 8 },
+          ],
+        });
+      },
+    };
+    await h.executor.tick();
+    const row = h.repository.rows.get(id)!;
+    expect(row).toMatchObject({ status: 'DRY_RUN_FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(row.progress.refusalCounts).toEqual([
+      { code: 'converter:customers', count: 9 },
+      { code: 'importer:customers', count: 8 },
+    ]);
+  });
+
+  it('sweeps a finished import: step directories always, the package unless retained', async () => {
+    for (const retainPackage of [false, true]) {
+      const h = executorHarness({ retainPackage });
+      const done = seed(h, { status: 'COMPLETED', keyCiphertext: null, keyKeyId: null });
+      const waiting = seed(h, { status: 'DRY_RUN_DONE' });
+      const orphan = nextId();
+      for (const id of [done, waiting, orphan]) {
+        h.workspaces.directories.add(id);
+        h.workspaces.staleSteps.set(id, 2);
+        h.workspaces.packageFiles.add(id);
+      }
+      await h.executor.tick();
+      // Terminal: decrypted directories gone; the package gone unless retained.
+      expect(h.workspaces.staleSteps.has(done)).toBe(false);
+      expect(h.workspaces.packageFiles.has(done)).toBe(retainPackage);
+      // Orphan (no row): its step directories only — an upload in flight has no row yet.
+      expect(h.workspaces.staleSteps.has(orphan)).toBe(false);
+      expect(h.workspaces.packageFiles.has(orphan)).toBe(true);
+      // Not finished: untouched by the sweep.
+      expect(h.workspaces.staleSteps.get(waiting)).toBe(2);
+      expect(h.workspaces.packageFiles.has(waiting)).toBe(true);
+    }
+  });
+
+  it('erases a key left idle in VERIFIED or DRY_RUN_DONE, and nowhere else', async () => {
+    const h = executorHarness({ keyIdleMs: 60 * 60_000 });
+    const old = new Date(h.now.getTime() - 2 * 60 * 60_000);
+    const idle = seed(h, { status: 'DRY_RUN_DONE', updatedAt: old });
+    const idleVerified = seed(h, { status: 'VERIFIED', updatedAt: old });
+    const recent = seed(h, { status: 'DRY_RUN_DONE', updatedAt: h.now });
+    const claimed = seed(h, {
+      status: 'VERIFIED',
+      updatedAt: old,
+      claimedBy: 'migration:other',
+      leaseUntil: new Date(h.now.getTime() + 60_000),
+    });
+    await h.executor.tick();
+    expect(h.repository.rows.get(idle)?.keyCiphertext).toBeNull();
+    expect(h.repository.rows.get(idle)?.status).toBe('DRY_RUN_DONE');
+    expect(h.repository.rows.get(idleVerified)?.keyCiphertext).toBeNull();
+    expect(h.repository.rows.get(recent)?.keyCiphertext).not.toBeNull();
+    expect(h.repository.rows.get(claimed)?.keyCiphertext).not.toBeNull();
+    // An import with no key is not work: a DRY_RUN_REQUESTED one waits for the key.
+    const keyless = seed(h, { status: 'DRY_RUN_REQUESTED', keyCiphertext: null, keyKeyId: null });
+    await h.executor.tick();
+    expect(h.repository.rows.get(keyless)).toMatchObject({
+      status: 'DRY_RUN_REQUESTED',
+      claimedBy: null,
+    });
+  });
+
   it('claims nothing while LEGACY_MIGRATION_ENABLED is off, and still reports a live loop', async () => {
     const repository = new InMemoryLegacyNxpkgImports();
     const executor = new LegacyMigrationExecutor({
@@ -922,5 +1269,83 @@ describe('LegacyMigrationExecutor', () => {
     await executor.tick();
     expect([...repository.rows.values()][0]?.claimedBy).toBeNull();
     expect(executor.isFresh(new Date('2026-10-10T10:00:01.000Z').getTime())).toBe(true);
+  });
+});
+
+describe('the pure rules of the migration role', () => {
+  it('counts only the importer RUN_CONFLICTs that pass on their own as transient', () => {
+    expect(
+      isTransientRunConflict(
+        "Another importer process is applying this tenant's import right now.",
+      ),
+    ).toBe(true);
+    expect(
+      isTransientRunConflict(
+        "Another importer process holds this tenant's import claim right now.",
+      ),
+    ).toBe(true);
+    expect(
+      isTransientRunConflict('Another legacy import run is RUNNING for this tenant (…).'),
+    ).toBe(true);
+    expect(
+      isTransientRunConflict(
+        'OWNERSHIP_HOLD_MISMATCH: run x was started under a different ownership hold',
+      ),
+    ).toBe(false);
+    expect(
+      isTransientRunConflict(
+        'Run x was started under a different panel mapping; resume needs the same mapping file.',
+      ),
+    ).toBe(false);
+  });
+
+  it('logs an error by its type and code, never its message', () => {
+    const fsError = Object.assign(
+      new Error("ENOENT: no such file or directory, open '/var/lib/nexa/x'"),
+      {
+        code: 'ENOENT',
+      },
+    );
+    expect(errorKind(fsError)).toEqual({ type: 'Error', code: 'ENOENT' });
+    expect(JSON.stringify(errorKind(fsError))).not.toContain('/var/lib');
+    expect(errorKind(new LegacyMigrationRetry('RUN_CONFLICT'))).toEqual({
+      type: 'LegacyMigrationRetry',
+      code: null,
+    });
+    expect(errorKind('text')).toEqual({ type: 'string', code: null });
+  });
+
+  it('is COMPLETED only when all three hold', () => {
+    const report = {
+      importerVerdict: 'COMPLETED',
+      reconcileVerdict: 'RECONCILED' as const,
+      reportHolds: true,
+      failedInvariants: [],
+      failedSections: [],
+      sections: [],
+      history: [],
+    };
+    const progress = {
+      ...emptyRow().progress,
+      importerVerdict: 'COMPLETED',
+      reconcileVerdict: 'RECONCILED' as const,
+    };
+    expect(completedStatusOf({ progress, applyReport: report })).toBe('COMPLETED');
+    expect(
+      completedStatusOf({
+        progress: { ...progress, importerVerdict: 'COMPLETED_WITH_FAILURES' },
+        applyReport: report,
+      }),
+    ).toBe('COMPLETED_WITH_DISCREPANCY');
+    expect(
+      completedStatusOf({
+        progress: { ...progress, reconcileVerdict: 'DISCREPANCY' },
+        applyReport: report,
+      }),
+    ).toBe('COMPLETED_WITH_DISCREPANCY');
+    expect(completedStatusOf({ progress, applyReport: { ...report, reportHolds: false } })).toBe(
+      'COMPLETED_WITH_DISCREPANCY',
+    );
+    expect(completedStatusOf({ progress, applyReport: null })).toBe('COMPLETED_WITH_DISCREPANCY');
   });
 });

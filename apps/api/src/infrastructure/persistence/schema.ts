@@ -13282,6 +13282,13 @@ export const legacyImportRunInputs = pgTable(
     }).notNull(),
     preImportCustomers: integer('pre_import_customers').notNull(),
     recordedAt: timestamptz('recorded_at').notNull(),
+    /**
+     * Mirza `.nxpkg` importer: SHA-256 of the ownership hold the run was started under (the
+     * sorted held invoice keys and the decisions file's entries digest, `ownershipHoldDigest`).
+     * NULL for a run without a hold. A resume, reconcile or report under another hold is
+     * refused, so one run is never decided under two different holds.
+     */
+    ownershipHoldDigest: text('ownership_hold_digest'),
   },
   (table) => [
     primaryKey({ name: 'legacy_import_run_inputs_pk', columns: [table.tenantId, table.runId] }),
@@ -13300,6 +13307,10 @@ export const legacyImportRunInputs = pgTable(
     ),
     check('legacy_import_run_inputs_currency_check', sql`wallet_currency ~ '^[A-Z]{3}$'`),
     check('legacy_import_run_inputs_customers_check', sql`pre_import_customers >= 0`),
+    check(
+      'legacy_import_run_inputs_hold_digest_check',
+      sql`ownership_hold_digest IS NULL OR ownership_hold_digest ~ '^[0-9a-f]{64}$'`,
+    ),
   ],
 );
 

@@ -12,6 +12,8 @@ import {
 } from '@nexa/contracts';
 import { LegacyMigrationExecutor } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
 import { NxpkgMigrationAdapters } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters';
+import { decideLegacyUser } from '../../apps/api/src/modules/platform/legacy-importer/application/decisions';
+import { classifyLegacyUserStatus } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import {
   TARGET_ACK_ENV,
   targetAcknowledgement,
@@ -131,11 +133,104 @@ describe('legacy migration: the executor over a real package', () => {
     panelBId = b.id;
   }, 120_000);
 
+  /**
+   * TEST-ONLY stand-in for the converter's operational records (`records/customers.jsonl`,
+   * `wallet_opening_balances.jsonl`, `legacy_debts.jsonl`): the converter's rules for these
+   * users are the importer's own (`decideLegacyUser`, duplicates held), so a faithful
+   * converter writes exactly these. `skew` changes one total, as a converter defect would.
+   */
+  function converterFiles(
+    dataset: ReturnType<typeof buildSyntheticLegacyDataset>,
+    skew: 'none' | 'customers' | 'openings_sum' = 'none',
+  ) {
+    const users = (dataset.tables['user'] ?? []) as Record<string, string | null>[];
+    const seen = new Map<string, number>();
+    for (const u of users) seen.set(String(u['id']), (seen.get(String(u['id'])) ?? 0) + 1);
+    const customers: Record<string, unknown>[] = [];
+    const openings: Record<string, unknown>[] = [];
+    const debts: Record<string, unknown>[] = [];
+    for (const u of users) {
+      if ((seen.get(String(u['id'])) ?? 0) > 1) continue;
+      const d = decideLegacyUser(
+        {
+          id: String(u['id']),
+          balance: u['Balance'] ?? null,
+          status: classifyLegacyUserStatus(u['User_Status'] ?? null),
+        },
+        false,
+      );
+      if (d.kind !== 'IMPORT') continue;
+      const tg = d.telegramUserId;
+      customers.push({ record_type: 'customer', idempotency_key: `legacy:customer:${tg}` });
+      if (d.balanceMinor > 0n) {
+        openings.push({
+          record_type: 'wallet_opening_balance',
+          idempotency_key: `legacy:opening:${tg}`,
+          amount_minor: d.balanceMinor.toString(),
+          currency: 'IRT',
+        });
+      } else if (d.balanceMinor < 0n) {
+        debts.push({
+          record_type: 'legacy_debt',
+          idempotency_key: `legacy:debt:${tg}`,
+          amount_minor: (-d.balanceMinor).toString(),
+          currency: 'IRT',
+        });
+      }
+    }
+    if (skew === 'customers') {
+      customers.push({ record_type: 'customer', idempotency_key: 'legacy:customer:999999999' });
+    }
+    if (skew === 'openings_sum' && openings[0] !== undefined) {
+      const first = openings[0];
+      openings[0] = {
+        ...first,
+        amount_minor: (BigInt(String(first['amount_minor'])) + 1n).toString(),
+      };
+    }
+    return {
+      'records/customers.jsonl': { records: customers },
+      'records/wallet_opening_balances.jsonl': { records: openings },
+      'records/legacy_debts.jsonl': { records: debts },
+    };
+  }
+
   /** The synthetic dataset as a package with two selected RickPanel targets. */
   async function writePackage(
-    options: { readonly real?: boolean } = {},
+    options: {
+      readonly real?: boolean;
+      /** Without the deliberately UNCLASSIFIED table (a synthetic source the gate can pass). */
+      readonly classified?: boolean;
+      /**
+       * Without the legacy rows whose `user.id` is not a Telegram id: the v1 report's C3 holds
+       * only for a source with none, so only such a source can import COMPLETED.
+       */
+      readonly clean?: boolean;
+      readonly converter?: 'absent' | 'none' | 'customers' | 'openings_sum';
+      readonly extra?: Record<string, { records: Record<string, unknown>[] }>;
+    } = {},
   ): Promise<{ path: string; keyFileText: string }> {
-    const dataset = buildSyntheticLegacyDataset();
+    const built = buildSyntheticLegacyDataset();
+    const dataset =
+      options.clean === true
+        ? {
+            ...built,
+            tables: {
+              ...built.tables,
+              user: (built.tables['user'] ?? []).filter(
+                (u) =>
+                  decideLegacyUser(
+                    {
+                      id: String(u['id']),
+                      balance: (u['Balance'] as string | null | undefined) ?? null,
+                      status: 'ACTIVE',
+                    },
+                    false,
+                  ).kind !== 'INVALID_IDENTITY',
+              ),
+            },
+          }
+        : built;
     // `real`: the snapshot carries no synthetic marker, as a converted production backup's
     // would not — the only kind a production-like target may ever import.
     const source =
@@ -146,7 +241,12 @@ describe('legacy migration: the executor over a real package', () => {
             // refuses any table not classified in a reviewed commit.
             schema: dataset.schema.filter((c) => !c.table.startsWith('nexa_synthetic')),
           }
-        : dataset;
+        : options.classified === true
+          ? {
+              ...dataset,
+              schema: dataset.schema.filter((c) => c.table !== 'nexa_synthetic_unclassified'),
+            }
+          : dataset;
     const parts = snapshotOfDataset(source as never);
     const C = SYNTHETIC_PANEL_CODES;
     const target = (code: string, selected: boolean) => ({
@@ -185,6 +285,10 @@ describe('legacy migration: the executor over a real package', () => {
             target('(no code_panel)', false),
           ],
         },
+        ...(options.converter === 'absent'
+          ? {}
+          : converterFiles(dataset, options.converter ?? 'none')),
+        ...(options.extra ?? {}),
       }),
       secret: { rawKey: raw.rawKey },
       manifest: { ...READY_MANIFEST, import_id: 'abcdefabcdefabcdefabcdefabcdefab' },
@@ -221,7 +325,7 @@ describe('legacy migration: the executor over a real package', () => {
     ).rows[0];
 
   it('verifies, dry-runs, imports, archives, reconciles and reports a package; the key is erased', async () => {
-    const pkg = await writePackage();
+    const pkg = await writePackage({ classified: true, clean: true });
     const id = await upload(pkg.path);
     const service = ctx.container.legacyMigration;
     const executor = ctx.container.migrationExecutor;
@@ -252,9 +356,32 @@ describe('legacy migration: the executor over a real package', () => {
     expect(dry.dryRunReport?.sections.find((s) => s.section === 'customers')).toMatchObject({
       imported: 8,
     });
-    // The dry run wrote no customer, balance or service.
+    // The dry run wrote no customer, balance or service — and no read set (H4): no product
+    // review, no invoice archive, no read-set run. Only the fingerprints are in its report.
     expect(await count('customers')).toBe(0);
     expect(await count('wallet_entries')).toBe(0);
+    expect(await count('legacy_read_set_runs')).toBe(0);
+    expect(await count('legacy_product_reviews')).toBe(0);
+    expect(await count('legacy_invoice_archive')).toBe(0);
+    expect(await count('legacy_invoice_archive_runs')).toBe(0);
+    expect(dry.dryRunReport?.planTalliesDigest).toMatch(/^[0-9a-f]{64}$/u);
+    const sections = new Map(dry.dryRunReport?.sections.map((x) => [x.section, x]));
+    for (const name of [
+      'customers:existing',
+      'customers:invalid_identity',
+      'wallet_openings',
+      'legacy_debts',
+      'trials',
+      'products',
+      'invoice_archive',
+      'services',
+      'history',
+    ]) {
+      expect(sections.has(name), name).toBe(true);
+    }
+    expect(sections.get('invoice_archive')?.source).toBeGreaterThan(0);
+    expect(dry.dryRunReport?.wallets.currency).toBe('IRT');
+    expect(BigInt(dry.dryRunReport?.debts.totalMinor ?? '-1') >= 0n).toBe(true);
 
     await service.approve(tenantA, owner, id, {
       idempotencyKey: key(),
@@ -263,9 +390,13 @@ describe('legacy migration: the executor over a real package', () => {
     });
     await executor.tick();
     const done = await detail(id);
-    expect(['COMPLETED', 'COMPLETED_WITH_DISCREPANCY'], JSON.stringify(done)).toContain(
-      done.status,
-    );
+    // A clean synthetic import is COMPLETED: the importer said COMPLETED, the reconcile
+    // RECONCILED, and the v2 report holds — never "one of the two".
+    expect(done.status, JSON.stringify(done.applyReport)).toBe('COMPLETED');
+    expect(done.progress.importerVerdict).toBe('COMPLETED');
+    expect(done.applyReport?.reportHolds).toBe(true);
+    expect(done.applyReport?.failedSections).toEqual([]);
+    expect(done.applyReport?.failedInvariants).toEqual([]);
     expect(done.progress.reconcileVerdict).toBe('RECONCILED');
     expect(done.applyLegacyRunId).not.toBeNull();
     // The standard backup after the import, through the unmodified pipeline.
@@ -288,7 +419,102 @@ describe('legacy migration: the executor over a real package', () => {
     expect((await readdir(join(migrationRoot, id))).filter((n) => n.startsWith('step-'))).toEqual(
       [],
     );
+    // The apply recorded the approved read sets (the dry run did not).
+    expect(await count('legacy_read_set_runs')).toBeGreaterThan(0);
+    // M4: the next tick's sweep removes the finished import's package (not retained).
+    await executor.tick();
+    expect(await readdir(join(migrationRoot, id))).toEqual([]);
   }, 300_000);
+
+  it('a source the report cannot hold (an invalid legacy id: C3) is COMPLETED_WITH_DISCREPANCY', async () => {
+    const pkg = await writePackage({ classified: true });
+    const id = await upload(pkg.path);
+    const service = ctx.container.legacyMigration;
+    const executor = ctx.container.migrationExecutor;
+    await service.setKey(tenantA, owner, id, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await executor.tick();
+    await service.setPanelBindings(tenantA, owner, id, {
+      idempotencyKey: key(),
+      bindings: [
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelAId },
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelBId },
+      ],
+    });
+    await service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
+    await executor.tick();
+    const dry = await detail(id);
+    expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
+    await service.approve(tenantA, owner, id, {
+      idempotencyKey: key(),
+      dryRunSha256: dry.dryRunSha256,
+      confirmation: LEGACY_MIGRATION_APPROVAL_PHRASE,
+    });
+    await executor.tick();
+    const done = await detail(id);
+    expect(done.status).toBe('COMPLETED_WITH_DISCREPANCY');
+    expect(done.progress.reconcileVerdict).toBe('RECONCILED');
+    expect(done.applyReport?.reportHolds).toBe(false);
+    expect(done.applyReport?.failedSections).toContain('core');
+  }, 300_000);
+
+  it("refuses a dry run whose plan disagrees with the converter's totals, with both numbers", async () => {
+    const pkg = await writePackage({ converter: 'customers' });
+    const id = await upload(pkg.path);
+    const service = ctx.container.legacyMigration;
+    const executor = ctx.container.migrationExecutor;
+    await service.setKey(tenantA, owner, id, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await executor.tick();
+    await service.setPanelBindings(tenantA, owner, id, {
+      idempotencyKey: key(),
+      bindings: [
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelAId },
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelBId },
+      ],
+    });
+    await service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
+    await executor.tick();
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'DRY_RUN_FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    const counts = new Map(failed.progress.refusalCounts.map((c) => [c.code, c.count]));
+    expect(counts.get('converter:customers')).toBe((counts.get('importer:customers') ?? -1) + 1);
+    expect((await row(id))?.['key_ciphertext']).toBeNull();
+  }, 300_000);
+
+  it('fails VERIFY on a history file the archive would refuse, before any dry run', async () => {
+    const payment = (n: number) => ({
+      record_type: 'legacy_payment_history',
+      schema: 'mirza.payment_report.v1',
+      // The same key twice: the ingest's first pass refuses it.
+      idempotency_key: 'legacy:payment:1',
+      customer: { telegram_user_id: null, source_user_id: null, relation: 'CUSTOMER_IMPORTED' },
+      amount: { amount_minor: String(1000 * n), currency: 'IRT', raw: String(1000 * n) },
+      status: { outcome: 'SUCCEEDED', raw: 'paid' },
+      method: { normalized: 'CARD_TO_CARD', raw: 'cart to cart' },
+      times: { created: { local: '2025-01-01T08:02:17', unix: 1_735_700_000 + n } },
+      provenance: { source_table: 'Payment_report', source_pk: String(n) },
+      affects_wallet: false,
+      applies_to_live_state: false,
+      creates_payment: false,
+      counts_as_revenue: false,
+    });
+    const pkg = await writePackage({
+      extra: { 'records/payments.jsonl': { records: [payment(1), payment(2)] } },
+    });
+    const id = await upload(pkg.path);
+    await ctx.container.legacyMigration.setKey(tenantA, owner, id, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await ctx.container.migrationExecutor.tick();
+    expect(await row(id)).toMatchObject({ status: 'VERIFY_FAILED', error_code: 'IMPORT_FAILED' });
+    expect(await count('legacy_history_records')).toBe(0);
+  }, 120_000);
 
   it('a wrong key is VERIFY_FAILED with NXPKG_WRONG_KEY, and the key is erased', async () => {
     const pkg = await writePackage();
@@ -343,7 +569,7 @@ describe('legacy migration: the executor over a real package', () => {
     });
     const service = container.legacyMigration;
 
-    const pkg = await writePackage({ real: true });
+    const pkg = await writePackage({ real: true, clean: true });
     const id = await upload(pkg.path);
     await service.setKey(tenantA, owner, id, {
       idempotencyKey: key(),
@@ -410,9 +636,7 @@ describe('legacy migration: the executor over a real package', () => {
     await stopSales();
     await executor.tick();
     view = await detail(id);
-    expect(['COMPLETED', 'COMPLETED_WITH_DISCREPANCY'], JSON.stringify(view)).toContain(
-      view.status,
-    );
+    expect(view.status, JSON.stringify(view.applyReport)).toBe('COMPLETED');
     expect(view.progress.blocker).toBeNull();
     expect(await count('customers')).toBe(8);
     expect((await row(id))?.['key_ciphertext']).toBeNull();

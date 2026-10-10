@@ -36,7 +36,24 @@ export interface ZipEntry {
 export interface ZipLimits {
   maxFiles: number;
   maxFileBytes: number;
+  /** Upper bound on the SUM of every entry's declared uncompressed size, in bytes. */
+  maxTotalBytes: number;
+  /**
+   * Upper bound on one DEFLATE entry's uncompressed / compressed ratio. Applied to entries
+   * larger than `ratioFloorBytes` only: a tiny file compresses absurdly well and costs nothing.
+   */
+  maxCompressionRatio: number;
+  ratioFloorBytes: number;
 }
+
+/**
+ * Safe defaults for the two bomb checks. Deflate cannot exceed ~1032:1; the converter's JSONL
+ * compresses far below 200:1 in practice. Sixteen gigabytes uncompressed is many times any
+ * converted Mirza backup, and bounds the CPU a hostile key holder can make the reader spend.
+ */
+export const ZIP_DEFAULT_MAX_TOTAL_BYTES = 16 * 1024 * 1024 * 1024;
+export const ZIP_DEFAULT_MAX_COMPRESSION_RATIO = 200;
+export const ZIP_DEFAULT_RATIO_FLOOR_BYTES = 1024 * 1024;
 
 const SIG_LOCAL = 0x04034b50;
 const SIG_CENTRAL = 0x02014b50;
@@ -175,6 +192,7 @@ export async function readZipDirectory(
 
   const entries: ZipEntry[] = [];
   const names = new Set<string>();
+  let totalBytes = 0;
   let p = 0;
   for (let i = 0; i < count; i++) {
     if (p + CENTRAL_LEN > cd.length || cd.readUInt32LE(p) !== SIG_CENTRAL) {
@@ -224,6 +242,17 @@ export async function readZipDirectory(
     }
     if (usize > limits.maxFileBytes) throw tampered('file_too_large');
     if (method === 0 && csize !== usize) throw tampered('zip_size_mismatch');
+    // Bomb checks on the DECLARED sizes, before anything is inflated; `readZipEntry` refuses
+    // content that inflates past its declared size, so the declaration is what is spent.
+    totalBytes += usize;
+    if (totalBytes > limits.maxTotalBytes) throw tampered('zip_total_too_large');
+    if (
+      method === 8 &&
+      usize > limits.ratioFloorBytes &&
+      usize > csize * limits.maxCompressionRatio
+    ) {
+      throw tampered('zip_compression_ratio');
+    }
     entries.push({
       name,
       method: method as 0 | 8,

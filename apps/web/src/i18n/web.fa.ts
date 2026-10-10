@@ -8952,6 +8952,8 @@ export const WEB_FA = {
   'web.lmg_verify_hint':
     'سرور بسته را با کلید باز می‌کند و قالب، یکپارچگی، آمادگی، واحد پول و پنل‌های مقصد را بررسی می‌کند.',
   'web.lmg_key_waiting': 'منتظر کلید بسته از سوی مدیر مهاجرت.',
+  'web.lmg_key_expired':
+    'کلید بسته مدتی بی‌استفاده مانده بود و برای امنیت پاک شد. برای ادامه، کلید را دوباره وارد کنید.',
   'web.lmg_verifying': 'کلید ثبت شد؛ بررسی بسته در صف یا در جریان است.',
   'web.lmg_synthetic': 'این بسته از دادهٔ ساختگی ساخته شده است و یک مهاجرت واقعی نیست.',
   'web.lmg_package_id': 'شناسهٔ بسته',
@@ -9051,6 +9053,7 @@ export const WEB_FA = {
   'web.lmg_discrepancy': 'مغایرت',
   'web.lmg_report_holds': 'گزارش برقرار است',
   'web.lmg_failed_invariants': 'ناورداهای ناموفق',
+  'web.lmg_failed_sections': 'بخش‌های ناموفق گزارش',
   'web.lmg_history': 'سوابق بایگانی‌شده',
   'web.lmg_audit_link': 'دیدن رویدادهای ممیزی',
   'web.lmg_sections': 'شمارش بخش‌ها',

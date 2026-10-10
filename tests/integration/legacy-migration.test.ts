@@ -78,6 +78,7 @@ const dryRunReport: LegacyMigrationDryRunReport = {
     freezeProofSha256: 'f'.repeat(64),
     finalDumpSha256: '1'.repeat(64),
   },
+  planTalliesDigest: '2'.repeat(64),
 };
 
 describe('legacy migration (Mirza .nxpkg)', () => {
@@ -412,6 +413,50 @@ describe('legacy migration (Mirza .nxpkg)', () => {
     ).toBe(false);
   });
 
+  it('erases an idle key in VERIFIED / DRY_RUN_DONE only, and a keyless import is not work', async () => {
+    const { id } = await uploaded();
+    const repository = api.container.legacyNxpkgImports;
+    const db = api.container.database.db;
+    await post(LEGACY_MIGRATION_ROUTES.key(id), ownerCookie, {
+      idempotencyKey: idempotencyKey(),
+      keyFileText: 'nxpkg-key-v1:AAAA',
+    });
+    const now = new Date();
+    const old = new Date(now.getTime() - 2 * 60 * 60_000);
+    const statuses = ['VERIFIED', 'DRY_RUN_DONE'] as const;
+    // UPLOADED is not an idle state: kept, whatever its age.
+    await db.execute(sql`UPDATE legacy_nxpkg_imports SET updated_at = ${old} WHERE id = ${id}`);
+    expect(await repository.expireIdleKeys({ now, idleBefore: now, statuses })).toEqual([]);
+    await db.execute(
+      sql`UPDATE legacy_nxpkg_imports SET status = 'VERIFIED', updated_at = ${old} WHERE id = ${id}`,
+    );
+    // Recent enough: kept.
+    expect(
+      await repository.expireIdleKeys({ now, idleBefore: new Date(old.getTime() - 1), statuses }),
+    ).toEqual([]);
+    expect(await repository.expireIdleKeys({ now, idleBefore: now, statuses })).toEqual([id]);
+    const rows = await db.execute<Record<string, unknown>>(
+      sql`SELECT status, key_ciphertext, key_key_id, key_kind FROM legacy_nxpkg_imports WHERE id = ${id}`,
+    );
+    expect(rows.rows[0]).toMatchObject({
+      status: 'VERIFIED',
+      key_ciphertext: null,
+      key_key_id: null,
+      key_kind: 'KEY_FILE',
+    });
+    // A DRY_RUN_REQUESTED import without a key is never claimed (nothing to open it with).
+    await db.execute(
+      sql`UPDATE legacy_nxpkg_imports SET status = 'DRY_RUN_REQUESTED' WHERE id = ${id}`,
+    );
+    expect(
+      await repository.claim({
+        leaseOwner: 'a',
+        now,
+        leaseUntil: new Date(now.getTime() + 60_000),
+      }),
+    ).toBeNull();
+  });
+
   // --- the executor against the real repository -------------------------------------------
 
   function executorWith(runner: Partial<MigrationRunner>, calls: string[]) {
@@ -440,6 +485,7 @@ describe('legacy migration (Mirza .nxpkg)', () => {
       },
       runner: {
         precheck: async () => undefined,
+        recordReadSets: async () => undefined,
         dryRun: async () => ({ report: dryRunReport, legacyRunId: null }),
         apply: async (_context, input) => {
           calls.push(`apply:${input.mode}`);
@@ -451,6 +497,7 @@ describe('legacy migration (Mirza .nxpkg)', () => {
           reconcileVerdict: input.reconcileVerdict,
           reportHolds: false,
           failedInvariants: ['WALLETS_RECONCILED'],
+          failedSections: [],
           sections: [],
           history: [...input.history],
         }),

@@ -3,6 +3,7 @@ import type {
   LegacyMigrationBlocker,
   LegacyMigrationApplyReport,
   LegacyMigrationBackupOutcome,
+  LegacyMigrationCodeCount,
   LegacyMigrationDryRunReport,
   LegacyMigrationPanelBinding,
   LegacyMigrationProgress,
@@ -190,6 +191,15 @@ export interface LegacyNxpkgImportRepository {
    * failed — unlike `recovery_requests.reclaimStale`: see `LegacyMigrationExecutor`.
    */
   reclaimStale(input: { readonly now: Date }): Promise<readonly LegacyNxpkgImportRow[]>;
+  /**
+   * Key expiry (L4): erases the sealed key of every UNCLAIMED import in `statuses` whose row
+   * has not changed since `idleBefore`, without moving its status. Returns the ids.
+   */
+  expireIdleKeys(input: {
+    readonly now: Date;
+    readonly idleBefore: Date;
+    readonly statuses: readonly LegacyNxpkgImportStatus[];
+  }): Promise<readonly string[]>;
 }
 
 // --- the filesystem ---------------------------------------------------------------------------
@@ -223,6 +233,16 @@ export interface MigrationWorkspaces {
   discardStep(path: string): Promise<void>;
   /** Removes every step directory an earlier (crashed) process left behind. */
   discardStaleSteps(importId: string): Promise<number>;
+  /**
+   * The import ids that have a directory under the root (a name that is not a uuid v7 is
+   * not listed: it is nothing this module made).
+   */
+  importDirectories(): Promise<readonly string[]>;
+  /**
+   * Removes an import's package and every decisions file (uploaded or partial), keeping the
+   * directory. Returns how many files were removed.
+   */
+  discardPackageFiles(importId: string): Promise<number>;
   /** SHA-256 (hex) and size of a file, streamed. */
   digest(path: string): Promise<{ readonly sha256: string; readonly bytes: number }>;
 }
@@ -256,13 +276,32 @@ export interface MigrationStepContext {
 
 /** A refusal with a code from `LEGACY_NXPKG_ERROR_CODES`: the step's verdict. */
 export class LegacyMigrationStepFailure extends Error {
+  /** Counts the operator must see beside the code (recorded as `progress.refusalCounts`). */
+  readonly counts: readonly LegacyMigrationCodeCount[] | null;
   constructor(
     readonly code: LegacyNxpkgErrorCode,
     message: string,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; counts?: readonly LegacyMigrationCodeCount[] },
   ) {
     super(message, options);
     this.name = 'LegacyMigrationStepFailure';
+    this.counts = options?.counts ?? null;
+  }
+}
+
+/**
+ * NOT a verdict, and not a crash: the step could not run NOW for a reason that passes on its
+ * own — another importer process holds this tenant (`RUN_CONFLICT`: the CLI, or a replica
+ * whose lease expired while its importer still ran). The executor releases the lease, does
+ * not count the attempt, and the step runs again on a later tick. Never FAILED.
+ */
+export class LegacyMigrationRetry extends Error {
+  constructor(
+    readonly reason: 'RUN_CONFLICT',
+    options?: { cause?: unknown },
+  ) {
+    super(`The legacy migration step will run again later: ${reason}.`, options);
+    this.name = 'LegacyMigrationRetry';
   }
 }
 
@@ -301,10 +340,14 @@ export interface PackageVerifier {
   ): Promise<LegacyMigrationVerifyReport>;
 }
 
-/** Design §6: the tenant holds no operational data. Panels may exist. */
+/**
+ * Design §6: the tenant holds no operational data. Panels may exist. Read sets recorded for
+ * `sourceFingerprint` (the import's own, taken at the apply's start) are not counted.
+ */
 export interface FreshTargetGuard {
   check(
     scope: TenantContext,
+    sourceFingerprint: string | null,
   ): Promise<
     | { readonly fresh: true }
     | { readonly fresh: false; readonly counts: Readonly<Record<string, number>> }
@@ -324,11 +367,24 @@ export interface MigrationRunner {
    * synthetic package against a production-like target). Anywhere else, nothing.
    */
   precheck(context: MigrationStepContext, step: 'DRY_RUN' | 'APPLY'): Promise<void>;
-  /** Read sets + `importer.dryRun`. Writes no customer, balance or service. */
+  /**
+   * `importer.dryRun` plus the read-set FINGERPRINTS (digest only, the `expected = null`
+   * observation): nothing durable is written for the read sets — no product review, no
+   * invoice archive, no `legacy_read_set_runs` row. The dry run's report carries them.
+   */
   dryRun(context: MigrationStepContext): Promise<{
     readonly report: LegacyMigrationDryRunReport;
     readonly legacyRunId: string | null;
   }>;
+  /**
+   * The APPROVED reads, at the start of the apply (after the target precheck and the fresh
+   * guard, before the cutover approval is decided): the products and invoice-archive read
+   * sets ingested and RECORDED, and the inventory recorded, each bound to the fingerprint the
+   * APPROVED dry run observed (`dryRunReport.cutover`). A source whose read sets now differ
+   * is refused (`DRY_RUN_MISMATCH`), nothing ingested. Idempotent: run again on every attempt
+   * until the import starts.
+   */
+  recordReadSets(context: MigrationStepContext): Promise<void>;
   /**
    * `importer.apply`. `IMPORT` the first time; `RESUME` after a crash — the importer resumes
    * its RUNNING `legacy_import_runs` row (`importer.md` §6), and when it holds none for this

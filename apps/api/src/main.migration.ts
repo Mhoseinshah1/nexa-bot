@@ -92,6 +92,14 @@ async function main(): Promise<void> {
 main().catch((error: unknown) => {
   if (isNexaError(error) && error.kind === 'CONFIGURATION') {
     console.error(error.message);
+  } else if (
+    error instanceof Error &&
+    typeof (error as { syscall?: unknown }).syscall === 'string'
+  ) {
+    // A filesystem or socket error's message names a path (under LEGACY_MIGRATION_WORK_DIR):
+    // its type and code say what failed without it.
+    const code = (error as { code?: unknown }).code;
+    console.error(`${error.name} ${typeof code === 'string' ? code : ''}`.trim());
   } else {
     console.error(error);
   }

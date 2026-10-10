@@ -19,7 +19,15 @@ import {
 } from './legacy-import-argv.js';
 import { NxpkgError } from './infrastructure/nxpkg/errors.js';
 import type { NxpkgSecret } from './infrastructure/nxpkg/crypto.js';
-import { NxpkgImportRefused } from './modules/platform/legacy-importer/application/nxpkg-panel-binding.js';
+import {
+  NxpkgImportRefused,
+  validatePanelMappingAgainstTargets,
+} from './modules/platform/legacy-importer/application/nxpkg-panel-binding.js';
+import {
+  NXPKG_PANEL_TARGETS_PATH,
+  checkNxpkgForImport,
+} from './modules/platform/legacy-importer/application/nxpkg-acceptance.js';
+import { freshTargetProblems } from './modules/platform/legacy-importer/application/fresh-target.js';
 import { nxpkgOwnershipHold } from './modules/platform/legacy-importer/application/nxpkg-ownership.js';
 import {
   NxpkgLegacySourceConnector,
@@ -79,6 +87,7 @@ import {
 import {
   PanelMappingRefused,
   parsePanelMapping,
+  type PanelMapping,
 } from './modules/platform/legacy-importer/application/panel-mapping.js';
 import {
   ALLOW_PRODUCTION_FLAG,
@@ -161,6 +170,7 @@ export const USAGE = [
   '                     [--cutover-gate] [--report-schema 1|2]',
   '                     [--package-key-env NAME | --package-passphrase-env NAME]',
   '                     [--package-work-dir DIR] [--ownership-decisions FILE]',
+  '                     [--expected-plan-tallies-digest HEX]',
   `                     [${ALLOW_PRODUCTION_FLAG}]`,
   '',
   '  MODE     audit | dry-run | import | resume | reconcile | report  (or --mode MODE)',
@@ -201,6 +211,13 @@ export const USAGE = [
   '  written) without an unrevoked owner approval (Web Admin) matching all seven, or over an',
   "  earlier import of another source without the owner's re-run acknowledgement",
   '  (SOURCE_SUPERSEDED).',
+  "  --expected-plan-tallies-digest HEX  import: the approved dry run's planTalliesDigest; a",
+  '                                      plan with other tallies is refused (DRY_RUN_MISMATCH).',
+  '',
+  '  nxpkg: every mode first re-checks the package (checkNxpkgForImport) and accepts the',
+  '  --panel-map only if it is exactly the map the package targets make with its bindings;',
+  '  dry-run and import refuse a target that is not fresh (FRESH_TARGET_NOT_EMPTY), and',
+  '  import decides that again inside the transaction that starts the run.',
   '  --report-schema 1|2                 report: the final report version --format json prints',
   '                                      (default 2; 1 is the closed v1 document, unchanged).',
   '',
@@ -251,6 +268,8 @@ export interface Args {
   readonly packageWorkDir?: string | null;
   /** `nxpkg:` only: the converter's signed `ownership-decisions.json`. */
   readonly ownershipDecisions?: string | null;
+  /** import: the approved dry run's `planTalliesDigest` (DRY_RUN_MISMATCH otherwise). */
+  readonly expectedPlanTalliesDigest?: string | null;
 }
 
 /**
@@ -296,6 +315,7 @@ const VALUE_FLAGS = new Set([
   '--package-passphrase-env',
   '--package-work-dir',
   '--ownership-decisions',
+  '--expected-plan-tallies-digest',
 ]);
 const BOOLEAN_FLAGS = new Set([ALLOW_PRODUCTION_FLAG, '--abort-running', '--cutover-gate']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -452,6 +472,17 @@ export function parseArgs(argv: readonly string[]): Args {
   if (cutoverGate && mode !== 'import' && mode !== 'resume') {
     throw new UsageError('--cutover-gate applies to import and resume only.');
   }
+  const expectedPlanTalliesDigest = values.get('--expected-plan-tallies-digest') ?? null;
+  if (expectedPlanTalliesDigest !== null) {
+    if (mode !== 'import') {
+      throw new UsageError('--expected-plan-tallies-digest applies to import only.');
+    }
+    if (!SHA256_HEX.test(expectedPlanTalliesDigest)) {
+      throw new UsageError(
+        '--expected-plan-tallies-digest is a SHA-256 as 64 lowercase hex characters, as the dry run prints it.',
+      );
+    }
+  }
   const rawSchema = values.get('--report-schema');
   if (rawSchema !== undefined && mode !== 'report') {
     throw new UsageError('--report-schema applies to report only.');
@@ -486,6 +517,7 @@ export function parseArgs(argv: readonly string[]): Args {
     packagePassphraseEnv,
     packageWorkDir,
     ownershipDecisions,
+    expectedPlanTalliesDigest,
   };
 }
 
@@ -799,6 +831,16 @@ export async function runMode(
      * adoption, decided from THIS snapshot (`nxpkgOwnershipHoldFor`).
      */
     readonly ownershipHoldFor?: (snapshot: LegacySnapshot) => Promise<ReadonlySet<string>>;
+    /**
+     * `.nxpkg` only: the verified ownership decisions file's `entries_digest`, or null without
+     * one. Bound with the hold into the run (`ownership_hold_digest`, M7).
+     */
+    readonly ownershipDecisionsDigest?: string | null;
+    /**
+     * import: the approved dry run's `planTalliesDigest` (`sections.planTalliesDigest`); the
+     * import refuses another plan (`DRY_RUN_MISMATCH`). Overrides `--expected-plan-tallies-digest`.
+     */
+    readonly dryRunTalliesDigest?: string;
   },
 ): Promise<LegacyImportReport | null> {
   const scope: TenantContext = { tenantId: context.tenantId as never, botInstanceId: null };
@@ -827,6 +869,13 @@ export async function runMode(
         `${EXPECTED_PANEL_MAP_FINGERPRINT_FLAG} is ${args.expectedPanelMapFingerprint}: this is ` +
         'not the mapping file that was approved. Nothing was written.',
     ]);
+  }
+
+  // `.nxpkg` (H2): whoever calls — the operator's CLI or the migration worker — every mode
+  // re-checks the package and takes the panel map only as the package's targets make it.
+  const nxpkg = connector instanceof NxpkgLegacySourceConnector;
+  if (connector instanceof NxpkgLegacySourceConnector) {
+    await assertNxpkgImportable(importer, scope, connector, mapping);
   }
 
   const session = await connector.open();
@@ -858,6 +907,21 @@ export async function runMode(
   }
   // Mirza PR5: the target's class travels with the input, so a stored approval's synthetic
   // flag is checked against it before any run acts on it.
+  // `.nxpkg` (§6): a dry run or an import only into a fresh tenant — a courtesy read here,
+  // decided again by the import inside the transaction that starts its run.
+  if (nxpkg && (args.mode === 'dry-run' || args.mode === 'import')) {
+    const fresh = await importer.freshTarget(scope, snapshot.fingerprint);
+    if (!fresh.fresh) {
+      throw new NxpkgImportRefused(
+        'FRESH_TARGET_NOT_EMPTY',
+        [
+          'the tenant already holds operational data; nothing is deleted to make room',
+          ...freshTargetProblems(fresh),
+        ],
+        fresh.counts,
+      );
+    }
+  }
   const ownershipHold =
     context.ownershipHoldFor === undefined ? undefined : await context.ownershipHoldFor(snapshot);
   const input = {
@@ -866,8 +930,11 @@ export async function runMode(
     snapshot,
     mapping,
     productionLikeTarget: context.productionLikeTarget,
-    ...(ownershipHold === undefined ? {} : { ownershipHold }),
+    ...(ownershipHold === undefined
+      ? {}
+      : { ownershipHold, ownershipDecisionsDigest: context.ownershipDecisionsDigest ?? null }),
   };
+  const dryRunTalliesDigest = context.dryRunTalliesDigest ?? args.expectedPlanTalliesDigest ?? null;
   const readContext = { scope, actor, productionLikeTarget: context.productionLikeTarget };
   if (gated) {
     // A FRESH read of every read set the approval binds, by sessions bound to this source:
@@ -889,6 +956,8 @@ export async function runMode(
       return importer.apply({
         ...input,
         mode: 'IMPORT',
+        ...(nxpkg ? { freshTarget: true } : {}),
+        ...(dryRunTalliesDigest === null ? {} : { dryRunTalliesDigest }),
         ...(gated ? { cutoverGate: { expectation } } : {}),
       });
     case 'resume':
@@ -929,6 +998,20 @@ export async function nxpkgOwnershipHoldFor(
   connector: NxpkgLegacySourceConnector,
   decisions: { readonly bytes: Uint8Array; readonly secret: NxpkgSecret } | null,
 ): Promise<(snapshot: LegacySnapshot) => Promise<ReadonlySet<string>>> {
+  return (await nxpkgOwnershipEvidence(connector, decisions)).holdFor;
+}
+
+/**
+ * `nxpkgOwnershipHoldFor`, and the verified decisions file's `entries_digest` (null without
+ * one) that `runMode` binds into the run with the hold (`ownershipDecisionsDigest`).
+ */
+export async function nxpkgOwnershipEvidence(
+  connector: NxpkgLegacySourceConnector,
+  decisions: { readonly bytes: Uint8Array; readonly secret: NxpkgSecret } | null,
+): Promise<{
+  readonly holdFor: (snapshot: LegacySnapshot) => Promise<ReadonlySet<string>>;
+  readonly decisionsDigest: string | null;
+}> {
   const pkg = connector.pkg;
   if (pkg === null) throw new UsageError('the nxpkg source has no opened package');
   const verified =
@@ -936,14 +1019,53 @@ export async function nxpkgOwnershipHoldFor(
       ? null
       : await verifyOwnershipDecisions(decisions.bytes, pkg, decisions.secret);
   const { facts } = await readOwnershipRecords(pkg);
-  return (snapshot) =>
-    Promise.resolve(
-      nxpkgOwnershipHold({
-        records: facts,
-        decisions: verified,
-        liveInvoices: snapshot.liveInvoices,
-      }).hold,
+  return {
+    holdFor: (snapshot) =>
+      Promise.resolve(
+        nxpkgOwnershipHold({
+          records: facts,
+          decisions: verified,
+          liveInvoices: snapshot.liveInvoices,
+        }).hold,
+      ),
+    decisionsDigest: verified?.entriesDigest ?? null,
+  };
+}
+
+/**
+ * `.nxpkg`: the package may be imported (`checkNxpkgForImport`, §1) and the panel map is
+ * exactly the one its targets make with the map's bindings (`validatePanelMappingAgainstTargets`).
+ * Both refuse with `NxpkgImportRefused` (exit 65) before the snapshot is read.
+ */
+async function assertNxpkgImportable(
+  importer: LegacyImporterService,
+  scope: TenantContext,
+  connector: NxpkgLegacySourceConnector,
+  mapping: PanelMapping,
+): Promise<void> {
+  const pkg = connector.pkg;
+  if (pkg === null) throw new UsageError('the nxpkg source has no opened package');
+  const acceptance = await checkNxpkgForImport(pkg);
+  const first = acceptance.problems[0];
+  if (!acceptance.ok && first !== undefined) {
+    throw new NxpkgImportRefused(
+      first.code,
+      acceptance.problems.map((p) => `${p.code}: ${p.detail}`),
     );
+  }
+  const targets: Record<string, unknown>[] = [];
+  if (pkg.has(NXPKG_PANEL_TARGETS_PATH)) {
+    for await (const record of pkg.iterJsonl(NXPKG_PANEL_TARGETS_PATH)) targets.push(record);
+  }
+  validatePanelMappingAgainstTargets({
+    tenantId: scope.tenantId,
+    targets,
+    mapping,
+    tenantPanels: await importer.panelFacts(
+      scope,
+      mapping.file.panels.map((p) => p.panelId),
+    ),
+  });
 }
 
 /** `legacy-import review …`: the Manual Review Queue, on the operator's terminal only. */
@@ -1302,6 +1424,7 @@ async function runMain(
 ): Promise<number> {
   let target = guarded;
   let ownershipHoldFor: ((snapshot: LegacySnapshot) => Promise<ReadonlySet<string>>) | undefined;
+  let ownershipDecisionsDigest: string | null = null;
   if (connector instanceof NxpkgLegacySourceConnector) {
     // The package's own marker, now that it is open: a SYNTHETIC package is refused against a
     // production-like target exactly as a fixture is, before anything else is read.
@@ -1319,7 +1442,9 @@ async function runMain(
             }),
             secret: packageSecretFromEnv(args, env),
           };
-    ownershipHoldFor = await nxpkgOwnershipHoldFor(connector, decisions);
+    const evidence = await nxpkgOwnershipEvidence(connector, decisions);
+    ownershipHoldFor = evidence.holdFor;
+    ownershipDecisionsDigest = evidence.decisionsDigest;
   }
 
   const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
@@ -1347,7 +1472,7 @@ async function runMain(
     const report = await runMode(importer, args, connector, mappingText, container.ids.uuid(), {
       tenantId,
       productionLikeTarget: target.productionLike,
-      ...(ownershipHoldFor === undefined ? {} : { ownershipHoldFor }),
+      ...(ownershipHoldFor === undefined ? {} : { ownershipHoldFor, ownershipDecisionsDigest }),
     });
     if (report === null) return 0;
     const reported = withInvocation(report, args);

@@ -417,6 +417,11 @@ function ImportFlow({
             {t(ERROR_LABELS[row.errorCode])}
           </Banner>
         )}
+        {row.errorCode !== null &&
+          row.status !== 'DRY_RUN_FAILED' &&
+          row.progress.refusalCounts.length > 0 && (
+            <CodeCounts title={t('web.lmg_refusal_counts')} rows={row.progress.refusalCounts} />
+          )}
         {row.working && <Banner tone="info">{t('web.lmg_working')}</Banner>}
         {row.progress.blocker !== null && !terminal && (
           <ProductionGate row={row} capabilities={capabilities} />
@@ -476,6 +481,8 @@ function VerifyCard({ row, mayManage }: { row: LegacyMigrationImportView; mayMan
   return (
     <Card title={stepTitle(2)} hint={t('web.lmg_verify_hint')}>
       {row.status === 'UPLOADED' && !row.keyPresent && mayManage && <KeyForm row={row} />}
+      {keyExpired(row) && <Banner tone="warn">{t('web.lmg_key_expired')}</Banner>}
+      {keyExpired(row) && mayManage && <KeyForm row={row} />}
       {row.status === 'UPLOADED' && !row.keyPresent && !mayManage && (
         <p className="muted">{t('web.lmg_key_waiting')}</p>
       )}
@@ -504,6 +511,18 @@ function VerifyCard({ row, mayManage }: { row: LegacyMigrationImportView; mayMan
         </>
       )}
     </Card>
+  );
+}
+
+/**
+ * The `migration` role erased a key left idle while the import waited on a person
+ * (`LEGACY_MIGRATION_KEY_IDLE_MS`); the server takes it again in these states only.
+ */
+function keyExpired(row: LegacyMigrationImportView): boolean {
+  return (
+    !row.keyPresent &&
+    row.status !== 'UPLOADED' &&
+    (LEGACY_MIGRATION_COMMAND_STATES.setKey as readonly string[]).includes(row.status)
   );
 }
 
@@ -620,6 +639,7 @@ function DryRunCard({ row, mayManage }: { row: LegacyMigrationImportView; mayMan
   });
   const canRequest =
     mayManage &&
+    row.keyPresent &&
     (LEGACY_MIGRATION_COMMAND_STATES.requestDryRun as readonly string[]).includes(row.status);
   const bound = row.panelBindings !== null && row.panelBindings.length > 0;
   const report = row.dryRunReport;
@@ -1135,6 +1155,14 @@ function ReportCard({ row }: { row: LegacyMigrationImportView }) {
                   '—'
                 ) : (
                   <Ltr key="f">{report.failedInvariants.join(', ')}</Ltr>
+                ),
+              ],
+              [
+                t('web.lmg_failed_sections'),
+                report.failedSections.length === 0 ? (
+                  '—'
+                ) : (
+                  <Ltr key="s">{report.failedSections.join(', ')}</Ltr>
                 ),
               ],
               [

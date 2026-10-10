@@ -47,6 +47,8 @@ export class NxpkgImportRefused extends Error {
   constructor(
     readonly code: LegacyNxpkgErrorCode,
     readonly problems: readonly string[],
+    /** `FRESH_TARGET_NOT_EMPTY`: the count per table, for the operator. Counts only. */
+    readonly counts: Readonly<Record<string, number>> | null = null,
   ) {
     super(`${code}:\n${problems.map((p) => `  - ${p}`).join('\n')}`);
   }
@@ -236,4 +238,47 @@ export function buildPanelMappingFromTargets(input: NxpkgPanelBindingInput): Nxp
     throw error;
   }
   return { text, mapping, unresolved: [...unresolved].sort() };
+}
+
+/**
+ * The importer's `.nxpkg` path (`runMode`): a panel map GIVEN for a package (the operator's
+ * `--panel-map`, or the migration worker's) is accepted only if it is exactly the map the
+ * package's targets make with the same bindings — `buildPanelMappingFromTargets` over the
+ * map's own `panels` (and its `products`, passed through), compared by fingerprint. So the
+ * same rules hold whoever wrote the file: every targeted code bound to an ACTIVE RickPanel of
+ * this tenant (a CONNECT_EXISTING target to its own id), no code bound without a target, no
+ * test or missing panels, the untargeted codes declared `OWNER_DECIDES_LATER` and nothing else.
+ * `PANEL_TARGET_MISMATCH` otherwise.
+ */
+export function validatePanelMappingAgainstTargets(input: {
+  readonly tenantId: string;
+  readonly targets: readonly Record<string, unknown>[];
+  readonly mapping: PanelMapping;
+  /** The tenant's panels the map names (or all of them). */
+  readonly tenantPanels: readonly PanelFacts[];
+}): NxpkgPanelBinding {
+  const bindings: Record<string, string> = {};
+  for (const { codePanel, panelId } of input.mapping.file.panels) {
+    if (Object.hasOwn(bindings, codePanel)) {
+      throw new NxpkgImportRefused('PANEL_TARGET_MISMATCH', [
+        `the panel map lists code_panel ${JSON.stringify(codePanel)} twice`,
+      ]);
+    }
+    bindings[codePanel] = panelId;
+  }
+  const built = buildPanelMappingFromTargets({
+    tenantId: input.tenantId,
+    targets: input.targets,
+    bindings,
+    tenantPanels: input.tenantPanels,
+    products: input.mapping.file.products,
+  });
+  if (built.mapping.fingerprint !== input.mapping.fingerprint) {
+    throw new NxpkgImportRefused('PANEL_TARGET_MISMATCH', [
+      'the panel map is not the one the package targets make with its bindings (a test or ' +
+        'missing panel, another production panel set, or an unresolved set other than the ' +
+        "package's untargeted codes)",
+    ]);
+  }
+  return built;
 }

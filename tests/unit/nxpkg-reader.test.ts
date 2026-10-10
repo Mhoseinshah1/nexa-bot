@@ -874,6 +874,43 @@ describe('tampering and limits', () => {
 
     it('rejects nonsense limits before touching the file', async () => {
       await expect(open(good.path, { maxFiles: 0 })).rejects.toThrow(RangeError);
+      await expect(open(good.path, { maxTotalBytes: 0 })).rejects.toThrow(RangeError);
+      await expect(open(good.path, { maxCompressionRatio: -1 })).rejects.toThrow(RangeError);
+    });
+
+    it('bounds the SUM of the uncompressed sizes across entries (a bomb spread thin)', async () => {
+      // Each file is under maxFileBytes; together (the 20 000-byte noise and the rest) they
+      // are over this cumulative cap.
+      await expectError(
+        open(good.path, { maxTotalBytes: 20_000 }),
+        'NXPKG_TAMPERED',
+        'zip_total_too_large',
+      );
+      const ok = await open(good.path, { maxTotalBytes: 64 * 1024 * 1024 });
+      await ok.close();
+      expect(workDirIsEmpty()).toBe(true);
+    });
+
+    it('refuses an entry that inflates past the compression ratio, above the floor only', async () => {
+      const k = newRawKey();
+      SECRETS.add(k.keyFileText);
+      // 2 MiB of one byte deflates to about 2 KiB: a ratio near 1000:1.
+      const w = await writeNxpkg(out('bomb'), {
+        files: { 'blobs/spaces.bin': Buffer.alloc(2 * 1024 * 1024, 0x20) },
+        secret: { rawKey: k.rawKey },
+      });
+      const secret = { keyFileText: k.keyFileText };
+      await expectError(
+        openNxpkg(w.path, secret, opts()),
+        'NXPKG_TAMPERED',
+        'zip_compression_ratio',
+      );
+      // Below the floor it is not asked; with a ratio cap above it, it opens.
+      const floor = await openNxpkg(w.path, secret, opts({ ratioFloorBytes: 4 * 1024 * 1024 }));
+      await floor.close();
+      const lax = await openNxpkg(w.path, secret, opts({ maxCompressionRatio: 5000 }));
+      await lax.close();
+      expect(workDirIsEmpty()).toBe(true);
     });
   });
 

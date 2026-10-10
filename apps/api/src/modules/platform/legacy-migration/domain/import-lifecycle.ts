@@ -164,6 +164,8 @@ export function digestsEqual(a: string, b: string): boolean {
 export const EMPTY_LEGACY_MIGRATION_PROGRESS: LegacyMigrationProgress = {
   phase: null,
   applyAttempts: 0,
+  verifyAttempts: 0,
+  dryRunAttempts: 0,
   importerVerdict: null,
   reconcileVerdict: null,
   history: [],
@@ -187,3 +189,37 @@ export function phaseReached(
  * read, not a process that retries for ever.
  */
 export const LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS = 5;
+
+/**
+ * The same bound for VERIFY and the DRY RUN. Both are read-only and simply run again after a
+ * crash or an error nobody classified — but not for ever: past the bound the step is failed
+ * (`VERIFY_FAILED` / `DRY_RUN_FAILED`, `IMPORT_FAILED`) and the key is erased.
+ */
+export const LEGACY_MIGRATION_MAX_STEP_ATTEMPTS = 5;
+
+/**
+ * Key expiry (`LEGACY_MIGRATION_KEY_IDLE_MS`): the states in which an import waits on a PERSON,
+ * never on the `migration` role. A sealed key left there longer than the idle period is
+ * erased; the operator gives it again (`setKey` accepts these states while no key is held).
+ */
+export const LEGACY_MIGRATION_KEY_IDLE_STATUSES = [
+  'VERIFIED',
+  'DRY_RUN_DONE',
+] as const satisfies readonly LegacyNxpkgImportStatus[];
+
+/** The default idle period before a waiting import's sealed key is erased: one day. */
+export const LEGACY_MIGRATION_KEY_IDLE_MS_DEFAULT = 24 * 60 * 60_000;
+
+/**
+ * What a log line may say about an error: its type and its code — never its message, which
+ * for a filesystem error carries a path under `LEGACY_MIGRATION_WORK_DIR` (L3), and for an
+ * importer error may carry a value from the package.
+ */
+export function errorKind(error: unknown): { readonly type: string; readonly code: string | null } {
+  if (!(error instanceof Error)) return { type: typeof error, code: null };
+  const code = (error as { code?: unknown }).code;
+  return {
+    type: error.name === 'Error' ? error.constructor.name : error.name,
+    code: typeof code === 'string' || typeof code === 'number' ? String(code) : null,
+  };
+}

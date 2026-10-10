@@ -749,6 +749,24 @@ export const configSchema = z
       .default(2 * 1024 * 1024 * 1024),
     /** How often the `migration` role asks whether an import has work for it. */
     LEGACY_MIGRATION_TICK_MS: z.coerce.number().int().min(1_000).max(600_000).default(15_000),
+    /**
+     * Whether a FINISHED import (any terminal state) keeps its encrypted package and its
+     * ownership decisions file on disk. Off by default: the `migration` role deletes both
+     * once the import is terminal (the backup it took and the import row are the record).
+     * Decrypted step directories are deleted whatever this says.
+     */
+    LEGACY_MIGRATION_RETAIN_PACKAGE: booleanish.default(false),
+    /**
+     * How long a sealed package key may wait in VERIFIED or DRY_RUN_DONE — states that wait
+     * on a person, not on the `migration` role — before the role erases it. The operator
+     * then gives the key again. One day by default; one minute to thirty days.
+     */
+    LEGACY_MIGRATION_KEY_IDLE_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(30 * 24 * 60 * 60_000)
+      .default(24 * 60 * 60_000),
     /** Where the `migration` role writes its heartbeat. Its own key, like every role's. */
     LEGACY_MIGRATION_HEARTBEAT_PATH: z
       .string()

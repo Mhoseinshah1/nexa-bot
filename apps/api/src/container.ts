@@ -6708,6 +6708,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     leaseOwner,
     tickIntervalMs: config.LEGACY_MIGRATION_TICK_MS,
     enabled: config.LEGACY_MIGRATION_ENABLED,
+    retainPackage: config.LEGACY_MIGRATION_RETAIN_PACKAGE,
+    keyIdleMs: config.LEGACY_MIGRATION_KEY_IDLE_MS,
     logger,
   });
   const backupScheduler = new BackupScheduler({

@@ -4,6 +4,7 @@ import {
   type Clock,
   type CorrelationId,
   type LegacyMigrationBlocker,
+  type LegacyMigrationCodeCount,
   type LegacyMigrationPhase,
   type LegacyMigrationProgress,
   type LegacyNxpkgErrorCode,
@@ -12,17 +13,23 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import {
+  isLegacyMigrationTerminal,
+  LEGACY_MIGRATION_KEY_IDLE_MS_DEFAULT,
+  LEGACY_MIGRATION_KEY_IDLE_STATUSES,
   LEGACY_MIGRATION_LEASE_HEARTBEAT_MS,
   LEGACY_MIGRATION_LEASE_MS,
   LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS,
+  LEGACY_MIGRATION_MAX_STEP_ATTEMPTS,
   phaseReached,
   reportDigest,
   digestsEqual,
+  errorKind,
 } from '../domain/import-lifecycle.js';
 import { LEGACY_MIGRATION_KEY_PURPOSE } from './legacy-migration.service.js';
 import {
   LegacyMigrationBlocked,
   LegacyMigrationNotWired,
+  LegacyMigrationRetry,
   LegacyMigrationStepFailure,
   type BackupPort,
   type FreshTargetGuard,
@@ -55,6 +62,13 @@ export interface LegacyMigrationExecutorDeps {
   readonly enabled: boolean;
   readonly leaseMs?: number;
   readonly heartbeatMs?: number;
+  /**
+   * `LEGACY_MIGRATION_RETAIN_PACKAGE`: keep a terminal import's encrypted package and
+   * decisions file. Off (the default): the sweep deletes both.
+   */
+  readonly retainPackage?: boolean;
+  /** `LEGACY_MIGRATION_KEY_IDLE_MS`: a key idle this long in VERIFIED / DRY_RUN_DONE is erased. */
+  readonly keyIdleMs?: number;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -109,8 +123,25 @@ class LeaseLost extends Error {
  *
  * A PORT THAT IS NOT WIRED (`LegacyMigrationNotWired`) is not a verdict: the lease is released
  * and the row stays where it was, so the import continues once the adapter is wired. An error
- * no port classified is treated the same way (the step runs again next tick) — except an apply
- * resumed `LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS` times, which is FAILED (`IMPORT_FAILED`).
+ * no port classified is treated the same way (the step runs again next tick) — but every
+ * step is BOUNDED: VERIFY and the DRY RUN after `LEGACY_MIGRATION_MAX_STEP_ATTEMPTS` starts,
+ * an apply after `LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS`, are failed (`IMPORT_FAILED`).
+ *
+ * TRANSIENT IS NOT A VERDICT EITHER. `LegacyMigrationRetry` (another importer process holds the
+ * tenant: `RUN_CONFLICT`) and a lost lease release the step without failing it and without
+ * counting the attempt; it runs again later. A step whose lease is lost is ABORTED through
+ * the context's signal, so a worker that lost its import stops instead of racing the one
+ * that took it over (the importer's own process lock refuses the second writer meanwhile).
+ *
+ * COMPLETED means all three: the importer's verdict is exactly `COMPLETED`, the reconcile is
+ * RECONCILED and the v2 final report holds. Anything else that finished is
+ * COMPLETED_WITH_DISCREPANCY — written, and for a person to read.
+ *
+ * HOUSEKEEPING, at start and on every tick: every `step-*` directory of a terminal import (or
+ * of a directory no import names) is removed, and a terminal import's package and decisions
+ * file too unless `retainPackage`; a sealed key idle in VERIFIED or DRY_RUN_DONE for
+ * `keyIdleMs` is erased (the operator gives it again). The key is also erased BEFORE the
+ * post-import backup is requested, so no backup ever contains it.
  */
 export class LegacyMigrationExecutor {
   private timer: NodeJS.Timeout | null = null;
@@ -123,6 +154,13 @@ export class LegacyMigrationExecutor {
     if (this.timer !== null) return;
     this.timer = setInterval(() => void this.tick(), this.deps.tickIntervalMs);
     this.timer.unref();
+    // Housekeeping at once: decrypted directories a crashed process left are not kept until
+    // the first interval.
+    if (this.deps.enabled) {
+      void this.housekeeping().catch((error: unknown) => {
+        this.deps.logger.error({ err: errorKind(error) }, 'legacy migration housekeeping failed');
+      });
+    }
   }
 
   stop(): void {
@@ -150,6 +188,7 @@ export class LegacyMigrationExecutor {
         return;
       }
       await this.reclaimAbandoned();
+      await this.housekeeping();
       const now = this.deps.clock.now();
       const claimed = await this.deps.repository.claim({
         leaseOwner: this.deps.leaseOwner,
@@ -161,9 +200,63 @@ export class LegacyMigrationExecutor {
       await this.run(claimed);
     } catch (error) {
       // Never fatal to the loop; `lastTickAt` is not advanced, so failing ticks show in health.
-      this.deps.logger.error({ err: messageOf(error) }, 'legacy migration tick failed');
+      this.deps.logger.error({ err: errorKind(error) }, 'legacy migration tick failed');
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * The sweep and the key expiry. Each failure is logged by kind and never stops the tick:
+   * the next tick sweeps again.
+   */
+  async housekeeping(): Promise<void> {
+    await this.sweep().catch((error: unknown) => {
+      this.deps.logger.error({ err: errorKind(error) }, 'the legacy migration sweep failed');
+    });
+    await this.expireIdleKeys().catch((error: unknown) => {
+      this.deps.logger.error({ err: errorKind(error) }, 'the legacy migration key expiry failed');
+    });
+  }
+
+  /**
+   * Removes what a finished import no longer needs: its decrypted step directories always,
+   * its package and decisions file unless `retainPackage`. A directory no import row names
+   * (an upload that never became a row, or a row of another installation's database) loses
+   * its step directories only: an upload in flight has its package there and no row yet.
+   */
+  private async sweep(): Promise<void> {
+    for (const id of await this.deps.workspaces.importDirectories()) {
+      const row = await this.deps.repository.byIdUnscoped(id);
+      if (row !== null && !isLegacyMigrationTerminal(row.status)) continue;
+      const steps = await this.deps.workspaces.discardStaleSteps(id);
+      const files =
+        row !== null && this.deps.retainPackage !== true
+          ? await this.deps.workspaces.discardPackageFiles(id)
+          : 0;
+      if (steps > 0 || files > 0) {
+        this.deps.logger.info(
+          { importId: id, stepDirectories: steps, packageFiles: files, orphan: row === null },
+          'removed the files of a finished legacy migration',
+        );
+      }
+    }
+  }
+
+  /** Erases a sealed key left waiting on a person longer than the idle period (L4). */
+  private async expireIdleKeys(): Promise<void> {
+    const now = this.deps.clock.now();
+    const idleMs = this.deps.keyIdleMs ?? LEGACY_MIGRATION_KEY_IDLE_MS_DEFAULT;
+    const expired = await this.deps.repository.expireIdleKeys({
+      now,
+      idleBefore: new Date(now.getTime() - idleMs),
+      statuses: LEGACY_MIGRATION_KEY_IDLE_STATUSES,
+    });
+    for (const importId of expired) {
+      this.deps.logger.warn(
+        { importId, idleMs },
+        'a legacy migration package key was idle too long and is erased; give it again to continue',
+      );
     }
   }
 
@@ -195,7 +288,7 @@ export class LegacyMigrationExecutor {
         })
         .catch((error: unknown) => {
           this.deps.logger.warn(
-            { importId: row.id, err: messageOf(error) },
+            { importId: row.id, err: errorKind(error) },
             'a legacy migration lease heartbeat failed',
           );
         });
@@ -244,6 +337,14 @@ export class LegacyMigrationExecutor {
         await this.release(row.id);
         return;
       }
+      if (error instanceof LegacyMigrationRetry) {
+        this.deps.logger.warn(
+          { importId: row.id, status: row.status, reason: error.reason },
+          'a legacy migration step will run again: another importer process holds the tenant',
+        );
+        await this.release(row.id);
+        return;
+      }
       if (error instanceof LegacyMigrationNotWired) {
         this.deps.logger.error(
           { importId: row.id, status: row.status, port: error.port },
@@ -251,7 +352,7 @@ export class LegacyMigrationExecutor {
         );
       } else {
         this.deps.logger.error(
-          { importId: row.id, status: row.status, err: messageOf(error) },
+          { importId: row.id, status: row.status, err: errorKind(error) },
           'a legacy migration step failed unexpectedly; it will run again',
         );
       }
@@ -267,84 +368,138 @@ export class LegacyMigrationExecutor {
     let row = claimed;
     if (row.status === 'UPLOADED') {
       row = await this.advance(row, ['UPLOADED'], 'VERIFYING', {
-        progress: { ...row.progress, phase: 'VERIFY' },
+        progress: { ...row.progress, phase: 'VERIFY', verifyAttempts: 1 },
       });
-    }
-    await this.withStep(row, signal, async (context) => {
-      try {
-        await this.assertPackageUnchanged(row);
-        const report = await this.deps.verifier.verify(context);
-        await this.advance(
-          row,
-          ['VERIFYING'],
-          'VERIFIED',
-          {
-            verifyReport: report,
-            packageImportId: report.packageImportId,
-            packageSourceFingerprint: report.sourceFingerprint,
-            packageSchemaVersion: report.packageSchemaVersion,
-            converterVersion: report.converterVersion,
-            manifestSummary: { synthetic: report.synthetic, recordCounts: report.recordCounts },
-          },
-          { release: true },
+    } else {
+      // A VERIFYING row claimed again: a crash, or an error nobody classified. Bounded.
+      if (row.progress.verifyAttempts >= LEGACY_MIGRATION_MAX_STEP_ATTEMPTS) {
+        this.deps.logger.error(
+          { importId: row.id, attempts: row.progress.verifyAttempts },
+          'a legacy migration verification was started too many times and is failed',
         );
-      } catch (error) {
-        if (!(error instanceof LegacyMigrationStepFailure)) throw error;
-        await this.fail(row, ['VERIFYING'], 'VERIFY_FAILED', error.code);
+        await this.fail(row, ['VERIFYING'], 'VERIFY_FAILED', 'IMPORT_FAILED');
+        return;
       }
-    });
+      row = await this.bookmark(row, { verifyAttempts: row.progress.verifyAttempts + 1 });
+    }
+    try {
+      await this.withStep(row, signal, async (context) => {
+        try {
+          await this.assertPackageUnchanged(row);
+          const report = await this.deps.verifier.verify(context);
+          await this.advance(
+            row,
+            ['VERIFYING'],
+            'VERIFIED',
+            {
+              verifyReport: report,
+              packageImportId: report.packageImportId,
+              packageSourceFingerprint: report.sourceFingerprint,
+              packageSchemaVersion: report.packageSchemaVersion,
+              converterVersion: report.converterVersion,
+              manifestSummary: { synthetic: report.synthetic, recordCounts: report.recordCounts },
+            },
+            { release: true },
+          );
+        } catch (error) {
+          if (!(error instanceof LegacyMigrationStepFailure)) throw error;
+          await this.fail(row, ['VERIFYING'], 'VERIFY_FAILED', error.code, error.counts);
+        }
+      });
+    } catch (error) {
+      if (error instanceof LegacyMigrationRetry) {
+        await this.uncount(row, { verifyAttempts: row.progress.verifyAttempts - 1 });
+      }
+      throw error;
+    }
   }
 
   // --- DRY RUN ---------------------------------------------------------------------------
 
   private async dryRun(claimed: LegacyNxpkgImportRow, signal: AbortSignal): Promise<void> {
     let row = claimed;
-    await this.withStep(row, signal, async (context) => {
-      try {
-        // A production-like target's gates come FIRST: while one is missing the import waits
-        // in DRY_RUN_REQUESTED (still cancellable) with the blocker on its progress.
-        await this.deps.runner.precheck(context, 'DRY_RUN');
-        if (row.status === 'DRY_RUN_REQUESTED') {
-          row = await this.advance(row, ['DRY_RUN_REQUESTED'], 'DRY_RUN_RUNNING', {
-            progress: { ...row.progress, phase: 'DRY_RUN', refusalCounts: [], blocker: null },
-          });
-        } else if (row.progress.blocker !== null) {
-          row = await this.bookmark(row, { blocker: null });
+    if (
+      row.status === 'DRY_RUN_RUNNING' &&
+      row.progress.dryRunAttempts >= LEGACY_MIGRATION_MAX_STEP_ATTEMPTS
+    ) {
+      this.deps.logger.error(
+        { importId: row.id, attempts: row.progress.dryRunAttempts },
+        'a legacy migration dry run was started too many times and is failed',
+      );
+      await this.fail(row, ['DRY_RUN_RUNNING'], 'DRY_RUN_FAILED', 'IMPORT_FAILED');
+      return;
+    }
+    try {
+      await this.withStep(row, signal, async (context) => {
+        try {
+          // A production-like target's gates come FIRST: while one is missing the import
+          // waits in DRY_RUN_REQUESTED (still cancellable) with the blocker on its progress.
+          await this.deps.runner.precheck(context, 'DRY_RUN');
+          if (row.status === 'DRY_RUN_REQUESTED') {
+            row = await this.advance(row, ['DRY_RUN_REQUESTED'], 'DRY_RUN_RUNNING', {
+              progress: {
+                ...row.progress,
+                phase: 'DRY_RUN',
+                refusalCounts: [],
+                blocker: null,
+                dryRunAttempts: 1,
+              },
+            });
+          } else {
+            row = await this.bookmark(row, {
+              blocker: null,
+              dryRunAttempts: row.progress.dryRunAttempts + 1,
+            });
+          }
+          await this.assertPackageUnchanged(row);
+          await this.assertFreshTarget(row, ['DRY_RUN_RUNNING']);
+          const { report, legacyRunId } = await this.deps.runner.dryRun(context);
+          await this.advance(
+            row,
+            ['DRY_RUN_RUNNING'],
+            'DRY_RUN_DONE',
+            {
+              dryRunReport: report,
+              dryRunSha256: reportDigest(report),
+              dryRunLegacyRunId: legacyRunId,
+            },
+            { release: true },
+          );
+        } catch (error) {
+          if (!(error instanceof LegacyMigrationStepFailure)) throw error;
+          await this.fail(
+            row,
+            ['DRY_RUN_REQUESTED', 'DRY_RUN_RUNNING'],
+            'DRY_RUN_FAILED',
+            error.code,
+            error.counts,
+          );
         }
-        await this.assertPackageUnchanged(row);
-        await this.assertFreshTarget(row, ['DRY_RUN_RUNNING']);
-        const { report, legacyRunId } = await this.deps.runner.dryRun(context);
-        await this.advance(
-          row,
-          ['DRY_RUN_RUNNING'],
-          'DRY_RUN_DONE',
-          {
-            dryRunReport: report,
-            dryRunSha256: reportDigest(report),
-            dryRunLegacyRunId: legacyRunId,
-          },
-          { release: true },
-        );
-      } catch (error) {
-        if (!(error instanceof LegacyMigrationStepFailure)) throw error;
-        await this.fail(
-          row,
-          ['DRY_RUN_REQUESTED', 'DRY_RUN_RUNNING'],
-          'DRY_RUN_FAILED',
-          error.code,
-        );
+      });
+    } catch (error) {
+      if (error instanceof LegacyMigrationRetry && row.status === 'DRY_RUN_RUNNING') {
+        await this.uncount(row, { dryRunAttempts: row.progress.dryRunAttempts - 1 });
       }
-    });
+      throw error;
+    }
   }
 
   // --- APPLY -----------------------------------------------------------------------------
 
   private async apply(claimed: LegacyNxpkgImportRow, signal: AbortSignal): Promise<void> {
     let row = claimed;
-    // A crash LOOP is a verdict an owner must read, not a process that retries for ever.
+    // The import, the history, the reconcile and the report are done and recorded; the key is
+    // already erased. Only the backup is left: no package is opened, no gate is asked again.
+    if (row.status === 'APPLYING' && phaseReached(row.progress.phase, 'BACKUP')) {
+      await this.finish(row);
+      return;
+    }
+    // A crash LOOP is a verdict an owner must read, not a process that retries for ever. (An
+    // APPLYING row with no key before BACKUP cannot be continued either.)
     if (
       row.status === 'APPLYING' &&
-      row.progress.applyAttempts >= LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS
+      (row.progress.applyAttempts >= LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS ||
+        row.keyCiphertext === null)
     ) {
       this.deps.logger.error(
         { importId: row.id, attempts: row.progress.applyAttempts, phase: row.progress.phase },
@@ -353,84 +508,112 @@ export class LegacyMigrationExecutor {
       await this.fail(row, ['APPLYING'], 'FAILED', 'IMPORT_FAILED');
       return;
     }
-    // A production-like target's gates, before the first write AND before every resume: the
-    // process's acknowledgement, the owner's cutover approval of the dry run's seven values,
-    // active stop-sales. Missing → the import waits (APPROVED stays cancellable) with the
-    // blocker recorded; the importer's own gate decides again inside its transaction.
-    try {
-      await this.withStep(row, signal, (context) => this.deps.runner.precheck(context, 'APPLY'));
-    } catch (error) {
-      if (!(error instanceof LegacyMigrationStepFailure)) throw error;
-      await this.fail(row, ['APPROVED', 'APPLYING'], 'FAILED', error.code);
-      return;
-    }
-    if (row.status === 'APPROVED') {
-      row = await this.advance(row, ['APPROVED'], 'APPLYING', {
-        progress: { ...row.progress, phase: 'APPLY_PRECHECK', blocker: null },
-      });
-    } else if (row.progress.blocker !== null) {
-      row = await this.bookmark(row, { blocker: null });
-    }
     const resumed = phaseReached(row.progress.phase, 'APPLY_IMPORT');
-    row = await this.bookmark(row, {
-      applyAttempts: row.progress.applyAttempts + 1,
-    });
+    let counted = false;
+    try {
+      await this.withStep(row, signal, async (context) => {
+        try {
+          if (!resumed) {
+            // Before anything is written, and on every attempt until the import starts:
+            //   1. the target acknowledgement (production-like; never a synthetic package);
+            //   2. the approval is bound to THIS dry run of THIS file;
+            //   3. the fresh target;
+            //   4. the APPROVED reads — the read sets ingested and recorded, each bound to the
+            //      fingerprint the approved dry run observed (the dry run itself wrote none);
+            //   5. the owner's cutover approval of the seven values and stop-sales
+            //      (production-like), which needs the read sets of step 4 recorded.
+            await this.deps.runner.precheck(context, 'DRY_RUN');
+            this.assertApprovedDigest(row);
+            await this.assertPackageUnchanged(row);
+            await this.assertFreshTarget(row, [row.status]);
+            await this.deps.runner.recordReadSets(context);
+          }
+          // Production-like: before the first write AND before every resume. Missing → the
+          // import waits (APPROVED stays cancellable) with the blocker recorded; the
+          // importer's own gate decides again inside its transaction.
+          await this.deps.runner.precheck(context, 'APPLY');
+          if (row.status === 'APPROVED') {
+            row = await this.advance(row, ['APPROVED'], 'APPLYING', {
+              progress: { ...row.progress, phase: 'APPLY_PRECHECK', blocker: null },
+            });
+          } else if (row.progress.blocker !== null) {
+            row = await this.bookmark(row, { blocker: null });
+          }
+          row = await this.bookmark(row, { applyAttempts: row.progress.applyAttempts + 1 });
+          counted = true;
 
-    await this.withStep(row, signal, async (context) => {
-      try {
-        // Re-checked on every attempt, the first and every resume: the approval is bound to
-        // THIS dry run of THIS file, whatever happened in between.
-        this.assertApprovedDigest(row);
-        await this.assertPackageUnchanged(row);
-        if (!resumed) {
-          // The fresh target only before the first write: a resumed apply has, by
-          // definition, already written. (The importer's own start transaction re-checks it
-          // when a RESUME finds no run to resume.)
-          await this.assertFreshTarget(row, ['APPLYING']);
-          row = await this.bookmark(row, { phase: 'APPLY_IMPORT' });
-        }
+          // Re-checked on every attempt, the first and every resume: the approval is bound
+          // to THIS dry run of THIS file, whatever happened in between.
+          this.assertApprovedDigest(row);
+          await this.assertPackageUnchanged(row);
+          if (!resumed) row = await this.bookmark(row, { phase: 'APPLY_IMPORT' });
 
-        if (!phaseReached(row.progress.phase, 'HISTORY')) {
-          const outcome = await this.deps.runner.apply(context, {
-            mode: resumed ? 'RESUME' : 'IMPORT',
-            approvedDryRunSha256: row.approvedDryRunSha256 ?? '',
-          });
-          row = await this.bookmark(
-            row,
-            { phase: 'HISTORY', importerVerdict: outcome.importerVerdict },
-            { applyLegacyRunId: outcome.legacyRunId },
-          );
-        }
-        if (!phaseReached(row.progress.phase, 'RECONCILE')) {
-          const archived = await this.deps.history.ingest(context);
-          row = await this.bookmark(row, { phase: 'RECONCILE', history: [...archived.counts] });
-        }
-        if (!phaseReached(row.progress.phase, 'REPORT')) {
-          const reconciled = await this.deps.runner.reconcile(context);
-          row = await this.bookmark(row, {
-            phase: 'REPORT',
-            reconcileVerdict: reconciled.verdict,
-          });
-        }
-        if (!phaseReached(row.progress.phase, 'BACKUP')) {
+          if (!phaseReached(row.progress.phase, 'HISTORY')) {
+            // A verdict recorded by an attempt that crashed before the HISTORY bookmark is the
+            // outcome: the import is not asked again.
+            if (row.progress.importerVerdict === null || row.applyLegacyRunId === null) {
+              const outcome = await this.deps.runner.apply(context, {
+                mode: resumed ? 'RESUME' : 'IMPORT',
+                approvedDryRunSha256: row.approvedDryRunSha256 ?? '',
+              });
+              // Recorded at once, on its own: a crash before the next bookmark keeps it.
+              row = await this.bookmark(
+                row,
+                { importerVerdict: outcome.importerVerdict },
+                { applyLegacyRunId: outcome.legacyRunId },
+              );
+            }
+            row = await this.bookmark(row, { phase: 'HISTORY' });
+          }
+          if (!phaseReached(row.progress.phase, 'RECONCILE')) {
+            const archived = await this.deps.history.ingest(context);
+            row = await this.bookmark(row, { phase: 'RECONCILE', history: [...archived.counts] });
+          }
+          if (!phaseReached(row.progress.phase, 'REPORT')) {
+            const reconciled = await this.deps.runner.reconcile(context);
+            row = await this.bookmark(row, {
+              phase: 'REPORT',
+              reconcileVerdict: reconciled.verdict,
+            });
+          }
           const report = await this.deps.runner.finalReport(context, {
             importerVerdict: row.progress.importerVerdict ?? 'UNKNOWN',
             reconcileVerdict: row.progress.reconcileVerdict ?? 'DISCREPANCY',
             history: row.progress.history,
           });
-          row = await this.bookmark(row, { phase: 'BACKUP' }, { applyReport: report });
+          // The key is erased WITH the BACKUP bookmark — before the backup is requested, so
+          // the backup never holds it, and a crash from here on needs no key: the backup is
+          // all that is left.
+          row = await this.bookmark(
+            row,
+            { phase: 'BACKUP' },
+            { applyReport: report, keyCiphertext: null, keyKeyId: null },
+          );
+        } catch (error) {
+          if (!(error instanceof LegacyMigrationStepFailure)) throw error;
+          await this.fail(row, ['APPROVED', 'APPLYING'], 'FAILED', error.code, error.counts);
         }
-        const backup = await this.backup(row);
-        const holds =
-          row.progress.reconcileVerdict === 'RECONCILED' && row.applyReport?.reportHolds === true;
-        await this.advance(row, ['APPLYING'], holds ? 'COMPLETED' : 'COMPLETED_WITH_DISCREPANCY', {
-          backupRunId: backup.runId,
-          progress: { ...row.progress, backup: backup.outcome },
-        });
-      } catch (error) {
-        if (!(error instanceof LegacyMigrationStepFailure)) throw error;
-        await this.fail(row, ['APPLYING'], 'FAILED', error.code);
+      });
+    } catch (error) {
+      if (error instanceof LegacyMigrationRetry && counted) {
+        await this.uncount(row, { applyAttempts: row.progress.applyAttempts - 1 });
       }
+      throw error;
+    }
+    if (row.status === 'APPLYING' && phaseReached(row.progress.phase, 'BACKUP')) {
+      await this.finish(row);
+    }
+  }
+
+  /**
+   * The standard backup, then the outcome. COMPLETED only when the importer said exactly
+   * `COMPLETED`, the reconcile RECONCILED and the v2 report holds.
+   */
+  private async finish(row: LegacyNxpkgImportRow): Promise<void> {
+    const backup = await this.backup(row);
+    await this.advance(row, ['APPLYING'], completedStatusOf(row), {
+      backupRunId: backup.runId,
+      progress: { ...row.progress, backup: backup.outcome },
     });
   }
 
@@ -441,7 +624,7 @@ export class LegacyMigrationExecutor {
     } catch (error) {
       if (error instanceof LegacyMigrationNotWired) throw error;
       this.deps.logger.error(
-        { importId: row.id, err: messageOf(error) },
+        { importId: row.id, err: errorKind(error) },
         'the backup after a legacy migration failed; the import itself is complete',
       );
       return { outcome: 'FAILED' as const, runId: null };
@@ -477,7 +660,7 @@ export class LegacyMigrationExecutor {
     row: LegacyNxpkgImportRow,
     from: readonly LegacyNxpkgImportStatus[],
   ): Promise<void> {
-    const fresh = await this.deps.freshTarget.check(scopeOf(row));
+    const fresh = await this.deps.freshTarget.check(scopeOf(row), row.packageSourceFingerprint);
     if (fresh.fresh) return;
     const refusalCounts = Object.entries(fresh.counts)
       .map(([code, count]) => ({ code, count }))
@@ -531,7 +714,7 @@ export class LegacyMigrationExecutor {
         // Loud: this is decrypted package content left on disk. The next step on this import
         // removes it (`discardStaleSteps`), and the log names the import, never the path.
         this.deps.logger.error(
-          { importId: row.id, err: messageOf(error) },
+          { importId: row.id, err: errorKind(error) },
           'a decrypted legacy migration step directory could not be removed',
         );
       });
@@ -594,10 +777,47 @@ export class LegacyMigrationExecutor {
     from: readonly LegacyNxpkgImportStatus[],
     to: 'VERIFY_FAILED' | 'DRY_RUN_FAILED' | 'FAILED',
     code: LegacyNxpkgErrorCode,
+    counts: readonly LegacyMigrationCodeCount[] | null = null,
   ): Promise<void> {
     this.deps.logger.warn({ importId: row.id, to, code }, 'a legacy migration step refused');
     const current = await this.reread(row.id);
-    await this.advance(current, from, to, { errorCode: code });
+    await this.advance(current, from, to, {
+      errorCode: code,
+      // What the refusal measured (M8: the converter's totals beside the importer's), kept
+      // on the row so the operator reads both numbers.
+      ...(counts === null ? {} : { progress: { ...current.progress, refusalCounts: [...counts] } }),
+    });
+  }
+
+  /**
+   * Gives back an attempt a TRANSIENT refusal took (`LegacyMigrationRetry`): waiting for
+   * another importer process is not a crash, and must not fail the import at the bound.
+   */
+  private async uncount(
+    row: LegacyNxpkgImportRow,
+    progress: Partial<
+      Pick<LegacyMigrationProgress, 'verifyAttempts' | 'dryRunAttempts' | 'applyAttempts'>
+    >,
+  ): Promise<void> {
+    const current = await this.deps.repository.byIdUnscoped(row.id);
+    if (current === null) return;
+    const clamped = Object.fromEntries(
+      Object.entries(progress).map(([key, value]) => [key, Math.max(0, value)]),
+    );
+    await this.deps.repository
+      .patch({
+        id: row.id,
+        from: [current.status],
+        leaseOwner: this.deps.leaseOwner,
+        now: this.deps.clock.now(),
+        patch: { progress: { ...current.progress, ...clamped } },
+      })
+      .catch((error: unknown) => {
+        this.deps.logger.warn(
+          { importId: row.id, err: errorKind(error) },
+          'a legacy migration attempt could not be given back',
+        );
+      });
   }
 
   /** Records what the import waits for, on this process's lease, without moving the status. */
@@ -617,7 +837,7 @@ export class LegacyMigrationExecutor {
     await this.deps.repository
       .release({ id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
       .catch((error: unknown) => {
-        this.deps.logger.error({ importId: id, err: messageOf(error) }, 'a lease release failed');
+        this.deps.logger.error({ importId: id, err: errorKind(error) }, 'a lease release failed');
       });
   }
 
@@ -636,6 +856,17 @@ function scopeOf(row: LegacyNxpkgImportRow): TenantContext {
   return { tenantId: asId<'TenantId'>(row.tenantId), botInstanceId: null };
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/**
+ * COMPLETED only when all three hold: the importer's own verdict is exactly `COMPLETED` (not
+ * `COMPLETED_WITH_FAILURES`, `COMPLETED_ADOPTION_PENDING_P6`, or a verdict reconstructed after
+ * a crash), the reconcile is RECONCILED, and the v2 final report holds.
+ */
+export function completedStatusOf(
+  row: Pick<LegacyNxpkgImportRow, 'progress' | 'applyReport'>,
+): 'COMPLETED' | 'COMPLETED_WITH_DISCREPANCY' {
+  return row.progress.importerVerdict === 'COMPLETED' &&
+    row.progress.reconcileVerdict === 'RECONCILED' &&
+    row.applyReport?.reportHolds === true
+    ? 'COMPLETED'
+    : 'COMPLETED_WITH_DISCREPANCY';
 }

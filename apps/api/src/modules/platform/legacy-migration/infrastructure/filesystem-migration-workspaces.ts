@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, type Dirent } from 'node:fs';
 import { chmod, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { uuidV7Schema } from '@nexa/contracts';
@@ -15,6 +15,11 @@ import type { MigrationImportFiles, MigrationWorkspaces } from '../application/p
  * <root>/<import id>/step-<random>/        0700, ONE step's decrypted content, removed after it
  * ```
  *
+ * The `migration` role also sweeps this root at start and on every tick: every `step-*`
+ * directory of a terminal import (or of a directory no import row names) is removed, and at a
+ * terminal state the package and decisions files are removed unless
+ * `LEGACY_MIGRATION_RETAIN_PACKAGE` is on (`LegacyMigrationExecutor.sweep`).
+ *
  * Nothing from a request reaches a path component: the import id is validated as a uuid
  * before any path is built, the file names are constants, and the step suffix is random.
  * Every path this class removes is checked to lie strictly inside the root.
@@ -22,6 +27,8 @@ import type { MigrationImportFiles, MigrationWorkspaces } from '../application/p
 const PACKAGE_FILE = 'package.nxpkg';
 const STEP_PREFIX = 'step-';
 const DECISIONS_PREFIX = 'ownership-decisions-';
+const UPLOAD_PREFIX = 'upload-';
+const UPLOAD_SUFFIX = '.partial';
 
 export class FilesystemMigrationWorkspaces implements MigrationWorkspaces {
   private readonly root: string;
@@ -48,7 +55,7 @@ export class FilesystemMigrationWorkspaces implements MigrationWorkspaces {
 
   decisionsUploadPath(importId: string): string {
     const { directory } = this.filesOf(importId);
-    return join(directory, `upload-${randomBytes(8).toString('hex')}.partial`);
+    return join(directory, `${UPLOAD_PREFIX}${randomBytes(8).toString('hex')}${UPLOAD_SUFFIX}`);
   }
 
   decisionsPath(importId: string, sha256: string): string {
@@ -98,6 +105,36 @@ export class FilesystemMigrationWorkspaces implements MigrationWorkspaces {
       await rm(join(directory, name), { recursive: true, force: true });
     }
     return stale.length;
+  }
+
+  async importDirectories(): Promise<readonly string[]> {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(this.root, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries
+      .filter((entry) => entry.isDirectory() && uuidV7Schema.safeParse(entry.name).success)
+      .map((entry) => entry.name);
+  }
+
+  async discardPackageFiles(importId: string): Promise<number> {
+    const { directory } = this.filesOf(importId);
+    let entries: string[];
+    try {
+      entries = await readdir(directory);
+    } catch {
+      return 0;
+    }
+    const doomed = entries.filter(
+      (name) =>
+        name === PACKAGE_FILE ||
+        name.startsWith(DECISIONS_PREFIX) ||
+        (name.startsWith(UPLOAD_PREFIX) && name.endsWith(UPLOAD_SUFFIX)),
+    );
+    for (const name of doomed) await rm(join(directory, name), { force: true });
+    return doomed.length;
   }
 
   async digest(path: string): Promise<{ readonly sha256: string; readonly bytes: number }> {

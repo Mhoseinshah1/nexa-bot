@@ -23,9 +23,10 @@ import { redactHistoryPayload } from './redaction.js';
  *
  * Read only: there is no write here and none behind it. Charged, in order, on `users.view`
  * (the customer page, as `CustomerInsightService` charges it), the customer existing in the
- * tenant, then `legacy.history.view`. Personal and free-text fields are null unless the reader
- * also holds `legacy.invoices.pii.view` — the legacy archives' personal-data key — and an
- * unredacted page is audited (record ids and counts, never a value).
+ * tenant, then `legacy.history.view`. Without `legacy.invoices.pii.view` — the legacy
+ * archives' personal-data key — a record is reduced to its per-type ALLOWLIST (`redaction.ts`:
+ * codes, amounts, counts, flags, instants) and everything else is dropped; with it the record
+ * is returned as packaged and the page is audited (record ids and counts, never a value).
  */
 
 export const LEGACY_HISTORY_VIEW_PERMISSION = 'legacy.history.view' satisfies PermissionKey;
@@ -156,13 +157,17 @@ export class LegacyHistoryReadService {
 }
 
 function itemOf(row: LegacyHistoryRecordRow, pii: boolean): LegacyHistoryReadItem {
-  const view = pii ? { payload: row.payload, redacted: [] } : redactHistoryPayload(row.payload);
+  // Without the PII key the summary is read from the allowlisted projection, never the
+  // packaged record: a summary field the allowlist does not carry is not shown either.
+  const view = pii
+    ? { payload: row.payload, redacted: [] }
+    : redactHistoryPayload(row.recordType, row.payload);
   return {
     id: row.id,
     recordType: row.recordType,
     occurredAt: row.occurredAt,
     packageImportId: row.packageImportId,
-    summary: summaryOf(row.recordType, row.payload),
+    summary: summaryOf(row.recordType, view.payload),
     payload: view.payload,
     redacted: view.redacted,
     legacyUserId: pii ? row.legacyUserId : null,

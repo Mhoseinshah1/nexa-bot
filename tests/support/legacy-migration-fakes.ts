@@ -140,7 +140,7 @@ export class InMemoryLegacyNxpkgImports implements LegacyNxpkgImportRepository {
     const work: readonly string[] = LEGACY_MIGRATION_WORK_STATUSES;
     const candidate = [...this.rows.values()]
       .filter((row) => work.includes(row.status))
-      .filter((row) => row.status !== 'UPLOADED' || row.keyCiphertext !== null)
+      .filter((row) => row.keyCiphertext !== null || row.status === 'APPLYING')
       .filter((row) => row.claimedBy === null || row.claimedBy === input.leaseOwner)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
     if (candidate === undefined) return null;
@@ -177,6 +177,31 @@ export class InMemoryLegacyNxpkgImports implements LegacyNxpkgImportRepository {
       }
     }
     return released;
+  }
+
+  async expireIdleKeys(input: {
+    now: Date;
+    idleBefore: Date;
+    statuses: readonly LegacyNxpkgImportRow['status'][];
+  }): Promise<readonly string[]> {
+    const ids: string[] = [];
+    for (const row of this.rows.values()) {
+      if (
+        input.statuses.includes(row.status) &&
+        row.keyCiphertext !== null &&
+        row.claimedBy === null &&
+        row.updatedAt.getTime() < input.idleBefore.getTime()
+      ) {
+        this.rows.set(row.id, {
+          ...row,
+          keyCiphertext: null,
+          keyKeyId: null,
+          updatedAt: input.now,
+        });
+        ids.push(row.id);
+      }
+    }
+    return ids;
   }
 
   /** Test helper: overwrite a row. */
@@ -224,8 +249,21 @@ export class InMemoryMigrationWorkspaces implements MigrationWorkspaces {
   async discardStep(path: string): Promise<void> {
     this.steps.delete(path);
   }
-  async discardStaleSteps(): Promise<number> {
-    return 0;
+  /** Step directories a "crashed process" left, per import (a test puts them here). */
+  readonly staleSteps = new Map<string, number>();
+  /** Import directories on the "disk", and which still hold their package files. */
+  readonly directories = new Set<string>();
+  readonly packageFiles = new Set<string>();
+  async discardStaleSteps(importId: string): Promise<number> {
+    const n = this.staleSteps.get(importId) ?? 0;
+    this.staleSteps.delete(importId);
+    return n;
+  }
+  async importDirectories(): Promise<readonly string[]> {
+    return [...this.directories];
+  }
+  async discardPackageFiles(importId: string): Promise<number> {
+    return this.packageFiles.delete(importId) ? 1 : 0;
   }
   async digest(path: string): Promise<{ sha256: string; bytes: number }> {
     return { sha256: this.digests.get(path) ?? 'f'.repeat(64), bytes: 1 };

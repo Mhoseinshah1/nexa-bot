@@ -1709,6 +1709,13 @@
       "when": 1791662419812,
       "tag": "0243_legacy_migration_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 244,
+      "version": "7",
+      "when": 1791670402008,
+      "tag": "0244_legacy_run_inputs_hold_digest",
+      "breakpoints": true
     }
   ]
 }

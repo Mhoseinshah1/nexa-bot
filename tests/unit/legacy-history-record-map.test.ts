@@ -228,8 +228,8 @@ describe('legacy user and time', () => {
 });
 
 describe('redaction', () => {
-  it('nulls Telegram ids at any depth, person raws, usernames, free text and raw columns', () => {
-    const { payload, redacted } = redactHistoryPayload({
+  it('keeps only the allowlist of the type: Telegram ids, person raws, usernames, free text and raw columns are dropped', () => {
+    const { payload, redacted } = redactHistoryPayload('service_ownership', {
       record_type: 'legacy_service_ownership',
       final_owner_telegram_user_id: '7000000061',
       current_owner_candidate: { telegram_user_id: '7000000061', basis: 'INVOICE_ID_USER' },
@@ -243,32 +243,24 @@ describe('redaction', () => {
       customer_text: 'synthetic text',
       fields_raw: { agent_id: '7000000053', amount: '10000' },
       amount: { amount_minor: '20000' },
+      ownership_decision: 'CONFIRMED_CURRENT_OWNER',
     });
     expect(payload).toEqual({
       record_type: 'legacy_service_ownership',
-      final_owner_telegram_user_id: null,
-      current_owner_candidate: { telegram_user_id: null, basis: 'INVOICE_ID_USER' },
-      ownership_evidence: [
-        { telegram_user_id: null, rule: 'OWN-R1' },
-        { telegram_user_id: null, rule: 'OWN-R2' },
-      ],
-      owner: { raw: null, telegram_user_id: null, role: 'OWNER' },
-      // `raw` of a status is a code, not a person.
-      status: { raw: 'paid', normalized: 'PAID' },
-      panel_account_username: null,
-      customer_text: null,
-      fields_raw: { agent_id: null, amount: null },
-      amount: { amount_minor: '20000' },
+      current_owner_candidate: { basis: 'INVOICE_ID_USER' },
+      ownership_evidence: [{ rule: 'OWN-R1' }, { rule: 'OWN-R2' }],
+      ownership_decision: 'CONFIRMED_CURRENT_OWNER',
     });
     expect(redacted).toEqual([
+      'amount',
       'current_owner_candidate.telegram_user_id',
       'customer_text',
-      'fields_raw.*',
+      'fields_raw',
       'final_owner_telegram_user_id',
-      'owner.raw',
-      'owner.telegram_user_id',
+      'owner',
       'ownership_evidence[].telegram_user_id',
       'panel_account_username',
+      'status',
     ]);
     expect(JSON.stringify(payload)).not.toMatch(/700000/);
   });

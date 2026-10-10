@@ -570,16 +570,34 @@ describe('Mirza .nxpkg importer: the history archive', () => {
         expect(item.legacyUserId).toBeNull();
         expect(JSON.stringify(item.payload)).not.toContain(TG_A);
       }
+      // An allowlist per type: only codes, amounts, counts, flags and times survive.
       const op = page.items.find((item) => item.recordType === 'service_operation');
       expect(op?.redacted).toEqual([
+        'operation_type.raw',
         'owner.raw',
         'owner.telegram_user_id',
         'panel_account_username',
+        'status.raw',
       ]);
-      expect(op?.payload).toMatchObject({
+      expect(op?.payload).toEqual({
+        record_type: 'legacy_service_operation',
+        schema: 'mirza.service_other.v1',
+        idempotency_key: 'legacy:service-op:1',
+        owner: { role: 'OWNER' },
+        operation_type: { normalized: 'RENEWAL' },
         status: { normalized: 'PAID' },
-        panel_account_username: null,
+        amount: { amount_minor: '20000', currency: 'IRT', applied: false },
+        provision: false,
+        affects_wallet: false,
+        applies_to_live_state: false,
+        creates_payment: false,
       });
+      expect(op?.summary).toMatchObject({ operation: 'RENEWAL', status: 'PAID' });
+      const archive = page.items.find((item) => item.recordType === 'archive_row');
+      if (archive !== undefined) {
+        expect(archive.payload).not.toHaveProperty('fields');
+        expect(archive.redacted).toContain('fields');
+      }
       const reveals = await q<{ n: string }>(
         sql`SELECT count(*)::text AS n FROM audit_logs WHERE action = 'legacy.history.pii_view'`,
       );

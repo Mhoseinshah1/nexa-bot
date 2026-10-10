@@ -29,7 +29,15 @@ import {
   type NxpkgFileEntry,
   type NxpkgManifest,
 } from './manifest.js';
-import { readZipDirectory, readZipEntry, type ZipEntry } from './zip.js';
+import {
+  readZipDirectory,
+  readZipEntry,
+  ZIP_DEFAULT_MAX_COMPRESSION_RATIO,
+  ZIP_DEFAULT_MAX_TOTAL_BYTES,
+  ZIP_DEFAULT_RATIO_FLOOR_BYTES,
+  type ZipEntry,
+  type ZipLimits,
+} from './zip.js';
 
 /**
  * A strict, streaming `.nxpkg` reader — the TypeScript twin of the converter's
@@ -61,6 +69,17 @@ export interface NxpkgOpenOptions {
   maxFiles: number;
   /** Upper bound on any one file's uncompressed size, in bytes. */
   maxFileBytes: number;
+  /**
+   * Upper bound on the SUM of every file's uncompressed size, in bytes (a ZIP bomb spread
+   * over many entries). Default `ZIP_DEFAULT_MAX_TOTAL_BYTES`.
+   */
+  maxTotalBytes?: number;
+  /**
+   * Upper bound on one compressed file's uncompressed / compressed ratio, for files over
+   * `ratioFloorBytes` (default 1 MiB). Default `ZIP_DEFAULT_MAX_COMPRESSION_RATIO`.
+   */
+  maxCompressionRatio?: number;
+  ratioFloorBytes?: number;
   signal?: AbortSignal;
 }
 
@@ -141,6 +160,19 @@ export async function openNxpkg(
   const maxPayloadBytes = checkLimit('maxPayloadBytes', opts.maxPayloadBytes);
   const maxFiles = checkLimit('maxFiles', opts.maxFiles);
   const maxFileBytes = checkLimit('maxFileBytes', opts.maxFileBytes);
+  const zipLimits: ZipLimits = {
+    maxFiles,
+    maxFileBytes,
+    maxTotalBytes: checkLimit('maxTotalBytes', opts.maxTotalBytes ?? ZIP_DEFAULT_MAX_TOTAL_BYTES),
+    maxCompressionRatio: checkLimit(
+      'maxCompressionRatio',
+      opts.maxCompressionRatio ?? ZIP_DEFAULT_MAX_COMPRESSION_RATIO,
+    ),
+    ratioFloorBytes: checkLimit(
+      'ratioFloorBytes',
+      opts.ratioFloorBytes ?? ZIP_DEFAULT_RATIO_FLOOR_BYTES,
+    ),
+  };
   const signal = opts.signal;
 
   await mkdir(opts.workDir, { recursive: true, mode: 0o700 });
@@ -151,7 +183,7 @@ export async function openNxpkg(
     if (!st.isDirectory() || st.isSymbolicLink()) throw new Error('nxpkg work dir is not private');
     const payloadPath = join(dir, PAYLOAD_NAME);
     const decrypted = await decryptToFile(path, secret, payloadPath, maxPayloadBytes, signal);
-    const verified = await verifyPayload(payloadPath, { maxFiles, maxFileBytes }, signal);
+    const verified = await verifyPayload(payloadPath, zipLimits, signal);
     return new Package(dir, payloadPath, decrypted, verified, signal);
   } catch (err) {
     await rm(dir, { recursive: true, force: true });
@@ -289,7 +321,7 @@ async function loadMetaJson(
 
 async function verifyPayload(
   payloadPath: string,
-  limits: { maxFiles: number; maxFileBytes: number },
+  limits: ZipLimits,
   signal: AbortSignal | undefined,
 ): Promise<Verified> {
   const fh = await open(payloadPath, 'r');

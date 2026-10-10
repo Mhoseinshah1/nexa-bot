@@ -1,3 +1,5 @@
+import { sha256Hex } from './source-snapshot.js';
+
 /**
  * Mirza `.nxpkg` importer — what the converter's ownership evidence means for adoption
  * (`docs/legacy-migration/nxpkg-importer.md` §7; converter `NEXA_IMPORTER_DESIGN.md` §8, §8.1).
@@ -13,16 +15,21 @@
  *
  * - with a verified `ownership-decisions.json`: every `QUARANTINED`, `REJECTED` or `PENDING`
  *   entry, and every `stale` one, whatever its class;
- * - without one: every record whose `ownership_decision` is not proven by evidence
+ * - with or without one: every record whose `ownership_decision` is not proven by evidence
  *   (`CONFIRMED_CURRENT_OWNER`, `CONFIRMED_TRANSFER`, `NO_CONFLICT`) — the `AMBIGUOUS_*` and
  *   orphan states stay quarantined, as the converter's design requires;
  * - a PROVEN record whose proven final owner is not the invoice's `id_user`: NEXA adopts onto
  *   `id_user` only, so a proof about somebody else is no proof for that adoption;
  * - a live invoice the package has no ownership record for.
  *
- * `ADMIN_APPROVED_UNVERIFIED` is NOT held and NOT promoted: it keeps NEXA's own rules (owner =
- * `invoice.id_user`, as the attestation itself says), and is reported separately as
- * `ADMIN_ATTESTATION`, never counted as proven.
+ * The two sources only ever ADD to each other: held = decisionHold(entry) ∪ baselineHold(record),
+ * where the baseline is the package's own evidence (not proven, or proven for another owner,
+ * or no record) and applies WITH a decisions file as much as without one.
+ *
+ * `ADMIN_APPROVED_UNVERIFIED` is never promoted and never REMOVES a hold: an attested invoice
+ * whose record the evidence does not prove stays held. Only when the evidence itself proves
+ * the record for `invoice.id_user` is it left to NEXA's own rules. Either way it is reported
+ * separately as `ADMIN_ATTESTATION` (`attested`), never counted as proven.
  */
 
 export const NXPKG_OWNERSHIP_CLASSES = [
@@ -100,11 +107,14 @@ export type NxpkgOwnershipHoldReason =
 export interface NxpkgOwnershipHold {
   /** Invoice keys never adopted automatically (`LegacyImportInput.ownershipHold`). */
   readonly hold: ReadonlySet<string>;
-  /** Invoice keys an admin attested (ADMIN_ATTESTATION): adopted only by NEXA's own rules. */
+  /**
+   * Invoice keys an admin attested (ADMIN_ATTESTATION), for reporting. An attested key may
+   * also be in `hold` (the attestation never removes a hold); it is never in `proven`.
+   */
   readonly attested: ReadonlySet<string>;
   /** Invoice keys proven by the converter's evidence and agreeing with `id_user`. */
   readonly proven: ReadonlySet<string>;
-  /** Counts per reason. No key, no owner. */
+  /** Counts per reason, one reason per held invoice (Σ = |hold|). No key, no owner. */
   readonly reasons: Readonly<Partial<Record<NxpkgOwnershipHoldReason, number>>>;
 }
 
@@ -132,57 +142,79 @@ export function nxpkgOwnershipHold(input: {
   const attested = new Set<string>();
   const proven = new Set<string>();
   const reasons: Partial<Record<NxpkgOwnershipHoldReason, number>> = {};
-  const held = (key: string, why: NxpkgOwnershipHoldReason) => {
-    hold.add(key);
-    reasons[why] = (reasons[why] ?? 0) + 1;
-  };
 
   for (const invoice of input.liveInvoices) {
     const key = invoice.idInvoice;
     const records = byInvoice.get(key) ?? [];
     // Two records for one invoice is two answers to one question: neither is taken.
     const record = records.length === 1 ? records[0] : undefined;
+    let why: NxpkgOwnershipHoldReason | null;
     if (record === undefined) {
-      held(key, 'NO_OWNERSHIP_RECORD');
-      continue;
-    }
-    let provenByEvidence: boolean;
-    if (input.decisions !== null) {
-      const entry = input.decisions.entries.get(record.key);
-      if (entry === undefined) {
-        // Verification refuses a file that does not cover every record; never reached.
-        held(key, 'DECISION_PENDING');
-        continue;
-      }
-      if (entry.stale) {
-        held(key, 'DECISION_STALE');
-        continue;
-      }
-      const why = HELD_CLASS[entry.class];
-      if (why !== undefined) {
-        held(key, why);
-        continue;
-      }
-      if (entry.class === 'ADMIN_APPROVED_UNVERIFIED') {
-        attested.add(key);
-        continue;
-      }
-      provenByEvidence = true;
+      why = 'NO_OWNERSHIP_RECORD';
     } else {
-      provenByEvidence =
-        record.decision !== null && NXPKG_PROVEN_OWNERSHIP_DECISIONS.has(record.decision);
-      if (!provenByEvidence) {
-        held(key, 'OWNERSHIP_NOT_PROVEN');
-        continue;
-      }
+      // held = decisionHold(entry) ∪ baselineHold(record). A decision can only ADD a hold:
+      // the admin's attestation never removes one the package's own evidence puts in place.
+      const entry = input.decisions?.entries.get(record.key);
+      if (entry?.class === 'ADMIN_APPROVED_UNVERIFIED') attested.add(key);
+      why = decisionHold(input.decisions, entry) ?? baselineHold(record, invoice.idUser);
+      if (why === null && entry?.class !== 'ADMIN_APPROVED_UNVERIFIED') proven.add(key);
     }
-    if (provenByEvidence) {
-      if (record.finalOwner === null || record.finalOwner !== invoice.idUser) {
-        held(key, 'PROVEN_OWNER_IS_NOT_INVOICE_OWNER');
-        continue;
-      }
-      proven.add(key);
+    if (why !== null) {
+      hold.add(key);
+      // One reason per held invoice (the decision's first), so Σ reasons = |hold|.
+      reasons[why] = (reasons[why] ?? 0) + 1;
     }
   }
   return { hold, attested, proven, reasons };
+}
+
+/**
+ * The hold the verified decisions file puts on one record, or null. A file that does not
+ * cover a record (verification refuses one; never reached) holds it as PENDING.
+ */
+function decisionHold(
+  decisions: VerifiedOwnershipDecisions | null,
+  entry: NxpkgOwnershipEntry | undefined,
+): NxpkgOwnershipHoldReason | null {
+  if (decisions === null) return null;
+  if (entry === undefined) return 'DECISION_PENDING';
+  if (entry.stale) return 'DECISION_STALE';
+  return HELD_CLASS[entry.class] ?? null;
+}
+
+/**
+ * The hold the package's own evidence puts on one record, whatever any decision says: not
+ * proven by evidence, or proven for somebody other than the invoice's `id_user` (NEXA adopts
+ * onto `id_user` only, so a proof about somebody else is no proof for that adoption).
+ */
+function baselineHold(
+  record: NxpkgOwnershipRecordFacts,
+  idUser: string | null,
+): NxpkgOwnershipHoldReason | null {
+  if (record.decision === null || !NXPKG_PROVEN_OWNERSHIP_DECISIONS.has(record.decision)) {
+    return 'OWNERSHIP_NOT_PROVEN';
+  }
+  if (record.finalOwner === null || record.finalOwner !== idUser) {
+    return 'PROVEN_OWNER_IS_NOT_INVOICE_OWNER';
+  }
+  return null;
+}
+
+/**
+ * What binds a run to its hold (`legacy_import_run_inputs.ownership_hold_digest`): SHA-256 of
+ * the sorted held invoice keys and the decisions file's `entries_digest` (or `none`). Recorded
+ * when a run starts; a resume, reconcile or report under any other hold is refused.
+ */
+export function ownershipHoldDigest(
+  hold: ReadonlySet<string>,
+  decisionsDigest: string | null,
+): string {
+  const keys = [...hold].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return sha256Hex(
+    JSON.stringify({
+      format: 'nexa-nxpkg-ownership-hold/v1',
+      hold: keys,
+      decisions: decisionsDigest ?? 'none',
+    }),
+  );
 }

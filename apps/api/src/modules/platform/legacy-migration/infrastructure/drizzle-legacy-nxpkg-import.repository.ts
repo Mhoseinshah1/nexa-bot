@@ -272,7 +272,10 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
      * this one is taking rather than waiting for it, and the outer predicate repeats the
      * lease test so a row re-leased between the pick and the write is not taken twice.
      *
-     * An UPLOADED row is work only once its key is held: there is nothing to verify with.
+     * A row is work only while its key is held: there is nothing to open the package with.
+     * (An UPLOADED row before the key is given; any other after an idle key was erased —
+     * L4 — until the operator gives it again.) Except APPLYING: its key is erased before the
+     * post-import backup is requested, and what is left (the backup, the outcome) needs none.
      */
     const result = await this.db.execute<{ id: string }>(sql`
       UPDATE ${t}
@@ -282,7 +285,7 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
        WHERE id = (
                SELECT candidate.id FROM ${t} AS candidate
                 WHERE candidate.status IN (${work})
-                  AND (candidate.status <> 'UPLOADED' OR candidate.key_ciphertext IS NOT NULL)
+                  AND (candidate.key_ciphertext IS NOT NULL OR candidate.status = 'APPLYING')
                   AND (candidate.claimed_by IS NULL OR candidate.claimed_by = ${input.leaseOwner})
                 ORDER BY candidate.created_at ASC, candidate.id ASC
                 LIMIT 1
@@ -332,5 +335,27 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
       )
       .returning();
     return rows.map(toRow);
+  }
+
+  async expireIdleKeys(input: {
+    readonly now: Date;
+    readonly idleBefore: Date;
+    readonly statuses: readonly LegacyNxpkgImportStatus[];
+  }): Promise<readonly string[]> {
+    if (input.statuses.length === 0) return [];
+    // `key_kind` stays, as at a terminal state: it records WHAT was given, not the secret.
+    const rows = await this.db
+      .update(t)
+      .set({ keyCiphertext: null, keyKeyId: null, updatedAt: input.now })
+      .where(
+        and(
+          inArray(t.status, [...input.statuses]),
+          isNotNull(t.keyCiphertext),
+          isNull(t.claimedBy),
+          lt(t.updatedAt, input.idleBefore),
+        ),
+      )
+      .returning({ id: t.id });
+    return rows.map((row) => row.id);
   }
 }
