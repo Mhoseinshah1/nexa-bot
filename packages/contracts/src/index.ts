@@ -161,6 +161,10 @@ export * from './legacy-service-review.js';
 export * from './legacy-cutover.js';
 /** Mirza `.nxpkg` importer: import statuses, history record types, error codes. */
 export * from './legacy-nxpkg.js';
+/** Mirza `.nxpkg` importer: the Web Admin routes, requests and views («مهاجرت از میرزا»). */
+export * from './legacy-migration-routes.js';
+/** Mirza `.nxpkg` importer: the archived history read on Customer 360. */
+export * from './legacy-history.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */
 export * from './business-chats.js';
 /** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */
