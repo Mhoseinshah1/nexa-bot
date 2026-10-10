@@ -47,6 +47,7 @@ import {
   type TenantContext,
   type UnitOfWork,
   type UserId,
+  type OrderPurpose,
   type PaymentGatewayProvider,
   type PaymentPurpose,
   conversionPolicyFor,
@@ -389,7 +390,12 @@ export interface GatewayAttempt {
  *   awaiting payment. The caller records this as an anomaly and moves no money.
  */
 export type GatewayConfirmation =
-  | { readonly outcome: 'SETTLED'; readonly payment: PaymentRecord }
+  | {
+      readonly outcome: 'SETTLED';
+      readonly payment: PaymentRecord;
+      /** The settled order's purpose; absent for a top-up. Evidence only (FIX-01). */
+      readonly orderPurpose?: OrderPurpose;
+    }
   | { readonly outcome: 'ALREADY_CONFIRMED'; readonly payment: PaymentRecord }
   | {
       readonly outcome: 'NOT_ELIGIBLE';
@@ -3755,7 +3761,7 @@ export class PaymentService {
           now,
           GATEWAY_CONFIRM_ACTION,
         );
-        return { outcome: 'SETTLED', payment: settled.payment };
+        return { outcome: 'SETTLED', payment: settled.payment, orderPurpose: order.purpose };
       },
     );
   }

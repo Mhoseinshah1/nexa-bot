@@ -99,6 +99,8 @@ class FakeTonPays {
     { orderId: string; amount: number; status: string; paid: unknown }
   >();
   checks = 0;
+  /** How many of the next checks answer a documented rate limit. */
+  rateLimitNext = 0;
   private seq = 0;
 
   readonly fetch: FetchLike = async (url, init) => {
@@ -126,6 +128,10 @@ class FakeTonPays {
     }
     if (url.endsWith('/api/v1/invoices/check')) {
       this.checks += 1;
+      if (this.rateLimitNext > 0) {
+        this.rateLimitNext -= 1;
+        return json(429, { detail: { code: 'RATE_LIMIT_EXCEEDED' } });
+      }
       const invoiceId = String(body.invoice_id);
       const invoice = this.invoices.get(invoiceId);
       if (invoice === undefined) return json(404, { detail: { code: 'INVOICE_NOT_FOUND' } });
@@ -426,7 +432,12 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
   /** The one redacted line, its shape, and that it carries nothing but ids and durations. */
   function expectSettlementLine(
     paymentId: string,
-    expected: { kind: 'ORDER' | 'TOPUP'; trigger: string; provider: PaymentGatewayProvider },
+    expected: {
+      kind: 'ORDER' | 'TOPUP';
+      trigger: string;
+      provider: PaymentGatewayProvider;
+      customerMessage?: string;
+    },
   ) {
     const lines = settlementLines();
     expect(lines, 'no settlement latency line, or more than one').toHaveLength(1);
@@ -436,7 +447,9 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       provider: expected.provider,
       kind: expected.kind,
       trigger: expected.trigger,
-      customerMessage: expected.kind === 'ORDER' ? 'PROVISIONER' : 'NOTIFICATION_LANE',
+      customerMessage:
+        expected.customerMessage ??
+        (expected.kind === 'ORDER' ? 'PROVISIONER' : 'NOTIFICATION_LANE'),
     });
     expect(Object.keys(context).sort()).toEqual(
       [
@@ -446,6 +459,7 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
         'inquiryAttempt',
         'invoiceToDiscoveryMs',
         'kind',
+        'orderPurpose',
         'paymentId',
         'provider',
         'trigger',
@@ -658,8 +672,117 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
   // TonPays Telegram — the receipt acknowledgement and the review cadence
   // =====================================================================================
 
+  describe('a gateway-paid RENEWAL: the provisioner runs it, the notification lane announces it', () => {
+    it('Codex #265 (2): labelled PROVISIONER_THEN_NOTIFICATION_LANE, and its final message is SERVICE_RENEWED from the lane, not a delivery card', async () => {
+      // A service to renew, bought by card to card and delivered.
+      const firstOrder = await confirmedOrder();
+      const { payment: bought } = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor(key()),
+        maryam,
+        { idempotencyKey: key(), orderId: firstOrder },
+      );
+      await ctx.container.payments.confirmManualTransfer(tenantA, owner, bought.id, {
+        idempotencyKey: key(),
+        note: 'کارت به کارت',
+      });
+      await ctx.container.provisionerLoop.tick();
+      expect(deliveryCards()).toHaveLength(1);
+      const [service] = await rows<{ id: string }>(
+        sql`SELECT id FROM services WHERE order_id = ${firstOrder}`,
+      );
+
+      // The renewal, paid through TonPays, approval hinted by the webhook.
+      await enable('TONPAYS');
+      const k = key();
+      const { order } = await ctx.container.commercialActions.draft(
+        tenantA,
+        systemActor(k),
+        maryam,
+        { serviceId: service!.id, kind: 'RENEW', idempotencyKey: `${k}-quote` },
+      );
+      await ctx.container.commercialActions.confirm(tenantA, systemActor(k), maryam, {
+        orderId: order.id,
+        idempotencyKey: `${k}-confirm`,
+      });
+      const paymentId = await gatewayOrderPayment('TONPAYS', order.id);
+      await lane.runOnce(tenantA);
+      const invoice = await invoiceOf(paymentId);
+      tonpays.approve(invoice.provider_invoice_id!);
+      await lane.receiveWebhook(
+        String(tenantA.tenantId),
+        'TONPAYS',
+        {
+          invoice_id: invoice.provider_invoice_id,
+          order_id: invoice.provider_order_id,
+          status: 'completed',
+          paid: true,
+          delivery_id: 'renew-1',
+          event: 'invoice.completed',
+          occurred_at: 1727200000,
+          api_version: 1,
+        },
+        'renew-1',
+      );
+      await passesUntilConfirmed(paymentId, 60_000);
+      const line = expectSettlementLine(paymentId, {
+        kind: 'ORDER',
+        trigger: 'WEBHOOK_HINT',
+        provider: 'TONPAYS',
+        customerMessage: 'PROVISIONER_THEN_NOTIFICATION_LANE',
+      });
+      expect(line.orderPurpose).toBe('RENEW');
+
+      // The provisioner runs the renewal; the announcer queues its result for the lane.
+      await ctx.container.provisionerLoop.tick();
+      expect(deliveryCards(), 'a renewal was announced as a new delivery').toHaveLength(1);
+      const queued = await rows<{ kind: string }>(
+        sql`SELECT n.kind FROM customer_notifications n
+              JOIN provisioning_operations o ON o.id = n.subject_id
+             WHERE o.order_id = ${order.id}`,
+      );
+      expect(queued.map((row) => row.kind)).toEqual(['SERVICE_RENEWED']);
+      const before = telegram.sent.filter((body) => String(body['chat_id']) === MARYAM).length;
+      await ctx.container.customerNotificationLoop.tick();
+      expect(
+        telegram.sent.filter((body) => String(body['chat_id']) === MARYAM).length,
+        'the lane did not send the renewal result',
+      ).toBe(before + 1);
+    });
+  });
+
+  describe('TONPAYS after a rate limit', () => {
+    it('Codex #265 (4): a tap between the normal step and the rate-limit floor is CUSTOMER_HINT, not SCHEDULED', async () => {
+      await enable('TONPAYS');
+      const paymentId = await gatewayTopup('TONPAYS', 250_000n);
+      await lane.runOnce(tenantA);
+      const invoice = await invoiceOf(paymentId);
+      // The first ask is rate-limited: the row now waits the later of its step and 60 s.
+      tonpays.rateLimitNext = 1;
+      await untilFirstAsk();
+      const [asked] = await rows<{ last_inquiry_at: Date; next_inquiry_at: Date }>(
+        sql`SELECT last_inquiry_at, next_inquiry_at FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+      );
+      const last = new Date(asked!.last_inquiry_at).getTime();
+      expect(new Date(asked!.next_inquiry_at).getTime() - last).toBeGreaterThanOrEqual(60_000);
+      // 45 s later — past the normal step, inside the floor — the customer taps.
+      now = last + 45_000;
+      clock.at(new Date(now));
+      tonpays.approve(invoice.provider_invoice_id!);
+      const view = await lane.attemptFor(tenantA, maryam, paymentId);
+      await lane.requestCheck(tenantA, view!);
+      await passesUntilConfirmed(paymentId, 60_000);
+      expectSettlementLine(paymentId, {
+        kind: 'TOPUP',
+        trigger: 'CUSTOMER_HINT',
+        provider: 'TONPAYS',
+      });
+    });
+  });
+
   describe('TONPAYS_TELEGRAM on the real review cadence', () => {
-    async function acknowledgedOrder() {
+    async function acknowledgedOrder(receiptMode: FakeTonPaysTelegram['receiptMode'] = 'ACK') {
+      tpt.receiptMode = receiptMode;
       await enable('TONPAYS_TELEGRAM');
       const orderId = await confirmedOrder();
       const paymentId = await gatewayOrderPayment('TONPAYS_TELEGRAM', orderId);
@@ -709,6 +832,25 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       expectSettlementLine(paymentId, {
         kind: 'ORDER',
         trigger: 'RECEIPT_ACK',
+        provider: 'TONPAYS_TELEGRAM',
+      });
+      await expectOrderDeliveredOnce(orderId, paymentId);
+    });
+
+    it('Codex #265 (3): a receipt accepted WITHOUT an acknowledgement brings the inquiry forward and is labelled RECEIPT_UPLOAD, not the customer', async () => {
+      const { orderId, paymentId, invoiceId } = await acknowledgedOrder('NO_SIGNAL');
+      await lane.runOnce(tenantA); // the upload: accepted, no review opened
+      expect(tpt.receipts).toHaveLength(1);
+      const [payment] = await rows<{ provider_review_until: Date | null }>(
+        sql`SELECT provider_review_until FROM payments WHERE id = ${paymentId}`,
+      );
+      expect(payment!.provider_review_until, 'a review opened').toBeNull();
+      tpt.set(invoiceId, 'completed', true);
+      advance(GATEWAY_PAYMENT_INTERVAL_MS);
+      await passesUntilConfirmed(paymentId, 60_000);
+      expectSettlementLine(paymentId, {
+        kind: 'ORDER',
+        trigger: 'RECEIPT_UPLOAD',
         provider: 'TONPAYS_TELEGRAM',
       });
       await expectOrderDeliveredOnce(orderId, paymentId);
@@ -806,11 +948,14 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
         ),
       );
       expect(await lane.settleRecorded(tenantA, paymentId)).toBe('SETTLED');
-      expectSettlementLine(paymentId, {
+      const line = expectSettlementLine(paymentId, {
         kind: 'ORDER',
         trigger: 'STARS_UPDATE',
         provider: 'TELEGRAM_STARS',
       });
+      // Codex #265 (1): no inquiry discovered it, so no inquiry attempt is claimed.
+      expect(line.inquiryAttempt).toBeNull();
+      expect(line.orderPurpose).toBe('NEW_SERVICE');
       await expectOrderDeliveredOnce(orderId, paymentId);
     });
   });

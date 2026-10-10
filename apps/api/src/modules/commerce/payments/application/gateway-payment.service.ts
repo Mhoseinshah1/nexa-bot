@@ -12,6 +12,8 @@ import {
   type CorrelationId,
   type IdGenerator,
   type OperationalEventRecorder,
+  orderPurposeCreatesNewService,
+  type OrderPurpose,
   type PaymentGatewayProvider,
   type PaymentId,
   type TenantContext,
@@ -163,6 +165,12 @@ export const RECEIPT_RATE_LIMIT_RETRY_MS = 60_000;
  * backoff applies (it is past its deadline, or on the last retry before it).
  */
 export const RECORDED_OUTCOME_RETRY_MS = 60_000;
+
+/**
+ * How soon a rate-limited inquiry is asked again, at the least: the later of its normal step
+ * and this. Shared with the FIX-01 evidence, which must know the row's real schedule.
+ */
+export const INQUIRY_RATE_LIMIT_RETRY_MS = 60_000;
 
 /** The path a provider's webhook is served on. The route and this must agree. */
 export const GATEWAY_WEBHOOK_PATH_PREFIX = '/payments/webhook';
@@ -996,7 +1004,7 @@ export class GatewayPaymentService {
     if (outcome.kind !== 'OBSERVED') {
       const retry =
         outcome.kind === 'RATE_LIMITED' && next !== null
-          ? new Date(Math.max(next.getTime(), at.getTime() + 60_000))
+          ? new Date(Math.max(next.getTime(), at.getTime() + INQUIRY_RATE_LIMIT_RETRY_MS))
           : next;
       await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
@@ -1198,7 +1206,14 @@ export class GatewayPaymentService {
       `${invoice.provider.toLowerCase()}:${outcome.status}:paid`,
       at,
       reference,
-      { trigger: this.discoveryTriggerOf(claimed, expiresAt), dueAt: invoice.nextInquiryAt },
+      {
+        trigger: this.discoveryTriggerOf(
+          claimed,
+          expiresAt,
+          await this.receiptEndedAt(scope, invoice),
+        ),
+        dueAt: invoice.nextInquiryAt,
+      },
     );
   }
 
@@ -1210,6 +1225,7 @@ export class GatewayPaymentService {
   private discoveryTriggerOf(
     claimed: ClaimedGatewayInvoice,
     expiresAt: Date | null,
+    receiptEndedAt: Date | null = null,
   ): InquiryDiscoveryTrigger {
     const { invoice } = claimed;
     const reviewUntil = claimed.paymentReviewUntil;
@@ -1217,14 +1233,52 @@ export class GatewayPaymentService {
       reviewUntil === null
         ? null
         : new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS);
+    const normal = this.scheduledInquiryAt(invoice, reviewUntil, reviewStartedAt, expiresAt);
+    /*
+     * Codex #265 (4): after an answer that was an error, the row may have been a rate limit,
+     * which waits the later of the normal step and the floor. Both are times the schedule
+     * alone could have put it; a hint between them is still a hint.
+     */
+    const afterRateLimit =
+      invoice.lastInquiryErrorCode !== null && invoice.lastInquiryAt !== null
+        ? new Date(invoice.lastInquiryAt.getTime() + INQUIRY_RATE_LIMIT_RETRY_MS)
+        : null;
     return inquiryDiscoveryTrigger({
       dueAt: invoice.nextInquiryAt,
-      scheduledAt: this.scheduledInquiryAt(invoice, reviewUntil, reviewStartedAt, expiresAt),
+      scheduledAt: [normal, afterRateLimit].filter((at): at is Date => at !== null),
       lastInquiryAt: invoice.lastInquiryAt,
       lastWebhookAt: invoice.lastWebhookAt,
       operatorRequestedAt: invoice.reconcileInquiryRequestedAt,
       reviewStartedAt,
+      receiptEndedAt,
     });
+  }
+
+  /**
+   * Codex #265 (3): when this card-transfer attempt's latest receipt upload ENDED — accepted or
+   * its answer lost — since either brings the next inquiry forward without opening a review.
+   * Evidence only; read once, for an approval about to be settled. Null for any other route.
+   */
+  private async receiptEndedAt(
+    scope: TenantContext,
+    invoice: GatewayInvoiceRecord,
+  ): Promise<Date | null> {
+    if (
+      this.deps.cardTransfer === undefined ||
+      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm !== 'CARD_TRANSFER'
+    ) {
+      return null;
+    }
+    try {
+      const submissions = await this.deps.cardTransfer.submissionsFor(scope, invoice.paymentId);
+      const ended = submissions
+        .filter((one) => one.state === 'ACCEPTED' || one.state === 'UNKNOWN')
+        .map((one) => one.decidedAt?.getTime() ?? null)
+        .filter((at): at is number => at !== null);
+      return ended.length === 0 ? null : new Date(Math.max(...ended));
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1285,7 +1339,13 @@ export class GatewayPaymentService {
     }
     switch (confirmation.outcome) {
       case 'SETTLED':
-        this.logSettlementLatency(invoice, confirmation.payment, discovery, at);
+        this.logSettlementLatency(
+          invoice,
+          confirmation.payment,
+          confirmation.orderPurpose ?? null,
+          discovery,
+          at,
+        );
         await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'SETTLED', at);
         return 'SETTLED';
       case 'ALREADY_CONFIRMED':
@@ -1330,6 +1390,7 @@ export class GatewayPaymentService {
   private logSettlementLatency(
     invoice: GatewayInvoiceRecord,
     payment: PaymentRecord,
+    orderPurpose: OrderPurpose | null,
     discovery: { readonly trigger: GatewayDiscoveryTrigger; readonly dueAt: Date | null },
     discoveredAt: Date,
   ): void {
@@ -1343,14 +1404,19 @@ export class GatewayPaymentService {
           paymentId: invoice.paymentId,
           provider: invoice.provider,
           kind: payment.orderId === null ? 'TOPUP' : 'ORDER',
+          orderPurpose,
           trigger: discovery.trigger,
-          inquiryAttempt: invoice.inquiryAttempts + 1,
+          // Codex #265 (1): a recorded payment (Stars) was discovered by no inquiry at all.
+          inquiryAttempt:
+            PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].approval === 'RECORDED_PAYMENT'
+              ? null
+              : invoice.inquiryAttempts + 1,
           invoiceToDiscoveryMs: since(invoice.createdInvoiceAt),
           dueToDiscoveryMs: since(discovery.dueAt),
           webhookToDiscoveryMs: since(invoice.lastWebhookAt),
           discoveryToConfirmedMs:
             confirmedAt === null ? null : confirmedAt.getTime() - discoveredAt.getTime(),
-          customerMessage: payment.orderId === null ? 'NOTIFICATION_LANE' : 'PROVISIONER',
+          customerMessage: finalMessagePath(payment.orderId === null, orderPurpose),
         },
         'gateway payment settlement latency',
       );
@@ -1412,6 +1478,8 @@ export class GatewayPaymentService {
       eligible,
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
+      null,
+      { trigger: 'STARS_RECOVERY', dueAt: invoice.nextInquiryAt },
     );
     return settled === 'HELD' ? 'ERROR' : settled;
   }
@@ -2808,4 +2876,24 @@ export class GatewayPaymentService {
       context: { paymentId: invoice.paymentId, provider: invoice.provider, source },
     });
   }
+}
+
+/**
+ * Codex #265 (2): which component sends the customer's FINAL message for a settled payment.
+ * A top-up's `WALLET_TOPUP_CREDITED` is enqueued in the settling transaction and sent by the
+ * customer notification lane. An order that CREATES a service is delivered by the provisioner
+ * directly, in the tick that creates it. An order that acts on an existing service (a renewal,
+ * an add-on, extra devices, a location change) is run by the provisioner as a commercial
+ * operation, and its result (`SERVICE_RENEWED` / `SERVICE_ACTION_SUCCEEDED`) is queued by the
+ * operation outcome announcer for the notification lane — both waits apply.
+ */
+export function finalMessagePath(
+  isTopup: boolean,
+  orderPurpose: OrderPurpose | null,
+): 'NOTIFICATION_LANE' | 'PROVISIONER' | 'PROVISIONER_THEN_NOTIFICATION_LANE' | 'UNKNOWN' {
+  if (isTopup) return 'NOTIFICATION_LANE';
+  if (orderPurpose === null) return 'UNKNOWN';
+  return orderPurposeCreatesNewService(orderPurpose)
+    ? 'PROVISIONER'
+    : 'PROVISIONER_THEN_NOTIFICATION_LANE';
 }

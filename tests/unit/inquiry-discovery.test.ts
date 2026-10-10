@@ -14,7 +14,7 @@ const t = (seconds: number) => new Date(Date.UTC(2026, 9, 10, 9, 0, 0) + seconds
 
 const row = (overrides: Partial<Parameters<typeof inquiryDiscoveryTrigger>[0]> = {}) => ({
   dueAt: t(20),
-  scheduledAt: t(20),
+  scheduledAt: [t(20)],
   lastInquiryAt: null,
   lastWebhookAt: null,
   operatorRequestedAt: null,
@@ -44,7 +44,7 @@ describe('what brought the discovering inquiry forward', () => {
   it('is a webhook when one arrived after the last inquiry, even on schedule', () => {
     expect(
       inquiryDiscoveryTrigger(
-        row({ lastInquiryAt: t(20), lastWebhookAt: t(30), dueAt: t(60), scheduledAt: t(60) }),
+        row({ lastInquiryAt: t(20), lastWebhookAt: t(30), dueAt: t(60), scheduledAt: [t(60)] }),
       ),
     ).toBe('WEBHOOK_HINT');
   });
@@ -52,25 +52,25 @@ describe('what brought the discovering inquiry forward', () => {
   it('is NOT a webhook when the only webhook was already answered by an inquiry', () => {
     expect(
       inquiryDiscoveryTrigger(
-        row({ lastInquiryAt: t(20), lastWebhookAt: t(10), dueAt: t(60), scheduledAt: t(60) }),
+        row({ lastInquiryAt: t(20), lastWebhookAt: t(10), dueAt: t(60), scheduledAt: [t(60)] }),
       ),
     ).toBe('SCHEDULED');
   });
 
   it('is the customer when the row was brought forward and no review opened since', () => {
     expect(
-      inquiryDiscoveryTrigger(row({ lastInquiryAt: t(20), dueAt: t(33), scheduledAt: t(60) })),
+      inquiryDiscoveryTrigger(row({ lastInquiryAt: t(20), dueAt: t(33), scheduledAt: [t(60)] })),
     ).toBe('CUSTOMER_HINT');
   });
 
   it('is the receipt acknowledgement when a review opened after the last inquiry', () => {
     expect(
       inquiryDiscoveryTrigger(
-        row({ lastInquiryAt: t(20), reviewStartedAt: t(40), dueAt: t(40), scheduledAt: t(60) }),
+        row({ lastInquiryAt: t(20), reviewStartedAt: t(40), dueAt: t(40), scheduledAt: [t(60)] }),
       ),
     ).toBe('RECEIPT_ACK');
     expect(
-      inquiryDiscoveryTrigger(row({ reviewStartedAt: t(5), dueAt: t(5), scheduledAt: t(20) })),
+      inquiryDiscoveryTrigger(row({ reviewStartedAt: t(5), dueAt: t(5), scheduledAt: [t(20)] })),
     ).toBe('RECEIPT_ACK');
   });
 
@@ -81,7 +81,7 @@ describe('what brought the discovering inquiry forward', () => {
           reviewStartedAt: t(40),
           lastInquiryAt: t(41),
           dueAt: t(101),
-          scheduledAt: t(161),
+          scheduledAt: [t(161)],
         }),
       ),
     ).toBe('CUSTOMER_HINT');
@@ -94,7 +94,34 @@ describe('what brought the discovering inquiry forward', () => {
   });
 
   it('cannot call anything a hint without a schedule to compare with', () => {
-    expect(inquiryDiscoveryTrigger(row({ scheduledAt: null, dueAt: t(1) }))).toBe('SCHEDULED');
+    expect(inquiryDiscoveryTrigger(row({ scheduledAt: [], dueAt: t(1) }))).toBe('SCHEDULED');
     expect(inquiryDiscoveryTrigger(row({ dueAt: null }))).toBe('SCHEDULED');
+  });
+
+  it('Codex #265 (4): after a rate-limited answer, a hint between the normal step and the floor is a hint', () => {
+    // Asked at 20 s and rate-limited: the normal step said 60 s, the floor 80 s; it waited 80.
+    const afterRateLimit = {
+      lastInquiryAt: t(20),
+      scheduledAt: [t(60), t(80)],
+    };
+    expect(inquiryDiscoveryTrigger(row({ ...afterRateLimit, dueAt: t(80) }))).toBe('SCHEDULED');
+    // A tap at 70 s brought it to 70 — later than the normal step, earlier than the real one.
+    expect(inquiryDiscoveryTrigger(row({ ...afterRateLimit, dueAt: t(70) }))).toBe('CUSTOMER_HINT');
+    // An error that was NOT a rate limit kept the normal step: on time is on time.
+    expect(inquiryDiscoveryTrigger(row({ ...afterRateLimit, dueAt: t(60) }))).toBe('SCHEDULED');
+    expect(inquiryDiscoveryTrigger(row({ ...afterRateLimit, dueAt: t(30) }))).toBe('CUSTOMER_HINT');
+  });
+
+  it('Codex #265 (3): a receipt upload that ended since the last inquiry without a review is the receipt', () => {
+    const early = { lastInquiryAt: t(20), dueAt: t(33), scheduledAt: [t(60)] };
+    expect(inquiryDiscoveryTrigger(row({ ...early, receiptEndedAt: t(33) }))).toBe(
+      'RECEIPT_UPLOAD',
+    );
+    // An upload that ended before the last inquiry was already answered by it.
+    expect(inquiryDiscoveryTrigger(row({ ...early, receiptEndedAt: t(10) }))).toBe('CUSTOMER_HINT');
+    // An acknowledged one opened a review: the acknowledgement wins.
+    expect(
+      inquiryDiscoveryTrigger(row({ ...early, receiptEndedAt: t(33), reviewStartedAt: t(33) })),
+    ).toBe('RECEIPT_ACK');
   });
 });
