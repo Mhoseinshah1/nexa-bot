@@ -1,10 +1,11 @@
 /**
  * FIX-01 (batch 2026-10-10): what brought forward the inquiry that DISCOVERED an approval.
  *
- * Evidence only. Nothing here decides anything about money, and nothing reads it back: the
- * lane logs it beside the settlement so a field report of "the credit took two minutes" can be
- * split into the four stages (`docs/payment-settlement-latency.md` §5) — when the provider's
- * approval was seen, and why then.
+ * Nothing here decides anything about money. The lane logs it beside the settlement so a
+ * field report of "the credit took two minutes" can be split into the four stages
+ * (`docs/payment-settlement-latency.md` §7) — when the provider's approval was seen, and why
+ * then. FIX-06 reads it too, for scheduling only: a row that is not `SCHEDULED` is asked
+ * before the pass's creations and may use the share of the budget kept for hinted rows.
  *
  * The provider's own approval instant is not knowable (no provider here reports one this
  * installation can trust), so the first stage is measured from the invoice's creation and

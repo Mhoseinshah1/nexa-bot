@@ -29,7 +29,6 @@ import {
   TONPAYS_CREATE_RETRY_MS,
 } from '../domain/tonpays.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
-import { inquiryDiscoveryTrigger } from '../domain/inquiry-discovery.js';
 import {
   firstInquiryAt,
   hintReservePerMinute,
@@ -37,6 +36,11 @@ import {
   jitteredMs,
   nextScheduledInquiryAt,
 } from '../domain/inquiry-schedule.js';
+import {
+  inquiryDiscoveryTrigger,
+  type GatewayDiscoveryTrigger,
+  type InquiryDiscoveryTrigger,
+} from '../domain/inquiry-discovery.js';
 import {
   receiptAcknowledged,
   reviewInquiryNextAt,
@@ -1194,7 +1198,33 @@ export class GatewayPaymentService {
       `${invoice.provider.toLowerCase()}:${outcome.status}:paid`,
       at,
       reference,
+      { trigger: this.discoveryTriggerOf(claimed, expiresAt), dueAt: invoice.nextInquiryAt },
     );
+  }
+
+  /**
+   * What made a due row due (`domain/inquiry-discovery.ts`): logged beside a settlement as
+   * FIX-01 evidence, and read by `isHinted` (FIX-06) to decide only WHEN a row is asked and
+   * from which share of the budget — never what its answer means.
+   */
+  private discoveryTriggerOf(
+    claimed: ClaimedGatewayInvoice,
+    expiresAt: Date | null,
+  ): InquiryDiscoveryTrigger {
+    const { invoice } = claimed;
+    const reviewUntil = claimed.paymentReviewUntil;
+    const reviewStartedAt =
+      reviewUntil === null
+        ? null
+        : new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS);
+    return inquiryDiscoveryTrigger({
+      dueAt: invoice.nextInquiryAt,
+      scheduledAt: this.scheduledInquiryAt(invoice, reviewUntil, reviewStartedAt, expiresAt),
+      lastInquiryAt: invoice.lastInquiryAt,
+      lastWebhookAt: invoice.lastWebhookAt,
+      operatorRequestedAt: invoice.reconcileInquiryRequestedAt,
+      reviewStartedAt,
+    });
   }
 
   /**
@@ -1211,6 +1241,11 @@ export class GatewayPaymentService {
     at: Date,
     /** The provider reference bound to this attempt (CentralPay), re-checked under the lock. */
     providerReference: string | null = null,
+    /** FIX-01 evidence: why the approval was seen now, and when its row fell due. */
+    discovery: { readonly trigger: GatewayDiscoveryTrigger; readonly dueAt: Date | null } = {
+      trigger: 'SCHEDULED',
+      dueAt: invoice.nextInquiryAt,
+    },
   ): Promise<'SETTLED' | 'LATE' | 'ERROR' | 'HELD'> {
     /*
      * FIX-03: an attempt this lane ALREADY settled is not a late completion. A worker that
@@ -1250,6 +1285,7 @@ export class GatewayPaymentService {
     }
     switch (confirmation.outcome) {
       case 'SETTLED':
+        this.logSettlementLatency(invoice, confirmation.payment, discovery, at);
         await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'SETTLED', at);
         return 'SETTLED';
       case 'ALREADY_CONFIRMED':
@@ -1273,6 +1309,53 @@ export class GatewayPaymentService {
         }
         await this.lateCompletion(scope, actor, invoice, confirmation.reason);
         return 'LATE';
+    }
+  }
+
+  /**
+   * FIX-01 (batch 2026-10-10): the four stages of one settlement, in one redacted line —
+   * identifiers and durations only, never an amount, a key, a payload or a card.
+   *
+   *  1. `invoiceToDiscoveryMs` — the invoice's creation to the answer that approved it, and
+   *     `dueToDiscoveryMs` — the row falling due to that answer (the lane's own lag: its
+   *     interval, the passes ahead of it, the call). The provider's own approval instant is
+   *     not knowable here, so it is never claimed.
+   *  2. `discoveryToConfirmedMs` — the answer to the committed settlement (ledger + state).
+   *  3. `customerMessage` — what announces it: a top-up's `WALLET_TOPUP_CREDITED` is enqueued
+   *     IN the settling transaction (confirmed → enqueued is zero by construction) and sent by
+   *     the customer notification lane, which logs `customer notification latency`; an order's
+   *     service is created and delivered by the provisioner, directly.
+   *  4. The send itself is the lane's or the provisioner's line, joined by payment id.
+   */
+  private logSettlementLatency(
+    invoice: GatewayInvoiceRecord,
+    payment: PaymentRecord,
+    discovery: { readonly trigger: GatewayDiscoveryTrigger; readonly dueAt: Date | null },
+    discoveredAt: Date,
+  ): void {
+    const since = (from: Date | null): number | null =>
+      from === null ? null : discoveredAt.getTime() - from.getTime();
+    const confirmedAt = payment.confirmedAt ?? null;
+    // Evidence only: a logger that fails must not stand between a settlement and its record.
+    try {
+      this.deps.logger.info(
+        {
+          paymentId: invoice.paymentId,
+          provider: invoice.provider,
+          kind: payment.orderId === null ? 'TOPUP' : 'ORDER',
+          trigger: discovery.trigger,
+          inquiryAttempt: invoice.inquiryAttempts + 1,
+          invoiceToDiscoveryMs: since(invoice.createdInvoiceAt),
+          dueToDiscoveryMs: since(discovery.dueAt),
+          webhookToDiscoveryMs: since(invoice.lastWebhookAt),
+          discoveryToConfirmedMs:
+            confirmedAt === null ? null : confirmedAt.getTime() - discoveredAt.getTime(),
+          customerMessage: payment.orderId === null ? 'NOTIFICATION_LANE' : 'PROVISIONER',
+        },
+        'gateway payment settlement latency',
+      );
+    } catch {
+      // Nothing to do: the settlement stands, and its record follows.
     }
   }
 
@@ -1367,6 +1450,8 @@ export class GatewayPaymentService {
       eligible,
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
+      null,
+      { trigger: 'STARS_UPDATE', dueAt: null },
     );
     return settled === 'HELD' ? 'ERROR' : settled;
   }
@@ -1416,26 +1501,11 @@ export class GatewayPaymentService {
    * the budget — never what its answer means.
    */
   private isHinted(claimed: ClaimedGatewayInvoice): boolean {
-    const { invoice } = claimed;
-    const reviewUntil = claimed.paymentReviewUntil;
-    const reviewStartedAt =
-      reviewUntil === null
-        ? null
-        : new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS);
     const expiresAt = gatewaySettlementDeadline({
       expiresAt: claimed.paymentExpiresAt,
-      providerReviewUntil: reviewUntil,
+      providerReviewUntil: claimed.paymentReviewUntil,
     });
-    return (
-      inquiryDiscoveryTrigger({
-        dueAt: invoice.nextInquiryAt,
-        scheduledAt: this.scheduledInquiryAt(invoice, reviewUntil, reviewStartedAt, expiresAt),
-        lastInquiryAt: invoice.lastInquiryAt,
-        lastWebhookAt: invoice.lastWebhookAt,
-        operatorRequestedAt: invoice.reconcileInquiryRequestedAt,
-        reviewStartedAt,
-      }) !== 'SCHEDULED'
-    );
+    return this.discoveryTriggerOf(claimed, expiresAt) !== 'SCHEDULED';
   }
 
   /**
@@ -2428,6 +2498,11 @@ export class GatewayPaymentService {
         : new Date(Math.max(now.getTime(), view.invoice.lastInquiryAt.getTime() + spacing));
     await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.requestInquiry(scope, view.payment.id, at, tx),
+    );
+    // FIX-01 evidence: tells a tap from a browser return when a settlement says CUSTOMER_HINT.
+    this.deps.logger.info(
+      { paymentId: view.payment.id, provider: view.invoice.provider },
+      'gateway status check brought an inquiry forward',
     );
   }
 
