@@ -30,6 +30,8 @@ import {
   GATEWAY_PAYMENT_INTERVAL_MS,
   GatewayPaymentLoop,
 } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment-loop';
+import { GATEWAY_DECISION_RETRY_MAX } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
+import { POST_DEADLINE_INQUIRY_MAX } from '../../apps/api/src/modules/commerce/payments/domain/tonpays';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -586,6 +588,109 @@ describe('the TonPays Telegram provider review window', () => {
       }
       expect(answer).toMatchObject({ outcome: 'NOT_ELIGIBLE', reason: 'DEADLINE_PASSED' });
       expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+    });
+
+    /*
+     * Codex #269: past the deadline no further inquiry is scheduled, and the answer was
+     * recorded (unscheduling the row) BEFORE the decision — now always the settlement path's.
+     * A decision that threw (the tenant stopped between the pass's check and the settlement's
+     * transaction, a transient database error) left a provider-paid attempt with no
+     * settlement, no LATE_COMPLETION, no audit and no alert, never asked again.
+     */
+    describe('a post-deadline approval whose decision fails (Codex #269)', () => {
+      const lateFacts = async (paymentId: string) => {
+        const [counts] = await rows<{ audits: number; events: number; outbox: number }>(
+          sql`SELECT
+                (SELECT count(*)::int FROM audit_logs WHERE action = 'gateway_invoice.late_completion'
+                   AND entity_id = ${paymentId}) AS audits,
+                (SELECT count(*)::int FROM operational_events WHERE code = 'payments.gateway_late_completion'
+                   AND dedupe_key LIKE ${`%${paymentId}`}) AS events,
+                (SELECT count(*)::int FROM outbox_messages WHERE event_type = 'PaymentLateCompletionObserved'
+                   AND aggregate_id = ${paymentId}) AS outbox`,
+        );
+        return counts;
+      };
+      /** A lane whose settlement path throws while `failing()` says so. */
+      const laneFailingConfirm = (failing: () => boolean) => {
+        const payments = Object.create(ctx.container.payments) as typeof ctx.container.payments;
+        payments.confirmGatewayPayment = (...args) =>
+          failing()
+            ? Promise.reject(new Error('the scope stopped accepting work'))
+            : ctx.container.payments.confirmGatewayPayment(...args);
+        return telegramLaneWith(ctx, fake, { payments });
+      };
+      const duePastDeadline = async (
+        created: Awaited<ReturnType<typeof attempt>>,
+        postDeadlineInquiries = 0,
+      ) => {
+        fake.set(created.invoiceId, 'completed', true);
+        clock.at(new Date(created.expiresAt.getTime() + 60_000));
+        await ctx.container.database.db.execute(
+          sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 60_000).toISOString()}::timestamptz,
+                     inquiry_claimed_until = NULL, post_deadline_inquiries = ${postDeadlineInquiries}
+               WHERE payment_id = ${created.paymentId}`,
+        );
+      };
+
+      it('keeps the row scheduled, and the next pass records LATE_COMPLETION exactly once', async () => {
+        const created = await attempt();
+        await duePastDeadline(created);
+        let failing = true;
+        const flaky = laneFailingConfirm(() => failing);
+
+        await flaky.runOnce(tenantA);
+        const stranded = await invoiceOf(created.paymentId);
+        expect(stranded.outcome).toBeNull();
+        expect(stranded.late_completion_observed_at).toBeNull();
+        // The answer is recorded, and the row is still due for a retry.
+        expect(stranded.next_inquiry_at).not.toBeNull();
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 0, events: 0, outbox: 0 });
+
+        failing = false;
+        clock.at(new Date(created.expiresAt.getTime() + 2 * 60_000 + 1_000));
+        await flaky.runOnce(tenantA);
+        const decided = await invoiceOf(created.paymentId);
+        expect(decided.outcome).toBe('LATE_COMPLETION');
+        expect(decided.late_completion_observed_at).not.toBeNull();
+        expect(decided.next_inquiry_at).toBeNull();
+        expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 1, events: 1, outbox: 1 });
+
+        // Nothing more is asked or written.
+        clock.at(new Date(created.expiresAt.getTime() + 10 * 60_000));
+        await flaky.runOnce(tenantA);
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 1, events: 1, outbox: 1 });
+      });
+
+      it('an approval met on the LAST permitted post-deadline inquiry is still retried to a decision', async () => {
+        const created = await attempt();
+        await duePastDeadline(created, POST_DEADLINE_INQUIRY_MAX - 1);
+        let failing = true;
+        const flaky = laneFailingConfirm(() => failing);
+        await flaky.runOnce(tenantA);
+        expect((await invoiceOf(created.paymentId)).next_inquiry_at).not.toBeNull();
+
+        failing = false;
+        clock.at(new Date(created.expiresAt.getTime() + 2 * 60_000 + 1_000));
+        await flaky.runOnce(tenantA);
+        expect((await invoiceOf(created.paymentId)).outcome).toBe('LATE_COMPLETION');
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 1, events: 1, outbox: 1 });
+      });
+
+      it('a decision that fails for ever stops after a bounded number of retries', async () => {
+        const created = await attempt();
+        await duePastDeadline(created);
+        const broken = laneFailingConfirm(() => true);
+        const checksBefore = fake.checks.length;
+        for (let i = 1; i <= POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX + 3; i += 1) {
+          clock.at(new Date(created.expiresAt.getTime() + i * 2 * 60_000));
+          await broken.runOnce(tenantA);
+        }
+        expect(fake.checks.length - checksBefore).toBe(
+          POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX,
+        );
+        expect((await invoiceOf(created.paymentId)).next_inquiry_at).toBeNull();
+      });
     });
 
     it('TPTG-28: half-open at the review deadline — settles at review_until − 1 ms, DEADLINE_PASSED at review_until', async () => {
