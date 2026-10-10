@@ -649,12 +649,22 @@ export interface GatewayInvoiceRepository {
    * the lease) keeps the schedule that commit wrote. Nothing else changes: not the payment,
    * not the attempt's evidence, and never `creation_sent_at` — a stamped send stays stamped,
    * so the next claim still calls it UNKNOWN. An unscheduled inquiry stays unscheduled.
+   *
+   * Codex #268 B: an INQUIRY row is pushed to `retryAt` only while it is exactly as the claim
+   * left it (`updated_at` still `claimedAt`, the claim's own stamp). A verified webhook, a
+   * receipt acknowledgement or an operator's recheck that landed after the claim wrote the
+   * row without touching its lease — and, because each of them only brings the schedule
+   * FORWARD (`LEAST`), usually without changing `next_inquiry_at` either. Such a row keeps
+   * the earlier of its schedule and `retryAt`, so the inquiry somebody asked for is not
+   * suppressed behind the back-off (possibly past the attempt's deadline). The CREATION
+   * lane does not read `claimedAt`.
    */
   backOffClaim(
     scope: TenantContext,
     lane: 'CREATION' | 'INQUIRY',
     paymentId: PaymentId,
     leaseUntil: Date,
+    claimedAt: Date,
     retryAt: Date,
     now: Date,
     tx?: unknown,

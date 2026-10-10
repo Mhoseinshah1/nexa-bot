@@ -836,6 +836,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     lane: 'CREATION' | 'INQUIRY',
     paymentId: PaymentId,
     leaseUntil: Date,
+    claimedAt: Date,
     retryAt: Date,
     now: Date,
     tx?: unknown,
@@ -858,7 +859,19 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
             .returning({ paymentId: gatewayInvoices.paymentId })
         : await this.exec(tx)
             .update(gatewayInvoices)
-            .set({ inquiryClaimedUntil: null, nextInquiryAt: retryAt, updatedAt: now })
+            .set({
+              inquiryClaimedUntil: null,
+              /*
+               * Codex #268 B: pushed back only while nobody has written the row since the
+               * claim stamped it. A hint that landed in between asked for an inquiry no later
+               * than now; it keeps the earlier time. (`updated_at` here is the row's value
+               * BEFORE this statement.)
+               */
+              nextInquiryAt: sql`CASE WHEN ${gatewayInvoices.updatedAt} = ${claimedAt}::timestamptz
+                THEN ${retryAt}::timestamptz
+                ELSE LEAST(${gatewayInvoices.nextInquiryAt}, ${retryAt}::timestamptz) END`,
+              updatedAt: now,
+            })
             .where(
               and(
                 eq(gatewayInvoices.tenantId, tenantId),
