@@ -322,6 +322,29 @@ describe('one campaign', () => {
     });
   });
 
+  it('will not confirm a wallet gift whose total the preview could not state — no 0 stands in (FIX-12)', async () => {
+    const api = stubApi([
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/preview`,
+        body: { ...preview, walletGift: { ...preview.walletGift, totalLiability: null } },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}/schedule`, body: detail({ state: 'SCHEDULED' }) },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+
+    await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
+    expect(screen.queryByText(/^0$/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('برای تأیید، تعداد را تایپ کنید'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByLabelText(/پیش‌نمایش را بررسی کردم/));
+    const confirm = screen.getByRole('button', { name: 'تأیید و زمان‌بندی' });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(posts(api, '/schedule')).toHaveLength(0);
+  });
+
   it('re-reads the campaign when its confirmation is refused as stale (409, review m5 X11)', async () => {
     const api = stubApi([
       { url: `/campaigns/${CAMPAIGN_ID}/preview`, body: preview },
