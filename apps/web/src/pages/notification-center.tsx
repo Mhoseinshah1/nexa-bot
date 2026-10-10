@@ -78,6 +78,7 @@ const TITLES: Readonly<Record<string, WebKey>> = {
   'payments.gateway_create_unknown': 'web.nc_t_create_unknown',
   'payments.gateway_receipt_unknown': 'web.nc_t_receipt_unknown',
   'payments.gateway_card_change_unknown': 'web.nc_t_card_change_unknown',
+  'payments.gateway_row_failing': 'web.nc_t_gateway_row_failing',
   'payments.gateway_late_completion': 'web.nc_t_late_completion',
   'payments.gateway_identity_mismatch': 'web.nc_t_identity_mismatch',
   'payments.gateway_charge_unmatched': 'web.nc_t_charge_unmatched',

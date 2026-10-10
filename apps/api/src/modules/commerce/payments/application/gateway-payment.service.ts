@@ -1,5 +1,8 @@
 import {
   GATEWAY_RETURN_PATH_PREFIX,
+  GATEWAY_ROW_FAILING_CODE,
+  GATEWAY_ROW_FAILURE_ALERT_AFTER,
+  GATEWAY_ROW_RECOVERED_CODE,
   PAYMENT_GATEWAY_DESCRIPTORS,
   TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS,
   TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS,
@@ -73,7 +76,10 @@ import {
   paymentLinkInterruptedFailure,
   type PaymentLinkFailure,
 } from './payment-link-failure.js';
-import { recordQuietly } from '../../../platform/opslog/application/error-events.js';
+import {
+  recordQuietly,
+  sanitizedErrorCode,
+} from '../../../platform/opslog/application/error-events.js';
 
 /**
  * Operational codes this lane raises. Declared beside their producer, and each is part
@@ -215,6 +221,21 @@ export function rowFailureRetryAt(now: Date, since: Date | null): Date {
  */
 export const GATEWAY_ROW_FAILED_MESSAGE =
   'gateway payment row failed; backed off, and the pass continues with the next row';
+
+/**
+ * FIX10 (audit P1-b on #268): the subject of a failing row's operator condition
+ * (`payments.gateway_row_failing`) — one per invoice row, one per receipt submission — so
+ * the condition is opened, counted and closed for that row and no other.
+ */
+export function gatewayRowConditionKey(
+  row:
+    | { readonly kind: 'INVOICE'; readonly paymentId: string }
+    | { readonly kind: 'RECEIPT'; readonly submissionId: string },
+): string {
+  return row.kind === 'INVOICE'
+    ? `${GATEWAY_ROW_FAILING_CODE}:invoice:${row.paymentId}`
+    : `${GATEWAY_ROW_FAILING_CODE}:receipt:${row.submissionId}`;
+}
 
 /**
  * What a log line may say about an exception: its class, a NexaError's machine code and a
@@ -653,6 +674,11 @@ export class GatewayPaymentService {
         await this.releaseUnreached(scope, 'CREATION', creating.slice(index + 1), creationLease);
         break;
       }
+      await this.rowSucceeded(scope, {
+        kind: 'INVOICE',
+        paymentId: claimed.invoice.paymentId,
+        rowFailures: claimed.invoice.rowFailures,
+      });
       report[result] += 1;
       // R2: the invoice is ready, refused or unknown — the waiting message shows it now.
       if (result !== 'createDeferred') await this.refreshScreens(scope, claimed.invoice.paymentId);
@@ -747,6 +773,11 @@ export class GatewayPaymentService {
         await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
         break;
       }
+      await this.rowSucceeded(scope, {
+        kind: 'INVOICE',
+        paymentId: claimed.invoice.paymentId,
+        rowFailures: claimed.invoice.rowFailures,
+      });
       report.inquired += 1;
       if (result === 'SETTLED') report.settled += 1;
       if (result === 'UNSUCCESSFUL') report.unsuccessful += 1;
@@ -803,12 +834,18 @@ export class GatewayPaymentService {
     paymentId: string,
     provider: PaymentGatewayProvider | null,
     error: unknown,
-    backOff: (at: Date) => Promise<unknown>,
+    backOff: (at: Date) => Promise<number | null | false>,
+    submissionId?: string,
   ): Promise<void> {
     const at = this.deps.clock.now();
     let backedOff = false;
+    // FIX10 (audit P1-b on #268): the row's durable count of consecutive thrown claims, as
+    // the back-off that advanced it returned it; null when nothing was counted.
+    let failures: number | null = null;
     try {
-      backedOff = (await backOff(at)) !== false;
+      const counted = await backOff(at);
+      backedOff = counted !== false && counted !== null;
+      failures = typeof counted === 'number' ? counted : null;
     } catch (backOffError: unknown) {
       this.deps.logger.error(
         { tenantId: String(scope.tenantId), lane, paymentId, ...errorFacts(backOffError) },
@@ -822,10 +859,103 @@ export class GatewayPaymentService {
         paymentId,
         provider,
         backedOff,
+        failures,
         ...errorFacts(error),
       },
       GATEWAY_ROW_FAILED_MESSAGE,
     );
+    /*
+     * FIX10 (audit P1-b on #268): isolating the row means nothing else reports it — it never
+     * reaches a settlement, an inquiry error or a lane failure — so a row that keeps
+     * throwing (possibly an approval nobody is settling) opens ONE operator condition,
+     * deduplicated per row, from the durable count. Every later failure lands on the same
+     * open row as an occurrence; the row's next clean pass closes it (`rowSucceeded`).
+     */
+    if (failures === null || failures < GATEWAY_ROW_FAILURE_ALERT_AFTER) return;
+    const facts = errorFacts(error);
+    await recordQuietly(
+      this.deps.opsLog,
+      scope,
+      {
+        code: GATEWAY_ROW_FAILING_CODE,
+        severity: 'ERROR',
+        message:
+          'A payment gateway row keeps failing in the worker and is retried with a back-off. ' +
+          'Nothing was decided about the payment; check the worker log for this payment id.',
+        dedupeKey: gatewayRowConditionKey(
+          submissionId === undefined
+            ? { kind: 'INVOICE', paymentId }
+            : { kind: 'RECEIPT', submissionId },
+        ),
+        context: {
+          paymentId,
+          ...(submissionId === undefined ? {} : { submissionId }),
+          provider,
+          lane,
+          failures,
+          error: facts.error,
+          errorCode: facts.code === null ? null : sanitizedErrorCode(facts.code),
+        },
+      },
+      this.deps.logger,
+    );
+  }
+
+  /**
+   * FIX10 (audit P1-b on #268): a row that had thrown before processed without throwing.
+   * Its count goes back to zero and, when its condition is open, the condition is closed.
+   * Only a row that HAD failed is written — a clean row costs nothing — and nothing here
+   * can fail the lane: the row's own outcome has already committed.
+   */
+  private async rowSucceeded(
+    scope: TenantContext,
+    row:
+      | { readonly kind: 'INVOICE'; readonly paymentId: PaymentId; readonly rowFailures: number }
+      | {
+          readonly kind: 'RECEIPT';
+          readonly paymentId: PaymentId;
+          readonly submissionId: string;
+          readonly rowFailures: number;
+        },
+  ): Promise<void> {
+    if (row.rowFailures === 0) return;
+    const cards = this.deps.cardTransfer;
+    try {
+      const cleared =
+        row.kind === 'INVOICE'
+          ? await this.deps.uow.run(scope, (tx) =>
+              this.deps.invoices.clearRowFailures(scope, row.paymentId, tx),
+            )
+          : cards !== undefined &&
+            (await this.deps.uow.run(scope, (tx) =>
+              cards.clearSubmissionFailures(scope, row.submissionId, tx),
+            ));
+      if (!cleared) return;
+      const dedupeKey = gatewayRowConditionKey(row);
+      if (!(await this.deps.conditions.conditionIsOpen(scope, dedupeKey))) return;
+      await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        {
+          code: GATEWAY_ROW_RECOVERED_CODE,
+          severity: 'INFO',
+          message: 'The payment gateway row is processed again.',
+          context: {
+            paymentId: row.paymentId,
+            ...(row.kind === 'RECEIPT' ? { submissionId: row.submissionId } : {}),
+          },
+          recoversCode: GATEWAY_ROW_FAILING_CODE,
+          recoversDedupeKey: dedupeKey,
+        },
+        this.deps.logger,
+      );
+    } catch (error: unknown) {
+      // The count stays; the next clean pass clears it and closes the condition then.
+      this.deps.logger.error(
+        { tenantId: String(scope.tenantId), paymentId: row.paymentId, ...errorFacts(error) },
+        'gateway payment row recovered, but its failure count could not be cleared',
+      );
+    }
   }
 
   /**
@@ -2362,17 +2492,24 @@ export class GatewayPaymentService {
       } catch (error: unknown) {
         // FIX10 BUG-1: backed off on its own lease; a stamped upload stays UNKNOWN.
         report.rowFailures += 1;
-        await this.rowFailed(scope, 'RECEIPT', row.row.paymentId, null, error, (at) =>
-          this.deps.uow.run(scope, (tx) =>
-            cards.backOffSubmission(
-              scope,
-              row.row.id,
-              lease,
-              rowFailureRetryAt(at, row.row.createdAt),
-              at,
-              tx,
+        await this.rowFailed(
+          scope,
+          'RECEIPT',
+          row.row.paymentId,
+          null,
+          error,
+          (at) =>
+            this.deps.uow.run(scope, (tx) =>
+              cards.backOffSubmission(
+                scope,
+                row.row.id,
+                lease,
+                rowFailureRetryAt(at, row.row.createdAt),
+                at,
+                tx,
+              ),
             ),
-          ),
+          row.row.id,
         );
         continue;
       }
@@ -2387,6 +2524,12 @@ export class GatewayPaymentService {
         );
         return { done, budgetExhausted: true };
       }
+      await this.rowSucceeded(scope, {
+        kind: 'RECEIPT',
+        paymentId: row.row.paymentId,
+        submissionId: row.row.id,
+        rowFailures: row.row.rowFailures,
+      });
       done += 1;
       await this.refreshScreens(scope, row.row.paymentId);
     }
