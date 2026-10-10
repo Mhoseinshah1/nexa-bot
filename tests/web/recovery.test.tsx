@@ -579,6 +579,39 @@ describe('the recovery page', () => {
       );
       expect(await screen.findByText(/کیت بازیابی همان سرور را/)).toBeInTheDocument();
     });
+
+    it('says a failure the advice did not cover in words too, with the code beside it (C5.9)', async () => {
+      stubApi([
+        ...routes(),
+        { url: `${API_PREFIX}${RECOVERY_ROUTES.upload}`, body: { recovery: recovery() } },
+        {
+          url: `${API_PREFIX}${RECOVERY_ROUTES.detail(RECOVERY_ID)}/verify`,
+          body: {
+            recovery: recovery({
+              state: 'FAILED',
+              stage: 'CLEANUP',
+              failureCode: 'recovery.checksum_mismatch',
+              finishedAt: '2026-09-09T03:01:00.000Z',
+            }),
+          },
+        },
+      ]);
+      renderPage(<RecoveryPage route={route} permissions={ALL} />);
+      fireEvent.change(await screen.findByLabelText('انتخاب فایل'), {
+        target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxb')] },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
+      );
+      // AEAD already proved the ciphertext intact, so the words must not blame the transfer
+      // or suggest re-uploading the same file; they send the operator to another backup.
+      const banner = await screen.findByText(/رمزگشایی آن سالم بود/);
+      expect(banner.textContent).toContain('فایل پشتیبان سالم دیگری');
+      expect(banner.textContent).not.toContain('انتقال');
+      // The code stays, for the server log, but is no longer the whole answer.
+      expect(screen.getAllByText('recovery.checksum_mismatch').length).toBeGreaterThan(0);
+    });
   });
 
   it('says upload is disabled when the server says so', async () => {
@@ -586,6 +619,39 @@ describe('the recovery page', () => {
     renderPage(<RecoveryPage route={route} permissions={ALL} />);
     expect(await screen.findByText('بارگذاری روی این نصب غیرفعال است.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'بارگذاری' })).toBeNull();
+  });
+
+  it('says a refused upload without promising a row, and re-reads the capabilities', async () => {
+    const api = stubApi([
+      ...routes(),
+      {
+        url: `${API_PREFIX}${RECOVERY_ROUTES.upload}`,
+        status: 400,
+        body: {
+          error: {
+            kind: 'validation',
+            code: 'recovery.refused',
+            message: 'Uploading a backup archive is disabled on this installation.',
+            correlationId: 'c7',
+          },
+        },
+      },
+    ]);
+    renderPage(<RecoveryPage route={route} permissions={ALL} />);
+    fireEvent.change(await screen.findByLabelText('انتخاب فایل'), {
+      target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxb')] },
+    });
+    const capabilityReads = () =>
+      api.calls.filter((call) => call.url.includes(RECOVERY_ROUTES.capabilities)).length;
+    const before = capabilityReads();
+    fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+    const banner = await screen.findByText(/سرور این درخواست بازیابی را نپذیرفت/);
+    expect(banner.textContent).toContain('صفحه را تازه کنید');
+    // Uploads disabled is refused before any recovery row exists: the words must not
+    // say the reason is recorded on one.
+    expect(banner.textContent).not.toMatch(/ثبت شده است/);
+    expect(document.body.textContent).not.toContain('disabled on this installation');
+    await waitFor(() => expect(capabilityReads()).toBeGreaterThan(before));
   });
 
   it('shows the quiesce banner and disables the run button while a recovery holds the installation', async () => {
@@ -597,7 +663,7 @@ describe('the recovery page', () => {
     expect(await screen.findByRole('button', { name: 'تهیه بکاپ جدید' })).toBeDisabled();
   });
 
-  it('renders a server refusal as its message, never as a raw exception', async () => {
+  it('renders a server refusal by its code in Persian — never the server’s English, never a raw exception', async () => {
     stubApi([
       ...routes(),
       {
@@ -607,7 +673,7 @@ describe('the recovery page', () => {
           error: {
             kind: 'conflict',
             code: 'recovery.quiesced',
-            message: 'این نصب در حال بازیابی است.',
+            message: 'The installation is refusing new durable writes while a recovery runs.',
             correlationId: 'c9',
           },
         },
@@ -615,7 +681,11 @@ describe('the recovery page', () => {
     ]);
     renderPage(<RecoveryPage route={route} permissions={ALL} />);
     fireEvent.click(await screen.findByRole('button', { name: 'تهیه بکاپ جدید' }));
-    expect(await screen.findByText('این نصب در حال بازیابی است.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('نصب در حال بازیابی است و تغییرات را نمی‌پذیرد.'),
+    ).toBeInTheDocument();
+    // The server's message is written for its log, in English; the page says the code's words.
+    expect(document.body.textContent).not.toContain('durable writes');
     // No stack, no code, no `[object Object]`.
     expect(document.body.textContent).not.toContain('TypeError');
     expect(document.body.textContent).not.toContain('at Object');
