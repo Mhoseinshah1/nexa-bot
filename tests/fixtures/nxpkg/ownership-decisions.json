@@ -1,0 +1,237 @@
+{
+  "admin_attestation_is_proof": false,
+  "audit": {
+    "events": 6,
+    "head": "b23de2348d7bb9cc71576381db20dedc8ead8af58cc7b2f47938ce844c89eec0",
+    "ok": true,
+    "reason": null
+  },
+  "authentication": {
+    "alg": "HMAC-SHA256",
+    "key": "HKDF-SHA256(package secret, info=nxpkg-v1/ownership-decisions)",
+    "mac": "yippMHxOYvc+UMXq0v1oHpvDS3FCD6VfOOeUj6BDtV0="
+  },
+  "entries": [
+    {
+      "basis": "ADMIN_ATTESTATION",
+      "batch_id": "b-5e23301471fae437",
+      "binding": "cbdd38e19d7e4add3343070b3320582ed7e7ed26c3bc94c0fd6c87b7fa7d8fb0",
+      "class": "ADMIN_APPROVED_UNVERIFIED",
+      "invoice_key": "100000000000000",
+      "key": "legacy:service-ownership:100000000000000",
+      "review_state": "ADMIN_APPROVED_UNVERIFIED",
+      "stale": false
+    },
+    {
+      "basis": "NONE",
+      "batch_id": null,
+      "binding": "f6526c8979964e6cf3b741fdeaa67533c8ad9d7d391da0e50a09325b546b5276",
+      "class": "PENDING",
+      "invoice_key": "100000100000001",
+      "key": "legacy:service-ownership:100000100000001",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "EVIDENCE",
+      "batch_id": null,
+      "binding": "1a65b66575ee7e25baf8af818b1b467789b9eaad0eb4216494db8b31e0332037",
+      "class": "PROVEN",
+      "invoice_key": "100000200000002",
+      "key": "legacy:service-ownership:100000200000002",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "EVIDENCE",
+      "batch_id": null,
+      "binding": "3153ebf97b28bec1282168b0225a65b0537fd3bfbd7c297d2b9fa65402015519",
+      "class": "PROVEN",
+      "invoice_key": "100000300000003",
+      "key": "legacy:service-ownership:100000300000003",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "EVIDENCE",
+      "batch_id": null,
+      "binding": "8a6d1e0cb432c53ee70ffa639a8d9758c10ea112901240a9e6c6f215a756a419",
+      "class": "PROVEN",
+      "invoice_key": "100000400000004",
+      "key": "legacy:service-ownership:100000400000004",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "SYSTEM_QUARANTINE",
+      "batch_id": null,
+      "binding": "5b235b9cd833ef8a672082e1c5d01014dac2f2ad2ff80a4918428f81e4189526",
+      "class": "QUARANTINED",
+      "invoice_key": "100000500000005",
+      "key": "legacy:service-ownership:100000500000005",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "EVIDENCE",
+      "batch_id": null,
+      "binding": "9e7cf2628d1440176e6299dd0b15e7221b5a9d2ff845160b3cce95172c50a88e",
+      "class": "PROVEN",
+      "invoice_key": "100000600000006",
+      "key": "legacy:service-ownership:100000600000006",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "ADMIN_ATTESTATION",
+      "batch_id": "b-5e23301471fae437",
+      "binding": "37fd653cb53c2485e5dc5c82de4bf72a256df6354f053800d01762eb50e8cfc3",
+      "class": "ADMIN_APPROVED_UNVERIFIED",
+      "invoice_key": "100000700000007",
+      "key": "legacy:service-ownership:100000700000007",
+      "review_state": "ADMIN_APPROVED_UNVERIFIED",
+      "stale": false
+    },
+    {
+      "basis": "ADMIN_ATTESTATION",
+      "batch_id": "b-5e23301471fae437",
+      "binding": "b7da0ab3ac9636ffc3b376052bffabda402310e5367c7b973c9562b95ff04169",
+      "class": "ADMIN_APPROVED_UNVERIFIED",
+      "invoice_key": "100000800000008",
+      "key": "legacy:service-ownership:100000800000008",
+      "review_state": "ADMIN_APPROVED_UNVERIFIED",
+      "stale": false
+    },
+    {
+      "basis": "NONE",
+      "batch_id": null,
+      "binding": "ff69747a1e0b481b73b3c3a00316c80ccf17a00576f374da6247b53f8c1ab719",
+      "class": "PENDING",
+      "invoice_key": "100000900000009",
+      "key": "legacy:service-ownership:100000900000009",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "ADMIN_ATTESTATION",
+      "batch_id": "b-5e23301471fae437",
+      "binding": "685c2c4cf3a52796a71892de5818539496141bc0126ddf810728a33304f79db6",
+      "class": "ADMIN_APPROVED_UNVERIFIED",
+      "invoice_key": "10000100000000a",
+      "key": "legacy:service-ownership:10000100000000a",
+      "review_state": "ADMIN_APPROVED_UNVERIFIED",
+      "stale": false
+    },
+    {
+      "basis": "EVIDENCE",
+      "batch_id": null,
+      "binding": "28303fbc4fa9fad4aff45d37a81b7770b4a43091468f20ee8bb38a67125dc786",
+      "class": "PROVEN",
+      "invoice_key": "10000110000000b",
+      "key": "legacy:service-ownership:10000110000000b",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "EVIDENCE",
+      "batch_id": null,
+      "binding": "df32b32513f5b3d493b19cf347c7db638abaa8c5306626a9f95cea20a0bcfa7a",
+      "class": "PROVEN",
+      "invoice_key": "9999995abcd",
+      "key": "legacy:service-ownership:9999995abcd",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "EVIDENCE",
+      "batch_id": null,
+      "binding": "ff3d32aae95a7f33d93aa7953e6ab1d2c55b72e861e993bc922713b93c0b1fdb",
+      "class": "PROVEN",
+      "invoice_key": "9999996abcd",
+      "key": "legacy:service-ownership:9999996abcd",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "SYSTEM_QUARANTINE",
+      "batch_id": null,
+      "binding": "8580db8e414a8b873918932b6d8e3dd9b340e4f2299fab9972792f5146cd7e92",
+      "class": "QUARANTINED",
+      "invoice_key": "9999997abcd",
+      "key": "legacy:service-ownership:9999997abcd",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "SYSTEM_QUARANTINE",
+      "batch_id": null,
+      "binding": "df41bf4b0c7e6db971eaeeae62fdf58719e9d4acb407b7eb32f2420921dc94d8",
+      "class": "QUARANTINED",
+      "invoice_key": "9999998abcd",
+      "key": "legacy:service-ownership:9999998abcd",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "SYSTEM_QUARANTINE",
+      "batch_id": null,
+      "binding": "7132a985d621ec2db5b846cc42b5e1ead45a7d4d15149f8c19beff4719a37a49",
+      "class": "QUARANTINED",
+      "invoice_key": "9999999abcd",
+      "key": "legacy:service-ownership:9999999abcd",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "SYSTEM_QUARANTINE",
+      "batch_id": null,
+      "binding": "eb58c443eb96b07da949f83b255f3e66e3718e302f58a6b7d74a54d56be8c6a8",
+      "class": "QUARANTINED",
+      "invoice_key": null,
+      "key": "legacy:service-ownership:unlinked:svc-username:5c0ec97d6d98a916e63a4887",
+      "review_state": "PENDING",
+      "stale": false
+    },
+    {
+      "basis": "SYSTEM_QUARANTINE",
+      "batch_id": null,
+      "binding": "852653eabf5a53639d9953341c6419bb7add6c8187f52b55acbd03b43b2e2359",
+      "class": "QUARANTINED",
+      "invoice_key": null,
+      "key": "legacy:service-ownership:unlinked:svc-username:68e9779a29fe006f8a60182c",
+      "review_state": "PENDING",
+      "stale": false
+    }
+  ],
+  "entries_digest": "9beb9b8ce001f04aeed2e3adfe80155d0e1eb6e884034a4dd3cf5e54303324b3",
+  "import_id": "43133e1e5b054e73d2b7182455ff7eea",
+  "matches_seal": true,
+  "package_header_sha256": "379911684d560a436afe83f5fd7a82b92dbfbc92e9886dcda44b8d6c00b58cbf",
+  "review_version": "1.0.0",
+  "rules": {
+    "approve_target": "invoice.id_user only",
+    "serious_reasons": [
+      "OWNERSHIP_MULTIPLE_CLAIMANTS",
+      "OWNERSHIP_NO_INVOICE_FOR_USERNAME",
+      "OWNERSHIP_OWNER_ID_INVALID",
+      "OWNERSHIP_OWNER_NOT_IN_USER_TABLE",
+      "OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE",
+      "OWNERSHIP_TRANSFER_TARGET_INVALID",
+      "OWNERSHIP_USERNAME_SHARED_BY_INVOICES"
+    ]
+  },
+  "schema": "m2n.ownership_decisions.v1",
+  "sealed": true,
+  "sealed_at": 1791663970,
+  "sealed_digest": "9beb9b8ce001f04aeed2e3adfe80155d0e1eb6e884034a4dd3cf5e54303324b3",
+  "sealed_divergence": 0,
+  "source_fingerprint": "701cba5b155f00323e98acdddf9bfa4dd66786cfe0159abae9220c78fea65aef",
+  "summary": {
+    "ADMIN_APPROVED_UNVERIFIED": 4,
+    "PENDING": 2,
+    "PROVEN": 7,
+    "QUARANTINED": 6,
+    "REJECTED": 0,
+    "items": 19
+  }
+}
