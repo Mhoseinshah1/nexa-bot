@@ -1053,8 +1053,9 @@ describe('Telegram Stars (Package A)', () => {
         const answer = await successfulPayment(invoice.provider_order_id, stars, 'c3-charge');
         // Recorded, so Telegram is not asked to deliver it again.
         expect(answer.statusCode).toBeLessThan(300);
-        // The pass fails, as the loop's `tick` expects one to; the row must survive it.
-        await expect(worker()).rejects.toThrow();
+        // The row fails — isolated and counted since FIX10 BUG-1, never the whole pass —
+        // and the row must survive it.
+        expect((await worker()).rowFailures).toBe(1);
         const stranded = await rows<{ next_inquiry_at: Date | null; outcome: string | null }>(
           sql`SELECT next_inquiry_at, outcome FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
         );
