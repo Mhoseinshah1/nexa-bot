@@ -57,7 +57,12 @@ export const LEGACY_MIGRATION_ROUTES = {
  *   what finishes them.
  */
 export const LEGACY_MIGRATION_COMMAND_STATES = {
-  setKey: ['UPLOADED'],
+  /**
+   * The key is given once after the upload, and AGAIN after the `migration` role erased an
+   * idle one (`LEGACY_MIGRATION_KEY_IDLE_MS`) from a VERIFIED or DRY_RUN_DONE import — the
+   * server accepts it there only while the import holds no key.
+   */
+  setKey: ['UPLOADED', 'VERIFIED', 'DRY_RUN_DONE'],
   setPanelBindings: ['UPLOADED', 'VERIFIED', 'DRY_RUN_DONE'],
   uploadDecisions: ['UPLOADED', 'VERIFIED', 'DRY_RUN_DONE'],
   requestDryRun: ['VERIFIED', 'DRY_RUN_DONE'],
@@ -306,6 +311,12 @@ export const legacyMigrationDryRunReportSchema = z.object({
   ownership: legacyMigrationOwnershipSummarySchema,
   /** What a cutover approval of this package binds (required on a production-like target). */
   cutover: legacyMigrationCutoverValuesSchema,
+  /**
+   * The importer's digest of the plan tallies this dry run computed (`planTalliesDigest`). The
+   * apply gives the APPROVED value to the importer, which refuses to start on a plan whose
+   * tallies differ (`DRY_RUN_MISMATCH`). Null only when the importer reported none.
+   */
+  planTalliesDigest: hex64.nullable(),
 });
 export type LegacyMigrationDryRunReport = z.infer<typeof legacyMigrationDryRunReportSchema>;
 
@@ -316,6 +327,8 @@ export const legacyMigrationApplyReportSchema = z.object({
   /** The final report v2 `verdict.holds`. */
   reportHolds: z.boolean(),
   failedInvariants: z.array(z.string()),
+  /** The final report v2 `verdict.failedSections`: every section whose own checks failed. */
+  failedSections: z.array(z.string()),
   sections: z.array(legacyMigrationSectionCountsSchema),
   history: z.array(legacyMigrationCodeCountSchema),
 });
@@ -369,6 +382,12 @@ export const legacyMigrationProgressSchema = z.object({
   phase: z.enum(LEGACY_MIGRATION_PHASES).nullable(),
   /** How many times the apply was started or resumed (a crash resumes, never fails). */
   applyAttempts: count,
+  /**
+   * How many times VERIFY and the DRY RUN were started (a crash runs them again, read-only);
+   * bounded like the apply, so an error nobody classified cannot loop for ever.
+   */
+  verifyAttempts: count,
+  dryRunAttempts: count,
   importerVerdict: z.string().nullable(),
   reconcileVerdict: z.enum(['RECONCILED', 'DISCREPANCY']).nullable(),
   /** Archived history records per record type (design §5). */
