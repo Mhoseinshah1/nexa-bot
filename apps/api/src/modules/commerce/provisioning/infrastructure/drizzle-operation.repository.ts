@@ -27,6 +27,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { provisioningOperations, services } from '../../../../infrastructure/persistence/schema.js';
+import { redactStoredText } from '../../../../infrastructure/redaction.js';
 import type { OperationDraft, OperationRecord, OperationRepository } from '../application/ports.js';
 import { BACKOFF_BASE_MS, RECONCILE_ROUNDS } from '../application/provision-executor.js';
 
@@ -886,7 +887,11 @@ export class DrizzleOperationRepository implements OperationRepository {
           ? {}
           : { providerReference: result.providerReference }),
         ...(result.failureKind === undefined ? {} : { failureKind: result.failureKind }),
-        ...(result.failureMessage === undefined ? {} : { failureMessage: result.failureMessage }),
+        // Redacted by content (FIX-04 S4): a failure note can carry a panel's
+        // own error text, and the Web Admin reads this column back.
+        ...(result.failureMessage === undefined
+          ? {}
+          : { failureMessage: redactStoredText(result.failureMessage) }),
         ...(result.nextAttemptAt === undefined ? {} : { nextAttemptAt: result.nextAttemptAt }),
         ...(result.createAcceptedAt === undefined
           ? {}
@@ -964,7 +969,7 @@ export class DrizzleOperationRepository implements OperationRepository {
         state: 'PLANNED',
         attempts: sql`GREATEST(${provisioningOperations.attempts} - 1, 0)`,
         nextAttemptAt: retryAt,
-        failureMessage: note,
+        failureMessage: redactStoredText(note),
         claimedBy: null,
         leaseUntil: null,
         callStartedAt: null,
@@ -1458,7 +1463,7 @@ export class DrizzleOperationRepository implements OperationRepository {
       .update(provisioningOperations)
       .set({
         nextAttemptAt,
-        failureMessage: note,
+        failureMessage: redactStoredText(note),
         ...(releaseRead
           ? {
               verificationAttempts: sql`GREATEST(${provisioningOperations.verificationAttempts} - 1, 0)`,

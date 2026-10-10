@@ -18,6 +18,7 @@ import type {
   Executor,
 } from '../../../../infrastructure/persistence/database.js';
 import { withinTransaction } from '../../../../infrastructure/transaction-boundary.js';
+import { redactStoredText } from '../../../../infrastructure/redaction.js';
 import {
   UNGATED,
   type InstallationWriteGate,
@@ -343,7 +344,9 @@ export class OutboxRelay {
                 .update(outboxMessages)
                 .set({
                   attempts: sql`${outboxMessages.attempts} + 1`,
-                  lastError: message.slice(0, 2000),
+                  // Redacted BEFORE the cut (FIX-04 S4), so a slice cannot leave
+                  // half a token that the pattern no longer recognises.
+                  lastError: redactStoredText(message).slice(0, 2000),
                   // Its own row only (WP20): the rest of the batch and the queue behind
                   // it are not held up. Null once exhausted, since nothing will retry it.
                   nextAttemptAt: markExhausted
