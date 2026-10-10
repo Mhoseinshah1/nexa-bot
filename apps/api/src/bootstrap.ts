@@ -22,6 +22,7 @@ import {
 } from './surfaces/gateway/webhook.controller.js';
 import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
+import { developmentExposureWarnings } from './infrastructure/config/exposure.js';
 import { trustProxyOption } from './infrastructure/trusted-proxy.js';
 import type { AppConfig } from './infrastructure/config/config.schema.js';
 
@@ -154,6 +155,12 @@ export interface ApiApp {
 export async function createApiApp(config: AppConfig = loadConfig()): Promise<ApiApp> {
   const container = createContainer(config, 'api');
   await resolveInstallationTenant(container);
+
+  // FIX-04 (S2): a development process on a configuration that looks public is
+  // allowed to start — staging hosts have been run that way — but never quietly.
+  for (const warning of developmentExposureWarnings(config)) {
+    container.logger.warn({ env: config.NODE_ENV }, warning);
+  }
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule.forContainer(container),

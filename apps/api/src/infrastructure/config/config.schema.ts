@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
+import { publicExposureSignals } from './exposure.js';
 import {
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
@@ -233,6 +234,15 @@ export const configSchema = z
           .map((origin) => origin.trim())
           .filter((origin) => origin.length > 0),
       ),
+
+    /**
+     * FIX-04 (S2): the unauthenticated `POST /api/admin/v1/system/ping` — a write into
+     * append-only tables with no session — is registered only when this is true AND
+     * NODE_ENV is development or test (`infrastructure/config/exposure.ts`). It used to
+     * follow NODE_ENV alone, so a host left on development served it to the internet.
+     * Refused in production and next to a public admin origin or a reverse proxy.
+     */
+    DEV_SYSTEM_ENDPOINT_ENABLED: booleanish.default(false),
 
     TELEGRAM_WEBHOOK_ENABLED: booleanish.default(false),
     // The route itself is fixed at /telegram/webhook. A configurable path was
@@ -1046,6 +1056,28 @@ export const configSchema = z
             'TELEGRAM_API_BASE_URL must use https in production. The bot token is part of every ' +
             'request path, so an insecure base URL publishes the credential on the wire. A local ' +
             'http stub is permitted outside production.',
+        });
+      }
+    }
+
+    if (config.DEV_SYSTEM_ENDPOINT_ENABLED) {
+      // Refused rather than ignored. The route is not registered in production
+      // either way; a flag that silently does nothing is a flag somebody copies
+      // to the next host believing it does something.
+      // The webhook is a warning signal, not a refusal: a local process with a
+      // tunnel for Telegram is a normal development set-up.
+      const exposure = publicExposureSignals(config, { webhook: false });
+      if (config.NODE_ENV === 'production' || exposure.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['DEV_SYSTEM_ENDPOINT_ENABLED'],
+          message:
+            'DEV_SYSTEM_ENDPOINT_ENABLED registers an UNAUTHENTICATED write endpoint and is ' +
+            'permitted only on a local development or test process. ' +
+            (config.NODE_ENV === 'production'
+              ? 'NODE_ENV is production.'
+              : `This configuration looks public: ${exposure.join('; ')}.`) +
+            ' Remove the setting.',
         });
       }
     }
