@@ -2357,6 +2357,37 @@ it; the other eighteen (the gateway status and review messages, `receipt_prompt`
   rather than sending it; the operational event itself stays in the log and in «مرکز
   اعلان‌ها».
 
+### What an update and a rollback leave as text: the bot copy of batch 2026-10-10 (FIX-07)
+
+FIX-07 rewrites Persian DEFAULTS (`docs/text-audit-2026-10-10.md`). It needs no migration and
+rewrites no stored row. A default ships inside the image, so during the update an old replica
+sends its old default and a new one the new default, and after a rollback every replica sends
+the old default again; a tenant's override of a changed key keeps the tenant's wording on
+both releases. Two things are not defaults only:
+
+- **`bot.admin.app_video_prompt` declares a new optional `{minutes}`** (the video request's
+  window, from `CLIENT_APP_VIDEO_CAPTURE_TTL_MS`). An override saved on the new release that
+  uses it is shown with `{minutes}` literal by an OLD replica during the update and by every
+  replica after a rollback. Administrators read it, not customers. Before rolling back, list
+  them:
+
+  ```bash
+  docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+    exec -T postgres psql -U nexa -d nexa -c \
+    "SELECT tenant_id, template_key FROM template_overrides
+      WHERE template_key = 'bot.admin.app_video_prompt' AND body LIKE '%{minutes}%'"
+  ```
+
+  and either revert the key to the default from the texts page or remove the placeholder.
+
+- **The service status markers** for an expired, an exhausted and a switched-off service
+  are now three slots (`date`, `traffic`, `inactive`) instead of one (`inactive`), chosen in
+  code (`SERVICE_STATUS_PRESENTATION`). No slot is new, so nothing renders literally on
+  either release. A tenant override of `bot.service.state_expired` or `state_exhausted`
+  that still begins with `{icon:inactive}` shows 🔴 on the card while the list button shows
+  the new marker; revert the override to the default to match them. After a rollback the
+  old code draws `inactive` again for all three.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

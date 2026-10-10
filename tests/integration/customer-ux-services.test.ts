@@ -344,7 +344,7 @@ describe('a customer looks after the services they bought', () => {
         style: 'success',
       });
       expect(cellOf(lastMarkup(), lapsed.id)).toMatchObject({
-        text: `🔴 ${lapsed.username}`,
+        text: `📅 ${lapsed.username}`,
         style: 'danger',
       });
       expect(cellOf(lastMarkup(), used.id)).toMatchObject({ style: 'success' });
@@ -352,7 +352,7 @@ describe('a customer looks after the services they bought', () => {
 
       // The lapsed card says so in red too, from the same table.
       await handle(tap(`sv:${lapsed.id}`));
-      expect(lastDrawnText()).toContain('📊وضعیت سرویس: 🔴 منقضی شده');
+      expect(lastDrawnText()).toContain('وضعیت سرویس: 📅 منقضی شده');
 
       // A refresh reads the panel: the allowance is used up. Card and list turn red.
       const user = panel.users.get(used.username);
@@ -362,10 +362,10 @@ describe('a customer looks after the services they bought', () => {
         sql`UPDATE services SET usage_synced_at = now() - interval '10 minutes' WHERE id = ${used.id}`,
       );
       await handle(tap(`rs:${used.id}`));
-      expect(lastDrawnText()).toContain('📊وضعیت سرویس: 🔴 حجم تمام شده');
+      expect(lastDrawnText()).toContain('وضعیت سرویس: 📊 حجم تمام شده');
       await handle(text('/services'));
       expect(cellOf(lastMarkup(), used.id)).toMatchObject({
-        text: `🔴 ${used.username}`,
+        text: `📊 ${used.username}`,
         style: 'danger',
       });
       expect((await services.findById(tenantA, used.id))?.state).toBe('ACTIVE');
@@ -513,14 +513,14 @@ describe('a customer looks after the services they bought', () => {
       const result = await handle(tap(`s:${service.id}`));
       expect(result.replyKey).toBe('bot.service.card');
       const body = lastText();
-      expect(body).toContain('📊وضعیت سرویس: 🟢 فعال');
-      expect(body).toContain(`👤 نام سرویس: ${service.username}`);
-      expect(body).toContain('🌍 موقعیت سرویس: 🚀 مولتی لوکیشن');
+      expect(body).toContain('وضعیت سرویس: 🟢 فعال');
+      expect(body).toContain(`👤 نام کاربری: ${service.username}`);
+      expect(body).toContain('🌍 موقعیت سرویس: مولتی لوکیشن');
       expect(body).toContain('📦 نام محصول: پلن card');
-      expect(body).toContain('🟩 ترافیک: 50 گیگابایت');
+      expect(body).toContain('🗂 حجم کل: 50 گیگابایت');
       // The create returned the panel's figure, so usage is KNOWN (0), not unread.
       expect(body).toContain('📥 حجم مصرفی: 0 گیگابایت');
-      expect(body).toContain('💢 حجم باقی مانده: 50 گیگابایت (100%)');
+      expect(body).toContain('💢 حجم باقی‌مانده: 50 گیگابایت (100%)');
       expect(body).toMatch(/📅 تاریخ اتمام: 14\d\d\/\d\d\/\d\d \d\d:\d\d \(30 روز\)/u);
       expect(body).toContain('📶 آخرین زمان اتصال شما: در دسترس نیست');
       expect(body).not.toContain('متصل نشده');
@@ -547,7 +547,7 @@ describe('a customer looks after the services they bought', () => {
         '🔗 لینک اشتراک',
         '📝 تغییر یادداشت',
         '💊 تمدید سرویس',
-        '❌ خاموش کردن اکانت',
+        '❌ خاموش کردن سرویس',
         '🏠 بازگشت به لیست سرویس ها',
       ]) {
         expect(markup, label).toContain(label);
@@ -573,9 +573,9 @@ describe('a customer looks after the services they bought', () => {
       panel.forget(service.username);
       await handle(tap(`s:${service.id}`));
       const body = lastText();
-      expect(body).toContain('🟩 ترافیک: نامحدود');
+      expect(body).toContain('🗂 حجم کل: نامحدود');
       expect(body).toContain('📥 حجم مصرفی: هنوز از سرور خوانده نشده');
-      expect(body).toContain('💢 حجم باقی مانده: نامحدود');
+      expect(body).toContain('💢 حجم باقی‌مانده: نامحدود');
       expect(body).toContain('📅 تاریخ اتمام: بدون محدودیت زمانی');
       expect(body).not.toContain('0 بایت');
     });
@@ -590,12 +590,12 @@ describe('a customer looks after the services they bought', () => {
       const row = await services.findById(tenantA, service.id);
       expect(row?.state).toBe('SUSPENDED');
       await handle(tap(`s:${service.id}`));
-      expect(lastText()).toContain('📊وضعیت سرویس: 🔴 خاموش');
+      expect(lastText()).toContain('وضعیت سرویس: 🔴 خاموش');
       const buttons = buttonsOf(lastMarkup());
       expect(buttons).toContain(`e:${service.id}`);
       expect(buttons).not.toContain(`u:${service.id}`);
       expect(buttons, 'a suspended service cannot be read').not.toContain(`rs:${service.id}`);
-      expect(lastMarkup()).toContain('✅ روشن کردن اکانت');
+      expect(lastMarkup()).toContain('✅ روشن کردن سرویس');
     });
   });
 
@@ -1234,7 +1234,7 @@ describe('a customer looks after the services they bought', () => {
       expect(JSON.stringify(edits[0]?.body['reply_markup'])).toContain(`sv:${service.id}`);
       expect(photos(), 'one QR photo, no request for the over-bound one').toHaveLength(1);
       const raw = photos()[0]?.raw ?? '';
-      expect(captionOf(raw)).toContain('کد QR لینک اتصال بالا');
+      expect(captionOf(raw)).toContain('کد QR همین لینک اتصال');
       expect(raw).not.toContain('name="reply_markup"');
       expect(of('deleteMessage')).toHaveLength(0);
       expect(of('sendMessage')).toHaveLength(0);

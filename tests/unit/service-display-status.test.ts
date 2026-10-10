@@ -135,11 +135,23 @@ describe('the one presentation table', () => {
       buttonStyle: 'success',
     });
     for (const status of ['EXPIRED', 'EXHAUSTED', 'SUSPENDED'] as const) {
-      expect(SERVICE_STATUS_PRESENTATION[status]).toMatchObject({
-        slot: 'inactive',
-        buttonStyle: 'danger',
-      });
+      expect(SERVICE_STATUS_PRESENTATION[status]).toMatchObject({ buttonStyle: 'danger' });
     }
+  });
+
+  /*
+   * Batch 2026-10-10 (brief C3, C5.7): one colour, three MARKERS — a customer who cannot
+   * tell red from red still reads which of the three it is, on the card and the list.
+   */
+  it('gives the three that do not serve three different markers, none of them «active»', () => {
+    const slots = (['EXPIRED', 'EXHAUSTED', 'SUSPENDED'] as const).map(
+      (status) => SERVICE_STATUS_PRESENTATION[status].slot,
+    );
+    expect(new Set(slots).size).toBe(3);
+    expect(slots).not.toContain('active');
+    expect(SERVICE_STATUS_PRESENTATION.EXPIRED.slot).toBe('date');
+    expect(SERVICE_STATUS_PRESENTATION.EXHAUSTED.slot).toBe('traffic');
+    expect(SERVICE_STATUS_PRESENTATION.SUSPENDED.slot).toBe('inactive');
   });
 
   it('gives the card and the list the SAME marker: every label starts with its slot', () => {
@@ -250,8 +262,9 @@ describe('the «سرویس‌های من» button', () => {
     );
     expect(cells.map((cell) => [cell.text, cell.style])).toEqual([
       ['🟢 nx7k2m9q', 'success'],
-      ['🔴 late', 'danger'],
-      ['🔴 full', 'danger'],
+      // Batch 2026-10-10: one colour, but the marker says which — time or volume.
+      ['📅 late', 'danger'],
+      ['📊 full', 'danger'],
     ]);
     // The route is the card's, whatever the colour.
     expect(cells.map((cell) => cell.callback_data)).toEqual([
@@ -307,11 +320,11 @@ describe('the service card’s status line', () => {
   const statusOf = async (overrides: Parameters<typeof card>[0]) =>
     appearanceFallbackText(String((await card(overrides)).values.status));
 
-  it('reads green «فعال» only while it serves, and red once its time or traffic is over', async () => {
+  it('reads green «فعال» only while it serves, and marks time, traffic and off apart', async () => {
     expect(await statusOf({})).toBe('🟢 فعال');
-    expect(await statusOf({ expiresAt: DEADLINES.past })).toBe('🔴 منقضی شده');
-    expect(await statusOf({ trafficUsedBytes: LIMIT })).toBe('🔴 حجم تمام شده');
-    expect(await statusOf({ state: 'EXPIRED' })).toBe('🔴 منقضی شده');
+    expect(await statusOf({ expiresAt: DEADLINES.past })).toBe('📅 منقضی شده');
+    expect(await statusOf({ trafficUsedBytes: LIMIT })).toBe('📊 حجم تمام شده');
+    expect(await statusOf({ state: 'EXPIRED' })).toBe('📅 منقضی شده');
     expect(await statusOf({ state: 'SUSPENDED' })).toBe('🔴 خاموش');
     // «working» still wins while a change is applied.
     expect(await statusOf({ expiresAt: DEADLINES.past, working: true })).toContain('در حال اعمال');

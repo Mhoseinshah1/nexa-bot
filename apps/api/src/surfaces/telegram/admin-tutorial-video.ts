@@ -1,4 +1,5 @@
 import {
+  CLIENT_APP_VIDEO_CAPTURE_TTL_MS,
   uuidV7Schema,
   type ActorContext,
   type BotInstanceId,
@@ -129,7 +130,7 @@ export function tutorialsPanelButton(): CustomerButton {
 /** What a turn of this section answers — the runtime's `PendingReply` subset it needs. */
 export interface TutorialReply {
   readonly key: TutorialKey;
-  readonly values: Readonly<Record<string, string>>;
+  readonly values: Readonly<Record<string, string | number>>;
   readonly buttons: readonly CustomerButton[];
   readonly orderId: null;
   readonly edit?: boolean;
@@ -150,7 +151,7 @@ type TutorialKey =
 
 function replyOf(
   key: TutorialKey,
-  values: Readonly<Record<string, string>>,
+  values: Readonly<Record<string, string | number>>,
   buttons: readonly CustomerButton[],
   edit: boolean,
 ): TutorialReply {
@@ -256,7 +257,11 @@ export async function adminTutorialTurn(
       });
       return replyOf(
         'bot.admin.app_video_prompt',
-        { app: appTitle(opened.app) },
+        // The window the capture row was opened with, never a number written into the text.
+        {
+          app: appTitle(opened.app),
+          minutes: Math.floor(CLIENT_APP_VIDEO_CAPTURE_TTL_MS / 60_000),
+        },
         // The cancel names the PROMPT, never the app: a stale cancel cannot close a newer one.
         [appButton('c', opened.captureId, 'bot.admin.app_video_cancel_button')],
         true,

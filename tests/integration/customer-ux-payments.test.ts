@@ -490,12 +490,12 @@ describe('a customer pays through the approved screens', () => {
       // Owner spec §4: every icon is an Appearance slot (phone 📱, balance `wallet`, referrals
       // `referral`), and §3 closes the screen with the date and time it was drawn.
       expect(body).toContain('📱 شماره تماس: 🔴 ارسال نشده است');
-      expect(body).toMatch(/⏳ زمان ثبت نام: 14\d\d\/\d\d\/\d\d \d\d:\d\d/u);
+      expect(body).toMatch(/⏳ زمان ثبت‌نام: 14\d\d\/\d\d\/\d\d \d\d:\d\d/u);
       expect(body).toContain('💰 موجودی: 750,000 تومان');
       expect(body).not.toContain('5,000,000');
-      expect(body).toContain('🛒 تعداد سرویس های خریداری شده: 0 عدد');
-      expect(body).toContain('🧾 تعداد فاکتورهای پرداخت شده: 0 عدد');
-      expect(body).toContain('🎁 تعداد زیرمجموعه های شما: 0 نفر');
+      expect(body).toContain('🛒 تعداد سرویس‌های خریداری‌شده: 0 عدد');
+      expect(body).toContain('🧾 تعداد فاکتورهای پرداخت‌شده: 0 عدد');
+      expect(body).toContain('🎁 تعداد زیرمجموعه‌های شما: 0 نفر');
       expect(body).toMatch(
         /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
       );
@@ -510,8 +510,8 @@ describe('a customer pays through the approved screens', () => {
       await ctx.container.provisionerLoop.tick();
       sent = [];
       await handle(text('/wallet'));
-      expect(lastText()).toContain('🛒 تعداد سرویس های خریداری شده: 1 عدد');
-      expect(lastText()).toContain('🧾 تعداد فاکتورهای پرداخت شده: 1 عدد');
+      expect(lastText()).toContain('🛒 تعداد سرویس‌های خریداری‌شده: 1 عدد');
+      expect(lastText()).toContain('🧾 تعداد فاکتورهای پرداخت‌شده: 1 عدد');
     });
   });
 
@@ -527,9 +527,9 @@ describe('a customer pays through the approved screens', () => {
       expect(begun.replyKey).toBe('bot.wallet.topup_amount_prompt');
       const typed = await handle(text('۵۰٬۰۰۰'));
       expect(typed.replyKey).toBe('bot.wallet.topup_method_prompt');
-      expect(lastText()).toBe('💰 روش پرداخت خود را انتخاب نمایید');
+      expect(lastText()).toBe('💰 روش پرداخت را انتخاب کنید.');
       const labels = labelsOf(lastMarkup());
-      expect(labels).toEqual(['پرداخت با کارت به کارت (10 درصد شارژ هدیه)', '❌ بستن لیست']);
+      expect(labels).toEqual(['کارت به کارت (+10٪ هدیه)', '❌ بستن لیست']);
       const route = buttonsOf(lastMarkup()).find((b) => b.startsWith('tp:'));
       expect(route).toMatch(/^tp:[0-9a-f-]{36}\.MANUAL_TRANSFER$/u);
 

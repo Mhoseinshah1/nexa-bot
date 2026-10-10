@@ -20,8 +20,9 @@ import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/mess
  * to the FACT it was changed for, by meaning rather than by bytes, so the next copy edit is
  * free to reword it and is stopped only if it re-introduces the false claim.
  *
- * Defaults only: no placeholder was added or removed by these changes, so a tenant's stored
- * override of any of these keys still validates and renders exactly as before.
+ * Defaults only, with one exception: no placeholder was removed, and the one added
+ * (`bot.admin.app_video_prompt`'s `{minutes}`) is optional — so a tenant's stored override of
+ * any of these keys still validates and renders exactly as before (pinned below).
  */
 
 /** Every key whose default this batch changed. */
@@ -39,6 +40,60 @@ const CHANGED = [
   'bot.service.transfer_received',
   'bot.service.list',
   'bot.service.location_requested',
+  // Part 2 (`fix10/text-p2-p3`): brief §C3, §C4 and §C5.
+  'bot.service.suspend_confirm',
+  'bot.service.resume_confirm',
+  'bot.service.suspend_button',
+  'bot.service.resume_button',
+  'bot.terms.updated',
+  'bot.admin.app_video_prompt',
+  'bot.payment.centralpay_review_unresolved',
+  'bot.payment.nowpayments_review_unresolved',
+  'bot.payment.gateway_review_unresolved',
+  'bot.payment.expired',
+  'bot.service.state_exhausted',
+  'bot.service.state_expired',
+  'bot.payment.receipt_received',
+  'bot.payment.gateway_card_invoice',
+  'bot.payment.gateway_receipt_button',
+  'bot.payment.gateway_card_receipt_sent',
+  'bot.payment.gateway_card_receipt_refused',
+  'bot.payment.gateway_in_review',
+  'bot.payment.gateway_receipt_prompt',
+  'bot.payment.gateway_receipt_queued',
+  'bot.payment.gateway_receipt_photo_only',
+  'bot.payment.gateway_receipt_already_sent',
+  'bot.payment.gateway_receipt_too_large',
+  'bot.payment.gateway_card_changing',
+  'bot.payment.gateway_card_unconfirmed',
+  'bot.payment.gateway_card_missing',
+  'bot.payment.stars_invoice_order_fee',
+  'bot.payment.stars_invoice_order',
+  'bot.service.card',
+  'bot.wallet.summary',
+  'bot.service.link_qr_caption',
+  'bot.admin.app_not_found',
+  'bot.admin.app_video_stale',
+  'bot.callback.stale',
+  'bot.ticket.line_escalated',
+  'bot.wallet.topup_method_prompt',
+  'bot.wallet.topup_refused',
+  'bot.service.renew_paid',
+  'bot.order.settled',
+  'bot.payment.sent_button',
+  'bot.apps.alternative_button',
+  'bot.wallet.topup_method_gift_button',
+  'bot.faq.default_4_answer',
+  'bot.faq.default_5_answer',
+  'bot.faq.default_9_answer',
+  'bot.username.choose',
+  'bot.username.instructions',
+  'bot.username.invalid',
+  'bot.username.taken',
+  'bot.username.exhausted',
+  'bot.username.unavailable',
+  'bot.username.mode_unavailable',
+  'bot.username.stale',
 ] as const satisfies readonly TemplateKey[];
 
 const body = (key: TemplateKey): string => CATALOGUE_FA[key];
@@ -215,5 +270,169 @@ describe('truth pins (brief §C2)', () => {
     const text = body('bot.service.location_requested');
     expect(text).not.toContain('{icon:success}');
     expect(text).toContain('هنوز اعمال نشده');
+  });
+});
+
+describe('part 2 pins (brief §C3, §C4, §C5)', () => {
+  it('C3 suspend/resume: «سرویس», never «اکانت», and the clock keeps running while off', () => {
+    // `serviceDisplayStatus` turns a SUSPENDED service past its deadline into EXPIRED, and
+    // SUSPEND/RESUME never write `expires_at`: switching off does not pause the time.
+    expect(body('bot.service.suspend_confirm')).toContain('متوقف نمی‌شود');
+    for (const key of [
+      'bot.service.suspend_confirm',
+      'bot.service.resume_confirm',
+      'bot.service.suspend_button',
+      'bot.service.resume_button',
+    ] as const) {
+      expect(body(key), key).not.toContain('اکانت');
+      expect(body(key), key).toContain('سرویس');
+    }
+  });
+
+  it('C3 review unresolved and expiry: what happened to the money, and what to do next', () => {
+    for (const key of [
+      'bot.payment.centralpay_review_unresolved',
+      'bot.payment.nowpayments_review_unresolved',
+      'bot.payment.gateway_review_unresolved',
+    ] as const) {
+      expect(body(key), key).toContain('مبلغی به کیف پول شما واریز نشده');
+      expect(body(key), key).toContain('دوباره پرداخت نکنید');
+    }
+    // A payment expires only from PENDING (`PaymentExpiryService`): nothing was ever credited.
+    expect(body('bot.payment.expired')).toContain('از این پرداخت مبلغی ثبت نشده است');
+    expect(body('bot.payment.expired')).toContain('دوباره پرداخت نکنید');
+  });
+
+  it('C3 invoices: an order figure is never drawn with the wallet icon', () => {
+    expect(body('bot.payment.stars_invoice_order_fee')).toContain(
+      '{icon:purchase} مبلغ سفارش: {principal}',
+    );
+    expect(body('bot.payment.stars_invoice_order')).toContain(
+      '{icon:amount} مبلغ قابل پرداخت: {payable}',
+    );
+    for (const key of [
+      'bot.payment.stars_invoice_order_fee',
+      'bot.payment.stars_invoice_order',
+      'bot.payment.gateway_card_invoice',
+    ] as const) {
+      expect(body(key), key).not.toContain('{icon:wallet}');
+    }
+    // One key serves an order and a top-up here, so the principal is named for what it is.
+    expect(body('bot.payment.gateway_card_invoice')).toContain('مبلغ بدون کارمزد: {principal}');
+    expect(body('bot.payment.gateway_card_invoice')).not.toContain('مبلغ اصلی');
+  });
+
+  it('Codex P2: the TonPays card invoice draws no purpose-specific icon beside the principal', () => {
+    // `gatewayAttemptScreen` renders this ONE key for an order and for a wallet top-up
+    // (payment.orderId === null) alike, so neither the cart nor the wallet icon is true of
+    // both; the order-only and top-up-only keys keep theirs.
+    const text = body('bot.payment.gateway_card_invoice');
+    expect(text).toContain('{icon:amount} مبلغ بدون کارمزد: {principal}');
+    expect(text).not.toContain('{icon:purchase}');
+  });
+
+  it('Codex P2: switching off promises nothing about a deadline an unlimited service lacks', () => {
+    // A service with no `expiresAt` is supported and SUSPEND is offered for it, so the
+    // clock sentence is conditional on the service having an end date at all.
+    const text = body('bot.service.suspend_confirm');
+    expect(text).toContain('اگر سرویس شما تاریخ اتمام دارد، زمان باقی‌ماندهٔ آن');
+    expect(text).not.toContain('زمان باقی‌ماندهٔ سرویس در این مدت متوقف نمی‌شود');
+  });
+
+  it('Codex P2: a receipt must go as a photo, not as a document, and the customer is told so', () => {
+    // `receivePhoto` returns PHOTO_ONLY for an image sent as a Telegram DOCUMENT; «تصویر»
+    // alone describes what the customer already did.
+    expect(body('bot.payment.gateway_receipt_photo_only')).toContain('به‌صورت عکس');
+    expect(body('bot.payment.gateway_receipt_photo_only')).toContain('نه به‌صورت سند');
+    expect(body('bot.payment.gateway_receipt_prompt')).toContain('به‌صورت عکس');
+    expect(body('bot.payment.gateway_receipt_prompt')).toContain('نه به‌صورت سند');
+  });
+
+  it('C3 service card: the username is labelled as one, and no decoration inside a value', () => {
+    const text = body('bot.service.card');
+    expect(text).toContain('{icon:user} نام کاربری: {serviceUsername}');
+    expect(text).not.toContain('نام سرویس: {serviceUsername}');
+    expect(text).not.toContain('🚀');
+    // The status carries its own marker; the line does not add a second one.
+    expect(text.startsWith('وضعیت سرویس: {status}')).toBe(true);
+  });
+
+  it('C5.1/FIX-09 receipts: «رسید» and «تصویر», never «فیش» or «فایل»', () => {
+    for (const [key, text] of Object.entries(CATALOGUE_FA)) {
+      if (!key.startsWith('bot.payment.')) continue;
+      expect(text, key).not.toContain('فیش');
+      if (key.startsWith('bot.payment.gateway_')) expect(text, key).not.toContain('فایل');
+    }
+    expect(body('bot.payment.gateway_receipt_prompt')).toContain('تصویر رسید');
+    expect(body('bot.payment.gateway_receipt_photo_only')).toContain('تصویر');
+  });
+
+  it('C5.1 vocabulary: the customer username keys say «نام کاربری», never «یوزرنیم»', () => {
+    for (const [key, text] of Object.entries(CATALOGUE_FA)) {
+      if (key.startsWith('bot.username.')) expect(text, key).not.toContain('یوزرنیم');
+    }
+  });
+
+  /*
+   * The welcomes are KEPT: `/catalog` is a live command (`bot-commands.ts`), and
+   * `bot-runtime.test.ts` already refuses any reachable body that points at a «منو» in prose
+   * or names a command the bot does not answer. The refusal is the one CTA that was false: it
+   * also answers a TYPED amount, where there is no list to choose from.
+   */
+  it('C5.3 calls to action: the top-up refusal fits a typed amount as well as a list', () => {
+    expect(body('bot.wallet.topup_refused')).not.toContain('از فهرست');
+  });
+
+  /*
+   * C5.6 / FIX-08: on main the result of a paid renewal or add-on arrives as a NEW message;
+   * with edit-in-place (`fix10/flows-edit-in-place`) it is edited into this one. The copy
+   * must be true in both: it promises a result, never a separate message.
+   */
+  it('C5.6 paid renewal and add-on: no promise of a separate message', () => {
+    for (const key of ['bot.service.renew_paid', 'bot.order.settled'] as const) {
+      expect(body(key), key).not.toContain('پیام جداگانه');
+      expect(body(key), key).toContain('در همین ربات');
+    }
+  });
+
+  it('C5.12 FAQ: no unbacked speed or country-count claim', () => {
+    expect(body('bot.faq.default_4_answer')).not.toMatch(/افت سرعت|بدون مشکل/);
+    expect(body('bot.faq.default_5_answer')).not.toMatch(/[0-9۰-۹]+ کشور/);
+  });
+
+  it('C3 app video prompt: the window is the constant, through {minutes}', () => {
+    const text = body('bot.admin.app_video_prompt');
+    expect(text).toContain('{minutes} دقیقه');
+    expect(text).not.toContain('۱۵');
+    expect(text).not.toContain('به‌صورت ویدیو');
+    // Optional: a body without it — any override stored before this release — still validates.
+    const definition = templateDefinition('bot.admin.app_video_prompt');
+    expect(definition.placeholders.find((p) => p.token === 'minutes')?.required).toBe(false);
+    const stored =
+      '🎬 ویدیوی آموزشی «{app}» را همین حالا به‌صورت ویدیو در همین گفتگو بفرستید.\n\nاین درخواست تا ۱۵ دقیقه معتبر است.';
+    expect(validateTemplateBody(definition, stored)).toEqual([]);
+  });
+
+  /*
+   * C5.11: a button label a phone can draw without cutting it. 24 visible characters is the
+   * width the audit measured; the gift button is measured with the values it is drawn with.
+   */
+  it('C5.11 shortened buttons fit on a phone, rendered', () => {
+    const width = (text: string) => [...text.replace(/‌/g, '')].length;
+    for (const key of [
+      'bot.payment.sent_button',
+      'bot.apps.alternative_button',
+      'bot.payment.gateway_receipt_button',
+      'bot.service.suspend_button',
+      'bot.service.resume_button',
+    ] as const) {
+      expect(width(render(key, {})), key).toBeLessThanOrEqual(24);
+    }
+    const gift = render('bot.wallet.topup_method_gift_button', {
+      name: 'کارت به کارت',
+      percent: 10,
+    });
+    expect(gift).toBe('کارت به کارت (+10٪ هدیه)');
+    expect(width(gift)).toBeLessThanOrEqual(24);
   });
 });
