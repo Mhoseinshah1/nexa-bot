@@ -26,6 +26,10 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleGatewayCardTransferRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository';
 import type { GatewayPaymentService } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
+import {
+  GATEWAY_PAYMENT_INTERVAL_MS,
+  GatewayPaymentLoop,
+} from '../../apps/api/src/modules/commerce/payments/application/gateway-payment-loop';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -826,9 +830,79 @@ describe('the TonPays Telegram provider review window', () => {
         },
       });
       const report = await broken.runOnce(tenantA);
-      expect(report.rowFailures).toBe(1);
+      // A LANE failed, not a row (Codex #268 A): counted apart, because it withholds progress.
+      expect(report.laneFailures).toBe(1);
+      expect(report.rowFailures).toBe(0);
       expect(report.reviewsLapsed).toBe(1);
       expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+    });
+
+    /*
+     * Codex #268 A: the lane isolation must not hide a dead lane from readiness. Every pass
+     * returns (the sweeps run), but a claim that throws on every one of them is no progress,
+     * so the loop goes stale after its window; a pass whose only failure is an isolated ROW
+     * stays fresh.
+     */
+    it('a claim that throws on every pass leaves the lane stale; a failing row alone does not', async () => {
+      const loopOver = (service: GatewayPaymentService) => {
+        let nowMs = 1_000_000;
+        const loop = new GatewayPaymentLoop(service, {
+          scope: () => tenantA,
+          intervalMs: GATEWAY_PAYMENT_INTERVAL_MS,
+          passBoundMs: 15_000,
+          now: () => nowMs,
+          logger: { info: () => undefined, error: () => undefined },
+        });
+        const window = 15_000 + 3 * GATEWAY_PAYMENT_INTERVAL_MS;
+        return {
+          async passesFor(totalMs: number) {
+            loop.start();
+            for (let elapsed = 0; elapsed <= totalMs; elapsed += GATEWAY_PAYMENT_INTERVAL_MS) {
+              nowMs = 1_000_000 + elapsed;
+              await loop.tick();
+            }
+            const fresh = loop.isFresh(nowMs);
+            await loop.stop();
+            return { fresh, window };
+          },
+          window,
+        };
+      };
+
+      const broken = telegramLaneWith(ctx, fake, {
+        invoices: (real) => {
+          real.claimInquiries = () => Promise.reject(new Error('the claim transaction failed'));
+          return real;
+        },
+      });
+      const dead = loopOver(broken);
+      expect((await dead.passesFor(dead.window + GATEWAY_PAYMENT_INTERVAL_MS)).fresh).toBe(false);
+
+      // A due row whose credential cannot be decrypted: the ROW throws, the lane works.
+      const created = await attempt();
+      clock.at(new Date(created.expiresAt.getTime() - 30 * 60_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET api_key_ciphertext = 'v9.not-an-envelope'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TONPAYS_TELEGRAM'`,
+      );
+      // Due again before EVERY pass, so every pass meets the failing row.
+      const reports: Awaited<ReturnType<GatewayPaymentService['runOnce']>>[] = [];
+      const failingRowEveryPass = {
+        runOnce: async (scope: typeof tenantA) => {
+          await ctx.container.database.db.execute(
+            sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 31 * 60_000).toISOString()}::timestamptz,
+                       inquiry_claimed_until = NULL
+                 WHERE payment_id = ${created.paymentId}`,
+          );
+          const report = await lane.runOnce(scope);
+          reports.push(report);
+          return report;
+        },
+      } as unknown as GatewayPaymentService;
+      const alive = loopOver(failingRowEveryPass);
+      expect((await alive.passesFor(alive.window + GATEWAY_PAYMENT_INTERVAL_MS)).fresh).toBe(true);
+      expect(reports.length).toBeGreaterThan(1);
+      expect(reports.every((r) => r.rowFailures === 1 && r.laneFailures === 0)).toBe(true);
     });
 
     it('a receipt whose processing throws is backed off and the receipt queued after it is uploaded in the same pass', async () => {

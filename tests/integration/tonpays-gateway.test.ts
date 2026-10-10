@@ -1730,6 +1730,78 @@ describe('TonPays, through the one settlement path', () => {
         expect(settled[0]!.n).toBe(1);
       }
     });
+
+    /*
+     * Codex #268 B: a verified webhook that lands while the row is claimed writes the row
+     * without touching its lease — and, bringing the schedule only FORWARD, without moving a
+     * `next_inquiry_at` that is already due. A back-off that then wrote `retryAt`
+     * unconditionally suppressed the inquiry the webhook asked for, by up to five minutes.
+     */
+    it('Codex #268 B: a webhook that lands between the claim and the throw keeps the row due; the back-off does not swallow it', async () => {
+      const first = await createdAttempt();
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 hour' WHERE payment_id = ${first.paymentId}`,
+      );
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const poisoned = Object.create(real) as TonPaysAdapter;
+      let poison = true;
+      let hinted = 0;
+      (poisoned as unknown as { inquire: unknown }).inquire = async (
+        apiKey: string,
+        invoiceId: string,
+      ) => {
+        if (!poison || invoiceId !== first.invoiceId) return real.inquire(apiKey, invoiceId);
+        // The customer paid; the provider's webhook arrives while this row is claimed …
+        expect(await webhook(first.invoice, 'completed', `mid-claim-${hinted}`)).toBe('SCHEDULED');
+        hinted += 1;
+        // … and then this row's processing throws, before anything is recorded.
+        throw Object.assign(new Error('boom'), { code: '40P01' });
+      };
+      const poisonLane = laneWith(tonpays, { adapter: poisoned });
+
+      offsetMs += 6 * 60_000;
+      const laneNow = Date.now() + offsetMs;
+      expect((await poisonLane.runOnce(tenantA)).rowFailures).toBe(1);
+      expect(hinted).toBe(1);
+      const [after] = await rows<{
+        inquiry_claimed_until: string | null;
+        next_inquiry_at: string;
+        last_webhook_at: string | null;
+      }>(
+        sql`SELECT inquiry_claimed_until, next_inquiry_at, last_webhook_at
+            FROM gateway_invoices WHERE payment_id = ${first.paymentId}`,
+      );
+      expect(after?.last_webhook_at).not.toBeNull();
+      // Lease given back, and still due: NOT pushed behind the 30-second back-off floor.
+      expect(after?.inquiry_claimed_until).toBeNull();
+      expect(new Date(after!.next_inquiry_at).getTime()).toBeLessThanOrEqual(laneNow);
+
+      // The very next pass — no time passes — asks again and the provider's answer settles it.
+      poison = false;
+      tonpays.set(first.invoiceId, 'completed', true);
+      await poisonLane.runOnce(tenantA);
+      expect((await paymentOf(first.paymentId)).state).toBe('CONFIRMED');
+
+      // The control: the same throw with NO webhook in between is backed off as before.
+      const second = await createdAttempt(300_000n);
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 hour' WHERE payment_id = ${second.paymentId}`,
+      );
+      const quiet = Object.create(real) as TonPaysAdapter;
+      (quiet as unknown as { inquire: unknown }).inquire = (apiKey: string, invoiceId: string) =>
+        invoiceId === second.invoiceId
+          ? Promise.reject(Object.assign(new Error('boom'), { code: '40P01' }))
+          : real.inquire(apiKey, invoiceId);
+      offsetMs += 6 * 60_000;
+      const quietNow = Date.now() + offsetMs;
+      expect((await laneWith(tonpays, { adapter: quiet }).runOnce(tenantA)).rowFailures).toBe(1);
+      const [backedOff] = await rows<{ next_inquiry_at: string }>(
+        sql`SELECT next_inquiry_at FROM gateway_invoices WHERE payment_id = ${second.paymentId}`,
+      );
+      expect(new Date(backedOff!.next_inquiry_at).getTime()).toBeGreaterThanOrEqual(
+        quietNow + 30_000,
+      );
+    });
   });
 
   /*
@@ -1879,6 +1951,54 @@ describe('TonPays, through the one settlement path', () => {
       const invoice = await invoiceOf(paymentId);
       expect(invoice.creation_state).toBe('CREATED');
       expect(invoice.provider_invoice_id).not.toBeNull();
+      expect(tonpays.creates).toHaveLength(1);
+    });
+
+    /*
+     * Codex #270: the hold was measured from the clock read BEFORE the setup steps. A setup
+     * that stalled past the row bound plus a lease (nobody reclaiming meanwhile) passed the
+     * lease fence and wrote a hold already in the past, so another replica could claim the
+     * row during the call and call the live create UNKNOWN.
+     */
+    it('a setup that stalls before the stamp still holds the row for the whole call', async () => {
+      await enableTonPays();
+      const { paymentId } = await payWithGateway(await draftOrder());
+      const budget = new DrizzleGatewayCallBudget(ctx.container.database.db);
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const stalled = Object.create(real) as TonPaysAdapter;
+      const other = laneWith(tonpays);
+      let othersReport: Awaited<ReturnType<GatewayPaymentService['runOnce']>> | null = null;
+      let holdAtCall: Date | null = null;
+      let clockAtCall = 0;
+      (stalled as unknown as { createInvoice: unknown }).createInvoice = async (
+        ...args: Parameters<TonPaysAdapter['createInvoice']>
+      ) => {
+        const [row] = await rows<{ hold: string }>(
+          sql`SELECT creation_claimed_until AS hold FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+        );
+        holdAtCall = new Date(row!.hold);
+        clockAtCall = Date.now() + offsetMs;
+        // A little into the call, another replica's pass runs.
+        offsetMs += 5_000;
+        othersReport = await other.runOnce(tenantA);
+        return real.createInvoice(...args);
+      };
+      const report = await laneWith(tonpays, {
+        adapter: stalled,
+        budget: {
+          take: async (...args: Parameters<GatewayCallBudget['take']>) => {
+            // A setup step before the stamp stalls far past rowBound + lease; nobody claims.
+            offsetMs += 10 * 60_000;
+            return budget.take(...args);
+          },
+        },
+      }).runOnce(tenantA);
+      expect(report.leaseLost).toBe(0);
+      // The hold the call started under covers the call from the moment it started.
+      expect(holdAtCall!.getTime()).toBeGreaterThan(clockAtCall);
+      expect(othersReport).toMatchObject({ createUnknown: 0, created: 0 });
+      const invoice = await invoiceOf(paymentId);
+      expect(invoice.creation_state).toBe('CREATED');
       expect(tonpays.creates).toHaveLength(1);
     });
   });
