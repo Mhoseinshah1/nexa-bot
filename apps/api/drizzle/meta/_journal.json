@@ -1681,6 +1681,34 @@
       "when": 1791531383174,
       "tag": "0239_qr_template_quiet_zone_check",
       "breakpoints": true
+    },
+    {
+      "idx": 240,
+      "version": "7",
+      "when": 1791662234057,
+      "tag": "0240_legacy_nxpkg_source_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 241,
+      "version": "7",
+      "when": 1791662407230,
+      "tag": "0241_legacy_nxpkg_imports",
+      "breakpoints": true
+    },
+    {
+      "idx": 242,
+      "version": "7",
+      "when": 1791662413199,
+      "tag": "0242_legacy_nxpkg_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 243,
+      "version": "7",
+      "when": 1791662419812,
+      "tag": "0243_legacy_migration_grants",
+      "breakpoints": true
     }
   ]
 }
