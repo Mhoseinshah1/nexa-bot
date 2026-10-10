@@ -1009,6 +1009,39 @@ describe('refunds', () => {
       return { n: rows.rows[0]?.n ?? 0, sum: BigInt(rows.rows[0]?.total ?? '0') };
     };
 
+    /**
+     * Codex #271: the backend a transaction runs on, so a case can name the lock holder.
+     */
+    const backendOf = async (tx: { tx: { execute: (q: never) => Promise<unknown> } }) =>
+      (
+        (await tx.tx.execute(sql`SELECT pg_backend_pid()::int AS pid` as never)) as {
+          rows: { pid: number }[];
+        }
+      ).rows[0]!.pid;
+
+    /**
+     * Codex #271: a contention barrier, not a sleep. Resolves once another backend is provably
+     * WAITING on a lock `holder` holds (`pg_blocking_pids` names it), and fails the case if none
+     * is within the bound. A fixed sleep only hoped the second transaction had reached the lock;
+     * on a slow runner the two serialised, the case passed with the lock removed, and it proved
+     * nothing about the lock.
+     */
+    async function blockedBehind(holder: number): Promise<void> {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const waiting = await scalar<number>(
+          sql`SELECT count(*)::int AS v FROM pg_stat_activity
+               WHERE datname = current_database() AND wait_event_type = 'Lock'
+                 AND ${holder}::int = ANY(pg_blocking_pids(pid))`,
+        );
+        if ((waiting ?? 0) > 0) return;
+        if (Date.now() > deadline) {
+          throw new Error('the second transaction never waited on the lock holder');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+
     async function expectOneCreditOfThePayment(paymentId: string): Promise<void> {
       expect(await creditsOf(paymentId)).toEqual({ n: 1, sum: PAID });
       expect(await consumedOf(paymentId)).toBeLessThanOrEqual(PAID);
@@ -1020,8 +1053,8 @@ describe('refunds', () => {
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
-      let holding: () => void = () => undefined;
-      const locked = new Promise<void>((resolve) => {
+      let holding: (pid: number) => void = () => undefined;
+      const locked = new Promise<number>((resolve) => {
         holding = resolve;
       });
       const record = await new DrizzlePaymentRepository(ctx.container.database.db).findById(
@@ -1036,15 +1069,20 @@ describe('refunds', () => {
           { payment: record!, now: ctx.container.clock.now() },
           tx,
         );
-        holding();
+        holding(await backendOf(tx));
         await held;
         return made;
       });
-      await locked;
+      const holder = await locked;
       // ...the second blocks on that lock, and reads the sum only after the first commits.
       const second = automatic(payment.id, 'h13a-2');
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      release();
+      // Released only once the second transaction is provably waiting on the holder (and
+      // released whatever the barrier says, so a failing case leaves no transaction open).
+      try {
+        await blockedBehind(holder);
+      } finally {
+        release();
+      }
       const [won, lost] = await Promise.all([first, second]);
       expect(won?.amount.amountMinor).toBe(PAID);
       expect(lost).toBeNull();
@@ -1066,8 +1104,8 @@ describe('refunds', () => {
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
-      let holding: () => void = () => undefined;
-      const locked = new Promise<void>((resolve) => {
+      let holding: (pid: number) => void = () => undefined;
+      const locked = new Promise<number>((resolve) => {
         holding = resolve;
       });
       const record = await new DrizzlePaymentRepository(ctx.container.database.db).findById(
@@ -1081,17 +1119,22 @@ describe('refunds', () => {
           { payment: record!, now: ctx.container.clock.now() },
           tx,
         );
-        holding();
+        holding(await backendOf(tx));
         await held;
         return made;
       });
-      await locked;
+      const holder = await locked;
       const operator = refund(owner, payment.id, PAID, 'h13c-operator-0001').then(
         () => 'settled' as const,
         (error: unknown) => error,
       );
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      release();
+      // Released only once the second transaction is provably waiting on the holder (and
+      // released whatever the barrier says, so a failing case leaves no transaction open).
+      try {
+        await blockedBehind(holder);
+      } finally {
+        release();
+      }
       expect((await auto)?.amount.amountMinor).toBe(PAID);
       expect(await operator).toMatchObject({ code: 'commerce.refund_exceeds_refundable' });
       await expectOneCreditOfThePayment(payment.id);
@@ -1103,8 +1146,8 @@ describe('refunds', () => {
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
-      let holding: () => void = () => undefined;
-      const locked = new Promise<void>((resolve) => {
+      let holding: (pid: number) => void = () => undefined;
+      const locked = new Promise<number>((resolve) => {
         holding = resolve;
       });
       // An operator's manual refund for the whole payment, committed while the automatic
@@ -1129,13 +1172,18 @@ describe('refunds', () => {
           },
           tx,
         );
-        holding();
+        holding(await backendOf(tx));
         await held;
       });
-      await locked;
+      const holder = await locked;
       const auto = automatic(payment.id, 'h13d-auto');
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      release();
+      // Released only once the second transaction is provably waiting on the holder (and
+      // released whatever the barrier says, so a failing case leaves no transaction open).
+      try {
+        await blockedBehind(holder);
+      } finally {
+        release();
+      }
       await operator;
       expect((await auto)?.amount.amountMinor).toBe(PAID);
       // The unfinished manual refund was failed in the automatic refund's transaction: the
