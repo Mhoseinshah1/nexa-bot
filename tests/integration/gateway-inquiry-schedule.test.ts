@@ -519,6 +519,95 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       expect(row!.inquiry_claimed_until).toBeNull();
     });
 
+    /*
+     * Codex on #277: the hinted phase used to claim the OLDEST ten due rows and only then
+     * keep the hinted ones. Behind a backlog of ten or more older scheduled rows a fresh
+     * webhook was never seen there, and the full phase asked the backlog instead.
+     */
+    it('a fresh hint behind a backlog of older scheduled rows is asked first, in the first pass', async () => {
+      const backlog: PaymentId[] = [];
+      for (let i = 0; i < 12; i += 1) backlog.push(await topup(251_000n + BigInt(i) * 1_000n));
+      const hintedId = await topup(400_000n);
+      // Every invoice made at one instant: every first ask is about ten seconds out.
+      for (let i = 0; i < 3; i += 1) await lane.runOnce(tenantA);
+      const hinted = await invoiceOf(hintedId);
+      expect(hinted.provider_invoice_id).not.toBeNull();
+      // Every backlog row falls due on its own schedule and waits; none has been asked yet.
+      expect(tonpays.checks()).toBe(0);
+      for (const paymentId of backlog) {
+        expect((await invoiceOf(paymentId)).provider_invoice_id).not.toBeNull();
+      }
+      advance(60_000);
+      for (const paymentId of backlog) {
+        expect(new Date((await invoiceOf(paymentId)).next_inquiry_at!).getTime()).toBeLessThan(now);
+      }
+      // The hinted row's own schedule is later than the backlog's: it is the newest due row.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(now + 10 * 60_000)}
+             WHERE payment_id = ${hintedId}`,
+      );
+      // The customer paid; the provider's webhook brings THIS row forward.
+      tonpays.set(hinted.provider_invoice_id!, 'completed', true);
+      expect(await webhook(hinted, 'backlog-hint')).toBe('SCHEDULED');
+      tonpays.calls.length = 0;
+      advance(1_000);
+      await lane.runOnce(tenantA);
+      const checks = tonpays.calls.filter((call) => call.startsWith('check:'));
+      expect(checks[0], 'the hint waited behind the backlog').toBe(
+        `check:${hinted.provider_invoice_id!}`,
+      );
+      expect(checks.filter((call) => call === `check:${hinted.provider_invoice_id!}`)).toHaveLength(
+        1,
+      );
+      expect(await stateOf(hintedId)).toBe('CONFIRMED');
+      expect(await credits(hintedId)).toHaveLength(1);
+      // The backlog is still asked, in its usual place after the hint.
+      expect(checks.length).toBeGreaterThan(1);
+    });
+
+    /*
+     * The same, for a hint no column records: the customer's tap brings `next_inquiry_at`
+     * forward, and ten or more scheduled rows that fell due AFTER it are newer. The hinted
+     * phase must pick the tapped row out of its candidates, not the newest ten of them.
+     */
+    it('a tapped row behind ten newer scheduled rows is still asked before the pass’s creations', async () => {
+      const tappedId = await topup(400_000n);
+      const backlog: PaymentId[] = [];
+      for (let i = 0; i < 12; i += 1) backlog.push(await topup(251_000n + BigInt(i) * 1_000n));
+      // Every invoice made at one instant, so every first ask is about ten seconds out.
+      for (let i = 0; i < 3; i += 1) await lane.runOnce(tenantA);
+      expect(tonpays.checks()).toBe(0);
+      const tapped = await invoiceOf(tappedId);
+      expect(tapped.provider_invoice_id).not.toBeNull();
+      for (const paymentId of backlog) {
+        expect((await invoiceOf(paymentId)).provider_invoice_id).not.toBeNull();
+      }
+      // The customer taps «بررسی وضعیت» at once: due now, well before its own schedule and
+      // before any backlog row's first ask.
+      const view = await lane.attemptFor(tenantA, maryam, tappedId);
+      expect(view).not.toBeNull();
+      await lane.requestCheck(tenantA, view!);
+      const tappedDue = new Date((await invoiceOf(tappedId)).next_inquiry_at!).getTime();
+      advance(30_000);
+      for (const paymentId of backlog) {
+        const due = new Date((await invoiceOf(paymentId)).next_inquiry_at!).getTime();
+        expect(due).toBeGreaterThan(tappedDue);
+        expect(due).toBeLessThan(now);
+      }
+      tonpays.set(tapped.provider_invoice_id!, 'completed', true);
+      // One more customer asks for an invoice in this pass.
+      await topup(500_000n);
+      tonpays.createDelayMs = 50;
+      tonpays.calls.length = 0;
+      await lane.runOnce(tenantA);
+      expect(tonpays.calls[0], 'the tap waited behind the creations').toBe(
+        `check:${tapped.provider_invoice_id!}`,
+      );
+      expect(tonpays.calls.filter((call) => call === 'create')).toHaveLength(1);
+      expect(await stateOf(tappedId)).toBe('CONFIRMED');
+      expect(await credits(tappedId)).toHaveLength(1);
+    });
+
     it('a scheduled inquiry keeps its place AFTER the creations, and is still asked in the same pass', async () => {
       const { paymentId, invoice } = await createdTopup();
       await topup(300_000n);

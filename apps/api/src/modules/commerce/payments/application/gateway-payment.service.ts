@@ -175,7 +175,14 @@ export function gatewayClaimLeaseMs(rowBoundMs: number): number {
 
 /** Rows per pass, per queue. Small: every one of them is a call to a third party. */
 export const GATEWAY_CREATE_BATCH = 5;
-export const GATEWAY_INQUIRY_BATCH = 10; /** TonPays Telegram: card changes and receipt uploads per pass; review and window sweeps. */
+export const GATEWAY_INQUIRY_BATCH = 10;
+/**
+ * Codex on #277: how many due rows the hinted phase READS to find the hinted ones among
+ * them (most likely hinted first). A read, not a claim and not a call: it bounds the work of
+ * looking, never the outbound rate.
+ */
+export const GATEWAY_HINT_SCAN_LIMIT = 50;
+/** TonPays Telegram: card changes and receipt uploads per pass; review and window sweeps. */
 export const GATEWAY_CARD_CHANGE_BATCH = 5;
 export const GATEWAY_RECEIPT_BATCH = 3;
 export const GATEWAY_REVIEW_SWEEP_BATCH = 50;
@@ -699,15 +706,45 @@ export class GatewayPaymentService {
   ): Promise<void> {
     const inquiryNow = this.deps.clock.now();
     const inquiryLease = new Date(inquiryNow.getTime() + this.leaseMs());
-    const claimed = await this.deps.uow.run(scope, (tx) =>
-      this.deps.invoices.claimInquiries(
-        scope,
-        inquiryNow,
-        this.leaseMs(),
-        GATEWAY_INQUIRY_BATCH,
-        tx,
-      ),
-    );
+    /*
+     * Codex on #277: `claimInquiries` takes the OLDEST due rows, ten of them, before anything
+     * is filtered — so behind a backlog of ten scheduled rows a fresh webhook, tap or return
+     * was never seen by the hinted phase, and the full phase spent its smaller share of the
+     * budget on that same backlog while the hint reserve went unused. The hinted phase now
+     * READS its candidates (no lease, no call), keeps the hinted ones by the same derivation
+     * (`isHinted`), and claims only those, at most a batch. The outbound rate and the budgets
+     * are unchanged: this changes which rows the phase asks, never how many.
+     */
+    const claimed =
+      which === 'HINTED'
+        ? await this.deps.uow.run(scope, async (tx) => {
+            const candidates = await this.deps.invoices.findHintCandidates(
+              scope,
+              inquiryNow,
+              GATEWAY_HINT_SCAN_LIMIT,
+              tx,
+            );
+            const hinted = candidates
+              .filter((row) => !askedThisPass.has(row.invoice.paymentId) && this.isHinted(row))
+              .slice(0, GATEWAY_INQUIRY_BATCH)
+              .map((row) => row.invoice.paymentId);
+            return this.deps.invoices.claimInquiriesOf(
+              scope,
+              inquiryNow,
+              this.leaseMs(),
+              hinted,
+              tx,
+            );
+          })
+        : await this.deps.uow.run(scope, (tx) =>
+            this.deps.invoices.claimInquiries(
+              scope,
+              inquiryNow,
+              this.leaseMs(),
+              GATEWAY_INQUIRY_BATCH,
+              tx,
+            ),
+          );
     /*
      * FIX-06: `HINTED` keeps only the rows a hint brought forward; both phases skip a row the
      * pass already asked (one whose processing threw while a webhook kept it due, say — it is
