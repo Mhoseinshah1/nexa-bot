@@ -47,6 +47,8 @@ export interface BroadcastPassReport {
   readonly failed: number;
   readonly retried: number;
   readonly rateLimited: number;
+  /** Claimed after the bot answered 429 in this pass: handed back unsent, no attempt spent. */
+  readonly released: number;
   readonly skipped: number;
   readonly lost: number;
   readonly errored: number;
@@ -114,6 +116,7 @@ export class BroadcastDispatcher {
       failed: 0,
       retried: 0,
       rateLimited: 0,
+      released: 0,
       skipped: 0,
       lost: 0,
       errored: 0,
@@ -175,11 +178,23 @@ export class BroadcastDispatcher {
       );
       tally.claimed += claimed.length;
       let index = 0;
+      /*
+       * FIX-13: once Telegram answers 429 for this bot, the rest of the bot's batch is handed
+       * back unsent rather than spent on requests Telegram has just said it will refuse — a
+       * flood wait is honoured, not probed. Sends already in flight when the 429 arrived (at
+       * most CONCURRENCY - 1) cannot be recalled; nothing STARTS after it.
+       */
+      let rateLimited = false;
       const worker = async () => {
         while (index < claimed.length) {
           const recipient = claimed[index] as ClaimedRecipient;
           index += 1;
+          if (rateLimited) {
+            tally[await this.releaseOne(scope, recipient)] += 1;
+            continue;
+          }
           const outcome = await this.deliverOne(scope, recipient, contentOf, actor, tally);
+          if (outcome === 'rateLimited') rateLimited = true;
           tally[outcome] += 1;
         }
       };
@@ -445,6 +460,29 @@ export class BroadcastDispatcher {
           broadcastId: recipient.broadcastId,
         },
         'broadcast send failed',
+      );
+      return 'errored';
+    }
+  }
+
+  /** A claimed, unstamped recipient handed back: the lease cleared, nothing recorded. */
+  private async releaseOne(
+    scope: TenantContext,
+    recipient: ClaimedRecipient,
+  ): Promise<keyof BroadcastPassReport> {
+    try {
+      const released = await this.deps.uow.run(scope, (tx) =>
+        this.deps.repository.release(scope, recipient, this.deps.clock.now(), tx),
+      );
+      return released ? 'released' : 'lost';
+    } catch (error: unknown) {
+      // The lease stands; the row comes back when it lapses. Nothing was sent.
+      this.deps.logger.error(
+        {
+          err: error instanceof Error ? error.name : 'unknown',
+          broadcastId: recipient.broadcastId,
+        },
+        'broadcast release failed',
       );
       return 'errored';
     }
