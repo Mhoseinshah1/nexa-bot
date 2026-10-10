@@ -151,6 +151,9 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   // Support's own process: the AI assistant role's liveness stays with the other roles'
   // stalls in SYSTEM (`job.loop_stalled` is there), listed BEFORE the support route below.
   { prefix: 'support.assistant.', category: 'SYSTEM' },
+  // The support AI's provider health (`credential-alert.ts`, `support-ai-chain.ts`) is the
+  // SUPPORT_AI role's operation, not a customer conversation: SYSTEM, like its stall above.
+  { prefix: 'support.ai_provider.', category: 'SYSTEM' },
   // Support conversations: a Telegram Business update that failed, a business connection
   // that is unusable, a hand-off owed (FIX-03, batch 2026-10-10; they used to fall through
   // to SYSTEM).

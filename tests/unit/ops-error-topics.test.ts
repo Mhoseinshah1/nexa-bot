@@ -142,6 +142,20 @@ describe('every classified code reaches its own topic (FIX-03)', () => {
   it('keeps the support assistant role’s stall in SYSTEM, beside the other roles’ stalls', () => {
     expect(opsLogTopicForCode('support.assistant.stalled')).toBe('SYSTEM');
   });
+
+  it('keeps the support AI provider’s health in SYSTEM, not with customer conversations', () => {
+    // Recorded by credential-alert.ts and support-ai-chain.ts, outside OPS_ERROR_EVENTS, so the
+    // exhaustive list above cannot see them (Codex review of the routing PR).
+    for (const code of [
+      'support.ai_provider.credential_rejected',
+      'support.ai_provider.credential_accepted',
+      'support.ai_provider.unavailable',
+      'support.ai_provider.available',
+    ]) {
+      expect(opsLogTopicForCode(code), code).toBe('SYSTEM');
+    }
+    expect(opsLogTopicForCode('support.business_update_failed')).toBe('BOT');
+  });
 });
 
 describe('operationType is an allow-listed detail (FIX-03)', () => {
