@@ -872,14 +872,22 @@ export class GatewayPaymentService {
      * UNKNOWN, as before. Not stamped: the lease was taken over (or the row decided) and
      * nothing was sent.
      */
+    /*
+     * Codex #270: the hold is measured from a clock read NOW, not from `now` (read before the
+     * credential, customer, callback and template steps above). A setup that stalled past
+     * `rowBound + lease` would otherwise pass the lease-token fence (nobody reclaimed it) and
+     * write a hold already expired — and the call below would start while another replica
+     * could claim the row and call the live create UNKNOWN.
+     */
+    const stampAt = this.deps.clock.now();
     const stamped = await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.markCreationSent(
         scope,
         invoice.paymentId,
-        now,
+        stampAt,
         {
           claimedUntil: leaseUntil,
-          holdUntil: new Date(now.getTime() + this.rowBoundMs() + this.leaseMs()),
+          holdUntil: new Date(stampAt.getTime() + this.rowBoundMs() + this.leaseMs()),
         },
         tx,
       ),

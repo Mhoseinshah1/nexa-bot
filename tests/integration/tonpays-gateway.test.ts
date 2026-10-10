@@ -1953,6 +1953,54 @@ describe('TonPays, through the one settlement path', () => {
       expect(invoice.provider_invoice_id).not.toBeNull();
       expect(tonpays.creates).toHaveLength(1);
     });
+
+    /*
+     * Codex #270: the hold was measured from the clock read BEFORE the setup steps. A setup
+     * that stalled past the row bound plus a lease (nobody reclaiming meanwhile) passed the
+     * lease fence and wrote a hold already in the past, so another replica could claim the
+     * row during the call and call the live create UNKNOWN.
+     */
+    it('a setup that stalls before the stamp still holds the row for the whole call', async () => {
+      await enableTonPays();
+      const { paymentId } = await payWithGateway(await draftOrder());
+      const budget = new DrizzleGatewayCallBudget(ctx.container.database.db);
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const stalled = Object.create(real) as TonPaysAdapter;
+      const other = laneWith(tonpays);
+      let othersReport: Awaited<ReturnType<GatewayPaymentService['runOnce']>> | null = null;
+      let holdAtCall: Date | null = null;
+      let clockAtCall = 0;
+      (stalled as unknown as { createInvoice: unknown }).createInvoice = async (
+        ...args: Parameters<TonPaysAdapter['createInvoice']>
+      ) => {
+        const [row] = await rows<{ hold: string }>(
+          sql`SELECT creation_claimed_until AS hold FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+        );
+        holdAtCall = new Date(row!.hold);
+        clockAtCall = Date.now() + offsetMs;
+        // A little into the call, another replica's pass runs.
+        offsetMs += 5_000;
+        othersReport = await other.runOnce(tenantA);
+        return real.createInvoice(...args);
+      };
+      const report = await laneWith(tonpays, {
+        adapter: stalled,
+        budget: {
+          take: async (...args: Parameters<GatewayCallBudget['take']>) => {
+            // A setup step before the stamp stalls far past rowBound + lease; nobody claims.
+            offsetMs += 10 * 60_000;
+            return budget.take(...args);
+          },
+        },
+      }).runOnce(tenantA);
+      expect(report.leaseLost).toBe(0);
+      // The hold the call started under covers the call from the moment it started.
+      expect(holdAtCall!.getTime()).toBeGreaterThan(clockAtCall);
+      expect(othersReport).toMatchObject({ createUnknown: 0, created: 0 });
+      const invoice = await invoiceOf(paymentId);
+      expect(invoice.creation_state).toBe('CREATED');
+      expect(tonpays.creates).toHaveLength(1);
+    });
   });
 
   describe('an exhausted call budget', () => {
