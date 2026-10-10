@@ -786,6 +786,7 @@ describe('a stalled worker loop is a condition in the operations log', () => {
       scope: () => tenant,
       clock: { now: () => new Date(now) },
       logger: { warn: vi.fn() },
+      role: 'worker',
     });
     return { reporter, events, advance: (ms: number) => (now += ms) };
   }
@@ -798,6 +799,9 @@ describe('a stalled worker loop is a condition in the operations log', () => {
     expect(events[0]).toMatchObject({
       severity: 'ERROR',
       dedupeKey: loopStallConditionKey('gateway-payments'),
+      // The worker's message is the text it always was (owner item 2 is deferred).
+      message: 'Worker loop "gateway-payments" has stopped making progress.',
+      context: { kind: 'gateway-payments', state: 'STALLED', processRole: 'worker' },
     });
     advance(LOOP_STALL_RERECORD_MS);
     await reporter.observe([{ name: 'gateway-payments', stalled: true }]);
@@ -845,6 +849,7 @@ describe('a stalled worker loop is a condition in the operations log', () => {
       scope: () => tenant,
       clock: { now: () => AT },
       logger: { warn: vi.fn() },
+      role: 'worker',
     });
     await reporter.observe([{ name: 'fx-refresh', stalled: false }]);
     expect(events).toEqual([]);
@@ -891,6 +896,7 @@ describe('a stalled worker loop is a condition in the operations log', () => {
       scope: () => tenant,
       clock: { now: () => AT },
       logger: { warn: vi.fn() },
+      role: 'worker',
     });
     await expect(
       reporter.observe([

@@ -32,6 +32,16 @@ export class ProvisionerLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private lastProgressAt: number | null = null;
+  /**
+   * When each LANE last succeeded, and when this loop started (FIX-03, batch 2026-10-10).
+   *
+   * For reporting only. Readiness is still the single `lastProgressAt` above — any lane's
+   * failure costs the tick its progress, exactly as before — but "the provisioner is
+   * stale" sends an operator looking at the whole role when one lane is the answer, so
+   * each lane's own success is kept and `laneStatuses` names the one that stopped.
+   */
+  private readonly laneProgressAt = new Map<ProvisionerLane, number>();
+  private startedAt: number | null = null;
 
   constructor(
     private readonly executor: ProvisionerService,
@@ -98,6 +108,7 @@ export class ProvisionerLoop {
 
   start(): void {
     if (this.timer !== null) return;
+    this.startedAt ??= this.options.now();
     this.timer = setInterval(() => void this.tick(), this.options.tickMs);
     // Node keeps the event loop alive for a timer; this one should not stop a
     // shutdown that has already begun draining.
@@ -129,6 +140,7 @@ export class ProvisionerLoop {
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    this.startedAt ??= this.options.now();
     let scope: TenantContext | null = null;
     let failed = false;
     try {
@@ -215,6 +227,7 @@ export class ProvisionerLoop {
       await this.outcomes.announceDue(scope, DRAIN_LIMIT);
       // R3: cards a crash left unanswered, after the grace.
       await this.options.cards?.answerDue(scope, DRAIN_LIMIT);
+      this.laneProgressAt.set('provisioner', this.options.now());
     } catch (error: unknown) {
       /*
        * A failed tick makes NO progress, deliberately.
@@ -240,13 +253,14 @@ export class ProvisionerLoop {
          * never credited. Now a lane's failure is logged under its own name, costs the
          * tick its progress as before, and holds no other lane back.
          */
-        for (const [lane, settle] of [
-          ['cashback', this.options.cashback],
-          ['referrals', this.options.referrals],
-          ['serviceRefunds', this.options.serviceRefunds],
+        for (const [lane, settle, reported] of [
+          ['cashback', this.options.cashback, 'provisioner-cashback'],
+          ['referrals', this.options.referrals, 'provisioner-referrals'],
+          ['serviceRefunds', this.options.serviceRefunds, 'provisioner-service-refunds'],
         ] as const) {
           try {
             await settle.settleDue(scope, DRAIN_LIMIT);
+            this.laneProgressAt.set(reported, this.options.now());
           } catch (error: unknown) {
             failed = true;
             this.options.logger.error({ error, lane }, 'provisioner settlement lane failed');
@@ -264,7 +278,39 @@ export class ProvisionerLoop {
     if (this.lastProgressAt === null) return false;
     return nowMs - this.lastProgressAt <= this.options.tickMs * STALE_TICK_MULTIPLE;
   }
+
+  /**
+   * Each lane, stalled or not, for the operations log (FIX-03, batch 2026-10-10).
+   *
+   * A lane is stalled when it has not succeeded within the same window readiness uses,
+   * counted from its last success or — before its first — from when this loop started, so
+   * the first heartbeat after a restart is not a false alarm. A loop never started (the
+   * provisioner disabled) reports every lane as not stalled, which closes a condition a
+   * previous life opened.
+   */
+  laneStatuses(nowMs: number): readonly { name: ProvisionerLane; stalled: boolean }[] {
+    const window = this.options.tickMs * STALE_TICK_MULTIPLE;
+    return PROVISIONER_LANES.map((name) => {
+      const last = this.laneProgressAt.get(name) ?? this.startedAt;
+      return { name, stalled: last !== null && nowMs - last > window };
+    });
+  }
 }
+
+/**
+ * The lanes this loop runs, by the names the operations log reports them under.
+ *
+ * Prefixed, because a stall's dedupe key is `job.loop_stalled:<name>` and the worker's
+ * loops share that namespace: a lane called `referrals` here and a loop of that name in
+ * the worker would open and close each other's condition.
+ */
+export const PROVISIONER_LANES = [
+  'provisioner',
+  'provisioner-cashback',
+  'provisioner-referrals',
+  'provisioner-service-refunds',
+] as const;
+export type ProvisionerLane = (typeof PROVISIONER_LANES)[number];
 
 /** How many operations one tick may drain before yielding. */
 export const DRAIN_LIMIT = 10;

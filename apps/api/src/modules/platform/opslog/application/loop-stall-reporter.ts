@@ -22,6 +22,45 @@ export interface LoopStatus {
 }
 
 /**
+ * The process roles that report their loops (FIX-03 batch 2026-10-10).
+ *
+ * The worker was the only one until this batch, so a provisioner whose every settlement
+ * lane threw, a monitor whose discovery threw and a recovery executor whose tick threw
+ * each went stale in their own container's health check and said nothing anywhere an
+ * operator reads. The role travels as `processRole` in the event's context, so the group
+ * message names the process to look at, not only the loop.
+ */
+export type LoopReportingRole = 'worker' | 'provisioner' | 'monitor' | 'recovery';
+
+const ROLE_LABEL: Readonly<Record<LoopReportingRole, string>> = {
+  worker: 'Worker',
+  provisioner: 'Provisioner',
+  monitor: 'Monitor',
+  recovery: 'Recovery',
+};
+
+/**
+ * Whether a loop of a role whose readiness has NO startup grace is stalled, for REPORTING.
+ *
+ * The provisioner, the monitor and the recovery executor all refuse readiness until their
+ * first successful pass, deliberately (each one's file says why). Readiness and reporting
+ * are different questions: a release that never becomes ready fails its rollout, which is
+ * the signal; but a stall recorded on the very first heartbeat, before the first tick could
+ * possibly have run, is a false alarm in the group on every restart. So a loop is reported
+ * stalled only once it has had `graceMs` since it started to make progress, and never
+ * while it is disabled (`startedAtMs` null — the operator switched it off).
+ */
+export function stalledAfterGrace(input: {
+  readonly fresh: boolean;
+  readonly startedAtMs: number | null;
+  readonly nowMs: number;
+  readonly graceMs: number;
+}): boolean {
+  if (input.fresh || input.startedAtMs === null) return false;
+  return input.nowMs - input.startedAtMs > input.graceMs;
+}
+
+/**
  * FIX-05: the worker's job and loop failures, reported at the one chokepoint that sees all
  * of them — the heartbeat's `stalledLoops`.
  *
@@ -57,6 +96,8 @@ export class LoopStallReporter {
       readonly scope: () => TenantContext | null;
       readonly clock: Clock;
       readonly logger: { warn: (context: Record<string, unknown>, message: string) => void };
+      /** Which process this is; named in the message and in the context. */
+      readonly role: LoopReportingRole;
     },
   ) {}
 
@@ -91,9 +132,9 @@ export class LoopStallReporter {
         {
           code: JOB_LOOP_STALLED_CODE,
           severity: OPS_ERROR_CLASS_POLICY.ERROR.storedSeverity,
-          message: `Worker loop "${loop.name}" has stopped making progress.`,
+          message: `${ROLE_LABEL[this.deps.role]} loop "${loop.name}" has stopped making progress.`,
           dedupeKey: loopStallConditionKey(loop.name),
-          context: { kind: loop.name, state: 'STALLED' },
+          context: { kind: loop.name, state: 'STALLED', processRole: this.deps.role },
         },
         this.deps.logger,
       );
@@ -123,8 +164,8 @@ export class LoopStallReporter {
         {
           code: JOB_LOOP_RECOVERED_CODE,
           severity: OPS_ERROR_CLASS_POLICY.INFO.storedSeverity,
-          message: `Worker loop "${name}" is making progress again.`,
-          context: { kind: name, state: 'FRESH' },
+          message: `${ROLE_LABEL[this.deps.role]} loop "${name}" is making progress again.`,
+          context: { kind: name, state: 'FRESH', processRole: this.deps.role },
           recoversCode: JOB_LOOP_STALLED_CODE,
           recoversDedupeKey: loopStallConditionKey(name),
         },

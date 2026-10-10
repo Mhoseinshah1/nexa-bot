@@ -38,6 +38,9 @@ export const DETAIL_KEYS: readonly string[] = [
   'provider',
   'method',
   'kind',
+  // Which process role recorded it — `worker`, `provisioner`, `monitor`, `recovery` — so a
+  // stalled-loop report names the container to look at (FIX-03, batch 2026-10-10).
+  'processRole',
   // The transition.
   'from',
   'to',

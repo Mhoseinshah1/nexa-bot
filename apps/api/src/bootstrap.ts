@@ -24,6 +24,11 @@ import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { trustProxyOption } from './infrastructure/trusted-proxy.js';
 import type { AppConfig } from './infrastructure/config/config.schema.js';
+import {
+  LoopStallReporter,
+  type LoopReportingRole,
+} from './modules/platform/opslog/application/loop-stall-reporter.js';
+import { DrizzleOperationalConditionReader } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
 
 /**
  * `POST /media/:purpose`, as Nest registers it. The detail read shares the URL and a
@@ -60,6 +65,29 @@ const DIRECT_MESSAGE_BODY_LIMIT_BYTES =
  */
 /** How often every process re-reads `installation_keys`. */
 export const INSTALLATION_KEY_REFRESH_MS = 60_000;
+
+/**
+ * The stalled-loop reporter of one background role (FIX-05; every role since FIX-03 of
+ * batch 2026-10-10). One construction, so the four roles cannot disagree about where a
+ * stall is recorded or under which tenant: the installation's, and nothing while there
+ * is none.
+ */
+export function loopStallReporterFor(
+  container: Container,
+  role: LoopReportingRole,
+): LoopStallReporter {
+  return new LoopStallReporter({
+    recorder: container.opsLog,
+    conditions: new DrizzleOperationalConditionReader(container.database.db),
+    scope: () =>
+      container.installationTenantId === null
+        ? null
+        : { tenantId: container.installationTenantId, botInstanceId: null },
+    clock: container.clock,
+    logger: container.logger,
+    role,
+  });
+}
 
 export async function resolveInstallationTenant(container: Container): Promise<void> {
   // The decrypt-only keys imported from Recovery Kits (ADR-0032), loaded before

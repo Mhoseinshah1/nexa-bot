@@ -1,10 +1,14 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { resolveInstallationTenant } from './bootstrap.js';
+import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { stalledAfterGrace } from './modules/platform/opslog/application/loop-stall-reporter.js';
+
+/** The executor's name in the operations log: `job.loop_stalled:recovery-executor`. */
+const RECOVERY_EXECUTOR_LOOP = 'recovery-executor';
 
 /**
  * Process role: `recovery`.
@@ -44,6 +48,15 @@ async function main(): Promise<void> {
   // role records are the ones saying a restore of the whole database failed.
   await resolveInstallationTenant(container);
 
+  /*
+   * FIX-03 (batch 2026-10-10): an executor whose tick throws every time is an operational
+   * condition. A recovery confirmed into a dead executor is an operator waiting on a
+   * progress page that will never move, and until this the only sign was this container's
+   * health. During a run `isFresh` is true by design, so a long restore is not a stall.
+   */
+  const loopStalls = loopStallReporterFor(container, 'recovery');
+  let executorStartedAt: number | null = null;
+
   /**
    * The heartbeat, and what it is allowed to claim.
    *
@@ -71,7 +84,21 @@ async function main(): Promise<void> {
       } catch {
         return false;
       }
-      return container.recoveryExecutor.isFresh(container.clock.now().getTime());
+      const now = container.clock.now().getTime();
+      const fresh = container.recoveryExecutor.isFresh(now);
+      // Not awaited, and it never throws: reporting must not slow or fail the heartbeat.
+      void loopStalls.observe([
+        {
+          name: RECOVERY_EXECUTOR_LOOP,
+          stalled: stalledAfterGrace({
+            fresh,
+            startedAtMs: executorStartedAt,
+            nowMs: now,
+            graceMs: config.RECOVERY_TICK_MS * 3,
+          }),
+        },
+      ]);
+      return fresh;
     },
   });
 
@@ -105,6 +132,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   container.recoveryExecutor.start();
+  executorStartedAt = container.clock.now().getTime();
   container.logger.info(
     { env: config.NODE_ENV, tickMs: config.RECOVERY_TICK_MS },
     'recovery executor running',
