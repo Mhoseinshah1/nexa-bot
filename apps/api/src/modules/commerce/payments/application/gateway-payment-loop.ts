@@ -100,7 +100,9 @@ export class GatewayPaymentLoop {
         report.created + report.createFailed + report.createUnknown + report.inquired > 0 ||
         report.budgetExhausted ||
         // FIX10 BUG-1: a pass that isolated a failing row says so, with the count.
-        report.rowFailures > 0
+        report.rowFailures > 0 ||
+        // FIX10 R1: rows given back for want of lease, or taken over by another replica.
+        report.leaseReleased + report.leaseLost > 0
       ) {
         this.options.logger.info({ ...report }, 'gateway payment pass');
       }

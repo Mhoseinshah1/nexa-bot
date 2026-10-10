@@ -558,6 +558,12 @@ export interface GatewayInvoiceRepository {
     scope: TenantContext,
     paymentId: PaymentId,
     now: Date,
+    /**
+     * FIX10 R1: stamped only while `creation_claimed_until` is still `claimedUntil` (this
+     * pass's lease), and the claim is extended to `holdUntil` in the same write, so no other
+     * replica can claim a row whose send is in flight.
+     */
+    fence: { readonly claimedUntil: Date; readonly holdUntil: Date },
     tx?: unknown,
   ): Promise<boolean>;
 
@@ -660,6 +666,18 @@ export interface GatewayInvoiceRepository {
     tx?: unknown,
   ): Promise<boolean>;
 
+  /**
+   * FIX10 R1: true when the row's inquiry claim is still `leaseUntil`, taking the row's lock
+   * so that it stays so until the transaction ends. False: the lease ran out and another
+   * replica holds the row (or nothing claims it), and the caller writes nothing.
+   */
+  holdsInquiryClaim(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    leaseUntil: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+
   /** Records what an inquiry returned and when the next one is due (null: none). */
   recordInquiry(
     scope: TenantContext,
@@ -675,10 +693,16 @@ export interface GatewayInvoiceRepository {
       readonly postDeadline: boolean;
       /** A provider payment id the answer named under this invoice; kept as the hint. */
       readonly hintedPaymentId?: string | null;
+      /**
+       * FIX10 R1: the claim's lease this answer was asked under. When given, the answer is
+       * recorded only while `inquiry_claimed_until` still carries it — a replica whose lease
+       * ran out and whose row another replica took records nothing (false).
+       */
+      readonly claimedUntil?: Date;
     },
     now: Date,
     tx?: unknown,
-  ): Promise<void>;
+  ): Promise<boolean>;
 
   /**
    * An operator's "ask the provider again" on an UNKNOWN payment (§9.6.4): flags the row and

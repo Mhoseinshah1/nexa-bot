@@ -453,6 +453,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     scope: TenantContext,
     paymentId: PaymentId,
     now: Date,
+    fence: { readonly claimedUntil: Date; readonly holdUntil: Date },
     tx?: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
@@ -461,6 +462,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       .set({
         creationSentAt: now,
         creationAttempts: sql`${gatewayInvoices.creationAttempts} + 1`,
+        creationClaimedUntil: fence.holdUntil,
         updatedAt: now,
       })
       .where(
@@ -469,6 +471,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           eq(gatewayInvoices.paymentId, paymentId),
           eq(gatewayInvoices.creationState, 'CREATING'),
           isNull(gatewayInvoices.creationSentAt),
+          eq(gatewayInvoices.creationClaimedUntil, fence.claimedUntil),
         ),
       )
       .returning({ paymentId: gatewayInvoices.paymentId });
@@ -873,6 +876,27 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     return rows.length > 0;
   }
 
+  async holdsInquiryClaim(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    leaseUntil: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ paymentId: gatewayInvoices.paymentId })
+      .from(gatewayInvoices)
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          eq(gatewayInvoices.inquiryClaimedUntil, leaseUntil),
+        ),
+      )
+      .for('update');
+    return rows.length > 0;
+  }
+
   async recordInquiry(
     scope: TenantContext,
     paymentId: PaymentId,
@@ -886,12 +910,13 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly nextInquiryAt: Date | null;
       readonly postDeadline: boolean;
       readonly hintedPaymentId?: string | null;
+      readonly claimedUntil?: Date;
     },
     now: Date,
     tx?: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    await this.exec(tx)
+    const rows = await this.exec(tx)
       .update(gatewayInvoices)
       .set({
         // An error leaves the last OBSERVED status standing: a failed call says nothing new.
@@ -920,7 +945,18 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         reconcileInquiryRequestedAt: null,
         updatedAt: now,
       })
-      .where(and(eq(gatewayInvoices.tenantId, tenantId), eq(gatewayInvoices.paymentId, paymentId)));
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          // FIX10 R1: fenced on the claim it was asked under, when the caller holds one.
+          result.claimedUntil === undefined
+            ? undefined
+            : eq(gatewayInvoices.inquiryClaimedUntil, result.claimedUntil),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length > 0;
   }
 
   async recordOutcome(

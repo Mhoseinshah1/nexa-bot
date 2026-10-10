@@ -1732,6 +1732,157 @@ describe('TonPays, through the one settlement path', () => {
     });
   });
 
+  /*
+   * FIX10 R1: the claim lease against a slow batch, with two lanes over one database and one
+   * movable clock. A provider call is "slow" by moving the lanes' clock inside it.
+   */
+  describe('the claim lease (FIX10 R1)', () => {
+    const claimOf = async (paymentId: string) =>
+      (
+        await rows<{ claimed: string | null }>(
+          sql`SELECT inquiry_claimed_until AS claimed FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+        )
+      )[0]?.claimed ?? null;
+
+    it('a lane starts no row its lease cannot cover, and gives those rows back for the next lane at once', async () => {
+      const attempts = [
+        await createdAttempt(),
+        await createdAttempt(260_000n),
+        await createdAttempt(270_000n),
+      ];
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const slow = Object.create(real) as TonPaysAdapter;
+      (slow as unknown as { inquire: unknown }).inquire = async (apiKey: string, id: string) => {
+        // Each answer takes twenty seconds of the lease.
+        offsetMs += 20_000;
+        return real.inquire(apiKey, id);
+      };
+      offsetMs += 6 * 60_000;
+      const checksBefore = tonpays.checks.length;
+      const report = await laneWith(tonpays, { adapter: slow }).runOnce(tenantA);
+      // A 60 s lease and a 45 s row bound: one row at 0 s, none at 20 s.
+      expect(tonpays.checks.length - checksBefore).toBe(1);
+      expect(report.leaseReleased).toBe(2);
+      const unasked = attempts.filter(
+        (one) => !tonpays.checks.slice(checksBefore).includes(one.invoiceId),
+      );
+      expect(unasked).toHaveLength(2);
+      for (const one of unasked) expect(await claimOf(one.paymentId)).toBeNull();
+
+      // Given back, not left leased: another lane takes them in its very next pass.
+      await laneWith(tonpays).runOnce(tenantA);
+      expect([...new Set(tonpays.checks.slice(checksBefore))].sort()).toEqual(
+        attempts.map((one) => one.invoiceId).sort(),
+      );
+    });
+
+    it('an answer recorded after the lease was taken over overwrites nothing and settles nothing', async () => {
+      const { paymentId, invoiceId } = await createdAttempt();
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const stalled = Object.create(real) as TonPaysAdapter;
+      const other = laneWith(tonpays);
+      (stalled as unknown as { inquire: unknown }).inquire = async (apiKey: string, id: string) => {
+        // This replica's answer: still pending. Then it stalls past its lease...
+        const stale = await real.inquire(apiKey, id);
+        offsetMs += 70_000;
+        // ...the customer pays, and another replica takes the row and settles it.
+        tonpays.set(invoiceId, 'completed', true);
+        await other.runOnce(tenantA);
+        return stale;
+      };
+      offsetMs += 6 * 60_000;
+      const report = await laneWith(tonpays, { adapter: stalled }).runOnce(tenantA);
+      expect(report.leaseLost).toBe(1);
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      // The newer evidence stands: the stale "pending" neither replaced it nor rescheduled
+      // a settled attempt.
+      const invoice = await invoiceOf(paymentId);
+      expect(invoice.provider_status).toBe('completed');
+      expect(invoice.provider_paid).toBe(true);
+      expect(invoice.outcome).toBe('SETTLED');
+      expect(invoice.next_inquiry_at).toBeNull();
+    });
+
+    it('a failed call recorded after the lease was taken over does not reschedule the attempt the other replica settled', async () => {
+      const { paymentId, invoiceId } = await createdAttempt();
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const stalled = Object.create(real) as TonPaysAdapter;
+      const other = laneWith(tonpays);
+      (stalled as unknown as { inquire: unknown }).inquire = async () => {
+        // This replica's call fails slowly, past its lease; meanwhile the other settles it.
+        offsetMs += 70_000;
+        tonpays.set(invoiceId, 'completed', true);
+        await other.runOnce(tenantA);
+        return { kind: 'UNKNOWN', code: 'nexa.timeout' };
+      };
+      offsetMs += 6 * 60_000;
+      const report = await laneWith(tonpays, { adapter: stalled }).runOnce(tenantA);
+      expect(report.leaseLost).toBe(1);
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      const [row] = await rows<{
+        outcome: string | null;
+        next_inquiry_at: string | null;
+        last_inquiry_error_code: string | null;
+      }>(
+        sql`SELECT outcome, next_inquiry_at, last_inquiry_error_code FROM gateway_invoices
+            WHERE payment_id = ${paymentId}`,
+      );
+      expect(row).toMatchObject({
+        outcome: 'SETTLED',
+        next_inquiry_at: null,
+        last_inquiry_error_code: null,
+      });
+    });
+
+    it('a replica whose lease was taken over before it stamped the send sends nothing', async () => {
+      await enableTonPays();
+      const { paymentId } = await payWithGateway(await draftOrder());
+      const repository = new DrizzleGatewayInvoiceRepository(ctx.container.database.db);
+      const budget = new DrizzleGatewayCallBudget(ctx.container.database.db);
+      const report = await laneWith(tonpays, {
+        budget: {
+          take: async (...args: Parameters<GatewayCallBudget['take']>) => {
+            // Stalled past its lease between the claim and the stamp; another replica claims.
+            offsetMs += 70_000;
+            const taken = await ctx.container.uow.run(tenantA, (tx) =>
+              repository.claimCreating(tenantA, new Date(Date.now() + offsetMs), 60_000, 5, tx),
+            );
+            expect(taken.map((one) => one.invoice.paymentId)).toEqual([paymentId]);
+            return budget.take(...args);
+          },
+        },
+      }).runOnce(tenantA);
+      expect(report.leaseLost).toBe(1);
+      expect(tonpays.creates).toHaveLength(0);
+      const invoice = await invoiceOf(paymentId);
+      expect(invoice.creation_state).toBe('CREATING');
+    });
+
+    it('a create still in flight is never called UNKNOWN by another replica, even past its lease', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const stalled = Object.create(real) as TonPaysAdapter;
+      const other = laneWith(tonpays);
+      let othersReport: Awaited<ReturnType<GatewayPaymentService['runOnce']>> | null = null;
+      (stalled as unknown as { createInvoice: unknown }).createInvoice = async (
+        ...args: Parameters<TonPaysAdapter['createInvoice']>
+      ) => {
+        // The call is slow: past the claim's sixty seconds, inside its timeout plus a lease.
+        offsetMs += 70_000;
+        othersReport = await other.runOnce(tenantA);
+        return real.createInvoice(...args);
+      };
+      await laneWith(tonpays, { adapter: stalled }).runOnce(tenantA);
+      expect(othersReport).toMatchObject({ createUnknown: 0, created: 0 });
+      const invoice = await invoiceOf(paymentId);
+      expect(invoice.creation_state).toBe('CREATED');
+      expect(invoice.provider_invoice_id).not.toBeNull();
+      expect(tonpays.creates).toHaveLength(1);
+    });
+  });
+
   describe('an exhausted call budget', () => {
     const empty: GatewayCallBudget = { take: () => Promise.resolve(false) };
     const claims = async (column: 'creation_claimed_until' | 'inquiry_claimed_until') =>
