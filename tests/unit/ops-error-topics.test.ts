@@ -33,6 +33,7 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'payments.gateway_review_unresolved': 'PAYMENTS',
   'payments.gateway_review_reconciled': 'PAYMENTS',
   'payments.gateway_settlement_failed': 'PAYMENTS',
+  'payments.gateway_settlement_decided': 'PAYMENTS',
   'payments.gateway_inquiry_failing': 'PAYMENTS',
   'payments.gateway_inquiry_ok': 'PAYMENTS',
   'payments.gateway_webhook_unverified': 'SECURITY',

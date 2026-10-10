@@ -130,8 +130,9 @@ export const GATEWAY_WEBHOOK_VERIFIED_CODE = 'payments.gateway_webhook_verified'
  *
  * - `payments.gateway_settlement_failed` (ERROR) — the provider APPROVED an attempt and the
  *   settlement transaction refused (`confirmGatewayPayment` threw). Nothing moved; the
- *   inquiry stays scheduled and is asked again inside the deadline. One row per payment, its
- *   counter the number of refusals — so a later `LATE_COMPLETION` is read beside its cause.
+ *   inquiry stays scheduled and is asked again inside the deadline. One condition per
+ *   payment, its counter the number of refusals; closed by `payments.gateway_settlement_decided`
+ *   (INFO) once the lane decides that payment (audit P2-b on #260).
  * - `payments.gateway_inquiry_failing` (WARN) — a gateway's inquiries keep failing
  *   (`GatewayInquiryHealth`). One open condition per gateway; closed by
  *   `payments.gateway_inquiry_ok` (INFO) when an inquiry is next answered.
@@ -139,6 +140,13 @@ export const GATEWAY_WEBHOOK_VERIFIED_CODE = 'payments.gateway_webhook_verified'
 export const GATEWAY_SETTLEMENT_FAILED_CODE = 'payments.gateway_settlement_failed';
 export const GATEWAY_INQUIRY_FAILING_CODE = 'payments.gateway_inquiry_failing';
 export const GATEWAY_INQUIRY_OK_CODE = 'payments.gateway_inquiry_ok';
+/**
+ * Audit P2-b on #260: closes a payment's `payments.gateway_settlement_failed` once the lane
+ * has DECIDED that payment — settled (or found already settled), failed, held for an
+ * operator, or recorded late. Its dedupe key names the payment, so it closes that payment's
+ * alarm and no other.
+ */
+export const GATEWAY_SETTLEMENT_DECIDED_CODE = 'payments.gateway_settlement_decided';
 
 /**
  * The note a CREATED card-transfer attempt carries in `creation_error_code` when the
@@ -483,6 +491,15 @@ export class GatewayPaymentService {
           result === 'HELD'
         ) {
           await this.refreshScreens(scope, claimed.invoice.paymentId);
+        }
+        // Audit P2-b on #260: a decision closes this payment's "settlement refused" alarm.
+        if (
+          result === 'SETTLED' ||
+          result === 'UNSUCCESSFUL' ||
+          result === 'LATE' ||
+          result === 'HELD'
+        ) {
+          await this.settlementDecided(scope, claimed.invoice.paymentId);
         }
       }
     }
@@ -1340,6 +1357,10 @@ export class GatewayPaymentService {
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
     );
+    // Audit P2-b on #260: the worker's pass is not the only one that decides a recorded payment.
+    if (settled === 'SETTLED' || settled === 'LATE') {
+      await this.settlementDecided(scope, paymentId);
+    }
     return settled === 'HELD' ? 'ERROR' : settled;
   }
 
@@ -2740,6 +2761,38 @@ export class GatewayPaymentService {
       recoversCode: GATEWAY_MISCONFIGURED_CODE,
       recoversDedupeKey: dedupeKey,
     });
+  }
+
+  /**
+   * Audit P2-b on #260: the lane decided this payment, so a "could not be settled, nothing
+   * was credited" alarm open for it is no longer true. Only an OPEN condition is answered
+   * (a decision with no earlier refusal records nothing), and never a failure of the pass:
+   * the decision has already committed.
+   */
+  private async settlementDecided(scope: TenantContext, paymentId: PaymentId): Promise<void> {
+    const dedupeKey = `${GATEWAY_SETTLEMENT_FAILED_CODE}:${paymentId}`;
+    try {
+      if (!(await this.deps.conditions.conditionIsOpen(scope, dedupeKey))) return;
+    } catch (error: unknown) {
+      this.deps.logger.warn(
+        { paymentId, error: error instanceof Error ? error.name : 'unknown' },
+        'a settlement alarm could not be checked; it is closed by the next decision',
+      );
+      return;
+    }
+    await recordQuietly(
+      this.deps.opsLog,
+      scope,
+      {
+        code: GATEWAY_SETTLEMENT_DECIDED_CODE,
+        severity: 'INFO',
+        message: 'The payment the gateway approved has now been decided.',
+        context: { paymentId },
+        recoversCode: GATEWAY_SETTLEMENT_FAILED_CODE,
+        recoversDedupeKey: dedupeKey,
+      },
+      this.deps.logger,
+    );
   }
 
   private async identityMismatch(

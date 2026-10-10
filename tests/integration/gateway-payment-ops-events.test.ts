@@ -14,6 +14,7 @@ import {
   GATEWAY_INQUIRY_FAILING_CODE,
   GATEWAY_INQUIRY_OK_CODE,
   GATEWAY_MISCONFIGURED_CODE,
+  GATEWAY_SETTLEMENT_DECIDED_CODE,
   GATEWAY_SETTLEMENT_FAILED_CODE,
   GatewayPaymentService,
   type GatewayPaymentServiceDeps,
@@ -43,7 +44,9 @@ import {
  * FIX-03 (batch 2026-10-10): the payment-gateway failures that used to be log lines.
  *
  * - An approval the settlement transaction refused is `payments.gateway_settlement_failed`,
- *   once per payment however often it is retried, and nothing is credited.
+ *   once per payment however often it is retried, and nothing is credited. It is a condition:
+ *   the pass that later DECIDES that payment closes it with `payments.gateway_settlement_decided`,
+ *   and only that payment's (audit P2-b on #260).
  * - Inquiries that keep failing open `payments.gateway_inquiry_failing` for the gateway, and
  *   the next answered inquiry closes it with `payments.gateway_inquiry_ok`.
  * - An inquiry whose route lost its key opens `payments.gateway_misconfigured`, as the create
@@ -304,6 +307,9 @@ describe('FIX-03: payment-gateway operational events', () => {
       occurrence_count: 2,
       context: { paymentId, provider: 'TONPAYS', error: 'Error' },
     });
+    // Undecided: the condition stays open, and nothing has recovered it.
+    expect(rows[0]!.resolved_at).toBeNull();
+    expect(await events(GATEWAY_SETTLEMENT_DECIDED_CODE)).toEqual([]);
     // Neither the error's message nor the key ever reaches the row.
     expect(JSON.stringify(rows)).not.toContain('scope stopped');
     expect(JSON.stringify(rows)).not.toContain(API_KEY);
@@ -312,7 +318,71 @@ describe('FIX-03: payment-gateway operational events', () => {
     // The settlement path recovers: credited exactly once, and no new failure row.
     await inquire(lane());
     expect(await paymentState(paymentId)).toBe('CONFIRMED');
-    expect(await events(GATEWAY_SETTLEMENT_FAILED_CODE)).toHaveLength(1);
+    const after = await events(GATEWAY_SETTLEMENT_FAILED_CODE);
+    expect(after).toHaveLength(1);
+    // Audit P2-b on #260: and the alarm that said "nothing was credited" is closed.
+    expect(after[0]!.resolved_at).not.toBeNull();
+    const decided = await events(GATEWAY_SETTLEMENT_DECIDED_CODE);
+    expect(decided).toHaveLength(1);
+    expect(decided[0]!.context).toEqual({ paymentId });
+    // A later pass decides nothing more and records nothing more.
+    await inquire(lane());
+    expect(await events(GATEWAY_SETTLEMENT_DECIDED_CODE)).toHaveLength(1);
+  });
+
+  it('a refused approval later recorded LATE_COMPLETION closes its alarm; another payment keeps its own', async () => {
+    const late = await topup();
+    await lane().runOnce(tenantA);
+    const other = await ctx.container.payments.requestGatewayTopup(
+      { ...tenantA, botInstanceId: BOT_A },
+      systemActor(key()),
+      customer,
+      { idempotencyKey: key(), amount: money(300_000n, 'IRT'), provider: 'TONPAYS' },
+    );
+    const otherId = other.payment.id as PaymentId;
+    await lane().runOnce(tenantA);
+    tonpays.approveAll();
+    const refusing = new Proxy(ctx.container.payments, {
+      get: (target, property, receiver) =>
+        property === 'confirmGatewayPayment'
+          ? () => Promise.reject(new Error('scope stopped accepting work'))
+          : (Reflect.get(target, property, receiver) as unknown),
+    });
+    await inquire(lane({ payments: refusing }));
+    const open = await events(GATEWAY_SETTLEMENT_FAILED_CODE);
+    expect(open.map((row) => row.dedupe_key).sort()).toEqual(
+      [late, otherId].map((id) => `${GATEWAY_SETTLEMENT_FAILED_CODE}:${id}`).sort(),
+    );
+    // Past `late`'s deadline only: its next answer is a LATE_COMPLETION, a decision.
+    await ctx.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = ${new Date(Date.now() + offsetMs + 60_000)}
+           WHERE id = ${late}`,
+    );
+    // The other payment is not asked in that pass: nothing is decided about it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(Date.now() + offsetMs + 3_600_000)}
+           WHERE payment_id = ${otherId}`,
+    );
+    await inquire(lane({ payments: refusing }));
+    expect(await paymentState(late)).toBe('PENDING');
+    const rows = await events(GATEWAY_SETTLEMENT_FAILED_CODE);
+    const byKey = new Map(rows.map((row) => [row.dedupe_key, row]));
+    expect(byKey.get(`${GATEWAY_SETTLEMENT_FAILED_CODE}:${late}`)?.resolved_at).not.toBeNull();
+    // The other payment is undecided: still nothing credited, its alarm still open.
+    expect(byKey.get(`${GATEWAY_SETTLEMENT_FAILED_CODE}:${otherId}`)?.resolved_at).toBeNull();
+    expect(await paymentState(otherId)).toBe('PENDING');
+    expect((await events(GATEWAY_SETTLEMENT_DECIDED_CODE)).map((row) => row.context)).toEqual([
+      { paymentId: late },
+    ]);
+  });
+
+  it('a decision with no refusal before it records no recovery', async () => {
+    const paymentId = await topup();
+    await lane().runOnce(tenantA);
+    tonpays.approveAll();
+    await inquire(lane());
+    expect(await paymentState(paymentId)).toBe('CONFIRMED');
+    expect(await events(GATEWAY_SETTLEMENT_DECIDED_CODE)).toEqual([]);
   });
 
   it('inquiries that keep failing open the gateway condition; an answered one closes it', async () => {
