@@ -18,7 +18,57 @@ export const LOOP_STALL_RERECORD_MS = 5 * 60_000;
 
 export interface LoopStatus {
   readonly name: string;
-  readonly stalled: boolean;
+  /**
+   * `true` stalled, `false` making progress (or switched off), and `null` UNKNOWN: no
+   * verdict yet, as inside a restarted role's startup grace (Codex P2 on #258). UNKNOWN
+   * opens nothing and CLOSES nothing — reading it as fresh resolved a stall the previous
+   * life left open before this one had made a single successful pass, and the condition
+   * reopened the moment the grace ran out.
+   */
+  readonly stalled: boolean | null;
+}
+
+/**
+ * The process roles that report their loops (FIX-03 batch 2026-10-10).
+ *
+ * The worker was the only one until this batch, so a provisioner whose every settlement
+ * lane threw, a monitor whose discovery threw and a recovery executor whose tick threw
+ * each went stale in their own container's health check and said nothing anywhere an
+ * operator reads. The role travels as `processRole` in the event's context, so the group
+ * message names the process to look at, not only the loop.
+ */
+export type LoopReportingRole = 'worker' | 'provisioner' | 'monitor' | 'recovery';
+
+const ROLE_LABEL: Readonly<Record<LoopReportingRole, string>> = {
+  worker: 'Worker',
+  provisioner: 'Provisioner',
+  monitor: 'Monitor',
+  recovery: 'Recovery',
+};
+
+/**
+ * Whether a loop of a role whose readiness has NO startup grace is stalled, for REPORTING.
+ *
+ * The provisioner, the monitor and the recovery executor all refuse readiness until their
+ * first successful pass, deliberately (each one's file says why). Readiness and reporting
+ * are different questions: a release that never becomes ready fails its rollout, which is
+ * the signal; but a stall recorded on the very first heartbeat, before the first tick could
+ * possibly have run, is a false alarm in the group on every restart. So a loop is reported
+ * stalled only once it has had `graceMs` since it started to make progress, and never
+ * while it is disabled (`startedAtMs` null — the operator switched it off).
+ *
+ * Inside the grace, a loop that has not yet made progress is UNKNOWN (`null`), not fresh:
+ * a stall inherited from the previous life stays open until a pass actually succeeds.
+ */
+export function stalledAfterGrace(input: {
+  readonly fresh: boolean;
+  readonly startedAtMs: number | null;
+  readonly nowMs: number;
+  readonly graceMs: number;
+}): boolean | null {
+  if (input.fresh || input.startedAtMs === null) return false;
+  // Inside the grace there is no verdict either way: UNKNOWN, never "fresh".
+  return input.nowMs - input.startedAtMs > input.graceMs ? true : null;
 }
 
 /**
@@ -45,7 +95,12 @@ export class LoopStallReporter {
    * them handled when found meant one failed write left the condition open for good.
    */
   private readonly inherited = new Set<string>();
-  private startupChecked = false;
+  /**
+   * The loops whose inherited condition has been looked for. Per loop, and only once a loop
+   * is KNOWN fresh: a loop still UNKNOWN on the first observation (inside its grace) is
+   * looked for when it first makes progress, not never.
+   */
+  private readonly startupChecked = new Set<string>();
   private running = false;
 
   constructor(
@@ -57,6 +112,8 @@ export class LoopStallReporter {
       readonly scope: () => TenantContext | null;
       readonly clock: Clock;
       readonly logger: { warn: (context: Record<string, unknown>, message: string) => void };
+      /** Which process this is; named in the message and in the context. */
+      readonly role: LoopReportingRole;
     },
   ) {}
 
@@ -82,7 +139,7 @@ export class LoopStallReporter {
     const now = this.deps.clock.now().getTime();
 
     for (const loop of loops) {
-      if (!loop.stalled) continue;
+      if (loop.stalled !== true) continue;
       const last = this.recordedAt.get(loop.name);
       if (last !== undefined && now - last < LOOP_STALL_RERECORD_MS) continue;
       const recorded = await recordQuietly(
@@ -91,29 +148,27 @@ export class LoopStallReporter {
         {
           code: JOB_LOOP_STALLED_CODE,
           severity: OPS_ERROR_CLASS_POLICY.ERROR.storedSeverity,
-          message: `Worker loop "${loop.name}" has stopped making progress.`,
+          message: `${ROLE_LABEL[this.deps.role]} loop "${loop.name}" has stopped making progress.`,
           dedupeKey: loopStallConditionKey(loop.name),
-          context: { kind: loop.name, state: 'STALLED' },
+          context: { kind: loop.name, state: 'STALLED', processRole: this.deps.role },
         },
         this.deps.logger,
       );
       if (recorded !== null) this.recordedAt.set(loop.name, now);
     }
 
-    // Recoveries: the ones this process opened, and — once, on its first observation —
-    // any another process left open for a loop that is fresh here.
-    const fresh = loops.filter((loop) => !loop.stalled).map((loop) => loop.name);
-    if (!this.startupChecked) {
-      const found: string[] = [];
-      for (const name of fresh) {
-        if (this.recordedAt.has(name)) continue;
+    // Recoveries: the ones this process opened, and — once per loop, the first time it is
+    // KNOWN fresh — any another process left open. An UNKNOWN loop is neither.
+    const fresh = loops.filter((loop) => loop.stalled === false).map((loop) => loop.name);
+    for (const name of fresh) {
+      if (this.startupChecked.has(name)) continue;
+      if (!this.recordedAt.has(name)) {
         const open = await this.deps.conditions.openConditions(scope, [
           loopStallConditionKey(name),
         ]);
-        if (open.includes(JOB_LOOP_STALLED_CODE)) found.push(name);
+        if (open.includes(JOB_LOOP_STALLED_CODE)) this.inherited.add(name);
       }
-      for (const name of found) this.inherited.add(name);
-      this.startupChecked = true;
+      this.startupChecked.add(name);
     }
     const toClose = fresh.filter((name) => this.recordedAt.has(name) || this.inherited.has(name));
     for (const name of toClose) {
@@ -123,8 +178,8 @@ export class LoopStallReporter {
         {
           code: JOB_LOOP_RECOVERED_CODE,
           severity: OPS_ERROR_CLASS_POLICY.INFO.storedSeverity,
-          message: `Worker loop "${name}" is making progress again.`,
-          context: { kind: name, state: 'FRESH' },
+          message: `${ROLE_LABEL[this.deps.role]} loop "${name}" is making progress again.`,
+          context: { kind: name, state: 'FRESH', processRole: this.deps.role },
           recoversCode: JOB_LOOP_STALLED_CODE,
           recoversDedupeKey: loopStallConditionKey(name),
         },

@@ -5713,6 +5713,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       return { tenantId: installationTenantId, botInstanceId: null };
     },
     tickMs: config.PROVISIONER_TICK_MS,
+    /*
+     * Stall REPORTING only (Codex P2 on #258): one step of a tick may be a provider
+     * exchange, and that is bounded by the panel HTTP timeout per request. The same
+     * product the per-panel probe claim is floored on — timeout x attempts x the most
+     * requests a registered provider makes in one exchange — so a call still inside its
+     * own deadline is never reported as a stalled provisioner.
+     */
+    inFlightAllowanceMs:
+      config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES) * MAX_REQUESTS_PER_PROBE,
     now: () => clock.now().getTime(),
     logger,
   });

@@ -576,6 +576,60 @@ Any of the three in a crash loop, alive with a blocked event loop, or alive and
 cut off from PostgreSQL goes unhealthy within a check or two, and a release in
 that state is backed out exactly as one whose API never answered.
 
+### Who reports a stalled role, and the one that cannot report itself
+
+Every background role now turns a loop that has stopped making progress into an
+operational condition — `job.loop_stalled`, closed by `job.loop_recovered` — in the
+operations log group's SYSTEM topic. The worker has done this since FIX-05; the
+provisioner, the monitor and the recovery executor since FIX-03 of batch 2026-10-10.
+The report names the loop (`kind`) and the process role (`processRole`), so the
+group says which container to look at:
+
+| Role          | Loops reported (`job.loop_stalled:<name>`)                                                                             |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `worker`      | every loop in its heartbeat (`relay`, `gateway-payments`, `notification-dispatcher`, …)                                |
+| `provisioner` | `provisioner` (the provisioning drain), `provisioner-cashback`, `provisioner-referrals`, `provisioner-service-refunds` |
+| `monitor`     | `panel-monitor`                                                                                                        |
+| `recovery`    | `recovery-executor` (fresh during a CLAIMED run, so a long restore is not a stall; a hang before a claim is)           |
+| `assistant`   | none here — the worker's `support-assistant-watch` raises `support.assistant.stalled` when AI work goes unclaimed      |
+
+A role whose readiness has no startup grace still waits one staleness window after it
+starts before it REPORTS a stall, so a restart does not post a false alarm. Inside that
+window a loop that has not yet succeeded is UNKNOWN, not fresh: it opens nothing and
+closes nothing, so a stall the previous life left open is resolved only by a pass that
+actually succeeds here. A provisioner tick in flight is held to the staleness window
+plus the longest provider exchange the configuration allows (`PANEL_HTTP_TIMEOUT_MS` ×
+the most requests one exchange makes), so a slow panel call within its own deadline is
+not a stall. A role switched off (`PROVISIONER_ENABLED=false`,
+`PANEL_MONITOR_ENABLED=false`) reports nothing stalled, which closes a condition a
+previous life opened.
+
+**What none of this can do: report a dead worker.** Every message to the operations
+log group is SENT by the notification dispatcher, and the dispatcher runs in the
+worker. The other roles still record their stalls while the worker is down — the rows
+are durable and are sent when it returns — but nobody is told in the meantime, and a
+worker whose dispatcher is stalled cannot announce its own stall either. Docker does
+not help: `restart: unless-stopped` restarts a container that EXITS, never one that is
+merely unhealthy.
+
+So an installation needs one check that does not run inside it. Two that work with
+what exists today:
+
+- **An off-host uptime check on `https://<domain>/health/ready`**, alerting on any
+  non-200 for more than a couple of minutes. It covers the API, PostgreSQL, the
+  migrations, and — through the `outbox` dependency, which fails when the oldest
+  unpublished event is older than `OUTBOX_RELAY_MAX_LAG_MS` — a worker whose relay
+  has stopped while events are being written. It does NOT see a stalled dispatcher
+  beside a healthy relay, and on a quiet installation it sees a dead relay only once
+  something is written.
+- **A host-side cron that runs `botctl status`** and alerts through a channel that is
+  not this installation (mail, a separate bot, the hosting provider's monitor) when
+  the exit status is non-zero. `status` reads every container's own health check,
+  including the worker's heartbeat, which goes stale when ANY of its loops — the
+  dispatcher included — stops making progress.
+
+Neither is configured by the installer, and neither is a substitute for the other.
+
 The required set is intersected with what the ACTIVE compose file defines, and
 that is what keeps rolling back to an older release valid. Host assets are
 release-versioned: a rollback activates the target's `compose.yml` and then

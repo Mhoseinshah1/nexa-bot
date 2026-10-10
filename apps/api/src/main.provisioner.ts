@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { resolveInstallationTenant } from './bootstrap.js';
+import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
@@ -44,6 +44,15 @@ async function main(): Promise<void> {
   // to invent a tenant id when there is none.
   await resolveInstallationTenant(container);
 
+  /*
+   * FIX-03 (batch 2026-10-10): a stalled lane is an operational condition, as the worker's
+   * loops are. Until this, a provisioner whose cashback, referral or refund lane threw on
+   * every tick went stale in its own container's health check and logged an error line —
+   * and nothing reached the operations group. Per LANE, so the report names the one that
+   * stopped; readiness below is unchanged.
+   */
+  const loopStalls = loopStallReporterFor(container, 'provisioner');
+
   /**
    * The signal the container's health check reads, and it proves three things.
    *
@@ -72,6 +81,11 @@ async function main(): Promise<void> {
       } catch {
         return false;
       }
+      // Not awaited, and it never throws: reporting must not slow or fail the heartbeat.
+      // A disabled provisioner reports every lane as not stalled, so its conditions close.
+      void loopStalls.observe(
+        container.provisionerLoop.laneStatuses(container.clock.now().getTime()),
+      );
       // A disabled provisioner is a healthy process deliberately doing nothing. It
       // must not report itself unhealthy and be restarted for ever by the container
       // runtime — the operator turned it off on purpose. The same rule the monitor has.
