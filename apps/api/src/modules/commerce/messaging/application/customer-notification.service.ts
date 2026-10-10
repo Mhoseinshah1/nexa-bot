@@ -7,8 +7,10 @@ import {
   CUSTOMER_NOTIFICATION_QUIET_HOURS,
   CUSTOMER_NOTIFICATION_TEMPLATES,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
+  type BotInstanceId,
   type Clock,
   type CustomerNotificationKind,
+  type TemplateKey,
   type TemplateValues,
   type TicketAttachmentKind,
   type TicketReplyFileMimeType,
@@ -21,7 +23,9 @@ import type {
   CustomerMessenger,
   CustomerNotificationRecord,
   CustomerNotificationRepository,
+  CustomerSendResult,
 } from './ports.js';
+import type { OrderScreenReadiness } from './order-screen-answer.js';
 import type { ServiceReminderSnapshotReader } from '../../provisioning/application/service-reminder.ports.js';
 import {
   CUSTOMER_NOTIFICATION_LATENCY_WARN_MS,
@@ -148,6 +152,12 @@ export interface NotificationSweepReport {
    * window was shortened or quiet hours were switched off. Brought forward before the claim.
    */
   readonly quietReleased: number;
+  /**
+   * FIX-08: an order outcome whose payment message another writer touched within the settle
+   * window, put back until it settles so the outcome can be edited onto it. No attempt spent,
+   * no stamp. Present only when non-zero, so a report from before FIX-08 reads the same.
+   */
+  readonly screenSettling?: number;
   /** The send threw. The lease stands and the row comes back later. */
   readonly errored: number;
   /**
@@ -407,14 +417,42 @@ export interface CustomerNotificationDeps {
       readonly serviceId: string;
       readonly orderId: string | null;
     } | null>;
+    /**
+     * FIX-08: the order a SUCCEEDED paid action was BOUGHT by — an `ADD_TRAFFIC`, `ADD_TIME`,
+     * `ADD_DEVICES` or `CHANGE_LOCATION` operation whose order's purpose is that same action
+     * (`PURCHASED_AS`) — so its `SERVICE_ACTION_SUCCEEDED` is answered on that order's payment
+     * message. Null for anything else: a SUSPEND carries the order that CREATED its service,
+     * and is never answered on that order's screen.
+     */
+    purchasedOrderFor?(scope: TenantContext, operationId: string): Promise<string | null>;
   };
   /**
-   * R2: closes the renewal's payment screens — the order's wizard messages lose their
-   * buttons — immediately BEFORE the dedicated result is sent, so the result is a new message
-   * after a closed one. Best effort: a screen that cannot be edited does not hold the result.
+   * The order's payment screens (R2 item 11; FIX-08).
+   *
+   * `close` takes the buttons off every open screen of the order — the lane's behaviour
+   * before FIX-08, and still its fallback. `readiness` and `answer` are FIX-08's
+   * edit-in-place (`order-screen-answer.ts`): asked BEFORE the stamp whether the outcome can
+   * be put on the order's payment message (or must wait for another writer to finish with
+   * it), and AFTER the stamp to edit it there. `answer` returning null means it did not
+   * answer, and the lane closes the screens and sends, exactly as before.
    */
   readonly orderScreens?: {
     close(scope: TenantContext, orderId: string): Promise<void>;
+    readiness?(
+      scope: TenantContext,
+      orderId: string,
+      destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+    ): Promise<OrderScreenReadiness>;
+    answer?(
+      scope: TenantContext,
+      orderId: string,
+      destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+      content: {
+        readonly templateKey: TemplateKey;
+        readonly values: TemplateValues;
+        readonly buttons: readonly CustomerButton[];
+      },
+    ): Promise<CustomerSendResult | null>;
   };
   /**
    * Round N (B2): what `WALLET_MASS_CREDITED` and `SERVICE_GIFT_APPLIED` render, read at send
@@ -612,6 +650,7 @@ export class CustomerNotificationService {
       blocked: counts.blocked ?? 0,
       unreachable: counts.unreachable ?? 0,
       quietHours: counts.quietHours ?? 0,
+      ...(counts.screenSettling === undefined ? {} : { screenSettling: counts.screenSettling }),
       errored: counts.errored ?? 0,
       lost: counts.lost ?? 0,
     };
@@ -630,7 +669,11 @@ export class CustomerNotificationService {
     readonly buttons: readonly CustomerButton[];
     /** HF-A7: a file to send, with the kind's template as its caption, instead of text. */
     readonly file?: NotificationFile;
-    /** R2: the order whose payment screens are closed right before this is sent. */
+    /**
+     * The order this outcome belongs to (R2; FIX-08): its payment message is where the
+     * outcome is EDITED when it can be, and whose screens are closed before it is sent
+     * when it cannot.
+     */
     readonly closesOrder?: string;
     /**
      * Where a delivered file's handle is stamped and its staged bytes cleared, in the
@@ -651,6 +694,20 @@ export class CustomerNotificationService {
         buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
         ...(facts.orderId === null ? {} : { closesOrder: facts.orderId }),
       };
+    }
+    /*
+     * FIX-08: a paid action's success is answered on the payment message of the order that
+     * bought it. The values and buttons are exactly what they were; only WHERE changes.
+     */
+    if (row.kind === 'SERVICE_ACTION_SUCCEEDED' && this.deps.renewals?.purchasedOrderFor) {
+      const orderId = await this.deps.renewals.purchasedOrderFor(scope, row.subjectId);
+      if (orderId !== null) {
+        return {
+          values: {},
+          buttons: this.deps.buttonsFor?.(row.kind, {}) ?? [],
+          closesOrder: orderId,
+        };
+      }
     }
     if (row.kind === 'WALLET_MASS_CREDITED' || row.kind === 'SERVICE_GIFT_APPLIED') {
       if (this.deps.massActions === undefined) return null;
@@ -1055,6 +1112,31 @@ export class CustomerNotificationService {
       }
 
       /*
+       * FIX-08: an order outcome waits, BEFORE the stamp, while its payment message is still
+       * being written by someone else (the customer's tap, the gateway worker) — so the
+       * outcome is edited onto it afterwards rather than buried under their late edit. Put
+       * back like a quiet-hours hold: no attempt spent, nothing stamped (`order-screen-answer.ts`).
+       */
+      const destination = { chatId: lookup.contact.chatId, botInstanceId: row.botInstanceId };
+      const answersOrder =
+        content.closesOrder !== undefined &&
+        content.file === undefined &&
+        this.deps.orderScreens?.readiness !== undefined &&
+        this.deps.orderScreens.answer !== undefined
+          ? content.closesOrder
+          : null;
+      if (answersOrder !== null) {
+        const ready = await this.deps.orderScreens?.readiness?.(scope, answersOrder, destination);
+        if (ready?.kind === 'WAIT') {
+          const at = this.deps.clock.now();
+          await this.deps.uow.run(scope, async (tx) =>
+            this.deps.notifications.deferUntil(scope, row.id, ready.until, at, tx),
+          );
+          return 'screenSettling';
+        }
+      }
+
+      /*
        * The stamp, committed BEFORE the send and in a transaction holding nothing else.
        *
        * A crash must not roll it back: the crash is the case it records. `false` means
@@ -1066,12 +1148,44 @@ export class CustomerNotificationService {
       );
       if (!started) return 'lost';
 
+      // FIX-08: the Telegram call starts here when the outcome is edited onto the order's
+      // payment message instead of sent.
+      let callStartedAt = this.deps.clock.now();
       /*
-       * R2 (item 11): the renewal's payment message is closed FIRST, so the result that
-       * follows is its own new message after a closed one — never an edit of the invoice, and
-       * never a message beside a payment screen still offering to pay.
+       * FIX-08: the outcome EDITED onto the order's payment message. ONE Telegram request for
+       * this row, like the send it replaces, and recorded exactly like one below. Null means
+       * nothing was edited — no message, another writer took it, or Telegram refused the
+       * edit outright — and only then is the outcome sent as before. A throw here is a
+       * database step before the edit (`answerOrder`), so the send below is never a second
+       * answer: it is the lane's ordinary fallback.
        */
-      if (content.closesOrder !== undefined && this.deps.orderScreens !== undefined) {
+      let answered: CustomerSendResult | null = null;
+      if (answersOrder !== null && this.deps.orderScreens?.answer !== undefined) {
+        try {
+          answered = await this.deps.orderScreens.answer(scope, answersOrder, destination, {
+            templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
+            values: content.values,
+            buttons: content.buttons,
+          });
+        } catch (error: unknown) {
+          answered = null;
+          this.deps.logger.error(
+            { err: error instanceof Error ? error.name : 'unknown', notificationId: row.id },
+            'order outcome could not be put on its payment message; sent as a new message',
+          );
+        }
+      }
+
+      /*
+       * R2 (item 11): when the outcome is SENT, the order's payment message is closed FIRST,
+       * so the result that follows is its own new message after a closed one — never a
+       * message beside a payment screen still offering to pay.
+       */
+      if (
+        answered === null &&
+        content.closesOrder !== undefined &&
+        this.deps.orderScreens !== undefined
+      ) {
         try {
           await this.deps.orderScreens.close(scope, content.closesOrder);
         } catch (error: unknown) {
@@ -1083,7 +1197,7 @@ export class CustomerNotificationService {
       }
 
       // FIX-03: the Telegram call starts HERE — after the stamp and any screen-closing.
-      const callStartedAt = this.deps.clock.now();
+      if (answered === null) callStartedAt = this.deps.clock.now();
 
       /*
        * HF-A7: a kind that carries a FILE goes up as one upload, its template the caption.
@@ -1091,31 +1205,33 @@ export class CustomerNotificationService {
        * means for text — including that an UNKNOWN upload is never sent again.
        */
       const result =
-        content.file === undefined
-          ? await this.deps.messenger.send(scope, {
-              chatId: lookup.contact.chatId,
-              botInstanceId: row.botInstanceId,
-              templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
-              values: content.values,
-              // Absent rather than empty: Telegram draws an empty keyboard as a blank attachment.
-              ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
-            })
-          : await this.deps.messenger.sendFile(scope, {
-              chatId: lookup.contact.chatId,
-              botInstanceId: row.botInstanceId,
-              kind: content.file.kind,
-              source: {
-                kind: 'BYTES',
-                bytes: content.file.bytes,
-                fileName: content.file.fileName,
-                mimeType: content.file.mimeType,
-              },
-              caption: {
+        answered !== null
+          ? answered
+          : content.file === undefined
+            ? await this.deps.messenger.send(scope, {
+                chatId: lookup.contact.chatId,
+                botInstanceId: row.botInstanceId,
                 templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
                 values: content.values,
-              },
-              ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
-            });
+                // Absent rather than empty: Telegram draws an empty keyboard as a blank attachment.
+                ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
+              })
+            : await this.deps.messenger.sendFile(scope, {
+                chatId: lookup.contact.chatId,
+                botInstanceId: row.botInstanceId,
+                kind: content.file.kind,
+                source: {
+                  kind: 'BYTES',
+                  bytes: content.file.bytes,
+                  fileName: content.file.fileName,
+                  mimeType: content.file.mimeType,
+                },
+                caption: {
+                  templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
+                  values: content.values,
+                },
+                ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
+              });
 
       const at = this.deps.clock.now();
       // FIX-03: where the wait went — the queue, or the Telegram call — one line per send.

@@ -2174,6 +2174,13 @@ export class ProvisioningService {
        * and rotation already follow (`requested_by_customer_id` NULL).
        */
       readonly requestedByCustomer?: boolean;
+      /**
+       * FIX-08: the service card a customer's FREE move was confirmed on. Recorded beside the
+       * operation in this transaction, so `OperationCardEditor` answers the move ON that card
+       * (the new location, or the card as it was with the failure line) and the announcer
+       * sends no second message. Never for an operator's move.
+       */
+      readonly card?: CardMessageRef;
     },
     now: Date,
     tx: TransactionScope,
@@ -2215,6 +2222,9 @@ export class ProvisioningService {
       now,
       tx,
     );
+    if (input.card !== undefined && input.requestedByCustomer !== false) {
+      await this.deps.cards?.attach(scope, operation.id, input.card, now, tx);
+    }
     await this.deps.audit.record(
       scope,
       actor,

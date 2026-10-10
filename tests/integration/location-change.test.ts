@@ -685,10 +685,26 @@ describe('service location change (WP-A6)', () => {
       expect(await count('service_location_changes')).toBe(0);
 
       const tap = tapUpdate(`lf:${encodeIdPair(service.id, fi)}`);
+      const cardId = tap.update.callback_query.message.message_id;
+      sent = [];
       const confirmed = await runtime().handle(tenantA, systemActor('bot'), tap);
-      expect(confirmed.replyKey).toBe('bot.service.location_requested');
-      // Telegram redelivering the same update requests it once.
-      await runtime().handle(tenantA, systemActor('bot'), tap);
+      /*
+       * FIX-08: confirmed on the card, nothing is SENT — the card itself turns «working»
+       * (an edit of the tapped message), and the move is answered on it when it ends.
+       */
+      expect(confirmed.replyKey).toBeNull();
+      expect(sent.filter((one) => one.url.includes('/sendMessage'))).toEqual([]);
+      expect(
+        sent.filter(
+          (one) => one.url.includes('/editMessageText') && one.body['message_id'] === cardId,
+        ),
+        'the card reads «working»',
+      ).toHaveLength(1);
+      // Telegram redelivering the same update requests it once, and does not touch the card.
+      sent = [];
+      const again = await runtime().handle(tenantA, systemActor('bot'), tap);
+      expect(again.replyKey).toBeNull();
+      expect(sent.filter((one) => !one.url.includes('/answerCallbackQuery'))).toEqual([]);
       expect(await count('service_location_changes')).toBe(1);
       expect(await count('orders', sql`purpose = 'CHANGE_LOCATION'`)).toBe(0);
 
@@ -709,11 +725,27 @@ describe('service location change (WP-A6)', () => {
       });
 
       const walletBefore = await balance();
+      sent = [];
       await ctx.container.provisionerLoop.tick();
       expect((await moveOf(service.id))[0]?.state).toBe('SUCCEEDED');
       expect((await services.findById(tenantA, service.id))?.locationKey).toBe('fi');
       expect(locationPanel.writes).toHaveLength(1);
       expect(await balance()).toBe(walletBefore);
+
+      /*
+       * FIX-08: the SAME card is edited to the service as it now is — in its new location —
+       * and the lane owes no second «انجام شد» message for it.
+       */
+      const answered = sent.filter(
+        (one) => one.url.includes('/editMessageText') && one.body['message_id'] === cardId,
+      );
+      expect(answered, 'the card is answered once, in place').toHaveLength(1);
+      expect(JSON.stringify(answered[0]?.body)).toContain('فنلاند');
+      expect(sent.filter((one) => one.url.includes('/sendMessage'))).toEqual([]);
+      const told = await ctx.container.database.db.execute<{ kind: string }>(
+        sql`SELECT kind FROM customer_notifications WHERE subject_id = ${planned?.id ?? ''}`,
+      );
+      expect(told.rows, 'no separate success message is queued').toEqual([]);
     });
 
     it('offers nothing where the declaration outran the methods: both are required', async () => {

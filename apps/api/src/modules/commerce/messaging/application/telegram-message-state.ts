@@ -186,6 +186,17 @@ export interface TelegramMessageStateRepository {
   ): Promise<TelegramWizardRecord | null>;
 
   /**
+   * FIX-08: the most recently touched `ORDER` wizard naming `subjectId` (an order), whatever
+   * its step or lease — the message an order's outcome may be answered on. A read; nothing
+   * moves. Null when the order never had a tracked screen.
+   */
+  latestForSubject(
+    scope: TenantContext,
+    subjectId: string,
+    tx?: TransactionScope,
+  ): Promise<TelegramWizardRecord | null>;
+
+  /**
    * Moves every wizard showing `paymentId` (or naming `subjectId`, or the one `id`) at one of
    * `from` to `to`, bumping each version and clearing its lease, and returns the rows it
    * moved — the ones THIS caller now edits.
@@ -588,6 +599,11 @@ export class TelegramMessageStateService {
 
   findWizard(scope: TenantContext, ref: TelegramMessageRef): Promise<TelegramWizardRecord | null> {
     return this.deps.repository.findWizard(scope, ref);
+  }
+
+  /** FIX-08: the order's most recently touched screen, for its outcome to be answered on. */
+  latestForSubject(scope: TenantContext, subjectId: string): Promise<TelegramWizardRecord | null> {
+    return this.deps.repository.latestForSubject(scope, subjectId);
   }
 
   // --- Receipt review messages -----------------------------------------------------------

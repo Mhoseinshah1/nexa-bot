@@ -70,7 +70,12 @@ export function successAnsweredElsewhere(subject: {
   readonly answeredOnCard?: boolean;
 }): boolean {
   if (subject.type === 'ROTATE_SUBSCRIPTION') return true;
-  if (subject.type === 'SUSPEND' || subject.type === 'RESUME') {
+  // FIX-08: a free location change asked from the card is answered on it, like the switch.
+  if (
+    subject.type === 'SUSPEND' ||
+    subject.type === 'RESUME' ||
+    subject.type === 'CHANGE_LOCATION'
+  ) {
     return subject.answeredOnCard === true;
   }
   return false;
@@ -88,6 +93,8 @@ export const CARD_ANSWERED_FAILURE_TYPES: readonly OperationType[] = [
   'SUSPEND',
   'RESUME',
   'ROTATE_SUBSCRIPTION',
+  // FIX-08: a free location change asked from the card.
+  'CHANGE_LOCATION',
 ];
 
 export function failureAnsweredOnCard(subject: {
