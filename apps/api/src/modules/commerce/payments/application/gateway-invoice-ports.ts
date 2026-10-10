@@ -641,6 +641,25 @@ export interface GatewayInvoiceRepository {
     tx?: unknown,
   ): Promise<number>;
 
+  /**
+   * FIX10 BUG-1: a row whose processing THREW (a local exception, never a provider answer)
+   * gives its lease back and is not due again before `retryAt`, so it neither sits at the
+   * head of the queue on every pass nor holds its lease. Only a lease still carrying the
+   * value this claim set is touched — a row whose outcome already committed (which clears
+   * the lease) keeps the schedule that commit wrote. Nothing else changes: not the payment,
+   * not the attempt's evidence, and never `creation_sent_at` — a stamped send stays stamped,
+   * so the next claim still calls it UNKNOWN. An unscheduled inquiry stays unscheduled.
+   */
+  backOffClaim(
+    scope: TenantContext,
+    lane: 'CREATION' | 'INQUIRY',
+    paymentId: PaymentId,
+    leaseUntil: Date,
+    retryAt: Date,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
   /** Records what an inquiry returned and when the next one is due (null: none). */
   recordInquiry(
     scope: TenantContext,
@@ -1121,4 +1140,17 @@ export interface GatewayCardTransferRepository {
     leaseUntil: Date,
     tx: unknown,
   ): Promise<number>;
+  /**
+   * FIX10 BUG-1: a submission whose processing threw gives its lease back and waits until
+   * `retryAt`. Conditional on the lease this claim set and on a state still in flight; its
+   * `sent_at` is never cleared, so a stamped upload is still UNKNOWN on the next claim.
+   */
+  backOffSubmission(
+    scope: TenantContext,
+    id: string,
+    leaseUntil: Date,
+    retryAt: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 }

@@ -351,10 +351,13 @@ describe('TonPays, through the one settlement path', () => {
       readonly payments?: GatewayPaymentServiceDeps['payments'];
       /** R2: the customer's invoice message, edited by the worker once the invoice is ready. */
       readonly invoiceScreens?: GatewayPaymentServiceDeps['invoiceScreens'];
+      /** FIX10: a wrapped adapter, so a case can make one row's call throw. */
+      readonly adapter?: TonPaysAdapter;
+      readonly logger?: GatewayPaymentServiceDeps['logger'];
     } = {},
   ): GatewayPaymentService {
     const db = ctx.container.database.db;
-    const adapter = new TonPaysAdapter({ fetch: fake.fetch });
+    const adapter = overrides.adapter ?? new TonPaysAdapter({ fetch: fake.fetch });
     const origins = new DrizzlePublicOriginReader(db);
     return new GatewayPaymentService({
       invoices: new DrizzleGatewayInvoiceRepository(db),
@@ -379,7 +382,11 @@ describe('TonPays, through the one settlement path', () => {
       outbox: ctx.container.outbox,
       clock: { now: () => new Date(Date.now() + offsetMs) },
       ids: ctx.container.ids,
-      logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      logger: overrides.logger ?? {
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
       ...(overrides.invoiceScreens === undefined
         ? {}
         : { invoiceScreens: overrides.invoiceScreens }),
@@ -1439,7 +1446,8 @@ describe('TonPays, through the one settlement path', () => {
         },
       });
       offsetMs += 6 * 60_000;
-      await expect(flaky.runOnce(tenantA)).rejects.toThrow('connection terminated');
+      // FIX10 BUG-1: the row's failure is isolated and counted, never the whole pass's.
+      expect((await flaky.runOnce(tenantA)).rowFailures).toBe(1);
       expect((await paymentOf(paymentId)).state).toBe('PENDING');
       const stranded = await invoiceOf(paymentId);
       expect(stranded.outcome).toBeNull();
@@ -1628,6 +1636,99 @@ describe('TonPays, through the one settlement path', () => {
             AND aggregate_id = ${orderId}`,
       );
       expect(settled[0]!.n).toBe(1);
+    });
+
+    /*
+     * FIX10 BUG-1 (audit probe `probe-poison-row`): one row whose processing throws used to
+     * throw the whole pass. The rows claimed with it were never processed, it kept the oldest
+     * `next_inquiry_at`, and the same batch was claimed and abandoned on every pass — a paid
+     * attempt beside it stayed PENDING for as long as the poison lasted.
+     */
+    it('FIX10 BUG-1: a row whose inquiry throws is backed off, and the paid row claimed with it settles in the same pass', async () => {
+      const first = await createdAttempt();
+      const secondOrderId = await draftOrder(300_000n);
+      const second = await payWithGateway(secondOrderId);
+      await pass();
+      const secondInvoiceId = (await invoiceOf(second.paymentId)).provider_invoice_id!;
+      // Deterministic order: the poisoned row is due first.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 hour' WHERE payment_id = ${first.paymentId}`,
+      );
+      tonpays.set(secondInvoiceId, 'completed', true);
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const poisoned = Object.create(real) as TonPaysAdapter;
+      let poison = true;
+      (poisoned as unknown as { inquire: unknown }).inquire = (
+        apiKey: string,
+        invoiceId: string,
+      ) =>
+        poison && invoiceId === first.invoiceId
+          ? Promise.reject(
+              Object.assign(new Error(`boom ${apiKey}`), { code: '40P01', detail: apiKey }),
+            )
+          : real.inquire(apiKey, invoiceId);
+      const errors: string[] = [];
+      const poisonLane = laneWith(tonpays, {
+        adapter: poisoned,
+        logger: {
+          info: () => undefined,
+          warn: () => undefined,
+          error: (context, message) => errors.push(`${message} ${JSON.stringify(context)}`),
+        },
+      });
+
+      offsetMs += 6 * 60_000;
+      const laneNow = Date.now() + offsetMs;
+      const report = await poisonLane.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.settled).toBe(1);
+      expect((await paymentOf(second.paymentId)).state).toBe('CONFIRMED');
+
+      // The failing row: nothing decided about it — not failed, not UNKNOWN, no outcome —
+      // its lease given back and its next inquiry pushed behind the back-off.
+      expect((await paymentOf(first.paymentId)).state).toBe('PENDING');
+      const [backedOff] = await rows<{
+        outcome: string | null;
+        inquiry_claimed_until: string | null;
+        next_inquiry_at: string;
+        inquiry_attempts: number;
+      }>(
+        sql`SELECT outcome, inquiry_claimed_until, next_inquiry_at, inquiry_attempts
+            FROM gateway_invoices WHERE payment_id = ${first.paymentId}`,
+      );
+      expect(backedOff?.outcome).toBeNull();
+      expect(backedOff?.inquiry_claimed_until).toBeNull();
+      expect(new Date(backedOff!.next_inquiry_at).getTime()).toBeGreaterThanOrEqual(
+        laneNow + 30_000,
+      );
+      // A local exception is not an answer: no inquiry was recorded for it.
+      expect(backedOff?.inquiry_attempts).toBe(0);
+
+      // Logged with its ids and the machine code only — never the message, detail or key.
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain(first.paymentId);
+      expect(errors[0]).toContain('"code":"40P01"');
+      expect(errors[0]).not.toContain('boom');
+      expect(errors[0]).not.toContain(API_KEY);
+
+      // Not due again before the back-off: a pass right now does not ask about it.
+      const checksBefore = tonpays.checks.length;
+      await poisonLane.runOnce(tenantA);
+      expect(tonpays.checks.slice(checksBefore)).not.toContain(first.invoiceId);
+
+      // The fault cleared, the row is asked again after its back-off and settles once.
+      poison = false;
+      tonpays.set(first.invoiceId, 'completed', true);
+      offsetMs += 6 * 60_000;
+      await poisonLane.runOnce(tenantA);
+      expect((await paymentOf(first.paymentId)).state).toBe('CONFIRMED');
+      for (const orderId of [first.orderId, secondOrderId]) {
+        const settled = await rows<{ n: number }>(
+          sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'OrderSettled'
+              AND aggregate_id = ${orderId}`,
+        );
+        expect(settled[0]!.n).toBe(1);
+      }
     });
   });
 

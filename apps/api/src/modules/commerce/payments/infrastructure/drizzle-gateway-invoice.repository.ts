@@ -831,6 +831,48 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     return rows.length;
   }
 
+  async backOffClaim(
+    scope: TenantContext,
+    lane: 'CREATION' | 'INQUIRY',
+    paymentId: PaymentId,
+    leaseUntil: Date,
+    retryAt: Date,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows =
+      lane === 'CREATION'
+        ? await this.exec(tx)
+            .update(gatewayInvoices)
+            // `creation_sent_at` is deliberately untouched: a stamped send is still UNKNOWN.
+            .set({ creationClaimedUntil: null, creationRetryAt: retryAt, updatedAt: now })
+            .where(
+              and(
+                eq(gatewayInvoices.tenantId, tenantId),
+                eq(gatewayInvoices.paymentId, paymentId),
+                eq(gatewayInvoices.creationState, 'CREATING'),
+                eq(gatewayInvoices.creationClaimedUntil, leaseUntil),
+              ),
+            )
+            .returning({ paymentId: gatewayInvoices.paymentId })
+        : await this.exec(tx)
+            .update(gatewayInvoices)
+            .set({ inquiryClaimedUntil: null, nextInquiryAt: retryAt, updatedAt: now })
+            .where(
+              and(
+                eq(gatewayInvoices.tenantId, tenantId),
+                eq(gatewayInvoices.paymentId, paymentId),
+                eq(gatewayInvoices.inquiryClaimedUntil, leaseUntil),
+                // Still scheduled and undecided: an unscheduled row is never re-scheduled here.
+                isNotNull(gatewayInvoices.nextInquiryAt),
+                isNull(gatewayInvoices.outcome),
+              ),
+            )
+            .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length > 0;
+  }
+
   async recordInquiry(
     scope: TenantContext,
     paymentId: PaymentId,

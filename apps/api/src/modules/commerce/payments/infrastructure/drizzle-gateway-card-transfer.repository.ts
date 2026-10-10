@@ -714,6 +714,31 @@ export class DrizzleGatewayCardTransferRepository implements GatewayCardTransfer
     return rows.length;
   }
 
+  async backOffSubmission(
+    scope: TenantContext,
+    id: string,
+    leaseUntil: Date,
+    retryAt: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(gatewayReceiptSubmissions)
+      // `sent_at` and `state` are deliberately untouched: a stamped upload is still UNKNOWN.
+      .set({ claimedUntil: null, retryAt, updatedAt: now })
+      .where(
+        and(
+          eq(gatewayReceiptSubmissions.tenantId, tenantId),
+          eq(gatewayReceiptSubmissions.id, id),
+          inArray(gatewayReceiptSubmissions.state, ['QUEUED', 'SENDING']),
+          eq(gatewayReceiptSubmissions.claimedUntil, leaseUntil),
+        ),
+      )
+      .returning({ id: gatewayReceiptSubmissions.id });
+    return rows.length > 0;
+  }
+
   // ---------------------------------------------------------------------------------------
 
   private async withPaymentFacts<T extends { readonly paymentId: PaymentId }>(

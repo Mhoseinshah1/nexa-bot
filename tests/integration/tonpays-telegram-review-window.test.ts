@@ -639,6 +639,125 @@ describe('the TonPays Telegram provider review window', () => {
     });
   });
 
+  /*
+   * FIX10 BUG-1: one row that throws stops neither the sweeps nor the rows beside it. Before
+   * this, a throwing inquiry threw the whole pass, and the review sweep after it never ran:
+   * a lapsed review stayed PENDING instead of going to an operator as UNKNOWN.
+   */
+  describe('a row that throws (FIX10 BUG-1)', () => {
+    it('inquiries that throw on an undecryptable key do not stop the review sweep', async () => {
+      const review = await reviewed(40);
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET api_key_ciphertext = 'v9.not-an-envelope'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TONPAYS_TELEGRAM'`,
+      );
+      clock.at(review.reviewUntil);
+      // Its inquiry is due, so the pass meets the throwing row before the sweep.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices
+               SET next_inquiry_at = ${new Date(review.reviewUntil.getTime() - 60_000).toISOString()}::timestamptz,
+                   inquiry_claimed_until = NULL
+             WHERE payment_id = ${review.paymentId}`,
+      );
+      const report = await lane.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.reviewsLapsed).toBe(1);
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+    });
+
+    it('a lane whose claim itself throws does not stop the review sweep or the lanes after it', async () => {
+      const review = await reviewed(40);
+      clock.at(review.reviewUntil);
+      const broken = telegramLaneWith(ctx, fake, {
+        invoices: (real) => {
+          real.claimInquiries = () => Promise.reject(new Error('the claim transaction failed'));
+          return real;
+        },
+      });
+      const report = await broken.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.reviewsLapsed).toBe(1);
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+    });
+
+    it('a receipt whose processing throws is backed off and the receipt queued after it is uploaded in the same pass', async () => {
+      const first = await attempt();
+      const second = await attempt();
+      clock.at(new Date(first.expiresAt.getTime() - 30 * 60_000));
+      const queue = async (paymentId: string): Promise<string> => {
+        const opened = await ctx.container.gatewayReceiptCaptures.openReceiptCapture(
+          tenantA,
+          systemActor(key()),
+          { customerId: maryam, paymentId, botInstanceId: BOT_A },
+        );
+        if (opened === null) throw new Error('no receipt window');
+        const fileId = `photo-${key()}`;
+        telegram.files.set(fileId, JPEG_BYTES);
+        const queued = await ctx.container.gatewayReceiptCaptures.receivePhoto(
+          tenantA,
+          systemActor(key()),
+          {
+            customerId: maryam,
+            botInstanceId: BOT_A,
+            file: {
+              kind: 'PHOTO',
+              fileId,
+              fileUniqueId: fileId,
+              mimeType: null,
+              fileName: null,
+              fileSize: BigInt(JPEG_BYTES.byteLength),
+              telegramMessageId: 1n,
+              caption: null,
+            },
+          },
+        );
+        expect(queued).toBe('QUEUED');
+        return fileId;
+      };
+      const poisonedFile = await queue(first.paymentId);
+      await queue(second.paymentId);
+      fake.receiptMode = 'ACK';
+      const errors: string[] = [];
+      const poisoned = telegramLaneWith(ctx, fake, {
+        logger: {
+          info: () => undefined,
+          warn: () => undefined,
+          error: (context, message) => errors.push(`${message} ${JSON.stringify(context)}`),
+        },
+        receiptFiles: {
+          download: (scope, binding, options) =>
+            binding.fileId === poisonedFile
+              ? Promise.reject(new Error('disk full'))
+              : ctx.container.receiptFiles.download(
+                  scope,
+                  { botInstanceId: binding.botInstanceId as never, fileId: binding.fileId },
+                  options,
+                ),
+        },
+      });
+      const report = await poisoned.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.receipts).toBe(1);
+      // The receipt after the one that threw was uploaded and opened its review.
+      expect((await paymentOf(second.paymentId)).provider_review_until).not.toBeNull();
+      // The one that threw: never sent, still queued, lease given back, retried later.
+      const [backedOff] = await rows<{
+        state: string;
+        sent_at: string | null;
+        claimed_until: string | null;
+        retry_at: string | null;
+      }>(
+        sql`SELECT state, sent_at, claimed_until, retry_at FROM gateway_receipt_submissions
+            WHERE payment_id = ${first.paymentId}`,
+      );
+      expect(backedOff).toMatchObject({ state: 'QUEUED', sent_at: null, claimed_until: null });
+      expect(new Date(backedOff!.retry_at!).getTime()).toBeGreaterThan(clock.now().getTime());
+      expect((await paymentOf(first.paymentId)).state).toBe('PENDING');
+      expect(errors.some((line) => line.includes(first.paymentId))).toBe(true);
+      expect(errors.join('\n')).not.toContain('disk full');
+    });
+  });
+
   describe('money in flight', () => {
     it('TPTG-36: in review and when UNKNOWN, the wallet purchase, the customer’s cancellation and withdrawal are refused, and the order is not expired', async () => {
       const review = await reviewed(30);
