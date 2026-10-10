@@ -481,6 +481,44 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       expect(leaseLeft!).toBeGreaterThanOrEqual(59_000);
     });
 
+    it('a hinted row that throws is isolated like any other: backed off, and the hinted row beside it still settles', async () => {
+      const failing = await createdTopup();
+      // A different amount: the same one would be handed back as the same open attempt.
+      const healthyId = await topup(260_000n);
+      await lane.runOnce(tenantA);
+      const healthy = { paymentId: healthyId, invoice: await invoiceOf(healthyId) };
+      expect(healthy.paymentId).not.toBe(failing.paymentId);
+      tonpays.set(failing.invoice.provider_invoice_id!, 'rejected', false);
+      tonpays.set(healthy.invoice.provider_invoice_id!, 'completed', true);
+      await webhook(failing.invoice, 'iso-1');
+      await webhook(healthy.invoice, 'iso-2');
+      const payments = ctx.container.payments;
+      const throwing = telegramLaneWith(ctx, new FakeTonPaysTelegram(), {
+        websiteFetch: tonpays.fetch,
+        payments: {
+          confirmGatewayPayment: (...args) => payments.confirmGatewayPayment(...args),
+          recordProviderReview: (...args) => payments.recordProviderReview(...args),
+          recordProviderFundsDetected: (...args) => payments.recordProviderFundsDetected(...args),
+          failGatewayPayment: () => Promise.reject(new Error('deadlock detected')),
+        },
+      });
+      tonpays.calls.length = 0;
+      advance(1_000);
+      const report = await throwing.runOnce(tenantA);
+      // Both were asked in the hinted pre-phase, before any create; one threw.
+      expect(report.rowFailures).toBe(1);
+      expect(await stateOf(healthy.paymentId)).toBe('CONFIRMED');
+      expect(await stateOf(failing.paymentId)).toBe('PENDING');
+      // Its answer was recorded before the throw, so it keeps that answer's schedule (FIX10
+      // BUG-1: a back-off never overrides a committed outcome): asked again, lease cleared.
+      const [row] = await rows<{ next_inquiry_at: Date; inquiry_claimed_until: Date | null }>(
+        sql`SELECT next_inquiry_at, inquiry_claimed_until FROM gateway_invoices
+             WHERE payment_id = ${failing.paymentId}`,
+      );
+      expect(new Date(row!.next_inquiry_at).getTime()).toBeGreaterThan(now);
+      expect(row!.inquiry_claimed_until).toBeNull();
+    });
+
     it('a scheduled inquiry keeps its place AFTER the creations, and is still asked in the same pass', async () => {
       const { paymentId, invoice } = await createdTopup();
       await topup(300_000n);

@@ -523,9 +523,12 @@ export class GatewayPaymentService {
      * handed straight back and asked in their usual place below. Same lane, same per-row
      * isolation and lease bound (`runInquiries`).
      */
-    await this.isolatedLane(scope, report, 'INQUIRY', () =>
-      this.runInquiries(scope, actor, report, 'HINTED'),
-    );
+    // A claim that threw here would throw again below: the lane is counted as failed once.
+    let inquiryLaneFailed = true;
+    await this.isolatedLane(scope, report, 'INQUIRY', async () => {
+      await this.runInquiries(scope, actor, report, 'HINTED');
+      inquiryLaneFailed = false;
+    });
     // FIX-06: whether the CALL budget is gone — the creations' answer, not the inquiries'.
     let callBudgetSpent = false;
     await this.isolatedLane(scope, report, 'CREATION', async () => {
@@ -538,7 +541,7 @@ export class GatewayPaymentService {
         report.budgetExhausted ||= inquiryShareSpent;
       }
     });
-    if (!report.budgetExhausted) {
+    if (!report.budgetExhausted && !inquiryLaneFailed) {
       await this.isolatedLane(scope, report, 'INQUIRY', () =>
         this.runInquiries(scope, actor, report, 'ALL'),
       );
