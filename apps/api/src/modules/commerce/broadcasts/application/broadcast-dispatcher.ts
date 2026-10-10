@@ -62,6 +62,11 @@ export interface BroadcastPassReport {
 
 type Tally = { -readonly [K in keyof BroadcastPassReport]: number };
 
+/** What Telegram answered within one bot's batch, independent of what was recorded. */
+interface TransportObservation {
+  rateLimited: boolean;
+}
+
 export interface BroadcastDispatcherDeps {
   readonly repository: BroadcastRepository;
   readonly transport: BroadcastTransport;
@@ -184,18 +189,22 @@ export class BroadcastDispatcher {
        * flood wait is honoured, not probed. Sends already in flight when the 429 arrived (at
        * most CONCURRENCY - 1) cannot be recalled; nothing STARTS after it.
        */
-      let rateLimited = false;
+      /*
+       * What Telegram SAID, kept apart from what this pass managed to RECORD: a 429 whose
+       * outcome could not be written (a failed transaction, a lease taken over) still stops
+       * every later send of this pass — `deliverOne` sets it the moment the answer arrives,
+       * before any write is attempted.
+       */
+      const observed: TransportObservation = { rateLimited: false };
       const worker = async () => {
         while (index < claimed.length) {
           const recipient = claimed[index] as ClaimedRecipient;
           index += 1;
-          if (rateLimited) {
+          if (observed.rateLimited) {
             tally[await this.releaseOne(scope, recipient)] += 1;
             continue;
           }
-          const outcome = await this.deliverOne(scope, recipient, contentOf, actor, tally);
-          if (outcome === 'rateLimited') rateLimited = true;
-          tally[outcome] += 1;
+          tally[await this.deliverOne(scope, recipient, contentOf, actor, tally, observed)] += 1;
         }
       };
       await Promise.all(Array.from({ length: Math.min(CONCURRENCY, claimed.length) }, worker));
@@ -240,6 +249,7 @@ export class BroadcastDispatcher {
     contentOf: (id: string) => Promise<BroadcastContent | null>,
     actor: ActorContext,
     tally: Tally,
+    observed: TransportObservation,
   ): Promise<keyof BroadcastPassReport> {
     try {
       const content = await contentOf(recipient.broadcastId);
@@ -367,17 +377,39 @@ export class BroadcastDispatcher {
           return counted;
         }
         case 'RATE_LIMITED': {
+          // Observed, whatever the record below manages: nothing STARTS after this answer.
+          observed.rateLimited = true;
           const until = new Date(
             at.getTime() + Math.max(result.retryAfterMs ?? 0, BROADCAST_RETRY_FLOOR_MS),
           );
-          return this.finish(
-            scope,
-            recipient,
-            stampedAt,
-            { to: 'DEFER', errorCode: 'telegram.rate_limited', nextAttemptAt: until },
-            'rateLimited',
-            (tx) => this.deps.repository.holdBot(scope, recipient.botInstanceId, until, at, tx),
-          );
+          let counted: keyof BroadcastPassReport;
+          try {
+            counted = await this.finish(
+              scope,
+              recipient,
+              stampedAt,
+              { to: 'DEFER', errorCode: 'telegram.rate_limited', nextAttemptAt: until },
+              'rateLimited',
+              (tx) => this.deps.repository.holdBot(scope, recipient.botInstanceId, until, at, tx),
+            );
+          } catch (error: unknown) {
+            // The stamp stands (the reaper resolves the row UNCONFIRMED); the hold is not lost.
+            this.deps.logger.error(
+              {
+                err: error instanceof Error ? error.name : 'unknown',
+                broadcastId: recipient.broadcastId,
+              },
+              'broadcast rate-limit record failed',
+            );
+            counted = 'errored';
+          }
+          /*
+           * The bot's hold rode in the record's transaction, so a record that failed or found
+           * the row moved left the BOT unheld for every other replica. The 429 is a fact about
+           * the bot, not the row: hold it on its own. `holdBot` only ever extends a hold.
+           */
+          if (counted !== 'rateLimited') await this.holdAlone(scope, recipient, until, at);
+          return counted;
         }
         case 'UNKNOWN':
           return this.finish(
@@ -462,6 +494,29 @@ export class BroadcastDispatcher {
         'broadcast send failed',
       );
       return 'errored';
+    }
+  }
+
+  /** The bot's pacing hold in its own transaction, when the record that carries it did not. */
+  private async holdAlone(
+    scope: TenantContext,
+    recipient: ClaimedRecipient,
+    until: Date,
+    at: Date,
+  ): Promise<void> {
+    try {
+      await this.deps.uow.run(scope, (tx) =>
+        this.deps.repository.holdBot(scope, recipient.botInstanceId, until, at, tx),
+      );
+    } catch (error: unknown) {
+      // This pass has stopped sending regardless; the next claim may not see the hold.
+      this.deps.logger.error(
+        {
+          err: error instanceof Error ? error.name : 'unknown',
+          broadcastId: recipient.broadcastId,
+        },
+        'broadcast bot hold failed',
+      );
     }
   }
 

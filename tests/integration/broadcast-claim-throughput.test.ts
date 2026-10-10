@@ -176,9 +176,12 @@ describe('broadcast claim and discovery, driven from SENDING broadcasts (FIX-13)
   const db = () => ctx.container.database.db;
   const repository = () => new DrizzleBroadcastRepository(db());
 
-  function dispatcherWith(transport: BroadcastTransport): BroadcastDispatcher {
+  function dispatcherWith(
+    transport: BroadcastTransport,
+    repo: DrizzleBroadcastRepository = repository(),
+  ): BroadcastDispatcher {
     return new BroadcastDispatcher({
-      repository: repository(),
+      repository: repo,
       transport,
       facts: new DrizzleRecipientFactsReader(db(), async () => 'IRT'),
       outbox: ctx.container.outbox,
@@ -380,6 +383,98 @@ describe('broadcast claim and discovery, driven from SENDING broadcasts (FIX-13)
     expect((await ctx.container.broadcasts.get(tenantA, owner, sending)).state).toBe('COMPLETED');
   });
 
+  it('locks only the rows it claims, however many broadcasts are sending', async () => {
+    // Twelve sending broadcasts of 300 due rows each through one bot (enough rows that the
+    // planner probes indexes): each broadcast could offer `take` candidates, and the claim
+    // keeps `take` of them all.
+    await customers(SEED_IDS.tenantA, SEED_IDS.botA1, 77, 300);
+    const sending: string[] = [];
+    for (let index = 0; index < 12; index += 1) sending.push(await launch(tenantA, owner));
+    sending.sort();
+    const take = 5;
+    const total = 12 * 300;
+    await db().execute(sql`ANALYZE broadcast_recipients`);
+    await db().execute(sql`ANALYZE broadcasts`);
+
+    // The plan stops at the first broadcasts that fill `take`: the eleven after them are not
+    // probed. Read: the chosen rows three times (chosen, locked, updated) and the one row of
+    // the next broadcast that tells the sort the first one is complete.
+    const plan = await explain(
+      claimDueQuery({
+        tenantId: SEED_IDS.tenantA,
+        botInstanceId: SEED_IDS.botA1,
+        now: clock.now(),
+        leaseUntil: new Date(clock.now().getTime() + BROADCAST_LEASE_MS),
+        take,
+      }),
+    );
+    for (const scan of plan.filter((node) => node['Relation Name'] === 'broadcast_recipients')) {
+      expect(scan['Node Type']).not.toBe('Seq Scan');
+    }
+    expect(recipientRowsRead(plan)).toBeLessThanOrEqual(3 * take + 1);
+
+    /*
+     * How many recipient rows are row-locked right now, asked from ANOTHER session: the rows
+     * a `FOR UPDATE SKIP LOCKED` there cannot take. Rolled back, so the probe holds nothing.
+     */
+    const lockedNow = async (): Promise<number> => {
+      const probe = await ctx.container.database.pool.connect();
+      try {
+        await probe.query('BEGIN');
+        const free = await probe.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM (SELECT 1 FROM broadcast_recipients
+             WHERE tenant_id = $1::uuid FOR UPDATE SKIP LOCKED) x`,
+          [SEED_IDS.tenantA],
+        );
+        await probe.query('ROLLBACK');
+        return total - (free.rows[0]?.n ?? 0);
+      } finally {
+        probe.release();
+      }
+    };
+
+    let lockedDuringClaim = -1;
+    let cancelledDuringClaim = false;
+    const last = sending[sending.length - 1] as string;
+    const claimed = await ctx.container.uow.run(tenantA, async (tx) => {
+      const rows = await tx.tx.execute<{ broadcast_id: string; customer_id: string }>(
+        claimDueQuery({
+          tenantId: SEED_IDS.tenantA,
+          botInstanceId: SEED_IDS.botA1,
+          now: clock.now(),
+          leaseUntil: new Date(clock.now().getTime() + BROADCAST_LEASE_MS),
+          take,
+        }),
+      );
+      // Still inside the claim's transaction: its locks are all held now.
+      lockedDuringClaim = await lockedNow();
+      // A broadcast the claim did not choose is not blocked by it: its recipients can be
+      // resolved by another session at once (lock_timeout turns a wait into a failure).
+      const probe = await ctx.container.database.pool.connect();
+      try {
+        await probe.query('BEGIN');
+        await probe.query(`SET LOCAL lock_timeout = '500ms'`);
+        await probe.query(
+          `UPDATE broadcast_recipients SET state = 'CANCELLED', resolved_at = now()
+            WHERE tenant_id = $1::uuid AND broadcast_id = $2::uuid AND state = 'PENDING'`,
+          [SEED_IDS.tenantA, last],
+        );
+        await probe.query('ROLLBACK');
+        cancelledDuringClaim = true;
+      } finally {
+        probe.release();
+      }
+      return rows.rows;
+    });
+
+    expect(claimed).toHaveLength(take);
+    // The first `take` of the lowest broadcast, as before.
+    expect(new Set(claimed.map((row) => row.broadcast_id))).toEqual(new Set([sending[0]]));
+    expect(lockedDuringClaim).toBe(take);
+    expect(cancelledDuringClaim).toBe(true);
+    expect(await lockedNow()).toBe(0);
+  });
+
   /** Every plan node of an EXPLAIN (FORMAT JSON). */
   function nodes(plan: Record<string, unknown>): Record<string, unknown>[] {
     const children = (plan.Plans as Record<string, unknown>[] | undefined) ?? [];
@@ -409,15 +504,21 @@ describe('broadcast claim and discovery, driven from SENDING broadcasts (FIX-13)
 
   /** How many recipient rows a plan actually read: returned plus filtered away, every loop. */
   function recipientRowsRead(plan: Record<string, unknown>[]): number {
-    return plan
-      .filter((node) => node['Relation Name'] === 'broadcast_recipients')
-      .reduce(
-        (sum, node) =>
-          sum +
-          ((node['Actual Rows'] as number) + ((node['Rows Removed by Filter'] as number) ?? 0)) *
-            (node['Actual Loops'] as number),
-        0,
-      );
+    return (
+      plan
+        // The UPDATE's own node names the table too, but reads nothing: its rows are the scans'.
+        .filter(
+          (node) =>
+            node['Relation Name'] === 'broadcast_recipients' && node['Node Type'] !== 'ModifyTable',
+        )
+        .reduce(
+          (sum, node) =>
+            sum +
+            ((node['Actual Rows'] as number) + ((node['Rows Removed by Filter'] as number) ?? 0)) *
+              (node['Actual Loops'] as number),
+          0,
+        )
+    );
   }
 
   it('plans both queries as index probes, not a walk of the recipients table', async () => {
@@ -462,8 +563,8 @@ describe('broadcast claim and discovery, driven from SENDING broadcasts (FIX-13)
       expect(scans.length).toBeGreaterThan(0);
       for (const scan of scans) expect(scan['Node Type']).not.toBe('Seq Scan');
       // The paused broadcast's 4,000 waiting rows are never read: at most the claim's own
-      // rows, each read again by the UPDATE's key lookup.
-      expect(recipientRowsRead(plan)).toBeLessThanOrEqual(2 * BROADCAST_SENDS_PER_SECOND);
+      // rows, each read three times — chosen, locked and re-checked, then updated.
+      expect(recipientRowsRead(plan)).toBeLessThanOrEqual(3 * BROADCAST_SENDS_PER_SECOND);
     }
     // And the claim still hands out the sending broadcast's rows, the paused one's none.
     const claimed = await claim(SEED_IDS.botA1, BROADCAST_SENDS_PER_SECOND);
@@ -521,6 +622,40 @@ describe('broadcast claim and discovery, driven from SENDING broadcasts (FIX-13)
       expect((await ctx.container.broadcasts.get(tenantA, owner, broadcastId)).state).toBe(
         'COMPLETED',
       );
+    }, 60_000);
+
+    it('stops the pass on a 429 even when its outcome cannot be recorded, and still holds the bot', async () => {
+      await customers(SEED_IDS.tenantA, SEED_IDS.botA1, 78, 40);
+      const broadcastId = await launch(tenantA, owner);
+      // Telegram is in a flood wait for this bot: every request is answered 429.
+      const telegram = new RateLimitedTelegram(clock, 0, 30_000);
+      // And the transaction that records the 429 fails (a transient database failure).
+      class FailingDeferRecord extends DrizzleBroadcastRepository {
+        override async record(...args: Parameters<DrizzleBroadcastRepository['record']>) {
+          if (args[3].to === 'DEFER') throw new Error('database unavailable');
+          return super.record(...args);
+        }
+      }
+      const report = await dispatcherWith(telegram, new FailingDeferRecord(db())).pass(tenantA);
+
+      expect(report.claimed).toBe(BROADCAST_SENDS_PER_SECOND);
+      // At most the sends already in flight when the first 429 arrived: nothing STARTS after.
+      expect(telegram.requests.length).toBeGreaterThanOrEqual(1);
+      expect(telegram.requests.length).toBeLessThanOrEqual(4);
+      expect(report.rateLimited).toBe(0); // nothing was recorded as rate limited
+      expect(report.errored).toBe(telegram.requests.length);
+      expect(report.released).toBe(BROADCAST_SENDS_PER_SECOND - telegram.requests.length);
+      // The bot is held for every replica although the record carrying the hold failed.
+      const hold = await db().execute<{ hold_until: string | null }>(sql`
+        SELECT hold_until::text AS hold_until FROM broadcast_bot_pacing
+         WHERE tenant_id = ${SEED_IDS.tenantA}::uuid AND bot_instance_id = ${SEED_IDS.botA1}::uuid`);
+      expect(hold.rows[0]?.hold_until).not.toBeNull();
+      // So the next pass claims nothing and asks Telegram nothing.
+      clock.advance(BROADCAST_INTERVAL_MS);
+      const next = await dispatcherWith(telegram).pass(tenantA);
+      expect(next.claimed).toBe(0);
+      expect(telegram.requests.length).toBeLessThanOrEqual(4);
+      expect(broadcastId).toBeTruthy();
     }, 60_000);
 
     it('honours retry_after when another lane spends the budget, survives a restart and a crash, and sends nobody twice', async () => {
