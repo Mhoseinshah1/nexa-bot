@@ -2148,6 +2148,23 @@ export class ProvisioningService {
   }
 
   /**
+   * Codex review of #257: the operation `planLocationChange` planned for one change — the same
+   * derivation, read-only — so a customer's free move confirmed on the service card can tell
+   * whether the move has already ENDED (and been drawn on the card) by the time its own
+   * «working» edit is done.
+   */
+  async findLocationChange(
+    scope: TenantContext,
+    serviceId: string,
+    changeId: string,
+  ): Promise<OperationRecord | null> {
+    return this.deps.operations.findByOperationId(
+      scope,
+      this.deps.operationId(`${serviceId}:CHANGE_LOCATION:${changeId}`),
+    );
+  }
+
+  /**
    * Plans a FREE location change's operation (WP-A6), inside the request's transaction.
    *
    * No order and no money: a free move is asked for, not bought, so there is nothing to
@@ -2174,6 +2191,13 @@ export class ProvisioningService {
        * and rotation already follow (`requested_by_customer_id` NULL).
        */
       readonly requestedByCustomer?: boolean;
+      /**
+       * FIX-08: the service card a customer's FREE move was confirmed on. Recorded beside the
+       * operation in this transaction, so `OperationCardEditor` answers the move ON that card
+       * (the new location, or the card as it was with the failure line) and the announcer
+       * sends no second message. Never for an operator's move.
+       */
+      readonly card?: CardMessageRef;
     },
     now: Date,
     tx: TransactionScope,
@@ -2215,6 +2239,9 @@ export class ProvisioningService {
       now,
       tx,
     );
+    if (input.card !== undefined && input.requestedByCustomer !== false) {
+      await this.deps.cards?.attach(scope, operation.id, input.card, now, tx);
+    }
     await this.deps.audit.record(
       scope,
       actor,

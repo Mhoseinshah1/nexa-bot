@@ -2,11 +2,23 @@ import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   type ActorContext,
   type Clock,
+  type BotInstanceId,
   type PaymentId,
   type TelegramWizardStep,
+  type TemplateKey,
+  type TemplateValues,
   type TenantContext,
 } from '@nexa/contracts';
-import type { CustomerMessenger } from '../../modules/commerce/messaging/application/ports.js';
+import type {
+  CustomerButton,
+  CustomerMessenger,
+  CustomerSendResult,
+} from '../../modules/commerce/messaging/application/ports.js';
+import {
+  orderScreenReadiness,
+  type OrderScreenReadiness,
+  type OrderScreenWait,
+} from '../../modules/commerce/messaging/application/order-screen-answer.js';
 import type { TelegramMessageStateService } from '../../modules/commerce/messaging/application/telegram-message-state.js';
 import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
 import type { GatewayCardFacts } from '../../modules/commerce/payments/application/gateway-payment.service.js';
@@ -53,7 +65,10 @@ import type { InvoiceScreensPort } from './wizard-state.js';
 export class WizardInvoiceScreens implements InvoiceScreensPort {
   constructor(
     private readonly deps: {
-      readonly state: Pick<TelegramMessageStateService, 'moveAll' | 'moveBack'>;
+      readonly state: Pick<
+        TelegramMessageStateService,
+        'moveAll' | 'moveBack' | 'latestForSubject'
+      >;
       readonly payments: {
         findById(scope: TenantContext, id: PaymentId): Promise<PaymentRecord | null>;
       };
@@ -127,6 +142,102 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
         }
       }
     }
+  }
+
+  /**
+   * FIX-08: whether an order's outcome can be answered on its payment message now, later
+   * (`WAIT`), or not at all (`NONE`) — `orderScreenReadiness` over the order's latest screen.
+   * A read; nothing moves.
+   */
+  async orderReadiness(
+    scope: TenantContext,
+    orderId: string,
+    destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+    settleMs: number,
+  ): Promise<OrderScreenReadiness> {
+    const latest = await this.deps.state.latestForSubject(scope, orderId);
+    return orderScreenReadiness(latest, destination, this.deps.clock.now(), settleMs);
+  }
+
+  /**
+   * FIX-08: edits the order's payment message into its outcome — the notification lane's
+   * own content — and closes the order's other open screens. Null when it did not answer (no
+   * message ready, another writer moved it first, or Telegram refused the edit outright): the
+   * lane then sends the outcome as a new message, exactly as before.
+   *
+   * Decided again here, after the lane's stamp: the message is taken by ONE conditional move
+   * from the step it was read at to `CLOSED`, which bumps its version — so a turn still holding
+   * it loses its landing and drops its now-stale edit, and of two callers only one edits. The
+   * edit is the last step that can fail: everything before it is a database step whose throw
+   * leaves nothing sent, so the caller's fallback send can never be a second answer.
+   *
+   * `WAIT` when another writer took the message between the lane's own readiness check and
+   * this one (a customer's tap landing on it): nothing was moved and nothing was sent, and the
+   * lane puts the row back exactly as it does for its first check. Treating it as "did not
+   * answer" would close the screens and send beside them — and the tap's late edit would then
+   * put its buttons back over the close.
+   *
+   * A REFUSED edit leaves the message as it was, and it is already `CLOSED` here, so
+   * `closeOrder` would pass it by: its buttons are taken off explicitly (best effort) before
+   * the lane sends the outcome as a new message, so no stale payment button stays beside it.
+   */
+  async answerOrder(
+    scope: TenantContext,
+    orderId: string,
+    destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+    settleMs: number,
+    content: {
+      readonly templateKey: TemplateKey;
+      readonly values: TemplateValues;
+      readonly buttons: readonly CustomerButton[];
+    },
+  ): Promise<CustomerSendResult | OrderScreenWait | null> {
+    const ready = await this.orderReadiness(scope, orderId, destination, settleMs);
+    if (ready.kind === 'WAIT') return ready;
+    if (ready.kind !== 'READY') return null;
+    const [taken] = await this.deps.state.moveAll(
+      scope,
+      this.deps.actor(),
+      { subjectId: orderId, id: ready.wizard.id },
+      [ready.wizard.step],
+      'CLOSED',
+    );
+    if (taken === undefined) return null;
+    const edited = await editSent(
+      this.deps.messenger,
+      scope,
+      {
+        chatId: taken.chatId,
+        messageId: taken.messageId,
+        botInstanceId: taken.botInstanceId,
+        templateKey: content.templateKey,
+        values: content.values,
+        buttons: content.buttons,
+      },
+      false,
+    );
+    // Refused: the message still shows what it showed. A screen that offered buttons loses
+    // them (one already CLOSED carries an earlier answer's, which stay). Best effort: a clear
+    // that fails holds nothing back, and the lane's one fallback send follows either way.
+    if (edited.outcome === 'REFUSED' && ready.wizard.step !== 'CLOSED') {
+      try {
+        await this.deps.messenger.clearButtons?.(scope, {
+          chatId: taken.chatId,
+          messageId: taken.messageId,
+          botInstanceId: taken.botInstanceId,
+        });
+      } catch {
+        // The buttons stay; each re-checks the order on a tap, and the screen is CLOSED.
+      }
+    }
+    // The order's OTHER open screens lose their buttons, as before. Best effort, and after
+    // the edit: it decides nothing about the answer just given, and must not undo it.
+    try {
+      await this.closeOrder(scope, orderId);
+    } catch {
+      // A screen left open keeps buttons every one of which re-checks the order on a tap.
+    }
+    return edited.outcome === 'REFUSED' ? null : edited;
   }
 
   /**

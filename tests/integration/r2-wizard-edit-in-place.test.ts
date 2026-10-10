@@ -18,6 +18,7 @@ import { CATALOGUE_FA } from '@nexa/i18n';
 import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
+import { encodeIdPair } from '../../apps/api/src/surfaces/telegram/bot-runtime';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -32,8 +33,8 @@ import {
 /**
  * R2 (v0.3.5 real-test items 5 and 11): the purchase and top-up wizards evolve through ONE
  * Telegram message, a stale tap cannot move them backward or repeat a draft or a payment,
- * and a renewal ends with its own result as a NEW message after the payment message was
- * closed.
+ * and (FIX-08, superseding R2 item 11's NEW message) a paid renewal's or add-on's result is
+ * edited onto that same payment message — sent as a new one only when it cannot be edited.
  *
  * A socket stands in for Telegram and answers every send with a NEW message id, as Telegram
  * does, so a test can follow one message through its edits.
@@ -70,6 +71,10 @@ describe('the wizard is one message, edited in place', () => {
   let updateSeq = 0;
   /** Messages Telegram will no longer edit: an edit of one is refused with a 400. */
   const uneditable = new Set<number>();
+  /** FIX-08: messages whose edit Telegram answers with a 429, or with a 500 (unknown). */
+  const editAnswers = new Map<number, 'RATE_LIMITED' | 'SERVER_ERROR'>();
+  /** Codex review of #257: messages whose keyboard Telegram refuses to clear (a 400). */
+  const unclearable = new Set<number>();
 
   beforeAll(async () => {
     calls = [];
@@ -84,6 +89,35 @@ describe('the wizard is one message, edited in place', () => {
           body = {};
         }
         const method = (request.url ?? '').split('/').pop() ?? '';
+        const forced = editAnswers.get(Number(body['message_id']));
+        if (method === 'editMessageText' && forced !== undefined) {
+          // FIX-08: a 429 (declined, nothing applied) or a 500 (Telegram may have applied it).
+          calls.push({ method, body, sentId: null });
+          const status = forced === 'RATE_LIMITED' ? 429 : 500;
+          response.writeHead(status, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: status,
+              description: forced === 'RATE_LIMITED' ? 'Too Many Requests' : 'Internal',
+              ...(forced === 'RATE_LIMITED' ? { parameters: { retry_after: 1 } } : {}),
+            }),
+          );
+          return;
+        }
+        if (method === 'editMessageReplyMarkup' && unclearable.has(Number(body['message_id']))) {
+          // Codex review of #257: a keyboard Telegram will not take off either.
+          calls.push({ method, body, sentId: null });
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 400,
+              description: "Bad Request: message can't be edited",
+            }),
+          );
+          return;
+        }
         if (method === 'editMessageText' && uneditable.has(Number(body['message_id']))) {
           calls.push({ method, body, sentId: null });
           response.writeHead(400, { 'content-type': 'application/json' });
@@ -131,6 +165,8 @@ describe('the wizard is one message, edited in place', () => {
     services = new DrizzleServiceRepository(ctx.container.database.db);
     calls = [];
     uneditable.clear();
+    editAnswers.clear();
+    unclearable.clear();
     panel = await startFakeMarzban({ host: '127.0.0.2' });
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-r2', roleKeys: ['owner'] }),
@@ -577,22 +613,52 @@ describe('the wizard is one message, edited in place', () => {
     return { id: service.id, username: service.providerUsername };
   }
 
-  it('a wallet renewal closes its payment message, then ends with the dedicated Renewal result — never the generic sentence', async () => {
-    const service = await activeService('renew');
-    const before = await services.findById(tenantA, service.id);
+  // -------------------------------------------------------------------------------------
+  // FIX-08: the outcome of a paid order is answered ON its payment message
+  // -------------------------------------------------------------------------------------
 
-    // The renewal quote is a new message: it becomes the renewal's wizard.
-    await tapOn(730, `nr:${service.id}`);
+  /** Another writer is done with the order's screens: past the settle window, and due. */
+  async function settleScreens(): Promise<void> {
+    await ctx.container.database.db.execute(sql`
+      UPDATE telegram_wizards SET updated_at = updated_at - interval '1 hour', busy_until = NULL
+       WHERE tenant_id = ${tenantA.tenantId}`);
+    await ctx.container.database.db.execute(sql`
+      UPDATE customer_notifications SET next_attempt_at = now() - interval '1 second'
+       WHERE tenant_id = ${tenantA.tenantId} AND state = 'PENDING'`);
+  }
+
+  const notice = async (kind: string) =>
+    (
+      await rows<{ state: string; attempts: number }>(
+        sql`SELECT state, attempts FROM customer_notifications
+             WHERE tenant_id = ${tenantA.tenantId} AND kind = ${kind}`,
+      )
+    )[0];
+
+  const renewedText = '✅ سرویس شما با موفقیت تمدید شد';
+
+  /** The renewal quote (a new message, the renewal's wizard) and its wallet button. */
+  async function renewalQuote(
+    serviceId: string,
+    messageId: number,
+  ): Promise<{ quoteId: number; pay: string }> {
+    await tapOn(messageId, `nr:${serviceId}`);
     const quote = calls.find((call) => call.method === 'sendMessage');
     const quoteId = quote?.sentId;
     if (quoteId === null || quoteId === undefined) throw new Error('no renewal quote');
-    const renewal = buttonsOf(quote).find((data) => data.startsWith('w:'));
-    if (renewal === undefined) throw new Error('no wallet button on the renewal quote');
+    const pay = buttonsOf(quote).find((data) => data.startsWith('w:'));
+    if (pay === undefined) throw new Error('no wallet button on the renewal quote');
+    return { quoteId, pay };
+  }
 
-    await tapOn(quoteId, renewal);
+  it('a wallet renewal is answered ON its payment message: one message, edited, never a second one (FIX-08)', async () => {
+    const service = await activeService('renew');
+    const before = await services.findById(tenantA, service.id);
+    const { quoteId, pay } = await renewalQuote(service.id, 730);
+
+    await tapOn(quoteId, pay);
     // Closed in place, with no buttons and no «order paid» sentence.
     expect(edited(quoteId)[0]?.body['text']).toBe(plain(CATALOGUE_FA['bot.service.renew_paid']));
-    expect(edited(quoteId)[0]?.body['text']).not.toBe(plain(CATALOGUE_FA['bot.order.settled']));
     expect(buttonsOf(edited(quoteId)[0])).toEqual([]);
 
     await ctx.container.provisionerLoop.tick();
@@ -603,11 +669,20 @@ describe('the wizard is one message, edited in place', () => {
     expect(told.map((row) => row.kind)).toContain('SERVICE_RENEWED');
     expect(told.map((row) => row.kind)).not.toContain('SERVICE_ACTION_SUCCEEDED');
 
+    // The customer's own tap edited that message moments ago: the result waits for it to
+    // settle, with nothing sent, nothing stamped and no attempt spent.
     calls = [];
     await ctx.container.customerNotificationLoop.tick();
-    const result = calls.filter((call) => call.method === 'sendMessage').at(-1);
+    expect(methods()).toEqual([]);
+    expect(await notice('SERVICE_RENEWED')).toEqual({ state: 'PENDING', attempts: 0 });
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods(), 'one edit, and no new message').toEqual(['editMessageText']);
+    const result = edited(quoteId)[0];
     const text = String(result?.body['text'] ?? '');
-    expect(text).toContain('✅ سرویس شما با موفقیت تمدید شد');
+    expect(text).toContain(renewedText);
     expect(text).toContain(service.username);
     expect(text).toContain('30 روز');
     const [paid] = await rows<{ reference: string }>(
@@ -619,48 +694,316 @@ describe('the wizard is one message, edited in place', () => {
     expect(text).not.toContain(':wallet');
     const after = await services.findById(tenantA, service.id);
     expect(after?.expiresAt?.getTime()).toBeGreaterThan(before?.expiresAt?.getTime() ?? 0);
-    // One button, opening the renewed service directly.
+    // The buttons are the result's: one, opening the renewed service directly.
     expect(buttonsOf(result)).toEqual([`s:${service.id}`]);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+
+    // That button works from the edited message: the closed payment screen does not gate it.
+    const opened = await tapOn(quoteId, `s:${service.id}`);
+    expect(opened.replyKey).toBe('bot.service.card');
+
+    // Exactly once: a later pass finds nothing to say.
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual([]);
   });
 
-  it('a renewal settled outside the wizard has its payment screen closed BEFORE the result is sent', async () => {
-    const service = await activeService('renew-manual');
-    await tapOn(740, `nr:${service.id}`);
-    const quote = calls.find((call) => call.method === 'sendMessage');
-    const quoteId = quote?.sentId;
-    if (quoteId === null || quoteId === undefined) throw new Error('no renewal quote');
+  it('a double tap on the wallet button pays once and is answered once (FIX-08)', async () => {
+    const service = await activeService('renew-double');
+    const { quoteId, pay } = await renewalQuote(service.id, 731);
+    const debitsBefore = await debits();
+
+    await tapOn(quoteId, pay);
+    const second = await tapOn(quoteId, pay);
+    // The second tap is on a CLOSED screen: answered, nothing moves, nothing is drawn.
+    expect(second.replyKey).toBeNull();
+    expect(methods()).toEqual(['answerCallbackQuery']);
+    expect((await debits()) - debitsBefore).toBe(1);
+
+    await ctx.container.provisionerLoop.tick();
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText']);
+    expect(String(edited(quoteId)[0]?.body['text'])).toContain(renewedText);
+  });
+
+  it('a renewal whose payment message cannot be edited is SENT once as a new message (FIX-08)', async () => {
+    const service = await activeService('renew-gone');
+    const { quoteId, pay } = await renewalQuote(service.id, 732);
+    await tapOn(quoteId, pay);
+    await ctx.container.provisionerLoop.tick();
+    // Deleted by the customer, or past Telegram's edit window: a definite refusal.
+    uneditable.add(quoteId);
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText', 'sendMessage']);
+    expect(String(calls[1]?.body['text'])).toContain(renewedText);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods(), 'and never a second time').toEqual([]);
+  });
+
+  it('a 429 on the edit is retried as the EDIT, never turned into a send (FIX-08)', async () => {
+    const service = await activeService('renew-429');
+    const { quoteId, pay } = await renewalQuote(service.id, 733);
+    await tapOn(quoteId, pay);
+    await ctx.container.provisionerLoop.tick();
+    editAnswers.set(quoteId, 'RATE_LIMITED');
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText']);
+    expect(await notice('SERVICE_RENEWED')).toEqual({ state: 'PENDING', attempts: 0 });
+
+    editAnswers.clear();
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText']);
+    expect(String(edited(quoteId)[0]?.body['text'])).toContain(renewedText);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+  });
+
+  it('an edit whose answer was lost is UNCONFIRMED and never repeated, as an edit or a send (FIX-08)', async () => {
+    const service = await activeService('renew-unknown');
+    const { quoteId, pay } = await renewalQuote(service.id, 734);
+    await tapOn(quoteId, pay);
+    await ctx.container.provisionerLoop.tick();
+    editAnswers.set(quoteId, 'SERVER_ERROR');
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText']);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'UNCONFIRMED' });
+
+    editAnswers.clear();
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual([]);
+  });
+
+  /**
+   * A renewal settled by an operator's hand rather than the wizard, and delivered: its quote
+   * is still OPEN, carrying its pay buttons, when the lane comes to answer it.
+   */
+  async function renewalSettledOutside(
+    name: string,
+    messageId: number,
+  ): Promise<{ service: { id: string; username: string }; quoteId: number }> {
+    const service = await activeService(name);
+    const { quoteId, pay } = await renewalQuote(service.id, messageId);
     const [order] = await rows<{ id: string }>(
       sql`SELECT id FROM orders WHERE purpose = 'RENEW' AND tenant_id = ${tenantA.tenantId}`,
     );
     if (order === undefined) throw new Error('no renewal order');
-
-    // Settled by an operator's hand rather than the wizard: the payment screen is still open.
     const confirmed = await ctx.container.commercialActions.confirm(
       tenantA,
-      systemActor('rm'),
+      systemActor(`${name}-c`),
       maryam,
-      {
-        orderId: order.id,
-        idempotencyKey: 'rm-confirm',
-      },
+      { orderId: order.id, idempotencyKey: `${name}-rm-confirm` },
     );
-    await ctx.container.payments.settleFromWallet(tenantA, systemActor('rm'), maryam, {
-      idempotencyKey: 'rm-pay',
+    await ctx.container.payments.settleFromWallet(tenantA, systemActor(`${name}-p`), maryam, {
+      idempotencyKey: `${name}-rm-pay`,
       orderId: confirmed.id,
     });
     await ctx.container.provisionerLoop.tick();
+    expect(buttonsOf(calls.find((call) => call.sentId === quoteId))).toContain(pay);
+    return { service, quoteId };
+  }
 
+  it('a renewal settled outside the wizard is answered on its still-open quote, which loses its pay buttons (FIX-08)', async () => {
+    const { service, quoteId } = await renewalSettledOutside('renew-manual', 740);
+
+    await settleScreens();
     calls = [];
     await ctx.container.customerNotificationLoop.tick();
-    const closeAt = calls.findIndex(
-      (call) => call.method === 'editMessageReplyMarkup' && call.body['message_id'] === quoteId,
+    expect(methods()).toEqual(['editMessageText']);
+    const result = edited(quoteId)[0];
+    expect(String(result?.body['text'])).toContain(renewedText);
+    // The quote's pay buttons are gone: what it carries now is the result's one button.
+    expect(buttonsOf(result)).toEqual([`s:${service.id}`]);
+    const [screen] = await rows<{ step: string }>(
+      sql`SELECT step FROM telegram_wizards WHERE tenant_id = ${tenantA.tenantId}
+          AND message_id = ${quoteId}`,
     );
-    const resultAt = calls.findIndex(
-      (call) =>
-        call.method === 'sendMessage' &&
-        String(call.body['text'] ?? '').includes('✅ سرویس شما با موفقیت تمدید شد'),
+    expect(screen?.step, 'and a stale pay tap on it is refused by the gate').toBe('CLOSED');
+  });
+
+  it('a refused edit of a still-open quote clears its pay buttons and sends the result once (Codex review of #257)', async () => {
+    const { service, quoteId } = await renewalSettledOutside('renew-refused', 741);
+    // Telegram will not edit the quote's text (a non-text message, an outcome too long).
+    uneditable.add(quoteId);
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText', 'editMessageReplyMarkup', 'sendMessage']);
+    // The quote keeps its text and loses its stale pay buttons...
+    expect(calls[1]?.body['message_id']).toBe(quoteId);
+    expect(buttonsOf(calls[1])).toEqual([]);
+    // ...and the result arrives once, as a new message.
+    expect(String(calls[2]?.body['text'])).toContain(renewedText);
+    expect(buttonsOf(calls[2])).toEqual([`s:${service.id}`]);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods(), 'and never a second time').toEqual([]);
+  });
+
+  it('a keyboard that cannot be cleared holds back nothing and sends nothing twice (Codex review of #257)', async () => {
+    const { quoteId } = await renewalSettledOutside('renew-unclearable', 742);
+    uneditable.add(quoteId);
+    unclearable.add(quoteId);
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText', 'editMessageReplyMarkup', 'sendMessage']);
+    expect(String(calls[2]?.body['text'])).toContain(renewedText);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual([]);
+  });
+
+  it('a tap that lands between the two readiness checks defers the result: nothing sent, no attempt spent (Codex review of #257)', async () => {
+    const service = await activeService('renew-landed');
+    const { quoteId, pay } = await renewalQuote(service.id, 743);
+    await tapOn(quoteId, pay);
+    await ctx.container.provisionerLoop.tick();
+    await settleScreens();
+
+    /*
+     * The lane's own check sees the message settled; right after it, a customer's turn lands
+     * on it (as a landing does: the version moves and `updated_at` is now), so `answerOrder`'s
+     * second check finds it being written.
+     */
+    const screens = ctx.container.wizardScreens;
+    const original = screens.orderReadiness.bind(screens);
+    let asked = 0;
+    screens.orderReadiness = async (...args) => {
+      const ready = await original(...args);
+      asked += 1;
+      if (asked === 1) {
+        await ctx.container.database.db.execute(sql`
+          UPDATE telegram_wizards SET updated_at = now(), version = version + 1
+           WHERE tenant_id = ${tenantA.tenantId} AND message_id = ${quoteId}`);
+      }
+      return ready;
+    };
+    try {
+      calls = [];
+      await ctx.container.customerNotificationLoop.tick();
+    } finally {
+      screens.orderReadiness = original;
+    }
+    expect(asked).toBe(2);
+    expect(methods(), 'nothing is edited, cleared or sent').toEqual([]);
+    expect(await notice('SERVICE_RENEWED')).toEqual({ state: 'PENDING', attempts: 0 });
+    const [stamp] = await rows<{ send_started_at: Date | null }>(
+      sql`SELECT send_started_at FROM customer_notifications
+           WHERE tenant_id = ${tenantA.tenantId} AND kind = 'SERVICE_RENEWED'`,
     );
-    expect(closeAt).toBeGreaterThanOrEqual(0);
-    expect(resultAt).toBeGreaterThan(closeAt);
+    expect(stamp?.send_started_at, 'the stamp is taken back').toBeNull();
+
+    // Once the message settles, the result is edited onto it, once.
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText']);
+    expect(String(edited(quoteId)[0]?.body['text'])).toContain(renewedText);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual([]);
+  });
+
+  it('a SUSPEND is never answered on the purchase message of the order that created its service (FIX-08)', async () => {
+    const service = await activeService('suspend-elsewhere');
+    // The service's own purchase left a settled screen in this chat, long ago.
+    const [created] = await rows<{ order_id: string }>(
+      sql`SELECT order_id FROM services WHERE id = ${service.id}`,
+    );
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO telegram_wizards
+        (id, tenant_id, bot_instance_id, chat_id, message_id, kind, step, version, subject_id,
+         created_at, updated_at)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${BOT_A}, ${MARYAM}, 760,
+              'ORDER', 'CLOSED', 1, ${created?.order_id ?? null},
+              now() - interval '1 day', now() - interval '1 day')`);
+    // Asked with no card, so the lane owes the answer — but the operation carries the
+    // CREATING order's id, which is not what it was bought as.
+    await ctx.container.provisioning.requestFromCustomer(
+      tenantA,
+      systemActor('susp'),
+      maryam,
+      service.id,
+      'SUSPEND',
+      { idempotencyKey: 'susp-elsewhere' },
+    );
+    await ctx.container.provisionerLoop.tick();
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['sendMessage']);
+    expect(edited(760)).toEqual([]);
+  });
+
+  it('extra traffic paid from the wallet is answered on its payment message too (FIX-08)', async () => {
+    const service = await activeService('traffic');
+    const addon = await ctx.container.serviceAddons.create(tenantA, owner, {
+      idempotencyKey: 'traffic-addon',
+      draft: {
+        kind: 'ADD_TRAFFIC',
+        title: 'بسته ۱۰ گیگ',
+        sortOrder: 10,
+        specification: { kind: 'ADD_TRAFFIC', trafficBytes: 10_737_418_240n, durationDays: null },
+        price: money(50_000n, 'IRT'),
+      },
+    });
+    await ctx.container.serviceAddons.activate(tenantA, owner, {
+      idempotencyKey: 'traffic-addon-on',
+      addonId: addon.id,
+    });
+
+    await tapOn(750, `a:${encodeIdPair(service.id, addon.id)}`);
+    const quote = calls.find((call) => call.method === 'sendMessage');
+    const quoteId = quote?.sentId ?? edited(750)[0]?.body['message_id'];
+    const message = quote ?? edited(750)[0];
+    const pay = buttonsOf(message).find((data) => data.startsWith('w:'));
+    if (typeof quoteId !== 'number' || pay === undefined) throw new Error('no traffic quote');
+    await tapOn(quoteId, pay);
+    await ctx.container.provisionerLoop.tick();
+    expect(
+      (
+        await rows<{ state: string }>(
+          sql`SELECT state FROM provisioning_operations WHERE type = 'ADD_TRAFFIC'`,
+        )
+      )[0]?.state,
+    ).toBe('SUCCEEDED');
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText']);
+    expect(edited(quoteId)[0]?.body['text']).toBe(
+      plain(CATALOGUE_FA['bot.service.action_succeeded']),
+    );
+    expect(await notice('SERVICE_ACTION_SUCCEEDED')).toMatchObject({ state: 'DELIVERED' });
   });
 });

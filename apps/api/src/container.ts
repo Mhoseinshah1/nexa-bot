@@ -619,6 +619,7 @@ import { WalletTopupFlowService } from './modules/commerce/payments/application/
 import { parseCustomerAmount } from './modules/commerce/payments/domain/customer-amount.js';
 import { composeFaqScreen } from './modules/control/support/application/faq-screen.js';
 import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
+import { orderScreenSettleMs } from './modules/commerce/messaging/application/order-screen-answer.js';
 import {
   CustomerNotificationLoop,
   CUSTOMER_NOTIFICATION_INTERVAL_MS,
@@ -4999,7 +5000,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       reminderFacts: new DrizzleCustomerReminderFactsReader(database.db),
       // R2 (item 11): the renewal result's facts, and the payment screens closed before it.
       renewals: new DrizzleRenewalFactsReader(database.db),
-      orderScreens: { close: (scope, orderId) => wizardScreens.closeOrder(scope, orderId) },
+      /*
+       * FIX-08: and the order's outcome edited onto its payment message, once nothing else
+       * can still be editing it — the messenger's own request timeout plus a margin.
+       */
+      orderScreens: {
+        close: (scope, orderId) => wizardScreens.closeOrder(scope, orderId),
+        readiness: (scope, orderId, destination) =>
+          wizardScreens.orderReadiness(
+            scope,
+            orderId,
+            destination,
+            orderScreenSettleMs(config.NOTIFICATION_SEND_TIMEOUT_MS),
+          ),
+        answer: (scope, orderId, destination, content) =>
+          wizardScreens.answerOrder(
+            scope,
+            orderId,
+            destination,
+            orderScreenSettleMs(config.NOTIFICATION_SEND_TIMEOUT_MS),
+            content,
+          ),
+      },
       // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.
       quietHours: reminderQuietHours,
       // Round N (B2): the mass credit's amount and the grant's service, read from the item.

@@ -3911,7 +3911,8 @@ export interface BotRuntimeDeps {
    * runtime without it: then a free target's confirmation answers the unavailable
    * sentence rather than being requested.
    */
-  readonly locationChanges?: Pick<LocationChangeService, 'requestFree'>;
+  readonly locationChanges?: Pick<LocationChangeService, 'requestFree'> &
+    Partial<Pick<LocationChangeService, 'freeRequestRecorded'>>;
   /**
    * The free trial (WP6-A). Optional only so the customer-side unit fixtures need not
    * build it; the composition root always supplies it, and without it every trial tap is
@@ -11294,10 +11295,18 @@ export class BotRuntime {
 
   /**
    * A free move, confirmed (WP-A6). `LocationChangeService.requestFree` decides everything
-   * again in its own transaction and plans the operation; the customer is told it was
-   * recorded, and its outcome later through the notification lane.
+   * again in its own transaction and plans the operation.
    *
-   * `idempotencyKey` is the update's, so Telegram redelivering the tap requests it once.
+   * FIX-08: confirmed on the service card, it is answered ON that card, the way a disable is
+   * (`serviceAction`): the card turns «working» on the tap, the move is planned with the card
+   * recorded beside it, and `OperationCardEditor` edits the same card to the service as it
+   * now is — the new location — or back as it was with the failure line. No «ثبت شد» now and
+   * no separate «انجام شد» later. Without a card (a client that sent no message) the customer
+   * is told it was recorded, and its outcome later through the notification lane, as before.
+   *
+   * `idempotencyKey` is the update's, so Telegram redelivering the tap requests it once — and
+   * a redelivery is recognised BEFORE the card is touched, so it never turns a card that
+   * already shows the outcome back to «working».
    */
   private async locationRequest(
     scope: TenantContext,
@@ -11305,21 +11314,61 @@ export class BotRuntime {
     customer: CustomerRecord,
     serviceId: string,
     locationId: string,
-    input: { readonly idempotencyKey: string },
+    input: {
+      readonly idempotencyKey: string;
+      readonly update?: unknown;
+      readonly botInstanceId?: BotInstanceId;
+    },
   ): Promise<PendingReply> {
     const changes = this.deps.locationChanges;
     if (changes === undefined) {
       return { key: 'bot.service.action_unavailable', values: {}, buttons: [], orderId: null };
     }
+    const request = {
+      serviceId,
+      locationId,
+      idempotencyKey: `${input.idempotencyKey}:change_location`,
+    };
+    const card =
+      input.botInstanceId === undefined || changes.freeRequestRecorded === undefined
+        ? null
+        : cardMessageOf(input.update, input.botInstanceId);
+    if (card !== null) {
+      if (await changes.freeRequestRecorded?.(scope, customer.id, request)) {
+        return { key: null, values: {}, buttons: [], orderId: null };
+      }
+      const service = await this.ownedService(scope, customer, serviceId);
+      if (service === null) return toastReply('bot.service.not_found');
+      await this.showWorking(scope, actor, customer, serviceId, card);
+    }
+    let requested;
     try {
-      await changes.requestFree(scope, actor, customer.id, {
-        serviceId,
-        locationId,
-        idempotencyKey: `${input.idempotencyKey}:change_location`,
+      requested = await changes.requestFree(scope, actor, customer.id, {
+        ...request,
+        ...(card === null ? {} : { card }),
       });
     } catch (error) {
       return refusal(error);
     }
+    /*
+     * Codex review of #257, as `serviceAction`: a concurrent redelivery can pass the check
+     * above before the first delivery recorded the move, and its «working» edit can land
+     * after the move ENDED and was drawn on the card. Its request replays the first one's,
+     * so the move's operation is read back by its change and, once ended, the card is drawn
+     * as it now is rather than left «working».
+     */
+    if (card !== null) {
+      const operation = await this.deps.services.findLocationChange(
+        scope,
+        serviceId,
+        requested.changeId,
+      );
+      if (operation !== null && operationHasEnded(operation)) {
+        return this.cardAfterEnded(scope, actor, customer, serviceId, operation.state);
+      }
+    }
+    // FIX-08: the card reads «working» and is answered when the move ends.
+    if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
     return {
       key: 'bot.service.location_requested',
       values: {},

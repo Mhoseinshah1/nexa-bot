@@ -27,6 +27,7 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
+import type { CardMessageRef } from '../../provisioning/application/operation-card.js';
 import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
@@ -113,6 +114,38 @@ export interface LocationChangeServiceDeps {
 export class LocationChangeService {
   constructor(private readonly deps: LocationChangeServiceDeps) {}
 
+  /**
+   * FIX-08: whether THIS request (the same key, the same move) was already recorded — the
+   * redelivered confirmation tap. The surface asks before it turns the card «working», so a
+   * redelivery never overwrites a card the outcome has already been drawn on. A read; the
+   * request itself still replays by its key in `requestFree`.
+   */
+  async freeRequestRecorded(
+    scope: TenantContext,
+    customerId: UserId,
+    input: {
+      readonly serviceId: string;
+      readonly locationId: string;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<boolean> {
+    let serviceId: string;
+    let locationId: ServiceLocationId;
+    try {
+      serviceId = this.serviceId(input.serviceId);
+      locationId = this.locationId(input.locationId);
+    } catch {
+      return false;
+    }
+    const replay = await this.deps.idempotency.find<{ changeId: string; operationId: string }>(
+      scope,
+      CUSTOMER_NAMESPACE,
+      input.idempotencyKey,
+      hashRequest({ customerId, serviceId, locationId, free: true }),
+    );
+    return replay !== null;
+  }
+
   async requestFree(
     scope: TenantContext,
     actor: ActorContext,
@@ -121,6 +154,11 @@ export class LocationChangeService {
       readonly serviceId: string;
       readonly locationId: string;
       readonly idempotencyKey: string;
+      /**
+       * FIX-08: the service card the move was confirmed on; the move is answered ON it. Not
+       * part of the request's hash: it says where to answer, not what was asked.
+       */
+      readonly card?: CardMessageRef;
     },
   ): Promise<{ readonly changeId: string; readonly operationId: string }> {
     const serviceId = this.serviceId(input.serviceId);
@@ -237,6 +275,7 @@ export class LocationChangeService {
             customerId,
             locationKey: target.locationKey,
             changeId,
+            ...(input.card === undefined ? {} : { card: input.card }),
           },
           now,
           tx,
