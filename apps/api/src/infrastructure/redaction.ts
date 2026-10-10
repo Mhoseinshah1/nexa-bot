@@ -461,6 +461,26 @@ export function redactSecretText(text: string): string {
   );
 }
 
+/**
+ * FIX-04 (S4): error text on its way into a DURABLE column — a backup run's delivery detail
+ * and failure message, an outbox message's last error, a provisioning operation's failure
+ * message. Each of those is read back by the Web Admin, outlives the process that wrote
+ * it, and is copied into every backup; a credential that lands there cannot be taken back
+ * out. The text is the transport's own: `fetch` quotes the request URL verbatim in a
+ * `TypeError` it cannot parse, and a Telegram request URL is `/bot<token>/…`. The
+ * notification-attempt column already went through `redactSecretText`; these did not.
+ *
+ * Redacted at the REPOSITORY, where the row is written, rather than at each place an error
+ * is caught: there are more of those than there are columns, and the next one would not
+ * know.
+ */
+export function redactStoredText(text: string): string;
+export function redactStoredText(text: string | null): string | null;
+export function redactStoredText(text: string | null | undefined): string | null | undefined;
+export function redactStoredText(text: string | null | undefined): string | null | undefined {
+  return typeof text === 'string' ? redactSecretText(text) : text;
+}
+
 /** Every fragment the text rule interpolates, for the test that keeps it simple. */
 export const TEXT_SENSITIVE_FRAGMENTS_FOR_TEST: readonly string[] = TEXT_SENSITIVE_FRAGMENTS;
 
