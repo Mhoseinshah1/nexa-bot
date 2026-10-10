@@ -104,13 +104,21 @@ export const TONPAYS_TELEGRAM_REVIEW_WINDOW_MS = TONPAYS_TELEGRAM_REVIEW_WINDOW_
 
 /**
  * NEXA (audit §9.6.5): the inquiry interval during a review, by time since the
- * acknowledgement. About ninety-eight calls over a whole review; the last inquiry before the
- * review deadline is scheduled fifteen seconds before it, as for the customer window.
+ * acknowledgement. About a hundred and thirteen calls over a whole review; the last inquiry
+ * before the review deadline is scheduled fifteen seconds before it, as for the customer window.
+ *
+ * FIX-06 (batch 2026-10-10): every 30 s for the first ten minutes — the provider usually
+ * decides a receipt soon after acknowledging it, and the customer is waiting — then 120 s to the
+ * hour as before. The route's limit is still undocumented (`OQ-TPTG-10`), so this changes WHEN
+ * the route's unchanged 15-a-minute inquiry budget is spent, never how much of it: one review
+ * asks at most twice a minute, and scheduled asks may use 12 of the 15, the rest kept for a tap
+ * or a webhook.
  */
 export const TONPAYS_TELEGRAM_REVIEW_INQUIRY_CADENCE: readonly {
   readonly untilMs: number;
   readonly intervalMs: number;
 }[] = [
+  { untilMs: 600_000, intervalMs: 30_000 },
   { untilMs: 3_600_000, intervalMs: 120_000 },
   { untilMs: 6 * 3_600_000, intervalMs: 600_000 },
   { untilMs: TONPAYS_TELEGRAM_REVIEW_WINDOW_MS, intervalMs: 1_800_000 },

@@ -1159,6 +1159,29 @@ describe('TonPays Telegram, through the one settlement path', () => {
   });
 
   describe('the budget and the logs', () => {
+    it('FIX-06: an inquiry that met its share of the budget does not stop a receipt upload the call budget still has room for', async () => {
+      const first = await createdAttempt();
+      const second = await createdAttempt();
+      // The first attempt's scheduled inquiry is due; the second's customer sends a receipt.
+      clock.shift(25_000);
+      await openWindow(second.paymentId);
+      expect(await sendPhoto(photo('receipt-fix06'))).toBe('QUEUED');
+      // Every SCHEDULED inquiry this minute already spent: 15 less the quarter kept for hints.
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO payment_gateway_call_budgets (tenant_id, provider, window_started_at, used)
+        VALUES (${tenantA.tenantId}, 'TONPAYS_TELEGRAM', ${clock.now()}, 12)
+        ON CONFLICT (tenant_id, provider)
+          DO UPDATE SET window_started_at = EXCLUDED.window_started_at, used = EXCLUDED.used`);
+      const checksBefore = fake.checks.length;
+      const report = await pass();
+      expect(fake.checks.length, 'a scheduled inquiry took the hint reserve').toBe(checksBefore);
+      expect(report.budgetExhausted).toBe(true);
+      // The upload went: the route's call budget (25) had room.
+      expect(report.receipts).toBe(1);
+      expect(fake.receipts).toHaveLength(1);
+      expect((await invoiceOf(first.paymentId)).outcome).toBeNull();
+    });
+
     it('TPTG-22: a pass stopped by an empty budget gives back the card-change and receipt leases it did not reach', async () => {
       const first = await createdAttempt();
       const second = await createdAttempt();

@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type {
   FxBaseAsset,
   FxSource,
@@ -762,16 +762,9 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     return rows.length > 0;
   }
 
-  async claimInquiries(
-    scope: TenantContext,
-    now: Date,
-    leaseMs: number,
-    limit: number,
-    tx?: unknown,
-  ): Promise<readonly ClaimedGatewayInvoice[]> {
-    const tenantId = requireTenantId(scope);
-    const leaseUntil = new Date(now.getTime() + leaseMs);
-    const claimable = and(
+  /** What makes a row's inquiry claimable now: due, unleased, and something to ask about. */
+  private inquiryClaimable(tenantId: string, now: Date) {
+    return and(
       eq(gatewayInvoices.tenantId, tenantId),
       inArray(gatewayInvoices.provider, [...PAYMENT_GATEWAY_PROVIDERS]),
       isNotNull(gatewayInvoices.nextInquiryAt),
@@ -788,12 +781,79 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         isNotNull(gatewayInvoices.providerChargeId),
       ),
     );
+  }
+
+  async claimInquiries(
+    scope: TenantContext,
+    now: Date,
+    leaseMs: number,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ClaimedGatewayInvoice[]> {
+    const tenantId = requireTenantId(scope);
+    const leaseUntil = new Date(now.getTime() + leaseMs);
+    const claimable = this.inquiryClaimable(tenantId, now);
     const due = this.exec(tx)
       .select({ paymentId: gatewayInvoices.paymentId })
       .from(gatewayInvoices)
       .where(claimable)
       .orderBy(asc(gatewayInvoices.nextInquiryAt), asc(gatewayInvoices.paymentId))
       .limit(limit)
+      .for('update', { skipLocked: true });
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({ inquiryClaimedUntil: leaseUntil, updatedAt: now })
+      .where(and(claimable, sql`${gatewayInvoices.paymentId} IN ${due}`))
+      .returning();
+    return this.withPayments(scope, rows, tx);
+  }
+
+  async findHintCandidates(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ClaimedGatewayInvoice[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(gatewayInvoices)
+      .where(this.inquiryClaimable(tenantId, now))
+      .orderBy(
+        // The hints a column records outright: an operator's recheck, a webhook since the
+        // last inquiry (or before the first). Whatever their due time.
+        desc(sql`(${gatewayInvoices.reconcileInquiryRequestedAt} IS NOT NULL
+          OR (${gatewayInvoices.lastWebhookAt} IS NOT NULL
+              AND (${gatewayInvoices.lastInquiryAt} IS NULL
+                   OR ${gatewayInvoices.lastWebhookAt} > ${gatewayInvoices.lastInquiryAt})))`),
+        // Then the most recently due: every other hint brings `next_inquiry_at` FORWARD to
+        // about when it arrived, so it is the newest due time, never the oldest.
+        desc(gatewayInvoices.nextInquiryAt),
+        asc(gatewayInvoices.paymentId),
+      )
+      .limit(limit);
+    return this.withPayments(scope, rows, tx);
+  }
+
+  async claimInquiriesOf(
+    scope: TenantContext,
+    now: Date,
+    leaseMs: number,
+    paymentIds: readonly PaymentId[],
+    tx?: unknown,
+  ): Promise<readonly ClaimedGatewayInvoice[]> {
+    if (paymentIds.length === 0) return [];
+    const tenantId = requireTenantId(scope);
+    const leaseUntil = new Date(now.getTime() + leaseMs);
+    const claimable = and(
+      this.inquiryClaimable(tenantId, now),
+      inArray(gatewayInvoices.paymentId, [...paymentIds]),
+    );
+    // The same lock discipline as `claimInquiries`: a row another replica holds is skipped.
+    const due = this.exec(tx)
+      .select({ paymentId: gatewayInvoices.paymentId })
+      .from(gatewayInvoices)
+      .where(claimable)
       .for('update', { skipLocked: true });
     const rows = await this.exec(tx)
       .update(gatewayInvoices)

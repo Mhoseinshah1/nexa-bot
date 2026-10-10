@@ -58,6 +58,8 @@ export class FakeTonPaysTelegram {
   readonly receipts: RecordedCall[] = [];
   createMode: FakeWrite | 'NO_CARD' | 'TIMEOUT_AFTER_CREATING' = 'OK';
   changeMode: FakeWrite | 'NO_CARD' = 'OK';
+  /** What the status check answers: the invoice (`OK`), a timeout, a 5xx or a refusal. */
+  checkMode: FakeWrite = 'OK';
   /**
    * What the receipt upload answers: an acknowledgement (`receipt_received: true`), the
    * status `processing` alone, an answer with neither signal, `receipt_received` as the
@@ -125,6 +127,12 @@ export class FakeTonPaysTelegram {
     if (check !== null && method === 'GET') {
       const invoiceId = decodeURIComponent(check[1]!);
       this.checks.push(invoiceId);
+      const checkMode = this.checkMode;
+      if (typeof checkMode === 'object') {
+        return json(checkMode.status, { detail: { code: checkMode.code, message: 'refused' } });
+      }
+      if (checkMode === 'SERVER_ERROR') return json(502, { error: 'bad gateway' });
+      if (checkMode === 'TIMEOUT') throw new Error('socket hang up');
       const invoice = this.invoices.get(invoiceId);
       if (invoice === undefined) return json(404, { detail: { code: 'INVOICE_NOT_FOUND' } });
       return json(200, {
@@ -222,9 +230,12 @@ export async function startFakeTelegram(): Promise<{
   readonly sent: Record<string, unknown>[];
   readonly files: Map<string, Buffer>;
   readonly downloads: string[];
+  /** Every request, raw: a multipart `sendPhoto` (a delivery card) is not JSON. */
+  readonly requests: { readonly url: string; readonly raw: string; readonly at: number }[];
   close(): Promise<void>;
 }> {
   const sent: Record<string, unknown>[] = [];
+  const requests: { url: string; raw: string; at: number }[] = [];
   const files = new Map<string, Buffer>();
   const downloads: string[] = [];
   const server: Server = createServer((request, response) => {
@@ -233,6 +244,7 @@ export async function startFakeTelegram(): Promise<{
     request.on('end', () => {
       const url = request.url ?? '';
       const raw = Buffer.concat(chunks).toString('utf8');
+      requests.push({ url, raw, at: Date.now() });
       let body: Record<string, unknown> | null;
       try {
         body = JSON.parse(raw) as Record<string, unknown>;
@@ -273,6 +285,7 @@ export async function startFakeTelegram(): Promise<{
     sent,
     files,
     downloads,
+    requests,
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());

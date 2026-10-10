@@ -47,6 +47,7 @@ import {
   type TenantContext,
   type UnitOfWork,
   type UserId,
+  type OrderPurpose,
   type PaymentGatewayProvider,
   type PaymentPurpose,
   conversionPolicyFor,
@@ -389,7 +390,12 @@ export interface GatewayAttempt {
  *   awaiting payment. The caller records this as an anomaly and moves no money.
  */
 export type GatewayConfirmation =
-  | { readonly outcome: 'SETTLED'; readonly payment: PaymentRecord }
+  | {
+      readonly outcome: 'SETTLED';
+      readonly payment: PaymentRecord;
+      /** The settled order's purpose; absent for a top-up. Evidence only (FIX-01). */
+      readonly orderPurpose?: OrderPurpose;
+    }
   | { readonly outcome: 'ALREADY_CONFIRMED'; readonly payment: PaymentRecord }
   | {
       readonly outcome: 'NOT_ELIGIBLE';
@@ -3657,7 +3663,6 @@ export class PaymentService {
     const paymentId = this.paymentId(id);
     const denial = { action: GATEWAY_CONFIRM_ACTION, entityType: 'Payment', entityId: paymentId };
     await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
-    const now = this.deps.clock.now();
 
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -3668,6 +3673,12 @@ export class PaymentService {
       async (tx): Promise<GatewayConfirmation> => {
         await this.assertScopeActive(scope, tx);
         const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        /*
+         * FIX10 BUG-2 (audit minor): the clock is read AFTER the lock is held. Read before,
+         * an approval that waited on the lock across the deadline was judged at a moment
+         * before it — the deadline and the state must be judged together, at the lock.
+         */
+        const now = this.deps.clock.now();
         if (payment === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
         }
@@ -3755,7 +3766,7 @@ export class PaymentService {
           now,
           GATEWAY_CONFIRM_ACTION,
         );
-        return { outcome: 'SETTLED', payment: settled.payment };
+        return { outcome: 'SETTLED', payment: settled.payment, orderPurpose: order.purpose };
       },
     );
   }

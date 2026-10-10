@@ -15,6 +15,8 @@ import {
   type CorrelationId,
   type IdGenerator,
   type OperationalEventRecorder,
+  orderPurposeCreatesNewService,
+  type OrderPurpose,
   type PaymentGatewayProvider,
   type PaymentId,
   type TenantContext,
@@ -26,14 +28,24 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import {
-  FIRST_INQUIRY_DELAY_MS,
   INQUIRY_MIN_SPACING_MS,
   POST_DEADLINE_INQUIRY_MAX,
   TONPAYS_CREATE_MAX_ATTEMPTS,
   TONPAYS_CREATE_RETRY_MS,
-  inquiryBackoffMs,
 } from '../domain/tonpays.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import {
+  firstInquiryAt,
+  hintReservePerMinute,
+  inquiryScheduleFor,
+  jitteredMs,
+  nextScheduledInquiryAt,
+} from '../domain/inquiry-schedule.js';
+import {
+  inquiryDiscoveryTrigger,
+  type GatewayDiscoveryTrigger,
+  type InquiryDiscoveryTrigger,
+} from '../domain/inquiry-discovery.js';
 import {
   receiptAcknowledged,
   reviewInquiryNextAt,
@@ -163,7 +175,14 @@ export function gatewayClaimLeaseMs(rowBoundMs: number): number {
 
 /** Rows per pass, per queue. Small: every one of them is a call to a third party. */
 export const GATEWAY_CREATE_BATCH = 5;
-export const GATEWAY_INQUIRY_BATCH = 10; /** TonPays Telegram: card changes and receipt uploads per pass; review and window sweeps. */
+export const GATEWAY_INQUIRY_BATCH = 10;
+/**
+ * Codex on #277: how many due rows the hinted phase READS to find the hinted ones among
+ * them (most likely hinted first). A read, not a claim and not a call: it bounds the work of
+ * looking, never the outbound rate.
+ */
+export const GATEWAY_HINT_SCAN_LIMIT = 50;
+/** TonPays Telegram: card changes and receipt uploads per pass; review and window sweeps. */
 export const GATEWAY_CARD_CHANGE_BATCH = 5;
 export const GATEWAY_RECEIPT_BATCH = 3;
 export const GATEWAY_REVIEW_SWEEP_BATCH = 50;
@@ -175,6 +194,12 @@ export const RECEIPT_RATE_LIMIT_RETRY_MS = 60_000;
  * backoff applies (it is past its deadline, or on the last retry before it).
  */
 export const RECORDED_OUTCOME_RETRY_MS = 60_000;
+
+/**
+ * How soon a rate-limited inquiry is asked again, at the least: the later of its normal step
+ * and this. Shared with the FIX-01 evidence, which must know the row's real schedule.
+ */
+export const INQUIRY_RATE_LIMIT_RETRY_MS = 60_000;
 
 /**
  * FIX10 BUG-1: how soon a row whose processing THREW is due again. Measured from the last
@@ -241,6 +266,16 @@ export function errorFacts(error: unknown): {
   const cause = error instanceof Error ? error.cause : undefined;
   return { error: name, code: codeOf(error) ?? codeOf(cause) };
 }
+
+/**
+ * Codex #269: how many post-deadline inquiries BEYOND `POST_DEADLINE_INQUIRY_MAX` an
+ * approval whose decision never committed may still be given. Its retry re-asks the provider
+ * (only the inquiry decides) and is therefore a post-deadline inquiry like any other; without
+ * this allowance an approval met on the last permitted post-deadline inquiry, whose decision
+ * then failed, would be stopped by the bound with neither a settlement nor a late completion.
+ * Bounded, so a decision that fails for ever does not ask the provider for ever.
+ */
+export const GATEWAY_DECISION_RETRY_MAX = 5;
 
 /** The path a provider's webhook is served on. The route and this must agree. */
 export const GATEWAY_WEBHOOK_PATH_PREFIX = '/payments/webhook';
@@ -527,12 +562,37 @@ export class GatewayPaymentService {
      * claimed beside it were never processed, it kept the oldest `next_inquiry_at` so the
      * same batch was claimed and abandoned on every pass, and the sweeps never ran.
      */
-    await this.isolatedLane(scope, report, 'CREATION', () =>
-      this.runCreations(scope, actor, report),
-    );
-    if (!report.budgetExhausted) {
+    /*
+     * FIX-06: a due inquiry a hint brought forward (a webhook, the customer's tap, a browser
+     * return, a receipt acknowledgement, an operator) is asked BEFORE this pass's creations.
+     * A create may take its whole 15 s timeout, five of them a pass; a customer who has just
+     * paid and tapped must not wait behind them. The scheduled rows claimed with them are
+     * handed straight back and asked in their usual place below. Same lane, same per-row
+     * isolation and lease bound (`runInquiries`).
+     */
+    // A claim that threw here would throw again below: the lane is counted as failed once.
+    let inquiryLaneFailed = true;
+    // Each row is asked at most once a pass: one the hinted phase reached is not asked again.
+    const askedThisPass = new Set<string>();
+    await this.isolatedLane(scope, report, 'INQUIRY', async () => {
+      await this.runInquiries(scope, actor, report, 'HINTED', askedThisPass);
+      inquiryLaneFailed = false;
+    });
+    // FIX-06: whether the CALL budget is gone — the creations' answer, not the inquiries'.
+    let callBudgetSpent = false;
+    await this.isolatedLane(scope, report, 'CREATION', async () => {
+      const inquiryShareSpent = report.budgetExhausted;
+      report.budgetExhausted = false;
+      try {
+        await this.runCreations(scope, actor, report);
+      } finally {
+        callBudgetSpent = report.budgetExhausted;
+        report.budgetExhausted ||= inquiryShareSpent;
+      }
+    });
+    if (!report.budgetExhausted && !inquiryLaneFailed) {
       await this.isolatedLane(scope, report, 'INQUIRY', () =>
-        this.runInquiries(scope, actor, report),
+        this.runInquiries(scope, actor, report, 'ALL', askedThisPass),
       );
     }
 
@@ -541,18 +601,26 @@ export class GatewayPaymentService {
       report.reviewsLapsed = await this.loseTrackOfLapsedReviews(scope, actor);
     });
     await this.isolatedLane(scope, report, 'CAPTURE_SWEEP', () => this.sweepReceiptCaptures(scope));
-    if (!report.budgetExhausted) {
+    /*
+     * FIX-06: gated on the CALL budget, not on the inquiries' share of it. An inquiry that met
+     * its share (smaller now that a quarter is kept for hinted rows) used to stop the card and
+     * receipt lanes for the pass — and, every row staying due, for the rest of the minute —
+     * though their own limit had room. A receipt upload is how a TonPays Telegram approval
+     * starts; it must not wait behind background inquiries. Each lane takes its own budget.
+     */
+    if (!callBudgetSpent) {
       await this.isolatedLane(scope, report, 'CARD_CHANGE', async () => {
         const cards = await this.runCardChanges(scope, actor, report);
         report.cardChanges = cards.done;
-        report.budgetExhausted = cards.budgetExhausted;
+        callBudgetSpent = cards.budgetExhausted;
+        report.budgetExhausted ||= cards.budgetExhausted;
       });
     }
-    if (!report.budgetExhausted) {
+    if (!callBudgetSpent) {
       await this.isolatedLane(scope, report, 'RECEIPT', async () => {
         const receipts = await this.runReceipts(scope, actor, report);
         report.receipts = receipts.done;
-        report.budgetExhausted = receipts.budgetExhausted;
+        report.budgetExhausted ||= receipts.budgetExhausted;
       });
     }
     return report;
@@ -624,22 +692,72 @@ export class GatewayPaymentService {
     }
   }
 
-  /** The inquiry queue (§5.4): one claim, then each row on its own. */
+  /**
+   * The inquiry queue (§5.4): one claim, then each row on its own. `HINTED` (FIX-06) asks
+   * only the claimed rows a hint brought forward and hands the others' leases straight back.
+   */
   private async runInquiries(
     scope: TenantContext,
     actor: ActorContext,
     report: { -readonly [K in keyof GatewayPassReport]: GatewayPassReport[K] },
+    which: 'HINTED' | 'ALL',
+    /** Rows already asked this pass: never claimed for a second answer in the same pass. */
+    askedThisPass: Set<string>,
   ): Promise<void> {
     const inquiryNow = this.deps.clock.now();
     const inquiryLease = new Date(inquiryNow.getTime() + this.leaseMs());
-    const due = await this.deps.uow.run(scope, (tx) =>
-      this.deps.invoices.claimInquiries(
-        scope,
-        inquiryNow,
-        this.leaseMs(),
-        GATEWAY_INQUIRY_BATCH,
-        tx,
-      ),
+    /*
+     * Codex on #277: `claimInquiries` takes the OLDEST due rows, ten of them, before anything
+     * is filtered — so behind a backlog of ten scheduled rows a fresh webhook, tap or return
+     * was never seen by the hinted phase, and the full phase spent its smaller share of the
+     * budget on that same backlog while the hint reserve went unused. The hinted phase now
+     * READS its candidates (no lease, no call), keeps the hinted ones by the same derivation
+     * (`isHinted`), and claims only those, at most a batch. The outbound rate and the budgets
+     * are unchanged: this changes which rows the phase asks, never how many.
+     */
+    const claimed =
+      which === 'HINTED'
+        ? await this.deps.uow.run(scope, async (tx) => {
+            const candidates = await this.deps.invoices.findHintCandidates(
+              scope,
+              inquiryNow,
+              GATEWAY_HINT_SCAN_LIMIT,
+              tx,
+            );
+            const hinted = candidates
+              .filter((row) => !askedThisPass.has(row.invoice.paymentId) && this.isHinted(row))
+              .slice(0, GATEWAY_INQUIRY_BATCH)
+              .map((row) => row.invoice.paymentId);
+            return this.deps.invoices.claimInquiriesOf(
+              scope,
+              inquiryNow,
+              this.leaseMs(),
+              hinted,
+              tx,
+            );
+          })
+        : await this.deps.uow.run(scope, (tx) =>
+            this.deps.invoices.claimInquiries(
+              scope,
+              inquiryNow,
+              this.leaseMs(),
+              GATEWAY_INQUIRY_BATCH,
+              tx,
+            ),
+          );
+    /*
+     * FIX-06: `HINTED` keeps only the rows a hint brought forward; both phases skip a row the
+     * pass already asked (one whose processing threw while a webhook kept it due, say — it is
+     * asked again by the NEXT pass, never twice in one). The rest go straight back.
+     */
+    const due = claimed.filter(
+      (row) => !askedThisPass.has(row.invoice.paymentId) && (which === 'ALL' || this.isHinted(row)),
+    );
+    await this.releaseUnreached(
+      scope,
+      'INQUIRY',
+      claimed.filter((row) => !due.includes(row)),
+      inquiryLease,
     );
     for (const [index, claimed] of due.entries()) {
       if (!this.rowFitsLease(inquiryLease)) {
@@ -648,6 +766,7 @@ export class GatewayPaymentService {
         await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
         break;
       }
+      askedThisPass.add(claimed.invoice.paymentId);
       let result: Awaited<ReturnType<GatewayPaymentService['processInquiry']>>;
       try {
         result = await this.processInquiry(scope, actor, claimed, inquiryLease);
@@ -1107,7 +1226,7 @@ export class GatewayPaymentService {
               // A provider that pushes its payments is never asked (Stars).
               firstInquiryAt:
                 descriptor.approval === 'INQUIRY'
-                  ? new Date(at.getTime() + FIRST_INQUIRY_DELAY_MS)
+                  ? firstInquiryAt(inquiryScheduleFor(invoice.provider), at, invoice.paymentId)
                   : null,
             },
             at,
@@ -1228,19 +1347,31 @@ export class GatewayPaymentService {
     /*
      * The EFFECTIVE deadline (§9.6.3 d): the review deadline once acknowledged, `expires_at`
      * otherwise. Advisory here — `confirmGatewayPayment` decides under the payment's lock.
+     * As of the CLAIM until the provider has answered; re-read then (FIX10 BUG-2, below).
      */
-    const reviewUntil = claimed.paymentReviewUntil;
-    const expiresAt = gatewaySettlementDeadline({
+    let paymentState = claimed.paymentState;
+    let reviewUntil = claimed.paymentReviewUntil;
+    let expiresAt = gatewaySettlementDeadline({
       expiresAt: claimed.paymentExpiresAt,
       providerReviewUntil: reviewUntil,
     });
-    const eligible =
-      claimed.paymentState === 'PENDING' &&
-      expiresAt !== null &&
-      now.getTime() < expiresAt.getTime();
-    const postDeadline = !eligible;
+    let eligible =
+      paymentState === 'PENDING' && expiresAt !== null && now.getTime() < expiresAt.getTime();
+    let postDeadline = !eligible;
     // An operator's "ask again" on an UNKNOWN payment lets ONE inquiry past the bound.
     const operatorAsked = invoice.reconcileInquiryRequestedAt !== null;
+    /*
+     * Codex #269: an approval was recorded on this row and no decision about it committed
+     * (neither an outcome nor a late completion) — its settlement or its late completion
+     * failed after the answer was recorded. Such a row is retried past the ordinary
+     * post-deadline bound, up to `GATEWAY_DECISION_RETRY_MAX` more.
+     */
+    const approvalUndecided =
+      invoice.providerPaid === true &&
+      invoice.outcome === null &&
+      invoice.lateCompletionObservedAt === null;
+    const postDeadlineBound =
+      POST_DEADLINE_INQUIRY_MAX + (approvalUndecided ? GATEWAY_DECISION_RETRY_MAX : 0);
 
     /*
      * A provider that PUSHES its payments (Stars) is never asked. Its row is due only
@@ -1267,7 +1398,7 @@ export class GatewayPaymentService {
       invoiceId === null ||
       adapter === null ||
       apiKey === null ||
-      (postDeadline && invoice.postDeadlineInquiries >= POST_DEADLINE_INQUIRY_MAX && !operatorAsked)
+      (postDeadline && invoice.postDeadlineInquiries >= postDeadlineBound && !operatorAsked)
     ) {
       // Nothing that could be asked, or nothing more to ask. Stop scheduling.
       const kept = await this.deps.uow.run(scope, (tx) =>
@@ -1292,9 +1423,14 @@ export class GatewayPaymentService {
       return kept ? 'ERROR' : 'LOST';
     }
 
-    if (
-      !(await this.deps.budget.take(scope, invoice.provider, adapter.inquiryBudgetPerMinute, now))
-    ) {
+    /*
+     * FIX-06: a scheduled inquiry may not take the top quarter of the provider's inquiry
+     * budget; a hinted one may. The budget itself is the provider's, unchanged.
+     */
+    const inquiryLimit = this.isHinted(claimed)
+      ? adapter.inquiryBudgetPerMinute
+      : adapter.inquiryBudgetPerMinute - hintReservePerMinute(adapter.inquiryBudgetPerMinute);
+    if (!(await this.deps.budget.take(scope, invoice.provider, inquiryLimit, now))) {
       await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.requestInquiry(
           scope,
@@ -1321,6 +1457,23 @@ export class GatewayPaymentService {
       providerUserId: invoice.providerUserId,
     });
     const at = this.deps.clock.now();
+    /*
+     * FIX10 BUG-2: the claim's view of the payment is as old as the claim, and a batch can
+     * reach a row many provider calls later. A receipt acknowledged in between opens a 24-hour
+     * review; judged from the claim, the approval that follows looked post-deadline and was
+     * recorded LATE_COMPLETION, unscheduled and never asked again. So the payment is re-read
+     * now, after the answer: the schedule, the post-deadline bound and every branch below use
+     * what it is NOW. Still advisory — the settlement path decides under the payment's lock.
+     */
+    const current = await this.deps.paymentRecords.findById(scope, invoice.paymentId);
+    if (current !== null) {
+      paymentState = current.state;
+      reviewUntil = current.providerReviewUntil;
+      expiresAt = gatewaySettlementDeadline(current);
+      eligible =
+        paymentState === 'PENDING' && expiresAt !== null && at.getTime() < expiresAt.getTime();
+      postDeadline = !eligible;
+    }
     const next = postDeadline
       ? null
       : reviewUntil !== null
@@ -1329,14 +1482,32 @@ export class GatewayPaymentService {
             new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS),
             reviewUntil,
             at,
+            (ms) => jitteredMs(ms, invoice.paymentId, invoice.inquiryAttempts + 1),
           )
         : this.nextInquiryAt(invoice, at, expiresAt);
 
     if (outcome.kind !== 'OBSERVED') {
       const retry =
         outcome.kind === 'RATE_LIMITED' && next !== null
-          ? new Date(Math.max(next.getTime(), at.getTime() + 60_000))
+          ? new Date(Math.max(next.getTime(), at.getTime() + INQUIRY_RATE_LIMIT_RETRY_MS))
           : next;
+      const scheduled = retry !== null && expiresAt !== null && retry >= expiresAt ? null : retry;
+      /*
+       * Codex on #277 (#269): an approval already recorded on this row whose decision never
+       * committed is asked again so that its decision can be made — and past the deadline
+       * `next` is null. A retry that met a timeout, a 429, a configuration refusal or any
+       * other non-answer then cleared the schedule, leaving a provider-paid attempt with
+       * neither a settlement nor a LATE_COMPLETION for ever. So such a row stays scheduled
+       * through a non-answer. This is NOT an approval: the error is recorded as an error,
+       * the recorded approval is the earlier inquiry's, and only a later inquiry's answer
+       * leads to a decision. Bounded by the same allowance: this inquiry is counted as a
+       * post-deadline one, and the bound above stops the row at
+       * `POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX`.
+       */
+      const nextInquiryAt =
+        scheduled === null && approvalUndecided
+          ? new Date(at.getTime() + RECORDED_OUTCOME_RETRY_MS)
+          : scheduled;
       const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
@@ -1350,8 +1521,7 @@ export class GatewayPaymentService {
             // failed: the attempt's own state stands, and the deadline still decides.
             errorCode: outcome.code,
             adoptInvoiceId: null,
-            nextInquiryAt:
-              retry !== null && expiresAt !== null && retry >= expiresAt ? null : retry,
+            nextInquiryAt,
             postDeadline,
             claimedUntil: leaseUntil,
           },
@@ -1464,7 +1634,21 @@ export class GatewayPaymentService {
            * the settlement is exactly-once, and a payment already failed is no longer
            * eligible, so the retry only records the outcome.
            */
-          nextInquiryAt: next,
+          /*
+           * Codex #269: and a verdict whose DECISION follows this transaction keeps a retry
+           * even where no further inquiry would be scheduled (past the deadline, or past the
+           * last slot before it). The decision — the settlement path's answer under the
+           * payment's lock, or the late completion — is what clears it. Unscheduled here, a
+           * decision that then failed (the tenant stopped between the pass's check and the
+           * settlement's transaction, a transient database error) stranded a provider-paid
+           * attempt with no settlement, no LATE_COMPLETION, no audit and no alert.
+           */
+          nextInquiryAt:
+            next ??
+            (verdict === 'APPROVED' ||
+            (verdict === 'MISMATCH' && !eligible && paymentState !== 'UNKNOWN')
+              ? new Date(at.getTime() + RECORDED_OUTCOME_RETRY_MS)
+              : null),
           postDeadline,
           // The payment this identity-checked answer described (NOWPayments): followed next.
           hintedPaymentId: outcome.providerPaymentId ?? null,
@@ -1525,7 +1709,7 @@ export class GatewayPaymentService {
           ? 'HELD'
           : 'ERROR';
       }
-      if (claimed.paymentState !== 'UNKNOWN') {
+      if (paymentState !== 'UNKNOWN') {
         await this.lateCompletion(scope, actor, invoice, reason);
         return 'LATE';
       }
@@ -1548,11 +1732,82 @@ export class GatewayPaymentService {
       scope,
       actor,
       invoice,
-      eligible,
       `${invoice.provider.toLowerCase()}:${outcome.status}:paid`,
       at,
       reference,
+      {
+        trigger: this.discoveryTriggerOf(
+          claimed,
+          expiresAt,
+          await this.receiptEndedAt(scope, invoice),
+        ),
+        dueAt: invoice.nextInquiryAt,
+      },
     );
+  }
+
+  /**
+   * What made a due row due (`domain/inquiry-discovery.ts`): logged beside a settlement as
+   * FIX-01 evidence, and read by `isHinted` (FIX-06) to decide only WHEN a row is asked and
+   * from which share of the budget — never what its answer means.
+   */
+  private discoveryTriggerOf(
+    claimed: ClaimedGatewayInvoice,
+    expiresAt: Date | null,
+    receiptEndedAt: Date | null = null,
+  ): InquiryDiscoveryTrigger {
+    const { invoice } = claimed;
+    const reviewUntil = claimed.paymentReviewUntil;
+    const reviewStartedAt =
+      reviewUntil === null
+        ? null
+        : new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS);
+    const normal = this.scheduledInquiryAt(invoice, reviewUntil, reviewStartedAt, expiresAt);
+    /*
+     * Codex #265 (4): after an answer that was an error, the row may have been a rate limit,
+     * which waits the later of the normal step and the floor. Both are times the schedule
+     * alone could have put it; a hint between them is still a hint.
+     */
+    const afterRateLimit =
+      invoice.lastInquiryErrorCode !== null && invoice.lastInquiryAt !== null
+        ? new Date(invoice.lastInquiryAt.getTime() + INQUIRY_RATE_LIMIT_RETRY_MS)
+        : null;
+    return inquiryDiscoveryTrigger({
+      dueAt: invoice.nextInquiryAt,
+      scheduledAt: [normal, afterRateLimit].filter((at): at is Date => at !== null),
+      lastInquiryAt: invoice.lastInquiryAt,
+      lastWebhookAt: invoice.lastWebhookAt,
+      operatorRequestedAt: invoice.reconcileInquiryRequestedAt,
+      reviewStartedAt,
+      receiptEndedAt,
+    });
+  }
+
+  /**
+   * Codex #265 (3): when this card-transfer attempt's latest receipt upload ENDED — accepted or
+   * its answer lost — since either brings the next inquiry forward without opening a review.
+   * Evidence only; read once, for an approval about to be settled. Null for any other route.
+   */
+  private async receiptEndedAt(
+    scope: TenantContext,
+    invoice: GatewayInvoiceRecord,
+  ): Promise<Date | null> {
+    if (
+      this.deps.cardTransfer === undefined ||
+      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm !== 'CARD_TRANSFER'
+    ) {
+      return null;
+    }
+    try {
+      const submissions = await this.deps.cardTransfer.submissionsFor(scope, invoice.paymentId);
+      const ended = submissions
+        .filter((one) => one.state === 'ACCEPTED' || one.state === 'UNKNOWN')
+        .map((one) => one.decidedAt?.getTime() ?? null)
+        .filter((at): at is number => at !== null);
+      return ended.length === 0 ? null : new Date(Math.max(...ended));
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1564,28 +1819,24 @@ export class GatewayPaymentService {
     scope: TenantContext,
     actor: ActorContext,
     invoice: GatewayInvoiceRecord,
-    eligible: boolean,
     evidenceNote: string,
     at: Date,
     /** The provider reference bound to this attempt (CentralPay), re-checked under the lock. */
     providerReference: string | null = null,
+    /** FIX-01 evidence: why the approval was seen now, and when its row fell due. */
+    discovery: { readonly trigger: GatewayDiscoveryTrigger; readonly dueAt: Date | null } = {
+      trigger: 'SCHEDULED',
+      dueAt: invoice.nextInquiryAt,
+    },
   ): Promise<'SETTLED' | 'LATE' | 'ERROR' | 'HELD'> {
     /*
-     * FIX-03: an attempt this lane ALREADY settled is not a late completion. A worker that
-     * died between the settlement's commit and `recordOutcome` leaves the approval scheduled
-     * against a CONFIRMED payment; judged ineligible here, the restarted pass recorded
-     * `LATE_COMPLETION`, raised the "paid invoice we can no longer settle" alarm and logged a
-     * late approval — for money that had been credited exactly once. A confirmed payment goes
-     * to the settlement path instead, which answers `ALREADY_CONFIRMED` under the payment's
-     * lock and moves nothing. Every other ineligible payment is still a late completion.
+     * FIX10 BUG-2: EVERY approval goes to the settlement path, whatever the caller's snapshot
+     * said about eligibility. Only its answer, taken under the payment's lock, decides whether
+     * the approval is late — a snapshot is as old as the read behind it, and a review that
+     * opened after it moved the deadline. (FIX-03's case is the same rule: a payment this
+     * lane already settled answers `ALREADY_CONFIRMED` and is never a late completion.) A
+     * NOT_ELIGIBLE answer is recorded as LATE_COMPLETION with the lock's own reason.
      */
-    const settledBefore =
-      !eligible &&
-      (await this.deps.paymentRecords.findById(scope, invoice.paymentId))?.state === 'CONFIRMED';
-    if (!eligible && !settledBefore) {
-      await this.lateCompletion(scope, actor, invoice, 'DEADLINE_PASSED');
-      return 'LATE';
-    }
     let confirmation: GatewayConfirmation;
     try {
       confirmation = await this.deps.payments.confirmGatewayPayment(
@@ -1608,6 +1859,13 @@ export class GatewayPaymentService {
     }
     switch (confirmation.outcome) {
       case 'SETTLED':
+        this.logSettlementLatency(
+          invoice,
+          confirmation.payment,
+          confirmation.orderPurpose ?? null,
+          discovery,
+          at,
+        );
         await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'SETTLED', at);
         return 'SETTLED';
       case 'ALREADY_CONFIRMED':
@@ -1631,6 +1889,59 @@ export class GatewayPaymentService {
         }
         await this.lateCompletion(scope, actor, invoice, confirmation.reason);
         return 'LATE';
+    }
+  }
+
+  /**
+   * FIX-01 (batch 2026-10-10): the four stages of one settlement, in one redacted line —
+   * identifiers and durations only, never an amount, a key, a payload or a card.
+   *
+   *  1. `invoiceToDiscoveryMs` — the invoice's creation to the answer that approved it, and
+   *     `dueToDiscoveryMs` — the row falling due to that answer (the lane's own lag: its
+   *     interval, the passes ahead of it, the call). The provider's own approval instant is
+   *     not knowable here, so it is never claimed.
+   *  2. `discoveryToConfirmedMs` — the answer to the committed settlement (ledger + state).
+   *  3. `customerMessage` — what announces it: a top-up's `WALLET_TOPUP_CREDITED` is enqueued
+   *     IN the settling transaction (confirmed → enqueued is zero by construction) and sent by
+   *     the customer notification lane, which logs `customer notification latency`; an order's
+   *     service is created and delivered by the provisioner, directly.
+   *  4. The send itself is the lane's or the provisioner's line, joined by payment id.
+   */
+  private logSettlementLatency(
+    invoice: GatewayInvoiceRecord,
+    payment: PaymentRecord,
+    orderPurpose: OrderPurpose | null,
+    discovery: { readonly trigger: GatewayDiscoveryTrigger; readonly dueAt: Date | null },
+    discoveredAt: Date,
+  ): void {
+    const since = (from: Date | null): number | null =>
+      from === null ? null : discoveredAt.getTime() - from.getTime();
+    const confirmedAt = payment.confirmedAt ?? null;
+    // Evidence only: a logger that fails must not stand between a settlement and its record.
+    try {
+      this.deps.logger.info(
+        {
+          paymentId: invoice.paymentId,
+          provider: invoice.provider,
+          kind: payment.orderId === null ? 'TOPUP' : 'ORDER',
+          orderPurpose,
+          trigger: discovery.trigger,
+          // Codex #265 (1): a recorded payment (Stars) was discovered by no inquiry at all.
+          inquiryAttempt:
+            PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].approval === 'RECORDED_PAYMENT'
+              ? null
+              : invoice.inquiryAttempts + 1,
+          invoiceToDiscoveryMs: since(invoice.createdInvoiceAt),
+          dueToDiscoveryMs: since(discovery.dueAt),
+          webhookToDiscoveryMs: since(invoice.lastWebhookAt),
+          discoveryToConfirmedMs:
+            confirmedAt === null ? null : confirmedAt.getTime() - discoveredAt.getTime(),
+          customerMessage: finalMessagePath(payment.orderId === null, orderPurpose),
+        },
+        'gateway payment settlement latency',
+      );
+    } catch {
+      // Nothing to do: the settlement stands, and its record follows.
     }
   }
 
@@ -1688,9 +1999,10 @@ export class GatewayPaymentService {
       scope,
       actor,
       invoice,
-      eligible,
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
+      null,
+      { trigger: 'STARS_RECOVERY', dueAt: invoice.nextInquiryAt },
     );
     return settled === 'HELD' ? 'ERROR' : settled;
   }
@@ -1719,16 +2031,15 @@ export class GatewayPaymentService {
     // and a redelivered update must not write a second late-completion notice.
     if (invoice.outcome !== null) return invoice.outcome === 'LATE_COMPLETION' ? 'LATE' : 'SETTLED';
     const now = this.deps.clock.now();
-    const deadline = gatewaySettlementDeadline(payment);
-    const eligible =
-      payment.state === 'PENDING' && deadline !== null && now.getTime() < deadline.getTime();
+    // Eligibility is the settlement path's to decide, under the payment's lock (FIX10 BUG-2).
     const settled = await this.settleApproved(
       scope,
       this.actor(),
       invoice,
-      eligible,
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
+      null,
+      { trigger: 'STARS_UPDATE', dueAt: null },
     );
     return settled === 'HELD' ? 'ERROR' : settled;
   }
@@ -1756,7 +2067,13 @@ export class GatewayPaymentService {
     expiresAt: Date | null,
   ): Date | null {
     if (expiresAt === null) return null;
-    const next = new Date(at.getTime() + inquiryBackoffMs(invoice.inquiryAttempts + 1));
+    // FIX-06: the provider's own schedule (`domain/inquiry-schedule.ts`), jittered.
+    const next = nextScheduledInquiryAt(inquiryScheduleFor(invoice.provider), {
+      at,
+      attempt: invoice.inquiryAttempts + 1,
+      invoiceCreatedAt: invoice.createdInvoiceAt,
+      paymentId: invoice.paymentId,
+    });
     if (next.getTime() < expiresAt.getTime()) return next;
     /*
      * One last question just before the deadline, so a payment made in the final minutes
@@ -1764,6 +2081,55 @@ export class GatewayPaymentService {
      */
     const last = new Date(expiresAt.getTime() - 15_000);
     return last.getTime() > at.getTime() ? last : null;
+  }
+
+  /**
+   * FIX-06: whether a due row was brought forward by a hint rather than by its schedule
+   * (`domain/inquiry-discovery.ts`). Decides only WHEN it is asked and from which share of
+   * the budget — never what its answer means.
+   */
+  private isHinted(claimed: ClaimedGatewayInvoice): boolean {
+    const expiresAt = gatewaySettlementDeadline({
+      expiresAt: claimed.paymentExpiresAt,
+      providerReviewUntil: claimed.paymentReviewUntil,
+    });
+    return this.discoveryTriggerOf(claimed, expiresAt) !== 'SCHEDULED';
+  }
+
+  /**
+   * When the schedule ALONE put this row's next inquiry — the same functions, with the same
+   * jitter, that wrote it. Null when it cannot be said (no create time, no deadline).
+   */
+  private scheduledInquiryAt(
+    invoice: GatewayInvoiceRecord,
+    reviewUntil: Date | null,
+    reviewStartedAt: Date | null,
+    expiresAt: Date | null,
+  ): Date | null {
+    if (invoice.lastInquiryAt === null) {
+      return invoice.createdInvoiceAt === null
+        ? null
+        : firstInquiryAt(
+            inquiryScheduleFor(invoice.provider),
+            invoice.createdInvoiceAt,
+            invoice.paymentId,
+          );
+    }
+    if (
+      reviewUntil !== null &&
+      reviewStartedAt !== null &&
+      invoice.lastInquiryAt.getTime() >= reviewStartedAt.getTime()
+    ) {
+      return reviewInquiryNextAt(reviewStartedAt, reviewUntil, invoice.lastInquiryAt, (ms) =>
+        jitteredMs(ms, invoice.paymentId, invoice.inquiryAttempts),
+      );
+    }
+    // `inquiryAttempts` already counts the last inquiry; the schedule was computed before it.
+    return this.nextInquiryAt(
+      { ...invoice, inquiryAttempts: Math.max(0, invoice.inquiryAttempts - 1) },
+      invoice.lastInquiryAt,
+      expiresAt,
+    );
   }
 
   // ---------------------------------------------------------------------------------------
@@ -2795,6 +3161,11 @@ export class GatewayPaymentService {
     await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.requestInquiry(scope, view.payment.id, at, tx),
     );
+    // FIX-01 evidence: tells a tap from a browser return when a settlement says CUSTOMER_HINT.
+    this.deps.logger.info(
+      { paymentId: view.payment.id, provider: view.invoice.provider },
+      'gateway status check brought an inquiry forward',
+    );
   }
 
   // ---------------------------------------------------------------------------------------
@@ -3099,4 +3470,24 @@ export class GatewayPaymentService {
       context: { paymentId: invoice.paymentId, provider: invoice.provider, source },
     });
   }
+}
+
+/**
+ * Codex #265 (2): which component sends the customer's FINAL message for a settled payment.
+ * A top-up's `WALLET_TOPUP_CREDITED` is enqueued in the settling transaction and sent by the
+ * customer notification lane. An order that CREATES a service is delivered by the provisioner
+ * directly, in the tick that creates it. An order that acts on an existing service (a renewal,
+ * an add-on, extra devices, a location change) is run by the provisioner as a commercial
+ * operation, and its result (`SERVICE_RENEWED` / `SERVICE_ACTION_SUCCEEDED`) is queued by the
+ * operation outcome announcer for the notification lane — both waits apply.
+ */
+export function finalMessagePath(
+  isTopup: boolean,
+  orderPurpose: OrderPurpose | null,
+): 'NOTIFICATION_LANE' | 'PROVISIONER' | 'PROVISIONER_THEN_NOTIFICATION_LANE' | 'UNKNOWN' {
+  if (isTopup) return 'NOTIFICATION_LANE';
+  if (orderPurpose === null) return 'UNKNOWN';
+  return orderPurposeCreatesNewService(orderPurpose)
+    ? 'PROVISIONER'
+    : 'PROVISIONER_THEN_NOTIFICATION_LANE';
 }
