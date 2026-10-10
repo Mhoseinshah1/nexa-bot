@@ -154,6 +154,16 @@ export const RECEIPT_RATE_LIMIT_RETRY_MS = 60_000;
  */
 export const RECORDED_OUTCOME_RETRY_MS = 60_000;
 
+/**
+ * Codex #269: how many post-deadline inquiries BEYOND `POST_DEADLINE_INQUIRY_MAX` an
+ * approval whose decision never committed may still be given. Its retry re-asks the provider
+ * (only the inquiry decides) and is therefore a post-deadline inquiry like any other; without
+ * this allowance an approval met on the last permitted post-deadline inquiry, whose decision
+ * then failed, would be stopped by the bound with neither a settlement nor a late completion.
+ * Bounded, so a decision that fails for ever does not ask the provider for ever.
+ */
+export const GATEWAY_DECISION_RETRY_MAX = 5;
+
 /** The path a provider's webhook is served on. The route and this must agree. */
 export const GATEWAY_WEBHOOK_PATH_PREFIX = '/payments/webhook';
 
@@ -809,6 +819,18 @@ export class GatewayPaymentService {
     let postDeadline = !eligible;
     // An operator's "ask again" on an UNKNOWN payment lets ONE inquiry past the bound.
     const operatorAsked = invoice.reconcileInquiryRequestedAt !== null;
+    /*
+     * Codex #269: an approval was recorded on this row and no decision about it committed
+     * (neither an outcome nor a late completion) — its settlement or its late completion
+     * failed after the answer was recorded. Such a row is retried past the ordinary
+     * post-deadline bound, up to `GATEWAY_DECISION_RETRY_MAX` more.
+     */
+    const approvalUndecided =
+      invoice.providerPaid === true &&
+      invoice.outcome === null &&
+      invoice.lateCompletionObservedAt === null;
+    const postDeadlineBound =
+      POST_DEADLINE_INQUIRY_MAX + (approvalUndecided ? GATEWAY_DECISION_RETRY_MAX : 0);
 
     /*
      * A provider that PUSHES its payments (Stars) is never asked. Its row is due only
@@ -835,7 +857,7 @@ export class GatewayPaymentService {
       invoiceId === null ||
       adapter === null ||
       apiKey === null ||
-      (postDeadline && invoice.postDeadlineInquiries >= POST_DEADLINE_INQUIRY_MAX && !operatorAsked)
+      (postDeadline && invoice.postDeadlineInquiries >= postDeadlineBound && !operatorAsked)
     ) {
       // Nothing that could be asked, or nothing more to ask. Stop scheduling.
       await this.deps.uow.run(scope, (tx) =>
@@ -1036,7 +1058,21 @@ export class GatewayPaymentService {
            * the settlement is exactly-once, and a payment already failed is no longer
            * eligible, so the retry only records the outcome.
            */
-          nextInquiryAt: next,
+          /*
+           * Codex #269: and a verdict whose DECISION follows this transaction keeps a retry
+           * even where no further inquiry would be scheduled (past the deadline, or past the
+           * last slot before it). The decision — the settlement path's answer under the
+           * payment's lock, or the late completion — is what clears it. Unscheduled here, a
+           * decision that then failed (the tenant stopped between the pass's check and the
+           * settlement's transaction, a transient database error) stranded a provider-paid
+           * attempt with no settlement, no LATE_COMPLETION, no audit and no alert.
+           */
+          nextInquiryAt:
+            next ??
+            (verdict === 'APPROVED' ||
+            (verdict === 'MISMATCH' && !eligible && paymentState !== 'UNKNOWN')
+              ? new Date(at.getTime() + RECORDED_OUTCOME_RETRY_MS)
+              : null),
           postDeadline,
           // The payment this identity-checked answer described (NOWPayments): followed next.
           hintedPaymentId: outcome.providerPaymentId ?? null,
