@@ -571,6 +571,8 @@ export interface ServiceRepository {
    * the "my services" screen's shape (customer UX completion §G). Offset paging, because
    * the screen shows `page/pages` and a page beyond the last is clamped by the caller;
    * ordered `created_at DESC, id DESC`, so the order is stable between two taps.
+   * A `TERMINATED` service is not listed (FIX-10); the page and the count share one
+   * predicate, and `searchForCustomer` uses it too.
    */
   pageForCustomer(
     scope: TenantContext,
