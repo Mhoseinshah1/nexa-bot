@@ -17,7 +17,10 @@
  *   --cpu N            CPU slowdown factor (default 1)
  *   --hover MS         move the pointer onto the link MS milliseconds before clicking it
  *                      (default 0: a bare click, which no sidebar prefetch can precede)
- *   --out FILE         JSON results (default .perf/web-nav-<rtt>ms.json)
+ *   --out FILE         JSON results (default .perf/web-nav-<cycle>-<rtt>ms.json)
+ *   --cycle NAME       admin (default: Dashboard → Customers → Audit Log → Settings) or
+ *                      commerce (→ Customers → Orders → Payments → Services → Products →
+ *                      Panels → Dashboard, the FIX-11 audit's cycle)
  *   --no-build         serve apps/web/dist as it is
  *
  * Per navigation it records:
@@ -70,12 +73,28 @@ import { Cdp } from '../web-shots/cdp.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 
-const STEPS = [
-  { from: 'dashboard', to: 'customers', href: '/users' },
-  { from: 'customers', to: 'audit-log', href: '/audit-log' },
-  { from: 'audit-log', to: 'settings', href: '/settings' },
-  { from: 'settings', to: 'dashboard', href: '/' },
-];
+/**
+ * The navigation cycles. `admin` is the original one. `commerce` is the one the FIX-11 audit
+ * measured (the pages an operator selling services lives on: orders, payments, services,
+ * products, panels), where the payment attention counts and the panel capacity count are.
+ */
+const CYCLES = {
+  admin: [
+    { from: 'dashboard', to: 'customers', href: '/users' },
+    { from: 'customers', to: 'audit-log', href: '/audit-log' },
+    { from: 'audit-log', to: 'settings', href: '/settings' },
+    { from: 'settings', to: 'dashboard', href: '/' },
+  ],
+  commerce: [
+    { from: 'dashboard', to: 'customers', href: '/users' },
+    { from: 'customers', to: 'orders', href: '/orders' },
+    { from: 'orders', to: 'payments', href: '/payments' },
+    { from: 'payments', to: 'services', href: '/services' },
+    { from: 'services', to: 'products', href: '/products' },
+    { from: 'products', to: 'panels', href: '/panels' },
+    { from: 'panels', to: 'dashboard', href: '/' },
+  ],
+};
 
 function parseArgs(argv) {
   const o = {
@@ -87,6 +106,7 @@ function parseArgs(argv) {
     hover: 0,
     out: null,
     build: true,
+    cycle: 'admin',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -103,11 +123,13 @@ function parseArgs(argv) {
     else if (a === '--out') o.out = resolve(v());
     else if (a === '--hover') o.hover = Number(v());
     else if (a === '--no-build') o.build = false;
+    else if (a === '--cycle') o.cycle = v();
     else throw new Error(`Unknown argument: ${a}`);
   }
   if (o.api === null || o.username === null) throw new Error('--api and --username are required');
+  if (CYCLES[o.cycle] === undefined) throw new Error(`--cycle is ${Object.keys(CYCLES).join('|')}`);
   if (!process.env.NEXA_BENCH_PASSWORD) throw new Error('Set NEXA_BENCH_PASSWORD.');
-  o.out ??= join(ROOT, '.perf', `web-nav-${o.rtt}ms.json`);
+  o.out ??= join(ROOT, '.perf', `web-nav-${o.cycle}-${o.rtt}ms.json`);
   return o;
 }
 
@@ -404,8 +426,14 @@ async function main() {
     let wait = loaded();
     await send('Page.navigate', { url: `${origin}/robots-not-a-route` });
     await wait;
+    /*
+     * The sidebar as the icon rail. The labelled sidebar is a single-open ACCORDION whose
+     * closed groups render no links at all, so a click on \`/users\` or \`/orders\` had no
+     * element to land on ("no link") from the dashboard. The rail draws every link the
+     * actor may see; what is measured is the page behind the link, not the accordion.
+     */
     const login = await send('Runtime.evaluate', {
-      expression: `fetch('/api/admin/v1/auth/login', { method: 'POST', credentials: 'same-origin',
+      expression: `localStorage.setItem('nexa.sidebar', 'collapsed'), fetch('/api/admin/v1/auth/login', { method: 'POST', credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ username: ${JSON.stringify(o.username)}, password: ${JSON.stringify(process.env.NEXA_BENCH_PASSWORD)} }) })
         .then((r) => r.status)`,
@@ -451,7 +479,7 @@ async function main() {
     );
 
     for (let round = 0; round <= o.rounds; round += 1) {
-      for (const step of STEPS) {
+      for (const step of CYCLES[o.cycle]) {
         await delay(300);
         requests.clear();
         if (o.hover > 0) {
@@ -526,7 +554,7 @@ async function main() {
 
     results.summary = {};
     for (const [label, kinds] of [
-      ...STEPS.map((step) => [`${step.from}→${step.to}`, ['cold', 'repeat']]),
+      ...CYCLES[o.cycle].map((step) => [`${step.from}→${step.to}`, ['cold', 'repeat']]),
       ['dashboard(loading)→customers', ['leave-early']],
     ]) {
       for (const kind of kinds) {
