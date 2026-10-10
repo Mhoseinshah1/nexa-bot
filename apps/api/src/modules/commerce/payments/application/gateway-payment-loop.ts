@@ -36,8 +36,9 @@ export function gatewayLoopSlackIntervals(intervalMs: number, passBoundMs: numbe
  * never while a customer's Telegram request waits.
  *
  * Progress is recorded when a pass COMPLETES, including one that did nothing; a pass
- * that threw records nothing, so a lane whose every pass fails goes stale and the
- * worker's readiness says so.
+ * that threw records nothing, and neither does one that returned with a lane that threw
+ * (`laneFailures`), so a lane whose every pass fails goes stale and the worker's
+ * readiness says so.
  */
 export class GatewayPaymentLoop {
   private timer: NodeJS.Timeout | null = null;
@@ -98,10 +99,22 @@ export class GatewayPaymentLoop {
       const report = await this.lane.runOnce(scope);
       if (
         report.created + report.createFailed + report.createUnknown + report.inquired > 0 ||
-        report.budgetExhausted
+        report.budgetExhausted ||
+        // FIX10 BUG-1: a pass that isolated a failing row says so, with the count.
+        report.rowFailures > 0 ||
+        report.laneFailures > 0
       ) {
         this.options.logger.info({ ...report }, 'gateway payment pass');
       }
+      /*
+       * FIX10 (Codex #268 A): a pass in which a LANE threw is not progress, even though it
+       * returned. The other lanes ran — the sweeps above all — but the failed lane did
+       * nothing, and a lane that throws on every pass (its claim, say) must go stale like a
+       * pass that throws, or readiness stays fresh over a queue nobody is working. A row's
+       * failure is different: it was isolated and backed off, and the lane around it did its
+       * work, so that pass still counts.
+       */
+      if (report.laneFailures > 0) return;
       this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error(

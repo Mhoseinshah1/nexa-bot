@@ -1,5 +1,8 @@
 import {
   GATEWAY_RETURN_PATH_PREFIX,
+  GATEWAY_ROW_FAILING_CODE,
+  GATEWAY_ROW_FAILURE_ALERT_AFTER,
+  GATEWAY_ROW_RECOVERED_CODE,
   PAYMENT_GATEWAY_DESCRIPTORS,
   TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS,
   TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS,
@@ -61,7 +64,10 @@ import {
   paymentLinkInterruptedFailure,
   type PaymentLinkFailure,
 } from './payment-link-failure.js';
-import { recordQuietly } from '../../../platform/opslog/application/error-events.js';
+import {
+  recordQuietly,
+  sanitizedErrorCode,
+} from '../../../platform/opslog/application/error-events.js';
 
 /**
  * Operational codes this lane raises. Declared beside their producer, and each is part
@@ -153,6 +159,72 @@ export const RECEIPT_RATE_LIMIT_RETRY_MS = 60_000;
  * backoff applies (it is past its deadline, or on the last retry before it).
  */
 export const RECORDED_OUTCOME_RETRY_MS = 60_000;
+
+/**
+ * FIX10 BUG-1: how soon a row whose processing THREW is due again. Measured from the last
+ * time the row made progress, halved, and held between the two bounds — so a row that fails
+ * once is retried within a minute, one that keeps failing backs off to the cap and stays
+ * there (it is never abandoned: a local fault, fixed, must let the row finish), and in
+ * neither case does it keep the head of the queue. Its own constants, not the inquiry
+ * schedule's: this is not an answer from a provider.
+ */
+export const GATEWAY_ROW_FAILURE_RETRY_MIN_MS = 30_000;
+export const GATEWAY_ROW_FAILURE_RETRY_MAX_MS = 5 * 60_000;
+
+export function rowFailureRetryAt(now: Date, since: Date | null): Date {
+  const elapsed = since === null ? 0 : Math.max(0, now.getTime() - since.getTime());
+  const delay = Math.min(
+    GATEWAY_ROW_FAILURE_RETRY_MAX_MS,
+    Math.max(GATEWAY_ROW_FAILURE_RETRY_MIN_MS, Math.floor(elapsed / 2)),
+  );
+  return new Date(now.getTime() + delay);
+}
+
+/**
+ * The one log line a failing row leaves, every time it fails: what an operator (or a log
+ * alert) searches for. A row that keeps failing repeats it at most every
+ * `GATEWAY_ROW_FAILURE_RETRY_MAX_MS`, and the pass report counts it as `rowFailures`.
+ */
+export const GATEWAY_ROW_FAILED_MESSAGE =
+  'gateway payment row failed; backed off, and the pass continues with the next row';
+
+/**
+ * FIX10 (audit P1-b on #268): the subject of a failing row's operator condition
+ * (`payments.gateway_row_failing`) — one per invoice row, one per receipt submission — so
+ * the condition is opened, counted and closed for that row and no other.
+ */
+export function gatewayRowConditionKey(
+  row:
+    | { readonly kind: 'INVOICE'; readonly paymentId: string }
+    | { readonly kind: 'RECEIPT'; readonly submissionId: string },
+): string {
+  return row.kind === 'INVOICE'
+    ? `${GATEWAY_ROW_FAILING_CODE}:invoice:${row.paymentId}`
+    : `${GATEWAY_ROW_FAILING_CODE}:receipt:${row.submissionId}`;
+}
+
+/**
+ * What a log line may say about an exception: its class, a NexaError's machine code and a
+ * PostgreSQL SQLSTATE. Never its message — a driver's message or detail can carry a value
+ * (a reference, a key fragment), and a provider error can carry a payload.
+ */
+export function errorFacts(error: unknown): {
+  readonly error: string;
+  readonly code: string | null;
+} {
+  const name = error instanceof Error ? error.name : 'unknown';
+  // A SQLSTATE (`23505`) or a machine code (`platform.secret_version_unsupported`), on the
+  // error or on the one it wraps (the query builder wraps the driver's); nothing free-form.
+  const codeOf = (value: unknown): string | null => {
+    const raw =
+      typeof value === 'object' && value !== null && 'code' in value
+        ? (value as { code?: unknown }).code
+        : undefined;
+    return typeof raw === 'string' && /^[A-Za-z0-9_.]{1,64}$/.test(raw) ? raw : null;
+  };
+  const cause = error instanceof Error ? error.cause : undefined;
+  return { error: name, code: codeOf(error) ?? codeOf(cause) };
+}
 
 /** The path a provider's webhook is served on. The route and this must agree. */
 export const GATEWAY_WEBHOOK_PATH_PREFIX = '/payments/webhook';
@@ -298,6 +370,19 @@ export interface GatewayPassReport {
   /** NOWPayments: attempts whose coins were seen (review opened) or held for a MISMATCH. */
   readonly reviewsOpened: number;
   readonly held: number;
+  /**
+   * FIX10 BUG-1: rows whose processing threw this pass. Each was logged as
+   * `GATEWAY_ROW_FAILED_MESSAGE` with its ids and backed off; the pass went on without it.
+   * A row's failure is isolated: the lane around it still did its work.
+   */
+  readonly rowFailures: number;
+  /**
+   * FIX10 (Codex #268 A): LANES that threw this pass — a claim, a sweep, anything outside a
+   * single row. The pass still runs every other lane, but a lane that failed did nothing, so
+   * the loop records NO progress for this pass: a lane that throws on every pass goes stale
+   * and the worker's readiness says so, instead of a fresh heartbeat over a dead queue.
+   */
+  readonly laneFailures: number;
 }
 
 /** What a webhook did. Never anything the caller could turn into money. */
@@ -389,12 +474,58 @@ export class GatewayPaymentService {
       receipts: 0,
       reviewsOpened: 0,
       held: 0,
+      rowFailures: 0,
+      laneFailures: 0,
     };
     // A stopped tenant's rows simply wait, and nothing about them is sent anywhere.
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return report;
-    const now = this.deps.clock.now();
     const actor = this.actor();
+    /*
+     * FIX10 BUG-1: every lane and every row is isolated. One row that throws — a credential
+     * that cannot be decrypted, a unique violation from a concurrent bind, a deadlock — is
+     * logged, backed off and counted, and the pass goes on to the rows claimed with it and to
+     * every lane after it. Before this a single poisoned row threw the whole pass: the rows
+     * claimed beside it were never processed, it kept the oldest `next_inquiry_at` so the
+     * same batch was claimed and abandoned on every pass, and the sweeps never ran.
+     */
+    await this.isolatedLane(scope, report, 'CREATION', () =>
+      this.runCreations(scope, actor, report),
+    );
+    if (!report.budgetExhausted) {
+      await this.isolatedLane(scope, report, 'INQUIRY', () =>
+        this.runInquiries(scope, actor, report),
+      );
+    }
 
+    // TonPays Telegram: no provider call — always run, whatever the budget said.
+    await this.isolatedLane(scope, report, 'REVIEW_SWEEP', async () => {
+      report.reviewsLapsed = await this.loseTrackOfLapsedReviews(scope, actor);
+    });
+    await this.isolatedLane(scope, report, 'CAPTURE_SWEEP', () => this.sweepReceiptCaptures(scope));
+    if (!report.budgetExhausted) {
+      await this.isolatedLane(scope, report, 'CARD_CHANGE', async () => {
+        const cards = await this.runCardChanges(scope, actor, report);
+        report.cardChanges = cards.done;
+        report.budgetExhausted = cards.budgetExhausted;
+      });
+    }
+    if (!report.budgetExhausted) {
+      await this.isolatedLane(scope, report, 'RECEIPT', async () => {
+        const receipts = await this.runReceipts(scope, actor, report);
+        report.receipts = receipts.done;
+        report.budgetExhausted = receipts.budgetExhausted;
+      });
+    }
+    return report;
+  }
+
+  /** The create queue (§5.2): one claim, then each row on its own. */
+  private async runCreations(
+    scope: TenantContext,
+    actor: ActorContext,
+    report: { -readonly [K in keyof GatewayPassReport]: GatewayPassReport[K] },
+  ): Promise<void> {
+    const now = this.deps.clock.now();
     const creationLease = new Date(now.getTime() + GATEWAY_CLAIM_LEASE_MS);
     const creating = await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.claimCreating(
@@ -406,75 +537,289 @@ export class GatewayPaymentService {
       ),
     );
     for (const [index, claimed] of creating.entries()) {
-      const result = await this.processCreation(scope, actor, claimed);
+      let result: Awaited<ReturnType<GatewayPaymentService['processCreation']>>;
+      try {
+        result = await this.processCreation(scope, actor, claimed);
+      } catch (error: unknown) {
+        report.rowFailures += 1;
+        await this.rowFailed(
+          scope,
+          'CREATION',
+          claimed.invoice.paymentId,
+          claimed.invoice.provider,
+          error,
+          (at) =>
+            this.deps.uow.run(scope, (tx) =>
+              this.deps.invoices.backOffClaim(
+                scope,
+                'CREATION',
+                claimed.invoice.paymentId,
+                creationLease,
+                claimed.invoice.updatedAt,
+                rowFailureRetryAt(at, claimed.invoice.createdAt),
+                at,
+                tx,
+              ),
+            ),
+        );
+        continue;
+      }
       if (result === 'BUDGET') {
         report.budgetExhausted = true;
         // The deferred row cleared its own lease; the rows not reached give theirs back.
         await this.releaseUnreached(scope, 'CREATION', creating.slice(index + 1), creationLease);
         break;
       }
+      await this.rowSucceeded(scope, {
+        kind: 'INVOICE',
+        paymentId: claimed.invoice.paymentId,
+        rowFailures: claimed.invoice.rowFailures,
+      });
       report[result] += 1;
       // R2: the invoice is ready, refused or unknown — the waiting message shows it now.
       if (result !== 'createDeferred') await this.refreshScreens(scope, claimed.invoice.paymentId);
     }
+  }
 
-    if (!report.budgetExhausted) {
-      const inquiryNow = this.deps.clock.now();
-      const inquiryLease = new Date(inquiryNow.getTime() + GATEWAY_CLAIM_LEASE_MS);
-      const due = await this.deps.uow.run(scope, (tx) =>
-        this.deps.invoices.claimInquiries(
-          scope,
-          inquiryNow,
-          GATEWAY_CLAIM_LEASE_MS,
-          GATEWAY_INQUIRY_BATCH,
-          tx,
-        ),
-      );
-      for (const [index, claimed] of due.entries()) {
-        const result = await this.processInquiry(scope, actor, claimed);
-        if (result === 'BUDGET') {
-          report.budgetExhausted = true;
-          /*
-           * The row that met the empty budget was rescheduled five seconds out; it and
-           * every row after it give their leases back, or each would sit leased for the
-           * whole lease and miss that retry — the last inquiry before a deadline among them.
-           */
-          await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
-          break;
-        }
-        report.inquired += 1;
-        if (result === 'SETTLED') report.settled += 1;
-        if (result === 'UNSUCCESSFUL') report.unsuccessful += 1;
-        if (result === 'LATE') report.lateCompletions += 1;
-        if (result === 'REVIEW') report.reviewsOpened += 1;
-        if (result === 'HELD') report.held += 1;
-        // R2: an attempt that settled or ended is shown so on the message that shows it.
-        if (
-          result === 'SETTLED' ||
-          result === 'UNSUCCESSFUL' ||
-          result === 'LATE' ||
-          result === 'REVIEW' ||
-          result === 'HELD'
-        ) {
-          await this.refreshScreens(scope, claimed.invoice.paymentId);
-        }
+  /** The inquiry queue (§5.4): one claim, then each row on its own. */
+  private async runInquiries(
+    scope: TenantContext,
+    actor: ActorContext,
+    report: { -readonly [K in keyof GatewayPassReport]: GatewayPassReport[K] },
+  ): Promise<void> {
+    const inquiryNow = this.deps.clock.now();
+    const inquiryLease = new Date(inquiryNow.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    const due = await this.deps.uow.run(scope, (tx) =>
+      this.deps.invoices.claimInquiries(
+        scope,
+        inquiryNow,
+        GATEWAY_CLAIM_LEASE_MS,
+        GATEWAY_INQUIRY_BATCH,
+        tx,
+      ),
+    );
+    for (const [index, claimed] of due.entries()) {
+      let result: Awaited<ReturnType<GatewayPaymentService['processInquiry']>>;
+      try {
+        result = await this.processInquiry(scope, actor, claimed);
+      } catch (error: unknown) {
+        report.rowFailures += 1;
+        const { invoice } = claimed;
+        await this.rowFailed(scope, 'INQUIRY', invoice.paymentId, invoice.provider, error, (at) =>
+          this.deps.uow.run(scope, (tx) =>
+            this.deps.invoices.backOffClaim(
+              scope,
+              'INQUIRY',
+              invoice.paymentId,
+              inquiryLease,
+              // The claim's own stamp: a row written since (a hint) keeps its earlier time.
+              invoice.updatedAt,
+              // Measured from the last inquiry that RECORDED something: a row failing
+              // pass after pass backs off further each time, up to the cap.
+              rowFailureRetryAt(
+                at,
+                invoice.lastInquiryAt ?? invoice.createdInvoiceAt ?? invoice.createdAt,
+              ),
+              at,
+              tx,
+            ),
+          ),
+        );
+        continue;
+      }
+      if (result === 'BUDGET') {
+        report.budgetExhausted = true;
+        /*
+         * The row that met the empty budget was rescheduled five seconds out; it and
+         * every row after it give their leases back, or each would sit leased for the
+         * whole lease and miss that retry — the last inquiry before a deadline among them.
+         */
+        await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
+        break;
+      }
+      await this.rowSucceeded(scope, {
+        kind: 'INVOICE',
+        paymentId: claimed.invoice.paymentId,
+        rowFailures: claimed.invoice.rowFailures,
+      });
+      report.inquired += 1;
+      if (result === 'SETTLED') report.settled += 1;
+      if (result === 'UNSUCCESSFUL') report.unsuccessful += 1;
+      if (result === 'LATE') report.lateCompletions += 1;
+      if (result === 'REVIEW') report.reviewsOpened += 1;
+      if (result === 'HELD') report.held += 1;
+      // R2: an attempt that settled or ended is shown so on the message that shows it.
+      if (
+        result === 'SETTLED' ||
+        result === 'UNSUCCESSFUL' ||
+        result === 'LATE' ||
+        result === 'REVIEW' ||
+        result === 'HELD'
+      ) {
+        await this.refreshScreens(scope, claimed.invoice.paymentId);
       }
     }
+  }
 
-    // TonPays Telegram: no provider call — always run, whatever the budget said.
-    report.reviewsLapsed = await this.loseTrackOfLapsedReviews(scope, actor);
-    await this.sweepReceiptCaptures(scope);
-    if (!report.budgetExhausted) {
-      const cards = await this.runCardChanges(scope, actor);
-      report.cardChanges = cards.done;
-      report.budgetExhausted = cards.budgetExhausted;
+  /**
+   * One lane of the pass, isolated from the others: a lane that throws (its claim
+   * transaction failed, say) is logged and counted, and the pass carries on to the next —
+   * the sweeps above all, which make no provider call and must run on every pass.
+   */
+  private async isolatedLane(
+    scope: TenantContext,
+    report: { laneFailures: number },
+    lane: 'CREATION' | 'INQUIRY' | 'REVIEW_SWEEP' | 'CAPTURE_SWEEP' | 'CARD_CHANGE' | 'RECEIPT',
+    run: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await run();
+    } catch (error: unknown) {
+      // Counted apart from a row's failure: this one withholds the pass's progress.
+      report.laneFailures += 1;
+      this.deps.logger.error(
+        { tenantId: String(scope.tenantId), lane, ...errorFacts(error) },
+        'gateway payment lane failed; the pass continues with the next lane',
+      );
     }
-    if (!report.budgetExhausted) {
-      const receipts = await this.runReceipts(scope, actor);
-      report.receipts = receipts.done;
-      report.budgetExhausted = receipts.budgetExhausted;
+  }
+
+  /**
+   * A row whose processing threw. Logged with ids and machine codes only (never a message,
+   * a payload or a key), then backed off by `backOff` — conditional on this claim's own
+   * lease, so a row whose outcome already committed keeps that outcome's schedule. The
+   * payment is never failed or marked unknown here: a local exception is not an answer
+   * from anyone. A back-off that itself fails leaves the lease to run out, which is the
+   * old behaviour for that one row and never the lane's.
+   */
+  private async rowFailed(
+    scope: TenantContext,
+    lane: 'CREATION' | 'INQUIRY' | 'CARD_CHANGE' | 'RECEIPT',
+    paymentId: string,
+    provider: PaymentGatewayProvider | null,
+    error: unknown,
+    backOff: (at: Date) => Promise<number | null | false>,
+    submissionId?: string,
+  ): Promise<void> {
+    const at = this.deps.clock.now();
+    let backedOff = false;
+    // FIX10 (audit P1-b on #268): the row's durable count of consecutive thrown claims, as
+    // the back-off that advanced it returned it; null when nothing was counted.
+    let failures: number | null = null;
+    try {
+      const counted = await backOff(at);
+      backedOff = counted !== false && counted !== null;
+      failures = typeof counted === 'number' ? counted : null;
+    } catch (backOffError: unknown) {
+      this.deps.logger.error(
+        { tenantId: String(scope.tenantId), lane, paymentId, ...errorFacts(backOffError) },
+        'gateway payment row could not be backed off; its lease will run out',
+      );
     }
-    return report;
+    this.deps.logger.error(
+      {
+        tenantId: String(scope.tenantId),
+        lane,
+        paymentId,
+        provider,
+        backedOff,
+        failures,
+        ...errorFacts(error),
+      },
+      GATEWAY_ROW_FAILED_MESSAGE,
+    );
+    /*
+     * FIX10 (audit P1-b on #268): isolating the row means nothing else reports it — it never
+     * reaches a settlement, an inquiry error or a lane failure — so a row that keeps
+     * throwing (possibly an approval nobody is settling) opens ONE operator condition,
+     * deduplicated per row, from the durable count. Every later failure lands on the same
+     * open row as an occurrence; the row's next clean pass closes it (`rowSucceeded`).
+     */
+    if (failures === null || failures < GATEWAY_ROW_FAILURE_ALERT_AFTER) return;
+    const facts = errorFacts(error);
+    await recordQuietly(
+      this.deps.opsLog,
+      scope,
+      {
+        code: GATEWAY_ROW_FAILING_CODE,
+        severity: 'ERROR',
+        message:
+          'A payment gateway row keeps failing in the worker and is retried with a back-off. ' +
+          'Nothing was decided about the payment; check the worker log for this payment id.',
+        dedupeKey: gatewayRowConditionKey(
+          submissionId === undefined
+            ? { kind: 'INVOICE', paymentId }
+            : { kind: 'RECEIPT', submissionId },
+        ),
+        context: {
+          paymentId,
+          ...(submissionId === undefined ? {} : { submissionId }),
+          provider,
+          lane,
+          failures,
+          error: facts.error,
+          errorCode: facts.code === null ? null : sanitizedErrorCode(facts.code),
+        },
+      },
+      this.deps.logger,
+    );
+  }
+
+  /**
+   * FIX10 (audit P1-b on #268): a row that had thrown before processed without throwing.
+   * Its count goes back to zero and, when its condition is open, the condition is closed.
+   * Only a row that HAD failed is written — a clean row costs nothing — and nothing here
+   * can fail the lane: the row's own outcome has already committed.
+   */
+  private async rowSucceeded(
+    scope: TenantContext,
+    row:
+      | { readonly kind: 'INVOICE'; readonly paymentId: PaymentId; readonly rowFailures: number }
+      | {
+          readonly kind: 'RECEIPT';
+          readonly paymentId: PaymentId;
+          readonly submissionId: string;
+          readonly rowFailures: number;
+        },
+  ): Promise<void> {
+    if (row.rowFailures === 0) return;
+    const cards = this.deps.cardTransfer;
+    try {
+      const cleared =
+        row.kind === 'INVOICE'
+          ? await this.deps.uow.run(scope, (tx) =>
+              this.deps.invoices.clearRowFailures(scope, row.paymentId, tx),
+            )
+          : cards !== undefined &&
+            (await this.deps.uow.run(scope, (tx) =>
+              cards.clearSubmissionFailures(scope, row.submissionId, tx),
+            ));
+      if (!cleared) return;
+      const dedupeKey = gatewayRowConditionKey(row);
+      if (!(await this.deps.conditions.conditionIsOpen(scope, dedupeKey))) return;
+      await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        {
+          code: GATEWAY_ROW_RECOVERED_CODE,
+          severity: 'INFO',
+          message: 'The payment gateway row is processed again.',
+          context: {
+            paymentId: row.paymentId,
+            ...(row.kind === 'RECEIPT' ? { submissionId: row.submissionId } : {}),
+          },
+          recoversCode: GATEWAY_ROW_FAILING_CODE,
+          recoversDedupeKey: dedupeKey,
+        },
+        this.deps.logger,
+      );
+    } catch (error: unknown) {
+      // The count stays; the next clean pass clears it and closes the condition then.
+      this.deps.logger.error(
+        { tenantId: String(scope.tenantId), paymentId: row.paymentId, ...errorFacts(error) },
+        'gateway payment row recovered, but its failure count could not be cleared',
+      );
+    }
   }
 
   /**
@@ -1480,6 +1825,7 @@ export class GatewayPaymentService {
   private async runCardChanges(
     scope: TenantContext,
     actor: ActorContext,
+    report: { rowFailures: number },
   ): Promise<{ readonly done: number; readonly budgetExhausted: boolean }> {
     const cards = this.deps.cardTransfer;
     if (cards === undefined) return { done: 0, budgetExhausted: false };
@@ -1490,7 +1836,21 @@ export class GatewayPaymentService {
     );
     let done = 0;
     for (const [index, row] of claimed.entries()) {
-      const result = await this.processCardChange(scope, actor, cards, row);
+      let result: 'DONE' | 'BUDGET';
+      try {
+        result = await this.processCardChange(scope, actor, cards, row);
+      } catch (error: unknown) {
+        /*
+         * FIX10 BUG-1: the row keeps its lease, which is its back-off — a card change has no
+         * schedule of its own, and a request stamped before the throw is UNKNOWN when the
+         * lease runs out and it is claimed again. The rows after it are processed now.
+         */
+        report.rowFailures += 1;
+        await this.rowFailed(scope, 'CARD_CHANGE', row.row.paymentId, null, error, () =>
+          Promise.resolve(false),
+        );
+        continue;
+      }
       if (result === 'BUDGET') {
         // The row that met the empty budget and every one after it give their leases back.
         await this.deps.uow.run(scope, (tx) =>
@@ -1669,6 +2029,7 @@ export class GatewayPaymentService {
   private async runReceipts(
     scope: TenantContext,
     actor: ActorContext,
+    report: { rowFailures: number },
   ): Promise<{ readonly done: number; readonly budgetExhausted: boolean }> {
     const cards = this.deps.cardTransfer;
     if (cards === undefined) return { done: 0, budgetExhausted: false };
@@ -1679,7 +2040,33 @@ export class GatewayPaymentService {
     );
     let done = 0;
     for (const [index, row] of claimed.entries()) {
-      const result = await this.processReceipt(scope, actor, cards, row);
+      let result: 'DONE' | 'BUDGET';
+      try {
+        result = await this.processReceipt(scope, actor, cards, row);
+      } catch (error: unknown) {
+        // FIX10 BUG-1: backed off on its own lease; a stamped upload stays UNKNOWN.
+        report.rowFailures += 1;
+        await this.rowFailed(
+          scope,
+          'RECEIPT',
+          row.row.paymentId,
+          null,
+          error,
+          (at) =>
+            this.deps.uow.run(scope, (tx) =>
+              cards.backOffSubmission(
+                scope,
+                row.row.id,
+                lease,
+                rowFailureRetryAt(at, row.row.createdAt),
+                at,
+                tx,
+              ),
+            ),
+          row.row.id,
+        );
+        continue;
+      }
       if (result === 'BUDGET') {
         await this.deps.uow.run(scope, (tx) =>
           cards.releaseSubmissionClaims(
@@ -1691,6 +2078,12 @@ export class GatewayPaymentService {
         );
         return { done, budgetExhausted: true };
       }
+      await this.rowSucceeded(scope, {
+        kind: 'RECEIPT',
+        paymentId: row.row.paymentId,
+        submissionId: row.row.id,
+        rowFailures: row.row.rowFailures,
+      });
       done += 1;
       await this.refreshScreens(scope, row.row.paymentId);
     }

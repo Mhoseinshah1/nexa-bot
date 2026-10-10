@@ -226,6 +226,18 @@ export const JOB_LOOP_RECOVERED_CODE = 'job.loop_recovered';
  */
 export const INTERNAL_UNHANDLED_CODE = 'internal.unhandled';
 
+/**
+ * FIX10 (audit P1-b on #268): a gateway row whose processing THREW — a local exception,
+ * never a provider's answer — on `GATEWAY_ROW_FAILURE_ALERT_AFTER` consecutive passes. The
+ * pass isolates such a row (backs it off and goes on), so without this an approved payment
+ * whose settlement throws every time would be visible only in the worker's log. One
+ * condition per row, closed by `GATEWAY_ROW_RECOVERED_CODE` when it next processes cleanly.
+ */
+export const GATEWAY_ROW_FAILING_CODE = 'payments.gateway_row_failing';
+export const GATEWAY_ROW_RECOVERED_CODE = 'payments.gateway_row_recovered';
+/** Consecutive thrown passes of one row before its condition opens. */
+export const GATEWAY_ROW_FAILURE_ALERT_AFTER = 3;
+
 // ---------------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------------
@@ -316,6 +328,12 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
     eventClass: 'SECURITY',
   }),
   recovery('payments.gateway_webhook_verified', 'PAYMENTS', 'payments.gateway_webhook_unverified'),
+  // FIX10 (audit P1-b on #268): one gateway row (an invoice or a receipt upload) whose
+  // processing has thrown on several passes in a row. It is isolated and backed off, so
+  // nothing else reports it: one condition per row, closed when the row next processes
+  // without throwing.
+  failure(GATEWAY_ROW_FAILING_CODE, 'PAYMENTS', 'CONDITION'),
+  recovery(GATEWAY_ROW_RECOVERED_CODE, 'PAYMENTS', GATEWAY_ROW_FAILING_CODE),
   failure('payments.receipt_push_failed', 'PAYMENTS', 'CONDITION'),
   recovery('payments.receipt_push_ok', 'PAYMENTS', 'payments.receipt_push_failed'),
   failure('payments.refund_request_push_failed', 'PAYMENTS', 'CONDITION'),

@@ -5,6 +5,8 @@ import {
   AUTH_ROUTES,
   EMPTY_PRODUCT_DISPLAY,
   PAYMENT_ROUTES,
+  GATEWAY_ROW_FAILING_CODE,
+  GATEWAY_ROW_FAILURE_ALERT_AFTER,
   SESSION_COOKIE_NAME,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
   paymentReinquireResponseSchema,
@@ -26,6 +28,10 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleGatewayCardTransferRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository';
 import type { GatewayPaymentService } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
+import {
+  GATEWAY_PAYMENT_INTERVAL_MS,
+  GatewayPaymentLoop,
+} from '../../apps/api/src/modules/commerce/payments/application/gateway-payment-loop';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -636,6 +642,233 @@ describe('the TonPays Telegram provider review window', () => {
       );
       expect(later).toHaveLength(0);
       expect((await paymentOf(approved.paymentId)).state).toBe('CONFIRMED');
+    });
+  });
+
+  /*
+   * FIX10 BUG-1: one row that throws stops neither the sweeps nor the rows beside it. Before
+   * this, a throwing inquiry threw the whole pass, and the review sweep after it never ran:
+   * a lapsed review stayed PENDING instead of going to an operator as UNKNOWN.
+   */
+  describe('a row that throws (FIX10 BUG-1)', () => {
+    it('inquiries that throw on an undecryptable key do not stop the review sweep', async () => {
+      const review = await reviewed(40);
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET api_key_ciphertext = 'v9.not-an-envelope'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TONPAYS_TELEGRAM'`,
+      );
+      clock.at(review.reviewUntil);
+      // Its inquiry is due, so the pass meets the throwing row before the sweep.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices
+               SET next_inquiry_at = ${new Date(review.reviewUntil.getTime() - 60_000).toISOString()}::timestamptz,
+                   inquiry_claimed_until = NULL
+             WHERE payment_id = ${review.paymentId}`,
+      );
+      const report = await lane.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.reviewsLapsed).toBe(1);
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+    });
+
+    it('a lane whose claim itself throws does not stop the review sweep or the lanes after it', async () => {
+      const review = await reviewed(40);
+      clock.at(review.reviewUntil);
+      const broken = telegramLaneWith(ctx, fake, {
+        invoices: (real) => {
+          real.claimInquiries = () => Promise.reject(new Error('the claim transaction failed'));
+          return real;
+        },
+      });
+      const report = await broken.runOnce(tenantA);
+      // A LANE failed, not a row (Codex #268 A): counted apart, because it withholds progress.
+      expect(report.laneFailures).toBe(1);
+      expect(report.rowFailures).toBe(0);
+      expect(report.reviewsLapsed).toBe(1);
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+    });
+
+    /*
+     * Codex #268 A: the lane isolation must not hide a dead lane from readiness. Every pass
+     * returns (the sweeps run), but a claim that throws on every one of them is no progress,
+     * so the loop goes stale after its window; a pass whose only failure is an isolated ROW
+     * stays fresh.
+     */
+    it('a claim that throws on every pass leaves the lane stale; a failing row alone does not', async () => {
+      const loopOver = (service: GatewayPaymentService) => {
+        let nowMs = 1_000_000;
+        const loop = new GatewayPaymentLoop(service, {
+          scope: () => tenantA,
+          intervalMs: GATEWAY_PAYMENT_INTERVAL_MS,
+          passBoundMs: 15_000,
+          now: () => nowMs,
+          logger: { info: () => undefined, error: () => undefined },
+        });
+        const window = 15_000 + 3 * GATEWAY_PAYMENT_INTERVAL_MS;
+        return {
+          async passesFor(totalMs: number) {
+            loop.start();
+            for (let elapsed = 0; elapsed <= totalMs; elapsed += GATEWAY_PAYMENT_INTERVAL_MS) {
+              nowMs = 1_000_000 + elapsed;
+              await loop.tick();
+            }
+            const fresh = loop.isFresh(nowMs);
+            await loop.stop();
+            return { fresh, window };
+          },
+          window,
+        };
+      };
+
+      const broken = telegramLaneWith(ctx, fake, {
+        invoices: (real) => {
+          real.claimInquiries = () => Promise.reject(new Error('the claim transaction failed'));
+          return real;
+        },
+      });
+      const dead = loopOver(broken);
+      expect((await dead.passesFor(dead.window + GATEWAY_PAYMENT_INTERVAL_MS)).fresh).toBe(false);
+
+      // A due row whose credential cannot be decrypted: the ROW throws, the lane works.
+      const created = await attempt();
+      clock.at(new Date(created.expiresAt.getTime() - 30 * 60_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET api_key_ciphertext = 'v9.not-an-envelope'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TONPAYS_TELEGRAM'`,
+      );
+      // Due again before EVERY pass, so every pass meets the failing row.
+      const reports: Awaited<ReturnType<GatewayPaymentService['runOnce']>>[] = [];
+      const failingRowEveryPass = {
+        runOnce: async (scope: typeof tenantA) => {
+          await ctx.container.database.db.execute(
+            sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 31 * 60_000).toISOString()}::timestamptz,
+                       inquiry_claimed_until = NULL
+                 WHERE payment_id = ${created.paymentId}`,
+          );
+          const report = await lane.runOnce(scope);
+          reports.push(report);
+          return report;
+        },
+      } as unknown as GatewayPaymentService;
+      const alive = loopOver(failingRowEveryPass);
+      expect((await alive.passesFor(alive.window + GATEWAY_PAYMENT_INTERVAL_MS)).fresh).toBe(true);
+      expect(reports.length).toBeGreaterThan(1);
+      expect(reports.every((r) => r.rowFailures === 1 && r.laneFailures === 0)).toBe(true);
+    });
+
+    it('a receipt whose processing throws is backed off and the receipt queued after it is uploaded in the same pass', async () => {
+      const first = await attempt();
+      const second = await attempt();
+      clock.at(new Date(first.expiresAt.getTime() - 30 * 60_000));
+      const queue = async (paymentId: string): Promise<string> => {
+        const opened = await ctx.container.gatewayReceiptCaptures.openReceiptCapture(
+          tenantA,
+          systemActor(key()),
+          { customerId: maryam, paymentId, botInstanceId: BOT_A },
+        );
+        if (opened === null) throw new Error('no receipt window');
+        const fileId = `photo-${key()}`;
+        telegram.files.set(fileId, JPEG_BYTES);
+        const queued = await ctx.container.gatewayReceiptCaptures.receivePhoto(
+          tenantA,
+          systemActor(key()),
+          {
+            customerId: maryam,
+            botInstanceId: BOT_A,
+            file: {
+              kind: 'PHOTO',
+              fileId,
+              fileUniqueId: fileId,
+              mimeType: null,
+              fileName: null,
+              fileSize: BigInt(JPEG_BYTES.byteLength),
+              telegramMessageId: 1n,
+              caption: null,
+            },
+          },
+        );
+        expect(queued).toBe('QUEUED');
+        return fileId;
+      };
+      const poisonedFile = await queue(first.paymentId);
+      await queue(second.paymentId);
+      fake.receiptMode = 'ACK';
+      const errors: string[] = [];
+      const poisoned = telegramLaneWith(ctx, fake, {
+        logger: {
+          info: () => undefined,
+          warn: () => undefined,
+          error: (context, message) => errors.push(`${message} ${JSON.stringify(context)}`),
+        },
+        receiptFiles: {
+          download: (scope, binding, options) =>
+            binding.fileId === poisonedFile
+              ? Promise.reject(new Error('disk full'))
+              : ctx.container.receiptFiles.download(
+                  scope,
+                  { botInstanceId: binding.botInstanceId as never, fileId: binding.fileId },
+                  options,
+                ),
+        },
+      });
+      const report = await poisoned.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.receipts).toBe(1);
+      // The receipt after the one that threw was uploaded and opened its review.
+      expect((await paymentOf(second.paymentId)).provider_review_until).not.toBeNull();
+      // The one that threw: never sent, still queued, lease given back, retried later.
+      const [backedOff] = await rows<{
+        state: string;
+        sent_at: string | null;
+        claimed_until: string | null;
+        retry_at: string | null;
+      }>(
+        sql`SELECT state, sent_at, claimed_until, retry_at FROM gateway_receipt_submissions
+            WHERE payment_id = ${first.paymentId}`,
+      );
+      expect(backedOff).toMatchObject({ state: 'QUEUED', sent_at: null, claimed_until: null });
+      expect(new Date(backedOff!.retry_at!).getTime()).toBeGreaterThan(clock.now().getTime());
+      expect((await paymentOf(first.paymentId)).state).toBe('PENDING');
+      expect(errors.some((line) => line.includes(first.paymentId))).toBe(true);
+      expect(errors.join('\n')).not.toContain('disk full');
+
+      /*
+       * FIX10 (audit P1-b on #268): the same receipt failing on consecutive passes opens ONE
+       * condition for that submission at the threshold, and its next clean upload closes it.
+       */
+      const [submission] = await rows<{ id: string }>(
+        sql`SELECT id FROM gateway_receipt_submissions WHERE payment_id = ${first.paymentId}`,
+      );
+      const conditionKey = `${GATEWAY_ROW_FAILING_CODE}:receipt:${submission!.id}`;
+      const conditions = () =>
+        rows<{ occurrence_count: number; resolved_at: string | null }>(
+          sql`SELECT occurrence_count, resolved_at FROM operational_events
+              WHERE tenant_id = ${tenantA.tenantId} AND code = ${GATEWAY_ROW_FAILING_CODE}
+                AND dedupe_key = ${conditionKey}`,
+        );
+      const dueAgain = () =>
+        ctx.container.database.db.execute(
+          sql`UPDATE gateway_receipt_submissions SET retry_at = NULL WHERE id = ${submission!.id}`,
+        );
+      for (let failed = 2; failed <= GATEWAY_ROW_FAILURE_ALERT_AFTER; failed += 1) {
+        expect(await conditions()).toEqual([]);
+        await dueAgain();
+        expect((await poisoned.runOnce(tenantA)).rowFailures).toBe(1);
+      }
+      expect(await conditions()).toEqual([{ occurrence_count: 1, resolved_at: null }]);
+
+      // The upload works again: the receipt is sent, and the condition closes.
+      await dueAgain();
+      const healthy = telegramLaneWith(ctx, fake);
+      expect((await healthy.runOnce(tenantA)).rowFailures).toBe(0);
+      const [closed] = await conditions();
+      expect(closed?.resolved_at).not.toBeNull();
+      const [sent] = await rows<{ row_failures: number; sent_at: string | null }>(
+        sql`SELECT row_failures, sent_at FROM gateway_receipt_submissions
+            WHERE id = ${submission!.id}`,
+      );
+      expect(sent).toMatchObject({ row_failures: 0 });
+      expect(sent?.sent_at).not.toBeNull();
     });
   });
 
