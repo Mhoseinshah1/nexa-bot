@@ -4537,6 +4537,27 @@ assert_not_contains 'an absent transport printed a refusal' \
   "$BOTCTL_OUTPUT" 'other than `telegram` or `recording`'
 seed_nexa_env canonical
 
+test_case 'status: the node environment row names a non-production NODE_ENV (FIX-04 S2)'
+# deploy/compose.yml pins NODE_ENV=production for every role, so Compose resolves
+# production (or nothing, which is the image default, production too). A resolution that
+# says anything else means the compose file lost the pin, and the row says what that costs.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'an absent NODE_ENV was not read as the image default' \
+  "$BOTCTL_OUTPUT" 'node environment   production'
+assert_not_contains 'a production installation printed the warning' \
+  "$BOTCTL_OUTPUT" 'reaches the containers'
+seed_nexa_env canonical
+append_resolved_env 'NODE_ENV=development'
+run_botctl status
+assert_contains 'a development resolution was not named' \
+  "$BOTCTL_OUTPUT" 'node environment   development'
+assert_contains 'the cost of development was not named' \
+  "$BOTCTL_OUTPUT" 'without Secure and without the __Host- prefix'
+assert_contains 'the remedy was not named' \
+  "$BOTCTL_OUTPUT" 'pins NODE_ENV=production'
+seed_nexa_env canonical
+
 test_case 'status: the notifications row says it has not checked the Telegram endpoint'
 # `notifications on` with the telegram transport is the dispatcher and the transport NAME.
 # The schema checks two more things: TELEGRAM_API_BASE_URL is `z.string().url()`, and a
