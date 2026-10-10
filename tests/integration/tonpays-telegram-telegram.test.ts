@@ -267,7 +267,7 @@ describe('TonPays Telegram in the bot', () => {
     const markup = markupOf(screen);
     expect(markup).toContain(`gr:${paymentId}`);
     expect(markup).toContain(`gc:${paymentId}`);
-    expect(markup).toContain('ارسال فیش واریزی');
+    expect(markup).toContain('📤 ارسال رسید');
     expect(markup).toContain('بررسی وضعیت');
     // The card was just shown: no change is offered inside its sixty seconds.
     expect(markup).not.toContain(`gk:${paymentId}`);

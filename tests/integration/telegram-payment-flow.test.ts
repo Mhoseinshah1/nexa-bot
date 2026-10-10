@@ -57,7 +57,7 @@ const OTHER_TELEGRAM_ID = 5551112223;
 const CHAT_ID = 8484;
 /** A10: the brief's exact copy for the one new message the first receipt sends. */
 const RECEIPT_RECEIVED_TEXT =
-  'رسید شما دریافت شد و در حال بررسی می‌باشد.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.';
+  'رسید شما دریافت شد و در حال بررسی است.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.';
 /**
  * A10: the invoice's final, button-less text — rendered from the catalogue and compared
  * EXACTLY, because the receipt prompt opens with the same first sentence.

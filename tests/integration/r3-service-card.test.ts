@@ -406,7 +406,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       expect(of('editMessageText')).toHaveLength(1);
       expect(question?.body['message_id']).toBe(CARD);
       expect(String(question?.body['text'])).toBe(
-        `آیا از خاموش کردن اکانت ${service.providerUsername} مطمئن هستید؟\nتا وقتی دوباره آن را روشن نکنید، اتصال شما برقرار نمی‌شود.`,
+        `آیا سرویس ${service.providerUsername} خاموش شود؟\nتا وقتی آن را دوباره روشن نکنید، اتصال برقرار نمی‌شود. زمان باقی‌ماندهٔ سرویس در این مدت متوقف نمی‌شود.`,
       );
       const data = callbacks(question);
       expect(data).toEqual([`uq:${service.id}`, `sv:${service.id}`]);
@@ -437,7 +437,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       const [question] = of('editMessageText');
       expect(question?.body['message_id']).toBe(CARD);
       expect(String(question?.body['text'])).toBe(
-        `آیا از روشن کردن اکانت ${service.providerUsername} مطمئن هستید؟`,
+        `آیا سرویس ${service.providerUsername} دوباره روشن شود؟`,
       );
       expect(callbacks(question)).toEqual([`eq:${service.id}`, `sv:${service.id}`]);
       expect(of('sendMessage')).toHaveLength(0);

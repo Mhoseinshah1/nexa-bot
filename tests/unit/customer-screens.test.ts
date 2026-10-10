@@ -60,15 +60,15 @@ describe('the service card', () => {
     expect(screen.key).toBe('bot.service.card');
     expect(render(screen.key, screen.values)).toBe(
       [
-        '📊وضعیت سرویس: 🟢 فعال',
-        '👤 نام سرویس: nx7k2m9q',
+        'وضعیت سرویس: 🟢 فعال',
+        '👤 نام کاربری: nx7k2m9q',
         '',
-        '🌍 موقعیت سرویس: 🚀 مولتی لوکیشن',
+        '🌍 موقعیت سرویس: مولتی لوکیشن',
         '📦 نام محصول: پلن ۳۰ روزه',
         '',
-        '🟩 ترافیک: 50 گیگابایت',
+        '🗂 حجم کل: 50 گیگابایت',
         '📥 حجم مصرفی: 10 گیگابایت',
-        '💢 حجم باقی مانده: 40 گیگابایت (80%)',
+        '💢 حجم باقی‌مانده: 40 گیگابایت (80%)',
         '',
         '📅 تاریخ اتمام: 1405/08/02 22:00 (30 روز)',
         '',
@@ -83,7 +83,7 @@ describe('the service card', () => {
     const screen = await composer.serviceCard(scope, { ...base, usageSyncedAt: null });
     const text = render(screen.key, screen.values);
     expect(text).toContain('📥 حجم مصرفی: هنوز از سرور خوانده نشده');
-    expect(text).toContain('💢 حجم باقی مانده: هنوز از سرور خوانده نشده');
+    expect(text).toContain('💢 حجم باقی‌مانده: هنوز از سرور خوانده نشده');
     expect(text).not.toContain(': 0 گیگابایت');
     expect(text).toContain('📶 آخرین زمان اتصال شما: در دسترس نیست');
     expect(text).not.toContain('متصل نشده');
@@ -109,9 +109,9 @@ describe('the service card', () => {
       rotateOffered: false,
     });
     const text = render(unlimited.key, unlimited.values);
-    expect(text).toContain('🟩 ترافیک: نامحدود');
+    expect(text).toContain('🗂 حجم کل: نامحدود');
     expect(text).toContain('📥 حجم مصرفی: 0 گیگابایت');
-    expect(text).toContain('💢 حجم باقی مانده: نامحدود');
+    expect(text).toContain('💢 حجم باقی‌مانده: نامحدود');
     expect(text).toContain('📅 تاریخ اتمام: بدون محدودیت زمانی');
     expect(text).not.toContain('موقعیت سرویس');
     expect(text).not.toContain('تغییر لینک');
@@ -125,7 +125,7 @@ describe('the service card', () => {
       expiresAt: new Date('2026-09-20T00:00:00Z'),
     });
     const text = render(overrun.key, overrun.values);
-    expect(text).toContain('💢 حجم باقی مانده: 0 گیگابایت (0%)');
+    expect(text).toContain('💢 حجم باقی‌مانده: 0 گیگابایت (0%)');
     expect(text).toContain('(0 روز)');
     expect(text).not.toContain('نامحدود');
   });
@@ -137,7 +137,7 @@ describe('the service card', () => {
       note: 'گوشی مادر',
     });
     const text = render(screen.key, screen.values);
-    expect(text).toContain('📊وضعیت سرویس: 🔴 خاموش');
+    expect(text).toContain('وضعیت سرویس: 🔴 خاموش');
     expect(text).toContain('📝 یادداشت: گوشی مادر');
   });
 });
@@ -168,11 +168,11 @@ describe('the wallet summary', () => {
         '🪪 شناسه کاربری: 910910',
         '👤 نام: مریم احمدی',
         '📱 شماره تماس: 🔴 ارسال نشده است',
-        '⏳ زمان ثبت نام: 1405/06/10 11:30',
+        '⏳ زمان ثبت‌نام: 1405/06/10 11:30',
         '💰 موجودی: 1,250,000 تومان',
-        '🛒 تعداد سرویس های خریداری شده: 3 عدد',
-        '🧾 تعداد فاکتورهای پرداخت شده: 4 عدد',
-        '🎁 تعداد زیرمجموعه های شما: 2 نفر',
+        '🛒 تعداد سرویس‌های خریداری‌شده: 3 عدد',
+        '🧾 تعداد فاکتورهای پرداخت‌شده: 4 عدد',
+        '🎁 تعداد زیرمجموعه‌های شما: 2 نفر',
         '🔖 گروه کاربری: کاربر عادی',
         '',
         '📅 تاریخ: 1405/07/10',
