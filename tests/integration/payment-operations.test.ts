@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   PAYMENT_OPS_QUEUES,
@@ -19,6 +20,8 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/domain/gateway-reconciliation';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzlePaymentAttentionReader } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment-attention.reader';
+import { paymentOpsQueueCondition } from '../../apps/api/src/modules/commerce/payments/infrastructure/payment-ops-queue-sql';
+import { schema } from '../../apps/api/src/infrastructure/persistence/schema';
 import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
 import {
   adminActorFor,
@@ -480,6 +483,239 @@ describe('the Payment Operations Center', () => {
     const rows = await reader.counts(tenantA, { start, end });
     expect(rows.find((row) => row.gatewayProvider === 'TONPAYS')?.counts.PENDING).toBe(2);
     expect((await reader.counts(tenantA, null))[0]?.counts.PENDING).toBe(4);
+  });
+
+  /**
+   * FIX-11: the counts are DRIVEN from the rows that can put a payment in a queue rather
+   * than from every payment the tenant took. The full scan they replaced is kept HERE, and
+   * only here, as the oracle: same predicates, every payment of the tenant, no driver.
+   *
+   * The fixture holds every queue, and for each driver arm a payment that ONLY that arm can
+   * reach (a FAILED or CONFIRMED payment with nothing but an invoice marker, a refund or an
+   * audited hold), so dropping an arm from `paymentOpsCandidateIds` loses a count here. Each
+   * shape is written at both window edges and just outside them, in BOTH tenants, beside
+   * rows that must count nowhere.
+   */
+  it('counts exactly what the full scan counts — every queue, every driver arm, both window edges, per tenant', async () => {
+    const start = new Date('2026-08-01T00:00:00Z');
+    const end = new Date('2026-08-08T00:00:00Z');
+    const instants = [new Date(start.getTime() - 1), start, new Date(end.getTime() - 1), end];
+    const oracle = async (scope: TenantContext, window: { start: Date; end: Date } | null) => {
+      const predicates = PAYMENT_OPS_QUEUES.map((queue) => paymentOpsQueueCondition(queue));
+      const windowSql =
+        window === null
+          ? sql``
+          : sql` AND payments.created_at >= ${window.start.toISOString()}::timestamptz AND payments.created_at < ${window.end.toISOString()}::timestamptz`;
+      const result = await exec(sql`
+        SELECT payments.gateway_provider AS "gatewayProvider",
+               ${sql.join(
+                 predicates.map(
+                   (predicate, index) =>
+                     sql`(count(*) FILTER (WHERE ${predicate}))::int AS ${sql.identifier(PAYMENT_OPS_QUEUES[index]!)}`,
+                 ),
+                 sql`, `,
+               )}
+          FROM payments
+         WHERE payments.tenant_id = ${scope.tenantId}::uuid${windowSql}
+           AND (${sql.join(predicates, sql` OR `)})
+         GROUP BY payments.gateway_provider
+         ORDER BY payments.gateway_provider ASC NULLS LAST`);
+      return (result.rows as Row[]).map((row) => ({
+        gatewayProvider: row.gatewayProvider ?? null,
+        counts: Object.fromEntries(PAYMENT_OPS_QUEUES.map((q) => [q, Number(row[q])])),
+      }));
+    };
+
+    // A manual transfer's open top-up is one per customer (`payments_open_topup_key`), so
+    // each PENDING manual transfer gets its own customer.
+    let customerSeq = 0;
+    const freshCustomer = async (scope: TenantContext): Promise<string> => {
+      customerSeq += 1;
+      const telegramUserId = String(7_300_000 + customerSeq);
+      return (
+        await ctx.container.customers.resolveFromUpdate(scope, system(`fc-${telegramUserId}`), {
+          idempotencyKey: `resolve-eq-${telegramUserId}`,
+          telegramUserId,
+          from: { id: Number(telegramUserId), first_name: 'آزمون' },
+          botInstanceId: scope === tenantB ? BOT_B : BOT_A,
+        })
+      ).customer.id;
+    };
+    const audit = (scope: TenantContext, entityId: string, after: Row) =>
+      insertRow('audit_logs', {
+        id: ctx.container.ids.uuid(),
+        tenant_id: scope.tenantId,
+        occurred_at: new Date(),
+        actor_type: 'SYSTEM_JOB',
+        action: 'payment.lose_track',
+        entity_type: 'Payment',
+        entity_id: entityId,
+        after: JSON.stringify(after),
+        correlation_id: 'ops-eq',
+        source_surface: 'WORKER',
+        result: 'SUCCESS',
+      });
+    const refund = (scope: TenantContext, paymentId: string, state: string) =>
+      insertRow('refunds', {
+        id: ctx.container.ids.uuid(),
+        tenant_id: scope.tenantId,
+        payment_id: paymentId,
+        customer_id: scope === tenantB ? customerB : customerA,
+        state,
+        channel: 'WALLET_CREDIT',
+        amount: 1000,
+        currency: 'IRT',
+        reason: 'ops equivalence refund',
+        ...(state === 'COMPLETED' ? { completed_at: new Date() } : {}),
+      });
+    const receipt = async (scope: TenantContext, paymentId: string, customerId: string) => {
+      seq += 1;
+      await insertRow('payment_receipts', {
+        id: ctx.container.ids.uuid(),
+        tenant_id: scope.tenantId,
+        bot_instance_id: scope === tenantB ? BOT_B : BOT_A,
+        customer_id: customerId,
+        payment_id: paymentId,
+        kind: 'PHOTO',
+        file_id: `file-${String(seq)}`,
+        file_unique_id: `unique-${String(seq)}`,
+      });
+    };
+    /** A PENDING manual transfer, optionally with a receipt, under its own customer. */
+    const manual = async (scope: TenantContext, createdAt: Date, withReceipt: boolean) => {
+      const customer = await freshCustomer(scope);
+      seq += 1;
+      const id = ctx.container.ids.uuid();
+      await insertRow('payments', {
+        id,
+        tenant_id: scope.tenantId,
+        customer_id: customer,
+        method: 'MANUAL_TRANSFER',
+        state: 'PENDING',
+        amount: 250000,
+        currency: 'IRT',
+        reference: `eq-${String(seq)}-${id.slice(-6)}`,
+        gateway_provider: 'MANUAL_TRANSFER',
+        created_at: createdAt,
+        updated_at: createdAt,
+        expires_at: new Date(createdAt.getTime() + 70 * 60_000),
+      });
+      if (withReceipt) await receipt(scope, id, customer);
+      return id;
+    };
+
+    for (const scope of [tenantA, tenantB]) {
+      const tenant_id = scope.tenantId;
+      for (const createdAt of instants) {
+        const at = { scope, createdAt };
+        // PENDING driver: manual transfers (with a receipt: NEEDS_ACTION), a gateway attempt.
+        await manual(scope, createdAt, false);
+        await manual(scope, createdAt, true);
+        const tonPending = await payment({ ...at, provider: 'TONPAYS' });
+        await invoice(tonPending, 'TONPAYS', { tenant_id });
+        // UNKNOWN driver: reconcilable, not reconcilable, and a routeless one.
+        const reconcilable = await payment({ ...at, provider: 'CENTRALPAY', state: 'UNKNOWN' });
+        await invoice(reconcilable, 'CENTRALPAY', { tenant_id, provider_status: 'unverified' });
+        const waiting = await payment({ ...at, provider: 'TONPAYS', state: 'UNKNOWN' });
+        await invoice(waiting, 'TONPAYS', { tenant_id, provider_status: 'waiting' });
+        await payment({ ...at, provider: null, method: 'WALLET', state: 'UNKNOWN' });
+        // Invoice driver ONLY: a payment no other arm reaches.
+        const createFailed = await payment({ ...at, provider: 'TONPAYS', state: 'FAILED' });
+        await invoice(createFailed, 'TONPAYS', {
+          tenant_id,
+          creation_state: 'CREATE_FAILED',
+          provider_invoice_id: null,
+          created_invoice_at: null,
+          creation_error_code: 'INVALID_API_KEY',
+        });
+        const inquiryError = await payment({ ...at, provider: 'CENTRALPAY', state: 'CONFIRMED' });
+        await invoice(inquiryError, 'CENTRALPAY', {
+          tenant_id,
+          last_inquiry_error_code: 'HTTP_503',
+        });
+        const late = await payment({ ...at, provider: 'TONPAYS', state: 'FAILED' });
+        await invoice(late, 'TONPAYS', {
+          tenant_id,
+          outcome: 'UNSUCCESSFUL',
+          outcome_at: new Date(),
+          late_completion_observed_at: new Date(),
+        });
+        const partial = await payment({ ...at, provider: 'NOWPAYMENTS', state: 'CONFIRMED' });
+        await invoice(partial, 'NOWPAYMENTS', {
+          tenant_id,
+          provider_status: 'partially_paid',
+          provider_paid: false,
+        });
+        // A quiet invoice and a status spelled like a partial on a provider without one.
+        const quiet = await payment({ ...at, provider: 'TONPAYS', state: 'CONFIRMED' });
+        await invoice(quiet, 'TONPAYS', { tenant_id });
+        const notPartial = await payment({ ...at, provider: 'TONPAYS', state: 'FAILED' });
+        await invoice(notPartial, 'TONPAYS', { tenant_id, provider_status: 'partially_paid' });
+        // Refund driver ONLY: an open refund (NEEDS_ACTION) and a completed one.
+        const refundOpen = await payment({ ...at, provider: null, state: 'CONFIRMED' });
+        await refund(scope, refundOpen, 'REQUESTED');
+        const refundDone = await payment({ ...at, provider: null, state: 'CONFIRMED' });
+        await refund(scope, refundDone, 'COMPLETED');
+        // Audit driver ONLY: a mismatch hold on a payment nothing else reaches; a lapsed
+        // review (no reason) that is not one.
+        const held = await payment({ ...at, provider: 'NOWPAYMENTS', state: 'CONFIRMED' });
+        await audit(scope, held, { state: 'UNKNOWN', reason: 'PROVIDER_AMOUNT_MISMATCH' });
+        const lapsed = await payment({ ...at, provider: 'TONPAYS', state: 'CONFIRMED' });
+        await audit(scope, lapsed, { state: 'UNKNOWN' });
+        // Nothing at all.
+        await payment({ ...at, provider: null, state: 'CONFIRMED' });
+        await payment({ ...at, provider: 'TONPAYS', state: 'FAILED' });
+      }
+    }
+    // Cross-tenant and malformed audit rows: tenant B's hold naming one of tenant A's
+    // payments, and a hold whose entity id is no uuid at all — neither may count, nor throw.
+    const aOnly = await payment({ provider: 'TONPAYS', state: 'CONFIRMED' });
+    await audit(tenantB, aOnly, { reason: 'PROVIDER_USER_MISMATCH' });
+    await audit(tenantA, 'not-a-uuid', { reason: 'PROVIDER_USER_MISMATCH' });
+    await audit(tenantA, aOnly.toUpperCase(), { reason: 'PROVIDER_USER_MISMATCH' });
+
+    const reader = new DrizzlePaymentAttentionReader(ctx.container.database.db);
+    for (const scope of [tenantA, tenantB]) {
+      for (const window of [
+        null,
+        { start, end },
+        { start: end, end: new Date(end.getTime() + 1) },
+      ]) {
+        const label = `${scope.tenantId} ${window === null ? 'all' : window.start.toISOString()}`;
+        const expected = await oracle(scope, window);
+        expect(await reader.counts(scope, window), label).toEqual(expected);
+      }
+    }
+    // The oracle is not vacuous: every queue counts something in the window.
+    const inWindow = await oracle(tenantA, { start, end });
+    for (const queue of PAYMENT_OPS_QUEUES) {
+      expect(
+        inWindow.reduce((sum, row) => sum + (row.counts[queue] ?? 0), 0),
+        queue,
+      ).toBeGreaterThan(0);
+    }
+    // Two of the four instants are inside `[start, end)`: the window kept the half-open pair.
+    const all = await oracle(tenantA, null);
+    const total = (rows: typeof all) =>
+      rows.reduce((sum, row) => sum + (row.counts.PENDING ?? 0), 0);
+    expect(total(all)).toBe(2 * total(inWindow));
+  }, 180_000);
+
+  it('runs the counts with JIT off, inside their own transaction', async () => {
+    // FIX-11: compiling the nine-queue statement cost 3.4–4.1 s per request at 400 000
+    // payments; executing it, 0.2–0.9 s. The setting is what removes the compile.
+    const statements: string[] = [];
+    const recording = drizzle(ctx.container.database.pool, {
+      schema,
+      logger: { logQuery: (query) => statements.push(query) },
+    });
+    await new DrizzlePaymentAttentionReader(recording).counts(tenantA, null);
+    // `SET LOCAL` outside a transaction is a no-op with a warning, so the order is the rule.
+    expect(statements).toHaveLength(4);
+    expect(statements[0]).toBe('begin');
+    expect(statements[1]).toBe('SET LOCAL jit = off');
+    expect(statements[2]).toMatch(/count\(\*\) FILTER/);
+    expect(statements[3]).toBe('commit');
   });
 
   it('resolves a named range in the tenant calendar through the reports’ resolver', async () => {
