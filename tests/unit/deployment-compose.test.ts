@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -425,6 +425,89 @@ describe('the production Caddy routing', () => {
     // `/telegram/webhook/*`.
     const prefix = declared!.replace(/\/:[^/]+$/, '');
     expect(routes).toContain(`@telegram path ${prefix}/*`);
+  });
+
+  it('routes every API route outside /api to the API, before the SPA fallback', () => {
+    // A controller with an empty @Controller() answers at a path the `/api/*`
+    // matcher does not cover. Each needs its own handle block, or the SPA
+    // fallback answers it with index.html and a 200. `/payments/return/*` was
+    // missed exactly that way: a CentralPay customer coming back from the bank
+    // saw the admin login page and the verify the return should have brought
+    // forward was never scheduled. So this reads the controllers instead of a
+    // list of prefixes somebody has to remember to extend.
+    const apiSrc = join(__dirname, '../../apps/api/src');
+    const contractsSrc = join(__dirname, '../../packages/contracts/src');
+    const constants = new Map<string, string>();
+    for (const file of [
+      join(contractsSrc, 'centralpay.ts'),
+      join(contractsSrc, 'http.ts'),
+      join(apiSrc, 'modules/commerce/payments/application/gateway-payment.service.ts'),
+    ]) {
+      for (const m of readFileSync(file, 'utf8').matchAll(
+        /export const ([A-Z_]+) = '(\/[^']*)';/g,
+      )) {
+        constants.set(m[1]!, m[2]!);
+      }
+    }
+    const healthRoutes = Object.fromEntries(
+      [
+        ...readFileSync(join(contractsSrc, 'http.ts'), 'utf8')
+          .split('export const HEALTH_ROUTES = {')[1]!
+          .split('}')[0]!
+          .matchAll(/(\w+): '([^']+)'/g),
+      ].map((m) => [m[1]!, m[2]!]),
+    );
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? walk(join(dir, e.name))
+          : e.name.endsWith('.controller.ts')
+            ? [join(dir, e.name)]
+            : [],
+      );
+    const controllers = walk(apiSrc).filter((f) =>
+      readFileSync(f, 'utf8').includes('@Controller()'),
+    );
+    expect(controllers.length, 'no root controller found').toBeGreaterThanOrEqual(4);
+    const paths: string[] = [];
+    for (const file of controllers) {
+      const source = readFileSync(file, 'utf8');
+      for (const m of source.matchAll(/@(?:Get|Post|Put|Patch|Delete|All)\(([^)]*)\)/g)) {
+        const arg = m[1]!.trim();
+        const literal = /^(['`])(.+)\1$/.exec(arg);
+        const health = /^HEALTH_ROUTES\.(\w+)$/.exec(arg);
+        const raw = literal ? literal[2]! : health ? healthRoutes[health[1]!] : undefined;
+        expect(raw, `cannot read the route ${arg} in ${file}`).toBeDefined();
+        const resolved = raw!.replace(/\$\{([A-Z_]+)\}/g, (_, name: string) => {
+          const value = constants.get(name);
+          expect(value, `unresolved route constant ${name} in ${file}`).toBeDefined();
+          return value!;
+        });
+        paths.push(resolved);
+      }
+    }
+    expect(paths).toContain('/payments/return/:provider/:tenantId');
+    expect(paths).toContain('/payments/webhook/:provider/:tenantId');
+    expect(paths).toContain('/telegram/webhook/:botInstanceId');
+    expect(paths).toContain('/health/ready');
+
+    const fallbackAt = routes.indexOf('\t\ttry_files {path} /index.html');
+    const matchers = [...routes.matchAll(/^\t@(\w+) path (\S+)$/gm)].map((m) => ({
+      name: m[1]!,
+      glob: m[2]!,
+      at: m.index,
+    }));
+    for (const path of paths) {
+      const matcher = matchers.find(
+        (m) => m.glob.endsWith('/*') && path.startsWith(m.glob.slice(0, -1)),
+      );
+      expect(matcher, `${path} has no handle block and falls to the SPA`).toBeDefined();
+      expect(matcher!.at).toBeLessThan(fallbackAt);
+      const blockStart = routes.indexOf(`handle @${matcher!.name} {`);
+      const block = routes.slice(blockStart, routes.indexOf('}', blockStart));
+      expect(block, `${path} is not proxied to the API`).toMatch(/reverse_proxy api:3000/);
+      expect(block, `${path} is served from disk`).not.toMatch(/file_server|root \*/);
+    }
   });
 
   it('proxies to the api service by name, never to a host port', () => {
