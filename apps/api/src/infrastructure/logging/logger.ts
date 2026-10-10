@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import pino from 'pino';
 import { asId, type CorrelationId, type LogLevel, type Logger } from '@nexa/contracts';
-import { redactSecrets } from '../redaction.js';
+import { redactForLog } from '../redaction.js';
 
 /**
  * Structured logging, with the correlation id carried implicitly.
@@ -36,7 +36,10 @@ class PinoLogger implements Logger {
   constructor(private readonly inner: pino.Logger) {}
 
   child(bindings: Record<string, unknown>): Logger {
-    return new PinoLogger(this.inner.child(bindings));
+    // A child's bindings are serialised once, here, and never pass through the
+    // `logMethod` hook below — nor through pino's `formatters.bindings`, which a
+    // child resets. So they are redacted on the way in (FIX-04).
+    return new PinoLogger(this.inner.child(redactForLog(bindings)));
   }
 
   private emit(
@@ -74,25 +77,50 @@ class PinoLogger implements Logger {
  * replaced. A hook that walks the object shares one implementation, and one
  * definition of "sensitive", with the audit log.
  */
-export function createLogger(level: LogLevel, role: string): Logger {
-  return new PinoLogger(
-    pino({
-      level,
-      base: { role },
-      hooks: {
-        logMethod(args, method) {
-          const [first, ...rest] = args;
-          if (first !== null && typeof first === 'object') {
-            method.apply(this, [redactSecrets(first), ...rest] as typeof args);
-            return;
-          }
-          method.apply(this, args);
-        },
-      },
-      formatters: { level: (label) => ({ level: label }) },
-      timestamp: pino.stdTimeFunctions.isoTime,
-    }),
+export function createLogger(
+  level: LogLevel,
+  role: string,
+  destination?: pino.DestinationStream,
+): Logger {
+  return new PinoLogger(createPinoLogger(level, role, destination));
+}
+
+/**
+ * FIX-04 (S1): EVERY argument is redacted, and by content as well as by key. The hook used
+ * to redact the first argument by key alone and pass the message through untouched, so a
+ * token in the message, in a stack logged as a string, or in any nested string value
+ * reached stdout verbatim — the key rule leaves every string as it found it.
+ */
+export function redactLogArguments(args: readonly unknown[]): unknown[] {
+  return args.map((argument) =>
+    typeof argument === 'string' || (argument !== null && typeof argument === 'object')
+      ? redactForLog(argument)
+      : argument,
   );
+}
+
+/** `destination` is for the test that captures what actually reaches the stream. */
+function createPinoLogger(
+  level: LogLevel,
+  role: string,
+  destination?: pino.DestinationStream,
+): pino.Logger {
+  const options: pino.LoggerOptions = {
+    level,
+    base: { role },
+    hooks: {
+      logMethod(args, method) {
+        method.apply(this, redactLogArguments(args) as typeof args);
+      },
+    },
+    // pino's own `err` serializer would re-read the already-redacted value as an
+    // error and rebuild it — `type: "Object"`, the cause's message concatenated
+    // into the parent's. What the redactor produced is what is written.
+    serializers: { err: (value: unknown) => value },
+    formatters: { level: (label) => ({ level: label }) },
+    timestamp: pino.stdTimeFunctions.isoTime,
+  };
+  return destination === undefined ? pino(options) : pino(options, destination);
 }
 
 export function newCorrelationId(uuid: string): CorrelationId {
