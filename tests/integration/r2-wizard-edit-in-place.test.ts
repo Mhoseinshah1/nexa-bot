@@ -464,6 +464,52 @@ describe('the wizard is one message, edited in place', () => {
   });
 
   /*
+   * FIX-10 (batch 2026-10-10): the owner's rule end to end, through the bot and the server
+   * together — the bot carries the raw text, the server judges it with the one contract
+   * function, and every refusal is the same sentence. Uppercase is folded, never refused,
+   * and only the lowercase form is reserved.
+   */
+  it('refuses through the bot every name the owner’s rule refuses, and keeps the lowercase form of one it allows (FIX-10)', async () => {
+    const productId = await product('brief-rule');
+    const wizard = 720;
+    await tapOn(wizard, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(wizard, `p:${productId}`);
+    const [order] = await draftOrders();
+    if (order === undefined) throw new Error('no draft');
+    await tapOn(wizard, `j:${order.id}`);
+
+    const refusedNames = [
+      'ali', // three
+      'a1b2c3d4e5f6g7h8i9j0k', // twenty-one
+      'aliserver', // no digit
+      '12345678', // no letter
+      'علی۱۴۰۳', // Persian
+      'ali 2026', // space
+      'ali.2026', // dot
+      '@ali2026', // at
+      'ali😀2026', // emoji
+    ];
+    let messageId = 4300;
+    for (const raw of refusedNames) {
+      messageId += 1;
+      const refused = await type(raw, messageId);
+      expect(refused.replyKey, JSON.stringify(raw)).toBe('bot.username.invalid');
+    }
+    expect(
+      await rows(sql`SELECT 1 FROM service_username_reservations WHERE order_id = ${order.id}`),
+      'nothing was reserved for a refused name',
+    ).toHaveLength(0);
+
+    const accepted = await type('Maryam_2026', messageId + 1);
+    expect(accepted.replyKey).toBe('bot.order.preinvoice');
+    expect(
+      await rows<{ username: string }>(
+        sql`SELECT username FROM service_username_reservations WHERE order_id = ${order.id}`,
+      ),
+    ).toEqual([{ username: 'maryam_2026' }]);
+  });
+
+  /*
    * R2 finding F3: a refused typed name names no order, and the refusal was shown on the
    * chat's most recently touched USERNAME wizard — with two purchases open, possibly the
    * OTHER order's. It is shown on the wizard of the order whose window is open.

@@ -10,6 +10,7 @@ import {
   isNull,
   lt,
   lte,
+  ne,
   or,
   sql,
   type SQL,
@@ -82,6 +83,25 @@ function notRefundedAway(): SQL {
       AND ${serviceRefundRequests.serviceId} = ${services.id}
       AND ${serviceRefundRequests.state} = 'COMPLETED'
   )`;
+}
+
+/**
+ * FIX-10 (batch 2026-10-10): what the customer's "my services" LIST shows — the page, its
+ * count (so `page/pages` agrees with the pages) and the search. A service ended for good
+ * (`TERMINATED`, the one `SERVICE_TERMINAL_STATES` member) used to stay behind as a broken
+ * «حذف شده» row after an operator deleted it; it now leaves the list as a refunded-away one
+ * does.
+ *
+ * Only `TERMINATED`, and that is the whole rule. A service reaches it only AFTER the
+ * provider's outcome is known — a delete that succeeded (or found nothing), a terminate with
+ * no create provenance, or an undeliverable order's refund — never on a terminate whose
+ * answer was lost: that operation is UNKNOWN and the service keeps the state it had, so it
+ * stays listed. `UNRECONCILED` stays listed too: a READ decides it, and the customer may be
+ * holding the account. Nothing is deleted: `findForCustomer` still answers the card by id
+ * (an old `sv:` button), and the operator's queries and the support context still see it.
+ */
+function listedForCustomer(): SQL {
+  return sql`${ne(services.state, 'TERMINATED')} AND ${notRefundedAway()}`;
 }
 
 function toRecord(row: Row): ServiceRecord {
@@ -986,7 +1006,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     const owned = and(
       eq(services.tenantId, tenantId),
       eq(services.customerId, customerId),
-      notRefundedAway(),
+      listedForCustomer(),
     );
     const [counted] = await this.exec(tx)
       .select({ total: sql<number>`count(*)::int` })
@@ -1049,7 +1069,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         and(
           eq(services.tenantId, tenantId),
           eq(services.customerId, customerId),
-          notRefundedAway(),
+          listedForCustomer(),
           sql`${services.providerUsername} LIKE ${`${escaped}%`} ESCAPE '\\'`,
         ),
       )

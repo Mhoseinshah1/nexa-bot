@@ -489,6 +489,111 @@ describe('a customer manages the service they bought', () => {
   });
 
   // =========================================================================
+  // FIX-10: an ended service leaves «سرویس‌های من»
+  // =========================================================================
+
+  const listedIds = async (): Promise<string[]> =>
+    (await ctx.container.provisioning.pageForCustomer(tenantA, customerA, 1)).items.map(
+      (item) => item.id,
+    );
+
+  it('drops a service an OPERATOR ended from the customer’s list, count and search (FIX-10)', async () => {
+    const kept = await activeService('list-kept');
+    const ended = await activeService('list-ended');
+    expect((await listedIds()).sort()).toEqual([kept.id, ended.id].sort());
+
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, ended.id, 'TERMINATE', {
+      idempotencyKey: 'op-terminate-list',
+    });
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findById(tenantA, ended.id))?.state).toBe('TERMINATED');
+
+    const page = await ctx.container.provisioning.pageForCustomer(tenantA, customerA, 1);
+    expect(
+      page.items.map((item) => item.id),
+      'the ended one is gone, the live one is not',
+    ).toEqual([kept.id]);
+    expect(page.count, 'the count is the list’s, not the table’s').toBe(1);
+    expect(page.pages).toBe(1);
+    expect(
+      (await ctx.container.provisioning.searchForCustomer(tenantA, customerA, ended.username)).map(
+        (item) => item.id,
+      ),
+      'search does not find it either',
+    ).toEqual([]);
+    expect(
+      (await ctx.container.provisioning.searchForCustomer(tenantA, customerA, kept.username)).map(
+        (item) => item.id,
+      ),
+    ).toEqual([kept.id]);
+
+    // The bot's list screen is that page: one button for the live service, none for the ended.
+    sent = [];
+    const listed = await runtime().handle(tenantA, systemActor('bot'), tapUpdate('sl:1'));
+    expect(listed.replyKey).toBe('bot.service.list');
+    // The list page is drawn by an edit of the tapped message (or a send): read whichever.
+    const drawn = JSON.stringify(
+      sent.filter((one) => /\/(sendMessage|editMessageText)$/u.test(one.url)),
+    );
+    expect(drawn).toContain(`sv:${kept.id}`);
+    expect(drawn).not.toContain(`sv:${ended.id}`);
+
+    // Nothing was deleted: an old card button still answers, and the operator still sees it.
+    expect(
+      (await ctx.container.provisioning.getForCustomer(tenantA, customerA, ended.id)).state,
+    ).toBe('TERMINATED');
+    expect((await services.findById(tenantA, ended.id))?.id).toBe(ended.id);
+  });
+
+  it('keeps a service listed while its terminate has not succeeded, and an UNRECONCILED one (FIX-10)', async () => {
+    const pending = await activeService('list-terminate-failing');
+    const unreconciled = await activeService('list-unreconciled');
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'UNRECONCILED', provisioned_at = NULL
+           WHERE id = ${unreconciled.id}` as never,
+    );
+
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, pending.id, 'TERMINATE', {
+      idempotencyKey: 'op-terminate-failing',
+    });
+    panel.behaviour = 'server-error';
+    await ctx.container.provisionerLoop.tick();
+    panel.behaviour = 'healthy';
+    const terminate = await operationOf(pending.id, 'TERMINATE');
+    expect(terminate?.state, 'the terminate has not succeeded').not.toBe('SUCCEEDED');
+    expect((await services.findById(tenantA, pending.id))?.state).toBe('ACTIVE');
+
+    const page = await ctx.container.provisioning.pageForCustomer(tenantA, customerA, 1);
+    expect(page.items.map((item) => item.id).sort()).toEqual([pending.id, unreconciled.id].sort());
+    expect(page.count).toBe(2);
+  });
+
+  it('pages the list over the same predicate it counts with (FIX-10)', async () => {
+    const one = await activeService('page-one');
+    const two = await activeService('page-two');
+    const three = await activeService('page-three');
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, two.id, 'TERMINATE', {
+      idempotencyKey: 'op-terminate-page',
+    });
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findById(tenantA, two.id))?.state).toBe('TERMINATED');
+
+    // Page size 1 at the repository: every page holds exactly one live service, the count
+    // says how many pages there are, and the page after the last is empty.
+    const pageOf = (number: number) =>
+      services.pageForCustomer(tenantA, customerA, { number, size: 1 });
+    const first = await pageOf(1);
+    const second = await pageOf(2);
+    const third = await pageOf(3);
+    expect(first.count).toBe(2);
+    expect(second.count).toBe(2);
+    expect([...first.items, ...second.items].map((item) => item.id).sort()).toEqual(
+      [one.id, three.id].sort(),
+    );
+    expect(third.items).toEqual([]);
+  });
+
+  // =========================================================================
   // Who may act
   // =========================================================================
 
