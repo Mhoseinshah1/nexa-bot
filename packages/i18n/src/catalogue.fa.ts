@@ -1000,7 +1000,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.resume_button': '✅ روشن کردن سرویس',
   // B8: both directions of the switch ask first; nothing changes until the customer confirms.
   'bot.service.suspend_confirm':
-    'آیا سرویس {serviceUsername} خاموش شود؟\nتا وقتی آن را دوباره روشن نکنید، اتصال برقرار نمی‌شود. زمان باقی‌ماندهٔ سرویس در این مدت متوقف نمی‌شود.',
+    'آیا سرویس {serviceUsername} خاموش شود؟\nتا وقتی آن را دوباره روشن نکنید، اتصال برقرار نمی‌شود. اگر سرویس شما تاریخ اتمام دارد، زمان باقی‌ماندهٔ آن در این مدت هم سپری می‌شود و متوقف نمی‌شود.',
   'bot.service.resume_confirm': 'آیا سرویس {serviceUsername} دوباره روشن شود؟',
   'bot.service.suspend_confirm_button': '✅ بله، خاموش شود',
   'bot.service.resume_confirm_button': '✅ بله، روشن شود',
@@ -1245,7 +1245,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_closed':
     'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_invoice':
-    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون‌پی\n\n{icon:purchase} مبلغ بدون کارمزد: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز اعلام‌شده توسط تون‌پی: {transferAmount}\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nمبلغ را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال رسید» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون‌پی\n\n{icon:amount} مبلغ بدون کارمزد: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز اعلام‌شده توسط تون‌پی: {transferAmount}\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nمبلغ را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال رسید» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_sent':
     '📤 رسید واریز شما برای تون‌پی ارسال شده و در انتظار پاسخ است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_refused':
@@ -1264,11 +1264,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_change_card_button': '🔄 تعویض کارت',
   'bot.payment.gateway_card_check_button': '🔎 بررسی وضعیت',
   'bot.payment.gateway_receipt_prompt':
-    '📤 لطفاً تصویر رسید واریز را همین‌جا بفرستید.\n\nحجم تصویر حداکثر ۵ مگابایت است. این درخواست تا {closesAt} باز است.',
+    '📤 لطفاً تصویر رسید واریز را همین‌جا به‌صورت عکس بفرستید، نه به‌صورت سند.\n\nحجم تصویر حداکثر ۵ مگابایت است. این درخواست تا {closesAt} باز است.',
   'bot.payment.gateway_receipt_queued':
     '{icon:time} رسید شما دریافت شد و در حال ارسال برای تون‌پی است. نتیجه در پیام پرداخت نمایش داده می‌شود.',
   'bot.payment.gateway_receipt_photo_only':
-    'رسید را به‌صورت تصویر بفرستید. لطفاً تصویر رسید واریز را دوباره ارسال کنید.',
+    'رسید فقط به‌صورت عکس پذیرفته می‌شود، نه به‌صورت سند یا ویدیو. لطفاً تصویر رسید واریز را از گالری و به‌صورت عکس دوباره بفرستید.',
   'bot.payment.gateway_receipt_already_sent':
     'این تصویر پیش‌تر برای همین پرداخت فرستاده شده است و دوباره ارسال نمی‌شود. اگر رسید دیگری دارید، تصویر آن را بفرستید.',
   'bot.payment.gateway_receipt_too_large':

@@ -322,6 +322,32 @@ describe('part 2 pins (brief §C3, §C4, §C5)', () => {
     expect(body('bot.payment.gateway_card_invoice')).not.toContain('مبلغ اصلی');
   });
 
+  it('Codex P2: the TonPays card invoice draws no purpose-specific icon beside the principal', () => {
+    // `gatewayAttemptScreen` renders this ONE key for an order and for a wallet top-up
+    // (payment.orderId === null) alike, so neither the cart nor the wallet icon is true of
+    // both; the order-only and top-up-only keys keep theirs.
+    const text = body('bot.payment.gateway_card_invoice');
+    expect(text).toContain('{icon:amount} مبلغ بدون کارمزد: {principal}');
+    expect(text).not.toContain('{icon:purchase}');
+  });
+
+  it('Codex P2: switching off promises nothing about a deadline an unlimited service lacks', () => {
+    // A service with no `expiresAt` is supported and SUSPEND is offered for it, so the
+    // clock sentence is conditional on the service having an end date at all.
+    const text = body('bot.service.suspend_confirm');
+    expect(text).toContain('اگر سرویس شما تاریخ اتمام دارد، زمان باقی‌ماندهٔ آن');
+    expect(text).not.toContain('زمان باقی‌ماندهٔ سرویس در این مدت متوقف نمی‌شود');
+  });
+
+  it('Codex P2: a receipt must go as a photo, not as a document, and the customer is told so', () => {
+    // `receivePhoto` returns PHOTO_ONLY for an image sent as a Telegram DOCUMENT; «تصویر»
+    // alone describes what the customer already did.
+    expect(body('bot.payment.gateway_receipt_photo_only')).toContain('به‌صورت عکس');
+    expect(body('bot.payment.gateway_receipt_photo_only')).toContain('نه به‌صورت سند');
+    expect(body('bot.payment.gateway_receipt_prompt')).toContain('به‌صورت عکس');
+    expect(body('bot.payment.gateway_receipt_prompt')).toContain('نه به‌صورت سند');
+  });
+
   it('C3 service card: the username is labelled as one, and no decoration inside a value', () => {
     const text = body('bot.service.card');
     expect(text).toContain('{icon:user} نام کاربری: {serviceUsername}');

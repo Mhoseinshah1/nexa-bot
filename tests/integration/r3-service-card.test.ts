@@ -406,7 +406,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       expect(of('editMessageText')).toHaveLength(1);
       expect(question?.body['message_id']).toBe(CARD);
       expect(String(question?.body['text'])).toBe(
-        `آیا سرویس ${service.providerUsername} خاموش شود؟\nتا وقتی آن را دوباره روشن نکنید، اتصال برقرار نمی‌شود. زمان باقی‌ماندهٔ سرویس در این مدت متوقف نمی‌شود.`,
+        `آیا سرویس ${service.providerUsername} خاموش شود؟\nتا وقتی آن را دوباره روشن نکنید، اتصال برقرار نمی‌شود. اگر سرویس شما تاریخ اتمام دارد، زمان باقی‌ماندهٔ آن در این مدت هم سپری می‌شود و متوقف نمی‌شود.`,
       );
       const data = callbacks(question);
       expect(data).toEqual([`uq:${service.id}`, `sv:${service.id}`]);
