@@ -323,7 +323,7 @@ integration test asserts the repository read model never carries the plaintext.
 is the single implementation of both, and which one applies depends on the shape
 of what is being written rather than on which caller is writing it.
 
-`redactSecrets` decides by KEY, and is what the logger, the audit log and the
+`redactSecrets` decides by KEY, and is what the audit log and the
 operational log use for their structured records. It traverses arrays as well as
 objects, bounds its recursion, survives a cyclic value, and **fails closed on a
 key it cannot read** — a homoglyph or a non-Latin key is redacted rather than
@@ -338,6 +338,21 @@ comment that said it was redacted. Its one sink today is that column, which is
 append-only and is returned over HTTP. Its fragment list is deliberately
 NARROWER than the key rule's — over-matching a key costs one field, over-matching
 prose costs the operator the sentence they needed.
+
+`redactForLog` is BOTH, and it is the process logger's (FIX-04). Every argument of
+every log call — the message as well as the context object, a child logger's
+bindings, every string at any depth, an error's message, stack, cause chain and
+`AggregateError.errors` — is judged by key and by content. Before it, the logger
+used the key rule alone, which returns every string untouched, so a bot token in
+a stack, a message argument or a nested provider text reached stdout verbatim.
+The text rule reads the text after `normaliseForScan` (zero-width and bidi
+characters removed, NFKC, Persian/Arabic-Indic digits folded, `%3A`/`%3D`/… decoded),
+and also takes bare JWTs, any-case `bearer`, Luhn-valid card numbers and the
+secret-bearing parts of any URL (userinfo, query, fragment, every path segment
+that is not a lowercase word). A stack keeps its frames' `file:line`. Pass an
+error OBJECT to the logger, never `error.stack` or `String(error)`: the object is
+what gets its cause chain rendered. `tests/unit/log-redaction-fuzz.test.ts` is
+the cross product that pins it.
 
 Two divergent implementations of the key rule existed before this module, and
 both had holes.

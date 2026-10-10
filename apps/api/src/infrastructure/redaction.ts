@@ -82,15 +82,79 @@ export function isSensitiveKey(key: string): boolean {
   return SENSITIVE_FRAGMENTS.some((fragment) => normalised.includes(fragment));
 }
 
-function redactValue(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+/** How many values one call will visit before it stops descending. */
+const MAX_NODES = 5_000;
+/** How many entries of one Map, Set or array a LOG line renders. */
+const MAX_COLLECTION_ENTRIES = 100;
+/** How many stack lines a log line keeps. */
+const MAX_STACK_LINES = 60;
+
+interface RedactState {
+  /**
+   * The ANCESTORS of the value being visited, not every value seen so far. A WeakSet of
+   * everything visited reported a value referenced twice — `{ err, cause: err.cause }`, or
+   * one error inside two AggregateErrors — as `[circular]` on its second appearance, which
+   * hid the cause from the operator although nothing was circular. `MAX_NODES` is what
+   * bounds a value that is wide rather than deep.
+   */
+  readonly ancestors: Set<object>;
+  /**
+   * FIX-04 (S1): whether a STRING is redacted by its content as well as by its key. The
+   * process log turns this on — a message, a stack, a provider's error text is a sentence,
+   * and a key rule says nothing about a sentence. The durable writers (audit before/after,
+   * operational events) keep the key rule alone: their values are structured records an
+   * operator has to read back as they were written, a panel address included.
+   */
+  readonly content: boolean;
+  nodes: number;
+}
+
+function redactValue(value: unknown, depth: number, state: RedactState): unknown {
   if (depth > MAX_DEPTH) return '[truncated]';
+  // The node budget is the LOG's: a log line is paid for on the event loop of
+  // every request. A durable record keeps the depth bound it always had.
+  state.nodes += 1;
+  if (state.content && state.nodes > MAX_NODES) return '[truncated]';
+  if (typeof value === 'string') return state.content ? redactSecretText(value) : value;
   if (value === null || typeof value !== 'object') return value;
 
-  if (seen.has(value)) return '[circular]';
-  seen.add(value);
+  if (state.ancestors.has(value)) return '[circular]';
+  state.ancestors.add(value);
+  try {
+    return redactObject(value, depth, state);
+  } finally {
+    state.ancestors.delete(value);
+  }
+}
 
+/** Whether a key, read as TEXT, is itself a credential (a map keyed by token). */
+function keyIsSecretText(key: string, state: RedactState): boolean {
+  return state.content && redactSecretText(key) !== key;
+}
+
+function redactEntries(
+  value: object,
+  depth: number,
+  state: RedactState,
+  out: Record<string, unknown>,
+): Record<string, unknown> {
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    // The pair was the secret: the key is replaced, and so is its value.
+    if (keyIsSecretText(key, state)) {
+      out[REDACTED] = REDACTED;
+      continue;
+    }
+    out[key] = isSensitiveKey(key) ? REDACTED : redactValue(item, depth + 1, state);
+  }
+  return out;
+}
+
+function redactObject(value: object, depth: number, state: RedactState): unknown {
   if (Array.isArray(value)) {
-    return value.map((item) => redactValue(item, depth + 1, seen));
+    const items = state.content ? value.slice(0, MAX_COLLECTION_ENTRIES) : value;
+    const out = items.map((item) => redactValue(item, depth + 1, state));
+    if (items.length < value.length) out.push(`[${String(value.length - items.length)} more]`);
+    return out;
   }
 
   // An Error keeps `message` and `stack` as NON-ENUMERABLE own properties, so
@@ -104,31 +168,115 @@ function redactValue(value: unknown, depth: number, seen: WeakSet<object>): unkn
   // emptied on the way out. A `NexaError` fared slightly better and still lost
   // its message, because `name`, `kind` and `code` happen to be enumerable.
   //
-  // The copied fields are then redacted like anything else: a message is the
-  // most likely place for a secret to appear by accident.
+  // The copied fields are then redacted BY CONTENT, whatever mode the caller
+  // asked for: an error's message is the most likely place for a secret to appear
+  // by accident, and its stack repeats the message on its first line. FIX-04 (S1):
+  // an earlier version said so and did not do it — the message went through the
+  // key rule, which returns every string untouched, and the stack was copied
+  // verbatim — so `fetch`'s "Failed to parse URL from …/bot<token>/…" reached the
+  // log twice.
   if (value instanceof Error) {
     const out: Record<string, unknown> = {
-      name: value.name,
-      message: redactValue(value.message, depth + 1, seen),
-      stack: value.stack,
+      name: redactSecretText(String(value.name)),
+      message: redactSecretText(String(value.message)),
     };
-    for (const [key, item] of Object.entries(value)) {
-      out[key] = isSensitiveKey(key) ? REDACTED : redactValue(item, depth + 1, seen);
+    if (typeof value.stack === 'string') out['stack'] = redactStack(value.stack);
+    redactEntries(value, depth, state, out);
+    // `cause` and an AggregateError's `errors` are own NON-ENUMERABLE properties,
+    // so the entries above never see them — and each is the failure's real reason.
+    if (value.cause !== undefined) out['cause'] = redactValue(value.cause, depth + 1, state);
+    const errors: unknown = (value as { errors?: unknown }).errors;
+    if (Array.isArray(errors) && !('errors' in out)) {
+      out['errors'] = redactValue(errors, depth + 1, state);
     }
-    if (value.cause !== undefined) out['cause'] = redactValue(value.cause, depth + 1, seen);
     return out;
   }
 
-  const out: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = isSensitiveKey(key) ? REDACTED : redactValue(item, depth + 1, seen);
+  if (state.content) {
+    // FIX-04 (S5): what the LOG makes of values JSON cannot represent. A Map and a
+    // Set enumerate nothing and became `{}`; a Buffer became an object of its bytes,
+    // content included; a Date became `{}`.
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString();
+    }
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+      const name = typeof value.constructor === 'function' ? value.constructor.name : 'binary';
+      return `[${name} ${String(value.byteLength)} bytes]`;
+    }
+    if (value instanceof Map) {
+      const entries: Record<string, unknown> = {};
+      let shown = 0;
+      for (const [key, item] of value as Map<unknown, unknown>) {
+        if (shown >= MAX_COLLECTION_ENTRIES) break;
+        shown += 1;
+        const label =
+          typeof key === 'string' ? key : JSON.stringify(redactValue(key, depth + 1, state));
+        if (keyIsSecretText(label, state)) {
+          entries[REDACTED] = REDACTED;
+          continue;
+        }
+        entries[label] = isSensitiveKey(label) ? REDACTED : redactValue(item, depth + 1, state);
+      }
+      return { type: 'Map', size: value.size, entries };
+    }
+    if (value instanceof Set) {
+      const values: unknown[] = [];
+      for (const item of value as Set<unknown>) {
+        if (values.length >= MAX_COLLECTION_ENTRIES) break;
+        values.push(redactValue(item, depth + 1, state));
+      }
+      return { type: 'Set', size: value.size, values };
+    }
+    if (value instanceof URL || value instanceof RegExp) return redactSecretText(String(value));
   }
-  return out;
+
+  return redactEntries(value, depth, state, {});
 }
 
-/** Redacts a structured value in place of writing it anywhere durable. */
+/**
+ * A stack, kept useful and made safe. Its first lines are the error's `Name: message`,
+ * which is free text and is redacted as such. A frame line that is EXACTLY the shape V8
+ * writes — `at fn (path:line:col)` with nothing in the path but path characters — is kept
+ * verbatim, because the file and line are why a stack is logged at all, and the text rule
+ * would otherwise read `session.service.js:42:7` as a label and its value. Any other line
+ * is redacted as text: a frame is not where a secret is expected, which is not the same as
+ * a place one cannot be.
+ */
+const SAFE_STACK_FRAME =
+  /^\s{1,16}at (?:async )?(?:(?:new )?[^\s()]{1,256}(?: \[as [^\]\s]{1,64}\])? \()?(?:file:\/\/\/?|node:)?[A-Za-z0-9_./@+~\\-]{1,512}(?::\d{1,7}){1,2}\)?$|^\s{1,16}at (?:async )?(?:[^\s()]{1,256} \()?<anonymous>\)?$/;
+
+export function redactStack(stack: string): string {
+  const lines = stack.split('\n');
+  const kept = lines.slice(0, MAX_STACK_LINES);
+  const firstFrame = kept.findIndex((line) => /^\s+at /.test(line));
+  const headerEnd = firstFrame === -1 ? kept.length : firstFrame;
+  const header = redactSecretText(kept.slice(0, headerEnd).join('\n'));
+  const frames = kept
+    .slice(headerEnd)
+    .map((line) => (SAFE_STACK_FRAME.test(line) ? line : redactSecretText(line)));
+  const dropped = lines.length - kept.length;
+  const tail = dropped > 0 ? [`    … ${String(dropped)} more lines`] : [];
+  return [header, ...frames, ...tail].join('\n');
+}
+
+/**
+ * Redacts a structured value by KEY before it is written anywhere durable — an audit row's
+ * before/after, an operational event's context. A string is returned as written, except
+ * inside an Error, whose message and stack are always redacted by content.
+ */
 export function redactSecrets<T>(value: T): T {
-  return redactValue(value, 0, new WeakSet()) as T;
+  return redactValue(value, 0, { ancestors: new Set(), content: false, nodes: 0 }) as T;
+}
+
+/**
+ * FIX-04 (S1): the PROCESS LOG's redactor — the key rule above AND every string by its
+ * content (`redactSecretText`), at any depth, inside arrays, Maps, Sets and errors. A log
+ * line is the one destination where a sentence and a record arrive together, and before
+ * this only the record's keys were judged: a token in the message argument, in a stack,
+ * or in a nested provider text reached stdout verbatim.
+ */
+export function redactForLog<T>(value: T): T {
+  return redactValue(value, 0, { ancestors: new Set(), content: true, nodes: 0 }) as T;
 }
 
 /**
@@ -227,6 +375,103 @@ const SUBSCRIPTION_URL_VALUE =
  * solvable by matching.
  */
 const TELEGRAM_BOT_TOKEN = /\d{5,}:[A-Za-z0-9_-]{20,}/g;
+
+/**
+ * FIX-04 (S3): a JSON Web Token with nothing around it to label it. Its header is base64url
+ * JSON and therefore always begins `eyJ` (`{"`), which is evidence enough on its own: no
+ * sentence an operator writes contains `eyJ<8+>.<8+>.`.
+ */
+const BARE_JWT = /\beyJ[A-Za-z0-9_-]{8,4096}\.[A-Za-z0-9_-]{8,8192}\.[A-Za-z0-9_-]{0,4096}/g;
+
+/**
+ * FIX-04 (S3): any URL, taken apart. The scheme, host and port are kept — which panel, which
+ * API, which port is what an operator needs from a failed request — and everything that can
+ * carry a capability is not: the userinfo, the query, the fragment, and every path segment
+ * that is not a plain lowercase word. A Telegram request path is `/bot<token>/…`, a
+ * subscription link is `/sub/<token>`, a 3x-ui panel's base path is itself a secret, and a
+ * signed payment link signs its path or its query; `/panel/api/inbounds` survives, and so
+ * does `/telegram/webhook`. `file://` is left alone: it is how an ES module's stack names
+ * its own files.
+ */
+const URL_IN_TEXT = /\b([a-z][a-z0-9+.-]{1,16}):\/\/([^\s"'<>/?#\\]{0,512})([^\s"'<>]{0,4096})/gi;
+
+/** A path segment that is a word, not a value: lowercase letters joined by `-`/`_`, or `v1`. */
+const SAFE_URL_SEGMENT = /^(?:[a-z]{1,32}(?:[-_][a-z]{1,32}){0,4}|v[0-9]{1,2})$/;
+
+function redactUrlParts(match: string, scheme: string, authority: string, rest: string): string {
+  if (scheme.toLowerCase() === 'file') return match;
+  const at = authority.lastIndexOf('@');
+  const host = at === -1 ? authority : `${REDACTED}@${authority.slice(at + 1)}`;
+  const queryAt = rest.search(/[?#]/);
+  const path = queryAt === -1 ? rest : rest.slice(0, queryAt);
+  const segments = path
+    .split('/')
+    .map((segment) => (segment === '' || SAFE_URL_SEGMENT.test(segment) ? segment : REDACTED));
+  const query = queryAt === -1 ? '' : `${rest.charAt(queryAt)}${REDACTED}`;
+  return `${scheme}://${host}${segments.join('/')}${query}`;
+}
+
+/**
+ * Format characters that render as nothing: zero-width spaces and joiners, bidi controls,
+ * the soft hyphen, the BOM, variation selectors. Each one splits a token into two strings
+ * no pattern recognises, while a person reading the log, or pasting from it, sees one.
+ *
+ * Written as code points rather than as the characters themselves, which a reader of this
+ * file could not see either.
+ */
+const INVISIBLE_RANGES: readonly (readonly [number, number])[] = [
+  [0x00ad, 0x00ad], // soft hyphen
+  [0x034f, 0x034f], // combining grapheme joiner
+  [0x061c, 0x061c], // Arabic letter mark
+  [0x115f, 0x1160], // Hangul fillers
+  [0x17b4, 0x17b5], // Khmer inherent vowels
+  [0x180b, 0x180f], // Mongolian variation selectors and vowel separator
+  [0x200b, 0x200f], // zero-width space, non-joiner, joiner; LRM, RLM
+  [0x202a, 0x202e], // bidi embeddings and overrides
+  [0x2060, 0x206f], // word joiner, invisible operators, bidi isolates
+  [0x3164, 0x3164], // Hangul filler
+  [0xfe00, 0xfe0f], // variation selectors
+  [0xfeff, 0xfeff], // byte-order mark
+  [0xffa0, 0xffa0], // halfwidth Hangul filler
+];
+
+function codePointClass(ranges: readonly (readonly [number, number])[]): RegExp {
+  const escape = (codePoint: number): string => `\\u${codePoint.toString(16).padStart(4, '0')}`;
+  const body = ranges
+    .map(([from, to]) => (from === to ? escape(from) : `${escape(from)}-${escape(to)}`))
+    .join('');
+  return new RegExp(`[${body}]`, 'g');
+}
+
+const INVISIBLE_CHARACTERS = codePointClass(INVISIBLE_RANGES);
+
+/** Arabic-Indic (U+0660…) and Persian (U+06F0…) digits; NFKC already folds fullwidth ones. */
+const EASTERN_DIGITS = codePointClass([
+  [0x0660, 0x0669],
+  [0x06f0, 0x06f9],
+]);
+
+/**
+ * The delimiters a secret's SHAPE depends on, percent-encoded — once, or again as `%25…` up
+ * to three times: `:` (a bot token), `=` (a labelled value), `/` `?` `#` `@` (a URL's parts).
+ * `&` is NOT decoded: inside an encoded value it is part of the value, and decoding it would
+ * end the labelled rule's match early and leave the rest of the value behind.
+ */
+const ENCODED_DELIMITER = /%(?:25){0,3}(3[AaDdFf]|2[Ff]|40|23)/g;
+
+/**
+ * The text the rules read: invisible characters removed, NFKC compatibility forms folded
+ * (a fullwidth `：` or `１２３` becomes `:` or `123`), eastern digits folded to ASCII, and the
+ * structural delimiters percent-decoded. Linear in the length, which `redactSecretText` has
+ * already bounded.
+ */
+export function normaliseForScan(text: string): string {
+  return text
+    .replace(INVISIBLE_CHARACTERS, '')
+    .normalize('NFKC')
+    .replace(EASTERN_DIGITS, (digit) => String.fromCharCode(48 + (digit.charCodeAt(0) & 0x0f)))
+    .replace(ENCODED_DELIMITER, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
 
 /**
  * Names whose value is an authorization credential, whatever scheme it uses.
@@ -336,7 +581,9 @@ const LABELLED_SECRET = new RegExp(
  * a gap named is worth more than a gap implied.
  */
 const BARE_CREDENTIAL = new RegExp(
-  String.raw`\b(?:${BARE_SCHEMES.join('|')})\s+` +
+  // `bearer` in either case as well: `bearer eyJ…` is how a lower-casing client
+  // quotes it, and unlike `token` the word is not one an operator's sentence uses.
+  String.raw`\b(?:${BARE_SCHEMES.join('|')}|bearer|BEARER)\s+` +
     String.raw`(?=[A-Za-z0-9._~+/-]*[0-9._~+/-])[A-Za-z0-9._~+/-]{8,}=*`,
   'g',
 );
@@ -402,16 +649,33 @@ export function redactSecretText(text: string): string {
   if (text.length > MAX_REDACTABLE_LENGTH) {
     return `${redactSecretText(text.slice(0, MAX_REDACTABLE_LENGTH))}… [${text.length - MAX_REDACTABLE_LENGTH} characters not scanned and dropped]`;
   }
-  const bounded = text;
 
+  // FIX-04 (S3): the rules below read the text AFTER `normaliseForScan`, so a
+  // token written with a fullwidth colon, split by a zero-width space, spelled in
+  // Persian digits or percent-encoded (`bot123%3AAA…`) is the token it is. When
+  // nothing is found the caller gets back exactly what it passed — a Persian
+  // sentence keeps its digits and its zero-width non-joiners. When something IS
+  // found it gets the normalised text, redacted: the original cannot be redacted
+  // by offsets the normalisation moved, and returning it unredacted is the one
+  // answer this function may never give.
+  const scanned = normaliseForScan(text);
+  const redacted = redactCardCandidates(applyTextRules(scanned));
+  return redacted === scanned ? text : redacted;
+}
+
+function applyTextRules(text: string): string {
   return (
-    bounded
+    text
       .replace(TELEGRAM_BOT_TOKEN, REDACTED)
+      .replace(BARE_JWT, REDACTED)
       .replace(
         SUBSCRIPTION_URL_VALUE,
         (_match, open: string, name: string, close: string, separator: string, quote: string) =>
           `${open}${name}${close}${separator}${quote}${REDACTED}`,
       )
+      // After the subscription rule, which takes the whole URL when its label
+      // says what it is; this one takes the secret-bearing PARTS of any other.
+      .replace(URL_IN_TEXT, redactUrlParts)
       // FIRST, because a credential header's whole value is the credential
       // whatever scheme it names, and the labelled rule below would otherwise
       // take only its first token.
@@ -473,11 +737,17 @@ export function redactRecord(
 
 /**
  * FIX-04/05: a payment card number in free text — 13 to 19 digits, optionally grouped by
- * single spaces or hyphens, and Luhn-valid. The Luhn check is what keeps an order id, an
- * amount in minor units or a Telegram id (all digit runs) out of the redaction: a random
- * digit run passes it one time in ten, a real card number always.
+ * spaces, hyphens or dots (up to two between digits), and Luhn-valid. The Luhn check is what
+ * keeps an order id, an amount in minor units or a Telegram id (all digit runs) out of the
+ * redaction: a random digit run passes it one time in ten, a real card number always.
+ *
+ * FIX-04 (S3): Persian, Arabic-Indic and fullwidth digits are digits — `normaliseForScan`
+ * folds them first. And a run that touches a `<hex>-` boundary is the inside of a UUID, not
+ * a card: `01900000-0000-7000-…` passed Luhn one time in ten and lost part of an id, which
+ * mattered little in an operator channel and would matter on every log line.
  */
-const CARD_CANDIDATE = /(?<![0-9])[0-9](?:[ -]?[0-9]){12,18}(?![0-9])/g;
+const CARD_CANDIDATE =
+  /(?<![0-9]|[0-9A-Fa-f]-)[0-9](?:[ .-]{0,2}[0-9]){12,18}(?![0-9]|-[0-9A-Fa-f])/g;
 
 function luhnValid(digits: string): boolean {
   let sum = 0;
@@ -494,11 +764,18 @@ function luhnValid(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-export function redactCardNumbers(text: string): string {
+/** The card rule over text `normaliseForScan` has already folded. */
+function redactCardCandidates(text: string): string {
   return text.replace(CARD_CANDIDATE, (match) => {
-    const digits = match.replace(/[ -]/g, '');
+    const digits = match.replace(/[ .-]/g, '');
     return digits.length >= 13 && digits.length <= 19 && luhnValid(digits) ? REDACTED : match;
   });
+}
+
+export function redactCardNumbers(text: string): string {
+  const scanned = normaliseForScan(text);
+  const redacted = redactCardCandidates(scanned);
+  return redacted === scanned ? text : redacted;
 }
 
 /**
