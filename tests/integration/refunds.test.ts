@@ -16,6 +16,7 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/application/ports';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import { DrizzleRefundRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-refund.repository';
+import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
 import {
   adminActorFor,
@@ -961,6 +962,217 @@ describe('refunds', () => {
    */
   const rawQuery = (text: string) =>
     ctx.container.database.withClient((client) => client.query(text));
+
+  /*
+   * FIX10 H13: the one credit path under concurrency. `refundUndeliverable` takes the
+   * payment's lock and sums what is consumed AFTER it; nothing else stops two callers. These
+   * cases run it twice at once, and beside an operator's refund, on real connections, and
+   * assert the two things that matter: one ledger credit, and never more than was paid.
+   */
+  describe('the automatic refund under concurrency (FIX10 H13)', () => {
+    const PAID = 250_000n;
+
+    const automatic = async (paymentId: PaymentId, label: string) => {
+      const payment = await new DrizzlePaymentRepository(ctx.container.database.db).findById(
+        tenantA,
+        paymentId,
+      );
+      if (payment === null) throw new Error('no payment');
+      return ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.refunds.refundUndeliverable(
+          tenantA,
+          systemActor(label),
+          { payment, now: ctx.container.clock.now() },
+          tx,
+        ),
+      );
+    };
+
+    /** What the payment's refunds still hold against it: the bound the lock enforces. */
+    const consumedOf = async (paymentId: string): Promise<bigint> =>
+      BigInt(
+        (await scalar<string>(
+          sql`SELECT COALESCE(sum(amount), 0)::text AS v FROM refunds WHERE payment_id = ${paymentId}
+               AND state IN ('REQUESTED', 'AWAITING_EXTERNAL', 'COMPLETED')`,
+        )) ?? '0',
+      );
+
+    /** The REFUND credits the ledger holds for this payment's refunds, and their sum. */
+    const creditsOf = async (paymentId: string): Promise<{ n: number; sum: bigint }> => {
+      const rows = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n, COALESCE(sum(w.amount), 0)::text AS total
+              FROM wallet_entries w
+              JOIN refunds r ON w.reference = r.id::text || ':refund'
+             WHERE w.tenant_id = ${tenantA.tenantId} AND w.reason = 'REFUND'
+               AND w.direction = 'CREDIT' AND r.payment_id = ${paymentId}` as never,
+      )) as unknown as { rows: { n: number; total: string }[] };
+      return { n: rows.rows[0]?.n ?? 0, sum: BigInt(rows.rows[0]?.total ?? '0') };
+    };
+
+    async function expectOneCreditOfThePayment(paymentId: string): Promise<void> {
+      expect(await creditsOf(paymentId)).toEqual({ n: 1, sum: PAID });
+      expect(await consumedOf(paymentId)).toBeLessThanOrEqual(PAID);
+    }
+
+    it('two at once, interleaved on the lock: the second finds nothing left and credits nothing', async () => {
+      const payment = await manualConfirmed('h13a');
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let holding: () => void = () => undefined;
+      const locked = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+      const record = await new DrizzlePaymentRepository(ctx.container.database.db).findById(
+        tenantA,
+        payment.id,
+      );
+      // The first credits the payment and holds its lock, uncommitted...
+      const first = ctx.container.uow.run(tenantA, async (tx) => {
+        const made = await ctx.container.refunds.refundUndeliverable(
+          tenantA,
+          systemActor('h13a-1'),
+          { payment: record!, now: ctx.container.clock.now() },
+          tx,
+        );
+        holding();
+        await held;
+        return made;
+      });
+      await locked;
+      // ...the second blocks on that lock, and reads the sum only after the first commits.
+      const second = automatic(payment.id, 'h13a-2');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      release();
+      const [won, lost] = await Promise.all([first, second]);
+      expect(won?.amount.amountMinor).toBe(PAID);
+      expect(lost).toBeNull();
+      await expectOneCreditOfThePayment(payment.id);
+    }, 30_000);
+
+    it('five at once, unordered: exactly one credit, for exactly the payment', async () => {
+      const payment = await manualConfirmed('h13b');
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, i) => automatic(payment.id, `h13b-${String(i)}`)),
+      );
+      expect(results.filter((one) => one !== null)).toHaveLength(1);
+      await expectOneCreditOfThePayment(payment.id);
+    }, 30_000);
+
+    it('the automatic refund holds the lock: the operator waiting behind it is refused, and nothing is credited twice', async () => {
+      const payment = await manualConfirmed('h13c');
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let holding: () => void = () => undefined;
+      const locked = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+      const record = await new DrizzlePaymentRepository(ctx.container.database.db).findById(
+        tenantA,
+        payment.id,
+      );
+      const auto = ctx.container.uow.run(tenantA, async (tx) => {
+        const made = await ctx.container.refunds.refundUndeliverable(
+          tenantA,
+          systemActor('h13c-auto'),
+          { payment: record!, now: ctx.container.clock.now() },
+          tx,
+        );
+        holding();
+        await held;
+        return made;
+      });
+      await locked;
+      const operator = refund(owner, payment.id, PAID, 'h13c-operator-0001').then(
+        () => 'settled' as const,
+        (error: unknown) => error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      release();
+      expect((await auto)?.amount.amountMinor).toBe(PAID);
+      expect(await operator).toMatchObject({ code: 'commerce.refund_exceeds_refundable' });
+      await expectOneCreditOfThePayment(payment.id);
+    }, 30_000);
+
+    it('the operator’s manual refund holds the lock: the automatic one supersedes it and credits the payment once', async () => {
+      const payment = await manualConfirmed('h13d');
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let holding: () => void = () => undefined;
+      const locked = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+      // An operator's manual refund for the whole payment, committed while the automatic
+      // refund waits on the same lock (the operator path's own first two steps).
+      const operator = ctx.container.uow.run(tenantA, async (tx) => {
+        await refundRepository.lockPayment(tenantA, payment.id, tx);
+        await refundRepository.create(
+          tenantA,
+          {
+            id: ctx.container.ids.uuid() as never,
+            paymentId: payment.id,
+            customerId: customerA,
+            orderId: (await orderOfPayment(payment.id)) as never,
+            state: 'AWAITING_EXTERNAL',
+            channel: 'EXTERNAL_MANUAL',
+            amount: money(PAID, 'IRT'),
+            reason: 'operator, at the same moment',
+            requestedByAdminId: owner.id,
+            completedByAdminId: null,
+            completedAt: null,
+            now: ctx.container.clock.now(),
+          },
+          tx,
+        );
+        holding();
+        await held;
+      });
+      await locked;
+      const auto = automatic(payment.id, 'h13d-auto');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      release();
+      await operator;
+      expect((await auto)?.amount.amountMinor).toBe(PAID);
+      // The unfinished manual refund was failed in the automatic refund's transaction: the
+      // payment's consumption is the one credit, not the credit plus a transfer still owed.
+      const states = (await ctx.container.database.db.execute(
+        sql`SELECT state, channel FROM refunds WHERE payment_id = ${payment.id} ORDER BY created_at` as never,
+      )) as unknown as { rows: { state: string; channel: string }[] };
+      expect(states.rows).toEqual([
+        { state: 'FAILED', channel: 'EXTERNAL_MANUAL' },
+        { state: 'COMPLETED', channel: 'WALLET_CREDIT' },
+      ]);
+      await expectOneCreditOfThePayment(payment.id);
+      // And the operator can no longer record that transfer as sent.
+      expect(await consumedOf(payment.id)).toBe(PAID);
+    }, 30_000);
+
+    it('an operator refund and the automatic one racing freely: one credit, and never more than the payment', async () => {
+      for (const label of ['h13e', 'h13f', 'h13g']) {
+        const payment = await manualConfirmed(label);
+        const [operator] = await Promise.all([
+          refund(owner, payment.id, PAID, `${label}-operator-0001`).then(
+            (made) => made,
+            (error: unknown) => error,
+          ),
+          automatic(payment.id, `${label}-auto`),
+        ]);
+        await expectOneCreditOfThePayment(payment.id);
+        // Whichever won, nothing is still owed outside the ledger: the operator was refused,
+        // or their manual refund was superseded.
+        const open = await scalar<number>(
+          sql`SELECT count(*)::int AS v FROM refunds WHERE payment_id = ${payment.id}
+               AND state IN ('REQUESTED', 'AWAITING_EXTERNAL')`,
+        );
+        expect(open, operator instanceof Error ? 'operator refused' : 'operator first').toBe(0);
+      }
+    }, 120_000);
+  });
 
   async function customer(telegramUserId: string): Promise<UserId> {
     const { customer: record } = await ctx.container.customers.resolveFromUpdate(
