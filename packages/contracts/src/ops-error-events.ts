@@ -30,8 +30,10 @@ import type { OperationalSeverity } from './ports.js';
  * page, the notification centre's rank, the gateway-health roll-up) ranks by that list — a
  * sixth stored value would be a widened vocabulary an older replica cannot read after a
  * rollback. So a security event is STORED at the severity its policy names and PRESENTED
- * as `SECURITY`: the group message prints the class, and the code's prefix already routes
- * it to the SECURITY topic (`OPS_LOG_TOPIC_ROUTES`).
+ * as `SECURITY`: the group message prints the class, and its code routes it to the
+ * SECURITY topic (`OPS_LOG_TOPIC_ROUTES`) — by its family prefix, or, for
+ * `payments.gateway_webhook_unverified`, by a route of its own ahead of `payments.`. The
+ * unit test pins every code here to its topic, and every SECURITY-class code to SECURITY.
  */
 export const OPS_ERROR_CLASSES = ['SECURITY', 'CRITICAL', 'ERROR', 'WARN', 'INFO'] as const;
 export type OpsErrorClass = (typeof OPS_ERROR_CLASSES)[number];

@@ -97,10 +97,11 @@ export const OPS_LOG_TOPIC_NAME_TEMPLATES = {
  *
  * The categories normalise the code prefixes this installation actually records (spec
  * §12; `docs/ops-log-topics.md` lists every prefix and why it lands where it does). A
- * concern with no operational events of its own gets no topic: support and broadcasts
- * record only DENIALS here (`access.permission_denied`, which is SECURITY's), and the
- * audit log is a separate store that is never projected to Telegram — a topic for any of
- * them would be a topic that stays empty for ever.
+ * concern with no topic of its own is routed to the topic its events are about: the
+ * support codes that are not about the AI role (business chats, hand-offs) are failures
+ * of a BOT's conversations, so `support.` routes there; broadcasts record only DENIALS
+ * (`access.permission_denied`, SECURITY's); the audit log is a separate store that is
+ * never projected to Telegram.
  *
  * Changing where a prefix routes changes only where its NEXT message goes: a queued
  * message keeps the topic it was queued for (`destination.opsTopic`), and the codes
@@ -110,6 +111,12 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   readonly prefix: string;
   readonly category: OpsLogTopicCategory;
 }[] = [
+  // A provider webhook whose signature did not verify is a REFUSED request — the SECURITY
+  // class (`OPS_ERROR_CLASS_POLICY`), presented as SECURITY — so it goes to the SECURITY
+  // topic with its recovery, ahead of `payments.` (FIX-03, batch 2026-10-10). Before this
+  // it was presented as SECURITY and posted to PAYMENTS, which made the class policy's
+  // "the prefix routes it to the SECURITY topic" false for exactly this code.
+  { prefix: 'payments.gateway_webhook_', category: 'SECURITY' },
   // Money. Listed first, and `order.refunded_undeliverable` before the `order.` prefix
   // below: a refund is the payments log's even though its code names the order.
   { prefix: 'payments.', category: 'PAYMENTS' },
@@ -141,6 +148,16 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   { prefix: 'bot.', category: 'BOT' },
   { prefix: 'bot_menu.', category: 'BOT' },
   { prefix: 'channels.', category: 'BOT' },
+  // Support's own process: the AI assistant role's liveness stays with the other roles'
+  // stalls in SYSTEM (`job.loop_stalled` is there), listed BEFORE the support route below.
+  { prefix: 'support.assistant.', category: 'SYSTEM' },
+  // The support AI's provider health (`credential-alert.ts`, `support-ai-chain.ts`) is the
+  // SUPPORT_AI role's operation, not a customer conversation: SYSTEM, like its stall above.
+  { prefix: 'support.ai_provider.', category: 'SYSTEM' },
+  // Support conversations: a Telegram Business update that failed, a business connection
+  // that is unusable, a hand-off owed (FIX-03, batch 2026-10-10; they used to fall through
+  // to SYSTEM).
+  { prefix: 'support.', category: 'BOT' },
   // Failures nobody anticipated: an unhandled exception, an error the API answered.
   { prefix: 'internal.', category: 'ERRORS' },
   { prefix: 'http.', category: 'ERRORS' },
