@@ -157,6 +157,147 @@ const EMPTY_COUNTS: BroadcastCounts = {
   pinFailed: 0,
 };
 
+/*
+ * FIX-13 — why discovery matches the bot as a RANGE (`BETWEEN x AND x`) and orders it FIRST,
+ * when it is an equality in meaning. (The claim no longer does: see `claimDueQuery`.)
+ *
+ * It probes one bot's PENDING rows of one SENDING broadcast, first by customer. Three
+ * indexes can hand those rows out in customer order: `broadcast_recipients_due_idx` (tenant,
+ * bot, broadcast, customer — PENDING only), `broadcast_recipients_state_idx` (tenant,
+ * broadcast, state, customer) and the primary key (tenant, broadcast, customer). Through the
+ * primary key the probe walks every row the broadcast has already RESOLVED (sent, failed,
+ * skipped …) before it reaches a waiting one, because sends go out in customer order — a
+ * walk that grows with the broadcast's progress, on every pass. With an equality on the bot
+ * the three paths cost almost the same to the planner, and on a single-bot installation (one
+ * distinct bot in the statistics, so the bot predicate looks free) it was measured choosing
+ * the primary key. As a range ordered first, only `due_idx` can return rows in the requested
+ * order without a sort; the other two would have to sort every candidate row, so the planner
+ * cannot prefer them. `BETWEEN x AND x` is `= x` for a non-null id, so the answer is
+ * unchanged. The plan test pins it for discovery (reverting to `= bi.id` there reads the
+ * resolved rows and fails it).
+ */
+
+/**
+ * The dispatcher's discovery: which of a tenant's bots have a due recipient in a SENDING
+ * broadcast. Exported, with `claimDueQuery`, so the plan test EXPLAINs the query that runs.
+ *
+ * Driven from the tenant's SENDING broadcasts (FIX-13): for each bot (a handful of rows) and
+ * each sending broadcast (a handful more), ONE ordered probe of `broadcast_recipients_due_idx`
+ * that stops at the first due row. The previous shape asked the recipients table first and
+ * joined the broadcast's state afterwards, so every PENDING row of a PAUSED broadcast was
+ * read and discarded every second when the planner chose a hash join — measured 180 ms (and
+ * 340–450 ms in the FIX-13 audit) at a few hundred thousand rows, a few ms when it chose a
+ * bitmap scan, against well under a millisecond here either way. The `ORDER BY` is for the PLAN, not the answer: it
+ * is what makes the range above exclude the other indexes, and an unordered `LIMIT 1` with
+ * an equality on the bot was measured as a sequential scan of the whole table (460k rows)
+ * for a bot with no due row.
+ */
+export function dueBotsQuery(tenantId: string, now: Date): SQL {
+  const at = sql`${now.toISOString()}::timestamptz`;
+  return sql`SELECT bi.id FROM bot_instances bi
+       WHERE bi.tenant_id = ${tenantId}::uuid
+         AND EXISTS (
+           SELECT 1 FROM broadcasts b
+            CROSS JOIN LATERAL (
+              SELECT 1 FROM broadcast_recipients r
+               WHERE r.tenant_id = b.tenant_id
+                 AND r.bot_instance_id BETWEEN bi.id AND bi.id
+                 AND r.broadcast_id = b.id AND r.state = 'PENDING'
+                 AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= ${at})
+                 AND (r.lease_until IS NULL OR r.lease_until <= ${at})
+               ORDER BY r.bot_instance_id, r.customer_id
+               LIMIT 1) due
+            WHERE b.tenant_id = bi.tenant_id AND b.state = 'SENDING')`;
+}
+
+/**
+ * The claim's statement: up to `take` of one bot's due recipients leased, run by
+ * `claimForBot` under the bot's pacing lock.
+ *
+ * Driven from the tenant's SENDING broadcasts (FIX-13), never from the bot's recipients: each
+ * sending broadcast offers its first `take` due rows of this bot, by customer, and the sort
+ * keeps the first `take` of those. The first k of a union of per-broadcast first-k lists IS
+ * the first k overall, so the order — and with it the fairness between one bot's broadcasts —
+ * is exactly the old `ORDER BY broadcast_id, customer_id`; what changed is that a PAUSED
+ * broadcast sorting ahead is no longer walked row by row (measured 540 ms at 250k rows, now
+ * under a millisecond).
+ *
+ * Two steps, so that only the rows the claim KEEPS are locked. `candidates` chooses without
+ * locking: a per-broadcast `FOR UPDATE` inside the lateral would lock up to `take` rows of
+ * EVERY sending broadcast before the global `LIMIT` dropped all but `take` of them — 20,000
+ * row locks for 1,000 sending broadcasts, each blocking a cancel or a stamp until commit.
+ * `due` then locks just those (at most `take`) rows, `SKIP LOCKED`, and re-checks under the
+ * lock everything that made them due — PENDING, due, unleased, the bot, the tenant, a
+ * SENDING broadcast — because a candidate read from the snapshot may have been stamped,
+ * leased or resolved since. A row lost to that re-check is simply not claimed this pass
+ * (the claim may come back short, never wrong); at-most-once rests on the lock and the
+ * re-check here, and on the stamp's own conditions after it.
+ *
+ * The plan, measured with 1,000 sending broadcasts (550k recipient rows, 250k of them PENDING
+ * in paused broadcasts sorting first): 550–830 ms and 20,000 row locks per claim before,
+ * 1.5–2.3 ms and 20 locks now. Three choices make it:
+ * - The sort is by `b.id`, the broadcast's own column, so the broadcasts come presorted from
+ *   their primary key and an incremental sort stops after the first broadcasts that fill
+ *   `take` — not one probe per sending broadcast and a sort of all of their offers.
+ * - Within a broadcast the order is `customer_id` alone, under an EQUALITY on the bot, so
+ *   `broadcast_recipients_state_idx` (tenant, broadcast, state, customer) and `due_idx` both
+ *   hand rows out in that order without a sort and the `LIMIT` stops the probe; the planner
+ *   picks between them by the bot's statistics (state_idx for a bot owning the rows, due_idx
+ *   for one that owns few). Ordering by the bot as a range, as discovery does, made the
+ *   planner sort every PENDING row of each probed broadcast.
+ * - The primary key would also return customer order, but tests `state` only as a filter and
+ *   would walk the broadcast's resolved rows first; the plan test puts thousands of resolved
+ *   rows ahead of the waiting ones and bounds the rows read, so that choice fails it.
+ */
+export function claimDueQuery(input: {
+  readonly tenantId: string;
+  readonly botInstanceId: string;
+  readonly now: Date;
+  readonly leaseUntil: Date;
+  readonly take: number;
+}): SQL {
+  const { tenantId, take } = input;
+  const at = sql`${input.now.toISOString()}::timestamptz`;
+  const bot = sql`${input.botInstanceId}::uuid`;
+  return sql`
+  WITH candidates AS MATERIALIZED (
+      SELECT b.id AS broadcast_id, d.customer_id
+        FROM broadcasts b
+       CROSS JOIN LATERAL (
+         SELECT r2.customer_id
+           FROM broadcast_recipients r2
+          WHERE r2.tenant_id = ${tenantId}::uuid AND r2.bot_instance_id = ${bot}
+            AND r2.broadcast_id = b.id AND r2.state = 'PENDING'
+            AND (r2.next_attempt_at IS NULL OR r2.next_attempt_at <= ${at})
+            AND (r2.lease_until IS NULL OR r2.lease_until <= ${at})
+          ORDER BY r2.customer_id
+          LIMIT ${take}
+       ) d
+       WHERE b.tenant_id = ${tenantId}::uuid AND b.state = 'SENDING'
+       ORDER BY b.id, d.customer_id
+       LIMIT ${take}
+  ), due AS (
+      SELECT r3.tenant_id, r3.broadcast_id, r3.customer_id
+        FROM candidates c
+        JOIN broadcast_recipients r3
+          ON r3.tenant_id = ${tenantId}::uuid AND r3.broadcast_id = c.broadcast_id
+         AND r3.customer_id = c.customer_id
+       WHERE r3.bot_instance_id = ${bot} AND r3.state = 'PENDING'
+         AND (r3.next_attempt_at IS NULL OR r3.next_attempt_at <= ${at})
+         AND (r3.lease_until IS NULL OR r3.lease_until <= ${at})
+         AND EXISTS (SELECT 1 FROM broadcasts b3
+                      WHERE b3.tenant_id = r3.tenant_id AND b3.id = r3.broadcast_id
+                        AND b3.state = 'SENDING')
+         FOR UPDATE OF r3 SKIP LOCKED
+  )
+  UPDATE broadcast_recipients r
+     SET lease_until = ${input.leaseUntil.toISOString()}::timestamptz, updated_at = ${at}
+    FROM due
+   WHERE r.tenant_id = due.tenant_id AND r.broadcast_id = due.broadcast_id
+     AND r.customer_id = due.customer_id
+     RETURNING r.broadcast_id, r.customer_id, r.bot_instance_id, r.chat_id, r.attempts`;
+}
+
 /**
  * The broadcast tables (round N). Every query carries the tenant; every state change is a
  * conditional UPDATE naming its `from` states; nothing here talks to Telegram.
@@ -825,23 +966,7 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
 
   async botsWithWork(scope: TenantContext, now: Date) {
     const tenantId = requireTenantId(scope);
-    const at = sql`${now.toISOString()}::timestamptz`;
-    /*
-     * The tenant's bots (a handful of rows), each asked whether ONE due recipient exists — an
-     * EXISTS that stops at the first row `broadcast_recipients_due_idx` yields, rather than a
-     * DISTINCT over every waiting recipient every second.
-     */
-    const rows = await this.rows<{ id: string }>(
-      sql`SELECT bi.id FROM bot_instances bi
-           WHERE bi.tenant_id = ${tenantId}::uuid
-             AND EXISTS (
-               SELECT 1 FROM broadcast_recipients r
-                 JOIN broadcasts b ON b.tenant_id = r.tenant_id AND b.id = r.broadcast_id
-                WHERE r.tenant_id = bi.tenant_id AND r.bot_instance_id = bi.id
-                  AND r.state = 'PENDING' AND b.state = 'SENDING'
-                  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= ${at})
-                  AND (r.lease_until IS NULL OR r.lease_until <= ${at}))`,
-    );
+    const rows = await this.rows<{ id: string }>(dueBotsQuery(tenantId, now));
     return rows.map((row) => row.id);
   }
 
@@ -892,24 +1017,15 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
         bot_instance_id: string;
         chat_id: string;
         attempts: number;
-      }>(sql`
-        UPDATE broadcast_recipients r
-           SET lease_until = ${input.leaseUntil.toISOString()}::timestamptz, updated_at = ${at}
-          FROM (
-            SELECT r2.tenant_id, r2.broadcast_id, r2.customer_id
-              FROM broadcast_recipients r2
-              JOIN broadcasts b ON b.tenant_id = r2.tenant_id AND b.id = r2.broadcast_id
-             WHERE r2.tenant_id = ${tenantId}::uuid AND r2.bot_instance_id = ${botInstanceId}::uuid
-               AND r2.state = 'PENDING' AND b.state = 'SENDING'
-               AND (r2.next_attempt_at IS NULL OR r2.next_attempt_at <= ${at})
-               AND (r2.lease_until IS NULL OR r2.lease_until <= ${at})
-             ORDER BY r2.broadcast_id, r2.customer_id
-             LIMIT ${take}
-             FOR UPDATE OF r2 SKIP LOCKED
-          ) due
-         WHERE r.tenant_id = due.tenant_id AND r.broadcast_id = due.broadcast_id
-           AND r.customer_id = due.customer_id
-     RETURNING r.broadcast_id, r.customer_id, r.bot_instance_id, r.chat_id, r.attempts`);
+      }>(
+        claimDueQuery({
+          tenantId,
+          botInstanceId,
+          now: input.now,
+          leaseUntil: input.leaseUntil,
+          take,
+        }),
+      );
       await tx.execute(sql`
         UPDATE broadcast_bot_pacing
            SET window_started_at = CASE WHEN ${fresh} THEN ${at} ELSE window_started_at END,
@@ -986,6 +1102,24 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
              SET state = 'SKIPPED', resolved_at = ${at}, lease_until = NULL,
                  error_code = ${errorCode}, updated_at = ${at}
            WHERE ${this.recipientKey(tenantId, recipient)} AND state = 'PENDING'
+       RETURNING customer_id`,
+      tx,
+    );
+    return rows.length === 1;
+  }
+
+  async release(
+    scope: TenantContext,
+    recipient: ClaimedRecipient,
+    now: Date,
+    tx: TransactionScope,
+  ) {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.rows<{ customer_id: string }>(
+      sql`UPDATE broadcast_recipients
+             SET lease_until = NULL, updated_at = ${now.toISOString()}::timestamptz
+           WHERE ${this.recipientKey(tenantId, recipient)} AND state = 'PENDING'
+             AND lease_until = ${recipient.leaseUntil.toISOString()}::timestamptz
        RETURNING customer_id`,
       tx,
     );
