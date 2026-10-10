@@ -3348,6 +3348,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     // CentralPay's browser return goes back to the tenant's bot (stored username, no call).
     botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
+    /*
+     * FIX10 R1: the longest one row may take — a provider call at its timeout (every
+     * provider's is TONPAYS_TIMEOUT_MS) and up to three Telegram calls around it (a
+     * receipt's getFile and file, the invoice screen's edit). The lease covers it.
+     */
+    rowBoundMs: TONPAYS_TIMEOUT_MS + 3 * config.NOTIFICATION_SEND_TIMEOUT_MS,
   });
   /*
    * TonPays Telegram (§8.2, §8.3): the customer's three commands — another card, the receipt

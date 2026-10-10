@@ -143,8 +143,24 @@ export const NO_PAYMENT_CARD_CODE = 'nexa.no_payment_card';
  */
 export const NO_PAYMENT_LINK_CODE = 'nexa.no_payment_link';
 
-/** How long a claimed row is held before another replica may take it. */
+/** How long a claimed row is held before another replica may take it (at least). */
 export const GATEWAY_CLAIM_LEASE_MS = 60_000;
+/**
+ * FIX10 R1: the longest ONE row of a lane may take — a provider call at its full timeout and
+ * the Telegram calls around it (a receipt's two downloads, the invoice screen's edit). This is
+ * the default; the container passes the bound its configured timeouts give (`rowBoundMs`).
+ * A lane STARTS a row only while its claim's lease still covers this bound from now, and gives
+ * the rest back; and the lease is never shorter than the bound plus the margin. Together they
+ * mean a row is never still being worked on when its lease runs out and another replica may
+ * claim it — which is what let a second replica call a live create UNKNOWN.
+ */
+export const GATEWAY_ROW_BOUND_MS = 45_000;
+export const GATEWAY_LEASE_MARGIN_MS = 15_000;
+
+export function gatewayClaimLeaseMs(rowBoundMs: number): number {
+  return Math.max(GATEWAY_CLAIM_LEASE_MS, rowBoundMs + GATEWAY_LEASE_MARGIN_MS);
+}
+
 /** Rows per pass, per queue. Small: every one of them is a call to a third party. */
 export const GATEWAY_CREATE_BATCH = 5;
 export const GATEWAY_INQUIRY_BATCH = 10; /** TonPays Telegram: card changes and receipt uploads per pass; review and window sweeps. */
@@ -350,6 +366,8 @@ export interface GatewayPaymentServiceDeps {
    * null. Absent, the return answers without a link.
    */
   readonly botLinkFor?: (scope: TenantContext) => Promise<string | null>;
+  /** FIX10 R1: `GATEWAY_ROW_BOUND_MS` from the configured timeouts; the default otherwise. */
+  readonly rowBoundMs?: number;
 }
 
 /** What one pass did, for the loop's log and for a test. Counts only; no identifiers. */
@@ -376,6 +394,12 @@ export interface GatewayPassReport {
    * A row's failure is isolated: the lane around it still did its work.
    */
   readonly rowFailures: number;
+  /**
+   * FIX10 R1: rows given back unprocessed because the lease no longer covered one more row
+   * (the next pass claims them), and rows whose fenced write found the lease taken over.
+   */
+  readonly leaseReleased: number;
+  readonly leaseLost: number;
   /**
    * FIX10 (Codex #268 A): LANES that threw this pass — a claim, a sweep, anything outside a
    * single row. The pass still runs every other lane, but a lane that failed did nothing, so
@@ -450,6 +474,19 @@ export interface GatewayCardFacts {
 export class GatewayPaymentService {
   constructor(private readonly deps: GatewayPaymentServiceDeps) {}
 
+  private rowBoundMs(): number {
+    return this.deps.rowBoundMs ?? GATEWAY_ROW_BOUND_MS;
+  }
+
+  private leaseMs(): number {
+    return gatewayClaimLeaseMs(this.rowBoundMs());
+  }
+
+  /** FIX10 R1: true while the claim's lease still covers one more row from now. */
+  private rowFitsLease(leaseUntil: Date): boolean {
+    return this.deps.clock.now().getTime() + this.rowBoundMs() <= leaseUntil.getTime();
+  }
+
   private actor(): ActorContext {
     return systemJobActor('gateway-payments', this.deps.ids.uuid() as CorrelationId);
   }
@@ -475,6 +512,8 @@ export class GatewayPaymentService {
       reviewsOpened: 0,
       held: 0,
       rowFailures: 0,
+      leaseReleased: 0,
+      leaseLost: 0,
       laneFailures: 0,
     };
     // A stopped tenant's rows simply wait, and nothing about them is sent anywhere.
@@ -526,20 +565,20 @@ export class GatewayPaymentService {
     report: { -readonly [K in keyof GatewayPassReport]: GatewayPassReport[K] },
   ): Promise<void> {
     const now = this.deps.clock.now();
-    const creationLease = new Date(now.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    const creationLease = new Date(now.getTime() + this.leaseMs());
     const creating = await this.deps.uow.run(scope, (tx) =>
-      this.deps.invoices.claimCreating(
-        scope,
-        now,
-        GATEWAY_CLAIM_LEASE_MS,
-        GATEWAY_CREATE_BATCH,
-        tx,
-      ),
+      this.deps.invoices.claimCreating(scope, now, this.leaseMs(), GATEWAY_CREATE_BATCH, tx),
     );
     for (const [index, claimed] of creating.entries()) {
+      if (!this.rowFitsLease(creationLease)) {
+        // FIX10 R1: no lease left for one more row; these go back for the next pass.
+        report.leaseReleased += creating.length - index;
+        await this.releaseUnreached(scope, 'CREATION', creating.slice(index), creationLease);
+        break;
+      }
       let result: Awaited<ReturnType<GatewayPaymentService['processCreation']>>;
       try {
-        result = await this.processCreation(scope, actor, claimed);
+        result = await this.processCreation(scope, actor, claimed, creationLease);
       } catch (error: unknown) {
         report.rowFailures += 1;
         await this.rowFailed(
@@ -562,6 +601,10 @@ export class GatewayPaymentService {
               ),
             ),
         );
+        continue;
+      }
+      if (result === 'LOST') {
+        report.leaseLost += 1;
         continue;
       }
       if (result === 'BUDGET') {
@@ -588,20 +631,26 @@ export class GatewayPaymentService {
     report: { -readonly [K in keyof GatewayPassReport]: GatewayPassReport[K] },
   ): Promise<void> {
     const inquiryNow = this.deps.clock.now();
-    const inquiryLease = new Date(inquiryNow.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    const inquiryLease = new Date(inquiryNow.getTime() + this.leaseMs());
     const due = await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.claimInquiries(
         scope,
         inquiryNow,
-        GATEWAY_CLAIM_LEASE_MS,
+        this.leaseMs(),
         GATEWAY_INQUIRY_BATCH,
         tx,
       ),
     );
     for (const [index, claimed] of due.entries()) {
+      if (!this.rowFitsLease(inquiryLease)) {
+        // FIX10 R1: no lease left for one more row; these go back for the next pass.
+        report.leaseReleased += due.length - index;
+        await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
+        break;
+      }
       let result: Awaited<ReturnType<GatewayPaymentService['processInquiry']>>;
       try {
-        result = await this.processInquiry(scope, actor, claimed);
+        result = await this.processInquiry(scope, actor, claimed, inquiryLease);
       } catch (error: unknown) {
         report.rowFailures += 1;
         const { invoice } = claimed;
@@ -625,6 +674,11 @@ export class GatewayPaymentService {
             ),
           ),
         );
+        continue;
+      }
+      if (result === 'LOST') {
+        // FIX10 R1: another replica holds the row now; it records and decides, not this pass.
+        report.leaseLost += 1;
         continue;
       }
       if (result === 'BUDGET') {
@@ -861,7 +915,9 @@ export class GatewayPaymentService {
     scope: TenantContext,
     actor: ActorContext,
     claimed: ClaimedGatewayInvoice,
-  ): Promise<'created' | 'createFailed' | 'createUnknown' | 'createDeferred' | 'BUDGET'> {
+    /** FIX10 R1: this pass's claim on the row, which the send stamp is fenced on. */
+    leaseUntil: Date,
+  ): Promise<'created' | 'createFailed' | 'createUnknown' | 'createDeferred' | 'BUDGET' | 'LOST'> {
     const { invoice } = claimed;
     const now = this.deps.clock.now();
 
@@ -938,10 +994,35 @@ export class GatewayPaymentService {
     const presentation =
       descriptor.invoiceCredential === 'BOT_TOKEN' ? await this.deps.presentation(scope) : null;
 
+    /*
+     * FIX10 R1: the stamp is fenced on this pass's lease, and it HOLDS the row for the row
+     * bound (a provider call at its full timeout) plus a whole lease from now — so no other
+     * replica can claim it, find the stamp and call a create still in flight UNKNOWN, even one
+     * whose worker stalled a lease past its timeout. Only after that is an unanswered stamp
+     * UNKNOWN, as before. Not stamped: the lease was taken over (or the row decided) and
+     * nothing was sent.
+     */
+    /*
+     * Codex #270: the hold is measured from a clock read NOW, not from `now` (read before the
+     * credential, customer, callback and template steps above). A setup that stalled past
+     * `rowBound + lease` would otherwise pass the lease-token fence (nobody reclaimed it) and
+     * write a hold already expired — and the call below would start while another replica
+     * could claim the row and call the live create UNKNOWN.
+     */
+    const stampAt = this.deps.clock.now();
     const stamped = await this.deps.uow.run(scope, (tx) =>
-      this.deps.invoices.markCreationSent(scope, invoice.paymentId, now, tx),
+      this.deps.invoices.markCreationSent(
+        scope,
+        invoice.paymentId,
+        stampAt,
+        {
+          claimedUntil: leaseUntil,
+          holdUntil: new Date(stampAt.getTime() + this.rowBoundMs() + this.leaseMs()),
+        },
+        tx,
+      ),
     );
-    if (!stamped) return 'createUnknown';
+    if (!stamped) return 'LOST';
 
     const calledAt = this.deps.clock.now();
     const outcome = await adapter.createInvoice(apiKey, {
@@ -1132,8 +1213,14 @@ export class GatewayPaymentService {
     scope: TenantContext,
     actor: ActorContext,
     claimed: ClaimedGatewayInvoice,
+    /**
+     * FIX10 R1: this pass's claim. Every record of an answer is fenced on it, so a replica
+     * whose lease ran out (and whose row another replica took) never overwrites the newer
+     * evidence with its older answer, and acts on nothing it could not record.
+     */
+    leaseUntil: Date,
   ): Promise<
-    'OPEN' | 'SETTLED' | 'UNSUCCESSFUL' | 'LATE' | 'ERROR' | 'BUDGET' | 'REVIEW' | 'HELD'
+    'OPEN' | 'SETTLED' | 'UNSUCCESSFUL' | 'LATE' | 'ERROR' | 'BUDGET' | 'REVIEW' | 'HELD' | 'LOST'
   > {
     const { invoice } = claimed;
     const now = this.deps.clock.now();
@@ -1162,7 +1249,7 @@ export class GatewayPaymentService {
      * No call, no budget: this is the settlement the webhook's own attempt did not finish.
      */
     if (PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].approval === 'RECORDED_PAYMENT') {
-      return this.settleRecordedClaim(scope, actor, invoice, eligible, expiresAt);
+      return this.settleRecordedClaim(scope, actor, invoice, eligible, expiresAt, leaseUntil);
     }
 
     const adapter = this.deps.adapters(invoice.provider);
@@ -1183,7 +1270,7 @@ export class GatewayPaymentService {
       (postDeadline && invoice.postDeadlineInquiries >= POST_DEADLINE_INQUIRY_MAX && !operatorAsked)
     ) {
       // Nothing that could be asked, or nothing more to ask. Stop scheduling.
-      await this.deps.uow.run(scope, (tx) =>
+      const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
           invoice.paymentId,
@@ -1196,12 +1283,13 @@ export class GatewayPaymentService {
             adoptInvoiceId: null,
             nextInquiryAt: null,
             postDeadline: false,
+            claimedUntil: leaseUntil,
           },
           now,
           tx,
         ),
       );
-      return 'ERROR';
+      return kept ? 'ERROR' : 'LOST';
     }
 
     if (
@@ -1249,7 +1337,7 @@ export class GatewayPaymentService {
         outcome.kind === 'RATE_LIMITED' && next !== null
           ? new Date(Math.max(next.getTime(), at.getTime() + 60_000))
           : next;
-      await this.deps.uow.run(scope, (tx) =>
+      const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
           invoice.paymentId,
@@ -1265,11 +1353,13 @@ export class GatewayPaymentService {
             nextInquiryAt:
               retry !== null && expiresAt !== null && retry >= expiresAt ? null : retry,
             postDeadline,
+            claimedUntil: leaseUntil,
           },
           at,
           tx,
         ),
       );
+      if (!kept) return 'LOST';
       if (outcome.kind === 'CONFIGURATION') await this.misconfigured(scope, invoice, outcome.code);
       return 'ERROR';
     }
@@ -1279,7 +1369,7 @@ export class GatewayPaymentService {
      * attempt, whatever it says. It is recorded and never acted on.
      */
     if (outcome.invoiceId !== invoiceId || outcome.orderId !== invoice.providerOrderId) {
-      await this.deps.uow.run(scope, (tx) =>
+      const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
           invoice.paymentId,
@@ -1292,11 +1382,13 @@ export class GatewayPaymentService {
             adoptInvoiceId: null,
             nextInquiryAt: null,
             postDeadline,
+            claimedUntil: leaseUntil,
           },
           at,
           tx,
         ),
       );
+      if (!kept) return 'LOST';
       await this.identityMismatch(scope, invoice, 'INQUIRY');
       return 'ERROR';
     }
@@ -1312,7 +1404,15 @@ export class GatewayPaymentService {
     let verdict = outcome.verdict;
     let mismatchReason = outcome.mismatchReason ?? null;
     const reference = outcome.providerReference ?? null;
-    await this.deps.uow.run(scope, async (tx) => {
+    const kept = await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * FIX10 R1: first, that the claim is still this pass's — locked, so it cannot change
+       * before this transaction commits. Not ours: nothing is written, not a bound reference,
+       * not a resolved upload, not the answer; the replica that holds the row decides.
+       */
+      if (!(await this.deps.invoices.holdsInquiryClaim(scope, invoice.paymentId, leaseUntil, tx))) {
+        return false;
+      }
       if (reference !== null && (verdict === 'APPROVED' || verdict === 'MISMATCH')) {
         const bound = await this.deps.invoices.bindProviderReference(
           scope,
@@ -1368,11 +1468,14 @@ export class GatewayPaymentService {
           postDeadline,
           // The payment this identity-checked answer described (NOWPayments): followed next.
           hintedPaymentId: outcome.providerPaymentId ?? null,
+          // Unfenced: the claim was checked and locked at the top of this transaction.
         },
         at,
         tx,
       );
+      return true;
     });
+    if (!kept) return 'LOST';
 
     if (verdict === 'OPEN') {
       /*
@@ -1538,7 +1641,8 @@ export class GatewayPaymentService {
     invoice: GatewayInvoiceRecord,
     eligible: boolean,
     expiresAt: Date | null,
-  ): Promise<'OPEN' | 'SETTLED' | 'LATE' | 'ERROR'> {
+    leaseUntil: Date,
+  ): Promise<'OPEN' | 'SETTLED' | 'LATE' | 'ERROR' | 'LOST'> {
     const now = this.deps.clock.now();
     const recorded = invoice.providerChargeId !== null && invoice.providerPaid === true;
     /*
@@ -1557,7 +1661,7 @@ export class GatewayPaymentService {
       ? ((eligible && expiresAt !== null ? this.nextInquiryAt(invoice, now, expiresAt) : null) ??
         new Date(now.getTime() + RECORDED_OUTCOME_RETRY_MS))
       : null;
-    await this.deps.uow.run(scope, (tx) =>
+    const kept = await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.recordInquiry(
         scope,
         invoice.paymentId,
@@ -1570,11 +1674,14 @@ export class GatewayPaymentService {
           adoptInvoiceId: null,
           nextInquiryAt: retry,
           postDeadline: false,
+          claimedUntil: leaseUntil,
         },
         now,
         tx,
       ),
     );
+    // FIX10 R1: another replica took the row; it settles it, not this pass.
+    if (!kept) return 'LOST';
     if (!recorded) return 'OPEN';
     // A recorded payment carries no provider reference, so it is never held here.
     const settled = await this.settleApproved(
@@ -1825,17 +1932,30 @@ export class GatewayPaymentService {
   private async runCardChanges(
     scope: TenantContext,
     actor: ActorContext,
-    report: { rowFailures: number },
+    report: { rowFailures: number; leaseReleased: number },
   ): Promise<{ readonly done: number; readonly budgetExhausted: boolean }> {
     const cards = this.deps.cardTransfer;
     if (cards === undefined) return { done: 0, budgetExhausted: false };
     const now = this.deps.clock.now();
-    const lease = new Date(now.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    const lease = new Date(now.getTime() + this.leaseMs());
     const claimed = await this.deps.uow.run(scope, (tx) =>
-      cards.claimCardChanges(scope, now, GATEWAY_CLAIM_LEASE_MS, GATEWAY_CARD_CHANGE_BATCH, tx),
+      cards.claimCardChanges(scope, now, this.leaseMs(), GATEWAY_CARD_CHANGE_BATCH, tx),
     );
     let done = 0;
     for (const [index, row] of claimed.entries()) {
+      if (!this.rowFitsLease(lease)) {
+        // FIX10 R1: no lease left for one more row; these go back for the next pass.
+        report.leaseReleased += claimed.length - index;
+        await this.deps.uow.run(scope, (tx) =>
+          cards.releaseCardChangeClaims(
+            scope,
+            claimed.slice(index).map((one) => one.row.id),
+            lease,
+            tx,
+          ),
+        );
+        break;
+      }
       let result: 'DONE' | 'BUDGET';
       try {
         result = await this.processCardChange(scope, actor, cards, row);
@@ -2029,17 +2149,30 @@ export class GatewayPaymentService {
   private async runReceipts(
     scope: TenantContext,
     actor: ActorContext,
-    report: { rowFailures: number },
+    report: { rowFailures: number; leaseReleased: number },
   ): Promise<{ readonly done: number; readonly budgetExhausted: boolean }> {
     const cards = this.deps.cardTransfer;
     if (cards === undefined) return { done: 0, budgetExhausted: false };
     const now = this.deps.clock.now();
-    const lease = new Date(now.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    const lease = new Date(now.getTime() + this.leaseMs());
     const claimed = await this.deps.uow.run(scope, (tx) =>
-      cards.claimSubmissions(scope, now, GATEWAY_CLAIM_LEASE_MS, GATEWAY_RECEIPT_BATCH, tx),
+      cards.claimSubmissions(scope, now, this.leaseMs(), GATEWAY_RECEIPT_BATCH, tx),
     );
     let done = 0;
     for (const [index, row] of claimed.entries()) {
+      if (!this.rowFitsLease(lease)) {
+        // FIX10 R1: no lease left for one more row; these go back for the next pass.
+        report.leaseReleased += claimed.length - index;
+        await this.deps.uow.run(scope, (tx) =>
+          cards.releaseSubmissionClaims(
+            scope,
+            claimed.slice(index).map((one) => one.row.id),
+            lease,
+            tx,
+          ),
+        );
+        break;
+      }
       let result: 'DONE' | 'BUDGET';
       try {
         result = await this.processReceipt(scope, actor, cards, row);
