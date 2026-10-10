@@ -70,6 +70,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { Cdp } from '../web-shots/cdp.mjs';
+import { failureLine } from './redact.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 
@@ -432,11 +433,18 @@ async function main() {
      * element to land on ("no link") from the dashboard. The rail draws every link the
      * actor may see; what is measured is the page behind the link, not the accordion.
      */
-    const login = await send('Runtime.evaluate', {
-      expression: `localStorage.setItem('nexa.sidebar', 'collapsed'), fetch('/api/admin/v1/auth/login', { method: 'POST', credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username: ${JSON.stringify(o.username)}, password: ${JSON.stringify(process.env.NEXA_BENCH_PASSWORD)} }) })
-        .then((r) => r.status)`,
+    // The credentials are ARGUMENTS, never interpolated into page source a CDP error can echo.
+    const page = await send('Runtime.evaluate', { expression: 'globalThis' });
+    const login = await send('Runtime.callFunctionOn', {
+      objectId: page.result.objectId,
+      functionDeclaration: `function (username, password) {
+        localStorage.setItem('nexa.sidebar', 'collapsed');
+        return fetch('/api/admin/v1/auth/login', { method: 'POST', credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username, password }) })
+          .then((r) => r.status);
+      }`,
+      arguments: [{ value: o.username }, { value: process.env.NEXA_BENCH_PASSWORD }],
       awaitPromise: true,
       returnByValue: true,
     });
@@ -629,6 +637,6 @@ function summarise(list) {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(failureLine(error, process.env.NEXA_BENCH_PASSWORD));
   process.exit(1);
 });
