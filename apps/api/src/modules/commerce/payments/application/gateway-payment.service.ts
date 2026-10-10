@@ -1454,6 +1454,23 @@ export class GatewayPaymentService {
         outcome.kind === 'RATE_LIMITED' && next !== null
           ? new Date(Math.max(next.getTime(), at.getTime() + INQUIRY_RATE_LIMIT_RETRY_MS))
           : next;
+      const scheduled = retry !== null && expiresAt !== null && retry >= expiresAt ? null : retry;
+      /*
+       * Codex on #277 (#269): an approval already recorded on this row whose decision never
+       * committed is asked again so that its decision can be made — and past the deadline
+       * `next` is null. A retry that met a timeout, a 429, a configuration refusal or any
+       * other non-answer then cleared the schedule, leaving a provider-paid attempt with
+       * neither a settlement nor a LATE_COMPLETION for ever. So such a row stays scheduled
+       * through a non-answer. This is NOT an approval: the error is recorded as an error,
+       * the recorded approval is the earlier inquiry's, and only a later inquiry's answer
+       * leads to a decision. Bounded by the same allowance: this inquiry is counted as a
+       * post-deadline one, and the bound above stops the row at
+       * `POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX`.
+       */
+      const nextInquiryAt =
+        scheduled === null && approvalUndecided
+          ? new Date(at.getTime() + RECORDED_OUTCOME_RETRY_MS)
+          : scheduled;
       const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
@@ -1467,8 +1484,7 @@ export class GatewayPaymentService {
             // failed: the attempt's own state stands, and the deadline still decides.
             errorCode: outcome.code,
             adoptInvoiceId: null,
-            nextInquiryAt:
-              retry !== null && expiresAt !== null && retry >= expiresAt ? null : retry,
+            nextInquiryAt,
             postDeadline,
             claimedUntil: leaseUntil,
           },
