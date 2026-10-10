@@ -181,6 +181,9 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- Mirza PR4: legacy wallet debts, before the runs and customers they name.
        legacy_wallet_debts,
        -- Migration P4: the import map before the runs it names.
+       -- Mirza .nxpkg importer: the history archive, then the imports it names, before the
+       -- legacy runs an import names.
+       legacy_history_records, legacy_nxpkg_imports,
        legacy_import_map, legacy_import_runs,
        -- Migration P7: the run inputs, before the runs they name.
        legacy_import_run_inputs, legacy_read_set_runs,

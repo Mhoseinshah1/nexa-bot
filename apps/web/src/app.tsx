@@ -60,6 +60,7 @@ import { LegacyInvoicesPage } from './pages/legacy-invoices';
 import { LegacyDebtsPage } from './pages/legacy-debts';
 import { LegacyServicesPage } from './pages/legacy-services';
 import { LegacyCutoverPage } from './pages/legacy-cutover';
+import { LegacyMigrationPage } from './pages/legacy-migration';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -199,6 +200,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/legacy-services',
   // Mirza PR6: the owner's cutover approval of one legacy snapshot.
   '/legacy-cutover',
+  // Mirza .nxpkg importer: the Fresh Migration of one converter package.
+  '/legacy-migration',
   '/extra-devices',
   '/service-locations',
   '/orders',
@@ -372,6 +375,7 @@ export function resolve(
           mayViewPayments={may('payments.view')}
           mayViewTickets={may('tickets.view')}
           mayViewBusinessChats={may('business_chats.view')}
+          mayViewLegacyHistory={may('legacy.history.view')}
           denied={!may('users.view')}
         />
       ),
@@ -491,6 +495,21 @@ export function resolve(
     };
   }
   // Mirza PR6: the owner's cutover approval (an approval imports nothing; the import reads it).
+  // Mirza .nxpkg importer: upload, verify, dry run, approve, import (the work is the server's).
+  if (route.path === '/legacy-migration') {
+    return {
+      element: (
+        <LegacyMigrationPage
+          denied={!may('legacy.migration.view')}
+          mayManage={may('legacy.migration.manage')}
+          mayApply={may('legacy.migration.apply')}
+          mayViewPanels={may('panels.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.lmg_title') }],
+      title: t('web.lmg_title'),
+    };
+  }
   if (route.path === '/legacy-cutover') {
     return {
       element: (

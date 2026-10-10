@@ -32,6 +32,8 @@
     "start:recovery": "node dist/main.recovery.js",
     "start:provisioner": "node dist/main.provisioner.js",
     "start:assistant": "node dist/main.assistant.js",
+    "start:migration": "node dist/main.migration.js",
+    "migration:dev": "tsx src/main.migration.ts",
     "support-ai-eval": "node dist/support-ai-eval.cli.js",
     "support-ai-eval:dev": "tsx src/support-ai-eval.cli.ts"
   },

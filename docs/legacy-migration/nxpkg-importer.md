@@ -40,42 +40,42 @@ NEXA importer that consumes it. Everything here **extends** the existing legacy 
 
 ## 1. Package requirements (fail closed)
 
-| Check | Code |
-|---|---|
-| container: magic, header canonical JSON, AES-256-GCM STREAM, key check, final chunk, no trailing bytes | `NXPKG_CONTAINER_INVALID`, `NXPKG_WRONG_KEY`, `NXPKG_TAMPERED` |
-| payload ZIP: deterministic, no traversal, sizes bounded, `checksums.json` matches every file | `NXPKG_TAMPERED` |
-| `manifest.package_schema == "nexa.migration.mirza"`, major `1`, `package_schema_version >= 1.4.0` | `NXPKG_UNSUPPORTED_VERSION` |
-| `manifest.readiness == "ready"` and no blockers | `NXPKG_NOT_READY` |
-| `source/catalog.json` + `source/tables/{user,invoice,product}.jsonl` present (contract 1.4.0) | `NXPKG_SOURCE_SNAPSHOT_MISSING` |
-| `money.declared_unit == "toman"`, `currency == "IRT"`, `rescaled == false` | `NXPKG_MONEY_UNIT` |
-| every `legacy_panel_target.target` has `provider_type == "rickpanel"` | `PANEL_TARGET_MISMATCH` |
-| any record carrying a live-state flag set to `true` (`provision`, `affects_wallet`, `creates_payment`, …) | `NXPKG_LIVE_FLAG` |
+| Check                                                                                                     | Code                                                           |
+| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| container: magic, header canonical JSON, AES-256-GCM STREAM, key check, final chunk, no trailing bytes    | `NXPKG_CONTAINER_INVALID`, `NXPKG_WRONG_KEY`, `NXPKG_TAMPERED` |
+| payload ZIP: deterministic, no traversal, sizes bounded, `checksums.json` matches every file              | `NXPKG_TAMPERED`                                               |
+| `manifest.package_schema == "nexa.migration.mirza"`, major `1`, `package_schema_version >= 1.4.0`         | `NXPKG_UNSUPPORTED_VERSION`                                    |
+| `manifest.readiness == "ready"` and no blockers                                                           | `NXPKG_NOT_READY`                                              |
+| `source/catalog.json` + `source/tables/{user,invoice,product}.jsonl` present (contract 1.4.0)             | `NXPKG_SOURCE_SNAPSHOT_MISSING`                                |
+| `money.declared_unit == "toman"`, `currency == "IRT"`, `rescaled == false`                                | `NXPKG_MONEY_UNIT`                                             |
+| every `legacy_panel_target.target` has `provider_type == "rickpanel"`                                     | `PANEL_TARGET_MISMATCH`                                        |
+| any record carrying a live-state flag set to `true` (`provision`, `affects_wallet`, `creates_payment`, …) | `NXPKG_LIVE_FLAG`                                              |
 
 ## 2. Contract additions (packages/contracts)
 
-* `LegacySourceEngine` gains `'NXPKG'` (CHECKs in migrations 0193, 0219, 0223 extended by a new
+- `LegacySourceEngine` gains `'NXPKG'` (CHECKs in migrations 0193, 0219, 0223 extended by a new
   migration).
-* Permissions (owner-only grant migration, like `0235_legacy_cutover_grants.sql`):
-  * `legacy.migration.view` (MEDIUM) — see imports, reports;
-  * `legacy.migration.manage` (HIGH) — upload, give the key, choose the panel, request a dry run;
-  * `legacy.migration.apply` (CRITICAL) — approve a dry run and start the import;
-  * `legacy.history.view` (MEDIUM) — the read-only Mirza history card on a customer.
-* `LEGACY_NXPKG_IMPORT_STATUSES`: `UPLOADED, VERIFYING, VERIFIED, VERIFY_FAILED,
-  DRY_RUN_REQUESTED, DRY_RUN_RUNNING, DRY_RUN_DONE, DRY_RUN_FAILED, APPROVED, APPLYING,
-  COMPLETED, COMPLETED_WITH_DISCREPANCY, FAILED, CANCELLED`.
-* `LEGACY_HISTORY_RECORD_TYPES`: the closed set of archive record types (§5).
+- Permissions (owner-only grant migration, like `0235_legacy_cutover_grants.sql`):
+  - `legacy.migration.view` (MEDIUM) — see imports, reports;
+  - `legacy.migration.manage` (HIGH) — upload, give the key, choose the panel, request a dry run;
+  - `legacy.migration.apply` (CRITICAL) — approve a dry run and start the import;
+  - `legacy.history.view` (MEDIUM) — the read-only Mirza history card on a customer.
+- `LEGACY_NXPKG_IMPORT_STATUSES`: `UPLOADED, VERIFYING, VERIFIED, VERIFY_FAILED,
+DRY_RUN_REQUESTED, DRY_RUN_RUNNING, DRY_RUN_DONE, DRY_RUN_FAILED, APPROVED, APPLYING,
+COMPLETED, COMPLETED_WITH_DISCREPANCY, FAILED, CANCELLED`.
+- `LEGACY_HISTORY_RECORD_TYPES`: the closed set of archive record types (§5).
 
 ## 3. Source adapter
 
 `legacy-importer/infrastructure/nxpkg-legacy-source.ts` implements `LegacySourceConnector` /
 `LegacySourceSession` over a decrypted package directory, like `fixture-legacy-source.ts`:
 
-* `descriptor = {engine: 'NXPKG', version: '<converter version> / contract <x.y.z>',
-  readOnlyProof: {kind: 'NOT_APPLICABLE'}}`;
-* `columns()`, `tables()`, `catalogColumns()`, `countRows()` from `source/catalog.json`;
-* `rows()` / `readSetRows()` from `source/tables/<table>.jsonl`, in primary-key byte order,
+- `descriptor = {engine: 'NXPKG', version: '<converter version> / contract <x.y.z>',
+readOnlyProof: {kind: 'NOT_APPLICABLE'}}`;
+- `columns()`, `tables()`, `catalogColumns()`, `countRows()` from `source/catalog.json`;
+- `rows()` / `readSetRows()` from `source/tables/<table>.jsonl`, in primary-key byte order,
   refusing a table outside the snapshot or a column the snapshot does not carry;
-* `aggregate()` throws `EvidenceUnsupported`; `syntheticMarker()` returns the package's synthetic
+- `aggregate()` throws `EvidenceUnsupported`; `syntheticMarker()` returns the package's synthetic
   marker (`source/catalog.json.synthetic_marker`, null for a real backup).
 
 CLI: `legacy-import ... --source nxpkg:<path> --package-key-env <NAME>` (key never on argv).
@@ -89,17 +89,17 @@ DRY_RUN_DONE → APPROVED (binds dry_run_sha256) → APPLYING → COMPLETED | CO
 any non-terminal → CANCELLED
 ```
 
-* One non-terminal import per tenant (partial unique index).
-* Worker lease: `claimed_by`, `lease_until`; a crashed worker's lease expires and the next one
+- One non-terminal import per tenant (partial unique index).
+- Worker lease: `claimed_by`, `lease_until`; a crashed worker's lease expires and the next one
   resumes — APPLYING resumes the same `legacy_import_runs` row (`importer.md` §6 resume) and the
   history ingest continues by idempotency key.
-* APPLY re-checks: fresh target (§6), panel binding (§1), the package sha256 and the approved
+- APPLY re-checks: fresh target (§6), panel binding (§1), the package sha256 and the approved
   dry-run digest. Any difference → `FAILED` with a code, nothing written.
-* After COMPLETED the worker requests a standard backup through the existing backup service
+- After COMPLETED the worker requests a standard backup through the existing backup service
   (`container.backup.run('MANUAL')`, the same call `backup.cli.ts` makes; a system job may not
   call `BackupAdminService.run`, which needs `backup.run`), honouring the recovery quiesce lock;
   its run id is stored on the import.
-* The worker runs exactly the existing CLI sequence, programmatically (`runMode` and the service
+- The worker runs exactly the existing CLI sequence, programmatically (`runMode` and the service
   methods; `docs/legacy-migration/rehearsal.md` order): products read set and invoice-archive read
   set before the import (`UNRESOLVED_RETAINED`), then dry run, import (resume on interruption),
   reconcile and the v2 final report. The production guard is unchanged: on a production-like
@@ -137,6 +137,26 @@ Verified exactly as `NEXA_IMPORTER_DESIGN.md` §8.1 of the converter: HMAC under
 entry's `binding == sha256(canonical record)`. `ADMIN_APPROVED_UNVERIFIED` stays distinct from
 `PROVEN`; `QUARANTINED` / `REJECTED` / `PENDING` / stale services are never adopted. Nothing is
 recomputed.
+
+**How it is applied (the hold).** The evidence can only REMOVE a live invoice from automatic
+adoption, never add one (`legacy-importer/application/nxpkg-ownership.ts`). The importer takes a
+set of held invoice keys (`LegacyImportInput.ownershipHold`, `ServiceReviewInputs.ownershipHold`);
+`decideAllServices` turns a held invoice that NEXA would otherwise adopt into
+`AMBIGUOUS_OWNERSHIP` — the existing category, map decision (`MANUAL_REVIEW`) and candidate row,
+after NEXA's own ownership rule, so a held invoice still counts as a claim on its account. Held:
+
+- with a verified decisions file: `QUARANTINED`, `REJECTED`, `PENDING` and every `stale` entry;
+- without one: every ownership record not proven by evidence (`CONFIRMED_CURRENT_OWNER`,
+  `CONFIRMED_TRANSFER`, `NO_CONFLICT`), i.e. the converter's `AMBIGUOUS_*` / orphan states;
+- a `PROVEN` record whose proven owner is not the invoice's `id_user` (NEXA adopts onto `id_user`
+  only), and a live invoice with no ownership record at all.
+
+`ADMIN_APPROVED_UNVERIFIED` is neither held nor promoted: NEXA's own rules decide it with owner =
+`invoice.id_user`, and it is reported as `ADMIN_ATTESTATION` (`attested`), never as proven. The
+same hold must be given to dry run, import, resume, reconcile and report of one package (the dry
+run reports its size as `sections.ownershipHold`). This was chosen over pre-closing candidate
+rows as `KEPT_AS_HISTORY`: a fresh target has no candidate rows to close, and "kept as history"
+would also drop the invoice's claim on its account from the ownership rule.
 
 ## 8. Admin page «مهاجرت از میرزا»
 
