@@ -161,6 +161,28 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
   },
   {
     /*
+     * FIX-11: the same count, served WITHOUT the heap. `services_panel_capacity_idx` finds a
+     * panel's live services, but the count's `state IN (SERVICE_CAPACITY_STATES)` is a column
+     * that index does not hold, so every one of them was a heap visit: a bitmap heap scan of
+     * ~45 000 buffers and 240–500 ms for four panels of ~70 000 services, on every services,
+     * products and panels page (`DrizzlePanelCapacityRepository.readWhere`). With `state` in
+     * the key the count is an index-only scan: ~300 buffers, 44–80 ms on the same data.
+     *
+     * The SAME partial predicate as `services_panel_capacity_idx`, for the reason given
+     * there: derived from the machine, not an enumeration that could disagree with the count.
+     * Additive. Its key has the older index's whole key as a prefix, so it also serves the
+     * reads that do not name a state: `services_panel_capacity_idx` is now redundant. It stays
+     * for ONE release only because this manifest has no retire step and an outgoing or
+     * rolled-back replica's manifest still lists it (expand/contract); retire it in a later
+     * release (Codex review of #273).
+     */
+    name: 'services_panel_capacity_state_idx',
+    definition:
+      'ON "services" USING btree ("tenant_id","panel_id","state") ' +
+      "WHERE (state <> 'TERMINATED'::text)",
+  },
+  {
+    /*
      * The support lookup: for ONE tenant, the service holding a given provider
      * username.
      *
