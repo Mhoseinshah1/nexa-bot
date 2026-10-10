@@ -86,6 +86,7 @@ const TITLES: Readonly<Record<string, WebKey>> = {
   'payments.gateway_misconfigured': 'web.nc_t_gateway_misconfigured',
   'payments.gateway_link_create_failed': 'web.nc_t_gateway_link_create_failed',
   'payments.gateway_webhook_unverified': 'web.nc_t_webhook_unverified',
+  'payments.gateway_inquiry_failing': 'web.nc_t_gateway_inquiry_failing',
   'panel.monitor.tenant_budget_exceeded': 'web.nc_t_panel_budget',
   'provisioning.stalled': 'web.nc_t_provisioning_stalled',
   'order.refunded_undeliverable': 'web.nc_t_refunded_undeliverable',

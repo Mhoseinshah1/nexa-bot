@@ -318,6 +318,16 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
     eventClass: 'SECURITY',
   }),
   recovery('payments.gateway_webhook_verified', 'PAYMENTS', 'payments.gateway_webhook_unverified'),
+  // FIX-03 (batch 2026-10-10): the provider approved and the settlement transaction refused
+  // (nothing moved; asked again inside the deadline). One condition per payment, closed by
+  // `payments.gateway_settlement_decided` once the lane decides that payment (settled,
+  // already settled, held, failed, or recorded late) — audit P2-b on #260.
+  failure('payments.gateway_settlement_failed', 'PAYMENTS', 'CONDITION'),
+  recovery('payments.gateway_settlement_decided', 'PAYMENTS', 'payments.gateway_settlement_failed'),
+  // FIX-03 (batch 2026-10-10): a gateway's inquiries keep failing (timeouts, 5xx, 429), so
+  // approvals cannot be read. One condition per gateway, closed by its next answered inquiry.
+  failure('payments.gateway_inquiry_failing', 'PAYMENTS', 'CONDITION'),
+  recovery('payments.gateway_inquiry_ok', 'PAYMENTS', 'payments.gateway_inquiry_failing'),
   failure('payments.receipt_push_failed', 'PAYMENTS', 'CONDITION'),
   recovery('payments.receipt_push_ok', 'PAYMENTS', 'payments.receipt_push_failed'),
   failure('payments.refund_request_push_failed', 'PAYMENTS', 'CONDITION'),

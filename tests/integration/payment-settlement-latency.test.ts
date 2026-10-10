@@ -668,6 +668,45 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
       expect(await ledger(paymentId)).toHaveLength(1);
       expect(await notifications(paymentId)).toHaveLength(1);
     });
+
+    it('TELEGRAM_STARS: a refused settlement opens its alarm, and the later settlement closes it (audit P2-b on #260)', async () => {
+      await enable('TELEGRAM_STARS');
+      const paymentId = await gatewayTopup('TELEGRAM_STARS', 100_000n);
+      await ctx.container.uow.run(tenantA, (tx) =>
+        new DrizzleGatewayInvoiceRepository(ctx.container.database.db).recordCharge(
+          tenantA,
+          paymentId,
+          { chargeId: 'stars-charge-p2b', status: 'successful_payment', dueAt: new Date() },
+          new Date(),
+          tx,
+        ),
+      );
+      const refusing = new Proxy(ctx.container.payments, {
+        get: (target, property, receiver) =>
+          property === 'confirmGatewayPayment'
+            ? () => Promise.reject(new Error('scope stopped accepting work'))
+            : (Reflect.get(target, property, receiver) as unknown),
+      });
+      const alarms = () =>
+        rows<{ code: string; resolved_at: Date | null }>(
+          sql`SELECT code, resolved_at FROM operational_events
+              WHERE tenant_id = ${tenantA.tenantId}
+                AND code IN ('payments.gateway_settlement_failed', 'payments.gateway_settlement_decided')
+              ORDER BY first_seen_at, id`,
+        );
+      expect(await laneWith(refusing).settleRecorded(tenantA, paymentId)).toBe('ERROR');
+      expect(await alarms()).toEqual([
+        { code: 'payments.gateway_settlement_failed', resolved_at: null },
+      ]);
+      expect(await laneWith().settleRecorded(tenantA, paymentId)).toBe('SETTLED');
+      const after = await alarms();
+      expect(after.map((row) => row.code)).toEqual([
+        'payments.gateway_settlement_failed',
+        'payments.gateway_settlement_decided',
+      ]);
+      expect(after[0]!.resolved_at).not.toBeNull();
+      expect(await ledger(paymentId)).toHaveLength(1);
+    });
   });
 
   // =====================================================================================

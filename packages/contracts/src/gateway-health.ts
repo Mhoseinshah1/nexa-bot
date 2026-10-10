@@ -49,6 +49,9 @@ export const GATEWAY_HEALTH_OPERATIONAL_CODES = [
   'payments.gateway_card_change_unknown',
   'payments.gateway_review_unresolved',
   'payments.gateway_webhook_unverified',
+  // FIX-03 (batch 2026-10-10; Codex P2 on #260): a gateway whose inquiries keep failing
+  // cannot read approvals — a settlement outage, so an open condition on its route.
+  'payments.gateway_inquiry_failing',
 ] as const;
 export type GatewayHealthOperationalCode = (typeof GATEWAY_HEALTH_OPERATIONAL_CODES)[number];
 
