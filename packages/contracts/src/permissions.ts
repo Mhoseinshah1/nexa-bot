@@ -645,6 +645,34 @@ export const PERMISSIONS = [
     'Record or revoke the owner approval of a legacy import snapshot (the final cutover)',
     'CRITICAL',
   ),
+  /*
+   * Mirza `.nxpkg` importer — Fresh Migration (`docs/legacy-migration/nxpkg-importer.md`).
+   *
+   * - VIEW (MEDIUM) lists the package imports, their status and their reports. Counts,
+   *   codes and digests — never the key, never package content beyond the report.
+   * - MANAGE (HIGH) uploads a package, gives its key, binds its panels, records the
+   *   ownership decisions file and requests a dry run. Nothing it does writes a customer,
+   *   a balance or a service.
+   * - APPLY (CRITICAL) approves ONE dry run's digest and starts the import that writes real
+   *   legacy customers, opening balances and adoptions — the blast radius of
+   *   `legacy.cutover.approve`, so CRITICAL and owner-only.
+   * - HISTORY VIEW (MEDIUM) reads the archived Mirza history of a customer (Customer 360's
+   *   read-only card). It is personal data, so never one of the LOW keys.
+   *
+   * None is a SYSTEM_JOB permission; the `migration` process role acts under maintenance.run.
+   */
+  p('legacy.migration.view', 'View the Mirza package imports and their reports', 'MEDIUM'),
+  p(
+    'legacy.migration.manage',
+    'Upload a Mirza package, give its key, bind its panels and request a dry run',
+    'HIGH',
+  ),
+  p(
+    'legacy.migration.apply',
+    'Approve a Mirza package dry run and start the import (writes legacy customers and balances)',
+    'CRITICAL',
+  ),
+  p('legacy.history.view', "View a customer's archived Mirza history (read only)", 'MEDIUM'),
 
   // Platform
   p('tenant.cross_read', 'Read data across tenants', 'CRITICAL'),
@@ -1074,6 +1102,11 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'legacy.services.decide': 'legacy.services.view',
   /* Mirza PR6. An approval is recorded FROM the read sets `legacy.cutover.view` lists. */
   'legacy.cutover.approve': 'legacy.cutover.view',
+  /* Mirza `.nxpkg` importer. Every command is taken FROM an import `legacy.migration.view` reads. */
+  'legacy.migration.manage': 'legacy.migration.view',
+  'legacy.migration.apply': 'legacy.migration.view',
+  /* The Mirza history is a card ON a customer's page, which `users.view` opens. */
+  'legacy.history.view': 'users.view',
   /*
    * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
    * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass

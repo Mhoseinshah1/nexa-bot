@@ -159,6 +159,8 @@ export * from './legacy-wallet-debt.js';
 export * from './legacy-service-review.js';
 /** Mirza migration PR6: the cutover approval, SOURCE_SUPERSEDED, the gate steps, report v2 versions. */
 export * from './legacy-cutover.js';
+/** Mirza `.nxpkg` importer: import statuses, history record types, error codes. */
+export * from './legacy-nxpkg.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */
 export * from './business-chats.js';
 /** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */

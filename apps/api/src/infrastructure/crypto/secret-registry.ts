@@ -5,6 +5,7 @@ import type { Database, Executor } from '../persistence/database.js';
 import {
   adminTotpFactors,
   botInstances,
+  legacyNxpkgImports,
   panelCredentials,
   paymentGatewayCredentials,
   supportAiProviderCredentials,
@@ -576,6 +577,70 @@ const supportAiProviderApiKey: SecretColumn = {
   },
 };
 
+// Mirza `.nxpkg` importer: one package's key, erased (NULL) when its import is terminal.
+const legacyNxpkgPackageKey: SecretColumn = {
+  purpose: 'legacy_migration.package_key',
+  table: 'legacy_nxpkg_imports',
+  ciphertextColumn: 'key_ciphertext',
+  keyIdColumn: 'key_key_id',
+
+  async all(db) {
+    const rows = await db
+      .select({
+        ciphertext: legacyNxpkgImports.keyCiphertext,
+        keyId: legacyNxpkgImports.keyKeyId,
+      })
+      .from(legacyNxpkgImports)
+      .where(isNotNull(legacyNxpkgImports.keyCiphertext));
+    return rows.flatMap((row) =>
+      row.ciphertext !== null && row.keyId !== null
+        ? [{ ciphertext: row.ciphertext, keyId: row.keyId }]
+        : [],
+    );
+  },
+
+  async page(db, cursor, limit) {
+    const present = isNotNull(legacyNxpkgImports.keyCiphertext);
+    const rows = await db
+      .select({ id: legacyNxpkgImports.id })
+      .from(legacyNxpkgImports)
+      .where(cursor === null ? present : and(present, gt(legacyNxpkgImports.id, cursor)))
+      .orderBy(asc(legacyNxpkgImports.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: legacyNxpkgImports.id,
+        tenantId: legacyNxpkgImports.tenantId,
+        ciphertext: legacyNxpkgImports.keyCiphertext,
+        keyId: legacyNxpkgImports.keyKeyId,
+      })
+      .from(legacyNxpkgImports)
+      .where(eq(legacyNxpkgImports.id, id))
+      .for('update')
+      .limit(1);
+    if (!row || row.ciphertext === null || row.keyId === null) return null;
+    return { id: row.id, tenantId: row.tenantId, ciphertext: row.ciphertext, keyId: row.keyId };
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(legacyNxpkgImports)
+      .set({ keyCiphertext: next.ciphertext, keyKeyId: next.keyId })
+      .where(
+        and(
+          eq(legacyNxpkgImports.id, id),
+          eq(legacyNxpkgImports.keyCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: legacyNxpkgImports.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
@@ -586,4 +651,5 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   paymentGatewayVerifyKey,
   adminTotpSecret,
   supportAiProviderApiKey,
+  legacyNxpkgPackageKey,
 ];
