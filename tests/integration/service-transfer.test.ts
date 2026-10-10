@@ -491,6 +491,8 @@ describe('Package F — a customer transfers a service to another customer', () 
     expect(text.startsWith(HEADING)).toBe(true);
     expect(text).toContain(service.providerUsername);
     expect(text).toContain('آلمان');
+    // Brief C3: the provider is never called by a transfer, so the link is the same one.
+    expect(text).toContain('لینک اشتراک این سرویس تغییر نکرده');
     const keyboard = (
       body.reply_markup as {
         inline_keyboard: { text: string; callback_data: string }[][];

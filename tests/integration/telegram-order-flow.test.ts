@@ -675,7 +675,7 @@ describe('the customer purchase flow over Telegram', () => {
     expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
     // The plan's 53687091200 bytes as the customer reads them, never the stored integer
     // (pre-release hardening §3).
-    expect(text).toContain('حجم اکانت: 50 گیگابایت');
+    expect(text).toContain('حجم: 50 گیگابایت');
     expect(text).not.toContain('53687091200');
 
     // The payment buttons name the ORDER rather than the product — wallet, then «🧾 ثبت
@@ -765,7 +765,7 @@ describe('the customer purchase flow over Telegram', () => {
     // Labelled lines, not bare figures: «250,000 تومان» contains «50,000 تومان».
     expect(text).toContain(`قیمت پیش از تخفیف: ${formatMoney(money(250_000n, 'IRT'))}`);
     expect(text).toContain(`تخفیف: ${formatMoney(money(50_000n, 'IRT'))}`);
-    expect(text).toContain(`قیمت: ${formatMoney(money(200_000n, 'IRT'))}`);
+    expect(text).toContain(`مبلغ سفارش: ${formatMoney(money(200_000n, 'IRT'))}`);
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
       `w:${orderId}`,
       `pm:${orderId}`,
@@ -825,7 +825,7 @@ describe('the customer purchase flow over Telegram', () => {
       `قیمت پیش از تخفیف: ${formatMoney(money(250_000n, 'IRT'))}`,
     );
     expect(text).toContain(`تخفیف: ${formatMoney(money(50_000n, 'IRT'))}`);
-    expect(text).toContain(`قیمت: ${formatMoney(money(200_000n, 'IRT'))}`);
+    expect(text).toContain(`مبلغ سفارش: ${formatMoney(money(200_000n, 'IRT'))}`);
 
     await api.container.database.db.execute(
       sql`UPDATE discounts SET status = 'INACTIVE' WHERE id = ${id}`,
