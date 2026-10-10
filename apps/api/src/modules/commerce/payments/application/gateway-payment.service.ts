@@ -534,8 +534,10 @@ export class GatewayPaymentService {
      */
     // A claim that threw here would throw again below: the lane is counted as failed once.
     let inquiryLaneFailed = true;
+    // Each row is asked at most once a pass: one the hinted phase reached is not asked again.
+    const askedThisPass = new Set<string>();
     await this.isolatedLane(scope, report, 'INQUIRY', async () => {
-      await this.runInquiries(scope, actor, report, 'HINTED');
+      await this.runInquiries(scope, actor, report, 'HINTED', askedThisPass);
       inquiryLaneFailed = false;
     });
     // FIX-06: whether the CALL budget is gone — the creations' answer, not the inquiries'.
@@ -552,7 +554,7 @@ export class GatewayPaymentService {
     });
     if (!report.budgetExhausted && !inquiryLaneFailed) {
       await this.isolatedLane(scope, report, 'INQUIRY', () =>
-        this.runInquiries(scope, actor, report, 'ALL'),
+        this.runInquiries(scope, actor, report, 'ALL', askedThisPass),
       );
     }
 
@@ -656,6 +658,8 @@ export class GatewayPaymentService {
     actor: ActorContext,
     report: { -readonly [K in keyof GatewayPassReport]: GatewayPassReport[K] },
     which: 'HINTED' | 'ALL',
+    /** Rows already asked this pass: never claimed for a second answer in the same pass. */
+    askedThisPass: Set<string>,
   ): Promise<void> {
     const inquiryNow = this.deps.clock.now();
     const inquiryLease = new Date(inquiryNow.getTime() + this.leaseMs());
@@ -668,16 +672,20 @@ export class GatewayPaymentService {
         tx,
       ),
     );
-    let due = claimed;
-    if (which === 'HINTED') {
-      due = claimed.filter((row) => this.isHinted(row));
-      await this.releaseUnreached(
-        scope,
-        'INQUIRY',
-        claimed.filter((row) => !due.includes(row)),
-        inquiryLease,
-      );
-    }
+    /*
+     * FIX-06: `HINTED` keeps only the rows a hint brought forward; both phases skip a row the
+     * pass already asked (one whose processing threw while a webhook kept it due, say — it is
+     * asked again by the NEXT pass, never twice in one). The rest go straight back.
+     */
+    const due = claimed.filter(
+      (row) => !askedThisPass.has(row.invoice.paymentId) && (which === 'ALL' || this.isHinted(row)),
+    );
+    await this.releaseUnreached(
+      scope,
+      'INQUIRY',
+      claimed.filter((row) => !due.includes(row)),
+      inquiryLease,
+    );
     for (const [index, claimed] of due.entries()) {
       if (!this.rowFitsLease(inquiryLease)) {
         // FIX10 R1: no lease left for one more row; these go back for the next pass.
@@ -685,6 +693,7 @@ export class GatewayPaymentService {
         await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
         break;
       }
+      askedThisPass.add(claimed.invoice.paymentId);
       let result: Awaited<ReturnType<GatewayPaymentService['processInquiry']>>;
       try {
         result = await this.processInquiry(scope, actor, claimed, inquiryLease);
