@@ -16,9 +16,27 @@ export const DSN_PASSWORD_REFUSAL =
   'A DSN on the command line must not carry a password. Put the whole DSN in an ' +
   'environment variable and pass env:NAME, or use --source-password-env / PGPASSWORD.';
 
-/** `--password`, `--db-password`, … — anything but a `--…password-env` that names a variable. */
+/**
+ * `--password`, `--db-password`, … — anything but a `--…password-env` that names a variable.
+ * The same for a `.nxpkg` package's secret: `--package-passphrase`, `--passphrase`,
+ * `--package-key`, `--key-file`, … are refused; only `--package-passphrase-env NAME` and
+ * `--package-key-env NAME` (a variable holding the key file's text) are accepted.
+ */
 export function isPasswordFlag(arg: string): boolean {
-  return /^--[a-z-]*password(?!-env$)/u.test(arg);
+  return (
+    /^--[a-z-]*password(?!-env$)/u.test(arg) ||
+    /^--[a-z-]*passphrase(?!-env$)/u.test(arg) ||
+    /^--([a-z-]*-)?(package-key|key-file|keyfile|nxkey)(?!-env$)/u.test(arg)
+  );
+}
+
+export const PACKAGE_SECRET_VALUE_REFUSAL =
+  'A package key is never accepted as an argument; put the key file text in an environment ' +
+  'variable and pass --package-key-env NAME.';
+
+/** An argument that IS a package key file's text (`nxkey1:…`), whatever flag it follows. */
+export function isPackageKeyText(arg: string): boolean {
+  return /^\s*nxkey\d+:/iu.test(arg);
 }
 
 /** Whether a URL-shaped argument carries a password (`scheme://user:secret@host/…`). */

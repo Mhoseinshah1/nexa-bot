@@ -263,6 +263,15 @@ export function duplicateSourceIds(
 export interface ServiceReviewInputs {
   readonly operatorPanels?: ReadonlyMap<string, string>;
   readonly keptAsHistory?: ReadonlySet<string>;
+  /**
+   * Mirza `.nxpkg` importer (`nxpkg-ownership.ts`): invoice keys the package's ownership
+   * evidence holds back — quarantined, rejected, pending or stale decisions, unproven
+   * ownership. An invoice NEXA would adopt is decided `AMBIGUOUS_OWNERSHIP` instead (manual
+   * review, never adopted). It is still a claim on its account for the ownership rule, so a
+   * second owner's invoice naming the same account stays ambiguous too. It can only remove
+   * an invoice from adoption, never add one.
+   */
+  readonly ownershipHold?: ReadonlySet<string>;
 }
 
 export function decideAllServices(
@@ -297,7 +306,10 @@ export function decideAllServices(
     );
     decided.push({ invoice, decision });
   }
-  const services = withOwnershipRule(decided, review.keptAsHistory ?? new Set());
+  const services = withOwnershipHold(
+    withOwnershipRule(decided, review.keptAsHistory ?? new Set()),
+    review.ownershipHold ?? new Set(),
+  );
   let namedProductCandidates = 0;
   for (const { decision } of services) {
     categories[decision.category] += 1;
@@ -340,6 +352,29 @@ export function withOwnershipRule(
       decision: { category: 'AMBIGUOUS_OWNERSHIP', map: INVOICE_MAP_DECISIONS.AMBIGUOUS_OWNERSHIP },
     };
   });
+}
+
+/**
+ * Mirza `.nxpkg` importer — an eligible invoice the package's ownership evidence holds back is
+ * `AMBIGUOUS_OWNERSHIP`: the same category, map decision and review row as an ownership NEXA
+ * itself cannot decide. Every other category is left as it is.
+ */
+export function withOwnershipHold(
+  services: readonly PlannedService[],
+  hold: ReadonlySet<string>,
+): readonly PlannedService[] {
+  if (hold.size === 0) return services;
+  return services.map((s) =>
+    s.decision.category === 'ADOPTION_ELIGIBLE' && hold.has(s.invoice.idInvoice)
+      ? {
+          invoice: s.invoice,
+          decision: {
+            category: 'AMBIGUOUS_OWNERSHIP',
+            map: INVOICE_MAP_DECISIONS.AMBIGUOUS_OWNERSHIP,
+          },
+        }
+      : s,
+  );
 }
 
 /** The complete indexes of the production panels whose inventory read is complete. */

@@ -211,6 +211,13 @@ export interface LegacyImportInput {
    * against this before any run acts on it. Absent = production-like: fail closed.
    */
   readonly productionLikeTarget?: boolean;
+  /**
+   * Mirza `.nxpkg` importer: live invoice keys the package's ownership evidence holds back from
+   * adoption (`nxpkg-ownership.ts`, `ServiceReviewInputs.ownershipHold`). Absent for every
+   * other source. The SAME set must be given to dry run, import, resume, reconcile and report
+   * of one package, as the mapping is.
+   */
+  readonly ownershipHold?: ReadonlySet<string>;
 }
 
 /**
@@ -421,6 +428,11 @@ export function incompletePanelMapMessage(completeness: PanelMappingCompleteness
   );
 }
 
+/** The `.nxpkg` ownership hold, as `prepare` takes it; absent for every other source. */
+function holdOf(input: LegacyImportInput): { readonly ownershipHold?: ReadonlySet<string> } {
+  return input.ownershipHold === undefined ? {} : { ownershipHold: input.ownershipHold };
+}
+
 export class LegacyImporterService {
   constructor(private readonly deps: LegacyImporterDeps) {}
 
@@ -436,7 +448,7 @@ export class LegacyImporterService {
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
     productionLikeTarget = true,
-    options: { readonly forApply?: boolean } = {},
+    options: { readonly forApply?: boolean; readonly ownershipHold?: ReadonlySet<string> } = {},
   ): Promise<Prepared> {
     const { destination } = this.deps;
     if (!(await destination.tenantExists(scope))) {
@@ -482,7 +494,13 @@ export class LegacyImporterService {
     for (const panelId of mapping.policy.productionPanelIds) {
       inventories.set(panelId, await this.deps.inventory.read(scope, panelId));
     }
-    const review = await this.prepareReview(scope, snapshot, mapping, productionLikeTarget);
+    const review = await this.prepareReview(
+      scope,
+      snapshot,
+      mapping,
+      productionLikeTarget,
+      options.ownershipHold,
+    );
 
     // Shape keys first (from a plan with no shapes known), then the real plan.
     const draft = planLegacyImport({
@@ -530,6 +548,7 @@ export class LegacyImporterService {
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
     productionLikeTarget: boolean,
+    ownershipHold: ReadonlySet<string> | undefined,
   ): Promise<PreparedReview> {
     const live = new Map(snapshot.liveInvoices.map((i) => [i.idInvoice, i]));
     const keys = [...live.keys()].filter(recordableKey);
@@ -559,7 +578,16 @@ export class LegacyImporterService {
         .filter((c) => c.reviewState === 'KEPT_AS_HISTORY' && c.synthetic === snapshot.synthetic)
         .map((c) => c.invoiceKey),
     );
-    return { candidates, approvals, gates, inputs: { operatorPanels, keptAsHistory } };
+    return {
+      candidates,
+      approvals,
+      gates,
+      inputs: {
+        operatorPanels,
+        keptAsHistory,
+        ...(ownershipHold === undefined ? {} : { ownershipHold }),
+      },
+    };
   }
 
   private providerSection(prepared: Prepared) {
@@ -633,6 +661,7 @@ export class LegacyImporterService {
       input.snapshot,
       input.mapping,
       input.productionLikeTarget,
+      holdOf(input),
     );
     const blockers: string[] = [];
     if (prepared.salesCurrency !== LEGACY_BALANCE_CURRENCY) {
@@ -670,7 +699,13 @@ export class LegacyImporterService {
   async dryRun(input: LegacyImportInput): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
-    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
+    const prepared = await this.prepare(
+      scope,
+      snapshot,
+      mapping,
+      input.productionLikeTarget,
+      holdOf(input),
+    );
     const runId = this.deps.ids.uuid();
     await this.mutate(scope, actor, 'legacy_import.run.start', runId, async (tx) => {
       const outcome = await this.deps.runs.startOrResume(
@@ -721,6 +756,10 @@ export class LegacyImporterService {
         panelMapping: this.mappingSection(mapping),
         provider: this.providerSection(prepared),
         plan: prepared.plan.tallies,
+        // `.nxpkg` only: how many live invoices the package's ownership evidence held back.
+        ...(input.ownershipHold === undefined
+          ? {}
+          : { ownershipHold: { invoices: input.ownershipHold.size } }),
       },
       'NO_BUSINESS_WRITE',
     );
@@ -773,6 +812,7 @@ export class LegacyImporterService {
     }
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
       forApply: true,
+      ...holdOf(input),
     });
     // G10, the same predicate as the audit, decided again NOW: an import never starts on
     // a map that forgets a live code_panel — whatever the audit said earlier.
@@ -1512,7 +1552,13 @@ export class LegacyImporterService {
       inventoryIndexes(mapping, prepared.inventories),
       importedUsers,
       (key) => (shapes.get(key)?.resolved === true ? 'RESOLVED' : 'UNRESOLVED'),
-      { operatorPanels, keptAsHistory },
+      {
+        operatorPanels,
+        keptAsHistory,
+        ...(review.inputs.ownershipHold === undefined
+          ? {}
+          : { ownershipHold: review.inputs.ownershipHold }),
+      },
     );
     tallies.services.categories = { ...decided.categories };
 
@@ -1984,7 +2030,13 @@ export class LegacyImporterService {
     const { scope, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
     const { run, inputs } = await this.runMadeFrom(scope, snapshot, mapping, 'reconcile');
-    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
+    const prepared = await this.prepare(
+      scope,
+      snapshot,
+      mapping,
+      input.productionLikeTarget,
+      holdOf(input),
+    );
     const { destination } = this.deps;
     const tallies = prepared.plan.tallies;
     const [wallet, openings, native, trials, shapes, since] = await Promise.all([
@@ -2215,7 +2267,13 @@ export class LegacyImporterService {
     const startedAt = this.deps.clock.now();
     const { run, inputs } = await this.runMadeFrom(scope, snapshot, mapping, 'report');
     const { destination } = this.deps;
-    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
+    const prepared = await this.prepare(
+      scope,
+      snapshot,
+      mapping,
+      input.productionLikeTarget,
+      holdOf(input),
+    );
     const currency = inputs.walletCurrency;
     const [openings, trials, shapes, map, native, actual, resumes, tenantSlug] = await Promise.all([
       destination.openingAggregates(scope),
