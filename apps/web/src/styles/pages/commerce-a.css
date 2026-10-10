@@ -613,4 +613,18 @@
     align-items: center;
     min-height: var(--ctl-h);
   }
+  /*
+   * FIX-12: Customer 360's section list (29px pills) and its "all of this customer's …"
+   * links, and a gateway health card's queue and action links (22px text), were each a
+   * target a thumb misses. Same 44px floor.
+   */
+  .c360-nav a,
+  .c360ws-half-head a,
+  .gh-links a:not(.btn) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--ctl-h);
+    min-width: var(--ctl-h);
+  }
 }

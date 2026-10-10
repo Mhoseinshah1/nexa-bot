@@ -268,7 +268,7 @@ function HealthCard({
         ]}
       />
       {view.queues !== null && (
-        <div className="filter-row">
+        <div className="filter-row gh-links">
           <span className="muted small">{t('web.gateway_health_queues')}:</span>
           {CARD_QUEUES.map(([queue, label]) => (
             <a key={queue} href={opsLinkFor(view.provider, range, queue)} onClick={onLink}>
@@ -278,7 +278,7 @@ function HealthCard({
         </div>
       )}
       <p className="muted small">{t('web.gateway_health_answers_hint')}</p>
-      <div className="form-actions">
+      <div className="form-actions gh-links">
         {/* The route's OWN view (item 8), not the top of a page listing every route. */}
         {!single && (
           <a href={paymentMethodPath(view.provider)} onClick={onLink}>

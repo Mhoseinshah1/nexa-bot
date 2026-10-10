@@ -393,10 +393,17 @@ function DeleteBody({
             items={[
               [
                 t('web.service_delete_amount_paid'),
-                <Money
-                  key="p"
-                  value={{ amountMinor: data.principalMinor ?? '0', currency: data.currency }}
-                />,
+                // FIX-12: an absent principal is shown as absent, never as a paid 0.
+                data.principalMinor === null ? (
+                  <span key="p" className="muted">
+                    —
+                  </span>
+                ) : (
+                  <Money
+                    key="p"
+                    value={{ amountMinor: data.principalMinor, currency: data.currency }}
+                  />
+                ),
               ],
               [
                 t('web.service_delete_amount_max'),
