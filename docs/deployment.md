@@ -51,14 +51,25 @@ Five containers on one host, behind Compose.
 ```
 
 - **Caddy** is the only container that publishes a host port. It terminates
-  TLS, serves the Web Admin, and proxies `/api/*`, `/health/*` and
-  `/telegram/webhook/*` to the API.
+  TLS, serves the Web Admin, and proxies `/api/*`, `/health/*`,
+  `/telegram/webhook/*`, `/payments/webhook/*` and `/payments/return/*` to the
+  API.
 
   That last one is not optional. The webhook controller is at
   `/telegram/webhook/:botInstanceId` and is **not** under `/api`, so without its
   own route it falls to the SPA fallback and answers Telegram `index.html` with
   a 200 — which Telegram reads as "update accepted". Every update would be
   acknowledged and discarded, silently.
+
+  The same holds for the two payment-gateway routes. `/payments/return/*` (a
+  CentralPay customer's browser coming back from the bank) was missing until
+  batch 2026-10-10: the customer was shown the admin login page instead of the
+  302 back to the bot, and the verify the return exists to bring forward waited
+  for the scheduled inquiry instead. `tests/unit/deployment-compose.test.ts`
+  now reads every root controller and fails if any of its paths would reach
+  the SPA. The route ships in `routes.caddy`, which `botctl update` moves with
+  the image; until a release carrying it is deployed, CentralPay settles on the
+  inquiry schedule alone.
 
 - **PostgreSQL and Redis publish nothing.** They are on an internal network
   that Caddy is not attached to, so the internet-facing container has no route
