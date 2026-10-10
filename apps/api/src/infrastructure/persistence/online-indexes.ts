@@ -170,7 +170,11 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
      *
      * The SAME partial predicate as `services_panel_capacity_idx`, for the reason given
      * there: derived from the machine, not an enumeration that could disagree with the count.
-     * Additive — the older index stays for the reads that do not name a state.
+     * Additive. Its key has the older index's whole key as a prefix, so it also serves the
+     * reads that do not name a state: `services_panel_capacity_idx` is now redundant. It stays
+     * for ONE release only because this manifest has no retire step and an outgoing or
+     * rolled-back replica's manifest still lists it (expand/contract); retire it in a later
+     * release (Codex review of #273).
      */
     name: 'services_panel_capacity_state_idx',
     definition:
