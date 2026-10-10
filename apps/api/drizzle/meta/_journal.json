@@ -1681,6 +1681,13 @@
       "when": 1791531383174,
       "tag": "0239_qr_template_quiet_zone_check",
       "breakpoints": true
+    },
+    {
+      "idx": 240,
+      "version": "7",
+      "when": 1791649526287,
+      "tag": "0240_gateway_row_failures",
+      "breakpoints": true
     }
   ]
 }

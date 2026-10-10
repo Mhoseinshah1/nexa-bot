@@ -45,6 +45,7 @@ function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceR
     providerPaid: false,
     lastInquiryAt: null,
     lastInquiryErrorCode: null,
+    rowFailures: 0,
     inquiryAttempts: 0,
     nextInquiryAt: null,
     postDeadlineInquiries: 0,

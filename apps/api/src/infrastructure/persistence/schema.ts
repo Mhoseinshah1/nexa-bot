@@ -4704,6 +4704,14 @@ export const gatewayInvoices = pgTable(
      * against what was SENT. Write-once (`nexa_gateway_invoices_provider_user_guard`).
      */
     providerUserId: text('provider_user_id'),
+    /**
+     * FIX10 (audit P1-b on #268): how many times in a row this row's processing in the
+     * creation or inquiry lane THREW (a local exception, never a provider answer). Advanced
+     * only by the back-off, which is conditional on the claim's own lease — so two replicas
+     * never count one failure twice — and set back to zero when the row next processes
+     * without throwing. At `GATEWAY_ROW_FAILURE_ALERT_AFTER` an operator condition opens.
+     */
+    rowFailures: integer('row_failures').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -5066,6 +5074,8 @@ export const gatewayReceiptSubmissions = pgTable(
      */
     inquiryResolvedAt: timestamptz('inquiry_resolved_at'),
     byteLength: integer('byte_length'),
+    /** FIX10 (audit P1-b on #268): consecutive local failures, as on `gateway_invoices`. */
+    rowFailures: integer('row_failures').notNull().default(0),
     createdAt: timestamptz('created_at').notNull(),
     updatedAt: timestamptz('updated_at').notNull(),
   },

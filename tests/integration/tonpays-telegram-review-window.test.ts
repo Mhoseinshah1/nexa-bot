@@ -5,6 +5,8 @@ import {
   AUTH_ROUTES,
   EMPTY_PRODUCT_DISPLAY,
   PAYMENT_ROUTES,
+  GATEWAY_ROW_FAILING_CODE,
+  GATEWAY_ROW_FAILURE_ALERT_AFTER,
   SESSION_COOKIE_NAME,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
   paymentReinquireResponseSchema,
@@ -829,6 +831,44 @@ describe('the TonPays Telegram provider review window', () => {
       expect((await paymentOf(first.paymentId)).state).toBe('PENDING');
       expect(errors.some((line) => line.includes(first.paymentId))).toBe(true);
       expect(errors.join('\n')).not.toContain('disk full');
+
+      /*
+       * FIX10 (audit P1-b on #268): the same receipt failing on consecutive passes opens ONE
+       * condition for that submission at the threshold, and its next clean upload closes it.
+       */
+      const [submission] = await rows<{ id: string }>(
+        sql`SELECT id FROM gateway_receipt_submissions WHERE payment_id = ${first.paymentId}`,
+      );
+      const conditionKey = `${GATEWAY_ROW_FAILING_CODE}:receipt:${submission!.id}`;
+      const conditions = () =>
+        rows<{ occurrence_count: number; resolved_at: string | null }>(
+          sql`SELECT occurrence_count, resolved_at FROM operational_events
+              WHERE tenant_id = ${tenantA.tenantId} AND code = ${GATEWAY_ROW_FAILING_CODE}
+                AND dedupe_key = ${conditionKey}`,
+        );
+      const dueAgain = () =>
+        ctx.container.database.db.execute(
+          sql`UPDATE gateway_receipt_submissions SET retry_at = NULL WHERE id = ${submission!.id}`,
+        );
+      for (let failed = 2; failed <= GATEWAY_ROW_FAILURE_ALERT_AFTER; failed += 1) {
+        expect(await conditions()).toEqual([]);
+        await dueAgain();
+        expect((await poisoned.runOnce(tenantA)).rowFailures).toBe(1);
+      }
+      expect(await conditions()).toEqual([{ occurrence_count: 1, resolved_at: null }]);
+
+      // The upload works again: the receipt is sent, and the condition closes.
+      await dueAgain();
+      const healthy = telegramLaneWith(ctx, fake);
+      expect((await healthy.runOnce(tenantA)).rowFailures).toBe(0);
+      const [closed] = await conditions();
+      expect(closed?.resolved_at).not.toBeNull();
+      const [sent] = await rows<{ row_failures: number; sent_at: string | null }>(
+        sql`SELECT row_failures, sent_at FROM gateway_receipt_submissions
+            WHERE id = ${submission!.id}`,
+      );
+      expect(sent).toMatchObject({ row_failures: 0 });
+      expect(sent?.sent_at).not.toBeNull();
     });
   });
 

@@ -392,6 +392,11 @@ export interface GatewayInvoiceRecord {
   readonly providerPaid: boolean | null;
   readonly lastInquiryAt: Date | null;
   readonly lastInquiryErrorCode: string | null;
+  /**
+   * FIX10 (audit P1-b on #268): how many claims of this row in a row ended in a thrown
+   * exception (`backOffClaim`), as read when it was claimed. Zero once it processes cleanly.
+   */
+  readonly rowFailures: number;
   readonly inquiryAttempts: number;
   readonly nextInquiryAt: Date | null;
   readonly postDeadlineInquiries: number;
@@ -658,6 +663,10 @@ export interface GatewayInvoiceRepository {
    * the earlier of its schedule and `retryAt`, so the inquiry somebody asked for is not
    * suppressed behind the back-off (possibly past the attempt's deadline). The CREATION
    * lane does not read `claimedAt`.
+   *
+   * FIX10 (audit P1-b on #268): the same statement advances `row_failures` and returns its
+   * new value — the durable count of consecutive thrown claims, advanced only by the replica
+   * holding the lease — or null when nothing was backed off (and nothing counted).
    */
   backOffClaim(
     scope: TenantContext,
@@ -668,7 +677,14 @@ export interface GatewayInvoiceRepository {
     retryAt: Date,
     now: Date,
     tx?: unknown,
-  ): Promise<boolean>;
+  ): Promise<number | null>;
+
+  /**
+   * FIX10 (audit P1-b on #268): the row processed without throwing; its consecutive-failure
+   * count goes back to zero. Touches nothing else (not `updated_at`, which the claim and the
+   * hint paths compare). Returns whether a non-zero count was cleared.
+   */
+  clearRowFailures(scope: TenantContext, paymentId: PaymentId, tx?: unknown): Promise<boolean>;
 
   /** Records what an inquiry returned and when the next one is due (null: none). */
   recordInquiry(
@@ -956,6 +972,8 @@ export interface GatewayReceiptSubmissionRecord {
   readonly openedReview: boolean;
   readonly inquiryResolvedAt: Date | null;
   readonly byteLength: number | null;
+  /** FIX10 (audit P1-b on #268): consecutive thrown claims, as on an invoice. */
+  readonly rowFailures: number;
   readonly createdAt: Date;
 }
 
@@ -1162,5 +1180,7 @@ export interface GatewayCardTransferRepository {
     retryAt: Date,
     now: Date,
     tx: unknown,
-  ): Promise<boolean>;
+  ): Promise<number | null>;
+  /** FIX10 (audit P1-b on #268): as `GatewayInvoiceRepository.clearRowFailures`. */
+  clearSubmissionFailures(scope: TenantContext, id: string, tx: unknown): Promise<boolean>;
 }
