@@ -87,6 +87,12 @@ const SECRETS: readonly SecretCase[] = [
   },
   { name: 'lowercase bearer', text: `sent bearer ${FAKE_OPAQUE} upstream`, cores: [FAKE_OPAQUE] },
   {
+    // PR #261 review: an HTTP auth scheme is case-insensitive.
+    name: 'mixed-case bearer',
+    text: `sent bEaReR ${FAKE_OPAQUE} upstream`,
+    cores: [FAKE_OPAQUE],
+  },
+  {
     name: 'password query parameter',
     text: `login https://panel.example.test/login?username=admin&password=${FAKE_OPAQUE}`,
     cores: [FAKE_OPAQUE],
@@ -147,6 +153,16 @@ const FULLWIDTH_COLON = String.fromCharCode(0xff1a);
 const SOFT_HYPHEN = String.fromCharCode(0x00ad);
 const RIGHT_TO_LEFT_MARK = String.fromCharCode(0x200f);
 
+const VARIATION_SELECTOR_17 = String.fromCodePoint(0xe0100);
+const TAG_LATIN_A = String.fromCodePoint(0xe0041);
+
+/**
+ * Every default-ignorable code point, by Unicode's own property rather than by the
+ * redactor's list — so a survival hidden by a character the redactor forgot is still
+ * found here.
+ */
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+
 const toPersianDigits = (text: string): string =>
   text.replace(/[0-9]/g, (digit) => String.fromCharCode(0x06f0 + Number(digit)));
 const toArabicIndicDigits = (text: string): string =>
@@ -176,6 +192,23 @@ const ENCODINGS: readonly { readonly name: string; readonly apply: (text: string
   {
     name: 'soft hyphens and bidi marks',
     apply: (text) => text.replace(/:/g, `${SOFT_HYPHEN}:${RIGHT_TO_LEFT_MARK}`),
+  },
+  {
+    // PR #261 review: invisibles beyond the BMP are surrogate pairs.
+    name: 'supplementary variation selector and tag inside every core',
+    apply: (text) => {
+      let out = text;
+      for (const secret of SECRETS) {
+        for (const core of secret.cores) {
+          out = out
+            .split(core)
+            .join(
+              `${core.slice(0, 4)}${VARIATION_SELECTOR_17}${core.slice(4, 9)}${TAG_LATIN_A}${core.slice(9)}`,
+            );
+        }
+      }
+      return out.replace(`${FAKE_TOKEN_ID}:`, `${FAKE_TOKEN_ID}${TAG_LATIN_A}:`);
+    },
   },
 ];
 
@@ -259,7 +292,7 @@ function survivors(lines: readonly string[], cores: readonly string[]): string[]
   for (const line of lines) {
     const texts = [line, ...allStrings(JSON.parse(line))];
     for (const text of texts) {
-      const forms = [text, normaliseForScan(text)];
+      const forms = [text, normaliseForScan(text), text.replace(IGNORABLE, '')];
       for (const core of cores) {
         if (forms.some((form) => form.includes(core))) found.push(core);
       }
@@ -425,5 +458,144 @@ describe('the redactor is bounded', () => {
       true,
       `token=${REDACTED}`,
     ]);
+  });
+});
+
+describe('PR #261 review findings', () => {
+  const tokenText = `bot${FAKE_TOKEN_ID}:${FAKE_TOKEN_SECRET}`;
+
+  it('1: Bearer is matched in every casing, and Basic stays case-sensitive', () => {
+    for (const scheme of ['bEaReR', 'BeArEr', 'bearer', 'BEARER', 'Bearer']) {
+      expect(redactSecretText(`sent ${scheme} ${FAKE_OPAQUE} upstream`)).toBe(
+        `sent ${scheme} ${REDACTED} upstream`,
+      );
+    }
+    expect(redactSecretText('basic auth failed for user alice_01')).toBe(
+      'basic auth failed for user alice_01',
+    );
+  });
+
+  it('2: an own toJSON hook is not carried onto the redacted copy', () => {
+    const { lines, log } = capture();
+    const error = Object.assign(new Error('provider failed'), {
+      toJSON: () => ({ leaked: tokenText }),
+    });
+    const plain = { detail: 'ok', toJSON: () => ({ leaked: tokenText }) };
+    log.error({ err: error, plain }, 'failed');
+    expect(survivors(lines, [FAKE_TOKEN_SECRET])).toEqual([]);
+    const line = JSON.parse(lines[0]!) as { err: { message: string }; plain: { detail: string } };
+    expect(line.err.message).toBe('provider failed');
+    expect(line.plain.detail).toBe('ok');
+    // The durable redactor drops it too: jsonb serialisation would call it as well.
+    expect(JSON.stringify(redactSecrets({ plain }))).not.toContain(FAKE_TOKEN_SECRET);
+  });
+
+  it('3: a well-formed frame still loses a credential in its function name or path', () => {
+    const stack = [
+      'Error: x',
+      `    at Object.${FAKE_JWT} (/app/dist/token-service.js:88:5)`,
+      `    at ${tokenText} (/app/dist/x.js:1:2)`,
+      `    at handler (/app/dist/${FAKE_JWT}/y.js:3:4)`,
+      '    at SessionTokenService.verify (/app/dist/session.service.js:42:7)',
+    ].join('\n');
+    const out = redactStack(stack);
+    expect(out).not.toContain(FAKE_JWT.split('.')[2]!);
+    expect(out).not.toContain(FAKE_TOKEN_SECRET);
+    expect(out).toContain('/app/dist/token-service.js:88:5');
+    expect(out).toContain('/app/dist/x.js:1:2');
+    expect(out).toContain('    at SessionTokenService.verify (/app/dist/session.service.js:42:7)');
+  });
+
+  it('4: a subclass assigning message after super() cannot overwrite the redacted message', () => {
+    class ProviderError extends Error {
+      constructor(text: string) {
+        super('placeholder');
+        // What a class field (`message = …`, define semantics) or a hand-rolled
+        // error does: `message` becomes an ENUMERABLE own property.
+        Object.defineProperty(this, 'message', {
+          value: text,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+        this.name = 'ProviderError';
+      }
+    }
+    const error = new ProviderError(
+      `Failed to parse URL from https://api.telegram.org/${tokenText}/getMe`,
+    );
+    expect(Object.keys(error)).toContain('message');
+    for (const redacted of [redactForLog({ err: error }), redactSecrets({ err: error })]) {
+      const text = JSON.stringify(redacted);
+      expect(text).not.toContain(FAKE_TOKEN_SECRET);
+      expect((redacted as { err: { name: string } }).err.name).toBe('ProviderError');
+    }
+  });
+
+  it('5: supplementary invisibles are stripped before scanning', () => {
+    const hidden = `x bot${FAKE_TOKEN_ID}${TAG_LATIN_A}:${FAKE_TOKEN_SECRET.slice(0, 5)}${VARIATION_SELECTOR_17}${FAKE_TOKEN_SECRET.slice(5)} y`;
+    const out = redactSecretText(hidden);
+    expect(out.replace(IGNORABLE, '')).not.toContain(FAKE_TOKEN_SECRET);
+    expect(normaliseForScan(`a${TAG_LATIN_A}b${VARIATION_SELECTOR_17}c`)).toBe('abc');
+  });
+
+  it('6: never throws, whatever it is handed', () => {
+    const throwingGetter = Object.defineProperty({}, 'boom', {
+      enumerable: true,
+      get() {
+        throw new Error(`getter leaked ${tokenText}`);
+      },
+    });
+    const throwingProxy = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('trap');
+        },
+        getPrototypeOf() {
+          throw new Error('trap');
+        },
+      },
+    );
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+    const badToString = {
+      toString() {
+        throw new Error('no');
+      },
+    };
+    const hostile = new Map<unknown, unknown>([
+      [10n, 'bigint key'],
+      [Symbol('s'), 'symbol key'],
+      [undefined, 'undefined key'],
+      [() => 1, 'function key'],
+      [throwingGetter, 'getter key'],
+      [{ big: 1n }, 'object with bigint'],
+    ]);
+    const inputs: unknown[] = [
+      hostile,
+      10n,
+      Symbol('x'),
+      throwingGetter,
+      throwingProxy,
+      revocable.proxy,
+      { nested: [revocable.proxy, throwingProxy, 5n] },
+      new Set([Symbol('y'), 7n]),
+      Object.assign(new Error('e'), { name: badToString }),
+    ];
+    for (const input of inputs) {
+      expect(() => redactForLog({ value: input })).not.toThrow();
+      expect(() => redactSecrets({ value: input })).not.toThrow();
+      const { lines, log } = capture();
+      expect(() => log.error({ value: input }, 'hostile')).not.toThrow();
+      expect(lines.join('')).not.toContain(FAKE_TOKEN_SECRET);
+    }
+    const rendered = redactForLog<unknown>({ m: hostile }) as {
+      m: { entries: Record<string, unknown> };
+    };
+    expect(rendered.m.entries['10']).toBe('bigint key');
+    expect(rendered.m.entries['Symbol(s)']).toBe('symbol key');
+    expect(rendered.m.entries['undefined']).toBe('undefined key');
+    expect(rendered.m.entries['[Function]']).toBe('function key');
   });
 });

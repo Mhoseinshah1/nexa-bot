@@ -116,14 +116,61 @@ function redactValue(value: unknown, depth: number, state: RedactState): unknown
   state.nodes += 1;
   if (state.content && state.nodes > MAX_NODES) return '[truncated]';
   if (typeof value === 'string') return state.content ? redactSecretText(value) : value;
+  // A log line is JSON: a bigint or a symbol is rendered as text rather than handed to a
+  // serialiser that may throw on it (PR #261 review).
+  if (state.content && (typeof value === 'bigint' || typeof value === 'symbol')) {
+    return safeString(value);
+  }
   if (value === null || typeof value !== 'object') return value;
 
   if (state.ancestors.has(value)) return '[circular]';
   state.ancestors.add(value);
   try {
     return redactObject(value, depth, state);
+  } catch (error) {
+    // TOTAL, never throwing (PR #261 review). This runs inside every logger call and
+    // every audit write, so a getter that throws, a Proxy whose trap throws or a revoked
+    // Proxy must cost one field, not the caller's operation. The error is not rendered:
+    // its message is whatever the hostile value chose.
+    const name = error instanceof Error ? redactSecretText(safeString(error.name)) : 'thrown';
+    return `[unreadable: ${name}]`;
   } finally {
     state.ancestors.delete(value);
+  }
+}
+
+/** `String(x)` that cannot throw (a symbol's description, an object whose toString throws). */
+function safeString(value: unknown): string {
+  try {
+    return typeof value === 'symbol' ? value.toString() : String(value);
+  } catch {
+    return '[unprintable]';
+  }
+}
+
+/**
+ * The fields an Error carries canonically. They are read once, explicitly, and redacted by
+ * CONTENT in every mode — and skipped by the enumerable pass, because a subclass that
+ * assigns `this.message = …` after `super()` makes `message` an enumerable own property,
+ * and that pass (key rule only, in the durable mode) wrote the raw value over the redacted
+ * one (PR #261 review).
+ */
+const CANONICAL_ERROR_FIELDS = new Set(['name', 'message', 'stack', 'cause']);
+
+/**
+ * A Map key as a string, for any key at all (PR #261 review). `JSON.stringify` throws on a
+ * bigint and returns `undefined` for a symbol, a function or `undefined` itself — and the
+ * next line then threw reading it as text. A key is rendered, never trusted to render.
+ */
+function mapKeyLabel(key: unknown, depth: number, state: RedactState): string {
+  if (typeof key === 'string') return key;
+  if (key === null || typeof key !== 'object') {
+    return typeof key === 'function' ? '[Function]' : safeString(key);
+  }
+  try {
+    return JSON.stringify(redactValue(key, depth + 1, state)) ?? '[object]';
+  } catch {
+    return '[unreadable key]';
   }
 }
 
@@ -137,8 +184,15 @@ function redactEntries(
   depth: number,
   state: RedactState,
   out: Record<string, unknown>,
+  skip?: ReadonlySet<string>,
 ): Record<string, unknown> {
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (skip?.has(key)) continue;
+    // A FUNCTION is never copied (PR #261 review). JSON drops every function except
+    // one: an own `toJSON`, which the serialiser CALLS after this redaction ran — so a
+    // hook returning a token wrote it verbatim. Dropping functions loses nothing JSON
+    // would have kept, in either mode.
+    if (typeof item === 'function') continue;
     // The pair was the secret: the key is replaced, and so is its value.
     if (keyIsSecretText(key, state)) {
       out[REDACTED] = REDACTED;
@@ -177,11 +231,11 @@ function redactObject(value: object, depth: number, state: RedactState): unknown
   // log twice.
   if (value instanceof Error) {
     const out: Record<string, unknown> = {
-      name: redactSecretText(String(value.name)),
-      message: redactSecretText(String(value.message)),
+      name: redactSecretText(safeString(value.name)),
+      message: redactSecretText(safeString(value.message)),
     };
     if (typeof value.stack === 'string') out['stack'] = redactStack(value.stack);
-    redactEntries(value, depth, state, out);
+    redactEntries(value, depth, state, out, CANONICAL_ERROR_FIELDS);
     // `cause` and an AggregateError's `errors` are own NON-ENUMERABLE properties,
     // so the entries above never see them — and each is the failure's real reason.
     if (value.cause !== undefined) out['cause'] = redactValue(value.cause, depth + 1, state);
@@ -209,8 +263,7 @@ function redactObject(value: object, depth: number, state: RedactState): unknown
       for (const [key, item] of value as Map<unknown, unknown>) {
         if (shown >= MAX_COLLECTION_ENTRIES) break;
         shown += 1;
-        const label =
-          typeof key === 'string' ? key : JSON.stringify(redactValue(key, depth + 1, state));
+        const label = mapKeyLabel(key, depth, state);
         if (keyIsSecretText(label, state)) {
           entries[REDACTED] = REDACTED;
           continue;
@@ -245,6 +298,23 @@ function redactObject(value: object, depth: number, state: RedactState): unknown
 const SAFE_STACK_FRAME =
   /^\s{1,16}at (?:async )?(?:(?:new )?[^\s()]{1,256}(?: \[as [^\]\s]{1,64}\])? \()?(?:file:\/\/\/?|node:)?[A-Za-z0-9_./@+~\\-]{1,512}(?::\d{1,7}){1,2}\)?$|^\s{1,16}at (?:async )?(?:[^\s()]{1,256} \()?<anonymous>\)?$/;
 
+/**
+ * The SHAPE rules alone — a bot token, a bare JWT, a bare scheme credential — for a frame
+ * line (not the card rule: a temp directory's 13-digit timestamp would pass Luhn one time
+ * in ten and cost the path) the labelled rule must not read (PR #261 review). A shape-valid frame
+ * was kept verbatim, and a computed function name or a path segment can still carry a
+ * credential (`at Object.eyJ… (…)`); these patterns cannot mistake `token-service.js:88:5`
+ * for one, so the frame keeps its file:line.
+ */
+function redactCredentialShapes(text: string): string {
+  const scanned = normaliseForScan(text);
+  const redacted = scanned
+    .replace(TELEGRAM_BOT_TOKEN, REDACTED)
+    .replace(BARE_JWT, REDACTED)
+    .replace(BARE_CREDENTIAL, (match) => `${/^\S+/.exec(match)?.[0] ?? ''} ${REDACTED}`);
+  return redacted === scanned ? text : redacted;
+}
+
 export function redactStack(stack: string): string {
   const lines = stack.split('\n');
   const kept = lines.slice(0, MAX_STACK_LINES);
@@ -253,7 +323,9 @@ export function redactStack(stack: string): string {
   const header = redactSecretText(kept.slice(0, headerEnd).join('\n'));
   const frames = kept
     .slice(headerEnd)
-    .map((line) => (SAFE_STACK_FRAME.test(line) ? line : redactSecretText(line)));
+    .map((line) =>
+      SAFE_STACK_FRAME.test(line) ? redactCredentialShapes(line) : redactSecretText(line),
+    );
   const dropped = lines.length - kept.length;
   const tail = dropped > 0 ? [`    … ${String(dropped)} more lines`] : [];
   return [header, ...frames, ...tail].join('\n');
@@ -433,14 +505,20 @@ const INVISIBLE_RANGES: readonly (readonly [number, number])[] = [
   [0xfe00, 0xfe0f], // variation selectors
   [0xfeff, 0xfeff], // byte-order mark
   [0xffa0, 0xffa0], // halfwidth Hangul filler
+  // Beyond the BMP (PR #261 review): each is a surrogate PAIR in a JS string, so the
+  // class below is built with the `u` flag and matches the code point, not its halves.
+  [0x1bca0, 0x1bca3], // shorthand format controls
+  [0x1d173, 0x1d17a], // musical symbol format controls
+  [0xe0000, 0xe007f], // tag characters
+  [0xe0100, 0xe01ef], // variation selectors supplement
 ];
 
 function codePointClass(ranges: readonly (readonly [number, number])[]): RegExp {
-  const escape = (codePoint: number): string => `\\u${codePoint.toString(16).padStart(4, '0')}`;
+  const escape = (codePoint: number): string => `\\u{${codePoint.toString(16)}}`;
   const body = ranges
     .map(([from, to]) => (from === to ? escape(from) : `${escape(from)}-${escape(to)}`))
     .join('');
-  return new RegExp(`[${body}]`, 'g');
+  return new RegExp(`[${body}]`, 'gu');
 }
 
 const INVISIBLE_CHARACTERS = codePointClass(INVISIBLE_RANGES);
@@ -500,6 +578,11 @@ const CREDENTIAL_HEADER_LINE = /((?:proxy-)?authorization)(\s*[=:]\s*)[^\r\n]+/g
  * `apikey`, so dropping them here costs nothing.
  */
 const BARE_SCHEMES = ['Bearer', 'Basic', 'Digest', 'Negotiate'];
+
+/** `bearer` → `[Bb][Ee][Aa][Rr][Ee][Rr]`: one word in every casing, inside a case-SENSITIVE pattern. */
+function anyCase(word: string): string {
+  return [...word].map((ch) => `[${ch.toUpperCase()}${ch.toLowerCase()}]`).join('');
+}
 
 /**
  * Schemes recognised as the START OF A VALUE, under any header name.
@@ -581,9 +664,11 @@ const LABELLED_SECRET = new RegExp(
  * a gap named is worth more than a gap implied.
  */
 const BARE_CREDENTIAL = new RegExp(
-  // `bearer` in either case as well: `bearer eyJ…` is how a lower-casing client
-  // quotes it, and unlike `token` the word is not one an operator's sentence uses.
-  String.raw`\b(?:${BARE_SCHEMES.join('|')}|bearer|BEARER)\s+` +
+  // `Bearer` in EVERY casing (PR #261 review): an HTTP auth scheme is
+  // case-insensitive, so `bEaReR <token>` is the same credential, and unlike
+  // `Basic` or `Digest` the word is not one an operator's sentence uses. The
+  // other scheme words stay case-sensitive, for the reason given above.
+  String.raw`\b(?:${BARE_SCHEMES.join('|')}|${anyCase('bearer')})\s+` +
     String.raw`(?=[A-Za-z0-9._~+/-]*[0-9._~+/-])[A-Za-z0-9._~+/-]{8,}=*`,
   'g',
 );
