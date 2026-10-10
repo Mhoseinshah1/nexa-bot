@@ -222,9 +222,12 @@ export async function startFakeTelegram(): Promise<{
   readonly sent: Record<string, unknown>[];
   readonly files: Map<string, Buffer>;
   readonly downloads: string[];
+  /** Every request, raw: a multipart `sendPhoto` (a delivery card) is not JSON. */
+  readonly requests: { readonly url: string; readonly raw: string; readonly at: number }[];
   close(): Promise<void>;
 }> {
   const sent: Record<string, unknown>[] = [];
+  const requests: { url: string; raw: string; at: number }[] = [];
   const files = new Map<string, Buffer>();
   const downloads: string[] = [];
   const server: Server = createServer((request, response) => {
@@ -233,6 +236,7 @@ export async function startFakeTelegram(): Promise<{
     request.on('end', () => {
       const url = request.url ?? '';
       const raw = Buffer.concat(chunks).toString('utf8');
+      requests.push({ url, raw, at: Date.now() });
       let body: Record<string, unknown> | null;
       try {
         body = JSON.parse(raw) as Record<string, unknown>;
@@ -273,6 +277,7 @@ export async function startFakeTelegram(): Promise<{
     sent,
     files,
     downloads,
+    requests,
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());

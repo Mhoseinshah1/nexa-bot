@@ -132,7 +132,7 @@ SELECT p.reference,
   FROM payments p
   LEFT JOIN gateway_invoices gi ON gi.payment_id = p.id AND gi.tenant_id = p.tenant_id
   LEFT JOIN customer_notifications n
-         ON n.tenant_id = p.tenant_id AND n.subject_id = p.id::text
+         ON n.tenant_id = p.tenant_id AND n.subject_id = p.id
         AND n.kind IN ('WALLET_TOPUP_CREDITED', 'RECEIPT_CREDITED_TO_WALLET')
  WHERE p.tenant_id = $1 AND p.id = $2;
 ```
@@ -154,3 +154,86 @@ SELECT p.reference,
 
 No figure here is a promise of "the same second": the bound is one lane interval plus the
 pass's work on a healthy installation.
+
+## 7. The four stages, and how to read a field report (FIX-01, 2026-10-10)
+
+The owner's later report — a purchase announced about 2 s after approval, a top-up's final
+message 90–120 s after it — needs the delay split before anything is changed. Four stages:
+
+| Stage                                    | Where it is measured                                                                                                                                                                                        |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Discovery (provider approval → seen)  | `gateway payment settlement latency` (lane, worker): `trigger`, `invoiceToDiscoveryMs`, `dueToDiscoveryMs`, `webhookToDiscoveryMs`, `inquiryAttempt`.                                                       |
+| 2. Settlement (seen → ledger committed)  | Same line, `discoveryToConfirmedMs`; `payments.confirmed_at`.                                                                                                                                               |
+| 3. Announcement queued (committed → due) | Top-up: zero by construction — `WALLET_TOPUP_CREDITED` is enqueued IN the settling transaction (`customerMessage: NOTIFICATION_LANE`). Order: the provisioning operation, same transaction (`PROVISIONER`). |
+| 4. Sent (due → Telegram answered)        | Top-up: `customer notification latency` (`queuedMs`, `preSendMs`, `sendMs`), §5. Order: the provisioner's tick (`PROVISIONER_TICK_MS`, 5 s) and `services.delivered_at`.                                    |
+
+The provider's own approval instant is **not knowable** here — no provider in this
+repository reports one this installation can trust — so stage 1 is measured from the
+invoice's creation and from the moment the row fell due, never from "when the customer paid".
+The line carries identifiers and durations only: no amount, key, card, payload or link.
+
+`trigger` says what made the discovering row due, derived from the claimed row
+(`domain/inquiry-discovery.ts`): `WEBHOOK_HINT` (a webhook since the last inquiry),
+`RECEIPT_ACK` (a TonPays Telegram receipt acknowledgement), `CUSTOMER_HINT` (the «بررسی
+وضعیت» tap or a CentralPay browser return — the API logs `gateway status check brought an
+inquiry forward` / `gateway browser return brought a verify forward` by payment id, which
+tells them apart), `OPERATOR_RECHECK`, `SCHEDULED` (the backoff alone), `STARS_UPDATE`
+(Telegram's `successful_payment`, settled on arrival). A manual card-to-card approval is the
+operator's decision; its stage 1 is `payment_receipts.created_at` → `payments.confirmed_at`.
+
+**Which version a report was made on matters.** `v0.5.5` (`eb139bef`) runs the customer
+notification lane every **60 s** (`CUSTOMER_NOTIFICATION_INTERVAL_MS`); `main` after #252
+runs it every 2 s. On v0.5.5 a top-up's stage 4 alone is 0–60 s, and an order's is not (the
+provisioner sends directly, 0–5 s) — the top-up/purchase asymmetry. 90–120 s needs 30–60 s
+more than that, and on the current schedule it can only come from stage 1 (below), a
+Telegram 429 (≥ 60 s), or a backlog in a 200-row lane pass. The query below says which.
+
+Worst case per rail on `main`, a healthy installation, from the provider's approval:
+
+| Rail                  | Stage 1, no hint                                                                                            | Stage 1, hinted                                                                                             | Stages 2–3 | Stage 4 top-up (v0.5.5 / main) | Stage 4 order           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------ | ----------------------- |
+| TonPays               | the gap to the next ask: 20 s, then 40, 80, 160, 300 s (asks at t+20, 60, 140, 300, 600 s …) + one 3 s pass | webhook / tap: ≤ 5 s spacing + 3 s pass                                                                     | same pass  | 60 s / 2 s                     | 5 s tick + panel create |
+| TonPays Telegram      | before a receipt: as TonPays; after its acknowledgement: 120 s (first hour of review), 600 s to 6 h         | ack: next pass; webhook ≤ 8 s; tap ≥ 60 s                                                                   | same pass  | 60 s / 2 s                     | 5 s + panel             |
+| NOWPayments           | as TonPays (chain confirmations dominate)                                                                   | verified IPN ≤ 8 s                                                                                          | same pass  | 60 s / 2 s                     | 5 s + panel             |
+| CentralPay            | as TonPays                                                                                                  | browser return ≤ 8 s **once routed** (`/payments/return/*` was not routed by Caddy before batch 2026-10-10) | same pass  | 60 s / 2 s                     | 5 s + panel             |
+| Telegram Stars        | 0 (Telegram's authenticated update)                                                                         | —                                                                                                           | inline     | 60 s / 2 s                     | 5 s + panel             |
+| Card to card (manual) | the operator                                                                                                | —                                                                                                           | inline     | 60 s / 2 s                     | 5 s + panel             |
+
+Plus, for every lane: a pass's creations (up to 5 × 15 s each) run before its inquiries, a
+budget-exhausted provider defers an inquiry by 5 s, and a 429 from the provider moves it at
+least 60 s. `tests/integration/payment-discovery-latency.test.ts` walks these on the real
+schedule, pass by pass at the production interval, for an order and a top-up, through to the
+delivery card (provisioner) or the amount-and-code message (lane).
+
+### The per-payment query for a field report
+
+```sql
+-- One payment: every stage's timestamp, top-up or order. Ids and times only.
+SELECT p.id, p.order_id IS NULL                         AS is_topup,
+       p.gateway_provider, p.created_at                 AS payment_created_at,
+       gi.created_invoice_at,                            -- the invoice the customer paid
+       gi.last_webhook_at, gi.webhook_count,             -- did the provider call back at all?
+       gi.callback_url_sent,                             -- did we send it a callback URL?
+       gi.inquiry_attempts, gi.last_inquiry_at,          -- the inquiry that decided
+       p.confirmed_at,                                   -- stage 2: ledger + state, one tx
+       n.created_at  AS notice_queued_at,                -- stage 3 (top-up): = confirmed_at
+       n.resolved_at AS notice_sent_at, n.state AS notice_state, n.attempts,
+       s.created_at  AS service_created_at,              -- stage 4 (order): provisioner
+       s.delivered_at, s.delivery_state,
+       p.confirmed_at - gi.created_invoice_at          AS invoice_to_confirmed,
+       COALESCE(n.resolved_at, s.delivered_at) - p.confirmed_at AS confirmed_to_message
+  FROM payments p
+  LEFT JOIN gateway_invoices gi ON gi.tenant_id = p.tenant_id AND gi.payment_id = p.id
+  LEFT JOIN customer_notifications n
+         ON n.tenant_id = p.tenant_id AND n.subject_id = p.id
+        AND n.kind IN ('WALLET_TOPUP_CREDITED', 'RECEIPT_CREDITED_TO_WALLET')
+  LEFT JOIN services s ON s.tenant_id = p.tenant_id AND s.order_id = p.order_id
+ WHERE p.tenant_id = $1 AND p.id = $2;
+```
+
+Read it as: `last_webhook_at` NULL with `callback_url_sent` true means the provider never
+called back and discovery waited for the schedule; `last_inquiry_at` far after the
+customer's payment with a small `inquiry_attempts` is a backoff gap; `confirmed_to_message`
+above a few seconds on a top-up is the lane (60 s on v0.5.5, a 429, or a backlog — the
+`customer notification latency` line for that payment says which). Then grep the worker's
+log for the payment id: the settlement line gives the trigger and the durations directly.
