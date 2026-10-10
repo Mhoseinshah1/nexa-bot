@@ -98,11 +98,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.transfer_prompt':
     'سرویس را به چه کاربری می‌خواهید انتقال دهید؟ شناسه کاربری عددی مقصد را ارسال کنید.',
   'bot.service.transfer_confirm':
-    '🔄 انتقال سرویس\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n{icon:identity} شناسه کاربری مقصد: {recipientId}\n{icon:user} نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
+    '🔄 انتقال سرویس\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n{icon:identity} شناسه کاربری مقصد: {recipientId}\n{icon:user} نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n{icon:warning} لینک اشتراک این سرویس تغییر نمی‌کند؛ هر کسی که لینک فعلی را دارد، از جمله خود شما، همچنان می‌تواند با آن متصل شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
   'bot.service.transfer_confirm_button': '✅ تأیید انتقال سرویس',
   'bot.service.transfer_done': '{icon:success} سرویس با موفقیت به کاربر مقصد منتقل شد.',
   'bot.service.transfer_received':
-    '{icon:referral} یک سرویس برای شما انتقال داده شد\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\nبرای دیدن مشخصات سرویس، دکمهٔ زیر را بزنید.',
+    '{icon:referral} یک سرویس برای شما انتقال داده شد\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\nلینک اشتراک این سرویس تغییر نکرده و همان لینک قبلی است. برای دیدن مشخصات سرویس، دکمهٔ زیر را بزنید.',
   'bot.service.transfer_details_button': 'مشخصات سرویس',
   'bot.service.transfer_recipient_invalid':
     'این یک شناسه کاربری عددی معتبر نیست. شناسه کاربری عددی مقصد را دوباره ارسال کنید.',
@@ -733,12 +733,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * customer who sent money for an order will otherwise assume the order went through.
    */
   /*
-   * Owner spec §2.2: the same two lines as a confirmed top-up. The order (if any) is still
-   * open and payable from the wallet — the pre-invoice says so where it is paid, so this
-   * sentence no longer explains it, and never sends the customer to «/wallet».
+   * Batch 2026-10-10 (brief C2.1) restores that sentence, which owner spec §2.2 had dropped
+   * by making this body the top-up's: the disposition leaves the payment FAILED and the
+   * order AWAITING_PAYMENT (`ReceiptDispositionService.creditToWallet`), so «پرداخت شما …
+   * تأیید شد» read as "your order is paid". The lane carries no payload (ADR-0030 §1) and
+   * the same kind serves a top-up receipt, so the order sentence is conditional rather than
+   * a new placeholder. Still never sends the customer to «/wallet».
    */
   'bot.payment.receipt_credited_to_wallet':
-    '{icon:success} پرداخت شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما اضافه شد.\n\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:success} رسید شما بررسی و تأیید شد.\n{icon:credit} مبلغ {amount} به کیف پول شما واریز شد.\nاین مبلغ به‌عنوان پرداخت سفارش ثبت نشده است؛ اگر رسید برای سفارشی بود، آن سفارش هنوز در انتظار پرداخت است و تا پایان مهلتش می‌توانید آن را از کیف پول پرداخت کنید.\n\n\nکد پیگیری پرداخت: {reference}',
 
   /*
    * It used to end «سپس رسید را ارسال نمایید» — "then send the receipt" — and no
@@ -846,10 +849,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:error} پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.expired':
     '{icon:time} مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.\n\nکد پیگیری پرداخت: {reference}',
-  /* WP-A9: one reminder before the window closes, while it can still be paid. */
+  /*
+   * WP-A9: one reminder before the window closes, while it can still be paid. Brief C2.4:
+   * the code is labelled the way every other payment message labels it, on its own line —
+   * dropped with the line when the payment's reference cannot be read.
+   */
   'bot.payment.pending_reminder':
-    '{icon:time} تنها {minutes} دقیقه تا پایان مهلت پرداخت فاکتور {reference} باقی مانده است (تا {expiresAt}).\n' +
-    'اگر هنوز واریز نکرده‌اید، پیش از پایان مهلت واریز کنید و رسید را ارسال کنید.',
+    '{icon:time} تنها {minutes} دقیقه تا پایان مهلت پرداخت باقی مانده است (تا {expiresAt}).\n' +
+    'اگر هنوز واریز نکرده‌اید، پیش از پایان مهلت واریز کنید و تصویر رسید را بفرستید.\n\n' +
+    'کد پیگیری پرداخت: {reference}',
   /*
    * P2. Paying from the wallet while a transfer the customer vouched for is waiting: the
    * review decides this order, and nothing was taken from the wallet.
@@ -963,8 +971,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.location_confirm_free':
     '{icon:location} تغییر لوکیشن سرویس\n\n📍 لوکیشن فعلی: {fromLocation}\n📍 لوکیشن جدید: {toLocation}\n{icon:amount} هزینه: رایگان\n\n{icon:info} ممکن است پس از تغییر لوکیشن، لینک یا اطلاعات اتصال سرویس تغییر کند. در این صورت اطلاعات جدید برای شما ارسال می‌شود.\n\nبرای انجام تغییر، دکمهٔ تأیید را بزنید.',
   'bot.service.location_confirm_button': '✅ تأیید تغییر لوکیشن',
+  /*
+   * Brief C4/C5.5: the request is QUEUED here (the provisioner runs it later), so the
+   * message opens with the waiting marker, never the success one.
+   */
   'bot.service.location_requested':
-    '{icon:success} درخواست تغییر لوکیشن ثبت شد و روی سرور انجام می‌شود.\nنتیجه از طریق همین ربات به شما اطلاع داده می‌شود.',
+    '{icon:time} درخواست تغییر لوکیشن ثبت شد و در نوبت انجام روی سرور است؛ هنوز اعمال نشده است.\nنتیجه از طریق همین ربات به شما اطلاع داده می‌شود.',
   'bot.service.location_same': 'سرویس شما همین حالا در این لوکیشن است. تغییری انجام نشد.',
   'bot.service.location_cooldown':
     'لوکیشن این سرویس به‌تازگی تغییر کرده است. لطفاً بعداً دوباره تلاش کنید.',
@@ -1160,10 +1172,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.contact_button': '📨 ارسال پیام به پشتیبانی',
   'bot.support.contact': '{icon:support} برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
+  /* Brief C2.6: the «شما» form every other customer text uses, and no promised time. */
   'bot.support.handoff_notice':
-    'پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد. لطفاً همین‌جا ادامه بده؛ نیازی به ارسال دوباره نیست.',
+    'پیام شما برای بررسی بیشتر به پشتیبان ارجاع شد و پاسخ در همین گفتگو داده می‌شود. لطفاً گفتگو را همین‌جا ادامه دهید؛ نیازی به ارسال دوبارهٔ پیام نیست.',
   'bot.order.preinvoice':
-    '{icon:invoice} پیش فاکتور شما:\n\n{icon:user} نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n{icon:amount} قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n\n{description}\n\n{icon:wallet} موجودی کیف پول شما: {walletBalance}\n\n{icon:wallet} سفارش شما آماده پرداخت است',
+    '{icon:invoice} پیش‌فاکتور\n\n{icon:service} سرویس: {productName}\n{icon:user} نام کاربری: {serviceUsername}\n{icon:date} مدت: {durationDays}\n{icon:traffic} حجم: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n{icon:amount} مبلغ سفارش: {total}\n\n{description}\n\n{icon:wallet} موجودی کیف پول: {walletBalance}\n\n{icon:purchase} سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
   'bot.order.preinvoice_custom':
     '🛠 سرویس دلخواه\n📍 لوکیشن: {location}\n📦 حجم: {volumeBytes} × {pricePerGb} = {volumePrice}\n{icon:time} مدت: {durationDays} × {pricePerDay} = {timePrice}',
   'bot.order.preinvoice_devices':
@@ -1211,11 +1224,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_preparing':
     '{icon:time} فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند لحظه صبر کنید؛ لینک پرداخت به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_invoice':
-    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ: {total}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:amount} مبلغ قابل پرداخت: {total}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت کنید؛ پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\nنتیجه به‌صورت خودکار در همین گفتگو اعلام می‌شود و پس از پرداخت نیازی به کار دیگری نیست.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_invoice_order_fee':
-    '{icon:invoice} فاکتور پرداخت آنلاین\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور پرداخت آنلاین سفارش\n\n{icon:purchase} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت کنید؛ پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\nنتیجه به‌صورت خودکار در همین گفتگو اعلام می‌شود و پس از پرداخت نیازی به کار دیگری نیست.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_invoice_topup_fee':
-    '{icon:invoice} فاکتور شارژ آنلاین کیف پول\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\n\nپس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود. دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور شارژ آنلاین کیف پول\n\n{icon:wallet} مبلغ شارژ: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفقط مبلغ شارژ به کیف پول شما واریز می‌شود و کارمزد درگاه واریز نمی‌شود.\nبا دکمهٔ زیر پرداخت کنید؛ پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.\nنتیجه به‌صورت خودکار در همین گفتگو اعلام می‌شود و پس از پرداخت نیازی به کار دیگری نیست.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_pay_button': '💳 پرداخت آنلاین',
   'bot.payment.gateway_check_button': '🔄 بررسی وضعیت پرداخت',
   'bot.payment.gateway_confirmed':
@@ -1279,7 +1292,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.topup_expired':
     'مهلت این درخواست به پایان رسیده است. لطفاً دوباره از کیف پول شروع کنید.',
   'bot.service.list':
-    '✨ اشتراک های خریداری شده توسط شما\n\n{icon:warning} برای مشاهده اطلاعات و مدیریت روی نام کاربری کلیک کنید\n\n🔴 همچنین برای پیدا کردن سریع سرویس خود و مدیریت آن می توانید از دکمه "🔎 جستجو سرویس" استفاده کنید\n\n📄 صفحه {page} از {pages} | 📊 کل: {total} سرویس',
+    '{icon:service} سرویس‌های شما\n\nبرای دیدن جزئیات و مدیریت هر سرویس، روی نام کاربری آن بزنید.\nبرای پیدا کردن سریع یک سرویس، از دکمهٔ جستجو در پایین فهرست استفاده کنید.\n\n📄 صفحه {page} از {pages} | کل: {total} سرویس',
   // Batch 01 item 3: the marker is the service's DERIVED status (green serving, red over).
   'bot.service.list_item_button': '{marker} {username}',
   'bot.service.search_label_button': 'جستجو نام کاربری',
@@ -1337,7 +1350,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.renew_unavailable':
     '{icon:warning} در حال حاضر گزینه‌ای برای تمدید این سرویس در دسترس نیست.',
   'bot.referral.screen':
-    '💼 زیرمجموعه‌گیری و هدیه خوش‌آمد\n\n📱 خبری خوش راحت ترین راه پول دراوردن\n\n📤 با ارسال 📎 لینک دعوت اختصاصی خود به مخاطبین و دوستان خود به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد {commissionPercent} درصد پورسانت دریافت کنید!\n\n{icon:payment} بعد از دعوت دیگران میتوانید درخواست برداشت موجودی خود به کارت بانکیتان را ثبت کنید و مبلغ به کارت بانکی شما واریز خواهد شد.\n\n{icon:wallet}برای برداشت موجودی بدست آمده به پشتیبانی ربات پیام ارسال کنید\n\n🔰همکاری با شما باعث افتخار ماست\n\n{icon:link} {referralLink}\n\n{giftBlock}\n\n💸 پورسانت خرید:\n• {commissionPercent} درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد\n\n📊 آمار شما:\n• زیرمجموعه‌ها: {referralCount} نفر\n• خریدها: {referredPurchaseCount} عدد\n• مجموع خرید: {referredPurchaseTotal}\n• پورسانت دریافتی: {commissionReceivedTotal}\n\n📢 دعوت کن، هدیه بگیر، رشد کن!',
+    '💼 زیرمجموعه‌گیری\n\n📤 لینک دعوت اختصاصی خود را برای دوستانتان بفرستید. به ازای خرید کاربرانی که برای نخستین بار با لینک شما وارد ربات شوند، طبق شرایط برنامه {commissionPercent} درصد پورسانت پس از تحویل سرویس به کیف پول شما در ربات واریز می‌شود.\n\n{icon:link} {referralLink}\n\n{giftBlock}\n\n📊 آمار شما:\n• زیرمجموعه‌ها: {referralCount} نفر\n• خریدها: {referredPurchaseCount} عدد\n• مجموع خرید: {referredPurchaseTotal}\n• پورسانت دریافتی: {commissionReceivedTotal}',
   'bot.referral.gift_block':
     '{icon:referral} هدیه عضویت:\n• مجموع هدیه: {total}\n• {referrerPercent}٪ برای شما (معرف)\n• {referredPercent}٪ برای زیرمجموعه (کاربر جدید)',
   'bot.referral.share_button': '🔗 اشتراک گذاری لینک',
@@ -1347,7 +1360,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.referral.gift_disabled': 'هدیهٔ عضویت در حال حاضر فعال نیست.',
   // R1: the forwardable invite (no figures) and the customer's own dashboard.
   'bot.referral.invite_card':
-    '💼 زیرمجموعه‌گیری و هدیه خوش‌آمد\n\n📱 خبری خوش راحت ترین راه پول دراوردن\n\n📤 با ارسال 📎 لینک دعوت اختصاصی خود به مخاطبین و دوستان خود به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد {commissionPercent} درصد پورسانت دریافت کنید!\n\n{icon:payment} بعد از دعوت دیگران میتوانید درخواست برداشت موجودی خود به کارت بانکیتان را ثبت کنید و مبلغ به کارت بانکی شما واریز خواهد شد.\n\n{icon:wallet}برای برداشت موجودی بدست آمده به پشتیبانی ربات پیام ارسال کنید\n\n🔰همکاری با شما باعث افتخار ماست\n\n{icon:link} {referralLink}\n\n📢 دعوت کن، هدیه بگیر، رشد کن!',
+    '💼 دعوت به ربات\n\nبا لینک زیر وارد ربات شوید و سرویس موردنیاز خود را تهیه کنید.\n\n💸 دعوت‌کننده به ازای خرید کاربرانی که برای نخستین بار با این لینک وارد ربات شوند، طبق شرایط برنامهٔ زیرمجموعه‌گیری {commissionPercent} درصد پورسانت می‌گیرد که پس از تحویل سرویس به کیف پول او در ربات واریز می‌شود.\n\n{icon:link} {referralLink}',
   'bot.referral.dashboard':
     '📊 زیرمجموعه‌گیری — آمار و شرایط شما\n\n{giftBlock}\n\n💸 پورسانت خرید:\n• {commissionPercent} درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد\n• {commissionScope}\n• حداقل مبلغ خرید: {minimumOrder}\n\n📊 آمار شما:\n• زیرمجموعه‌ها: {referralCount} نفر\n• خریدها: {referredPurchaseCount} عدد\n• مجموع خرید: {referredPurchaseTotal}\n• پورسانت دریافتی: {commissionReceivedTotal}\n\n📤 پیام بالا را برای دوستانتان هدایت (فوروارد) کنید، یا با دکمهٔ زیر لینک خود را به اشتراک بگذارید.',
   'bot.referral.scope_first_order': 'فقط برای اولین خرید هر زیرمجموعه',

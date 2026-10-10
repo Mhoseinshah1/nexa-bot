@@ -297,13 +297,14 @@ describe('a customer looks after the services they bought', () => {
       expect(result.replyKey).toBe('bot.service.list');
       expect(lastText()).toBe(
         [
-          '✨ اشتراک های خریداری شده توسط شما',
+          // Batch 2026-10-10 (brief C3): names no button that does not exist, and no
+          // 🔴 bullet that reads as the inactive status marker.
+          '📦 سرویس‌های شما',
           '',
-          '⚠️ برای مشاهده اطلاعات و مدیریت روی نام کاربری کلیک کنید',
+          'برای دیدن جزئیات و مدیریت هر سرویس، روی نام کاربری آن بزنید.',
+          'برای پیدا کردن سریع یک سرویس، از دکمهٔ جستجو در پایین فهرست استفاده کنید.',
           '',
-          '🔴 همچنین برای پیدا کردن سریع سرویس خود و مدیریت آن می توانید از دکمه "🔎 جستجو سرویس" استفاده کنید',
-          '',
-          '📄 صفحه 1 از 1 | 📊 کل: 1 سرویس',
+          '📄 صفحه 1 از 1 | کل: 1 سرویس',
         ].join('\n'),
       );
       const markup = lastMarkup();
@@ -387,14 +388,14 @@ describe('a customer looks after the services they bought', () => {
         ids.push((await activeService(`page-${String(i)}`, maryam, productId)).id);
       }
       await handle(text('/services'));
-      expect(lastText()).toContain('📄 صفحه 1 از 2 | 📊 کل: 11 سرویس');
+      expect(lastText()).toContain('📄 صفحه 1 از 2 | کل: 11 سرویس');
       const first = buttonsOf(lastMarkup());
       expect(first.filter((b) => b.startsWith('sv:'))).toHaveLength(10);
       expect(first).toContain('sl:2');
       expect(first).not.toContain('sl:0');
 
       await handle(tap('sl:2'));
-      expect(lastDrawnText()).toContain('📄 صفحه 2 از 2 | 📊 کل: 11 سرویس');
+      expect(lastDrawnText()).toContain('📄 صفحه 2 از 2 | کل: 11 سرویس');
       const second = buttonsOf(lastDrawnMarkup());
       expect(second.filter((b) => b.startsWith('sv:'))).toHaveLength(1);
       expect(second).toContain('sl:1');
@@ -433,7 +434,7 @@ describe('a customer looks after the services they bought', () => {
       expect(messages()).toHaveLength(0);
       expect(lastDrawn()?.url).toContain('/editMessageText');
       expect(lastDrawn()?.body['message_id']).toBe(listMessage);
-      expect(lastDrawnText()).toContain('✨ اشتراک های خریداری شده توسط شما');
+      expect(lastDrawnText()).toContain('📦 سرویس‌های شما');
       expect(buttonsOf(lastDrawnMarkup())).toContain(`sv:${service.id}`);
     });
 

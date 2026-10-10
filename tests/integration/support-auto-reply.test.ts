@@ -73,7 +73,7 @@ const grounded = {
 
 /** Roadmap A4: the one message a handoff sends the customer (template `bot.support.handoff_notice`). */
 const HANDOFF_NOTICE =
-  'پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد. لطفاً همین‌جا ادامه بده؛ نیازی به ارسال دوباره نیست.';
+  'پیام شما برای بررسی بیشتر به پشتیبان ارجاع شد و پاسخ در همین گفتگو داده می‌شود. لطفاً گفتگو را همین‌جا ادامه دهید؛ نیازی به ارسال دوبارهٔ پیام نیست.';
 
 /**
  * Telegram, scripted. Roadmap A4: the handoff notice is recorded apart (`notices`) and answered

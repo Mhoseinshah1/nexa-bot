@@ -28,20 +28,28 @@ const GATEWAY_INVOICES = [
   'bot.payment.gateway_invoice_topup_fee',
 ] as const satisfies readonly TemplateKey[];
 
+/*
+ * A11's meaning, in the owner-approved shorter copy of batch 2026-10-10 (brief C2.3): the
+ * 45-word paragraph became two short sentences. It used to pin the paragraph byte for byte;
+ * it now pins what A11 asked for — a payment counts only once the gateway confirms it, the
+ * result arrives automatically, and nothing else is needed after paying — and that the
+ * manual check is never presented as the way to confirm. The body no longer names the
+ * check button: it is shared by every link gateway, and a route without that button
+ * (FIX-09, Dragon Stars) must not be told to press it.
+ */
 describe('A11: the gateway invoice says the payment is checked automatically', () => {
   for (const key of GATEWAY_INVOICES) {
-    it(`${key} says the check is automatic and the button is only a fallback`, () => {
+    it(`${key} says the check is automatic and nothing else is needed`, () => {
       const text = body(key);
       // The contract's own requirement survives: a payment counts only once confirmed.
       expect(text).toContain('پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود.');
       expect(text).toContain(
-        'پس از پرداخت نیازی به کار دیگری نیست: وضعیت پرداخت به‌صورت خودکار بررسی می‌شود و نتیجه در همین گفتگو به شما اعلام می‌شود.',
-      );
-      expect(text).toContain(
-        'دکمهٔ «بررسی وضعیت پرداخت» فقط برای وقتی است که چند دقیقه پس از پرداخت هنوز نتیجه‌ای دریافت نکرده‌اید.',
+        'نتیجه به‌صورت خودکار در همین گفتگو اعلام می‌شود و پس از پرداخت نیازی به کار دیگری نیست.',
       );
       // The old instruction made the manual check the way to confirm a payment.
       expect(text).not.toContain('پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید');
+      // …and the long paragraph that replaced it is gone (brief C2.3).
+      expect(text).not.toContain('فقط برای وقتی است که چند دقیقه پس از پرداخت');
       expect(tokensOf(text)).toEqual(declared(key));
     });
   }

@@ -598,12 +598,15 @@ describe('a submitted receipt and its three dispositions', () => {
         { amount: money(240_000n, 'IRT'), reference: paymentTrackingCode(payment!.reference) },
       ]);
       expect(lane.rendered().join('\n')).toContain(
-        `اضافه شد.\n\n\nکد پیگیری پرداخت: ${paymentTrackingCode(payment?.reference ?? 'MISSING')}`,
+        `پرداخت کنید.\n\n\nکد پیگیری پرداخت: ${paymentTrackingCode(payment?.reference ?? 'MISSING')}`,
       );
-      // Owner spec §2.2: the reviewer's figure in the approved credit copy, and no command.
+      // The reviewer's figure, and no command.
       expect(lane.rendered().join('\n')).toContain(
-        '💎 مبلغ 240,000 تومان به کیف پول شما اضافه شد.',
+        '💎 مبلغ 240,000 تومان به کیف پول شما واریز شد.',
       );
+      // Brief C2.1 (batch 2026-10-10): the order this receipt was for is NOT paid by it.
+      expect(lane.rendered().join('\n')).toContain('به‌عنوان پرداخت سفارش ثبت نشده است');
+      expect(lane.rendered().join('\n')).toContain('در انتظار پرداخت');
       expect(lane.rendered().join('\n')).not.toContain('/wallet');
     });
 

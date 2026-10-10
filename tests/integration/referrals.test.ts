@@ -2066,7 +2066,7 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
         const dashboardText = String(dashboard?.body['text']);
         // 1. The forwardable invite: the introduction, the program's rate and the link —
         //    and NO statistics of any kind, and no buttons to forward along with it.
-        expect(inviteText.startsWith('💼 زیرمجموعه‌گیری و هدیه خوش‌آمد')).toBe(true);
+        expect(inviteText.startsWith('💼 دعوت به ربات')).toBe(true);
         expect(inviteText).toContain(`🔗 ${link}`);
         expect(inviteText).toContain('10 درصد پورسانت');
         expect(inviteText).not.toContain('📊');
