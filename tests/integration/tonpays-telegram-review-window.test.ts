@@ -487,7 +487,10 @@ describe('the TonPays Telegram provider review window', () => {
       clock.at(new Date(review.reviewStartedAt.getTime() + 10_000));
       await lane.runOnce(tenantA);
       const next = new Date((await invoiceOf(review.paymentId)).next_inquiry_at!);
-      expect(next.getTime() - (review.reviewStartedAt.getTime() + 10_000)).toBe(120_000);
+      // FIX-06: every 30 s for the first ten minutes, with the step's ±10 % jitter.
+      const step = next.getTime() - (review.reviewStartedAt.getTime() + 10_000);
+      expect(step).toBeGreaterThanOrEqual(27_000);
+      expect(step).toBeLessThanOrEqual(33_000);
       clock.at(new Date(review.reviewUntil.getTime() - 60_000));
       await ctx.container.database.db.execute(
         sql`UPDATE gateway_invoices SET next_inquiry_at = ${clock.now()} WHERE payment_id = ${review.paymentId}`,
@@ -1167,6 +1170,15 @@ describe('the TonPays Telegram provider review window', () => {
 
     it('review F5: in review, a customer’s check is spaced a minute after the last inquiry', async () => {
       const review = await reviewed(30);
+      /*
+       * FIX-06: past the review's first ten minutes, where the cadence (120 s) is slower than
+       * the tap's minute. Inside them the cadence asks every 30 s on its own, so a tap cannot
+       * bring anything forward there — `requestInquiry` only ever moves a row EARLIER.
+       */
+      clock.at(new Date(review.reviewStartedAt.getTime() + 11 * 60_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = ${clock.now()} WHERE payment_id = ${review.paymentId}`,
+      );
       await lane.runOnce(tenantA);
       const [asked] = await rows<{ last_inquiry_at: string | null }>(
         sql`SELECT last_inquiry_at FROM gateway_invoices WHERE payment_id = ${review.paymentId}`,

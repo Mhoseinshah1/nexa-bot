@@ -97,7 +97,8 @@ export function sniffReceiptImage(bytes: Uint8Array): TonPaysTelegramReceiptMime
 
 /**
  * When the next background inquiry is due during a provider review (audit §9.6.5), after one
- * answered at `at`: two minutes for the first hour, ten until the sixth, thirty until the
+ * answered at `at`: thirty seconds for the first ten minutes (FIX-06), two minutes to the first
+ * hour, ten until the sixth, thirty until the
  * end — and one last question fifteen seconds before the review deadline, so an approval in
  * the final minutes is not lost to the cadence. Null once nothing remains to ask for.
  */
@@ -105,13 +106,15 @@ export function reviewInquiryNextAt(
   reviewStartedAt: Date,
   reviewUntil: Date,
   at: Date,
+  /** FIX-06: the step's deterministic jitter (`inquiry-schedule.ts`); none by default. */
+  jitter: (ms: number) => number = (ms) => ms,
 ): Date | null {
   const since = at.getTime() - reviewStartedAt.getTime();
   const step =
     TONPAYS_TELEGRAM_REVIEW_INQUIRY_CADENCE.find((band) => since < band.untilMs)?.intervalMs ??
     TONPAYS_TELEGRAM_REVIEW_INQUIRY_CADENCE[TONPAYS_TELEGRAM_REVIEW_INQUIRY_CADENCE.length - 1]!
       .intervalMs;
-  const next = new Date(at.getTime() + step);
+  const next = new Date(at.getTime() + jitter(step));
   if (next.getTime() < reviewUntil.getTime() - 15_000) return next;
   const last = new Date(reviewUntil.getTime() - 15_000);
   return last.getTime() > at.getTime() ? last : null;

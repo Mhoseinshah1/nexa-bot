@@ -23,14 +23,20 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import {
-  FIRST_INQUIRY_DELAY_MS,
   INQUIRY_MIN_SPACING_MS,
   POST_DEADLINE_INQUIRY_MAX,
   TONPAYS_CREATE_MAX_ATTEMPTS,
   TONPAYS_CREATE_RETRY_MS,
-  inquiryBackoffMs,
 } from '../domain/tonpays.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import { inquiryDiscoveryTrigger } from '../domain/inquiry-discovery.js';
+import {
+  firstInquiryAt,
+  hintReservePerMinute,
+  inquiryScheduleFor,
+  jitteredMs,
+  nextScheduledInquiryAt,
+} from '../domain/inquiry-schedule.js';
 import {
   receiptAcknowledged,
   reviewInquiryNextAt,
@@ -300,6 +306,13 @@ export interface GatewayPassReport {
   readonly held: number;
 }
 
+/** The inquiry counters of one pass (`GatewayPassReport`), as the pass accumulates them. */
+type InquiryCounts = {
+  -readonly [
+    K in 'inquired' | 'settled' | 'unsuccessful' | 'lateCompletions' | 'reviewsOpened' | 'held'
+  ]: GatewayPassReport[K];
+};
+
 /** What a webhook did. Never anything the caller could turn into money. */
 export type GatewayWebhookResult =
   | 'SCHEDULED'
@@ -392,14 +405,26 @@ export class GatewayPaymentService {
     };
     // A stopped tenant's rows simply wait, and nothing about them is sent anywhere.
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return report;
-    const now = this.deps.clock.now();
     const actor = this.actor();
 
-    const creationLease = new Date(now.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    /*
+     * FIX-06: a due inquiry a hint brought forward (a webhook, the customer's tap, a browser
+     * return, a receipt acknowledgement, an operator) is asked BEFORE this pass's creations.
+     * A create may take its whole 15 s timeout, five of them a pass; a customer who has just
+     * paid and tapped must not wait behind them. The scheduled rows claimed with them are
+     * handed straight back and asked in their usual place below.
+     */
+    let callBudgetSpent = false;
+    await this.runHintedInquiries(scope, actor, report);
+
+    // A fresh clock: the hinted inquiries above may have taken a while, and a lease measured
+    // from before them would be shorter than it says.
+    const creationNow = this.deps.clock.now();
+    const creationLease = new Date(creationNow.getTime() + GATEWAY_CLAIM_LEASE_MS);
     const creating = await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.claimCreating(
         scope,
-        now,
+        creationNow,
         GATEWAY_CLAIM_LEASE_MS,
         GATEWAY_CREATE_BATCH,
         tx,
@@ -409,6 +434,7 @@ export class GatewayPaymentService {
       const result = await this.processCreation(scope, actor, claimed);
       if (result === 'BUDGET') {
         report.budgetExhausted = true;
+        callBudgetSpent = true;
         // The deferred row cleared its own lease; the rows not reached give theirs back.
         await this.releaseUnreached(scope, 'CREATION', creating.slice(index + 1), creationLease);
         break;
@@ -442,39 +468,97 @@ export class GatewayPaymentService {
           await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
           break;
         }
-        report.inquired += 1;
-        if (result === 'SETTLED') report.settled += 1;
-        if (result === 'UNSUCCESSFUL') report.unsuccessful += 1;
-        if (result === 'LATE') report.lateCompletions += 1;
-        if (result === 'REVIEW') report.reviewsOpened += 1;
-        if (result === 'HELD') report.held += 1;
-        // R2: an attempt that settled or ended is shown so on the message that shows it.
-        if (
-          result === 'SETTLED' ||
-          result === 'UNSUCCESSFUL' ||
-          result === 'LATE' ||
-          result === 'REVIEW' ||
-          result === 'HELD'
-        ) {
-          await this.refreshScreens(scope, claimed.invoice.paymentId);
-        }
+        await this.countInquiry(scope, report, claimed, result);
       }
     }
 
     // TonPays Telegram: no provider call — always run, whatever the budget said.
     report.reviewsLapsed = await this.loseTrackOfLapsedReviews(scope, actor);
     await this.sweepReceiptCaptures(scope);
-    if (!report.budgetExhausted) {
+    /*
+     * FIX-06: gated on the CALL budget, not on the inquiries' share of it. An inquiry that met
+     * its share (smaller now that a quarter is kept for hinted rows) used to stop the card and
+     * receipt lanes for the pass — and, every row staying due, for the rest of the minute —
+     * though their own limit had room. A receipt upload is how a TonPays Telegram approval
+     * starts; it must not wait behind background inquiries. Each lane takes its own budget.
+     */
+    if (!callBudgetSpent) {
       const cards = await this.runCardChanges(scope, actor);
       report.cardChanges = cards.done;
-      report.budgetExhausted = cards.budgetExhausted;
+      callBudgetSpent = cards.budgetExhausted;
+      report.budgetExhausted ||= cards.budgetExhausted;
     }
-    if (!report.budgetExhausted) {
+    if (!callBudgetSpent) {
       const receipts = await this.runReceipts(scope, actor);
       report.receipts = receipts.done;
-      report.budgetExhausted = receipts.budgetExhausted;
+      report.budgetExhausted ||= receipts.budgetExhausted;
     }
     return report;
+  }
+
+  /**
+   * FIX-06: the hinted part of the due inquiries, asked first (see `runOnce`). Claims a batch
+   * in due order exactly as the main inquiry step does, gives the scheduled rows their leases
+   * back at once, and asks the hinted ones. An empty budget ends the pass's inquiries as it
+   * does below.
+   */
+  private async runHintedInquiries(
+    scope: TenantContext,
+    actor: ActorContext,
+    report: InquiryCounts & { budgetExhausted: boolean },
+  ): Promise<void> {
+    const at = this.deps.clock.now();
+    const lease = new Date(at.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    const due = await this.deps.uow.run(scope, (tx) =>
+      this.deps.invoices.claimInquiries(
+        scope,
+        at,
+        GATEWAY_CLAIM_LEASE_MS,
+        GATEWAY_INQUIRY_BATCH,
+        tx,
+      ),
+    );
+    const hinted = due.filter((claimed) => this.isHinted(claimed));
+    await this.releaseUnreached(
+      scope,
+      'INQUIRY',
+      due.filter((claimed) => !hinted.includes(claimed)),
+      lease,
+    );
+    for (const [index, claimed] of hinted.entries()) {
+      const result = await this.processInquiry(scope, actor, claimed);
+      if (result === 'BUDGET') {
+        report.budgetExhausted = true;
+        await this.releaseUnreached(scope, 'INQUIRY', hinted.slice(index), lease);
+        return;
+      }
+      await this.countInquiry(scope, report, claimed, result);
+    }
+  }
+
+  /** One answered inquiry, counted, and shown on the customer's message when it ended. */
+  private async countInquiry(
+    scope: TenantContext,
+    report: InquiryCounts,
+    claimed: ClaimedGatewayInvoice,
+    result: 'OPEN' | 'SETTLED' | 'UNSUCCESSFUL' | 'LATE' | 'ERROR' | 'REVIEW' | 'HELD',
+  ): Promise<void> {
+    report.inquired += 1;
+    if (result === 'SETTLED') report.settled += 1;
+    if (result === 'UNSUCCESSFUL') report.unsuccessful += 1;
+    if (result === 'LATE') report.lateCompletions += 1;
+    if (result === 'REVIEW') report.reviewsOpened += 1;
+    if (result === 'HELD') report.held += 1;
+    // R2: an attempt that settled or ended is shown so on the message that shows it.
+    if (
+      result === 'SETTLED' ||
+      result === 'UNSUCCESSFUL' ||
+      result === 'LATE' ||
+      result === 'REVIEW' ||
+      result === 'HELD'
+    ) {
+      await this.refreshScreens(scope, claimed.invoice.paymentId);
+    }
   }
 
   /**
@@ -681,7 +765,7 @@ export class GatewayPaymentService {
               // A provider that pushes its payments is never asked (Stars).
               firstInquiryAt:
                 descriptor.approval === 'INQUIRY'
-                  ? new Date(at.getTime() + FIRST_INQUIRY_DELAY_MS)
+                  ? firstInquiryAt(inquiryScheduleFor(invoice.provider), at, invoice.paymentId)
                   : null,
             },
             at,
@@ -859,9 +943,14 @@ export class GatewayPaymentService {
       return 'ERROR';
     }
 
-    if (
-      !(await this.deps.budget.take(scope, invoice.provider, adapter.inquiryBudgetPerMinute, now))
-    ) {
+    /*
+     * FIX-06: a scheduled inquiry may not take the top quarter of the provider's inquiry
+     * budget; a hinted one may. The budget itself is the provider's, unchanged.
+     */
+    const inquiryLimit = this.isHinted(claimed)
+      ? adapter.inquiryBudgetPerMinute
+      : adapter.inquiryBudgetPerMinute - hintReservePerMinute(adapter.inquiryBudgetPerMinute);
+    if (!(await this.deps.budget.take(scope, invoice.provider, inquiryLimit, now))) {
       await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.requestInquiry(
           scope,
@@ -896,6 +985,7 @@ export class GatewayPaymentService {
             new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS),
             reviewUntil,
             at,
+            (ms) => jitteredMs(ms, invoice.paymentId, invoice.inquiryAttempts + 1),
           )
         : this.nextInquiryAt(invoice, at, expiresAt);
 
@@ -1304,7 +1394,13 @@ export class GatewayPaymentService {
     expiresAt: Date | null,
   ): Date | null {
     if (expiresAt === null) return null;
-    const next = new Date(at.getTime() + inquiryBackoffMs(invoice.inquiryAttempts + 1));
+    // FIX-06: the provider's own schedule (`domain/inquiry-schedule.ts`), jittered.
+    const next = nextScheduledInquiryAt(inquiryScheduleFor(invoice.provider), {
+      at,
+      attempt: invoice.inquiryAttempts + 1,
+      invoiceCreatedAt: invoice.createdInvoiceAt,
+      paymentId: invoice.paymentId,
+    });
     if (next.getTime() < expiresAt.getTime()) return next;
     /*
      * One last question just before the deadline, so a payment made in the final minutes
@@ -1312,6 +1408,70 @@ export class GatewayPaymentService {
      */
     const last = new Date(expiresAt.getTime() - 15_000);
     return last.getTime() > at.getTime() ? last : null;
+  }
+
+  /**
+   * FIX-06: whether a due row was brought forward by a hint rather than by its schedule
+   * (`domain/inquiry-discovery.ts`). Decides only WHEN it is asked and from which share of
+   * the budget — never what its answer means.
+   */
+  private isHinted(claimed: ClaimedGatewayInvoice): boolean {
+    const { invoice } = claimed;
+    const reviewUntil = claimed.paymentReviewUntil;
+    const reviewStartedAt =
+      reviewUntil === null
+        ? null
+        : new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS);
+    const expiresAt = gatewaySettlementDeadline({
+      expiresAt: claimed.paymentExpiresAt,
+      providerReviewUntil: reviewUntil,
+    });
+    return (
+      inquiryDiscoveryTrigger({
+        dueAt: invoice.nextInquiryAt,
+        scheduledAt: this.scheduledInquiryAt(invoice, reviewUntil, reviewStartedAt, expiresAt),
+        lastInquiryAt: invoice.lastInquiryAt,
+        lastWebhookAt: invoice.lastWebhookAt,
+        operatorRequestedAt: invoice.reconcileInquiryRequestedAt,
+        reviewStartedAt,
+      }) !== 'SCHEDULED'
+    );
+  }
+
+  /**
+   * When the schedule ALONE put this row's next inquiry — the same functions, with the same
+   * jitter, that wrote it. Null when it cannot be said (no create time, no deadline).
+   */
+  private scheduledInquiryAt(
+    invoice: GatewayInvoiceRecord,
+    reviewUntil: Date | null,
+    reviewStartedAt: Date | null,
+    expiresAt: Date | null,
+  ): Date | null {
+    if (invoice.lastInquiryAt === null) {
+      return invoice.createdInvoiceAt === null
+        ? null
+        : firstInquiryAt(
+            inquiryScheduleFor(invoice.provider),
+            invoice.createdInvoiceAt,
+            invoice.paymentId,
+          );
+    }
+    if (
+      reviewUntil !== null &&
+      reviewStartedAt !== null &&
+      invoice.lastInquiryAt.getTime() >= reviewStartedAt.getTime()
+    ) {
+      return reviewInquiryNextAt(reviewStartedAt, reviewUntil, invoice.lastInquiryAt, (ms) =>
+        jitteredMs(ms, invoice.paymentId, invoice.inquiryAttempts),
+      );
+    }
+    // `inquiryAttempts` already counts the last inquiry; the schedule was computed before it.
+    return this.nextInquiryAt(
+      { ...invoice, inquiryAttempts: Math.max(0, invoice.inquiryAttempts - 1) },
+      invoice.lastInquiryAt,
+      expiresAt,
+    );
   }
 
   // ---------------------------------------------------------------------------------------
