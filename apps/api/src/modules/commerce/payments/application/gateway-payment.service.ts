@@ -368,8 +368,9 @@ export interface GatewayPassReport {
   readonly reviewsOpened: number;
   readonly held: number;
   /**
-   * FIX10 BUG-1: rows (and lanes) whose processing threw this pass. Each was logged as
+   * FIX10 BUG-1: rows whose processing threw this pass. Each was logged as
    * `GATEWAY_ROW_FAILED_MESSAGE` with its ids and backed off; the pass went on without it.
+   * A row's failure is isolated: the lane around it still did its work.
    */
   readonly rowFailures: number;
   /**
@@ -378,6 +379,13 @@ export interface GatewayPassReport {
    */
   readonly leaseReleased: number;
   readonly leaseLost: number;
+  /**
+   * FIX10 (Codex #268 A): LANES that threw this pass — a claim, a sweep, anything outside a
+   * single row. The pass still runs every other lane, but a lane that failed did nothing, so
+   * the loop records NO progress for this pass: a lane that throws on every pass goes stale
+   * and the worker's readiness says so, instead of a fresh heartbeat over a dead queue.
+   */
+  readonly laneFailures: number;
 }
 
 /** What a webhook did. Never anything the caller could turn into money. */
@@ -485,6 +493,7 @@ export class GatewayPaymentService {
       rowFailures: 0,
       leaseReleased: 0,
       leaseLost: 0,
+      laneFailures: 0,
     };
     // A stopped tenant's rows simply wait, and nothing about them is sent anywhere.
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return report;
@@ -564,6 +573,7 @@ export class GatewayPaymentService {
                 'CREATION',
                 claimed.invoice.paymentId,
                 creationLease,
+                claimed.invoice.updatedAt,
                 rowFailureRetryAt(at, claimed.invoice.createdAt),
                 at,
                 tx,
@@ -625,6 +635,8 @@ export class GatewayPaymentService {
               'INQUIRY',
               invoice.paymentId,
               inquiryLease,
+              // The claim's own stamp: a row written since (a hint) keeps its earlier time.
+              invoice.updatedAt,
               // Measured from the last inquiry that RECORDED something: a row failing
               // pass after pass backs off further each time, up to the cap.
               rowFailureRetryAt(
@@ -679,14 +691,15 @@ export class GatewayPaymentService {
    */
   private async isolatedLane(
     scope: TenantContext,
-    report: { rowFailures: number },
+    report: { laneFailures: number },
     lane: 'CREATION' | 'INQUIRY' | 'REVIEW_SWEEP' | 'CAPTURE_SWEEP' | 'CARD_CHANGE' | 'RECEIPT',
     run: () => Promise<void>,
   ): Promise<void> {
     try {
       await run();
     } catch (error: unknown) {
-      report.rowFailures += 1;
+      // Counted apart from a row's failure: this one withholds the pass's progress.
+      report.laneFailures += 1;
       this.deps.logger.error(
         { tenantId: String(scope.tenantId), lane, ...errorFacts(error) },
         'gateway payment lane failed; the pass continues with the next lane',

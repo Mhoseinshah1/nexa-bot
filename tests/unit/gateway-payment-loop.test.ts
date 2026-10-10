@@ -65,4 +65,76 @@ describe('the gateway lane freshness', () => {
     expect(loop.isFresh(nowMs)).toBe(true);
     await loop.stop();
   });
+
+  /*
+   * FIX10 (Codex #268 A): the pass isolates its lanes, so a lane that throws no longer throws
+   * the pass. It must still not be called progress: a claim that fails on every pass would
+   * otherwise keep readiness fresh over a queue nothing is working.
+   */
+  describe('a pass that returns with a failure', () => {
+    const report = (failures: { rowFailures: number; laneFailures: number }) => ({
+      created: 0,
+      createFailed: 0,
+      createUnknown: 0,
+      createDeferred: 0,
+      inquired: 0,
+      settled: 0,
+      unsuccessful: 0,
+      lateCompletions: 0,
+      budgetExhausted: false,
+      ...failures,
+    });
+    const loopOver = (failures: { rowFailures: number; laneFailures: number }) => {
+      const clock = { nowMs: 1_000_000 };
+      const lane = {
+        runOnce: () => Promise.resolve(report(failures)),
+      } as unknown as GatewayPaymentService;
+      const errors: string[] = [];
+      const loop = new GatewayPaymentLoop(lane, {
+        scope: () => ({ tenantId: 't' as never, botInstanceId: null }),
+        intervalMs: INTERVAL,
+        passBoundMs: PASS_BOUND,
+        now: () => clock.nowMs,
+        logger: { info: () => undefined, error: (_c, message) => errors.push(message) },
+      });
+      return { clock, loop, errors };
+    };
+    const window = PASS_BOUND + 3 * INTERVAL;
+
+    it('goes stale when a lane fails on every pass, however many passes return', async () => {
+      const { clock, loop } = loopOver({ rowFailures: 0, laneFailures: 1 });
+      loop.start();
+      // A pass every interval, each one returning, for longer than the freshness window.
+      for (let elapsed = 0; elapsed <= window + INTERVAL; elapsed += INTERVAL) {
+        clock.nowMs = 1_000_000 + elapsed;
+        await loop.tick();
+      }
+      expect(loop.isFresh(clock.nowMs)).toBe(false);
+      await loop.stop();
+    });
+
+    it('stays fresh when only rows failed: each was isolated and the lane did its work', async () => {
+      const { clock, loop } = loopOver({ rowFailures: 3, laneFailures: 0 });
+      loop.start();
+      for (let elapsed = 0; elapsed <= window + INTERVAL; elapsed += INTERVAL) {
+        clock.nowMs = 1_000_000 + elapsed;
+        await loop.tick();
+      }
+      expect(loop.isFresh(clock.nowMs)).toBe(true);
+      await loop.stop();
+    });
+
+    it('recovers on the first pass whose lanes all succeed', async () => {
+      const failures = { rowFailures: 0, laneFailures: 1 };
+      const { clock, loop } = loopOver(failures);
+      loop.start();
+      clock.nowMs = 1_000_000 + window + 1;
+      await loop.tick();
+      expect(loop.isFresh(clock.nowMs)).toBe(false);
+      failures.laneFailures = 0;
+      await loop.tick();
+      expect(loop.isFresh(clock.nowMs)).toBe(true);
+      await loop.stop();
+    });
+  });
 });
