@@ -17,7 +17,6 @@ import {
   runBackupNow,
   uploadRecoveryArchive,
   verifyRecovery,
-  ApiError,
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -44,7 +43,8 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { BackupScheduleCard } from './backup-schedule';
-import { RecoveryKitSection, recoveryFailureAdvice } from './recovery-kit';
+import { RecoveryKitSection } from './recovery-kit';
+import { recoveryErrorText, recoveryFailureText } from '../recovery-failure-labels';
 
 /**
  * Backup and disaster recovery.
@@ -343,7 +343,9 @@ function BackupStatus({
       {/* BUSY is not a failure: one backup at a time is the invariant working. */}
       {outcome === 'BUSY' && <Banner tone="warn">{t('web.recovery_run_busy')}</Banner>}
       {outcome === 'COMPLETED' && <Banner tone="ok">{t('web.recovery_run_done')}</Banner>}
-      {error !== null && error !== undefined && <Banner tone="danger">{safeMessage(error)}</Banner>}
+      {error !== null && error !== undefined && (
+        <Banner tone="danger">{recoveryErrorText(error)}</Banner>
+      )}
     </>
   );
 }
@@ -525,7 +527,7 @@ function RecoveryOperations({
             {upload.isPending ? t('web.recovery_uploading') : t('web.recovery_upload_send')}
           </button>
         </div>
-        {upload.error !== null && <Banner tone="danger">{safeMessage(upload.error)}</Banner>}
+        {upload.error !== null && <Banner tone="danger">{recoveryErrorText(upload.error)}</Banner>}
       </form>
 
       {current !== null && (
@@ -573,8 +575,8 @@ function RecoveryOperations({
             ]}
           />
 
-          {recoveryFailureAdvice(current.failureCode) !== null && (
-            <Banner tone="danger">{recoveryFailureAdvice(current.failureCode)}</Banner>
+          {current.failureCode !== null && (
+            <Banner tone="danger">{recoveryFailureText(current.failureCode)}</Banner>
           )}
 
           {current.state === 'UPLOADED' && (
@@ -592,7 +594,9 @@ function RecoveryOperations({
               </div>
             </>
           )}
-          {verify.error !== null && <Banner tone="danger">{safeMessage(verify.error)}</Banner>}
+          {verify.error !== null && (
+            <Banner tone="danger">{recoveryErrorText(verify.error)}</Banner>
+          )}
 
           {current.state === 'RESTORE_TEST_PASSED' && (
             <RestoreConfirmation
@@ -766,7 +770,9 @@ function RestoreConfirmation({
           {t('web.recovery_confirm_button')}
         </button>
       </div>
-      {error !== null && error !== undefined && <Banner tone="danger">{safeMessage(error)}</Banner>}
+      {error !== null && error !== undefined && (
+        <Banner tone="danger">{recoveryErrorText(error)}</Banner>
+      )}
     </div>
   );
 }
@@ -852,7 +858,19 @@ function recoveryColumns(): readonly Column<RecoveryRequestSummary>[] {
     {
       key: 'failure',
       header: t('web.recovery_failure'),
-      render: (row) => (row.failureCode === null ? '—' : <Ltr>{row.failureCode}</Ltr>),
+      // The failure in words, with the code under it for whoever reads the server log.
+      render: (row) =>
+        row.failureCode === null ? (
+          '—'
+        ) : (
+          <>
+            {recoveryFailureText(row.failureCode)}
+            <br />
+            <span className="muted small">
+              <Ltr>{row.failureCode}</Ltr>
+            </span>
+          </>
+        ),
     },
     {
       /*
@@ -937,17 +955,4 @@ function stateTone(state: RecoveryRequestSummary['state']): 'ok' | 'warn' | 'dan
     return 'warn';
   }
   return 'info';
-}
-
-/**
- * An error an operator may see, and never a raw exception.
- *
- * `ApiError` carries the server's own message, which is author-controlled and
- * safe to render. Anything else is reported as a generic failure: an unexpected
- * throw here is a `TypeError` or a `ZodError` whose message names internals, and
- * putting one on screen is how a stack trace ends up in a screenshot in a
- * ticket.
- */
-function safeMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : t('web.error');
 }
