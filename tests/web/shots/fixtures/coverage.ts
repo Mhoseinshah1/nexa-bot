@@ -8,6 +8,32 @@ import {
   termsOverviewSchema,
 } from '@nexa/contracts';
 import { ago, fixture, type ShotFixture } from '../fixture.ts';
+import { PANELS } from './ops-a.ts';
+
+type Json = Record<string, unknown>;
+
+/*
+ * /panel-health: the production service returns ONE ROW PER LIVE PANEL (it pages
+ * `PanelService.list`, the same page `/panels` serves), so the fleet here is the five
+ * panels the `/panels` fixture shows — not an empty dashboard no operator with panels
+ * would ever see. No failed or unknown provisioning in the window and no open ops-log
+ * conditions; the service counts are the panel's own non-terminated services, so the
+ * card agrees with the capacity the panel row reports.
+ */
+const HEALTH_ROWS: readonly Json[] = PANELS.map((panel) => {
+  const capacity = panel['capacity'] as { services: number };
+  return {
+    panel,
+    services: { active: capacity.services, suspended: 0, expired: 0, pending: 0, unreconciled: 0 },
+    provisioning: {
+      failedInWindow: 0,
+      unknownOpen: 0,
+      lastFailureAt: null,
+      lastFailureKind: null,
+    },
+    conditions: [],
+  };
+});
 
 /**
  * FIX-12: answers for requests `pnpm web:responsive` reported as `unfixtured` on routes
@@ -25,7 +51,23 @@ export const COVERAGE: readonly ShotFixture[] = [
     totp: { state: 'DISABLED', activatedAt: null },
     backupCodes: { remaining: 0, generatedAt: null },
   }),
-  fixture('/auth/sessions', adminSessionListResponseSchema, { sessions: [] }),
+  // An authenticated caller always holds at least the session that made the request:
+  // the signed-in owner of `shell.ts`, signed in at its `lastLoginAt`, expiring at its
+  // `expiresAt`, and marked `current` as `listOwnSessions` marks it.
+  fixture('/auth/sessions', adminSessionListResponseSchema, {
+    sessions: [
+      {
+        id: '019260ab-cdef-7012-8345-6789abcdef31',
+        issuedAt: ago(5),
+        expiresAt: ago(-60 * 8),
+        lastSeenAt: ago(0),
+        ip: '203.0.113.24',
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36',
+        current: true,
+      },
+    ],
+  }),
   fixture('/auth/security/events', securityEventListResponseSchema, { events: [] }),
 
   // /orders/:id: an order routed explicitly, which has no balancing decision.
@@ -43,9 +85,9 @@ export const COVERAGE: readonly ShotFixture[] = [
     ],
   }),
 
-  // /panel-health: a fleet with nothing to report.
+  // /panel-health: the live fleet of `/panels`, one row each.
   fixture('/panel-health', panelHealthDashboardResponseSchema, {
-    rows: [],
+    rows: HEALTH_ROWS,
     nextCursor: null,
     generatedAt: ago(0),
     failureWindowMs: 86_400_000,
