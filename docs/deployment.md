@@ -55,7 +55,7 @@ Five containers on one host, behind Compose.
   `/telegram/webhook/*`, `/payments/webhook/*` and `/payments/return/*` to the
   API.
 
-  That last one is not optional. The webhook controller is at
+  The Telegram webhook route is not optional. Its controller is at
   `/telegram/webhook/:botInstanceId` and is **not** under `/api`, so without its
   own route it falls to the SPA fallback and answers Telegram `index.html` with
   a 200 — which Telegram reads as "update accepted". Every update would be
