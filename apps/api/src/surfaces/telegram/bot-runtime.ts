@@ -11341,13 +11341,31 @@ export class BotRuntime {
       if (service === null) return toastReply('bot.service.not_found');
       await this.showWorking(scope, actor, customer, serviceId, card);
     }
+    let requested;
     try {
-      await changes.requestFree(scope, actor, customer.id, {
+      requested = await changes.requestFree(scope, actor, customer.id, {
         ...request,
         ...(card === null ? {} : { card }),
       });
     } catch (error) {
       return refusal(error);
+    }
+    /*
+     * Codex review of #257, as `serviceAction`: a concurrent redelivery can pass the check
+     * above before the first delivery recorded the move, and its «working» edit can land
+     * after the move ENDED and was drawn on the card. Its request replays the first one's,
+     * so the move's operation is read back by its change and, once ended, the card is drawn
+     * as it now is rather than left «working».
+     */
+    if (card !== null) {
+      const operation = await this.deps.services.findLocationChange(
+        scope,
+        serviceId,
+        requested.changeId,
+      );
+      if (operation !== null && operationHasEnded(operation)) {
+        return this.cardAfterEnded(scope, actor, customer, serviceId, operation.state);
+      }
     }
     // FIX-08: the card reads «working» and is answered when the move ends.
     if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };

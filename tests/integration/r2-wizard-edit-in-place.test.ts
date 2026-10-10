@@ -73,6 +73,8 @@ describe('the wizard is one message, edited in place', () => {
   const uneditable = new Set<number>();
   /** FIX-08: messages whose edit Telegram answers with a 429, or with a 500 (unknown). */
   const editAnswers = new Map<number, 'RATE_LIMITED' | 'SERVER_ERROR'>();
+  /** Codex review of #257: messages whose keyboard Telegram refuses to clear (a 400). */
+  const unclearable = new Set<number>();
 
   beforeAll(async () => {
     calls = [];
@@ -99,6 +101,19 @@ describe('the wizard is one message, edited in place', () => {
               error_code: status,
               description: forced === 'RATE_LIMITED' ? 'Too Many Requests' : 'Internal',
               ...(forced === 'RATE_LIMITED' ? { parameters: { retry_after: 1 } } : {}),
+            }),
+          );
+          return;
+        }
+        if (method === 'editMessageReplyMarkup' && unclearable.has(Number(body['message_id']))) {
+          // Codex review of #257: a keyboard Telegram will not take off either.
+          calls.push({ method, body, sentId: null });
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 400,
+              description: "Bad Request: message can't be edited",
             }),
           );
           return;
@@ -151,6 +166,7 @@ describe('the wizard is one message, edited in place', () => {
     calls = [];
     uneditable.clear();
     editAnswers.clear();
+    unclearable.clear();
     panel = await startFakeMarzban({ host: '127.0.0.2' });
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-r2', roleKeys: ['owner'] }),
@@ -776,29 +792,37 @@ describe('the wizard is one message, edited in place', () => {
     expect(methods()).toEqual([]);
   });
 
-  it('a renewal settled outside the wizard is answered on its still-open quote, which loses its pay buttons (FIX-08)', async () => {
-    const service = await activeService('renew-manual');
-    const { quoteId } = await renewalQuote(service.id, 740);
+  /**
+   * A renewal settled by an operator's hand rather than the wizard, and delivered: its quote
+   * is still OPEN, carrying its pay buttons, when the lane comes to answer it.
+   */
+  async function renewalSettledOutside(
+    name: string,
+    messageId: number,
+  ): Promise<{ service: { id: string; username: string }; quoteId: number }> {
+    const service = await activeService(name);
+    const { quoteId, pay } = await renewalQuote(service.id, messageId);
     const [order] = await rows<{ id: string }>(
       sql`SELECT id FROM orders WHERE purpose = 'RENEW' AND tenant_id = ${tenantA.tenantId}`,
     );
     if (order === undefined) throw new Error('no renewal order');
-
-    // Settled by an operator's hand rather than the wizard: the payment screen is still open.
     const confirmed = await ctx.container.commercialActions.confirm(
       tenantA,
-      systemActor('rm'),
+      systemActor(`${name}-c`),
       maryam,
-      {
-        orderId: order.id,
-        idempotencyKey: 'rm-confirm',
-      },
+      { orderId: order.id, idempotencyKey: `${name}-rm-confirm` },
     );
-    await ctx.container.payments.settleFromWallet(tenantA, systemActor('rm'), maryam, {
-      idempotencyKey: 'rm-pay',
+    await ctx.container.payments.settleFromWallet(tenantA, systemActor(`${name}-p`), maryam, {
+      idempotencyKey: `${name}-rm-pay`,
       orderId: confirmed.id,
     });
     await ctx.container.provisionerLoop.tick();
+    expect(buttonsOf(calls.find((call) => call.sentId === quoteId))).toContain(pay);
+    return { service, quoteId };
+  }
+
+  it('a renewal settled outside the wizard is answered on its still-open quote, which loses its pay buttons (FIX-08)', async () => {
+    const { service, quoteId } = await renewalSettledOutside('renew-manual', 740);
 
     await settleScreens();
     calls = [];
@@ -813,6 +837,100 @@ describe('the wizard is one message, edited in place', () => {
           AND message_id = ${quoteId}`,
     );
     expect(screen?.step, 'and a stale pay tap on it is refused by the gate').toBe('CLOSED');
+  });
+
+  it('a refused edit of a still-open quote clears its pay buttons and sends the result once (Codex review of #257)', async () => {
+    const { service, quoteId } = await renewalSettledOutside('renew-refused', 741);
+    // Telegram will not edit the quote's text (a non-text message, an outcome too long).
+    uneditable.add(quoteId);
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText', 'editMessageReplyMarkup', 'sendMessage']);
+    // The quote keeps its text and loses its stale pay buttons...
+    expect(calls[1]?.body['message_id']).toBe(quoteId);
+    expect(buttonsOf(calls[1])).toEqual([]);
+    // ...and the result arrives once, as a new message.
+    expect(String(calls[2]?.body['text'])).toContain(renewedText);
+    expect(buttonsOf(calls[2])).toEqual([`s:${service.id}`]);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods(), 'and never a second time').toEqual([]);
+  });
+
+  it('a keyboard that cannot be cleared holds back nothing and sends nothing twice (Codex review of #257)', async () => {
+    const { quoteId } = await renewalSettledOutside('renew-unclearable', 742);
+    uneditable.add(quoteId);
+    unclearable.add(quoteId);
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText', 'editMessageReplyMarkup', 'sendMessage']);
+    expect(String(calls[2]?.body['text'])).toContain(renewedText);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual([]);
+  });
+
+  it('a tap that lands between the two readiness checks defers the result: nothing sent, no attempt spent (Codex review of #257)', async () => {
+    const service = await activeService('renew-landed');
+    const { quoteId, pay } = await renewalQuote(service.id, 743);
+    await tapOn(quoteId, pay);
+    await ctx.container.provisionerLoop.tick();
+    await settleScreens();
+
+    /*
+     * The lane's own check sees the message settled; right after it, a customer's turn lands
+     * on it (as a landing does: the version moves and `updated_at` is now), so `answerOrder`'s
+     * second check finds it being written.
+     */
+    const screens = ctx.container.wizardScreens;
+    const original = screens.orderReadiness.bind(screens);
+    let asked = 0;
+    screens.orderReadiness = async (...args) => {
+      const ready = await original(...args);
+      asked += 1;
+      if (asked === 1) {
+        await ctx.container.database.db.execute(sql`
+          UPDATE telegram_wizards SET updated_at = now(), version = version + 1
+           WHERE tenant_id = ${tenantA.tenantId} AND message_id = ${quoteId}`);
+      }
+      return ready;
+    };
+    try {
+      calls = [];
+      await ctx.container.customerNotificationLoop.tick();
+    } finally {
+      screens.orderReadiness = original;
+    }
+    expect(asked).toBe(2);
+    expect(methods(), 'nothing is edited, cleared or sent').toEqual([]);
+    expect(await notice('SERVICE_RENEWED')).toEqual({ state: 'PENDING', attempts: 0 });
+    const [stamp] = await rows<{ send_started_at: Date | null }>(
+      sql`SELECT send_started_at FROM customer_notifications
+           WHERE tenant_id = ${tenantA.tenantId} AND kind = 'SERVICE_RENEWED'`,
+    );
+    expect(stamp?.send_started_at, 'the stamp is taken back').toBeNull();
+
+    // Once the message settles, the result is edited onto it, once.
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText']);
+    expect(String(edited(quoteId)[0]?.body['text'])).toContain(renewedText);
+    expect(await notice('SERVICE_RENEWED')).toMatchObject({ state: 'DELIVERED' });
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual([]);
   });
 
   it('a SUSPEND is never answered on the purchase message of the order that created its service (FIX-08)', async () => {

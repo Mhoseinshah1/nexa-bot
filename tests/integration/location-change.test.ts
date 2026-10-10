@@ -149,6 +149,14 @@ describe('service location change (WP-A6)', () => {
   let customerA: UserId;
   let owner: ActorContext;
   let updateSeq = 0;
+  /**
+   * Codex review of #257: edits of this message that Telegram is slow to apply. The next
+   * `holdCount` of them are held, and reach `sent` only when released — in release order,
+   * which is the order Telegram applied them in.
+   */
+  let holdOn: number | null = null;
+  let holdCount = 0;
+  let held: { body: Record<string, unknown>; release: () => void }[] = [];
 
   beforeAll(async () => {
     sent = [];
@@ -163,9 +171,21 @@ describe('service location change (WP-A6)', () => {
         } catch {
           body = { unparseable: raw };
         }
-        sent.push({ url: request.url ?? '', body });
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+        const answer = () => {
+          sent.push({ url: request.url ?? '', body });
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+        };
+        if (
+          holdCount > 0 &&
+          (request.url ?? '').includes('/editMessageText') &&
+          body['message_id'] === holdOn
+        ) {
+          holdCount -= 1;
+          held.push({ body, release: answer });
+          return;
+        }
+        answer();
       });
     });
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
@@ -194,6 +214,9 @@ describe('service location change (WP-A6)', () => {
     services = new DrizzleServiceRepository(ctx.container.database.db);
     operations = new DrizzleOperationRepository(ctx.container.database.db);
     sent = [];
+    holdOn = null;
+    holdCount = 0;
+    held = [];
     locationPanel.at.clear();
     locationPanel.mode = 'APPLY';
     locationPanel.newLink = null;
@@ -746,6 +769,54 @@ describe('service location change (WP-A6)', () => {
         sql`SELECT kind FROM customer_notifications WHERE subject_id = ${planned?.id ?? ''}`,
       );
       expect(told.rows, 'no separate success message is queued').toEqual([]);
+    });
+
+    it("redraws the card when a concurrent redelivery's «working» edit lands after the free move ended (Codex review of #257)", async () => {
+      const service = await activeService('free-race');
+      const { fi } = await standardLocations();
+      const tap = tapUpdate(`lf:${encodeIdPair(service.id, fi)}`);
+      const cardId = tap.update.callback_query.message.message_id;
+      const waitFor = async (done: () => boolean): Promise<void> => {
+        for (let i = 0; i < 1_000 && !done(); i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(done()).toBe(true);
+      };
+      const cardEdits = () =>
+        sent.filter(
+          (one) => one.url.includes('/editMessageText') && one.body['message_id'] === cardId,
+        );
+
+      // Both deliveries of the one tap pass the redelivery check and ask for «working».
+      holdOn = cardId;
+      holdCount = 2;
+      sent = [];
+      const first = runtime().handle(tenantA, systemActor('bot'), tap);
+      await waitFor(() => held.length === 1);
+      const second = runtime().handle(tenantA, systemActor('bot'), tap);
+      await waitFor(() => held.length === 2);
+
+      // The first lands, plans the move, and the move ends and is drawn on the card.
+      held[0]?.release();
+      expect((await first).replyKey).toBeNull();
+      await ctx.container.provisionerLoop.tick();
+      expect((await moveOf(service.id)).map((one) => one.state)).toEqual(['SUCCEEDED']);
+      const final = cardEdits().at(-1);
+      expect(JSON.stringify(final?.body)).toContain('فنلاند');
+
+      // The second's «working» edit is applied only now, over the final card.
+      const working = held[1]?.body;
+      held[1]?.release();
+      const late = await second;
+      expect(late.replyKey, 'the late delivery draws the card as it now is').not.toBeNull();
+
+      const last = cardEdits().at(-1);
+      expect(last?.body['text'], 'the card ends on the final state, not «working»').toBe(
+        final?.body['text'],
+      );
+      expect(last?.body['text']).not.toBe(working?.['text']);
+      expect(await count('service_location_changes')).toBe(1);
+      expect(locationPanel.writes).toHaveLength(1);
     });
 
     it('offers nothing where the declaration outran the methods: both are required', async () => {

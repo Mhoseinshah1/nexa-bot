@@ -2148,6 +2148,23 @@ export class ProvisioningService {
   }
 
   /**
+   * Codex review of #257: the operation `planLocationChange` planned for one change — the same
+   * derivation, read-only — so a customer's free move confirmed on the service card can tell
+   * whether the move has already ENDED (and been drawn on the card) by the time its own
+   * «working» edit is done.
+   */
+  async findLocationChange(
+    scope: TenantContext,
+    serviceId: string,
+    changeId: string,
+  ): Promise<OperationRecord | null> {
+    return this.deps.operations.findByOperationId(
+      scope,
+      this.deps.operationId(`${serviceId}:CHANGE_LOCATION:${changeId}`),
+    );
+  }
+
+  /**
    * Plans a FREE location change's operation (WP-A6), inside the request's transaction.
    *
    * No order and no money: a free move is asked for, not bought, so there is nothing to

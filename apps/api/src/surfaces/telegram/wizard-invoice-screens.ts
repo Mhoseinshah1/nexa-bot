@@ -17,6 +17,7 @@ import type {
 import {
   orderScreenReadiness,
   type OrderScreenReadiness,
+  type OrderScreenWait,
 } from '../../modules/commerce/messaging/application/order-screen-answer.js';
 import type { TelegramMessageStateService } from '../../modules/commerce/messaging/application/telegram-message-state.js';
 import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
@@ -169,6 +170,16 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
    * it loses its landing and drops its now-stale edit, and of two callers only one edits. The
    * edit is the last step that can fail: everything before it is a database step whose throw
    * leaves nothing sent, so the caller's fallback send can never be a second answer.
+   *
+   * `WAIT` when another writer took the message between the lane's own readiness check and
+   * this one (a customer's tap landing on it): nothing was moved and nothing was sent, and the
+   * lane puts the row back exactly as it does for its first check. Treating it as "did not
+   * answer" would close the screens and send beside them — and the tap's late edit would then
+   * put its buttons back over the close.
+   *
+   * A REFUSED edit leaves the message as it was, and it is already `CLOSED` here, so
+   * `closeOrder` would pass it by: its buttons are taken off explicitly (best effort) before
+   * the lane sends the outcome as a new message, so no stale payment button stays beside it.
    */
   async answerOrder(
     scope: TenantContext,
@@ -180,8 +191,9 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
       readonly values: TemplateValues;
       readonly buttons: readonly CustomerButton[];
     },
-  ): Promise<CustomerSendResult | null> {
+  ): Promise<CustomerSendResult | OrderScreenWait | null> {
     const ready = await this.orderReadiness(scope, orderId, destination, settleMs);
+    if (ready.kind === 'WAIT') return ready;
     if (ready.kind !== 'READY') return null;
     const [taken] = await this.deps.state.moveAll(
       scope,
@@ -204,6 +216,20 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
       },
       false,
     );
+    // Refused: the message still shows what it showed. A screen that offered buttons loses
+    // them (one already CLOSED carries an earlier answer's, which stay). Best effort: a clear
+    // that fails holds nothing back, and the lane's one fallback send follows either way.
+    if (edited.outcome === 'REFUSED' && ready.wizard.step !== 'CLOSED') {
+      try {
+        await this.deps.messenger.clearButtons?.(scope, {
+          chatId: taken.chatId,
+          messageId: taken.messageId,
+          botInstanceId: taken.botInstanceId,
+        });
+      } catch {
+        // The buttons stay; each re-checks the order on a tap, and the screen is CLOSED.
+      }
+    }
     // The order's OTHER open screens lose their buttons, as before. Best effort, and after
     // the edit: it decides nothing about the answer just given, and must not undo it.
     try {

@@ -71,6 +71,9 @@ export type OrderScreenReadiness =
   | { readonly kind: 'WAIT'; readonly until: Date }
   | { readonly kind: 'READY'; readonly wizard: TelegramWizardRecord };
 
+/** Another writer still has the order's payment message: the lane comes back at `until`. */
+export type OrderScreenWait = Extract<OrderScreenReadiness, { readonly kind: 'WAIT' }>;
+
 /** The pure decision. `latest` is the order's most recently touched wizard. */
 export function orderScreenReadiness(
   latest: TelegramWizardRecord | null,

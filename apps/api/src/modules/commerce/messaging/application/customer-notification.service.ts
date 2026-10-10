@@ -25,7 +25,7 @@ import type {
   CustomerNotificationRepository,
   CustomerSendResult,
 } from './ports.js';
-import type { OrderScreenReadiness } from './order-screen-answer.js';
+import type { OrderScreenReadiness, OrderScreenWait } from './order-screen-answer.js';
 import type { ServiceReminderSnapshotReader } from '../../provisioning/application/service-reminder.ports.js';
 import {
   CUSTOMER_NOTIFICATION_LATENCY_WARN_MS,
@@ -434,7 +434,9 @@ export interface CustomerNotificationDeps {
    * edit-in-place (`order-screen-answer.ts`): asked BEFORE the stamp whether the outcome can
    * be put on the order's payment message (or must wait for another writer to finish with
    * it), and AFTER the stamp to edit it there. `answer` returning null means it did not
-   * answer, and the lane closes the screens and sends, exactly as before.
+   * answer, and the lane closes the screens and sends, exactly as before; `WAIT` means
+   * another writer took the message after the first check, nothing was sent, and the row is
+   * put back like the first check's `WAIT`.
    */
   readonly orderScreens?: {
     close(scope: TenantContext, orderId: string): Promise<void>;
@@ -452,7 +454,7 @@ export interface CustomerNotificationDeps {
         readonly values: TemplateValues;
         readonly buttons: readonly CustomerButton[];
       },
-    ): Promise<CustomerSendResult | null>;
+    ): Promise<CustomerSendResult | OrderScreenWait | null>;
   };
   /**
    * Round N (B2): what `WALLET_MASS_CREDITED` and `SERVICE_GIFT_APPLIED` render, read at send
@@ -1159,22 +1161,37 @@ export class CustomerNotificationService {
        * database step before the edit (`answerOrder`), so the send below is never a second
        * answer: it is the lane's ordinary fallback.
        */
-      let answered: CustomerSendResult | null = null;
+      let answer: CustomerSendResult | OrderScreenWait | null = null;
       if (answersOrder !== null && this.deps.orderScreens?.answer !== undefined) {
         try {
-          answered = await this.deps.orderScreens.answer(scope, answersOrder, destination, {
+          answer = await this.deps.orderScreens.answer(scope, answersOrder, destination, {
             templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
             values: content.values,
             buttons: content.buttons,
           });
         } catch (error: unknown) {
-          answered = null;
+          answer = null;
           this.deps.logger.error(
             { err: error instanceof Error ? error.name : 'unknown', notificationId: row.id },
             'order outcome could not be put on its payment message; sent as a new message',
           );
         }
       }
+      /*
+       * Codex review of #257: another writer took the message between the first check and
+       * `answer`'s own. Nothing was moved or sent, so the stamp is taken back and the row
+       * waits exactly as the first check's `WAIT` does — no attempt spent. Falling through to
+       * the send would close the screens beside a turn whose late edit restores their buttons.
+       */
+      if (answer !== null && 'kind' in answer) {
+        const until = answer.until;
+        const at = this.deps.clock.now();
+        await this.deps.uow.run(scope, async (tx) =>
+          this.deps.notifications.deferUntil(scope, row.id, until, at, tx),
+        );
+        return 'screenSettling';
+      }
+      const answered: CustomerSendResult | null = answer;
 
       /*
        * R2 (item 11): when the outcome is SENT, the order's payment message is closed FIRST,
