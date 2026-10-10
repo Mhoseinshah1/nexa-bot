@@ -33,7 +33,10 @@ export class GatewayInquiryHealth {
     } = GATEWAY_INQUIRY_HEALTH_DEFAULTS,
   ) {}
 
-  /** A failed inquiry. True when the failing condition should be recorded now. */
+  /**
+   * A failed inquiry. True when the failing condition should be recorded now; the caller
+   * reports a successful write with `recorded`.
+   */
   failure(provider: string, nowMs: number): boolean {
     const recent = (this.failures.get(provider) ?? []).filter(
       (at) => nowMs - at < this.options.windowMs,
@@ -45,8 +48,16 @@ export class GatewayInquiryHealth {
     // Re-recorded at most once a window while it lasts: the row's counter grows, and the
     // recorder announces only a NEW or REOPENED condition.
     if (last !== undefined && nowMs - last < this.options.windowMs) return false;
-    this.recordedAt.set(provider, nowMs);
     return true;
+  }
+
+  /**
+   * The failing condition WAS written (Codex P2 on #260). Only this holds the next record off
+   * for a window: the caller's write is quiet and can fail, and advancing the clock on the
+   * attempt let one failed write silence an outage for ten minutes.
+   */
+  recorded(provider: string, nowMs: number): void {
+    this.recordedAt.set(provider, nowMs);
   }
 
   /** A successful inquiry. True when the caller should check for an open condition and close it. */

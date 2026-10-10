@@ -7075,6 +7075,7 @@ export const WEB_FA = {
   'web.nc_t_gateway_link_create_failed': 'لینک پرداخت از درگاه ساخته نشد',
   // --- end FIX-04 opsevents ---
   'web.nc_t_webhook_unverified': 'وب‌هوک درگاه تأیید نمی‌شود',
+  'web.nc_t_gateway_inquiry_failing': 'درگاه پرداخت به استعلام‌ها پاسخ نمی‌دهد',
   'web.nc_t_panel': 'وضعیت پنل نیاز به بررسی دارد',
   'web.nc_t_panel_capacity': 'ظرفیت پنل رو به پایان است',
   'web.nc_t_panel_budget': 'سهمیهٔ پایش پنل‌ها تمام شده است',

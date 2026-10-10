@@ -889,12 +889,7 @@ export class GatewayPaymentService {
        * missing key; the inquiry now says the same, after its own write committed.
        */
       if (adapter !== null && apiKey === null) {
-        await recordQuietly(
-          this.deps.opsLog,
-          scope,
-          misconfiguredEvent(invoice.provider, 'nexa.credential_missing'),
-          this.deps.logger,
-        );
+        await this.inquiryMisconfigured(scope, invoice.provider, 'nexa.credential_missing');
       }
       return 'ERROR';
     }
@@ -965,7 +960,9 @@ export class GatewayPaymentService {
           tx,
         ),
       );
-      if (outcome.kind === 'CONFIGURATION') await this.misconfigured(scope, invoice, outcome.code);
+      if (outcome.kind === 'CONFIGURATION') {
+        await this.inquiryMisconfigured(scope, invoice.provider, outcome.code);
+      }
       if (outcome.kind === 'FAILED' || outcome.kind === 'RATE_LIMITED') {
         await this.inquiryFailed(scope, invoice.provider, outcome.kind, outcome.code, at);
       }
@@ -2611,7 +2608,7 @@ export class GatewayPaymentService {
     at: Date,
   ): Promise<void> {
     if (!this.inquiryHealth.failure(provider, at.getTime())) return;
-    await recordQuietly(
+    const recorded = await recordQuietly(
       this.deps.opsLog,
       scope,
       {
@@ -2625,6 +2622,52 @@ export class GatewayPaymentService {
       },
       this.deps.logger,
     );
+    // Only a WRITTEN record holds the next one off (Codex P2 on #260): `recordQuietly`
+    // swallows a failure, and marking it recorded anyway silenced the outage for a window.
+    if (recorded !== null) this.inquiryHealth.recorded(provider, at.getTime());
+  }
+
+  /**
+   * The inquiry could not be authorised: no key to ask with, or the provider refused the
+   * one it was given (Codex P1 on #260).
+   *
+   * For a route whose inquiry uses the SAME credential as its create (TonPays), this is the
+   * route's one `payments.gateway_misconfigured` condition, and a create that succeeds proves
+   * the key and closes it. For a route whose inquiry is authorised by a SEPARATE verify key
+   * (CentralPay), it is a condition of its own — same code, its own subject — because a
+   * create made with the link key proves nothing about the verify key, and closing the alarm
+   * on it would clear the one signal that no approval can be read. That subject is closed
+   * only by an inquiry the provider answered (`inquiryAnswered`).
+   */
+  private async inquiryMisconfigured(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    code: string,
+  ): Promise<void> {
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].verifyKey) {
+      await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        misconfiguredEvent(provider, code),
+        this.deps.logger,
+      );
+      return;
+    }
+    const recorded = await recordQuietly(
+      this.deps.opsLog,
+      scope,
+      {
+        ...misconfiguredEvent(provider, code),
+        message:
+          'The payment gateway could not be asked about payments: its verify key is missing or ' +
+          'was refused, so no approval can be read. Check the verify key.',
+        dedupeKey: inquiryCredentialConditionKey(provider),
+        context: { provider, reason: code, kind: 'VERIFY_KEY' },
+      },
+      this.deps.logger,
+    );
+    // The next answered inquiry looks for it at once, not a recheck later.
+    if (recorded !== null) this.inquiryHealth.forgetCheck(provider);
   }
 
   /** An answered inquiry: closes the failing condition when one is open. Never throws. */
@@ -2635,9 +2678,16 @@ export class GatewayPaymentService {
   ): Promise<void> {
     if (!this.inquiryHealth.success(provider, at.getTime())) return;
     const dedupeKey = `${GATEWAY_INQUIRY_FAILING_CODE}:${provider}`;
+    const credentialKey = PAYMENT_GATEWAY_DESCRIPTORS[provider].verifyKey
+      ? inquiryCredentialConditionKey(provider)
+      : null;
     let open: boolean;
+    let credentialOpen: boolean;
     try {
       open = await this.deps.conditions.conditionIsOpen(scope, dedupeKey);
+      credentialOpen =
+        credentialKey !== null &&
+        (await this.deps.conditions.conditionIsOpen(scope, credentialKey));
     } catch (error: unknown) {
       this.deps.logger.warn(
         { provider, error: error instanceof Error ? error.name : 'unknown' },
@@ -2645,6 +2695,23 @@ export class GatewayPaymentService {
       );
       this.inquiryHealth.forgetCheck(provider);
       return;
+    }
+    if (credentialOpen && credentialKey !== null) {
+      // The verify key worked: the provider answered an inquiry authorised by it.
+      const closed = await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        {
+          code: GATEWAY_CONFIGURED_CODE,
+          severity: 'INFO',
+          message: 'The payment gateway is answering inquiries with this installation’s key again.',
+          context: { provider, kind: 'VERIFY_KEY' },
+          recoversCode: GATEWAY_MISCONFIGURED_CODE,
+          recoversDedupeKey: credentialKey,
+        },
+        this.deps.logger,
+      );
+      if (closed === null) this.inquiryHealth.forgetCheck(provider);
     }
     if (!open) return;
     await recordQuietly(
@@ -2690,6 +2757,16 @@ export class GatewayPaymentService {
       context: { paymentId: invoice.paymentId, provider: invoice.provider, source },
     });
   }
+}
+
+/**
+ * The subject of `payments.gateway_misconfigured` for a route's SEPARATE inquiry credential
+ * (a descriptor with `verifyKey`; Codex P1 on #260). Same code, its own condition: opened by
+ * an inquiry that could not be authorised, closed only by one the provider answered — never
+ * by a create, which uses the other key. One function: the format IS the identity.
+ */
+export function inquiryCredentialConditionKey(provider: PaymentGatewayProvider): string {
+  return `${GATEWAY_MISCONFIGURED_CODE}:${provider}:verify-key`;
 }
 
 /**

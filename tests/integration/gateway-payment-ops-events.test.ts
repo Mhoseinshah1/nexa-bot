@@ -194,6 +194,7 @@ describe('FIX-03: payment-gateway operational events', () => {
       readonly payments?: GatewayPaymentServiceDeps['payments'];
       readonly noCredential?: boolean;
       readonly health?: GatewayInquiryHealth;
+      readonly opsLog?: GatewayPaymentServiceDeps['opsLog'];
     } = {},
   ): GatewayPaymentService {
     const db = ctx.container.database.db;
@@ -225,7 +226,7 @@ describe('FIX-03: payment-gateway operational events', () => {
       scopeActivity: ctx.container.tenants,
       uow: ctx.container.uow,
       audit: ctx.container.audit,
-      opsLog: ctx.container.opsLog,
+      opsLog: options.opsLog ?? ctx.container.opsLog,
       outbox: ctx.container.outbox,
       clock: { now: () => new Date(Date.now() + offsetMs) },
       ids: ctx.container.ids,
@@ -340,6 +341,33 @@ describe('FIX-03: payment-gateway operational events', () => {
     // A healthy lane closes nothing more.
     await inquire(service);
     expect(await events(GATEWAY_INQUIRY_OK_CODE)).toHaveLength(1);
+  });
+
+  it('a failing-condition record that did not land is tried again on the next failure (Codex P2 on #260)', async () => {
+    await topup();
+    let refuseNext = true;
+    const flaky: GatewayPaymentServiceDeps['opsLog'] = {
+      record: (scope, event, tx) => {
+        if (event.code === GATEWAY_INQUIRY_FAILING_CODE && refuseNext) {
+          refuseNext = false;
+          return Promise.reject(new Error('operations log unavailable'));
+        }
+        return ctx.container.opsLog.record(scope, event, tx);
+      },
+    };
+    // A ten-minute window: before the fix, the failed write held the next one off for it.
+    const health = new GatewayInquiryHealth({ threshold: 2, windowMs: 600_000, recheckMs: 0 });
+    const service = lane({ health, opsLog: flaky });
+    await service.runOnce(tenantA); // creates the invoice
+    tonpays.check = 'BAD_GATEWAY';
+    await inquire(service);
+    await inquire(service); // threshold reached; the write is refused
+    expect(refuseNext).toBe(false);
+    expect(await events(GATEWAY_INQUIRY_FAILING_CODE)).toHaveLength(0);
+    await inquire(service); // two minutes later, inside the window: recorded now
+    const rows = await events(GATEWAY_INQUIRY_FAILING_CODE);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.resolved_at).toBeNull();
   });
 
   it('one failed inquiry is not an outage', async () => {

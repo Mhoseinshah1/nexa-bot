@@ -376,6 +376,29 @@ describe('gateway health', () => {
   });
 
   /*
+   * Codex P2 on #260: a gateway whose inquiries keep failing cannot read an approval. Its
+   * condition is a gateway-health code, so the route it names asks for attention.
+   */
+  it('shows an open inquiry-failing condition on its route', async () => {
+    await ctx.container.opsLog.record(tenantA, {
+      code: 'payments.gateway_inquiry_failing',
+      severity: 'WARN',
+      message: 'test condition',
+      dedupeKey: 'payments.gateway_inquiry_failing:TONPAYS',
+      context: { provider: 'TONPAYS', reason: 'FAILED' },
+    });
+    const signals = await ctx.container.gatewayHealth.signals(tenantA, null);
+    expect(signals.map((s) => [s.key, s.provider, s.kind, s.opsCode])).toEqual([
+      [
+        'TONPAYS:OPEN_CONDITION:payments.gateway_inquiry_failing',
+        'TONPAYS',
+        'OPEN_CONDITION',
+        'payments.gateway_inquiry_failing',
+      ],
+    ]);
+  });
+
+  /*
    * Codex review of #160: the receipt-unknown and card-change-unknown producers write
    * `paymentId` and a reason, never `provider`. The route is the payment's, read through it.
    */

@@ -282,6 +282,13 @@ recorded at its own site.
 | 37  | Trials, orders, service actions refused by rules                         | Not reported, by design | user-facing refusals; an unexpected failure is #15                                                                                                                                                                              |
 | 38  | Support AI, legacy importer / Mirza                                      | Out of scope            | excluded by the owner's brief; their codes are not classified here and the inventory test skips their directories                                                                                                               |
 
+Row 9, two details (Codex on #260). A route whose inquiry is authorised by a SEPARATE
+verify key (CentralPay) opens `payments.gateway_misconfigured` under its own subject,
+`payments.gateway_misconfigured:<provider>:verify-key`, when that key is missing or refused;
+only an inquiry the provider answered closes it — a create, made with the link key, proves
+nothing about the verify key. And `payments.gateway_inquiry_failing` is a gateway-health
+code, so `/payment-gateways-health` shows it as an open condition on its route.
+
 So: **not 100%.** Rows 18, 20, 27, 33 and 35 are known partial or uncovered sources, each with
 its reason. Every code the source records today is classified (the inventory test), and
 every source above is either reported, deliberately silent with a reason, or listed as a gap.

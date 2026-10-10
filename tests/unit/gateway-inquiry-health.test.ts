@@ -16,12 +16,25 @@ describe('GatewayInquiryHealth', () => {
     expect(health.failure('TONPAYS', 0)).toBe(false);
     expect(health.failure('TONPAYS', 100)).toBe(false);
     expect(health.failure('TONPAYS', 200)).toBe(true);
+    health.recorded('TONPAYS', 200);
     // Still failing: the row's counter is the record, not a second message.
     expect(health.failure('TONPAYS', 300)).toBe(false);
     expect(health.failure('TONPAYS', 900)).toBe(false);
     expect(health.failure('TONPAYS', 1_100)).toBe(false);
     // A window after the last record, and still failing: recorded again.
     expect(health.failure('TONPAYS', 1_250)).toBe(true);
+  });
+
+  it('a record that was not written holds nothing off (Codex P2 on #260)', () => {
+    const health = new GatewayInquiryHealth(options);
+    health.failure('TONPAYS', 0);
+    health.failure('TONPAYS', 1);
+    expect(health.failure('TONPAYS', 2)).toBe(true);
+    // The caller's quiet write failed, so it never called `recorded`: the very next failure
+    // asks again, rather than the outage going unreported for a window.
+    expect(health.failure('TONPAYS', 3)).toBe(true);
+    health.recorded('TONPAYS', 3);
+    expect(health.failure('TONPAYS', 4)).toBe(false);
   });
 
   it('forgets failures older than the window, so occasional ones never add up', () => {
