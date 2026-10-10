@@ -5038,6 +5038,19 @@ export const TEMPLATES = [
         required: true,
         repeatable: false,
       },
+      {
+        /*
+         * Batch 2026-10-10 (brief C3): the window from `CLIENT_APP_VIDEO_CAPTURE_TTL_MS`,
+         * instead of a «۱۵» written into the text. OPTIONAL, so every stored override (which
+         * cannot carry it) still validates; an old release leaves it literal — see
+         * `docs/deployment.md`.
+         */
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'How long the request stays open, in whole minutes.',
+        required: false,
+        repeatable: false,
+      },
     ],
   },
   {
