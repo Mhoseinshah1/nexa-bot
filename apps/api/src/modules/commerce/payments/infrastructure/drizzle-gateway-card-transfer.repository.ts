@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type {
   GatewayCardChangeState,
   GatewayReceiptCaptureCloseReason,
@@ -80,6 +80,7 @@ function submissionOf(row: SubmissionRow): GatewayReceiptSubmissionRecord {
     openedReview: row.openedReview,
     inquiryResolvedAt: row.inquiryResolvedAt,
     byteLength: row.byteLength,
+    rowFailures: row.rowFailures,
     createdAt: row.createdAt,
   };
 }
@@ -721,18 +722,40 @@ export class DrizzleGatewayCardTransferRepository implements GatewayCardTransfer
     retryAt: Date,
     now: Date,
     tx: unknown,
-  ): Promise<boolean> {
+  ): Promise<number | null> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .update(gatewayReceiptSubmissions)
       // `sent_at` and `state` are deliberately untouched: a stamped upload is still UNKNOWN.
-      .set({ claimedUntil: null, retryAt, updatedAt: now })
+      .set({
+        claimedUntil: null,
+        retryAt,
+        // FIX10 (audit P1-b on #268): counted only by the replica holding this lease.
+        rowFailures: sql`${gatewayReceiptSubmissions.rowFailures} + 1`,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(gatewayReceiptSubmissions.tenantId, tenantId),
           eq(gatewayReceiptSubmissions.id, id),
           inArray(gatewayReceiptSubmissions.state, ['QUEUED', 'SENDING']),
           eq(gatewayReceiptSubmissions.claimedUntil, leaseUntil),
+        ),
+      )
+      .returning({ rowFailures: gatewayReceiptSubmissions.rowFailures });
+    return rows[0]?.rowFailures ?? null;
+  }
+
+  async clearSubmissionFailures(scope: TenantContext, id: string, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(gatewayReceiptSubmissions)
+      .set({ rowFailures: 0 })
+      .where(
+        and(
+          eq(gatewayReceiptSubmissions.tenantId, tenantId),
+          eq(gatewayReceiptSubmissions.id, id),
+          gt(gatewayReceiptSubmissions.rowFailures, 0),
         ),
       )
       .returning({ id: gatewayReceiptSubmissions.id });

@@ -5,9 +5,13 @@ import {
   classifyListSearch,
   COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
+  GATEWAY_ROW_FAILING_CODE,
+  GATEWAY_ROW_FAILURE_ALERT_AFTER,
+  GATEWAY_ROW_RECOVERED_CODE,
   isNexaError,
   MAX_MONEY_AMOUNT_MINOR,
   money,
+  opsLogTopicForCode,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -1801,6 +1805,165 @@ describe('TonPays, through the one settlement path', () => {
       expect(new Date(backedOff!.next_inquiry_at).getTime()).toBeGreaterThanOrEqual(
         quietNow + 30_000,
       );
+    });
+
+    /*
+     * FIX10 (audit P1-b on #268): isolating a row means nothing else reports it — no
+     * settlement failure, no inquiry error, no lane failure, and readiness stays fresh. So a
+     * row whose processing throws on EVERY pass (an approval among them) opens one operator
+     * condition after GATEWAY_ROW_FAILURE_ALERT_AFTER passes in a row, counted durably on the
+     * row, and its next clean pass closes it.
+     */
+    it('FIX10 P1-b: a row that throws on every pass opens ONE condition after three passes; a clean pass closes it', async () => {
+      const first = await createdAttempt();
+      const secondOrderId = await draftOrder(300_000n);
+      const second = await payWithGateway(secondOrderId);
+      await pass();
+      const secondInvoiceId = (await invoiceOf(second.paymentId)).provider_invoice_id!;
+      // The provider HAS approved the failing one: money is held while its row throws.
+      tonpays.set(first.invoiceId, 'completed', true);
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const poisoned = Object.create(real) as TonPaysAdapter;
+      let poison = true;
+      (poisoned as unknown as { inquire: unknown }).inquire = (
+        apiKey: string,
+        invoiceId: string,
+      ) =>
+        poison && invoiceId === first.invoiceId
+          ? Promise.reject(Object.assign(new Error(`boom ${apiKey}`), { code: '40P01' }))
+          : real.inquire(apiKey, invoiceId);
+      const poisonLane = laneWith(tonpays, { adapter: poisoned });
+      const conditions = () =>
+        rows<{
+          dedupe_key: string;
+          severity: string;
+          occurrence_count: number;
+          resolved_at: string | null;
+          context: Record<string, unknown>;
+        }>(
+          sql`SELECT dedupe_key, severity, occurrence_count, resolved_at, context
+              FROM operational_events
+              WHERE tenant_id = ${tenantA.tenantId} AND code = ${GATEWAY_ROW_FAILING_CODE}`,
+        );
+      const failuresOf = async (paymentId: string) =>
+        (
+          await rows<{ row_failures: number }>(
+            sql`SELECT row_failures FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+          )
+        )[0]!.row_failures;
+
+      for (let passNo = 1; passNo < GATEWAY_ROW_FAILURE_ALERT_AFTER; passNo += 1) {
+        // Past the back-off's cap: the row is due again on every one of these passes.
+        offsetMs += 6 * 60_000;
+        expect((await poisonLane.runOnce(tenantA)).rowFailures).toBe(1);
+        expect(await failuresOf(first.paymentId)).toBe(passNo);
+        expect(await conditions()).toEqual([]);
+      }
+      // The row beside it was not held up by any of this.
+      tonpays.set(secondInvoiceId, 'completed', true);
+      offsetMs += 6 * 60_000;
+      const report = await poisonLane.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.settled).toBe(1);
+      expect((await paymentOf(second.paymentId)).state).toBe('CONFIRMED');
+      expect(await failuresOf(second.paymentId)).toBe(0);
+
+      const opened = await conditions();
+      expect(opened).toHaveLength(1);
+      expect(opened[0]).toMatchObject({
+        dedupe_key: `${GATEWAY_ROW_FAILING_CODE}:invoice:${first.paymentId}`,
+        severity: 'ERROR',
+        occurrence_count: 1,
+        resolved_at: null,
+      });
+      expect(opened[0]!.context).toMatchObject({
+        paymentId: first.paymentId,
+        provider: 'TONPAYS',
+        lane: 'INQUIRY',
+        failures: GATEWAY_ROW_FAILURE_ALERT_AFTER,
+        errorCode: '40P01',
+      });
+      // Ids and machine codes only: never the message, the key or a provider payload.
+      expect(JSON.stringify(opened[0]!.context)).not.toContain('boom');
+      expect(JSON.stringify(opened[0]!.context)).not.toContain(API_KEY);
+      // Its PAYMENTS topic.
+      expect(opsLogTopicForCode(GATEWAY_ROW_FAILING_CODE)).toBe('PAYMENTS');
+
+      // Another failing pass is an occurrence of the SAME condition, never a second one.
+      offsetMs += 6 * 60_000;
+      await poisonLane.runOnce(tenantA);
+      const still = await conditions();
+      expect(still).toHaveLength(1);
+      expect(still[0]!.occurrence_count).toBe(2);
+      expect(still[0]!.resolved_at).toBeNull();
+      expect((await paymentOf(first.paymentId)).state).toBe('PENDING');
+
+      // The fault cleared: the next pass settles it once and closes the condition.
+      poison = false;
+      offsetMs += 6 * 60_000;
+      await poisonLane.runOnce(tenantA);
+      expect((await paymentOf(first.paymentId)).state).toBe('CONFIRMED');
+      expect(await failuresOf(first.paymentId)).toBe(0);
+      const closed = await conditions();
+      expect(closed).toHaveLength(1);
+      expect(closed[0]!.resolved_at).not.toBeNull();
+      const recoveries = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM operational_events
+            WHERE tenant_id = ${tenantA.tenantId} AND code = ${GATEWAY_ROW_RECOVERED_CODE}`,
+      );
+      expect(recoveries[0]!.n).toBe(1);
+      const settled = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'OrderSettled'
+            AND aggregate_id = ${first.orderId}`,
+      );
+      expect(settled[0]!.n).toBe(1);
+    });
+
+    it('FIX10 P1-b: a row that fails fewer times in a row than the threshold opens nothing, and its count resets', async () => {
+      const first = await createdAttempt();
+      const real = new TonPaysAdapter({ fetch: tonpays.fetch });
+      const poisoned = Object.create(real) as TonPaysAdapter;
+      let poison = true;
+      (poisoned as unknown as { inquire: unknown }).inquire = (
+        apiKey: string,
+        invoiceId: string,
+      ) =>
+        poison && invoiceId === first.invoiceId
+          ? Promise.reject(Object.assign(new Error('boom'), { code: '40P01' }))
+          : real.inquire(apiKey, invoiceId);
+      const poisonLane = laneWith(tonpays, { adapter: poisoned });
+      // Due on every pass, whatever a clean inquiry scheduled next.
+      const dueNow = () =>
+        ctx.container.database.db.execute(
+          sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 hour'
+              WHERE payment_id = ${first.paymentId}`,
+        );
+      const failures = async () =>
+        (
+          await rows<{ row_failures: number }>(
+            sql`SELECT row_failures FROM gateway_invoices WHERE payment_id = ${first.paymentId}`,
+          )
+        )[0]!.row_failures;
+      for (let round = 0; round < 2; round += 1) {
+        poison = true;
+        for (let n = 1; n < GATEWAY_ROW_FAILURE_ALERT_AFTER; n += 1) {
+          offsetMs += 6 * 60_000;
+          await dueNow();
+          await poisonLane.runOnce(tenantA);
+        }
+        expect(await failures()).toBe(GATEWAY_ROW_FAILURE_ALERT_AFTER - 1);
+        // One clean pass in between: CONSECUTIVE failures, so the count starts again.
+        poison = false;
+        offsetMs += 6 * 60_000;
+        await dueNow();
+        await poisonLane.runOnce(tenantA);
+        expect(await failures()).toBe(0);
+      }
+      const events = await rows<{ code: string }>(
+        sql`SELECT code FROM operational_events WHERE tenant_id = ${tenantA.tenantId}
+            AND code IN (${GATEWAY_ROW_FAILING_CODE}, ${GATEWAY_ROW_RECOVERED_CODE})`,
+      );
+      expect(events).toEqual([]);
     });
   });
 

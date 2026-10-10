@@ -7064,6 +7064,7 @@ export const WEB_FA = {
   'web.nc_t_review_unresolved': 'پرداخت درگاهی نیاز به تطبیق دستی دارد',
   'web.nc_t_create_unknown': 'نتیجهٔ ساخت فاکتور درگاه نامعلوم است',
   'web.nc_t_receipt_unknown': 'نتیجهٔ ارسال رسید به درگاه نامعلوم است',
+  'web.nc_t_gateway_row_failing': 'پردازش یک پرداخت درگاه پیاپی خطا می‌دهد',
   'web.nc_t_card_change_unknown': 'نتیجهٔ تغییر کارت درگاه نامعلوم است',
   'web.nc_t_late_completion': 'پرداختی پس از مهلت تأیید شد',
   'web.nc_t_identity_mismatch': 'هویت پرداخت با سفارش نمی‌خواند',
