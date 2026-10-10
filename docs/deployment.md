@@ -590,13 +590,19 @@ group says which container to look at:
 | `worker`      | every loop in its heartbeat (`relay`, `gateway-payments`, `notification-dispatcher`, …)                                |
 | `provisioner` | `provisioner` (the provisioning drain), `provisioner-cashback`, `provisioner-referrals`, `provisioner-service-refunds` |
 | `monitor`     | `panel-monitor`                                                                                                        |
-| `recovery`    | `recovery-executor` (fresh during a run by design, so a long restore is not a stall)                                   |
+| `recovery`    | `recovery-executor` (fresh during a CLAIMED run, so a long restore is not a stall; a hang before a claim is)           |
 | `assistant`   | none here — the worker's `support-assistant-watch` raises `support.assistant.stalled` when AI work goes unclaimed      |
 
 A role whose readiness has no startup grace still waits one staleness window after it
-starts before it REPORTS a stall, so a restart does not post a false alarm. A role
-switched off (`PROVISIONER_ENABLED=false`, `PANEL_MONITOR_ENABLED=false`) reports
-nothing stalled, which closes a condition a previous life opened.
+starts before it REPORTS a stall, so a restart does not post a false alarm. Inside that
+window a loop that has not yet succeeded is UNKNOWN, not fresh: it opens nothing and
+closes nothing, so a stall the previous life left open is resolved only by a pass that
+actually succeeds here. A provisioner tick in flight is held to the staleness window
+plus the longest provider exchange the configuration allows (`PANEL_HTTP_TIMEOUT_MS` ×
+the most requests one exchange makes), so a slow panel call within its own deadline is
+not a stall. A role switched off (`PROVISIONER_ENABLED=false`,
+`PANEL_MONITOR_ENABLED=false`) reports nothing stalled, which closes a condition a
+previous life opened.
 
 **What none of this can do: report a dead worker.** Every message to the operations
 log group is SENT by the notification dispatcher, and the dispatcher runs in the

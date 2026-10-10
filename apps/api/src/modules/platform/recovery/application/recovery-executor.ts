@@ -139,6 +139,13 @@ function rootMessage(error: unknown): string {
 export class RecoveryExecutor {
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
+  /**
+   * A CLAIMED recovery is running in this tick (Codex P2 on #258). Separate from `ticking`,
+   * which is also set across the reconcile, the reclaim and the claim queries: a tick that
+   * hung there was reported fresh for ever while the heartbeat's `SELECT 1` succeeded. Only
+   * an actual run earns the long-running exemption below.
+   */
+  private runInFlight = false;
   private lastTickAt: number | null = null;
 
   constructor(private readonly deps: RecoveryExecutorDeps) {}
@@ -182,8 +189,12 @@ export class RecoveryExecutor {
      * heartbeat, which the run refreshes itself and which stops the moment the
      * process does. So a run in flight reports fresh, and a loop between runs is
      * held to the tick interval as before.
+     *
+     * A run, not a tick: the part of a tick BEFORE a claim — the cutover journal,
+     * the reclaim, the claim queries — is held to the tick interval too, because
+     * `lastTickAt` is stamped only after the claim. A hang there goes stale.
      */
-    if (this.ticking) return true;
+    if (this.runInFlight) return true;
     if (this.lastTickAt === null) return false;
     return nowMs - this.lastTickAt <= this.deps.tickIntervalMs * 3;
   }
@@ -211,11 +222,16 @@ export class RecoveryExecutor {
 
       this.lastTickAt = this.deps.clock.now().getTime();
       if (claimed === null) return;
+      this.runInFlight = true;
       if (own !== null && awaitsReadinessAfterCutover(own)) {
         await this.resumeAfterCutover(own);
-        return;
+      } else {
+        await this.execute(claimed);
       }
-      await this.execute(claimed);
+      // A run that finished is the loop's progress. Without this, `lastTickAt` still
+      // dated from the claim, and the moment an hour-long run ended the executor read
+      // stale until the next tick — a stall reported after every long restore.
+      this.lastTickAt = this.deps.clock.now().getTime();
     } catch (error) {
       // Never fatal to the loop: a tick that throws must not end recoveries for
       // the life of the process. `lastTickAt` is deliberately NOT advanced here,
@@ -225,6 +241,7 @@ export class RecoveryExecutor {
         'recovery executor tick failed',
       );
     } finally {
+      this.runInFlight = false;
       this.ticking = false;
     }
   }
