@@ -436,6 +436,154 @@ describe('the TonPays Telegram provider review window', () => {
       expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
     });
 
+    /*
+     * FIX10 BUG-2 (audit probe `probe-stale-claim`): the lane judged eligibility from the
+     * CLAIM-time row. A review that opened between the claim and this row's turn moved the
+     * deadline 24 h out, yet the approval was recorded LATE_COMPLETION, unscheduled, and the
+     * payment left to lapse to UNKNOWN — a paid customer turned into an operator case.
+     */
+    it('FIX10 BUG-2: a review that opens between the claim and the inquiry is not a late completion', async () => {
+      const created = await attempt();
+      fake.set(created.invoiceId, 'completed', true);
+      // The claim is taken one second before the deadline.
+      clock.at(new Date(created.expiresAt.getTime() - 1_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 600_000).toISOString()}::timestamptz, inquiry_claimed_until = NULL WHERE payment_id = ${created.paymentId}`,
+      );
+      const probeLane = telegramLaneWith(ctx, fake);
+      const invoices = (
+        probeLane as unknown as {
+          deps: { invoices: { claimInquiries: (...a: unknown[]) => Promise<unknown> } };
+        }
+      ).deps.invoices;
+      const claim = invoices.claimInquiries.bind(invoices);
+      invoices.claimInquiries = async (...args: unknown[]) => {
+        const out = await claim(...args);
+        // Between the claim and this row's turn: a receipt acknowledgement commits strictly
+        // before the deadline (as recordProviderReview would), and the batch reaches the
+        // row five seconds after the deadline.
+        await ctx.container.database.db.execute(
+          sql`UPDATE payments SET provider_review_started_at = expires_at - interval '500 milliseconds',
+                 provider_review_until = expires_at - interval '500 milliseconds' + interval '24 hours'
+              WHERE id = ${created.paymentId}`,
+        );
+        clock.at(new Date(created.expiresAt.getTime() + 5_000));
+        return out;
+      };
+      await probeLane.runOnce(tenantA);
+      // The payment's EFFECTIVE deadline is the review's, 24 h away: the approval settles.
+      const pay = await paymentOf(created.paymentId);
+      expect(pay.state).toBe('CONFIRMED');
+      const inv = await invoiceOf(created.paymentId);
+      expect(inv.outcome).toBe('SETTLED');
+      expect(inv.late_completion_observed_at).toBeNull();
+      expect(await orderState(created.orderId)).toBe('PAID');
+    });
+
+    it('FIX10 BUG-2: the review that opened after the claim also sets the schedule — an open answer stays scheduled on the review cadence', async () => {
+      const created = await attempt();
+      fake.set(created.invoiceId, 'processing', false);
+      clock.at(new Date(created.expiresAt.getTime() - 1_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 600_000).toISOString()}::timestamptz, inquiry_claimed_until = NULL WHERE payment_id = ${created.paymentId}`,
+      );
+      const probeLane = telegramLaneWith(ctx, fake);
+      const invoices = (
+        probeLane as unknown as {
+          deps: { invoices: { claimInquiries: (...a: unknown[]) => Promise<unknown> } };
+        }
+      ).deps.invoices;
+      const claim = invoices.claimInquiries.bind(invoices);
+      invoices.claimInquiries = async (...args: unknown[]) => {
+        const out = await claim(...args);
+        await ctx.container.database.db.execute(
+          sql`UPDATE payments SET provider_review_started_at = expires_at - interval '500 milliseconds',
+                 provider_review_until = expires_at - interval '500 milliseconds' + interval '24 hours'
+              WHERE id = ${created.paymentId}`,
+        );
+        clock.at(new Date(created.expiresAt.getTime() + 5_000));
+        return out;
+      };
+      await probeLane.runOnce(tenantA);
+      // Judged from the claim this was post-deadline and unscheduled for ever; it is in review.
+      const inv = await invoiceOf(created.paymentId);
+      expect(inv.next_inquiry_at).not.toBeNull();
+      expect(new Date(inv.next_inquiry_at!).getTime()).toBeGreaterThan(clock.now().getTime());
+      expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+    });
+
+    it('FIX10 BUG-2: even the re-read is a snapshot — a review that opens after it is still decided at the lock, never by the lane', async () => {
+      const created = await attempt();
+      fake.set(created.invoiceId, 'completed', true);
+      clock.at(new Date(created.expiresAt.getTime() - 1_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 600_000).toISOString()}::timestamptz, inquiry_claimed_until = NULL WHERE payment_id = ${created.paymentId}`,
+      );
+      let opened = false;
+      const racing = telegramLaneWith(ctx, fake, {
+        paymentRecords: (real) => {
+          const read = real.findById.bind(real);
+          real.findById = async (scope, id, tx) => {
+            const seen = await read(scope, id, tx);
+            if (!opened && id === created.paymentId && tx === undefined) {
+              opened = true;
+              // The lane's re-read saw no review and a passed deadline; the acknowledgement
+              // (committed just before the deadline) lands right after that read.
+              await ctx.container.database.db.execute(
+                sql`UPDATE payments SET provider_review_started_at = expires_at - interval '500 milliseconds',
+                       provider_review_until = expires_at - interval '500 milliseconds' + interval '24 hours'
+                    WHERE id = ${created.paymentId}`,
+              );
+            }
+            return seen;
+          };
+          return real;
+        },
+      });
+      clock.at(new Date(created.expiresAt.getTime() + 5_000));
+      await racing.runOnce(tenantA);
+      expect(opened).toBe(true);
+      expect((await paymentOf(created.paymentId)).state).toBe('CONFIRMED');
+      const inv = await invoiceOf(created.paymentId);
+      expect(inv.outcome).toBe('SETTLED');
+      expect(inv.late_completion_observed_at).toBeNull();
+    });
+
+    it('FIX10 BUG-2: the deadline is judged at the lock — an approval that waits on the lock across the deadline is DEADLINE_PASSED', async () => {
+      const created = await attempt();
+      clock.at(new Date(created.expiresAt.getTime() - 1_000));
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let locked: () => void = () => undefined;
+      const holding = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const holder = ctx.container.uow.run(tenantA, async (tx) => {
+        await tx.tx.execute(
+          sql`SELECT id FROM payments WHERE id = ${created.paymentId} FOR UPDATE`,
+        );
+        locked();
+        await held;
+      });
+      let answer: Awaited<ReturnType<typeof confirmNow>> | null;
+      try {
+        await holding;
+        const approving = confirmNow(created.paymentId);
+        await awaitBlocked();
+        // The deadline passes while the approval waits for the lock.
+        clock.at(created.expiresAt);
+        release();
+        answer = await approving;
+      } finally {
+        release();
+        await holder;
+      }
+      expect(answer).toMatchObject({ outcome: 'NOT_ELIGIBLE', reason: 'DEADLINE_PASSED' });
+      expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+    });
+
     it('TPTG-28: half-open at the review deadline — settles at review_until − 1 ms, DEADLINE_PASSED at review_until', async () => {
       const early = await reviewed(10);
       clock.at(new Date(early.reviewUntil.getTime() - 1));

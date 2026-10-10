@@ -1137,17 +1137,17 @@ export class GatewayPaymentService {
     /*
      * The EFFECTIVE deadline (§9.6.3 d): the review deadline once acknowledged, `expires_at`
      * otherwise. Advisory here — `confirmGatewayPayment` decides under the payment's lock.
+     * As of the CLAIM until the provider has answered; re-read then (FIX10 BUG-2, below).
      */
-    const reviewUntil = claimed.paymentReviewUntil;
-    const expiresAt = gatewaySettlementDeadline({
+    let paymentState = claimed.paymentState;
+    let reviewUntil = claimed.paymentReviewUntil;
+    let expiresAt = gatewaySettlementDeadline({
       expiresAt: claimed.paymentExpiresAt,
       providerReviewUntil: reviewUntil,
     });
-    const eligible =
-      claimed.paymentState === 'PENDING' &&
-      expiresAt !== null &&
-      now.getTime() < expiresAt.getTime();
-    const postDeadline = !eligible;
+    let eligible =
+      paymentState === 'PENDING' && expiresAt !== null && now.getTime() < expiresAt.getTime();
+    let postDeadline = !eligible;
     // An operator's "ask again" on an UNKNOWN payment lets ONE inquiry past the bound.
     const operatorAsked = invoice.reconcileInquiryRequestedAt !== null;
 
@@ -1235,6 +1235,23 @@ export class GatewayPaymentService {
       providerUserId: invoice.providerUserId,
     });
     const at = this.deps.clock.now();
+    /*
+     * FIX10 BUG-2: the claim's view of the payment is as old as the claim, and a batch can
+     * reach a row many provider calls later. A receipt acknowledged in between opens a 24-hour
+     * review; judged from the claim, the approval that follows looked post-deadline and was
+     * recorded LATE_COMPLETION, unscheduled and never asked again. So the payment is re-read
+     * now, after the answer: the schedule, the post-deadline bound and every branch below use
+     * what it is NOW. Still advisory — the settlement path decides under the payment's lock.
+     */
+    const current = await this.deps.paymentRecords.findById(scope, invoice.paymentId);
+    if (current !== null) {
+      paymentState = current.state;
+      reviewUntil = current.providerReviewUntil;
+      expiresAt = gatewaySettlementDeadline(current);
+      eligible =
+        paymentState === 'PENDING' && expiresAt !== null && at.getTime() < expiresAt.getTime();
+      postDeadline = !eligible;
+    }
     const next = postDeadline
       ? null
       : reviewUntil !== null
@@ -1440,7 +1457,7 @@ export class GatewayPaymentService {
           ? 'HELD'
           : 'ERROR';
       }
-      if (claimed.paymentState !== 'UNKNOWN') {
+      if (paymentState !== 'UNKNOWN') {
         await this.lateCompletion(scope, actor, invoice, reason);
         return 'LATE';
       }
@@ -1463,7 +1480,6 @@ export class GatewayPaymentService {
       scope,
       actor,
       invoice,
-      eligible,
       `${invoice.provider.toLowerCase()}:${outcome.status}:paid`,
       at,
       reference,
@@ -1551,7 +1567,6 @@ export class GatewayPaymentService {
     scope: TenantContext,
     actor: ActorContext,
     invoice: GatewayInvoiceRecord,
-    eligible: boolean,
     evidenceNote: string,
     at: Date,
     /** The provider reference bound to this attempt (CentralPay), re-checked under the lock. */
@@ -1563,21 +1578,13 @@ export class GatewayPaymentService {
     },
   ): Promise<'SETTLED' | 'LATE' | 'ERROR' | 'HELD'> {
     /*
-     * FIX-03: an attempt this lane ALREADY settled is not a late completion. A worker that
-     * died between the settlement's commit and `recordOutcome` leaves the approval scheduled
-     * against a CONFIRMED payment; judged ineligible here, the restarted pass recorded
-     * `LATE_COMPLETION`, raised the "paid invoice we can no longer settle" alarm and logged a
-     * late approval — for money that had been credited exactly once. A confirmed payment goes
-     * to the settlement path instead, which answers `ALREADY_CONFIRMED` under the payment's
-     * lock and moves nothing. Every other ineligible payment is still a late completion.
+     * FIX10 BUG-2: EVERY approval goes to the settlement path, whatever the caller's snapshot
+     * said about eligibility. Only its answer, taken under the payment's lock, decides whether
+     * the approval is late — a snapshot is as old as the read behind it, and a review that
+     * opened after it moved the deadline. (FIX-03's case is the same rule: a payment this
+     * lane already settled answers `ALREADY_CONFIRMED` and is never a late completion.) A
+     * NOT_ELIGIBLE answer is recorded as LATE_COMPLETION with the lock's own reason.
      */
-    const settledBefore =
-      !eligible &&
-      (await this.deps.paymentRecords.findById(scope, invoice.paymentId))?.state === 'CONFIRMED';
-    if (!eligible && !settledBefore) {
-      await this.lateCompletion(scope, actor, invoice, 'DEADLINE_PASSED');
-      return 'LATE';
-    }
     let confirmation: GatewayConfirmation;
     try {
       confirmation = await this.deps.payments.confirmGatewayPayment(
@@ -1740,7 +1747,6 @@ export class GatewayPaymentService {
       scope,
       actor,
       invoice,
-      eligible,
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
       null,
@@ -1773,14 +1779,11 @@ export class GatewayPaymentService {
     // and a redelivered update must not write a second late-completion notice.
     if (invoice.outcome !== null) return invoice.outcome === 'LATE_COMPLETION' ? 'LATE' : 'SETTLED';
     const now = this.deps.clock.now();
-    const deadline = gatewaySettlementDeadline(payment);
-    const eligible =
-      payment.state === 'PENDING' && deadline !== null && now.getTime() < deadline.getTime();
+    // Eligibility is the settlement path's to decide, under the payment's lock (FIX10 BUG-2).
     const settled = await this.settleApproved(
       scope,
       this.actor(),
       invoice,
-      eligible,
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
       null,

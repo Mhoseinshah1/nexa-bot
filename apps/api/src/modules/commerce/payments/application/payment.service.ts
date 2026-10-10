@@ -3663,7 +3663,6 @@ export class PaymentService {
     const paymentId = this.paymentId(id);
     const denial = { action: GATEWAY_CONFIRM_ACTION, entityType: 'Payment', entityId: paymentId };
     await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
-    const now = this.deps.clock.now();
 
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -3674,6 +3673,12 @@ export class PaymentService {
       async (tx): Promise<GatewayConfirmation> => {
         await this.assertScopeActive(scope, tx);
         const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        /*
+         * FIX10 BUG-2 (audit minor): the clock is read AFTER the lock is held. Read before,
+         * an approval that waited on the lock across the deadline was judged at a moment
+         * before it — the deadline and the state must be judged together, at the lock.
+         */
+        const now = this.deps.clock.now();
         if (payment === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
         }
