@@ -604,7 +604,11 @@ describe('the recovery page', () => {
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );
-      expect(await screen.findByText(/هنگام انتقال آسیب دیده است/)).toBeInTheDocument();
+      // AEAD already proved the ciphertext intact, so the words must not blame the transfer
+      // or suggest re-uploading the same file; they send the operator to another backup.
+      const banner = await screen.findByText(/رمزگشایی آن سالم بود/);
+      expect(banner.textContent).toContain('فایل پشتیبان سالم دیگری');
+      expect(banner.textContent).not.toContain('انتقال');
       // The code stays, for the server log, but is no longer the whole answer.
       expect(screen.getAllByText('recovery.checksum_mismatch').length).toBeGreaterThan(0);
     });
@@ -615,6 +619,39 @@ describe('the recovery page', () => {
     renderPage(<RecoveryPage route={route} permissions={ALL} />);
     expect(await screen.findByText('بارگذاری روی این نصب غیرفعال است.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'بارگذاری' })).toBeNull();
+  });
+
+  it('says a refused upload without promising a row, and re-reads the capabilities', async () => {
+    const api = stubApi([
+      ...routes(),
+      {
+        url: `${API_PREFIX}${RECOVERY_ROUTES.upload}`,
+        status: 400,
+        body: {
+          error: {
+            kind: 'validation',
+            code: 'recovery.refused',
+            message: 'Uploading a backup archive is disabled on this installation.',
+            correlationId: 'c7',
+          },
+        },
+      },
+    ]);
+    renderPage(<RecoveryPage route={route} permissions={ALL} />);
+    fireEvent.change(await screen.findByLabelText('انتخاب فایل'), {
+      target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxb')] },
+    });
+    const capabilityReads = () =>
+      api.calls.filter((call) => call.url.includes(RECOVERY_ROUTES.capabilities)).length;
+    const before = capabilityReads();
+    fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+    const banner = await screen.findByText(/سرور این درخواست بازیابی را نپذیرفت/);
+    expect(banner.textContent).toContain('صفحه را تازه کنید');
+    // Uploads disabled is refused before any recovery row exists: the words must not
+    // say the reason is recorded on one.
+    expect(banner.textContent).not.toMatch(/ثبت شده است/);
+    expect(document.body.textContent).not.toContain('disabled on this installation');
+    await waitFor(() => expect(capabilityReads()).toBeGreaterThan(before));
   });
 
   it('shows the quiesce banner and disables the run button while a recovery holds the installation', async () => {

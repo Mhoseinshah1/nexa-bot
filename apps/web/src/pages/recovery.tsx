@@ -116,6 +116,9 @@ export function RecoveryPage({
     void client.invalidateQueries({ queryKey: ['backup-status'] });
     void client.invalidateQueries({ queryKey: ['backup-history'] });
     void client.invalidateQueries({ queryKey: ['recoveries'] });
+    // A refused upload may mean uploads were switched off after this page loaded (or
+    // another replica disagrees); re-reading the capabilities lets the page say so.
+    void client.invalidateQueries({ queryKey: ['recovery-capabilities'] });
   };
 
   /*
@@ -463,6 +466,9 @@ function RecoveryOperations({
       setCurrent(result.recovery);
       onChanged();
     },
+    // A refusal may have left a FAILED row (oversized, empty) or none at all (uploads
+    // disabled); either way the list and the capabilities are re-read.
+    onError: () => onChanged(),
   });
   const verify = useMutation({
     mutationFn: (id: string) => verifyRecovery(id),

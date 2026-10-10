@@ -75,3 +75,77 @@ describe('a refused request on the recovery page', () => {
     );
   });
 });
+
+/*
+ * The words must be TRUE for every path that emits the code, not only the obvious one.
+ * Each case below names a server path the first wording contradicted (Codex review of #274).
+ */
+describe('what each failure sentence is allowed to claim', () => {
+  const text = (code: string) => recoveryFailureText(code);
+
+  it('migration_incompatible names every refused verdict and does not claim the archive is newer', () => {
+    // AHEAD is cut over to (RECOVERY_CUTOVER_READY_VERDICTS); the refusals are NONE, DIVERGED
+    // and a BEHIND this release could not migrate forward (recovery-executor.ts).
+    const sentence = text('recovery.migration_incompatible');
+    expect(sentence).toContain('هیچ سابقه‌ی مهاجرتی ندارد');
+    expect(sentence).toContain('واگرا');
+    expect(sentence).toContain('نتوانست آن را به‌روز کند');
+    expect(sentence).not.toMatch(/نسخه‌ی جدیدتر/);
+  });
+
+  it('checksum_mismatch does not blame the transfer: decryption had already authenticated', () => {
+    const sentence = text('recovery.checksum_mismatch');
+    expect(sentence).not.toContain('انتقال');
+    expect(sentence).toContain('فایل پشتیبان سالم دیگری');
+    expect(sentence).toContain('گزارش سرور');
+  });
+
+  it('upload_rejected also covers an uploaded file the server no longer has', () => {
+    const sentence = text('recovery.upload_rejected');
+    expect(sentence).toContain('دیگر روی سرور پیدا نمی‌شود');
+    expect(sentence).toContain('فضای ذخیره‌سازی سرور');
+  });
+
+  it('candidate_validation_failed names the operational causes, not only bad data', () => {
+    const sentence = text('recovery.candidate_validation_failed');
+    expect(sentence).toContain('اتصال یا دسترسی پایگاه‌داده');
+    expect(sentence).toContain('مهاجرت‌های این نسخه');
+    expect(sentence).toContain('کلیدهای این نصب');
+    expect(sentence).toContain('گزارش سرور');
+    expect(sentence).toContain('دست‌نخورده');
+  });
+
+  it('archive_malformed tells an older install how to read a newer format', () => {
+    const sentence = text('recovery.archive_malformed');
+    expect(sentence).toContain('قالبی تازه‌تر');
+    expect(sentence).toContain('نسخه‌ای از نکسا را نصب کنید');
+    expect(sentence).toContain('فایل پشتیبان سازگار دیگری');
+  });
+});
+
+describe('recovery.refused', () => {
+  const refusal = (details?: Record<string, unknown>) =>
+    new ApiError(400, PLATFORM_ERROR_CODES.RECOVERY_REFUSED, 'refused in English', details);
+
+  it('without a failure code (uploads disabled, before any row exists) promises no row', () => {
+    const sentence = recoveryErrorText(refusal());
+    expect(sentence).toContain('صفحه را تازه کنید');
+    expect(sentence).toContain('اگر برای این درخواست ردیفی');
+    expect(sentence).not.toMatch(/ثبت شده است/);
+  });
+
+  it('with the service’s failure code says that code’s words', () => {
+    expect(recoveryErrorText(refusal({ failureCode: 'recovery.upload_rejected' }))).toBe(
+      recoveryFailureText('recovery.upload_rejected'),
+    );
+    expect(recoveryErrorText(refusal({ failureCode: 'recovery.checksum_mismatch' }))).toBe(
+      recoveryFailureText('recovery.checksum_mismatch'),
+    );
+  });
+
+  it('with a failure code this build does not know falls back to the generic refusal', () => {
+    expect(recoveryErrorText(refusal({ failureCode: 'recovery.from_the_future' }))).toBe(
+      recoveryErrorText(refusal()),
+    );
+  });
+});

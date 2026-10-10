@@ -60,6 +60,21 @@ const REQUEST_ERROR_TEXT: Readonly<Record<string, WebKey>> = {
 /** Any error from this page's requests, as safe Persian; never a raw exception. */
 export function recoveryErrorText(error: unknown): string {
   if (!(error instanceof ApiError)) return t('web.error');
+  /*
+   * `recovery.refused` is several different refusals. The service's own refusals carry the
+   * failure code in `details.failureCode` (a verify of a request whose uploaded file is no
+   * longer on the server is `recovery.upload_rejected`), and that code has the precise words.
+   * The rest — uploads disabled on this installation (a page opened before the setting
+   * changed, or a replica that disagrees), an oversized or empty upload, an unknown id —
+   * carry none, and some of them happen before any recovery row exists, so the generic
+   * sentence must not promise one.
+   */
+  if (error.code === PLATFORM_ERROR_CODES.RECOVERY_REFUSED) {
+    const failureCode = error.details?.['failureCode'];
+    if (typeof failureCode === 'string' && failureCode in RECOVERY_FAILURE_TEXT) {
+      return recoveryFailureText(failureCode);
+    }
+  }
   const key = REQUEST_ERROR_TEXT[error.code];
   if (key !== undefined) return t(key);
   // A recovery failure code answered directly is still one of the 22.
