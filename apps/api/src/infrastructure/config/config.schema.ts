@@ -725,16 +725,25 @@ export const configSchema = z
     /**
      * Mirza `.nxpkg` importer — Fresh Migration (`docs/legacy-migration/nxpkg-importer.md`).
      *
-     * OFF by default, and off means off everywhere: every Web Admin route refuses and the
-     * `migration` process role claims nothing. A migration is a one-off an owner turns on
-     * for the installation that receives it, not a standing feature.
+     * ON by default (Phase 7, owner instruction: no server commands). The Web Admin's restore
+     * page takes a Mirza `.nxpkg` as its second source, and the `recovery` role executes it.
+     * What makes ON safe is not this flag: the fresh-target guard (an installation holding
+     * operational data is refused; nothing is deleted), the owner-only CRITICAL
+     * `legacy.migration.apply`, the typed confirmation bound to the dry run's digest, the
+     * mandatory verified protective backup before any write, and the installation-wide write
+     * freeze while the import applies.
+     *
+     * `false` is the kill switch, and off means off everywhere: every Web Admin route refuses
+     * and the executor (in the `recovery` and `migration` roles) claims nothing.
      */
-    LEGACY_MIGRATION_ENABLED: booleanish.default(false),
+    LEGACY_MIGRATION_ENABLED: booleanish.default(true),
     /**
      * Where uploaded packages live: one `0700` directory per import, the package `0600`
      * inside it, and the `migration` role's private per-step directories for decrypted
      * content (each deleted when its step ends). Its OWN directory, never the recovery's or
-     * the backup's: a sweep written for one must never reach another.
+     * the backup's: a sweep written for one must never reach another. In the deployment it is
+     * the `legacymigration` volume, shared by the `api` (the upload) and the `recovery` role
+     * (the executor).
      */
     LEGACY_MIGRATION_WORK_DIR: z.string().trim().min(1).default('/var/lib/nexa/legacy-migration'),
     /**

@@ -28,6 +28,7 @@ import { stopSalesHolds } from '../../legacy-cutover/domain/cutover-rules.js';
 import {
   classifyTarget,
   evaluateProductionGuard,
+  TARGET_ACK_ENV as TARGET_ACK_ENV_NAME,
   type TARGET_ACK_ENV,
   type TargetIdentity,
 } from '../../legacy-importer/application/production-guard.js';
@@ -159,7 +160,10 @@ export class NxpkgMigrationAdapters
    * (`LegacyCutoverService.decideImport`, the importer's own evaluator) and active stop-sales
    * (`stopSalesHolds`). The importer decides all of it again inside its start transaction.
    */
-  async precheck(context: MigrationStepContext, step: 'DRY_RUN' | 'APPLY'): Promise<void> {
+  async precheck(
+    context: MigrationStepContext,
+    step: 'DRY_RUN' | 'TARGET' | 'APPLY',
+  ): Promise<void> {
     if (!this.productionLikeTarget) return;
     const synthetic = context.verifyReport?.synthetic ?? true;
     if (synthetic) {
@@ -169,19 +173,10 @@ export class NxpkgMigrationAdapters
         'A synthetic package is never imported into a production-like database.',
       );
     }
-    const target = this.deps.target;
-    const verdict =
-      target === null
-        ? { allowed: false as const }
-        : evaluateProductionGuard({
-            target,
-            tenantId: context.scope.tenantId,
-            env: this.deps.guardEnv(),
-            allowProductionFlag: true,
-            syntheticSource: false,
-          });
-    if (!verdict.allowed) throw new LegacyMigrationBlocked('TARGET_ACK_MISSING');
+    // Phase 7: the dry run writes no customer and no money; the acknowledgement arms the apply.
     if (step === 'DRY_RUN') return;
+    if (!this.acknowledged(context)) throw new LegacyMigrationBlocked('TARGET_ACK_MISSING');
+    if (step === 'TARGET') return;
 
     const values = context.dryRunReport?.cutover;
     if (values === undefined) throw new LegacyMigrationBlocked('CUTOVER_APPROVAL_MISSING');
@@ -203,6 +198,36 @@ export class NxpkgMigrationAdapters
     if (!stopSalesHolds(await cutover.stopSalesFacts(context.scope)).holds) {
       throw new LegacyMigrationBlocked('STOP_SALES_NOT_ACTIVE');
     }
+  }
+
+  /**
+   * The importer's own guard (`evaluateProductionGuard`), asked with each acknowledgement there
+   * is: the owner's, given with the approval and stored on the import (Phase 7, the restore
+   * page — the service required it to be this installation's own when it stored it, and it is
+   * asked again here against THIS process's target and tenant), and this process's environment
+   * (the CLI and the rehearsal kit, unchanged). Either, bound to this target and tenant, is
+   * the acknowledgement; neither is none.
+   */
+  private acknowledged(context: MigrationStepContext): boolean {
+    const target = this.deps.target;
+    if (target === null) return false;
+    const env = this.deps.guardEnv();
+    const candidates = [
+      env[TARGET_ACK_ENV_NAME],
+      ...(context.targetAck === null ? [] : [context.targetAck]),
+    ];
+    return candidates.some(
+      (ack) =>
+        ack !== undefined &&
+        ack !== '' &&
+        evaluateProductionGuard({
+          target,
+          tenantId: context.scope.tenantId,
+          env: { NODE_ENV: env.NODE_ENV, [TARGET_ACK_ENV_NAME]: ack },
+          allowProductionFlag: true,
+          syntheticSource: false,
+        }).allowed,
+    );
   }
 
   // --- verify (§1, §7) --------------------------------------------------------------------

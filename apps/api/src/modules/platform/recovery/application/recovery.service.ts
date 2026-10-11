@@ -87,6 +87,11 @@ export interface RecoveryServiceDeps {
    * any process that has no migrations directory beside it.
    */
   readonly expected: () => readonly ExpectedMigration[];
+  /**
+   * Phase 7 — mutual exclusion with a Mirza `.nxpkg` import: whether one is APPROVED or
+   * APPLYING on this installation. A restore is not confirmed while one is.
+   */
+  readonly legacyMigrationActive: () => Promise<boolean>;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -527,6 +532,14 @@ export class RecoveryService {
     }
     if (request.restoreTest === null || !request.restoreTest.cutoverPermitted) {
       throw this.confirmationRefused('This artifact has not passed a restore test.');
+    }
+    // Phase 7: a Mirza import approved or in progress is a restore already under way, from the
+    // operator's view. One at a time, whichever came first; nothing is confirmed.
+    if (await this.deps.legacyMigrationActive()) {
+      throw errors.conflict(
+        PLATFORM_ERROR_CODES.RECOVERY_LEGACY_MIGRATION_ACTIVE,
+        'A Mirza backup is being restored into this installation. Confirm this restore after it finishes.',
+      );
     }
 
     const now = this.deps.clock.now();

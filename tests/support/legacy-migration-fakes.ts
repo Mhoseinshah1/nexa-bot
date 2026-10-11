@@ -55,6 +55,8 @@ export class InMemoryLegacyNxpkgImports implements LegacyNxpkgImportRepository {
       dryRunLegacyRunId: null,
       applyLegacyRunId: null,
       backupRunId: null,
+      preImportBackupRunId: null,
+      targetAck: null,
       progress: { ...EMPTY_LEGACY_MIGRATION_PROGRESS },
       requestedByAdminId: input.requestedByAdminId,
       approvedByAdminId: null,
@@ -202,6 +204,17 @@ export class InMemoryLegacyNxpkgImports implements LegacyNxpkgImportRepository {
       }
     }
     return ids;
+  }
+
+  async applyingImportId(): Promise<string | null> {
+    return [...this.rows.values()].find((row) => row.status === 'APPLYING')?.id ?? null;
+  }
+
+  async committedImportId(): Promise<string | null> {
+    return (
+      [...this.rows.values()].find((row) => row.status === 'APPROVED' || row.status === 'APPLYING')
+        ?.id ?? null
+    );
   }
 
   /** Test helper: overwrite a row. */

@@ -200,7 +200,11 @@ import {
   type TargetIdentity,
 } from './modules/platform/legacy-importer/application/production-guard.js';
 import { expectedMigrations } from './infrastructure/persistence/migration-state.js';
-import type { InstallationWriteGate } from './infrastructure/persistence/write-gate.js';
+import {
+  legacyMigrationQuiesceId,
+  runAsLegacyMigration,
+  type InstallationWriteGate,
+} from './infrastructure/persistence/write-gate.js';
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
@@ -1554,10 +1558,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * differently from the unit of work would be a relay publishing during a
    * cutover.
    */
+  /*
+   * Phase 7: the Mirza `.nxpkg` import's lifecycle table, built here for the same reason — the
+   * gate reads it. An APPLYING import freezes the installation exactly as a quiescing recovery
+   * does (`legacy-migration:<id>`); only that import's own executor writes through it
+   * (`runAsLegacyMigration`). The recovery is asked FIRST: the two are mutually exclusive, and
+   * if both ever held, the restore's answer is the one an operator must see.
+   */
+  const legacyNxpkgImports = new DrizzleLegacyNxpkgImportRepository(database.db);
   const writeGate: InstallationWriteGate = {
     async quiescedBy(tx) {
       const lock = await recoveryRequests.installationLock(tx);
-      return lock !== null && lock.quiescing ? lock.recoveryId : null;
+      if (lock !== null && lock.quiescing) return lock.recoveryId;
+      const applying = await legacyNxpkgImports.applyingImportId(tx);
+      return applying === null ? null : legacyMigrationQuiesceId(applying);
     },
   };
   const uow = new DrizzleUnitOfWork(database.db, writeGate);
@@ -6562,6 +6576,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * wrong answer about whether a database can be served.
      */
     expected: () => expectedMigrations(fileURLToPath(new URL('../drizzle', import.meta.url))),
+    // Phase 7: a Mirza import APPROVED or APPLYING refuses a restore's confirmation.
+    legacyMigrationActive: async () => (await legacyNxpkgImports.committedImportId()) !== null,
     logger,
   });
   /**
@@ -6652,7 +6668,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * importer through the CLI's own `runMode`), the fresh-target guard and the history ingest;
    * `PipelineBackupPort` is the standard backup after the import, quiesce honoured.
    */
-  const legacyNxpkgImports = new DrizzleLegacyNxpkgImportRepository(database.db);
   const migrationWorkspaces = new FilesystemMigrationWorkspaces(config.LEGACY_MIGRATION_WORK_DIR);
   const legacyMigration = new LegacyMigrationService({
     repository: legacyNxpkgImports,
@@ -6676,6 +6691,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         ? targetAcknowledgement(target, tenantId)
         : null;
     },
+    // Phase 7: the restore page's approval records the owner's cutover approval too, and is
+    // refused while a disaster recovery holds the installation.
+    cutover: () => legacyCutover,
+    recoveryActive: async (tx) => (await recoveryRequests.installationLock(tx)) !== null,
     logger,
   });
   const nxpkgMigration = new NxpkgMigrationAdapters({
@@ -6703,6 +6722,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     freshTarget: nxpkgMigration,
     history: nxpkgMigration,
     backup: new PipelineBackupPort(backup, recoveryQuiesced),
+    // Phase 7: never started while a recovery is confirmed and unfinished; the apply runs as
+    // the import's own writer, the one writer its APPLYING freeze lets through.
+    recoveryActive: async () => (await recoveryRequests.installationLock()) !== null,
+    asImportWriter: runAsLegacyMigration,
     clock,
     correlation: () => newCorrelationId(ids.uuid()),
     leaseOwner,

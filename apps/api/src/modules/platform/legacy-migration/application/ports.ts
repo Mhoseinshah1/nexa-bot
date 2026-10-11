@@ -59,6 +59,10 @@ export interface LegacyNxpkgImportRow {
   readonly dryRunLegacyRunId: string | null;
   readonly applyLegacyRunId: string | null;
   readonly backupRunId: string | null;
+  /** Phase 7: the verified protective backup taken before the import wrote anything. */
+  readonly preImportBackupRunId: string | null;
+  /** Phase 7: the target acknowledgement the owner's approval carried (production-like). */
+  readonly targetAck: string | null;
   readonly progress: LegacyMigrationProgress;
   readonly requestedByAdminId: string;
   readonly approvedByAdminId: string | null;
@@ -94,6 +98,8 @@ export interface LegacyNxpkgImportPatch {
   readonly dryRunLegacyRunId?: string | null;
   readonly applyLegacyRunId?: string | null;
   readonly backupRunId?: string | null;
+  readonly preImportBackupRunId?: string | null;
+  readonly targetAck?: string | null;
   readonly progress?: LegacyMigrationProgress;
 }
 
@@ -200,6 +206,17 @@ export interface LegacyNxpkgImportRepository {
     readonly idleBefore: Date;
     readonly statuses: readonly LegacyNxpkgImportStatus[];
   }): Promise<readonly string[]>;
+  /**
+   * Phase 7 — the installation-wide write freeze: the id of an import (any tenant) that is
+   * APPLYING, or null. Read on the caller's transaction when given one (the write gate asks
+   * INSIDE the transaction it is about to permit).
+   */
+  applyingImportId(tx?: unknown): Promise<string | null>;
+  /**
+   * Phase 7 — mutual exclusion with a disaster recovery: the id of an import (any tenant)
+   * that is APPROVED or APPLYING, or null.
+   */
+  committedImportId(tx?: unknown): Promise<string | null>;
 }
 
 // --- the filesystem ---------------------------------------------------------------------------
@@ -270,6 +287,12 @@ export interface MigrationStepContext {
   /** What verification and the dry run recorded (null before each). */
   readonly verifyReport: LegacyMigrationVerifyReport | null;
   readonly dryRunReport: LegacyMigrationDryRunReport | null;
+  /**
+   * Phase 7: the target acknowledgement the owner's approval carried and the server checked
+   * (`legacy_nxpkg_imports.target_ack`), or null. The production-like precheck accepts it in
+   * place of the process environment's when it is still this target's own.
+   */
+  readonly targetAck: string | null;
   /** Aborted when the lease is lost (cancelled, or taken over): stop and write nothing more. */
   readonly signal: AbortSignal;
 }
@@ -297,7 +320,7 @@ export class LegacyMigrationStepFailure extends Error {
  */
 export class LegacyMigrationRetry extends Error {
   constructor(
-    readonly reason: 'RUN_CONFLICT',
+    readonly reason: 'RUN_CONFLICT' | 'BACKUP_BUSY' | 'RECOVERY_ACTIVE',
     options?: { cause?: unknown },
   ) {
     super(`The legacy migration step will run again later: ${reason}.`, options);
@@ -360,13 +383,20 @@ export interface FreshTargetGuard {
  */
 export interface MigrationRunner {
   /**
-   * Before a dry run (`DRY_RUN`) and before every apply attempt (`APPLY`): on a production-like
-   * target, the gates the CLI applies — the process's target acknowledgement, and for the apply
-   * the owner's cutover approval of the dry run's seven values and active stop-sales. Throws
-   * `LegacyMigrationBlocked` (waiting) or `LegacyMigrationStepFailure` (never allowed: a
-   * synthetic package against a production-like target). Anywhere else, nothing.
+   * On a production-like target only (anywhere else, nothing):
+   *
+   * - `DRY_RUN` (before a dry run): a synthetic package is never allowed
+   *   (`LegacyMigrationStepFailure`). Nothing else — the dry run writes no customer and no
+   *   money, and the owner's approval is where the target acknowledgement is given;
+   * - `TARGET` (at the apply's start, before the protective backup): that, and the target
+   *   acknowledgement — the owner's, stored on the import (`targetAck`), or the process
+   *   environment's `NEXA_LEGACY_IMPORT_TARGET_ACK` (CLI, rehearsal) — for THIS target;
+   * - `APPLY` (before the first write and every resume): that, the owner's cutover approval of
+   *   the dry run's seven values, and stop-sales (an APPLYING import's own freeze counts).
+   *
+   * A missing gate throws `LegacyMigrationBlocked`.
    */
-  precheck(context: MigrationStepContext, step: 'DRY_RUN' | 'APPLY'): Promise<void>;
+  precheck(context: MigrationStepContext, step: 'DRY_RUN' | 'TARGET' | 'APPLY'): Promise<void>;
   /**
    * `importer.dryRun` plus the read-set FINGERPRINTS (digest only, the `expected = null`
    * observation): nothing durable is written for the read sets — no product review, no
@@ -417,10 +447,48 @@ export interface HistoryIngestPort {
   }>;
 }
 
-/** The standard backup after a completed import, honouring the recovery quiesce. */
+/** The backups around an import, through the unmodified Backup V1 pipeline. */
 export interface BackupPort {
+  /**
+   * Phase 7 — the MANDATORY protective backup, before the import writes anything: the
+   * pipeline's `PRE_RESTORE` trigger (a migration IS a restore from the operator's view).
+   * `TAKEN` only for a run that SUCCEEDED with its archive verified (VERIFY_RESTORE);
+   * `BUSY` when another backup holds the pipeline's lock; `FAILED` otherwise.
+   */
+  runBeforeImport(): Promise<{
+    readonly outcome: 'TAKEN' | 'BUSY' | 'FAILED';
+    readonly runId: string | null;
+  }>;
+  /** The standard backup after a completed import, honouring the recovery quiesce. */
   runAfterImport(): Promise<{
     readonly outcome: LegacyMigrationBackupOutcome;
     readonly runId: string | null;
   }>;
+}
+
+/**
+ * Phase 7 — where the owner's ONE confirmation on the restore page records the cutover
+ * approval of the dry run's seven values (`LegacyCutoverService.recordImportApproval`), inside
+ * the approval's own transaction. Idempotent: an identical unrevoked approval is reused.
+ */
+export interface ImportCutoverApprovals {
+  recordImportApproval(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly importId: string;
+      readonly binding: {
+        readonly sourceFingerprint: string;
+        readonly panelMapFingerprint: string;
+        readonly inventoryFingerprint: string;
+        readonly productsFingerprint: string;
+        readonly invoiceArchiveFingerprint: string;
+        readonly freezeProofSha256: string;
+        readonly finalDumpSha256: string;
+      };
+      readonly synthetic: boolean;
+      readonly reason: string;
+    },
+    tx: TransactionScope,
+  ): Promise<{ readonly approvalId: string; readonly created: boolean }>;
 }

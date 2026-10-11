@@ -91,6 +91,8 @@ function toRow(row: Row): LegacyNxpkgImportRow {
     dryRunLegacyRunId: row.dryRunLegacyRunId,
     applyLegacyRunId: row.applyLegacyRunId,
     backupRunId: row.backupRunId,
+    preImportBackupRunId: row.preImportBackupRunId,
+    targetAck: row.targetAck,
     progress: { ...EMPTY_PROGRESS, ...progress },
     requestedByAdminId: row.requestedByAdminId,
     approvedByAdminId: row.approvedByAdminId,
@@ -357,5 +359,31 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
       )
       .returning({ id: t.id });
     return rows.map((row) => row.id);
+  }
+
+  async applyingImportId(tx?: unknown): Promise<string | null> {
+    return this.firstIn(['APPLYING'], tx);
+  }
+
+  async committedImportId(tx?: unknown): Promise<string | null> {
+    return this.firstIn(['APPROVED', 'APPLYING'], tx);
+  }
+
+  /**
+   * One indexed read (`legacy_nxpkg_imports_poll_idx` leads with `status`) on the caller's
+   * transaction, UNWRAPPED from its `TransactionScope` as `installationLock` does.
+   */
+  private async firstIn(
+    statuses: readonly LegacyNxpkgImportStatus[],
+    tx?: unknown,
+  ): Promise<string | null> {
+    const executor: Executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
+    const [row] = await executor
+      .select({ id: t.id })
+      .from(t)
+      .where(inArray(t.status, [...statuses]))
+      .orderBy(t.createdAt)
+      .limit(1);
+    return row?.id ?? null;
   }
 }

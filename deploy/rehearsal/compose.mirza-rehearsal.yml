@@ -31,12 +31,12 @@ name: nexa-mirza-rehearsal
 
 services:
   api:
+    # The package workspace (`legacymigration`) is the production file's own app-role mount
+    # now (Phase 7), so the api needs no volume of its own here.
     networks: !override
       - data
       - front
       - panelsim
-    volumes:
-      - legacymigration:/var/lib/nexa/legacy-migration
 
   worker:
     # `data` alone: the notification dispatcher (disabled in nexa.env as well) has no route

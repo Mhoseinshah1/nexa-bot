@@ -47,6 +47,7 @@ import {
   LEGACY_MIGRATION_COMMAND_FROM,
 } from '../domain/import-lifecycle.js';
 import type {
+  ImportCutoverApprovals,
   LegacyNxpkgImportPatch,
   LegacyNxpkgImportRepository,
   LegacyNxpkgImportRow,
@@ -56,6 +57,11 @@ import type {
 export const LEGACY_MIGRATION_VIEW_PERMISSION = 'legacy.migration.view' satisfies PermissionKey;
 export const LEGACY_MIGRATION_MANAGE_PERMISSION = 'legacy.migration.manage' satisfies PermissionKey;
 export const LEGACY_MIGRATION_APPLY_PERMISSION = 'legacy.migration.apply' satisfies PermissionKey;
+/** The cutover approval the restore page's approval also records (owner-only, CRITICAL). */
+const LEGACY_CUTOVER_APPROVE_PERMISSION = 'legacy.cutover.approve' satisfies PermissionKey;
+
+/** The reason the restore page's cutover approval is recorded with (Persian, as the owner reads it). */
+export const LEGACY_MIGRATION_CUTOVER_REASON = 'تأیید بازیابی از صفحه بکاپ و بازیابی';
 
 /** The purpose the package key is sealed under; the entity is the import row's id. */
 export const LEGACY_MIGRATION_KEY_PURPOSE = 'legacy_migration.package_key' as const;
@@ -86,6 +92,13 @@ export interface LegacyMigrationServiceDeps {
    * must carry for this tenant (a digest the guard itself prints; not a secret). Null otherwise.
    */
   readonly targetAcknowledgement: (tenantId: string) => string | null;
+  /** Phase 7: the owner's cutover approval, recorded by the same approval. */
+  readonly cutover: () => ImportCutoverApprovals;
+  /**
+   * Phase 7 — mutual exclusion: a disaster recovery is confirmed and not finished. Read
+   * INSIDE the approval's transaction.
+   */
+  readonly recoveryActive: (tx: TransactionScope) => Promise<boolean>;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -540,6 +553,18 @@ export class LegacyMigrationService {
    * import's CURRENT `dry_run_sha256`, in the transaction AND in the UPDATE's predicate — so an
    * approval read off one report can never start an import computed from another. The
    * executor re-checks the binding and the package's SHA-256 before it writes anything.
+   *
+   * PHASE 7 — the restore page's ONE confirmation folds in the owner gates the CLI path asks
+   * for elsewhere, so the page never sends anyone to another page or a server command:
+   *
+   * - production-like target: `targetAcknowledgement` must equal this installation's own
+   *   (`TARGET_ACK_MISMATCH` otherwise), and is stored (`target_ack`) for the executor, which
+   *   accepts it in place of the process environment's;
+   * - the owner's CUTOVER approval of the dry run's seven values is recorded in the same
+   *   transaction (`legacy.cutover.approve` is required too), in the owner's name, reused when
+   *   an identical one exists;
+   * - a confirmed, unfinished disaster recovery refuses the approval (`RECOVERY_ACTIVE`): one
+   *   restore at a time, whichever came first.
    */
   async approve(
     scope: TenantContext,
@@ -554,6 +579,12 @@ export class LegacyMigrationService {
       action,
       entityId: id,
     });
+    // The cutover approval this call also records is the owner's too: asked up front, so a
+    // caller without it is audited DENIED for exactly that permission.
+    await this.requirePermission(scope, actor, LEGACY_CUTOVER_APPROVE_PERMISSION, {
+      action,
+      entityId: id,
+    });
     const command = legacyMigrationApproveRequestSchema.parse(body);
     if (command.confirmation !== LEGACY_MIGRATION_APPROVAL_PHRASE) {
       throw errors.validation(
@@ -561,7 +592,29 @@ export class LegacyMigrationService {
         'The confirmation phrase does not match. Nothing was approved.',
       );
     }
-    const requestHash = hashRequest({ action, importId: id, dryRunSha256: command.dryRunSha256 });
+    // Production-like: the owner confirms THIS database and tenant — the value the
+    // capabilities show — or nothing is approved. Elsewhere there is nothing to acknowledge.
+    let targetAck: string | null = null;
+    if (this.deps.productionLikeTarget) {
+      const expected = this.deps.targetAcknowledgement(scope.tenantId);
+      if (
+        expected === null ||
+        command.targetAcknowledgement === null ||
+        !digestsEqual(command.targetAcknowledgement, expected)
+      ) {
+        throw errors.validation(
+          CODES.TARGET_ACK_MISMATCH,
+          'This approval does not acknowledge this installation’s database. Nothing was approved.',
+        );
+      }
+      targetAck = expected;
+    }
+    const requestHash = hashRequest({
+      action,
+      importId: id,
+      dryRunSha256: command.dryRunSha256,
+      targetAcknowledgement: targetAck,
+    });
     return this.idempotent(
       scope,
       actor,
@@ -581,6 +634,14 @@ export class LegacyMigrationService {
           );
         }
         if (row.keyCiphertext === null) throw invalidState(row.status);
+        const values = row.dryRunReport?.cutover;
+        if (values === undefined || row.verifyReport === null) throw invalidState(row.status);
+        if (await this.deps.recoveryActive(tx)) {
+          throw errors.conflict(
+            CODES.RECOVERY_ACTIVE,
+            'A restore of this installation is confirmed and not finished. Nothing was approved.',
+          );
+        }
         const now = this.deps.clock.now();
         const moved = await this.deps.repository.transition(
           {
@@ -595,11 +656,25 @@ export class LegacyMigrationService {
               approvedDryRunSha256: command.dryRunSha256,
               approvedByAdminId: adminIdOf(actor),
               approvedAt: now,
+              targetAck,
             },
           },
           tx,
         );
         if (!moved) throw invalidState(row.status);
+        // The owner's cutover approval of the seven values the approved dry run recorded, in
+        // the same transaction: both commit or neither does.
+        const cutover = await this.deps.cutover().recordImportApproval(
+          scope,
+          actor,
+          {
+            importId: row.id,
+            binding: values,
+            synthetic: row.verifyReport.synthetic,
+            reason: LEGACY_MIGRATION_CUTOVER_REASON,
+          },
+          tx,
+        );
         await this.deps.audit.record(
           scope,
           actor,
@@ -613,6 +688,8 @@ export class LegacyMigrationService {
               fileSha256: row.fileSha256,
               dryRunSha256: command.dryRunSha256,
               packageSourceFingerprint: row.packageSourceFingerprint,
+              targetAcknowledged: targetAck !== null,
+              cutoverApprovalId: cutover.approvalId,
             },
             reason: 'The owner approved a Mirza package dry run and started its import.',
             result: 'SUCCESS',
@@ -936,6 +1013,7 @@ export function legacyMigrationView(
     dryRunLegacyRunId: row.dryRunLegacyRunId,
     applyLegacyRunId: row.applyLegacyRunId,
     backupRunId: row.backupRunId,
+    preImportBackupRunId: row.preImportBackupRunId,
     progress: { ...row.progress },
     working:
       row.claimedBy !== null && row.leaseUntil !== null && row.leaseUntil.getTime() > now.getTime(),

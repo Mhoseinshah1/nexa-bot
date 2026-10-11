@@ -441,6 +441,7 @@ describe('legacy migration: interrupt, resume and rerun over a real package', ()
       panelBindings: (await rig.detail(first)).panelBindings ?? [],
       verifyReport: (await rig.detail(first)).verifyReport,
       dryRunReport: (await rig.detail(first)).dryRunReport,
+      targetAck: null,
       signal: new AbortController().signal,
     };
     const replay = await adapters.apply(context, {

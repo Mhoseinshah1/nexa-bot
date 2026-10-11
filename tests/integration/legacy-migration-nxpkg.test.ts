@@ -6,12 +6,20 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  isNexaError,
   LEGACY_MIGRATION_APPROVAL_PHRASE,
+  LEGACY_MIGRATION_HTTP_ERROR_CODES,
+  PLATFORM_ERROR_CODES,
   type ActorContext,
   type CorrelationId,
 } from '@nexa/contracts';
+import { runAsLegacyMigration } from '../../apps/api/src/infrastructure/persistence/write-gate';
 import { LegacyMigrationExecutor } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
 import { NxpkgMigrationAdapters } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters';
+import { PipelineBackupPort } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/migration-adapters';
+import { LegacyMigrationService } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration.service';
+import type { ApplyPhase } from '../../apps/api/src/modules/platform/legacy-importer/application/legacy-importer.service';
+import { withAfterPhase } from '../support/legacy-migration-rig';
 import { decideLegacyUser } from '../../apps/api/src/modules/platform/legacy-importer/application/decisions';
 import { compareKeyBytes } from '../../apps/api/src/modules/platform/legacy-importer/application/source-port';
 import { classifyLegacyUserStatus } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
@@ -57,6 +65,7 @@ import {
  */
 
 const TENANT = SEED_IDS.tenantA as unknown as string;
+const PRE_IMPORT_BACKUP_RUN = '019600ab-cdef-7012-8345-6789abcd8888';
 
 describe('legacy migration: the executor over a real package', () => {
   let ctx: TestContext;
@@ -595,11 +604,17 @@ describe('legacy migration: the executor over a real package', () => {
   /**
    * A production-like target, simulated the way the guard's own tests do: a database NAME with
    * no non-production token, and `NODE_ENV=production` in the migration process's environment.
-   * The CLI's gates, unchanged, decide: without the process's target acknowledgement the dry
-   * run waits; without the owner's cutover approval of the dry run's seven values the import
-   * waits; without stop-sales it waits; with all three it runs.
+   * The CLI / rehearsal path, where the acknowledgement is the PROCESS's environment and this
+   * container's own service (not production-like) stores none with the approval.
+   *
+   * Phase 7 changed three things here, deliberately: the dry run no longer waits for the
+   * acknowledgement (it writes no customer and no money); the approval records the owner's
+   * cutover approval of the dry run's seven values itself (no `/legacy-cutover` visit); and the
+   * import's own installation-wide write freeze is stopped sales (no incident). What still
+   * waits is the APPLY, for this target's acknowledgement — and it waits APPROVED, before the
+   * protective backup and before the freeze.
    */
-  it('production-like: waits for the ack, the cutover approval and stop-sales, then imports', async () => {
+  it('production-like (env path): the apply waits for the ack; approval and freeze stand for the cutover gate', async () => {
     const target = { host: 'db.internal', port: '5432', database: 'nexa' };
     const env: { NODE_ENV: string; [TARGET_ACK_ENV]?: string } = { NODE_ENV: 'production' };
     const container = ctx.container;
@@ -613,6 +628,7 @@ describe('legacy migration: the executor over a real package', () => {
       guardEnv: () => env,
       logger: { warn: () => undefined, error: () => undefined },
     });
+    let backupsBefore = 0;
     const executor = new LegacyMigrationExecutor({
       repository: container.legacyNxpkgImports,
       workspaces: container.migrationWorkspaces,
@@ -621,7 +637,15 @@ describe('legacy migration: the executor over a real package', () => {
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
-      backup: { runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }) },
+      backup: {
+        runBeforeImport: async () => {
+          backupsBefore += 1;
+          return { outcome: 'TAKEN', runId: PRE_IMPORT_BACKUP_RUN };
+        },
+        runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }),
+      },
+      recoveryActive: async () => false,
+      asImportWriter: runAsLegacyMigration,
       clock: container.clock,
       correlation: () => 'corr-prod' as CorrelationId,
       leaseOwner: 'migration:prod-sim',
@@ -649,21 +673,12 @@ describe('legacy migration: the executor over a real package', () => {
     });
     await service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
 
-    // 1. No acknowledgement in the process's environment: the dry run WAITS (nothing read).
+    // 1. No acknowledgement anywhere: the DRY RUN still runs (Phase 7) and writes nothing.
     await executor.tick();
     let view = await detail(id);
-    expect(view.status).toBe('DRY_RUN_REQUESTED');
-    expect(view.progress.blocker).toBe('TARGET_ACK_MISSING');
-    // Another target's acknowledgement is no acknowledgement.
-    env[TARGET_ACK_ENV] = targetAcknowledgement({ ...target, database: 'nexa_other' }, TENANT);
-    await executor.tick();
-    expect((await detail(id)).progress.blocker).toBe('TARGET_ACK_MISSING');
-
-    env[TARGET_ACK_ENV] = targetAcknowledgement(target, TENANT);
-    await executor.tick();
-    view = await detail(id);
     expect(view.status, JSON.stringify(view.errorCode)).toBe('DRY_RUN_DONE');
     expect(view.progress.blocker).toBeNull();
+    expect(await count('customers')).toBe(0);
     const values = view.dryRunReport?.cutover;
     if (values === undefined) throw new Error('no cutover values');
 
@@ -672,37 +687,319 @@ describe('legacy migration: the executor over a real package', () => {
       dryRunSha256: view.dryRunSha256,
       confirmation: LEGACY_MIGRATION_APPROVAL_PHRASE,
     });
-
-    // 2. No owner cutover approval of these seven values: the import WAITS, still APPROVED.
-    await executor.tick();
-    view = await detail(id);
-    expect(view.status).toBe('APPROVED');
-    expect(view.progress.blocker).toBe('CUTOVER_APPROVAL_MISSING');
-    expect(await count('customers')).toBe(0);
-
-    await container.legacyCutover.approve(tenantA, owner, {
-      idempotencyKey: key(),
+    // The approval recorded the owner's cutover approval of exactly these seven values.
+    const approvals = await container.database.db.execute<Record<string, unknown>>(
+      sql`SELECT kind, source_fingerprint, final_dump_sha256, synthetic, reason
+            FROM legacy_cutover_approvals WHERE tenant_id = ${TENANT}`,
+    );
+    expect(approvals.rows).toHaveLength(1);
+    expect(approvals.rows[0]).toMatchObject({
       kind: 'CUTOVER',
-      ...values,
-      priorSourceFingerprint: null,
-      reason: 'production-like rehearsal of the migration role',
+      source_fingerprint: values.sourceFingerprint,
+      final_dump_sha256: values.finalDumpSha256,
+      synthetic: false,
     });
 
-    // 3. Sales are not stopped: still waiting.
+    // 2. The APPLY waits for this target's acknowledgement — APPROVED, no backup, no freeze.
     await executor.tick();
     view = await detail(id);
     expect(view.status).toBe('APPROVED');
-    expect(view.progress.blocker).toBe('STOP_SALES_NOT_ACTIVE');
+    expect(view.progress.blocker).toBe('TARGET_ACK_MISSING');
+    expect(view.preImportBackupRunId).toBeNull();
+    expect(backupsBefore).toBe(0);
+    // Another target's acknowledgement is no acknowledgement.
+    env[TARGET_ACK_ENV] = targetAcknowledgement({ ...target, database: 'nexa_other' }, TENANT);
+    await executor.tick();
+    expect((await detail(id)).progress.blocker).toBe('TARGET_ACK_MISSING');
     expect(await count('customers')).toBe(0);
 
-    await stopSales();
+    // 3. With it: no incident, no drained panel, no `/legacy-cutover` visit — the import runs.
+    env[TARGET_ACK_ENV] = targetAcknowledgement(target, TENANT);
     await executor.tick();
     view = await detail(id);
     expect(view.status, JSON.stringify(view.applyReport)).toBe('COMPLETED');
     expect(view.progress.blocker).toBeNull();
+    expect(view.preImportBackupRunId).toBe(PRE_IMPORT_BACKUP_RUN);
+    expect(backupsBefore).toBe(1);
     expect(await count('customers')).toBe(8);
+    expect(await count('incidents')).toBe(0);
     expect((await row(id))?.['key_ciphertext']).toBeNull();
   }, 300_000);
+
+  /**
+   * PHASE 7 — the restore page's path on a production-like target, end to end, with NOTHING
+   * done on the server: no `NEXA_LEGACY_IMPORT_TARGET_ACK` in the process environment, no
+   * stop-sales incident, no `/legacy-cutover` visit. The owner's one approval carries the
+   * target acknowledgement (refused when it is not this installation's own) and records the
+   * cutover approval; the executor takes the REAL verified protective backup before any
+   * customer row, then freezes the installation while it imports: a normal write is refused
+   * with the restore's own code and the outbox relay idles. No customer is told anything and
+   * no panel is written to; a second claim afterwards changes nothing.
+   */
+  it('Phase 7 restore page, production-like: no env ack, no incident — backup first, frozen while applying', async () => {
+    const target = { host: 'db.internal', port: '5432', database: 'nexa' };
+    const ack = targetAcknowledgement(target, TENANT);
+    const container = ctx.container;
+    const db = container.database.db;
+    // What the API process of a production-like installation is: the SAME service, told the
+    // truth about its target.
+    const pageService = new LegacyMigrationService({
+      repository: container.legacyNxpkgImports,
+      workspaces: container.migrationWorkspaces,
+      cipher: container.cipher,
+      guard: container.guard,
+      uow: container.uow,
+      audit: container.audit,
+      opsLog: container.opsLog,
+      sessions: container.sessions,
+      idempotency: container.idempotency,
+      scopeActivity: container.tenants,
+      clock: container.clock,
+      ids: container.ids,
+      enabled: true,
+      maxUploadBytes: 1024 * 1024 * 1024,
+      productionLikeTarget: true,
+      targetAcknowledgement: (tenantId) => targetAcknowledgement(target, tenantId),
+      cutover: () => container.legacyCutover,
+      recoveryActive: async (tx) =>
+        (await container.recoveryRequests.installationLock(tx)) !== null,
+      logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    });
+
+    // The pause: after the importer's customers phase, while APPLYING, the test body (which is
+    // NOT the import's writer) probes the freeze; then the import continues.
+    let paused: () => void = () => undefined;
+    const reachedPause = new Promise<void>((resolve) => (paused = resolve));
+    let resume: () => void = () => undefined;
+    const resumed = new Promise<void>((resolve) => (resume = resolve));
+    let pausedOnce = false;
+    const pause = async (phase: ApplyPhase) => {
+      if (pausedOnce || phase !== 'customers') return;
+      pausedOnce = true;
+      paused();
+      await resumed;
+    };
+    const adapters = new NxpkgMigrationAdapters({
+      db,
+      importer: () => withAfterPhase(container.legacyImporter(), pause),
+      history: () => container.legacyHistoryIngest,
+      cutover: () => container.legacyCutover,
+      uow: container.uow,
+      target,
+      // A production server's migration process: NODE_ENV=production and NO acknowledgement.
+      guardEnv: () => ({ NODE_ENV: 'production' }),
+      logger: { warn: () => undefined, error: () => undefined },
+    });
+    // The REAL Backup V1 pipeline behind the port, observed: how many customers existed and
+    // what the import's status was at the moment the protective backup was requested.
+    const pipeline = new PipelineBackupPort(container.backup, container.recoveryQuiesced);
+    const atBackup: { customers: number; status: unknown }[] = [];
+    const executor = new LegacyMigrationExecutor({
+      repository: container.legacyNxpkgImports,
+      workspaces: container.migrationWorkspaces,
+      cipher: container.cipher,
+      verifier: adapters,
+      runner: adapters,
+      freshTarget: adapters,
+      history: adapters,
+      backup: {
+        runBeforeImport: async () => {
+          atBackup.push({
+            customers: await count('customers'),
+            status: (
+              await db.execute<{ status: string }>(
+                sql`SELECT status FROM legacy_nxpkg_imports WHERE tenant_id = ${TENANT}`,
+              )
+            ).rows[0]?.status,
+          });
+          return pipeline.runBeforeImport();
+        },
+        runAfterImport: () => pipeline.runAfterImport(),
+      },
+      recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
+      asImportWriter: runAsLegacyMigration,
+      clock: container.clock,
+      correlation: () => 'corr-restore-page' as CorrelationId,
+      leaseOwner: 'recovery:restore-page',
+      tickIntervalMs: 1000,
+      enabled: true,
+      logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    });
+
+    const pkg = await writePackage({ real: true, clean: true });
+    const id = await upload(pkg.path);
+    const service = container.legacyMigration;
+    await service.setKey(tenantA, owner, id, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await executor.tick();
+    await service.setPanelBindings(tenantA, owner, id, {
+      idempotencyKey: key(),
+      bindings: [
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelAId },
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelBId },
+      ],
+    });
+    await service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
+    // The dry run needs no acknowledgement (Phase 7).
+    await executor.tick();
+    const dry = await detail(id);
+    expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
+
+    const codeOf = async (promise: Promise<unknown>) => {
+      try {
+        await promise;
+        return null;
+      } catch (error) {
+        if (isNexaError(error)) return error.code;
+        throw error;
+      }
+    };
+    const approve = (targetAcknowledgement?: string | null) =>
+      pageService.approve(tenantA, owner, id, {
+        idempotencyKey: key(),
+        dryRunSha256: dry.dryRunSha256,
+        confirmation: LEGACY_MIGRATION_APPROVAL_PHRASE,
+        ...(targetAcknowledgement === undefined ? {} : { targetAcknowledgement }),
+      });
+    // Refused on a mismatch — none, null, another database's — nothing approved or recorded.
+    for (const wrong of [
+      undefined,
+      null,
+      targetAcknowledgement({ ...target, database: 'nexa_x' }, TENANT),
+    ]) {
+      expect(await codeOf(approve(wrong)), String(wrong)).toBe(
+        LEGACY_MIGRATION_HTTP_ERROR_CODES.TARGET_ACK_MISMATCH,
+      );
+    }
+    expect((await row(id))?.['status']).toBe('DRY_RUN_DONE');
+    expect(await count('legacy_cutover_approvals')).toBe(0);
+
+    await approve(ack);
+    expect(await row(id)).toMatchObject({ status: 'APPROVED', target_ack: ack });
+    // The owner's cutover approval, recorded by the same approval in the owner's name.
+    const approvals = await db.execute<Record<string, unknown>>(
+      sql`SELECT kind, approved_by_admin_id, reason, synthetic FROM legacy_cutover_approvals
+           WHERE tenant_id = ${TENANT}`,
+    );
+    expect(approvals.rows).toEqual([
+      {
+        kind: 'CUTOVER',
+        approved_by_admin_id: owner.id,
+        reason: 'تأیید بازیابی از صفحه بکاپ و بازیابی',
+        synthetic: false,
+      },
+    ]);
+
+    const notificationsBefore = await count('notifications');
+    // A message waiting in the outbox: proof the relay idles because of the freeze, not
+    // because it had nothing to claim (the recovery suite's positive-control rule).
+    await db.execute(sql`
+      INSERT INTO outbox_messages
+        (id, aggregate_type, aggregate_id, sequence, event_type, payload, actor, correlation_id, occurred_at)
+      VALUES ('01900000-0000-7000-8000-00000000f7e1', 'System', 'system', 1, 'SystemPinged', '{}', '{}',
+              'freeze-probe', now())`);
+
+    const ticking = executor.tick();
+    // Either the import pauses mid-way, or the tick ends without ever reaching the pause (a
+    // refusal) — never a hang.
+    await Promise.race([reachedPause, ticking]);
+    expect(pausedOnce, String((await row(id))?.['status'])).toBe(true);
+
+    // --- frozen: the import is APPLYING and has written its customers ---------------------
+    const frozen = await row(id);
+    expect(frozen?.['status']).toBe('APPLYING');
+    const backupRunId = String(frozen?.['pre_import_backup_run_id']);
+    expect(backupRunId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(await count('customers')).toBe(8);
+    // A normal tenant write anywhere in the installation: refused, the restore's own code.
+    expect(await codeOf(container.uow.run(tenantA, async () => 'a normal write'))).toBe(
+      PLATFORM_ERROR_CODES.RECOVERY_QUIESCED,
+    );
+    // The relay idles: the message is left unclaimed.
+    expect(await container.relay.processBatch()).toEqual({ claimed: 0, published: 0, failed: 0 });
+    // Reads still work.
+    expect((await detail(id)).status).toBe('APPLYING');
+    resume();
+    await ticking;
+
+    const done = await detail(id);
+    expect(done.status, JSON.stringify(done.applyReport)).toBe('COMPLETED');
+    expect(done.preImportBackupRunId).toBe(backupRunId);
+
+    // The protective backup: the REAL pipeline, trigger PRE_RESTORE, verified, taken while
+    // the import was still APPROVED and before a single customer existed.
+    expect(atBackup).toEqual([{ customers: 0, status: 'APPROVED' }]);
+    const backupRow = await db.execute<Record<string, unknown>>(
+      sql`SELECT trigger, state, verified_at IS NOT NULL AS verified FROM backup_runs WHERE id = ${backupRunId}`,
+    );
+    expect(backupRow.rows[0]).toEqual({
+      trigger: 'PRE_RESTORE',
+      state: 'SUCCEEDED',
+      verified: true,
+    });
+
+    // The freeze is lifted: writes and the relay work again (the positive control).
+    expect(await container.uow.run(tenantA, async () => 'writes again')).toBe('writes again');
+    expect((await container.relay.processBatch()).claimed).toBeGreaterThan(0);
+    for (let i = 0; i < 5; i += 1) await container.relay.processBatch();
+
+    // No Telegram: no customer was told anything, no notification intent was created by the
+    // import (the backups' own operator events are the only producers in this window).
+    expect(await count('customer_notifications')).toBe(0);
+    const intents = await db.execute<{ kind: string }>(
+      sql`SELECT kind FROM notifications WHERE tenant_id = ${TENANT} ORDER BY created_at`,
+    );
+    expect(
+      intents.rows.slice(notificationsBefore).filter((n) => !n.kind.startsWith('backup')),
+      JSON.stringify(intents.rows),
+    ).toEqual([]);
+    // No panel write: GETs and the token exchange only.
+    for (const fake of [panelA, panelB]) {
+      expect(
+        fake.requests.filter(
+          (r) => !(r.method === 'GET' || (r.method === 'POST' && r.path === '/api/admin/token')),
+        ),
+      ).toEqual([]);
+    }
+    // No incident was needed, none was opened.
+    expect(await count('incidents')).toBe(0);
+
+    // A RERUN changes nothing: no second opening balance, no second backup.
+    const ledger = async () =>
+      (
+        await db.execute<{ n: number; total: string }>(
+          sql`SELECT count(*)::int AS n, coalesce(sum(amount), 0)::text AS total
+                FROM wallet_entries WHERE tenant_id = ${TENANT}`,
+        )
+      ).rows[0];
+    const before = await ledger();
+    await executor.tick();
+    expect(await ledger()).toEqual(before);
+    expect(atBackup).toHaveLength(1);
+    // And the same package again is refused FRESH_TARGET_NOT_EMPTY at its dry run.
+    const again = await upload(pkg.path);
+    await service.setKey(tenantA, owner, again, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await executor.tick();
+    await service.setPanelBindings(tenantA, owner, again, {
+      idempotencyKey: key(),
+      bindings: [
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelAId },
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelBId },
+      ],
+    });
+    await service.requestDryRun(tenantA, owner, again, { idempotencyKey: key() });
+    await executor.tick();
+    expect(await detail(again)).toMatchObject({
+      status: 'DRY_RUN_FAILED',
+      errorCode: 'FRESH_TARGET_NOT_EMPTY',
+    });
+    expect(await ledger()).toEqual(before);
+  }, 600_000);
 
   it('production-like: every legacy table is classified from the package coverage report, or the dry run is refused naming it', async () => {
     const target = { host: 'db.internal', port: '5432', database: 'nexa' };
@@ -730,7 +1027,12 @@ describe('legacy migration: the executor over a real package', () => {
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
-      backup: { runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }) },
+      backup: {
+        runBeforeImport: async () => ({ outcome: 'TAKEN', runId: PRE_IMPORT_BACKUP_RUN }),
+        runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }),
+      },
+      recoveryActive: async () => false,
+      asImportWriter: runAsLegacyMigration,
       clock: container.clock,
       correlation: () => 'corr-prod-tables' as CorrelationId,
       leaseOwner: 'migration:prod-tables',
@@ -785,20 +1087,4 @@ describe('legacy migration: the executor over a real package', () => {
     expect(done.dryRunReport?.warnings.map((w) => w.code)).not.toContain('INVENTORY_INCOMPLETE');
     expect(await count('customers')).toBe(0);
   }, 300_000);
-
-  /** Stop sales the runbook's way (the cutover suite's helper): incident, drained panels, no gateway. */
-  async function stopSales(): Promise<void> {
-    const db = ctx.container.database.db;
-    await db.execute(sql`
-      INSERT INTO incidents (id, tenant_id, kind, severity, status, title, stop_sales, admin_banner,
-                             started_at, created_at, updated_at)
-      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'MAINTENANCE', 'MAJOR', 'ACTIVE',
-              'migration window', true, true, now(), now(), now())`);
-    await db.execute(
-      sql`UPDATE panels SET drained_at = now(), drain_reason = 'cutover' WHERE tenant_id = ${tenantA.tenantId}`,
-    );
-    await db.execute(
-      sql`UPDATE payment_gateways SET status = 'DISABLED' WHERE tenant_id = ${tenantA.tenantId}`,
-    );
-  }
 });

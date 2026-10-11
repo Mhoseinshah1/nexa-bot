@@ -19,6 +19,7 @@ import {
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
+import { runAsLegacyMigration } from '../../apps/api/src/infrastructure/persistence/write-gate';
 import { LegacyMigrationExecutor } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
 import {
   LegacyMigrationStepFailure,
@@ -304,10 +305,22 @@ describe('legacy migration (Mirza .nxpkg)', () => {
       passphrase: PASSPHRASE,
     });
     const digest = reportDigest(dryRunReport);
+    // A DRY_RUN_DONE import always holds its verification (Phase 7: the approval records the
+    // owner's cutover approval with the verified package's evidence class).
+    const verifyReport = {
+      packageImportId: 'pkg-int-1',
+      sourceFingerprint: H('c'),
+      packageSchemaVersion: '1.4.0',
+      converterVersion: '0.5.0',
+      synthetic: true,
+      panelTargets: [],
+      recordCounts: [],
+      decisions: null,
+    };
     await api.container.database.db.execute(sql`
       UPDATE legacy_nxpkg_imports
          SET status = 'DRY_RUN_DONE', dry_run_report = ${JSON.stringify(dryRunReport)}::jsonb,
-             dry_run_sha256 = ${digest}
+             verify_report = ${JSON.stringify(verifyReport)}::jsonb, dry_run_sha256 = ${digest}
        WHERE id = ${id}`);
     const approve = (dryRunSha256: string) =>
       post(LEGACY_MIGRATION_ROUTES.approve(id), ownerCookie, {
@@ -505,7 +518,15 @@ describe('legacy migration (Mirza .nxpkg)', () => {
       },
       freshTarget: { check: async () => ({ fresh: true }) },
       history: { ingest: async () => ({ counts: [{ code: 'payment', count: 3 }] }) },
-      backup: { runAfterImport: async () => ({ outcome: 'SKIPPED_QUIESCED', runId: null }) },
+      backup: {
+        runBeforeImport: async () => ({
+          outcome: 'TAKEN',
+          runId: '019600ab-cdef-7012-8345-6789abcd9999',
+        }),
+        runAfterImport: async () => ({ outcome: 'SKIPPED_QUIESCED', runId: null }),
+      },
+      recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
+      asImportWriter: runAsLegacyMigration,
       clock: container.clock,
       correlation: () => 'corr' as CorrelationId,
       leaseOwner: 'migration:integration',

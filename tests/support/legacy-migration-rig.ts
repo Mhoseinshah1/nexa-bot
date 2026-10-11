@@ -50,6 +50,7 @@ import {
   snapshotPackageFiles,
   type SnapshotParts,
 } from './nxpkg-legacy-package';
+import { runAsLegacyMigration } from '../../apps/api/src/infrastructure/persistence/write-gate';
 
 /**
  * TEST-ONLY — a rig for driving the Mirza `.nxpkg` Fresh Migration through the operator's
@@ -707,6 +708,9 @@ export interface RigLogLine {
  * interruption is injected there), `runner` / `history` wrap the adapters' ports (a crash
  * between two executor phases), and every log line is kept.
  */
+/** The protective backup run id the rig's default backup port reports (no row: no FK). */
+export const RIG_PRE_IMPORT_BACKUP_RUN = '019600ab-cdef-7012-8345-6789abcdeeee';
+
 export function rigExecutor(
   ctx: TestContext,
   options: {
@@ -715,7 +719,8 @@ export function rigExecutor(
     readonly importer?: (importer: LegacyImporterService) => LegacyImporterService;
     readonly runner?: (real: MigrationRunner) => MigrationRunner;
     readonly history?: (real: HistoryIngestPort) => HistoryIngestPort;
-    readonly backup?: BackupPort;
+    /** Either backup may be given; the other is the default (a TAKEN protective backup). */
+    readonly backup?: Partial<BackupPort>;
     readonly lines?: RigLogLine[];
   } = {},
 ): LegacyMigrationExecutor {
@@ -749,7 +754,15 @@ export function rigExecutor(
     runner,
     freshTarget: adapters,
     history,
-    backup: options.backup ?? { runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }) },
+    backup: {
+      runBeforeImport: async () => ({ outcome: 'TAKEN', runId: RIG_PRE_IMPORT_BACKUP_RUN }),
+      runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }),
+      ...options.backup,
+    },
+    // The container's own Phase 7 wiring: a confirmed recovery holds the import back, and
+    // the apply runs as the import's own writer through the REAL write freeze.
+    recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
+    asImportWriter: runAsLegacyMigration,
     clock: container.clock,
     correlation: () => `corr-rig-${String(Date.now())}` as CorrelationId,
     leaseOwner: options.leaseOwner ?? 'migration:rig',

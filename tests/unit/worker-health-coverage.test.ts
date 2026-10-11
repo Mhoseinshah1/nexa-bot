@@ -165,6 +165,13 @@ describe('worker health coverage', () => {
     expect(recovery).toMatch(/recoveryExecutor\.isFresh\(/);
   });
 
+  it('Phase 7: the recovery role STARTS the Mirza package executor and its heartbeat checks it', () => {
+    const recovery = readFileSync(join(root, 'apps/api/src/main.recovery.ts'), 'utf8');
+    expect(recovery).toMatch(/migrationExecutor\.start\(\)/);
+    expect(recovery).toMatch(/migrationExecutor\.isFresh\(/);
+    expect(recovery).toMatch(/migrationExecutor\.stop\(\)/);
+  });
+
   it('checks the legacy migration executor in the migration role', () => {
     const migration = readFileSync(join(root, 'apps/api/src/main.migration.ts'), 'utf8');
     expect(migration).toMatch(/migrationExecutor\.isFresh\(/);

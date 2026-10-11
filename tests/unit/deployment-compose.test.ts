@@ -297,6 +297,24 @@ describe('the production compose topology', () => {
     expect(redis).not.toMatch(/redisdata:/);
   });
 
+  it('Phase 7: shares the Mirza package workspace between the api (upload) and recovery (executor)', () => {
+    // Through the app-role anchor, so every role that uses it — the api that streams the
+    // upload, the recovery role whose executor opens it — sees the SAME named volume.
+    const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
+    expect(anchor).toMatch(/- legacymigration:\/var\/lib\/nexa\/legacy-migration/);
+    for (const role of ['api', 'recovery']) {
+      expect(serviceBlock(compose, role), role).toMatch(/<<: \*app-common/);
+    }
+    const volumes = compose.slice(compose.indexOf('\nvolumes:'));
+    expect(volumes).toMatch(/\n {2}legacymigration:\n/);
+    // The configured default path IS the mount point.
+    const schema = readFileSync(
+      join(__dirname, '../../apps/api/src/infrastructure/config/config.schema.ts'),
+      'utf8',
+    );
+    expect(schema).toMatch(/LEGACY_MIGRATION_WORK_DIR:[^;]*'\/var\/lib\/nexa\/legacy-migration'/);
+  });
+
   it('never writes a secret into the compose file', () => {
     // Every credential arrives through an env_file the Docker daemon reads as
     // root. None is a literal here, and none is a build argument.
