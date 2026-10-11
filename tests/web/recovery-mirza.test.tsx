@@ -271,7 +271,9 @@ const posts = (api: { calls: { url: string; method: string; body: unknown }[] })
 
 async function choose(bytes: Uint8Array, name: string): Promise<void> {
   fireEvent.change(await screen.findByLabelText(t('web.recovery_upload_choose')), {
-    target: { files: [new File([bytes], name, { type: 'application/octet-stream' })] },
+    target: {
+      files: [new File([bytes as unknown as BlobPart], name, { type: 'application/octet-stream' })],
+    },
   });
 }
 

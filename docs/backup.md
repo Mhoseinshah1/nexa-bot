@@ -501,7 +501,12 @@ NEXA that holds no operational data yet (a non-empty installation is refused; no
 Before it writes anything it takes a verified `PRE_RESTORE` backup through this pipeline
 (`preImportBackupRunId`; restoring it here undoes the import), and while it applies the whole
 installation is quiesced exactly as during a restore (`recovery.quiesced`, the relay idle). One at
-a time: a restore is not confirmed while a Mirza import is approved or applying, and the reverse.
+a time: a restore is not confirmed while a Mirza import is approved or applying, and the reverse
+(the recovery executor also does not claim a confirmed restore while an import holds the
+installation). Both of the import's backups — the protective one and the one after — run with
+`deliver: false`: verified and kept on this server, recorded `NOT_ATTEMPTED`, never sent to Telegram
+(a restore sends nothing to Telegram, and the archive holds every imported customer). Download them
+from the history like any local archive.
 
 ## The Recovery Kit — keep one, apart from the backups
 

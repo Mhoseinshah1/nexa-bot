@@ -417,6 +417,22 @@ describe('the backup pipeline', () => {
     expect(run.cleanupOk).toBe(true);
   });
 
+  it('deliver: false keeps a verified archive on the server and sends nothing (Mirza restore)', async () => {
+    const h = harness();
+    const outcome = await h.service.run('PRE_RESTORE', { deliver: false });
+    if (outcome.kind !== 'COMPLETED') throw new Error('expected the run to complete');
+    const run = outcome.run;
+    expect(run.state).toBe('SUCCEEDED');
+    expect(run.verifiedAt).not.toBeNull();
+    expect(run.deliveryState).toBe('NOT_ATTEMPTED');
+    expect(run.deliveryAttemptedAt).toBeNull();
+    expect(h.state.deliveredDocument).toBeNull();
+    expect(h.state.deliveredMessage).toBeNull();
+    // Without the option, the same harness delivers: the difference is the option.
+    const delivered = await completed(harness());
+    expect(delivered.deliveryState).toBe('SUCCEEDED');
+  });
+
   it('never delivers an archive whose restore verification failed', async () => {
     const h = harness();
     // `ok: false` with a NON-ZERO table count, deliberately. A partial

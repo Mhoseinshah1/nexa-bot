@@ -160,7 +160,17 @@ export class BackupService {
    * the installation's invariant is one backup at a time, and a second caller
    * being told "already running, since 09:14" is the invariant working.
    */
-  async run(trigger: BackupTrigger): Promise<BackupOutcome> {
+  async run(
+    trigger: BackupTrigger,
+    /**
+     * `deliver: false` keeps the verified archive on this server only: the DELIVER stage is
+     * recorded NOT_ATTEMPTED and nothing is sent to Telegram. Used by the Mirza restore's
+     * protective and post-import backups (a restore sends nothing to Telegram; the archive
+     * holds every imported customer). Every other stage, the lock and the verification are
+     * the same run's.
+     */
+    options: { readonly deliver?: boolean } = {},
+  ): Promise<BackupOutcome> {
     // Release any lock whose owner died before it could. Done first, and by
     // FAILING the abandoned run rather than adopting it: its files belong to a
     // process that may still be writing them.
@@ -350,13 +360,20 @@ export class BackupService {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
-      const delivered = await this.deliver({
-        id,
-        manifest,
-        archivePath: workspace.archivePath,
-        archiveBytes: sealed.archiveBytes,
-        tableCount: verified.tableCount,
-      });
+      const delivered =
+        options.deliver === false
+          ? {
+              state: 'NOT_ATTEMPTED' as const,
+              detail: 'Kept on this server only: this run was asked not to leave it.',
+              attemptedAt: null,
+            }
+          : await this.deliver({
+              id,
+              manifest,
+              archivePath: workspace.archivePath,
+              archiveBytes: sealed.archiveBytes,
+              tableCount: verified.tableCount,
+            });
       deliveryState = delivered.state;
       deliveryDetail = delivered.detail;
       deliveryAttemptedAt = delivered.attemptedAt;

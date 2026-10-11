@@ -294,7 +294,9 @@ and adapters as §4 — with these differences:
   recorded on the row; `decideImport` still requires the read sets recorded at the apply's start.
 - **Mandatory protective backup before any write.** On claiming an APPROVED import, after the
   target, digest, package and fresh-target checks, the executor runs `BackupService.run('PRE_RESTORE')`
-  (the recovery's emergency-backup trigger) and requires a run that SUCCEEDED with `verified_at`.
+  (the recovery's emergency-backup trigger) with `deliver: false` (kept on this server, never
+  sent to Telegram; the post-import backup likewise) and requires a run that SUCCEEDED with
+  `verified_at`.
   Its id is recorded (`pre_import_backup_run_id`, view `preImportBackupRunId`) in the SAME
   conditional UPDATE that moves the import APPROVED → APPLYING (a CHECK requires it on every
   APPLYING row), so a resumed import never takes a second one. Not taken and verified →

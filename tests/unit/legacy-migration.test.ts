@@ -1693,12 +1693,15 @@ describe('PipelineBackupPort.runBeforeImport (Phase 7)', () => {
       | { kind: 'COMPLETED'; run: { id: string; state: string; verifiedAt: Date | null } },
   ) => {
     const triggers: string[] = [];
+    const options_: unknown[] = [];
     return {
       triggers,
+      options: options_,
       port: new PipelineBackupPort(
         {
-          run: async (trigger) => {
+          run: async (trigger, options) => {
             triggers.push(trigger);
+            options_.push(options);
             return outcome;
           },
         },
@@ -1714,6 +1717,11 @@ describe('PipelineBackupPort.runBeforeImport (Phase 7)', () => {
     });
     expect(await verified.port.runBeforeImport()).toEqual({ outcome: 'TAKEN', runId: 'r1' });
     expect(verified.triggers).toEqual(['PRE_RESTORE']);
+    // Kept on this server: a Mirza restore sends nothing to Telegram, its backups included.
+    expect(verified.options).toEqual([{ deliver: false }]);
+    await verified.port.runAfterImport();
+    expect(verified.triggers).toEqual(['PRE_RESTORE', 'MANUAL']);
+    expect(verified.options).toEqual([{ deliver: false }, { deliver: false }]);
     expect(
       await port({
         kind: 'COMPLETED',

@@ -6640,6 +6640,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       const blocking = dependencies.filter((dependency) => dependency.name !== 'outbox');
       return { degraded: blocking.some(blocksReadiness) };
     },
+    legacyMigrationActive: async () => (await legacyNxpkgImports.committedImportId()) !== null,
     clock,
     opsLog,
     scope: () =>

@@ -72,6 +72,13 @@ export interface RecoveryExecutorDeps {
   readonly backup: BackupService;
   /** Whether the installation can serve traffic, asked AFTER the cutover. */
   readonly readiness: () => Promise<{ degraded: boolean }>;
+  /**
+   * Phase 7: whether a Mirza restore (`legacy_nxpkg_imports`) is approved or applying. A
+   * confirmed recovery is NOT claimed while one is: the confirm and the approval are separate
+   * requests, so both can commit, and the import holding the installation wins. The waiting
+   * recovery's confirmation then expires on its own (`recovery.confirmation_invalid`).
+   */
+  readonly legacyMigrationActive?: () => Promise<boolean>;
   readonly clock: Clock;
   readonly opsLog: OperationalEventRecorder;
   readonly scope: () => ScopeContext | null;
@@ -202,12 +209,18 @@ export class RecoveryExecutor {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
+      const importHolds =
+        own === null && this.deps.legacyMigrationActive !== undefined
+          ? await this.deps.legacyMigrationActive()
+          : false;
       const claimed =
         own ??
-        (await this.deps.requests.claimConfirmed({
-          leaseOwner: this.deps.leaseOwner,
-          now: this.deps.clock.now(),
-        }));
+        (importHolds
+          ? null
+          : await this.deps.requests.claimConfirmed({
+              leaseOwner: this.deps.leaseOwner,
+              now: this.deps.clock.now(),
+            }));
 
       this.lastTickAt = this.deps.clock.now().getTime();
       if (claimed === null) return;
