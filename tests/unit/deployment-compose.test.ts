@@ -315,6 +315,27 @@ describe('the production compose topology', () => {
     expect(schema).toMatch(/LEGACY_MIGRATION_WORK_DIR:[^;]*'\/var\/lib\/nexa\/legacy-migration'/);
   });
 
+  it('every named volume an app role mounts is a directory the image creates for the node user', () => {
+    // A named volume is initialised from the image's directory at that path; a path the
+    // image does not create comes up root-owned and the non-root process cannot write it
+    // (the Phase 7 review's H2: `legacymigration` was mounted and never created).
+    const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
+    const mounts = [...anchor.matchAll(/^ {4}- ([a-z][a-z0-9-]*):(\/[^\s]+)$/gmu)].map((m) => m[2]);
+    expect(mounts.length, 'the anchor mounts nothing the test can see').toBeGreaterThanOrEqual(3);
+    const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
+    const mkdir =
+      /RUN mkdir -p ([^\n\\]+)\\\n\s*&& chown -R node:node \/var\/lib\/nexa \\\n\s*&& chmod 700 ([^\n]+)/u.exec(
+        dockerfile,
+      );
+    expect(mkdir, 'the image creates its state directories in one RUN').not.toBeNull();
+    const created = new Set(mkdir?.[1]?.trim().split(/\s+/u));
+    const locked = new Set(mkdir?.[2]?.trim().split(/\s+/u));
+    for (const path of mounts) {
+      expect(created.has(path), `${path} is not created in the Dockerfile`).toBe(true);
+      expect(locked.has(path), `${path} is not chmod 700 in the Dockerfile`).toBe(true);
+    }
+  });
+
   it('never writes a secret into the compose file', () => {
     // Every credential arrives through an env_file the Docker daemon reads as
     // root. None is a literal here, and none is a build argument.
