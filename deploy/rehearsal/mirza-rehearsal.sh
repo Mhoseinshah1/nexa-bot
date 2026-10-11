@@ -170,7 +170,9 @@ cmd_init() {
   case "$HTTPS_PORT" in
     '' | *[!0-9]*) die "--https-port must be a number." ;;
   esac
-  [ "$HTTPS_PORT" -ge 1024 ] && [ "$HTTPS_PORT" -le 65535 ] || die "--https-port must be 1024–65535."
+  if [ "$HTTPS_PORT" -lt 1024 ] || [ "$HTTPS_PORT" -gt 65535 ]; then
+    die "--https-port must be 1024–65535."
+  fi
   case "$SUBNET_OCTET" in
     '' | *[!0-9]*) die "--subnet-octet must be a number." ;;
   esac
@@ -363,10 +365,10 @@ cmd_preflight() {
 
   running="$(compose ps --services --status running 2>/dev/null || true)"
   for service in provisioner monitor assistant recovery; do
-    if printf '%s\n' "$running" | grep -qx "$service"; then bad "${service} is running"; else ok "${service} is not running"; fi
+    if grep -qx "$service" <<<"$running"; then bad "${service} is running"; else ok "${service} is not running"; fi
   done
   for service in api worker migration rickpanel-standin; do
-    if printf '%s\n' "$running" | grep -qx "$service"; then ok "${service} is running"; else bad "${service} is not running"; fi
+    if grep -qx "$service" <<<"$running"; then ok "${service} is running"; else bad "${service} is not running"; fi
   done
 
   for network in data front panelsim; do

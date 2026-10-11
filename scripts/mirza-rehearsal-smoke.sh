@@ -50,8 +50,9 @@ bash "$KIT" build --dir "$R"
 bash "$KIT" up --dir "$R" || fail "the rehearsal did not come up isolated"
 pass "up: migrated, provisioned, every role healthy, isolation preflight passed"
 
+running="$(compose ps --services --status running)"
 for service in provisioner monitor assistant recovery; do
-  if compose ps --services --status running | grep -qx "$service"; then fail "${service} is running"; fi
+  if grep -qx "$service" <<<"$running"; then fail "${service} is running"; fi
 done
 pass "provisioner, monitor, assistant and recovery are not running"
 
@@ -59,7 +60,8 @@ code="$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:${PORT}/healt
 [ "$code" = "200" ] || fail "the HTTPS edge on 127.0.0.1:${PORT} answered ${code}"
 pass "the admin edge answers on https://localhost:${PORT}"
 published="$(docker ps --filter label=com.docker.compose.project=nexa-mirza-rehearsal --format '{{.Ports}}' | tr ',' '\n' | grep -- '->' || true)"
-if printf '%s\n' "$published" | grep -v '^ *127\.0\.0\.1:' | grep -q .; then
+outside="$(grep -v '^ *127\.0\.0\.1:' <<<"$published" || true)"
+if [ -n "$outside" ]; then
   fail "a port is published beyond 127.0.0.1: ${published}"
 fi
 pass "the only published port is on 127.0.0.1"
@@ -89,12 +91,13 @@ if bash "$KIT" standin-check --dir "$R" >/dev/null; then fail "standin-check mis
 pass "a write is refused (405) and standin-check reports it"
 
 out="$(bash "$KIT" verify --dir "$R")" || fail "the independent SQL check did not run"
-printf '%s\n' "$out" | grep -qx $'customers\t0\t' || fail "verify: customers is not 0 on a fresh rehearsal"
-printf '%s\n' "$out" | grep -qx $'payments\t0\t' || fail "verify: payments is not 0"
+grep -qx $'customers\t0\t' <<<"$out" || fail "verify: customers is not 0 on a fresh rehearsal"
+grep -qx $'payments\t0\t' <<<"$out" || fail "verify: payments is not 0"
 pass "the independent SQL check runs (fresh: 0 customers, 0 payments)"
 
 bash "$KIT" backup-run --dir "$R" >/dev/null || fail "the standard backup failed inside the rehearsal"
-bash "$KIT" backup-list --dir "$R" | grep -q 'SUCCEEDED' || fail "backup-list shows no SUCCEEDED run"
+listed="$(bash "$KIT" backup-list --dir "$R")" || fail "backup-list failed"
+grep -q 'SUCCEEDED' <<<"$listed" || fail "backup-list shows no SUCCEEDED run"
 pass "a standard NEXA backup is taken and listed"
 
 bash "$KIT" down --dir "$R" >/dev/null
