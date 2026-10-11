@@ -217,6 +217,12 @@ export interface LegacyNxpkgImportRepository {
    * that is APPROVED or APPLYING, or null.
    */
   committedImportId(tx?: unknown): Promise<string | null>;
+  /**
+   * Phase 7 (review H1): closes every NON-TERMINAL import created before `before` (a NEXA
+   * restore's cutover) — CANCELLED / `SUPERSEDED_BY_RESTORE`, key erased, lease released — by
+   * one conditional UPDATE naming the non-terminal states. Returns the ids.
+   */
+  supersedeBefore(input: { readonly before: Date; readonly now: Date }): Promise<readonly string[]>;
 }
 
 // --- the filesystem ---------------------------------------------------------------------------
@@ -320,7 +326,7 @@ export class LegacyMigrationStepFailure extends Error {
  */
 export class LegacyMigrationRetry extends Error {
   constructor(
-    readonly reason: 'RUN_CONFLICT' | 'BACKUP_BUSY' | 'RECOVERY_ACTIVE',
+    readonly reason: 'RUN_CONFLICT' | 'BACKUP_BUSY',
     options?: { cause?: unknown },
   ) {
     super(`The legacy migration step will run again later: ${reason}.`, options);
@@ -391,8 +397,9 @@ export interface MigrationRunner {
    * - `TARGET` (at the apply's start, before the protective backup): that, and the target
    *   acknowledgement — the owner's, stored on the import (`targetAck`), or the process
    *   environment's `NEXA_LEGACY_IMPORT_TARGET_ACK` (CLI, rehearsal) — for THIS target;
-   * - `APPLY` (before the first write and every resume): that, the owner's cutover approval of
-   *   the dry run's seven values, and stop-sales (an APPLYING import's own freeze counts).
+   * - `APPLY` (before the first write and every resume): the owner's cutover approval of the
+   *   dry run's seven values and stop-sales (an APPLYING import's own freeze counts). NOT the
+   *   acknowledgement again: TARGET decided it before the first write (review M3).
    *
    * A missing gate throws `LegacyMigrationBlocked`.
    */

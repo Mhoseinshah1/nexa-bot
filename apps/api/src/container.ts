@@ -201,6 +201,10 @@ import {
 } from './modules/platform/legacy-importer/application/production-guard.js';
 import { expectedMigrations } from './infrastructure/persistence/migration-state.js';
 import {
+  takeRestoreExclusionLock,
+  withRestoreExclusion,
+} from './infrastructure/persistence/restore-exclusion.js';
+import {
   legacyMigrationQuiesceId,
   runAsLegacyMigration,
   type InstallationWriteGate,
@@ -6491,6 +6495,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // put in front of a person, and nothing here consumes the queue it writes
     // to, so there is no cycle to avoid.
     opsLog,
+    // Phase 7 (M2): the raw writer, NOT projected — a deliver:false run announces nothing.
+    quietOpsLog: opsLogWriter,
     // Resolved per call: the installation's tenant is a row, so it is not known
     // while this object is being built.
     scope: () =>
@@ -6576,8 +6582,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * wrong answer about whether a database can be served.
      */
     expected: () => expectedMigrations(fileURLToPath(new URL('../drizzle', import.meta.url))),
-    // Phase 7: a Mirza import APPROVED or APPLYING refuses a restore's confirmation.
-    legacyMigrationActive: async () => (await legacyNxpkgImports.committedImportId()) !== null,
+    // Phase 7: a Mirza import APPROVED or APPLYING refuses a restore's confirmation — read
+    // inside the confirmation's transaction, under the lock the approval takes too (M1).
+    legacyMigrationActive: async (tx) => (await legacyNxpkgImports.committedImportId(tx)) !== null,
+    exclusive: (fn) => withRestoreExclusion(database.db, fn),
     logger,
   });
   /**
@@ -6641,6 +6649,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       return { degraded: blocking.some(blocksReadiness) };
     },
     legacyMigrationActive: async () => (await legacyNxpkgImports.committedImportId()) !== null,
+    // Phase 7 (H1): the Mirza imports a restored database carried are closed at the cutover.
+    supersedeLegacyImports: (cutoverAt) =>
+      legacyNxpkgImports.supersedeBefore({ before: cutoverAt, now: clock.now() }),
     clock,
     opsLog,
     scope: () =>
@@ -6695,7 +6706,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // Phase 7: the restore page's approval records the owner's cutover approval too, and is
     // refused while a disaster recovery holds the installation.
     cutover: () => legacyCutover,
-    recoveryActive: async (tx) => (await recoveryRequests.installationLock(tx)) !== null,
+    // Serialised with a restore's confirmation on one lock, then read in this transaction (M1).
+    recoveryActive: async (tx) => {
+      await takeRestoreExclusionLock(tx);
+      return (await recoveryRequests.installationLock(tx)) !== null;
+    },
     logger,
   });
   const nxpkgMigration = new NxpkgMigrationAdapters({
@@ -6726,6 +6741,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // Phase 7: never started while a recovery is confirmed and unfinished; the apply runs as
     // the import's own writer, the one writer its APPLYING freeze lets through.
     recoveryActive: async () => (await recoveryRequests.installationLock()) !== null,
+    latestCutoverAt: () => recoveryRequests.latestCutoverAt(),
     asImportWriter: runAsLegacyMigration,
     clock,
     correlation: () => newCorrelationId(ids.uuid()),

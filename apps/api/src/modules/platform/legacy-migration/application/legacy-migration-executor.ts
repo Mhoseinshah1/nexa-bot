@@ -1,5 +1,6 @@
 import {
   asId,
+  LEGACY_MIGRATION_APPROVAL_TTL_MS,
   systemJobActor,
   type Clock,
   type CorrelationId,
@@ -18,6 +19,7 @@ import {
   LEGACY_MIGRATION_KEY_IDLE_STATUSES,
   LEGACY_MIGRATION_LEASE_HEARTBEAT_MS,
   LEGACY_MIGRATION_LEASE_MS,
+  LEGACY_MIGRATION_APPLY_WINDOW_MS,
   LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS,
   LEGACY_MIGRATION_MAX_STEP_ATTEMPTS,
   phaseReached,
@@ -58,6 +60,11 @@ export interface LegacyMigrationExecutorDeps {
    * (`recovery_requests` in a destructive state). An import is not started while one is.
    */
   readonly recoveryActive: () => Promise<boolean>;
+  /**
+   * Phase 7 (review H1): when the latest NEXA restore cut over, or null. An unfinished import
+   * created before it came back with the restored backup and is closed, never continued.
+   */
+  readonly latestCutoverAt: () => Promise<Date | null>;
   /**
    * Phase 7 — the write freeze's one exemption (`runAsLegacyMigration`): runs the apply as
    * THIS import's own writer, so its writes pass the installation-wide freeze its APPLYING
@@ -140,7 +147,9 @@ class LeaseLost extends Error {
  *
  * TRANSIENT IS NOT A VERDICT EITHER. `LegacyMigrationRetry` (another importer process holds the
  * tenant: `RUN_CONFLICT`) and a lost lease release the step without failing it and without
- * counting the attempt; it runs again later. A step whose lease is lost is ABORTED through
+ * counting the attempt; it runs again later — EXCEPT while APPLYING (Phase 7, review H3):
+ * there the installation is frozen, so every attempt counts from its start and the bound
+ * fails the import rather than holding the freeze for ever. A step whose lease is lost is ABORTED through
  * the context's signal, so a worker that lost its import stops instead of racing the one
  * that took it over (the importer's own process lock refuses the second writer meanwhile).
  *
@@ -165,13 +174,10 @@ export class LegacyMigrationExecutor {
     if (this.timer !== null) return;
     this.timer = setInterval(() => void this.tick(), this.deps.tickIntervalMs);
     this.timer.unref();
-    // Housekeeping at once: decrypted directories a crashed process left are not kept until
-    // the first interval.
-    if (this.deps.enabled) {
-      void this.housekeeping().catch((error: unknown) => {
-        this.deps.logger.error({ err: errorKind(error) }, 'legacy migration housekeeping failed');
-      });
-    }
+    // A tick at once (its housekeeping included): decrypted directories a crashed process left
+    // are not kept until the first interval, and the role's heartbeat — which requires this
+    // loop fresh — is fresh from the start rather than after an interval.
+    void this.tick();
   }
 
   stop(): void {
@@ -199,6 +205,7 @@ export class LegacyMigrationExecutor {
         return;
       }
       await this.reclaimAbandoned();
+      await this.supersedeRestored();
       await this.housekeeping();
       const now = this.deps.clock.now();
       const claimed = await this.deps.repository.claim({
@@ -267,6 +274,27 @@ export class LegacyMigrationExecutor {
       this.deps.logger.warn(
         { importId, idleMs },
         'a legacy migration package key was idle too long and is erased; give it again to continue',
+      );
+    }
+  }
+
+  /**
+   * Phase 7 (review H1), the backstop to the recovery executor's own sweep: an unfinished
+   * import created before the latest NEXA restore's cutover came back WITH that restore (the
+   * protective backup is taken while the import is APPROVED). Continuing it would import again
+   * (or hold the installation frozen); it is closed `SUPERSEDED_BY_RESTORE`, before any claim.
+   */
+  private async supersedeRestored(): Promise<void> {
+    const cutoverAt = await this.deps.latestCutoverAt();
+    if (cutoverAt === null) return;
+    const closed = await this.deps.repository.supersedeBefore({
+      before: cutoverAt,
+      now: this.deps.clock.now(),
+    });
+    for (const importId of closed) {
+      this.deps.logger.warn(
+        { importId },
+        'a legacy migration from before a NEXA restore was closed instead of being continued',
       );
     }
   }
@@ -509,129 +537,150 @@ export class LegacyMigrationExecutor {
       await this.finish(row);
       return;
     }
-    // A crash LOOP is a verdict an owner must read, not a process that retries for ever. (An
-    // APPLYING row with no key before BACKUP cannot be continued either.)
-    if (
-      row.status === 'APPLYING' &&
-      (row.progress.applyAttempts >= LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS ||
-        row.keyCiphertext === null)
+    const nowMs = this.deps.clock.now().getTime();
+    if (row.status === 'APPLYING') {
+      // A crash LOOP is a verdict an owner must read, not a process that retries for ever —
+      // and while APPLYING the whole installation is frozen, so the bound is what lifts it.
+      // (An APPLYING row with no key before BACKUP cannot be continued either; nor one still
+      // being resumed past the wall-clock window.)
+      const expired =
+        row.approvedAt === null ||
+        nowMs - row.approvedAt.getTime() > LEGACY_MIGRATION_APPLY_WINDOW_MS;
+      if (
+        row.progress.applyAttempts >= LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS ||
+        row.keyCiphertext === null ||
+        expired
+      ) {
+        this.deps.logger.error(
+          {
+            importId: row.id,
+            attempts: row.progress.applyAttempts,
+            phase: row.progress.phase,
+            expired,
+          },
+          'a legacy migration apply was resumed too many times (or too long) and is failed',
+        );
+        await this.fail(row, ['APPLYING'], 'FAILED', 'IMPORT_FAILED');
+        return;
+      }
+      // COUNTED HERE, before anything else can throw (review H3): an attempt that dies in a
+      // precheck, the step directory, the key, the read sets or a port that is not wired is
+      // still an attempt, so a fault that repeats reaches the bound instead of holding the
+      // freeze for ever. A transient refusal (`LegacyMigrationRetry`) counts too while
+      // APPLYING, for the same reason.
+      row = await this.bookmark(row, { applyAttempts: row.progress.applyAttempts + 1 });
+    } else if (
+      row.approvedAt === null ||
+      nowMs - row.approvedAt.getTime() > LEGACY_MIGRATION_APPROVAL_TTL_MS
     ) {
-      this.deps.logger.error(
-        { importId: row.id, attempts: row.progress.applyAttempts, phase: row.progress.phase },
-        'a legacy migration apply was resumed too many times and is failed',
+      // An approval means "now": one left waiting past the TTL (a blocker, a recovery, an
+      // executor that was off) is not the owner's decision about today. Nothing was written.
+      this.deps.logger.warn(
+        { importId: row.id, approvedAt: row.approvedAt?.toISOString() ?? null },
+        'a legacy migration approval expired before the import started',
       );
-      await this.fail(row, ['APPLYING'], 'FAILED', 'IMPORT_FAILED');
+      await this.fail(row, ['APPROVED'], 'FAILED', 'APPROVAL_EXPIRED');
       return;
     }
     const resumed = phaseReached(row.progress.phase, 'APPLY_IMPORT');
-    let counted = false;
-    try {
-      await this.withStep(row, signal, async (context) => {
-        try {
-          if (!resumed) {
-            // Before anything is written, and on every attempt until the import starts:
-            //   1. the target acknowledgement (production-like; never a synthetic package);
-            //   2. the approval is bound to THIS dry run of THIS file;
-            //   3. the fresh target;
-            //   4. (Phase 7, once) no recovery holds the installation, then the MANDATORY
-            //      protective backup — verified, or the import is FAILED with nothing written —
-            //      and, in the same UPDATE that records it, APPROVED → APPLYING: from here the
-            //      installation is frozen for every writer but this import;
-            //   5. the APPROVED reads — the read sets ingested and recorded, each bound to the
-            //      fingerprint the approved dry run observed (the dry run itself wrote none);
-            //   6. the owner's cutover approval of the seven values and stop-sales
-            //      (production-like), which needs the read sets of step 5 recorded.
-            await this.deps.runner.precheck(context, 'TARGET');
-            this.assertApprovedDigest(row);
-            await this.assertPackageUnchanged(row);
-            await this.assertFreshTarget(row, [row.status]);
-            if (row.status === 'APPROVED') row = await this.protect(row);
-            await this.deps.runner.recordReadSets(context);
-          }
-          // Production-like: before the first write AND before every resume. The importer's
-          // own gate decides again inside its transaction. A blocker here is met while
-          // APPLYING, i.e. while the installation is frozen — see the catch below.
-          await this.deps.runner.precheck(context, 'APPLY');
-          if (row.progress.blocker !== null) {
-            row = await this.bookmark(row, { blocker: null });
-          }
-          row = await this.bookmark(row, { applyAttempts: row.progress.applyAttempts + 1 });
-          counted = true;
-
-          // Re-checked on every attempt, the first and every resume: the approval is bound
-          // to THIS dry run of THIS file, whatever happened in between.
+    await this.withStep(row, signal, async (context) => {
+      try {
+        if (!resumed) {
+          // Before anything is written, and on every attempt until the import starts:
+          //   1. the target acknowledgement (production-like; never a synthetic package);
+          //   2. the approval is bound to THIS dry run of THIS file;
+          //   3. the fresh target;
+          //   4. (Phase 7, once) no recovery holds the installation, then the MANDATORY
+          //      protective backup — verified, or the import is FAILED with nothing written —
+          //      and, in the same UPDATE that records it, APPROVED → APPLYING: from here the
+          //      installation is frozen for every writer but this import;
+          //   5. the APPROVED reads — the read sets ingested and recorded, each bound to the
+          //      fingerprint the approved dry run observed (the dry run itself wrote none);
+          //   6. the owner's cutover approval of the seven values and stop-sales
+          //      (production-like), which needs the read sets of step 5 recorded.
+          await this.deps.runner.precheck(context, 'TARGET');
           this.assertApprovedDigest(row);
           await this.assertPackageUnchanged(row);
-          if (!resumed) row = await this.bookmark(row, { phase: 'APPLY_IMPORT' });
-
-          if (!phaseReached(row.progress.phase, 'HISTORY')) {
-            // A verdict recorded by an attempt that crashed before the HISTORY bookmark is the
-            // outcome: the import is not asked again.
-            if (row.progress.importerVerdict === null || row.applyLegacyRunId === null) {
-              const outcome = await this.deps.runner.apply(context, {
-                mode: resumed ? 'RESUME' : 'IMPORT',
-                approvedDryRunSha256: row.approvedDryRunSha256 ?? '',
-              });
-              // Recorded at once, on its own: a crash before the next bookmark keeps it.
-              row = await this.bookmark(
-                row,
-                { importerVerdict: outcome.importerVerdict },
-                { applyLegacyRunId: outcome.legacyRunId },
-              );
-            }
-            row = await this.bookmark(row, { phase: 'HISTORY' });
-          }
-          if (!phaseReached(row.progress.phase, 'RECONCILE')) {
-            const archived = await this.deps.history.ingest(context);
-            row = await this.bookmark(row, { phase: 'RECONCILE', history: [...archived.counts] });
-          }
-          if (!phaseReached(row.progress.phase, 'REPORT')) {
-            const reconciled = await this.deps.runner.reconcile(context);
-            row = await this.bookmark(row, {
-              phase: 'REPORT',
-              reconcileVerdict: reconciled.verdict,
-            });
-          }
-          const report = await this.deps.runner.finalReport(context, {
-            importerVerdict: row.progress.importerVerdict ?? 'UNKNOWN',
-            reconcileVerdict: row.progress.reconcileVerdict ?? 'DISCREPANCY',
-            history: row.progress.history,
-          });
-          // The key is erased WITH the BACKUP bookmark — before the backup is requested, so
-          // the backup never holds it, and a crash from here on needs no key: the backup is
-          // all that is left.
-          row = await this.bookmark(
-            row,
-            { phase: 'BACKUP' },
-            { applyReport: report, keyCiphertext: null, keyKeyId: null },
-          );
-        } catch (error) {
-          if (error instanceof LegacyMigrationBlocked && row.status === 'APPLYING') {
-            // WAITING IS NOT AN OPTION ONCE APPLYING: the installation is frozen, so the very
-            // operator write that could clear the blocker (a cutover approval, stop-sales) is
-            // refused, and an import that waited would hold the freeze for ever. It is FAILED
-            // instead, the blocker kept on its progress; the protective backup is the undo.
-            this.deps.logger.error(
-              { importId: row.id, blocker: error.blocker, phase: row.progress.phase },
-              'a legacy migration met a blocker while the installation was frozen and is failed',
-            );
-            const current = await this.reread(row.id);
-            await this.advance(current, ['APPLYING'], 'FAILED', {
-              errorCode: 'IMPORT_FAILED',
-              progress: { ...current.progress, blocker: error.blocker },
-            });
-            return;
-          }
-          if (!(error instanceof LegacyMigrationStepFailure)) throw error;
-          await this.fail(row, ['APPROVED', 'APPLYING'], 'FAILED', error.code, error.counts);
+          await this.assertFreshTarget(row, [row.status]);
+          if (row.status === 'APPROVED') row = await this.protect(row);
+          await this.deps.runner.recordReadSets(context);
         }
-      });
-    } catch (error) {
-      if (error instanceof LegacyMigrationRetry && counted) {
-        await this.uncount(row, { applyAttempts: row.progress.applyAttempts - 1 });
+        // Production-like: before the first write AND before every resume. The importer's
+        // own gate decides again inside its transaction. A blocker here is met while
+        // APPLYING, i.e. while the installation is frozen — see the catch below.
+        await this.deps.runner.precheck(context, 'APPLY');
+        if (row.progress.blocker !== null) {
+          row = await this.bookmark(row, { blocker: null });
+        }
+
+        // Re-checked on every attempt, the first and every resume: the approval is bound
+        // to THIS dry run of THIS file, whatever happened in between.
+        this.assertApprovedDigest(row);
+        await this.assertPackageUnchanged(row);
+        if (!resumed) row = await this.bookmark(row, { phase: 'APPLY_IMPORT' });
+
+        if (!phaseReached(row.progress.phase, 'HISTORY')) {
+          // A verdict recorded by an attempt that crashed before the HISTORY bookmark is the
+          // outcome: the import is not asked again.
+          if (row.progress.importerVerdict === null || row.applyLegacyRunId === null) {
+            const outcome = await this.deps.runner.apply(context, {
+              mode: resumed ? 'RESUME' : 'IMPORT',
+              approvedDryRunSha256: row.approvedDryRunSha256 ?? '',
+            });
+            // Recorded at once, on its own: a crash before the next bookmark keeps it.
+            row = await this.bookmark(
+              row,
+              { importerVerdict: outcome.importerVerdict },
+              { applyLegacyRunId: outcome.legacyRunId },
+            );
+          }
+          row = await this.bookmark(row, { phase: 'HISTORY' });
+        }
+        if (!phaseReached(row.progress.phase, 'RECONCILE')) {
+          const archived = await this.deps.history.ingest(context);
+          row = await this.bookmark(row, { phase: 'RECONCILE', history: [...archived.counts] });
+        }
+        if (!phaseReached(row.progress.phase, 'REPORT')) {
+          const reconciled = await this.deps.runner.reconcile(context);
+          row = await this.bookmark(row, {
+            phase: 'REPORT',
+            reconcileVerdict: reconciled.verdict,
+          });
+        }
+        const report = await this.deps.runner.finalReport(context, {
+          importerVerdict: row.progress.importerVerdict ?? 'UNKNOWN',
+          reconcileVerdict: row.progress.reconcileVerdict ?? 'DISCREPANCY',
+          history: row.progress.history,
+        });
+        // The key is erased WITH the BACKUP bookmark — before the backup is requested, so
+        // the backup never holds it, and a crash from here on needs no key: the backup is
+        // all that is left.
+        row = await this.bookmark(
+          row,
+          { phase: 'BACKUP' },
+          { applyReport: report, keyCiphertext: null, keyKeyId: null },
+        );
+      } catch (error) {
+        if (error instanceof LegacyMigrationBlocked && row.status === 'APPLYING') {
+          // WAITING IS NOT AN OPTION ONCE APPLYING: the installation is frozen, so the very
+          // operator write that could clear the blocker (a cutover approval, stop-sales) is
+          // refused, and an import that waited would hold the freeze for ever. It is FAILED
+          // instead, the blocker kept on its progress; the protective backup is the undo.
+          this.deps.logger.error(
+            { importId: row.id, blocker: error.blocker, phase: row.progress.phase },
+            'a legacy migration met a blocker while the installation was frozen and is failed',
+          );
+          const current = await this.reread(row.id);
+          await this.advance(current, ['APPLYING'], 'FAILED', {
+            errorCode: 'IMPORT_FAILED',
+            progress: { ...current.progress, blocker: error.blocker },
+          });
+          return;
+        }
+        if (!(error instanceof LegacyMigrationStepFailure)) throw error;
+        await this.fail(row, ['APPROVED', 'APPLYING'], 'FAILED', error.code, error.counts);
       }
-      throw error;
-    }
+    });
     if (row.status === 'APPLYING' && phaseReached(row.progress.phase, 'BACKUP')) {
       await this.finish(row);
     }
@@ -645,13 +694,23 @@ export class LegacyMigrationExecutor {
    * row always names its backup and a resumed one never takes a second (it never comes back
    * here: only an APPROVED row does).
    *
-   * - a recovery is confirmed and not finished, or another backup holds the pipeline: not a
-   *   verdict — the step runs again later (`LegacyMigrationRetry`), still APPROVED;
+   * - a recovery is confirmed and not finished, or another import is APPLYING: the import
+   *   WAITS with the blocker shown (`RECOVERY_ACTIVE`, `ANOTHER_IMPORT_APPLYING`), still
+   *   APPROVED; another backup holds the pipeline: it runs again later
+   *   (`LegacyMigrationRetry`), still APPROVED;
    * - any other outcome, or an error from the pipeline: FAILED `PRE_IMPORT_BACKUP_FAILED`,
    *   nothing imported. No override, as for the recovery's emergency backup.
    */
   private async protect(row: LegacyNxpkgImportRow): Promise<LegacyNxpkgImportRow> {
-    if (await this.deps.recoveryActive()) throw new LegacyMigrationRetry('RECOVERY_ACTIVE');
+    // Shown, not silent (review M1/M4): the import WAITS, still APPROVED and cancellable, with
+    // the reason on its progress — a confirmed NEXA restore, or another import (any tenant)
+    // holding the one installation-wide freeze. The partial unique index is the database's
+    // rule for the second; this check spares a protective backup that could not be used.
+    if (await this.deps.recoveryActive()) throw new LegacyMigrationBlocked('RECOVERY_ACTIVE');
+    const applying = await this.deps.repository.applyingImportId();
+    if (applying !== null && applying !== row.id) {
+      throw new LegacyMigrationBlocked('ANOTHER_IMPORT_APPLYING');
+    }
     let backup: Awaited<ReturnType<BackupPort['runBeforeImport']>>;
     try {
       backup = await this.deps.backup.runBeforeImport();
@@ -682,9 +741,16 @@ export class LegacyMigrationExecutor {
       { importId: row.id, backupRunId: backup.runId },
       'the protective backup before a legacy migration is taken; the installation is frozen for the import',
     );
+    // The FIRST attempt is counted in the same write (review H3): from here every error
+    // counts toward the bound, however early in the attempt it comes.
     return this.advance(row, ['APPROVED'], 'APPLYING', {
       preImportBackupRunId: backup.runId,
-      progress: { ...row.progress, phase: 'APPLY_PRECHECK', blocker: null },
+      progress: {
+        ...row.progress,
+        phase: 'APPLY_PRECHECK',
+        blocker: null,
+        applyAttempts: row.progress.applyAttempts + 1,
+      },
     });
   }
 

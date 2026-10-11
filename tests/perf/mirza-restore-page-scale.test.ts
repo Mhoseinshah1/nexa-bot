@@ -219,6 +219,7 @@ describe('Mirza restore through the restore page, at scale', () => {
           runAfterImport: () => pipeline.runAfterImport(),
         },
         recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
+        latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
         asImportWriter: runAsLegacyMigration,
         clock: container.clock,
         correlation: () => 'corr-restore-scale' as CorrelationId,

@@ -320,7 +320,9 @@ describe('the production compose topology', () => {
     // image does not create comes up root-owned and the non-root process cannot write it
     // (the Phase 7 review's H2: `legacymigration` was mounted and never created).
     const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
-    const mounts = [...anchor.matchAll(/^ {4}- ([a-z][a-z0-9-]*):(\/[^\s]+)$/gmu)].map((m) => m[2]);
+    const mounts = [...anchor.matchAll(/^ {4}- ([a-z][a-z0-9-]*):(\/[^\s]+)$/gmu)].map(
+      (m) => m[2] ?? '',
+    );
     expect(mounts.length, 'the anchor mounts nothing the test can see').toBeGreaterThanOrEqual(3);
     const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
     const mkdir =

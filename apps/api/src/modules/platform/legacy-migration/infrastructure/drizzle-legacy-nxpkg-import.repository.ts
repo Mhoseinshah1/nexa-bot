@@ -361,6 +361,32 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
     return rows.map((row) => row.id);
   }
 
+  async supersedeBefore(input: {
+    readonly before: Date;
+    readonly now: Date;
+  }): Promise<readonly string[]> {
+    const rows = await this.db
+      .update(t)
+      .set({
+        status: 'CANCELLED',
+        errorCode: 'SUPERSEDED_BY_RESTORE',
+        finishedAt: input.now,
+        updatedAt: input.now,
+        keyCiphertext: null,
+        keyKeyId: null,
+        claimedBy: null,
+        leaseUntil: null,
+      })
+      .where(
+        and(
+          notInArray(t.status, [...LEGACY_NXPKG_TERMINAL_STATUSES]),
+          lt(t.createdAt, input.before),
+        ),
+      )
+      .returning({ id: t.id });
+    return rows.map((row) => row.id);
+  }
+
   async applyingImportId(tx?: unknown): Promise<string | null> {
     return this.firstIn(['APPLYING'], tx);
   }

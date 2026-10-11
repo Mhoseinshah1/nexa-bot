@@ -219,6 +219,8 @@ interface Harness {
     leaked: string[];
     cleanupFails: boolean;
     /** Every operational event the run recorded, in order. */
+    /** Events recorded on the QUIET recorder (not projected to Telegram). */
+    quiet: string[];
     recorded: {
       code: string;
       severity: string;
@@ -263,6 +265,7 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
     leaked: [],
     cleanupFails: false,
     recorded: [],
+    quiet: [],
     scoped: true,
     opsLogThrows: false,
     open: new Set<string>(),
@@ -361,6 +364,22 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
       callbackRef: () => 'ref',
     },
     installationId: () => 'installation-1',
+    quietOpsLog: {
+      async record(_scope, event) {
+        state.quiet.push(event.code);
+        return {
+          id: 'q1',
+          code: event.code,
+          severity: event.severity,
+          message: event.message,
+          occurrenceCount: 1,
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+          isNew: true,
+          reopened: false,
+        } as never;
+      },
+    },
     opsLog: {
       async record(_scope, event) {
         if (state.opsLogThrows) throw new Error('the ops log is unreachable');
@@ -431,6 +450,30 @@ describe('the backup pipeline', () => {
     // Without the option, the same harness delivers: the difference is the option.
     const delivered = await completed(harness());
     expect(delivered.deliveryState).toBe('SUCCEEDED');
+  });
+
+  it('deliver: false announces nothing and leaves the delivery condition alone (review M2)', async () => {
+    const h = harness();
+    // An open delivery condition a "not attempted" run must NOT close as "not configured".
+    h.state.open.add('backup.delivery_failed');
+    const ok = await h.service.run('PRE_RESTORE', { deliver: false });
+    expect(ok.kind).toBe('COMPLETED');
+    // run_ok is recorded (the run condition closes as for any success) — on the QUIET
+    // recorder, which nothing projects to Telegram; nothing reaches the announcing one.
+    expect(h.state.quiet).toEqual(['backup.run_ok']);
+    expect(h.state.recorded).toEqual([]);
+    // A failing local-only run is quiet too.
+    const failing = harness();
+    failing.state.dumpFails = true;
+    await failing.service.run('MANUAL', { deliver: false });
+    expect(failing.state.quiet).toEqual(['backup.run_failed']);
+    expect(failing.state.recorded).toEqual([]);
+    // The control: an ordinary run announces, and closes the delivery condition.
+    const loud = harness();
+    loud.state.open.add('backup.delivery_failed');
+    await loud.service.run('MANUAL');
+    expect(loud.state.recorded.map((r) => r.code)).toEqual(['backup.run_ok', 'backup.delivery_ok']);
+    expect(loud.state.quiet).toEqual([]);
   });
 
   it('never delivers an archive whose restore verification failed', async () => {

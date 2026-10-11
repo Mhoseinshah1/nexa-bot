@@ -31,6 +31,7 @@ describe('the recovery executor', () => {
   let container: Container;
   let workRoot: string;
   let recoveryRoot: string;
+  let legacyRoot: string;
   /** Every database this case may have created, for the teardown to drop. */
   let created: string[];
 
@@ -89,10 +90,12 @@ describe('the recovery executor', () => {
     liveUrl = url.toString();
     await runMigrations(liveUrl);
 
+    legacyRoot = await mkdtemp(join(tmpdir(), 'nexa-exec-legacy-'));
     const config = testConfig({
       DATABASE_URL: liveUrl,
       BACKUP_WORK_DIR: workRoot,
       RECOVERY_WORK_DIR: recoveryRoot,
+      LEGACY_MIGRATION_WORK_DIR: legacyRoot,
     });
     container = createContainer(config, 'recovery');
     await seed(container.database.db, container.cipher);
@@ -124,6 +127,7 @@ describe('the recovery executor', () => {
     }
     await rm(workRoot, { recursive: true, force: true });
     await rm(recoveryRoot, { recursive: true, force: true });
+    await rm(legacyRoot, { recursive: true, force: true });
   });
 
   /**
@@ -318,6 +322,237 @@ describe('the recovery executor', () => {
     expect(row?.cutoverAt).toBeNull();
     expect(row?.displacedDatabase).toBeNull();
     expect(row?.candidateDatabase).toBeNull();
+    expect(await databaseExists(liveName)).toBe(true);
+  });
+
+  /** Phase 7: a `legacy_nxpkg_imports` row as the executor would leave it, written by hand. */
+  async function seedImport(
+    id: string,
+    status: 'APPROVED' | 'DRY_RUN_DONE' | 'APPLYING',
+    ownerId: string,
+  ): Promise<void> {
+    const H = (c: string) => c.repeat(64);
+    const approved = status !== 'DRY_RUN_DONE';
+    const report = {
+      importerVerdict: 'READY',
+      sections: [],
+      warnings: [],
+      quarantine: [],
+      wallets: { currency: 'IRT', customers: 0, beforeTotalMinor: '0', afterTotalMinor: '0' },
+      debts: { currency: 'IRT', count: 0, totalMinor: '0' },
+      ownership: {
+        decisionsProvided: false,
+        proven: 0,
+        adminApprovedUnverified: 0,
+        quarantined: 0,
+        rejected: 0,
+        pending: 0,
+        stale: 0,
+      },
+      cutover: {
+        sourceFingerprint: H('a'),
+        panelMapFingerprint: H('b'),
+        inventoryFingerprint: H('c'),
+        productsFingerprint: H('d'),
+        invoiceArchiveFingerprint: H('e'),
+        freezeProofSha256: H('f'),
+        finalDumpSha256: H('1'),
+      },
+      planTalliesDigest: null,
+    };
+    // A REAL sealed key: a restored database must name only keys this installation holds.
+    const sealed = container.cipher.encrypt('the package passphrase', {
+      purpose: 'legacy_migration.package_key',
+      tenantId: String(tenantA.tenantId),
+      entityId: id,
+    });
+    await container.database.db.execute(
+      `INSERT INTO legacy_nxpkg_imports
+         (id, tenant_id, status, file_name, file_path, file_sha256, file_bytes, progress,
+          key_ciphertext, key_key_id, key_kind, verify_report, dry_run_report, dry_run_sha256,
+          approved_dry_run_sha256, approved_by_admin_id, approved_at, pre_import_backup_run_id,
+          claimed_by, lease_until, requested_by_admin_id, created_at, updated_at)
+       VALUES ('${id}', '${String(tenantA.tenantId)}', '${status}', 'mirza.nxpkg', '/nowhere/p',
+               '${H('9')}', 1, '{}'::jsonb, '${sealed.ciphertext}', '${sealed.keyId}', 'PASSPHRASE',
+               '{"synthetic": true}'::jsonb, '${JSON.stringify(report)}'::jsonb, '${H('8')}',
+               ${approved ? `'${H('8')}'` : 'NULL'}, ${approved ? `'${ownerId}'` : 'NULL'},
+               ${approved ? 'now()' : 'NULL'},
+               ${status === 'APPLYING' ? "'01900000-0000-7000-8000-0000000b0001'" : 'NULL'},
+               'recovery:old-host', now() + interval '1 hour',
+               '${ownerId}', now(), now())` as never,
+    );
+  }
+
+  async function importState(id: string): Promise<Record<string, unknown> | undefined> {
+    const rows = await container.database.db.execute(
+      `SELECT status, error_code, key_ciphertext, claimed_by FROM legacy_nxpkg_imports
+        WHERE id = '${id}'` as never,
+    );
+    return (rows.rows as unknown as Record<string, unknown>[])[0];
+  }
+
+  /**
+   * Review H1 — restoring the PROTECTIVE backup must not resurrect the import. That backup is
+   * taken while the import is APPROVED (key sealed, lease held), so the restored database
+   * carries an APPROVED row: re-claimed, it would import again; left, it would refuse every
+   * later restore and upload. The recovery executor closes it right after the cutover.
+   */
+  it('Phase 7 H1: the restored database’s unfinished Mirza import is closed at the cutover; restore and upload work after', async () => {
+    const owner = adminActorFor(
+      await createAdmin(container, tenantA, { username: 'h1-owner', roleKeys: ['owner'] }),
+    );
+    const resurrected = '01900000-0000-7000-8000-0000000c0001';
+    await seedImport(resurrected, 'APPROVED', String(owner.id));
+    const { recoveryId } = await confirmedRecovery({
+      // The backup above holds the APPROVED row; the live one is finished before the confirm.
+      beforeConfirm: async () => {
+        await container.database.db.execute(
+          `UPDATE legacy_nxpkg_imports SET status = 'CANCELLED', error_code = 'CANCELLED',
+                  finished_at = now(), key_ciphertext = NULL, key_key_id = NULL,
+                  claimed_by = NULL, lease_until = NULL
+            WHERE id = '${resurrected}'` as never,
+        );
+      },
+    });
+    await container.recoveryExecutor.tick();
+    const recovery = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(recovery?.state, String(recovery?.failureCode)).toBe('SUCCEEDED');
+    created.push(recovery?.displacedDatabase ?? '');
+
+    // In the RESTORED database: closed, key erased, lease released — never re-imported.
+    expect(await importState(resurrected)).toEqual({
+      status: 'CANCELLED',
+      error_code: 'SUPERSEDED_BY_RESTORE',
+      key_ciphertext: null,
+      claimed_by: null,
+    });
+    expect(await container.legacyNxpkgImports.committedImportId()).toBeNull();
+    // The migration loop claims nothing.
+    await container.migrationExecutor.tick();
+    expect((await importState(resurrected))?.['status']).toBe('CANCELLED');
+    // A new Mirza upload is accepted (no active import in the way).
+    const pending = await container.legacyMigration.beginUpload(tenantA, owner, {
+      fileName: 'again.nxpkg',
+    });
+    await container.legacyMigration.failUpload(pending);
+    // And a new NEXA restore can be confirmed. (The restored dump carries the RUNNING row of
+    // the backup that took it; the pipeline reclaims a row that stale — fast-forwarded here.)
+    await container.database.db.execute(
+      `UPDATE backup_runs SET lease_heartbeat_at = now() - interval '1 day' WHERE state = 'RUNNING'` as never,
+    );
+    const again = await confirmedRecovery();
+    expect((await container.recoveryRequests.byIdUnscoped(again.recoveryId))?.state).toBe(
+      'RESTORE_REQUESTED',
+    );
+  });
+
+  /**
+   * Review M1 — the confirm and the approval are serialised on ONE lock, and each reads the
+   * other inside its own transaction: a confirm arriving while an approval is mid-commit
+   * WAITS for it and then refuses; an approval arriving while a confirm holds the lock waits.
+   */
+  it('Phase 7 M1: a confirmation waits for an approval in flight and then refuses', async () => {
+    const owner = adminActorFor(
+      await createAdmin(container, tenantA, { username: 'm1-owner', roleKeys: ['owner'] }),
+    );
+    const H = (c: string) => c.repeat(64);
+    const inflight = '01900000-0000-7000-8000-0000000c0002';
+    await confirmedRecovery({
+      beforeConfirm: async (attempt) => {
+        // An approval in flight: the lock taken and its APPROVED row written, NOT committed.
+        const client = new Client({ connectionString: liveUrl });
+        await client.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(
+            "SELECT pg_advisory_xact_lock(hashtextextended('nexa:restore-exclusion:v1', 0))",
+          );
+          await client.query(
+            `INSERT INTO legacy_nxpkg_imports
+               (id, tenant_id, status, file_name, file_path, file_sha256, file_bytes, progress,
+                approved_dry_run_sha256, approved_by_admin_id, approved_at,
+                requested_by_admin_id, created_at, updated_at)
+             VALUES ($1, $2, 'APPROVED', 'm.nxpkg', '/n', $3, 1, '{}'::jsonb, $3, $4, now(),
+                     $4, now(), now())`,
+            [inflight, String(tenantA.tenantId), H('7'), String(owner.id)],
+          );
+          let settled = false;
+          const confirming = attempt().then(
+            () => ((settled = true), null),
+            (error: unknown) => ((settled = true), (error as { code?: string }).code ?? 'thrown'),
+          );
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          // Without the shared lock the confirm would have read "nothing holds it" and won.
+          expect(settled).toBe(false);
+          await client.query('COMMIT');
+          expect(await confirming).toBe('recovery.legacy_migration_active');
+        } finally {
+          await client.end();
+        }
+        await container.database.db.execute(
+          `UPDATE legacy_nxpkg_imports SET status = 'CANCELLED', error_code = 'CANCELLED',
+                  finished_at = now() WHERE id = '${inflight}'` as never,
+        );
+      },
+    });
+
+    // The other way round: an approval while a confirmation holds the lock waits for it.
+    const waiting = '01900000-0000-7000-8000-0000000c0003';
+    await container.database.db.execute(
+      `UPDATE recovery_requests SET state = 'FAILED', failure_code = 'recovery.internal',
+              finished_at = now() WHERE state = 'RESTORE_REQUESTED'` as never,
+    );
+    await seedImport(waiting, 'DRY_RUN_DONE', String(owner.id));
+    await container.database.db.execute(
+      `UPDATE legacy_nxpkg_imports SET claimed_by = NULL, lease_until = NULL WHERE id = '${waiting}'` as never,
+    );
+    const capabilities = await container.legacyMigration.capabilities(tenantA, owner);
+    const client = new Client({ connectionString: liveUrl });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('nexa:restore-exclusion:v1', 0))",
+      );
+      let settled = false;
+      const approving = container.legacyMigration
+        .approve(tenantA, owner, waiting, {
+          idempotencyKey: 'm1-approve-wait',
+          dryRunSha256: H('8'),
+          confirmation: 'IMPORT MIRZA',
+          targetAcknowledgement: capabilities.targetAcknowledgement,
+        })
+        .then(
+          (view) => ((settled = true), view.status as string),
+          (error: unknown) => ((settled = true), (error as { code?: string }).code ?? 'thrown'),
+        );
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(settled).toBe(false);
+      await client.query('COMMIT');
+      expect(await approving).toBe('APPROVED');
+    } finally {
+      await client.end();
+    }
+  });
+
+  /**
+   * Review M1 — if both ever committed, the recovery executor does not leave the recovery
+   * unclaimed (where it never expired and blocked every later restore): it claims it and
+   * fails it at once, before anything destructive.
+   */
+  it('Phase 7 M1: a confirmed recovery claimed while an import holds is FAILED at once, nothing destructive', async () => {
+    const owner = adminActorFor(
+      await createAdmin(container, tenantA, { username: 'm1b-owner', roleKeys: ['owner'] }),
+    );
+    const { recoveryId } = await confirmedRecovery();
+    // The race the lock prevents, forced by hand: an import APPROVED after the confirm.
+    await seedImport('01900000-0000-7000-8000-0000000c0004', 'APPROVED', String(owner.id));
+    await container.recoveryExecutor.tick();
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.failureCode).toBe('recovery.confirmation_invalid');
+    expect(row?.preRestoreBackupId ?? null).toBeNull();
+    expect(row?.cutoverAt ?? null).toBeNull();
     expect(await databaseExists(liveName)).toBe(true);
   });
 

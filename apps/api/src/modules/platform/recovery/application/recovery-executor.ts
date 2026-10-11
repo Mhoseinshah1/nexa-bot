@@ -73,12 +73,19 @@ export interface RecoveryExecutorDeps {
   /** Whether the installation can serve traffic, asked AFTER the cutover. */
   readonly readiness: () => Promise<{ degraded: boolean }>;
   /**
-   * Phase 7: whether a Mirza restore (`legacy_nxpkg_imports`) is approved or applying. A
-   * confirmed recovery is NOT claimed while one is: the confirm and the approval are separate
-   * requests, so both can commit, and the import holding the installation wins. The waiting
-   * recovery's confirmation then expires on its own (`recovery.confirmation_invalid`).
+   * Phase 7: whether a Mirza restore (`legacy_nxpkg_imports`) is approved or applying. The
+   * confirm and the approval are serialised on one lock, so both committing is not expected;
+   * if it ever happens the import holding the installation wins: the recovery is CLAIMED and
+   * FAILED at once (`recovery.confirmation_invalid`) before anything destructive — never left
+   * unclaimed, where an unexpired RESTORE_REQUESTED would wait (and block) for ever.
    */
   readonly legacyMigrationActive?: () => Promise<boolean>;
+  /**
+   * Phase 7 (review H1): right after a cutover, close every unfinished Mirza import the
+   * restored database carried (created before `cutoverAt`) — a restored APPROVED row would be
+   * re-imported, and one APPLYING would freeze the installation. Returns the ids closed.
+   */
+  readonly supersedeLegacyImports?: (cutoverAt: Date) => Promise<readonly string[]>;
   readonly clock: Clock;
   readonly opsLog: OperationalEventRecorder;
   readonly scope: () => ScopeContext | null;
@@ -209,18 +216,12 @@ export class RecoveryExecutor {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
-      const importHolds =
-        own === null && this.deps.legacyMigrationActive !== undefined
-          ? await this.deps.legacyMigrationActive()
-          : false;
       const claimed =
         own ??
-        (importHolds
-          ? null
-          : await this.deps.requests.claimConfirmed({
-              leaseOwner: this.deps.leaseOwner,
-              now: this.deps.clock.now(),
-            }));
+        (await this.deps.requests.claimConfirmed({
+          leaseOwner: this.deps.leaseOwner,
+          now: this.deps.clock.now(),
+        }));
 
       this.lastTickAt = this.deps.clock.now().getTime();
       if (claimed === null) return;
@@ -510,7 +511,31 @@ export class RecoveryExecutor {
    * continued by a process that did not watch it start, and FAILED releases the
    * quiesce while the candidate stays named on the row for an operator.
    */
+  /**
+   * Phase 7 (H1): closes the Mirza imports the restored database brought back. Never fails the
+   * recovery (the cutover is done); the migration executor sweeps the same rows on its own
+   * ticks as a backstop, and the log names what is left.
+   */
+  private async supersedeLegacyImports(recoveryId: string, cutoverAt: Date): Promise<void> {
+    if (this.deps.supersedeLegacyImports === undefined) return;
+    try {
+      const closed = await this.deps.supersedeLegacyImports(cutoverAt);
+      if (closed.length > 0) {
+        this.deps.logger.warn(
+          { recoveryId, imports: closed },
+          'closed the unfinished Mirza imports the restored database carried',
+        );
+      }
+    } catch (error) {
+      this.deps.logger.error(
+        { recoveryId, err: rootMessage(error) },
+        'could not close the Mirza imports the restored database carried',
+      );
+    }
+  }
+
   private async resumeAfterCutover(row: RecoveryRequestRow): Promise<void> {
+    if (row.cutoverAt !== null) await this.supersedeLegacyImports(row.id, row.cutoverAt);
     const heartbeat = this.startHeartbeat(row.id);
     const facts = {
       recoveryId: row.id,
@@ -834,6 +859,17 @@ export class RecoveryExecutor {
       throw new RecoveryAbort(
         'recovery.confirmation_invalid',
         'The confirmation on this request has expired. A new confirmation is a new decision.',
+      );
+    }
+    // Phase 7: a Mirza import approved or applying holds the installation. Failed here, at
+    // the claim, before the emergency backup: nothing destructive has happened.
+    if (
+      this.deps.legacyMigrationActive !== undefined &&
+      (await this.deps.legacyMigrationActive())
+    ) {
+      throw new RecoveryAbort(
+        'recovery.confirmation_invalid',
+        'A Mirza import holds this installation; this confirmation is not acted on.',
       );
     }
     if (request.workspacePath === null) {
@@ -1161,6 +1197,7 @@ export class RecoveryExecutor {
       failureCode: null,
     };
     await this.deps.requests.reassert(reasserted);
+    if (done.cutoverAt !== null) await this.supersedeLegacyImports(id, done.cutoverAt);
 
     // Keys that came back INSIDE the restored backup rather than through an
     // import here: stamped `restored_at` by the carry, and audited now, in the

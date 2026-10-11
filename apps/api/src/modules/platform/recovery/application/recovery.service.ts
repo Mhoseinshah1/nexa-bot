@@ -91,7 +91,13 @@ export interface RecoveryServiceDeps {
    * Phase 7 — mutual exclusion with a Mirza `.nxpkg` import: whether one is APPROVED or
    * APPLYING on this installation. A restore is not confirmed while one is.
    */
-  readonly legacyMigrationActive: () => Promise<boolean>;
+  readonly legacyMigrationActive: (tx?: unknown) => Promise<boolean>;
+  /**
+   * Phase 7 (review M1): runs the confirmation's check and its transition in ONE transaction
+   * holding the restore-exclusion lock — the lock a Mirza approval takes too — so the two can
+   * never both commit.
+   */
+  readonly exclusive: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -534,28 +540,34 @@ export class RecoveryService {
       throw this.confirmationRefused('This artifact has not passed a restore test.');
     }
     // Phase 7: a Mirza import approved or in progress is a restore already under way, from the
-    // operator's view. One at a time, whichever came first; nothing is confirmed.
-    if (await this.deps.legacyMigrationActive()) {
-      throw errors.conflict(
-        PLATFORM_ERROR_CODES.RECOVERY_LEGACY_MIGRATION_ACTIVE,
-        'A Mirza backup is being restored into this installation. Confirm this restore after it finishes.',
+    // operator's view. One at a time, whichever came first; nothing is confirmed. Asked and
+    // acted on under the restore-exclusion lock the approval also takes (review M1).
+    const artifactChecksum = request.artifactChecksum;
+    const moved = await this.deps.exclusive(async (tx) => {
+      if (await this.deps.legacyMigrationActive(tx)) {
+        throw errors.conflict(
+          PLATFORM_ERROR_CODES.RECOVERY_LEGACY_MIGRATION_ACTIVE,
+          'A Mirza backup is being restored into this installation. Confirm this restore after it finishes.',
+        );
+      }
+      const now = this.deps.clock.now();
+      return this.deps.requests.transition(
+        {
+          id,
+          from: ['RESTORE_TEST_PASSED'],
+          to: 'RESTORE_REQUESTED',
+          now,
+          patch: {
+            stage: 'AWAIT_CONFIRMATION',
+            confirmedAt: now,
+            confirmedByAdminId: actor.id,
+            confirmedSessionId: actor.sessionId ?? null,
+            confirmedChecksum: artifactChecksum,
+            confirmationExpiresAt: new Date(now.getTime() + RECOVERY_CONFIRMATION_TTL_MS),
+          },
+        },
+        tx,
       );
-    }
-
-    const now = this.deps.clock.now();
-    const moved = await this.deps.requests.transition({
-      id,
-      from: ['RESTORE_TEST_PASSED'],
-      to: 'RESTORE_REQUESTED',
-      now,
-      patch: {
-        stage: 'AWAIT_CONFIRMATION',
-        confirmedAt: now,
-        confirmedByAdminId: actor.id,
-        confirmedSessionId: actor.sessionId ?? null,
-        confirmedChecksum: request.artifactChecksum,
-        confirmationExpiresAt: new Date(now.getTime() + RECOVERY_CONFIRMATION_TTL_MS),
-      },
     });
     if (!moved) {
       // A replay, or somebody else confirming first. Both are the same answer,

@@ -651,6 +651,7 @@ interface ExecutorHarness {
   now: Date;
   backupSawKey: boolean | null;
   recoveryActive: boolean;
+  latestCutoverAt: Date | null;
   beforeBackup: () => Promise<{ outcome: 'TAKEN' | 'BUSY' | 'FAILED'; runId: string | null }>;
   readonly writerDepth: number;
   /** The import ids the apply ran as the writer of. */
@@ -670,6 +671,7 @@ function executorHarness(
   const state = {
     fresh: true,
     recoveryActive: false,
+    latestCutoverAt: null as Date | null,
     writerDepth: 0,
     writers: [] as string[],
     beforeBackup: async (): Promise<{
@@ -742,6 +744,12 @@ function executorHarness(
     get recoveryActive() {
       return state.recoveryActive;
     },
+    set latestCutoverAt(value: Date | null) {
+      state.latestCutoverAt = value;
+    },
+    get latestCutoverAt() {
+      return state.latestCutoverAt;
+    },
     set recoveryActive(value) {
       state.recoveryActive = value;
     },
@@ -805,6 +813,7 @@ function executorHarness(
       },
     },
     recoveryActive: async () => state.recoveryActive,
+    latestCutoverAt: async () => state.latestCutoverAt,
     asImportWriter: (importId, fn) => {
       state.writers.push(importId);
       state.writerDepth += 1;
@@ -1204,6 +1213,8 @@ describe('LegacyMigrationExecutor', () => {
     h.recoveryActive = true;
     await h.executor.tick();
     expect(h.repository.rows.get(id)).toMatchObject({ status: 'APPROVED', claimedBy: null });
+    // Shown, not silent (review M1).
+    expect(h.repository.rows.get(id)?.progress.blocker).toBe('RECOVERY_ACTIVE');
     expect(h.calls).toEqual([]);
 
     h.recoveryActive = false;
@@ -1367,7 +1378,66 @@ describe('LegacyMigrationExecutor', () => {
     expect(logged).toContain('EACCES');
   });
 
-  it('a RUN_CONFLICT (another importer process) is transient: released, uncounted, never FAILED', async () => {
+  it('review H3: while APPLYING every attempt COUNTS — a RUN_CONFLICT, an unwired port, an unclassified throw — and the cap FAILS it (the freeze lifts)', async () => {
+    const faults: [string, () => Promise<never>][] = [
+      ['RUN_CONFLICT', async () => Promise.reject(new LegacyMigrationRetry('RUN_CONFLICT'))],
+      ['not wired', async () => Promise.reject(new LegacyMigrationNotWired('MigrationRunner'))],
+      ['unclassified', async () => Promise.reject(new Error('EACCES: the step directory'))],
+    ];
+    for (const [name, fault] of faults) {
+      const h = executorHarness();
+      const digest = reportDigest(dryRunReport);
+      const id = seed(h, {
+        status: 'APPROVED',
+        dryRunReport,
+        dryRunSha256: digest,
+        approvedDryRunSha256: digest,
+        approvedByAdminId: ADMIN,
+        approvedAt: h.now,
+      });
+      // The fault comes BEFORE the old counting point (the read sets, under the freeze).
+      h.runner = { ...h.runner, recordReadSets: fault };
+      await h.executor.tick();
+      expect(h.repository.rows.get(id), name).toMatchObject({
+        status: 'APPLYING',
+        claimedBy: null,
+      });
+      expect(h.repository.rows.get(id)?.progress.applyAttempts, name).toBe(1);
+      for (let i = 2; i <= LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS; i += 1) {
+        await h.executor.tick();
+        expect(h.repository.rows.get(id)?.progress.applyAttempts, `${name} ${String(i)}`).toBe(i);
+      }
+      await h.executor.tick();
+      expect(h.repository.rows.get(id), name).toMatchObject({
+        status: 'FAILED',
+        errorCode: 'IMPORT_FAILED',
+        keyCiphertext: null,
+      });
+    }
+  });
+
+  it('review H3: an attempt resumed past the wall-clock window is FAILED before it runs', async () => {
+    const h = executorHarness();
+    const digest = reportDigest(dryRunReport);
+    const id = seed(h, {
+      status: 'APPLYING',
+      dryRunReport,
+      dryRunSha256: digest,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
+      approvedAt: new Date(h.now.getTime() - 49 * 3_600_000),
+      preImportBackupRunId: PRE_BACKUP_RUN,
+      progress: { ...emptyRow().progress, phase: 'APPLY_IMPORT', applyAttempts: 1 },
+    });
+    await h.executor.tick();
+    expect(h.repository.rows.get(id)).toMatchObject({
+      status: 'FAILED',
+      errorCode: 'IMPORT_FAILED',
+    });
+    expect(h.calls).toEqual([]);
+  });
+
+  it('an approval older than the TTL is FAILED APPROVAL_EXPIRED: no backup, nothing written', async () => {
     const h = executorHarness();
     const digest = reportDigest(dryRunReport);
     const id = seed(h, {
@@ -1376,25 +1446,79 @@ describe('LegacyMigrationExecutor', () => {
       dryRunSha256: digest,
       approvedDryRunSha256: digest,
       approvedByAdminId: ADMIN,
+      approvedAt: new Date(h.now.getTime() - 25 * 3_600_000),
+    });
+    await h.executor.tick();
+    expect(h.repository.rows.get(id)).toMatchObject({
+      status: 'FAILED',
+      errorCode: 'APPROVAL_EXPIRED',
+      keyCiphertext: null,
+    });
+    expect(h.calls).toEqual([]);
+  });
+
+  it('review H1: an unfinished import created before the latest NEXA restore is closed, never continued', async () => {
+    const h = executorHarness();
+    const digest = reportDigest(dryRunReport);
+    const restored = seed(h, {
+      status: 'APPROVED',
+      dryRunReport,
+      dryRunSha256: digest,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
+      approvedAt: h.now,
+      claimedBy: 'recovery:old-host',
+      leaseUntil: new Date(h.now.getTime() - 1),
+    });
+    h.latestCutoverAt = new Date(h.now.getTime() - 1000);
+    await h.executor.tick();
+    expect(h.repository.rows.get(restored)).toMatchObject({
+      status: 'CANCELLED',
+      errorCode: 'SUPERSEDED_BY_RESTORE',
+      keyCiphertext: null,
+      claimedBy: null,
+    });
+    expect(h.calls).toEqual([]);
+    // An import created AFTER the cutover is untouched and runs.
+    const fresh = seed(h, { status: 'UPLOADED', createdAt: h.now, updatedAt: h.now });
+    await h.executor.tick();
+    expect(status(h, fresh)).toBe('VERIFIED');
+  });
+
+  it('review M4: another import APPLYING (any tenant) is a shown blocker — no backup taken', async () => {
+    const h = executorHarness();
+    const digest = reportDigest(dryRunReport);
+    seed(h, {
+      status: 'APPLYING',
+      tenantId: '019600ab-cdef-7012-8345-6789abcd0009',
+      preImportBackupRunId: PRE_BACKUP_RUN,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
+      approvedAt: h.now,
+      claimedBy: 'recovery:other',
+      leaseUntil: new Date(h.now.getTime() + 600_000),
+    });
+    const id = seed(h, {
+      status: 'APPROVED',
+      dryRunReport,
+      dryRunSha256: digest,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
       approvedAt: h.now,
     });
-    const healthy = h.runner;
-    h.runner = {
-      ...healthy,
-      apply: async () => {
-        throw new LegacyMigrationRetry('RUN_CONFLICT');
-      },
-    };
-    for (let i = 0; i < LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS + 3; i += 1) {
-      await h.executor.tick();
-      const row = h.repository.rows.get(id)!;
-      expect(row.status).toBe('APPLYING');
-      expect(row.claimedBy).toBeNull();
-      expect(row.progress.applyAttempts).toBe(0);
-    }
-    h.runner = healthy;
     await h.executor.tick();
-    expect(status(h, id)).toBe('COMPLETED');
+    expect(h.repository.rows.get(id)).toMatchObject({ status: 'APPROVED', claimedBy: null });
+    expect(h.repository.rows.get(id)?.progress.blocker).toBe('ANOTHER_IMPORT_APPLYING');
+    expect(h.calls).not.toContain('backup:before');
+  });
+
+  it('starts with a tick, so the role heartbeat is fresh at once', async () => {
+    const h = executorHarness();
+    expect(h.executor.isFresh(h.now.getTime())).toBe(false);
+    h.executor.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    h.executor.stop();
+    expect(h.executor.isFresh(h.now.getTime())).toBe(true);
   });
 
   it('is COMPLETED only for the importer verdict COMPLETED, a RECONCILED reconcile and a report that holds', async () => {
@@ -1801,9 +1925,11 @@ describe('NxpkgMigrationAdapters.precheck on a production-like target (Phase 7)'
     expect(
       await blocker(adapters({ [TARGET_ACK_ENV]: ACK }, 1).precheck(context(null), 'TARGET')),
     ).toBeNull();
+    // Review M3: APPLY (and so every resume) trusts the decision TARGET made before the first
+    // write — no acknowledgement is asked again, so a resumed import is never failed for it.
     expect(
       await blocker(adapters({ [TARGET_ACK_ENV]: other }, 1).precheck(context(null), 'APPLY')),
-    ).toBe('TARGET_ACK_MISSING');
+    ).toBeNull();
   });
 
   it('stop-sales holds through the APPLYING import’s own freeze, with no incident', async () => {

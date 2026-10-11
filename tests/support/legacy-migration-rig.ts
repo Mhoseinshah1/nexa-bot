@@ -762,6 +762,7 @@ export function rigExecutor(
     // The container's own Phase 7 wiring: a confirmed recovery holds the import back, and
     // the apply runs as the import's own writer through the REAL write freeze.
     recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
+    latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
     asImportWriter: runAsLegacyMigration,
     clock: container.clock,
     correlation: () => `corr-rig-${String(Date.now())}` as CorrelationId,

@@ -526,6 +526,7 @@ describe('legacy migration (Mirza .nxpkg)', () => {
         runAfterImport: async () => ({ outcome: 'SKIPPED_QUIESCED', runId: null }),
       },
       recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
+      latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
       asImportWriter: runAsLegacyMigration,
       clock: container.clock,
       correlation: () => 'corr' as CorrelationId,

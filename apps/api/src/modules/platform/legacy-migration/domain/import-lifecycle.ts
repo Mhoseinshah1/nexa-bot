@@ -191,6 +191,14 @@ export function phaseReached(
 export const LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS = 5;
 
 /**
+ * Phase 7 (review H3): the wall-clock bound on an APPLYING import, from its approval. Asked
+ * when an attempt STARTS (never mid-attempt, so one long healthy import is not cut off): an
+ * import still being resumed this long after the owner approved it is failed, which lifts the
+ * installation-wide write freeze it holds. 48 hours — the approval TTL (24 h) plus a day.
+ */
+export const LEGACY_MIGRATION_APPLY_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+/**
  * The same bound for VERIFY and the DRY RUN. Both are read-only and simply run again after a
  * crash or an error nobody classified — but not for ever: past the bound the step is failed
  * (`VERIFY_FAILED` / `DRY_RUN_FAILED`, `IMPORT_FAILED`) and the key is erased.

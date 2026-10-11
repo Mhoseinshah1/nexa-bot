@@ -175,8 +175,14 @@ export class NxpkgMigrationAdapters
     }
     // Phase 7: the dry run writes no customer and no money; the acknowledgement arms the apply.
     if (step === 'DRY_RUN') return;
-    if (!this.acknowledged(context)) throw new LegacyMigrationBlocked('TARGET_ACK_MISSING');
-    if (step === 'TARGET') return;
+    // The acknowledgement is asked ONCE, before the first write (TARGET). An APPLY — the first
+    // attempt's, right after TARGET, and every resume's — trusts that stored decision (review
+    // M3): failing a partly written import because an environment changed between two
+    // attempts would strand it, and the owner's acknowledgement is on the row anyway.
+    if (step === 'TARGET') {
+      if (!this.acknowledged(context)) throw new LegacyMigrationBlocked('TARGET_ACK_MISSING');
+      return;
+    }
 
     const values = context.dryRunReport?.cutover;
     if (values === undefined) throw new LegacyMigrationBlocked('CUTOVER_APPROVAL_MISSING');

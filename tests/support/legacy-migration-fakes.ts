@@ -206,6 +206,27 @@ export class InMemoryLegacyNxpkgImports implements LegacyNxpkgImportRepository {
     return ids;
   }
 
+  async supersedeBefore(input: { before: Date; now: Date }): Promise<readonly string[]> {
+    const ids: string[] = [];
+    for (const row of this.rows.values()) {
+      if (isLegacyMigrationTerminal(row.status)) continue;
+      if (row.createdAt.getTime() >= input.before.getTime()) continue;
+      this.rows.set(row.id, {
+        ...row,
+        status: 'CANCELLED',
+        errorCode: 'SUPERSEDED_BY_RESTORE',
+        finishedAt: input.now,
+        updatedAt: input.now,
+        keyCiphertext: null,
+        keyKeyId: null,
+        claimedBy: null,
+        leaseUntil: null,
+      });
+      ids.push(row.id);
+    }
+    return ids;
+  }
+
   async applyingImportId(): Promise<string | null> {
     return [...this.rows.values()].find((row) => row.status === 'APPLYING')?.id ?? null;
   }

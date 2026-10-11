@@ -645,6 +645,7 @@ describe('legacy migration: the executor over a real package', () => {
         runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }),
       },
       recoveryActive: async () => false,
+      latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
       asImportWriter: runAsLegacyMigration,
       clock: container.clock,
       correlation: () => 'corr-prod' as CorrelationId,
@@ -817,6 +818,7 @@ describe('legacy migration: the executor over a real package', () => {
         runAfterImport: () => pipeline.runAfterImport(),
       },
       recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
+      latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
       asImportWriter: runAsLegacyMigration,
       clock: container.clock,
       correlation: () => 'corr-restore-page' as CorrelationId,
@@ -892,7 +894,11 @@ describe('legacy migration: the executor over a real package', () => {
       },
     ]);
 
+    // The installation's tenant, as every role resolves it at boot: without it a backup
+    // records no operational event at all, and "nothing was announced" would prove nothing.
+    container.setInstallationTenant(tenantA.tenantId);
     const notificationsBefore = await count('notifications');
+    const eventsBefore = await count('operational_events');
     // A message waiting in the outbox: proof the relay idles because of the freeze, not
     // because it had nothing to claim (the recovery suite's positive-control rule).
     await db.execute(sql`
@@ -945,16 +951,19 @@ describe('legacy migration: the executor over a real package', () => {
     expect((await container.relay.processBatch()).claimed).toBeGreaterThan(0);
     for (let i = 0; i < 5; i += 1) await container.relay.processBatch();
 
-    // No Telegram: no customer was told anything, no notification intent was created by the
-    // import (the backups' own operator events are the only producers in this window).
+    // No Telegram: no customer was told anything, and no notification intent was created.
     expect(await count('customer_notifications')).toBe(0);
     const intents = await db.execute<{ kind: string }>(
       sql`SELECT kind FROM notifications WHERE tenant_id = ${TENANT} ORDER BY created_at`,
     );
-    expect(
-      intents.rows.slice(notificationsBefore).filter((n) => !n.kind.startsWith('backup')),
-      JSON.stringify(intents.rows),
-    ).toEqual([]);
+    // Review M2: NOTHING — not even the backups' own run_ok: the import's backups are local
+    // only and record their events on the recorder that is not projected to Telegram.
+    expect(intents.rows.slice(notificationsBefore), JSON.stringify(intents.rows)).toEqual([]);
+    // ...while the backups' events WERE recorded (the condition machinery still runs).
+    const recorded = await db.execute<{ code: string }>(
+      sql`SELECT code FROM operational_events WHERE tenant_id = ${TENANT} ORDER BY first_seen_at`,
+    );
+    expect(recorded.rows.slice(eventsBefore).map((r) => r.code)).toContain('backup.run_ok');
     // No panel write: GETs and the token exchange only.
     for (const fake of [panelA, panelB]) {
       expect(
@@ -1032,6 +1041,7 @@ describe('legacy migration: the executor over a real package', () => {
         runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }),
       },
       recoveryActive: async () => false,
+      latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
       asImportWriter: runAsLegacyMigration,
       clock: container.clock,
       correlation: () => 'corr-prod-tables' as CorrelationId,

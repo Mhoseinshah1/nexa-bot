@@ -5,9 +5,11 @@ import {
 } from '../../apps/api/src/modules/platform/recovery/application/recovery-executor';
 
 /**
- * Phase 7: a confirmed recovery is not claimed while a Mirza restore is approved or applying.
- * The two confirmations are separate requests and can both commit; the executor's claim is
- * where the import holding the installation wins (the recovery's confirmation then expires).
+ * Phase 7 (review M1): a confirmed recovery is ALWAYS claimed, even while a Mirza restore is
+ * approved or applying. Left unclaimed, an unexpired RESTORE_REQUESTED waited for ever — its
+ * expiry is decided only at the claim — and held the installation against every later
+ * confirmation. It is claimed and FAILED at once instead (`recovery.confirmation_invalid`,
+ * before anything destructive): `recovery-executor.test.ts` proves that against PostgreSQL.
  */
 function executor(importActive: boolean) {
   const calls = { claimConfirmed: 0 };
@@ -31,10 +33,10 @@ function executor(importActive: boolean) {
 }
 
 describe('RecoveryExecutor and a Mirza restore in progress', () => {
-  it('does not claim a confirmed recovery while an import is approved or applying', async () => {
+  it('claims a confirmed recovery even while an import is approved or applying (no starvation)', async () => {
     const held = executor(true);
     await held.executor.tick();
-    expect(held.calls.claimConfirmed).toBe(0);
+    expect(held.calls.claimConfirmed).toBe(1);
   });
 
   it('claims as before when no import is active', async () => {

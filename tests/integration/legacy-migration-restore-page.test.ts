@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createContainer, type Container } from '../../apps/api/src/container';
+import { isUniqueViolation } from '../../apps/api/src/infrastructure/persistence/sqlstate';
 import {
   MigrationRig,
   generateDataset,
@@ -12,7 +13,15 @@ import {
   type GeneratedDataset,
   type MigrationPackage,
 } from '../support/legacy-migration-rig';
-import { createTestContext, testConfig, type TestContext } from './harness';
+import {
+  adminActorFor,
+  createAdmin,
+  createTestContext,
+  tenantA,
+  tenantB,
+  testConfig,
+  type TestContext,
+} from './harness';
 
 /**
  * Phase 7 — the Mirza `.nxpkg` as the restore page's second source, executed by the
@@ -135,6 +144,33 @@ describe('legacy migration: the restore page source, executed by the recovery ro
     expect(rig.providerWrites()).toEqual([]);
     expect(await rig.count('customer_notifications')).toBe(0);
   }, 600_000);
+
+  it('review M4: the database admits ONE APPLYING import in the whole installation, whatever the tenant', async () => {
+    await ctx.reset();
+    const applying = async (id: string, scope: typeof tenantA) => {
+      const admin = adminActorFor(
+        await createAdmin(ctx.container, scope, {
+          username: `m4-${id.slice(-4)}`,
+          roleKeys: ['owner'],
+        }),
+      );
+      const H = (c: string) => c.repeat(64);
+      await db().execute(sql`
+        INSERT INTO legacy_nxpkg_imports
+          (id, tenant_id, status, file_name, file_path, file_sha256, file_bytes, progress,
+           approved_dry_run_sha256, approved_by_admin_id, approved_at, pre_import_backup_run_id,
+           requested_by_admin_id, created_at, updated_at)
+        VALUES (${id}, ${String(scope.tenantId)}, 'APPLYING', 'm.nxpkg', '/n', ${H('7')}, 1,
+                '{}'::jsonb, ${H('7')}, ${String(admin.id)}, now(),
+                '01900000-0000-7000-8000-0000000d0001', ${String(admin.id)}, now(), now())`);
+    };
+    await applying('01900000-0000-7000-8000-0000000d00a1', tenantA);
+    const refused = await applying('01900000-0000-7000-8000-0000000d00b1', tenantB).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(isUniqueViolation(refused, 'legacy_nxpkg_imports_one_applying_idx')).toBe(true);
+  }, 120_000);
 
   it('a protective backup that is not taken and verified fails the import with nothing written', async () => {
     await rig.freshTenant(generated.liveAccounts);
