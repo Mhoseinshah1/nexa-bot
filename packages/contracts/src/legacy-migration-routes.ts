@@ -95,6 +95,17 @@ export const LEGACY_MIGRATION_HTTP_ERROR_CODES = {
   /** The typed approval phrase does not match. */
   CONFIRMATION_INVALID: 'legacy_migration.confirmation_invalid',
   SCOPE_STOPPED: 'legacy_migration.scope_stopped',
+  /**
+   * Production-like target: the approval's `targetAcknowledgement` is not this installation's
+   * own (`capabilities.targetAcknowledgement`) — the owner confirmed another database or
+   * tenant, or none. Nothing was approved.
+   */
+  TARGET_ACK_MISMATCH: 'legacy_migration.target_ack_mismatch',
+  /**
+   * A disaster recovery holds the installation (confirmed and not finished). A migration is a
+   * restore from the operator's view: one at a time, whichever came first. Nothing was approved.
+   */
+  RECOVERY_ACTIVE: 'legacy_migration.recovery_active',
 } as const;
 export type LegacyMigrationHttpErrorCode =
   (typeof LEGACY_MIGRATION_HTTP_ERROR_CODES)[keyof typeof LEGACY_MIGRATION_HTTP_ERROR_CODES];
@@ -181,12 +192,24 @@ export type LegacyMigrationPanelBindingsRequest = z.infer<
 export const legacyMigrationCommandRequestSchema = z.object({ idempotencyKey }).strict();
 export type LegacyMigrationCommandRequest = z.infer<typeof legacyMigrationCommandRequestSchema>;
 
-/** The owner's approval: bound to the dry run digest the owner READ, plus the typed phrase. */
+/** The importer's target acknowledgement: 16 lowercase hex (a digest, not a secret). */
+export const legacyMigrationTargetAcknowledgementSchema = z.string().regex(/^[0-9a-f]{16}$/u);
+
+/**
+ * The owner's approval: bound to the dry run digest the owner READ, plus the typed phrase.
+ *
+ * `targetAcknowledgement` (Phase 7, the restore page): on a production-like target the server
+ * REQUIRES it to equal its own `targetAcknowledgement(target, tenant)` — the value
+ * `capabilities.targetAcknowledgement` shows — and stores it on the import, where the
+ * `migration` executor accepts it in place of the process environment's
+ * `NEXA_LEGACY_IMPORT_TARGET_ACK`. Elsewhere it is ignored. Omitted means null.
+ */
 export const legacyMigrationApproveRequestSchema = z
   .object({
     idempotencyKey,
     dryRunSha256: hex64,
     confirmation: z.string().max(64),
+    targetAcknowledgement: legacyMigrationTargetAcknowledgementSchema.nullable().default(null),
   })
   .strict();
 export type LegacyMigrationApproveRequest = z.infer<typeof legacyMigrationApproveRequestSchema>;
@@ -352,11 +375,17 @@ export type LegacyMigrationPhase = (typeof LEGACY_MIGRATION_PHASES)[number];
  * failure: the import stays where it is (still cancellable before the apply starts) and
  * continues once the operator acts.
  *
- * - `TARGET_ACK_MISSING`: the `migration` process's own environment has no (or another)
- *   `NEXA_LEGACY_IMPORT_TARGET_ACK` — set it to the capabilities' `targetAcknowledgement`;
- * - `CUTOVER_APPROVAL_MISSING`: no unrevoked owner approval at `/legacy-cutover` matches the
- *   dry run's seven `cutover` values;
- * - `STOP_SALES_NOT_ACTIVE`: sales are not stopped (runbook step 1).
+ * - `TARGET_ACK_MISSING`: neither the owner's approval (`targetAcknowledgement`, stored on the
+ *   import) nor the `migration` process's environment (`NEXA_LEGACY_IMPORT_TARGET_ACK`, the CLI
+ *   and rehearsal path) carries this target's acknowledgement;
+ * - `CUTOVER_APPROVAL_MISSING`: no unrevoked owner approval matches the dry run's seven
+ *   `cutover` values (the restore page's approval records one; `/legacy-cutover` too);
+ * - `STOP_SALES_NOT_ACTIVE`: sales are not stopped (runbook step 1). An APPLYING import's own
+ *   installation-wide write freeze counts as stopped sales.
+ *
+ * Phase 7: a blocker met once the import is APPLYING fails it (`IMPORT_FAILED`, the blocker
+ * kept on the progress) instead of waiting: the write freeze would refuse the very operator
+ * write that could clear it.
  */
 export const LEGACY_MIGRATION_BLOCKERS = [
   'TARGET_ACK_MISSING',
@@ -427,6 +456,12 @@ export const legacyMigrationImportViewSchema = z.object({
   dryRunLegacyRunId: z.string().nullable(),
   applyLegacyRunId: z.string().nullable(),
   backupRunId: z.string().nullable(),
+  /**
+   * The mandatory protective backup the executor took BEFORE the import wrote anything
+   * (`backup_runs.id`, trigger `PRE_RESTORE`, verified). Restoring it on the recovery page is
+   * how this import is undone. Null until taken.
+   */
+  preImportBackupRunId: z.string().nullable(),
   progress: legacyMigrationProgressSchema,
   /** The `migration` role holds the import right now. */
   working: z.boolean(),
@@ -463,9 +498,10 @@ export const legacyMigrationCapabilitiesResponseSchema = z.object({
    */
   productionLikeTarget: z.boolean(),
   /**
-   * Production-like only: the value `NEXA_LEGACY_IMPORT_TARGET_ACK` must hold in the
-   * `migration` process's environment (the importer's target acknowledgement for this database
-   * and tenant — a digest, not a secret). Set by the server operator; never accepted from here.
+   * Production-like only: the importer's target acknowledgement for this database and tenant
+   * (a digest, not a secret). The owner's approval echoes it (`targetAcknowledgement`), which
+   * is how the restore page confirms the target; the `migration` process's environment
+   * (`NEXA_LEGACY_IMPORT_TARGET_ACK`) is still accepted for the CLI and the rehearsal kit.
    */
   targetAcknowledgement: z.string().nullable(),
 });

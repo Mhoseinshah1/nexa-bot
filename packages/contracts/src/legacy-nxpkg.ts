@@ -113,6 +113,11 @@ export const LEGACY_NXPKG_ERROR_CODES = [
   'DECISIONS_INVALID',
   /** The import itself failed; the legacy run's report says where. */
   'IMPORT_FAILED',
+  /**
+   * The mandatory protective backup taken BEFORE the import writes anything (the restore's
+   * `PRE_RESTORE` trigger, verified) did not succeed. Nothing was imported.
+   */
+  'PRE_IMPORT_BACKUP_FAILED',
   /** The operator cancelled the import. */
   'CANCELLED',
 ] as const;
