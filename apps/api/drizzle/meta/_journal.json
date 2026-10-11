@@ -1723,6 +1723,13 @@
       "when": 1791746396788,
       "tag": "0245_legacy_nxpkg_restore_page",
       "breakpoints": true
+    },
+    {
+      "idx": 246,
+      "version": "7",
+      "when": 1791751836172,
+      "tag": "0246_legacy_nxpkg_one_applying",
+      "breakpoints": true
     }
   ]
 }

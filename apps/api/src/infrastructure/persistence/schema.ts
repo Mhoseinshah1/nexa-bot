@@ -14174,6 +14174,15 @@ export const legacyNxpkgImports = pgTable(
     uniqueIndex('legacy_nxpkg_imports_one_active_idx')
       .on(table.tenantId)
       .where(sql`NOT (${enumCheck('status', LEGACY_NXPKG_TERMINAL_STATUSES)})`),
+    /*
+     * Phase 7 (review M4): at most ONE import APPLYING in the whole installation, whatever
+     * the tenant — each one freezes every write, and the write gate's exemption names one
+     * import. The executor checks first (blocker `ANOTHER_IMPORT_APPLYING`); this is the
+     * database's rule for a writer that does not.
+     */
+    uniqueIndex('legacy_nxpkg_imports_one_applying_idx')
+      .on(table.status)
+      .where(sql`status = 'APPLYING'`),
     index('legacy_nxpkg_imports_poll_idx').on(table.status, table.leaseUntil),
     index('legacy_nxpkg_imports_tenant_created_idx').on(table.tenantId, table.createdAt),
     foreignKey({
