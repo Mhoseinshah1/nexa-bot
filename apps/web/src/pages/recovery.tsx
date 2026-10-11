@@ -1068,5 +1068,9 @@ function stateTone(state: RecoveryRequestSummary['state']): 'ok' | 'warn' | 'dan
  * ticket.
  */
 function safeMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code === 'recovery.legacy_migration_active') {
+    // A Mirza import holds the installation: said in Persian, with what to do.
+    return t('web.recovery_fault_legacy_migration_active');
+  }
   return error instanceof ApiError ? error.message : t('web.error');
 }

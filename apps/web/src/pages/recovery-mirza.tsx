@@ -169,6 +169,8 @@ const ERROR_LABELS: Readonly<Record<LegacyNxpkgErrorCode, WebKey>> = {
   IMPORT_FAILED: 'web.lmg_error_import_failed',
   CANCELLED: 'web.lmg_error_cancelled',
   PRE_IMPORT_BACKUP_FAILED: 'web.mrz_error_pre_import_backup',
+  SUPERSEDED_BY_RESTORE: 'web.mrz_error_superseded',
+  APPROVAL_EXPIRED: 'web.mrz_error_approval_expired',
 };
 
 const PHASE_LABELS: Readonly<Record<LegacyMigrationPhase, WebKey>> = {
@@ -193,6 +195,8 @@ const BLOCKER_LABELS: Readonly<Record<LegacyMigrationBlocker, WebKey>> = {
   TARGET_ACK_MISSING: 'web.lmg_blocker_ack',
   CUTOVER_APPROVAL_MISSING: 'web.lmg_blocker_approval',
   STOP_SALES_NOT_ACTIVE: 'web.lmg_blocker_stop_sales',
+  RECOVERY_ACTIVE: 'web.lmg_blocker_recovery',
+  ANOTHER_IMPORT_APPLYING: 'web.lmg_blocker_other_import',
 };
 
 const FAULTS: Readonly<Record<string, WebKey>> = {

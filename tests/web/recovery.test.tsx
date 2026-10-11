@@ -656,7 +656,13 @@ describe('the recovery page', () => {
     });
 
     /** Uploads a file and verifies it, leaving the page at RESTORE_TEST_PASSED. */
-    async function reachConfirmation(permissions: readonly PermissionKey[]) {
+    async function reachConfirmation(
+      permissions: readonly PermissionKey[],
+      confirmAnswer: { status: number; body: unknown } = {
+        status: 200,
+        body: { recovery: { ...tested, state: 'RESTORE_REQUESTED' } },
+      },
+    ) {
       const api = stubApi([
         ...routes(),
         { url: `${API_PREFIX}${RECOVERY_ROUTES.upload}`, body: { recovery: recovery() } },
@@ -666,7 +672,8 @@ describe('the recovery page', () => {
         },
         {
           url: `${API_PREFIX}${RECOVERY_ROUTES.confirm(RECOVERY_ID)}`,
-          body: { recovery: { ...tested, state: 'RESTORE_REQUESTED' } },
+          body: confirmAnswer.body,
+          status: confirmAnswer.status,
         },
       ]);
       renderPage(<RecoveryPage route={route} permissions={permissions} />);
@@ -736,6 +743,30 @@ describe('the recovery page', () => {
       expect(body.phrase).toBe(RECOVERY_CONFIRMATION_PHRASE);
       // THE BINDING. Without this the confirmation says "restore something".
       expect(body.artifactChecksum).toBe('c'.repeat(64));
+    });
+
+    it('says in Persian that a Mirza import holds the installation when the confirm is refused for it', async () => {
+      await reachConfirmation(ALL, {
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'recovery.legacy_migration_active',
+            message: 'A Mirza backup is being restored into this installation.',
+            correlationId: 'test',
+          },
+        },
+      });
+      fireEvent.change(phraseField(), { target: { value: RECOVERY_CONFIRMATION_PHRASE } });
+      fireEvent.click(screen.getByRole('button', { name: 'تأیید و شروع بازیابی' }));
+      expect(
+        await screen.findByText(
+          'یک بازیابی از میرزا روی این نصب تأیید شده یا در جریان است؛ پس از پایان آن دوباره تأیید کنید. چیزی تأیید نشد.',
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText('A Mirza backup is being restored into this installation.'),
+      ).toBeNull();
     });
 
     it('shows the restore-test evidence an operator has to read before confirming', async () => {
