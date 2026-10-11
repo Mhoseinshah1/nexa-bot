@@ -501,12 +501,25 @@ NEXA that holds no operational data yet (a non-empty installation is refused; no
 Before it writes anything it takes a verified `PRE_RESTORE` backup through this pipeline
 (`preImportBackupRunId`; restoring it here undoes the import), and while it applies the whole
 installation is quiesced exactly as during a restore (`recovery.quiesced`, the relay idle). One at
-a time: a restore is not confirmed while a Mirza import is approved or applying, and the reverse
-(the recovery executor also does not claim a confirmed restore while an import holds the
-installation). Both of the import's backups — the protective one and the one after — run with
-`deliver: false`: verified and kept on this server, recorded `NOT_ATTEMPTED`, never sent to Telegram
-(a restore sends nothing to Telegram, and the archive holds every imported customer). Download them
-from the history like any local archive.
+a time: a restore is not confirmed while a Mirza import is approved or applying, and the reverse —
+both confirmations take one advisory lock and read the other inside their own transaction, and if
+both ever committed the recovery executor claims the restore and fails it at once
+(`recovery.confirmation_invalid`) before anything destructive. Both of the import's backups — the
+protective one and the one after — run with `deliver: false`: verified and kept on this server,
+recorded `NOT_ATTEMPTED`, never sent to Telegram (a restore sends nothing to Telegram, and the
+archive holds every imported customer). Download them from the history like any local archive.
+
+**A `deliver: false` run announces nothing.** Its `backup.run_ok` / `backup.run_failed` (and a
+cleanup condition) are recorded on the operational-event writer WITHOUT the projection to the
+operations group, so the run condition opens and closes as for any run but no Telegram message is
+queued; and it does not touch the delivery condition at all — "not attempted on purpose" neither
+opens `backup.delivery_failed` nor closes one as "not configured".
+
+**Restoring the protective backup closes the import it protected.** That backup is taken while the
+import is APPROVED, so the restored database carries the import row. Right after the cutover the
+recovery executor closes every unfinished import created before it (`CANCELLED`,
+`SUPERSEDED_BY_RESTORE`, key erased, lease released); the Mirza executor does the same on its own
+ticks as a backstop. Nothing is re-imported, and later restores and uploads are not blocked.
 
 ## The Recovery Kit — keep one, apart from the backups
 

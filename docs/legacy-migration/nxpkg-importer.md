@@ -321,6 +321,45 @@ and adapters as §4 — with these differences:
   (`CustomerImported`, the review queue's change), no customer notification is created, and the
   RickPanel sees GETs and the token exchange only — asserted after a full import and a relay pass.
 
+### 10a. Review hardening (Phase 7 review)
+
+- **A restore closes what it brought back (H1).** After a NEXA restore's cutover, every
+  non-terminal import created before it is closed (`CANCELLED` / `SUPERSEDED_BY_RESTORE`, key
+  erased) by the recovery executor, and again by the Mirza executor's tick (backstop, also when the
+  recovery's sweep failed). Restoring the protective backup therefore never re-imports.
+- **The image creates `/var/lib/nexa/legacy-migration` (H2)** for the node user, 0700.
+- **The freeze is bounded (H3).** Every APPLYING attempt is counted BEFORE anything can throw (the
+  first one in the APPROVED → APPLYING update), so a step-directory, key, read-set, unwired-port or
+  unclassified error — and a `RUN_CONFLICT` — reaches `LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS` (5) and
+  FAILS the import, lifting the freeze. An attempt starting more than 48 h after the approval is
+  failed too (`LEGACY_MIGRATION_APPLY_WINDOW_MS`; never mid-attempt).
+- **One lock for the two confirmations (M1).** `approve` and the NEXA restore's `confirm` take the
+  same transaction-scoped advisory lock (`restore-exclusion.ts`) and read the other's state inside
+  their transaction. The recovery executor always claims a confirmed restore and, if a Mirza import
+  holds the installation, fails it at once (`recovery.confirmation_invalid`); the import side waits
+  with the blocker `RECOVERY_ACTIVE` shown.
+- **The acknowledgement is decided once (M3)**, by `TARGET` before the first write; `APPLY` and
+  every resume trust that decision, so a partly written import is never failed for it.
+- **One APPLYING import per installation (M4):** blocker `ANOTHER_IMPORT_APPLYING` before the
+  protective backup, and the partial unique index `legacy_nxpkg_imports_one_applying_idx` (0246).
+- **Approval TTL.** An import APPROVED for more than `LEGACY_MIGRATION_APPROVAL_TTL_MS` (24 h)
+  without starting is failed `APPROVAL_EXPIRED`, nothing written.
+- **The cutover approval an import recorded is not revoked when the import ends without writes.**
+  Harmless by construction: it binds the exact uploaded file (`finalDumpSha256`), its source and
+  read-set fingerprints; a later import of that same file still needs its own dry run, approval
+  (and on the restore page its own confirmation), and the fresh-target guard still decides. It is
+  visible at `/legacy-cutover` and the owner may revoke it there.
+- **What `targetAcknowledgement` proves.** The page echoes the value the capabilities returned, so
+  it proves only that the client read this installation's capabilities before confirming — not an
+  independent operator act like the CLI's environment variable. The owner's CRITICAL permission,
+  the typed phrase and the digest binding are what authorise; the acknowledgement guards against a
+  confirmation built for another installation or tenant.
+- **Upgrading onto 0245 with an import APPLYING.** 0245's CHECK requires a protective backup id on
+  every APPLYING row, so an installation upgraded from a pre-Phase-7 release while an import is
+  APPLYING would fail that migration (and `botctl` rolls back). Let the import finish (or fail)
+  before upgrading; no installation is known to be in that state (the feature was never deployed).
+- The recovery role's Mirza loop ticks at start, so the role's heartbeat is fresh at once.
+
 Tests: `tests/unit/legacy-migration.test.ts`, `tests/unit/legacy-migration-write-freeze.test.ts`,
 `tests/integration/legacy-migration-nxpkg.test.ts` (the production-like restore-page case),
 `tests/integration/legacy-migration-restore-page.test.ts` (the recovery role's executor, the
