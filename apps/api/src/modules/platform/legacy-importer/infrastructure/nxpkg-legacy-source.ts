@@ -20,6 +20,12 @@ import {
   type NxpkgSourceCatalog,
 } from '../application/nxpkg-source-catalog.js';
 import {
+  NXPKG_COVERAGE_PATH,
+  classifyFromCoverage,
+  parseNxpkgCoverage,
+  type NxpkgCoverageEntry,
+} from '../application/nxpkg-table-accounting.js';
+import {
   EvidenceUnsupported,
   LEGACY_IDENTIFIER_PATTERN,
   LEGACY_OPTIONAL_COLUMNS,
@@ -124,6 +130,8 @@ export class NxpkgLegacySourceConnector implements LegacySourceConnector {
     private readonly release: () => Promise<void>,
     /** The opened package this connector owns (`nxpkgSourceConnector`), else null. */
     readonly pkg: NxpkgPackage | null,
+    /** `reports/coverage.json`, when the package carries one (contract >= 1.1.0). */
+    readonly coverage: ReadonlyMap<string, NxpkgCoverageEntry> | null = null,
   ) {
     this.label = identity.importId === null ? 'nxpkg package' : `nxpkg import ${identity.importId}`;
     this.descriptor = {
@@ -157,12 +165,16 @@ export class NxpkgLegacySourceConnector implements LegacySourceConnector {
         );
       }
     }
+    const coverage = files.has(NXPKG_COVERAGE_PATH)
+      ? parseNxpkgCoverage(await files.readJson(NXPKG_COVERAGE_PATH))
+      : null;
     return new NxpkgLegacySourceConnector(
       files,
       catalog,
       identity,
       owned?.release ?? (() => Promise.resolve()),
       owned?.pkg ?? null,
+      coverage,
     );
   }
 
@@ -194,7 +206,7 @@ export class NxpkgLegacySourceConnector implements LegacySourceConnector {
 
   open(): Promise<LegacySourceSession> {
     if (this.closed) return Promise.reject(new Error('the nxpkg source is closed'));
-    const { catalog, files, descriptor } = this;
+    const { catalog, files, descriptor, coverage } = this;
     let closed = false;
     const live = () => {
       if (closed || this.closed) throw new Error('the nxpkg session is closed');
@@ -275,6 +287,13 @@ export class NxpkgLegacySourceConnector implements LegacySourceConnector {
             })),
           ),
         );
+      },
+      packageClassification: (table: string) => {
+        live();
+        if (coverage === null) return null;
+        const described = catalog.tables.find((t) => t.name === table);
+        if (described === undefined) return null;
+        return classifyFromCoverage(coverage.get(table), described.rows);
       },
       countRows: (table: string) => {
         live();

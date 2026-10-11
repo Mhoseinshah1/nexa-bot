@@ -13,6 +13,7 @@ import {
 import { LegacyMigrationExecutor } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
 import { NxpkgMigrationAdapters } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters';
 import { decideLegacyUser } from '../../apps/api/src/modules/platform/legacy-importer/application/decisions';
+import { compareKeyBytes } from '../../apps/api/src/modules/platform/legacy-importer/application/source-port';
 import { classifyLegacyUserStatus } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import {
   TARGET_ACK_ENV,
@@ -208,6 +209,12 @@ describe('legacy migration: the executor over a real package', () => {
       readonly clean?: boolean;
       readonly converter?: 'absent' | 'none' | 'customers' | 'openings_sum';
       readonly extra?: Record<string, { records: Record<string, unknown>[] }>;
+      /**
+       * §5a: two more legacy tables in the source catalogue, as a real backup has —
+       * `Payment_report` (history) and `admin` (excluded, secret) — with the converter's
+       * `reports/coverage.json` (`coverage: true`) or without it.
+       */
+      readonly historyTables?: { readonly coverage: boolean };
     } = {},
   ): Promise<{ path: string; keyFileText: string }> {
     const built = buildSyntheticLegacyDataset();
@@ -248,6 +255,60 @@ describe('legacy migration: the executor over a real package', () => {
             }
           : dataset;
     const parts = snapshotOfDataset(source as never);
+    const coverageFiles: Record<string, { json: unknown }> = {};
+    if (options.historyTables !== undefined) {
+      const catalogTables = parts.catalog['tables'] as Record<string, unknown>[];
+      const column = (name: string, dataType: string, ordinal: number) => ({
+        column: name,
+        data_type: dataType,
+        ordinal,
+        charset: dataType === 'varchar' ? 'utf8mb4' : null,
+      });
+      const extraTable = (name: string, rows: number) => ({
+        name,
+        table_type: 'BASE TABLE',
+        storage_engine: 'InnoDB',
+        charset: 'utf8mb4',
+        collation: 'utf8mb4_general_ci',
+        rows,
+        columns: [column('id', 'int', 1), column('note', 'varchar', 2)],
+      });
+      catalogTables.push(extraTable('Payment_report', 3), extraTable('admin', 1));
+      catalogTables.sort((a, b) => compareKeyBytes(String(a['name']), String(b['name'])));
+      if (options.historyTables.coverage) {
+        const line = (table: Record<string, unknown>, over: Record<string, unknown>) => ({
+          table: table['name'],
+          rows: table['rows'],
+          exported: 0,
+          archived: 0,
+          review: 0,
+          skipped: 0,
+          accounted_rows: table['rows'],
+          ...over,
+        });
+        coverageFiles['reports/coverage.json'] = {
+          json: {
+            tables: catalogTables.map((t) =>
+              t['name'] === 'Payment_report'
+                ? line(t, {
+                    class: 'ARCHIVE',
+                    status: 'archived',
+                    archived: 3,
+                    sensitivity: 'financial',
+                  })
+                : t['name'] === 'admin'
+                  ? line(t, {
+                      class: 'EXCLUDED',
+                      status: 'excluded',
+                      skipped: 1,
+                      sensitivity: 'secret',
+                    })
+                  : line(t, { class: 'OPERATIONAL', status: 'executed', exported: t['rows'] }),
+            ),
+          },
+        };
+      }
+    }
     const C = SYNTHETIC_PANEL_CODES;
     const target = (code: string, selected: boolean) => ({
       record_type: 'legacy_panel_target',
@@ -289,6 +350,7 @@ describe('legacy migration: the executor over a real package', () => {
           ? {}
           : converterFiles(dataset, options.converter ?? 'none')),
         ...(options.extra ?? {}),
+        ...coverageFiles,
       }),
       secret: { rawKey: raw.rawKey },
       manifest: { ...READY_MANIFEST, import_id: 'abcdefabcdefabcdefabcdefabcdefab' },
@@ -640,6 +702,88 @@ describe('legacy migration: the executor over a real package', () => {
     expect(view.progress.blocker).toBeNull();
     expect(await count('customers')).toBe(8);
     expect((await row(id))?.['key_ciphertext']).toBeNull();
+  }, 300_000);
+
+  it('production-like: every legacy table is classified from the package coverage report, or the dry run is refused naming it', async () => {
+    const target = { host: 'db.internal', port: '5432', database: 'nexa' };
+    const env: { NODE_ENV: string; [TARGET_ACK_ENV]?: string } = {
+      NODE_ENV: 'production',
+      [TARGET_ACK_ENV]: targetAcknowledgement(target, TENANT),
+    };
+    const container = ctx.container;
+    const warnings: Record<string, unknown>[] = [];
+    const adapters = new NxpkgMigrationAdapters({
+      db: container.database.db,
+      importer: () => container.legacyImporter(),
+      history: () => container.legacyHistoryIngest,
+      cutover: () => container.legacyCutover,
+      uow: container.uow,
+      target,
+      guardEnv: () => env,
+      logger: { warn: (fields) => void warnings.push(fields), error: () => undefined },
+    });
+    const executor = new LegacyMigrationExecutor({
+      repository: container.legacyNxpkgImports,
+      workspaces: container.migrationWorkspaces,
+      cipher: container.cipher,
+      verifier: adapters,
+      runner: adapters,
+      freshTarget: adapters,
+      history: adapters,
+      backup: { runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }) },
+      clock: container.clock,
+      correlation: () => 'corr-prod-tables' as CorrelationId,
+      leaseOwner: 'migration:prod-tables',
+      tickIntervalMs: 1000,
+      enabled: true,
+      logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    });
+    const service = container.legacyMigration;
+    const dryRun = async (coverage: boolean) => {
+      const pkg = await writePackage({ real: true, clean: true, historyTables: { coverage } });
+      const id = await upload(pkg.path);
+      await service.setKey(tenantA, owner, id, {
+        idempotencyKey: key(),
+        keyFileText: pkg.keyFileText,
+      });
+      await executor.tick();
+      await service.setPanelBindings(tenantA, owner, id, {
+        idempotencyKey: key(),
+        bindings: [
+          { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelAId },
+          { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelBId },
+        ],
+      });
+      await service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
+      await executor.tick();
+      return detail(id);
+    };
+
+    // Without the coverage report, NEXA cannot classify Payment_report or admin: refused,
+    // and the log names the two tables (names only, never a row).
+    const refused = await dryRun(false);
+    expect(refused.status).toBe('DRY_RUN_FAILED');
+    expect(refused.errorCode).toBe('IMPORT_FAILED');
+    expect(warnings.map((w) => w['unclassified'])).toContainEqual(['Payment_report', 'admin']);
+    expect(await count('customers')).toBe(0);
+
+    // With it: Payment_report is history (ARCHIVE), admin is SECRETS_MANUAL, the inventory is
+    // COMPLETE, and every table has its own accounting line.
+    const done = await dryRun(true);
+    expect(done.status, JSON.stringify(done.errorCode)).toBe('DRY_RUN_DONE');
+    const sections = new Map(done.dryRunReport?.sections.map((x) => [x.section, x]));
+    expect(sections.get('table:ARCHIVE:Payment_report')).toMatchObject({
+      source: 3,
+      imported: 0,
+      archived: 3,
+      skipped: 0,
+      quarantined: 0,
+    });
+    expect(sections.get('table:SECRETS_MANUAL:admin')).toMatchObject({ source: 1, skipped: 1 });
+    expect(sections.get('table:SUPPORTED:user')?.source).toBeGreaterThan(0);
+    expect([...sections.keys()].filter((k) => k.startsWith('table:UNCLASSIFIED'))).toEqual([]);
+    expect(done.dryRunReport?.warnings.map((w) => w.code)).not.toContain('INVENTORY_INCOMPLETE');
+    expect(await count('customers')).toBe(0);
   }, 300_000);
 
   /** Stop sales the runbook's way (the cutover suite's helper): incident, drained panels, no gateway. */

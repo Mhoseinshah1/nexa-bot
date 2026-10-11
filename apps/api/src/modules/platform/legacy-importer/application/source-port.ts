@@ -19,6 +19,8 @@
  * column lists below are the vocabulary.
  */
 
+import type { LegacyTableClassification } from '@nexa/contracts';
+
 /**
  * The import read set, FROZEN as v1 (`legacy-source-fingerprint:v1`).
  *
@@ -215,6 +217,12 @@ export interface LegacySourceSession {
    * archive has no such table, so null. Read inside the same snapshot as the rows.
    */
   syntheticMarker(): Promise<string | null>;
+  /**
+   * A `.nxpkg` source only: the class its authenticated coverage report earns a table the
+   * frozen catalogue does not name (`nxpkg-table-accounting.ts`). Absent on every other
+   * source, where such a table stays `UNCLASSIFIED`. Never overrides a catalogue entry.
+   */
+  packageClassification?(table: string): Readonly<LegacyTableClassification> | null;
   /** Rolls the READ ONLY transaction back and releases the connection. */
   close(): Promise<void>;
 }

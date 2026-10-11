@@ -156,8 +156,36 @@ engagement (discounts, discount usage, referrals, wheel results, ad campaigns, p
 support (departments, messages, tickets, ticket messages), generic `archive/*` and
 `configuration/*`. None of them changes a balance, an order, a service or a role.
 
-Per-section counts in the final report: `source`, `imported`, `archived`, `skipped`,
-`quarantined` — from the converter's coverage plus NEXA's own map. Nothing is dropped silently.
+Per-section counts: `source`, `imported`, `archived`, `skipped`, `quarantined`. The dry run
+reports one `history:<record_type>` section per record type (every line of every history file
+counted by the ingest's validating first pass), and one `table:<NEXA class>:<table>` section per
+legacy table with the converter's own breakdown from `reports/coverage.json` (§5a). The ingest
+refuses an unknown file under `records/`, an unknown or misfiled `record_type` and any live flag;
+nothing is dropped silently.
+
+## 5a. Every legacy table accounted for (`nxpkg-table-accounting.ts`)
+
+The frozen catalogue (`LEGACY_TABLE_CLASSIFICATION`) names only the tables NEXA's read sets read
+(`user`, `invoice`, `product`, the synthetic marker). A real Mirza backup has ~50 tables, and a
+production-like import (and the cutover gate) refuses an inventory with an `UNCLASSIFIED` table.
+For a `.nxpkg` source only, and only for a table the frozen catalogue does not name, NEXA derives
+the class from the package's authenticated `reports/coverage.json` (the converter refuses to
+write a package with a non-empty uncatalogued table or with rows it did not account for):
+
+| converter class                  | condition                                                   | NEXA class       |
+| -------------------------------- | ----------------------------------------------------------- | ---------------- |
+| ARCHIVE / REVIEW / CONFIGURATION | row count equals `source/catalog.json`; every row accounted | `ARCHIVE`        |
+| EXCLUDED, sensitivity `secret`   | row count equals; nothing carried                           | `SECRETS_MANUAL` |
+| EXCLUDED, other sensitivity      | row count equals; nothing carried                           | `OWNER_DECISION` |
+| none (unknown to the converter)  | the table is EMPTY                                          | `OWNER_DECISION` |
+| anything else                    | —                                                           | `UNCLASSIFIED`   |
+
+`ARCHIVE` means read-only history (`legacy_history_records`); no read set reads such a table's
+rows from a package. A MySQL source never gets this: there a table stays `UNCLASSIFIED` until a
+reviewed commit classifies it. The dry run warns `INVENTORY_INCOMPLETE` on every target (a
+production-like one refuses, naming the unclassified tables). Pinned by
+`tests/unit/nxpkg-table-accounting.test.ts`, including the converter-written fixture package's
+50 tables (none unclassified).
 
 ## 6. Fresh target guard
 

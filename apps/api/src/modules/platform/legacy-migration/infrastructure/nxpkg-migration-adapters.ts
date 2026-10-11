@@ -14,6 +14,7 @@ import {
   type LegacyMigrationSectionCounts,
   type LegacyMigrationVerifyReport,
   type LegacyNxpkgErrorCode,
+  type LegacyTableClass,
   type TenantContext,
 } from '@nexa/contracts';
 import { and, desc, eq } from 'drizzle-orm';
@@ -60,6 +61,7 @@ import {
   nxpkgSourceConnector,
   type NxpkgLegacySourceConnector,
 } from '../../legacy-importer/infrastructure/nxpkg-legacy-source.js';
+import type { NxpkgCoverageEntry } from '../../legacy-importer/application/nxpkg-table-accounting.js';
 import {
   readOwnershipRecords,
   verifyOwnershipDecisions,
@@ -308,6 +310,9 @@ export class NxpkgMigrationAdapters
             holdChangedCategory:
               typeof holdSection?.changedCategory === 'number' ? holdSection.changedCategory : null,
             converterTotalsAbsent: absent,
+            inventoryVerdict: observed.inventoryVerdict,
+            tables: observed.tables,
+            coverage: opened.connector.coverage,
           }),
           cutover,
           planTalliesDigest:
@@ -677,10 +682,17 @@ export class NxpkgMigrationAdapters
     // package the gate will refuse at the apply.
     if (this.productionLikeTarget && inventory.inventory.verdict !== 'COMPLETE') {
       this.deps.logger.warn(
-        { importId: context.importId, verdict: inventory.inventory.verdict },
+        {
+          importId: context.importId,
+          verdict: inventory.inventory.verdict,
+          unclassified: unclassifiedTables(inventory.inventory.tables),
+        },
         'the package inventory is not complete; a production-like import would be refused',
       );
-      throw new LegacyMigrationStepFailure('IMPORT_FAILED', 'The inventory is not complete.');
+      throw new LegacyMigrationStepFailure(
+        'IMPORT_FAILED',
+        inventoryIncomplete(inventory.inventory),
+      );
     }
     if (inventory.recorded === null) {
       throw new LegacyMigrationStepFailure(
@@ -783,6 +795,8 @@ export class NxpkgMigrationAdapters
     readonly productsFingerprint: string;
     readonly invoiceArchiveFingerprint: string;
     readonly invoiceArchiveRows: number;
+    readonly inventoryVerdict: string;
+    readonly tables: readonly InventoryTableLine[];
   }> {
     const importer = this.deps.importer();
     const fresh = await freshCutoverFingerprints(importer, connector, fingerprint, {
@@ -793,12 +807,18 @@ export class NxpkgMigrationAdapters
     // The cutover gate refuses an import whose fresh inventory is not COMPLETE (every legacy
     // table classified in a reviewed commit). Said at the dry run, so no owner approves a
     // package the gate will refuse at the apply.
-    if (this.productionLikeTarget && fresh.inventory.verdict !== 'COMPLETE') {
+    if (fresh.inventory.verdict !== 'COMPLETE') {
       this.deps.logger.warn(
-        { importId: context.importId, verdict: fresh.inventory.verdict },
+        {
+          importId: context.importId,
+          verdict: fresh.inventory.verdict,
+          unclassified: unclassifiedTables(fresh.inventory.tables),
+        },
         'the package inventory is not complete; a production-like import would be refused',
       );
-      throw new LegacyMigrationStepFailure('IMPORT_FAILED', 'The inventory is not complete.');
+      if (this.productionLikeTarget) {
+        throw new LegacyMigrationStepFailure('IMPORT_FAILED', inventoryIncomplete(fresh.inventory));
+      }
     }
     // A second observation, for the row count the dry run reports (a digest read as well).
     const invoices = await importer.readInvoiceArchive({
@@ -820,6 +840,8 @@ export class NxpkgMigrationAdapters
       productsFingerprint: fresh.products.fingerprint,
       invoiceArchiveFingerprint: fresh.invoiceArchive.fingerprint,
       invoiceArchiveRows: invoices.rows.invoice,
+      inventoryVerdict: fresh.inventory.verdict,
+      tables: fresh.inventory.tables.map((t) => ({ name: t.name, class: t.class, rows: t.rows })),
     };
   }
 
@@ -1079,6 +1101,69 @@ function nonZero(counts: Readonly<Record<string, number>>): Record<string, numbe
 /** The trial plans that write an override; the rest leave NEXA's policy (or a decision) alone. */
 const TRIAL_WRITES = ['LEGACY_NO_TRIALS', 'LEGACY_TRIAL_CONSUMED', 'LEGACY_LIMIT_UNREADABLE'];
 
+interface InventoryTableLine {
+  readonly name: string;
+  readonly class: LegacyTableClass;
+  readonly rows: number | null;
+}
+
+/** The unclassified tables' NAMES (never a row): what the operator must have classified. */
+function unclassifiedTables(tables: readonly InventoryTableLine[]): string[] {
+  return tables.filter((t) => t.class === 'UNCLASSIFIED').map((t) => t.name);
+}
+
+function inventoryIncomplete(inventory: {
+  readonly verdict: string;
+  readonly tables: readonly InventoryTableLine[];
+}): string {
+  const names = unclassifiedTables(inventory.tables);
+  const listed = names.slice(0, 20).join(', ');
+  return names.length === 0
+    ? `The inventory is not complete (${inventory.verdict}).`
+    : `The inventory is not complete: ${String(names.length)} unclassified table(s): ${listed}${names.length > 20 ? ', …' : ''}.`;
+}
+
+/**
+ * One legacy table's accounting line, `table:<NEXA class>:<name>` (`nxpkg-importer.md` §5a). With the package's
+ * coverage row: the converter's own breakdown, placed by where NEXA puts it — a supported
+ * table's exported rows are imported; a history table's carried rows are archived; review
+ * rows are quarantined (a person's queue); an excluded table's rows are skipped. Without
+ * one: the row count only. An UNCLASSIFIED table's rows are all quarantined.
+ */
+function tableSection(
+  table: InventoryTableLine,
+  coverage: NxpkgCoverageEntry | undefined,
+): LegacyMigrationSectionCounts {
+  const rows = table.rows ?? 0;
+  const line = (counts: Omit<LegacyMigrationSectionCounts, 'section' | 'source'>) => ({
+    section: `table:${table.class}:${table.name}`,
+    source: rows,
+    ...counts,
+  });
+  if (table.class === 'UNCLASSIFIED') {
+    return line({ imported: 0, archived: 0, skipped: 0, quarantined: rows });
+  }
+  if (table.class === 'SECRETS_MANUAL' || table.class === 'OWNER_DECISION') {
+    return line({ imported: 0, archived: 0, skipped: rows, quarantined: 0 });
+  }
+  if (coverage === undefined) {
+    return line({ imported: 0, archived: 0, skipped: 0, quarantined: 0 });
+  }
+  return table.class === 'SUPPORTED'
+    ? line({
+        imported: coverage.exported,
+        archived: coverage.archived,
+        skipped: coverage.skipped,
+        quarantined: coverage.review,
+      })
+    : line({
+        imported: 0,
+        archived: coverage.exported + coverage.archived,
+        skipped: coverage.skipped,
+        quarantined: coverage.review,
+      });
+}
+
 /** The importer's dry run, summarised as the contract's counts. Never a row. */
 function dryRunReportOf(
   report: LegacyImportReport,
@@ -1091,6 +1176,10 @@ function dryRunReportOf(
     /** The importer's count of held invoices it would otherwise have adopted, if reported. */
     readonly holdChangedCategory: number | null;
     readonly converterTotalsAbsent: boolean;
+    /** The package inventory: every legacy table, its class and rows (§5a). */
+    readonly inventoryVerdict: string;
+    readonly tables: readonly InventoryTableLine[];
+    readonly coverage: ReadonlyMap<string, NxpkgCoverageEntry> | null;
   },
 ): Omit<LegacyMigrationDryRunReport, 'cutover' | 'planTalliesDigest'> {
   // L5: the currency is the importer's, stated — never assumed. A Fresh Migration's ledger is
@@ -1210,6 +1299,7 @@ function dryRunReportOf(
       skipped: 0,
       quarantined: 0,
     })),
+    ...extra.tables.map((t) => tableSection(t, extra.coverage?.get(t.name))),
   ];
   const reasons = hold?.reasons ?? {};
   const ownership: LegacyMigrationOwnershipSummary = {
@@ -1232,6 +1322,15 @@ function dryRunReportOf(
       ? [{ code: 'OWNERSHIP_HOLD_CHANGED_NOT_REPORTED', count: hold?.hold.size ?? 0 }]
       : []),
     ...(extra.converterTotalsAbsent ? [{ code: 'CONVERTER_TOTALS_ABSENT', count: 1 }] : []),
+    // Said on every target, not only where it refuses (a staging dry run must show it too).
+    ...(extra.inventoryVerdict === 'COMPLETE'
+      ? []
+      : [
+          {
+            code: 'INVENTORY_INCOMPLETE',
+            count: Math.max(1, extra.tables.filter((t) => t.class === 'UNCLASSIFIED').length),
+          },
+        ]),
   ].sort(byCode);
   return {
     importerVerdict: report.verdict ?? 'DRY_RUN',
