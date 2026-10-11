@@ -14141,6 +14141,19 @@ export const legacyNxpkgImports = pgTable(
     applyLegacyRunId: uuid('apply_legacy_run_id'),
     /** The standard backup requested after COMPLETED (`backup_runs.id`; no FK — rows are purged). */
     backupRunId: uuid('backup_run_id'),
+    /**
+     * Phase 7: the mandatory protective backup (`backup_runs.id`, trigger `PRE_RESTORE`,
+     * verified) taken BEFORE the import writes anything. Set in the same UPDATE that moves the
+     * import APPROVED → APPLYING, so an APPLYING row always names one and a resume never takes
+     * a second. No FK, as `backup_run_id`: backup rows are purged by retention.
+     */
+    preImportBackupRunId: uuid('pre_import_backup_run_id'),
+    /**
+     * Phase 7: the importer's target acknowledgement the OWNER's approval carried (16 hex,
+     * production-like targets only). The executor accepts it, when it is still this
+     * installation's own, in place of the process's `NEXA_LEGACY_IMPORT_TARGET_ACK`.
+     */
+    targetAck: text('target_ack'),
     progress: jsonb('progress')
       .notNull()
       .default(sql`'{}'::jsonb`),
@@ -14203,6 +14216,10 @@ export const legacyNxpkgImports = pgTable(
     check(
       'legacy_nxpkg_imports_lifecycle_check',
       sql`(finished_at IS NOT NULL) = (${enumCheck('status', LEGACY_NXPKG_TERMINAL_STATUSES)})`,
+    ),
+    check(
+      'legacy_nxpkg_imports_pre_import_backup_check',
+      sql`(target_ack IS NULL OR target_ack ~ '^[0-9a-f]{16}$') AND (status <> 'APPLYING' OR pre_import_backup_run_id IS NOT NULL)`,
     ),
     check(
       'legacy_nxpkg_imports_lease_check',

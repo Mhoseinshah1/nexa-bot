@@ -1716,6 +1716,13 @@
       "when": 1791670402008,
       "tag": "0244_legacy_run_inputs_hold_digest",
       "breakpoints": true
+    },
+    {
+      "idx": 245,
+      "version": "7",
+      "when": 1791746396788,
+      "tag": "0245_legacy_nxpkg_restore_page",
+      "breakpoints": true
     }
   ]
 }
