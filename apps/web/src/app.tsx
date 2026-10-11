@@ -60,7 +60,6 @@ import { LegacyInvoicesPage } from './pages/legacy-invoices';
 import { LegacyDebtsPage } from './pages/legacy-debts';
 import { LegacyServicesPage } from './pages/legacy-services';
 import { LegacyCutoverPage } from './pages/legacy-cutover';
-import { LegacyMigrationPage } from './pages/legacy-migration';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -200,7 +199,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/legacy-services',
   // Mirza PR6: the owner's cutover approval of one legacy snapshot.
   '/legacy-cutover',
-  // Mirza .nxpkg importer: the Fresh Migration of one converter package.
+  // Phase 7: the Mirza restore moved into «بکاپ و بازیابی»; served as a redirect so old links land.
   '/legacy-migration',
   '/extra-devices',
   '/service-locations',
@@ -494,22 +493,19 @@ export function resolve(
       title: t('web.lsr_title'),
     };
   }
-  // Mirza PR6: the owner's cutover approval (an approval imports nothing; the import reads it).
-  // Mirza .nxpkg importer: upload, verify, dry run, approve, import (the work is the server's).
+  /*
+   * Phase 7: restoring from Mirza is a restore source of «بکاپ و بازیابی ← عملیات بازیابی»
+   * (a `.nxpkg` chosen there takes the Mirza flow). The old page's path REPLACES itself with
+   * the recovery page, so a bookmark lands there and Back does not bounce into the redirect.
+   */
   if (route.path === '/legacy-migration') {
     return {
-      element: (
-        <LegacyMigrationPage
-          denied={!may('legacy.migration.view')}
-          mayManage={may('legacy.migration.manage')}
-          mayApply={may('legacy.migration.apply')}
-          mayViewPanels={may('panels.view')}
-        />
-      ),
-      crumbs: [{ label: t('web.lmg_title') }],
-      title: t('web.lmg_title'),
+      element: <RedirectPage to="/recovery" />,
+      crumbs: [{ label: t('web.nav_recovery') }],
+      title: t('web.nav_recovery'),
     };
   }
+  // Mirza PR6: the owner's cutover approval (an approval imports nothing; the import reads it).
   if (route.path === '/legacy-cutover') {
     return {
       element: (

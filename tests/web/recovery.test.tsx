@@ -11,7 +11,7 @@ import {
 } from '@nexa/contracts';
 import { RecoveryPage } from '../../apps/web/src/pages/recovery';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
-import { renderPage, stubApi } from './harness';
+import { NEXA_ARCHIVE_BYTES, renderPage, stubApi } from './harness';
 
 /**
  * The backup and recovery page.
@@ -571,9 +571,12 @@ describe('the recovery page', () => {
       ]);
       renderPage(<RecoveryPage route={route} permissions={ALL} />);
       fireEvent.change(await screen.findByLabelText('انتخاب فایل'), {
-        target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxb')] },
+        target: { files: [new File([NEXA_ARCHIVE_BYTES], 'old.nxb')] },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+      // The file's first bytes are read before the upload is offered (NEXA or Mirza).
+      const send = screen.getByRole('button', { name: 'بارگذاری' });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );
@@ -672,13 +675,16 @@ describe('the recovery page', () => {
       fireEvent.change(input, {
         target: {
           files: [
-            new File([new Uint8Array([1, 2, 3])], 'mine.nxb', {
+            new File([NEXA_ARCHIVE_BYTES], 'mine.nxb', {
               type: 'application/octet-stream',
             }),
           ],
         },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+      // The file's first bytes are read before the upload is offered (NEXA or Mirza).
+      const send = screen.getByRole('button', { name: 'بارگذاری' });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );

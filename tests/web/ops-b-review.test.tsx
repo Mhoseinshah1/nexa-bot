@@ -11,7 +11,7 @@ import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { formatNumber } from '../../apps/web/src/format';
-import { renderPage, setting, stubApi } from './harness';
+import { NEXA_ARCHIVE_BYTES, renderPage, setting, stubApi } from './harness';
 
 /**
  * The Codex review of PR #128 (WEB-OPS-B), one regression per finding. Each test here
@@ -517,12 +517,13 @@ describe('the recovery step strip after a verification fails', () => {
     );
     fireEvent.change(await screen.findByLabelText(t('web.recovery_upload_choose')), {
       target: {
-        files: [
-          new File([new Uint8Array([1, 2, 3])], 'mine.nxb', { type: 'application/octet-stream' }),
-        ],
+        files: [new File([NEXA_ARCHIVE_BYTES], 'mine.nxb', { type: 'application/octet-stream' })],
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+    // The file's first bytes are read before the upload is offered (NEXA or Mirza).
+    const send = screen.getByRole('button', { name: 'بارگذاری' });
+    await waitFor(() => expect(send).toBeEnabled());
+    fireEvent.click(send);
     fireEvent.click(await screen.findByRole('button', { name: t('web.recovery_verify') }));
     await screen.findByText('FAILED');
 

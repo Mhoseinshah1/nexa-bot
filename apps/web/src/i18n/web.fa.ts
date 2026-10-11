@@ -793,6 +793,15 @@ export const WEB_FA = {
   'web.recovery_uploading': 'در حال بارگذاری…',
   'web.recovery_upload_disabled': 'بارگذاری روی این نصب غیرفعال است.',
   'web.recovery_upload_too_large': 'این فایل از حد مجاز این نصب بزرگ‌تر است.',
+  // Phase 7: one file input, two restore sources, told apart by the file's first bytes.
+  'web.recovery_file_hint':
+    'فایل بکاپ NEXA (‎.nxb‎) یا فایل بکاپ NEXA برای بازیابی از میرزا (‎.nxpkg‎، ساخته‌شده با Mirza2Nexa).',
+  'web.recovery_file_reading': 'در حال شناختن نوع فایل…',
+  'web.recovery_file_nexa': 'بکاپ NEXA: بازیابی کامل این نصب از این آرشیو.',
+  'web.recovery_file_mirza':
+    'فایل بکاپ NEXA برای بازیابی از میرزا: مشتریان و موجودی‌ها از بستهٔ مبدل وارد می‌شوند.',
+  'web.recovery_file_unknown':
+    'این فایل نه بکاپ NEXA است و نه فایل بازیابی از میرزا. فقط فایل ‎.nxb‎ همین سامانه یا فایل ‎.nxpkg‎ ساخته‌شده با Mirza2Nexa پذیرفته می‌شود.',
   // A failure code an operator can act on, said in words (ADR-0032). The raw code
   // stays beside it in an LTR run for whoever reads the server log.
   'web.recovery_failure_foreign':
@@ -8855,27 +8864,11 @@ export const WEB_FA = {
   'web.perm_legacy_migration_apply':
     'تأیید نتیجهٔ اجرای آزمایشی و شروع واردکردن بستهٔ میرزا (کاربران و موجودی‌ها را می‌نویسد)',
   'web.perm_legacy_history_view': 'دیدن سوابق بایگانی‌شدهٔ میرزا برای یک مشتری (فقط خواندنی)',
-  // Mirza `.nxpkg` importer: the «مهاجرت از میرزا» page.
-  'web.nav_legacy_migration': 'مهاجرت از میرزا',
-  'web.lmg_title': 'مهاجرت از میرزا',
-  'web.lmg_subtitle':
-    'واردکردن بستهٔ رمزگذاری‌شدهٔ ‎.nxpkg‎ مبدل میرزا به نکسا، در هشت گام، با اجرای آزمایشی و تأیید مالک.',
+  // Mirza `.nxpkg` importer: the restore-from-Mirza flow of the recovery page (Phase 7).
   'web.lmg_banner':
-    'فقط مهاجرت تازه: نکسا باید خالی باشد (بدون مشتری، سفارش، سرویس، پرداخت یا دفتر کیف پول). هیچ چیزی برای جا باز کردن حذف نمی‌شود و هیچ سرویسی روی پنل ساخته، تمدید یا حذف نمی‌شود. کار اصلی را نقش «migration» سرور انجام می‌دهد؛ این صفحه فقط وضعیت را نشان می‌دهد.',
+    'فقط روی نصب تازه: نکسا باید خالی باشد (بدون مشتری، سفارش، سرویس، پرداخت یا دفتر کیف پول). هیچ چیزی برای جا باز کردن حذف نمی‌شود و هیچ سرویسی روی پنل ساخته، تمدید یا حذف نمی‌شود. کار اصلی را نقش بازیابی (recovery) سرور انجام می‌دهد؛ این صفحه فقط وضعیت را نشان می‌دهد.',
   'web.lmg_disabled':
     'مهاجرت از میرزا روی این نصب خاموش است (LEGACY_MIGRATION_ENABLED). مدیر سرور باید آن را برای همین مهاجرت روشن کند.',
-  'web.lmg_empty': 'هنوز بسته‌ای بارگذاری نشده است',
-  'web.lmg_empty_hint': 'بارگذاری بسته به دسترسی «مدیریت مهاجرت میرزا» نیاز دارد.',
-  'web.lmg_steps_label': 'گام‌های مهاجرت',
-  'web.lmg_step_n': 'گام {n}',
-  'web.lmg_step_upload': 'بارگذاری',
-  'web.lmg_step_verify': 'بررسی بسته',
-  'web.lmg_step_dry_run': 'اجرای آزمایشی',
-  'web.lmg_step_panels': 'پنل‌ها و مشتریان',
-  'web.lmg_step_money': 'بازبینی پول و مالکیت',
-  'web.lmg_step_approval': 'تأیید نهایی',
-  'web.lmg_step_import': 'واردکردن',
-  'web.lmg_step_report': 'گزارش، تطبیق، ممیزی و پشتیبان',
   'web.lmg_step_failed': 'ناموفق',
   'web.lmg_status': 'وضعیت',
   'web.lmg_status_uploaded': 'بارگذاری‌شده',
@@ -8936,17 +8929,11 @@ export const WEB_FA = {
   'web.lmg_fault_request': 'درخواست معتبر نیست.',
   'web.lmg_fault_not_found': 'چنین مهاجرتی پیدا نشد.',
   'web.lmg_fault_stopped': 'این نصب دیگر کار جدید نمی‌پذیرد.',
-  'web.lmg_upload_hint':
-    'فایل ‎.nxpkg‎ ساخته‌شده با مبدل میرزا. فایل رمزگذاری‌شده روی همین سرور ذخیره می‌شود و این درخواست آن را باز نمی‌کند.',
-  'web.lmg_upload_choose': 'فایل بسته',
-  'web.lmg_upload_send': 'بارگذاری بسته',
-  'web.lmg_uploading': 'در حال بارگذاری…',
   'web.lmg_file_name': 'نام فایل',
   'web.lmg_file_size': 'اندازه (بایت)',
   'web.lmg_file_sha256': 'SHA-256 فایل',
   'web.lmg_uploaded_at': 'زمان بارگذاری',
   'web.lmg_working': 'سرور هم‌اکنون روی این مهاجرت کار می‌کند؛ این صفحه خودش تازه می‌شود.',
-  'web.lmg_cancel': 'لغو مهاجرت',
   'web.lmg_cancel_applying':
     'واردکردنِ در جریان لغو نمی‌شود؛ تا پایان ادامه می‌یابد و در صورت قطعی از سر گرفته می‌شود.',
   'web.lmg_verify_hint':
@@ -8977,10 +8964,7 @@ export const WEB_FA = {
   'web.lmg_dry_run_digest': 'چکیدهٔ اجرای آزمایشی (SHA-256)',
   'web.lmg_warnings': 'هشدارها',
   'web.lmg_quarantine': 'قرنطینه',
-  'web.lmg_dry_run_needs_panels':
-    'پیش از اجرای آزمایشی، برای هر پنل بسته یک ریک‌پنل نکسا انتخاب کنید (گام ۴).',
   'web.lmg_dry_run_request': 'درخواست اجرای آزمایشی',
-  'web.lmg_dry_run_again': 'اجرای آزمایشی دوباره',
   'web.lmg_panels_hint':
     'هر پنل مقصد بسته باید به یک ریک‌پنل فعال نکسا وصل شود. هیچ سرویسی روی پنل ساخته نمی‌شود؛ سرویس‌های موجود فقط پیوند می‌خورند.',
   'web.lmg_panels_after_verify': 'پنل‌های بسته پس از بررسی بسته نمایش داده می‌شوند.',
@@ -8991,12 +8975,8 @@ export const WEB_FA = {
   'web.lmg_col_services': 'سرویس‌ها',
   'web.lmg_col_nexa_panel': 'ریک‌پنل نکسا',
   'web.lmg_choose_panel': 'انتخاب پنل…',
-  'web.lmg_panels_save': 'ذخیرهٔ انتخاب پنل‌ها',
   'web.lmg_panels_resets_dry_run': 'تغییر پنل‌ها اجرای آزمایشی فعلی را باطل می‌کند.',
   'web.lmg_customers': 'مشتریان در بسته',
-  'web.lmg_money_hint':
-    'جمع موجودی کیف پول پیش و پس از واردکردن، بدهی‌های قدیمی (که هرگز وصول نمی‌شوند) و خلاصهٔ تصمیم‌های مالکیت سرویس‌ها.',
-  'web.lmg_money_after_dry_run': 'ارقام پولی پس از اجرای آزمایشی نمایش داده می‌شوند.',
   'web.lmg_wallet_before': 'جمع موجودی پیش از واردکردن',
   'web.lmg_wallet_after': 'جمع موجودی پس از واردکردن',
   'web.lmg_wallet_customers': 'مشتریان دارای موجودی',
@@ -9018,34 +8998,15 @@ export const WEB_FA = {
   'web.lmg_decisions_send': 'بارگذاری تصمیم‌ها',
   'web.lmg_yes': 'بله',
   'web.lmg_no': 'خیر',
-  'web.lmg_approval_hint':
-    'تأیید شما به چکیدهٔ همین اجرای آزمایشی بسته است و واردکردن را شروع می‌کند.',
-  'web.lmg_approval_after_dry_run': 'تأیید پس از یک اجرای آزمایشی موفق ممکن است.',
-  'web.lmg_production_like':
-    'این پایگاه دادهٔ تولیدی به نظر می‌رسد. پیش از اجرا دو کار اپراتوری لازم است: مدیر سرور مقدار تأیید هدف را در محیط فرایند migration قرار دهد و آن را دوباره راه‌اندازی کند، و مالک تأیید انتقال نهایی را با هفت مقدار زیر ثبت کند (با فروش متوقف‌شده). این صفحه هیچ‌کدام را انجام نمی‌دهد.',
   'web.lmg_blocker_ack': 'منتظر تأیید هدف در محیط فرایند migration',
   'web.lmg_blocker_approval': 'منتظر تأیید انتقال نهایی مالک برای همین هفت مقدار',
   'web.lmg_blocker_stop_sales': 'منتظر توقف فروش (گام ۱ دستورالعمل انتقال)',
-  'web.lmg_ack_env': 'متغیر محیطی فرایند migration',
-  'web.lmg_cutover_values':
-    'این هفت مقدار را در «تأیید انتقال نهایی» ثبت کنید؛ هر مقدار دیگری تأیید را بی‌اثر می‌کند.',
-  'web.lmg_cutover_link': 'رفتن به تأیید انتقال نهایی',
   'web.lmg_approval_owner_only': 'تأیید نهایی فقط با دسترسی «اجرای مهاجرت میرزا» (مالک) ممکن است.',
   'web.lmg_approval_warning':
     'با تأیید، مشتریان، موجودی‌های افتتاحیه و پیوند سرویس‌ها نوشته می‌شوند. این کار برگشت‌پذیر نیست.',
   'web.lmg_approval_phrase': 'برای تأیید، عبارت {phrase} را تایپ کنید',
-  'web.lmg_approve': 'تأیید و شروع واردکردن',
-  'web.lmg_approved_digest': 'چکیدهٔ تأییدشده',
-  'web.lmg_approved_at': 'زمان تأیید',
-  'web.lmg_import_hint':
-    'نقش migration سرور واردکردن را انجام می‌دهد و پس از قطعی از همان مرحله ادامه می‌دهد.',
-  'web.lmg_import_after_approval': 'واردکردن پس از تأیید نهایی شروع می‌شود.',
   'web.lmg_apply_attempts': 'دفعات شروع یا ادامه',
-  'web.lmg_working_now': 'در حال کار',
   'web.lmg_resumed': 'واردکردن پس از یک قطعی از سر گرفته شد.',
-  'web.lmg_report_hint':
-    'گزارش نهایی، تطبیق کیف پول‌ها و سرویس‌ها، شمار سوابق بایگانی‌شده و پشتیبان پس از واردکردن.',
-  'web.lmg_report_after_import': 'گزارش پس از پایان واردکردن نمایش داده می‌شود.',
   'web.lmg_report_discrepancy':
     'گزارش نهایی همهٔ ناورداها را تأیید نمی‌کند؛ پیش از فروش موارد را بازبینی کنید.',
   'web.lmg_reconcile_verdict': 'نتیجهٔ تطبیق',
@@ -9065,7 +9026,56 @@ export const WEB_FA = {
   'web.lmg_col_quarantined': 'قرنطینه',
   'web.lmg_col_error': 'علت توقف',
   'web.lmg_none': 'هیچ',
-  'web.lmg_history_title': 'مهاجرت‌های پیشین',
+  'web.lmg_history_title': 'بازیابی‌های پیشین از میرزا',
+  // Phase 7: the Mirza restore inside «بکاپ و بازیابی ← عملیات بازیابی».
+  'web.mrz_steps_label': 'گام‌های بازیابی از میرزا',
+  'web.mrz_step_upload': 'بارگذاری',
+  'web.mrz_step_review': 'بررسی',
+  'web.mrz_step_confirm': 'تأیید بازیابی',
+  'web.mrz_step_run': 'اجرا و نتیجه',
+  'web.mrz_no_permission':
+    'شما اجازهٔ بازیابی از میرزا را ندارید (دسترسی «مدیریت مهاجرت میرزا» لازم است).',
+  'web.mrz_cancel': 'لغو این بازیابی',
+  'web.mrz_key_title': 'کلید بسته',
+  'web.mrz_key_held': 'کلید نزد سرور است:',
+  'web.mrz_verify_title': 'نتیجهٔ بررسی بسته',
+  'web.mrz_panels_title': 'نگاشت پنل‌ها',
+  'web.mrz_panels_preselected':
+    'تنها ریک‌پنل فعال این نصب از پیش انتخاب شد؛ اگر درست است ذخیره کنید.',
+  'web.mrz_panels_save': 'ذخیره و اجرای بررسی آزمایشی',
+  'web.mrz_decisions_title': 'تصمیم‌های مالکیت (اختیاری)',
+  'web.mrz_dry_run_title': 'گزارش اجرای آزمایشی',
+  'web.mrz_dry_run_after_inputs':
+    'پس از ثبت کلید و ذخیرهٔ نگاشت پنل‌ها، اجرای آزمایشی خودکار درخواست می‌شود.',
+  'web.mrz_money_title': 'کیف پول‌ها و بدهی‌ها',
+  'web.mrz_target': 'مقصد',
+  'web.mrz_target_this': 'همین نصب NEXA (همین پایگاه داده و همین مستأجر)',
+  'web.mrz_target_production_like': 'شبیه محیط عملیاتی',
+  'web.mrz_target_ack': 'تأیید مقصد (چکیده، نه رمز)',
+  'web.mrz_protective_title': 'پیش از هر نوشتن، یک بکاپ محافظ گرفته می‌شود',
+  'web.mrz_protective_body':
+    'سرور پیش از واردکردن، یک بکاپ کامل و راستی‌آزمایی‌شده از همین نصب می‌گیرد؛ اگر نشود، چیزی وارد نمی‌شود. در طول واردکردن نصب هیچ تغییر دیگری نمی‌پذیرد و هیچ پیامی به مشتریان یا پنل‌ها فرستاده نمی‌شود. برای برگرداندن، همان بکاپ محافظ را در همین صفحه بازیابی کنید.',
+  'web.mrz_confirm_button': 'تأیید و شروع بازیابی از میرزا',
+  'web.mrz_fault_target_ack':
+    'تأیید مقصد با این نصب یکی نیست. صفحه را تازه کنید و دوباره تأیید کنید. چیزی تأیید نشد.',
+  'web.mrz_fault_recovery_active':
+    'یک بازیابی دیگر روی این نصب در جریان است؛ پس از پایان آن دوباره تأیید کنید. چیزی تأیید نشد.',
+  'web.mrz_error_pre_import_backup':
+    'بکاپ محافظ پیش از واردکردن گرفته یا راستی‌آزمایی نشد؛ هیچ داده‌ای وارد نشد. وضعیت بکاپ را در بالای همین صفحه بررسی کنید و دوباره بارگذاری کنید.',
+  'web.mrz_run_frozen':
+    'بازیابی در جریان است. تا پایان آن، این نصب تغییر دیگری نمی‌پذیرد؛ این صفحه خودش تازه می‌شود.',
+  'web.mrz_run_protective': 'بکاپ محافظ',
+  'web.mrz_run_import': 'واردکردن',
+  'web.mrz_run_reconcile': 'تطبیق',
+  'web.mrz_run_report': 'گزارش',
+  'web.mrz_run_backup': 'بکاپ پس از واردکردن',
+  'web.mrz_run_in_progress': 'در جریان',
+  'web.mrz_protective_run': 'شناسهٔ بکاپ محافظ',
+  'web.mrz_result_title': 'نتیجه',
+  'web.mrz_result_ok': 'بازیابی از میرزا کامل شد و تطبیق برقرار است.',
+  'web.mrz_result_failed': 'بازیابی از میرزا ناموفق بود.',
+  'web.mrz_undo_hint':
+    'برای برگرداندن این بازیابی، بکاپ محافظ بالا را از تاریخچهٔ بکاپ‌ها دریافت و در همین بخش بازیابی کنید.',
   'web.lco_title': 'تأیید انتقال نهایی',
   'web.lco_subtitle':
     'تأیید مالک برای واردکردن یک نسخهٔ منجمد از پایگاه ربات قدیمی (میرزا)، بسته به هفت مقدار دقیق.',
