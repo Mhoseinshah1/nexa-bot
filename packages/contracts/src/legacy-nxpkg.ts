@@ -118,6 +118,17 @@ export const LEGACY_NXPKG_ERROR_CODES = [
    * `PRE_RESTORE` trigger, verified) did not succeed. Nothing was imported.
    */
   'PRE_IMPORT_BACKUP_FAILED',
+  /**
+   * A NEXA restore replaced the database after this import was created: the row came back
+   * from the restored backup and is not continued (it would re-import, or hold the
+   * installation). Nothing of it is applied.
+   */
+  'SUPERSEDED_BY_RESTORE',
+  /**
+   * The owner's approval was not acted on within `LEGACY_MIGRATION_APPROVAL_TTL_MS`: an
+   * approval means "now", not "whenever". Nothing was written; approve a new dry run.
+   */
+  'APPROVAL_EXPIRED',
   /** The operator cancelled the import. */
   'CANCELLED',
 ] as const;

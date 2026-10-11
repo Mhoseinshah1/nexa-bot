@@ -117,6 +117,13 @@ export type LegacyMigrationHttpErrorCode =
  */
 export const LEGACY_MIGRATION_APPROVAL_PHRASE = 'IMPORT MIRZA';
 
+/**
+ * How long an approval may wait in APPROVED before the executor starts it. Past it the import
+ * is FAILED `APPROVAL_EXPIRED` with nothing written (an approval read days ago is not the
+ * owner's decision about today's installation). 24 hours.
+ */
+export const LEGACY_MIGRATION_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+
 /** The ownership decisions file ceiling (a JSON document, never a package). */
 export const LEGACY_MIGRATION_DECISIONS_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -391,6 +398,10 @@ export const LEGACY_MIGRATION_BLOCKERS = [
   'TARGET_ACK_MISSING',
   'CUTOVER_APPROVAL_MISSING',
   'STOP_SALES_NOT_ACTIVE',
+  /** A NEXA restore is confirmed and unfinished: the import waits, APPROVED, until it ends. */
+  'RECOVERY_ACTIVE',
+  /** Another import (any tenant) is APPLYING: one installation-wide freeze at a time. */
+  'ANOTHER_IMPORT_APPLYING',
 ] as const;
 export type LegacyMigrationBlocker = (typeof LEGACY_MIGRATION_BLOCKERS)[number];
 
