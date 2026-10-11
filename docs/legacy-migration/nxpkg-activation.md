@@ -35,6 +35,14 @@ non-production; synthetic packages are allowed there and refused on a production
 Fake RickPanels on `127.0.0.1` answer only GET and the token exchange; tests assert provider
 writes = 0.
 
+### 2a. Rehearsal with a real backup (isolated)
+
+Before any activation, the operator rehearses with a real converted backup on a separate
+machine: [`nxpkg-real-rehearsal.md`](nxpkg-real-rehearsal.md) and the kit in
+`deploy/rehearsal/` (own Compose project and database, no route to the internet, a read-only
+RickPanel stand-in, the `migration` role, the same production gates). What moves where, and
+what is not supported: [`nxpkg-coverage.md`](nxpkg-coverage.md).
+
 ## 3. Future activation (only after the owner's separate approval)
 
 1. Deploy a release containing this code to a **new, empty** NEXA installation (never the current

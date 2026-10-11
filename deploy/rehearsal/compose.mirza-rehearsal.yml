@@ -1,0 +1,183 @@
+# The ISOLATED Mirza → NEXA migration rehearsal. NOT a deployment, never production,
+# never the current staging. Read docs/legacy-migration/nxpkg-real-rehearsal.md first.
+#
+# Applied as a second `-f` over the production file, so every container is the production
+# definition (non-root, no capabilities, no privileged, digest-pinned image) with exactly
+# the differences below. `deploy/rehearsal/mirza-rehearsal.sh` is the only supported way to
+# run it; it always invokes
+#
+#   docker compose --env-file <rehearsal dir>/deploy.env \
+#     -f deploy/compose.yml -f deploy/rehearsal/compose.mirza-rehearsal.yml ...
+#
+# What makes it isolated — each line is a rule the unit test
+# tests/unit/mirza-rehearsal-compose.test.ts reads back:
+#
+#   1. Its OWN project name, so its own containers, volumes and networks: nothing is shared
+#      with an installation named `nexa` on the same Docker host, and its database is a new,
+#      empty one (`nexa_mirza_rehearsal`, created by its own PostgreSQL container).
+#   2. NO INTERNET EGRESS from any NEXA process. `api` is on `front` (internal) instead of
+#      `edge`; `worker` is on `data` alone; `migration` on `data` and `panelsim`. All three
+#      networks are `internal: true`. Telegram, a real panel, an FX site, an AI provider: none
+#      is reachable, whatever a setting says.
+#   3. The roles that act outside NEXA do not run: `provisioner` (creates and changes panel
+#      accounts), `monitor` (dials panels on a timer), `assistant` (calls an AI provider) and
+#      `recovery` (replaces databases). They are behind a profile nothing enables.
+#   4. The only panel is the read-only RickPanel stand-in (rickpanel-standin.mjs) on
+#      `panelsim`, which refuses and counts every write.
+#   5. The only published port is Caddy's HTTPS on 127.0.0.1 (a browser on this machine);
+#      nothing listens on another interface.
+
+name: nexa-mirza-rehearsal
+
+services:
+  api:
+    networks: !override
+      - data
+      - front
+      - panelsim
+    volumes:
+      - legacymigration:/var/lib/nexa/legacy-migration
+
+  worker:
+    # `data` alone: the notification dispatcher (disabled in nexa.env as well) has no route
+    # to Telegram, so even a bot somebody connected by mistake could message nobody.
+    networks: !override
+      - data
+
+  # The `migration` process role (apps/api/src/main.migration.ts), the one that verifies a
+  # package, runs the dry run and the import, reconciles, reports and takes the standard
+  # backup. The same image and the same restrictions as every application role.
+  migration:
+    image: ${NEXA_IMAGE:?NEXA_IMAGE must be an image digest reference}
+    restart: unless-stopped
+    init: true
+    command: ['node', 'dist/main.migration.js']
+    env_file:
+      - ${NEXA_CONFIG_DIR:?NEXA_CONFIG_DIR must name the rehearsal directory}/nexa.env
+      # NEXA_LEGACY_IMPORT_TARGET_ACK only (`mirza-rehearsal.sh set-target-ack`): the
+      # production guard reads it from THIS process's environment.
+      - ${NEXA_CONFIG_DIR:?NEXA_CONFIG_DIR must name the rehearsal directory}/migration.env
+    environment:
+      NEXA_DATA_SUBNET: ${NEXA_DATA_SUBNET:?NEXA_DATA_SUBNET must be set}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - data
+      - panelsim
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backups:/var/lib/nexa/backups
+      - recovery:/var/lib/nexa/recovery
+      - legacymigration:/var/lib/nexa/legacy-migration
+    healthcheck:
+      # The same shape as every role: the heartbeat file is younger than three intervals.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const fs=require('fs');const p=process.env.LEGACY_MIGRATION_HEARTBEAT_PATH||'/tmp/nexa-migration.heartbeat';const i=Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS);const max=(Number.isFinite(i)&&i>0?i:10000)*3;try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=max?0:1)}catch{process.exit(1)}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  # The read-only RickPanel stand-in. The NEXA image's own Node runs the script, mounted
+  # read-only; it holds no NEXA configuration and is reachable only on `panelsim`, at a fixed
+  # address the operator registers as the panel (`mirza-rehearsal.sh status` prints it).
+  rickpanel-standin:
+    image: ${NEXA_IMAGE:?NEXA_IMAGE must be an image digest reference}
+    restart: unless-stopped
+    init: true
+    entrypoint: ['node']
+    command: ['/rehearsal/rickpanel-standin.mjs']
+    env_file:
+      - ${NEXA_CONFIG_DIR:?NEXA_CONFIG_DIR must name the rehearsal directory}/standin.env
+    environment:
+      RICKPANEL_STANDIN_PORT: '8000'
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      panelsim:
+        ipv4_address: ${NEXA_REHEARSAL_STANDIN_IP:?NEXA_REHEARSAL_STANDIN_IP must be set}
+    volumes:
+      - ${NEXA_DEPLOY_DIR:?NEXA_DEPLOY_DIR must name the checkout's deploy directory}/rehearsal/rickpanel-standin.mjs:/rehearsal/rickpanel-standin.mjs:ro
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8000/api/system').then(r=>process.exit(r.status===401?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        # Every request is one line, and `mirza-rehearsal.sh standin-check` counts them, so
+        # the log is kept large enough for two full inventory walks of a big panel.
+        max-size: '50m'
+        max-file: '10'
+
+  caddy:
+    # Plain HTTP on the container's loopback for the healthcheck, HTTPS with Caddy's own local
+    # CA for the browser, published on 127.0.0.1 only.
+    command:
+      ['caddy', 'run', '--config', '/etc/caddy-rehearsal/Caddyfile', '--adapter', 'caddyfile']
+    ports: !override
+      - '127.0.0.1:${NEXA_REHEARSAL_HTTPS_PORT:?NEXA_REHEARSAL_HTTPS_PORT must be set}:443'
+    environment:
+      NEXA_DOMAIN: localhost
+      NEXA_ACME_EMAIL: rehearsal@localhost
+    networks: !override
+      - edge
+      - front
+    volumes:
+      - ${NEXA_DEPLOY_DIR:?NEXA_DEPLOY_DIR must name the checkout's deploy directory}/rehearsal/Caddyfile.rehearsal:/etc/caddy-rehearsal/Caddyfile:ro
+
+  # Out of the rehearsal entirely (rule 3). `docker compose up` never starts a service whose
+  # profile is not enabled, and nothing enables this one.
+  monitor:
+    profiles: ['never-in-rehearsal']
+  provisioner:
+    profiles: ['never-in-rehearsal']
+  assistant:
+    profiles: ['never-in-rehearsal']
+  recovery:
+    profiles: ['never-in-rehearsal']
+
+networks:
+  # Overrides the production `data` network's subnet only through deploy.env.
+  front:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: ${NEXA_REHEARSAL_FRONT_SUBNET:?NEXA_REHEARSAL_FRONT_SUBNET must be set}
+  panelsim:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: ${NEXA_REHEARSAL_PANEL_SUBNET:?NEXA_REHEARSAL_PANEL_SUBNET must be set}
+
+volumes:
+  legacymigration:
