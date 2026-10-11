@@ -723,6 +723,57 @@ export const configSchema = z
      */
     RECOVERY_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(365),
     /**
+     * Mirza `.nxpkg` importer — Fresh Migration (`docs/legacy-migration/nxpkg-importer.md`).
+     *
+     * OFF by default, and off means off everywhere: every Web Admin route refuses and the
+     * `migration` process role claims nothing. A migration is a one-off an owner turns on
+     * for the installation that receives it, not a standing feature.
+     */
+    LEGACY_MIGRATION_ENABLED: booleanish.default(false),
+    /**
+     * Where uploaded packages live: one `0700` directory per import, the package `0600`
+     * inside it, and the `migration` role's private per-step directories for decrypted
+     * content (each deleted when its step ends). Its OWN directory, never the recovery's or
+     * the backup's: a sweep written for one must never reach another.
+     */
+    LEGACY_MIGRATION_WORK_DIR: z.string().trim().min(1).default('/var/lib/nexa/legacy-migration'),
+    /**
+     * The ceiling on an uploaded package, counted on the STREAM (a chunked request declares
+     * no length). Two gigabytes by default — a converted Mirza backup is far smaller.
+     */
+    LEGACY_MIGRATION_UPLOAD_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(64 * 1024 * 1024 * 1024)
+      .default(2 * 1024 * 1024 * 1024),
+    /** How often the `migration` role asks whether an import has work for it. */
+    LEGACY_MIGRATION_TICK_MS: z.coerce.number().int().min(1_000).max(600_000).default(15_000),
+    /**
+     * Whether a FINISHED import (any terminal state) keeps its encrypted package and its
+     * ownership decisions file on disk. Off by default: the `migration` role deletes both
+     * once the import is terminal (the backup it took and the import row are the record).
+     * Decrypted step directories are deleted whatever this says.
+     */
+    LEGACY_MIGRATION_RETAIN_PACKAGE: booleanish.default(false),
+    /**
+     * How long a sealed package key may wait in VERIFIED or DRY_RUN_DONE — states that wait
+     * on a person, not on the `migration` role — before the role erases it. The operator
+     * then gives the key again. One day by default; one minute to thirty days.
+     */
+    LEGACY_MIGRATION_KEY_IDLE_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(30 * 24 * 60 * 60_000)
+      .default(24 * 60 * 60_000),
+    /** Where the `migration` role writes its heartbeat. Its own key, like every role's. */
+    LEGACY_MIGRATION_HEARTBEAT_PATH: z
+      .string()
+      .trim()
+      .min(1)
+      .default('/tmp/nexa-migration.heartbeat'),
+    /**
      * How long a FINISHED backup run row is kept.
      *
      * A year, because the row is the only durable evidence that a backup was

@@ -63,6 +63,8 @@ import {
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
 import { CustomerCrmSection } from './customer-360-crm';
+// Mirza `.nxpkg` importer: the archived legacy history card (read only).
+import { CustomerLegacyHistoryCard } from './customer-360-legacy';
 // Roadmap B5: the workspace — attention, the newest rows, support, shortcuts.
 import {
   CustomerAttentionCard,
@@ -141,6 +143,7 @@ export function UserDetailPage({
   mayViewPayments = false,
   mayViewTickets = false,
   mayViewBusinessChats = false,
+  mayViewLegacyHistory = false,
   denied,
 }: {
   id: string;
@@ -212,6 +215,8 @@ export function UserDetailPage({
   mayViewTickets?: boolean;
   /** `business_chats.view` — the handoff inbox shortcut. */
   mayViewBusinessChats?: boolean;
+  /** `legacy.history.view` — the archived Mirza history card; not drawn without it. */
+  mayViewLegacyHistory?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -525,6 +530,7 @@ export function UserDetailPage({
                     mayManageTags={mayManageTags}
                   />
                   <TimelineCard customerId={id} mayView={mayViewAudit} />
+                  <CustomerLegacyHistoryCard customerId={id} mayView={mayViewLegacyHistory} />
                 </>
               }
               side={

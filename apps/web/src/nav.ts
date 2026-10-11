@@ -299,6 +299,17 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    // Mirza `.nxpkg` importer (`docs/legacy-migration/nxpkg-importer.md` §8): upload a
+    // converter package, verify, dry run, approve and import — the work is the `migration`
+    // role's. Its own MEDIUM view permission; approving is CRITICAL and owner-only.
+    id: 'legacy-migration',
+    path: '/legacy-migration',
+    label: 'web.nav_legacy_migration',
+    icon: 'database',
+    permission: 'legacy.migration.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'custom-service',
     path: '/custom-service',
     label: 'web.nav_custom_service',

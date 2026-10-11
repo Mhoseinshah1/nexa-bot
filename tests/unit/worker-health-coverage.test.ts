@@ -99,6 +99,7 @@ describe('worker health coverage', () => {
     const found = [...entrypoints().keys()].sort();
     expect(found).toEqual([
       'main.assistant.ts',
+      'main.migration.ts',
       'main.monitor.ts',
       'main.provisioner.ts',
       'main.recovery.ts',
@@ -162,5 +163,10 @@ describe('worker health coverage', () => {
   it('checks the recovery executor in the recovery role', () => {
     const recovery = readFileSync(join(root, 'apps/api/src/main.recovery.ts'), 'utf8');
     expect(recovery).toMatch(/recoveryExecutor\.isFresh\(/);
+  });
+
+  it('checks the legacy migration executor in the migration role', () => {
+    const migration = readFileSync(join(root, 'apps/api/src/main.migration.ts'), 'utf8');
+    expect(migration).toMatch(/migrationExecutor\.isFresh\(/);
   });
 });

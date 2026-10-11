@@ -105,6 +105,12 @@ export interface LegacyPlan {
   readonly services: readonly PlannedService[];
   readonly inventories: readonly PanelInventorySummary[];
   readonly tallies: PlanTallies;
+  /**
+   * Mirza `.nxpkg`: live invoices whose category the ownership hold changed (0 without a hold).
+   * Already reflected in `tallies.services.categories`; reported as
+   * `sections.ownershipHold.changedCategory`.
+   */
+  readonly ownershipHoldChanged: number;
 }
 
 export interface PlanTallies {
@@ -263,6 +269,15 @@ export function duplicateSourceIds(
 export interface ServiceReviewInputs {
   readonly operatorPanels?: ReadonlyMap<string, string>;
   readonly keptAsHistory?: ReadonlySet<string>;
+  /**
+   * Mirza `.nxpkg` importer (`nxpkg-ownership.ts`): invoice keys the package's ownership
+   * evidence holds back — quarantined, rejected, pending or stale decisions, unproven
+   * ownership. An invoice NEXA would adopt is decided `AMBIGUOUS_OWNERSHIP` instead (manual
+   * review, never adopted). It is still a claim on its account for the ownership rule, so a
+   * second owner's invoice naming the same account stays ambiguous too. It can only remove
+   * an invoice from adoption, never add one.
+   */
+  readonly ownershipHold?: ReadonlySet<string>;
 }
 
 export function decideAllServices(
@@ -276,6 +291,8 @@ export function decideAllServices(
   readonly services: readonly PlannedService[];
   readonly categories: Readonly<Record<ServiceCandidateCategory, number>>;
   readonly namedProductCandidates: number;
+  /** Live invoices whose category the ownership hold changed (ADOPTION_ELIGIBLE → AMBIGUOUS_OWNERSHIP). */
+  readonly ownershipHoldChanged: number;
 } {
   const userIds = new Set(snapshot.users.map((u) => u.id));
   const categories = zeroes<ServiceCandidateCategory>(SERVICE_CANDIDATE_CATEGORIES);
@@ -297,7 +314,11 @@ export function decideAllServices(
     );
     decided.push({ invoice, decision });
   }
-  const services = withOwnershipRule(decided, review.keptAsHistory ?? new Set());
+  const ruled = withOwnershipRule(decided, review.keptAsHistory ?? new Set());
+  const services = withOwnershipHold(ruled, review.ownershipHold ?? new Set());
+  const ownershipHoldChanged = services.filter(
+    (s, i) => s.decision.category !== ruled[i]?.decision.category,
+  ).length;
   let namedProductCandidates = 0;
   for (const { decision } of services) {
     categories[decision.category] += 1;
@@ -305,7 +326,7 @@ export function decideAllServices(
       namedProductCandidates += 1;
     }
   }
-  return { services, categories, namedProductCandidates };
+  return { services, categories, namedProductCandidates, ownershipHoldChanged };
 }
 
 /**
@@ -340,6 +361,29 @@ export function withOwnershipRule(
       decision: { category: 'AMBIGUOUS_OWNERSHIP', map: INVOICE_MAP_DECISIONS.AMBIGUOUS_OWNERSHIP },
     };
   });
+}
+
+/**
+ * Mirza `.nxpkg` importer — an eligible invoice the package's ownership evidence holds back is
+ * `AMBIGUOUS_OWNERSHIP`: the same category, map decision and review row as an ownership NEXA
+ * itself cannot decide. Every other category is left as it is.
+ */
+export function withOwnershipHold(
+  services: readonly PlannedService[],
+  hold: ReadonlySet<string>,
+): readonly PlannedService[] {
+  if (hold.size === 0) return services;
+  return services.map((s) =>
+    s.decision.category === 'ADOPTION_ELIGIBLE' && hold.has(s.invoice.idInvoice)
+      ? {
+          invoice: s.invoice,
+          decision: {
+            category: 'AMBIGUOUS_OWNERSHIP',
+            map: INVOICE_MAP_DECISIONS.AMBIGUOUS_OWNERSHIP,
+          },
+        }
+      : s,
+  );
 }
 
 /** The complete indexes of the production panels whose inventory read is complete. */
@@ -530,7 +574,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
       });
     }
   }
-  const { services, categories, namedProductCandidates } = decideAllServices(
+  const { services, categories, namedProductCandidates, ownershipHoldChanged } = decideAllServices(
     snapshot,
     input.mapping,
     indexes,
@@ -545,6 +589,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     shapes,
     services,
     inventories,
+    ownershipHoldChanged,
     tallies: {
       customers,
       wallet,
@@ -571,4 +616,31 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
       },
     },
   };
+}
+
+/**
+ * Mirza `.nxpkg` importer — the digest of a plan's tallies (`DRY_RUN_MISMATCH`). A dry run
+ * reports it (`sections.planTalliesDigest`); an import given the approved one recomputes the
+ * plan's tallies at its start and refuses to start on any other value. Keys sorted at every
+ * depth, a bigint as its decimal string with an `n` suffix, so the value is stable across runs
+ * and processes. Counts and sums only: no key, no person.
+ */
+export function planTalliesDigest(plan: Pick<LegacyPlan, 'tallies'>): string {
+  return sha256Hex(stableJson({ format: 'nexa-legacy-plan-tallies/v1', tallies: plan.tallies }));
+}
+
+function stableJson(value: unknown): string {
+  if (typeof value === 'bigint') return JSON.stringify(`${value.toString()}n`);
+  if (value === null || typeof value !== 'object') {
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new TypeError('a plan tally is not a finite number');
+    }
+    if (value === undefined) return 'null';
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
 }

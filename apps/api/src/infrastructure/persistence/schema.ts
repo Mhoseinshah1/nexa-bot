@@ -249,6 +249,11 @@ import {
   LEGACY_SERVICE_OUTCOMES,
   LEGACY_CUTOVER_APPROVAL_KINDS,
   LEGACY_CUTOVER_REASON_MAX_LENGTH,
+  LEGACY_HISTORY_RECORD_TYPES,
+  LEGACY_NXPKG_ERROR_CODES,
+  LEGACY_NXPKG_IMPORT_STATUSES,
+  LEGACY_NXPKG_KEY_KINDS,
+  LEGACY_NXPKG_TERMINAL_STATUSES,
   LEGACY_SERVICE_REVIEW_STATES,
   LEGACY_INVOICE_ARCHIVE_RUN_FAILURES,
   LEGACY_INVOICE_ARCHIVE_RUN_STATES,
@@ -13277,6 +13282,13 @@ export const legacyImportRunInputs = pgTable(
     }).notNull(),
     preImportCustomers: integer('pre_import_customers').notNull(),
     recordedAt: timestamptz('recorded_at').notNull(),
+    /**
+     * Mirza `.nxpkg` importer: SHA-256 of the ownership hold the run was started under (the
+     * sorted held invoice keys and the decisions file's entries digest, `ownershipHoldDigest`).
+     * NULL for a run without a hold. A resume, reconcile or report under another hold is
+     * refused, so one run is never decided under two different holds.
+     */
+    ownershipHoldDigest: text('ownership_hold_digest'),
   },
   (table) => [
     primaryKey({ name: 'legacy_import_run_inputs_pk', columns: [table.tenantId, table.runId] }),
@@ -13287,7 +13299,7 @@ export const legacyImportRunInputs = pgTable(
     }),
     check(
       'legacy_import_run_inputs_engine_check',
-      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')`,
+      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE', 'NXPKG')`,
     ),
     check(
       'legacy_import_run_inputs_hashes_check',
@@ -13295,6 +13307,10 @@ export const legacyImportRunInputs = pgTable(
     ),
     check('legacy_import_run_inputs_currency_check', sql`wallet_currency ~ '^[A-Z]{3}$'`),
     check('legacy_import_run_inputs_customers_check', sql`pre_import_customers >= 0`),
+    check(
+      'legacy_import_run_inputs_hold_digest_check',
+      sql`ownership_hold_digest IS NULL OR ownership_hold_digest ~ '^[0-9a-f]{64}$'`,
+    ),
   ],
 );
 
@@ -13353,7 +13369,7 @@ export const legacyReadSetRuns = pgTable(
     ),
     check(
       'legacy_read_set_runs_engine_check',
-      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')`,
+      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE', 'NXPKG')`,
     ),
     check('legacy_read_set_runs_counts_check', sql`table_count >= 0 AND row_count >= 0`),
     check(
@@ -13568,7 +13584,7 @@ export const legacyInvoiceArchiveRuns = pgTable(
     ),
     check(
       'legacy_invoice_archive_runs_engine_check',
-      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')`,
+      sql`source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE', 'NXPKG')`,
     ),
     check(
       'legacy_invoice_archive_runs_code_version_check',
@@ -14061,6 +14077,201 @@ export const legacyCutoverApprovalRevocations = pgTable(
     check(
       'legacy_cutover_approval_revocations_reason_check',
       sql`char_length(reason) BETWEEN 1 AND ${sql.raw(String(LEGACY_CUTOVER_REASON_MAX_LENGTH))}`,
+    ),
+  ],
+);
+
+/**
+ * Mirza `.nxpkg` importer — one uploaded package and its Fresh Migration
+ * (`docs/legacy-migration/nxpkg-importer.md` §4).
+ *
+ * The web surface uploads, records the key, the panel bindings and the decisions file, and
+ * shows progress; the `migration` process role does the work by polling this table with a
+ * lease (`claimed_by`, `lease_until`), the recovery pattern (ADR-0028). Every state change
+ * is a conditional UPDATE naming its `from` states.
+ *
+ * The package key is sealed with the installation keyring (`legacy_migration.package_key`, AAD
+ * bound to this row) and erased when the import reaches a terminal state; it is never
+ * logged, returned or audited. The reports are counts, codes and digests — `manifest_summary`
+ * carries no personal data. An APPLY is bound to `approved_dry_run_sha256`, which the owner
+ * approved under the CRITICAL `legacy.migration.apply`.
+ *
+ * At most one non-terminal import per tenant (a partial unique index). Never deleted (`0242`):
+ * it is the provenance every history record names.
+ */
+export const legacyNxpkgImports = pgTable(
+  'legacy_nxpkg_imports',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    status: text('status').notNull(),
+    /** What the browser called the file. Recorded, bounded, and acted on nowhere. */
+    fileName: text('file_name').notNull(),
+    /** Where the encrypted package lives on the installation's own disk. */
+    filePath: text('file_path').notNull(),
+    /** SHA-256 of the ENCRYPTED package as received: what verify, approve and apply bind to. */
+    fileSha256: text('file_sha256').notNull(),
+    fileBytes: bigint('file_bytes', { mode: 'bigint' }).notNull(),
+    /** From the authenticated manifest, once verified. */
+    packageImportId: text('package_import_id'),
+    packageSourceFingerprint: text('package_source_fingerprint'),
+    packageSchemaVersion: text('package_schema_version'),
+    converterVersion: text('converter_version'),
+    /** Counts and versions from the manifest. Never personal data. */
+    manifestSummary: jsonb('manifest_summary'),
+    /** The package key, sealed (`legacy_migration.package_key`). NULL once terminal. */
+    keyCiphertext: text('key_ciphertext'),
+    keyKeyId: text('key_key_id'),
+    keyKind: text('key_kind'),
+    /** The converter's `ownership-decisions.json`, when one was given (§7). */
+    decisionsFilePath: text('decisions_file_path'),
+    decisionsSummary: jsonb('decisions_summary'),
+    /** `code_panel` → NEXA panel id, as the operator chose them. */
+    panelBindings: jsonb('panel_bindings'),
+    verifyReport: jsonb('verify_report'),
+    dryRunReport: jsonb('dry_run_report'),
+    /** SHA-256 of the canonical dry-run report. */
+    dryRunSha256: text('dry_run_sha256'),
+    /** The dry-run digest the owner approved; APPLY refuses any other (`DRY_RUN_MISMATCH`). */
+    approvedDryRunSha256: text('approved_dry_run_sha256'),
+    applyReport: jsonb('apply_report'),
+    dryRunLegacyRunId: uuid('dry_run_legacy_run_id'),
+    applyLegacyRunId: uuid('apply_legacy_run_id'),
+    /** The standard backup requested after COMPLETED (`backup_runs.id`; no FK — rows are purged). */
+    backupRunId: uuid('backup_run_id'),
+    progress: jsonb('progress')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    /** A value from `LEGACY_NXPKG_ERROR_CODES`. Never a message. */
+    errorCode: text('error_code'),
+    requestedByAdminId: uuid('requested_by_admin_id').notNull(),
+    approvedByAdminId: uuid('approved_by_admin_id'),
+    approvedAt: timestamptz('approved_at'),
+    /** The worker lease: two `migration` replicas are the normal case on a rolling update. */
+    claimedBy: text('claimed_by'),
+    leaseUntil: timestamptz('lease_until'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+    finishedAt: timestamptz('finished_at'),
+  },
+  (table) => [
+    unique('legacy_nxpkg_imports_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('legacy_nxpkg_imports_one_active_idx')
+      .on(table.tenantId)
+      .where(sql`NOT (${enumCheck('status', LEGACY_NXPKG_TERMINAL_STATUSES)})`),
+    index('legacy_nxpkg_imports_poll_idx').on(table.status, table.leaseUntil),
+    index('legacy_nxpkg_imports_tenant_created_idx').on(table.tenantId, table.createdAt),
+    foreignKey({
+      name: 'legacy_nxpkg_imports_tenant_requested_by_fk',
+      columns: [table.tenantId, table.requestedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    foreignKey({
+      name: 'legacy_nxpkg_imports_tenant_approved_by_fk',
+      columns: [table.tenantId, table.approvedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    foreignKey({
+      name: 'legacy_nxpkg_imports_tenant_dry_run_fk',
+      columns: [table.tenantId, table.dryRunLegacyRunId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+    }),
+    foreignKey({
+      name: 'legacy_nxpkg_imports_tenant_apply_run_fk',
+      columns: [table.tenantId, table.applyLegacyRunId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+    }),
+    check('legacy_nxpkg_imports_status_check', enumCheck('status', LEGACY_NXPKG_IMPORT_STATUSES)),
+    check(
+      'legacy_nxpkg_imports_error_code_check',
+      sql`(${nullableEnumCheck('error_code', LEGACY_NXPKG_ERROR_CODES)}) AND ((status IN ('VERIFY_FAILED', 'DRY_RUN_FAILED', 'FAILED', 'CANCELLED')) = (error_code IS NOT NULL))`,
+    ),
+    check(
+      'legacy_nxpkg_imports_key_check',
+      sql`(${nullableEnumCheck('key_kind', LEGACY_NXPKG_KEY_KINDS)}) AND ((key_ciphertext IS NULL) = (key_key_id IS NULL)) AND (key_ciphertext IS NULL OR key_kind IS NOT NULL)`,
+    ),
+    check(
+      'legacy_nxpkg_imports_hashes_check',
+      sql`file_sha256 ~ '^[0-9a-f]{64}$' AND (dry_run_sha256 IS NULL OR dry_run_sha256 ~ '^[0-9a-f]{64}$') AND (approved_dry_run_sha256 IS NULL OR approved_dry_run_sha256 ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      'legacy_nxpkg_imports_approval_check',
+      sql`((approved_dry_run_sha256 IS NULL) = (approved_at IS NULL)) AND ((approved_at IS NULL) = (approved_by_admin_id IS NULL)) AND (status NOT IN ('APPROVED', 'APPLYING', 'COMPLETED', 'COMPLETED_WITH_DISCREPANCY') OR approved_at IS NOT NULL)`,
+    ),
+    check(
+      'legacy_nxpkg_imports_lifecycle_check',
+      sql`(finished_at IS NOT NULL) = (${enumCheck('status', LEGACY_NXPKG_TERMINAL_STATUSES)})`,
+    ),
+    check(
+      'legacy_nxpkg_imports_lease_check',
+      sql`(claimed_by IS NULL) = (lease_until IS NULL) AND (claimed_by IS NULL OR char_length(claimed_by) BETWEEN 1 AND 200)`,
+    ),
+    check(
+      'legacy_nxpkg_imports_shape_check',
+      sql`char_length(file_name) BETWEEN 1 AND 255 AND char_length(file_path) BETWEEN 1 AND 4096 AND file_bytes > 0 AND (decisions_file_path IS NULL OR char_length(decisions_file_path) BETWEEN 1 AND 4096) AND (package_import_id IS NULL OR char_length(package_import_id) BETWEEN 1 AND 200) AND (package_source_fingerprint IS NULL OR char_length(package_source_fingerprint) BETWEEN 1 AND 200) AND (package_schema_version IS NULL OR char_length(package_schema_version) BETWEEN 1 AND 64) AND (converter_version IS NULL OR char_length(converter_version) BETWEEN 1 AND 64) AND jsonb_typeof(progress) = 'object'`,
+    ),
+  ],
+);
+
+/**
+ * Mirza `.nxpkg` importer — one archived Mirza record (design §5): visible history, never
+ * operational and never money. Nothing reads it to change a balance, an order, a service or
+ * a role. `payload` is the record exactly as packaged.
+ *
+ * Written once per `(tenant, package import, idempotency key)` — a resumed ingest continues
+ * by that key and writes nothing twice. `customer_id` is resolved through
+ * `legacy_import_map` when the record is written (after the customers phase). Append-only
+ * (`0242`): never updated, never deleted.
+ */
+export const legacyHistoryRecords = pgTable(
+  'legacy_history_records',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    nxpkgImportId: uuid('nxpkg_import_id').notNull(),
+    /** The package's own `import_id` (manifest). */
+    packageImportId: text('package_import_id').notNull(),
+    recordType: text('record_type').notNull(),
+    /** `legacy:<…>`, derived from the record's provenance. */
+    idempotencyKey: text('idempotency_key').notNull(),
+    /** The legacy `user.id` the record belongs to, as packaged (PII: a Telegram id). */
+    legacyUserId: text('legacy_user_id'),
+    customerId: uuid('customer_id'),
+    occurredAt: timestamptz('occurred_at'),
+    payload: jsonb('payload').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+  },
+  (table) => [
+    unique('legacy_history_records_idempotency_key').on(
+      table.tenantId,
+      table.packageImportId,
+      table.idempotencyKey,
+    ),
+    index('legacy_history_records_customer_idx').on(table.tenantId, table.customerId),
+    index('legacy_history_records_legacy_user_idx').on(table.tenantId, table.legacyUserId),
+    index('legacy_history_records_type_idx').on(table.tenantId, table.recordType),
+    index('legacy_history_records_import_idx').on(table.tenantId, table.nxpkgImportId),
+    foreignKey({
+      name: 'legacy_history_records_tenant_import_fk',
+      columns: [table.tenantId, table.nxpkgImportId],
+      foreignColumns: [legacyNxpkgImports.tenantId, legacyNxpkgImports.id],
+    }),
+    foreignKey({
+      name: 'legacy_history_records_tenant_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    check(
+      'legacy_history_records_type_check',
+      enumCheck('record_type', LEGACY_HISTORY_RECORD_TYPES),
+    ),
+    check(
+      'legacy_history_records_shape_check',
+      sql`idempotency_key LIKE 'legacy:%' AND char_length(idempotency_key) BETWEEN 8 AND 512 AND char_length(package_import_id) BETWEEN 1 AND 200 AND (legacy_user_id IS NULL OR char_length(legacy_user_id) BETWEEN 1 AND 64) AND jsonb_typeof(payload) = 'object'`,
     ),
   ],
 );

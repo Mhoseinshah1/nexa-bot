@@ -553,4 +553,6 @@ export const CUSTOMER_360_ROUTES = {
   timeline: (id: string) => `/users/${encodeURIComponent(id)}/timeline`,
   /** Roadmap B5: the workspace summary. */
   workspace: (id: string) => `/users/${encodeURIComponent(id)}/workspace`,
+  /** Mirza `.nxpkg` importer: the archived Mirza history (`legacy.history.view`). */
+  legacyHistory: (id: string) => `/users/${encodeURIComponent(id)}/legacy-history`,
 } as const;

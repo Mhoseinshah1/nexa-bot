@@ -121,7 +121,7 @@ export const LEGACY_LIVE_STATUSES = [
 /** The table a SYNTHETIC dataset loads to say so (`tests/fixtures/legacy/synthetic-legacy.ts`). */
 export const LEGACY_SYNTHETIC_MARKER_TABLE = 'nexa_synthetic_fixture';
 
-export type LegacySourceEngine = 'MYSQL' | 'MARIADB' | 'SYNTHETIC_FIXTURE';
+export type LegacySourceEngine = 'MYSQL' | 'MARIADB' | 'SYNTHETIC_FIXTURE' | 'NXPKG';
 
 export interface LegacySchemaColumn {
   readonly table: string;
