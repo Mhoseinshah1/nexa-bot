@@ -4,19 +4,24 @@ Status: **built and tested on isolated databases only.** Production and the curr
 untouched. Nothing here may run against them until the owner approves activation separately
 (`production-gate.md`). Design: [`nxpkg-importer.md`](nxpkg-importer.md).
 
-## 1. What the operator does (simple path)
+## 1. What the operator does (simple path, Phase 7)
 
-1. Convert the Mirza backup with **Mirza2Nexa ≥ 0.6.0** on the operator's own Windows PC (contract
-   1.4.0). Choose the main panel's target as **RickPanel** («پنل مقصد در NEXA»). Optionally run the
-   bulk ownership review there and export the **sealed** `ownership-decisions.json`.
+1. Convert the Mirza backup with **Mirza2Nexa** on the operator's own Windows PC. Choose the main
+   panel's target as **RickPanel** («پنل مقصد در NEXA»). Optionally run the bulk ownership review
+   there and export the **sealed** `ownership-decisions.json`. The output is
+   `nexa-restore-mirza-<date>.nxpkg` («فایل بکاپ NEXA برای بازیابی از میرزا»).
 2. In the fresh NEXA, create the RickPanel through **Panels** (credentials are entered there, never
    taken from the package) and run its connection test.
-3. Open **«مهاجرت از میرزا»**, upload the `.nxpkg`, give the key file (or passphrase), bind the
-   package's panel code to the RickPanel, optionally upload the decisions file.
-4. Read the dry run: customers, balances, debts, services, history, warnings and quarantine. If it is
-   right, approve (typed confirmation). On a production-like target, also record the cutover
-   approval of the seven values shown and stop sales.
-5. The `migration` process imports, reconciles, writes the v2 report and takes a standard backup.
+3. Open **بکاپ و بازیابی ← عملیات بازیابی**, choose the file. The page recognises a Mirza package
+   by its first bytes and asks for its key (key file or passphrase); the panel is bound
+   automatically when exactly one ACTIVE RickPanel exists. The dry run runs by itself.
+4. Read the dry run: customers, balances, debts, services, history, warnings and quarantine. If it
+   is right, type the phrase and confirm «تأیید بازیابی». That ONE confirmation also acknowledges
+   this database (production-like targets) and records the owner's cutover approval of the seven
+   values. No incident, no server command, no environment variable.
+5. The `recovery` process takes a verified protective backup, freezes the installation (every
+   other write is refused, nothing is sent), imports, reconciles, writes the v2 report and takes a
+   standard backup. To undo: restore the protective backup on the same page.
 
 ## 2. Isolated rehearsal (what was run for this PR)
 
@@ -43,26 +48,21 @@ machine: [`nxpkg-real-rehearsal.md`](nxpkg-real-rehearsal.md) and the kit in
 RickPanel stand-in, the `migration` role, the same production gates). What moves where, and
 what is not supported: [`nxpkg-coverage.md`](nxpkg-coverage.md).
 
-## 3. Future activation (only after the owner's separate approval)
+## 3. Activation (only after the owner's separate approval)
 
 1. Deploy a release containing this code to a **new, empty** NEXA installation (never the current
    production or staging; never wipe a database to make it "fresh" — the importer refuses a
-   non-empty tenant with `FRESH_TARGET_NOT_EMPTY` and deletes nothing).
-2. Add a `migration` service to the deployment (command `node dist/main.migration.js`, health check
-   on `LEGACY_MIGRATION_HEARTBEAT_PATH`, a persistent `LEGACY_MIGRATION_WORK_DIR`, a direct
-   PostgreSQL connection — not a transaction pooler, the importer holds a session advisory lock).
-   Not added to `deploy/` in this PR.
-3. Set `LEGACY_MIGRATION_ENABLED=true` for the API and the `migration` role only for the migration
-   window; set it back to `false` afterwards.
-4. On the production-like target set `NEXA_LEGACY_IMPORT_TARGET_ACK` in the `migration` process's
-   environment to the value the page shows (guard digest of host/port/database/tenant).
-5. Upload, verify, dry run, review, approve the import (typed confirmation). The dry run
-   records nothing: the read sets the cutover approval binds are recorded when the approved
-   import starts, and the import then waits (`CUTOVER_APPROVAL_MISSING`). Record the cutover
-   approval (`/legacy-cutover`) for exactly the seven values the dry run listed, stop sales; the
-   import continues by itself.
-6. After COMPLETED: check the reconciliation (RECONCILED) and the v2 report invariants, keep the
-   standard backup the migration took, then resume sales.
+   non-empty tenant with `FRESH_TARGET_NOT_EMPTY` and deletes nothing). The release's
+   `deploy/compose.yml` already mounts the `legacymigration` volume on every app role and the
+   `recovery` service runs the executor; `LEGACY_MIGRATION_ENABLED` is on by default.
+2. Create the RickPanel in **Panels** and test its connection.
+3. Restore the Mirza file on **بکاپ و بازیابی ← عملیات بازیابی** (§1, steps 3–5).
+4. After COMPLETED: check the reconciliation (RECONCILED) and the v2 report invariants; keep the
+   protective backup and the standard backup the import took.
+
+The CLI and rehearsal path is unchanged: the `migration` role (`main.migration.ts`, the kit in
+`deploy/rehearsal/`) still accepts `NEXA_LEGACY_IMPORT_TARGET_ACK` from its own environment.
+`LEGACY_MIGRATION_ENABLED=false` is the kill switch for every role.
 
 ## 4. Recovery
 
@@ -87,8 +87,10 @@ what is not supported: [`nxpkg-coverage.md`](nxpkg-coverage.md).
   own process lock refuses it as a second writer meanwhile. Nothing to do.
 - **A failed import** (`FAILED`, `COMPLETED_WITH_DISCREPANCY`): nothing is rolled back
   automatically. Read `errorCode`, the refusal counts and the apply report (`failedSections`,
-  `failedInvariants`). Restore the backup taken **before** the import (NEXA Backup & Restore),
-  fix the cause, upload again. The importer never deletes data to retry. COMPLETED is reached only
+  `failedInvariants`). Restore the protective backup taken **before** the import
+  (`preImportBackupRunId`, NEXA Backup & Restore), fix the cause, upload again.
+  `PRE_IMPORT_BACKUP_FAILED` means that backup was not taken and verified and nothing was
+  imported. The importer never deletes data to retry. COMPLETED is reached only
   when the importer said `COMPLETED`, the reconcile is RECONCILED and the v2 report holds.
 - **The key** is erased on every terminal state, and BEFORE the post-import backup is requested
   (the backup never holds it). A key left idle in VERIFIED or DRY_RUN_DONE longer than
@@ -99,11 +101,11 @@ what is not supported: [`nxpkg-coverage.md`](nxpkg-coverage.md).
   import's encrypted package and decisions file are deleted unless
   `LEGACY_MIGRATION_RETAIN_PACKAGE=true`.
 
-### Configuration keys of the `migration` role
+### Configuration keys of the executor (`recovery` and `migration` roles)
 
 | Key                                                           | Default                                  | Meaning                                                                 |
 | ------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------- |
-| `LEGACY_MIGRATION_ENABLED`                                    | `false`                                  | the feature, for the API and the role                                   |
+| `LEGACY_MIGRATION_ENABLED`                                    | `true`                                   | the feature (kill switch: `false`), for the API and the executors       |
 | `LEGACY_MIGRATION_WORK_DIR`                                   | `/var/lib/nexa/legacy-migration`         | packages and private step directories                                   |
 | `LEGACY_MIGRATION_RETAIN_PACKAGE`                             | `false`                                  | keep a finished import's encrypted package and decisions file           |
 | `LEGACY_MIGRATION_KEY_IDLE_MS`                                | `86400000`                               | erase a key idle this long in VERIFIED / DRY_RUN_DONE (1 min … 30 days) |
@@ -113,12 +115,12 @@ what is not supported: [`nxpkg-coverage.md`](nxpkg-coverage.md).
 
 1. `freezeProofSha256` = package payload SHA-256 and `finalDumpSha256` = uploaded `.nxpkg` SHA-256
    for the cutover approval of a package import.
-2. The CRITICAL web approval standing in for the CLI's `--allow-production-target` (the env target
-   ack is still required).
+2. The CRITICAL web approval standing in for the CLI's `--allow-production-target`, and (Phase 7)
+   for the env target acknowledgement too: the approval carries it and the executor accepts it.
 3. Retention of the encrypted package and decisions files after the import — built as
    `LEGACY_MIGRATION_RETAIN_PACKAGE` (default `false`: deleted at the terminal state); the owner
    decides whether a migration window turns it on.
-4. The `migration` service in `deploy/`.
+4. ~~The `migration` service in `deploy/`~~ — Phase 7: the `recovery` role runs the executor.
 5. Existing-customer handling is moot in Fresh Migration (a non-empty target is refused); merging
    into a live NEXA stays unsupported.
 
@@ -128,7 +130,7 @@ what is not supported: [`nxpkg-coverage.md`](nxpkg-coverage.md).
 
 ۱. بکاپ میرزا را با Mirza2Nexa نسخه ۰٫۶٫۰ یا بالاتر تبدیل کنید و پنل مقصد را **RickPanel** بگذارید.
 ۲. در NEXA تازه، پنل RickPanel را از بخش «پنل‌ها» با اطلاعات ورود خودش بسازید و تست اتصال بگیرید.
-۳. در «مهاجرت از میرزا» فایل `.nxpkg` را بارگذاری کنید، کلید را وارد کنید، کد پنل را به RickPanel متصل کنید.
-۴. نتیجه اجرای آزمایشی (Dry Run) را بررسی و تأیید نهایی کنید؛ Import در پس‌زمینه انجام و پس از آن بکاپ استاندارد گرفته می‌شود.
+۳. در «بکاپ و بازیابی ← عملیات بازیابی» فایل `.nxpkg` را انتخاب کنید و کلید را وارد کنید؛ اگر فقط یک RickPanel فعال باشد، پنل خودکار انتخاب می‌شود.
+۴. نتیجه اجرای آزمایشی (Dry Run) را بررسی و با عبارت تأیید، «تأیید بازیابی» را بزنید؛ پیش از هر نوشتن یک بکاپ محافظ گرفته می‌شود، در طول بازیابی نوشتن دیگری پذیرفته نمی‌شود، و پس از آن بکاپ استاندارد گرفته می‌شود. برای برگرداندن، همان بکاپ محافظ را در همین صفحه بازیابی کنید.
 ۵. Importer فقط روی دیتابیس خالی اجرا می‌شود؛ اگر داده‌ای وجود داشته باشد متوقف می‌شود و هیچ چیزی را پاک نمی‌کند.
 ۶. فعال‌سازی روی سرور واقعی فقط پس از تأیید جداگانه مالک و طبق بخش ۳ همین سند.

@@ -492,6 +492,17 @@ uploaded archive's workspace after success.** Debris is reported on the row and
 in the operational log rather than cleaned up silently; a recovery that removed
 its own evidence would be a recovery nobody could audit.
 
+### Restoring a Mirza backup on the same page
+
+The «عملیات بازیابی» card also takes a Mirza `.nxpkg` from Mirza2Nexa (Phase 7). It is NOT a
+`.nxb` and does not replace the database: it is the Fresh Migration importer
+(`docs/legacy-migration/nxpkg-importer.md` §10), executed by this same `recovery` role, into a
+NEXA that holds no operational data yet (a non-empty installation is refused; nothing is deleted).
+Before it writes anything it takes a verified `PRE_RESTORE` backup through this pipeline
+(`preImportBackupRunId`; restoring it here undoes the import), and while it applies the whole
+installation is quiesced exactly as during a restore (`recovery.quiesced`, the relay idle). One at
+a time: a restore is not confirmed while a Mirza import is approved or applying, and the reverse.
+
 ## The Recovery Kit — keep one, apart from the backups
 
 **A `.nxb` alone is not enough to restore on a new server.** Export a Recovery

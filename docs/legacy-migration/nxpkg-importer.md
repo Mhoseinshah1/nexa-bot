@@ -142,7 +142,9 @@ any non-terminal → CANCELLED
   recorded on the row as soon as the importer returns it, before the history phase. The production guard is unchanged: on a production-like
   target the operator must provide `NEXA_LEGACY_IMPORT_TARGET_ACK` to the `migration` process and
   the existing cutover approval (`legacy_cutover_approvals`, `legacy.cutover.approve`) binds the
-  seven values; the admin page links to it at step 6. Nothing here weakens a gate.
+  seven values; the admin page links to it at step 6. Nothing here weakens a gate. (Phase 7, §10:
+  the restore page's approval carries the acknowledgement and records the cutover approval itself,
+  and the import's write freeze stands for stop-sales.)
 
 ## 5. History archive (`legacy_history_records`)
 
@@ -251,7 +253,73 @@ would also drop the invoice's claim on its account from the ownership rule.
 
 ## 8. Admin page «مهاجرت از میرزا»
 
+(Phase 7: the flow moves into «بکاپ و بازیابی ← عملیات بازیابی», §10; the steps below are the
+same API.)
+
 Steps: 1 upload · 2 verify · 3 dry run · 4 panels and customers · 5 money and ownership review ·
 6 final approval · 7 import · 8 report, reconciliation, audit and backup. Persian, RTL, mobile,
 `legacy.migration.*` permissions. Customer 360 gains a read-only «سوابق میرزا» card
 (`legacy.history.view`).
+
+## 10. Phase 7 — the restore page's second source (`recovery` role)
+
+The owner's flow has no migration page, no server command and no environment variable:
+Mirza2Nexa produces the `.nxpkg` («فایل بکاپ NEXA برای بازیابی از میرزا»), and NEXA's
+**بکاپ و بازیابی ← عملیات بازیابی** takes it beside a `.nxb`. A real `.nxb` is not possible
+(its data key is wrapped under the installation's KEK and a restore REPLACES the whole
+database; `docs/backup.md`), so the page drives this importer — the same rows, routes, executor
+and adapters as §4 — with these differences:
+
+- **Executor in the `recovery` role.** `main.recovery.ts` starts `container.migrationExecutor`
+  beside the recovery executor and its heartbeat requires both loops to be fresh.
+  `main.migration.ts` stays for the rehearsal kit; two replicas are safe (the lease).
+- **Storage.** `deploy/compose.yml` mounts the named volume `legacymigration` at
+  `/var/lib/nexa/legacy-migration` (`LEGACY_MIGRATION_WORK_DIR`) on every app role, so the api
+  (upload) and the recovery role (executor) see the same files.
+- **On by default.** `LEGACY_MIGRATION_ENABLED` defaults to `true`; `false` is the kill switch.
+  Safety does not rest on the flag: the fresh-target guard (§6), the owner-only CRITICAL
+  `legacy.migration.apply` (and `legacy.cutover.approve`), the typed phrase bound to the dry-run
+  digest, the protective backup and the write freeze below.
+- **The dry run needs no target acknowledgement** (it writes no customer and no money). A
+  synthetic package is still refused on a production-like target.
+- **One confirmation folds in the owner gates.** The approve request carries
+  `targetAcknowledgement`; on a production-like target it must equal
+  `targetAcknowledgement(target, tenant)` (`legacy_migration.target_ack_mismatch` otherwise) and
+  is stored (`legacy_nxpkg_imports.target_ack`, migration 0245). The executor's production-like
+  precheck accepts that stored value — re-derived for its own target and tenant — in place of the
+  process environment's `NEXA_LEGACY_IMPORT_TARGET_ACK` (still accepted: CLI and rehearsal).
+  The same transaction records the owner's CUTOVER approval of the dry run's seven values
+  (`LegacyCutoverService.recordImportApproval`, reason «تأیید بازیابی از صفحه بکاپ و بازیابی»,
+  reused when an identical unrevoked one exists). Its evidence is the dry run the executor
+  recorded on the row; `decideImport` still requires the read sets recorded at the apply's start.
+- **Mandatory protective backup before any write.** On claiming an APPROVED import, after the
+  target, digest, package and fresh-target checks, the executor runs `BackupService.run('PRE_RESTORE')`
+  (the recovery's emergency-backup trigger) and requires a run that SUCCEEDED with `verified_at`.
+  Its id is recorded (`pre_import_backup_run_id`, view `preImportBackupRunId`) in the SAME
+  conditional UPDATE that moves the import APPROVED → APPLYING (a CHECK requires it on every
+  APPLYING row), so a resumed import never takes a second one. Not taken and verified →
+  `FAILED` / `PRE_IMPORT_BACKUP_FAILED`, nothing written. A busy pipeline, or a confirmed
+  recovery, is not a verdict: the import waits APPROVED. Restoring that backup on the same page
+  is how the import is undone. The post-import backup is unchanged.
+- **Installation-wide write freeze while APPLYING.** The container's write gate answers
+  `legacy-migration:<id>` while any import is APPLYING, so every durable write in every process is
+  refused with `recovery.quiesced` and the outbox relay idles (nothing is dispatched to anyone
+  during the import). The one exemption is the import's own writer: the executor runs the apply
+  inside `runAsLegacyMigration(id, …)` (an `AsyncLocalStorage`), and a write passes only when the
+  freezing id is exactly that import's. Reads, readiness and the executor's own lease writes (the
+  repository writes on the pool, outside the unit of work) are unaffected.
+- **Stop-sales** holds when the tenant has an APPLYING import (`frozenByImport`), so no incident
+  is needed. A blocker met while APPLYING (a revoked approval, a changed target) FAILS the import
+  with the blocker on its progress: the freeze would refuse the very write that could clear it.
+- **Mutual exclusion with a recovery.** A restore is not confirmed while an import is APPROVED or
+  APPLYING (`recovery.legacy_migration_active`); an import is not approved
+  (`legacy_migration.recovery_active`) and not started while a recovery is confirmed and
+  unfinished.
+- **No Telegram, no panel write.** No outbox consumer subscribes to an importer event
+  (`CustomerImported`, the review queue's change), no customer notification is created, and the
+  RickPanel sees GETs and the token exchange only — asserted after a full import and a relay pass.
+
+Tests: `tests/unit/legacy-migration.test.ts`, `tests/unit/legacy-migration-write-freeze.test.ts`,
+`tests/integration/legacy-migration-nxpkg.test.ts` (the production-like restore-page case),
+`tests/integration/legacy-migration-restore-page.test.ts` (the recovery role's executor, the
+backup failure) and `tests/integration/recovery-executor.test.ts` (mutual exclusion).
