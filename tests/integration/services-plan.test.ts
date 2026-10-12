@@ -27,6 +27,8 @@ import { createTestContext, tenantA, tenantB, type TestContext } from './harness
 
 /** Enough rows that the planner has a reason to prefer an index. */
 const ROWS = 20_000;
+/** Seconds the setup waits for a concurrent snapshot to let the visibility map settle. */
+const VISIBILITY_ATTEMPTS = 90;
 
 describe('the service query plans', () => {
   let ctx: TestContext;
@@ -130,6 +132,31 @@ describe('the service query plans', () => {
         // VACUUM as well: the capacity count below is an index-only scan, which needs the
         // visibility map a live table's autovacuum keeps.
         await client.query('VACUUM ANALYZE services');
+        /*
+         * And make sure it took. VACUUM cannot mark a page all-visible while any other
+         * snapshot in the cluster is older than the rows on it — on CI's shared database an
+         * autovacuum ANALYZE of another table is enough — and a half-visible map makes the
+         * planner prefer a bitmap scan through the narrower `services_tenant_panel_idx`. The
+         * assertion below is about the index the production query picks on a settled table,
+         * so the table is settled first: VACUUM again until every page is all-visible, and
+         * fail with the reason (never pass) if a foreign snapshot outlives the bound.
+         */
+        for (let attempt = 0; ; attempt += 1) {
+          const { rows } = await client.query<{ pages: number; visible: number }>(
+            `SELECT relpages AS pages, relallvisible AS visible
+               FROM pg_class WHERE oid = 'services'::regclass`,
+          );
+          const { pages, visible } = rows[0]!;
+          if (visible >= pages) break;
+          if (attempt >= VISIBILITY_ATTEMPTS) {
+            throw new Error(
+              `services stayed ${visible}/${pages} pages all-visible: a snapshot older than ` +
+                'the setup held the visibility map back for the whole bound',
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          await client.query('VACUUM services');
+        }
       } finally {
         await client.query('RESET statement_timeout');
       }

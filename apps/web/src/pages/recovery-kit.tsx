@@ -5,7 +5,6 @@ import {
   RECOVERY_KIT_PASSPHRASE_MIN_LENGTH,
   type ImportRecoveryKitResponse,
   type InstallationKeySummary,
-  type RecoveryFailureCode,
   type PermissionKey,
 } from '@nexa/contracts';
 import {
@@ -544,15 +543,4 @@ export function kitMessage(error: unknown): string {
     return key === undefined ? error.message : t(key);
   }
   return t('web.error');
-}
-
-/**
- * A recovery failure an operator can ACT on, in words. Null for the rest, which
- * keep the code-only rendering the page always had.
- */
-export function recoveryFailureAdvice(code: RecoveryFailureCode | string | null): string | null {
-  if (code === 'recovery.archive_foreign_key') return t('web.recovery_failure_foreign');
-  if (code === 'recovery.candidate_keys_missing') return t('web.recovery_failure_keys_missing');
-  if (code === 'recovery.archive_auth_failed') return t('web.recovery_failure_auth');
-  return null;
 }
