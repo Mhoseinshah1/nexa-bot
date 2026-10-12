@@ -644,6 +644,9 @@ import {
   customerOverviewResponseSchema,
   customerServicesToggleResponseSchema,
   customerTimelineResponseSchema,
+  legacyHistoryResponseSchema,
+  type LegacyHistoryRecordType,
+  type LegacyHistoryResponse,
   customerTransferPreviewResponseSchema,
   customerTransferResponseSchema,
   type CustomerChannelExemptionRequest,
@@ -712,6 +715,19 @@ import {
   type LegacyWalletDebtResponse,
   type LegacyWalletDebtState,
   type LegacyWalletDebtSummaryResponse,
+} from '@nexa/contracts';
+// Mirza `.nxpkg` importer: the «مهاجرت از میرزا» page.
+import {
+  LEGACY_MIGRATION_ROUTES,
+  legacyMigrationCapabilitiesResponseSchema,
+  legacyMigrationImportListResponseSchema,
+  legacyMigrationImportResponseSchema,
+  type LegacyMigrationApproveRequest,
+  type LegacyMigrationCapabilitiesResponse,
+  type LegacyMigrationImportListResponse,
+  type LegacyMigrationImportResponse,
+  type LegacyMigrationKeyRequest,
+  type LegacyMigrationPanelBindingsRequest,
 } from '@nexa/contracts';
 import {
   LEGACY_CUTOVER_ROUTES,
@@ -4968,6 +4984,24 @@ export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineRespo
 }
 
 /**
+ * Mirza `.nxpkg` importer: the customer's archived Mirza history, one page, optionally one
+ * record type. `users.view` + `legacy.history.view`; personal fields arrive null unless the
+ * viewer holds `legacy.invoices.pii.view`.
+ */
+export function fetchCustomerLegacyHistory(
+  id: string,
+  query: { type?: LegacyHistoryRecordType; offset?: number; limit?: number } = {},
+): Promise<LegacyHistoryResponse> {
+  const params = new URLSearchParams();
+  if (query.type !== undefined) params.set('type', query.type);
+  if (query.offset !== undefined) params.set('offset', String(query.offset));
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  const suffix = params.toString();
+  const path = CUSTOMER_360_ROUTES.legacyHistory(id);
+  return authedGet(suffix ? `${path}?${suffix}` : path, legacyHistoryResponseSchema);
+}
+
+/**
  * Roadmap B5: what about one customer waits for a person, and their newest orders and
  * payments. Each section the viewer may not open is null; `users.view` is charged.
  */
@@ -5534,4 +5568,103 @@ export function revokeLegacyCutover(
 ): Promise<LegacyCutoverApprovalResponse> {
   const { id, ...body } = input;
   return post(LEGACY_CUTOVER_ROUTES.revoke(id), body, legacyCutoverApprovalResponseSchema);
+}
+
+// --- Mirza `.nxpkg` importer (`legacy.migration.*`) -----------------------------------------
+
+/** What the server can do: the flag, the ceilings, the approval phrase, production-likeness. */
+export function fetchLegacyMigrationCapabilities(): Promise<LegacyMigrationCapabilitiesResponse> {
+  return authedGet(LEGACY_MIGRATION_ROUTES.capabilities, legacyMigrationCapabilitiesResponseSchema);
+}
+
+/** One page of package imports, newest first (`legacy.migration.view`). Counts and codes only. */
+export function fetchLegacyMigrationImports(
+  after?: string,
+): Promise<LegacyMigrationImportListResponse> {
+  return authedGet(
+    pageOf(LEGACY_MIGRATION_ROUTES.list, after),
+    legacyMigrationImportListResponseSchema,
+  );
+}
+
+export function fetchLegacyMigrationImport(id: string): Promise<LegacyMigrationImportResponse> {
+  return authedGet(LEGACY_MIGRATION_ROUTES.detail(id), legacyMigrationImportResponseSchema);
+}
+
+/**
+ * A raw octet-stream upload, the recovery upload's shape: the `File` is the body (it streams;
+ * no multipart wrapper), and the name travels in a header the server treats as a label.
+ */
+async function uploadRaw(path: string, file: File): Promise<LegacyMigrationImportResponse> {
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'content-type': 'application/octet-stream',
+      accept: 'application/json',
+      'x-nexa-filename': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw toApiError(response.status, payload);
+  return legacyMigrationImportResponseSchema.parse(payload);
+}
+
+/** Uploads a `.nxpkg` package (`legacy.migration.manage`). Nothing is opened by the request. */
+export function uploadLegacyMigrationPackage(file: File): Promise<LegacyMigrationImportResponse> {
+  return uploadRaw(LEGACY_MIGRATION_ROUTES.upload, file);
+}
+
+/** Uploads the converter's `ownership-decisions.json` for an import. */
+export function uploadLegacyMigrationDecisions(
+  id: string,
+  file: File,
+): Promise<LegacyMigrationImportResponse> {
+  return uploadRaw(LEGACY_MIGRATION_ROUTES.decisions(id), file);
+}
+
+/** The package key or passphrase, once. Write-only: the answer says only that one is held. */
+export function setLegacyMigrationKey(
+  id: string,
+  body: LegacyMigrationKeyRequest,
+): Promise<LegacyMigrationImportResponse> {
+  return post(LEGACY_MIGRATION_ROUTES.key(id), body, legacyMigrationImportResponseSchema);
+}
+
+export function setLegacyMigrationPanelBindings(
+  id: string,
+  body: LegacyMigrationPanelBindingsRequest,
+): Promise<LegacyMigrationImportResponse> {
+  return post(LEGACY_MIGRATION_ROUTES.panelBindings(id), body, legacyMigrationImportResponseSchema);
+}
+
+export function requestLegacyMigrationDryRun(
+  id: string,
+  idempotencyKey: string,
+): Promise<LegacyMigrationImportResponse> {
+  return post(
+    LEGACY_MIGRATION_ROUTES.dryRun(id),
+    { idempotencyKey },
+    legacyMigrationImportResponseSchema,
+  );
+}
+
+/** The owner's approval of ONE dry run digest (`legacy.migration.apply`, CRITICAL). */
+export function approveLegacyMigration(
+  id: string,
+  body: LegacyMigrationApproveRequest,
+): Promise<LegacyMigrationImportResponse> {
+  return post(LEGACY_MIGRATION_ROUTES.approve(id), body, legacyMigrationImportResponseSchema);
+}
+
+export function cancelLegacyMigration(
+  id: string,
+  idempotencyKey: string,
+): Promise<LegacyMigrationImportResponse> {
+  return post(
+    LEGACY_MIGRATION_ROUTES.cancel(id),
+    { idempotencyKey },
+    legacyMigrationImportResponseSchema,
+  );
 }

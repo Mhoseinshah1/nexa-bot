@@ -174,10 +174,10 @@ export class ReadinessService {
       // administrator, the real message belongs in the log with its
       // correlation id rather than in an HTTP body that may be pasted into a
       // ticket. The response gets a fixed word.
-      this.deps.logger.error(
-        { dependency: name, err: error instanceof Error ? error.stack : String(error) },
-        'Readiness probe failed',
-      );
+      // The error OBJECT, not its stack as a string (FIX-04): the logger's
+      // redactor renders an error with its cause chain and keeps a stack's
+      // frames while it redacts the message the stack repeats.
+      this.deps.logger.error({ dependency: name, err: error }, 'Readiness probe failed');
       return {
         name,
         status: 'down',

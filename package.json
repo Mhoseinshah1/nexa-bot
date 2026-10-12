@@ -39,6 +39,7 @@
     "check:runtime": "bash scripts/check-runtime-cli.sh",
     "test:deploy": "bash tests/deploy/botctl.test.sh && bash tests/deploy/check-shell.test.sh && bash tests/deploy/release-ci-gate.test.sh",
     "test:exhaustive": "vitest run --project exhaustive",
+    "test:migration-scale": "vitest run --project migration-scale",
     "db:migrate:dev": "pnpm --filter @nexa/api db:migrate:dev",
     "db:seed:dev": "pnpm --filter @nexa/api db:seed:dev",
     "admin:bootstrap:dev": "pnpm --filter @nexa/api admin:bootstrap:dev",

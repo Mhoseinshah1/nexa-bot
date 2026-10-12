@@ -2497,10 +2497,12 @@ textarea.input,
   }
   /*
    * A link that is a row's or a value's way somewhere (a table cell, a definition, a
-   * link-styled button) is a target of its own on touch, not a line of text.
+   * card's header action, a link-styled button) is a target of its own on touch, not a
+   * line of text.
    */
   .tbl td a:not(.btn),
   .kv dd a:not(.btn),
+  .card-head .actions a:not(.btn),
   button.link {
     display: inline-flex;
     align-items: center;

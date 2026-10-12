@@ -9,6 +9,7 @@ import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { backupRuns } from '../../../../infrastructure/persistence/schema.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
+import { redactStoredText } from '../../../../infrastructure/redaction.js';
 import type {
   BackupArchiveRetentionStore,
   BackupRunRepository,
@@ -195,9 +196,11 @@ export class DrizzleBackupRunRepository
         verifiedAt: input.verifiedAt ?? null,
         deliveryState: input.deliveryState,
         deliveryAttemptedAt: input.deliveryAttemptedAt ?? null,
-        deliveryDetail: input.deliveryDetail ?? null,
+        // Redacted by content (FIX-04 S4): a transport's error text can quote the
+        // request URL, and the Telegram one carries the bot token in its path.
+        deliveryDetail: redactStoredText(input.deliveryDetail ?? null),
         failureCode: input.failureCode ?? null,
-        failureMessage: input.failureMessage ?? null,
+        failureMessage: redactStoredText(input.failureMessage ?? null),
         cleanupOk: input.cleanupOk,
         cleanupDetail: input.cleanupDetail ?? null,
       })

@@ -138,7 +138,19 @@ async function main() {
                            currency, quote, expires_at, confirmed_at, settled_at, cancelled_at, refunded_at,
                            created_at, updated_at, purpose, line_category_id)
        select gen_random_uuid(), $1, c.id, g.state, p.id, p.panel_id, p.title, p.duration_days, p.traffic_bytes,
-              p.price_amount, p.price_amount, 0, p.price_amount, 'IRT', '{}'::jsonb,
+              p.price_amount, p.price_amount, 0, p.price_amount, 'IRT',
+              -- A quote the API parses (priceQuoteWireSchema): an empty object made GET /orders a 500
+              -- ("carries a quote that is not a quote"). One BASE_PRICE step, as checkout writes.
+              jsonb_build_object(
+                'productId', p.id::text,
+                'quotedAt', to_char(g.t at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                'currency', 'IRT',
+                'finalAmount', jsonb_build_object('amountMinor', p.price_amount::text, 'currency', 'IRT'),
+                'trace', jsonb_build_array(jsonb_build_object(
+                  'step', 'BASE_PRICE', 'effect', 'REPLACES', 'ruleId', null,
+                  'ruleLabel', p.title,
+                  'amountBefore', jsonb_build_object('amountMinor', p.price_amount::text, 'currency', 'IRT'),
+                  'amountAfter', jsonb_build_object('amountMinor', p.price_amount::text, 'currency', 'IRT')))),
               case when g.state = 'AWAITING_PAYMENT' then now() + interval '30 minutes' else g.t + interval '30 minutes' end,
               g.t + interval '1 minute',
               case when g.state in ('PAID', 'REFUNDED') then g.t + interval '5 minutes' end,

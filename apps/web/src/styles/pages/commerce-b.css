@@ -651,3 +651,10 @@
   display: grid;
   gap: 8px;
 }
+
+/* FIX-12: on touch an audience segment tile, which is one label, is a 44px target. */
+@media (pointer: coarse) and (hover: none) {
+  .aud-segment {
+    min-height: var(--ctl-h);
+  }
+}

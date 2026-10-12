@@ -72,6 +72,20 @@ export interface RecoveryExecutorDeps {
   readonly backup: BackupService;
   /** Whether the installation can serve traffic, asked AFTER the cutover. */
   readonly readiness: () => Promise<{ degraded: boolean }>;
+  /**
+   * Phase 7: whether a Mirza restore (`legacy_nxpkg_imports`) is approved or applying. The
+   * confirm and the approval are serialised on one lock, so both committing is not expected;
+   * if it ever happens the import holding the installation wins: the recovery is CLAIMED and
+   * FAILED at once (`recovery.confirmation_invalid`) before anything destructive — never left
+   * unclaimed, where an unexpired RESTORE_REQUESTED would wait (and block) for ever.
+   */
+  readonly legacyMigrationActive?: () => Promise<boolean>;
+  /**
+   * Phase 7 (review H1): right after a cutover, close every unfinished Mirza import the
+   * restored database carried (created before `cutoverAt`) — a restored APPROVED row would be
+   * re-imported, and one APPLYING would freeze the installation. Returns the ids closed.
+   */
+  readonly supersedeLegacyImports?: (cutoverAt: Date) => Promise<readonly string[]>;
   readonly clock: Clock;
   readonly opsLog: OperationalEventRecorder;
   readonly scope: () => ScopeContext | null;
@@ -139,6 +153,13 @@ function rootMessage(error: unknown): string {
 export class RecoveryExecutor {
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
+  /**
+   * A CLAIMED recovery is running in this tick (Codex P2 on #258). Separate from `ticking`,
+   * which is also set across the reconcile, the reclaim and the claim queries: a tick that
+   * hung there was reported fresh for ever while the heartbeat's `SELECT 1` succeeded. Only
+   * an actual run earns the long-running exemption below.
+   */
+  private runInFlight = false;
   private lastTickAt: number | null = null;
 
   constructor(private readonly deps: RecoveryExecutorDeps) {}
@@ -182,8 +203,12 @@ export class RecoveryExecutor {
      * heartbeat, which the run refreshes itself and which stops the moment the
      * process does. So a run in flight reports fresh, and a loop between runs is
      * held to the tick interval as before.
+     *
+     * A run, not a tick: the part of a tick BEFORE a claim — the cutover journal,
+     * the reclaim, the claim queries — is held to the tick interval too, because
+     * `lastTickAt` is stamped only after the claim. A hang there goes stale.
      */
-    if (this.ticking) return true;
+    if (this.runInFlight) return true;
     if (this.lastTickAt === null) return false;
     return nowMs - this.lastTickAt <= this.deps.tickIntervalMs * 3;
   }
@@ -211,11 +236,16 @@ export class RecoveryExecutor {
 
       this.lastTickAt = this.deps.clock.now().getTime();
       if (claimed === null) return;
+      this.runInFlight = true;
       if (own !== null && awaitsReadinessAfterCutover(own)) {
         await this.resumeAfterCutover(own);
-        return;
+      } else {
+        await this.execute(claimed);
       }
-      await this.execute(claimed);
+      // A run that finished is the loop's progress. Without this, `lastTickAt` still
+      // dated from the claim, and the moment an hour-long run ended the executor read
+      // stale until the next tick — a stall reported after every long restore.
+      this.lastTickAt = this.deps.clock.now().getTime();
     } catch (error) {
       // Never fatal to the loop: a tick that throws must not end recoveries for
       // the life of the process. `lastTickAt` is deliberately NOT advanced here,
@@ -225,6 +255,7 @@ export class RecoveryExecutor {
         'recovery executor tick failed',
       );
     } finally {
+      this.runInFlight = false;
       this.ticking = false;
     }
   }
@@ -497,7 +528,31 @@ export class RecoveryExecutor {
    * continued by a process that did not watch it start, and FAILED releases the
    * quiesce while the candidate stays named on the row for an operator.
    */
+  /**
+   * Phase 7 (H1): closes the Mirza imports the restored database brought back. Never fails the
+   * recovery (the cutover is done); the migration executor sweeps the same rows on its own
+   * ticks as a backstop, and the log names what is left.
+   */
+  private async supersedeLegacyImports(recoveryId: string, cutoverAt: Date): Promise<void> {
+    if (this.deps.supersedeLegacyImports === undefined) return;
+    try {
+      const closed = await this.deps.supersedeLegacyImports(cutoverAt);
+      if (closed.length > 0) {
+        this.deps.logger.warn(
+          { recoveryId, imports: closed },
+          'closed the unfinished Mirza imports the restored database carried',
+        );
+      }
+    } catch (error) {
+      this.deps.logger.error(
+        { recoveryId, err: rootMessage(error) },
+        'could not close the Mirza imports the restored database carried',
+      );
+    }
+  }
+
   private async resumeAfterCutover(row: RecoveryRequestRow): Promise<void> {
+    if (row.cutoverAt !== null) await this.supersedeLegacyImports(row.id, row.cutoverAt);
     const heartbeat = this.startHeartbeat(row.id);
     const facts = {
       recoveryId: row.id,
@@ -821,6 +876,17 @@ export class RecoveryExecutor {
       throw new RecoveryAbort(
         'recovery.confirmation_invalid',
         'The confirmation on this request has expired. A new confirmation is a new decision.',
+      );
+    }
+    // Phase 7: a Mirza import approved or applying holds the installation. Failed here, at
+    // the claim, before the emergency backup: nothing destructive has happened.
+    if (
+      this.deps.legacyMigrationActive !== undefined &&
+      (await this.deps.legacyMigrationActive())
+    ) {
+      throw new RecoveryAbort(
+        'recovery.confirmation_invalid',
+        'A Mirza import holds this installation; this confirmation is not acted on.',
       );
     }
     if (request.workspacePath === null) {
@@ -1148,6 +1214,7 @@ export class RecoveryExecutor {
       failureCode: null,
     };
     await this.deps.requests.reassert(reasserted);
+    if (done.cutoverAt !== null) await this.supersedeLegacyImports(id, done.cutoverAt);
 
     // Keys that came back INSIDE the restored backup rather than through an
     // import here: stamped `restored_at` by the carry, and audited now, in the

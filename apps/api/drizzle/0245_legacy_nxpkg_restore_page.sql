@@ -1,0 +1,5 @@
+ALTER TABLE "legacy_nxpkg_imports" DROP CONSTRAINT "legacy_nxpkg_imports_error_code_check";--> statement-breakpoint
+ALTER TABLE "legacy_nxpkg_imports" ADD COLUMN "pre_import_backup_run_id" uuid;--> statement-breakpoint
+ALTER TABLE "legacy_nxpkg_imports" ADD COLUMN "target_ack" text;--> statement-breakpoint
+ALTER TABLE "legacy_nxpkg_imports" ADD CONSTRAINT "legacy_nxpkg_imports_pre_import_backup_check" CHECK ((target_ack IS NULL OR target_ack ~ '^[0-9a-f]{16}$') AND (status <> 'APPLYING' OR pre_import_backup_run_id IS NOT NULL));--> statement-breakpoint
+ALTER TABLE "legacy_nxpkg_imports" ADD CONSTRAINT "legacy_nxpkg_imports_error_code_check" CHECK ((error_code IS NULL OR error_code IN ('NXPKG_CONTAINER_INVALID', 'NXPKG_WRONG_KEY', 'NXPKG_TAMPERED', 'NXPKG_UNSUPPORTED_VERSION', 'NXPKG_NOT_READY', 'NXPKG_SOURCE_SNAPSHOT_MISSING', 'NXPKG_MONEY_UNIT', 'NXPKG_LIVE_FLAG', 'PANEL_TARGET_MISMATCH', 'FRESH_TARGET_NOT_EMPTY', 'PACKAGE_CHANGED', 'DRY_RUN_MISMATCH', 'DECISIONS_INVALID', 'IMPORT_FAILED', 'PRE_IMPORT_BACKUP_FAILED', 'CANCELLED')) AND ((status IN ('VERIFY_FAILED', 'DRY_RUN_FAILED', 'FAILED', 'CANCELLED')) = (error_code IS NOT NULL)));

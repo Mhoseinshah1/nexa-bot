@@ -130,6 +130,7 @@ describe('backup against a real database', () => {
       // written to the real `operational_events` table with its real dedupe and
       // recovery semantics rather than to a fake that agrees with itself.
       opsLog: context.container.opsLog,
+      quietOpsLog: context.container.opsLog,
       scope: () => ({ tenantId: SEED_IDS.tenantA as never, botInstanceId: null }),
       logger: { info() {}, warn() {}, error() {} },
       leaseOwner: overrides.leaseOwner ?? `test:${randomBytes(4).toString('hex')}`,

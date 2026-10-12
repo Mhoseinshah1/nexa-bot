@@ -53,22 +53,35 @@ describe('§2.1 the low-balance alert', () => {
 
 describe('§2.2 the wallet-credit message', () => {
   const amount = money(500_000n, 'IRT');
+  /*
+   * The top-up keeps the two approved lines. The receipt CREDITED to the wallet does not
+   * (batch 2026-10-10, brief C2.1): it is a reviewer's disposition that leaves the payment
+   * FAILED and any order AWAITING_PAYMENT, so it says the receipt was approved, the money is
+   * in the wallet, and an order it was for is still unpaid — and still never «/wallet».
+   */
+  const TOPUP_LINES =
+    '✅ پرداخت شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما اضافه شد.';
+  const RECEIPT_CREDIT_LINES =
+    '✅ رسید شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما واریز شد.\n' +
+    'این مبلغ به‌عنوان پرداخت سفارش ثبت نشده است؛ اگر رسید برای سفارشی بود، آن سفارش هنوز در انتظار پرداخت است و تا پایان مهلتش می‌توانید آن را از کیف پول پرداخت کنید.';
+  const LINES = {
+    'bot.wallet.topup_credited': TOPUP_LINES,
+    'bot.payment.receipt_credited_to_wallet': RECEIPT_CREDIT_LINES,
+  } as const;
+
   it.each(['bot.wallet.topup_credited', 'bot.payment.receipt_credited_to_wallet'] as const)(
-    '%s reads the two approved lines and nothing about /wallet',
+    '%s reads its approved lines and nothing about /wallet',
     (key) => {
       const text = rendered(key, { amount });
-      expect(text).toBe(
-        '✅ پرداخت شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما اضافه شد.',
-      );
+      expect(text).toBe(LINES[key]);
       expect(CATALOGUE_FA[key]).not.toContain('/wallet');
-      expect(CATALOGUE_FA[key]).not.toContain('این واریز به‌عنوان پرداخت سفارش ثبت نشد');
     },
   );
 
   /*
    * B14: the wallet-credit success message (an approved receipt, or a gateway top-up) ends
    * with the payment's tracking code, after exactly two blank lines — and without a code (an
-   * override, a reader not wired) it is the two lines alone, with no blank line left behind.
+   * override, a reader not wired) it is the lines alone, with no blank line left behind.
    */
   it.each(['bot.wallet.topup_credited', 'bot.payment.receipt_credited_to_wallet'] as const)(
     '%s ends with «کد پیگیری پرداخت: …» after two blank lines',
@@ -78,8 +91,7 @@ describe('§2.2 the wallet-credit message', () => {
         reference: 'c0ffee00-0000-7000-8000-000000000001:topup',
       });
       expect(text).toBe(
-        '✅ پرداخت شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما اضافه شد.' +
-          '\n\n\nکد پیگیری پرداخت: c0ffee00-0000-7000-8000-000000000001:topup',
+        LINES[key] + '\n\n\nکد پیگیری پرداخت: c0ffee00-0000-7000-8000-000000000001:topup',
       );
     },
   );

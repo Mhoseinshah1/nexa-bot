@@ -18,24 +18,31 @@ The source of truth is `packages/contracts/src/ops-log-group.ts`
 | `PAYMENTS` | 💳 پرداخت‌ها            | Payments, gateways, refunds, wallet, the exchange rate — and the financial log (WP18).                      | `payments.`, `payment.`, `refunds.`, `refund.`, `wallet.`, `gateway`, `order.refunded_undeliverable`, `fx.` |
 | `SERVICES` | 🧩 سفارش‌ها و سرویس‌ها  | What a customer bought: provisioning on a panel and the order around it.                                    | `provisioning.`, `order.`, `service.`                                                                       |
 | `PANELS`   | 🖥 پنل‌ها                | Panel health, probes and capacity.                                                                          | `panel.`                                                                                                    |
-| `BOT`      | 🤖 ربات و پیام‌رسانی    | The bots themselves: sends to customers, menus and commands, channel checks, token replacement.             | `telegram.`, `bot.`, `bot_menu.`, `channels.`                                                               |
-| `SECURITY` | 🛡 امنیت و دسترسی        | Who may do what: refusals, sign-in lock-outs, administrator changes, spam protection.                       | `access.`, `auth.`, `admin.`, `antispam.`                                                                   |
+| `BOT`      | 🤖 ربات و پیام‌رسانی    | The bots themselves: sends to customers, menus and commands, channel checks, token replacement.             | `telegram.`, `bot.`, `bot_menu.`, `channels.`, `support.`                                                   |
+| `SECURITY` | 🛡 امنیت و دسترسی        | Who may do what: refusals, sign-in lock-outs, administrator changes, spam protection.                       | `access.`, `auth.`, `admin.`, `antispam.`, `payments.gateway_webhook_`                                      |
 | `BACKUPS`  | 💾 بکاپ‌ها              | The encrypted backup archives themselves, the notice for one too large to send, and backup/recovery events. | `backup.`, `recovery.`                                                                                      |
 
 First match wins, in the order of `OPS_LOG_TOPIC_ROUTES`; `order.refunded_undeliverable`
 is listed before `order.` on purpose — a refund is the payments log's even though its
-code names the order.
+code names the order. Two more are ordered on purpose (FIX-03, batch 2026-10-10):
+`payments.gateway_webhook_` before `payments.`, because a webhook whose signature did
+not verify is a refused request — presented as SECURITY, so it is read in SECURITY, its
+recovery beside it; and `support.assistant.` (SYSTEM, beside the other process roles'
+stalls) before `support.` (BOT: business-chat updates, business connections and
+hand-offs are failures of a bot's conversations). `tests/unit/ops-error-topics.test.ts`
+pins every code in `OPS_ERROR_EVENTS` to its topic.
 
 The names are templates (`ops.group.topic_name.*`), editable in the Web Admin; a new
 name applies when a topic is next created or recreated.
 
 ## What did not get a topic, and why
 
-The owner's list also named `SUPPORT`, `BROADCAST` and `AUDIT`. None of them records
-an operational event of its own today: support and broadcasts pass the recorder only to
-record a permission DENIAL, which is `access.permission_denied` and belongs in SECURITY,
-and the audit log is a separate store (`audit_logs`) that is never projected to
-Telegram. A topic nothing routes to would be created in every group and stay empty for
+The owner's list also named `SUPPORT`, `BROADCAST` and `AUDIT`. Support's own codes
+(`support.business_*`, `support.handoff_*`) go to BOT, the bot whose conversations they
+are about; broadcasts pass the recorder only to record a permission DENIAL, which is
+`access.permission_denied` and belongs in SECURITY; and the audit log is a separate
+store (`audit_logs`) that is never projected to Telegram. A topic nothing routes to
+would be created in every group and stay empty for
 ever. Adding one later is an entry in each of the three tables above and nothing else —
 the database pins only the shape of a category key.
 
