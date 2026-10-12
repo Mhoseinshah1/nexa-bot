@@ -59,7 +59,7 @@ const PROMPT = 'سرویس را به چه کاربری می‌خواهید ان�
 const DONE = '✅ سرویس با موفقیت به کاربر مقصد منتقل شد.';
 const UNAVAILABLE =
   'انتقال این سرویس در حال حاضر ممکن نیست. سرویس باید فعال یا خاموش باشد، سرویس تست نباشد و پرداخت، درخواست یا عملیات در جریانی نداشته باشد.';
-const HEADING = '🎁 یک سرویس برای شما انتقال داده شد';
+const HEADING = '📦 یک سرویس برای شما انتقال داده شد';
 
 const systemActor = (correlationId: string): ActorContext => ({
   type: 'SYSTEM_JOB',

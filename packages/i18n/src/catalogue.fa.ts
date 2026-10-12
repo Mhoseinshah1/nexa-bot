@@ -28,8 +28,7 @@ import type { TemplateKey } from '@nexa/contracts';
 export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ping.reply': 'سلام. ربات فعال است. شناسه پیگیری: {correlationId}',
   'bot.unknown_command': 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
-  'bot.callback.stale':
-    '{icon:info} این دکمه قدیمی است یا دیگر فعال نیست. لطفاً با دکمهٔ زیر ادامه دهید.',
+  'bot.callback.stale': '{icon:info} این دکمه دیگر فعال نیست. برای ادامه، دکمهٔ زیر را بزنید.',
   'error.internal': 'خطایی رخ داد. لطفاً بعداً دوباره تلاش کنید.',
   'error.permission_denied': 'شما به این بخش دسترسی ندارید.',
 
@@ -98,11 +97,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.transfer_prompt':
     'سرویس را به چه کاربری می‌خواهید انتقال دهید؟ شناسه کاربری عددی مقصد را ارسال کنید.',
   'bot.service.transfer_confirm':
-    '🔄 انتقال سرویس\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n{icon:identity} شناسه کاربری مقصد: {recipientId}\n{icon:user} نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n{icon:warning} لینک اشتراک این سرویس تغییر نمی‌کند؛ هر کسی که لینک فعلی را دارد، از جمله خود شما، همچنان می‌تواند با آن متصل شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
+    '🔄 انتقال سرویس\n\n{icon:user} نام کاربری: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی‌مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n{icon:identity} شناسه کاربری مقصد: {recipientId}\n{icon:user} نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n{icon:warning} لینک اشتراک این سرویس تغییر نمی‌کند؛ هر کسی که لینک فعلی را دارد، از جمله خود شما، همچنان می‌تواند با آن متصل شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
   'bot.service.transfer_confirm_button': '✅ تأیید انتقال سرویس',
   'bot.service.transfer_done': '{icon:success} سرویس با موفقیت به کاربر مقصد منتقل شد.',
   'bot.service.transfer_received':
-    '{icon:referral} یک سرویس برای شما انتقال داده شد\n\n{icon:user} نام سرویس: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\nلینک اشتراک این سرویس تغییر نکرده و همان لینک قبلی است. برای دیدن مشخصات سرویس، دکمهٔ زیر را بزنید.',
+    '{icon:service} یک سرویس برای شما انتقال داده شد\n\n{icon:user} نام کاربری: {service}\n{icon:location} موقعیت سرویس: {location}\n💢 حجم باقی‌مانده: {remainingTraffic}\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\nلینک اشتراک این سرویس تغییر نکرده و همان لینک قبلی است. برای دیدن مشخصات سرویس، دکمهٔ زیر را بزنید.',
   'bot.service.transfer_details_button': 'مشخصات سرویس',
   'bot.service.transfer_recipient_invalid':
     'این یک شناسه کاربری عددی معتبر نیست. شناسه کاربری عددی مقصد را دوباره ارسال کنید.',
@@ -186,7 +185,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.terms.required':
     '{icon:info} قوانین و مقررات\n\n{title}\n\n{body}\n\nبرای ادامهٔ استفاده از ربات، قوانین بالا را بخوانید و دکمهٔ «پذیرش قوانین» را بزنید.',
   'bot.terms.updated':
-    '{icon:warning} قوانین ربات به‌روزرسانی شده است و نسخه‌ای که پذیرفتید دیگر نسخهٔ فعلی نیست. لطفاً نسخهٔ جدید را بخوانید و بپذیرید.\n\n{title}\n\n{body}',
+    '{icon:warning} قوانین ربات به‌روزرسانی شده است. برای ادامهٔ استفاده از ربات، نسخهٔ جدید را بخوانید و دکمهٔ «پذیرش قوانین» را بزنید.\n\n{title}\n\n{body}',
   'bot.terms.accepted':
     '{icon:success} قوانین و مقررات با موفقیت پذیرفته شد.\nاکنون می‌توانید از ربات استفاده کنید.',
   'bot.terms.accept_button': '✅ پذیرش قوانین',
@@ -233,34 +232,34 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // The username a customer's service is known by on the panel. The panel's policy
   // decides which of the two modes they are offered; with one enabled the choice is
   // skipped and that flow runs directly.
-  'bot.username.choose': 'یوزرنیم سرویس‌تان را چطور انتخاب می‌کنید؟',
+  'bot.username.choose': 'نام کاربری سرویس‌تان را چطور انتخاب می‌کنید؟',
   'bot.username.custom_button': '✍️ نام کاربری دلخواه',
   'bot.username.automatic_button': '🎲 انتخاب خودکار',
   // The rule, stated once and in full, because a customer who is refused twice for two
   // different reasons they were never told stops buying. Every clause here is one the
   // shared validator actually enforces.
   'bot.username.instructions':
-    'یوزرنیم دلخواه‌تان را بفرستید.\n' +
+    'نام کاربری دلخواه‌تان را بفرستید.\n' +
     '• بین ۴ تا ۲۰ نویسه\n' +
     '• فقط حروف انگلیسی (a تا z)، رقم انگلیسی (0 تا 9)، خط تیره (-) و زیرخط (_)\n' +
     '• حداقل یک حرف انگلیسی و حداقل یک رقم داشته باشد\n' +
     '• حروف بزرگ و کوچک فرقی ندارند و در نهایت با حروف کوچک ذخیره می‌شود\n' +
     '• حرف و رقم فارسی، فاصله، نقطه، @ و ایموجی پذیرفته نمی‌شود',
   'bot.username.invalid':
-    'این یوزرنیم پذیرفته نشد. لطفاً با توجه به شرایط بالا یک یوزرنیم دیگر بفرستید.',
+    'این نام کاربری پذیرفته نشد. لطفاً با توجه به شرایط بالا یک نام کاربری دیگر بفرستید.',
   'bot.username.taken':
-    'این یوزرنیم قبلاً گرفته شده است. لطفاً یوزرنیم دیگری بفرستید. هیچ مبلغی کسر نشده است.',
+    'این نام کاربری قبلاً گرفته شده است. لطفاً نام کاربری دیگری بفرستید. هیچ مبلغی کسر نشده است.',
   // Three refusals the customer did not cause. Each says that no money moved, because
   // that is the only part of the answer they can act on; none of them names a panel,
   // a preset or a template, because none of those is theirs to fix.
   'bot.username.exhausted':
-    'ساخت خودکار یوزرنیم در این لحظه ممکن نشد. لطفاً چند دقیقه دیگر دوباره تلاش کنید. هیچ مبلغی کسر نشده است.',
+    'ساخت خودکار نام کاربری در این لحظه ممکن نشد. لطفاً چند دقیقه دیگر دوباره تلاش کنید. هیچ مبلغی کسر نشده است.',
   'bot.username.unavailable':
-    'ساخت خودکار یوزرنیم برای این خرید ممکن نیست. لطفاً یوزرنیم دلخواه خود را بفرستید یا با پشتیبانی تماس بگیرید. هیچ مبلغی کسر نشده است.',
+    'ساخت خودکار نام کاربری برای این خرید ممکن نیست. لطفاً نام کاربری دلخواه خود را بفرستید یا با پشتیبانی تماس بگیرید. هیچ مبلغی کسر نشده است.',
   'bot.username.mode_unavailable':
-    'انتخاب یوزرنیم دلخواه برای این خرید در دسترس نیست. لطفاً گزینه‌ی انتخاب خودکار را بزنید. هیچ مبلغی کسر نشده است.',
+    'انتخاب نام کاربری دلخواه برای این خرید در دسترس نیست. لطفاً گزینه‌ی انتخاب خودکار را بزنید. هیچ مبلغی کسر نشده است.',
   'bot.username.stale':
-    'یوزرنیم انتخاب‌شده برای این سفارش دیگر معتبر نیست و آزاد شد. لطفاً دوباره یوزرنیم انتخاب کنید. هیچ مبلغی کسر نشده است.',
+    'نام کاربری انتخاب‌شده برای این سفارش دیگر معتبر نیست و آزاد شد. لطفاً دوباره نام کاربری انتخاب کنید. هیچ مبلغی کسر نشده است.',
   'bot.order.summary':
     'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ قابل پرداخت: {total}',
   'bot.order.summary_discounted':
@@ -295,7 +294,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * later phase words it however they like; the default must not lie in the release
    * that ships it.
    */
-  'bot.order.settled': '{icon:success} پرداخت با موفقیت تأیید شد و سفارش شما پرداخت‌شده است.',
+  'bot.order.settled':
+    '{icon:success} پرداخت شما تأیید شد و سفارش پرداخت‌شده است؛ انجام آن در حال پیگیری است و نتیجه در همین ربات به شما اعلام می‌شود.',
   'bot.order.cancelled': 'سفارش لغو شد.',
   /*
    * Three lines, and the two figures are the point of the change.
@@ -626,16 +626,16 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'ویدیوی آموزشی «{app}» حذف شود؟ مشتریان دیگر این ویدیو را نخواهند دید.',
   'bot.admin.app_video_delete_confirm_button': '✅ بله، حذف شود',
   'bot.admin.app_video_prompt':
-    '🎬 ویدیوی آموزشی «{app}» را همین حالا به‌صورت ویدیو در همین گفتگو بفرستید.\n\nاین درخواست تا ۱۵ دقیقه معتبر است.',
+    '🎬 ویدیوی آموزشی «{app}» را همین‌جا بفرستید.\n\nاین درخواست تا {minutes} دقیقه معتبر است.',
   'bot.admin.app_video_cancel_button': '✖️ انصراف',
   'bot.admin.app_video_saved': '✅ ویدیوی آموزشی «{app}» ذخیره شد.',
   'bot.admin.app_video_deleted': '🗑 ویدیوی آموزشی «{app}» حذف شد.',
   'bot.admin.app_video_cancelled': 'ارسال ویدیو لغو شد؛ چیزی ذخیره نشد.',
   'bot.admin.app_video_stale':
-    '⌛️ درخواست ارسال ویدیو باز نیست یا منقضی شده است و چیزی ذخیره نشد. برای تنظیم ویدیو، برنامه را انتخاب و دوباره «تنظیم ویدیو» را بزنید.',
+    '⌛️ این درخواست ارسال ویدیو دیگر باز نیست و چیزی ذخیره نشد. برای تنظیم ویدیو، برنامه را دوباره انتخاب کنید و «تنظیم ویدیو» را بزنید.',
   'bot.admin.apps_back_button': '🔙 بازگشت به برنامه‌ها',
   'bot.admin.app_back_button': '🔙 بازگشت',
-  'bot.admin.app_not_found': 'این برنامه دیگر وجود ندارد.',
+  'bot.admin.app_not_found': 'این برنامه پیدا نشد؛ ممکن است حذف شده باشد.',
   'bot.admin.categories_button': '🗂 دسته‌بندی‌ها',
   'bot.admin.categories_section':
     'دسته‌بندی‌ها به همان ترتیبی که مشتری می‌بیند. کنار هر دسته وضعیت و نمایش آن آمده است؛ برای مدیریت روی هرکدام بزنید.\n\nبرای ساختن دستهٔ تازه:\n/category_new <نام>',
@@ -707,7 +707,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.open_button': '💰 کیف پول',
   'bot.catalog.open_button': '🛒 خرید سرویس',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
-  'bot.wallet.topup_refused': 'این مبلغ قابل شارژ نیست. لطفاً مبلغ دیگری را از فهرست انتخاب کنید.',
+  'bot.wallet.topup_refused':
+    'این مبلغ برای شارژ پذیرفته نشد. لطفاً مبلغ دیگری انتخاب کنید یا بفرستید.',
   'bot.wallet.topup_unavailable':
     'شارژ کیف پول در حال حاضر فعال نیست. لطفاً با پشتیبانی تماس بگیرید.',
   /*
@@ -789,7 +790,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * would be two ways to reach one action — and a customer who pressed only the first
    * would have a window open and no idea it was there.
    */
-  'bot.payment.sent_button': '✅ پرداخت را انجام دادم | ارسال رسید',
+  'bot.payment.sent_button': '📤 ارسال رسید واریز',
   /*
    * Whose claim this repeats is the whole of the wording.
    *
@@ -818,7 +819,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * reviewed — never that money did.
    */
   'bot.payment.receipt_received':
-    'رسید شما دریافت شد و در حال بررسی می‌باشد.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+    'رسید شما دریافت شد و در حال بررسی است.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.receipt_not_expected':
     'در حال حاضر منتظر رسیدی از شما نیستیم. برای ارسال رسید، ابتدا پیام پرداخت خود را باز کنید و دکمهٔ ارسال رسید را بزنید.',
   'bot.payment.receipt_expired':
@@ -848,7 +849,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.rejected':
     '{icon:error} پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.expired':
-    '{icon:time} مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:time} مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد؛ از این پرداخت مبلغی ثبت نشده است.\nاگر پس از پایان مهلت مبلغی واریز یا پرداخت کرده‌اید، دوباره پرداخت نکنید و با همین کد پیگیری به پشتیبانی پیام دهید.\n\nکد پیگیری پرداخت: {reference}',
   /*
    * WP-A9: one reminder before the window closes, while it can still be paid. Brief C2.4:
    * the code is labelled the way every other payment message labels it, on its own line —
@@ -995,12 +996,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.action_quote':
     '{productTitle}\nحجم افزوده: {trafficBytes}\nمدت افزوده: {durationDays}\nمبلغ: {total}',
   'bot.service.action_confirm_button': 'تأیید و پرداخت',
-  'bot.service.suspend_button': '❌ خاموش کردن اکانت',
-  'bot.service.resume_button': '✅ روشن کردن اکانت',
+  'bot.service.suspend_button': '❌ خاموش کردن سرویس',
+  'bot.service.resume_button': '✅ روشن کردن سرویس',
   // B8: both directions of the switch ask first; nothing changes until the customer confirms.
   'bot.service.suspend_confirm':
-    'آیا از خاموش کردن اکانت {serviceUsername} مطمئن هستید؟\nتا وقتی دوباره آن را روشن نکنید، اتصال شما برقرار نمی‌شود.',
-  'bot.service.resume_confirm': 'آیا از روشن کردن اکانت {serviceUsername} مطمئن هستید؟',
+    'آیا سرویس {serviceUsername} خاموش شود؟\nتا وقتی آن را دوباره روشن نکنید، اتصال برقرار نمی‌شود. اگر سرویس شما تاریخ اتمام دارد، زمان باقی‌ماندهٔ آن در این مدت هم سپری می‌شود و متوقف نمی‌شود.',
+  'bot.service.resume_confirm': 'آیا سرویس {serviceUsername} دوباره روشن شود؟',
   'bot.service.suspend_confirm_button': '✅ بله، خاموش شود',
   'bot.service.resume_confirm_button': '✅ بله، روشن شود',
   'bot.service.toggle_cancel_button': '✖️ انصراف',
@@ -1020,7 +1021,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:success} سرویس شما با موفقیت تمدید شد\n\n{icon:user} نام کاربری: {username}\n{icon:time} مدت تمدید: {durationDays}\n{icon:date} تاریخ انقضای جدید: {expiresAt}\n{icon:invoice} کد پیگیری پرداخت: {reference}',
   'bot.service.renewed_details_button': '📊 مشخصات سرویس',
   'bot.service.renew_paid':
-    '{icon:success} پرداخت تمدید انجام شد. نتیجهٔ تمدید سرویس در پیام جداگانه برای شما ارسال می‌شود.',
+    '{icon:success} پرداخت تمدید ثبت شد؛ تمدید سرویس در حال انجام است و نتیجه در همین ربات به شما اعلام می‌شود.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
   /*
    * Round N, package D: the reseller monthly minimum. Informational only — nothing happens
@@ -1094,8 +1095,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
   'bot.service.delivered_qr_caption':
     '📷 کد QR لینک اتصال شما. جزئیات سرویس در پیام بعدی آمده است.',
-  'bot.service.link_qr_caption':
-    '📷 کد QR لینک اتصال بالا. می‌توانید آن را در برنامهٔ خود اسکن کنید.',
+  'bot.service.link_qr_caption': '📷 کد QR همین لینک اتصال؛ آن را با برنامهٔ خود اسکن کنید.',
   'bot.service.delivery_tutorial': '{text}',
   'bot.service.tutorial_button': '📚 مشاهده آموزش استفاده',
   'bot.service.connected_button': '🥰 وصل شدم',
@@ -1134,7 +1134,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.apps.detail_files':
     '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}\n\n📁 این برنامه فایل‌های اتصال را هم می‌پذیرد. فایل‌ها را با دکمهٔ «📁 دریافت فایل‌های اتصال» در صفحهٔ سرویس خود دریافت کنید.',
   'bot.apps.download_button': '⬇️ دانلود از سایت رسمی',
-  'bot.apps.alternative_button': '🏪 دانلود از فروشگاه یا لینک جایگزین',
+  'bot.apps.alternative_button': '🏪 فروشگاه یا لینک دیگر',
   'bot.apps.help_button': '🎬 ویدیو و راهنمای بیشتر',
   'bot.apps.back_button': '🔙 بازگشت به فهرست برنامه‌ها',
   'bot.apps.platforms_button': '🔙 انتخاب سیستم عامل دیگر',
@@ -1155,10 +1155,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.faq.default_3_answer': 'در این صورت حجم سرویس شما زود تمام خواهد شد.',
   'bot.faq.default_4_question': 'فیلترشکن شما از چه نوعیه؟',
   'bot.faq.default_4_answer':
-    'فیلترشکن های ما v2ray است و پروتکل‌های مختلفی رو ساپورت میکنیم تا حتی تو دورانی که اینترنت اختلال داره بدون مشکل و افت سرعت بتونید از سرویستون استفاده کنید.',
+    'سرویس‌های ما بر پایهٔ v2ray هستند و از چند پروتکل پشتیبانی می‌کنند تا در زمان اختلال اینترنت هم گزینهٔ اتصال داشته باشید.',
   'bot.faq.default_5_question': 'فیلترشکن از کدوم کشور است؟',
   'bot.faq.default_5_answer':
-    'سرور فیلترشکن ما از 25 کشور همزمان هست در یک اشتراک که از اینجا میتونین مشاهده کنین',
+    'لوکیشن سرویس شما پس از خرید در کارت سرویس نمایش داده می‌شود. برای اطلاع از لوکیشن‌های هر محصول پیش از خرید، توضیحات محصول را ببینید یا از پشتیبانی بپرسید.',
   'bot.faq.default_6_question': 'چطور باید از این فیلترشکن استفاده کنم؟',
   'bot.faq.default_6_answer': 'برای آموزش استفاده از برنامه، روی دکمه «📚 آموزش» بزنید.',
   'bot.faq.default_7_question': 'فیلترشکن وصل نمیشه، چیکار کنم؟',
@@ -1167,7 +1167,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.faq.default_8_answer':
     'به دلیل قابل پیش‌بینی نبودن وضعیت نت کشور، امکان دادن تضمین نیست فقط می‌تونیم تضمین کنیم که تمام تلاشمون رو برای ارائه سرویس هر چه بهتر انجام بدیم.',
   'bot.faq.default_9_question': 'امکان بازگشت وجه دارید؟',
-  'bot.faq.default_9_answer': 'امکان بازگشت وجه در صورت حل نشدن مشکل از سمت ما وجود دارد.',
+  'bot.faq.default_9_answer':
+    'اگر مشکل سرویس از سمت ما برطرف نشود، امکان درخواست بازگشت وجه وجود دارد؛ پس از بررسی، مبلغ تأییدشده به کیف پول شما در ربات واریز می‌شود.',
   'bot.faq.page': '{content}',
   'bot.support.contact_button': '📨 ارسال پیام به پشتیبانی',
   'bot.support.contact': '{icon:support} برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
@@ -1197,16 +1198,16 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.nowpayments_in_review':
     '🕓 پرداخت ارز دیجیتال شما دریافت شده و در انتظار تأیید شبکه است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت تأیید: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید نهایی درگاه در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.nowpayments_review_unresolved':
-    'پرداخت ارز دیجیتال شما نیاز به بررسی دارد؛ مبلغ دریافتی با فاکتور مطابقت ندارد یا تأیید نهایی آن هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    'پرداخت ارز دیجیتال شما نیاز به بررسی دارد؛ مبلغ دریافتی با فاکتور مطابقت ندارد یا تأیید نهایی آن هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\nتا روشن شدن نتیجه، از این پرداخت مبلغی به کیف پول شما واریز نشده و سفارشی با آن پرداخت نشده است.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.route_name_centralpay': 'پرداخت با CentralPay',
   'bot.payment.centralpay_pay_button': '💳 پرداخت با CentralPay',
   'bot.payment.centralpay_review_unresolved':
-    'پرداخت شما از طریق CentralPay نیاز به بررسی دارد؛ اطلاعات تأیید درگاه با این پرداخت مطابقت ندارد. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    'پرداخت شما از طریق CentralPay نیاز به بررسی دارد؛ اطلاعات تأیید درگاه با این پرداخت مطابقت ندارد. پرداخت شما ناموفق اعلام نشده و توسط پشتیبانی پیگیری می‌شود.\nتا روشن شدن نتیجه، از این پرداخت مبلغی به کیف پول شما واریز نشده و سفارشی با آن پرداخت نشده است.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.route_name_telegram_stars': '⭐ تلگرام استارز',
   'bot.payment.stars_invoice_order':
-    '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:wallet} مبلغ سفارش: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.stars_invoice_order_fee':
-    '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:wallet} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور پرداخت با تلگرام استارز\n\n{icon:purchase} مبلغ سفارش: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.stars_invoice_topup':
     '{icon:invoice} فاکتور شارژ کیف پول با تلگرام استارز\n\n{icon:wallet} مبلغ شارژ: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n{icon:time} مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.stars_invoice_topup_fee':
@@ -1244,36 +1245,36 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_closed':
     'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_invoice':
-    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون پی\n\n{icon:wallet} مبلغ اصلی: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ اعلام‌شده توسط تون پی برای واریز: {transferAmount}\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال فیش: {expiresAt}\n\nمبلغ را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال فیش واریزی» عکس فیش را بفرستید. پرداخت شما فقط پس از تأیید تون پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون‌پی\n\n{icon:amount} مبلغ بدون کارمزد: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز اعلام‌شده توسط تون‌پی: {transferAmount}\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nمبلغ را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال رسید» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_sent':
-    '📤 فیش واریزی شما برای تون پی ارسال شده و در انتظار پاسخ است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
+    '📤 رسید واریز شما برای تون‌پی ارسال شده و در انتظار پاسخ است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_refused':
-    '{icon:warning} تون پی آخرین تصویر را به‌عنوان فیش نپذیرفت یا ارسال آن ممکن نشد. لطفاً عکس واضح فیش واریزی را دوباره بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال فیش: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:warning} تون‌پی آخرین تصویر را به‌عنوان رسید نپذیرفت یا ارسال آن ممکن نشد. لطفاً تصویر واضح رسید واریز را دوباره بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_changing':
-    '🔄 درخواست کارت جدید برای تون پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '🔄 درخواست کارت جدید برای تون‌پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_unconfirmed':
-    'پاسخ تون پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، فیش آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.\n\nکد پیگیری پرداخت: {reference}',
+    'پاسخ تون‌پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، تصویر رسید آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_missing':
-    'تون پی ساخت این فاکتور را اعلام کرد اما شماره کارتی برای واریز نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.\n\nکد پیگیری پرداخت: {reference}',
+    'تون‌پی ساخت این فاکتور را اعلام کرد اما شماره کارتی برای واریز نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_in_review':
-    '🕓 تون پی فیش واریزی شما را دریافت کرده و در حال بررسی آن است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت بررسی: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید تون پی در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '🕓 تون‌پی رسید واریز شما را دریافت کرده و در حال بررسی آن است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت بررسی: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید تون‌پی در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_review_unresolved':
-    'نتیجهٔ بررسی تون پی هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و در حال پیگیری است.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
-  'bot.payment.gateway_receipt_button': '📤 ارسال فیش واریزی',
+    'نتیجهٔ بررسی تون‌پی هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و در حال پیگیری است.\nتا روشن شدن نتیجه، از این پرداخت مبلغی به کیف پول شما واریز نشده و سفارشی با آن پرداخت نشده است.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_receipt_button': '📤 ارسال رسید',
   'bot.payment.gateway_change_card_button': '🔄 تعویض کارت',
   'bot.payment.gateway_card_check_button': '🔎 بررسی وضعیت',
   'bot.payment.gateway_receipt_prompt':
-    '📤 لطفاً عکس فیش واریزی را همین‌جا بفرستید.\n\nفقط عکس پذیرفته می‌شود (نه فایل، PDF یا ویدیو) و حجم آن حداکثر ۵ مگابایت است. این درخواست تا {closesAt} باز است.',
+    '📤 لطفاً تصویر رسید واریز را همین‌جا به‌صورت عکس بفرستید، نه به‌صورت سند.\n\nحجم تصویر حداکثر ۵ مگابایت است. این درخواست تا {closesAt} باز است.',
   'bot.payment.gateway_receipt_queued':
-    '{icon:time} فیش شما دریافت شد و در حال ارسال برای تون پی است. نتیجه در پیام پرداخت نمایش داده می‌شود.',
+    '{icon:time} رسید شما دریافت شد و در حال ارسال برای تون‌پی است. نتیجه در پیام پرداخت نمایش داده می‌شود.',
   'bot.payment.gateway_receipt_photo_only':
-    'فقط عکس فیش پذیرفته می‌شود. لطفاً فیش را به‌صورت عکس (نه فایل، PDF یا ویدیو) بفرستید.',
+    'رسید فقط به‌صورت عکس پذیرفته می‌شود، نه به‌صورت سند یا ویدیو. لطفاً تصویر رسید واریز را از گالری و به‌صورت عکس دوباره بفرستید.',
   'bot.payment.gateway_receipt_already_sent':
-    'این عکس پیش‌تر برای همین پرداخت فرستاده شده است و دوباره ارسال نمی‌شود. اگر فیش دیگری دارید، عکس آن را بفرستید.',
+    'این تصویر پیش‌تر برای همین پرداخت فرستاده شده است و دوباره ارسال نمی‌شود. اگر رسید دیگری دارید، تصویر آن را بفرستید.',
   'bot.payment.gateway_receipt_too_large':
-    'حجم این عکس بیش از ۵ مگابایت است. لطفاً عکس کوچک‌تری از فیش واریزی بفرستید.',
+    'حجم این تصویر بیش از ۵ مگابایت است. لطفاً تصویر کوچک‌تری از رسید واریز بفرستید.',
   'bot.wallet.summary':
-    '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: {telegramId}\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس های خریداری شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
+    '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: {telegramId}\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت‌نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس‌های خریداری‌شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت‌شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه‌های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',
   'bot.wallet.group_customer': 'کاربر عادی',
   'bot.wallet.group_reseller': 'نماینده',
@@ -1283,9 +1284,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'مبلغ واردشده معتبر نیست. لطفاً فقط یک عدد صحیح و مثبت بفرستید.',
   'bot.wallet.topup_below_minimum': 'مبلغ واردشده کمتر از حداقل مجاز است. حداقل: {minimum}',
   'bot.wallet.topup_above_maximum': 'مبلغ واردشده بیشتر از حداکثر مجاز است. حداکثر: {maximum}',
-  'bot.wallet.topup_method_prompt': '{icon:wallet} روش پرداخت خود را انتخاب نمایید',
+  'bot.wallet.topup_method_prompt': '{icon:wallet} روش پرداخت را انتخاب کنید.',
   'bot.wallet.topup_method_button': 'پرداخت با {name}',
-  'bot.wallet.topup_method_gift_button': 'پرداخت با {name} ({percent} درصد شارژ هدیه)',
+  'bot.wallet.topup_method_gift_button': '{name} (+{percent}٪ هدیه)',
   'bot.wallet.topup_close_button': '❌ بستن لیست',
   'bot.wallet.topup_closed': 'فهرست بسته شد. درخواستی ثبت نشد.',
   'bot.wallet.topup_none_available': 'در حال حاضر روش پرداختی برای این مبلغ در دسترس نیست.',
@@ -1306,7 +1307,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.search_none': 'سرویسی با این نام کاربری در میان سرویس‌های شما پیدا نشد.',
   'bot.service.search_invalid': 'عبارت جستجو معتبر نیست.',
   'bot.service.card':
-    '📊وضعیت سرویس: {status}\n{icon:user} نام سرویس: {serviceUsername}\n\n{icon:location} موقعیت سرویس: 🚀 {serviceLocation}\n📦 نام محصول: {productName}\n\n🟩 ترافیک: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی مانده: {remainingTraffic}\n\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{rotateHint}',
+    'وضعیت سرویس: {status}\n{icon:user} نام کاربری: {serviceUsername}\n\n{icon:location} موقعیت سرویس: {serviceLocation}\n📦 نام محصول: {productName}\n\n🗂 حجم کل: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی‌مانده: {remainingTraffic}\n\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{rotateHint}',
   // Round N (F4): the card while a change is applied, and its one-line notice.
   'bot.service.state_working': '{icon:time} در حال اعمال درخواست شما روی سرور…',
   'bot.service.status_with_notice': '{status}\n{notice}',
@@ -1316,8 +1317,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.state_pending_provision': '{icon:time} در حال ساخت',
   'bot.service.state_active': '{icon:active} فعال',
   'bot.service.state_suspended': '{icon:inactive} خاموش',
-  'bot.service.state_expired': '{icon:inactive} منقضی شده',
-  'bot.service.state_exhausted': '{icon:inactive} حجم تمام شده',
+  'bot.service.state_expired': '{icon:date} منقضی شده',
+  'bot.service.state_exhausted': '{icon:traffic} حجم تمام شده',
   'bot.service.state_terminated': '{icon:error} حذف شده',
   'bot.service.state_unreconciled': '{icon:warning} در حال بررسی',
   'bot.service.traffic_value': '{bytes}',
@@ -1412,7 +1413,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.line_closed_by_customer': '🔒 {at} — تیکت را بستید.',
   'bot.ticket.line_closed_by_support': '🔒 {at} — پشتیبانی تیکت را بست.',
   'bot.ticket.line_reopened': '🔓 {at} — پشتیبانی تیکت را دوباره باز کرد.',
-  'bot.ticket.line_escalated': '🧑‍💼 {at} — گفتگوی شما در تلگرام به پشتیبانی سپرده شد.',
+  'bot.ticket.line_escalated': '🧑‍💼 {at} — گفتگوی شما در تلگرام به پشتیبانی ارجاع شد.',
   'bot.ticket.attachment_marker': '📎 پیوست',
   'bot.ticket.reply_button': '✍️ ارسال پاسخ',
   'bot.ticket.close_button': '🔒 بستن تیکت',

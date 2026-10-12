@@ -12,6 +12,7 @@ import {
   TG,
   keyboardOf,
   lastKeyboard,
+  lastText,
   receiptFixture,
   rows,
   systemActor,
@@ -131,6 +132,8 @@ describe('the tutorial video wizard (spec §7)', () => {
     expect(callbacks()).not.toContain(app('x'));
 
     expect((await tap(f, app('s'), TG.owner)).replyKey).toBe('bot.admin.app_video_prompt');
+    // Batch 2026-10-10 (brief C3): the window comes from CLIENT_APP_VIDEO_CAPTURE_TTL_MS.
+    expect(lastText(f)).toContain('تا 15 دقیقه معتبر است');
     // The cancel names the PROMPT (Codex review of #143), never the app.
     const [cancel] = callbacks();
     expect(cancel).toMatch(new RegExp(`^${ADMIN_APP_CALLBACK_PREFIX}c:`, 'u'));

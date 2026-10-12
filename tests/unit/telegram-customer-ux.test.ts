@@ -143,7 +143,7 @@ describe('§2.4 the manual-transfer receipt', () => {
 
   it('answers the first receipt with the brief’s two sentences, a blank line between them', () => {
     expect(rendered('bot.payment.receipt_received', {})).toBe(
-      'رسید شما دریافت شد و در حال بررسی می‌باشد.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+      'رسید شما دریافت شد و در حال بررسی است.\n\nپس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
     );
   });
 
