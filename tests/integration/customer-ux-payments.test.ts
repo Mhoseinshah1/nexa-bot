@@ -292,20 +292,24 @@ describe('a customer pays through the approved screens', () => {
       await credit(maryam, 1_000_000n, 'pre');
       const orderId = await draftTo(productId);
       const body = lastText();
-      expect(body.startsWith('🧾 پیش فاکتور شما:\n\n')).toBe(true);
-      expect(body).toMatch(/👤 نام کاربر: nx[a-z0-9]+\n/u);
+      // Batch 2026-10-10 (brief C2.2): the money model's labels, the wallet icon on the wallet
+      // line only, and the figure the customer pays last in the facts block.
+      expect(body.startsWith('🧾 پیش‌فاکتور\n\n📦 سرویس: پلن pre\n')).toBe(true);
+      expect(body).toMatch(/👤 نام کاربری: nx[a-z0-9]+\n/u);
       expect(body).toContain(
-        '🔐 نام سرویس: پلن pre\n📆 مدت اعتبار: 30 روز\n💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n',
+        '📅 مدت: 30 روز\n📊 حجم: 50 گیگابایت\n💵 مبلغ سفارش: 250,000 تومان\n\n',
       );
       // B1: the description, in place of the two blocks — the locations and features stay
       // product data and are not drawn.
       expect(body).toContain(
-        '👥 حجم اکانت: 50 گیگابایت\n\nسرورهای پرسرعت آلمان و هلند\nاتصال همزمان ۳ دستگاه\n\n💰 موجودی',
+        '💵 مبلغ سفارش: 250,000 تومان\n\nسرورهای پرسرعت آلمان و هلند\nاتصال همزمان ۳ دستگاه\n\n💰 موجودی',
       );
       expect(body).not.toContain('لوکیشن‌های محصول');
       expect(body).not.toContain('🇩🇪');
       expect(
-        body.endsWith('💰 موجودی کیف پول شما: 1,000,000 تومان\n\n💰 سفارش شما آماده پرداخت است'),
+        body.endsWith(
+          '💰 موجودی کیف پول: 1,000,000 تومان\n\n🛒 سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
+        ),
       ).toBe(true);
       expect(buttonsOf(lastMarkup())).toEqual([
         `w:${orderId}`,
@@ -330,7 +334,7 @@ describe('a customer pays through the approved screens', () => {
       const body = lastText();
       expect(body).not.toContain('لوکیشن');
       expect(body).not.toContain('🇩🇪');
-      expect(body).toContain('👥 حجم اکانت: 50 گیگابایت\n\n💰 موجودی کیف پول شما');
+      expect(body).toContain('💵 مبلغ سفارش: 250,000 تومان\n\n💰 موجودی کیف پول');
       expect(body).not.toContain('{');
       expect(lastMarkup()).not.toContain('💳 پرداخت با درگاه');
       expect(buttonsOf(lastMarkup()).some((b) => b.startsWith('g:'))).toBe(false);
@@ -378,7 +382,7 @@ describe('a customer pays through the approved screens', () => {
       const text = String(last?.body['text']);
       expect(text.length).toBeLessThanOrEqual(4096);
       expect(text).toContain(longest.split('\n')[0] ?? 'MISSING');
-      expect(text).toContain('💰 سفارش شما آماده پرداخت است');
+      expect(text).toContain('🛒 سفارش شما آماده پرداخت است');
       expect(text).not.toContain('🌐 لوکیشن شمارهٔ');
       expect(last?.body['reply_markup']).toBeDefined();
     });
@@ -864,7 +868,7 @@ describe('a customer pays through the approved screens', () => {
         .filter((one) => one.url.includes('/sendMessage'))
         .map((one) => String(one.body['text'] ?? ''));
       expect(texts).toHaveLength(2);
-      expect(texts[0]?.startsWith('💼 زیرمجموعه‌گیری و هدیه خوش‌آمد')).toBe(true);
+      expect(texts[0]?.startsWith('💼 دعوت به ربات')).toBe(true);
       expect(texts[0]).toContain('🔗 https://t.me/');
       expect(texts[0]).not.toContain('📊');
       expect(lastText()).toContain('📊 آمار شما');
