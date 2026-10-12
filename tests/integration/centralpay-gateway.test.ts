@@ -139,6 +139,8 @@ describe('CentralPay, through the one settlement path', () => {
   let fake: FakeCentralPay;
   let lane: GatewayPaymentService;
   let offsetMs: number;
+  /** The lane reads no verify key while set: a key gone missing under an open attempt. */
+  let hideVerifyKey = false;
   let seq = 0;
   const logged: string[] = [];
   const key = () => `cp-key-${String((seq += 1)).padStart(4, '0')}`;
@@ -171,6 +173,7 @@ describe('CentralPay, through the one settlement path', () => {
     );
     fake = new FakeCentralPay();
     offsetMs = 0;
+    hideVerifyKey = false;
     logged.length = 0;
     lane = laneWith(fake);
   });
@@ -187,8 +190,14 @@ describe('CentralPay, through the one settlement path', () => {
       payments: ctx.container.payments,
       paymentRecords: new DrizzlePaymentRepository(db),
       adapters: (provider) => (provider === 'CENTRALPAY' ? adapter : null),
-      credentials: new DrizzleGatewayCredentialStore(db, ctx.container.cipher, () =>
-        ctx.container.ids.uuid(),
+      credentials: new Proxy(
+        new DrizzleGatewayCredentialStore(db, ctx.container.cipher, () => ctx.container.ids.uuid()),
+        {
+          get: (target, property, receiver) =>
+            property === 'readVerifyKey' && hideVerifyKey
+              ? () => Promise.resolve(null)
+              : (Reflect.get(target, property, receiver) as unknown),
+        },
       ),
       botTokens: { tokenForBotInstance: () => Promise.resolve(null) },
       presentation: () => Promise.reject(new Error('CentralPay renders no invoice text')),
@@ -666,6 +675,69 @@ describe('CentralPay, through the one settlement path', () => {
       }
       expect(fake.verifies.length - atDeadline).toBeLessThanOrEqual(3);
       expect(await ledger()).toEqual([]);
+    });
+
+    /*
+     * Codex P1 on #260: the inquiry is authorised by the VERIFY key, the create by the link
+     * key. A create that succeeds proves the link key and nothing about the verify key, so it
+     * must not clear the alarm that no approval can be read; only an answered verify does.
+     */
+    it('keeps the verify-key alarm open across a successful create, and closes it on an answered verify', async () => {
+      await enableCentralPay();
+      const condition = async () =>
+        rows<{ dedupe_key: string; resolved_at: Date | null; context: Record<string, unknown> }>(
+          sql`SELECT dedupe_key, resolved_at, context FROM operational_events
+               WHERE tenant_id = ${tenantA.tenantId} AND code = 'payments.gateway_misconfigured'
+               ORDER BY first_seen_at`,
+        );
+      await createdAttempt();
+      hideVerifyKey = true;
+      await inquireNow();
+      expect(await condition()).toEqual([
+        {
+          dedupe_key: 'payments.gateway_misconfigured:CENTRALPAY:verify-key',
+          resolved_at: null,
+          context: {
+            provider: 'CENTRALPAY',
+            reason: 'nexa.credential_missing',
+            kind: 'VERIFY_KEY',
+          },
+        },
+      ]);
+
+      // Another customer's link is made with the LINK key, and succeeds — the create path's
+      // own recovery runs. The verify-key alarm stays open: no approval can be read yet.
+      offsetMs = 0;
+      const other = (
+        await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-cp-2'), {
+          idempotencyKey: 'resolve-cp-2',
+          telegramUserId: '910912',
+          from: { id: 910912, first_name: 'سارا' },
+          botInstanceId: BOT_A,
+        })
+      ).customer.id;
+      const k = key();
+      const second = await ctx.container.payments.requestGatewayTopup(
+        tenantA,
+        systemActor(k),
+        other,
+        { idempotencyKey: k, amount: money(TOPUP_TOMAN, 'IRT'), provider: 'CENTRALPAY' },
+      );
+      const linksBefore = fake.links.length;
+      await pass();
+      expect(fake.links.length).toBe(linksBefore + 1);
+      expect((await invoiceOf(second.payment.id)).creation_state).toBe('CREATED');
+      expect((await condition())[0]?.resolved_at).toBeNull();
+      expect(await openConditions()).toContain('payments.gateway_misconfigured');
+
+      // The verify key is back and CentralPay answers a verify: that is what closes it.
+      hideVerifyKey = false;
+      const verifiesBefore = fake.verifies.length;
+      await inquireNow();
+      expect(fake.verifies.length).toBeGreaterThan(verifiesBefore);
+      expect((await condition())[0]?.resolved_at).not.toBeNull();
+      expect(await openConditions()).not.toContain('payments.gateway_misconfigured');
+      expect((await paymentOf(second.payment.id)).state).toBe('PENDING');
     });
 
     it('accepts no webhook for the route', async () => {
