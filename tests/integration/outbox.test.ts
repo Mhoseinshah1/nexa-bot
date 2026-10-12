@@ -228,6 +228,41 @@ describe('transactional outbox', () => {
     expect(afterFailure?.lastError).toContain('consumer exploded');
   });
 
+  it('stores a failure redacted, never the credential its text quotes (FIX-04 S4)', async () => {
+    // `fetch` quotes the request URL in a TypeError it cannot parse, and a Telegram request
+    // URL carries the bot token. `last_error` is durable and read back by the Web Admin.
+    const fakeToken = '7012345678:AAFakeTokenSynthetic0123456789xyzQ';
+    const leaking: EventConsumer = {
+      name: 'test.leaking',
+      subscribesTo: ['SystemPinged'],
+      async handle() {
+        throw new TypeError(
+          `Failed to parse URL from https://api.telegram.org:99999/bot${fakeToken}/sendMessage`,
+        );
+      },
+    };
+    const relay = new OutboxRelay(
+      ctx.container.database.db,
+      [leaking],
+      ctx.container.clock,
+      ctx.container.logger,
+      { batchSize: 10, pollIntervalMs: 50, maxLagMs: 300_000 },
+    );
+    await ctx.container.uow.run(tenantA, async (tx) => {
+      await ctx.container.outbox.write(tx, actor(), {
+        eventType: 'SystemPinged',
+        aggregateType: 'System',
+        aggregateId: 'system',
+        payload: { source: 'test' },
+      });
+    });
+
+    expect((await relay.processBatch()).failed).toBe(1);
+    const [row] = await ctx.container.database.db.select().from(outboxMessages);
+    expect(row?.lastError).toContain('Failed to parse URL from');
+    expect(row?.lastError).not.toContain('AAFakeTokenSynthetic');
+  });
+
   it('reports lag so a stalled relay is visible rather than silent', async () => {
     expect(await ctx.container.relay.lagMs()).toBe(0);
     expect(await ctx.container.relay.isHealthy()).toBe(true);

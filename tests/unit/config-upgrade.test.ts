@@ -223,6 +223,19 @@ describe('an upgraded installation on the current image', () => {
     }
   });
 
+  it('Phase 7: turns the Mirza package restore ON for every existing configuration, and false is the kill switch', () => {
+    // Owner instruction: no server command between "deploy the release" and "restore a Mirza
+    // backup on the restore page". Safety is the fresh-target guard, the owner-only CRITICAL
+    // approval, the protective backup and the write freeze — not this flag.
+    for (const { name, env } of legacy) {
+      expect(configSchema.parse(env).LEGACY_MIGRATION_ENABLED, name).toBe(true);
+      expect(
+        configSchema.parse({ ...env, LEGACY_MIGRATION_ENABLED: 'false' }).LEGACY_MIGRATION_ENABLED,
+        name,
+      ).toBe(false);
+    }
+  });
+
   it('carries the stale build identity the first template wrote, and it masks the image', () => {
     // The defect `botctl update` now reconciles. `env_file` beats an image's own
     // ENV, so these three lines REPLACE the values stamped into the release at

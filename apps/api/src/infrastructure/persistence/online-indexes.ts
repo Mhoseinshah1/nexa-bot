@@ -161,6 +161,28 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
   },
   {
     /*
+     * FIX-11: the same count, served WITHOUT the heap. `services_panel_capacity_idx` finds a
+     * panel's live services, but the count's `state IN (SERVICE_CAPACITY_STATES)` is a column
+     * that index does not hold, so every one of them was a heap visit: a bitmap heap scan of
+     * ~45 000 buffers and 240–500 ms for four panels of ~70 000 services, on every services,
+     * products and panels page (`DrizzlePanelCapacityRepository.readWhere`). With `state` in
+     * the key the count is an index-only scan: ~300 buffers, 44–80 ms on the same data.
+     *
+     * The SAME partial predicate as `services_panel_capacity_idx`, for the reason given
+     * there: derived from the machine, not an enumeration that could disagree with the count.
+     * Additive. Its key has the older index's whole key as a prefix, so it also serves the
+     * reads that do not name a state: `services_panel_capacity_idx` is now redundant. It stays
+     * for ONE release only because this manifest has no retire step and an outgoing or
+     * rolled-back replica's manifest still lists it (expand/contract); retire it in a later
+     * release (Codex review of #273).
+     */
+    name: 'services_panel_capacity_state_idx',
+    definition:
+      'ON "services" USING btree ("tenant_id","panel_id","state") ' +
+      "WHERE (state <> 'TERMINATED'::text)",
+  },
+  {
+    /*
      * The support lookup: for ONE tenant, the service holding a given provider
      * username.
      *
@@ -446,6 +468,28 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "gateway_invoices" USING btree ("tenant_id","hinted_invoice_id") ' +
       'WHERE (hinted_invoice_id IS NOT NULL)',
+  },
+  {
+    /*
+     * FIX-11: the invoice arm of the Payment Operations Center's attention counts
+     * (`paymentOpsCandidateIds`) — the invoices that put a payment in PARTIAL, LATE_COMPLETION
+     * or PROVIDER_ERROR. Without it that arm read every invoice the tenant ever created
+     * (a parallel sequential scan, 640 ms at 300 000 invoices); with it, 5 ms.
+     *
+     * PARTIAL: the predicate is the union of those three queues' invoice conditions, so the
+     * index holds only the few rows that need somebody. The planner uses it only while the
+     * query's condition IMPLIES this predicate; a partial status added to
+     * `PARTIAL_PAYMENT_STATUSES` that is not listed here makes the arm fall back to the scan —
+     * still correct, only slower — and `payment-attention-plan.test.ts` fails on it.
+     */
+    name: 'gateway_invoices_tenant_attention_idx',
+    definition:
+      'ON "gateway_invoices" USING btree ("tenant_id") ' +
+      // Spelled as PostgreSQL renders it, which is what `online-indexes.test.ts` compares.
+      "WHERE ((outcome = 'LATE_COMPLETION'::text) OR (late_completion_observed_at IS NOT NULL) " +
+      "OR (creation_state = ANY (ARRAY['CREATE_FAILED'::text, 'CREATE_UNKNOWN'::text])) " +
+      'OR (last_inquiry_error_code IS NOT NULL) ' +
+      "OR (provider_status = 'partially_paid'::text))",
   },
   {
     /*

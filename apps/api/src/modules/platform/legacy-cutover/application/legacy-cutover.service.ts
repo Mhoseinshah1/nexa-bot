@@ -291,6 +291,87 @@ export class LegacyCutoverService {
     );
   }
 
+  /**
+   * Phase 7 — the owner's cutover approval given through the restore page's ONE confirmation
+   * («تأیید بازیابی»), recorded inside `LegacyMigrationService.approve`'s own transaction, in
+   * the owner's name, of exactly the seven values the import's dry run recorded.
+   *
+   * The caller has authorised the owner (`legacy.migration.apply` AND `legacy.cutover.approve`,
+   * both CRITICAL) and bound the approval to the dry run's digest the owner read. The evidence
+   * is that dry run: the `migration` role's own observation of this package, recorded on the
+   * import row by the executor and never by a request — in place of `approve`'s recorded read
+   * sets, which an import records only at the start of its apply (the dry run writes none). The
+   * read sets are still required where they always were: `decideImport` refuses an import
+   * whose named read sets are not recorded for its source.
+   *
+   * IDEMPOTENT: an unrevoked CUTOVER approval with these exact values is reused, never
+   * duplicated. Writes the approval and its audit row; nothing else.
+   */
+  async recordImportApproval(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly importId: string;
+      readonly binding: {
+        readonly sourceFingerprint: string;
+        readonly panelMapFingerprint: string;
+        readonly inventoryFingerprint: string;
+        readonly productsFingerprint: string;
+        readonly invoiceArchiveFingerprint: string;
+        readonly freezeProofSha256: string;
+        readonly finalDumpSha256: string;
+      };
+      readonly synthetic: boolean;
+      readonly reason: string;
+    },
+    tx: TransactionScope,
+  ): Promise<{ readonly approvalId: string; readonly created: boolean }> {
+    await this.deps.repository.lockTenantApprovals(scope, tx);
+    const existing = await this.deps.repository.approvalsForSource(
+      scope,
+      input.binding.sourceFingerprint,
+      tx,
+    );
+    const same = existing.find(
+      (row) =>
+        row.revocation === null &&
+        row.kind === 'CUTOVER' &&
+        row.priorSourceFingerprint === null &&
+        row.synthetic === input.synthetic &&
+        bindingMatches(row, input.binding),
+    );
+    if (same !== undefined) return { approvalId: same.id, created: false };
+    const approval = await this.deps.repository.insertApproval(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        kind: 'CUTOVER',
+        ...input.binding,
+        priorSourceFingerprint: null,
+        synthetic: input.synthetic,
+        reason: input.reason,
+        approvedByAdminId: adminIdOf(actor),
+        approvedAt: this.deps.clock.now(),
+      },
+      tx,
+    );
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: LEGACY_CUTOVER_AUDIT_ACTIONS.approve,
+        entityType: ENTITY,
+        entityId: approval.id,
+        before: null,
+        after: { ...auditView(approval), nxpkgImportId: input.importId },
+        reason: input.reason,
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return { approvalId: approval.id, created: true };
+  }
+
   /** Withdraws an approval, once, for good. A new approval is a new row. */
   async revoke(
     scope: TenantContext,

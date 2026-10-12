@@ -20,7 +20,10 @@ import {
   DrizzlePublicOriginReader,
 } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-credentials';
 import { CentralPayAdapter } from '../../apps/api/src/modules/commerce/payments/infrastructure/centralpay-adapter';
-import type { FetchLike } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-adapter';
+import {
+  TonPaysAdapter,
+  type FetchLike,
+} from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-adapter';
 import {
   GatewayPaymentService,
   gatewayReturnUrl,
@@ -139,6 +142,8 @@ describe('CentralPay, through the one settlement path', () => {
   let fake: FakeCentralPay;
   let lane: GatewayPaymentService;
   let offsetMs: number;
+  /** The lane reads no verify key while set: a key gone missing under an open attempt. */
+  let hideVerifyKey = false;
   let seq = 0;
   const logged: string[] = [];
   const key = () => `cp-key-${String((seq += 1)).padStart(4, '0')}`;
@@ -171,11 +176,20 @@ describe('CentralPay, through the one settlement path', () => {
     );
     fake = new FakeCentralPay();
     offsetMs = 0;
+    hideVerifyKey = false;
     logged.length = 0;
     lane = laneWith(fake);
   });
 
-  function laneWith(centralpay: FakeCentralPay): GatewayPaymentService {
+  function laneWith(
+    centralpay: FakeCentralPay,
+    overrides: {
+      /** FIX10: the lane's invoice repository, so a case can act inside one of its calls. */
+      readonly invoices?: DrizzleGatewayInvoiceRepository;
+      /** FIX10: a second provider beside CentralPay, served by this adapter. */
+      readonly tonpays?: TonPaysAdapter;
+    } = {},
+  ): GatewayPaymentService {
     const db = ctx.container.database.db;
     const adapter = new CentralPayAdapter({ fetch: centralpay.fetch });
     const origins = new DrizzlePublicOriginReader(db);
@@ -183,12 +197,23 @@ describe('CentralPay, through the one settlement path', () => {
       logged.push(`${message} ${JSON.stringify(context)}`);
     };
     return new GatewayPaymentService({
-      invoices: new DrizzleGatewayInvoiceRepository(db),
+      invoices: overrides.invoices ?? new DrizzleGatewayInvoiceRepository(db),
       payments: ctx.container.payments,
       paymentRecords: new DrizzlePaymentRepository(db),
-      adapters: (provider) => (provider === 'CENTRALPAY' ? adapter : null),
-      credentials: new DrizzleGatewayCredentialStore(db, ctx.container.cipher, () =>
-        ctx.container.ids.uuid(),
+      adapters: (provider) =>
+        provider === 'CENTRALPAY'
+          ? adapter
+          : provider === 'TONPAYS'
+            ? (overrides.tonpays ?? null)
+            : null,
+      credentials: new Proxy(
+        new DrizzleGatewayCredentialStore(db, ctx.container.cipher, () => ctx.container.ids.uuid()),
+        {
+          get: (target, property, receiver) =>
+            property === 'readVerifyKey' && hideVerifyKey
+              ? () => Promise.resolve(null)
+              : (Reflect.get(target, property, receiver) as unknown),
+        },
       ),
       botTokens: { tokenForBotInstance: () => Promise.resolve(null) },
       presentation: () => Promise.reject(new Error('CentralPay renders no invoice text')),
@@ -574,6 +599,158 @@ describe('CentralPay, through the one settlement path', () => {
       expect(audit?.after.reason).toBe('PROVIDER_USER_MISMATCH');
     });
 
+    /*
+     * FIX10 BUG-1: two replicas bind the same reference to two attempts at once. The loser's
+     * UPDATE meets the unique index (23505) inside its transaction — a row that THROWS. It
+     * used to throw the whole pass; now that row alone is backed off, the rows after it are
+     * processed, and its next inquiry finds the reference taken and holds it for an operator.
+     * One reference, one credit, whatever the interleaving.
+     */
+    it('FIX10 BUG-1: a concurrent bind of the same reference (23505) neither stalls the lane nor credits twice', async () => {
+      await enableCentralPay();
+      const loser = await createdAttempt(150_000n);
+      const winner = await createdAttempt(160_000n);
+      const bystander = await createdAttempt(170_000n);
+      fake.pay(loser.orderId, { referenceId: 'RACED-REF' });
+      fake.pay(winner.orderId, { referenceId: 'RACED-REF' });
+      fake.pay(bystander.orderId);
+      // The loser is asked first, the bystander last.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '3 minutes' WHERE payment_id = ${loser.paymentId}`,
+      );
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '2 minutes' WHERE payment_id = ${winner.paymentId}`,
+      );
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 minute' WHERE payment_id = ${bystander.paymentId}`,
+      );
+      const invoices = new DrizzleGatewayInvoiceRepository(ctx.container.database.db);
+      const lookup = invoices.findByChargeId.bind(invoices);
+      let raced = false;
+      invoices.findByChargeId = async (scope, provider, chargeId, tx) => {
+        const found = await lookup(scope, provider, chargeId, tx);
+        if (!raced && chargeId === 'RACED-REF' && found === null) {
+          raced = true;
+          // Another replica binds the same reference to the winner and commits, between the
+          // loser's look-up and its write — on its own connection, outside this transaction.
+          await ctx.container.database.db.execute(
+            sql`UPDATE gateway_invoices SET provider_charge_id = 'RACED-REF'
+                WHERE payment_id = ${winner.paymentId}`,
+          );
+        }
+        return found;
+      };
+      const racing = laneWith(fake, { invoices });
+      const report = await racing.runOnce(tenantA);
+      expect(raced).toBe(true);
+      expect(report.rowFailures).toBe(1);
+      expect(logged.some((line) => line.includes('"code":"23505"'))).toBe(true);
+      expect(logged.join('\n')).not.toContain(VERIFY_KEY);
+      // The rows claimed after the one that threw were processed in the same pass.
+      expect((await paymentOf(winner.paymentId)).state).toBe('CONFIRMED');
+      expect((await paymentOf(bystander.paymentId)).state).toBe('CONFIRMED');
+      // The loser: nothing bound, nothing decided, backed off.
+      expect((await paymentOf(loser.paymentId)).state).toBe('PENDING');
+      expect((await invoiceOf(loser.paymentId)).provider_charge_id).toBeNull();
+
+      // Its next inquiry finds the reference taken: held for an operator, never credited.
+      offsetMs += 6 * 60_000;
+      await racing.runOnce(tenantA);
+      expect((await paymentOf(loser.paymentId)).state).toBe('UNKNOWN');
+      const credits = await ledger();
+      expect(credits).toHaveLength(2);
+      expect(credits.map((entry) => entry.payment_id).sort()).toEqual(
+        [winner.paymentId, bystander.paymentId].sort(),
+      );
+    });
+
+    /*
+     * FIX10 BUG-1: a credential that cannot be decrypted (a newer release's envelope, a
+     * truncated value) throws inside the row. It must stall neither another provider's
+     * creates nor its inquiries, and must not fail or close the attempt it belongs to.
+     */
+    it('FIX10 BUG-1: an undecryptable credential for one provider stalls no other provider, and decides nothing about its own attempt', async () => {
+      await enableCentralPay();
+      await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS',
+        config: OPEN_ROUTE,
+      });
+      await ctx.container.paymentGateways.setCredential(tenantA, owner, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS',
+        apiKey: 'tp_live_KEY_never_leak_settle_9f1',
+      });
+      await ctx.container.paymentGateways.setStatus(tenantA, owner, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS',
+        status: 'ACTIVE',
+      });
+      const k = key();
+      const broken = await ctx.container.payments.requestGatewayTopup(
+        tenantA,
+        systemActor(k),
+        maryam,
+        { idempotencyKey: k, amount: money(TOPUP_TOMAN, 'IRT'), provider: 'TONPAYS' },
+      );
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET api_key_ciphertext = 'v9.not-an-envelope'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TONPAYS'`,
+      );
+      const healthy = await topup();
+      let tonpaysCalls = 0;
+      const mixed = laneWith(fake, {
+        tonpays: new TonPaysAdapter({
+          fetch: () => {
+            tonpaysCalls += 1;
+            return Promise.reject(new Error('never dialled: the key cannot be read'));
+          },
+        }),
+      });
+
+      // The broken provider's row is the OLDER one, claimed first.
+      const created = await mixed.runOnce(tenantA);
+      expect(created.rowFailures).toBe(1);
+      expect(created.created).toBe(1);
+      const healthyInvoice = await invoiceOf(healthy.payment.id);
+      expect(healthyInvoice.creation_state).toBe('CREATED');
+      expect(tonpaysCalls).toBe(0);
+      // Nothing decided about the broken attempt: still CREATING, never sent, lease given
+      // back, retried later — and its payment neither failed nor closed.
+      const [stuck] = await rows<{
+        creation_state: string;
+        creation_sent_at: string | null;
+        creation_claimed_until: string | null;
+        creation_retry_at: string | null;
+      }>(
+        sql`SELECT creation_state, creation_sent_at, creation_claimed_until, creation_retry_at
+            FROM gateway_invoices WHERE payment_id = ${broken.payment.id}`,
+      );
+      expect(stuck).toMatchObject({
+        creation_state: 'CREATING',
+        creation_sent_at: null,
+        creation_claimed_until: null,
+      });
+      expect(stuck?.creation_retry_at).not.toBeNull();
+      expect((await paymentOf(broken.payment.id)).state).toBe('PENDING');
+      expect(
+        logged.some(
+          (line) =>
+            line.includes(broken.payment.id) &&
+            line.includes('platform.secret_version_unsupported'),
+        ),
+      ).toBe(true);
+
+      // And the healthy provider's inquiry settles while the broken row keeps failing.
+      fake.pay(healthyInvoice.provider_order_id);
+      offsetMs += 6 * 60_000;
+      const settled = await mixed.runOnce(tenantA);
+      expect(settled.settled).toBe(1);
+      expect((await paymentOf(healthy.payment.id)).state).toBe('CONFIRMED');
+      expect((await paymentOf(broken.payment.id)).state).toBe('PENDING');
+      expect(await ledger()).toHaveLength(1);
+    });
+
     it('refuses a referenceId already consumed by another payment: one reference, one credit', async () => {
       await enableCentralPay();
       const first = await createdAttempt(150_000n);
@@ -666,6 +843,69 @@ describe('CentralPay, through the one settlement path', () => {
       }
       expect(fake.verifies.length - atDeadline).toBeLessThanOrEqual(3);
       expect(await ledger()).toEqual([]);
+    });
+
+    /*
+     * Codex P1 on #260: the inquiry is authorised by the VERIFY key, the create by the link
+     * key. A create that succeeds proves the link key and nothing about the verify key, so it
+     * must not clear the alarm that no approval can be read; only an answered verify does.
+     */
+    it('keeps the verify-key alarm open across a successful create, and closes it on an answered verify', async () => {
+      await enableCentralPay();
+      const condition = async () =>
+        rows<{ dedupe_key: string; resolved_at: Date | null; context: Record<string, unknown> }>(
+          sql`SELECT dedupe_key, resolved_at, context FROM operational_events
+               WHERE tenant_id = ${tenantA.tenantId} AND code = 'payments.gateway_misconfigured'
+               ORDER BY first_seen_at`,
+        );
+      await createdAttempt();
+      hideVerifyKey = true;
+      await inquireNow();
+      expect(await condition()).toEqual([
+        {
+          dedupe_key: 'payments.gateway_misconfigured:CENTRALPAY:verify-key',
+          resolved_at: null,
+          context: {
+            provider: 'CENTRALPAY',
+            reason: 'nexa.credential_missing',
+            kind: 'VERIFY_KEY',
+          },
+        },
+      ]);
+
+      // Another customer's link is made with the LINK key, and succeeds — the create path's
+      // own recovery runs. The verify-key alarm stays open: no approval can be read yet.
+      offsetMs = 0;
+      const other = (
+        await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve-cp-2'), {
+          idempotencyKey: 'resolve-cp-2',
+          telegramUserId: '910912',
+          from: { id: 910912, first_name: 'سارا' },
+          botInstanceId: BOT_A,
+        })
+      ).customer.id;
+      const k = key();
+      const second = await ctx.container.payments.requestGatewayTopup(
+        tenantA,
+        systemActor(k),
+        other,
+        { idempotencyKey: k, amount: money(TOPUP_TOMAN, 'IRT'), provider: 'CENTRALPAY' },
+      );
+      const linksBefore = fake.links.length;
+      await pass();
+      expect(fake.links.length).toBe(linksBefore + 1);
+      expect((await invoiceOf(second.payment.id)).creation_state).toBe('CREATED');
+      expect((await condition())[0]?.resolved_at).toBeNull();
+      expect(await openConditions()).toContain('payments.gateway_misconfigured');
+
+      // The verify key is back and CentralPay answers a verify: that is what closes it.
+      hideVerifyKey = false;
+      const verifiesBefore = fake.verifies.length;
+      await inquireNow();
+      expect(fake.verifies.length).toBeGreaterThan(verifiesBefore);
+      expect((await condition())[0]?.resolved_at).not.toBeNull();
+      expect(await openConditions()).not.toContain('payments.gateway_misconfigured');
+      expect((await paymentOf(second.payment.id)).state).toBe('PENDING');
     });
 
     it('accepts no webhook for the route', async () => {

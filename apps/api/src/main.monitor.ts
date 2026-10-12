@@ -1,10 +1,14 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { resolveInstallationTenant } from './bootstrap.js';
+import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { stalledAfterGrace } from './modules/platform/opslog/application/loop-stall-reporter.js';
+
+/** The monitor's name in the operations log: `job.loop_stalled:panel-monitor`. */
+const PANEL_MONITOR_LOOP = 'panel-monitor';
 
 /**
  * Process role: `monitor`.
@@ -40,6 +44,15 @@ async function main(): Promise<void> {
   // container resolves settings for the installation at boot.
   await resolveInstallationTenant(container);
 
+  /*
+   * FIX-03 (batch 2026-10-10): a monitor whose discovery throws on every tick is an
+   * operational condition, as a stalled worker loop is. Before this it went stale in its
+   * own container's health check and nowhere an operator reads — and a monitor that has
+   * stopped is the one thing panel health cannot report about itself.
+   */
+  const loopStalls = loopStallReporterFor(container, 'monitor');
+  let monitorStartedAt: number | null = null;
+
   /**
    * The signal the container's health check reads, and it proves three things.
    *
@@ -74,11 +87,26 @@ async function main(): Promise<void> {
       } catch {
         return false;
       }
+      const now = container.clock.now().getTime();
+      // Not awaited, and it never throws. A disabled monitor never started, so it is
+      // reported as not stalled and a condition a previous life opened closes.
+      const fresh = config.PANEL_MONITOR_ENABLED && container.panelMonitor.iterationIsFresh(now);
+      void loopStalls.observe([
+        {
+          name: PANEL_MONITOR_LOOP,
+          stalled: stalledAfterGrace({
+            fresh,
+            startedAtMs: monitorStartedAt,
+            nowMs: now,
+            graceMs: config.PANEL_MONITOR_TICK_MS * 3,
+          }),
+        },
+      ]);
       // A disabled monitor is a healthy process that is deliberately doing
       // nothing. It must not report itself unhealthy and be restarted for ever
       // by the container runtime — the operator turned it off on purpose.
       if (!config.PANEL_MONITOR_ENABLED) return true;
-      return container.panelMonitor.iterationIsFresh(container.clock.now().getTime());
+      return fresh;
     },
   });
 
@@ -98,6 +126,7 @@ async function main(): Promise<void> {
 
   if (config.PANEL_MONITOR_ENABLED) {
     container.panelMonitor.start();
+    monitorStartedAt = container.clock.now().getTime();
     container.logger.info(
       {
         tickMs: config.PANEL_MONITOR_TICK_MS,

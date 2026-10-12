@@ -385,6 +385,26 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
     return rows[0] === undefined ? null : wizardOf(rows[0]);
   }
 
+  async latestForSubject(
+    scope: TenantContext,
+    subjectId: string,
+    tx?: TransactionScope,
+  ): Promise<TelegramWizardRecord | null> {
+    const rows = await this.exec(tx)
+      .select()
+      .from(telegramWizards)
+      .where(
+        and(
+          eq(telegramWizards.tenantId, requireTenantId(scope)),
+          eq(telegramWizards.subjectId, subjectId),
+          eq(telegramWizards.kind, 'ORDER'),
+        ),
+      )
+      .orderBy(desc(telegramWizards.updatedAt), desc(telegramWizards.messageId))
+      .limit(1);
+    return rows[0] === undefined ? null : wizardOf(rows[0]);
+  }
+
   async moveWizards(
     scope: TenantContext,
     where: WizardSelector,

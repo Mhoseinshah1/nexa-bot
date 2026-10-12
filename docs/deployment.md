@@ -51,14 +51,25 @@ Five containers on one host, behind Compose.
 ```
 
 - **Caddy** is the only container that publishes a host port. It terminates
-  TLS, serves the Web Admin, and proxies `/api/*`, `/health/*` and
-  `/telegram/webhook/*` to the API.
+  TLS, serves the Web Admin, and proxies `/api/*`, `/health/*`,
+  `/telegram/webhook/*`, `/payments/webhook/*` and `/payments/return/*` to the
+  API.
 
-  That last one is not optional. The webhook controller is at
+  The Telegram webhook route is not optional. Its controller is at
   `/telegram/webhook/:botInstanceId` and is **not** under `/api`, so without its
   own route it falls to the SPA fallback and answers Telegram `index.html` with
   a 200 — which Telegram reads as "update accepted". Every update would be
   acknowledged and discarded, silently.
+
+  The same holds for the two payment-gateway routes. `/payments/return/*` (a
+  CentralPay customer's browser coming back from the bank) was missing until
+  batch 2026-10-10: the customer was shown the admin login page instead of the
+  302 back to the bot, and the verify the return exists to bring forward waited
+  for the scheduled inquiry instead. `tests/unit/deployment-compose.test.ts`
+  now reads every root controller and fails if any of its paths would reach
+  the SPA. The route ships in `routes.caddy`, which `botctl update` moves with
+  the image; until a release carrying it is deployed, CentralPay settles on the
+  inquiry schedule alone.
 
 - **PostgreSQL and Redis publish nothing.** They are on an internal network
   that Caddy is not attached to, so the internet-facing container has no route
@@ -575,6 +586,60 @@ healthy: it is a process doing nothing on purpose, not a broken one.
 Any of the three in a crash loop, alive with a blocked event loop, or alive and
 cut off from PostgreSQL goes unhealthy within a check or two, and a release in
 that state is backed out exactly as one whose API never answered.
+
+### Who reports a stalled role, and the one that cannot report itself
+
+Every background role now turns a loop that has stopped making progress into an
+operational condition — `job.loop_stalled`, closed by `job.loop_recovered` — in the
+operations log group's SYSTEM topic. The worker has done this since FIX-05; the
+provisioner, the monitor and the recovery executor since FIX-03 of batch 2026-10-10.
+The report names the loop (`kind`) and the process role (`processRole`), so the
+group says which container to look at:
+
+| Role          | Loops reported (`job.loop_stalled:<name>`)                                                                             |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `worker`      | every loop in its heartbeat (`relay`, `gateway-payments`, `notification-dispatcher`, …)                                |
+| `provisioner` | `provisioner` (the provisioning drain), `provisioner-cashback`, `provisioner-referrals`, `provisioner-service-refunds` |
+| `monitor`     | `panel-monitor`                                                                                                        |
+| `recovery`    | `recovery-executor` (fresh during a CLAIMED run, so a long restore is not a stall; a hang before a claim is)           |
+| `assistant`   | none here — the worker's `support-assistant-watch` raises `support.assistant.stalled` when AI work goes unclaimed      |
+
+A role whose readiness has no startup grace still waits one staleness window after it
+starts before it REPORTS a stall, so a restart does not post a false alarm. Inside that
+window a loop that has not yet succeeded is UNKNOWN, not fresh: it opens nothing and
+closes nothing, so a stall the previous life left open is resolved only by a pass that
+actually succeeds here. A provisioner tick in flight is held to the staleness window
+plus the longest provider exchange the configuration allows (`PANEL_HTTP_TIMEOUT_MS` ×
+the most requests one exchange makes), so a slow panel call within its own deadline is
+not a stall. A role switched off (`PROVISIONER_ENABLED=false`,
+`PANEL_MONITOR_ENABLED=false`) reports nothing stalled, which closes a condition a
+previous life opened.
+
+**What none of this can do: report a dead worker.** Every message to the operations
+log group is SENT by the notification dispatcher, and the dispatcher runs in the
+worker. The other roles still record their stalls while the worker is down — the rows
+are durable and are sent when it returns — but nobody is told in the meantime, and a
+worker whose dispatcher is stalled cannot announce its own stall either. Docker does
+not help: `restart: unless-stopped` restarts a container that EXITS, never one that is
+merely unhealthy.
+
+So an installation needs one check that does not run inside it. Two that work with
+what exists today:
+
+- **An off-host uptime check on `https://<domain>/health/ready`**, alerting on any
+  non-200 for more than a couple of minutes. It covers the API, PostgreSQL, the
+  migrations, and — through the `outbox` dependency, which fails when the oldest
+  unpublished event is older than `OUTBOX_RELAY_MAX_LAG_MS` — a worker whose relay
+  has stopped while events are being written. It does NOT see a stalled dispatcher
+  beside a healthy relay, and on a quiet installation it sees a dead relay only once
+  something is written.
+- **A host-side cron that runs `botctl status`** and alerts through a channel that is
+  not this installation (mail, a separate bot, the hosting provider's monitor) when
+  the exit status is non-zero. `status` reads every container's own health check,
+  including the worker's heartbeat, which goes stale when ANY of its loops — the
+  dispatcher included — stops making progress.
+
+Neither is configured by the installer, and neither is a substitute for the other.
 
 The required set is intersected with what the ACTIVE compose file defines, and
 that is what keeps rolling back to an older release valid. Host assets are
@@ -2356,6 +2421,45 @@ it; the other eighteen (the gateway status and review messages, `receipt_prompt`
   old dispatcher that claims one ends it `FAILED_PERMANENT` (`notification.render_failed`)
   rather than sending it; the operational event itself stays in the log and in «مرکز
   اعلان‌ها».
+
+### What an update changes: NODE_ENV is pinned to production, and the development endpoint is opt-in (FIX-04 S2)
+
+`deploy/compose.yml` now sets `NODE_ENV: production` in the `environment` of the
+shared application anchor, so **every role** (api, worker, monitor, provisioner,
+assistant, recovery) runs as production whatever `/etc/nexa/nexa.env` says —
+`environment` beats `env_file`. Before, a host whose `nexa.env` said
+`NODE_ENV=development` served, on its public domain behind Caddy's `/api/*`
+route:
+
+- the **unauthenticated** `POST /api/admin/v1/system/ping`, a write into
+  append-only tables registered on `NODE_ENV=development` alone;
+- an admin session cookie without `Secure` and without the `__Host-` prefix;
+- no CSRF Origin check when `WEB_ADMIN_ORIGINS` was empty, weak password hashing
+  and loopback panel addresses allowed.
+
+Independently of the pin, the system endpoint is now registered only when
+`DEV_SYSTEM_ENDPOINT_ENABLED=true` **and** `NODE_ENV` is `development` or `test`;
+the config schema refuses that flag in production and beside a public
+`WEB_ADMIN_ORIGINS` or `DEPLOYMENT_TOPOLOGY=reverse-proxy`. A development process
+whose configuration looks public (a public admin origin, a reverse proxy, the
+Telegram webhook) still starts, and logs a `warn` line naming what it found at
+every start. `botctl status` shows a `node environment` row and explains a
+non-production value.
+
+**Before updating a host that ran on development settings:** the update makes
+it a production process, and production refuses to start without what it
+requires — a canonical `https` `WEB_ADMIN_ORIGINS`, `DEPLOYMENT_TOPOLOGY=reverse-proxy`
+with `TRUSTED_PROXY_IPS`, `PASSWORD_HASH_PROFILE` not `fast`, an `https`
+`TELEGRAM_API_BASE_URL`, no `AUTH_MODE=none`, no `NOTIFICATION_TRANSPORT=recording`,
+no `PANEL_HTTP_ALLOW_LOOPBACK`. The installer has always written those
+production values; a hand-edited `nexa.env` may not have them. Remove the
+`NODE_ENV=development` line from `nexa.env` (it is ignored now) and fix what
+`botctl logs api` reports. Existing sessions issued as non-`__Host-` cookies stop
+being read, so administrators sign in again once.
+
+**Rollback** restores the previous compose file, and with it whatever
+`nexa.env` says about `NODE_ENV`. A development process for a test machine
+belongs to the root `docker-compose.yml` and `.env`, never to `deploy/`.
 
 ### How far back you can roll
 

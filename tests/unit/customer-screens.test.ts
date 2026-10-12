@@ -224,20 +224,20 @@ describe('the pre-invoice', () => {
     expect(screen.key).toBe('bot.order.preinvoice');
     expect(render(screen.key, screen.values)).toBe(
       [
-        '🧾 پیش فاکتور شما:',
+        '🧾 پیش‌فاکتور',
         '',
-        '👤 نام کاربر: ali_2026',
-        '🔐 نام سرویس: پلن ۳۰ روزه',
-        '📆 مدت اعتبار: 30 روز',
-        '💵 قیمت: 250,000 تومان',
-        '👥 حجم اکانت: 50 گیگابایت',
+        '📦 سرویس: پلن ۳۰ روزه',
+        '👤 نام کاربری: ali_2026',
+        '📅 مدت: 30 روز',
+        '📊 حجم: 50 گیگابایت',
+        '💵 مبلغ سفارش: 250,000 تومان',
         '',
         'سرورهای پرسرعت آلمان و هلند',
         'مناسب استفادهٔ روزمره و استریم',
         '',
-        '💰 موجودی کیف پول شما: 1,000,000 تومان',
+        '💰 موجودی کیف پول: 1,000,000 تومان',
         '',
-        '💰 سفارش شما آماده پرداخت است',
+        '🛒 سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
       ].join('\n'),
     );
   });
@@ -254,7 +254,7 @@ describe('the pre-invoice', () => {
       expect(text).not.toContain('آلمان');
       expect(text).not.toContain('{');
       expect(text).toContain(
-        '💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n💰 موجودی کیف پول شما',
+        '📊 حجم: 50 گیگابایت\n💵 مبلغ سفارش: 250,000 تومان\n\n💰 موجودی کیف پول',
       );
     },
   );
@@ -284,10 +284,10 @@ describe('the pre-invoice', () => {
     });
     const text = render(screen.key, screen.values);
     expect(text).not.toContain('لوکیشن');
-    expect(text).not.toContain('نام کاربر');
+    expect(text).not.toContain('نام کاربری');
     expect(text).not.toContain('{');
     expect(text).toContain(
-      '💵 قیمت: 250,000 تومان\n👥 حجم اکانت: 50 گیگابایت\n\n💰 موجودی کیف پول شما',
+      '📊 حجم: 50 گیگابایت\n💵 مبلغ سفارش: 250,000 تومان\n\n💰 موجودی کیف پول',
     );
   });
 
@@ -299,7 +299,8 @@ describe('the pre-invoice', () => {
       cashback: money(10_000n, 'IRT'),
     });
     const text = render(screen.key, screen.values);
-    expect(text).toContain('💵 قیمت: 200,000 تومان');
+    // The FINAL figure, labelled with the money model's «مبلغ سفارش» (brief C2.2).
+    expect(text).toContain('💵 مبلغ سفارش: 200,000 تومان');
     expect(text).toContain('🏷 تخفیف: 50,000 تومان (قیمت پیش از تخفیف: 250,000 تومان)');
     expect(text).toContain('🎁 کش‌بک این سفارش پس از تحویل: 10,000 تومان');
   });
@@ -316,8 +317,8 @@ describe('the pre-invoice', () => {
     });
     const text = render(screen.key, screen.values);
     expect(text).toContain('➕ حجم افزوده: 20 گیگابایت');
-    expect(text).not.toContain('مدت اعتبار');
-    expect(text).not.toContain('حجم اکانت');
+    expect(text).not.toContain('📅 مدت');
+    expect(text).not.toContain('📊 حجم:');
   });
 });
 
@@ -340,12 +341,17 @@ describe('the referral screens (R1: exactly two messages)', () => {
     });
     const text = render(card.key, card.values);
     expect(card.key).toBe('bot.referral.invite_card');
-    expect(text.startsWith('💼 زیرمجموعه‌گیری و هدیه خوش‌آمد')).toBe(true);
+    /*
+     * Batch 2026-10-10 (brief C2.5): the copy no longer promises a withdrawal to a bank
+     * card — none exists; a commission is a wallet credit earned at delivery — nor an
+     * unconditional welcome gift, which is flag-gated and off by default.
+     */
+    expect(text.startsWith('💼 دعوت به ربات')).toBe(true);
     expect(text).toContain(
-      'به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد 15 درصد پورسانت دریافت کنید!',
+      'طبق شرایط برنامهٔ زیرمجموعه‌گیری 15 درصد پورسانت می‌گیرد که پس از تحویل سرویس به کیف پول او در ربات واریز می‌شود.',
     );
-    expect(text).toContain('🔗 https://t.me/nexa_bot?start=ref-ABCDEFGH');
-    expect(text.endsWith('📢 دعوت کن، هدیه بگیر، رشد کن!')).toBe(true);
+    expect(text.endsWith('🔗 https://t.me/nexa_bot?start=ref-ABCDEFGH')).toBe(true);
+    expect(text).not.toMatch(/کارت بانکی|برداشت/);
     // Nothing a customer would not want forwarded: no counts, no totals, no gift shares.
     expect(text).not.toContain('📊');
     expect(text).not.toContain('زیرمجموعه‌ها:');

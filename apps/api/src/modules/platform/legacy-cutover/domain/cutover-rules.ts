@@ -222,19 +222,28 @@ export interface StopSalesFacts {
   readonly activePanelsNotDrained: number;
   readonly gateways: number;
   readonly gatewaysActive: number;
+  /** Phase 7: APPLYING `.nxpkg` imports of the tenant — each freezes every write. */
+  readonly frozenByImport: number;
 }
 
+/**
+ * Phase 7: an APPLYING `.nxpkg` import of the tenant also holds — its installation-wide write
+ * freeze refuses every order, payment and panel write, which is stopped sales by construction
+ * and needs no incident (the restore page sends nobody to the incident page).
+ */
 export function stopSalesHolds(facts: StopSalesFacts): {
   readonly holds: boolean;
   readonly detail: string;
 } {
   const holds =
-    facts.activeStopSalesIncidents >= 1 &&
-    facts.activePanelsNotDrained === 0 &&
-    facts.gatewaysActive === 0;
+    facts.frozenByImport >= 1 ||
+    (facts.activeStopSalesIncidents >= 1 &&
+      facts.activePanelsNotDrained === 0 &&
+      facts.gatewaysActive === 0);
   return {
     holds,
     detail:
+      `installation frozen by an APPLYING import=${String(facts.frozenByImport)}; ` +
       `active stop_sales MAINTENANCE incidents=${String(facts.activeStopSalesIncidents)}; ` +
       `active panels not drained=${String(facts.activePanelsNotDrained)} of ${String(facts.activePanels)}; ` +
       `gateways still ACTIVE=${String(facts.gatewaysActive)} of ${String(facts.gateways)}`,

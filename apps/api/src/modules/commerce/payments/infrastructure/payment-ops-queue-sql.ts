@@ -1,5 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
-import type { PaymentGatewayProvider, PaymentOpsQueue } from '@nexa/contracts';
+import type { PaymentGatewayProvider, PaymentOpsQueue, TimePeriod } from '@nexa/contracts';
 import { payments } from '../../../../infrastructure/persistence/schema.js';
 import {
   PARTIAL_PAYMENT_STATUSES,
@@ -36,23 +36,13 @@ export function paymentOpsQueueCondition(queue: PaymentOpsQueue): SQL {
          WHERE a.tenant_id = ${payments.tenantId}
            AND a.entity_type = 'Payment'
            AND a.entity_id = ${payments.id}::text
-           AND a.action = ${PAYMENT_LOSE_TRACK_ACTION}
-           AND a.after ->> 'reason' IS NOT NULL)`;
+           AND ${mismatchHoldAudit()})`;
     case 'PARTIAL':
       return invoiceWhere(partialStatus());
     case 'LATE_COMPLETION':
-      /*
-       * The durable marker as well as the outcome (review of PR #243, CX1): an attempt the
-       * provider refused first (UNSUCCESSFUL) and approved later keeps its first outcome,
-       * and only `late_completion_observed_at` says the money arrived.
-       */
-      return invoiceWhere(
-        sql`(gi.outcome = 'LATE_COMPLETION' OR gi.late_completion_observed_at IS NOT NULL)`,
-      );
+      return invoiceWhere(lateCompletionInvoice());
     case 'PROVIDER_ERROR':
-      return invoiceWhere(
-        sql`(gi.creation_state IN ('CREATE_FAILED', 'CREATE_UNKNOWN') OR gi.last_inquiry_error_code IS NOT NULL)`,
-      );
+      return invoiceWhere(providerErrorInvoice());
     case 'REFUND_RELATED':
       return sql`EXISTS (
         SELECT 1 FROM refunds r
@@ -61,6 +51,75 @@ export function paymentOpsQueueCondition(queue: PaymentOpsQueue): SQL {
     case 'NEEDS_ACTION':
       return needsActionCondition();
   }
+}
+
+/**
+ * Only a canonical (lowercase) uuid can equal `payments.id::text`, which is what MISMATCH
+ * compares; anything else names no payment. The CASE, rather than a WHERE beside the cast,
+ * is what guarantees the cast never sees a malformed id — PostgreSQL does not promise the
+ * order it evaluates ANDed quals in.
+ */
+const CANONICAL_UUID = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+
+/**
+ * The ids of the tenant's payments that CAN be in some queue: a superset of every queue's
+ * rows, read from the rows that make a payment eligible rather than from every payment the
+ * tenant ever took (FIX-11: the attention counts scanned all of them, 2.5 s at 400k).
+ *
+ * Every queue's predicate implies one of these arms, which is what makes it a superset:
+ *
+ * - PENDING, NEEDS_ACTION's receipt arm         → `state = 'PENDING'`;
+ * - UNKNOWN, NEEDS_RECONCILIATION, NEEDS_ACTION → `state = 'UNKNOWN'`;
+ * - PARTIAL, LATE_COMPLETION, PROVIDER_ERROR    → an invoice satisfying that queue's own
+ *   invoice condition (the same functions, not a restatement);
+ * - REFUND_RELATED, NEEDS_ACTION's refund arm   → any refund against the payment;
+ * - MISMATCH                                    → the lane's audited hold.
+ *
+ * It only narrows the rows the queue predicates are then asked about; it never decides a
+ * count. A new queue whose predicate implies none of these arms must add one here, and
+ * `payment-operations.test.ts` compares the counts with the full scan to catch it.
+ */
+export function paymentOpsCandidateIds(tenantId: string, window: TimePeriod | null): SQL {
+  // The caller bounds `payments.created_at` itself; repeating the window on the payment arm
+  // only lets that arm use it too. The other arms carry no `created_at` of the payment.
+  const inWindow =
+    window === null
+      ? sql``
+      : sql` AND p.created_at >= ${window.start.toISOString()}::timestamptz AND p.created_at < ${window.end.toISOString()}::timestamptz`;
+  return sql`(
+    SELECT p.id FROM payments p
+     WHERE p.tenant_id = ${tenantId}::uuid AND p.state IN ('PENDING', 'UNKNOWN')${inWindow}
+    UNION ALL
+    SELECT gi.payment_id FROM gateway_invoices gi
+     WHERE gi.tenant_id = ${tenantId}::uuid
+       AND (${partialStatus()} OR ${lateCompletionInvoice()} OR ${providerErrorInvoice()})
+    UNION ALL
+    SELECT r.payment_id FROM refunds r WHERE r.tenant_id = ${tenantId}::uuid
+    UNION ALL
+    SELECT CASE WHEN a.entity_id ~ ${CANONICAL_UUID} THEN a.entity_id::uuid END
+      FROM audit_logs a
+     WHERE a.tenant_id = ${tenantId}::uuid
+       AND a.entity_type = 'Payment'
+       AND ${mismatchHoldAudit()}
+  )`;
+}
+
+/** The lane's audited mismatch hold (`a` is the `audit_logs` row). */
+function mismatchHoldAudit(): SQL {
+  return sql`a.action = ${PAYMENT_LOSE_TRACK_ACTION} AND a.after ->> 'reason' IS NOT NULL`;
+}
+
+/**
+ * The durable marker as well as the outcome (review of PR #243, CX1): an attempt the
+ * provider refused first (UNSUCCESSFUL) and approved later keeps its first outcome, and only
+ * `late_completion_observed_at` says the money arrived. `gi` is the invoice.
+ */
+function lateCompletionInvoice(): SQL {
+  return sql`(gi.outcome = 'LATE_COMPLETION' OR gi.late_completion_observed_at IS NOT NULL)`;
+}
+
+function providerErrorInvoice(): SQL {
+  return sql`(gi.creation_state IN ('CREATE_FAILED', 'CREATE_UNKNOWN') OR gi.last_inquiry_error_code IS NOT NULL)`;
 }
 
 /**
