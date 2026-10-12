@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GATEWAY_CLAIM_LEASE_MS,
+  GATEWAY_LEASE_MARGIN_MS,
+  GATEWAY_ROW_BOUND_MS,
+  gatewayClaimLeaseMs,
   GATEWAY_ROW_FAILURE_RETRY_MAX_MS,
   GATEWAY_ROW_FAILURE_RETRY_MIN_MS,
   errorFacts,
@@ -40,5 +44,18 @@ describe('a gateway row that threw', () => {
     ).toEqual({ error: 'Error', code: null });
     expect(errorFacts('a string')).toEqual({ error: 'unknown', code: null });
     expect(JSON.stringify(errorFacts(wrapped))).not.toContain('REF-1');
+  });
+});
+
+/** FIX10 R1: a claim's lease always covers one whole row, with a margin, whatever the bound. */
+describe('the gateway claim lease', () => {
+  it('is never shorter than the row bound plus the margin, nor than the base lease', () => {
+    expect(gatewayClaimLeaseMs(GATEWAY_ROW_BOUND_MS)).toBeGreaterThanOrEqual(
+      GATEWAY_ROW_BOUND_MS + GATEWAY_LEASE_MARGIN_MS,
+    );
+    expect(gatewayClaimLeaseMs(1_000)).toBe(GATEWAY_CLAIM_LEASE_MS);
+    // An operator who raises the Telegram timeout to its maximum still gets a lease that covers a row.
+    const slow = 15_000 + 3 * 120_000;
+    expect(gatewayClaimLeaseMs(slow)).toBe(slow + GATEWAY_LEASE_MARGIN_MS);
   });
 });
