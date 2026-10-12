@@ -31,6 +31,10 @@ export const DETAIL_KEYS: readonly string[] = [
   'providerInvoiceId',
   'panelId',
   'operationId',
+  // The operation's TYPE (`CREATE_USER`, `RENEW`, …): a closed enum, never a value a
+  // customer typed, and what an operator needs to tell a stalled renewal from a stalled
+  // create (FIX-03, batch 2026-10-10).
+  'operationType',
   'notificationId',
   'backupRunId',
   'recoveryId',

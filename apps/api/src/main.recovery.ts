@@ -38,6 +38,16 @@ const RECOVERY_EXECUTOR_LOOP = 'recovery-executor';
  * polling for a confirmed request that is not there. That is deliberate and it
  * is cheap: one indexed query per tick against a partial index over a handful of
  * states.
+ *
+ * PHASE 7 — THE SECOND RESTORE SOURCE. The Web Admin's restore page also takes a
+ * Mirza `.nxpkg` (`docs/legacy-migration/nxpkg-importer.md` §10), and this role is
+ * what executes it: `container.migrationExecutor`, the same loop `main.migration.ts`
+ * runs for the rehearsal kit, started here beside the recovery executor. Each has
+ * its own timer, lease and table; they exclude each other by state (a restore is
+ * not confirmed while an import is APPROVED or APPLYING, an import is neither
+ * approved nor started while a restore is confirmed), and the import's own write
+ * freeze is the restore's quiesce mechanism. `LEGACY_MIGRATION_ENABLED=false` is
+ * the kill switch: the loop then ticks, reports healthy and claims nothing.
  */
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -98,7 +108,9 @@ async function main(): Promise<void> {
           }),
         },
       ]);
-      return fresh;
+      // BOTH loops: a role whose migration loop stopped ticking is not healthy just because
+      // the recovery loop still is (each loop's own step keeps its own lease alive).
+      return fresh && container.migrationExecutor.isFresh(now);
     },
   });
 
@@ -124,6 +136,9 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
     close: async () => {
       heartbeat.stop();
+      // Stops the TIMER only, as for the recovery executor: an import step in flight runs to
+      // its end, or is resumed from its phase bookmark after its lease expires.
+      container.migrationExecutor.stop();
       await container.shutdown();
     },
   });
@@ -133,9 +148,20 @@ async function main(): Promise<void> {
 
   container.recoveryExecutor.start();
   executorStartedAt = container.clock.now().getTime();
+  container.migrationExecutor.start();
+  if (!config.LEGACY_MIGRATION_ENABLED) {
+    container.logger.warn(
+      {},
+      'Mirza package restore is turned off (LEGACY_MIGRATION_ENABLED=false); no package will be processed',
+    );
+  }
   container.logger.info(
-    { env: config.NODE_ENV, tickMs: config.RECOVERY_TICK_MS },
-    'recovery executor running',
+    {
+      env: config.NODE_ENV,
+      tickMs: config.RECOVERY_TICK_MS,
+      migrationTickMs: config.LEGACY_MIGRATION_TICK_MS,
+    },
+    'recovery executor running, with the Mirza package executor beside it',
   );
 }
 

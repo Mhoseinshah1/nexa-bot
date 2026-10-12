@@ -51,14 +51,25 @@ Five containers on one host, behind Compose.
 ```
 
 - **Caddy** is the only container that publishes a host port. It terminates
-  TLS, serves the Web Admin, and proxies `/api/*`, `/health/*` and
-  `/telegram/webhook/*` to the API.
+  TLS, serves the Web Admin, and proxies `/api/*`, `/health/*`,
+  `/telegram/webhook/*`, `/payments/webhook/*` and `/payments/return/*` to the
+  API.
 
-  That last one is not optional. The webhook controller is at
+  The Telegram webhook route is not optional. Its controller is at
   `/telegram/webhook/:botInstanceId` and is **not** under `/api`, so without its
   own route it falls to the SPA fallback and answers Telegram `index.html` with
   a 200 — which Telegram reads as "update accepted". Every update would be
   acknowledged and discarded, silently.
+
+  The same holds for the two payment-gateway routes. `/payments/return/*` (a
+  CentralPay customer's browser coming back from the bank) was missing until
+  batch 2026-10-10: the customer was shown the admin login page instead of the
+  302 back to the bot, and the verify the return exists to bring forward waited
+  for the scheduled inquiry instead. `tests/unit/deployment-compose.test.ts`
+  now reads every root controller and fails if any of its paths would reach
+  the SPA. The route ships in `routes.caddy`, which `botctl update` moves with
+  the image; until a release carrying it is deployed, CentralPay settles on the
+  inquiry schedule alone.
 
 - **PostgreSQL and Redis publish nothing.** They are on an internal network
   that Caddy is not attached to, so the internet-facing container has no route
@@ -2410,6 +2421,45 @@ it; the other eighteen (the gateway status and review messages, `receipt_prompt`
   old dispatcher that claims one ends it `FAILED_PERMANENT` (`notification.render_failed`)
   rather than sending it; the operational event itself stays in the log and in «مرکز
   اعلان‌ها».
+
+### What an update changes: NODE_ENV is pinned to production, and the development endpoint is opt-in (FIX-04 S2)
+
+`deploy/compose.yml` now sets `NODE_ENV: production` in the `environment` of the
+shared application anchor, so **every role** (api, worker, monitor, provisioner,
+assistant, recovery) runs as production whatever `/etc/nexa/nexa.env` says —
+`environment` beats `env_file`. Before, a host whose `nexa.env` said
+`NODE_ENV=development` served, on its public domain behind Caddy's `/api/*`
+route:
+
+- the **unauthenticated** `POST /api/admin/v1/system/ping`, a write into
+  append-only tables registered on `NODE_ENV=development` alone;
+- an admin session cookie without `Secure` and without the `__Host-` prefix;
+- no CSRF Origin check when `WEB_ADMIN_ORIGINS` was empty, weak password hashing
+  and loopback panel addresses allowed.
+
+Independently of the pin, the system endpoint is now registered only when
+`DEV_SYSTEM_ENDPOINT_ENABLED=true` **and** `NODE_ENV` is `development` or `test`;
+the config schema refuses that flag in production and beside a public
+`WEB_ADMIN_ORIGINS` or `DEPLOYMENT_TOPOLOGY=reverse-proxy`. A development process
+whose configuration looks public (a public admin origin, a reverse proxy, the
+Telegram webhook) still starts, and logs a `warn` line naming what it found at
+every start. `botctl status` shows a `node environment` row and explains a
+non-production value.
+
+**Before updating a host that ran on development settings:** the update makes
+it a production process, and production refuses to start without what it
+requires — a canonical `https` `WEB_ADMIN_ORIGINS`, `DEPLOYMENT_TOPOLOGY=reverse-proxy`
+with `TRUSTED_PROXY_IPS`, `PASSWORD_HASH_PROFILE` not `fast`, an `https`
+`TELEGRAM_API_BASE_URL`, no `AUTH_MODE=none`, no `NOTIFICATION_TRANSPORT=recording`,
+no `PANEL_HTTP_ALLOW_LOOPBACK`. The installer has always written those
+production values; a hand-edited `nexa.env` may not have them. Remove the
+`NODE_ENV=development` line from `nexa.env` (it is ignored now) and fix what
+`botctl logs api` reports. Existing sessions issued as non-`__Host-` cookies stop
+being read, so administrators sign in again once.
+
+**Rollback** restores the previous compose file, and with it whatever
+`nexa.env` says about `NODE_ENV`. A development process for a test machine
+belongs to the root `docker-compose.yml` and `.env`, never to `deploy/`.
 
 ### How far back you can roll
 

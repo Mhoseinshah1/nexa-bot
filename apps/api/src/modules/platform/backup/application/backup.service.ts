@@ -96,6 +96,13 @@ export interface BackupServiceDeps {
    * genuinely possible state, since a backup can be taken before provisioning.
    */
   readonly opsLog: OperationalEventRecorder;
+  /**
+   * Phase 7 (review M2): the RECORDER ALONE, without the projection to Telegram — the raw
+   * operational-event writer. A `deliver: false` run (the Mirza restore's backups: "a restore
+   * sends nothing to Telegram") records its events here, so its conditions open and close as
+   * any run's do and nothing is announced to the operations group.
+   */
+  readonly quietOpsLog: OperationalEventRecorder;
   readonly scope: () => ScopeContext | null;
   /**
    * Where the archive stays when it is too large to send.
@@ -160,7 +167,17 @@ export class BackupService {
    * the installation's invariant is one backup at a time, and a second caller
    * being told "already running, since 09:14" is the invariant working.
    */
-  async run(trigger: BackupTrigger): Promise<BackupOutcome> {
+  async run(
+    trigger: BackupTrigger,
+    /**
+     * `deliver: false` keeps the verified archive on this server only: the DELIVER stage is
+     * recorded NOT_ATTEMPTED and nothing is sent to Telegram. Used by the Mirza restore's
+     * protective and post-import backups (a restore sends nothing to Telegram; the archive
+     * holds every imported customer). Every other stage, the lock and the verification are
+     * the same run's.
+     */
+    options: { readonly deliver?: boolean } = {},
+  ): Promise<BackupOutcome> {
     // Release any lock whose owner died before it could. Done first, and by
     // FAILING the abandoned run rather than adopting it: its files belong to a
     // process that may still be writing them.
@@ -200,6 +217,8 @@ export class BackupService {
       });
     }
 
+    // A run that stays on this server also says nothing to Telegram about itself (M2).
+    const quiet = options.deliver === false;
     const id = this.deps.ids.uuid();
     const startedAt = this.deps.clock.now();
     const claim = await this.deps.runs.start({
@@ -350,13 +369,20 @@ export class BackupService {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
-      const delivered = await this.deliver({
-        id,
-        manifest,
-        archivePath: workspace.archivePath,
-        archiveBytes: sealed.archiveBytes,
-        tableCount: verified.tableCount,
-      });
+      const delivered =
+        options.deliver === false
+          ? {
+              state: 'NOT_ATTEMPTED' as const,
+              detail: 'Kept on this server only: this run was asked not to leave it.',
+              attemptedAt: null,
+            }
+          : await this.deliver({
+              id,
+              manifest,
+              archivePath: workspace.archivePath,
+              archiveBytes: sealed.archiveBytes,
+              tableCount: verified.tableCount,
+            });
       deliveryState = delivered.state;
       deliveryDetail = delivered.detail;
       deliveryAttemptedAt = delivered.attemptedAt;
@@ -376,16 +402,21 @@ export class BackupService {
       // that a crash between the two leaves the condition open rather than
       // resolved — an operator chasing a backup that is fine costs an hour, and
       // one who believes a broken backup recovered costs a database.
-      await this.report({
-        code: 'backup.run_ok',
-        severity: 'INFO',
-        message: `Backup ${id} completed and was verified against a real restore.`,
-        context: { backupId: id, trigger, delivery: deliveryState },
-        recoversCode: 'backup.run_failed',
-        recoversDedupeKey: BACKUP_CONDITION_KEY,
-      });
-      await this.reportDelivery(id, deliveryState);
-      if (!cleanupOk) await this.reportCleanup(id, 'SUCCEEDED', leftovers.length);
+      await this.report(
+        {
+          code: 'backup.run_ok',
+          severity: 'INFO',
+          message: `Backup ${id} completed and was verified against a real restore.`,
+          context: { backupId: id, trigger, delivery: deliveryState },
+          recoversCode: 'backup.run_failed',
+          recoversDedupeKey: BACKUP_CONDITION_KEY,
+        },
+        quiet,
+      );
+      // A run asked NOT to deliver says nothing about delivery (M2): it neither opens nor
+      // closes the delivery condition — "not attempted" here is not "not configured".
+      if (!quiet) await this.reportDelivery(id, deliveryState);
+      if (!cleanupOk) await this.reportCleanup(id, 'SUCCEEDED', leftovers.length, quiet);
 
       // Inside the `try`, so a rejection here is caught below and re-finished as
       // FAILED with a condition — the row does not stay RUNNING holding the
@@ -438,13 +469,16 @@ export class BackupService {
        * closed vocabularies and stay in the message, because they are what makes
        * the alert actionable; `context` is redacted and is not projected.
        */
-      await this.report({
-        code: 'backup.run_failed',
-        severity: 'ERROR',
-        message: `Backup ${id} failed at ${stage} (${failureCode}).`,
-        context: { backupId: id, trigger, stage, failureCode, failureMessage },
-        dedupeKey: BACKUP_CONDITION_KEY,
-      });
+      await this.report(
+        {
+          code: 'backup.run_failed',
+          severity: 'ERROR',
+          message: `Backup ${id} failed at ${stage} (${failureCode}).`,
+          context: { backupId: id, trigger, stage, failureCode, failureMessage },
+          dedupeKey: BACKUP_CONDITION_KEY,
+        },
+        quiet,
+      );
 
       // Everything goes, archive included. An archive from a run that failed
       // before verification is unproven, and an unproven archive on disk is
@@ -457,7 +491,7 @@ export class BackupService {
         ...(workspace === null ? [] : await workspace.discardAll()),
         ...this.deps.tools.leaked,
       ];
-      if (leftovers.length > 0) await this.reportCleanup(id, 'FAILED', leftovers.length);
+      if (leftovers.length > 0) await this.reportCleanup(id, 'FAILED', leftovers.length, quiet);
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,
@@ -721,14 +755,18 @@ export class BackupService {
     id: string,
     state: 'SUCCEEDED' | 'FAILED',
     left: number,
+    quiet = false,
   ): Promise<void> {
-    await this.report({
-      code: 'backup.cleanup_failed',
-      severity: 'ERROR',
-      message: `Backup ${id} (${state}) left ${String(left)} artifact(s) on this host after cleanup.`,
-      context: { backupId: id, state, leftovers: left },
-      dedupeKey: CLEANUP_CONDITION_KEY,
-    });
+    await this.report(
+      {
+        code: 'backup.cleanup_failed',
+        severity: 'ERROR',
+        message: `Backup ${id} (${state}) left ${String(left)} artifact(s) on this host after cleanup.`,
+        context: { backupId: id, state, leftovers: left },
+        dedupeKey: CLEANUP_CONDITION_KEY,
+      },
+      quiet,
+    );
   }
 
   private async isOpen(code: string): Promise<boolean> {
@@ -753,15 +791,18 @@ export class BackupService {
    * which would replace the message an operator needs with the message about
    * why they did not get it.
    */
-  private async report(event: {
-    code: string;
-    severity: 'INFO' | 'WARN' | 'ERROR';
-    message: string;
-    context: Record<string, unknown>;
-    dedupeKey?: string;
-    recoversCode?: string;
-    recoversDedupeKey?: string;
-  }): Promise<void> {
+  private async report(
+    event: {
+      code: string;
+      severity: 'INFO' | 'WARN' | 'ERROR';
+      message: string;
+      context: Record<string, unknown>;
+      dedupeKey?: string;
+      recoversCode?: string;
+      recoversDedupeKey?: string;
+    },
+    quiet = false,
+  ): Promise<void> {
     const scope = this.deps.scope();
     if (scope === null) {
       // No tenant provisioned yet. Recording under an invented scope would be
@@ -773,7 +814,7 @@ export class BackupService {
       return;
     }
     try {
-      await this.deps.opsLog.record(scope, event);
+      await (quiet ? this.deps.quietOpsLog : this.deps.opsLog).record(scope, event);
     } catch (error) {
       this.deps.logger.error(
         { code: event.code, reason: error instanceof Error ? error.message : String(error) },

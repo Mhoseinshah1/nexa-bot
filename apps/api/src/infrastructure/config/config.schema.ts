@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
+import { publicExposureSignals } from './exposure.js';
 import {
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
@@ -233,6 +234,15 @@ export const configSchema = z
           .map((origin) => origin.trim())
           .filter((origin) => origin.length > 0),
       ),
+
+    /**
+     * FIX-04 (S2): the unauthenticated `POST /api/admin/v1/system/ping` — a write into
+     * append-only tables with no session — is registered only when this is true AND
+     * NODE_ENV is development or test (`infrastructure/config/exposure.ts`). It used to
+     * follow NODE_ENV alone, so a host left on development served it to the internet.
+     * Refused in production and next to a public admin origin or a reverse proxy.
+     */
+    DEV_SYSTEM_ENDPOINT_ENABLED: booleanish.default(false),
 
     TELEGRAM_WEBHOOK_ENABLED: booleanish.default(false),
     // The route itself is fixed at /telegram/webhook. A configurable path was
@@ -723,6 +733,66 @@ export const configSchema = z
      */
     RECOVERY_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(365),
     /**
+     * Mirza `.nxpkg` importer — Fresh Migration (`docs/legacy-migration/nxpkg-importer.md`).
+     *
+     * ON by default (Phase 7, owner instruction: no server commands). The Web Admin's restore
+     * page takes a Mirza `.nxpkg` as its second source, and the `recovery` role executes it.
+     * What makes ON safe is not this flag: the fresh-target guard (an installation holding
+     * operational data is refused; nothing is deleted), the owner-only CRITICAL
+     * `legacy.migration.apply`, the typed confirmation bound to the dry run's digest, the
+     * mandatory verified protective backup before any write, and the installation-wide write
+     * freeze while the import applies.
+     *
+     * `false` is the kill switch, and off means off everywhere: every Web Admin route refuses
+     * and the executor (in the `recovery` and `migration` roles) claims nothing.
+     */
+    LEGACY_MIGRATION_ENABLED: booleanish.default(true),
+    /**
+     * Where uploaded packages live: one `0700` directory per import, the package `0600`
+     * inside it, and the `migration` role's private per-step directories for decrypted
+     * content (each deleted when its step ends). Its OWN directory, never the recovery's or
+     * the backup's: a sweep written for one must never reach another. In the deployment it is
+     * the `legacymigration` volume, shared by the `api` (the upload) and the `recovery` role
+     * (the executor).
+     */
+    LEGACY_MIGRATION_WORK_DIR: z.string().trim().min(1).default('/var/lib/nexa/legacy-migration'),
+    /**
+     * The ceiling on an uploaded package, counted on the STREAM (a chunked request declares
+     * no length). Two gigabytes by default — a converted Mirza backup is far smaller.
+     */
+    LEGACY_MIGRATION_UPLOAD_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(64 * 1024 * 1024 * 1024)
+      .default(2 * 1024 * 1024 * 1024),
+    /** How often the `migration` role asks whether an import has work for it. */
+    LEGACY_MIGRATION_TICK_MS: z.coerce.number().int().min(1_000).max(600_000).default(15_000),
+    /**
+     * Whether a FINISHED import (any terminal state) keeps its encrypted package and its
+     * ownership decisions file on disk. Off by default: the `migration` role deletes both
+     * once the import is terminal (the backup it took and the import row are the record).
+     * Decrypted step directories are deleted whatever this says.
+     */
+    LEGACY_MIGRATION_RETAIN_PACKAGE: booleanish.default(false),
+    /**
+     * How long a sealed package key may wait in VERIFIED or DRY_RUN_DONE — states that wait
+     * on a person, not on the `migration` role — before the role erases it. The operator
+     * then gives the key again. One day by default; one minute to thirty days.
+     */
+    LEGACY_MIGRATION_KEY_IDLE_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(30 * 24 * 60 * 60_000)
+      .default(24 * 60 * 60_000),
+    /** Where the `migration` role writes its heartbeat. Its own key, like every role's. */
+    LEGACY_MIGRATION_HEARTBEAT_PATH: z
+      .string()
+      .trim()
+      .min(1)
+      .default('/tmp/nexa-migration.heartbeat'),
+    /**
      * How long a FINISHED backup run row is kept.
      *
      * A year, because the row is the only durable evidence that a backup was
@@ -1046,6 +1116,28 @@ export const configSchema = z
             'TELEGRAM_API_BASE_URL must use https in production. The bot token is part of every ' +
             'request path, so an insecure base URL publishes the credential on the wire. A local ' +
             'http stub is permitted outside production.',
+        });
+      }
+    }
+
+    if (config.DEV_SYSTEM_ENDPOINT_ENABLED) {
+      // Refused rather than ignored. The route is not registered in production
+      // either way; a flag that silently does nothing is a flag somebody copies
+      // to the next host believing it does something.
+      // The webhook is a warning signal, not a refusal: a local process with a
+      // tunnel for Telegram is a normal development set-up.
+      const exposure = publicExposureSignals(config, { webhook: false });
+      if (config.NODE_ENV === 'production' || exposure.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['DEV_SYSTEM_ENDPOINT_ENABLED'],
+          message:
+            'DEV_SYSTEM_ENDPOINT_ENABLED registers an UNAUTHENTICATED write endpoint and is ' +
+            'permitted only on a local development or test process. ' +
+            (config.NODE_ENV === 'production'
+              ? 'NODE_ENV is production.'
+              : `This configuration looks public: ${exposure.join('; ')}.`) +
+            ' Remove the setting.',
         });
       }
     }

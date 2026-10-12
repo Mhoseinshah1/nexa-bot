@@ -187,8 +187,28 @@ import { FileCutoverJournal } from './modules/platform/recovery/infrastructure/c
 import { RecoveryService } from './modules/platform/recovery/application/recovery.service.js';
 import { BackupAdminService } from './modules/platform/recovery/application/backup-admin.service.js';
 import { RecoveryExecutor } from './modules/platform/recovery/application/recovery-executor.js';
+import { LegacyMigrationService } from './modules/platform/legacy-migration/application/legacy-migration.service.js';
+import { LegacyMigrationExecutor } from './modules/platform/legacy-migration/application/legacy-migration-executor.js';
+import { DrizzleLegacyNxpkgImportRepository } from './modules/platform/legacy-migration/infrastructure/drizzle-legacy-nxpkg-import.repository.js';
+import { FilesystemMigrationWorkspaces } from './modules/platform/legacy-migration/infrastructure/filesystem-migration-workspaces.js';
+import { PipelineBackupPort } from './modules/platform/legacy-migration/infrastructure/migration-adapters.js';
+import { NxpkgMigrationAdapters } from './modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters.js';
+import {
+  classifyTarget,
+  TARGET_ACK_ENV,
+  targetAcknowledgement,
+  type TargetIdentity,
+} from './modules/platform/legacy-importer/application/production-guard.js';
 import { expectedMigrations } from './infrastructure/persistence/migration-state.js';
-import type { InstallationWriteGate } from './infrastructure/persistence/write-gate.js';
+import {
+  takeRestoreExclusionLock,
+  withRestoreExclusion,
+} from './infrastructure/persistence/restore-exclusion.js';
+import {
+  legacyMigrationQuiesceId,
+  runAsLegacyMigration,
+  type InstallationWriteGate,
+} from './infrastructure/persistence/write-gate.js';
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
@@ -260,6 +280,9 @@ import { DrizzleLegacyCutoverRepository } from './modules/platform/legacy-cutove
 import { DrizzleLegacyProductReviewRepository } from './modules/commerce/legacy-product-review/infrastructure/drizzle-legacy-product-review.repository.js';
 import { LegacyInvoiceArchiveService } from './modules/platform/legacy-invoice-archive/application/legacy-invoice-archive.service.js';
 import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy-invoice-archive/infrastructure/drizzle-legacy-invoice-archive.repository.js';
+import { LegacyHistoryIngest } from './modules/platform/legacy-history/application/legacy-history-ingest.js';
+import { LegacyHistoryReadService } from './modules/platform/legacy-history/application/legacy-history-read.service.js';
+import { DrizzleLegacyHistoryRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-history.repository.js';
 import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
 import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
 import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
@@ -751,7 +774,14 @@ import type { NotificationTransport } from './modules/control/notifications/appl
  * delay notification delivery, and a customer waiting for the configuration they paid
  * for must not queue behind a sweep of every panel in the installation.
  */
-export type ProcessRole = 'api' | 'worker' | 'monitor' | 'recovery' | 'provisioner' | 'assistant';
+/*
+ * `migration` is the seventh: the Mirza `.nxpkg` Fresh Migration lane
+ * (`docs/legacy-migration/nxpkg-importer.md` §4). Its own role for the recovery role's reason —
+ * a long job that writes a whole tenant's customers must not share an event loop with the
+ * webhook or the outbox, and no HTTP request may run it.
+ */
+export type ProcessRole =
+  'api' | 'worker' | 'monitor' | 'recovery' | 'provisioner' | 'assistant' | 'migration';
 
 export interface Container {
   readonly config: AppConfig;
@@ -957,6 +987,13 @@ export interface Container {
   readonly legacyProductReviews: LegacyProductReviewService;
   /** Mirza PR3: the append-only legacy invoice archive (Web Admin reads; CLI ingest steps). */
   readonly legacyInvoiceArchive: LegacyInvoiceArchiveService;
+  /**
+   * Mirza `.nxpkg` importer (design §5): the append-only history archive. The ingest is the
+   * migration role's SYSTEM_JOB step (`maintenance.run`); the read is Customer 360's card
+   * (`users.view` + `legacy.history.view`). Neither touches money, orders, services or roles.
+   */
+  readonly legacyHistoryIngest: LegacyHistoryIngest;
+  readonly legacyHistoryRead: LegacyHistoryReadService;
   /**
    * Mirza PR4 (owner decision 6): the owner's review of legacy wallet debts — negative legacy
    * balances held beside the ledger. Reads under `legacy.debts.view`, decisions under
@@ -1324,6 +1361,15 @@ export interface Container {
   readonly recoveryExecutor: RecoveryExecutor;
   readonly recoveryRequests: DrizzleRecoveryRequestRepository;
   readonly recoveryWorkspaces: FilesystemRecoveryWorkspaces;
+  /**
+   * Mirza `.nxpkg` importer (`docs/legacy-migration/nxpkg-importer.md`): the operator's
+   * service (the Web Admin «مهاجرت از میرزا»), and the executor that ONLY the `migration`
+   * role starts. Built in every role, like the recovery executor.
+   */
+  readonly legacyMigration: LegacyMigrationService;
+  readonly migrationExecutor: LegacyMigrationExecutor;
+  readonly legacyNxpkgImports: DrizzleLegacyNxpkgImportRepository;
+  readonly migrationWorkspaces: FilesystemMigrationWorkspaces;
   /** Exposed so a test can drive the lock directly, and so `botctl` can list runs. */
   readonly backupRuns: DrizzleBackupRunRepository;
   /**
@@ -1516,10 +1562,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * differently from the unit of work would be a relay publishing during a
    * cutover.
    */
+  /*
+   * Phase 7: the Mirza `.nxpkg` import's lifecycle table, built here for the same reason — the
+   * gate reads it. An APPLYING import freezes the installation exactly as a quiescing recovery
+   * does (`legacy-migration:<id>`); only that import's own executor writes through it
+   * (`runAsLegacyMigration`). The recovery is asked FIRST: the two are mutually exclusive, and
+   * if both ever held, the restore's answer is the one an operator must see.
+   */
+  const legacyNxpkgImports = new DrizzleLegacyNxpkgImportRepository(database.db);
   const writeGate: InstallationWriteGate = {
     async quiescedBy(tx) {
       const lock = await recoveryRequests.installationLock(tx);
-      return lock !== null && lock.quiescing ? lock.recoveryId : null;
+      if (lock !== null && lock.quiescing) return lock.recoveryId;
+      const applying = await legacyNxpkgImports.applyingImportId(tx);
+      return applying === null ? null : legacyMigrationQuiesceId(applying);
     },
   };
   const uow = new DrizzleUnitOfWork(database.db, writeGate);
@@ -4381,6 +4437,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     auditHistory: new DrizzleAuditHistoryReader(database.db),
     guard,
   });
+  const legacyHistoryRepository = new DrizzleLegacyHistoryRepository(database.db);
+  const legacyHistoryIngest = new LegacyHistoryIngest({
+    repository: legacyHistoryRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const legacyHistoryRead = new LegacyHistoryReadService({
+    repository: legacyHistoryRepository,
+    customers: customerRepository,
+    guard,
+    audit,
+  });
   const customerAccountTransferService = new CustomerAccountTransferService({
     repository: new DrizzleCustomerAccountTransferRepository(database.db),
     customers: customerRepository,
@@ -6430,6 +6504,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // put in front of a person, and nothing here consumes the queue it writes
     // to, so there is no cycle to avoid.
     opsLog,
+    // Phase 7 (M2): the raw writer, NOT projected — a deliver:false run announces nothing.
+    quietOpsLog: opsLogWriter,
     // Resolved per call: the installation's tenant is a row, so it is not known
     // while this object is being built.
     scope: () =>
@@ -6515,6 +6591,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * wrong answer about whether a database can be served.
      */
     expected: () => expectedMigrations(fileURLToPath(new URL('../drizzle', import.meta.url))),
+    // Phase 7: a Mirza import APPROVED or APPLYING refuses a restore's confirmation — read
+    // inside the confirmation's transaction, under the lock the approval takes too (M1).
+    legacyMigrationActive: async (tx) => (await legacyNxpkgImports.committedImportId(tx)) !== null,
+    exclusive: (fn) => withRestoreExclusion(database.db, fn),
     logger,
   });
   /**
@@ -6577,6 +6657,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       const blocking = dependencies.filter((dependency) => dependency.name !== 'outbox');
       return { degraded: blocking.some(blocksReadiness) };
     },
+    legacyMigrationActive: async () => (await legacyNxpkgImports.committedImportId()) !== null,
+    // Phase 7 (H1): the Mirza imports a restored database carried are closed at the cutover.
+    supersedeLegacyImports: (cutoverAt) =>
+      legacyNxpkgImports.supersedeBefore({ before: cutoverAt, now: clock.now() }),
     clock,
     opsLog,
     scope: () =>
@@ -6597,6 +6681,86 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     const lock = await recoveryRequests.installationLock();
     return lock !== null && lock.quiescing;
   };
+  /*
+   * Mirza `.nxpkg` importer — Fresh Migration. The service in every role (the API serves the
+   * Web Admin), the executor STARTED only by `main.migration.ts`.
+   *
+   * PORTS: all real. `NxpkgMigrationAdapters` is the verifier, the runner (the EXISTING
+   * importer through the CLI's own `runMode`), the fresh-target guard and the history ingest;
+   * `PipelineBackupPort` is the standard backup after the import, quiesce honoured.
+   */
+  const migrationWorkspaces = new FilesystemMigrationWorkspaces(config.LEGACY_MIGRATION_WORK_DIR);
+  const legacyMigration = new LegacyMigrationService({
+    repository: legacyNxpkgImports,
+    workspaces: migrationWorkspaces,
+    cipher,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+    enabled: config.LEGACY_MIGRATION_ENABLED,
+    maxUploadBytes: config.LEGACY_MIGRATION_UPLOAD_MAX_BYTES,
+    productionLikeTarget: productionLikeDatabase(config.DATABASE_URL, config.NODE_ENV),
+    targetAcknowledgement: (tenantId) => {
+      const target = databaseTarget(config.DATABASE_URL);
+      return target !== null && productionLikeDatabase(config.DATABASE_URL, config.NODE_ENV)
+        ? targetAcknowledgement(target, tenantId)
+        : null;
+    },
+    // Phase 7: the restore page's approval records the owner's cutover approval too, and is
+    // refused while a disaster recovery holds the installation.
+    cutover: () => legacyCutover,
+    // Serialised with a restore's confirmation on one lock, then read in this transaction (M1).
+    recoveryActive: async (tx) => {
+      await takeRestoreExclusionLock(tx);
+      return (await recoveryRequests.installationLock(tx)) !== null;
+    },
+    logger,
+  });
+  const nxpkgMigration = new NxpkgMigrationAdapters({
+    db: database.db,
+    // Resolved at call time: both are members of the container built below.
+    importer: () => container.legacyImporter(),
+    history: () => container.legacyHistoryIngest,
+    cutover: () => container.legacyCutover,
+    uow,
+    target: databaseTarget(config.DATABASE_URL),
+    // THIS process's environment, as the CLI reads its own: the acknowledgement is a server
+    // operator's act, never a value from the database or a request.
+    guardEnv: () => ({
+      NODE_ENV: config.NODE_ENV,
+      [TARGET_ACK_ENV]: process.env[TARGET_ACK_ENV],
+    }),
+    logger,
+  });
+  const migrationExecutor = new LegacyMigrationExecutor({
+    repository: legacyNxpkgImports,
+    workspaces: migrationWorkspaces,
+    cipher,
+    verifier: nxpkgMigration,
+    runner: nxpkgMigration,
+    freshTarget: nxpkgMigration,
+    history: nxpkgMigration,
+    backup: new PipelineBackupPort(backup, recoveryQuiesced),
+    // Phase 7: never started while a recovery is confirmed and unfinished; the apply runs as
+    // the import's own writer, the one writer its APPLYING freeze lets through.
+    recoveryActive: async () => (await recoveryRequests.installationLock()) !== null,
+    latestCutoverAt: () => recoveryRequests.latestCutoverAt(),
+    asImportWriter: runAsLegacyMigration,
+    clock,
+    correlation: () => newCorrelationId(ids.uuid()),
+    leaseOwner,
+    tickIntervalMs: config.LEGACY_MIGRATION_TICK_MS,
+    enabled: config.LEGACY_MIGRATION_ENABLED,
+    retainPackage: config.LEGACY_MIGRATION_RETAIN_PACKAGE,
+    keyIdleMs: config.LEGACY_MIGRATION_KEY_IDLE_MS,
+    logger,
+  });
   const backupScheduler = new BackupScheduler({
     service: backup,
     runs: backupRuns,
@@ -6885,6 +7049,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyProducts: legacyProductService,
     legacyProductReviews: legacyProductReviewService,
     legacyInvoiceArchive: legacyInvoiceArchiveService,
+    legacyHistoryIngest,
+    legacyHistoryRead,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,
@@ -7282,6 +7448,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recoveryExecutor,
     recoveryRequests,
     recoveryWorkspaces,
+    legacyMigration,
+    migrationExecutor,
+    legacyNxpkgImports,
+    migrationWorkspaces,
     keyring,
     installationKeyLoader,
     installationKeyRepository,
@@ -7332,6 +7502,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       backupScheduler.stop();
       backupHousekeeping.stop();
       recoveryExecutor.stop();
+      migrationExecutor.stop();
       await relay.stop();
       await panelMonitor.stop();
       await notificationDispatcher.stop();
@@ -7376,6 +7547,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ),
   };
   return container;
+}
+
+/**
+ * Whether this installation's own database looks like production, by the legacy importer's
+ * production guard (`classifyTarget`). The Web Admin links the existing cutover approval when
+ * it does. An unparsable URL is production-like: the conservative answer.
+ */
+function productionLikeDatabase(databaseUrl: string, nodeEnv: string): boolean {
+  const target = databaseTarget(databaseUrl);
+  return target === null || classifyTarget(target, { NODE_ENV: nodeEnv }).productionLike;
+}
+
+/** The database URL as the importer's guard identifies a target (`targetIdentity`'s shape). */
+function databaseTarget(databaseUrl: string): TargetIdentity | null {
+  try {
+    const parsed = new URL(databaseUrl);
+    const database = decodeURIComponent(parsed.pathname.replace(/^\//u, ''));
+    if (database === '') return null;
+    return { host: parsed.hostname || 'localhost', port: parsed.port || '5432', database };
+  } catch {
+    return null;
+  }
 }
 
 export const CONTAINER = Symbol('CONTAINER');

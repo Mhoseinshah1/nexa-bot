@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -101,6 +101,31 @@ describe('the production compose topology', () => {
     // Through the shared anchor, so api AND worker receive it.
     const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
     expect(anchor).toContain('NEXA_DATA_SUBNET:');
+  });
+
+  it('pins NODE_ENV=production for every application role, over whatever nexa.env says', () => {
+    // FIX-04 (S2). `environment` beats `env_file`, so the pin in the shared anchor is what
+    // keeps a `NODE_ENV=development` left in nexa.env from turning a public installation
+    // into a development one (Secure-less cookies, an optional CSRF check, weak hashing).
+    const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
+    expect(anchor).toMatch(
+      /^ {2}environment:\n(?: {4}#.*\n| {4}[A-Z_]+: .*\n)* {4}NODE_ENV: production\n/m,
+    );
+    const roles = ['api', 'worker', 'monitor', 'provisioner', 'assistant', 'recovery'];
+    for (const role of roles) {
+      const block = serviceBlock(compose, role);
+      expect(block, `${role} does not merge the shared anchor`).toContain('<<: *app-common');
+      // A service-level `environment:` would REPLACE the anchor's map, pin included.
+      expect(block, `${role} overrides environment and loses the pin`).not.toMatch(
+        /^ {4}environment:/m,
+      );
+    }
+    // Control: every service that merges the anchor is one of the roles above.
+    const merging = [...compose.matchAll(/\n {2}([a-z-]+):\n {4}<<: \*app-common/g)].map(
+      (match) => match[1],
+    );
+    expect(merging.sort()).toEqual([...roles].sort());
+    expect(compose).not.toMatch(/NODE_ENV:\s*development/);
   });
 
   it('mounts no Docker socket, uses no host network and runs nothing privileged', () => {
@@ -297,6 +322,47 @@ describe('the production compose topology', () => {
     expect(redis).not.toMatch(/redisdata:/);
   });
 
+  it('Phase 7: shares the Mirza package workspace between the api (upload) and recovery (executor)', () => {
+    // Through the app-role anchor, so every role that uses it — the api that streams the
+    // upload, the recovery role whose executor opens it — sees the SAME named volume.
+    const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
+    expect(anchor).toMatch(/- legacymigration:\/var\/lib\/nexa\/legacy-migration/);
+    for (const role of ['api', 'recovery']) {
+      expect(serviceBlock(compose, role), role).toMatch(/<<: \*app-common/);
+    }
+    const volumes = compose.slice(compose.indexOf('\nvolumes:'));
+    expect(volumes).toMatch(/\n {2}legacymigration:\n/);
+    // The configured default path IS the mount point.
+    const schema = readFileSync(
+      join(__dirname, '../../apps/api/src/infrastructure/config/config.schema.ts'),
+      'utf8',
+    );
+    expect(schema).toMatch(/LEGACY_MIGRATION_WORK_DIR:[^;]*'\/var\/lib\/nexa\/legacy-migration'/);
+  });
+
+  it('every named volume an app role mounts is a directory the image creates for the node user', () => {
+    // A named volume is initialised from the image's directory at that path; a path the
+    // image does not create comes up root-owned and the non-root process cannot write it
+    // (the Phase 7 review's H2: `legacymigration` was mounted and never created).
+    const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
+    const mounts = [...anchor.matchAll(/^ {4}- ([a-z][a-z0-9-]*):(\/[^\s]+)$/gmu)].map(
+      (m) => m[2] ?? '',
+    );
+    expect(mounts.length, 'the anchor mounts nothing the test can see').toBeGreaterThanOrEqual(3);
+    const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
+    const mkdir =
+      /RUN mkdir -p ([^\n\\]+)\\\n\s*&& chown -R node:node \/var\/lib\/nexa \\\n\s*&& chmod 700 ([^\n]+)/u.exec(
+        dockerfile,
+      );
+    expect(mkdir, 'the image creates its state directories in one RUN').not.toBeNull();
+    const created = new Set(mkdir?.[1]?.trim().split(/\s+/u));
+    const locked = new Set(mkdir?.[2]?.trim().split(/\s+/u));
+    for (const path of mounts) {
+      expect(created.has(path), `${path} is not created in the Dockerfile`).toBe(true);
+      expect(locked.has(path), `${path} is not chmod 700 in the Dockerfile`).toBe(true);
+    }
+  });
+
   it('never writes a secret into the compose file', () => {
     // Every credential arrives through an env_file the Docker daemon reads as
     // root. None is a literal here, and none is a build argument.
@@ -425,6 +491,89 @@ describe('the production Caddy routing', () => {
     // `/telegram/webhook/*`.
     const prefix = declared!.replace(/\/:[^/]+$/, '');
     expect(routes).toContain(`@telegram path ${prefix}/*`);
+  });
+
+  it('routes every API route outside /api to the API, before the SPA fallback', () => {
+    // A controller with an empty @Controller() answers at a path the `/api/*`
+    // matcher does not cover. Each needs its own handle block, or the SPA
+    // fallback answers it with index.html and a 200. `/payments/return/*` was
+    // missed exactly that way: a CentralPay customer coming back from the bank
+    // saw the admin login page and the verify the return should have brought
+    // forward was never scheduled. So this reads the controllers instead of a
+    // list of prefixes somebody has to remember to extend.
+    const apiSrc = join(__dirname, '../../apps/api/src');
+    const contractsSrc = join(__dirname, '../../packages/contracts/src');
+    const constants = new Map<string, string>();
+    for (const file of [
+      join(contractsSrc, 'centralpay.ts'),
+      join(contractsSrc, 'http.ts'),
+      join(apiSrc, 'modules/commerce/payments/application/gateway-payment.service.ts'),
+    ]) {
+      for (const m of readFileSync(file, 'utf8').matchAll(
+        /export const ([A-Z_]+) = '(\/[^']*)';/g,
+      )) {
+        constants.set(m[1]!, m[2]!);
+      }
+    }
+    const healthRoutes = Object.fromEntries(
+      [
+        ...readFileSync(join(contractsSrc, 'http.ts'), 'utf8')
+          .split('export const HEALTH_ROUTES = {')[1]!
+          .split('}')[0]!
+          .matchAll(/(\w+): '([^']+)'/g),
+      ].map((m) => [m[1]!, m[2]!]),
+    );
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? walk(join(dir, e.name))
+          : e.name.endsWith('.controller.ts')
+            ? [join(dir, e.name)]
+            : [],
+      );
+    const controllers = walk(apiSrc).filter((f) =>
+      readFileSync(f, 'utf8').includes('@Controller()'),
+    );
+    expect(controllers.length, 'no root controller found').toBeGreaterThanOrEqual(4);
+    const paths: string[] = [];
+    for (const file of controllers) {
+      const source = readFileSync(file, 'utf8');
+      for (const m of source.matchAll(/@(?:Get|Post|Put|Patch|Delete|All)\(([^)]*)\)/g)) {
+        const arg = m[1]!.trim();
+        const literal = /^(['`])(.+)\1$/.exec(arg);
+        const health = /^HEALTH_ROUTES\.(\w+)$/.exec(arg);
+        const raw = literal ? literal[2]! : health ? healthRoutes[health[1]!] : undefined;
+        expect(raw, `cannot read the route ${arg} in ${file}`).toBeDefined();
+        const resolved = raw!.replace(/\$\{([A-Z_]+)\}/g, (_, name: string) => {
+          const value = constants.get(name);
+          expect(value, `unresolved route constant ${name} in ${file}`).toBeDefined();
+          return value!;
+        });
+        paths.push(resolved);
+      }
+    }
+    expect(paths).toContain('/payments/return/:provider/:tenantId');
+    expect(paths).toContain('/payments/webhook/:provider/:tenantId');
+    expect(paths).toContain('/telegram/webhook/:botInstanceId');
+    expect(paths).toContain('/health/ready');
+
+    const fallbackAt = routes.indexOf('\t\ttry_files {path} /index.html');
+    const matchers = [...routes.matchAll(/^\t@(\w+) path (\S+)$/gm)].map((m) => ({
+      name: m[1]!,
+      glob: m[2]!,
+      at: m.index,
+    }));
+    for (const path of paths) {
+      const matcher = matchers.find(
+        (m) => m.glob.endsWith('/*') && path.startsWith(m.glob.slice(0, -1)),
+      );
+      expect(matcher, `${path} has no handle block and falls to the SPA`).toBeDefined();
+      expect(matcher!.at).toBeLessThan(fallbackAt);
+      const blockStart = routes.indexOf(`handle @${matcher!.name} {`);
+      const block = routes.slice(blockStart, routes.indexOf('}', blockStart));
+      expect(block, `${path} is not proxied to the API`).toMatch(/reverse_proxy api:3000/);
+      expect(block, `${path} is served from disk`).not.toMatch(/file_server|root \*/);
+    }
   });
 
   it('proxies to the api service by name, never to a host port', () => {
