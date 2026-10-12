@@ -3,6 +3,9 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import {
   RECOVERY_ROUTES,
+  LEGACY_MIGRATION_DECISIONS_MAX_BYTES,
+  LEGACY_MIGRATION_ROUTES,
+  routePattern,
   TENANT_MEDIA_MAX_BYTES,
   TICKET_MESSAGE_MAX_LENGTH,
   TICKET_REPLY_FILE_MAX_BYTES,
@@ -22,8 +25,15 @@ import {
 } from './surfaces/gateway/webhook.controller.js';
 import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
+import { developmentExposureWarnings } from './infrastructure/config/exposure.js';
 import { trustProxyOption } from './infrastructure/trusted-proxy.js';
 import type { AppConfig } from './infrastructure/config/config.schema.js';
+
+/** The decisions upload's route pattern, as Nest registers it (derived, never restated). */
+const LEGACY_MIGRATION_DECISIONS_ROUTE_SUFFIX = routePattern(
+  LEGACY_MIGRATION_ROUTES.decisions,
+  'id',
+);
 
 /**
  * `POST /media/:purpose`, as Nest registers it. The detail read shares the URL and a
@@ -155,6 +165,12 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
   const container = createContainer(config, 'api');
   await resolveInstallationTenant(container);
 
+  // FIX-04 (S2): a development process on a configuration that looks public is
+  // allowed to start — staging hosts have been run that way — but never quietly.
+  for (const warning of developmentExposureWarnings(config)) {
+    container.logger.warn({ env: config.NODE_ENV }, warning);
+  }
+
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule.forContainer(container),
     new FastifyAdapter({
@@ -229,6 +245,16 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
      */
     if (route.url.endsWith(RECOVERY_ROUTES.upload)) {
       route.bodyLimit = config.RECOVERY_UPLOAD_MAX_BYTES;
+    }
+    /*
+     * The Mirza `.nxpkg` package upload and its ownership decisions file: raised to their
+     * own ceilings for the same reason. The handler's counter is still the authority.
+     */
+    if (route.url.endsWith(LEGACY_MIGRATION_ROUTES.upload)) {
+      route.bodyLimit = config.LEGACY_MIGRATION_UPLOAD_MAX_BYTES;
+    }
+    if (route.url.endsWith(LEGACY_MIGRATION_DECISIONS_ROUTE_SUFFIX)) {
+      route.bodyLimit = LEGACY_MIGRATION_DECISIONS_MAX_BYTES;
     }
     /*
      * The media upload carries its file as base64 inside JSON — four thirds of the

@@ -46,6 +46,9 @@ describe('HTTP surface', () => {
     const config = testConfig({
       TELEGRAM_WEBHOOK_ENABLED: 'true',
       TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      // The system ping is the development write-path probe, registered only on
+      // this explicit opt-in (FIX-04 S2; `dev-system-endpoint.test.ts`).
+      DEV_SYSTEM_ENDPOINT_ENABLED: 'true',
     });
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
@@ -598,6 +601,9 @@ describe('telegram webhook body limit', () => {
     const config = testConfig({
       TELEGRAM_WEBHOOK_ENABLED: 'true',
       TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      // The system ping is the development write-path probe, registered only on
+      // this explicit opt-in (FIX-04 S2; `dev-system-endpoint.test.ts`).
+      DEV_SYSTEM_ENDPOINT_ENABLED: 'true',
     });
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);

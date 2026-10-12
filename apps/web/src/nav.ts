@@ -684,18 +684,18 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_recovery',
     icon: 'database',
     /*
-     * `backup.view` alone. The page serves four capabilities and gates each one
-     * itself, so requiring the most privileged of them would hide the list from
-     * an operator whose whole job is checking that backups work.
+     * `backup.view`, or `legacy.migration.view`. The page serves several capabilities
+     * and gates each one itself, so requiring the most privileged of them would hide
+     * the list from an operator whose whole job is checking that backups work.
      *
-     * Not a LIST, unlike `/panels` and `/notifications`: every other capability
-     * here is strictly narrower in audience than `backup.view`, because
-     * `backup.view` is LOW and is in the observer role's read-only set while
-     * `backup.run`, `backup.download` and `recovery.restore` are HIGH or
-     * CRITICAL. There is no actor who holds one of those and not this one —
-     * which is the condition under which a list is needed, and it does not hold.
+     * A LIST since Phase 7: `backup.run`, `backup.download` and `recovery.restore`
+     * are still strictly narrower in audience than `backup.view`, but the Mirza
+     * restore (a `.nxpkg` chosen in «عملیات بازیابی», which `/legacy-migration`
+     * now redirects to) is authorised by `legacy.migration.*`, whose graph does not
+     * include `backup.view` — so an actor can hold the one and not the other, the
+     * condition under which a list is needed (Codex review on #278).
      */
-    permission: 'backup.view',
+    permission: ['backup.view', 'legacy.migration.view'],
     group: 'web.navgroup_system',
   },
 ];

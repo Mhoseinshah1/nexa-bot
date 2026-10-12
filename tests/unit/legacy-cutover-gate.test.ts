@@ -108,12 +108,23 @@ describe('stop sales', () => {
     activePanelsNotDrained: 0,
     gateways: 3,
     gatewaysActive: 0,
+    frozenByImport: 0,
   };
   it('holds only with an active stop-sales incident, every panel drained and every gateway off', () => {
     expect(stopSalesHolds(facts).holds).toBe(true);
     expect(stopSalesHolds({ ...facts, activeStopSalesIncidents: 0 }).holds).toBe(false);
     expect(stopSalesHolds({ ...facts, activePanelsNotDrained: 1 }).holds).toBe(false);
     expect(stopSalesHolds({ ...facts, gatewaysActive: 1 }).holds).toBe(false);
+  });
+  it('Phase 7: an APPLYING import of the tenant holds on its own — its freeze stops every sale', () => {
+    const open = {
+      ...facts,
+      activeStopSalesIncidents: 0,
+      activePanelsNotDrained: 2,
+      gatewaysActive: 3,
+    };
+    expect(stopSalesHolds(open).holds).toBe(false);
+    expect(stopSalesHolds({ ...open, frozenByImport: 1 }).holds).toBe(true);
   });
 });
 

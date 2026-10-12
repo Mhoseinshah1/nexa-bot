@@ -1,5 +1,5 @@
 {
-  "id": "4e3512bc-b1fb-4511-835d-68895cb04f92",
+  "id": "e7c8089c-e297-4e38-87c6-c186f05211ea",
   "prevId": "8d358c45-dd36-49b6-88e3-b634dde79fdf",
   "version": "7",
   "dialect": "postgresql",
@@ -11611,13 +11611,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "row_failures": {
-          "name": "row_failures",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -12270,13 +12263,6 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": false
-        },
-        "row_failures": {
-          "name": "row_failures",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         },
         "created_at": {
           "name": "created_at",
@@ -14183,7 +14169,7 @@
       "checkConstraints": {
         "legacy_import_run_inputs_engine_check": {
           "name": "legacy_import_run_inputs_engine_check",
-          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')"
+          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE', 'NXPKG')"
         },
         "legacy_import_run_inputs_hashes_check": {
           "name": "legacy_import_run_inputs_hashes_check",
@@ -15165,7 +15151,7 @@
         },
         "legacy_invoice_archive_runs_engine_check": {
           "name": "legacy_invoice_archive_runs_engine_check",
-          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')"
+          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE', 'NXPKG')"
         },
         "legacy_invoice_archive_runs_code_version_check": {
           "name": "legacy_invoice_archive_runs_code_version_check",
@@ -16013,7 +15999,7 @@
         },
         "legacy_read_set_runs_engine_check": {
           "name": "legacy_read_set_runs_engine_check",
-          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE')"
+          "value": "source_engine IN ('MYSQL', 'MARIADB', 'SYNTHETIC_FIXTURE', 'NXPKG')"
         },
         "legacy_read_set_runs_counts_check": {
           "name": "legacy_read_set_runs_counts_check",

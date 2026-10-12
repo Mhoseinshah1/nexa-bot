@@ -99,6 +99,26 @@ export default defineConfig({
         test: {
           ...shared,
           /**
+           * The Mirza `.nxpkg` Fresh Migration at scale: a ~200 000-customer synthetic package
+           * through the whole `migration` lifecycle against PostgreSQL and fake RickPanels,
+           * with timings, peak memory and every count reconciled against the package. Its own
+           * project for the reason `exhaustive` is: it takes many minutes and a large database,
+           * so it is run on demand (`pnpm test:migration-scale`), never on the pull-request
+           * path. The size is NEXA_MIGRATION_SCALE_USERS / NEXA_MIGRATION_SCALE_INVOICES.
+           */
+          name: 'migration-scale',
+          include: ['tests/perf/**/*.test.ts'],
+          setupFiles: ['tests/integration/setup.ts'],
+          fileParallelism: false,
+          testTimeout: 7_200_000,
+          hookTimeout: 600_000,
+        },
+      },
+      {
+        plugins: [tsExtensionResolver()],
+        test: {
+          ...shared,
+          /**
            * The real-panel acceptance.
            *
            * Its own project because it needs something no other suite does: an
