@@ -25,7 +25,8 @@ if git rev-parse --verify -q "$base" >/dev/null; then
   if [[ ${#mine[@]} -gt 0 ]]; then
     echo "- Migrations added here: $(printf '`%s` ' "${mine[@]##*/}")"
   fi
-  commits="$(git log --format='  - `%h` %s' "$mb..HEAD" | head -15)"
+  # -n inside git, not `| head`: under pipefail a closed pipe fails the script.
+  commits="$(git log -n 15 --format='  - `%h` %s' "$mb..HEAD")"
   if [[ -n "$commits" ]]; then echo "- Commits on this branch:"; echo "$commits"; fi
 else
   echo "- Base \`$base\` not available locally (git fetch origin main)"
@@ -33,7 +34,7 @@ fi
 dirty="$(git status --porcelain | wc -l | tr -d ' ')"
 if [[ "$dirty" != "0" ]]; then
   echo "- Uncommitted: $dirty path(s) — commit and push, or they are lost with the container"
-  git status --porcelain | head -10 | sed 's/^/  - `/; s/$/`/'
+  git status --porcelain | sed -n '1,10{s/^/  - `/; s/$/`/; p;}'
 else
   echo "- Working tree clean"
 fi

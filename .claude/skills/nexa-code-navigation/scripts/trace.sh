@@ -39,7 +39,9 @@ layer() {
   fi
   total="$(printf '%s\n' "$hits" | wc -l | tr -d ' ')"
   printf '## %s (%s)\n' "$label" "$total"
-  printf '%s\n' "$hits" | head -n "$max"
+  # sed reads all input; `head` would close the pipe early and, under
+  # pipefail, end the script.
+  printf '%s\n' "$hits" | sed -n "1,${max}p"
   if (( total > max )); then
     printf '  ... %s more (narrow the term or raise the cap)\n' "$((total - max))"
   fi

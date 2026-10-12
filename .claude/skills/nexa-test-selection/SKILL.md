@@ -21,8 +21,10 @@ bash .claude/skills/nexa-test-selection/scripts/select-tests.sh --files <path>..
 ```
 
 It prints commands and runs nothing. It selects: changed test files; tests
-that import a changed source file by path (one hop); and the standing guard
-suites for the change's risk class. Its own check:
+that import a changed source file by path (one hop, extensionless or `.js`);
+the whole project when a shared helper under `tests/` changes; and the
+standing guard suites for the change's risk class. An unresolvable `--base` is
+an error (exit 2), never "no changes". Its own check:
 `bash .claude/skills/nexa-test-selection/scripts/select-tests.test.sh`.
 
 Limits, stated so you do not over-trust it: one-hop imports only (a change

@@ -32,10 +32,15 @@ root="$(git rev-parse --show-toplevel)"
 cd "$root"
 
 if [[ ${#files[@]} -eq 0 ]]; then
-  mb="$(git merge-base HEAD "$base" 2>/dev/null || true)"
+  # An unresolvable base must not read as "nothing changed": that would
+  # silently select no tests for a branch whose changes are all committed.
+  if ! mb="$(git merge-base HEAD "$base" 2>/dev/null)"; then
+    echo "cannot find a merge-base with '$base' (git fetch origin main, or pass --base/--files)" >&2
+    exit 2
+  fi
   mapfile -t files < <(
     {
-      [[ -n "$mb" ]] && git diff --name-only "$mb" HEAD
+      git diff --name-only "$mb" HEAD
       git diff --name-only HEAD
       git ls-files --others --exclude-standard
     } | sort -u
@@ -47,7 +52,7 @@ if [[ ${#files[@]} -eq 0 ]]; then
   exit 0
 fi
 
-declare -A unit=() web=() integ=() checks=()
+declare -A unit=() web=() integ=() checks=() whole=()
 grep_tests() { # $1 = fixed string, $2 = dir
   if command -v rg >/dev/null 2>&1; then
     rg -l --fixed-strings -- "$1" "$2" 2>/dev/null || true
@@ -69,16 +74,26 @@ add_integ_matching() { # file-name glob, e.g. '*refund*' or 'migration-*'
 
 for f in "${files[@]}"; do
   case "$f" in
-    tests/*) add_test "$f"; continue ;;
+    tests/unit/*.test.ts|tests/web/*.test.tsx|tests/web/*.test.ts|tests/integration/*.test.ts)
+      add_test "$f"; continue ;;
+    # A helper, harness or fixture is imported by many tests, often relatively,
+    # so it selects its whole project rather than nothing.
+    tests/unit/*) whole[unit]=1; continue ;;
+    tests/web/*) whole[web]=1; continue ;;
+    tests/integration/*) whole[integration]=1; continue ;;
+    tests/support/*|tests/fixtures/*) whole[unit]=1; whole[web]=1; whole[integration]=1; continue ;;
+    tests/deploy/*) checks[deploy]=1; continue ;;
+    tests/*) continue ;;
   esac
 
-  # 2. direct importers (imports are extensionless repo paths behind ../../)
+  # 2. direct importers (repo paths behind ../../, extensionless or NodeNext .js)
   case "$f" in
     *.ts|*.tsx|*.mts)
       stem="${f%.*}"
       for d in tests/unit tests/web tests/integration; do
         while IFS= read -r t; do [[ -n "$t" ]] && add_test "$t"; done \
-          < <(grep_tests "$stem'" "$d"; grep_tests "$stem\"" "$d")
+          < <(grep_tests "$stem'" "$d"; grep_tests "$stem\"" "$d"
+              grep_tests "$stem.js'" "$d"; grep_tests "$stem.js\"" "$d")
       done
       ;;
   esac
@@ -90,7 +105,8 @@ for f in "${files[@]}"; do
     apps/api/src/modules/commerce/wallet/*|apps/api/src/modules/commerce/orders/*)
       checks[money]=1; add_integ_matching '*wallet*'; add_integ_matching '*refund*'; add_integ_matching '*order*' ;;
     apps/api/src/modules/commerce/pricing/*|apps/api/src/modules/commerce/resellers/*|apps/api/src/modules/commerce/referrals/*)
-      checks[money]=1; add_integ_matching '*pricing*'; add_integ_matching '*reseller*'; add_integ_matching '*referral*' ;;
+      checks[money]=1; add_integ_matching '*pricing*'; add_integ_matching '*cashback*'; add_integ_matching '*discount*'
+      add_integ_matching '*reseller*'; add_integ_matching '*referral*' ;;
     apps/api/src/modules/commerce/provisioning/*)
       checks[money]=1; add_integ_matching '*provision*'; add_integ_matching '*refund*' ;;
   esac
@@ -99,7 +115,7 @@ for f in "${files[@]}"; do
       checks[migration]=1; add_integ_matching 'migration-*' ;;
   esac
   case "$f" in
-    apps/api/src/modules/platform/identity/*|apps/api/src/modules/platform/access/*|apps/api/src/surfaces/web/auth*|apps/api/src/infrastructure/crypto/*|apps/api/src/infrastructure/redaction.ts)
+    apps/api/src/modules/platform/identity/*|apps/api/src/modules/platform/access/*|apps/api/src/surfaces/web/auth*|apps/api/src/surfaces/web/account-security*|apps/api/src/surfaces/web/admins*|apps/api/src/infrastructure/crypto/*|apps/api/src/infrastructure/redaction.ts)
       checks[security]=1; add_integ_matching '*auth*'; add_integ_matching '*admin-security*' ;;
     apps/api/src/modules/platform/backup/*|apps/api/src/modules/platform/recovery/*|apps/api/src/main.recovery.ts)
       checks[security]=1; add_integ_matching '*backup*'; add_integ_matching '*recovery*' ;;
@@ -123,6 +139,20 @@ keys_line() { # assoc-array name -> " k1 k2 ..." sorted
 echo "# changed files: ${#files[@]}"
 echo "# always, while iterating:"
 echo "pnpm typecheck"
+# A whole project supersedes its file list.
+if [[ -n "${whole[unit]:-}" ]]; then
+  unit=()
+  echo "pnpm test   # a shared unit helper changed: the whole unit project"
+fi
+if [[ -n "${whole[web]:-}" ]]; then
+  web=()
+  echo "pnpm test:web   # a shared web helper changed: the whole web project"
+fi
+if [[ -n "${whole[integration]:-}" ]]; then
+  integ=()
+  echo "# a shared integration helper changed: the whole integration project (needs postgres+redis)"
+  echo "pnpm test:integration"
+fi
 if [[ ${#unit[@]} -gt 0 ]]; then
   echo "pnpm exec vitest run --project unit$(keys_line unit)"
 fi
