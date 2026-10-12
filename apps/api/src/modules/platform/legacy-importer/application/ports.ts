@@ -8,6 +8,7 @@ import type {
   LegacyAdoptionCandidate,
   LegacyAdoptionOutcome,
 } from '../../../commerce/legacy-adoption/application/legacy-adoption-ports.js';
+import type { FreshTargetCheck, FreshTargetOptions } from './fresh-target.js';
 import type { PanelFacts } from './panel-mapping.js';
 import type { LegacySourceEngine } from './source-port.js';
 
@@ -123,6 +124,16 @@ export interface LegacyImporterDestination {
   }>;
   /** How many audit rows of `action` name this entity (a run's resumes). */
   auditCount(scope: TenantContext, action: string, entityId: string): Promise<number>;
+  /**
+   * Mirza `.nxpkg`: the fresh-target counts (`fresh-target.ts`). With `tx` and `lockTenant`,
+   * inside the caller's transaction with the tenant row locked first, so the counts hold
+   * until it commits (the authoritative check at an APPLY run's start).
+   */
+  freshTargetCounts(
+    scope: TenantContext,
+    options: FreshTargetOptions & { readonly lockTenant?: boolean },
+    tx?: TransactionScope,
+  ): Promise<FreshTargetCheck>;
   /** The tenant's RUNNING run (at most one, by a partial unique index), if any. */
   runningRun(scope: TenantContext): Promise<string | null>;
   /** The tenant's most recent run of a mode, if any. */
@@ -142,6 +153,11 @@ export interface LegacyRunInputs {
   readonly preImportWalletTotalMinor: bigint;
   readonly preImportCustomers: number;
   readonly recordedAt: Date;
+  /**
+   * Mirza `.nxpkg`: the ownership hold the run was started under (`ownershipHoldDigest`), or
+   * null for a run without one. A resume, reconcile or report under another hold is refused.
+   */
+  readonly ownershipHoldDigest: string | null;
 }
 
 export interface LegacyRunInputsRepository {

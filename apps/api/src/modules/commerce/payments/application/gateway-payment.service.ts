@@ -11,6 +11,7 @@ import {
   type Clock,
   type CorrelationId,
   type IdGenerator,
+  type OperationalEventInput,
   type OperationalEventRecorder,
   type PaymentGatewayProvider,
   type PaymentId,
@@ -62,6 +63,7 @@ import {
   type PaymentLinkFailure,
 } from './payment-link-failure.js';
 import { recordQuietly } from '../../../platform/opslog/application/error-events.js';
+import { GatewayInquiryHealth } from './gateway-inquiry-health.js';
 
 /**
  * Operational codes this lane raises. Declared beside their producer, and each is part
@@ -122,6 +124,29 @@ export const PAYMENT_LOSE_TRACK_ACTION = 'payment.lose_track';
  */
 export const GATEWAY_WEBHOOK_UNVERIFIED_CODE = 'payments.gateway_webhook_unverified';
 export const GATEWAY_WEBHOOK_VERIFIED_CODE = 'payments.gateway_webhook_verified';
+/**
+ * FIX-03 (batch 2026-10-10), declared beside their producer and part of the schema once
+ * shipped:
+ *
+ * - `payments.gateway_settlement_failed` (ERROR) — the provider APPROVED an attempt and the
+ *   settlement transaction refused (`confirmGatewayPayment` threw). Nothing moved; the
+ *   inquiry stays scheduled and is asked again inside the deadline. One condition per
+ *   payment, its counter the number of refusals; closed by `payments.gateway_settlement_decided`
+ *   (INFO) once the lane decides that payment (audit P2-b on #260).
+ * - `payments.gateway_inquiry_failing` (WARN) — a gateway's inquiries keep failing
+ *   (`GatewayInquiryHealth`). One open condition per gateway; closed by
+ *   `payments.gateway_inquiry_ok` (INFO) when an inquiry is next answered.
+ */
+export const GATEWAY_SETTLEMENT_FAILED_CODE = 'payments.gateway_settlement_failed';
+export const GATEWAY_INQUIRY_FAILING_CODE = 'payments.gateway_inquiry_failing';
+export const GATEWAY_INQUIRY_OK_CODE = 'payments.gateway_inquiry_ok';
+/**
+ * Audit P2-b on #260: closes a payment's `payments.gateway_settlement_failed` once the lane
+ * has DECIDED that payment — settled (or found already settled), failed, held for an
+ * operator, or recorded late. Its dedupe key names the payment, so it closes that payment's
+ * alarm and no other.
+ */
+export const GATEWAY_SETTLEMENT_DECIDED_CODE = 'payments.gateway_settlement_decided';
 
 /**
  * The note a CREATED card-transfer attempt carries in `creation_error_code` when the
@@ -278,6 +303,11 @@ export interface GatewayPaymentServiceDeps {
    * null. Absent, the return answers without a link.
    */
   readonly botLinkFor?: (scope: TenantContext) => Promise<string | null>;
+  /**
+   * FIX-03 (batch 2026-10-10): the per-gateway count of failed inquiries behind
+   * `payments.gateway_inquiry_failing`. Absent, the defaults (`GatewayInquiryHealth`).
+   */
+  readonly inquiryHealth?: GatewayInquiryHealth;
 }
 
 /** What one pass did, for the loop's log and for a test. Counts only; no identifiers. */
@@ -363,7 +393,11 @@ export interface GatewayCardFacts {
  *    first takes the tenant's per-minute budget, shared by every replica.
  */
 export class GatewayPaymentService {
-  constructor(private readonly deps: GatewayPaymentServiceDeps) {}
+  private readonly inquiryHealth: GatewayInquiryHealth;
+
+  constructor(private readonly deps: GatewayPaymentServiceDeps) {
+    this.inquiryHealth = deps.inquiryHealth ?? new GatewayInquiryHealth();
+  }
 
   private actor(): ActorContext {
     return systemJobActor('gateway-payments', this.deps.ids.uuid() as CorrelationId);
@@ -457,6 +491,15 @@ export class GatewayPaymentService {
           result === 'HELD'
         ) {
           await this.refreshScreens(scope, claimed.invoice.paymentId);
+        }
+        // Audit P2-b on #260: a decision closes this payment's "settlement refused" alarm.
+        if (
+          result === 'SETTLED' ||
+          result === 'UNSUCCESSFUL' ||
+          result === 'LATE' ||
+          result === 'HELD'
+        ) {
+          await this.settlementDecided(scope, claimed.invoice.paymentId);
         }
       }
     }
@@ -856,6 +899,15 @@ export class GatewayPaymentService {
           tx,
         ),
       );
+      /*
+       * FIX-03 (batch 2026-10-10): a route whose key went missing while an attempt was open
+       * cannot ask about it, and an approval it cannot read is a customer who paid and is
+       * not credited. The create path already opens `payments.gateway_misconfigured` for a
+       * missing key; the inquiry now says the same, after its own write committed.
+       */
+      if (adapter !== null && apiKey === null) {
+        await this.inquiryMisconfigured(scope, invoice.provider, 'nexa.credential_missing');
+      }
       return 'ERROR';
     }
 
@@ -925,9 +977,16 @@ export class GatewayPaymentService {
           tx,
         ),
       );
-      if (outcome.kind === 'CONFIGURATION') await this.misconfigured(scope, invoice, outcome.code);
+      if (outcome.kind === 'CONFIGURATION') {
+        await this.inquiryMisconfigured(scope, invoice.provider, outcome.code);
+      }
+      if (outcome.kind === 'FAILED' || outcome.kind === 'RATE_LIMITED') {
+        await this.inquiryFailed(scope, invoice.provider, outcome.kind, outcome.code, at);
+      }
       return 'ERROR';
     }
+    // The provider answered: whatever the answer says, its check endpoint is working.
+    await this.inquiryAnswered(scope, invoice.provider, at);
 
     /*
      * An answer about ANOTHER invoice or another order is not an answer about this
@@ -1152,9 +1211,29 @@ export class GatewayPaymentService {
        * changed under the payment). Nothing moved; the inquiry stays scheduled, so it is
        * asked again inside the deadline — and past it, the deadline decides.
        */
+      const errorName = error instanceof Error ? error.name : 'unknown';
       this.deps.logger.error(
-        { paymentId: invoice.paymentId, error: error instanceof Error ? error.name : 'unknown' },
+        { paymentId: invoice.paymentId, error: errorName },
         'a gateway approval could not be settled',
+      );
+      /*
+       * FIX-03 (batch 2026-10-10): and the operator is told, once per payment (the row's
+       * counter grows on each refusal). The settlement transaction has already rolled back;
+       * this write is quiet and outside it, so it can neither move money nor fail the pass.
+       */
+      await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        {
+          code: GATEWAY_SETTLEMENT_FAILED_CODE,
+          severity: 'ERROR',
+          message:
+            'A payment the gateway approved could not be settled. Nothing was credited; it is ' +
+            'asked again until its deadline.',
+          dedupeKey: `${GATEWAY_SETTLEMENT_FAILED_CODE}:${invoice.paymentId}`,
+          context: { paymentId: invoice.paymentId, provider: invoice.provider, error: errorName },
+        },
+        this.deps.logger,
       );
       return 'ERROR';
     }
@@ -1278,6 +1357,10 @@ export class GatewayPaymentService {
       `${invoice.provider.toLowerCase()}:successful_payment`,
       now,
     );
+    // Audit P2-b on #260: the worker's pass is not the only one that decides a recorded payment.
+    if (settled === 'SETTLED' || settled === 'LATE') {
+      await this.settlementDecided(scope, paymentId);
+    }
     return settled === 'HELD' ? 'ERROR' : settled;
   }
 
@@ -2534,15 +2617,137 @@ export class GatewayPaymentService {
     invoice: GatewayInvoiceRecord,
     code: string,
   ): Promise<void> {
-    await this.deps.opsLog.record(scope, {
-      code: GATEWAY_MISCONFIGURED_CODE,
-      severity: 'ERROR',
-      message:
-        'The payment gateway refused this installation’s configuration. Customers are told the ' +
-        'method is unavailable; check the API key and the gateway account.',
-      dedupeKey: `${GATEWAY_MISCONFIGURED_CODE}:${invoice.provider}`,
-      context: { provider: invoice.provider, reason: code },
-    });
+    await this.deps.opsLog.record(scope, misconfiguredEvent(invoice.provider, code));
+  }
+
+  /** A failed inquiry (FAILED or RATE_LIMITED), counted per gateway. Never throws. */
+  private async inquiryFailed(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    kind: 'FAILED' | 'RATE_LIMITED',
+    errorCode: string,
+    at: Date,
+  ): Promise<void> {
+    if (!this.inquiryHealth.failure(provider, at.getTime())) return;
+    const recorded = await recordQuietly(
+      this.deps.opsLog,
+      scope,
+      {
+        code: GATEWAY_INQUIRY_FAILING_CODE,
+        severity: 'WARN',
+        message:
+          'The payment gateway keeps failing to answer inquiries, so approvals cannot be read. ' +
+          'Payments stay pending and are asked again until their deadline.',
+        dedupeKey: `${GATEWAY_INQUIRY_FAILING_CODE}:${provider}`,
+        context: { provider, reason: kind, errorCode },
+      },
+      this.deps.logger,
+    );
+    // Only a WRITTEN record holds the next one off (Codex P2 on #260): `recordQuietly`
+    // swallows a failure, and marking it recorded anyway silenced the outage for a window.
+    if (recorded !== null) this.inquiryHealth.recorded(provider, at.getTime());
+  }
+
+  /**
+   * The inquiry could not be authorised: no key to ask with, or the provider refused the
+   * one it was given (Codex P1 on #260).
+   *
+   * For a route whose inquiry uses the SAME credential as its create (TonPays), this is the
+   * route's one `payments.gateway_misconfigured` condition, and a create that succeeds proves
+   * the key and closes it. For a route whose inquiry is authorised by a SEPARATE verify key
+   * (CentralPay), it is a condition of its own — same code, its own subject — because a
+   * create made with the link key proves nothing about the verify key, and closing the alarm
+   * on it would clear the one signal that no approval can be read. That subject is closed
+   * only by an inquiry the provider answered (`inquiryAnswered`).
+   */
+  private async inquiryMisconfigured(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    code: string,
+  ): Promise<void> {
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].verifyKey) {
+      await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        misconfiguredEvent(provider, code),
+        this.deps.logger,
+      );
+      return;
+    }
+    const recorded = await recordQuietly(
+      this.deps.opsLog,
+      scope,
+      {
+        ...misconfiguredEvent(provider, code),
+        message:
+          'The payment gateway could not be asked about payments: its verify key is missing or ' +
+          'was refused, so no approval can be read. Check the verify key.',
+        dedupeKey: inquiryCredentialConditionKey(provider),
+        context: { provider, reason: code, kind: 'VERIFY_KEY' },
+      },
+      this.deps.logger,
+    );
+    // The next answered inquiry looks for it at once, not a recheck later.
+    if (recorded !== null) this.inquiryHealth.forgetCheck(provider);
+  }
+
+  /** An answered inquiry: closes the failing condition when one is open. Never throws. */
+  private async inquiryAnswered(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    at: Date,
+  ): Promise<void> {
+    if (!this.inquiryHealth.success(provider, at.getTime())) return;
+    const dedupeKey = `${GATEWAY_INQUIRY_FAILING_CODE}:${provider}`;
+    const credentialKey = PAYMENT_GATEWAY_DESCRIPTORS[provider].verifyKey
+      ? inquiryCredentialConditionKey(provider)
+      : null;
+    let open: boolean;
+    let credentialOpen: boolean;
+    try {
+      open = await this.deps.conditions.conditionIsOpen(scope, dedupeKey);
+      credentialOpen =
+        credentialKey !== null &&
+        (await this.deps.conditions.conditionIsOpen(scope, credentialKey));
+    } catch (error: unknown) {
+      this.deps.logger.warn(
+        { provider, error: error instanceof Error ? error.name : 'unknown' },
+        'could not read the inquiry condition; it is checked again on a later answer',
+      );
+      this.inquiryHealth.forgetCheck(provider);
+      return;
+    }
+    if (credentialOpen && credentialKey !== null) {
+      // The verify key worked: the provider answered an inquiry authorised by it.
+      const closed = await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        {
+          code: GATEWAY_CONFIGURED_CODE,
+          severity: 'INFO',
+          message: 'The payment gateway is answering inquiries with this installation’s key again.',
+          context: { provider, kind: 'VERIFY_KEY' },
+          recoversCode: GATEWAY_MISCONFIGURED_CODE,
+          recoversDedupeKey: credentialKey,
+        },
+        this.deps.logger,
+      );
+      if (closed === null) this.inquiryHealth.forgetCheck(provider);
+    }
+    if (!open) return;
+    await recordQuietly(
+      this.deps.opsLog,
+      scope,
+      {
+        code: GATEWAY_INQUIRY_OK_CODE,
+        severity: 'INFO',
+        message: 'The payment gateway is answering inquiries again.',
+        context: { provider },
+        recoversCode: GATEWAY_INQUIRY_FAILING_CODE,
+        recoversDedupeKey: dedupeKey,
+      },
+      this.deps.logger,
+    );
   }
 
   private async configured(scope: TenantContext, provider: PaymentGatewayProvider): Promise<void> {
@@ -2556,6 +2761,38 @@ export class GatewayPaymentService {
       recoversCode: GATEWAY_MISCONFIGURED_CODE,
       recoversDedupeKey: dedupeKey,
     });
+  }
+
+  /**
+   * Audit P2-b on #260: the lane decided this payment, so a "could not be settled, nothing
+   * was credited" alarm open for it is no longer true. Only an OPEN condition is answered
+   * (a decision with no earlier refusal records nothing), and never a failure of the pass:
+   * the decision has already committed.
+   */
+  private async settlementDecided(scope: TenantContext, paymentId: PaymentId): Promise<void> {
+    const dedupeKey = `${GATEWAY_SETTLEMENT_FAILED_CODE}:${paymentId}`;
+    try {
+      if (!(await this.deps.conditions.conditionIsOpen(scope, dedupeKey))) return;
+    } catch (error: unknown) {
+      this.deps.logger.warn(
+        { paymentId, error: error instanceof Error ? error.name : 'unknown' },
+        'a settlement alarm could not be checked; it is closed by the next decision',
+      );
+      return;
+    }
+    await recordQuietly(
+      this.deps.opsLog,
+      scope,
+      {
+        code: GATEWAY_SETTLEMENT_DECIDED_CODE,
+        severity: 'INFO',
+        message: 'The payment the gateway approved has now been decided.',
+        context: { paymentId },
+        recoversCode: GATEWAY_SETTLEMENT_FAILED_CODE,
+        recoversDedupeKey: dedupeKey,
+      },
+      this.deps.logger,
+    );
   }
 
   private async identityMismatch(
@@ -2573,4 +2810,31 @@ export class GatewayPaymentService {
       context: { paymentId: invoice.paymentId, provider: invoice.provider, source },
     });
   }
+}
+
+/**
+ * The subject of `payments.gateway_misconfigured` for a route's SEPARATE inquiry credential
+ * (a descriptor with `verifyKey`; Codex P1 on #260). Same code, its own condition: opened by
+ * an inquiry that could not be authorised, closed only by one the provider answered — never
+ * by a create, which uses the other key. One function: the format IS the identity.
+ */
+export function inquiryCredentialConditionKey(provider: PaymentGatewayProvider): string {
+  return `${GATEWAY_MISCONFIGURED_CODE}:${provider}:verify-key`;
+}
+
+/**
+ * The `payments.gateway_misconfigured` event, one shape for every site that opens it — the
+ * create path, the inquiry's CONFIGURATION answer, and (FIX-03, batch 2026-10-10) an inquiry
+ * whose route has no key to ask with.
+ */
+function misconfiguredEvent(provider: PaymentGatewayProvider, code: string): OperationalEventInput {
+  return {
+    code: GATEWAY_MISCONFIGURED_CODE,
+    severity: 'ERROR',
+    message:
+      'The payment gateway refused this installation’s configuration. Customers are told the ' +
+      'method is unavailable; check the API key and the gateway account.',
+    dedupeKey: `${GATEWAY_MISCONFIGURED_CODE}:${provider}`,
+    context: { provider, reason: code },
+  };
 }

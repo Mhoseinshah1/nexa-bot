@@ -205,6 +205,8 @@ export default tseslint.config(
       // file that invokes them. Same shape as scripts/: node globals, and a
       // process that talks to an operator on stdout.
       'deploy/bin/**/*.mjs',
+      // The isolated Mirza rehearsal's read-only RickPanel stand-in (deploy/rehearsal/).
+      'deploy/rehearsal/**/*.mjs',
     ],
     languageOptions: {
       globals: {

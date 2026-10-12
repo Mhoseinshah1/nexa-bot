@@ -393,6 +393,22 @@ status_capabilities_untraced() {
     [ "$key" != PANEL_MONITOR_ENABLED ] || monitor="$configured"
     printf '  %s %-8s %s\n' "$label" "$configured" "$owner"
   done
+  # FIX-04 (S2): the NODE_ENV the containers get. deploy/compose.yml pins `production`
+  # for every application role, over nexa.env, so this row reads anything else only
+  # when the compose file in use has lost the pin. ABSENT is the image's own default,
+  # which is production too. Read from Compose's resolution like every row above.
+  local node_env_effective
+  node_env_effective="$(nexa_listing_rendered "$resolved" NODE_ENV)" || node_env_effective=''
+  [ -n "$node_env_effective" ] || node_env_effective=production
+  printf '  %s %-8s %s\n' 'node environment  ' "$node_env_effective" 'every role'
+  if [ "$node_env_effective" != production ]; then
+    printf '\n  NODE_ENV=%s reaches the containers. Outside production the admin session\n' \
+      "$node_env_effective"
+    printf '  cookie is issued without Secure and without the __Host- prefix, an empty\n'
+    printf '  WEB_ADMIN_ORIGINS turns the CSRF Origin check off, and weak password hashing\n'
+    printf '  and loopback panels are accepted. deploy/compose.yml pins NODE_ENV=production;\n'
+    printf '  restore that file, then run `botctl restart`. See docs/deployment.md.\n'
+  fi
   # The monitor's row reports its FLAG and nothing more, and says so, because
   # `configSchema.superRefine` guards FIVE cross-field invariants behind
   # `if (PANEL_MONITOR_ENABLED)` and a `panel monitor on` that ignored them is the same

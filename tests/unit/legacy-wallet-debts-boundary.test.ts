@@ -37,6 +37,12 @@ const ALLOWED = new Set([
   // Mirza PR6: the final report v2's duplicate counter (the most debts one customer holds),
   // one read-only aggregate. It reads no amount and writes nothing.
   'apps/api/src/modules/platform/legacy-cutover/infrastructure/drizzle-legacy-cutover.repository.ts',
+  // Mirza `.nxpkg` importer: Customer 360's history card counts a customer's debt rows
+  // (`walletDebtCount`, under `legacy.debts.view`). A row count only: no amount, no write.
+  'apps/api/src/modules/platform/legacy-history/infrastructure/drizzle-legacy-history.repository.ts',
+  // Mirza `.nxpkg` importer: the fresh-target guard (design §6) counts the tenant's debt rows
+  // to refuse a non-empty target. A row count only: no amount, no write, no customer.
+  'apps/api/src/modules/platform/legacy-importer/infrastructure/nxpkg-fresh-target.ts',
   // The Web Admin's list and decisions (through the review service only).
   'apps/api/src/surfaces/web/legacy-debts.controller.ts',
 ]);

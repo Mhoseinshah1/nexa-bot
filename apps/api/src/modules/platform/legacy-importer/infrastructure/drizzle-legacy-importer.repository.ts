@@ -28,6 +28,8 @@ import type {
   RecordedDebt,
 } from '../application/ports.js';
 import type { LegacySourceEngine } from '../application/source-port.js';
+import type { FreshTargetCheck, FreshTargetOptions } from '../application/fresh-target.js';
+import { freshTargetCounts } from './nxpkg-fresh-target.js';
 
 /**
  * Migration P7 — NEXA's side of the importer: batched lookups and tenant aggregates the
@@ -489,6 +491,17 @@ export class DrizzleLegacyImporterRepository
     return result.rows[0]?.id ?? null;
   }
 
+  freshTargetCounts(
+    scope: TenantContext,
+    options: FreshTargetOptions & { readonly lockTenant?: boolean },
+    tx?: TransactionScope,
+  ): Promise<FreshTargetCheck> {
+    if (options.lockTenant === true && tx === undefined) {
+      throw new Error('the fresh-target lock is taken inside a transaction only');
+    }
+    return freshTargetCounts(this.exec(tx), requireTenantId(scope), options);
+  }
+
   async latestRun(
     scope: TenantContext,
     mode: 'DRY_RUN' | 'APPLY',
@@ -513,11 +526,12 @@ export class DrizzleLegacyImporterRepository
     await this.exec(tx).execute(sql`
       INSERT INTO legacy_import_run_inputs (
         tenant_id, run_id, source_engine, source_schema_hash, panel_mapping_fingerprint,
-        wallet_currency, pre_import_wallet_total_minor, pre_import_customers, recorded_at)
+        wallet_currency, pre_import_wallet_total_minor, pre_import_customers, recorded_at,
+        ownership_hold_digest)
       VALUES (${tenantId}, ${inputs.runId}, ${inputs.sourceEngine}, ${inputs.sourceSchemaHash},
               ${inputs.panelMappingFingerprint}, ${inputs.walletCurrency},
               ${inputs.preImportWalletTotalMinor.toString()}::bigint, ${inputs.preImportCustomers},
-              ${inputs.recordedAt.toISOString()}::timestamptz)
+              ${inputs.recordedAt.toISOString()}::timestamptz, ${inputs.ownershipHoldDigest})
       ON CONFLICT (tenant_id, run_id) DO NOTHING
     `);
     const stored = await this.find(scope, inputs.runId, tx);
@@ -536,10 +550,11 @@ export class DrizzleLegacyImporterRepository
       pre: string;
       pre_import_customers: number;
       recorded_at: Date | string;
+      ownership_hold_digest: string | null;
     }>(sql`
       SELECT run_id, source_engine, source_schema_hash, panel_mapping_fingerprint,
              wallet_currency, pre_import_wallet_total_minor::text AS pre, pre_import_customers,
-             recorded_at
+             recorded_at, ownership_hold_digest
         FROM legacy_import_run_inputs WHERE tenant_id = ${tenantId} AND run_id = ${runId}
     `);
     const row = result.rows[0];
@@ -553,6 +568,7 @@ export class DrizzleLegacyImporterRepository
       preImportWalletTotalMinor: BigInt(row.pre),
       preImportCustomers: row.pre_import_customers,
       recordedAt: new Date(row.recorded_at),
+      ownershipHoldDigest: row.ownership_hold_digest,
     };
   }
 

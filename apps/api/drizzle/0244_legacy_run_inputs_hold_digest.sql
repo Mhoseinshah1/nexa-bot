@@ -1,0 +1,2 @@
+ALTER TABLE "legacy_import_run_inputs" ADD COLUMN "ownership_hold_digest" text;--> statement-breakpoint
+ALTER TABLE "legacy_import_run_inputs" ADD CONSTRAINT "legacy_import_run_inputs_hold_digest_check" CHECK (ownership_hold_digest IS NULL OR ownership_hold_digest ~ '^[0-9a-f]{64}$');

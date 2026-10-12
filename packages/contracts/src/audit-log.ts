@@ -89,6 +89,9 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   // CRITICAL `legacy.cutover.approve` (`legacy-cutover.service.ts`, `requireApprove`).
   'legacy.cutover.approve': ['legacy.cutover.approve'],
   'legacy.cutover.revoke': ['legacy.cutover.approve'],
+  // Mirza `.nxpkg` importer: approving a dry run's digest starts the import, charged on the
+  // CRITICAL `legacy.migration.apply` (`LEGACY_NXPKG_AUDIT_ACTIONS.approve`).
+  'legacy.migration.approve': ['legacy.migration.apply'],
 };
 
 export const AUDIT_CRITICAL_ACTION_CODES: readonly string[] = Object.keys(AUDIT_CRITICAL_ACTIONS);

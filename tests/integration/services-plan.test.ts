@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import type { Database } from '../../apps/api/src/infrastructure/persistence/database';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
+import { DrizzlePanelCapacityRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-capacity.repository';
 import { createTestContext, tenantA, tenantB, type TestContext } from './harness';
 
 /**
@@ -123,7 +127,9 @@ describe('the service query plans', () => {
          * plan is a sequential scan, which would make the assertion below pass or fail for
          * a reason unrelated to the index.
          */
-        await client.query('ANALYZE services');
+        // VACUUM as well: the capacity count below is an index-only scan, which needs the
+        // visibility map a live table's autovacuum keeps.
+        await client.query('VACUUM ANALYZE services');
       } finally {
         await client.query('RESET statement_timeout');
       }
@@ -182,5 +188,36 @@ describe('the service query plans', () => {
       /Index Cond:.*provider_username/s,
     );
     expect(removedByFilter(plan), `rows were read and discarded:\n${plan}`).toBeLessThan(500);
+  }, 60_000);
+
+  it('counts a panel’s live services from services_panel_capacity_state_idx, without the heap', async () => {
+    // The statement the REAL repository sends, captured on its way through.
+    const dialect = new PgDialect();
+    const captured: { sql: string; params: unknown[] }[] = [];
+    const real = ctx.container.database.db;
+    const recording = {
+      execute: (query: SQL) => {
+        const compiled = dialect.sqlToQuery(query);
+        captured.push({ sql: compiled.sql, params: [...compiled.params] });
+        return real.execute(query);
+      },
+    } as unknown as Database;
+    const counts = await new DrizzlePanelCapacityRepository(recording).readAll(tenantA, new Date());
+    expect(captured).toHaveLength(1);
+    // Not vacuous: tenant A's one panel holds its 20 000 ACTIVE services.
+    expect([...counts.values()].map((capacity) => capacity.used)).toEqual([ROWS]);
+
+    const plan = await planFor(() => captured[0]!);
+    /*
+     * The NAME: `services_panel_capacity_idx` also matches the predicate, but it does not
+     * hold `state`, so through it every live service is a heap visit — measured on 280 000
+     * services, a ~45 000-buffer bitmap heap scan (240–500 ms) against ~300 buffers here.
+     */
+    expect(plan, `the capacity count did not use its index:\n${plan}`).toContain(
+      'Index Only Scan using services_panel_capacity_state_idx',
+    );
+    expect(plan, `the services heap was walked:\n${plan}`).not.toContain(
+      'Bitmap Heap Scan on services',
+    );
   }, 60_000);
 });

@@ -53,8 +53,17 @@ export interface CardMessageRef {
  * they change what the card SAYS (the state line and the switch), and nothing else to
  * report. A rotation's answer is the new link and files (`DeliveryService`); a renewal's
  * is its own result message.
+ *
+ * FIX-08: and a customer's FREE location change, asked from the card — its answer is the
+ * card with the new location on it, instead of «ثبت شد» on the card and a separate
+ * «انجام شد» message. A PAID move is confirmed from its invoice, has no card recorded, and
+ * is answered on that order's payment message by the notification lane.
  */
-export const CARD_ANSWERED_OPERATIONS: readonly OperationType[] = ['SUSPEND', 'RESUME'];
+export const CARD_ANSWERED_OPERATIONS: readonly OperationType[] = [
+  'SUSPEND',
+  'RESUME',
+  'CHANGE_LOCATION',
+];
 
 /**
  * Round N (F4): the operation types whose FAILURE is answered on the card they were asked
@@ -68,6 +77,8 @@ export const CARD_FAILURE_ANSWERED_OPERATIONS: readonly OperationType[] = [
   'SUSPEND',
   'RESUME',
   'ROTATE_SUBSCRIPTION',
+  // FIX-08: a free location change asked from the card.
+  'CHANGE_LOCATION',
 ];
 
 /** A card claimed for its one answer. */

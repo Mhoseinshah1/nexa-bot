@@ -425,3 +425,12 @@ export function sidebarLink(name: string): HTMLElement {
   if (header !== null && header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
   return within(nav).getByRole('link', { name });
 }
+
+/**
+ * The first bytes of each restore source the recovery page tells apart (Phase 7): a NEXA
+ * backup archive begins `NEXABAK1`, a Mirza converter package `NXPKG\0`. Synthetic — a
+ * magic and three filler bytes, never a real archive.
+ */
+const ascii = (text: string): number[] => Array.from(text, (char) => char.charCodeAt(0));
+export const NEXA_ARCHIVE_BYTES = new Uint8Array([...ascii('NEXABAK1'), 1, 2, 3]);
+export const MIRZA_PACKAGE_BYTES = new Uint8Array([...ascii('NXPKG'), 0, 1, 2, 3]);

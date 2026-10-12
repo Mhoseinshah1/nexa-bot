@@ -150,6 +150,18 @@ describe('the delete modal', () => {
     expect(within(dialog).getByText(t('web.service_delete_refund_denied'))).toBeInTheDocument();
   });
 
+  it('shows an absent paid amount as absent, never as a fabricated 0 (FIX-12)', async () => {
+    stubApi([...detailRoutes, quote({ principalMinor: null })]);
+    const dialog = await openModal();
+    fireEvent.click(within(dialog).getByRole('radio', { name: /حذف سرویس و بازگشت وجه/ }));
+    await within(dialog).findByLabelText(/مبلغ بازگشت \(تومان\)/);
+    expect(within(dialog).getByText(t('web.service_delete_amount_paid'))).toBeInTheDocument();
+    expect(within(dialog).getByText('—')).toBeInTheDocument();
+    // The bound the server did state is still shown; nothing reads as a paid zero.
+    expect(within(dialog).getByText('200,000')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/^0$/)).toBeNull();
+  });
+
   it('validates the amount against the server’s bound, then summarises before the final confirmation', async () => {
     const api = stubApi([...detailRoutes, quote(), executed()]);
     const dialog = await openModal();
