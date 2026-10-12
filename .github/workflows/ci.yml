@@ -594,6 +594,13 @@ jobs:
       - name: Update and rollback smoke
         run: bash scripts/deployment-update-smoke.sh
 
+      # The isolated Mirza migration rehearsal kit (deploy/rehearsal/), actually run:
+      # up, the isolation preflight (no NEXA process reaches the internet), the read-only
+      # RickPanel stand-in refusing and counting a write, the migration role healthy, the
+      # independent SQL check, a standard backup, and `down` keeping the volumes.
+      - name: Mirza rehearsal smoke
+        run: bash scripts/mirza-rehearsal-smoke.sh
+
   # Deliberately its own job. A dependency audit reads a remote advisory
   # database, so it can fail for reasons that have nothing to do with the diff;
   # keeping it out of `static` and `test` means a registry outage cannot make a

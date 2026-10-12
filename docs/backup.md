@@ -492,6 +492,35 @@ uploaded archive's workspace after success.** Debris is reported on the row and
 in the operational log rather than cleaned up silently; a recovery that removed
 its own evidence would be a recovery nobody could audit.
 
+### Restoring a Mirza backup on the same page
+
+The «عملیات بازیابی» card also takes a Mirza `.nxpkg` from Mirza2Nexa (Phase 7). It is NOT a
+`.nxb` and does not replace the database: it is the Fresh Migration importer
+(`docs/legacy-migration/nxpkg-importer.md` §10), executed by this same `recovery` role, into a
+NEXA that holds no operational data yet (a non-empty installation is refused; nothing is deleted).
+Before it writes anything it takes a verified `PRE_RESTORE` backup through this pipeline
+(`preImportBackupRunId`; restoring it here undoes the import), and while it applies the whole
+installation is quiesced exactly as during a restore (`recovery.quiesced`, the relay idle). One at
+a time: a restore is not confirmed while a Mirza import is approved or applying, and the reverse —
+both confirmations take one advisory lock and read the other inside their own transaction, and if
+both ever committed the recovery executor claims the restore and fails it at once
+(`recovery.confirmation_invalid`) before anything destructive. Both of the import's backups — the
+protective one and the one after — run with `deliver: false`: verified and kept on this server,
+recorded `NOT_ATTEMPTED`, never sent to Telegram (a restore sends nothing to Telegram, and the
+archive holds every imported customer). Download them from the history like any local archive.
+
+**A `deliver: false` run announces nothing.** Its `backup.run_ok` / `backup.run_failed` (and a
+cleanup condition) are recorded on the operational-event writer WITHOUT the projection to the
+operations group, so the run condition opens and closes as for any run but no Telegram message is
+queued; and it does not touch the delivery condition at all — "not attempted on purpose" neither
+opens `backup.delivery_failed` nor closes one as "not configured".
+
+**Restoring the protective backup closes the import it protected.** That backup is taken while the
+import is APPROVED, so the restored database carries the import row. Right after the cutover the
+recovery executor closes every unfinished import created before it (`CANCELLED`,
+`SUPERSEDED_BY_RESTORE`, key erased, lease released); the Mirza executor does the same on its own
+ticks as a backstop. Nothing is re-imported, and later restores and uploads are not blocked.
+
 ## The Recovery Kit — keep one, apart from the backups
 
 **A `.nxb` alone is not enough to restore on a new server.** Export a Recovery

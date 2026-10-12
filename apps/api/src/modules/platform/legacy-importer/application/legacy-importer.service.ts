@@ -63,9 +63,19 @@ import {
   type PanelMappingCompleteness,
   validatePanelMappingAgainstTenant,
   validateProductMappingAgainstTenant,
+  type PanelFacts,
   type PanelMapping,
 } from './panel-mapping.js';
-import { decideAllServices, inventoryIndexes, planLegacyImport, type LegacyPlan } from './plan.js';
+import {
+  decideAllServices,
+  inventoryIndexes,
+  planLegacyImport,
+  planTalliesDigest,
+  type LegacyPlan,
+} from './plan.js';
+import { freshTargetProblems, type FreshTargetCheck } from './fresh-target.js';
+import { NxpkgImportRefused } from './nxpkg-panel-binding.js';
+import { ownershipHoldDigest } from './nxpkg-ownership.js';
 import type {
   LegacyAdoptionPort,
   LegacyCustomerWriter,
@@ -211,6 +221,40 @@ export interface LegacyImportInput {
    * against this before any run acts on it. Absent = production-like: fail closed.
    */
   readonly productionLikeTarget?: boolean;
+  /**
+   * Mirza `.nxpkg` importer: live invoice keys the package's ownership evidence holds back from
+   * adoption (`nxpkg-ownership.ts`, `ServiceReviewInputs.ownershipHold`). Absent for every
+   * other source. The SAME set must be given to dry run, import, resume, reconcile and report
+   * of one package, as the mapping is.
+   */
+  readonly ownershipHold?: ReadonlySet<string>;
+  /**
+   * Mirza `.nxpkg` importer: the verified ownership decisions file's `entries_digest`, or null
+   * / absent without one. With `ownershipHold` it makes the run's hold digest
+   * (`ownershipHoldDigest`), recorded when a run starts and required equal by its resume,
+   * reconcile and report.
+   */
+  readonly ownershipDecisionsDigest?: string | null;
+}
+
+/**
+ * Mirza `.nxpkg` importer — what an import (`apply`, mode IMPORT) is given beyond the common
+ * input. Both checks run only when a NEW APPLY run starts; a resume is never refused by its
+ * own writes.
+ */
+export interface LegacyFreshMigrationInput {
+  /**
+   * Re-check the fresh target (`fresh-target.ts`) inside the transaction that starts the run,
+   * with the tenant row locked: `FRESH_TARGET_NOT_EMPTY` otherwise. Always applied to a source
+   * of engine `NXPKG` whatever this says; `true` applies it to any other engine as well.
+   */
+  readonly freshTarget?: boolean;
+  /**
+   * The approved dry run's `planTalliesDigest` (its report's `sections.planTalliesDigest`).
+   * The import recomputes the plan's tallies at its start and refuses another value
+   * (`DRY_RUN_MISMATCH`), before any write.
+   */
+  readonly dryRunTalliesDigest?: string;
 }
 
 /**
@@ -421,6 +465,43 @@ export function incompletePanelMapMessage(completeness: PanelMappingCompleteness
   );
 }
 
+/** The run's hold digest (`ownershipHoldDigest`), or null for an input without a hold. */
+function holdDigestOf(input: LegacyImportInput): string | null {
+  return input.ownershipHold === undefined
+    ? null
+    : ownershipHoldDigest(input.ownershipHold, input.ownershipDecisionsDigest ?? null);
+}
+
+/** The `.nxpkg` ownership hold, as `prepare` takes it; absent for every other source. */
+function holdOf(input: LegacyImportInput): { readonly ownershipHold?: ReadonlySet<string> } {
+  return input.ownershipHold === undefined ? {} : { ownershipHold: input.ownershipHold };
+}
+
+/** `sections.ownershipHold` of a report, for an input with a hold; nothing otherwise. */
+function ownershipHoldSection(
+  input: LegacyImportInput,
+  plan: Pick<LegacyPlan, 'ownershipHoldChanged'>,
+): { readonly ownershipHold?: { readonly invoices: number; readonly changedCategory: number } } {
+  if (input.ownershipHold === undefined) return {};
+  // `invoices`: live invoices held back; `changedCategory`: of those, the ones NEXA would
+  // otherwise have adopted (ADOPTION_ELIGIBLE → AMBIGUOUS_OWNERSHIP).
+  return {
+    ownershipHold: {
+      invoices: input.ownershipHold.size,
+      changedCategory: plan.ownershipHoldChanged,
+    },
+  };
+}
+
+/** M7: a run is decided under ONE ownership hold; any other is refused. */
+function ownershipHoldMismatch(runId: string, purpose: string) {
+  return errors.conflict(
+    LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+    `OWNERSHIP_HOLD_MISMATCH: run ${runId} was started under a different ownership hold ` +
+      `(package records or ownership decisions); ${purpose} needs the same one.`,
+  );
+}
+
 export class LegacyImporterService {
   constructor(private readonly deps: LegacyImporterDeps) {}
 
@@ -436,7 +517,7 @@ export class LegacyImporterService {
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
     productionLikeTarget = true,
-    options: { readonly forApply?: boolean } = {},
+    options: { readonly forApply?: boolean; readonly ownershipHold?: ReadonlySet<string> } = {},
   ): Promise<Prepared> {
     const { destination } = this.deps;
     if (!(await destination.tenantExists(scope))) {
@@ -482,7 +563,13 @@ export class LegacyImporterService {
     for (const panelId of mapping.policy.productionPanelIds) {
       inventories.set(panelId, await this.deps.inventory.read(scope, panelId));
     }
-    const review = await this.prepareReview(scope, snapshot, mapping, productionLikeTarget);
+    const review = await this.prepareReview(
+      scope,
+      snapshot,
+      mapping,
+      productionLikeTarget,
+      options.ownershipHold,
+    );
 
     // Shape keys first (from a plan with no shapes known), then the real plan.
     const draft = planLegacyImport({
@@ -530,6 +617,7 @@ export class LegacyImporterService {
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
     productionLikeTarget: boolean,
+    ownershipHold: ReadonlySet<string> | undefined,
   ): Promise<PreparedReview> {
     const live = new Map(snapshot.liveInvoices.map((i) => [i.idInvoice, i]));
     const keys = [...live.keys()].filter(recordableKey);
@@ -559,7 +647,16 @@ export class LegacyImporterService {
         .filter((c) => c.reviewState === 'KEPT_AS_HISTORY' && c.synthetic === snapshot.synthetic)
         .map((c) => c.invoiceKey),
     );
-    return { candidates, approvals, gates, inputs: { operatorPanels, keptAsHistory } };
+    return {
+      candidates,
+      approvals,
+      gates,
+      inputs: {
+        operatorPanels,
+        keptAsHistory,
+        ...(ownershipHold === undefined ? {} : { ownershipHold }),
+      },
+    };
   }
 
   private providerSection(prepared: Prepared) {
@@ -633,6 +730,7 @@ export class LegacyImporterService {
       input.snapshot,
       input.mapping,
       input.productionLikeTarget,
+      holdOf(input),
     );
     const blockers: string[] = [];
     if (prepared.salesCurrency !== LEGACY_BALANCE_CURRENCY) {
@@ -670,7 +768,13 @@ export class LegacyImporterService {
   async dryRun(input: LegacyImportInput): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
-    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
+    const prepared = await this.prepare(
+      scope,
+      snapshot,
+      mapping,
+      input.productionLikeTarget,
+      holdOf(input),
+    );
     const runId = this.deps.ids.uuid();
     await this.mutate(scope, actor, 'legacy_import.run.start', runId, async (tx) => {
       const outcome = await this.deps.runs.startOrResume(
@@ -684,7 +788,15 @@ export class LegacyImporterService {
         },
         tx,
       );
-      await this.recordInputs(scope, runId, snapshot, mapping, prepared.salesCurrency, tx);
+      await this.recordInputs(
+        scope,
+        runId,
+        snapshot,
+        mapping,
+        prepared.salesCurrency,
+        holdDigestOf(input),
+        tx,
+      );
       await this.auditRun(scope, actor, 'legacy_import.run.start', outcome.run, mapping, tx);
     });
 
@@ -721,6 +833,9 @@ export class LegacyImporterService {
         panelMapping: this.mappingSection(mapping),
         provider: this.providerSection(prepared),
         plan: prepared.plan.tallies,
+        // What an import is given back as `dryRunTalliesDigest` (DRY_RUN_MISMATCH).
+        planTalliesDigest: planTalliesDigest(prepared.plan),
+        ...ownershipHoldSection(input, prepared.plan),
       },
       'NO_BUSINESS_WRITE',
     );
@@ -729,11 +844,12 @@ export class LegacyImporterService {
   // --- import / resume -----------------------------------------------------------------
 
   async apply(
-    input: LegacyImportInput & {
-      readonly mode: 'IMPORT' | 'RESUME';
-      readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
-      readonly cutoverGate?: LegacyCutoverGateInput;
-    },
+    input: LegacyImportInput &
+      LegacyFreshMigrationInput & {
+        readonly mode: 'IMPORT' | 'RESUME';
+        readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
+        readonly cutoverGate?: LegacyCutoverGateInput;
+      },
   ): Promise<LegacyImportReport> {
     // Claimed BEFORE anything is read, held until the last write: a second process is
     // refused at once instead of walking the same rows beside this one.
@@ -753,11 +869,12 @@ export class LegacyImporterService {
   }
 
   private async applyClaimed(
-    input: LegacyImportInput & {
-      readonly mode: 'IMPORT' | 'RESUME';
-      readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
-      readonly cutoverGate?: LegacyCutoverGateInput;
-    },
+    input: LegacyImportInput &
+      LegacyFreshMigrationInput & {
+        readonly mode: 'IMPORT' | 'RESUME';
+        readonly afterPhase?: (phase: ApplyPhase) => Promise<void> | void;
+        readonly cutoverGate?: LegacyCutoverGateInput;
+      },
     lease: LegacyImportProcessLease,
   ): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
@@ -773,6 +890,7 @@ export class LegacyImporterService {
     }
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
       forApply: true,
+      ...holdOf(input),
     });
     // G10, the same predicate as the audit, decided again NOW: an import never starts on
     // a map that forgets a live code_panel — whatever the audit said earlier.
@@ -786,6 +904,18 @@ export class LegacyImporterService {
         `The tenant sells in ${prepared.salesCurrency}; legacy balances are Toman (IRT) and are never converted.`,
       );
     }
+    // `.nxpkg`: an import starts only from the plan the owner approved in its dry run. A
+    // resume is not compared: its own earlier writes are part of NEXA's state now.
+    if (input.mode === 'IMPORT' && input.dryRunTalliesDigest !== undefined) {
+      const now = planTalliesDigest(prepared.plan);
+      if (now !== input.dryRunTalliesDigest) {
+        throw new NxpkgImportRefused('DRY_RUN_MISMATCH', [
+          `the plan's tallies digest is ${now}, not the approved dry run's ${input.dryRunTalliesDigest}: NEXA's state or the input changed since the dry run. Nothing was written.`,
+        ]);
+      }
+    }
+    const holdDigest = holdDigestOf(input);
+    const freshGuard = input.freshTarget === true || snapshot.descriptor.engine === 'NXPKG';
     const preImport = await this.deps.destination.walletTotals(scope, prepared.salesCurrency, {
       excludeOpenings: true,
     });
@@ -818,6 +948,30 @@ export class LegacyImporterService {
           'There is no RUNNING import of this source to resume. Use --mode import.',
         );
       }
+      // `.nxpkg` (H1): the fresh target, decided again HERE — in the transaction that starts
+      // the run, with the tenant row locked so nothing lands in it until this commits. A new
+      // run only: a resume's tenant holds the run's own writes.
+      if (freshGuard && outcome.kind === 'STARTED') {
+        const fresh = await this.deps.destination.freshTargetCounts(
+          scope,
+          {
+            sourceFingerprint: snapshot.fingerprint,
+            excludeRunId: outcome.run.id,
+            lockTenant: true,
+          },
+          tx,
+        );
+        if (!fresh.fresh) {
+          throw new NxpkgImportRefused(
+            'FRESH_TARGET_NOT_EMPTY',
+            [
+              'the tenant already holds operational data; nothing is deleted to make room',
+              ...freshTargetProblems(fresh),
+            ],
+            fresh.counts,
+          );
+        }
+      }
       await this.bindUserStatus(scope, actor, snapshot, tx);
       const stored = await this.recordInputs(
         scope,
@@ -825,6 +979,7 @@ export class LegacyImporterService {
         snapshot,
         mapping,
         prepared.salesCurrency,
+        holdDigest,
         tx,
         preImport,
       );
@@ -833,6 +988,9 @@ export class LegacyImporterService {
           LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
           `Run ${outcome.run.id} was started under a different panel mapping; resume needs the same mapping file.`,
         );
+      }
+      if (stored.ownershipHoldDigest !== holdDigest) {
+        throw ownershipHoldMismatch(outcome.run.id, 'resume');
       }
       await this.auditRun(
         scope,
@@ -989,6 +1147,7 @@ export class LegacyImporterService {
         panelMapping: this.mappingSection(mapping),
         provider: this.providerSection(prepared),
         plan: prepared.plan.tallies,
+        ...ownershipHoldSection(input, prepared.plan),
         applied: tallies,
         attention,
       },
@@ -998,6 +1157,20 @@ export class LegacyImporterService {
           ? 'COMPLETED_ADOPTION_PENDING_P6'
           : 'COMPLETED',
     );
+  }
+
+  /** The tenant's panels among `panelIds` (read only), as the `.nxpkg` binding checks them. */
+  panelFacts(scope: TenantContext, panelIds: readonly string[]): Promise<readonly PanelFacts[]> {
+    return this.deps.destination.panels(scope, panelIds);
+  }
+
+  /**
+   * `.nxpkg`: the fresh-target counts, read only (`fresh-target.ts`), not counting the read sets
+   * of `sourceFingerprint`. A courtesy before a dry run or an import; an import decides again
+   * inside its start transaction with the tenant locked.
+   */
+  freshTarget(scope: TenantContext, sourceFingerprint: string | null): Promise<FreshTargetCheck> {
+    return this.deps.destination.freshTargetCounts(scope, { sourceFingerprint });
   }
 
   resolveTenant(ref: string): Promise<string | null> {
@@ -1512,7 +1685,13 @@ export class LegacyImporterService {
       inventoryIndexes(mapping, prepared.inventories),
       importedUsers,
       (key) => (shapes.get(key)?.resolved === true ? 'RESOLVED' : 'UNRESOLVED'),
-      { operatorPanels, keptAsHistory },
+      {
+        operatorPanels,
+        keptAsHistory,
+        ...(review.inputs.ownershipHold === undefined
+          ? {}
+          : { ownershipHold: review.inputs.ownershipHold }),
+      },
     );
     tallies.services.categories = { ...decided.categories };
 
@@ -1983,8 +2162,20 @@ export class LegacyImporterService {
   async reconcile(input: LegacyImportInput): Promise<LegacyImportReport> {
     const { scope, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
-    const { run, inputs } = await this.runMadeFrom(scope, snapshot, mapping, 'reconcile');
-    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
+    const { run, inputs } = await this.runMadeFrom(
+      scope,
+      snapshot,
+      mapping,
+      'reconcile',
+      holdDigestOf(input),
+    );
+    const prepared = await this.prepare(
+      scope,
+      snapshot,
+      mapping,
+      input.productionLikeTarget,
+      holdOf(input),
+    );
     const { destination } = this.deps;
     const tallies = prepared.plan.tallies;
     const [wallet, openings, native, trials, shapes, since] = await Promise.all([
@@ -2213,9 +2404,21 @@ export class LegacyImporterService {
     });
     if (!label.ok) throw errors.conflict(LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT, label.message);
     const startedAt = this.deps.clock.now();
-    const { run, inputs } = await this.runMadeFrom(scope, snapshot, mapping, 'report');
+    const { run, inputs } = await this.runMadeFrom(
+      scope,
+      snapshot,
+      mapping,
+      'report',
+      holdDigestOf(input),
+    );
     const { destination } = this.deps;
-    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget);
+    const prepared = await this.prepare(
+      scope,
+      snapshot,
+      mapping,
+      input.productionLikeTarget,
+      holdOf(input),
+    );
     const currency = inputs.walletCurrency;
     const [openings, trials, shapes, map, native, actual, resumes, tenantSlug] = await Promise.all([
       destination.openingAggregates(scope),
@@ -2364,6 +2567,7 @@ export class LegacyImporterService {
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
     purpose: 'reconcile' | 'report',
+    holdDigest: string | null,
   ): Promise<{ readonly run: LegacyImportRunRecord; readonly inputs: LegacyRunInputs }> {
     const run = await this.latestApplyRun(scope);
     if (purpose === 'reconcile' && run.status !== 'COMPLETED') {
@@ -2393,6 +2597,7 @@ export class LegacyImporterService {
         `Run ${run.id} was made under a different panel mapping; ${purpose} needs the same mapping file.`,
       );
     }
+    if (inputs.ownershipHoldDigest !== holdDigest) throw ownershipHoldMismatch(run.id, purpose);
     return { run, inputs };
   }
 
@@ -2609,6 +2814,7 @@ export class LegacyImporterService {
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
     currency: string,
+    ownershipHoldDigest: string | null,
     tx: TransactionScope,
     preImport?: { readonly totalMinor: bigint; readonly customers: number },
   ): Promise<LegacyRunInputs> {
@@ -2626,6 +2832,7 @@ export class LegacyImporterService {
         preImportWalletTotalMinor: totals.totalMinor,
         preImportCustomers: totals.customers,
         recordedAt: this.deps.clock.now(),
+        ownershipHoldDigest,
       },
       tx,
     );

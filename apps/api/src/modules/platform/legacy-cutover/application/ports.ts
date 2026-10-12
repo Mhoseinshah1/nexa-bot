@@ -112,6 +112,12 @@ export interface LegacyCutoverStopSalesFacts {
   readonly gateways: number;
   /** Payment gateways still ACTIVE: each could still take a payment or a top-up. */
   readonly gatewaysActive: number;
+  /**
+   * Phase 7: this tenant's `.nxpkg` imports that are APPLYING. Each freezes the whole
+   * installation (the write gate refuses every write but the import's own), which stops sales
+   * more strongly than an incident, drained panels and disabled gateways do.
+   */
+  readonly frozenByImport: number;
 }
 
 export interface LegacyCutoverRepository {
