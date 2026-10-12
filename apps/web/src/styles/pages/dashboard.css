@@ -253,3 +253,10 @@
   margin: 16px 0 8px;
   font-size: var(--fs-ui);
 }
+
+/* FIX-12: on touch the attention row, which is one link, is a 44px target (tokens.css). */
+@media (pointer: coarse) and (hover: none) {
+  .attn-link {
+    min-height: var(--ctl-h);
+  }
+}
