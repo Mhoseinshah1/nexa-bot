@@ -353,9 +353,12 @@ describe('FIX-03: payment-gateway operational events', () => {
     expect(open.map((row) => row.dedupe_key).sort()).toEqual(
       [late, otherId].map((id) => `${GATEWAY_SETTLEMENT_FAILED_CODE}:${id}`).sort(),
     );
-    // Past `late`'s deadline only: its next answer is a LATE_COMPLETION, a decision.
+    // Past `late`'s deadline only: its next answer is a LATE_COMPLETION, a decision. Past it
+    // on the payment service's own clock too: since #269 the deadline is judged under the
+    // payment's lock in `confirmGatewayPayment`, which reads the container's clock, not this
+    // lane's shifted one.
     await ctx.container.database.db.execute(
-      sql`UPDATE payments SET expires_at = ${new Date(Date.now() + offsetMs + 60_000)}
+      sql`UPDATE payments SET expires_at = ${new Date(Date.now() - 60_000)}
            WHERE id = ${late}`,
     );
     // The other payment is not asked in that pass: nothing is decided about it.
@@ -363,7 +366,10 @@ describe('FIX-03: payment-gateway operational events', () => {
       sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(Date.now() + offsetMs + 3_600_000)}
            WHERE payment_id = ${otherId}`,
     );
-    await inquire(lane({ payments: refusing }));
+    // The real payment service this time: since #269 a post-deadline approval is decided by
+    // `confirmGatewayPayment` under the payment's lock, which records the LATE_COMPLETION.
+    // (Refusing it here would leave nothing decided — and the alarm rightly open.)
+    await inquire(lane());
     expect(await paymentState(late)).toBe('PENDING');
     const rows = await events(GATEWAY_SETTLEMENT_FAILED_CODE);
     const byKey = new Map(rows.map((row) => [row.dedupe_key, row]));
