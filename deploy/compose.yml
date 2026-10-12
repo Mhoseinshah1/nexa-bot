@@ -47,6 +47,15 @@ x-app-common: &app-common
     # the protection without copying the value into a second file. Extra
     # networks an operator wants refused go in PANEL_HTTP_DENIED_SUBNETS.
     NEXA_DATA_SUBNET: ${NEXA_DATA_SUBNET:-172.29.1.0/24}
+    # PINNED, for every application role (each one merges this anchor and none
+    # overrides `environment`). FIX-04 (S2): `environment` wins over `env_file`,
+    # so a `NODE_ENV=development` left in nexa.env no longer turns a public
+    # installation into a development one — Secure-less session cookies, an
+    # optional CSRF Origin check, weak hashing allowed, loopback panels. This
+    # file IS the production deployment; a development process belongs to the
+    # root docker-compose.yml. `botctl status` shows the resolved value in its
+    # `node environment` row and explains anything but production.
+    NODE_ENV: production
   security_opt:
     - no-new-privileges:true
   cap_drop:

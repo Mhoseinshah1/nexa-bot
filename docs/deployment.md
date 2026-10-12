@@ -2357,6 +2357,45 @@ it; the other eighteen (the gateway status and review messages, `receipt_prompt`
   rather than sending it; the operational event itself stays in the log and in «مرکز
   اعلان‌ها».
 
+### What an update changes: NODE_ENV is pinned to production, and the development endpoint is opt-in (FIX-04 S2)
+
+`deploy/compose.yml` now sets `NODE_ENV: production` in the `environment` of the
+shared application anchor, so **every role** (api, worker, monitor, provisioner,
+assistant, recovery) runs as production whatever `/etc/nexa/nexa.env` says —
+`environment` beats `env_file`. Before, a host whose `nexa.env` said
+`NODE_ENV=development` served, on its public domain behind Caddy's `/api/*`
+route:
+
+- the **unauthenticated** `POST /api/admin/v1/system/ping`, a write into
+  append-only tables registered on `NODE_ENV=development` alone;
+- an admin session cookie without `Secure` and without the `__Host-` prefix;
+- no CSRF Origin check when `WEB_ADMIN_ORIGINS` was empty, weak password hashing
+  and loopback panel addresses allowed.
+
+Independently of the pin, the system endpoint is now registered only when
+`DEV_SYSTEM_ENDPOINT_ENABLED=true` **and** `NODE_ENV` is `development` or `test`;
+the config schema refuses that flag in production and beside a public
+`WEB_ADMIN_ORIGINS` or `DEPLOYMENT_TOPOLOGY=reverse-proxy`. A development process
+whose configuration looks public (a public admin origin, a reverse proxy, the
+Telegram webhook) still starts, and logs a `warn` line naming what it found at
+every start. `botctl status` shows a `node environment` row and explains a
+non-production value.
+
+**Before updating a host that ran on development settings:** the update makes
+it a production process, and production refuses to start without what it
+requires — a canonical `https` `WEB_ADMIN_ORIGINS`, `DEPLOYMENT_TOPOLOGY=reverse-proxy`
+with `TRUSTED_PROXY_IPS`, `PASSWORD_HASH_PROFILE` not `fast`, an `https`
+`TELEGRAM_API_BASE_URL`, no `AUTH_MODE=none`, no `NOTIFICATION_TRANSPORT=recording`,
+no `PANEL_HTTP_ALLOW_LOOPBACK`. The installer has always written those
+production values; a hand-edited `nexa.env` may not have them. Remove the
+`NODE_ENV=development` line from `nexa.env` (it is ignored now) and fix what
+`botctl logs api` reports. Existing sessions issued as non-`__Host-` cookies stop
+being read, so administrators sign in again once.
+
+**Rollback** restores the previous compose file, and with it whatever
+`nexa.env` says about `NODE_ENV`. A development process for a test machine
+belongs to the root `docker-compose.yml` and `.env`, never to `deploy/`.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
