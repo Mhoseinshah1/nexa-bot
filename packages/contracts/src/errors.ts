@@ -352,6 +352,12 @@ export const PLATFORM_ERROR_CODES = {
    */
   RECOVERY_ALREADY_ACTIVE: 'recovery.already_active',
   /**
+   * A Mirza `.nxpkg` import is APPROVED or APPLYING on this installation: a restore cannot be
+   * confirmed until it finishes (Phase 7 — a migration is a restore from the operator's view,
+   * and the two are mutually exclusive). A CONFLICT: retry once the import is done.
+   */
+  RECOVERY_LEGACY_MIGRATION_ACTIVE: 'recovery.legacy_migration_active',
+  /**
    * The installation is refusing new durable writes while a recovery runs.
    *
    * Deliberately distinguishable from a stopped tenant. An operator who saw

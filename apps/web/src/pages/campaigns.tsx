@@ -1741,6 +1741,15 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
   const typed = current.typed;
   const setReviewed = (next: boolean) => setAnswers({ ...current, reviewed: next });
   const setTyped = (next: typeof EMPTY_TYPED) => setAnswers({ ...current, typed: next });
+  /*
+   * FIX-12: a wallet gift binds the confirmation to its exact total. A preview that could
+   * not state one has nothing to bind to, so it cannot be confirmed — never with a `0`
+   * standing in for the figure nobody saw.
+   */
+  const walletTotalUnknown =
+    preview.data !== undefined &&
+    preview.data.walletGift !== null &&
+    preview.data.walletGift.totalLiability === null;
 
   const confirm = useMutation({
     mutationFn: (p: CampaignPreviewResponse) => {
@@ -1760,7 +1769,7 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
                 count: p.walletGift.count,
                 fingerprint: p.walletGift.fingerprint,
                 typedCount: typedOf(typed.walletGift),
-                totalMinor: p.walletGift.totalLiability?.amountMinor ?? '0',
+                totalMinor: knownWalletTotal(p.walletGift),
               },
         trafficGift: binding(p.trafficGift, typed.trafficGift),
         timeGift: binding(p.timeGift, typed.timeGift),
@@ -1889,7 +1898,7 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
               <Button
                 variant="primary"
                 icon="check"
-                disabled={!reviewed || confirm.isPending}
+                disabled={!reviewed || confirm.isPending || walletTotalUnknown}
                 onClick={() => confirm.mutate(p)}
               >
                 {t('web.campaign_confirm')}
@@ -1900,6 +1909,15 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
       </StateSwitch>
     </Card>
   );
+}
+
+/** The wallet gift's exact total, which the confirmation binds to. Never a stand-in. */
+function knownWalletTotal(gift: NonNullable<CampaignPreviewResponse['walletGift']>): string {
+  if (gift.totalLiability === null) {
+    // The button is disabled for this preview; reaching here is a defect, not a zero.
+    throw new Error('A wallet gift without a stated total cannot be confirmed.');
+  }
+  return gift.totalLiability.amountMinor;
 }
 
 /** Everything a confirmation binds to, as one string: a change in any of it is a new preview. */

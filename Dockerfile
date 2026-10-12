@@ -168,9 +168,9 @@ RUN set -eux; \
 #
 # 0700, because these hold encrypted archives and, briefly, decrypted database
 # dumps. Nothing else on the host has any business reading them.
-RUN mkdir -p /var/lib/nexa/backups /var/lib/nexa/recovery \
+RUN mkdir -p /var/lib/nexa/backups /var/lib/nexa/recovery /var/lib/nexa/legacy-migration \
     && chown -R node:node /var/lib/nexa \
-    && chmod 700 /var/lib/nexa/backups /var/lib/nexa/recovery
+    && chmod 700 /var/lib/nexa/backups /var/lib/nexa/recovery /var/lib/nexa/legacy-migration
 
 # The `node` user (uid 1000) ships with the base image. The application never
 # needs to write to its own filesystem, so nothing here is owned by it for

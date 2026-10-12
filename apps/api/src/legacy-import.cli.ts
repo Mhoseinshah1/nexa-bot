@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   LEGACY_TABLE_CLASSIFICATION,
@@ -10,10 +11,32 @@ import {
 import { createContainer } from './container.js';
 import {
   DSN_PASSWORD_REFUSAL,
+  PACKAGE_SECRET_VALUE_REFUSAL,
   PASSWORD_FLAG_REFUSAL,
   hasUrlPassword,
+  isPackageKeyText,
   isPasswordFlag,
 } from './legacy-import-argv.js';
+import { NxpkgError } from './infrastructure/nxpkg/errors.js';
+import type { NxpkgSecret } from './infrastructure/nxpkg/crypto.js';
+import {
+  NxpkgImportRefused,
+  validatePanelMappingAgainstTargets,
+} from './modules/platform/legacy-importer/application/nxpkg-panel-binding.js';
+import {
+  NXPKG_PANEL_TARGETS_PATH,
+  checkNxpkgForImport,
+} from './modules/platform/legacy-importer/application/nxpkg-acceptance.js';
+import { freshTargetProblems } from './modules/platform/legacy-importer/application/fresh-target.js';
+import { nxpkgOwnershipHold } from './modules/platform/legacy-importer/application/nxpkg-ownership.js';
+import {
+  NxpkgLegacySourceConnector,
+  nxpkgSourceConnector,
+} from './modules/platform/legacy-importer/infrastructure/nxpkg-legacy-source.js';
+import {
+  readOwnershipRecords,
+  verifyOwnershipDecisions,
+} from './modules/platform/legacy-importer/infrastructure/nxpkg-ownership-decisions.js';
 import {
   INVENTORY_USAGE,
   InventoryUsageError,
@@ -64,6 +87,7 @@ import {
 import {
   PanelMappingRefused,
   parsePanelMapping,
+  type PanelMapping,
 } from './modules/platform/legacy-importer/application/panel-mapping.js';
 import {
   ALLOW_PRODUCTION_FLAG,
@@ -83,7 +107,10 @@ import {
   LegacySourceRefused,
   type LegacySourceConnector,
 } from './modules/platform/legacy-importer/application/source-port.js';
-import { readFromSession } from './modules/platform/legacy-importer/application/source-snapshot.js';
+import {
+  readFromSession,
+  type LegacySnapshot,
+} from './modules/platform/legacy-importer/application/source-snapshot.js';
 import {
   FixtureLegacySourceConnector,
   loadFixtureDataset,
@@ -141,6 +168,9 @@ export const USAGE = [
   '                     [--expected-invoice-archive-fingerprint HEX]',
   '                     [--expected-freeze-proof-sha256 HEX] [--expected-final-dump-sha256 HEX]',
   '                     [--cutover-gate] [--report-schema 1|2]',
+  '                     [--package-key-env NAME | --package-passphrase-env NAME]',
+  '                     [--package-work-dir DIR] [--ownership-decisions FILE]',
+  '                     [--expected-plan-tallies-digest HEX]',
   `                     [${ALLOW_PRODUCTION_FLAG}]`,
   '',
   '  MODE     audit | dry-run | import | resume | reconcile | report  (or --mode MODE)',
@@ -148,6 +178,9 @@ export const USAGE = [
   '  SOURCE   env:NAME                 a mysql:// DSN read from the environment variable NAME',
   '           mysql://USER@HOST:PORT/DB  (no password here; add --source-password-env NAME)',
   '           fixture:PATH             a SYNTHETIC dataset (tests and rehearsal code checks only)',
+  '           nxpkg:PATH               a Mirza2Nexa .nxpkg package (contract >= 1.4.0), opened with',
+  '                                    --package-key-env NAME (the key file text) or',
+  '                                    --package-passphrase-env NAME; never a key on argv',
   '  TARGET   env:NAME                 the NEXA postgres:// URL read from the variable NAME',
   '           postgres://USER@HOST:PORT/DB  (no password here; PGPASSWORD is honoured)',
   '           DBNAME                   the database DATABASE_URL names, typed out to confirm it',
@@ -178,6 +211,13 @@ export const USAGE = [
   '  written) without an unrevoked owner approval (Web Admin) matching all seven, or over an',
   "  earlier import of another source without the owner's re-run acknowledgement",
   '  (SOURCE_SUPERSEDED).',
+  "  --expected-plan-tallies-digest HEX  import: the approved dry run's planTalliesDigest; a",
+  '                                      plan with other tallies is refused (DRY_RUN_MISMATCH).',
+  '',
+  '  nxpkg: every mode first re-checks the package (checkNxpkgForImport) and accepts the',
+  '  --panel-map only if it is exactly the map the package targets make with its bindings;',
+  '  dry-run and import refuse a target that is not fresh (FRESH_TARGET_NOT_EMPTY), and',
+  '  import decides that again inside the transaction that starts the run.',
   '  --report-schema 1|2                 report: the final report version --format json prints',
   '                                      (default 2; 1 is the closed v1 document, unchanged).',
   '',
@@ -220,6 +260,16 @@ export interface Args {
   readonly cutoverGate: boolean;
   /** report: the final report version `--format json` prints. */
   readonly reportSchema: 1 | 2;
+  /** `nxpkg:` only: the variable holding the package key file's text. */
+  readonly packageKeyEnv?: string | null;
+  /** `nxpkg:` only: the variable holding the package passphrase. */
+  readonly packagePassphraseEnv?: string | null;
+  /** `nxpkg:` only: where the package is decrypted (a private 0700 directory inside). */
+  readonly packageWorkDir?: string | null;
+  /** `nxpkg:` only: the converter's signed `ownership-decisions.json`. */
+  readonly ownershipDecisions?: string | null;
+  /** import: the approved dry run's `planTalliesDigest` (DRY_RUN_MISMATCH otherwise). */
+  readonly expectedPlanTalliesDigest?: string | null;
 }
 
 /**
@@ -261,6 +311,11 @@ const VALUE_FLAGS = new Set([
   '--inventory-page-size',
   '--format',
   '--evidence-class',
+  '--package-key-env',
+  '--package-passphrase-env',
+  '--package-work-dir',
+  '--ownership-decisions',
+  '--expected-plan-tallies-digest',
 ]);
 const BOOLEAN_FLAGS = new Set([ALLOW_PRODUCTION_FLAG, '--abort-running', '--cutover-gate']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -269,6 +324,8 @@ const DATABASE_NAME = /^[a-z_][a-z0-9_]{0,62}$/u;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/u;
 
 export function parseArgs(argv: readonly string[]): Args {
+  // A package key's text is refused wherever it stands — as a flag's value too.
+  if (argv.some(isPackageKeyText)) throw new UsageError(PACKAGE_SECRET_VALUE_REFUSAL);
   const values = new Map<string, string>();
   const flags = new Set<string>();
   // The mode may lead, positionally (`legacy-import import --tenant …`), or be `--mode`.
@@ -320,8 +377,37 @@ export function parseArgs(argv: readonly string[]): Args {
       throw new UsageError(`${spec} does not name an environment variable.`);
     }
   }
-  if (!/^(env:|mysql:\/\/|mariadb:\/\/|fixture:)/u.test(source)) {
-    throw new UsageError('--source must be env:NAME, mysql://… or fixture:PATH.');
+  if (!/^(env:|mysql:\/\/|mariadb:\/\/|fixture:|nxpkg:)/u.test(source)) {
+    throw new UsageError('--source must be env:NAME, mysql://…, fixture:PATH or nxpkg:PATH.');
+  }
+  const nxpkg = source.startsWith('nxpkg:');
+  if (nxpkg && source.length === 'nxpkg:'.length) {
+    throw new UsageError('--source nxpkg: needs the package path.');
+  }
+  const packageKeyEnv = values.get('--package-key-env') ?? null;
+  const packagePassphraseEnv = values.get('--package-passphrase-env') ?? null;
+  const packageWorkDir = values.get('--package-work-dir') ?? null;
+  const ownershipDecisions = values.get('--ownership-decisions') ?? null;
+  for (const name of [packageKeyEnv, packagePassphraseEnv]) {
+    if (name !== null && !ENV_NAME.test(name)) {
+      throw new UsageError('--package-key-env / --package-passphrase-env name a variable.');
+    }
+  }
+  if (nxpkg && (packageKeyEnv === null) === (packagePassphraseEnv === null)) {
+    throw new UsageError(
+      '--source nxpkg: needs exactly one of --package-key-env NAME or --package-passphrase-env NAME.',
+    );
+  }
+  if (
+    !nxpkg &&
+    (packageKeyEnv !== null ||
+      packagePassphraseEnv !== null ||
+      packageWorkDir !== null ||
+      ownershipDecisions !== null)
+  ) {
+    throw new UsageError(
+      '--package-key-env, --package-passphrase-env, --package-work-dir and --ownership-decisions apply to an nxpkg: source only.',
+    );
   }
   if (!/^(env:|postgres:\/\/|postgresql:\/\/)/u.test(target) && !DATABASE_NAME.test(target)) {
     throw new UsageError('--target must be env:NAME, postgres://… or a database name.');
@@ -386,6 +472,17 @@ export function parseArgs(argv: readonly string[]): Args {
   if (cutoverGate && mode !== 'import' && mode !== 'resume') {
     throw new UsageError('--cutover-gate applies to import and resume only.');
   }
+  const expectedPlanTalliesDigest = values.get('--expected-plan-tallies-digest') ?? null;
+  if (expectedPlanTalliesDigest !== null) {
+    if (mode !== 'import') {
+      throw new UsageError('--expected-plan-tallies-digest applies to import only.');
+    }
+    if (!SHA256_HEX.test(expectedPlanTalliesDigest)) {
+      throw new UsageError(
+        '--expected-plan-tallies-digest is a SHA-256 as 64 lowercase hex characters, as the dry run prints it.',
+      );
+    }
+  }
   const rawSchema = values.get('--report-schema');
   if (rawSchema !== undefined && mode !== 'report') {
     throw new UsageError('--report-schema applies to report only.');
@@ -416,6 +513,11 @@ export function parseArgs(argv: readonly string[]): Args {
     inventoryPageSizeSource: rawPage === undefined ? 'CLI_DEFAULT' : 'OPERATOR',
     format,
     evidenceClass: evidenceClass as EvidenceClass | null,
+    packageKeyEnv,
+    packagePassphraseEnv,
+    packageWorkDir,
+    ownershipDecisions,
+    expectedPlanTalliesDigest,
   };
 }
 
@@ -461,9 +563,19 @@ export function targetIdentity(url: string): TargetIdentity {
   return { host: parsed.hostname || 'localhost', port: parsed.port || '5432', database };
 }
 
-/** The guard, as the CLI applies it. Throws `UsageError` with the refusal. */
+/**
+ * The guard, as the CLI applies it. Throws `UsageError` with the refusal.
+ *
+ * A source is synthetic when it is a `fixture:`, OR when the caller has read the source's own
+ * marker and says so (`syntheticSource: true` — an `.nxpkg` package whose catalogue carries
+ * NEXA's synthetic marker). The flag can only ADD the refusal: a `fixture:` source is
+ * synthetic whatever it says, and a real package (marker null) is guarded as any real source.
+ */
 export function guardTarget(
-  args: Pick<Args, 'tenant' | 'allowProductionTarget'> & { readonly source?: string },
+  args: Pick<Args, 'tenant' | 'allowProductionTarget'> & {
+    readonly source?: string;
+    readonly syntheticSource?: boolean;
+  },
   targetUrl: string,
   env: NodeJS.ProcessEnv,
 ): TargetIdentity & { readonly productionLike: boolean } {
@@ -473,16 +585,56 @@ export function guardTarget(
     tenantId: args.tenant,
     env: { NODE_ENV: env['NODE_ENV'], [TARGET_ACK_ENV]: env[TARGET_ACK_ENV] },
     allowProductionFlag: args.allowProductionTarget,
-    syntheticSource: args.source?.startsWith('fixture:') ?? false,
+    syntheticSource:
+      (args.source?.startsWith('fixture:') ?? false) || args.syntheticSource === true,
   });
   if (!verdict.allowed) throw new UsageError(verdict.message);
   return { ...identity, productionLike: verdict.productionLike };
 }
 
+/**
+ * The package secret, read from the variable the operator named — never from argv. An unset
+ * or empty variable is refused; the value is returned for one `openNxpkg` call and kept
+ * nowhere else.
+ */
+export function packageSecretFromEnv(
+  args: Pick<Args, 'packageKeyEnv' | 'packagePassphraseEnv'>,
+  env: NodeJS.ProcessEnv,
+): NxpkgSecret {
+  const name = args.packageKeyEnv ?? args.packagePassphraseEnv ?? null;
+  if (name === null) {
+    throw new UsageError('--package-key-env or --package-passphrase-env is required.');
+  }
+  const value = env[name];
+  if (value === undefined || value === '') throw new UsageError(`${name} is not set.`);
+  return args.packageKeyEnv != null ? { keyFileText: value } : { passphrase: value };
+}
+
+/**
+ * The `.nxpkg` source for the orchestration (`legacy-migration`) and the CLI: opens and
+ * authenticates the package, decrypting it into a private directory under `workDir`, and
+ * returns a connector that owns it (`close()` deletes it). See `nxpkg-legacy-source.ts`.
+ */
+export { nxpkgSourceConnector };
+
 async function sourceConnector(
-  args: Pick<Args, 'source' | 'sourcePasswordEnv'>,
+  args: Pick<Args, 'source' | 'sourcePasswordEnv'> &
+    Partial<Pick<Args, 'packageKeyEnv' | 'packagePassphraseEnv' | 'packageWorkDir'>>,
   env: NodeJS.ProcessEnv,
 ): Promise<LegacySourceConnector> {
+  if (args.source.startsWith('nxpkg:')) {
+    return nxpkgSourceConnector(
+      args.source.slice('nxpkg:'.length),
+      packageSecretFromEnv(
+        {
+          packageKeyEnv: args.packageKeyEnv ?? null,
+          packagePassphraseEnv: args.packagePassphraseEnv ?? null,
+        },
+        env,
+      ),
+      args.packageWorkDir ?? tmpdir(),
+    );
+  }
   if (args.source.startsWith('fixture:')) {
     return new FixtureLegacySourceConnector(
       await loadFixtureDataset(args.source.slice('fixture:'.length)),
@@ -671,7 +823,25 @@ export async function runMode(
   connector: LegacySourceConnector,
   mappingText: string,
   actorCorrelation: string,
-  context: { readonly tenantId: string; readonly productionLikeTarget: boolean },
+  context: {
+    readonly tenantId: string;
+    readonly productionLikeTarget: boolean;
+    /**
+     * `.nxpkg` only: the live invoices the package's ownership evidence holds back from
+     * adoption, decided from THIS snapshot (`nxpkgOwnershipHoldFor`).
+     */
+    readonly ownershipHoldFor?: (snapshot: LegacySnapshot) => Promise<ReadonlySet<string>>;
+    /**
+     * `.nxpkg` only: the verified ownership decisions file's `entries_digest`, or null without
+     * one. Bound with the hold into the run (`ownership_hold_digest`, M7).
+     */
+    readonly ownershipDecisionsDigest?: string | null;
+    /**
+     * import: the approved dry run's `planTalliesDigest` (`sections.planTalliesDigest`); the
+     * import refuses another plan (`DRY_RUN_MISMATCH`). Overrides `--expected-plan-tallies-digest`.
+     */
+    readonly dryRunTalliesDigest?: string;
+  },
 ): Promise<LegacyImportReport | null> {
   const scope: TenantContext = { tenantId: context.tenantId as never, botInstanceId: null };
   const actor = systemJobActor(`legacy-import:${args.mode}`, actorCorrelation as CorrelationId);
@@ -699,6 +869,13 @@ export async function runMode(
         `${EXPECTED_PANEL_MAP_FINGERPRINT_FLAG} is ${args.expectedPanelMapFingerprint}: this is ` +
         'not the mapping file that was approved. Nothing was written.',
     ]);
+  }
+
+  // `.nxpkg` (H2): whoever calls — the operator's CLI or the migration worker — every mode
+  // re-checks the package and takes the panel map only as the package's targets make it.
+  const nxpkg = connector instanceof NxpkgLegacySourceConnector;
+  if (connector instanceof NxpkgLegacySourceConnector) {
+    await assertNxpkgImportable(importer, scope, connector, mapping);
   }
 
   const session = await connector.open();
@@ -730,13 +907,34 @@ export async function runMode(
   }
   // Mirza PR5: the target's class travels with the input, so a stored approval's synthetic
   // flag is checked against it before any run acts on it.
+  // `.nxpkg` (§6): a dry run or an import only into a fresh tenant — a courtesy read here,
+  // decided again by the import inside the transaction that starts its run.
+  if (nxpkg && (args.mode === 'dry-run' || args.mode === 'import')) {
+    const fresh = await importer.freshTarget(scope, snapshot.fingerprint);
+    if (!fresh.fresh) {
+      throw new NxpkgImportRefused(
+        'FRESH_TARGET_NOT_EMPTY',
+        [
+          'the tenant already holds operational data; nothing is deleted to make room',
+          ...freshTargetProblems(fresh),
+        ],
+        fresh.counts,
+      );
+    }
+  }
+  const ownershipHold =
+    context.ownershipHoldFor === undefined ? undefined : await context.ownershipHoldFor(snapshot);
   const input = {
     scope,
     actor,
     snapshot,
     mapping,
     productionLikeTarget: context.productionLikeTarget,
+    ...(ownershipHold === undefined
+      ? {}
+      : { ownershipHold, ownershipDecisionsDigest: context.ownershipDecisionsDigest ?? null }),
   };
+  const dryRunTalliesDigest = context.dryRunTalliesDigest ?? args.expectedPlanTalliesDigest ?? null;
   const readContext = { scope, actor, productionLikeTarget: context.productionLikeTarget };
   if (gated) {
     // A FRESH read of every read set the approval binds, by sessions bound to this source:
@@ -758,6 +956,8 @@ export async function runMode(
       return importer.apply({
         ...input,
         mode: 'IMPORT',
+        ...(nxpkg ? { freshTarget: true } : {}),
+        ...(dryRunTalliesDigest === null ? {} : { dryRunTalliesDigest }),
         ...(gated ? { cutoverGate: { expectation } } : {}),
       });
     case 'resume':
@@ -787,6 +987,85 @@ export async function runMode(
       });
     }
   }
+}
+
+/**
+ * `.nxpkg` only: the ownership hold resolver `runMode` calls with its snapshot — the package's
+ * `records/service_ownership.jsonl`, and the converter's signed `ownership-decisions.json` when
+ * one is given (verified FIRST, before the snapshot is read: a bad file refuses the run).
+ */
+export async function nxpkgOwnershipHoldFor(
+  connector: NxpkgLegacySourceConnector,
+  decisions: { readonly bytes: Uint8Array; readonly secret: NxpkgSecret } | null,
+): Promise<(snapshot: LegacySnapshot) => Promise<ReadonlySet<string>>> {
+  return (await nxpkgOwnershipEvidence(connector, decisions)).holdFor;
+}
+
+/**
+ * `nxpkgOwnershipHoldFor`, and the verified decisions file's `entries_digest` (null without
+ * one) that `runMode` binds into the run with the hold (`ownershipDecisionsDigest`).
+ */
+export async function nxpkgOwnershipEvidence(
+  connector: NxpkgLegacySourceConnector,
+  decisions: { readonly bytes: Uint8Array; readonly secret: NxpkgSecret } | null,
+): Promise<{
+  readonly holdFor: (snapshot: LegacySnapshot) => Promise<ReadonlySet<string>>;
+  readonly decisionsDigest: string | null;
+}> {
+  const pkg = connector.pkg;
+  if (pkg === null) throw new UsageError('the nxpkg source has no opened package');
+  const verified =
+    decisions === null
+      ? null
+      : await verifyOwnershipDecisions(decisions.bytes, pkg, decisions.secret);
+  const { facts } = await readOwnershipRecords(pkg);
+  return {
+    holdFor: (snapshot) =>
+      Promise.resolve(
+        nxpkgOwnershipHold({
+          records: facts,
+          decisions: verified,
+          liveInvoices: snapshot.liveInvoices,
+        }).hold,
+      ),
+    decisionsDigest: verified?.entriesDigest ?? null,
+  };
+}
+
+/**
+ * `.nxpkg`: the package may be imported (`checkNxpkgForImport`, §1) and the panel map is
+ * exactly the one its targets make with the map's bindings (`validatePanelMappingAgainstTargets`).
+ * Both refuse with `NxpkgImportRefused` (exit 65) before the snapshot is read.
+ */
+async function assertNxpkgImportable(
+  importer: LegacyImporterService,
+  scope: TenantContext,
+  connector: NxpkgLegacySourceConnector,
+  mapping: PanelMapping,
+): Promise<void> {
+  const pkg = connector.pkg;
+  if (pkg === null) throw new UsageError('the nxpkg source has no opened package');
+  const acceptance = await checkNxpkgForImport(pkg);
+  const first = acceptance.problems[0];
+  if (!acceptance.ok && first !== undefined) {
+    throw new NxpkgImportRefused(
+      first.code,
+      acceptance.problems.map((p) => `${p.code}: ${p.detail}`),
+    );
+  }
+  const targets: Record<string, unknown>[] = [];
+  if (pkg.has(NXPKG_PANEL_TARGETS_PATH)) {
+    for await (const record of pkg.iterJsonl(NXPKG_PANEL_TARGETS_PATH)) targets.push(record);
+  }
+  validatePanelMappingAgainstTargets({
+    tenantId: scope.tenantId,
+    targets,
+    mapping,
+    tenantPanels: await importer.panelFacts(
+      scope,
+      mapping.file.panels.map((p) => p.panelId),
+    ),
+  });
 }
 
 /** `legacy-import review …`: the Manual Review Queue, on the operator's terminal only. */
@@ -1050,9 +1329,15 @@ export function exitCodeForError(error: unknown): number {
     error instanceof LegacySourceRefused ||
     error instanceof InvoiceArchiveRefused ||
     error instanceof InvoiceArchiveStagingRefused ||
-    error instanceof LegacyCutoverRefused
+    error instanceof LegacyCutoverRefused ||
+    error instanceof NxpkgImportRefused
   ) {
     console.error(error.message);
+    return 65;
+  }
+  if (error instanceof NxpkgError) {
+    // A fixed sentence and a code: never a path inside the package, never key material.
+    console.error(`${error.code}: ${error.message}`);
     return 65;
   }
   if (error instanceof ReportNotWritten) {
@@ -1122,6 +1407,45 @@ async function main(): Promise<number> {
     throw new UsageError(`The panel mapping file ${args.panelMap} cannot be read.`);
   });
   const connector = await sourceConnector(args, env);
+  try {
+    return await runMain(args, env, targetUrl, target, mappingText, connector);
+  } finally {
+    if (connector instanceof NxpkgLegacySourceConnector) await connector.close();
+  }
+}
+
+async function runMain(
+  args: Args,
+  env: NodeJS.ProcessEnv,
+  targetUrl: string,
+  guarded: ReturnType<typeof guardTarget>,
+  mappingText: string,
+  connector: LegacySourceConnector,
+): Promise<number> {
+  let target = guarded;
+  let ownershipHoldFor: ((snapshot: LegacySnapshot) => Promise<ReadonlySet<string>>) | undefined;
+  let ownershipDecisionsDigest: string | null = null;
+  if (connector instanceof NxpkgLegacySourceConnector) {
+    // The package's own marker, now that it is open: a SYNTHETIC package is refused against a
+    // production-like target exactly as a fixture is, before anything else is read.
+    target = guardTarget(
+      { ...args, syntheticSource: connector.syntheticMarker !== null },
+      targetUrl,
+      env,
+    );
+    const decisions =
+      args.ownershipDecisions == null
+        ? null
+        : {
+            bytes: await readFile(args.ownershipDecisions).catch(() => {
+              throw new UsageError('The ownership decisions file cannot be read.');
+            }),
+            secret: packageSecretFromEnv(args, env),
+          };
+    const evidence = await nxpkgOwnershipEvidence(connector, decisions);
+    ownershipHoldFor = evidence.holdFor;
+    ownershipDecisionsDigest = evidence.decisionsDigest;
+  }
 
   const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
   try {
@@ -1148,6 +1472,7 @@ async function main(): Promise<number> {
     const report = await runMode(importer, args, connector, mappingText, container.ids.uuid(), {
       tenantId,
       productionLikeTarget: target.productionLike,
+      ...(ownershipHoldFor === undefined ? {} : { ownershipHoldFor, ownershipDecisionsDigest }),
     });
     if (report === null) return 0;
     const reported = withInvocation(report, args);

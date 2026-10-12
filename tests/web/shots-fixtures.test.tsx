@@ -47,4 +47,22 @@ describe('the screenshot fixtures', () => {
     // Nothing answers a path no fixture names — the harness reports it by name.
     expect(at('/definitely-not-fixtured')).toBeUndefined();
   });
+
+  /*
+   * A fixture can satisfy its schema and still be a state the server never produces —
+   * and then the responsive run measures an empty state instead of the screen.
+   */
+  const body = (path: string) => FIXTURES.find((f) => f.method === 'GET' && f.path === path)?.body;
+
+  it('lists the signed-in session among the account’s sessions, marked current', () => {
+    const { sessions } = body('/auth/sessions') as { sessions: { current: boolean }[] };
+    expect(sessions.filter((session) => session.current)).toHaveLength(1);
+  });
+
+  it('gives the panel-health dashboard one row per panel the panel list shows', () => {
+    const { panels } = body('/panels') as { panels: { id: string }[] };
+    const { rows } = body('/panel-health') as { rows: { panel: { id: string } }[] };
+    expect(panels.length).toBeGreaterThan(0);
+    expect(rows.map((row) => row.panel.id)).toEqual(panels.map((panel) => panel.id));
+  });
 });
