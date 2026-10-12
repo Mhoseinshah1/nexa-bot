@@ -34,10 +34,11 @@ export class DomainErrorFilter implements ExceptionFilter {
     const body = this.toBody(exception, correlationId, status);
 
     if (status >= 500) {
-      this.container.logger.error(
-        { err: exception instanceof Error ? exception.stack : String(exception) },
-        'Unhandled failure',
-      );
+      // The exception OBJECT (FIX-04): the logger's redactor renders an error
+      // with its cause chain, keeps the stack's frames and redacts the message
+      // the stack repeats, and renders a non-Error throw as what it is rather
+      // than `[object Object]`.
+      this.container.logger.error({ err: exception }, 'Unhandled failure');
       // FIX-05: and to the operations log. Not awaited — the answer to the client never
       // waits on it — and it never throws (`recordQuietly`).
       void this.reportUnhandled(exception, host, status, correlationId);
