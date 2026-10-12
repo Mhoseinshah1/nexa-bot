@@ -637,6 +637,30 @@ export interface GatewayInvoiceRepository {
   ): Promise<readonly ClaimedGatewayInvoice[]>;
 
   /**
+   * Codex on #277 (FIX-06): the due, unleased rows most likely to have been brought forward
+   * by a hint, READ without a lease, up to `limit`: first those a column records as hinted
+   * (an operator's recheck, a webhook since the last inquiry), then the most recently due.
+   * `claimInquiries` takes the OLDEST due rows, so a backlog of scheduled rows used to hide
+   * a fresh hint from the hinted phase. The caller decides which are hinted and claims those
+   * with `claimInquiriesOf`; a read costs no provider call and no lease.
+   */
+  findHintCandidates(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ClaimedGatewayInvoice[]>;
+
+  /** Claims the named rows whose next inquiry is still due and unleased, as `claimInquiries`. */
+  claimInquiriesOf(
+    scope: TenantContext,
+    now: Date,
+    leaseMs: number,
+    paymentIds: readonly PaymentId[],
+    tx?: unknown,
+  ): Promise<readonly ClaimedGatewayInvoice[]>;
+
+  /**
    * Gives back the leases a pass took and will not use. Only a lease still carrying the
    * value this claim set is cleared, so a row another worker has since claimed keeps its
    * lease. A pass that stops early (the call budget ran out) calls this for the rows it

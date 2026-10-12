@@ -4076,3 +4076,29 @@ not on a real run. Two things are unproven and are NOT guessed:
 post from a channel the second bot is not in, record the exact status and description
 Telegram answers, and narrow or widen the sourced-send rule to exactly those answers in the
 same commit that records them.
+
+## OQ-FIX06 — the inquiry schedule's numbers against limits nobody documented (FIX-06, 2026-10-10)
+
+Status: OPEN. `domain/inquiry-schedule.ts` gives each provider its own inquiry schedule. Only
+one provider's limit is documented, so only one schedule was made faster on its strength:
+
+- **TONPAYS** — documented 60 create/inquiry requests a minute
+  (`TONPAYS_DOCUMENTED_REQUESTS_PER_MINUTE`). Asked every 10 s for the first two minutes, then
+  30 s / 60 s / 120 s, capped at the old 300 s, inside the unchanged budget of 40 inquiries a
+  minute per tenant, of which scheduled asks may take 30 (a quarter is kept for hinted rows).
+- **TONPAYS_TELEGRAM** — limit UNDOCUMENTED (`OQ-TPTG-10`). Its review cadence now asks every
+  30 s for the first ten minutes after an acknowledgement. That is NOT a guess at the limit:
+  the route's existing conservative budget (15 inquiries a minute per tenant, 12 for scheduled
+  asks) still bounds every minute; the cadence only spends it sooner on a fresh review. If the
+  real limit proves lower than 15 a minute, lower the BUDGET, not the cadence. Before a
+  receipt, the route keeps the original schedule (20, 40, 80, 160, 300 s).
+- **CENTRALPAY** — limit UNDOCUMENTED (`OQ-CP-05`). Kept on the original schedule; its fast
+  path is the browser return, routed by Caddy since batch 2026-10-10. Decide a faster
+  schedule only once the limit is known.
+- **NOWPAYMENTS** — limit unpublished (`OQ-NP-04`). Kept on the original schedule; chain
+  confirmations take minutes and the verified IPN is the fast path.
+
+None of the providers' inquiry answers carries a `Retry-After` this installation reads; a rate
+limit on an inquiry backs the row off at least 60 s (unchanged). **Decide** with the real
+provider (`OQ-WP10-01`): record each limit and whether it is per key, per account or per IP,
+and set the budgets from it in the same commit.

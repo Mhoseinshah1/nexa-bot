@@ -22,9 +22,10 @@ import type { GatewayPaymentService } from '../../apps/api/src/modules/commerce/
 import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
 import type { FetchLike } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-adapter';
 import {
-  FIRST_INQUIRY_DELAY_MS,
-  inquiryBackoffMs,
-} from '../../apps/api/src/modules/commerce/payments/domain/tonpays';
+  TONPAYS_INQUIRY_SCHEDULE,
+  firstInquiryAt,
+  inquiryScheduleFor,
+} from '../../apps/api/src/modules/commerce/payments/domain/inquiry-schedule';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -536,11 +537,13 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       await lane.runOnce(tenantA); // the create
       const invoice = await invoiceOf(paymentId);
       expect(invoice.provider_invoice_id).not.toBeNull();
-      // The first scheduled inquiry, exactly where the schedule puts it.
-      expect(
-        new Date(invoice.next_inquiry_at!).getTime() -
-          new Date(invoice.created_invoice_at!).getTime(),
-      ).toBe(FIRST_INQUIRY_DELAY_MS);
+      // The first scheduled inquiry, exactly where the provider's schedule puts it (FIX-06).
+      const created = new Date(invoice.created_invoice_at!);
+      const firstDelay =
+        firstInquiryAt(inquiryScheduleFor('TONPAYS'), created, paymentId).getTime() -
+        created.getTime();
+      expect(new Date(invoice.next_inquiry_at!).getTime() - created.getTime()).toBe(firstDelay);
+      expect(firstDelay).toBeLessThanOrEqual(11_000);
 
       // The customer pays two seconds later. No webhook ever arrives.
       advance(2_000);
@@ -549,7 +552,7 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       const discoveredAt = await passesUntilConfirmed(paymentId, 10 * 60_000);
       expect(tonpays.checks, 'settled by more than one inquiry').toBe(1);
       expect(discoveredAt - approvedAt).toBeLessThanOrEqual(
-        FIRST_INQUIRY_DELAY_MS + GATEWAY_PAYMENT_INTERVAL_MS,
+        firstDelay + GATEWAY_PAYMENT_INTERVAL_MS,
       );
       const line = expectSettlementLine(paymentId, {
         kind: 'ORDER',
@@ -562,14 +565,13 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       await expectOrderDeliveredOnce(orderId, paymentId);
     });
 
-    it('TOPUP, callback lost, paid just after the first inquiry: discovered at the second, one backoff step later — the gap FIX-06 is about', async () => {
+    it('TOPUP, callback lost, paid just after the first inquiry: discovered at the second, one schedule step (10 s since FIX-06) later', async () => {
       await enable('TONPAYS');
       const paymentId = await gatewayTopup('TONPAYS', 250_000n);
       await lane.runOnce(tenantA);
       const invoice = await invoiceOf(paymentId);
       // Walk to the first inquiry; it finds the invoice unpaid.
-      advance(FIRST_INQUIRY_DELAY_MS);
-      await lane.runOnce(tenantA);
+      await untilFirstAsk();
       expect(tonpays.checks).toBe(1);
       expect(await paymentState(paymentId)).toBe('PENDING');
 
@@ -579,9 +581,13 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       const discoveredAt = await passesUntilConfirmed(paymentId, 10 * 60_000);
       expect(tonpays.checks).toBe(2);
       const gap = discoveredAt - approvedAt;
-      // The schedule's own next step after one inquiry, measured from that inquiry.
-      expect(gap).toBeGreaterThan(inquiryBackoffMs(1) - 2 * GATEWAY_PAYMENT_INTERVAL_MS);
-      expect(gap).toBeLessThanOrEqual(inquiryBackoffMs(1) + GATEWAY_PAYMENT_INTERVAL_MS);
+      // The schedule's own next step after one inquiry (10 s ±10 %), measured from that inquiry.
+      const step =
+        TONPAYS_INQUIRY_SCHEDULE.kind === 'BANDS'
+          ? TONPAYS_INQUIRY_SCHEDULE.bands[0]!.intervalMs
+          : 0;
+      expect(gap).toBeGreaterThan(step * 0.9 - 1_000 - GATEWAY_PAYMENT_INTERVAL_MS);
+      expect(gap).toBeLessThanOrEqual(step * 1.1 + GATEWAY_PAYMENT_INTERVAL_MS);
       const line = expectSettlementLine(paymentId, {
         kind: 'TOPUP',
         trigger: 'SCHEDULED',
@@ -636,8 +642,7 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       const orderId = await confirmedOrder();
       const paymentId = await gatewayOrderPayment('TONPAYS', orderId);
       await lane.runOnce(tenantA);
-      advance(FIRST_INQUIRY_DELAY_MS);
-      await lane.runOnce(tenantA); // the first inquiry: unpaid
+      await untilFirstAsk(); // the first inquiry: unpaid
       const invoice = await invoiceOf(paymentId);
       advance(4_000);
       tonpays.approve(invoice.provider_invoice_id!);

@@ -29,14 +29,19 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import {
-  FIRST_INQUIRY_DELAY_MS,
   INQUIRY_MIN_SPACING_MS,
   POST_DEADLINE_INQUIRY_MAX,
   TONPAYS_CREATE_MAX_ATTEMPTS,
   TONPAYS_CREATE_RETRY_MS,
-  inquiryBackoffMs,
 } from '../domain/tonpays.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import {
+  firstInquiryAt,
+  hintReservePerMinute,
+  inquiryScheduleFor,
+  jitteredMs,
+  nextScheduledInquiryAt,
+} from '../domain/inquiry-schedule.js';
 import {
   inquiryDiscoveryTrigger,
   type GatewayDiscoveryTrigger,
@@ -195,7 +200,14 @@ export function gatewayClaimLeaseMs(rowBoundMs: number): number {
 
 /** Rows per pass, per queue. Small: every one of them is a call to a third party. */
 export const GATEWAY_CREATE_BATCH = 5;
-export const GATEWAY_INQUIRY_BATCH = 10; /** TonPays Telegram: card changes and receipt uploads per pass; review and window sweeps. */
+export const GATEWAY_INQUIRY_BATCH = 10;
+/**
+ * Codex on #277: how many due rows the hinted phase READS to find the hinted ones among
+ * them (most likely hinted first). A read, not a claim and not a call: it bounds the work of
+ * looking, never the outbound rate.
+ */
+export const GATEWAY_HINT_SCAN_LIMIT = 50;
+/** TonPays Telegram: card changes and receipt uploads per pass; review and window sweeps. */
 export const GATEWAY_CARD_CHANGE_BATCH = 5;
 export const GATEWAY_RECEIPT_BATCH = 3;
 export const GATEWAY_REVIEW_SWEEP_BATCH = 50;
@@ -213,16 +225,6 @@ export const RECORDED_OUTCOME_RETRY_MS = 60_000;
  * and this. Shared with the FIX-01 evidence, which must know the row's real schedule.
  */
 export const INQUIRY_RATE_LIMIT_RETRY_MS = 60_000;
-
-/**
- * Codex #269: how many post-deadline inquiries BEYOND `POST_DEADLINE_INQUIRY_MAX` an
- * approval whose decision never committed may still be given. Its retry re-asks the provider
- * (only the inquiry decides) and is therefore a post-deadline inquiry like any other; without
- * this allowance an approval met on the last permitted post-deadline inquiry, whose decision
- * then failed, would be stopped by the bound with neither a settlement nor a late completion.
- * Bounded, so a decision that fails for ever does not ask the provider for ever.
- */
-export const GATEWAY_DECISION_RETRY_MAX = 5;
 
 /**
  * FIX10 BUG-1: how soon a row whose processing THREW is due again. Measured from the last
@@ -289,6 +291,16 @@ export function errorFacts(error: unknown): {
   const cause = error instanceof Error ? error.cause : undefined;
   return { error: name, code: codeOf(error) ?? codeOf(cause) };
 }
+
+/**
+ * Codex #269: how many post-deadline inquiries BEYOND `POST_DEADLINE_INQUIRY_MAX` an
+ * approval whose decision never committed may still be given. Its retry re-asks the provider
+ * (only the inquiry decides) and is therefore a post-deadline inquiry like any other; without
+ * this allowance an approval met on the last permitted post-deadline inquiry, whose decision
+ * then failed, would be stopped by the bound with neither a settlement nor a late completion.
+ * Bounded, so a decision that fails for ever does not ask the provider for ever.
+ */
+export const GATEWAY_DECISION_RETRY_MAX = 5;
 
 /** The path a provider's webhook is served on. The route and this must agree. */
 export const GATEWAY_WEBHOOK_PATH_PREFIX = '/payments/webhook';
@@ -584,12 +596,37 @@ export class GatewayPaymentService {
      * claimed beside it were never processed, it kept the oldest `next_inquiry_at` so the
      * same batch was claimed and abandoned on every pass, and the sweeps never ran.
      */
-    await this.isolatedLane(scope, report, 'CREATION', () =>
-      this.runCreations(scope, actor, report),
-    );
-    if (!report.budgetExhausted) {
+    /*
+     * FIX-06: a due inquiry a hint brought forward (a webhook, the customer's tap, a browser
+     * return, a receipt acknowledgement, an operator) is asked BEFORE this pass's creations.
+     * A create may take its whole 15 s timeout, five of them a pass; a customer who has just
+     * paid and tapped must not wait behind them. The scheduled rows claimed with them are
+     * handed straight back and asked in their usual place below. Same lane, same per-row
+     * isolation and lease bound (`runInquiries`).
+     */
+    // A claim that threw here would throw again below: the lane is counted as failed once.
+    let inquiryLaneFailed = true;
+    // Each row is asked at most once a pass: one the hinted phase reached is not asked again.
+    const askedThisPass = new Set<string>();
+    await this.isolatedLane(scope, report, 'INQUIRY', async () => {
+      await this.runInquiries(scope, actor, report, 'HINTED', askedThisPass);
+      inquiryLaneFailed = false;
+    });
+    // FIX-06: whether the CALL budget is gone — the creations' answer, not the inquiries'.
+    let callBudgetSpent = false;
+    await this.isolatedLane(scope, report, 'CREATION', async () => {
+      const inquiryShareSpent = report.budgetExhausted;
+      report.budgetExhausted = false;
+      try {
+        await this.runCreations(scope, actor, report);
+      } finally {
+        callBudgetSpent = report.budgetExhausted;
+        report.budgetExhausted ||= inquiryShareSpent;
+      }
+    });
+    if (!report.budgetExhausted && !inquiryLaneFailed) {
       await this.isolatedLane(scope, report, 'INQUIRY', () =>
-        this.runInquiries(scope, actor, report),
+        this.runInquiries(scope, actor, report, 'ALL', askedThisPass),
       );
     }
 
@@ -598,18 +635,26 @@ export class GatewayPaymentService {
       report.reviewsLapsed = await this.loseTrackOfLapsedReviews(scope, actor);
     });
     await this.isolatedLane(scope, report, 'CAPTURE_SWEEP', () => this.sweepReceiptCaptures(scope));
-    if (!report.budgetExhausted) {
+    /*
+     * FIX-06: gated on the CALL budget, not on the inquiries' share of it. An inquiry that met
+     * its share (smaller now that a quarter is kept for hinted rows) used to stop the card and
+     * receipt lanes for the pass — and, every row staying due, for the rest of the minute —
+     * though their own limit had room. A receipt upload is how a TonPays Telegram approval
+     * starts; it must not wait behind background inquiries. Each lane takes its own budget.
+     */
+    if (!callBudgetSpent) {
       await this.isolatedLane(scope, report, 'CARD_CHANGE', async () => {
         const cards = await this.runCardChanges(scope, actor, report);
         report.cardChanges = cards.done;
-        report.budgetExhausted = cards.budgetExhausted;
+        callBudgetSpent = cards.budgetExhausted;
+        report.budgetExhausted ||= cards.budgetExhausted;
       });
     }
-    if (!report.budgetExhausted) {
+    if (!callBudgetSpent) {
       await this.isolatedLane(scope, report, 'RECEIPT', async () => {
         const receipts = await this.runReceipts(scope, actor, report);
         report.receipts = receipts.done;
-        report.budgetExhausted = receipts.budgetExhausted;
+        report.budgetExhausted ||= receipts.budgetExhausted;
       });
     }
     return report;
@@ -681,22 +726,72 @@ export class GatewayPaymentService {
     }
   }
 
-  /** The inquiry queue (§5.4): one claim, then each row on its own. */
+  /**
+   * The inquiry queue (§5.4): one claim, then each row on its own. `HINTED` (FIX-06) asks
+   * only the claimed rows a hint brought forward and hands the others' leases straight back.
+   */
   private async runInquiries(
     scope: TenantContext,
     actor: ActorContext,
     report: { -readonly [K in keyof GatewayPassReport]: GatewayPassReport[K] },
+    which: 'HINTED' | 'ALL',
+    /** Rows already asked this pass: never claimed for a second answer in the same pass. */
+    askedThisPass: Set<string>,
   ): Promise<void> {
     const inquiryNow = this.deps.clock.now();
     const inquiryLease = new Date(inquiryNow.getTime() + this.leaseMs());
-    const due = await this.deps.uow.run(scope, (tx) =>
-      this.deps.invoices.claimInquiries(
-        scope,
-        inquiryNow,
-        this.leaseMs(),
-        GATEWAY_INQUIRY_BATCH,
-        tx,
-      ),
+    /*
+     * Codex on #277: `claimInquiries` takes the OLDEST due rows, ten of them, before anything
+     * is filtered — so behind a backlog of ten scheduled rows a fresh webhook, tap or return
+     * was never seen by the hinted phase, and the full phase spent its smaller share of the
+     * budget on that same backlog while the hint reserve went unused. The hinted phase now
+     * READS its candidates (no lease, no call), keeps the hinted ones by the same derivation
+     * (`isHinted`), and claims only those, at most a batch. The outbound rate and the budgets
+     * are unchanged: this changes which rows the phase asks, never how many.
+     */
+    const claimed =
+      which === 'HINTED'
+        ? await this.deps.uow.run(scope, async (tx) => {
+            const candidates = await this.deps.invoices.findHintCandidates(
+              scope,
+              inquiryNow,
+              GATEWAY_HINT_SCAN_LIMIT,
+              tx,
+            );
+            const hinted = candidates
+              .filter((row) => !askedThisPass.has(row.invoice.paymentId) && this.isHinted(row))
+              .slice(0, GATEWAY_INQUIRY_BATCH)
+              .map((row) => row.invoice.paymentId);
+            return this.deps.invoices.claimInquiriesOf(
+              scope,
+              inquiryNow,
+              this.leaseMs(),
+              hinted,
+              tx,
+            );
+          })
+        : await this.deps.uow.run(scope, (tx) =>
+            this.deps.invoices.claimInquiries(
+              scope,
+              inquiryNow,
+              this.leaseMs(),
+              GATEWAY_INQUIRY_BATCH,
+              tx,
+            ),
+          );
+    /*
+     * FIX-06: `HINTED` keeps only the rows a hint brought forward; both phases skip a row the
+     * pass already asked (one whose processing threw while a webhook kept it due, say — it is
+     * asked again by the NEXT pass, never twice in one). The rest go straight back.
+     */
+    const due = claimed.filter(
+      (row) => !askedThisPass.has(row.invoice.paymentId) && (which === 'ALL' || this.isHinted(row)),
+    );
+    await this.releaseUnreached(
+      scope,
+      'INQUIRY',
+      claimed.filter((row) => !due.includes(row)),
+      inquiryLease,
     );
     for (const [index, claimed] of due.entries()) {
       if (!this.rowFitsLease(inquiryLease)) {
@@ -705,6 +800,7 @@ export class GatewayPaymentService {
         await this.releaseUnreached(scope, 'INQUIRY', due.slice(index), inquiryLease);
         break;
       }
+      askedThisPass.add(claimed.invoice.paymentId);
       let result: Awaited<ReturnType<GatewayPaymentService['processInquiry']>>;
       try {
         result = await this.processInquiry(scope, actor, claimed, inquiryLease);
@@ -1173,7 +1269,7 @@ export class GatewayPaymentService {
               // A provider that pushes its payments is never asked (Stars).
               firstInquiryAt:
                 descriptor.approval === 'INQUIRY'
-                  ? new Date(at.getTime() + FIRST_INQUIRY_DELAY_MS)
+                  ? firstInquiryAt(inquiryScheduleFor(invoice.provider), at, invoice.paymentId)
                   : null,
             },
             at,
@@ -1380,9 +1476,14 @@ export class GatewayPaymentService {
       return 'ERROR';
     }
 
-    if (
-      !(await this.deps.budget.take(scope, invoice.provider, adapter.inquiryBudgetPerMinute, now))
-    ) {
+    /*
+     * FIX-06: a scheduled inquiry may not take the top quarter of the provider's inquiry
+     * budget; a hinted one may. The budget itself is the provider's, unchanged.
+     */
+    const inquiryLimit = this.isHinted(claimed)
+      ? adapter.inquiryBudgetPerMinute
+      : adapter.inquiryBudgetPerMinute - hintReservePerMinute(adapter.inquiryBudgetPerMinute);
+    if (!(await this.deps.budget.take(scope, invoice.provider, inquiryLimit, now))) {
       await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.requestInquiry(
           scope,
@@ -1434,6 +1535,7 @@ export class GatewayPaymentService {
             new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS),
             reviewUntil,
             at,
+            (ms) => jitteredMs(ms, invoice.paymentId, invoice.inquiryAttempts + 1),
           )
         : this.nextInquiryAt(invoice, at, expiresAt);
 
@@ -1705,8 +1807,9 @@ export class GatewayPaymentService {
   }
 
   /**
-   * FIX-01 evidence: what made the row that discovered an approval due — never read back,
-   * only logged beside the settlement (`domain/inquiry-discovery.ts`).
+   * What made a due row due (`domain/inquiry-discovery.ts`): logged beside a settlement as
+   * FIX-01 evidence, and read by `isHinted` (FIX-06) to decide only WHEN a row is asked and
+   * from which share of the budget — never what its answer means.
    */
   private discoveryTriggerOf(
     claimed: ClaimedGatewayInvoice,
@@ -1765,37 +1868,6 @@ export class GatewayPaymentService {
     } catch {
       return null;
     }
-  }
-
-  /**
-   * When the schedule ALONE put this row's next inquiry: the first one after the create, the
-   * review cadence after an inquiry answered in review, the backoff otherwise — the same
-   * functions that wrote it. Null when it cannot be said (no create time, no deadline).
-   */
-  private scheduledInquiryAt(
-    invoice: GatewayInvoiceRecord,
-    reviewUntil: Date | null,
-    reviewStartedAt: Date | null,
-    expiresAt: Date | null,
-  ): Date | null {
-    if (invoice.lastInquiryAt === null) {
-      return invoice.createdInvoiceAt === null
-        ? null
-        : new Date(invoice.createdInvoiceAt.getTime() + FIRST_INQUIRY_DELAY_MS);
-    }
-    if (
-      reviewUntil !== null &&
-      reviewStartedAt !== null &&
-      invoice.lastInquiryAt.getTime() >= reviewStartedAt.getTime()
-    ) {
-      return reviewInquiryNextAt(reviewStartedAt, reviewUntil, invoice.lastInquiryAt);
-    }
-    // `inquiryAttempts` already counts the last inquiry; the schedule was computed before it.
-    return this.nextInquiryAt(
-      { ...invoice, inquiryAttempts: Math.max(0, invoice.inquiryAttempts - 1) },
-      invoice.lastInquiryAt,
-      expiresAt,
-    );
   }
 
   /**
@@ -2079,7 +2151,13 @@ export class GatewayPaymentService {
     expiresAt: Date | null,
   ): Date | null {
     if (expiresAt === null) return null;
-    const next = new Date(at.getTime() + inquiryBackoffMs(invoice.inquiryAttempts + 1));
+    // FIX-06: the provider's own schedule (`domain/inquiry-schedule.ts`), jittered.
+    const next = nextScheduledInquiryAt(inquiryScheduleFor(invoice.provider), {
+      at,
+      attempt: invoice.inquiryAttempts + 1,
+      invoiceCreatedAt: invoice.createdInvoiceAt,
+      paymentId: invoice.paymentId,
+    });
     if (next.getTime() < expiresAt.getTime()) return next;
     /*
      * One last question just before the deadline, so a payment made in the final minutes
@@ -2087,6 +2165,55 @@ export class GatewayPaymentService {
      */
     const last = new Date(expiresAt.getTime() - 15_000);
     return last.getTime() > at.getTime() ? last : null;
+  }
+
+  /**
+   * FIX-06: whether a due row was brought forward by a hint rather than by its schedule
+   * (`domain/inquiry-discovery.ts`). Decides only WHEN it is asked and from which share of
+   * the budget — never what its answer means.
+   */
+  private isHinted(claimed: ClaimedGatewayInvoice): boolean {
+    const expiresAt = gatewaySettlementDeadline({
+      expiresAt: claimed.paymentExpiresAt,
+      providerReviewUntil: claimed.paymentReviewUntil,
+    });
+    return this.discoveryTriggerOf(claimed, expiresAt) !== 'SCHEDULED';
+  }
+
+  /**
+   * When the schedule ALONE put this row's next inquiry — the same functions, with the same
+   * jitter, that wrote it. Null when it cannot be said (no create time, no deadline).
+   */
+  private scheduledInquiryAt(
+    invoice: GatewayInvoiceRecord,
+    reviewUntil: Date | null,
+    reviewStartedAt: Date | null,
+    expiresAt: Date | null,
+  ): Date | null {
+    if (invoice.lastInquiryAt === null) {
+      return invoice.createdInvoiceAt === null
+        ? null
+        : firstInquiryAt(
+            inquiryScheduleFor(invoice.provider),
+            invoice.createdInvoiceAt,
+            invoice.paymentId,
+          );
+    }
+    if (
+      reviewUntil !== null &&
+      reviewStartedAt !== null &&
+      invoice.lastInquiryAt.getTime() >= reviewStartedAt.getTime()
+    ) {
+      return reviewInquiryNextAt(reviewStartedAt, reviewUntil, invoice.lastInquiryAt, (ms) =>
+        jitteredMs(ms, invoice.paymentId, invoice.inquiryAttempts),
+      );
+    }
+    // `inquiryAttempts` already counts the last inquiry; the schedule was computed before it.
+    return this.nextInquiryAt(
+      { ...invoice, inquiryAttempts: Math.max(0, invoice.inquiryAttempts - 1) },
+      invoice.lastInquiryAt,
+      expiresAt,
+    );
   }
 
   // ---------------------------------------------------------------------------------------

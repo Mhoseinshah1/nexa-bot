@@ -384,10 +384,15 @@ describe('the TonPays Telegram rules', () => {
     expect(gatewaySettlementDeadline({ expiresAt: null, providerReviewUntil: null })).toBeNull();
   });
 
-  it('TPTG-40: the review inquiry cadence is 2 / 10 / 30 minutes, ends with one inquiry 15 s before the deadline, and stays near a hundred calls', () => {
+  it('TPTG-40 / FIX-06: the review inquiry cadence is 30 s / 2 / 10 / 30 minutes, ends with one inquiry 15 s before the deadline, and stays near a hundred and thirteen calls', () => {
     const start = new Date('2026-10-02T10:00:00Z');
     const until = new Date(start.getTime() + TONPAYS_TELEGRAM_REVIEW_WINDOW_MS);
-    expect(reviewInquiryNextAt(start, until, start)!.getTime() - start.getTime()).toBe(120_000);
+    // FIX-06: every 30 s for the first ten minutes after the acknowledgement.
+    expect(reviewInquiryNextAt(start, until, start)!.getTime() - start.getTime()).toBe(30_000);
+    const nine = new Date(start.getTime() + 9 * 60_000);
+    expect(reviewInquiryNextAt(start, until, nine)!.getTime() - nine.getTime()).toBe(30_000);
+    const eleven = new Date(start.getTime() + 11 * 60_000);
+    expect(reviewInquiryNextAt(start, until, eleven)!.getTime() - eleven.getTime()).toBe(120_000);
     const two = new Date(start.getTime() + 2 * 3_600_000);
     expect(reviewInquiryNextAt(start, until, two)!.getTime() - two.getTime()).toBe(600_000);
     const ten = new Date(start.getTime() + 10 * 3_600_000);
@@ -407,8 +412,8 @@ describe('the TonPays Telegram rules', () => {
       calls += 1;
       at = next;
     }
-    expect(calls).toBeGreaterThan(90);
-    expect(calls).toBeLessThan(110);
+    expect(calls).toBeGreaterThan(105);
+    expect(calls).toBeLessThan(125);
     expect(at.getTime()).toBe(until.getTime() - 15_000);
   });
 
