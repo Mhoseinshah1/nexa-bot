@@ -55,6 +55,9 @@ const REQUEST_ERROR_TEXT: Readonly<Record<string, WebKey>> = {
   [PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING]: 'web.recovery_error_run_missing',
   [PLATFORM_ERROR_CODES.PERMISSION_DENIED]: 'web.recovery_error_permission',
   [PLATFORM_ERROR_CODES.IDEMPOTENCY_IN_FLIGHT]: 'web.recovery_error_in_flight',
+  // A Mirza package import holds the installation (#278): said in Persian, with what to do.
+  [PLATFORM_ERROR_CODES.RECOVERY_LEGACY_MIGRATION_ACTIVE]:
+    'web.recovery_fault_legacy_migration_active',
 };
 
 /** Any error from this page's requests, as safe Persian; never a raw exception. */

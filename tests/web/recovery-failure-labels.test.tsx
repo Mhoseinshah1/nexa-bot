@@ -55,6 +55,7 @@ describe('a refused request on the recovery page', () => {
     PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING,
     PLATFORM_ERROR_CODES.PERMISSION_DENIED,
     PLATFORM_ERROR_CODES.IDEMPOTENCY_IN_FLIGHT,
+    PLATFORM_ERROR_CODES.RECOVERY_LEGACY_MIGRATION_ACTIVE,
   ])('%s is said in Persian, never as the server’s English', (code) => {
     const text = recoveryErrorText(refused(code));
     expect(text).toMatch(PERSIAN);

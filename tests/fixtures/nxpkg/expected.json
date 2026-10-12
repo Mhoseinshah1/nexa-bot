@@ -1,0 +1,808 @@
+{
+  "canonical_vectors": [
+    {
+      "canonical_b64": "eyJaIjowLCJhIjpbdHJ1ZSxmYWxzZSxudWxsXSwiYiI6MSwiYmlnIjo5MDA3MTk5MjU0NzQwOTkxLCLDqSI6IsOpIn0=",
+      "input_b64": "eyJiIjogMSwgImEiOiBbdHJ1ZSwgZmFsc2UsIG51bGxdLCAiXHUwMGU5IjogIlx1MDBlOSIsICJaIjogMCwgImJpZyI6IDkwMDcxOTkyNTQ3NDA5OTF9"
+    },
+    {
+      "canonical_b64": "eyJib20iOiLvu78iLCJjdGwiOiJcdTAwMDBcdTAwMDFcYlx0XG5cdTAwMGJcZlxyXHUwMDFmfyIsImxzIjoi4oCo4oCpIiwicSI6IlwiXFwvIn0=",
+      "input_b64": "eyJjdGwiOiAiXHUwMDAwXHUwMDAxXGJcdFxuXHUwMDBiXGZcclx1MDAxZlx1MDA3ZiIsICJxIjogIlwiXFwvIiwgImxzIjogIlx1MjAyOFx1MjAyOSIsICJib20iOiAiXHVmZWZmIn0="
+    },
+    {
+      "canonical_b64": "eyJhIjp7InkiOnt9LCJ6IjpbXX0sIu2fvyI6NCwi7oCAIjozLCLvv78iOjIsIvCfmIAiOjF9",
+      "input_b64": "eyJcdWQ4M2RcdWRlMDAiOiAxLCAiXHVmZmZmIjogMiwgIlx1ZTAwMCI6IDMsICJcdWQ3ZmYiOiA0LCAiYSI6IHsieiI6IFtdLCAieSI6IHt9fX0="
+    },
+    {
+      "canonical_b64": "WyLZhduM2LHYstinIiwi9I+/vyIsIiIsLTEyMzQ1Njc4OTAxMjM0XQ==",
+      "input_b64": "WyJcdTA2NDVcdTA2Y2NcdTA2MzFcdTA2MzJcdTA2MjciLCAiXHVkYmZmXHVkZmZmIiwgIiIsIC0xMjM0NTY3ODkwMTIzNF0="
+    },
+    {
+      "canonical_b64": "InBsYWluIg==",
+      "input_b64": "InBsYWluIg=="
+    },
+    {
+      "canonical_b64": "MA==",
+      "input_b64": "MA=="
+    }
+  ],
+  "decisions_key_hex": "f961e5bfefa9d9975565c5986a844a1c4fe584fba7a600668027ed7337f7885c",
+  "decisions_summary": {
+    "ADMIN_APPROVED_UNVERIFIED": 4,
+    "PENDING": 2,
+    "PROVEN": 7,
+    "QUARANTINED": 6,
+    "REJECTED": 0,
+    "items": 19
+  },
+  "generator": {
+    "converter": "mirza2nexa",
+    "kdf_n": 1024,
+    "money_unit": "toman",
+    "spec": {
+      "seed": 7,
+      "users": 20
+    },
+    "version": "0.6.0"
+  },
+  "keyfile": {
+    "chunks": 1,
+    "file_sha256": "e0acc45f2ca61fa55f5777fa83ee7f51bd67341ab184e83f67e1b82f38ce6190",
+    "files": {
+      "manifest.json": {
+        "records": null,
+        "sha256": "ca2721c35c008c94669ae45724e86a3d447d2896652df310ae8c98ccc2a446eb",
+        "size": 9468
+      },
+      "records/agents/agent_invoices.jsonl": {
+        "records": 6,
+        "sha256": "b429c3791f5099ac896b4422c0f1da77162c257c9eff3173283672468e5bf516",
+        "size": 5741
+      },
+      "records/agents/agent_logs.jsonl": {
+        "records": 4,
+        "sha256": "1f974a6ef167e78a719e6332f45703ceb9cdbfda53da7d05243d1a93ca1a9260",
+        "size": 3296
+      },
+      "records/agents/agent_requests.jsonl": {
+        "records": 4,
+        "sha256": "f6e00864ddd2f8cdf15f5e24b7460c47bb9601ff6acc9e9cf55690296d08687b",
+        "size": 3511
+      },
+      "records/agents/agent_usage.jsonl": {
+        "records": 3,
+        "sha256": "0e76e9c5f3f9fb61360780ac1f8cd8b42d539e2ca4b31d7d1ab85cc4ce683aa2",
+        "size": 2478
+      },
+      "records/agents/profiles.jsonl": {
+        "records": 2,
+        "sha256": "2e2160a2e6ce5cf0c499d29ee55f50c923a9a0aa44591fb03549282c783e9234",
+        "size": 2359
+      },
+      "records/agents/state.jsonl": {
+        "records": 2,
+        "sha256": "bb6e7d1b75a42839d83c18dcc299e738e073f38260a6feb6077561c105ea380b",
+        "size": 4855
+      },
+      "records/agents/tier_prices.jsonl": {
+        "records": 5,
+        "sha256": "442569d5f00576ba474599acf7b2bc3916c51df4ec1591488529a6eac19e612c",
+        "size": 4996
+      },
+      "records/archive/help_category.jsonl": {
+        "records": 1,
+        "sha256": "c11a1f11b6ef2a87ec826cb32d82ae167b1527ccc8ebf32b7347f79dde54093a",
+        "size": 503
+      },
+      "records/archive/vs_category.jsonl": {
+        "records": 2,
+        "sha256": "8e5c2aec5986dd72fc434ed314597ba16bc9ae4a32bf4a1241765a039b1a3dc5",
+        "size": 978
+      },
+      "records/archive/vs_order.jsonl": {
+        "records": 3,
+        "sha256": "ba2a72d7532c8ecb7a85398381ba015152aae2dad2d18ac56f640043dc5df3d3",
+        "size": 1539
+      },
+      "records/archive/vs_package.jsonl": {
+        "records": 1,
+        "sha256": "652818f646e3751d048456063dbcda1b40846b1da90a15a3fb8c704673a2b165",
+        "size": 504
+      },
+      "records/archive/vs_setting.jsonl": {
+        "records": 1,
+        "sha256": "6f837e0be2d6453de84c7baf10d7ba078c62e5d7de409e7b2f1126143582524f",
+        "size": 467
+      },
+      "records/archive/vs_stock.jsonl": {
+        "records": 1,
+        "sha256": "4f3b583fff52aa6ca7a7449fa0bbe3614efdf64d825f9c8ed92c425606a169b0",
+        "size": 509
+      },
+      "records/categories.jsonl": {
+        "records": 2,
+        "sha256": "a0f395a3ddb3c904193ea71b6427c15a1275e550e601f17c9149321551a25d3f",
+        "size": 728
+      },
+      "records/category_catalogue.jsonl": {
+        "records": 7,
+        "sha256": "396a2d25117fdc811f97f34f08eead424a810ce7a21145ec0f5453d6dc5562b1",
+        "size": 4838
+      },
+      "records/configuration/PaySetting.jsonl": {
+        "records": 6,
+        "sha256": "0d8ebe38d6cdb90d92a852b09517389a85ed41f618f67ab720411c8991c4db10",
+        "size": 3268
+      },
+      "records/configuration/app.jsonl": {
+        "records": 2,
+        "sha256": "7a88f62255ac750461f698b9f7553cae7639f9e82e41d1b7646bb9c8a3b20b5d",
+        "size": 996
+      },
+      "records/configuration/channels.jsonl": {
+        "records": 1,
+        "sha256": "2dc718aaec31062e88ec7c3bb6a7d023477140452964b8b06c4d62bbc099d7e1",
+        "size": 546
+      },
+      "records/configuration/help.jsonl": {
+        "records": 2,
+        "sha256": "6c50c52e047243073e937f5033079c0b16302b8066434f6e7daf460fbf95c233",
+        "size": 1224
+      },
+      "records/configuration/protocol.jsonl": {
+        "records": 2,
+        "sha256": "a6e9b55514238bc16e40bf8c2d760651685b1240e34ba30444526ac2378a6942",
+        "size": 1008
+      },
+      "records/configuration/setting.jsonl": {
+        "records": 1,
+        "sha256": "ad97bd8e3e4f06841c7ca9e8bc9e074fe7e80292ebab5e59c350108ec5a8ff79",
+        "size": 949
+      },
+      "records/configuration/shopSetting.jsonl": {
+        "records": 3,
+        "sha256": "53f93a6c12961ecb7c813b398ed168b8339b1b863f7eb0674d996fdbdbfcfebc",
+        "size": 1646
+      },
+      "records/configuration/textbot.jsonl": {
+        "records": 4,
+        "sha256": "29794639c721f40f89de759728709536f8fec4923665e31bf7474bf1628116cc",
+        "size": 2391
+      },
+      "records/customers.jsonl": {
+        "records": 20,
+        "sha256": "45d773624a77cf53281706692650c59b19bbed763244d7ea00e38033a030501d",
+        "size": 10431
+      },
+      "records/engagement/ad_campaigns.jsonl": {
+        "records": 1,
+        "sha256": "861c1a3f38ad734ef23e533b275f0bda3d7736eb2c507b5ff63b39295bca0ef9",
+        "size": 662
+      },
+      "records/engagement/discount_usage.jsonl": {
+        "records": 7,
+        "sha256": "39beaafd6390bd7e89ee6cdd166ad1a679516641cc0d5b5e9b22fb2fa0770e68",
+        "size": 5426
+      },
+      "records/engagement/discounts.jsonl": {
+        "records": 10,
+        "sha256": "3923da2a25cb067082b8aec04d5b0c2c9620b5399dda954476b57c27561d210f",
+        "size": 12626
+      },
+      "records/engagement/program_settings.jsonl": {
+        "records": 1,
+        "sha256": "36f3de0519e9bf35910db058a3467973cf2df237472c247485bf0a8f7b83e4e7",
+        "size": 827
+      },
+      "records/engagement/referrals.jsonl": {
+        "records": 4,
+        "sha256": "66db44aac04231df3decb02659531fceda8a450ef1b70dba67ccc1409e573c54",
+        "size": 3690
+      },
+      "records/engagement/wheel_results.jsonl": {
+        "records": 3,
+        "sha256": "763c8fc4e2cc47f75b10b68c1f1aa8068a3e8cc9ac3ad8670458796cd3d6100c",
+        "size": 2542
+      },
+      "records/invoices.jsonl": {
+        "records": 17,
+        "sha256": "b24b1e3a2a0e8a34e6361686d01ae6aed85f6459c9c7c1b34d253f13495456fa",
+        "size": 15274
+      },
+      "records/legacy_debts.jsonl": {
+        "records": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0
+      },
+      "records/manual_config_inventory.jsonl": {
+        "records": 6,
+        "sha256": "50e3fe12c976337d2775ada930cc5d3707bd2cb25ae3381dabd6a547e0cef666",
+        "size": 4605
+      },
+      "records/panel_mapping_template.jsonl": {
+        "records": 7,
+        "sha256": "eabfab2e2d1ad4a4651418362f5f83017de6a54096873ea1d5affcdb874b6061",
+        "size": 7845
+      },
+      "records/panel_registry.jsonl": {
+        "records": 4,
+        "sha256": "548d3619e3ce2f52d3b8ac4396370dc5323098b53b7beb9c89d799784b62ed4a",
+        "size": 8713
+      },
+      "records/panel_target_mapping.jsonl": {
+        "records": 6,
+        "sha256": "b38efcd2256b862ed1a876504512fef52c858716da2414f02ebba0052eeb0dea",
+        "size": 3912
+      },
+      "records/panels.jsonl": {
+        "records": 3,
+        "sha256": "1a97ff549023f84141f80e561fe1b692a4906d9c5b26c946ae63ee05498f1930",
+        "size": 1236
+      },
+      "records/payments.jsonl": {
+        "records": 36,
+        "sha256": "39210f1d6141117fbb059ac0ee744a11066155e557297852cc8b33051db73a59",
+        "size": 63627
+      },
+      "records/product_mapping_proposal.jsonl": {
+        "records": 13,
+        "sha256": "85d2b187d6aeb42e0bf768ec135d865703277243e990f7607808d88345209bbd",
+        "size": 31839
+      },
+      "records/products.jsonl": {
+        "records": 11,
+        "sha256": "f683063f02a3f17f3ef2758903095f696249ed3704e6b74f02327dcddc155ff1",
+        "size": 8828
+      },
+      "records/service_cancellation_requests.jsonl": {
+        "records": 6,
+        "sha256": "0a874ea50e719c7ea565f6f5807d4a5281319e79c11a67e7fecdd5b95544e2d0",
+        "size": 5835
+      },
+      "records/service_operations.jsonl": {
+        "records": 35,
+        "sha256": "d891379b6e9ed0cbbfa90df7502e523ff0d71cfc9ff9253a4904fa10e1174c5e",
+        "size": 46693
+      },
+      "records/service_ownership.jsonl": {
+        "records": 19,
+        "sha256": "20628c5da98b8c94a22e75f3ac558c422489666ce876becdd814923ce704103b",
+        "size": 39752
+      },
+      "records/services.jsonl": {
+        "records": 8,
+        "sha256": "797a7502a90e44ca2f1a3fed137dd875949cba445ea97f6ca363a37a3390c9df",
+        "size": 7442
+      },
+      "records/support/departments.jsonl": {
+        "records": 2,
+        "sha256": "9a08f96dd5623bb95c131f3fecd2bab47979407210283f3062a6794bb9ee11b1",
+        "size": 1289
+      },
+      "records/support/support_messages.jsonl": {
+        "records": 5,
+        "sha256": "7d76699fe6bcb55e57f7fd7001e67d8fe90f3b8eec6ef5395d892448df4d3379",
+        "size": 6607
+      },
+      "records/support/ticket_messages.jsonl": {
+        "records": 4,
+        "sha256": "ff80c8c7ad22fdd0d07ac2563ef032665bcb7bc18406a10785bb197abeaea4d4",
+        "size": 4080
+      },
+      "records/support/tickets.jsonl": {
+        "records": 5,
+        "sha256": "cb4f18c9c2aa446f45384351f6138fec41ad9217bde61bba50fd5e404e5f6c06",
+        "size": 5178
+      },
+      "records/wallet_history.jsonl": {
+        "records": 4,
+        "sha256": "6c684f174286992d1e9a716c8de2766c7f32da57e53b829629e58ecbfe5a8faf",
+        "size": 6571
+      },
+      "records/wallet_history_checks.jsonl": {
+        "records": 1,
+        "sha256": "211de1f28ffe262a89fe6b46ab322937a8500c829bb29182011a0a448ecfc7e1",
+        "size": 954
+      },
+      "records/wallet_opening_balances.jsonl": {
+        "records": 5,
+        "sha256": "0ca0d847493bb84b7ddc0616fa2c2640dec1269a890138f0702f24ae2476ab2e",
+        "size": 2499
+      },
+      "reports/coverage.json": {
+        "records": null,
+        "sha256": "5ba893fd913be89e389f2d3c87001d11bc674070766841a22450d883d045e672",
+        "size": 49436
+      },
+      "reports/mapping.json": {
+        "records": null,
+        "sha256": "42a32a1e189c17e97600c611149dc30982ab771242ad2d66abb3282e964b1dc9",
+        "size": 8554
+      },
+      "reports/migration-readiness.json": {
+        "records": null,
+        "sha256": "1af525f6aa2672062709f81bfe9e93f60418590bf05dddf8b804de000209629c",
+        "size": 8500
+      },
+      "reports/reconciliation.json": {
+        "records": null,
+        "sha256": "aea1d740efcd0a7bd7a7db83c9bcb8ba6277959530def7024607bf466a18baa0",
+        "size": 30139
+      },
+      "reports/review-queue.jsonl": {
+        "records": 97,
+        "sha256": "855acce114023e9fb72293f24f56d60ec24e3dab662d7669cb83d5f00f228828",
+        "size": 40659
+      },
+      "reports/review-taxonomy.json": {
+        "records": null,
+        "sha256": "2fd38a02121931e0d6e958298bc3af432298677eb29ff492eab3fb21961655e0",
+        "size": 4865
+      },
+      "source/catalog.json": {
+        "records": null,
+        "sha256": "b549eefa81649472fbdf5df42813f02792451c5c6521de7ee491128afaa9453f",
+        "size": 30883
+      },
+      "source/tables/invoice.jsonl": {
+        "records": 18,
+        "sha256": "a36bbd65f224eb11cc58201638614fbad9b325bf78b0d6ffef9cf3f82524cc87",
+        "size": 2688
+      },
+      "source/tables/product.jsonl": {
+        "records": 14,
+        "sha256": "e588dbb7d5959a2cc8da7bffcae5cce2e6db975aabea001ac631a96c9eec6174",
+        "size": 1348
+      },
+      "source/tables/user.jsonl": {
+        "records": 24,
+        "sha256": "d93dcaa51ed5d7fc7e50202b27034dade6e963ea2ebfded3b15e826e41089493",
+        "size": 1709
+      }
+    },
+    "header_sha256": "379911684d560a436afe83f5fd7a82b92dbfbc92e9886dcda44b8d6c00b58cbf",
+    "import_id": "43133e1e5b054e73d2b7182455ff7eea",
+    "jsonl_canonical_digests": {
+      "records/agents/agent_invoices.jsonl": "b429c3791f5099ac896b4422c0f1da77162c257c9eff3173283672468e5bf516",
+      "records/agents/agent_logs.jsonl": "1f974a6ef167e78a719e6332f45703ceb9cdbfda53da7d05243d1a93ca1a9260",
+      "records/agents/agent_requests.jsonl": "f6e00864ddd2f8cdf15f5e24b7460c47bb9601ff6acc9e9cf55690296d08687b",
+      "records/agents/agent_usage.jsonl": "0e76e9c5f3f9fb61360780ac1f8cd8b42d539e2ca4b31d7d1ab85cc4ce683aa2",
+      "records/agents/profiles.jsonl": "2e2160a2e6ce5cf0c499d29ee55f50c923a9a0aa44591fb03549282c783e9234",
+      "records/agents/state.jsonl": "bb6e7d1b75a42839d83c18dcc299e738e073f38260a6feb6077561c105ea380b",
+      "records/agents/tier_prices.jsonl": "442569d5f00576ba474599acf7b2bc3916c51df4ec1591488529a6eac19e612c",
+      "records/archive/help_category.jsonl": "c11a1f11b6ef2a87ec826cb32d82ae167b1527ccc8ebf32b7347f79dde54093a",
+      "records/archive/vs_category.jsonl": "8e5c2aec5986dd72fc434ed314597ba16bc9ae4a32bf4a1241765a039b1a3dc5",
+      "records/archive/vs_order.jsonl": "ba2a72d7532c8ecb7a85398381ba015152aae2dad2d18ac56f640043dc5df3d3",
+      "records/archive/vs_package.jsonl": "652818f646e3751d048456063dbcda1b40846b1da90a15a3fb8c704673a2b165",
+      "records/archive/vs_setting.jsonl": "6f837e0be2d6453de84c7baf10d7ba078c62e5d7de409e7b2f1126143582524f",
+      "records/archive/vs_stock.jsonl": "4f3b583fff52aa6ca7a7449fa0bbe3614efdf64d825f9c8ed92c425606a169b0",
+      "records/categories.jsonl": "a0f395a3ddb3c904193ea71b6427c15a1275e550e601f17c9149321551a25d3f",
+      "records/category_catalogue.jsonl": "396a2d25117fdc811f97f34f08eead424a810ce7a21145ec0f5453d6dc5562b1",
+      "records/configuration/PaySetting.jsonl": "0d8ebe38d6cdb90d92a852b09517389a85ed41f618f67ab720411c8991c4db10",
+      "records/configuration/app.jsonl": "7a88f62255ac750461f698b9f7553cae7639f9e82e41d1b7646bb9c8a3b20b5d",
+      "records/configuration/channels.jsonl": "2dc718aaec31062e88ec7c3bb6a7d023477140452964b8b06c4d62bbc099d7e1",
+      "records/configuration/help.jsonl": "6c50c52e047243073e937f5033079c0b16302b8066434f6e7daf460fbf95c233",
+      "records/configuration/protocol.jsonl": "a6e9b55514238bc16e40bf8c2d760651685b1240e34ba30444526ac2378a6942",
+      "records/configuration/setting.jsonl": "ad97bd8e3e4f06841c7ca9e8bc9e074fe7e80292ebab5e59c350108ec5a8ff79",
+      "records/configuration/shopSetting.jsonl": "53f93a6c12961ecb7c813b398ed168b8339b1b863f7eb0674d996fdbdbfcfebc",
+      "records/configuration/textbot.jsonl": "29794639c721f40f89de759728709536f8fec4923665e31bf7474bf1628116cc",
+      "records/customers.jsonl": "45d773624a77cf53281706692650c59b19bbed763244d7ea00e38033a030501d",
+      "records/engagement/ad_campaigns.jsonl": "861c1a3f38ad734ef23e533b275f0bda3d7736eb2c507b5ff63b39295bca0ef9",
+      "records/engagement/discount_usage.jsonl": "39beaafd6390bd7e89ee6cdd166ad1a679516641cc0d5b5e9b22fb2fa0770e68",
+      "records/engagement/discounts.jsonl": "3923da2a25cb067082b8aec04d5b0c2c9620b5399dda954476b57c27561d210f",
+      "records/engagement/program_settings.jsonl": "36f3de0519e9bf35910db058a3467973cf2df237472c247485bf0a8f7b83e4e7",
+      "records/engagement/referrals.jsonl": "66db44aac04231df3decb02659531fceda8a450ef1b70dba67ccc1409e573c54",
+      "records/engagement/wheel_results.jsonl": "763c8fc4e2cc47f75b10b68c1f1aa8068a3e8cc9ac3ad8670458796cd3d6100c",
+      "records/invoices.jsonl": "b24b1e3a2a0e8a34e6361686d01ae6aed85f6459c9c7c1b34d253f13495456fa",
+      "records/legacy_debts.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "records/manual_config_inventory.jsonl": "50e3fe12c976337d2775ada930cc5d3707bd2cb25ae3381dabd6a547e0cef666",
+      "records/panel_mapping_template.jsonl": "eabfab2e2d1ad4a4651418362f5f83017de6a54096873ea1d5affcdb874b6061",
+      "records/panel_registry.jsonl": "548d3619e3ce2f52d3b8ac4396370dc5323098b53b7beb9c89d799784b62ed4a",
+      "records/panel_target_mapping.jsonl": "b38efcd2256b862ed1a876504512fef52c858716da2414f02ebba0052eeb0dea",
+      "records/panels.jsonl": "1a97ff549023f84141f80e561fe1b692a4906d9c5b26c946ae63ee05498f1930",
+      "records/payments.jsonl": "39210f1d6141117fbb059ac0ee744a11066155e557297852cc8b33051db73a59",
+      "records/product_mapping_proposal.jsonl": "85d2b187d6aeb42e0bf768ec135d865703277243e990f7607808d88345209bbd",
+      "records/products.jsonl": "f683063f02a3f17f3ef2758903095f696249ed3704e6b74f02327dcddc155ff1",
+      "records/service_cancellation_requests.jsonl": "0a874ea50e719c7ea565f6f5807d4a5281319e79c11a67e7fecdd5b95544e2d0",
+      "records/service_operations.jsonl": "d891379b6e9ed0cbbfa90df7502e523ff0d71cfc9ff9253a4904fa10e1174c5e",
+      "records/service_ownership.jsonl": "20628c5da98b8c94a22e75f3ac558c422489666ce876becdd814923ce704103b",
+      "records/services.jsonl": "797a7502a90e44ca2f1a3fed137dd875949cba445ea97f6ca363a37a3390c9df",
+      "records/support/departments.jsonl": "9a08f96dd5623bb95c131f3fecd2bab47979407210283f3062a6794bb9ee11b1",
+      "records/support/support_messages.jsonl": "7d76699fe6bcb55e57f7fd7001e67d8fe90f3b8eec6ef5395d892448df4d3379",
+      "records/support/ticket_messages.jsonl": "ff80c8c7ad22fdd0d07ac2563ef032665bcb7bc18406a10785bb197abeaea4d4",
+      "records/support/tickets.jsonl": "cb4f18c9c2aa446f45384351f6138fec41ad9217bde61bba50fd5e404e5f6c06",
+      "records/wallet_history.jsonl": "6c684f174286992d1e9a716c8de2766c7f32da57e53b829629e58ecbfe5a8faf",
+      "records/wallet_history_checks.jsonl": "211de1f28ffe262a89fe6b46ab322937a8500c829bb29182011a0a448ecfc7e1",
+      "records/wallet_opening_balances.jsonl": "0ca0d847493bb84b7ddc0616fa2c2640dec1269a890138f0702f24ae2476ab2e",
+      "reports/review-queue.jsonl": "855acce114023e9fb72293f24f56d60ec24e3dab662d7669cb83d5f00f228828",
+      "source/tables/invoice.jsonl": "a36bbd65f224eb11cc58201638614fbad9b325bf78b0d6ffef9cf3f82524cc87",
+      "source/tables/product.jsonl": "e588dbb7d5959a2cc8da7bffcae5cce2e6db975aabea001ac631a96c9eec6174",
+      "source/tables/user.jsonl": "d93dcaa51ed5d7fc7e50202b27034dade6e963ea2ebfded3b15e826e41089493"
+    },
+    "package_schema_version": "1.4.0",
+    "payload_sha256": "c973e6a69084aa35849449887f29607459f3bcad1222edca0586bb7c9da20933",
+    "payload_size": 108927,
+    "source_fingerprint": "701cba5b155f00323e98acdddf9bfa4dd66786cfe0159abae9220c78fea65aef"
+  },
+  "passphrase": "synthetic-test-passphrase-\u015e\u00c9",
+  "passphrase_decisions_key_hex": "f885812d2d775df54c703859e5d7f4c8a65c8c5cb36c187dd3baf64cac82bc5e",
+  "passphrase_package": {
+    "chunks": 1,
+    "file_sha256": "861ab5fef052a97834ae195d4653dc11437b128747d52fc043b88ccb40f3befa",
+    "files": {
+      "manifest.json": {
+        "records": null,
+        "sha256": "ca2721c35c008c94669ae45724e86a3d447d2896652df310ae8c98ccc2a446eb",
+        "size": 9468
+      },
+      "records/agents/agent_invoices.jsonl": {
+        "records": 6,
+        "sha256": "b429c3791f5099ac896b4422c0f1da77162c257c9eff3173283672468e5bf516",
+        "size": 5741
+      },
+      "records/agents/agent_logs.jsonl": {
+        "records": 4,
+        "sha256": "1f974a6ef167e78a719e6332f45703ceb9cdbfda53da7d05243d1a93ca1a9260",
+        "size": 3296
+      },
+      "records/agents/agent_requests.jsonl": {
+        "records": 4,
+        "sha256": "f6e00864ddd2f8cdf15f5e24b7460c47bb9601ff6acc9e9cf55690296d08687b",
+        "size": 3511
+      },
+      "records/agents/agent_usage.jsonl": {
+        "records": 3,
+        "sha256": "0e76e9c5f3f9fb61360780ac1f8cd8b42d539e2ca4b31d7d1ab85cc4ce683aa2",
+        "size": 2478
+      },
+      "records/agents/profiles.jsonl": {
+        "records": 2,
+        "sha256": "2e2160a2e6ce5cf0c499d29ee55f50c923a9a0aa44591fb03549282c783e9234",
+        "size": 2359
+      },
+      "records/agents/state.jsonl": {
+        "records": 2,
+        "sha256": "bb6e7d1b75a42839d83c18dcc299e738e073f38260a6feb6077561c105ea380b",
+        "size": 4855
+      },
+      "records/agents/tier_prices.jsonl": {
+        "records": 5,
+        "sha256": "442569d5f00576ba474599acf7b2bc3916c51df4ec1591488529a6eac19e612c",
+        "size": 4996
+      },
+      "records/archive/help_category.jsonl": {
+        "records": 1,
+        "sha256": "c11a1f11b6ef2a87ec826cb32d82ae167b1527ccc8ebf32b7347f79dde54093a",
+        "size": 503
+      },
+      "records/archive/vs_category.jsonl": {
+        "records": 2,
+        "sha256": "8e5c2aec5986dd72fc434ed314597ba16bc9ae4a32bf4a1241765a039b1a3dc5",
+        "size": 978
+      },
+      "records/archive/vs_order.jsonl": {
+        "records": 3,
+        "sha256": "ba2a72d7532c8ecb7a85398381ba015152aae2dad2d18ac56f640043dc5df3d3",
+        "size": 1539
+      },
+      "records/archive/vs_package.jsonl": {
+        "records": 1,
+        "sha256": "652818f646e3751d048456063dbcda1b40846b1da90a15a3fb8c704673a2b165",
+        "size": 504
+      },
+      "records/archive/vs_setting.jsonl": {
+        "records": 1,
+        "sha256": "6f837e0be2d6453de84c7baf10d7ba078c62e5d7de409e7b2f1126143582524f",
+        "size": 467
+      },
+      "records/archive/vs_stock.jsonl": {
+        "records": 1,
+        "sha256": "4f3b583fff52aa6ca7a7449fa0bbe3614efdf64d825f9c8ed92c425606a169b0",
+        "size": 509
+      },
+      "records/categories.jsonl": {
+        "records": 2,
+        "sha256": "a0f395a3ddb3c904193ea71b6427c15a1275e550e601f17c9149321551a25d3f",
+        "size": 728
+      },
+      "records/category_catalogue.jsonl": {
+        "records": 7,
+        "sha256": "396a2d25117fdc811f97f34f08eead424a810ce7a21145ec0f5453d6dc5562b1",
+        "size": 4838
+      },
+      "records/configuration/PaySetting.jsonl": {
+        "records": 6,
+        "sha256": "0d8ebe38d6cdb90d92a852b09517389a85ed41f618f67ab720411c8991c4db10",
+        "size": 3268
+      },
+      "records/configuration/app.jsonl": {
+        "records": 2,
+        "sha256": "7a88f62255ac750461f698b9f7553cae7639f9e82e41d1b7646bb9c8a3b20b5d",
+        "size": 996
+      },
+      "records/configuration/channels.jsonl": {
+        "records": 1,
+        "sha256": "2dc718aaec31062e88ec7c3bb6a7d023477140452964b8b06c4d62bbc099d7e1",
+        "size": 546
+      },
+      "records/configuration/help.jsonl": {
+        "records": 2,
+        "sha256": "6c50c52e047243073e937f5033079c0b16302b8066434f6e7daf460fbf95c233",
+        "size": 1224
+      },
+      "records/configuration/protocol.jsonl": {
+        "records": 2,
+        "sha256": "a6e9b55514238bc16e40bf8c2d760651685b1240e34ba30444526ac2378a6942",
+        "size": 1008
+      },
+      "records/configuration/setting.jsonl": {
+        "records": 1,
+        "sha256": "ad97bd8e3e4f06841c7ca9e8bc9e074fe7e80292ebab5e59c350108ec5a8ff79",
+        "size": 949
+      },
+      "records/configuration/shopSetting.jsonl": {
+        "records": 3,
+        "sha256": "53f93a6c12961ecb7c813b398ed168b8339b1b863f7eb0674d996fdbdbfcfebc",
+        "size": 1646
+      },
+      "records/configuration/textbot.jsonl": {
+        "records": 4,
+        "sha256": "29794639c721f40f89de759728709536f8fec4923665e31bf7474bf1628116cc",
+        "size": 2391
+      },
+      "records/customers.jsonl": {
+        "records": 20,
+        "sha256": "45d773624a77cf53281706692650c59b19bbed763244d7ea00e38033a030501d",
+        "size": 10431
+      },
+      "records/engagement/ad_campaigns.jsonl": {
+        "records": 1,
+        "sha256": "861c1a3f38ad734ef23e533b275f0bda3d7736eb2c507b5ff63b39295bca0ef9",
+        "size": 662
+      },
+      "records/engagement/discount_usage.jsonl": {
+        "records": 7,
+        "sha256": "39beaafd6390bd7e89ee6cdd166ad1a679516641cc0d5b5e9b22fb2fa0770e68",
+        "size": 5426
+      },
+      "records/engagement/discounts.jsonl": {
+        "records": 10,
+        "sha256": "3923da2a25cb067082b8aec04d5b0c2c9620b5399dda954476b57c27561d210f",
+        "size": 12626
+      },
+      "records/engagement/program_settings.jsonl": {
+        "records": 1,
+        "sha256": "36f3de0519e9bf35910db058a3467973cf2df237472c247485bf0a8f7b83e4e7",
+        "size": 827
+      },
+      "records/engagement/referrals.jsonl": {
+        "records": 4,
+        "sha256": "66db44aac04231df3decb02659531fceda8a450ef1b70dba67ccc1409e573c54",
+        "size": 3690
+      },
+      "records/engagement/wheel_results.jsonl": {
+        "records": 3,
+        "sha256": "763c8fc4e2cc47f75b10b68c1f1aa8068a3e8cc9ac3ad8670458796cd3d6100c",
+        "size": 2542
+      },
+      "records/invoices.jsonl": {
+        "records": 17,
+        "sha256": "b24b1e3a2a0e8a34e6361686d01ae6aed85f6459c9c7c1b34d253f13495456fa",
+        "size": 15274
+      },
+      "records/legacy_debts.jsonl": {
+        "records": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0
+      },
+      "records/manual_config_inventory.jsonl": {
+        "records": 6,
+        "sha256": "50e3fe12c976337d2775ada930cc5d3707bd2cb25ae3381dabd6a547e0cef666",
+        "size": 4605
+      },
+      "records/panel_mapping_template.jsonl": {
+        "records": 7,
+        "sha256": "eabfab2e2d1ad4a4651418362f5f83017de6a54096873ea1d5affcdb874b6061",
+        "size": 7845
+      },
+      "records/panel_registry.jsonl": {
+        "records": 4,
+        "sha256": "548d3619e3ce2f52d3b8ac4396370dc5323098b53b7beb9c89d799784b62ed4a",
+        "size": 8713
+      },
+      "records/panel_target_mapping.jsonl": {
+        "records": 6,
+        "sha256": "b38efcd2256b862ed1a876504512fef52c858716da2414f02ebba0052eeb0dea",
+        "size": 3912
+      },
+      "records/panels.jsonl": {
+        "records": 3,
+        "sha256": "1a97ff549023f84141f80e561fe1b692a4906d9c5b26c946ae63ee05498f1930",
+        "size": 1236
+      },
+      "records/payments.jsonl": {
+        "records": 36,
+        "sha256": "39210f1d6141117fbb059ac0ee744a11066155e557297852cc8b33051db73a59",
+        "size": 63627
+      },
+      "records/product_mapping_proposal.jsonl": {
+        "records": 13,
+        "sha256": "85d2b187d6aeb42e0bf768ec135d865703277243e990f7607808d88345209bbd",
+        "size": 31839
+      },
+      "records/products.jsonl": {
+        "records": 11,
+        "sha256": "f683063f02a3f17f3ef2758903095f696249ed3704e6b74f02327dcddc155ff1",
+        "size": 8828
+      },
+      "records/service_cancellation_requests.jsonl": {
+        "records": 6,
+        "sha256": "0a874ea50e719c7ea565f6f5807d4a5281319e79c11a67e7fecdd5b95544e2d0",
+        "size": 5835
+      },
+      "records/service_operations.jsonl": {
+        "records": 35,
+        "sha256": "d891379b6e9ed0cbbfa90df7502e523ff0d71cfc9ff9253a4904fa10e1174c5e",
+        "size": 46693
+      },
+      "records/service_ownership.jsonl": {
+        "records": 19,
+        "sha256": "20628c5da98b8c94a22e75f3ac558c422489666ce876becdd814923ce704103b",
+        "size": 39752
+      },
+      "records/services.jsonl": {
+        "records": 8,
+        "sha256": "797a7502a90e44ca2f1a3fed137dd875949cba445ea97f6ca363a37a3390c9df",
+        "size": 7442
+      },
+      "records/support/departments.jsonl": {
+        "records": 2,
+        "sha256": "9a08f96dd5623bb95c131f3fecd2bab47979407210283f3062a6794bb9ee11b1",
+        "size": 1289
+      },
+      "records/support/support_messages.jsonl": {
+        "records": 5,
+        "sha256": "7d76699fe6bcb55e57f7fd7001e67d8fe90f3b8eec6ef5395d892448df4d3379",
+        "size": 6607
+      },
+      "records/support/ticket_messages.jsonl": {
+        "records": 4,
+        "sha256": "ff80c8c7ad22fdd0d07ac2563ef032665bcb7bc18406a10785bb197abeaea4d4",
+        "size": 4080
+      },
+      "records/support/tickets.jsonl": {
+        "records": 5,
+        "sha256": "cb4f18c9c2aa446f45384351f6138fec41ad9217bde61bba50fd5e404e5f6c06",
+        "size": 5178
+      },
+      "records/wallet_history.jsonl": {
+        "records": 4,
+        "sha256": "6c684f174286992d1e9a716c8de2766c7f32da57e53b829629e58ecbfe5a8faf",
+        "size": 6571
+      },
+      "records/wallet_history_checks.jsonl": {
+        "records": 1,
+        "sha256": "211de1f28ffe262a89fe6b46ab322937a8500c829bb29182011a0a448ecfc7e1",
+        "size": 954
+      },
+      "records/wallet_opening_balances.jsonl": {
+        "records": 5,
+        "sha256": "0ca0d847493bb84b7ddc0616fa2c2640dec1269a890138f0702f24ae2476ab2e",
+        "size": 2499
+      },
+      "reports/coverage.json": {
+        "records": null,
+        "sha256": "5ba893fd913be89e389f2d3c87001d11bc674070766841a22450d883d045e672",
+        "size": 49436
+      },
+      "reports/mapping.json": {
+        "records": null,
+        "sha256": "42a32a1e189c17e97600c611149dc30982ab771242ad2d66abb3282e964b1dc9",
+        "size": 8554
+      },
+      "reports/migration-readiness.json": {
+        "records": null,
+        "sha256": "1af525f6aa2672062709f81bfe9e93f60418590bf05dddf8b804de000209629c",
+        "size": 8500
+      },
+      "reports/reconciliation.json": {
+        "records": null,
+        "sha256": "aea1d740efcd0a7bd7a7db83c9bcb8ba6277959530def7024607bf466a18baa0",
+        "size": 30139
+      },
+      "reports/review-queue.jsonl": {
+        "records": 97,
+        "sha256": "855acce114023e9fb72293f24f56d60ec24e3dab662d7669cb83d5f00f228828",
+        "size": 40659
+      },
+      "reports/review-taxonomy.json": {
+        "records": null,
+        "sha256": "2fd38a02121931e0d6e958298bc3af432298677eb29ff492eab3fb21961655e0",
+        "size": 4865
+      },
+      "source/catalog.json": {
+        "records": null,
+        "sha256": "b549eefa81649472fbdf5df42813f02792451c5c6521de7ee491128afaa9453f",
+        "size": 30883
+      },
+      "source/tables/invoice.jsonl": {
+        "records": 18,
+        "sha256": "a36bbd65f224eb11cc58201638614fbad9b325bf78b0d6ffef9cf3f82524cc87",
+        "size": 2688
+      },
+      "source/tables/product.jsonl": {
+        "records": 14,
+        "sha256": "e588dbb7d5959a2cc8da7bffcae5cce2e6db975aabea001ac631a96c9eec6174",
+        "size": 1348
+      },
+      "source/tables/user.jsonl": {
+        "records": 24,
+        "sha256": "d93dcaa51ed5d7fc7e50202b27034dade6e963ea2ebfded3b15e826e41089493",
+        "size": 1709
+      }
+    },
+    "header_sha256": "2195efb158474de3426b85e173145845777a3ce0c74b6942eed58a043de4a69f",
+    "import_id": "43133e1e5b054e73d2b7182455ff7eea",
+    "jsonl_canonical_digests": {
+      "records/agents/agent_invoices.jsonl": "b429c3791f5099ac896b4422c0f1da77162c257c9eff3173283672468e5bf516",
+      "records/agents/agent_logs.jsonl": "1f974a6ef167e78a719e6332f45703ceb9cdbfda53da7d05243d1a93ca1a9260",
+      "records/agents/agent_requests.jsonl": "f6e00864ddd2f8cdf15f5e24b7460c47bb9601ff6acc9e9cf55690296d08687b",
+      "records/agents/agent_usage.jsonl": "0e76e9c5f3f9fb61360780ac1f8cd8b42d539e2ca4b31d7d1ab85cc4ce683aa2",
+      "records/agents/profiles.jsonl": "2e2160a2e6ce5cf0c499d29ee55f50c923a9a0aa44591fb03549282c783e9234",
+      "records/agents/state.jsonl": "bb6e7d1b75a42839d83c18dcc299e738e073f38260a6feb6077561c105ea380b",
+      "records/agents/tier_prices.jsonl": "442569d5f00576ba474599acf7b2bc3916c51df4ec1591488529a6eac19e612c",
+      "records/archive/help_category.jsonl": "c11a1f11b6ef2a87ec826cb32d82ae167b1527ccc8ebf32b7347f79dde54093a",
+      "records/archive/vs_category.jsonl": "8e5c2aec5986dd72fc434ed314597ba16bc9ae4a32bf4a1241765a039b1a3dc5",
+      "records/archive/vs_order.jsonl": "ba2a72d7532c8ecb7a85398381ba015152aae2dad2d18ac56f640043dc5df3d3",
+      "records/archive/vs_package.jsonl": "652818f646e3751d048456063dbcda1b40846b1da90a15a3fb8c704673a2b165",
+      "records/archive/vs_setting.jsonl": "6f837e0be2d6453de84c7baf10d7ba078c62e5d7de409e7b2f1126143582524f",
+      "records/archive/vs_stock.jsonl": "4f3b583fff52aa6ca7a7449fa0bbe3614efdf64d825f9c8ed92c425606a169b0",
+      "records/categories.jsonl": "a0f395a3ddb3c904193ea71b6427c15a1275e550e601f17c9149321551a25d3f",
+      "records/category_catalogue.jsonl": "396a2d25117fdc811f97f34f08eead424a810ce7a21145ec0f5453d6dc5562b1",
+      "records/configuration/PaySetting.jsonl": "0d8ebe38d6cdb90d92a852b09517389a85ed41f618f67ab720411c8991c4db10",
+      "records/configuration/app.jsonl": "7a88f62255ac750461f698b9f7553cae7639f9e82e41d1b7646bb9c8a3b20b5d",
+      "records/configuration/channels.jsonl": "2dc718aaec31062e88ec7c3bb6a7d023477140452964b8b06c4d62bbc099d7e1",
+      "records/configuration/help.jsonl": "6c50c52e047243073e937f5033079c0b16302b8066434f6e7daf460fbf95c233",
+      "records/configuration/protocol.jsonl": "a6e9b55514238bc16e40bf8c2d760651685b1240e34ba30444526ac2378a6942",
+      "records/configuration/setting.jsonl": "ad97bd8e3e4f06841c7ca9e8bc9e074fe7e80292ebab5e59c350108ec5a8ff79",
+      "records/configuration/shopSetting.jsonl": "53f93a6c12961ecb7c813b398ed168b8339b1b863f7eb0674d996fdbdbfcfebc",
+      "records/configuration/textbot.jsonl": "29794639c721f40f89de759728709536f8fec4923665e31bf7474bf1628116cc",
+      "records/customers.jsonl": "45d773624a77cf53281706692650c59b19bbed763244d7ea00e38033a030501d",
+      "records/engagement/ad_campaigns.jsonl": "861c1a3f38ad734ef23e533b275f0bda3d7736eb2c507b5ff63b39295bca0ef9",
+      "records/engagement/discount_usage.jsonl": "39beaafd6390bd7e89ee6cdd166ad1a679516641cc0d5b5e9b22fb2fa0770e68",
+      "records/engagement/discounts.jsonl": "3923da2a25cb067082b8aec04d5b0c2c9620b5399dda954476b57c27561d210f",
+      "records/engagement/program_settings.jsonl": "36f3de0519e9bf35910db058a3467973cf2df237472c247485bf0a8f7b83e4e7",
+      "records/engagement/referrals.jsonl": "66db44aac04231df3decb02659531fceda8a450ef1b70dba67ccc1409e573c54",
+      "records/engagement/wheel_results.jsonl": "763c8fc4e2cc47f75b10b68c1f1aa8068a3e8cc9ac3ad8670458796cd3d6100c",
+      "records/invoices.jsonl": "b24b1e3a2a0e8a34e6361686d01ae6aed85f6459c9c7c1b34d253f13495456fa",
+      "records/legacy_debts.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "records/manual_config_inventory.jsonl": "50e3fe12c976337d2775ada930cc5d3707bd2cb25ae3381dabd6a547e0cef666",
+      "records/panel_mapping_template.jsonl": "eabfab2e2d1ad4a4651418362f5f83017de6a54096873ea1d5affcdb874b6061",
+      "records/panel_registry.jsonl": "548d3619e3ce2f52d3b8ac4396370dc5323098b53b7beb9c89d799784b62ed4a",
+      "records/panel_target_mapping.jsonl": "b38efcd2256b862ed1a876504512fef52c858716da2414f02ebba0052eeb0dea",
+      "records/panels.jsonl": "1a97ff549023f84141f80e561fe1b692a4906d9c5b26c946ae63ee05498f1930",
+      "records/payments.jsonl": "39210f1d6141117fbb059ac0ee744a11066155e557297852cc8b33051db73a59",
+      "records/product_mapping_proposal.jsonl": "85d2b187d6aeb42e0bf768ec135d865703277243e990f7607808d88345209bbd",
+      "records/products.jsonl": "f683063f02a3f17f3ef2758903095f696249ed3704e6b74f02327dcddc155ff1",
+      "records/service_cancellation_requests.jsonl": "0a874ea50e719c7ea565f6f5807d4a5281319e79c11a67e7fecdd5b95544e2d0",
+      "records/service_operations.jsonl": "d891379b6e9ed0cbbfa90df7502e523ff0d71cfc9ff9253a4904fa10e1174c5e",
+      "records/service_ownership.jsonl": "20628c5da98b8c94a22e75f3ac558c422489666ce876becdd814923ce704103b",
+      "records/services.jsonl": "797a7502a90e44ca2f1a3fed137dd875949cba445ea97f6ca363a37a3390c9df",
+      "records/support/departments.jsonl": "9a08f96dd5623bb95c131f3fecd2bab47979407210283f3062a6794bb9ee11b1",
+      "records/support/support_messages.jsonl": "7d76699fe6bcb55e57f7fd7001e67d8fe90f3b8eec6ef5395d892448df4d3379",
+      "records/support/ticket_messages.jsonl": "ff80c8c7ad22fdd0d07ac2563ef032665bcb7bc18406a10785bb197abeaea4d4",
+      "records/support/tickets.jsonl": "cb4f18c9c2aa446f45384351f6138fec41ad9217bde61bba50fd5e404e5f6c06",
+      "records/wallet_history.jsonl": "6c684f174286992d1e9a716c8de2766c7f32da57e53b829629e58ecbfe5a8faf",
+      "records/wallet_history_checks.jsonl": "211de1f28ffe262a89fe6b46ab322937a8500c829bb29182011a0a448ecfc7e1",
+      "records/wallet_opening_balances.jsonl": "0ca0d847493bb84b7ddc0616fa2c2640dec1269a890138f0702f24ae2476ab2e",
+      "reports/review-queue.jsonl": "855acce114023e9fb72293f24f56d60ec24e3dab662d7669cb83d5f00f228828",
+      "source/tables/invoice.jsonl": "a36bbd65f224eb11cc58201638614fbad9b325bf78b0d6ffef9cf3f82524cc87",
+      "source/tables/product.jsonl": "e588dbb7d5959a2cc8da7bffcae5cce2e6db975aabea001ac631a96c9eec6174",
+      "source/tables/user.jsonl": "d93dcaa51ed5d7fc7e50202b27034dade6e963ea2ebfded3b15e826e41089493"
+    },
+    "package_schema_version": "1.4.0",
+    "payload_sha256": "c973e6a69084aa35849449887f29607459f3bcad1222edca0586bb7c9da20933",
+    "payload_size": 108927,
+    "source_fingerprint": "701cba5b155f00323e98acdddf9bfa4dd66786cfe0159abae9220c78fea65aef"
+  },
+  "synthetic": true
+}

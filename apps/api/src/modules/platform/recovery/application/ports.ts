@@ -300,17 +300,26 @@ export interface RecoveryRequestRepository {
    * rather than overwriting a decision somebody else made. This is the only way
    * a state changes — there is no `setState`.
    */
-  transition(input: {
-    readonly id: string;
-    readonly from: readonly RecoveryState[];
-    readonly to: RecoveryState;
-    readonly now: Date;
-    readonly patch?: RecoveryPatch;
-    /** Required when `to` is terminal; refused otherwise by the CHECK. */
-    readonly finished?: boolean;
-    /** Guards the write on the lease, for executor-owned transitions. */
-    readonly leaseOwner?: string;
-  }): Promise<boolean>;
+  transition(
+    input: {
+      readonly id: string;
+      readonly from: readonly RecoveryState[];
+      readonly to: RecoveryState;
+      readonly now: Date;
+      readonly patch?: RecoveryPatch;
+      /** Required when `to` is terminal; refused otherwise by the CHECK. */
+      readonly finished?: boolean;
+      /** Guards the write on the lease, for executor-owned transitions. */
+      readonly leaseOwner?: string;
+    },
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Phase 7 (review H1): when the latest cutover happened, or null. An import row created
+   * before it came back with a restored backup and is never continued.
+   */
+  latestCutoverAt(): Promise<Date | null>;
 
   /**
    * Advances the stage on a request that has NO lease yet.

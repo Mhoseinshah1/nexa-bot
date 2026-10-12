@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   RECOVERY_CONFIRMATION_PHRASE,
+  isLegacyNxpkgTerminalStatus,
   isRecoveryConfirmationPhrase,
   type BackupRunSummary,
   type RecoveryRequestSummary,
@@ -10,6 +11,7 @@ import {
 import {
   backupArchiveUrl,
   confirmRecovery,
+  uploadLegacyMigrationPackage,
   fetchBackupHistory,
   fetchBackupStatus,
   fetchRecoveries,
@@ -45,6 +47,17 @@ import { Icon } from '../ui/icons';
 import { BackupScheduleCard } from './backup-schedule';
 import { RecoveryKitSection } from './recovery-kit';
 import { recoveryErrorText, recoveryFailureText } from '../recovery-failure-labels';
+import {
+  MirzaHistory,
+  MirzaRestoreFlow,
+  MirzaSteps,
+  legacyMigrationFault,
+  mirzaAccess,
+  sniffRestoreFile,
+  useMirzaImports,
+  type MirzaAccess,
+  type RestoreFileKind,
+} from './recovery-mirza';
 
 /**
  * Backup and disaster recovery.
@@ -84,6 +97,7 @@ export function RecoveryPage({
   const mayRun = permissions.includes('backup.run');
   const mayDownload = permissions.includes('backup.download');
   const mayRestore = permissions.includes('recovery.restore');
+  const mirza = mirzaAccess(permissions);
 
   const cursor = route.query.get('cursor') ?? undefined;
 
@@ -216,14 +230,32 @@ export function RecoveryPage({
         hint={t('web.recovery_upload_hint')}
         className="recovery-operations"
       >
-        <StateSwitch query={capabilities} denied={!mayView}>
+        {/*
+          A Mirza restore is authorised by `legacy.migration.*`, not by `backup.view` (Codex
+          review on #278): an administrator holding only the migration permissions gets the
+          Mirza half of this card, without the NEXA capabilities they may not read.
+        */}
+        {!mayView && mirza.mayView ? (
           <RecoveryOperations
-            uploadEnabled={capabilities.data?.uploadEnabled ?? false}
-            maxUploadBytes={capabilities.data?.maxUploadBytes ?? 0}
-            mayRestore={mayRestore}
+            nexaAllowed={false}
+            uploadEnabled={false}
+            maxUploadBytes={0}
+            mayRestore={false}
+            mirza={mirza}
             onChanged={refreshAll}
           />
-        </StateSwitch>
+        ) : (
+          <StateSwitch query={capabilities} denied={!mayView}>
+            <RecoveryOperations
+              nexaAllowed
+              uploadEnabled={capabilities.data?.uploadEnabled ?? false}
+              maxUploadBytes={capabilities.data?.maxUploadBytes ?? 0}
+              mayRestore={mayRestore}
+              mirza={mirza}
+              onChanged={refreshAll}
+            />
+          </StateSwitch>
+        )}
       </Card>
 
       <Card title={t('web.recovery_requests_title')}>
@@ -443,32 +475,63 @@ function DownloadControl({ run, mayDownload }: { run: BackupRunSummary; mayDownl
   );
 }
 
-/** Upload, verify, and — behind a typed confirmation — restore. */
+/**
+ * Upload, verify, and — behind a typed confirmation — restore.
+ *
+ * Two restore sources share the one file input, told apart by the file's own first bytes and
+ * never by its name (`sniffRestoreFile`): a NEXA backup archive (`.nxb`) takes the restore
+ * below exactly as before, and the Mirza converter's package (`.nxpkg`) takes the Mirza flow
+ * (`recovery-mirza.tsx`) — upload, review, confirm, run — over the same import row the
+ * `recovery` role executes. Anything else is refused here, before a byte is uploaded.
+ */
 function RecoveryOperations({
+  nexaAllowed,
   uploadEnabled,
   maxUploadBytes,
   mayRestore,
+  mirza,
   onChanged,
 }: {
+  /** False for an actor without `backup.view`: the card is their Mirza restore only. */
+  nexaAllowed: boolean;
   uploadEnabled: boolean;
   maxUploadBytes: number;
   mayRestore: boolean;
+  mirza: MirzaAccess;
   onChanged: () => void;
 }) {
+  const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
-  const [tooLarge, setTooLarge] = useState(false);
+  /** The chosen file's source, or null while its first bytes are read. */
+  const [kind, setKind] = useState<RestoreFileKind | null>(null);
+  const chosenRef = useRef<File | null>(null);
   const [current, setCurrent] = useState<RecoveryRequestSummary | null>(null);
+  /** Which source the card shows below the input: the last one uploaded here. */
+  const [shown, setShown] = useState<'NEXA' | 'MIRZA' | null>(null);
+  const [mirzaId, setMirzaId] = useState<string | null>(null);
   const [phrase, setPhrase] = useState('');
+
+  const imports = useMirzaImports(mirza.mayView);
+  const mirzaReady = mirza.mayView && imports.enabled && imports.capabilities !== null;
 
   const upload = useMutation({
     mutationFn: (chosen: File) => uploadRecoveryArchive(chosen),
     onSuccess: (result) => {
       setCurrent(result.recovery);
+      setShown('NEXA');
       onChanged();
     },
     // A refusal may have left a FAILED row (oversized, empty) or none at all (uploads
     // disabled); either way the list and the capabilities are re-read.
     onError: () => onChanged(),
+  });
+  const mirzaUpload = useMutation({
+    mutationFn: (chosen: File) => uploadLegacyMigrationPackage(chosen),
+    onSuccess: (result) => {
+      setMirzaId(result.import.id);
+      setShown('MIRZA');
+      void queryClient.invalidateQueries({ queryKey: ['legacy-migration'] });
+    },
   });
   const verify = useMutation({
     mutationFn: (id: string) => verifyRecovery(id),
@@ -491,27 +554,75 @@ function RecoveryOperations({
     onError: (error) => confirmKey.settleOn(error),
   });
 
-  if (!uploadEnabled) {
+  /*
+   * The Mirza import this card shows: the one uploaded here; else an unfinished one (an import
+   * outlives a reload, and its progress is what the operator came back for), which stays shown
+   * once it finishes so its result is not snatched away mid-read.
+   */
+  const activeId = imports.rows.find((row) => !isLegacyNxpkgTerminalStatus(row.status))?.id ?? null;
+  const [followed, setFollowed] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeId !== null) setFollowed(activeId);
+  }, [activeId]);
+  const focusId = mirzaId ?? activeId ?? followed;
+  const mirzaRow =
+    imports.rows.find((row) => row.id === focusId) ??
+    (mirzaUpload.data !== undefined && mirzaUpload.data.import.id === focusId
+      ? mirzaUpload.data.import
+      : null);
+  const showMirza = shown !== 'NEXA' && mirzaRow !== null && imports.capabilities !== null;
+
+  if (!uploadEnabled && !mirzaReady) {
     return <Banner tone="neutral">{t('web.recovery_upload_disabled')}</Banner>;
   }
 
   const onChoose = (chosen: File | null): void => {
+    chosenRef.current = chosen;
     setFile(chosen);
-    // Refused HERE as well as on the server, so an operator is not made to
-    // upload a gigabyte to be told the limit. The server's counter is still the
-    // authority; this is a courtesy, and it reports the real configured limit
-    // rather than a number this page invented.
-    setTooLarge(chosen !== null && chosen.size > maxUploadBytes);
+    setKind(null);
+    if (chosen === null) return;
+    // The answer for a file the operator has since replaced is dropped.
+    void sniffRestoreFile(chosen)
+      .catch((): RestoreFileKind => 'UNKNOWN')
+      .then((found) => {
+        if (chosenRef.current === chosen) setKind(found);
+      });
   };
+
+  // Refused HERE as well as on the server, so an operator is not made to upload a gigabyte
+  // to be told the limit. The server's counter is still the authority; this is a courtesy,
+  // and it reports the real configured limit rather than a number this page invented.
+  const limit = kind === 'MIRZA' ? (imports.capabilities?.maxUploadBytes ?? 0) : maxUploadBytes;
+  const tooLarge = file !== null && kind !== null && kind !== 'UNKNOWN' && file.size > limit;
+  const refusal: string | null =
+    file === null || kind === null
+      ? null
+      : kind === 'UNKNOWN'
+        ? t('web.recovery_file_unknown')
+        : kind === 'NEXA' && !nexaAllowed
+          ? t('web.recovery_no_permission_nexa')
+          : kind === 'NEXA' && !uploadEnabled
+            ? t('web.recovery_upload_disabled')
+            : kind === 'MIRZA' && !mirza.mayManage
+              ? t('web.mrz_no_permission')
+              : kind === 'MIRZA' && !mirzaReady
+                ? t('web.lmg_disabled')
+                : null;
+  const pending = upload.isPending || mirzaUpload.isPending;
 
   const onSubmit = (event: FormEvent): void => {
     event.preventDefault();
-    if (file !== null && !tooLarge) upload.mutate(file);
+    if (file === null || tooLarge || refusal !== null) return;
+    if (kind === 'NEXA') upload.mutate(file);
+    if (kind === 'MIRZA') mirzaUpload.mutate(file);
   };
 
   return (
     <>
-      <RecoverySteps current={current} />
+      {showMirza ? <MirzaSteps row={mirzaRow} /> : <RecoverySteps current={current} />}
+      {nexaAllowed && !uploadEnabled && (
+        <Banner tone="neutral">{t('web.recovery_upload_disabled')}</Banner>
+      )}
       <h3 className="card-subtitle">{t('web.recovery_upload_title')}</h3>
       <form onSubmit={onSubmit} className="stack">
         <label className="field">
@@ -519,24 +630,57 @@ function RecoveryOperations({
           <input
             type="file"
             className="recovery-file"
+            accept={!nexaAllowed ? '.nxpkg' : mirza.mayView ? '.nxb,.nxpkg' : '.nxb'}
+            aria-describedby="recovery-file-kind"
             onChange={(event) => onChoose(event.currentTarget.files?.[0] ?? null)}
           />
         </label>
-        {tooLarge && <Banner tone="danger">{t('web.recovery_upload_too_large')}</Banner>}
+        <p className="muted small" id="recovery-file-kind" aria-live="polite">
+          {file === null
+            ? t('web.recovery_file_hint')
+            : kind === null
+              ? t('web.recovery_file_reading')
+              : kind === 'NEXA'
+                ? t('web.recovery_file_nexa')
+                : kind === 'MIRZA'
+                  ? t('web.recovery_file_mirza')
+                  : ''}
+        </p>
+        {refusal !== null && <Banner tone="danger">{refusal}</Banner>}
+        {kind === 'MIRZA' && refusal === null && (
+          <Banner tone="warn" icon="info">
+            {t('web.lmg_banner')}
+          </Banner>
+        )}
+        {tooLarge && (
+          <Banner tone="danger">
+            {kind === 'MIRZA' ? t('web.lmg_fault_too_large') : t('web.recovery_upload_too_large')}
+          </Banner>
+        )}
         <div className="btn-group">
           <button
             type="submit"
             className="btn primary"
-            disabled={file === null || tooLarge || upload.isPending}
+            disabled={file === null || kind === null || tooLarge || refusal !== null || pending}
           >
             <Icon name="upload" />
-            {upload.isPending ? t('web.recovery_uploading') : t('web.recovery_upload_send')}
+            {pending ? t('web.recovery_uploading') : t('web.recovery_upload_send')}
           </button>
         </div>
         {upload.error !== null && <Banner tone="danger">{recoveryErrorText(upload.error)}</Banner>}
+        {mirzaUpload.error !== null && (
+          <Banner tone="danger">{legacyMigrationFault(mirzaUpload.error)}</Banner>
+        )}
       </form>
 
-      {current !== null && (
+      {showMirza && imports.capabilities !== null && (
+        <MirzaRestoreFlow row={mirzaRow} capabilities={imports.capabilities} access={mirza} />
+      )}
+      {mirzaReady && (
+        <MirzaHistory rows={imports.rows.filter((row) => !(showMirza && row.id === mirzaRow.id))} />
+      )}
+
+      {shown !== 'MIRZA' && current !== null && (
         <div className="stack inset">
           <KV
             items={[

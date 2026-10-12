@@ -1,0 +1,25 @@
+# The isolated Mirza → NEXA rehearsal's edge (docs/legacy-migration/nxpkg-real-rehearsal.md).
+#
+# The ROUTES are the production edge's own (routes.caddy, imported unchanged). What differs:
+# no public name and no ACME — HTTPS on `localhost` with Caddy's own local CA (the browser
+# asks once to accept it), because a production NEXA issues its session as a Secure
+# `__Host-` cookie and refuses a non-https admin origin. Published on 127.0.0.1 only
+# (compose.mirza-rehearsal.yml), so only a browser on this machine reaches it.
+{
+	admin off
+	auto_https disable_redirects
+	# The local CA lives in the container's /data volume; nothing is installed on the host.
+	skip_install_trust
+}
+
+import /etc/caddy/routes.caddy
+
+# The healthcheck's site (compose.yml's caddy healthcheck probes it), as in production.
+http://127.0.0.1:8080 {
+	import nexa_routes
+}
+
+https://localhost {
+	tls internal
+	import nexa_routes
+}

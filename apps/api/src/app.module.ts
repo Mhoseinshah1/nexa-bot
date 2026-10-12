@@ -55,7 +55,9 @@ import { LegacyProductsController } from './surfaces/web/legacy-products.control
 import { LegacyDebtsController } from './surfaces/web/legacy-debts.controller.js';
 import { LegacyServicesController } from './surfaces/web/legacy-services.controller.js';
 import { LegacyCutoverController } from './surfaces/web/legacy-cutover.controller.js';
+import { LegacyMigrationController } from './surfaces/web/legacy-migration.controller.js';
 import { LegacyInvoicesController } from './surfaces/web/legacy-invoices.controller.js';
+import { LegacyHistoryController } from './surfaces/web/legacy-history.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
 import { RecoveryController } from './surfaces/web/recovery.controller.js';
@@ -70,6 +72,7 @@ import { GatewayReturnController } from './surfaces/gateway/return.controller.js
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
 import { securityHeaders } from './surfaces/web/security-headers.middleware.js';
 import { DomainErrorFilter } from './surfaces/web/error.filter.js';
+import { systemEndpointEnabled } from './infrastructure/config/exposure.js';
 
 /**
  * The API process's module graph.
@@ -162,7 +165,9 @@ export class AppModule implements NestModule {
         LegacyDebtsController as never,
         LegacyServicesController as never,
         LegacyCutoverController as never,
+        LegacyMigrationController as never,
         LegacyInvoicesController as never,
+        LegacyHistoryController as never,
         ServicesController as never,
         PanelsController as never,
         RecoveryController as never,
@@ -177,11 +182,13 @@ export class AppModule implements NestModule {
     }
 
     // The system ping endpoint runs the canonical write path over HTTP with no
-    // authentication, because Phase 0 has none. That is acceptable as a
-    // development affordance and unacceptable anywhere else: it would let an
-    // anonymous caller write rows into append-only tables. Registered only in
-    // development, the same way the webhook is registered only when configured.
-    if (container.config.NODE_ENV === 'development') {
+    // authentication. That is acceptable as a local development affordance and
+    // unacceptable anywhere else: it lets an anonymous caller write rows into
+    // append-only tables. FIX-04 (S2): registered only on an explicit opt-in AND
+    // a development/test NODE_ENV — it used to follow NODE_ENV alone, so a host
+    // left on development served it on its public domain. See
+    // `infrastructure/config/exposure.ts`.
+    if (systemEndpointEnabled(container.config)) {
       controllers.push(SystemController as never);
     }
 

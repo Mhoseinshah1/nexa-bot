@@ -11,7 +11,7 @@ import {
 } from '@nexa/contracts';
 import { RecoveryPage } from '../../apps/web/src/pages/recovery';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
-import { renderPage, stubApi } from './harness';
+import { NEXA_ARCHIVE_BYTES, renderPage, stubApi } from './harness';
 
 /**
  * The backup and recovery page.
@@ -192,6 +192,8 @@ describe('the recovery page', () => {
     if (entry === undefined) return;
     expect(navPermitted(entry, [])).toBe(false);
     expect(navPermitted(entry, ['backup.view'])).toBe(true);
+    // The Mirza restore's own audience reaches the page too (Codex review on #278).
+    expect(navPermitted(entry, ['legacy.migration.view'])).toBe(true);
   });
 
   it('routes /recovery to the page rather than to NotFound', () => {
@@ -571,9 +573,12 @@ describe('the recovery page', () => {
       ]);
       renderPage(<RecoveryPage route={route} permissions={ALL} />);
       fireEvent.change(await screen.findByLabelText('انتخاب فایل'), {
-        target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxb')] },
+        target: { files: [new File([NEXA_ARCHIVE_BYTES], 'old.nxb')] },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+      // The file's first bytes are read before the upload is offered (NEXA or Mirza).
+      const send = screen.getByRole('button', { name: 'بارگذاری' });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );
@@ -598,9 +603,12 @@ describe('the recovery page', () => {
       ]);
       renderPage(<RecoveryPage route={route} permissions={ALL} />);
       fireEvent.change(await screen.findByLabelText('انتخاب فایل'), {
-        target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxb')] },
+        target: { files: [new File([NEXA_ARCHIVE_BYTES], 'old.nxb')] },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+      // The file's first bytes are read before the upload is offered (NEXA or Mirza).
+      const send = screen.getByRole('button', { name: 'بارگذاری' });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );
@@ -639,12 +647,15 @@ describe('the recovery page', () => {
     ]);
     renderPage(<RecoveryPage route={route} permissions={ALL} />);
     fireEvent.change(await screen.findByLabelText('انتخاب فایل'), {
-      target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxb')] },
+      target: { files: [new File([NEXA_ARCHIVE_BYTES], 'old.nxb')] },
     });
     const capabilityReads = () =>
       api.calls.filter((call) => call.url.includes(RECOVERY_ROUTES.capabilities)).length;
+    // The file's first bytes are read before the upload is offered (NEXA or Mirza).
+    const send = screen.getByRole('button', { name: 'بارگذاری' });
+    await waitFor(() => expect(send).toBeEnabled());
     const before = capabilityReads();
-    fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+    fireEvent.click(send);
     const banner = await screen.findByText(/سرور این درخواست بازیابی را نپذیرفت/);
     expect(banner.textContent).toContain('صفحه را تازه کنید');
     // Uploads disabled is refused before any recovery row exists: the words must not
@@ -723,7 +734,13 @@ describe('the recovery page', () => {
     });
 
     /** Uploads a file and verifies it, leaving the page at RESTORE_TEST_PASSED. */
-    async function reachConfirmation(permissions: readonly PermissionKey[]) {
+    async function reachConfirmation(
+      permissions: readonly PermissionKey[],
+      confirmAnswer: { status: number; body: unknown } = {
+        status: 200,
+        body: { recovery: { ...tested, state: 'RESTORE_REQUESTED' } },
+      },
+    ) {
       const api = stubApi([
         ...routes(),
         { url: `${API_PREFIX}${RECOVERY_ROUTES.upload}`, body: { recovery: recovery() } },
@@ -733,7 +750,8 @@ describe('the recovery page', () => {
         },
         {
           url: `${API_PREFIX}${RECOVERY_ROUTES.confirm(RECOVERY_ID)}`,
-          body: { recovery: { ...tested, state: 'RESTORE_REQUESTED' } },
+          body: confirmAnswer.body,
+          status: confirmAnswer.status,
         },
       ]);
       renderPage(<RecoveryPage route={route} permissions={permissions} />);
@@ -742,13 +760,16 @@ describe('the recovery page', () => {
       fireEvent.change(input, {
         target: {
           files: [
-            new File([new Uint8Array([1, 2, 3])], 'mine.nxb', {
+            new File([NEXA_ARCHIVE_BYTES], 'mine.nxb', {
               type: 'application/octet-stream',
             }),
           ],
         },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'بارگذاری' }));
+      // The file's first bytes are read before the upload is offered (NEXA or Mirza).
+      const send = screen.getByRole('button', { name: 'بارگذاری' });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );
@@ -800,6 +821,30 @@ describe('the recovery page', () => {
       expect(body.phrase).toBe(RECOVERY_CONFIRMATION_PHRASE);
       // THE BINDING. Without this the confirmation says "restore something".
       expect(body.artifactChecksum).toBe('c'.repeat(64));
+    });
+
+    it('says in Persian that a Mirza import holds the installation when the confirm is refused for it', async () => {
+      await reachConfirmation(ALL, {
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'recovery.legacy_migration_active',
+            message: 'A Mirza backup is being restored into this installation.',
+            correlationId: 'test',
+          },
+        },
+      });
+      fireEvent.change(phraseField(), { target: { value: RECOVERY_CONFIRMATION_PHRASE } });
+      fireEvent.click(screen.getByRole('button', { name: 'تأیید و شروع بازیابی' }));
+      expect(
+        await screen.findByText(
+          'یک بازیابی از میرزا روی این نصب تأیید شده یا در جریان است؛ پس از پایان آن دوباره تأیید کنید. چیزی تأیید نشد.',
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText('A Mirza backup is being restored into this installation.'),
+      ).toBeNull();
     });
 
     it('shows the restore-test evidence an operator has to read before confirming', async () => {
