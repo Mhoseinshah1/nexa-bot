@@ -432,6 +432,47 @@ describe('the Mirza review', () => {
     expect(dryRun?.body).toEqual({ idempotencyKey: expect.any(String) });
   });
 
+  it('offers the optional decisions file before the panels whose saving starts the dry run', async () => {
+    // Codex review on #278: with panels first, the page's own order started a dry run that a
+    // decisions file then had to wait out and repeat.
+    page([view({ status: 'VERIFIED', keyPresent: true, keyKind: 'KEY_FILE', verifyReport })]);
+    // The step titles (the panels title is also a mark in the step list above them).
+    const decisions = (await screen.findAllByText(t('web.mrz_decisions_title'))).at(-1)!;
+    const panels = (await screen.findAllByText(t('web.mrz_panels_title'))).at(-1)!;
+    expect(
+      decisions.compareDocumentPosition(panels) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('gives an actor with the Mirza permissions alone (no backup.view) the Mirza restore', async () => {
+    // Codex review on #278: the card was gated on backup.view only, so the server authorised
+    // controls this actor could never reach.
+    const api = page([], {
+      permissions: ['legacy.migration.view', 'legacy.migration.manage', 'legacy.migration.apply'],
+    });
+    const input = await screen.findByLabelText(t('web.recovery_upload_choose'));
+    expect(input).toHaveAttribute('accept', '.nxpkg');
+    expect(screen.queryByText(t('web.recovery_upload_disabled'))).toBeNull();
+    await choose(MIRZA_PACKAGE_BYTES, 'restore.nxpkg');
+    expect(await screen.findByText(t('web.recovery_file_mirza'))).toBeInTheDocument();
+    await send();
+    await waitFor(() =>
+      expect(posts(api).map((call) => call.url)).toEqual([
+        `${API_PREFIX}/legacy-migration/imports/upload`,
+      ]),
+    );
+    // The NEXA capabilities it may not read are never asked for.
+    expect(api.calls.some((call) => call.url.includes(RECOVERY_ROUTES.capabilities))).toBe(false);
+  });
+
+  it('refuses a NEXA archive to that actor, before anything is uploaded', async () => {
+    const api = page([], { permissions: ['legacy.migration.view', 'legacy.migration.manage'] });
+    await choose(NEXA_ARCHIVE_BYTES, 'mine.nxb');
+    expect(await screen.findByText(t('web.recovery_no_permission_nexa'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.recovery_upload_send') })).toBeDisabled();
+    expect(posts(api)).toEqual([]);
+  });
+
   it('guesses nothing when two ACTIVE RickPanels exist', async () => {
     const api = page(
       [view({ status: 'VERIFIED', keyPresent: true, keyKind: 'KEY_FILE', verifyReport })],

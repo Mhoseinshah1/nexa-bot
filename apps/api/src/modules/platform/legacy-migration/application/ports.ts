@@ -266,6 +266,11 @@ export interface MigrationWorkspaces {
    * directory. Returns how many files were removed.
    */
   discardPackageFiles(importId: string): Promise<number>;
+  /**
+   * The newest modification time of an import's directory and of what it directly holds, or
+   * null when the directory is gone. An upload in flight keeps moving it forward.
+   */
+  lastWrittenAt(importId: string): Promise<Date | null>;
   /** SHA-256 (hex) and size of a file, streamed. */
   digest(path: string): Promise<{ readonly sha256: string; readonly bytes: number }>;
 }

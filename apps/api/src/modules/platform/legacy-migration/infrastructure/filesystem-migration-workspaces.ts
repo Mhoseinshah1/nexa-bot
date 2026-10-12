@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, type Dirent } from 'node:fs';
-import { chmod, mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { uuidV7Schema } from '@nexa/contracts';
 import type { MigrationImportFiles, MigrationWorkspaces } from '../application/ports.js';
@@ -18,7 +18,9 @@ import type { MigrationImportFiles, MigrationWorkspaces } from '../application/p
  * The `migration` role also sweeps this root at start and on every tick: every `step-*`
  * directory of a terminal import (or of a directory no import row names) is removed, and at a
  * terminal state the package and decisions files are removed unless
- * `LEGACY_MIGRATION_RETAIN_PACKAGE` is on (`LegacyMigrationExecutor.sweep`).
+ * `LEGACY_MIGRATION_RETAIN_PACKAGE` is on (`LegacyMigrationExecutor.sweep`). A directory no
+ * row names and nothing has written to for `LEGACY_MIGRATION_ORPHAN_IDLE_MS` (an upload whose
+ * process died before its row was inserted) is removed whole.
  *
  * Nothing from a request reaches a path component: the import id is validated as a uuid
  * before any path is built, the file names are constants, and the step suffix is random.
@@ -135,6 +137,26 @@ export class FilesystemMigrationWorkspaces implements MigrationWorkspaces {
     );
     for (const name of doomed) await rm(join(directory, name), { force: true });
     return doomed.length;
+  }
+
+  async lastWrittenAt(importId: string): Promise<Date | null> {
+    const { directory } = this.filesOf(importId);
+    let newest: number;
+    let entries: string[];
+    try {
+      newest = (await lstat(directory)).mtimeMs;
+      entries = await readdir(directory);
+    } catch {
+      return null;
+    }
+    for (const name of entries) {
+      try {
+        newest = Math.max(newest, (await lstat(join(directory, name))).mtimeMs);
+      } catch {
+        // Removed between the listing and the stat: it no longer counts.
+      }
+    }
+    return new Date(newest);
   }
 
   async digest(path: string): Promise<{ readonly sha256: string; readonly bytes: number }> {

@@ -299,6 +299,12 @@ export class InMemoryMigrationWorkspaces implements MigrationWorkspaces {
   async discardPackageFiles(importId: string): Promise<number> {
     return this.packageFiles.delete(importId) ? 1 : 0;
   }
+  /** When each import directory was last written (a test sets it; absent → "just now"). */
+  readonly writtenAt = new Map<string, Date>();
+  async lastWrittenAt(importId: string): Promise<Date | null> {
+    if (!this.directories.has(importId)) return null;
+    return this.writtenAt.get(importId) ?? new Date(8_640_000_000_000_000);
+  }
   async digest(path: string): Promise<{ sha256: string; bytes: number }> {
     return { sha256: this.digests.get(path) ?? 'f'.repeat(64), bytes: 1 };
   }

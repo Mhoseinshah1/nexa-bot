@@ -22,6 +22,7 @@ import {
   LEGACY_MIGRATION_APPLY_WINDOW_MS,
   LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS,
   LEGACY_MIGRATION_MAX_STEP_ATTEMPTS,
+  LEGACY_MIGRATION_ORPHAN_IDLE_MS,
   phaseReached,
   reportDigest,
   digestsEqual,
@@ -241,12 +242,23 @@ export class LegacyMigrationExecutor {
    * Removes what a finished import no longer needs: its decrypted step directories always,
    * its package and decisions file unless `retainPackage`. A directory no import row names
    * (an upload that never became a row, or a row of another installation's database) loses
-   * its step directories only: an upload in flight has its package there and no row yet.
+   * its step directories only while it is still being written — an upload in flight has its
+   * package there and no row yet — and is removed whole once nothing has written to it for
+   * `LEGACY_MIGRATION_ORPHAN_IDLE_MS`: an upload whose process died before its row was
+   * inserted, which no request will ever clean up.
    */
   private async sweep(): Promise<void> {
     for (const id of await this.deps.workspaces.importDirectories()) {
       const row = await this.deps.repository.byIdUnscoped(id);
       if (row !== null && !isLegacyMigrationTerminal(row.status)) continue;
+      if (row === null && (await this.orphanAbandoned(id))) {
+        await this.deps.workspaces.discard(id);
+        this.deps.logger.warn(
+          { importId: id },
+          'removed an abandoned legacy migration upload (no import row, idle a day)',
+        );
+        continue;
+      }
       const steps = await this.deps.workspaces.discardStaleSteps(id);
       const files =
         row !== null && this.deps.retainPackage !== true
@@ -259,6 +271,12 @@ export class LegacyMigrationExecutor {
         );
       }
     }
+  }
+
+  private async orphanAbandoned(importId: string): Promise<boolean> {
+    const written = await this.deps.workspaces.lastWrittenAt(importId);
+    if (written === null) return false;
+    return this.deps.clock.now().getTime() - written.getTime() >= LEGACY_MIGRATION_ORPHAN_IDLE_MS;
   }
 
   /** Erases a sealed key left waiting on a person longer than the idle period (L4). */
@@ -459,17 +477,29 @@ export class LegacyMigrationExecutor {
 
   private async dryRun(claimed: LegacyNxpkgImportRow, signal: AbortSignal): Promise<void> {
     let row = claimed;
-    if (
-      row.status === 'DRY_RUN_RUNNING' &&
-      row.progress.dryRunAttempts >= LEGACY_MIGRATION_MAX_STEP_ATTEMPTS
-    ) {
+    if (row.progress.dryRunAttempts >= LEGACY_MIGRATION_MAX_STEP_ATTEMPTS) {
       this.deps.logger.error(
         { importId: row.id, attempts: row.progress.dryRunAttempts },
         'a legacy migration dry run was started too many times and is failed',
       );
-      await this.fail(row, ['DRY_RUN_RUNNING'], 'DRY_RUN_FAILED', 'IMPORT_FAILED');
+      await this.fail(
+        row,
+        ['DRY_RUN_REQUESTED', 'DRY_RUN_RUNNING'],
+        'DRY_RUN_FAILED',
+        'IMPORT_FAILED',
+      );
       return;
     }
+    // Every start is counted BEFORE the step's workspace is made, in DRY_RUN_REQUESTED as well
+    // (Codex review on #278): a work directory that cannot be created (a full, missing or
+    // unwritable volume) fails `withStep` before its callback runs, and a start counted only
+    // inside it left the row DRY_RUN_REQUESTED with no attempt, retried on every tick for ever
+    // while the one-active index held every other import back. The request resets the count
+    // (`requestDryRun`); waiting on an operator or on another process gives the start back.
+    row = await this.bookmark(row, {
+      blocker: null,
+      dryRunAttempts: row.progress.dryRunAttempts + 1,
+    });
     try {
       await this.withStep(row, signal, async (context) => {
         try {
@@ -480,18 +510,7 @@ export class LegacyMigrationExecutor {
           await this.deps.runner.precheck(context, 'DRY_RUN');
           if (row.status === 'DRY_RUN_REQUESTED') {
             row = await this.advance(row, ['DRY_RUN_REQUESTED'], 'DRY_RUN_RUNNING', {
-              progress: {
-                ...row.progress,
-                phase: 'DRY_RUN',
-                refusalCounts: [],
-                blocker: null,
-                dryRunAttempts: 1,
-              },
-            });
-          } else {
-            row = await this.bookmark(row, {
-              blocker: null,
-              dryRunAttempts: row.progress.dryRunAttempts + 1,
+              progress: { ...row.progress, phase: 'DRY_RUN', refusalCounts: [], blocker: null },
             });
           }
           await this.assertPackageUnchanged(row);
@@ -520,7 +539,7 @@ export class LegacyMigrationExecutor {
         }
       });
     } catch (error) {
-      if (error instanceof LegacyMigrationRetry && row.status === 'DRY_RUN_RUNNING') {
+      if (error instanceof LegacyMigrationRetry || error instanceof LegacyMigrationBlocked) {
         await this.uncount(row, { dryRunAttempts: row.progress.dryRunAttempts - 1 });
       }
       throw error;

@@ -412,6 +412,29 @@ describe('legacy migration: the executor over a real package', () => {
     expect(verified.verifyReport?.panelTargets.map((t) => t.codePanel).sort()).toEqual(
       [SYNTHETIC_PANEL_CODES.mappedA, SYNTHETIC_PANEL_CODES.mappedB].sort(),
     );
+    // Each target carries the live, non-test services the package places on it (Codex review
+    // on #278: it was a constant 0), counted here straight from the synthetic source.
+    const liveStatuses = new Set([
+      'active',
+      'disabled',
+      'disabledn',
+      'disablebyadmin',
+      'end_of_volume',
+    ]);
+    const expectedServices = (code: string): number =>
+      (buildSyntheticLegacyDataset().tables['invoice'] ?? []).filter(
+        (i) =>
+          String(i['code_panel'] ?? '').trim() === code &&
+          liveStatuses.has(String(i['Status'] ?? '')) &&
+          String(i['is_test'] ?? '').trim() === '0',
+      ).length;
+    for (const target of verified.verifyReport?.panelTargets ?? []) {
+      expect(target.services, target.codePanel).toBe(expectedServices(target.codePanel));
+    }
+    expect(
+      (verified.verifyReport?.panelTargets ?? []).some((t) => t.services > 0),
+      'the synthetic source has live services on a mapped panel',
+    ).toBe(true);
 
     await service.setPanelBindings(tenantA, owner, id, {
       idempotencyKey: key(),

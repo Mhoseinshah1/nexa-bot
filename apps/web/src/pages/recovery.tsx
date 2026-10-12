@@ -97,6 +97,7 @@ export function RecoveryPage({
   const mayRun = permissions.includes('backup.run');
   const mayDownload = permissions.includes('backup.download');
   const mayRestore = permissions.includes('recovery.restore');
+  const mirza = mirzaAccess(permissions);
 
   const cursor = route.query.get('cursor') ?? undefined;
 
@@ -226,15 +227,32 @@ export function RecoveryPage({
         hint={t('web.recovery_upload_hint')}
         className="recovery-operations"
       >
-        <StateSwitch query={capabilities} denied={!mayView}>
+        {/*
+          A Mirza restore is authorised by `legacy.migration.*`, not by `backup.view` (Codex
+          review on #278): an administrator holding only the migration permissions gets the
+          Mirza half of this card, without the NEXA capabilities they may not read.
+        */}
+        {!mayView && mirza.mayView ? (
           <RecoveryOperations
-            uploadEnabled={capabilities.data?.uploadEnabled ?? false}
-            maxUploadBytes={capabilities.data?.maxUploadBytes ?? 0}
-            mayRestore={mayRestore}
-            mirza={mirzaAccess(permissions)}
+            nexaAllowed={false}
+            uploadEnabled={false}
+            maxUploadBytes={0}
+            mayRestore={false}
+            mirza={mirza}
             onChanged={refreshAll}
           />
-        </StateSwitch>
+        ) : (
+          <StateSwitch query={capabilities} denied={!mayView}>
+            <RecoveryOperations
+              nexaAllowed
+              uploadEnabled={capabilities.data?.uploadEnabled ?? false}
+              maxUploadBytes={capabilities.data?.maxUploadBytes ?? 0}
+              mayRestore={mayRestore}
+              mirza={mirza}
+              onChanged={refreshAll}
+            />
+          </StateSwitch>
+        )}
       </Card>
 
       <Card title={t('web.recovery_requests_title')}>
@@ -462,12 +480,15 @@ function DownloadControl({ run, mayDownload }: { run: BackupRunSummary; mayDownl
  * `recovery` role executes. Anything else is refused here, before a byte is uploaded.
  */
 function RecoveryOperations({
+  nexaAllowed,
   uploadEnabled,
   maxUploadBytes,
   mayRestore,
   mirza,
   onChanged,
 }: {
+  /** False for an actor without `backup.view`: the card is their Mirza restore only. */
+  nexaAllowed: boolean;
   uploadEnabled: boolean;
   maxUploadBytes: number;
   mayRestore: boolean;
@@ -570,13 +591,15 @@ function RecoveryOperations({
       ? null
       : kind === 'UNKNOWN'
         ? t('web.recovery_file_unknown')
-        : kind === 'NEXA' && !uploadEnabled
-          ? t('web.recovery_upload_disabled')
-          : kind === 'MIRZA' && !mirza.mayManage
-            ? t('web.mrz_no_permission')
-            : kind === 'MIRZA' && !mirzaReady
-              ? t('web.lmg_disabled')
-              : null;
+        : kind === 'NEXA' && !nexaAllowed
+          ? t('web.recovery_no_permission_nexa')
+          : kind === 'NEXA' && !uploadEnabled
+            ? t('web.recovery_upload_disabled')
+            : kind === 'MIRZA' && !mirza.mayManage
+              ? t('web.mrz_no_permission')
+              : kind === 'MIRZA' && !mirzaReady
+                ? t('web.lmg_disabled')
+                : null;
   const pending = upload.isPending || mirzaUpload.isPending;
 
   const onSubmit = (event: FormEvent): void => {
@@ -589,7 +612,9 @@ function RecoveryOperations({
   return (
     <>
       {showMirza ? <MirzaSteps row={mirzaRow} /> : <RecoverySteps current={current} />}
-      {!uploadEnabled && <Banner tone="neutral">{t('web.recovery_upload_disabled')}</Banner>}
+      {nexaAllowed && !uploadEnabled && (
+        <Banner tone="neutral">{t('web.recovery_upload_disabled')}</Banner>
+      )}
       <h3 className="card-subtitle">{t('web.recovery_upload_title')}</h3>
       <form onSubmit={onSubmit} className="stack">
         <label className="field">
@@ -597,7 +622,7 @@ function RecoveryOperations({
           <input
             type="file"
             className="recovery-file"
-            accept={mirza.mayView ? '.nxb,.nxpkg' : '.nxb'}
+            accept={!nexaAllowed ? '.nxpkg' : mirza.mayView ? '.nxb,.nxpkg' : '.nxb'}
             aria-describedby="recovery-file-kind"
             onChange={(event) => onChoose(event.currentTarget.files?.[0] ?? null)}
           />

@@ -40,7 +40,11 @@ import type { LegacyImportReport } from '../../legacy-importer/application/repor
 import type { LegacySnapshot } from '../../legacy-importer/application/source-snapshot.js';
 import { readImportV1Identity } from '../../legacy-importer/application/source-snapshot.js';
 import { PanelMappingRefused } from '../../legacy-importer/application/panel-mapping.js';
-import { LegacySourceRefused } from '../../legacy-importer/application/source-port.js';
+import {
+  LEGACY_LIVE_STATUSES,
+  LegacySourceRefused,
+  type LegacySourceSession,
+} from '../../legacy-importer/application/source-port.js';
 import {
   checkNxpkgForImport,
   NXPKG_PANEL_TARGETS_PATH,
@@ -255,12 +259,14 @@ export class NxpkgMigrationAdapters
       const decisions = await this.decisions(context, pkg);
       const session = await connector.open();
       let fingerprint: string;
+      let liveByCodePanel: ReadonlyMap<string, number>;
       try {
         fingerprint = (await readImportV1Identity(session)).fingerprint;
+        liveByCodePanel = await liveServicesByCodePanel(session);
       } finally {
         await session.close();
       }
-      const panelTargets = await selectedTargets(pkg);
+      const panelTargets = await selectedTargets(pkg, liveByCodePanel);
       const packageImportId = connector.identity.importId;
       if (packageImportId === null) {
         throw new LegacyMigrationStepFailure('NXPKG_CONTAINER_INVALID', 'No package import id.');
@@ -1049,8 +1055,41 @@ function requireFingerprint(context: Context): string {
   return context.sourceFingerprint;
 }
 
+/**
+ * The live legacy services the import places, per `code_panel`: invoices whose `Status` is
+ * one of `LEGACY_LIVE_STATUSES` (exact) and whose `is_test` is 0 — the same "live real"
+ * invoices the panel-mapping completeness rule counts (`panelMappingCompleteness`). The
+ * operator reads this beside each target while choosing its NEXA panel (Codex review on
+ * #278: it was a constant 0).
+ */
+async function liveServicesByCodePanel(
+  session: LegacySourceSession,
+): Promise<ReadonlyMap<string, number>> {
+  const present = new Set(
+    (await session.columns()).filter((c) => c.table === 'invoice').map((c) => c.column),
+  );
+  const out = new Map<string, number>();
+  if (!present.has('code_panel') || !present.has('Status') || !present.has('is_test')) return out;
+  const live: ReadonlySet<string> = new Set(LEGACY_LIVE_STATUSES);
+  for await (const [code, status, isTest] of session.rows('invoice', [
+    'code_panel',
+    'Status',
+    'is_test',
+  ])) {
+    if (status === null || status === undefined || !live.has(status)) continue;
+    if (isTest?.trim() !== '0') continue;
+    const key = code?.trim() ?? '';
+    if (key === '') continue;
+    out.set(key, (out.get(key) ?? 0) + 1);
+  }
+  return out;
+}
+
 /** The package's SELECTED RickPanel targets: what the operator binds (others stay unresolved). */
-async function selectedTargets(pkg: NxpkgPackage): Promise<LegacyMigrationPanelTarget[]> {
+async function selectedTargets(
+  pkg: NxpkgPackage,
+  liveByCodePanel: ReadonlyMap<string, number>,
+): Promise<LegacyMigrationPanelTarget[]> {
   const out: LegacyMigrationPanelTarget[] = [];
   if (!pkg.has(NXPKG_PANEL_TARGETS_PATH)) return out;
   for await (const record of pkg.iterJsonl(NXPKG_PANEL_TARGETS_PATH)) {
@@ -1060,7 +1099,7 @@ async function selectedTargets(pkg: NxpkgPackage): Promise<LegacyMigrationPanelT
     out.push({
       codePanel: code,
       providerType: typeof target['provider_type'] === 'string' ? target['provider_type'] : '',
-      services: 0,
+      services: liveByCodePanel.get(code.trim()) ?? 0,
     });
   }
   return out;

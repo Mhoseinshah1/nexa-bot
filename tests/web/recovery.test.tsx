@@ -192,6 +192,8 @@ describe('the recovery page', () => {
     if (entry === undefined) return;
     expect(navPermitted(entry, [])).toBe(false);
     expect(navPermitted(entry, ['backup.view'])).toBe(true);
+    // The Mirza restore's own audience reaches the page too (Codex review on #278).
+    expect(navPermitted(entry, ['legacy.migration.view'])).toBe(true);
   });
 
   it('routes /recovery to the page rather than to NotFound', () => {

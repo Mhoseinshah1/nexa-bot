@@ -648,6 +648,11 @@ function VerifyResult({ row }: { row: LegacyMigrationImportView }) {
  * requested AUTOMATICALLY once its inputs are saved (a binding or a decisions file returns the
  * import to VERIFIED and clears any earlier dry run), so the operator never has to find a
  * second button to see the report the confirmation binds.
+ *
+ * The optional decisions file comes FIRST (Codex review on #278): saving the bindings starts the
+ * dry run, and a decisions file is accepted only before one (UPLOADED, VERIFIED) or after it
+ * (DRY_RUN_DONE), so with panels first an operator following the page in order would wait out
+ * a whole dry run only to attach the file and run it again.
  */
 function ReviewSteps({
   row,
@@ -674,13 +679,13 @@ function ReviewSteps({
   };
   return (
     <>
-      <PanelsStep row={row} access={access} onSaved={requestIfReady} />
       <DecisionsStep
         row={row}
         capabilities={capabilities}
         mayManage={access.mayManage}
         onSaved={requestIfReady}
       />
+      <PanelsStep row={row} access={access} onSaved={requestIfReady} />
       <DryRunStep
         row={row}
         mayManage={access.mayManage}

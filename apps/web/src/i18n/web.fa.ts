@@ -830,6 +830,8 @@ export const WEB_FA = {
   'web.recovery_confirm_expires': 'اعتبار تأیید',
   'web.recovery_no_permission_restore':
     'شما اجازه‌ی بازگرداندن این نصب را ندارید. راستی‌آزمایی آرشیو همچنان ممکن است.',
+  'web.recovery_no_permission_nexa':
+    'شما اجازهٔ بازیابی از بکاپ NEXA را ندارید (دسترسی «مشاهدهٔ بکاپ‌ها» لازم است). از این بخش فقط فایل میرزا (.nxpkg) را می‌توانید بازیابی کنید.',
 
   // --- The Recovery Kit (ADR-0032) -----------------------------------------
   'web.kit_title': 'کیت بازیابی',

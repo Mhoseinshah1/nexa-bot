@@ -519,6 +519,24 @@ describe('LegacyMigrationService', () => {
     );
   });
 
+  it('a new dry run request starts its own attempt count', async () => {
+    const h = harness();
+    const id = await uploaded(h);
+    const row = h.repository.rows.get(id)!;
+    h.repository.put({
+      ...row,
+      status: 'DRY_RUN_DONE',
+      keyCiphertext: 'held',
+      keyKeyId: 'k',
+      keyKind: 'KEY_FILE',
+      panelBindings: [{ codePanel: 'p1', panelId: nextId() }],
+      progress: { ...row.progress, dryRunAttempts: 4 },
+    });
+    await h.service.requestDryRun(scope, actor, id, { idempotencyKey: key() });
+    expect(h.repository.rows.get(id)?.status).toBe('DRY_RUN_REQUESTED');
+    expect(h.repository.rows.get(id)?.progress.dryRunAttempts).toBe(0);
+  });
+
   it('takes the key again only where an idle one was erased, never over a held one', async () => {
     const h = harness();
     const id = await uploaded(h);
@@ -1270,6 +1288,8 @@ describe('LegacyMigrationExecutor', () => {
     await h.executor.tick();
     expect(h.repository.rows.get(id)).toMatchObject({ status: 'DRY_RUN_REQUESTED' });
     expect(h.repository.rows.get(id)?.progress.blocker).toBe('TARGET_ACK_MISSING');
+    // Waiting on an operator is not a start: the count is given back.
+    expect(h.repository.rows.get(id)?.progress.dryRunAttempts).toBe(0);
     h.runner = {
       ...h.runner,
       precheck: async () => {
@@ -1347,6 +1367,29 @@ describe('LegacyMigrationExecutor', () => {
       status: 'DRY_RUN_FAILED',
       errorCode: 'IMPORT_FAILED',
       keyCiphertext: null,
+    });
+    expect(h.calls).toEqual([]);
+  });
+
+  it('a dry run whose workspace cannot be made is counted and failed at the bound', async () => {
+    // Codex review on #278: the step directory is made before the step's callback runs, so an
+    // attempt counted inside it was never counted, and the row stayed DRY_RUN_REQUESTED for ever.
+    const h = executorHarness();
+    const id = seed(h, { status: 'DRY_RUN_REQUESTED' });
+    h.workspaces.stepDirectory = async () => {
+      throw Object.assign(new Error('ENOSPC: no space left on device, mkdir /srv/x'), {
+        code: 'ENOSPC',
+      });
+    };
+    for (let i = 0; i < 5; i += 1) {
+      await h.executor.tick();
+      expect(status(h, id)).toBe('DRY_RUN_REQUESTED');
+    }
+    expect(h.repository.rows.get(id)?.progress.dryRunAttempts).toBe(5);
+    await h.executor.tick();
+    expect(h.repository.rows.get(id)).toMatchObject({
+      status: 'DRY_RUN_FAILED',
+      errorCode: 'IMPORT_FAILED',
     });
     expect(h.calls).toEqual([]);
   });
@@ -1680,6 +1723,27 @@ describe('LegacyMigrationExecutor', () => {
       expect(h.workspaces.staleSteps.get(waiting)).toBe(2);
       expect(h.workspaces.packageFiles.has(waiting)).toBe(true);
     }
+  });
+
+  it('removes an upload no row names once it has been idle a day, and not before', async () => {
+    // Codex review on #278: a process killed between beginUpload and completeUpload leaves a
+    // package no request will ever clean up.
+    const h = executorHarness();
+    const abandoned = nextId();
+    const inFlight = nextId();
+    const finishedRowless = nextId();
+    for (const id of [abandoned, inFlight, finishedRowless]) {
+      h.workspaces.directories.add(id);
+      h.workspaces.packageFiles.add(id);
+    }
+    h.workspaces.writtenAt.set(abandoned, new Date(h.now.getTime() - 24 * 60 * 60_000));
+    h.workspaces.writtenAt.set(inFlight, new Date(h.now.getTime() - 23 * 60 * 60_000));
+    // A row, even an old idle one, is never reaped as an orphan.
+    const owned = seed(h, { status: 'DRY_RUN_DONE' });
+    h.workspaces.directories.add(owned);
+    h.workspaces.writtenAt.set(owned, new Date(h.now.getTime() - 30 * 24 * 60 * 60_000));
+    await h.executor.tick();
+    expect(h.workspaces.discarded).toEqual([abandoned]);
   });
 
   it('erases a key left idle in VERIFIED or DRY_RUN_DONE, and nowhere else', async () => {

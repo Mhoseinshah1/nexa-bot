@@ -523,7 +523,9 @@ export class LegacyMigrationService {
             to: 'DRY_RUN_REQUESTED',
             unowned: true,
             now: this.deps.clock.now(),
-            patch: CLEAR_DRY_RUN,
+            // A new dry run starts its own count: the executor counts every start, from
+            // DRY_RUN_REQUESTED on, against LEGACY_MIGRATION_MAX_STEP_ATTEMPTS.
+            patch: { ...CLEAR_DRY_RUN, progress: { ...row.progress, dryRunAttempts: 0 } },
           },
           tx,
         );

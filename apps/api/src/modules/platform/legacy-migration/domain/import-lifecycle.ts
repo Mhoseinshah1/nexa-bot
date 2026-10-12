@@ -219,6 +219,14 @@ export const LEGACY_MIGRATION_KEY_IDLE_STATUSES = [
 export const LEGACY_MIGRATION_KEY_IDLE_MS_DEFAULT = 24 * 60 * 60_000;
 
 /**
+ * How long an import directory no row names may go unwritten before the sweep removes it
+ * whole: one day. Such a directory is an upload in flight (written to continuously, so never
+ * idle this long) or an upload whose process died between `beginUpload` and `completeUpload`,
+ * which nothing else would ever remove (Codex review on #278).
+ */
+export const LEGACY_MIGRATION_ORPHAN_IDLE_MS = 24 * 60 * 60_000;
+
+/**
  * What a log line may say about an error: its type and its code — never its message, which
  * for a filesystem error carries a path under `LEGACY_MIGRATION_WORK_DIR` (L3), and for an
  * importer error may carry a value from the package.
