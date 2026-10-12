@@ -37,13 +37,14 @@ export interface LoopStatus {
  * operator reads. The role travels as `processRole` in the event's context, so the group
  * message names the process to look at, not only the loop.
  */
-export type LoopReportingRole = 'worker' | 'provisioner' | 'monitor' | 'recovery';
+export type LoopReportingRole = 'worker' | 'provisioner' | 'monitor' | 'recovery' | 'migration';
 
 const ROLE_LABEL: Readonly<Record<LoopReportingRole, string>> = {
   worker: 'Worker',
   provisioner: 'Provisioner',
   monitor: 'Monitor',
   recovery: 'Recovery',
+  migration: 'Migration',
 };
 
 /**

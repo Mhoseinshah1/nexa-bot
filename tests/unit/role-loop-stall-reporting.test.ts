@@ -211,6 +211,7 @@ describe('every background role reports its stalled loops', () => {
   it('finds the roles, so the rule below cannot pass vacuously', () => {
     expect(roles.map(([name]) => name).sort()).toEqual([
       'main.assistant.ts',
+      'main.migration.ts',
       'main.monitor.ts',
       'main.provisioner.ts',
       'main.recovery.ts',
