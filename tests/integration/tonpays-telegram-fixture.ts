@@ -299,6 +299,10 @@ export function telegramLaneWith(
     readonly paymentRecords?: (
       real: DrizzlePaymentRepository,
     ) => GatewayPaymentServiceDeps['paymentRecords'];
+    /** FIX10: the lane's invoice repository, so a case can make one of its calls throw. */
+    readonly invoices?: (real: DrizzleGatewayInvoiceRepository) => DrizzleGatewayInvoiceRepository;
+    /** FIX10: the receipt downloader, so a case can make one submission's download throw. */
+    readonly receiptFiles?: GatewayPaymentServiceDeps['receiptFiles'];
   } = {},
 ): GatewayPaymentService {
   const db = ctx.container.database.db;
@@ -310,7 +314,10 @@ export function telegramLaneWith(
   });
   const origins = new DrizzlePublicOriginReader(db);
   return new GatewayPaymentService({
-    invoices: new DrizzleGatewayInvoiceRepository(db),
+    invoices:
+      overrides.invoices === undefined
+        ? new DrizzleGatewayInvoiceRepository(db)
+        : overrides.invoices(new DrizzleGatewayInvoiceRepository(db)),
     payments: overrides.payments ?? ctx.container.payments,
     paymentRecords:
       overrides.paymentRecords === undefined
@@ -320,7 +327,7 @@ export function telegramLaneWith(
       provider === 'TONPAYS_TELEGRAM' ? telegram : provider === 'TONPAYS' ? website : null,
     cardTransfer: new DrizzleGatewayCardTransferRepository(db),
     cardAdapters: (provider) => (provider === 'TONPAYS_TELEGRAM' ? telegram : null),
-    receiptFiles: {
+    receiptFiles: overrides.receiptFiles ?? {
       download: (scope, binding, options) =>
         ctx.container.receiptFiles.download(
           scope,

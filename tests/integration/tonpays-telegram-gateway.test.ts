@@ -627,6 +627,43 @@ describe('TonPays Telegram, through the one settlement path', () => {
       ]);
     });
 
+    it('FIX10 BUG-1: a card change whose processing throws keeps its lease as its back-off, and the request after it is applied in the same pass', async () => {
+      const first = await createdAttempt();
+      const second = await createdAttempt(300_000n);
+      clock.shift(61_000);
+      expect(await askCard(first.paymentId)).toBe(true);
+      expect(await askCard(second.paymentId)).toBe(true);
+      // Nothing else due, so the card lane is what this pass is about.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = NULL WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      const poisoned = telegramLaneWith(ctx, fake, {
+        invoices: (real) => {
+          const read = real.findByPayment.bind(real);
+          real.findByPayment = (scope, paymentId, tx) =>
+            paymentId === first.paymentId
+              ? Promise.reject(new Error('read failed'))
+              : read(scope, paymentId, tx);
+          return real;
+        },
+      });
+      const report = await poisoned.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.cardChanges).toBe(1);
+      expect(await cardChanges(second.paymentId)).toEqual([{ state: 'APPLIED', error_code: null }]);
+      // Nothing decided about the one that threw: still requested, never sent, still leased.
+      const [held] = await rows<{
+        state: string;
+        sent_at: string | null;
+        claimed_until: string | null;
+      }>(
+        sql`SELECT state, sent_at, claimed_until FROM gateway_card_changes WHERE payment_id = ${first.paymentId}`,
+      );
+      expect(held).toMatchObject({ state: 'REQUESTED', sent_at: null });
+      expect(held?.claimed_until).not.toBeNull();
+      expect(fake.changes).toHaveLength(1);
+    });
+
     it('TPTG-20: refused locally while one is in flight, during the cooldown, and once exhausted', async () => {
       const { paymentId } = await createdAttempt();
       // The local sixty seconds from the card shown.
