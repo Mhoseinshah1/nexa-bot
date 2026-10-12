@@ -352,6 +352,59 @@ hold, on the day it matters. On a deployed server, use the `$C exec -T api node
 dist/backup.cli.js …` forms from § Commands, and `docs/vps-acceptance.md` § 7b
 for the full checklist.
 
+## Operating it honestly: what is on, what leaves the host, what has been measured
+
+Added for FIX-14 (batch 2026-10-10). Every statement below is about what the code
+does today; none of it is a measurement from a real installation.
+
+**The schedule is OFF by default.** `BACKUP_SCHEDULE_ENABLED` defaults to `false`, so
+a fresh installation takes no automatic backup until somebody switches it on — in the
+Web Admin («بکاپ و بازیابی» → «زمان‌بندی بکاپ خودکار», applies within one
+`BACKUP_TICK_MS`, no restart), or as the installation default with
+`BACKUP_SCHEDULE_ENABLED=true` (and optionally `BACKUP_INTERVAL_MS`) in
+`/etc/nexa/nexa.env` followed by `botctl restart`. `botctl status` prints
+`scheduled backup   off` for the environment default only; the Web Admin page shows
+the value in force.
+
+**Nothing alerts while the schedule is off.** `backup.interval_exceeded` is evaluated
+only when the schedule is on, and switching the schedule off CLOSES it. There is no
+existing code that means "automatic backups are disabled", and reusing the overdue
+code for it would make that condition mean two things, so this batch adds none: the
+check is `botctl status` and the Web Admin page. A dedicated condition is a contracts
+change for a later batch.
+
+**Off-host is Telegram, up to 50 MiB.** A verified archive is delivered to the
+operations group's BACKUPS topic (or the fallback chat). Above Telegram's 50 MiB bot
+ceiling the topic gets a notice and the archive stays on this server only — see
+§ What this does NOT do. With no destination configured, the archive is on this
+server only. In both cases copying it off the host is a manual step.
+
+**Integrity is checked on every run.** SHA-256 checksum, encryption, and a
+VERIFY_RESTORE of the encrypted archive into a scratch database before delivery
+(ADR-0025). Failures raise `backup.run_failed`, `backup.delivery_failed`,
+`backup.cleanup_failed`, `backup.disk_threshold_exceeded` and, with the schedule on,
+`backup.interval_exceeded` (§ Alerts).
+
+### Recording RPO and RTO from a drill
+
+No RPO or RTO has been measured for any installation; this repository holds no such
+figure, and none should be quoted until a drill on the real host produces one. Run the
+§ Restore drill against an ISOLATED database (`nexa_drill`, never the live one, never
+staging) and record:
+
+| Measure                          | How to read it                                                                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Worst-case RPO (data you lose)   | the schedule interval plus the observed backup duration below                                                                        |
+| Observed backup duration         | wall clock of `time pnpm backup run` (dump, encrypt, verify-by-restore, deliver), for the database size it had                       |
+| Restore time (RTO, data part)    | wall clock from `pnpm backup restore … --target nexa_drill` starting to it finishing                                                 |
+| Restore time (RTO, service part) | for a real Web Admin recovery: from confirmation to `/health/ready` answering 200 after the cutover (§ Restoring from the Web Admin) |
+| Archive size                     | whether it is still under 50 MiB, i.e. whether the off-host copy still happens                                                       |
+
+Write the date, release, database size and the five numbers into the installation's
+own runbook, and repeat after a release that changes the schema materially or when the
+archive approaches 50 MiB. A drill also proves the keys you actually hold can open the
+archive, which no automatic check can.
+
 ## Restoring from the Web Admin
 
 The CLI above is one way in. The other is **بکاپ و بازیابی** under **سامانه و

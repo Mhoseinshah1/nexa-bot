@@ -32,6 +32,28 @@ export class ProvisionerLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private lastProgressAt: number | null = null;
+  /**
+   * When each LANE last succeeded, and when this loop started (FIX-03, batch 2026-10-10).
+   *
+   * For reporting only. Readiness is still the single `lastProgressAt` above — any lane's
+   * failure costs the tick its progress, exactly as before — but "the provisioner is
+   * stale" sends an operator looking at the whole role when one lane is the answer, so
+   * each lane's own success is kept and `laneStatuses` names the one that stopped.
+   */
+  private readonly laneProgressAt = new Map<ProvisionerLane, number>();
+  private startedAt: number | null = null;
+  /**
+   * While a tick is in flight, when it last finished a step; null between ticks (Codex P2
+   * on #258).
+   *
+   * A tick is a sequence of steps, and the drain's steps are provider calls each allowed
+   * `PANEL_HTTP_TIMEOUT_MS` — up to 120 s against a tick that can be 1 s. Judged by the
+   * lanes' last successes alone, one ordinary call in flight made every lane look stalled
+   * and then recovered: an alarm and an all-clear for a provisioner doing its job. So
+   * while a tick runs, its own last step is the evidence, held to the tick window PLUS the
+   * longest step this installation allows (`inFlightAllowanceMs`). Past that, it is a hang.
+   */
+  private tickActivityAt: number | null = null;
 
   constructor(
     private readonly executor: ProvisionerService,
@@ -81,6 +103,12 @@ export class ProvisionerLoop {
       /** R3 item 10: the service cards to edit when a disable or enable succeeds. */
       readonly cards?: Pick<OperationCardEditor, 'answer' | 'answerDue'>;
       readonly tickMs: number;
+      /**
+       * The longest ONE step of a tick may legitimately take — a provider exchange at the
+       * configured panel HTTP timeout. Reporting only; readiness ignores it. Zero when
+       * omitted (a test without provider calls).
+       */
+      readonly inFlightAllowanceMs?: number;
       readonly now: () => number;
       /**
        * The narrowest shape this loop uses.
@@ -98,6 +126,7 @@ export class ProvisionerLoop {
 
   start(): void {
     if (this.timer !== null) return;
+    this.startedAt ??= this.options.now();
     this.timer = setInterval(() => void this.tick(), this.options.tickMs);
     // Node keeps the event loop alive for a timer; this one should not stop a
     // shutdown that has already begun draining.
@@ -129,12 +158,15 @@ export class ProvisionerLoop {
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    this.startedAt ??= this.options.now();
+    this.tickActivityAt = this.options.now();
     let scope: TenantContext | null = null;
     let failed = false;
     try {
       scope = this.options.scope();
       for (let drained = 0; drained < DRAIN_LIMIT; drained += 1) {
         const result = await this.executor.runOnce(scope);
+        this.touch();
         if (result.kind === 'IDLE') break;
         /*
          * ONE LINE PER OPERATION, and the reason it is here rather than inside
@@ -175,12 +207,14 @@ export class ProvisionerLoop {
          * off and retry — is correct rather than merely harmless. Queued, not sent.
          */
         await this.outcomes.announce(scope, result.operationId);
+        this.touch();
         /*
          * R3 item 10: a disable or enable asked from a service card is answered ON the
          * card, in this tick. `answer` claims first and does nothing for any other
          * operation, so calling it for every result is safe.
          */
         await this.options.cards?.answer(scope, result.operationId);
+        this.touch();
         if (result.kind === 'REFUSED') break;
       }
       /*
@@ -194,6 +228,7 @@ export class ProvisionerLoop {
        * and a backlog larger than that takes more ticks rather than one long one.
        */
       await this.delivery.deliverDue(scope, DRAIN_LIMIT);
+      this.touch();
       /*
        * And the operations a CRASH left terminal and unanswered.
        *
@@ -213,8 +248,10 @@ export class ProvisionerLoop {
        * limits are somebody else's.
        */
       await this.outcomes.announceDue(scope, DRAIN_LIMIT);
+      this.touch();
       // R3: cards a crash left unanswered, after the grace.
       await this.options.cards?.answerDue(scope, DRAIN_LIMIT);
+      this.laneProgressAt.set('provisioner', this.options.now());
     } catch (error: unknown) {
       /*
        * A failed tick makes NO progress, deliberately.
@@ -240,15 +277,18 @@ export class ProvisionerLoop {
          * never credited. Now a lane's failure is logged under its own name, costs the
          * tick its progress as before, and holds no other lane back.
          */
-        for (const [lane, settle] of [
-          ['cashback', this.options.cashback],
-          ['referrals', this.options.referrals],
-          ['serviceRefunds', this.options.serviceRefunds],
+        for (const [lane, settle, reported] of [
+          ['cashback', this.options.cashback, 'provisioner-cashback'],
+          ['referrals', this.options.referrals, 'provisioner-referrals'],
+          ['serviceRefunds', this.options.serviceRefunds, 'provisioner-service-refunds'],
         ] as const) {
           try {
             await settle.settleDue(scope, DRAIN_LIMIT);
+            this.laneProgressAt.set(reported, this.options.now());
+            this.touch();
           } catch (error: unknown) {
             failed = true;
+            this.touch();
             this.options.logger.error({ error, lane }, 'provisioner settlement lane failed');
           }
         }
@@ -256,7 +296,13 @@ export class ProvisionerLoop {
       if (!failed) this.lastProgressAt = this.options.now();
     } finally {
       this.running = false;
+      this.tickActivityAt = null;
     }
+  }
+
+  /** A step of the in-flight tick finished (reporting only; see `tickActivityAt`). */
+  private touch(): void {
+    this.tickActivityAt = this.options.now();
   }
 
   /** Whether this process has made progress recently enough to be called ready. */
@@ -264,7 +310,50 @@ export class ProvisionerLoop {
     if (this.lastProgressAt === null) return false;
     return nowMs - this.lastProgressAt <= this.options.tickMs * STALE_TICK_MULTIPLE;
   }
+
+  /**
+   * Each lane, stalled or not, for the operations log (FIX-03, batch 2026-10-10).
+   *
+   * Three answers per lane (Codex P2 on #258):
+   *
+   * - `false`, fresh: it succeeded within the window readiness uses — or the loop was never
+   *   started (the provisioner disabled), which closes a condition a previous life opened.
+   * - `null`, UNKNOWN: no verdict. Before the lane's first success while the loop is inside
+   *   its startup window, or while a tick is in flight and its last step finished within
+   *   the window plus `inFlightAllowanceMs`. UNKNOWN neither opens a condition nor closes
+   *   one, so a stall inherited from the previous life stays open until the lane actually
+   *   succeeds here, and a long provider call raises nothing.
+   * - `true`, stalled: anything else.
+   */
+  laneStatuses(nowMs: number): readonly { name: ProvisionerLane; stalled: boolean | null }[] {
+    const window = this.options.tickMs * STALE_TICK_MULTIPLE;
+    const inFlight =
+      this.tickActivityAt !== null &&
+      nowMs - this.tickActivityAt <= window + (this.options.inFlightAllowanceMs ?? 0);
+    return PROVISIONER_LANES.map((name) => {
+      if (this.startedAt === null) return { name, stalled: false };
+      const last = this.laneProgressAt.get(name);
+      if (last !== undefined && nowMs - last <= window) return { name, stalled: false };
+      if (last === undefined && nowMs - this.startedAt <= window) return { name, stalled: null };
+      return { name, stalled: inFlight ? null : true };
+    });
+  }
 }
+
+/**
+ * The lanes this loop runs, by the names the operations log reports them under.
+ *
+ * Prefixed, because a stall's dedupe key is `job.loop_stalled:<name>` and the worker's
+ * loops share that namespace: a lane called `referrals` here and a loop of that name in
+ * the worker would open and close each other's condition.
+ */
+export const PROVISIONER_LANES = [
+  'provisioner',
+  'provisioner-cashback',
+  'provisioner-referrals',
+  'provisioner-service-refunds',
+] as const;
+export type ProvisionerLane = (typeof PROVISIONER_LANES)[number];
 
 /** How many operations one tick may drain before yielding. */
 export const DRAIN_LIMIT = 10;

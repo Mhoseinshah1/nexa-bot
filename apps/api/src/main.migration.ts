@@ -1,10 +1,14 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { resolveInstallationTenant } from './bootstrap.js';
+import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { stalledAfterGrace } from './modules/platform/opslog/application/loop-stall-reporter.js';
+
+/** The executor's name in the operations log: `job.loop_stalled:migration-executor`. */
+const MIGRATION_EXECUTOR_LOOP = 'migration-executor';
 
 /**
  * Process role: `migration`.
@@ -35,6 +39,15 @@ async function main(): Promise<void> {
   // the package key is sealed under this installation's keyring.
   await resolveInstallationTenant(container);
 
+  /*
+   * Every background role reports its stalled loop to the operations group (FIX-03, batch
+   * 2026-10-10), this one included: an executor whose tick throws every time is a package the
+   * operator approved and a progress page that will never move. The grace is the same three
+   * ticks the recovery role allows, and a disabled loop still ticks, so it is never stalled.
+   */
+  const loopStalls = loopStallReporterFor(container, 'migration');
+  let executorStartedAt: number | null = null;
+
   /**
    * The heartbeat: alive, the database answers, and the LOOP has ticked recently. A step in
    * flight counts as fresh — its own lease heartbeat is what proves the step alive.
@@ -52,7 +65,21 @@ async function main(): Promise<void> {
       } catch {
         return false;
       }
-      return container.migrationExecutor.isFresh(container.clock.now().getTime());
+      const now = container.clock.now().getTime();
+      const fresh = container.migrationExecutor.isFresh(now);
+      // Not awaited, and it never throws: reporting must not slow or fail the heartbeat.
+      void loopStalls.observe([
+        {
+          name: MIGRATION_EXECUTOR_LOOP,
+          stalled: stalledAfterGrace({
+            fresh,
+            startedAtMs: executorStartedAt,
+            nowMs: now,
+            graceMs: config.LEGACY_MIGRATION_TICK_MS * 3,
+          }),
+        },
+      ]);
+      return fresh;
     },
   });
 
@@ -77,6 +104,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   container.migrationExecutor.start();
+  executorStartedAt = container.clock.now().getTime();
   if (!config.LEGACY_MIGRATION_ENABLED) {
     container.logger.warn(
       {},

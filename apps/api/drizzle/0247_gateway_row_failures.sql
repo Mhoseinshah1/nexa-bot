@@ -1,0 +1,2 @@
+ALTER TABLE "gateway_invoices" ADD COLUMN "row_failures" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "gateway_receipt_submissions" ADD COLUMN "row_failures" integer DEFAULT 0 NOT NULL;
