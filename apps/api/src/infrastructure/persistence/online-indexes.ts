@@ -449,6 +449,28 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
   },
   {
     /*
+     * FIX-11: the invoice arm of the Payment Operations Center's attention counts
+     * (`paymentOpsCandidateIds`) — the invoices that put a payment in PARTIAL, LATE_COMPLETION
+     * or PROVIDER_ERROR. Without it that arm read every invoice the tenant ever created
+     * (a parallel sequential scan, 640 ms at 300 000 invoices); with it, 5 ms.
+     *
+     * PARTIAL: the predicate is the union of those three queues' invoice conditions, so the
+     * index holds only the few rows that need somebody. The planner uses it only while the
+     * query's condition IMPLIES this predicate; a partial status added to
+     * `PARTIAL_PAYMENT_STATUSES` that is not listed here makes the arm fall back to the scan —
+     * still correct, only slower — and `payment-attention-plan.test.ts` fails on it.
+     */
+    name: 'gateway_invoices_tenant_attention_idx',
+    definition:
+      'ON "gateway_invoices" USING btree ("tenant_id") ' +
+      // Spelled as PostgreSQL renders it, which is what `online-indexes.test.ts` compares.
+      "WHERE ((outcome = 'LATE_COMPLETION'::text) OR (late_completion_observed_at IS NOT NULL) " +
+      "OR (creation_state = ANY (ARRAY['CREATE_FAILED'::text, 'CREATE_UNKNOWN'::text])) " +
+      'OR (last_inquiry_error_code IS NOT NULL) ' +
+      "OR (provider_status = 'partially_paid'::text))",
+  },
+  {
+    /*
      * An order's provisioning operations (Payment Operations Center): the payment timeline
      * reads the operation that delivers what the settling order bought. Nothing served
      * `order_id` except the partial open-operation keys, so a timeline would have walked the
