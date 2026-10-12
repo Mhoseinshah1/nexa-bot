@@ -356,6 +356,18 @@ export interface BroadcastRepository {
     tx: TransactionScope,
   ): Promise<boolean>;
   /**
+   * FIX-13: hands a claimed, NOT YET STAMPED recipient back — its lease cleared, nothing else
+   * changed, no attempt spent — because its bot answered 429 earlier in the same pass and
+   * Telegram's `retry_after` is to be honoured rather than spent on more requests. Only the
+   * lease this pass holds, only while PENDING; false when the row moved meanwhile.
+   */
+  release(
+    scope: TenantContext,
+    recipient: ClaimedRecipient,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+  /**
    * The stamp: PENDING → SENDING, only for the lease this pass holds and only while the
    * broadcast is SENDING. For a MARKETING send (`marketing`) the customer's opt-out is read
    * in this same transaction, under the customer's row lock: one that holds moves the row
