@@ -115,12 +115,19 @@ export interface ServiceStatusPresentation {
   readonly label: TemplateKey;
 }
 
+/*
+ * Batch 2026-10-10 (brief C3, C5.7): the three statuses that do not serve keep ONE colour —
+ * the owner's acceptance rows make all three red — but each has its own MARKER, so the
+ * difference is not carried by colour alone: time ran out (`date`), volume ran out
+ * (`traffic`), switched off (`inactive`). All three are slots `APPEARANCE_SLOTS` already
+ * declared, so no contract changes and a tenant's custom emoji for each still applies.
+ */
 export const SERVICE_STATUS_PRESENTATION: Readonly<
   Record<ServiceDisplayStatus, ServiceStatusPresentation>
 > = {
   ACTIVE: { slot: 'active', buttonStyle: 'success', label: 'bot.service.state_active' },
-  EXPIRED: { slot: 'inactive', buttonStyle: 'danger', label: 'bot.service.state_expired' },
-  EXHAUSTED: { slot: 'inactive', buttonStyle: 'danger', label: 'bot.service.state_exhausted' },
+  EXPIRED: { slot: 'date', buttonStyle: 'danger', label: 'bot.service.state_expired' },
+  EXHAUSTED: { slot: 'traffic', buttonStyle: 'danger', label: 'bot.service.state_exhausted' },
   SUSPENDED: { slot: 'inactive', buttonStyle: 'danger', label: 'bot.service.state_suspended' },
   PENDING: { slot: 'time', buttonStyle: null, label: 'bot.service.state_pending_provision' },
   UNRECONCILED: { slot: 'warning', buttonStyle: null, label: 'bot.service.state_unreconciled' },
