@@ -30,8 +30,10 @@ import type { OperationalSeverity } from './ports.js';
  * page, the notification centre's rank, the gateway-health roll-up) ranks by that list — a
  * sixth stored value would be a widened vocabulary an older replica cannot read after a
  * rollback. So a security event is STORED at the severity its policy names and PRESENTED
- * as `SECURITY`: the group message prints the class, and the code's prefix already routes
- * it to the SECURITY topic (`OPS_LOG_TOPIC_ROUTES`).
+ * as `SECURITY`: the group message prints the class, and its code routes it to the
+ * SECURITY topic (`OPS_LOG_TOPIC_ROUTES`) — by its family prefix, or, for
+ * `payments.gateway_webhook_unverified`, by a route of its own ahead of `payments.`. The
+ * unit test pins every code here to its topic, and every SECURITY-class code to SECURITY.
  */
 export const OPS_ERROR_CLASSES = ['SECURITY', 'CRITICAL', 'ERROR', 'WARN', 'INFO'] as const;
 export type OpsErrorClass = (typeof OPS_ERROR_CLASSES)[number];
@@ -226,6 +228,18 @@ export const JOB_LOOP_RECOVERED_CODE = 'job.loop_recovered';
  */
 export const INTERNAL_UNHANDLED_CODE = 'internal.unhandled';
 
+/**
+ * FIX10 (audit P1-b on #268): a gateway row whose processing THREW — a local exception,
+ * never a provider's answer — on `GATEWAY_ROW_FAILURE_ALERT_AFTER` consecutive passes. The
+ * pass isolates such a row (backs it off and goes on), so without this an approved payment
+ * whose settlement throws every time would be visible only in the worker's log. One
+ * condition per row, closed by `GATEWAY_ROW_RECOVERED_CODE` when it next processes cleanly.
+ */
+export const GATEWAY_ROW_FAILING_CODE = 'payments.gateway_row_failing';
+export const GATEWAY_ROW_RECOVERED_CODE = 'payments.gateway_row_recovered';
+/** Consecutive thrown passes of one row before its condition opens. */
+export const GATEWAY_ROW_FAILURE_ALERT_AFTER = 3;
+
 // ---------------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------------
@@ -316,6 +330,22 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
     eventClass: 'SECURITY',
   }),
   recovery('payments.gateway_webhook_verified', 'PAYMENTS', 'payments.gateway_webhook_unverified'),
+  // FIX-03 (batch 2026-10-10): the provider approved and the settlement transaction refused
+  // (nothing moved; asked again inside the deadline). One condition per payment, closed by
+  // `payments.gateway_settlement_decided` once the lane decides that payment (settled,
+  // already settled, held, failed, or recorded late) — audit P2-b on #260.
+  failure('payments.gateway_settlement_failed', 'PAYMENTS', 'CONDITION'),
+  recovery('payments.gateway_settlement_decided', 'PAYMENTS', 'payments.gateway_settlement_failed'),
+  // FIX-03 (batch 2026-10-10): a gateway's inquiries keep failing (timeouts, 5xx, 429), so
+  // approvals cannot be read. One condition per gateway, closed by its next answered inquiry.
+  failure('payments.gateway_inquiry_failing', 'PAYMENTS', 'CONDITION'),
+  recovery('payments.gateway_inquiry_ok', 'PAYMENTS', 'payments.gateway_inquiry_failing'),
+  // FIX10 (audit P1-b on #268): one gateway row (an invoice or a receipt upload) whose
+  // processing has thrown on several passes in a row. It is isolated and backed off, so
+  // nothing else reports it: one condition per row, closed when the row next processes
+  // without throwing.
+  failure(GATEWAY_ROW_FAILING_CODE, 'PAYMENTS', 'CONDITION'),
+  recovery(GATEWAY_ROW_RECOVERED_CODE, 'PAYMENTS', GATEWAY_ROW_FAILING_CODE),
   failure('payments.receipt_push_failed', 'PAYMENTS', 'CONDITION'),
   recovery('payments.receipt_push_ok', 'PAYMENTS', 'payments.receipt_push_failed'),
   failure('payments.refund_request_push_failed', 'PAYMENTS', 'CONDITION'),

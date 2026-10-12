@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type {
   FxBaseAsset,
   FxSource,
@@ -112,6 +112,7 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     providerPaid: row.providerPaid,
     lastInquiryAt: row.lastInquiryAt,
     lastInquiryErrorCode: row.lastInquiryErrorCode,
+    rowFailures: row.rowFailures,
     inquiryAttempts: row.inquiryAttempts,
     nextInquiryAt: row.nextInquiryAt,
     postDeadlineInquiries: row.postDeadlineInquiries,
@@ -453,6 +454,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     scope: TenantContext,
     paymentId: PaymentId,
     now: Date,
+    fence: { readonly claimedUntil: Date; readonly holdUntil: Date },
     tx?: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
@@ -461,6 +463,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       .set({
         creationSentAt: now,
         creationAttempts: sql`${gatewayInvoices.creationAttempts} + 1`,
+        creationClaimedUntil: fence.holdUntil,
         updatedAt: now,
       })
       .where(
@@ -469,6 +472,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           eq(gatewayInvoices.paymentId, paymentId),
           eq(gatewayInvoices.creationState, 'CREATING'),
           isNull(gatewayInvoices.creationSentAt),
+          eq(gatewayInvoices.creationClaimedUntil, fence.claimedUntil),
         ),
       )
       .returning({ paymentId: gatewayInvoices.paymentId });
@@ -831,6 +835,111 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     return rows.length;
   }
 
+  async backOffClaim(
+    scope: TenantContext,
+    lane: 'CREATION' | 'INQUIRY',
+    paymentId: PaymentId,
+    leaseUntil: Date,
+    claimedAt: Date,
+    retryAt: Date,
+    now: Date,
+    tx?: unknown,
+  ): Promise<number | null> {
+    const tenantId = requireTenantId(scope);
+    // FIX10 (audit P1-b on #268): counted in the same conditional write, so only the
+    // replica holding this claim's lease counts this failure.
+    const counted = sql`${gatewayInvoices.rowFailures} + 1`;
+    const rows =
+      lane === 'CREATION'
+        ? await this.exec(tx)
+            .update(gatewayInvoices)
+            // `creation_sent_at` is deliberately untouched: a stamped send is still UNKNOWN.
+            .set({
+              creationClaimedUntil: null,
+              creationRetryAt: retryAt,
+              rowFailures: counted,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(gatewayInvoices.tenantId, tenantId),
+                eq(gatewayInvoices.paymentId, paymentId),
+                eq(gatewayInvoices.creationState, 'CREATING'),
+                eq(gatewayInvoices.creationClaimedUntil, leaseUntil),
+              ),
+            )
+            .returning({ rowFailures: gatewayInvoices.rowFailures })
+        : await this.exec(tx)
+            .update(gatewayInvoices)
+            .set({
+              inquiryClaimedUntil: null,
+              /*
+               * Codex #268 B: pushed back only while nobody has written the row since the
+               * claim stamped it. A hint that landed in between asked for an inquiry no later
+               * than now; it keeps the earlier time. (`updated_at` here is the row's value
+               * BEFORE this statement.)
+               */
+              nextInquiryAt: sql`CASE WHEN ${gatewayInvoices.updatedAt} = ${claimedAt}::timestamptz
+                THEN ${retryAt}::timestamptz
+                ELSE LEAST(${gatewayInvoices.nextInquiryAt}, ${retryAt}::timestamptz) END`,
+              rowFailures: counted,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(gatewayInvoices.tenantId, tenantId),
+                eq(gatewayInvoices.paymentId, paymentId),
+                eq(gatewayInvoices.inquiryClaimedUntil, leaseUntil),
+                // Still scheduled and undecided: an unscheduled row is never re-scheduled here.
+                isNotNull(gatewayInvoices.nextInquiryAt),
+                isNull(gatewayInvoices.outcome),
+              ),
+            )
+            .returning({ rowFailures: gatewayInvoices.rowFailures });
+    return rows[0]?.rowFailures ?? null;
+  }
+
+  async clearRowFailures(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({ rowFailures: 0 })
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          gt(gatewayInvoices.rowFailures, 0),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length > 0;
+  }
+
+  async holdsInquiryClaim(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    leaseUntil: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ paymentId: gatewayInvoices.paymentId })
+      .from(gatewayInvoices)
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          eq(gatewayInvoices.inquiryClaimedUntil, leaseUntil),
+        ),
+      )
+      .for('update');
+    return rows.length > 0;
+  }
+
   async recordInquiry(
     scope: TenantContext,
     paymentId: PaymentId,
@@ -844,12 +953,13 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly nextInquiryAt: Date | null;
       readonly postDeadline: boolean;
       readonly hintedPaymentId?: string | null;
+      readonly claimedUntil?: Date;
     },
     now: Date,
     tx?: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    await this.exec(tx)
+    const rows = await this.exec(tx)
       .update(gatewayInvoices)
       .set({
         // An error leaves the last OBSERVED status standing: a failed call says nothing new.
@@ -878,7 +988,18 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         reconcileInquiryRequestedAt: null,
         updatedAt: now,
       })
-      .where(and(eq(gatewayInvoices.tenantId, tenantId), eq(gatewayInvoices.paymentId, paymentId)));
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          // FIX10 R1: fenced on the claim it was asked under, when the caller holds one.
+          result.claimedUntil === undefined
+            ? undefined
+            : eq(gatewayInvoices.inquiryClaimedUntil, result.claimedUntil),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length > 0;
   }
 
   async recordOutcome(

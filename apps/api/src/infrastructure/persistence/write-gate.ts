@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { errors, isSystemContext, PLATFORM_ERROR_CODES, type ScopeContext } from '@nexa/contracts';
 
 /**
@@ -74,6 +75,37 @@ export interface InstallationWriteGate {
 }
 
 /**
+ * Phase 7 — the Mirza `.nxpkg` import's installation-wide WRITE FREEZE.
+ *
+ * While an import is APPLYING, the gate answers `legacy-migration:<importId>` (the container's
+ * `quiescedBy` reads `legacy_nxpkg_imports` after the recovery row), so every durable write in
+ * every process is refused exactly as during a restore's quiesce, and the outbox relay idles
+ * — nothing is dispatched to anyone while customers are being written. Stronger than stop
+ * sales, and the restore's own mechanism: a migration IS a restore from the operator's view.
+ *
+ * THE ONE EXEMPTION is the import itself. `LegacyMigrationExecutor` runs the apply inside
+ * `runAsLegacyMigration(importId, …)`, and a write is let through when the freezing id is
+ * exactly that import's — never another import's, never a recovery's. An AsyncLocalStorage
+ * rather than a scope or an option, because the importer's many write paths already take the
+ * tenant scope they must keep (their permission checks and tenant predicates read it); the
+ * exemption follows the executor's call tree and nothing else. A request handler, the worker
+ * and the relay never run inside it.
+ */
+const LEGACY_MIGRATION_QUIESCE_PREFIX = 'legacy-migration:';
+
+const legacyMigrationWriteContext = new AsyncLocalStorage<string>();
+
+/** The id the gate reports for an APPLYING import. */
+export function legacyMigrationQuiesceId(importId: string): string {
+  return `${LEGACY_MIGRATION_QUIESCE_PREFIX}${importId}`;
+}
+
+/** Runs `fn` as the import's own writer: its writes pass the freeze IT holds, and only that. */
+export function runAsLegacyMigration<T>(importId: string, fn: () => Promise<T>): Promise<T> {
+  return legacyMigrationWriteContext.run(legacyMigrationQuiesceId(importId), fn);
+}
+
+/**
  * Refuses the transaction if the installation is quiesced.
  *
  * Throws a CONFLICT rather than a validation error: the caller did nothing
@@ -90,6 +122,15 @@ export async function assertInstallationWritable(
   if (isRecoveryLane(scope)) return;
   const recoveryId = await gate.quiescedBy(tx);
   if (recoveryId === null) return;
+  if (recoveryId.startsWith(LEGACY_MIGRATION_QUIESCE_PREFIX)) {
+    // The import's own writes, and nothing else's.
+    if (legacyMigrationWriteContext.getStore() === recoveryId) return;
+    throw errors.conflict(
+      PLATFORM_ERROR_CODES.RECOVERY_QUIESCED,
+      'This installation is being restored from a Mirza backup and is not accepting changes. ' +
+        `Import ${recoveryId.slice(LEGACY_MIGRATION_QUIESCE_PREFIX.length)} is in progress.`,
+    );
+  }
   throw errors.conflict(
     PLATFORM_ERROR_CODES.RECOVERY_QUIESCED,
     'This installation is being restored from a backup and is not accepting changes. ' +

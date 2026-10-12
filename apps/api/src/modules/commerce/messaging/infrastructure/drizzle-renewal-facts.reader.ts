@@ -24,6 +24,27 @@ import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-
 export class DrizzleRenewalFactsReader {
   constructor(private readonly db: Database) {}
 
+  /**
+   * FIX-08: the order a SUCCEEDED paid action was bought by, or null. `PURCHASED_AS` in SQL:
+   * the operation's type must be the order's purpose, so a SUSPEND — which carries the order
+   * that created its service — is never answered on that order's payment message.
+   */
+  async purchasedOrderFor(scope: TenantContext, operationId: string): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.db.execute(sql`
+      SELECT op.order_id
+      FROM provisioning_operations op
+      JOIN orders o ON o.tenant_id = op.tenant_id AND o.id = op.order_id
+      WHERE op.tenant_id = ${tenantId}
+        AND op.id = ${operationId}
+        AND op.state = 'SUCCEEDED'
+        AND op.type IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
+        AND o.purpose = op.type
+      LIMIT 1`);
+    const row = result.rows[0] as { order_id: string | null } | undefined;
+    return row?.order_id ?? null;
+  }
+
   async notificationFacts(
     scope: TenantContext,
     operationId: string,

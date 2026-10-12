@@ -5,6 +5,8 @@ import {
   AUTH_ROUTES,
   EMPTY_PRODUCT_DISPLAY,
   PAYMENT_ROUTES,
+  GATEWAY_ROW_FAILING_CODE,
+  GATEWAY_ROW_FAILURE_ALERT_AFTER,
   SESSION_COOKIE_NAME,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
   paymentReinquireResponseSchema,
@@ -26,6 +28,12 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleGatewayCardTransferRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository';
 import type { GatewayPaymentService } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
+import {
+  GATEWAY_PAYMENT_INTERVAL_MS,
+  GatewayPaymentLoop,
+} from '../../apps/api/src/modules/commerce/payments/application/gateway-payment-loop';
+import { GATEWAY_DECISION_RETRY_MAX } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
+import { POST_DEADLINE_INQUIRY_MAX } from '../../apps/api/src/modules/commerce/payments/domain/tonpays';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -436,6 +444,352 @@ describe('the TonPays Telegram provider review window', () => {
       expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
     });
 
+    /*
+     * FIX10 BUG-2 (audit probe `probe-stale-claim`): the lane judged eligibility from the
+     * CLAIM-time row. A review that opened between the claim and this row's turn moved the
+     * deadline 24 h out, yet the approval was recorded LATE_COMPLETION, unscheduled, and the
+     * payment left to lapse to UNKNOWN — a paid customer turned into an operator case.
+     */
+    it('FIX10 BUG-2: a review that opens between the claim and the inquiry is not a late completion', async () => {
+      const created = await attempt();
+      fake.set(created.invoiceId, 'completed', true);
+      // The claim is taken one second before the deadline.
+      clock.at(new Date(created.expiresAt.getTime() - 1_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 600_000).toISOString()}::timestamptz, inquiry_claimed_until = NULL WHERE payment_id = ${created.paymentId}`,
+      );
+      const probeLane = telegramLaneWith(ctx, fake);
+      const invoices = (
+        probeLane as unknown as {
+          deps: { invoices: { claimInquiries: (...a: unknown[]) => Promise<unknown> } };
+        }
+      ).deps.invoices;
+      const claim = invoices.claimInquiries.bind(invoices);
+      invoices.claimInquiries = async (...args: unknown[]) => {
+        const out = await claim(...args);
+        // Between the claim and this row's turn: a receipt acknowledgement commits strictly
+        // before the deadline (as recordProviderReview would), and the batch reaches the
+        // row five seconds after the deadline.
+        await ctx.container.database.db.execute(
+          sql`UPDATE payments SET provider_review_started_at = expires_at - interval '500 milliseconds',
+                 provider_review_until = expires_at - interval '500 milliseconds' + interval '24 hours'
+              WHERE id = ${created.paymentId}`,
+        );
+        clock.at(new Date(created.expiresAt.getTime() + 5_000));
+        return out;
+      };
+      await probeLane.runOnce(tenantA);
+      // The payment's EFFECTIVE deadline is the review's, 24 h away: the approval settles.
+      const pay = await paymentOf(created.paymentId);
+      expect(pay.state).toBe('CONFIRMED');
+      const inv = await invoiceOf(created.paymentId);
+      expect(inv.outcome).toBe('SETTLED');
+      expect(inv.late_completion_observed_at).toBeNull();
+      expect(await orderState(created.orderId)).toBe('PAID');
+    });
+
+    it('FIX10 BUG-2: the review that opened after the claim also sets the schedule — an open answer stays scheduled on the review cadence', async () => {
+      const created = await attempt();
+      fake.set(created.invoiceId, 'processing', false);
+      clock.at(new Date(created.expiresAt.getTime() - 1_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 600_000).toISOString()}::timestamptz, inquiry_claimed_until = NULL WHERE payment_id = ${created.paymentId}`,
+      );
+      const probeLane = telegramLaneWith(ctx, fake);
+      const invoices = (
+        probeLane as unknown as {
+          deps: { invoices: { claimInquiries: (...a: unknown[]) => Promise<unknown> } };
+        }
+      ).deps.invoices;
+      const claim = invoices.claimInquiries.bind(invoices);
+      invoices.claimInquiries = async (...args: unknown[]) => {
+        const out = await claim(...args);
+        await ctx.container.database.db.execute(
+          sql`UPDATE payments SET provider_review_started_at = expires_at - interval '500 milliseconds',
+                 provider_review_until = expires_at - interval '500 milliseconds' + interval '24 hours'
+              WHERE id = ${created.paymentId}`,
+        );
+        clock.at(new Date(created.expiresAt.getTime() + 5_000));
+        return out;
+      };
+      await probeLane.runOnce(tenantA);
+      // Judged from the claim this was post-deadline and unscheduled for ever; it is in review.
+      const inv = await invoiceOf(created.paymentId);
+      expect(inv.next_inquiry_at).not.toBeNull();
+      expect(new Date(inv.next_inquiry_at!).getTime()).toBeGreaterThan(clock.now().getTime());
+      expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+    });
+
+    it('FIX10 BUG-2: even the re-read is a snapshot — a review that opens after it is still decided at the lock, never by the lane', async () => {
+      const created = await attempt();
+      fake.set(created.invoiceId, 'completed', true);
+      clock.at(new Date(created.expiresAt.getTime() - 1_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 600_000).toISOString()}::timestamptz, inquiry_claimed_until = NULL WHERE payment_id = ${created.paymentId}`,
+      );
+      let opened = false;
+      const racing = telegramLaneWith(ctx, fake, {
+        paymentRecords: (real) => {
+          const read = real.findById.bind(real);
+          real.findById = async (scope, id, tx) => {
+            const seen = await read(scope, id, tx);
+            if (!opened && id === created.paymentId && tx === undefined) {
+              opened = true;
+              // The lane's re-read saw no review and a passed deadline; the acknowledgement
+              // (committed just before the deadline) lands right after that read.
+              await ctx.container.database.db.execute(
+                sql`UPDATE payments SET provider_review_started_at = expires_at - interval '500 milliseconds',
+                       provider_review_until = expires_at - interval '500 milliseconds' + interval '24 hours'
+                    WHERE id = ${created.paymentId}`,
+              );
+            }
+            return seen;
+          };
+          return real;
+        },
+      });
+      clock.at(new Date(created.expiresAt.getTime() + 5_000));
+      await racing.runOnce(tenantA);
+      expect(opened).toBe(true);
+      expect((await paymentOf(created.paymentId)).state).toBe('CONFIRMED');
+      const inv = await invoiceOf(created.paymentId);
+      expect(inv.outcome).toBe('SETTLED');
+      expect(inv.late_completion_observed_at).toBeNull();
+    });
+
+    it('FIX10 BUG-2: the deadline is judged at the lock — an approval that waits on the lock across the deadline is DEADLINE_PASSED', async () => {
+      const created = await attempt();
+      clock.at(new Date(created.expiresAt.getTime() - 1_000));
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let locked: () => void = () => undefined;
+      const holding = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const holder = ctx.container.uow.run(tenantA, async (tx) => {
+        await tx.tx.execute(
+          sql`SELECT id FROM payments WHERE id = ${created.paymentId} FOR UPDATE`,
+        );
+        locked();
+        await held;
+      });
+      let answer: Awaited<ReturnType<typeof confirmNow>> | null;
+      try {
+        await holding;
+        const approving = confirmNow(created.paymentId);
+        await awaitBlocked();
+        // The deadline passes while the approval waits for the lock.
+        clock.at(created.expiresAt);
+        release();
+        answer = await approving;
+      } finally {
+        release();
+        await holder;
+      }
+      expect(answer).toMatchObject({ outcome: 'NOT_ELIGIBLE', reason: 'DEADLINE_PASSED' });
+      expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+    });
+
+    /*
+     * Codex #269: past the deadline no further inquiry is scheduled, and the answer was
+     * recorded (unscheduling the row) BEFORE the decision — now always the settlement path's.
+     * A decision that threw (the tenant stopped between the pass's check and the settlement's
+     * transaction, a transient database error) left a provider-paid attempt with no
+     * settlement, no LATE_COMPLETION, no audit and no alert, never asked again.
+     */
+    describe('a post-deadline approval whose decision fails (Codex #269)', () => {
+      const lateFacts = async (paymentId: string) => {
+        const [counts] = await rows<{ audits: number; events: number; outbox: number }>(
+          sql`SELECT
+                (SELECT count(*)::int FROM audit_logs WHERE action = 'gateway_invoice.late_completion'
+                   AND entity_id = ${paymentId}) AS audits,
+                (SELECT count(*)::int FROM operational_events WHERE code = 'payments.gateway_late_completion'
+                   AND dedupe_key LIKE ${`%${paymentId}`}) AS events,
+                (SELECT count(*)::int FROM outbox_messages WHERE event_type = 'PaymentLateCompletionObserved'
+                   AND aggregate_id = ${paymentId}) AS outbox`,
+        );
+        return counts;
+      };
+      /** A lane whose settlement path throws while `failing()` says so. */
+      const laneFailingConfirm = (failing: () => boolean) => {
+        const payments = Object.create(ctx.container.payments) as typeof ctx.container.payments;
+        payments.confirmGatewayPayment = (...args) =>
+          failing()
+            ? Promise.reject(new Error('the scope stopped accepting work'))
+            : ctx.container.payments.confirmGatewayPayment(...args);
+        return telegramLaneWith(ctx, fake, { payments });
+      };
+      const duePastDeadline = async (
+        created: Awaited<ReturnType<typeof attempt>>,
+        postDeadlineInquiries = 0,
+      ) => {
+        fake.set(created.invoiceId, 'completed', true);
+        clock.at(new Date(created.expiresAt.getTime() + 60_000));
+        await ctx.container.database.db.execute(
+          sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 60_000).toISOString()}::timestamptz,
+                     inquiry_claimed_until = NULL, post_deadline_inquiries = ${postDeadlineInquiries}
+               WHERE payment_id = ${created.paymentId}`,
+        );
+      };
+
+      it('keeps the row scheduled, and the next pass records LATE_COMPLETION exactly once', async () => {
+        const created = await attempt();
+        await duePastDeadline(created);
+        let failing = true;
+        const flaky = laneFailingConfirm(() => failing);
+
+        await flaky.runOnce(tenantA);
+        const stranded = await invoiceOf(created.paymentId);
+        expect(stranded.outcome).toBeNull();
+        expect(stranded.late_completion_observed_at).toBeNull();
+        // The answer is recorded, and the row is still due for a retry.
+        expect(stranded.next_inquiry_at).not.toBeNull();
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 0, events: 0, outbox: 0 });
+
+        failing = false;
+        clock.at(new Date(created.expiresAt.getTime() + 2 * 60_000 + 1_000));
+        await flaky.runOnce(tenantA);
+        const decided = await invoiceOf(created.paymentId);
+        expect(decided.outcome).toBe('LATE_COMPLETION');
+        expect(decided.late_completion_observed_at).not.toBeNull();
+        expect(decided.next_inquiry_at).toBeNull();
+        expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 1, events: 1, outbox: 1 });
+
+        // Nothing more is asked or written.
+        clock.at(new Date(created.expiresAt.getTime() + 10 * 60_000));
+        await flaky.runOnce(tenantA);
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 1, events: 1, outbox: 1 });
+      });
+
+      it('an approval met on the LAST permitted post-deadline inquiry is still retried to a decision', async () => {
+        const created = await attempt();
+        await duePastDeadline(created, POST_DEADLINE_INQUIRY_MAX - 1);
+        let failing = true;
+        const flaky = laneFailingConfirm(() => failing);
+        await flaky.runOnce(tenantA);
+        expect((await invoiceOf(created.paymentId)).next_inquiry_at).not.toBeNull();
+
+        failing = false;
+        clock.at(new Date(created.expiresAt.getTime() + 2 * 60_000 + 1_000));
+        await flaky.runOnce(tenantA);
+        expect((await invoiceOf(created.paymentId)).outcome).toBe('LATE_COMPLETION');
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 1, events: 1, outbox: 1 });
+      });
+
+      it('a decision that fails for ever stops after a bounded number of retries', async () => {
+        const created = await attempt();
+        await duePastDeadline(created);
+        const broken = laneFailingConfirm(() => true);
+        const checksBefore = fake.checks.length;
+        for (let i = 1; i <= POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX + 3; i += 1) {
+          clock.at(new Date(created.expiresAt.getTime() + i * 2 * 60_000));
+          await broken.runOnce(tenantA);
+        }
+        expect(fake.checks.length - checksBefore).toBe(
+          POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX,
+        );
+        expect((await invoiceOf(created.paymentId)).next_inquiry_at).toBeNull();
+      });
+
+      /*
+       * Codex on #277: the retry that follows a failed decision is a post-deadline inquiry,
+       * where `next` is always null. A retry that met a timeout or a 429 recorded the error
+       * with the schedule cleared — the paid attempt then had neither a settlement nor a
+       * LATE_COMPLETION, for ever. A non-answer is recorded as an error (never an approval)
+       * and the row stays scheduled, within the same bounded allowance.
+       */
+      it('a retry that times out or is rate-limited keeps the row scheduled, and a later answer records LATE_COMPLETION once', async () => {
+        const created = await attempt();
+        await duePastDeadline(created);
+        let failing = true;
+        const flaky = laneFailingConfirm(() => failing);
+        await flaky.runOnce(tenantA);
+        expect((await invoiceOf(created.paymentId)).next_inquiry_at).not.toBeNull();
+
+        failing = false;
+        try {
+          for (const [step, mode] of [
+            [1, 'TIMEOUT'],
+            [2, { status: 429, code: 'RATE_LIMIT_EXCEEDED' }],
+            [3, 'SERVER_ERROR'],
+          ] as const) {
+            fake.checkMode = mode;
+            const checksBefore = fake.checks.length;
+            clock.at(new Date(created.expiresAt.getTime() + (step + 1) * 2 * 60_000));
+            await flaky.runOnce(tenantA);
+            // The provider was asked, gave no answer, and nothing was decided …
+            expect(fake.checks.length - checksBefore, JSON.stringify(mode)).toBe(1);
+            const after = await invoiceOf(created.paymentId);
+            expect(after.outcome, JSON.stringify(mode)).toBeNull();
+            expect(after.late_completion_observed_at).toBeNull();
+            // … and the row is still due for the inquiry that will decide it.
+            expect(after.next_inquiry_at, JSON.stringify(mode)).not.toBeNull();
+            expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+            expect(await lateFacts(created.paymentId)).toEqual({ audits: 0, events: 0, outbox: 0 });
+          }
+        } finally {
+          fake.checkMode = 'OK';
+        }
+
+        clock.at(new Date(created.expiresAt.getTime() + 10 * 60_000));
+        await flaky.runOnce(tenantA);
+        const decided = await invoiceOf(created.paymentId);
+        expect(decided.outcome).toBe('LATE_COMPLETION');
+        expect(decided.next_inquiry_at).toBeNull();
+        expect((await paymentOf(created.paymentId)).state).toBe('PENDING');
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 1, events: 1, outbox: 1 });
+
+        clock.at(new Date(created.expiresAt.getTime() + 20 * 60_000));
+        await flaky.runOnce(tenantA);
+        expect(await lateFacts(created.paymentId)).toEqual({ audits: 1, events: 1, outbox: 1 });
+      });
+
+      it('the control: a post-deadline row with NO recorded approval is not kept scheduled by a non-answer', async () => {
+        const created = await attempt();
+        clock.at(new Date(created.expiresAt.getTime() + 60_000));
+        await ctx.container.database.db.execute(
+          sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 60_000).toISOString()}::timestamptz,
+                     inquiry_claimed_until = NULL
+               WHERE payment_id = ${created.paymentId}`,
+        );
+        fake.checkMode = 'TIMEOUT';
+        try {
+          const checksBefore = fake.checks.length;
+          await lane.runOnce(tenantA);
+          expect(fake.checks.length - checksBefore).toBe(1);
+        } finally {
+          fake.checkMode = 'OK';
+        }
+        const after = await invoiceOf(created.paymentId);
+        expect(after.next_inquiry_at).toBeNull();
+      });
+
+      it('a retry that never gets an answer still stops at the same bound', async () => {
+        const created = await attempt();
+        await duePastDeadline(created);
+        const flaky = laneFailingConfirm(() => true);
+        await flaky.runOnce(tenantA);
+        fake.checkMode = 'TIMEOUT';
+        try {
+          const checksBefore = fake.checks.length;
+          for (let i = 2; i <= POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX + 3; i += 1) {
+            clock.at(new Date(created.expiresAt.getTime() + i * 2 * 60_000));
+            await flaky.runOnce(tenantA);
+          }
+          // One inquiry was the approval; the rest of the allowance, then nothing more.
+          expect(fake.checks.length - checksBefore).toBe(
+            POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX - 1,
+          );
+          expect((await invoiceOf(created.paymentId)).next_inquiry_at).toBeNull();
+        } finally {
+          fake.checkMode = 'OK';
+        }
+      });
+    });
+
     it('TPTG-28: half-open at the review deadline — settles at review_until − 1 ms, DEADLINE_PASSED at review_until', async () => {
       const early = await reviewed(10);
       clock.at(new Date(early.reviewUntil.getTime() - 1));
@@ -636,6 +990,233 @@ describe('the TonPays Telegram provider review window', () => {
       );
       expect(later).toHaveLength(0);
       expect((await paymentOf(approved.paymentId)).state).toBe('CONFIRMED');
+    });
+  });
+
+  /*
+   * FIX10 BUG-1: one row that throws stops neither the sweeps nor the rows beside it. Before
+   * this, a throwing inquiry threw the whole pass, and the review sweep after it never ran:
+   * a lapsed review stayed PENDING instead of going to an operator as UNKNOWN.
+   */
+  describe('a row that throws (FIX10 BUG-1)', () => {
+    it('inquiries that throw on an undecryptable key do not stop the review sweep', async () => {
+      const review = await reviewed(40);
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET api_key_ciphertext = 'v9.not-an-envelope'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TONPAYS_TELEGRAM'`,
+      );
+      clock.at(review.reviewUntil);
+      // Its inquiry is due, so the pass meets the throwing row before the sweep.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices
+               SET next_inquiry_at = ${new Date(review.reviewUntil.getTime() - 60_000).toISOString()}::timestamptz,
+                   inquiry_claimed_until = NULL
+             WHERE payment_id = ${review.paymentId}`,
+      );
+      const report = await lane.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.reviewsLapsed).toBe(1);
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+    });
+
+    it('a lane whose claim itself throws does not stop the review sweep or the lanes after it', async () => {
+      const review = await reviewed(40);
+      clock.at(review.reviewUntil);
+      const broken = telegramLaneWith(ctx, fake, {
+        invoices: (real) => {
+          real.claimInquiries = () => Promise.reject(new Error('the claim transaction failed'));
+          return real;
+        },
+      });
+      const report = await broken.runOnce(tenantA);
+      // A LANE failed, not a row (Codex #268 A): counted apart, because it withholds progress.
+      expect(report.laneFailures).toBe(1);
+      expect(report.rowFailures).toBe(0);
+      expect(report.reviewsLapsed).toBe(1);
+      expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+    });
+
+    /*
+     * Codex #268 A: the lane isolation must not hide a dead lane from readiness. Every pass
+     * returns (the sweeps run), but a claim that throws on every one of them is no progress,
+     * so the loop goes stale after its window; a pass whose only failure is an isolated ROW
+     * stays fresh.
+     */
+    it('a claim that throws on every pass leaves the lane stale; a failing row alone does not', async () => {
+      const loopOver = (service: GatewayPaymentService) => {
+        let nowMs = 1_000_000;
+        const loop = new GatewayPaymentLoop(service, {
+          scope: () => tenantA,
+          intervalMs: GATEWAY_PAYMENT_INTERVAL_MS,
+          passBoundMs: 15_000,
+          now: () => nowMs,
+          logger: { info: () => undefined, error: () => undefined },
+        });
+        const window = 15_000 + 3 * GATEWAY_PAYMENT_INTERVAL_MS;
+        return {
+          async passesFor(totalMs: number) {
+            loop.start();
+            for (let elapsed = 0; elapsed <= totalMs; elapsed += GATEWAY_PAYMENT_INTERVAL_MS) {
+              nowMs = 1_000_000 + elapsed;
+              await loop.tick();
+            }
+            const fresh = loop.isFresh(nowMs);
+            await loop.stop();
+            return { fresh, window };
+          },
+          window,
+        };
+      };
+
+      const broken = telegramLaneWith(ctx, fake, {
+        invoices: (real) => {
+          real.claimInquiries = () => Promise.reject(new Error('the claim transaction failed'));
+          return real;
+        },
+      });
+      const dead = loopOver(broken);
+      expect((await dead.passesFor(dead.window + GATEWAY_PAYMENT_INTERVAL_MS)).fresh).toBe(false);
+
+      // A due row whose credential cannot be decrypted: the ROW throws, the lane works.
+      const created = await attempt();
+      clock.at(new Date(created.expiresAt.getTime() - 30 * 60_000));
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET api_key_ciphertext = 'v9.not-an-envelope'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TONPAYS_TELEGRAM'`,
+      );
+      // Due again before EVERY pass, so every pass meets the failing row.
+      const reports: Awaited<ReturnType<GatewayPaymentService['runOnce']>>[] = [];
+      const failingRowEveryPass = {
+        runOnce: async (scope: typeof tenantA) => {
+          await ctx.container.database.db.execute(
+            sql`UPDATE gateway_invoices SET next_inquiry_at = ${new Date(created.expiresAt.getTime() - 31 * 60_000).toISOString()}::timestamptz,
+                       inquiry_claimed_until = NULL
+                 WHERE payment_id = ${created.paymentId}`,
+          );
+          const report = await lane.runOnce(scope);
+          reports.push(report);
+          return report;
+        },
+      } as unknown as GatewayPaymentService;
+      const alive = loopOver(failingRowEveryPass);
+      expect((await alive.passesFor(alive.window + GATEWAY_PAYMENT_INTERVAL_MS)).fresh).toBe(true);
+      expect(reports.length).toBeGreaterThan(1);
+      expect(reports.every((r) => r.rowFailures === 1 && r.laneFailures === 0)).toBe(true);
+    });
+
+    it('a receipt whose processing throws is backed off and the receipt queued after it is uploaded in the same pass', async () => {
+      const first = await attempt();
+      const second = await attempt();
+      clock.at(new Date(first.expiresAt.getTime() - 30 * 60_000));
+      const queue = async (paymentId: string): Promise<string> => {
+        const opened = await ctx.container.gatewayReceiptCaptures.openReceiptCapture(
+          tenantA,
+          systemActor(key()),
+          { customerId: maryam, paymentId, botInstanceId: BOT_A },
+        );
+        if (opened === null) throw new Error('no receipt window');
+        const fileId = `photo-${key()}`;
+        telegram.files.set(fileId, JPEG_BYTES);
+        const queued = await ctx.container.gatewayReceiptCaptures.receivePhoto(
+          tenantA,
+          systemActor(key()),
+          {
+            customerId: maryam,
+            botInstanceId: BOT_A,
+            file: {
+              kind: 'PHOTO',
+              fileId,
+              fileUniqueId: fileId,
+              mimeType: null,
+              fileName: null,
+              fileSize: BigInt(JPEG_BYTES.byteLength),
+              telegramMessageId: 1n,
+              caption: null,
+            },
+          },
+        );
+        expect(queued).toBe('QUEUED');
+        return fileId;
+      };
+      const poisonedFile = await queue(first.paymentId);
+      await queue(second.paymentId);
+      fake.receiptMode = 'ACK';
+      const errors: string[] = [];
+      const poisoned = telegramLaneWith(ctx, fake, {
+        logger: {
+          info: () => undefined,
+          warn: () => undefined,
+          error: (context, message) => errors.push(`${message} ${JSON.stringify(context)}`),
+        },
+        receiptFiles: {
+          download: (scope, binding, options) =>
+            binding.fileId === poisonedFile
+              ? Promise.reject(new Error('disk full'))
+              : ctx.container.receiptFiles.download(
+                  scope,
+                  { botInstanceId: binding.botInstanceId as never, fileId: binding.fileId },
+                  options,
+                ),
+        },
+      });
+      const report = await poisoned.runOnce(tenantA);
+      expect(report.rowFailures).toBe(1);
+      expect(report.receipts).toBe(1);
+      // The receipt after the one that threw was uploaded and opened its review.
+      expect((await paymentOf(second.paymentId)).provider_review_until).not.toBeNull();
+      // The one that threw: never sent, still queued, lease given back, retried later.
+      const [backedOff] = await rows<{
+        state: string;
+        sent_at: string | null;
+        claimed_until: string | null;
+        retry_at: string | null;
+      }>(
+        sql`SELECT state, sent_at, claimed_until, retry_at FROM gateway_receipt_submissions
+            WHERE payment_id = ${first.paymentId}`,
+      );
+      expect(backedOff).toMatchObject({ state: 'QUEUED', sent_at: null, claimed_until: null });
+      expect(new Date(backedOff!.retry_at!).getTime()).toBeGreaterThan(clock.now().getTime());
+      expect((await paymentOf(first.paymentId)).state).toBe('PENDING');
+      expect(errors.some((line) => line.includes(first.paymentId))).toBe(true);
+      expect(errors.join('\n')).not.toContain('disk full');
+
+      /*
+       * FIX10 (audit P1-b on #268): the same receipt failing on consecutive passes opens ONE
+       * condition for that submission at the threshold, and its next clean upload closes it.
+       */
+      const [submission] = await rows<{ id: string }>(
+        sql`SELECT id FROM gateway_receipt_submissions WHERE payment_id = ${first.paymentId}`,
+      );
+      const conditionKey = `${GATEWAY_ROW_FAILING_CODE}:receipt:${submission!.id}`;
+      const conditions = () =>
+        rows<{ occurrence_count: number; resolved_at: string | null }>(
+          sql`SELECT occurrence_count, resolved_at FROM operational_events
+              WHERE tenant_id = ${tenantA.tenantId} AND code = ${GATEWAY_ROW_FAILING_CODE}
+                AND dedupe_key = ${conditionKey}`,
+        );
+      const dueAgain = () =>
+        ctx.container.database.db.execute(
+          sql`UPDATE gateway_receipt_submissions SET retry_at = NULL WHERE id = ${submission!.id}`,
+        );
+      for (let failed = 2; failed <= GATEWAY_ROW_FAILURE_ALERT_AFTER; failed += 1) {
+        expect(await conditions()).toEqual([]);
+        await dueAgain();
+        expect((await poisoned.runOnce(tenantA)).rowFailures).toBe(1);
+      }
+      expect(await conditions()).toEqual([{ occurrence_count: 1, resolved_at: null }]);
+
+      // The upload works again: the receipt is sent, and the condition closes.
+      await dueAgain();
+      const healthy = telegramLaneWith(ctx, fake);
+      expect((await healthy.runOnce(tenantA)).rowFailures).toBe(0);
+      const [closed] = await conditions();
+      expect(closed?.resolved_at).not.toBeNull();
+      const [sent] = await rows<{ row_failures: number; sent_at: string | null }>(
+        sql`SELECT row_failures, sent_at FROM gateway_receipt_submissions
+            WHERE id = ${submission!.id}`,
+      );
+      expect(sent).toMatchObject({ row_failures: 0 });
+      expect(sent?.sent_at).not.toBeNull();
     });
   });
 

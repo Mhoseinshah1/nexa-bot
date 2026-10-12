@@ -157,16 +157,22 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
     return toRow(row);
   }
 
-  async transition(input: {
-    id: string;
-    from: readonly RecoveryState[];
-    to: RecoveryState;
-    now: Date;
-    patch?: RecoveryPatch;
-    finished?: boolean;
-    leaseOwner?: string;
-  }): Promise<boolean> {
+  async transition(
+    input: {
+      id: string;
+      from: readonly RecoveryState[];
+      to: RecoveryState;
+      now: Date;
+      patch?: RecoveryPatch;
+      finished?: boolean;
+      leaseOwner?: string;
+    },
+    tx?: unknown,
+  ): Promise<boolean> {
     const terminal = input.to === 'SUCCEEDED' || input.to === 'FAILED';
+    // The caller's transaction when it has one (Phase 7: the confirmation runs under the
+    // restore-exclusion lock), unwrapped as `installationLock` does.
+    const executor: Executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
     const predicates = [
       eq(recoveryRequests.id, input.id),
       inArray(recoveryRequests.state, [...input.from]),
@@ -180,7 +186,7 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
       predicates.push(eq(recoveryRequests.leaseOwner, input.leaseOwner));
     }
     try {
-      const updated = await this.db
+      const updated = await executor
         .update(recoveryRequests)
         .set({
           state: input.to,
@@ -459,6 +465,14 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
    * INSIDE the transaction it is about to permit, so a quiesce that commits
    * between a check and a write cannot be overtaken.
    */
+  async latestCutoverAt(): Promise<Date | null> {
+    const result = await this.db.execute<{ at: Date | string | null }>(
+      sql`SELECT max(cutover_at) AS at FROM recovery_requests WHERE cutover_at IS NOT NULL`,
+    );
+    const at = result.rows[0]?.at ?? null;
+    return at === null ? null : new Date(at);
+  }
+
   async installationLock(
     tx?: unknown,
   ): Promise<{ destructive: boolean; quiescing: boolean; recoveryId: string | null } | null> {

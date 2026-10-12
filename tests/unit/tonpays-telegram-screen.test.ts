@@ -83,6 +83,7 @@ function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceR
     providerPaid: false,
     lastInquiryAt: null,
     lastInquiryErrorCode: null,
+    rowFailures: 0,
     inquiryAttempts: 0,
     nextInquiryAt: null,
     postDeadlineInquiries: 0,
@@ -133,6 +134,7 @@ const submission = (
   openedReview: false,
   inquiryResolvedAt: null,
   byteLength: null,
+  rowFailures: 0,
   createdAt: CREATED_AT,
 });
 

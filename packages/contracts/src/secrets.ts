@@ -54,6 +54,10 @@
  * `support_ai_provider.api_key` is a tenant's key for one AI provider (TB4, ADR-0034 §8), on
  * its `support_ai_provider_credentials` row; the entity is that row's id, so a key moved onto
  * another provider's row — or another tenant's — fails authentication.
+ *
+ * `legacy_migration.package_key` is the key (or passphrase) of one uploaded Mirza `.nxpkg`
+ * package, on its `legacy_nxpkg_imports` row (`docs/legacy-migration/nxpkg-importer.md` §0.6);
+ * the entity is that row's id, and the column is set to NULL when the import is terminal.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -65,6 +69,7 @@ export const SECRET_PURPOSES = [
   'payment_gateway.verify_key',
   'admin.totp_secret',
   'support_ai_provider.api_key',
+  'legacy_migration.package_key',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

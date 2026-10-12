@@ -418,6 +418,7 @@ export class DrizzleLegacyCutoverRepository implements LegacyCutoverRepository {
       panels_open: string;
       gateways: string;
       gateways_active: string;
+      frozen: string;
     }>(sql`
       SELECT
         (SELECT count(*) FROM incidents WHERE tenant_id = ${tenantId} AND kind = 'MAINTENANCE'
@@ -427,7 +428,9 @@ export class DrizzleLegacyCutoverRepository implements LegacyCutoverRepository {
             AND drained_at IS NULL)::text AS panels_open,
         (SELECT count(*) FROM payment_gateways WHERE tenant_id = ${tenantId})::text AS gateways,
         (SELECT count(*) FROM payment_gateways WHERE tenant_id = ${tenantId}
-            AND status = 'ACTIVE')::text AS gateways_active
+            AND status = 'ACTIVE')::text AS gateways_active,
+        (SELECT count(*) FROM legacy_nxpkg_imports WHERE tenant_id = ${tenantId}
+            AND status = 'APPLYING')::text AS frozen
     `);
     const row = result.rows[0];
     return {
@@ -436,6 +439,7 @@ export class DrizzleLegacyCutoverRepository implements LegacyCutoverRepository {
       activePanelsNotDrained: num(row?.panels_open),
       gateways: num(row?.gateways),
       gatewaysActive: num(row?.gateways_active),
+      frozenByImport: num(row?.frozen),
     };
   }
 

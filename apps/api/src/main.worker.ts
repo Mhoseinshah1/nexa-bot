@@ -1,16 +1,12 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { resolveInstallationTenant } from './bootstrap.js';
+import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { stalledLoops, type LoopHealth } from './infrastructure/lifecycle/loop-health.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
-import {
-  LoopStallReporter,
-  loopStatusesForReporting,
-} from './modules/platform/opslog/application/loop-stall-reporter.js';
-import { DrizzleOperationalConditionReader } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
+import { loopStatusesForReporting } from './modules/platform/opslog/application/loop-stall-reporter.js';
 
 /**
  * Process role: `worker`.
@@ -41,16 +37,7 @@ async function main(): Promise<void> {
   // that is draining is not reported as alive after it has stopped taking
   // work.
   // FIX-05: a stalled loop is also an operational condition, opened and closed here.
-  const loopStalls = new LoopStallReporter({
-    recorder: container.opsLog,
-    conditions: new DrizzleOperationalConditionReader(container.database.db),
-    scope: () =>
-      container.installationTenantId === null
-        ? null
-        : { tenantId: container.installationTenantId, botInstanceId: null },
-    clock: container.clock,
-    logger: container.logger,
-  });
+  const loopStalls = loopStallReporterFor(container, 'worker');
   const heartbeat = startHeartbeat({
     path: config.WORKER_HEARTBEAT_PATH,
     intervalMs: config.WORKER_HEARTBEAT_INTERVAL_MS,

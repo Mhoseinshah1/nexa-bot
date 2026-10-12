@@ -144,7 +144,13 @@ export async function readLegacyInventoryTables(
     const baseTable = info.tableType === 'BASE TABLE';
     if (!baseTable) findings.push('NOT_A_BASE_TABLE');
     if (!nameOk) findings.push('TABLE_NAME_UNSUPPORTED');
-    const classification = classifyLegacyTable(info.name);
+    // The frozen catalogue first, always; a package's coverage report only for a table the
+    // catalogue does not name (`nxpkg-table-accounting.ts`). Every other source: UNCLASSIFIED.
+    const frozen = classifyLegacyTable(info.name);
+    const classification =
+      frozen.class === 'UNCLASSIFIED'
+        ? (session.packageClassification?.(info.name) ?? frozen)
+        : frozen;
     if (classification.class === 'UNCLASSIFIED') findings.push('UNCLASSIFIED');
     if (baseTable && (info.storageEngine ?? '').toLowerCase() !== SNAPSHOT_ENGINE) {
       findings.push('NOT_SNAPSHOT_CONSISTENT');

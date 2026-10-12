@@ -199,6 +199,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/legacy-services',
   // Mirza PR6: the owner's cutover approval of one legacy snapshot.
   '/legacy-cutover',
+  // Phase 7: the Mirza restore moved into «بکاپ و بازیابی»; served as a redirect so old links land.
+  '/legacy-migration',
   '/extra-devices',
   '/service-locations',
   '/orders',
@@ -372,6 +374,7 @@ export function resolve(
           mayViewPayments={may('payments.view')}
           mayViewTickets={may('tickets.view')}
           mayViewBusinessChats={may('business_chats.view')}
+          mayViewLegacyHistory={may('legacy.history.view')}
           denied={!may('users.view')}
         />
       ),
@@ -488,6 +491,18 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.lsr_title') }],
       title: t('web.lsr_title'),
+    };
+  }
+  /*
+   * Phase 7: restoring from Mirza is a restore source of «بکاپ و بازیابی ← عملیات بازیابی»
+   * (a `.nxpkg` chosen there takes the Mirza flow). The old page's path REPLACES itself with
+   * the recovery page, so a bookmark lands there and Back does not bounce into the redirect.
+   */
+  if (route.path === '/legacy-migration') {
+    return {
+      element: <RedirectPage to="/recovery" />,
+      crumbs: [{ label: t('web.nav_recovery') }],
+      title: t('web.nav_recovery'),
     };
   }
   // Mirza PR6: the owner's cutover approval (an approval imports nothing; the import reads it).

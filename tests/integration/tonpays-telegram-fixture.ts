@@ -58,6 +58,8 @@ export class FakeTonPaysTelegram {
   readonly receipts: RecordedCall[] = [];
   createMode: FakeWrite | 'NO_CARD' | 'TIMEOUT_AFTER_CREATING' = 'OK';
   changeMode: FakeWrite | 'NO_CARD' = 'OK';
+  /** What the status check answers: the invoice (`OK`), a timeout, a 5xx or a refusal. */
+  checkMode: FakeWrite = 'OK';
   /**
    * What the receipt upload answers: an acknowledgement (`receipt_received: true`), the
    * status `processing` alone, an answer with neither signal, `receipt_received` as the
@@ -125,6 +127,12 @@ export class FakeTonPaysTelegram {
     if (check !== null && method === 'GET') {
       const invoiceId = decodeURIComponent(check[1]!);
       this.checks.push(invoiceId);
+      const checkMode = this.checkMode;
+      if (typeof checkMode === 'object') {
+        return json(checkMode.status, { detail: { code: checkMode.code, message: 'refused' } });
+      }
+      if (checkMode === 'SERVER_ERROR') return json(502, { error: 'bad gateway' });
+      if (checkMode === 'TIMEOUT') throw new Error('socket hang up');
       const invoice = this.invoices.get(invoiceId);
       if (invoice === undefined) return json(404, { detail: { code: 'INVOICE_NOT_FOUND' } });
       return json(200, {
@@ -304,6 +312,10 @@ export function telegramLaneWith(
     readonly paymentRecords?: (
       real: DrizzlePaymentRepository,
     ) => GatewayPaymentServiceDeps['paymentRecords'];
+    /** FIX10: the lane's invoice repository, so a case can make one of its calls throw. */
+    readonly invoices?: (real: DrizzleGatewayInvoiceRepository) => DrizzleGatewayInvoiceRepository;
+    /** FIX10: the receipt downloader, so a case can make one submission's download throw. */
+    readonly receiptFiles?: GatewayPaymentServiceDeps['receiptFiles'];
   } = {},
 ): GatewayPaymentService {
   const db = ctx.container.database.db;
@@ -315,7 +327,10 @@ export function telegramLaneWith(
   });
   const origins = new DrizzlePublicOriginReader(db);
   return new GatewayPaymentService({
-    invoices: new DrizzleGatewayInvoiceRepository(db),
+    invoices:
+      overrides.invoices === undefined
+        ? new DrizzleGatewayInvoiceRepository(db)
+        : overrides.invoices(new DrizzleGatewayInvoiceRepository(db)),
     payments: overrides.payments ?? ctx.container.payments,
     paymentRecords:
       overrides.paymentRecords === undefined
@@ -325,7 +340,7 @@ export function telegramLaneWith(
       provider === 'TONPAYS_TELEGRAM' ? telegram : provider === 'TONPAYS' ? website : null,
     cardTransfer: new DrizzleGatewayCardTransferRepository(db),
     cardAdapters: (provider) => (provider === 'TONPAYS_TELEGRAM' ? telegram : null),
-    receiptFiles: {
+    receiptFiles: overrides.receiptFiles ?? {
       download: (scope, binding, options) =>
         ctx.container.receiptFiles.download(
           scope,

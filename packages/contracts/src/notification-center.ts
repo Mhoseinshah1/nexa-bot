@@ -166,6 +166,14 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
     link: 'PAYMENT',
     minSeverity: 'WARN',
   },
+  // FIX10 (audit P1-b on #268): one payment's row keeps throwing in the worker, isolated
+  // from the rest of the pass; it may be an approval that is not being settled.
+  {
+    code: 'payments.gateway_row_failing',
+    category: 'PAYMENTS',
+    link: 'PAYMENT',
+    minSeverity: 'WARN',
+  },
   // Money that arrived late, for someone else, or for nothing invoiced.
   {
     code: 'payments.gateway_late_completion',
@@ -207,6 +215,14 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
   },
   {
     code: 'payments.gateway_webhook_unverified',
+    category: 'GATEWAYS',
+    link: 'PAYMENT_GATEWAYS',
+    minSeverity: 'WARN',
+  },
+  // FIX-03 (batch 2026-10-10): a gateway whose inquiries keep failing cannot read an
+  // approval; one condition per provider, a gateway-health code (Codex P2 on #260).
+  {
+    code: 'payments.gateway_inquiry_failing',
     category: 'GATEWAYS',
     link: 'PAYMENT_GATEWAYS',
     minSeverity: 'WARN',

@@ -352,6 +352,59 @@ hold, on the day it matters. On a deployed server, use the `$C exec -T api node
 dist/backup.cli.js …` forms from § Commands, and `docs/vps-acceptance.md` § 7b
 for the full checklist.
 
+## Operating it honestly: what is on, what leaves the host, what has been measured
+
+Added for FIX-14 (batch 2026-10-10). Every statement below is about what the code
+does today; none of it is a measurement from a real installation.
+
+**The schedule is OFF by default.** `BACKUP_SCHEDULE_ENABLED` defaults to `false`, so
+a fresh installation takes no automatic backup until somebody switches it on — in the
+Web Admin («بکاپ و بازیابی» → «زمان‌بندی بکاپ خودکار», applies within one
+`BACKUP_TICK_MS`, no restart), or as the installation default with
+`BACKUP_SCHEDULE_ENABLED=true` (and optionally `BACKUP_INTERVAL_MS`) in
+`/etc/nexa/nexa.env` followed by `botctl restart`. `botctl status` prints
+`scheduled backup   off` for the environment default only; the Web Admin page shows
+the value in force.
+
+**Nothing alerts while the schedule is off.** `backup.interval_exceeded` is evaluated
+only when the schedule is on, and switching the schedule off CLOSES it. There is no
+existing code that means "automatic backups are disabled", and reusing the overdue
+code for it would make that condition mean two things, so this batch adds none: the
+check is `botctl status` and the Web Admin page. A dedicated condition is a contracts
+change for a later batch.
+
+**Off-host is Telegram, up to 50 MiB.** A verified archive is delivered to the
+operations group's BACKUPS topic (or the fallback chat). Above Telegram's 50 MiB bot
+ceiling the topic gets a notice and the archive stays on this server only — see
+§ What this does NOT do. With no destination configured, the archive is on this
+server only. In both cases copying it off the host is a manual step.
+
+**Integrity is checked on every run.** SHA-256 checksum, encryption, and a
+VERIFY_RESTORE of the encrypted archive into a scratch database before delivery
+(ADR-0025). Failures raise `backup.run_failed`, `backup.delivery_failed`,
+`backup.cleanup_failed`, `backup.disk_threshold_exceeded` and, with the schedule on,
+`backup.interval_exceeded` (§ Alerts).
+
+### Recording RPO and RTO from a drill
+
+No RPO or RTO has been measured for any installation; this repository holds no such
+figure, and none should be quoted until a drill on the real host produces one. Run the
+§ Restore drill against an ISOLATED database (`nexa_drill`, never the live one, never
+staging) and record:
+
+| Measure                          | How to read it                                                                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Worst-case RPO (data you lose)   | the schedule interval plus the observed backup duration below                                                                        |
+| Observed backup duration         | wall clock of `time pnpm backup run` (dump, encrypt, verify-by-restore, deliver), for the database size it had                       |
+| Restore time (RTO, data part)    | wall clock from `pnpm backup restore … --target nexa_drill` starting to it finishing                                                 |
+| Restore time (RTO, service part) | for a real Web Admin recovery: from confirmation to `/health/ready` answering 200 after the cutover (§ Restoring from the Web Admin) |
+| Archive size                     | whether it is still under 50 MiB, i.e. whether the off-host copy still happens                                                       |
+
+Write the date, release, database size and the five numbers into the installation's
+own runbook, and repeat after a release that changes the schema materially or when the
+archive approaches 50 MiB. A drill also proves the keys you actually hold can open the
+archive, which no automatic check can.
+
 ## Restoring from the Web Admin
 
 The CLI above is one way in. The other is **بکاپ و بازیابی** under **سامانه و
@@ -491,6 +544,35 @@ pools, and their own pool error listeners are what let them survive it. A
 uploaded archive's workspace after success.** Debris is reported on the row and
 in the operational log rather than cleaned up silently; a recovery that removed
 its own evidence would be a recovery nobody could audit.
+
+### Restoring a Mirza backup on the same page
+
+The «عملیات بازیابی» card also takes a Mirza `.nxpkg` from Mirza2Nexa (Phase 7). It is NOT a
+`.nxb` and does not replace the database: it is the Fresh Migration importer
+(`docs/legacy-migration/nxpkg-importer.md` §10), executed by this same `recovery` role, into a
+NEXA that holds no operational data yet (a non-empty installation is refused; nothing is deleted).
+Before it writes anything it takes a verified `PRE_RESTORE` backup through this pipeline
+(`preImportBackupRunId`; restoring it here undoes the import), and while it applies the whole
+installation is quiesced exactly as during a restore (`recovery.quiesced`, the relay idle). One at
+a time: a restore is not confirmed while a Mirza import is approved or applying, and the reverse —
+both confirmations take one advisory lock and read the other inside their own transaction, and if
+both ever committed the recovery executor claims the restore and fails it at once
+(`recovery.confirmation_invalid`) before anything destructive. Both of the import's backups — the
+protective one and the one after — run with `deliver: false`: verified and kept on this server,
+recorded `NOT_ATTEMPTED`, never sent to Telegram (a restore sends nothing to Telegram, and the
+archive holds every imported customer). Download them from the history like any local archive.
+
+**A `deliver: false` run announces nothing.** Its `backup.run_ok` / `backup.run_failed` (and a
+cleanup condition) are recorded on the operational-event writer WITHOUT the projection to the
+operations group, so the run condition opens and closes as for any run but no Telegram message is
+queued; and it does not touch the delivery condition at all — "not attempted on purpose" neither
+opens `backup.delivery_failed` nor closes one as "not configured".
+
+**Restoring the protective backup closes the import it protected.** That backup is taken while the
+import is APPROVED, so the restored database carries the import row. Right after the cutover the
+recovery executor closes every unfinished import created before it (`CANCELLED`,
+`SUPERSEDED_BY_RESTORE`, key erased, lease released); the Mirza executor does the same on its own
+ticks as a backstop. Nothing is re-imported, and later restores and uploads are not blocked.
 
 ## The Recovery Kit — keep one, apart from the backups
 

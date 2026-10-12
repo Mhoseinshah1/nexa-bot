@@ -1,10 +1,14 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { resolveInstallationTenant } from './bootstrap.js';
+import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { stalledAfterGrace } from './modules/platform/opslog/application/loop-stall-reporter.js';
+
+/** The executor's name in the operations log: `job.loop_stalled:recovery-executor`. */
+const RECOVERY_EXECUTOR_LOOP = 'recovery-executor';
 
 /**
  * Process role: `recovery`.
@@ -34,6 +38,16 @@ import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.j
  * polling for a confirmed request that is not there. That is deliberate and it
  * is cheap: one indexed query per tick against a partial index over a handful of
  * states.
+ *
+ * PHASE 7 — THE SECOND RESTORE SOURCE. The Web Admin's restore page also takes a
+ * Mirza `.nxpkg` (`docs/legacy-migration/nxpkg-importer.md` §10), and this role is
+ * what executes it: `container.migrationExecutor`, the same loop `main.migration.ts`
+ * runs for the rehearsal kit, started here beside the recovery executor. Each has
+ * its own timer, lease and table; they exclude each other by state (a restore is
+ * not confirmed while an import is APPROVED or APPLYING, an import is neither
+ * approved nor started while a restore is confirmed), and the import's own write
+ * freeze is the restore's quiesce mechanism. `LEGACY_MIGRATION_ENABLED=false` is
+ * the kill switch: the loop then ticks, reports healthy and claims nothing.
  */
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -43,6 +57,15 @@ async function main(): Promise<void> {
   // tenant provisioned" branch and is silently dropped — and the events this
   // role records are the ones saying a restore of the whole database failed.
   await resolveInstallationTenant(container);
+
+  /*
+   * FIX-03 (batch 2026-10-10): an executor whose tick throws every time is an operational
+   * condition. A recovery confirmed into a dead executor is an operator waiting on a
+   * progress page that will never move, and until this the only sign was this container's
+   * health. During a run `isFresh` is true by design, so a long restore is not a stall.
+   */
+  const loopStalls = loopStallReporterFor(container, 'recovery');
+  let executorStartedAt: number | null = null;
 
   /**
    * The heartbeat, and what it is allowed to claim.
@@ -71,7 +94,23 @@ async function main(): Promise<void> {
       } catch {
         return false;
       }
-      return container.recoveryExecutor.isFresh(container.clock.now().getTime());
+      const now = container.clock.now().getTime();
+      const fresh = container.recoveryExecutor.isFresh(now);
+      // Not awaited, and it never throws: reporting must not slow or fail the heartbeat.
+      void loopStalls.observe([
+        {
+          name: RECOVERY_EXECUTOR_LOOP,
+          stalled: stalledAfterGrace({
+            fresh,
+            startedAtMs: executorStartedAt,
+            nowMs: now,
+            graceMs: config.RECOVERY_TICK_MS * 3,
+          }),
+        },
+      ]);
+      // BOTH loops: a role whose migration loop stopped ticking is not healthy just because
+      // the recovery loop still is (each loop's own step keeps its own lease alive).
+      return fresh && container.migrationExecutor.isFresh(now);
     },
   });
 
@@ -97,6 +136,9 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
     close: async () => {
       heartbeat.stop();
+      // Stops the TIMER only, as for the recovery executor: an import step in flight runs to
+      // its end, or is resumed from its phase bookmark after its lease expires.
+      container.migrationExecutor.stop();
       await container.shutdown();
     },
   });
@@ -105,9 +147,21 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   container.recoveryExecutor.start();
+  executorStartedAt = container.clock.now().getTime();
+  container.migrationExecutor.start();
+  if (!config.LEGACY_MIGRATION_ENABLED) {
+    container.logger.warn(
+      {},
+      'Mirza package restore is turned off (LEGACY_MIGRATION_ENABLED=false); no package will be processed',
+    );
+  }
   container.logger.info(
-    { env: config.NODE_ENV, tickMs: config.RECOVERY_TICK_MS },
-    'recovery executor running',
+    {
+      env: config.NODE_ENV,
+      tickMs: config.RECOVERY_TICK_MS,
+      migrationTickMs: config.LEGACY_MIGRATION_TICK_MS,
+    },
+    'recovery executor running, with the Mirza package executor beside it',
   );
 }
 

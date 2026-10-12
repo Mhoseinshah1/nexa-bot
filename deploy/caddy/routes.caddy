@@ -75,6 +75,17 @@
 		reverse_proxy api:3000
 	}
 
+	# A customer's browser coming back from a provider's payment page (CentralPay):
+	# `GET /payments/return/<provider>/<tenantId>?orderId=<n>`. NOT under /api, so
+	# without this block it fell to the SPA below — the customer was shown the admin
+	# login page with a 200 instead of the 302 back to the bot, and the return's one
+	# job, bringing the server-to-server verify forward, never happened. The return
+	# is a hint and decides nothing; the API answers it identically for any order id.
+	@gateway_return path /payments/return/*
+	handle @gateway_return {
+		reverse_proxy api:3000
+	}
+
 	# --- The Web Admin -------------------------------------------------------
 
 	# Hashed filenames, so a year is safe and a new release busts the cache by
