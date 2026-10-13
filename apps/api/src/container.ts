@@ -795,6 +795,8 @@ export interface LegacyInventoryOptions {
   readonly inventoryAttempts?: number;
   /** A seam for the pause between attempts (tests); the real one waits. */
   readonly inventorySleep?: (ms: number) => Promise<void>;
+  /** The executor step's signal: a lost lease ends an inventory read before another attempt. */
+  readonly inventorySignal?: AbortSignal;
 }
 
 export interface Container {
@@ -6771,10 +6773,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // And up to INVENTORY_READ_ATTEMPTS double walks when a read is incomplete or a page did
     // not answer: a production-like dry run that planned on an incomplete read is not
     // approvable, so a panel that moved for a moment must not cost the owner a dry run.
-    importer: () =>
+    importer: (signal) =>
       container.legacyImporter({
         inventoryPageSize: INVENTORY_MAX_PAGE_SIZE,
         inventoryAttempts: INVENTORY_READ_ATTEMPTS,
+        ...(signal === undefined ? {} : { inventorySignal: signal }),
       }),
     history: () => container.legacyHistoryIngest,
     cutover: () => container.legacyCutover,
@@ -7004,6 +7007,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         ...(options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize }),
         ...(options.inventoryAttempts === undefined ? {} : { attempts: options.inventoryAttempts }),
         ...(options.inventorySleep === undefined ? {} : { sleep: options.inventorySleep }),
+        ...(options.inventorySignal === undefined ? {} : { signal: options.inventorySignal }),
       },
       () => clock.now(),
     );

@@ -629,6 +629,52 @@ describe('the confirmation', () => {
     expect(screen.queryByText(t('web.mrz_inventory_incomplete_title'))).toBeNull();
   });
 
+  it('production-like: withholds the confirmation of a dry run that reported no plan digest, and says to run it again', async () => {
+    // `null` is what the page can receive: the client parses the view with the contract schema,
+    // where the key is required, so a report with NO key never reaches this step (the server
+    // refuses that one on its own — tests/unit/legacy-migration.test.ts).
+    const api = page([reviewed({ dryRunReport: { ...dryRunReport, planTalliesDigest: null } })], {
+      capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK },
+    });
+    expect(await screen.findByText(t('web.mrz_digest_missing_title'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
+    expect(posts(api)).toEqual([]);
+  });
+
+  it('off a production-like target, a dry run with no plan digest is not withheld here', async () => {
+    page([reviewed({ dryRunReport: { ...dryRunReport, planTalliesDigest: null } })]);
+    expect(
+      await screen.findByRole('button', { name: t('web.mrz_confirm_button') }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t('web.mrz_digest_missing_title'))).toBeNull();
+  });
+
+  it('says in words when the server refuses a dry run that reported no plan digest', async () => {
+    page([reviewed()], {
+      capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK },
+      extra: [
+        approve(
+          {
+            error: {
+              kind: 'conflict',
+              code: 'legacy_migration.invalid_state',
+              message: 'no plan digest',
+              correlationId: 'c1',
+              details: { status: 'DRY_RUN_DONE', reason: 'PLAN_DIGEST_MISSING' },
+            },
+          },
+          409,
+        ),
+      ],
+    });
+    const field = await screen.findByLabelText(
+      t('web.lmg_approval_phrase').replace('{phrase}', LEGACY_MIGRATION_APPROVAL_PHRASE),
+    );
+    fireEvent.change(field, { target: { value: LEGACY_MIGRATION_APPROVAL_PHRASE } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.mrz_confirm_button') }));
+    expect(await screen.findByText(t('web.mrz_digest_missing_body'))).toBeInTheDocument();
+  });
+
   it('says in words when the server refuses a dry run planned on an incomplete RickPanel read', async () => {
     page([reviewed()], {
       capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK },

@@ -1067,13 +1067,18 @@ describe('legacy migration: the executor over a real package', () => {
         (await container.recoveryRequests.installationLock(tx)) !== null,
       logger: quiet,
     });
+    // Every importer the adapter asks for, and the step signal it was handed (the lease).
+    const importerSignals: (AbortSignal | undefined)[] = [];
     const adapters = new NxpkgMigrationAdapters({
       db,
-      importer: () =>
-        container.legacyImporter({
+      importer: (signal) => {
+        importerSignals.push(signal);
+        return container.legacyImporter({
           inventoryAttempts: INVENTORY_READ_ATTEMPTS,
           inventorySleep: async () => undefined,
-        }),
+          ...(signal === undefined ? {} : { inventorySignal: signal }),
+        });
+      },
       history: () => container.legacyHistoryIngest,
       cutover: () => container.legacyCutover,
       uow: container.uow,
@@ -1124,7 +1129,7 @@ describe('legacy migration: the executor over a real package', () => {
         confirmation: LEGACY_MIGRATION_APPROVAL_PHRASE,
         targetAcknowledgement: ack,
       });
-    return { executor, service, toDryRun, approve };
+    return { executor, service, toDryRun, approve, importerSignals };
   }
 
   const codes = (rows: readonly { code: string; count: number }[] | undefined) =>
@@ -1170,6 +1175,10 @@ describe('legacy migration: the executor over a real package', () => {
     await page.executor.tick();
     const done = await detail(id);
     expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
+    // The executor's step signal reaches every importer the adapter built, so a lost lease
+    // ends the importer's live panel read (and its pause) before the import's first write.
+    expect(page.importerSignals.length).toBeGreaterThan(0);
+    for (const signal of page.importerSignals) expect(signal).toBeInstanceOf(AbortSignal);
     for (const fake of [panelA, panelB]) {
       expect(
         fake.requests.filter(

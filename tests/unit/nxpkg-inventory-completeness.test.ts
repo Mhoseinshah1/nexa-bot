@@ -290,6 +290,59 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
     expect(panel.tokenExchanges).toBe(1);
   });
 
+  it('a lost lease ends the REAL pause at once and starts no further attempt (no read after it)', async () => {
+    const panel = panelOf(NAMES);
+    const lease = new AbortController();
+    // Attempt 1 comes out incomplete; the lease is lost 10 ms into the 15 s pause.
+    panel.beforePage = (walk, offset) => {
+      if (walk === 1 && offset === 2) {
+        panel.names.pop();
+        setTimeout(() => {
+          lease.abort(new Error('lease lost'));
+        }, 10);
+      }
+      return undefined;
+    };
+    const source = new RickpanelInventorySource(
+      {
+        panel: async () => ({ baseUrl: 'https://panel.invalid', providerType: 'rickpanel' }),
+        credentials: async () => ({ username: 'admin', password: 'synthetic', apiToken: null }),
+        http: () => clientOf(panel),
+      },
+      // No `sleep` seam: the real pause, which must end on the signal, not after 15 s.
+      { pageSize: 2, attempts: INVENTORY_READ_ATTEMPTS, signal: lease.signal },
+      () => new Date('2026-10-13T08:00:00.000Z'),
+    );
+    const started = Date.now();
+    await expect(source.read(SCOPE, 'panel')).rejects.toThrow('lease lost');
+    expect(Date.now() - started).toBeLessThan(5_000);
+    // One attempt's logins only: nothing was read after the lease was lost.
+    const loginsAtAbort = panel.tokenExchanges;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(panel.tokenExchanges).toBe(loginsAtAbort);
+    expect(loginsAtAbort).toBeLessThanOrEqual(2);
+  });
+
+  it('a lease lost during the pause seam is checked before the next attempt', async () => {
+    const panel = panelOf(NAMES);
+    panel.beforePage = (walk, offset) => {
+      if (walk === 1 && offset === 2) panel.names.pop();
+      return undefined;
+    };
+    const lease = new AbortController();
+    const { source } = sourceFor(panel, {
+      sleep: async () => {
+        lease.abort(new Error('lease lost'));
+      },
+      signal: lease.signal,
+    } as never);
+    const before = panel.tokenExchanges;
+    await expect(source.read(SCOPE, 'panel')).rejects.toThrow('lease lost');
+    // The first attempt's walks only (an inconsistent first walk ends the attempt): no
+    // token exchange after the pause.
+    expect(panel.tokenExchanges - before).toBe(1);
+  });
+
   it('attempts: 1 reads once', async () => {
     const panel = panelOf(NAMES);
     panel.beforePage = (walk, offset) => {

@@ -108,7 +108,11 @@ import {
  */
 export interface NxpkgMigrationAdapterDeps {
   readonly db: Database;
-  readonly importer: () => LegacyImporterService;
+  /**
+   * The importer, given the executor step's signal: its live RickPanel read stops on a lost
+   * lease (between attempts and during the pause), before the import's first write.
+   */
+  readonly importer: (signal?: AbortSignal) => LegacyImporterService;
   readonly history: () => LegacyHistoryIngest;
   /** The owner's cutover approvals and the stop-sales sample (`/legacy-cutover`). */
   readonly cutover: () => LegacyCutoverService;
@@ -405,7 +409,7 @@ export class NxpkgMigrationAdapters
           'The apply has no approved dry run of this source.',
         );
       }
-      const importer = this.deps.importer();
+      const importer = this.deps.importer(context.signal);
       const common = {
         scope: context.scope,
         actor: context.actor,
@@ -462,7 +466,7 @@ export class NxpkgMigrationAdapters
       // finished run of this source IS the outcome — never a second import).
       let mode: 'import' | 'resume' = 'import';
       if (input.mode === 'RESUME') {
-        if ((await this.deps.importer().runningRun(context.scope)) !== null) {
+        if ((await this.deps.importer(context.signal).runningRun(context.scope)) !== null) {
           mode = 'resume';
         } else if (
           !(
@@ -638,7 +642,7 @@ export class NxpkgMigrationAdapters
       ...(mode === 'report' ? ['--report-schema', '2'] : []),
     ]);
     const report = await cli.runMode(
-      this.deps.importer(),
+      this.deps.importer(context.signal),
       args,
       connector,
       mapping,
@@ -715,7 +719,7 @@ export class NxpkgMigrationAdapters
       'inventoryFingerprint' | 'productsFingerprint' | 'invoiceArchiveFingerprint'
     >
   > {
-    const importer = this.deps.importer();
+    const importer = this.deps.importer(context.signal);
     const common = {
       scope: context.scope,
       actor: context.actor,
@@ -864,7 +868,7 @@ export class NxpkgMigrationAdapters
     readonly inventoryVerdict: string;
     readonly tables: readonly InventoryTableLine[];
   }> {
-    const importer = this.deps.importer();
+    const importer = this.deps.importer(context.signal);
     const fresh = await freshCutoverFingerprints(importer, connector, fingerprint, {
       scope: context.scope,
       actor: context.actor,

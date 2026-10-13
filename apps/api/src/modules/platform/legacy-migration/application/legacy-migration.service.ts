@@ -3,6 +3,7 @@ import {
   LEGACY_MIGRATION_APPROVAL_PHRASE,
   legacyMigrationDryRunInventoryIncomplete,
   LEGACY_MIGRATION_DECISIONS_MAX_BYTES,
+  LEGACY_MIGRATION_PLAN_DIGEST_MISSING,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
   LEGACY_MIGRATION_HTTP_ERROR_CODES,
   LEGACY_MIGRATION_PAGE_MAX,
@@ -663,7 +664,7 @@ export class LegacyMigrationService {
           throw errors.conflict(
             CODES.INVALID_STATE,
             'This dry run reported no plan digest. Run the dry run again. Nothing was approved.',
-            { status: row.status, reason: 'PLAN_DIGEST_MISSING' },
+            { status: row.status, reason: LEGACY_MIGRATION_PLAN_DIGEST_MISSING },
           );
         }
         const values = row.dryRunReport?.cutover;

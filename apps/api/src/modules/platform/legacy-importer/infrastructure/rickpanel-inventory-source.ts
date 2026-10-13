@@ -136,6 +136,12 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       readonly attempts?: number;
       /** A seam for the pause between attempts; the real one waits. */
       readonly sleep?: (ms: number) => Promise<void>;
+      /**
+       * The executor step's signal (its lease). Checked before every attempt, and the pause
+       * between attempts ends on it: a worker that lost its lease stops HERE, inside the
+       * importer's `prepare` — before any write — instead of waking up to read and plan again.
+       */
+      readonly signal?: AbortSignal;
     } = {},
     private readonly now: () => Date = () => {
       throw new Error('RickpanelInventorySource needs the Clock to stamp a read');
@@ -144,8 +150,21 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
 
   private sleep(ms: number): Promise<void> {
     if (this.options.sleep !== undefined) return this.options.sleep(ms);
-    return new Promise((resolve) => {
-      setTimeout(resolve, ms);
+    const signal = this.options.signal;
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted === true) {
+        reject(signal.reason as Error);
+        return;
+      }
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal?.reason as Error);
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      signal?.addEventListener('abort', onAbort, { once: true });
     });
   }
 
@@ -176,6 +195,8 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         const delays = INVENTORY_RETRY_DELAYS_MS;
         await this.sleep(delays[Math.min(attempt - 1, delays.length - 1)] ?? 0);
       }
+      // A lost lease ends the read before another attempt, never after it.
+      this.options.signal?.throwIfAborted();
       attempt += 1;
       outcome = await this.reader.listAll({ baseUrl: panel.baseUrl, credentials }, http, {
         ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
