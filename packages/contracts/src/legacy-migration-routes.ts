@@ -359,6 +359,14 @@ export type LegacyMigrationDryRunReport = z.infer<typeof legacyMigrationDryRunRe
 export const LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE = 'PROVIDER_INVENTORY_INCOMPLETE';
 
 /**
+ * The `reason` a production-like approval refusal (`legacy_migration.invalid_state`) carries
+ * when the dry run reported no plan digest: without it the import could be bound to no approved
+ * plan (`DRY_RUN_MISMATCH` would compare nothing). The server's refusal and the Web Admin's
+ * courtesy name it from here. A detail value, not an error code.
+ */
+export const LEGACY_MIGRATION_PLAN_DIGEST_MISSING = 'PLAN_DIGEST_MISSING';
+
+/**
  * How many production panels a dry run planned on without a complete live RickPanel inventory.
  * On a production-like target such a dry run is NOT approvable and its apply does not start:
  * the import reads the panel again, and a plan made on a read that did not hold cannot be
