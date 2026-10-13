@@ -1194,16 +1194,20 @@ describe('legacy migration: the executor over a real package', () => {
     expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
     expect(failed.applyLegacyRunId).toBeNull();
     const refusal = codes(failed.progress.refusalCounts);
-    // Each moved number, both sides; the money did not move and is not listed.
-    expect(refusal['apply:services:ADOPTION_ELIGIBLE']).toBeLessThan(
-      refusal['dryrun:services:ADOPTION_ELIGIBLE'] ?? 0,
-    );
+    // Each moved number, both sides; the money did not move and is not listed. The invoices
+    // whose accounts were deleted are now PROVIDER_MISSING (in this package they were spread
+    // over other categories before, not ADOPTION_ELIGIBLE: what moved is what is recorded).
     expect(refusal['apply:services:PROVIDER_MISSING']).toBeGreaterThan(
       refusal['dryrun:services:PROVIDER_MISSING'] ?? Infinity,
     );
     expect(Object.keys(refusal).some((k) => /customers|wallet/u.test(k))).toBe(false);
     for (const code of Object.keys(refusal)) {
-      expect(code).toMatch(/^(dryrun|apply):[a-z_]+:[A-Za-z_]+$/u);
+      // Only the panel read moved, so only service categories are listed — each as a pair.
+      expect(code).toMatch(/^(dryrun|apply):services:[A-Z_]+$/u);
+      const other = code.startsWith('dryrun:')
+        ? code.replace('dryrun:', 'apply:')
+        : code.replace('apply:', 'dryrun:');
+      expect(refusal[other], other).toBeDefined();
     }
     expect(await count('customers')).toBe(0);
     expect(await count('wallet_entries')).toBe(0);

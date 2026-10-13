@@ -358,7 +358,9 @@ describe('the recovery executor', () => {
         freezeProofSha256: H('f'),
         finalDumpSha256: H('1'),
       },
-      planTalliesDigest: null,
+      // A real dry run always reports the plan's digest; a production-like approval refuses
+      // one without it (PLAN_DIGEST_MISSING), so the hand-written row carries one.
+      planTalliesDigest: H('7'),
     };
     // A REAL sealed key: a restored database must name only keys this installation holds.
     const sealed = container.cipher.encrypt('the package passphrase', {
@@ -593,7 +595,9 @@ describe('the recovery executor', () => {
         stale: 0,
       },
       cutover,
-      planTalliesDigest: null,
+      // A real dry run always reports the plan's digest; a production-like approval refuses
+      // one without it (PLAN_DIGEST_MISSING), so the hand-written row carries one.
+      planTalliesDigest: H('7'),
     };
     const verifyReport = {
       packageImportId: 'pkg',
