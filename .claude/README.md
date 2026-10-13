@@ -29,6 +29,29 @@ stops prompting for the same fifteen. **`permissions.deny`** blocks pushing to
   what stops the twelfth session from inventing a `balance` float column.
 - **`nexa-migrations`** — how to write and verify a migration here, including
   the things `drizzle-kit` does not model.
+- **`nexa-code-navigation`** — the layer map and `scripts/trace.sh <term>`,
+  which lists the files behind a feature, layer by layer, in one call, so a
+  session searches instead of reading directories.
+- **`nexa-test-selection`** — which tests to run while iterating, which guard
+  suites (money, migration, security, legacy import, deploy) are never
+  narrowed, and when the full gate runs. `scripts/select-tests.sh` prints the
+  commands; it never skips or removes a test.
+- **`nexa-pr-workflow`** — branch → PR → CI → review → merge, with
+  `scripts/branch-check.sh` for conflicts, contract changes and
+  migration-number collisions. Merging, tagging and releasing stay the owner's
+  explicit call.
+- **`nexa-handoff`** — a short structured handoff between sessions;
+  `scripts/handoff-facts.sh` generates the git half.
+- **`nexa-web-design`** — Web Admin rules (RTL, Vazirmatn, tokens, CSP, touch,
+  accessibility, permissions, no demo data). The visual redesign is paused;
+  `references/redesign-status.md` records that and is where an approved
+  reference will be registered.
+
+Skills load progressively: only each `description` is in context until a task
+matches it; the body and any `references/` file are read on demand. Keep
+descriptions specific and bodies short, and point at `docs/` rather than
+copying it. The scripts are read-only helpers; each has a `*.test.sh` beside it
+(run by hand — they are not part of `pnpm verify`).
 
 ### `agents/`
 
