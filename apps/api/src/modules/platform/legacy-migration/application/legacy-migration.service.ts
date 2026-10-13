@@ -653,7 +653,13 @@ export class LegacyMigrationService {
           );
         }
         // Production-like: a dry run without the plan's digest cannot bind the import to it.
-        if (this.deps.productionLikeTarget && row.dryRunReport?.planTalliesDigest === null) {
+        // Not only `null`: the stored report is not re-parsed, and a row written by a release
+        // before the field existed has no key at all — the import would then be given no
+        // digest and compare nothing. Anything that is not the digest string is refused.
+        if (
+          this.deps.productionLikeTarget &&
+          typeof row.dryRunReport?.planTalliesDigest !== 'string'
+        ) {
           throw errors.conflict(
             CODES.INVALID_STATE,
             'This dry run reported no plan digest. Run the dry run again. Nothing was approved.',

@@ -658,6 +658,13 @@ describe('the apply, before the protective backup: an approval from before the g
       code: 'DRY_RUN_MISMATCH',
       counts: [{ code: 'dryrun:plan:digest_missing', count: 1 }],
     });
+    // An approval of a report stored before the field existed: the key is ABSENT, not null.
+    // Refused the same way — `runMode` would otherwise hand the importer no digest at all.
+    const unkeyed = { ...(context as object), dryRunReport: { warnings: [] } } as never;
+    await expect(adapters.precheck(unkeyed, 'TARGET')).rejects.toMatchObject({
+      code: 'DRY_RUN_MISMATCH',
+      counts: [{ code: 'dryrun:plan:digest_missing', count: 1 }],
+    });
     // A complete dry run passes this gate and meets the next one (the acknowledgement).
     const complete = {
       ...(context as object),

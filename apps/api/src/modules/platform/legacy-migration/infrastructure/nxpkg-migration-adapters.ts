@@ -201,7 +201,12 @@ export class NxpkgMigrationAdapters
         );
       }
       // Without the plan's digest the import could not be bound to the approved plan at all.
-      if (context.dryRunReport !== null && context.dryRunReport.planTalliesDigest === null) {
+      // Not only `null`: a report stored by a release before the field existed has no key, and
+      // `runMode` would then hand the importer no digest to compare (fail closed on either).
+      if (
+        context.dryRunReport !== null &&
+        typeof context.dryRunReport.planTalliesDigest !== 'string'
+      ) {
         throw new LegacyMigrationStepFailure(
           'DRY_RUN_MISMATCH',
           'The approved dry run reported no plan digest to bind the import to.',

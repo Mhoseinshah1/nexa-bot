@@ -167,8 +167,10 @@ reaching it was not.
   (`TIMEOUT`, `UNREACHABLE`, `RATE_LIMITED`, `PROVIDER_ERROR` with no status or a 5xx). At the
   login only `TIMEOUT` and `UNREACHABLE` are retried: any answer the token exchange gave is one
   more failed login if asked again (a lockout is worse than a refusal). A 4xx or a page-shape
-  fault is never retried. Only an attempt complete on its own is indexed. The CLI and the
-  rehearsal walk read once, as before (`inventoryAttempts`).
+  fault is never retried. Only an attempt complete on its own is indexed. Each attempt is a full
+  `listAll`, which exchanges a token again: a retried read costs one more SUCCESSFUL login, so a
+  panel read logs in at most `INVENTORY_READ_ATTEMPTS` times, and a failed login ends the read.
+  The CLI and the rehearsal walk read once, as before (`inventoryAttempts`).
 - **The dry run says so**: `PROVIDER_INVENTORY_INCOMPLETE` (production panels) and one
   `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason. The importer's `sections.provider.panels`
   carries each read's counts (`diagnostics`: attempts, and per walk the pages, rows, distinct

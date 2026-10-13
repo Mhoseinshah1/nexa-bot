@@ -480,6 +480,15 @@ describe('LegacyMigrationService', () => {
       code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
       details: expect.objectContaining({ reason: 'PLAN_DIGEST_MISSING' }),
     });
+    // A report stored by a release before the field existed has NO key at all (the stored
+    // JSON is not re-parsed): refused the same way, never read as "a digest was given".
+    const { planTalliesDigest: _absent, ...withoutKey } = dryRunReport;
+    const unkeyed = await seeded(withoutKey as LegacyMigrationDryRunReport, true);
+    await expect(unkeyed.approve()).rejects.toMatchObject({
+      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+      details: expect.objectContaining({ reason: 'PLAN_DIGEST_MISSING' }),
+    });
+    expect(unkeyed.h.repository.rows.get(unkeyed.id)).toMatchObject({ status: 'DRY_RUN_DONE' });
   });
 
   it('Phase 7: off a production-like target the acknowledgement is ignored and nothing is stored', async () => {
