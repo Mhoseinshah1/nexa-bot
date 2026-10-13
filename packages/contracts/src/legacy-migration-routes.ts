@@ -350,6 +350,37 @@ export const legacyMigrationDryRunReportSchema = z.object({
 });
 export type LegacyMigrationDryRunReport = z.infer<typeof legacyMigrationDryRunReportSchema>;
 
+/**
+ * The dry run report's warning for the production panels whose LIVE RickPanel inventory was
+ * not complete when the dry run planned. Beside it, one `PROVIDER_INVENTORY_INCOMPLETE:<reason>`
+ * per reason (`TOTAL_CHANGED`, `COUNT_MISMATCH`, `WALKS_DIFFER`, a failure kind such as
+ * `TIMEOUT`).
+ */
+export const LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE = 'PROVIDER_INVENTORY_INCOMPLETE';
+
+/**
+ * How many production panels a dry run planned on without a complete live RickPanel inventory.
+ * On a production-like target such a dry run is NOT approvable and its apply does not start:
+ * the import reads the panel again, and a plan made on a read that did not hold cannot be
+ * compared with it (`DRY_RUN_MISMATCH`). ONE rule, for the server's refusal and the Web Admin's
+ * courtesy alike.
+ *
+ * Fails closed for a report written before the warning existed: there the services category
+ * `INVENTORY_INCOMPLETE` is the only trace (a production-like dry run with an incomplete TABLE
+ * inventory never reaches DRY_RUN_DONE, so on such a target that code is the services one).
+ */
+export function legacyMigrationDryRunInventoryIncomplete(
+  warnings: readonly LegacyMigrationCodeCount[] | null | undefined,
+): number {
+  let provider = 0;
+  let services = 0;
+  for (const w of warnings ?? []) {
+    if (w.code === LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE) provider += w.count;
+    if (w.code === 'INVENTORY_INCOMPLETE') services += w.count;
+  }
+  return Math.max(provider, services > 0 ? 1 : 0);
+}
+
 /** The apply's outcome (stored as `apply_report`). */
 export const legacyMigrationApplyReportSchema = z.object({
   importerVerdict: z.string(),
