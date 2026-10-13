@@ -10,10 +10,12 @@ import {
   effectiveInventoryPageSize,
   inventoryIndex,
   readOnlyRickpanelHttp,
+  type RickpanelInventoryOutcome,
 } from '../../providers/infrastructure/rickpanel-inventory.js';
 import { TOKEN_PATH } from '../../providers/infrastructure/rickpanel-protocol.js';
 import type {
   AccountRuntime,
+  LegacyInventoryDiagnostics,
   LegacyInventoryPort,
   LegacyInventoryRead,
 } from '../application/ports.js';
@@ -35,7 +37,57 @@ import type {
  *
  * Each panel is read with `listAll` — two consecutive walks that must agree — so the
  * matcher only ever sees a COMPLETE inventory; anything else is `INVENTORY_INCOMPLETE`.
+ *
+ * ## Attempts (DRY_RUN_MISMATCH)
+ *
+ * Opt-in (`attempts`; the Web Admin's `.nxpkg` importer asks for `INVENTORY_READ_ATTEMPTS`;
+ * every other caller — the CLI, the rehearsal walk — reads once, as before). A live panel that
+ * moves during a walk — or one that did not answer a page in time — is read again, up to
+ * `attempts` double walks, with a pause before each. The
+ * criterion is NOT relaxed by it: every attempt is a full `listAll`, and only an attempt that
+ * is complete on its own is ever indexed. What the attempts change is how often a dry run and
+ * an import each settle on a complete read of the same panel, rather than one of them
+ * plan on an incomplete one and the other on a complete one (another digest).
+ *
+ * Retried: an incomplete answer (`TOTAL_CHANGED`, `COUNT_MISMATCH`, `WALKS_DIFFER`) and, on a
+ * LIST page, the failures that say nothing about the panel's answer: `TIMEOUT`, `UNREACHABLE`,
+ * `RATE_LIMITED`, and `PROVIDER_ERROR` without a status or with a 5xx. At the LOGIN only
+ * `TIMEOUT` and `UNREACHABLE`: any answer the token exchange gave (a 400, a 401, a 429) is one
+ * more failed login if asked again, and a panel that limits logins turns those into a lockout.
+ * Never retried: every fault a second attempt would meet identically (a page shape, a row, the
+ * page bound, a 4xx).
  */
+
+/** Double walks per panel read the Web Admin's `.nxpkg` importer asks for. */
+export const INVENTORY_READ_ATTEMPTS = 3;
+/** The pause before the 2nd and 3rd attempt: time for a moving panel to settle. */
+export const INVENTORY_RETRY_DELAYS_MS: readonly number[] = [15_000, 45_000];
+
+/** Whether another double walk could answer differently. Exported for its own test. */
+export function inventoryRetryable(outcome: RickpanelInventoryOutcome): boolean {
+  if (outcome.ok) return !outcome.complete;
+  if (outcome.pagination !== undefined) return false;
+  if (outcome.failure === 'TIMEOUT' || outcome.failure === 'UNREACHABLE') return true;
+  if (outcome.phase === 'LOGIN') return false;
+  if (outcome.failure === 'RATE_LIMITED') return true;
+  return outcome.failure === 'PROVIDER_ERROR' && (outcome.status === null || outcome.status >= 500);
+}
+
+function diagnosticsOf(
+  outcome: RickpanelInventoryOutcome,
+  attempts: number,
+): LegacyInventoryDiagnostics {
+  if (!outcome.ok) {
+    return { attempts, walks: [], pagination: outcome.pagination ?? null, status: outcome.status };
+  }
+  const { first, second } = outcome.evidence;
+  return {
+    attempts,
+    walks: second === null ? [{ ...first }] : [{ ...first }, { ...second }],
+    pagination: null,
+    status: null,
+  };
+}
 
 export interface PanelReadAccess {
   /** The panel's address and provider type, in this tenant; null when it is not one. */
@@ -78,11 +130,24 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
 
   constructor(
     private readonly access: PanelReadAccess,
-    private readonly options: { readonly pageSize?: number } = {},
+    private readonly options: {
+      readonly pageSize?: number;
+      /** Double walks per read (default one; the Web Admin asks `INVENTORY_READ_ATTEMPTS`). */
+      readonly attempts?: number;
+      /** A seam for the pause between attempts; the real one waits. */
+      readonly sleep?: (ms: number) => Promise<void>;
+    } = {},
     private readonly now: () => Date = () => {
       throw new Error('RickpanelInventorySource needs the Clock to stamp a read');
     },
   ) {}
+
+  private sleep(ms: number): Promise<void> {
+    if (this.options.sleep !== undefined) return this.options.sleep(ms);
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
 
   requestCounts(): { readonly reads: number; readonly refusedWrites: number } {
     return { ...this.counts };
@@ -103,14 +168,29 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     );
     if (credentials === null) return { ok: false, failure: 'CREDENTIALS_MISSING' };
     const http = readOnlyRickpanelHttp(readOnlyGuard(this.access.http(panel.baseUrl), this.counts));
-    const outcome = await this.reader.listAll({ baseUrl: panel.baseUrl, credentials }, http, {
-      ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
-      subscriptionLinks: true,
-    });
-    if (!outcome.ok) return { ok: false, failure: outcome.failure };
-    if (!outcome.complete) return { ok: true, complete: false, reason: outcome.reason };
+    const attempts = Math.max(1, Math.trunc(this.options.attempts ?? 1));
+    let outcome: RickpanelInventoryOutcome | undefined;
+    let attempt = 0;
+    while (attempt < attempts) {
+      if (attempt > 0) {
+        const delays = INVENTORY_RETRY_DELAYS_MS;
+        await this.sleep(delays[Math.min(attempt - 1, delays.length - 1)] ?? 0);
+      }
+      attempt += 1;
+      outcome = await this.reader.listAll({ baseUrl: panel.baseUrl, credentials }, http, {
+        ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
+        subscriptionLinks: true,
+      });
+      if (!inventoryRetryable(outcome)) break;
+    }
+    if (outcome === undefined) throw new Error('an inventory read made no attempt');
+    const diagnostics = diagnosticsOf(outcome, attempt);
+    if (!outcome.ok) return { ok: false, failure: outcome.failure, diagnostics };
+    if (!outcome.complete) {
+      return { ok: true, complete: false, reason: outcome.reason, diagnostics };
+    }
     const index = inventoryIndex(panelId, outcome);
-    if (index === null) return { ok: true, complete: false, reason: 'NOT_INDEXABLE' };
+    if (index === null) return { ok: true, complete: false, reason: 'NOT_INDEXABLE', diagnostics };
     const states: Record<string, number> = {};
     // The runtime facts P6 adopts from, from the SAME complete walk as the index — never
     // a second read that could describe a different moment. The link is the inventory's
@@ -141,6 +221,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       states,
       runtime,
       observedAt: this.now(),
+      diagnostics,
     };
   }
 }

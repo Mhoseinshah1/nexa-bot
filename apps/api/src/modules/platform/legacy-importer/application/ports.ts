@@ -250,6 +250,37 @@ export interface AccountRuntime {
   readonly subscriptionUrl: string | null;
 }
 
+/**
+ * One walk of a panel's list, as counts (`RickpanelInventoryEvidence`): pages read, rows
+ * received, distinct exact spellings, rows already seen, the panel's own `total` on the first
+ * page, and the first and last page's rows. Never a name.
+ */
+export interface LegacyInventoryWalkCounts {
+  readonly pages: number;
+  readonly rowsFetched: number;
+  readonly distinctUsernames: number;
+  readonly duplicateRows: number;
+  readonly reportedTotal: number | null;
+  readonly firstPageRows: number;
+  readonly lastPageRows: number;
+}
+
+/**
+ * How a panel read came out, as counts only — what an operator reads to tell a moving panel
+ * (`TOTAL_CHANGED`, `WALKS_DIFFER`) from a list that never adds up (`COUNT_MISMATCH` with
+ * duplicate rows: an unstable order) or a panel that did not answer (`TIMEOUT`).
+ */
+export interface LegacyInventoryDiagnostics {
+  /** Complete double walks attempted (1 when the first one was complete). */
+  readonly attempts: number;
+  /** The LAST attempt's walks: one when its first walk was already inconsistent, else two. */
+  readonly walks: readonly LegacyInventoryWalkCounts[];
+  /** The pagination fault the last attempt failed on, when it failed on one. */
+  readonly pagination: string | null;
+  /** The HTTP status the last attempt failed with, when it failed with one. */
+  readonly status: number | null;
+}
+
 export type LegacyInventoryRead =
   | {
       readonly ok: true;
@@ -264,9 +295,19 @@ export type LegacyInventoryRead =
       readonly runtime: ReadonlyMap<string, AccountRuntime>;
       /** When the walk that produced these facts finished. */
       readonly observedAt: Date;
+      readonly diagnostics?: LegacyInventoryDiagnostics;
     }
-  | { readonly ok: true; readonly complete: false; readonly reason: string }
-  | { readonly ok: false; readonly failure: string };
+  | {
+      readonly ok: true;
+      readonly complete: false;
+      readonly reason: string;
+      readonly diagnostics?: LegacyInventoryDiagnostics;
+    }
+  | {
+      readonly ok: false;
+      readonly failure: string;
+      readonly diagnostics?: LegacyInventoryDiagnostics;
+    };
 
 /**
  * The READ-ONLY provider surface. Implemented over `RickpanelInventoryReader` and

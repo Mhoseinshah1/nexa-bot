@@ -91,7 +91,9 @@ On the admin page **«مهاجرت از میرزا»**:
    - `customers`, `wallet_openings`, `legacy_debts`, `trials`, `products`, `invoice_archive`,
      `services`, `history` and every `history:<type>`;
    - one `table:<class>:<name>` per Mirza table — no `table:UNCLASSIFIED:…` line may exist, and
-     no `INVENTORY_INCOMPLETE` warning (a production-like dry run refuses it anyway);
+     no `TABLE_INVENTORY_INCOMPLETE` warning (a production-like dry run refuses it), and no
+     `INVENTORY_INCOMPLETE` / `PROVIDER_INVENTORY_INCOMPLETE` warning (a production-like
+     approval refuses it: a panel was not read completely — see `nxpkg-importer.md` §4a);
    - warnings and quarantine; the wallet and debt totals; the ownership summary;
    - the seven cutover values.
      Write the figures down (or save the page) — §6 compares them.

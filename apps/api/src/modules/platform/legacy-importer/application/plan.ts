@@ -26,7 +26,7 @@ import {
   type ServiceCandidateDecision,
 } from './decisions.js';
 import { unmappedCodePanels, type PanelMapping } from './panel-mapping.js';
-import type { LegacyInventoryRead, RecordedDebt } from './ports.js';
+import type { LegacyInventoryDiagnostics, LegacyInventoryRead, RecordedDebt } from './ports.js';
 import {
   sha256Hex,
   type LegacyInvoiceRow,
@@ -97,6 +97,8 @@ export interface PanelInventorySummary {
   readonly accounts: number | null;
   readonly reason: string | null;
   readonly states: Readonly<Record<string, number>>;
+  /** How the read came out, as counts (attempts, each walk's pages and totals). */
+  readonly diagnostics: LegacyInventoryDiagnostics | null;
 }
 
 export interface LegacyPlan {
@@ -563,6 +565,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
         accounts: read.accounts,
         reason: null,
         states: read.states,
+        diagnostics: read.diagnostics ?? null,
       });
     } else {
       inventories.push({
@@ -571,6 +574,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
         accounts: null,
         reason: read === undefined ? 'NOT_READ' : read.ok ? read.reason : read.failure,
         states: {},
+        diagnostics: read?.diagnostics ?? null,
       });
     }
   }
@@ -619,14 +623,91 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
 }
 
 /**
- * Mirza `.nxpkg` importer — the digest of a plan's tallies (`DRY_RUN_MISMATCH`). A dry run
- * reports it (`sections.planTalliesDigest`); an import given the approved one recomputes the
- * plan's tallies at its start and refuses to start on any other value. Keys sorted at every
- * depth, a bigint as its decimal string with an `n` suffix, so the value is stable across runs
- * and processes. Counts and sums only: no key, no person.
+ * Mirza `.nxpkg` importer — the digest of a plan (`DRY_RUN_MISMATCH`). A dry run reports it
+ * (`sections.planTalliesDigest`); an import given the approved one recomputes it at its start
+ * and refuses to start on any other value. Keys sorted at every depth, a bigint as its decimal
+ * string with an `n` suffix, so the value is stable across runs and processes.
+ *
+ * v2 binds, beside the tallies, every live invoice's service decision (`servicesDecisionDigest`).
+ * The tallies alone could hold still while the plan moved: an account deleted on the panel and
+ * another created between the dry run and the import turn one invoice PROVIDER_MISSING and
+ * another ADOPTION_ELIGIBLE — the same counts, and an adoption of an account the owner never
+ * saw in the approved plan. Runtime facts (usage, state, link) are deliberately NOT in it:
+ * they move by the minute on a live panel, and the import adopts from its own read anyway.
  */
-export function planTalliesDigest(plan: Pick<LegacyPlan, 'tallies'>): string {
+export function planTalliesDigest(plan: Pick<LegacyPlan, 'tallies' | 'services'>): string {
+  return sha256Hex(
+    stableJson({
+      format: 'nexa-legacy-plan-tallies/v2',
+      tallies: plan.tallies,
+      services: servicesDecisionDigest(plan.services),
+    }),
+  );
+}
+
+/**
+ * The v1 digest (tallies only), the one a dry run approved before v0.5.7 carries. Asked only to
+ * say WHY such an approval no longer matches (`PLAN_DIGEST_FORMAT_OUTDATED`) — never accepted.
+ */
+export function planTalliesDigestV1(plan: Pick<LegacyPlan, 'tallies'>): string {
   return sha256Hex(stableJson({ format: 'nexa-legacy-plan-tallies/v1', tallies: plan.tallies }));
+}
+
+/** The refusal count of an approval whose digest is the v1 digest of this very plan. */
+export const PLAN_DIGEST_FORMAT_OUTDATED = 'plan:digest_format_outdated';
+
+/**
+ * The digest of every live invoice's service decision: its category and, for an eligible one,
+ * the panel, the exact provider spelling, the product path and the customer it would adopt
+ * into. Sorted by invoice, so it does not depend on the snapshot's row order. A digest: no
+ * name or id leaves the importer through it.
+ */
+export function servicesDecisionDigest(services: readonly PlannedService[]): string {
+  const rows = services
+    .map(({ invoice, decision }) =>
+      decision.category === 'ADOPTION_ELIGIBLE'
+        ? [
+            invoice.idInvoice,
+            decision.category,
+            decision.panelId,
+            decision.providerUsername,
+            decision.product.kind,
+            decision.product.kind === 'NAMED_PRODUCT'
+              ? decision.product.productId
+              : decision.product.shapeKey,
+            decision.telegramUserId,
+          ]
+        : [invoice.idInvoice, decision.category],
+    )
+    .map(stableJson)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return sha256Hex(`[${rows.join(',')}]`);
+}
+
+/**
+ * What a `DRY_RUN_MISMATCH` refusal carries, so the operator can see WHICH tally moved: the
+ * import's own service categories, new customers, openings and debts, product shapes, and how
+ * many production panels had no complete RickPanel inventory — the one input the dry run and
+ * the import each read LIVE, which none of the seven cutover values binds. Each key names a
+ * number the approved dry run's report also carries (the adapter's `mismatchCounts`), so the two
+ * sides can be set beside each other. Counts only: no key, no person, no panel id.
+ */
+export function planTalliesRefusalCounts(
+  plan: Pick<LegacyPlan, 'tallies' | 'inventories'>,
+): Record<string, number> {
+  const { tallies } = plan;
+  const counts: Record<string, number> = {
+    'apply:customers:importable': tallies.customers.importable,
+    'apply:customers:new': tallies.customers.new,
+    'apply:wallet:positive': tallies.wallet.positive.count,
+    'apply:wallet:negative': tallies.wallet.negative.count,
+    'apply:products:distinct_shapes': tallies.products.distinctShapes,
+    'apply:panels:inventory_incomplete': plan.inventories.filter((p) => !p.complete).length,
+  };
+  for (const [category, count] of Object.entries(tallies.services.categories)) {
+    counts[`apply:services:${category}`] = count;
+  }
+  return counts;
 }
 
 function stableJson(value: unknown): string {

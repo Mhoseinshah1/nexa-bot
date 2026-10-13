@@ -70,7 +70,10 @@ import {
   decideAllServices,
   inventoryIndexes,
   planLegacyImport,
+  PLAN_DIGEST_FORMAT_OUTDATED,
   planTalliesDigest,
+  planTalliesDigestV1,
+  planTalliesRefusalCounts,
   type LegacyPlan,
 } from './plan.js';
 import { freshTargetProblems, type FreshTargetCheck } from './fresh-target.js';
@@ -904,14 +907,45 @@ export class LegacyImporterService {
         `The tenant sells in ${prepared.salesCurrency}; legacy balances are Toman (IRT) and are never converted.`,
       );
     }
+    // Production-like `.nxpkg` (or any import bound to a dry run's digest): an import plans
+    // only on a COMPLETE read of every production panel — the rule the owner's approval of the
+    // dry run met. Refused as itself, before the digest and whether or not a digest was given
+    // (the CLI's flag is optional), even where it would not move a tally: what the import
+    // adopts from must be a read that held. A resume is not refused: its own writes stand.
+    const unread = prepared.plan.inventories.filter((p) => !p.complete).length;
+    if (
+      input.mode === 'IMPORT' &&
+      input.productionLikeTarget !== false &&
+      (input.dryRunTalliesDigest !== undefined || snapshot.descriptor.engine === 'NXPKG') &&
+      unread > 0
+    ) {
+      throw new NxpkgImportRefused(
+        'DRY_RUN_MISMATCH',
+        [
+          `${String(unread)} production panel(s) had no complete RickPanel inventory when the import read them: the plan cannot be compared with the approved dry run. Nothing was written; run and approve a new dry run.`,
+        ],
+        planTalliesRefusalCounts(prepared.plan),
+      );
+    }
     // `.nxpkg`: an import starts only from the plan the owner approved in its dry run. A
     // resume is not compared: its own earlier writes are part of NEXA's state now.
     if (input.mode === 'IMPORT' && input.dryRunTalliesDigest !== undefined) {
       const now = planTalliesDigest(prepared.plan);
       if (now !== input.dryRunTalliesDigest) {
-        throw new NxpkgImportRefused('DRY_RUN_MISMATCH', [
-          `the plan's tallies digest is ${now}, not the approved dry run's ${input.dryRunTalliesDigest}: NEXA's state or the input changed since the dry run. Nothing was written.`,
-        ]);
+        // A dry run approved before v2 carries the v1 digest of the same tallies: said as
+        // that, not as a plan that moved. The owner runs and approves a new dry run.
+        const outdated = planTalliesDigestV1(prepared.plan) === input.dryRunTalliesDigest;
+        // The import's own tallies go with the refusal (counts only): which one moved is
+        // the diagnosis, and the message itself is never shown past the adapter (L3).
+        throw new NxpkgImportRefused(
+          'DRY_RUN_MISMATCH',
+          [
+            outdated
+              ? 'the approved dry run carries a digest of an earlier format; run and approve a new dry run. Nothing was written.'
+              : `the plan's tallies digest is ${now}, not the approved dry run's ${input.dryRunTalliesDigest}: NEXA's state or the input changed since the dry run. Nothing was written.`,
+          ],
+          outdated ? { [PLAN_DIGEST_FORMAT_OUTDATED]: 1 } : planTalliesRefusalCounts(prepared.plan),
+        );
       }
     }
     const holdDigest = holdDigestOf(input);

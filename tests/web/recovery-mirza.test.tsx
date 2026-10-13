@@ -602,6 +602,59 @@ describe('the confirmation', () => {
     expect(await screen.findByText(t('web.mrz_fault_target_ack'))).toBeInTheDocument();
   });
 
+  const incompleteReport = {
+    ...dryRunReport,
+    warnings: [
+      ...dryRunReport.warnings,
+      { code: 'INVENTORY_INCOMPLETE', count: 1_234 },
+      { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 },
+      { code: 'PROVIDER_INVENTORY_INCOMPLETE:WALKS_DIFFER', count: 1 },
+    ],
+  };
+
+  it('production-like: withholds the confirmation of a dry run planned on an incomplete RickPanel read, and says why', async () => {
+    const api = page([reviewed({ dryRunReport: incompleteReport })], {
+      capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK },
+    });
+    expect(await screen.findByText(t('web.mrz_inventory_incomplete_title'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
+    expect(posts(api)).toEqual([]);
+  });
+
+  it('off a production-like target, the same dry run is the owner’s to confirm', async () => {
+    page([reviewed({ dryRunReport: incompleteReport })]);
+    expect(
+      await screen.findByRole('button', { name: t('web.mrz_confirm_button') }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t('web.mrz_inventory_incomplete_title'))).toBeNull();
+  });
+
+  it('says in words when the server refuses a dry run planned on an incomplete RickPanel read', async () => {
+    page([reviewed()], {
+      capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK },
+      extra: [
+        approve(
+          {
+            error: {
+              kind: 'conflict',
+              code: 'legacy_migration.invalid_state',
+              message: 'incomplete inventory',
+              correlationId: 'c1',
+              details: { status: 'DRY_RUN_DONE', reason: 'PROVIDER_INVENTORY_INCOMPLETE' },
+            },
+          },
+          409,
+        ),
+      ],
+    });
+    const field = await screen.findByLabelText(
+      t('web.lmg_approval_phrase').replace('{phrase}', LEGACY_MIGRATION_APPROVAL_PHRASE),
+    );
+    fireEvent.change(field, { target: { value: LEGACY_MIGRATION_APPROVAL_PHRASE } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.mrz_confirm_button') }));
+    expect(await screen.findByText(t('web.mrz_inventory_incomplete_body'))).toBeInTheDocument();
+  });
+
   it('offers no confirmation without legacy.migration.apply', async () => {
     const api = page([reviewed()], {
       permissions: MIRZA_ALL.filter((key) => key !== 'legacy.migration.apply'),

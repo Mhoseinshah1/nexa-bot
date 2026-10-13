@@ -418,6 +418,70 @@ describe('LegacyMigrationService', () => {
     );
   });
 
+  it('production-like: a dry run planned on an incomplete RickPanel inventory is NOT approvable (invalid_state, PROVIDER_INVENTORY_INCOMPLETE)', async () => {
+    const seeded = async (report: LegacyMigrationDryRunReport, productionLike: boolean) => {
+      const h = harness({ productionLike });
+      const id = await uploaded(h);
+      h.repository.put({
+        ...h.repository.rows.get(id)!,
+        status: 'DRY_RUN_DONE',
+        keyCiphertext: 'sealed',
+        keyKeyId: 'key-1',
+        keyKind: 'PASSPHRASE',
+        verifyReport: { ...verifyReport, synthetic: !productionLike },
+        dryRunReport: report,
+        dryRunSha256: reportDigest(report),
+      });
+      const approve = () =>
+        h.service.approve(scope, actor, id, {
+          idempotencyKey: key(),
+          dryRunSha256: reportDigest(report),
+          confirmation: LEGACY_MIGRATION_APPROVAL_PHRASE,
+          targetAcknowledgement: productionLike ? TARGET_ACK : null,
+        });
+      return { h, id, approve };
+    };
+    const incomplete: LegacyMigrationDryRunReport = {
+      ...dryRunReport,
+      warnings: [
+        ...dryRunReport.warnings,
+        { code: 'INVENTORY_INCOMPLETE', count: 1_234 },
+        { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 },
+        { code: 'PROVIDER_INVENTORY_INCOMPLETE:WALKS_DIFFER', count: 1 },
+      ],
+    };
+    // A report from before the provider warning existed: the services category is the trace.
+    const legacy: LegacyMigrationDryRunReport = {
+      ...dryRunReport,
+      warnings: [...dryRunReport.warnings, { code: 'INVENTORY_INCOMPLETE', count: 7 }],
+    };
+
+    for (const report of [incomplete, legacy]) {
+      const { h, id, approve } = await seeded(report, true);
+      await expect(approve()).rejects.toMatchObject({
+        code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+        details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
+      });
+      // Nothing approved and no cutover approval recorded: the dry run is asked for again.
+      expect(h.repository.rows.get(id)).toMatchObject({
+        status: 'DRY_RUN_DONE',
+        approvedAt: null,
+        approvedDryRunSha256: null,
+      });
+      expect(h.cutoverApprovals).toEqual([]);
+    }
+    // The complete dry run of the same package is approvable on the same kind of target.
+    expect((await (await seeded(dryRunReport, true)).approve()).status).toBe('APPROVED');
+    // Off a production-like target the warning is shown, and the owner decides.
+    expect((await (await seeded(incomplete, false)).approve()).status).toBe('APPROVED');
+    // Production-like: a dry run that reported no plan digest cannot bind the import.
+    const undigested = await seeded({ ...dryRunReport, planTalliesDigest: null }, true);
+    await expect(undigested.approve()).rejects.toMatchObject({
+      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+      details: expect.objectContaining({ reason: 'PLAN_DIGEST_MISSING' }),
+    });
+  });
+
   it('Phase 7: off a production-like target the acknowledgement is ignored and nothing is stored', async () => {
     const h = harness();
     const id = await uploaded(h);

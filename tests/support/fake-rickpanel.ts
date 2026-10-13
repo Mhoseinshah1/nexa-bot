@@ -169,6 +169,8 @@ export interface FakeRickpanel {
   listCalls(): number;
   /** Put an account on the panel directly, as an operator's own panel would hold it. */
   seedUser(name: string, fields?: Partial<Omit<FakeRickpanelUser, 'username'>>): void;
+  /** An account deleted on the panel by its own operator (between two reads, or mid-walk). */
+  removeUser(name: string): void;
   /**
    * Package E: the body `GET /api/user/{name}/files` answers with, or null for the
    * panel's own — one JSON config and one plain-text list per user, both built from the
@@ -640,6 +642,9 @@ export async function startFakeRickpanel(
     listCalls: () =>
       requests.filter((one) => one.method === 'GET' && one.path.split('?')[0] === '/api/users')
         .length,
+    removeUser: (name: string) => {
+      users.delete(name);
+    },
     seedUser: (name: string, fields: Partial<Omit<FakeRickpanelUser, 'username'>> = {}) => {
       userCounter += 1;
       users.set(name, {

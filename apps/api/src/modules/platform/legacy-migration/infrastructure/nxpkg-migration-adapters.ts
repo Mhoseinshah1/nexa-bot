@@ -2,7 +2,9 @@ import { readFile } from 'node:fs/promises';
 import {
   isNexaError,
   LEGACY_IMPORT_ERROR_CODES,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
   LEGACY_NXPKG_ERROR_CODES,
+  legacyMigrationDryRunInventoryIncomplete,
   type ActorContext,
   type LegacyMigrationApplyReport,
   type LegacyMigrationCodeCount,
@@ -19,6 +21,8 @@ import {
 } from '@nexa/contracts';
 import { and, desc, eq } from 'drizzle-orm';
 import { errorKind } from '../domain/import-lifecycle.js';
+import { SERVICE_CANDIDATE_CATEGORIES } from '../../legacy-importer/application/decisions.js';
+import { PLAN_DIGEST_FORMAT_OUTDATED } from '../../legacy-importer/application/plan.js';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { runInventory } from '../../../../legacy-import-inventory.js';
@@ -184,6 +188,26 @@ export class NxpkgMigrationAdapters
     // M3): failing a partly written import because an environment changed between two
     // attempts would strand it, and the owner's acknowledgement is on the row anyway.
     if (step === 'TARGET') {
+      // The approval refuses a dry run that planned on an incomplete live RickPanel read
+      // (`LegacyMigrationService.approve`); asked again here, before the protective backup
+      // and the freeze, for an approval recorded by a release that did not refuse it.
+      // One-sided by nature (nothing was read yet to compare with): `dryrun:` alone.
+      const unread = legacyMigrationDryRunInventoryIncomplete(context.dryRunReport?.warnings);
+      if (unread > 0) {
+        throw new LegacyMigrationStepFailure(
+          'DRY_RUN_MISMATCH',
+          'The approved dry run planned on an incomplete RickPanel inventory.',
+          { counts: [{ code: 'dryrun:panels:inventory_incomplete', count: unread }] },
+        );
+      }
+      // Without the plan's digest the import could not be bound to the approved plan at all.
+      if (context.dryRunReport !== null && context.dryRunReport.planTalliesDigest === null) {
+        throw new LegacyMigrationStepFailure(
+          'DRY_RUN_MISMATCH',
+          'The approved dry run reported no plan digest to bind the import to.',
+          { counts: [{ code: 'dryrun:plan:digest_missing', count: 1 }] },
+        );
+      }
       if (!this.acknowledged(context)) throw new LegacyMigrationBlocked('TARGET_ACK_MISSING');
       return;
     }
@@ -969,6 +993,15 @@ export class NxpkgMigrationAdapters
     };
     if (error instanceof NxpkgError) return fail(error.code);
     if (error instanceof NxpkgImportRefused) {
+      // The importer's DRY_RUN_MISMATCH carries the import's own tallies: set beside the
+      // approved dry run's, only the numbers that MOVED are kept, both sides of each.
+      if (
+        error.code === 'DRY_RUN_MISMATCH' &&
+        error.counts !== null &&
+        context.dryRunReport !== null
+      ) {
+        return fail(error.code, mismatchCounts(context.dryRunReport, error.counts));
+      }
       return fail(
         error.code,
         error.counts === null
@@ -1234,8 +1267,112 @@ function tableSection(
       });
 }
 
-/** The importer's dry run, summarised as the contract's counts. Never a row. */
-function dryRunReportOf(
+function providerPanels(report: LegacyImportReport): unknown[] {
+  const provider = report.sections['provider'] as { readonly panels?: unknown } | undefined;
+  return Array.isArray(provider?.panels) ? (provider.panels as unknown[]) : [];
+}
+
+/**
+ * How many production panels the importer's provider section reports without a complete
+ * read. Exported for its own test.
+ */
+export function providerIncomplete(report: LegacyImportReport): number {
+  // Fail closed: anything that is not a panel read reported exactly complete counts.
+  return providerPanels(report).filter(
+    (p) => (p as { complete?: unknown } | null)?.complete !== true,
+  ).length;
+}
+
+/**
+ * The incomplete panels by WHY (`TOTAL_CHANGED`, `COUNT_MISMATCH`, `WALKS_DIFFER`, a failure
+ * kind such as `TIMEOUT`, …), as `PROVIDER_INVENTORY_INCOMPLETE:<reason>` warnings: what tells
+ * a panel that moved during the walk from a list that never adds up. A reason outside the
+ * closed shape is `UNKNOWN`, never echoed. Exported for its own test.
+ */
+export function providerIncompleteReasons(report: LegacyImportReport): LegacyMigrationCodeCount[] {
+  const byReason = new Map<string, number>();
+  for (const p of providerPanels(report)) {
+    const panel = p as { complete?: unknown; reason?: unknown } | null;
+    if (panel?.complete === true) continue;
+    const reason =
+      typeof panel?.reason === 'string' && /^[A-Z][A-Z_]{0,39}$/u.test(panel.reason)
+        ? panel.reason
+        : 'UNKNOWN';
+    byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
+  }
+  return [...byReason].map(([reason, count]) => ({
+    code: `${LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE}:${reason}`,
+    count,
+  }));
+}
+
+/**
+ * The dry run's provider warnings: `PROVIDER_INVENTORY_INCOMPLETE` (how many production panels)
+ * and one `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason; none when every read was
+ * complete. Exported for its own test.
+ */
+export function providerWarnings(report: LegacyImportReport): LegacyMigrationCodeCount[] {
+  const incomplete = providerIncomplete(report);
+  if (incomplete === 0) return [];
+  return [
+    { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE, count: incomplete },
+    ...providerIncompleteReasons(report),
+  ];
+}
+
+/**
+ * What a `DRY_RUN_MISMATCH` refusal records: each number the import's plan and the approved
+ * dry run's report both carry, where the two differ — `dryrun:<key>` and `apply:<key>` side by
+ * side (zeros kept, so a pair always reads as one; the TARGET gate's `dryrun:` count, refused
+ * before anything was read, is the one unpaired shape). When the digest moved and no compared
+ * number did, the change is in what the counts do not show (which invoice adopts which
+ * account, a trial, a status): said as `plan:changed_beyond_compared_counts`. Counts only.
+ * Exported for its own test.
+ */
+export function mismatchCounts(
+  dryRun: Pick<LegacyMigrationDryRunReport, 'sections' | 'warnings'>,
+  applyCounts: Readonly<Record<string, number>>,
+): LegacyMigrationCodeCount[] {
+  // The approval's digest is an earlier format of this same plan: nothing moved but the format.
+  if (applyCounts[PLAN_DIGEST_FORMAT_OUTDATED] !== undefined) {
+    return [{ code: PLAN_DIGEST_FORMAT_OUTDATED, count: 1 }];
+  }
+  const section = (name: string) => dryRun.sections.find((x) => x.section === name);
+  const warning = (code: string) =>
+    dryRun.warnings.filter((w) => w.code === code).reduce((a, w) => a + w.count, 0);
+  const dry = new Map<string, number | undefined>([
+    [
+      'customers:importable',
+      section('customers') === undefined
+        ? undefined
+        : n(section('customers')?.imported) + n(section('customers:existing')?.source),
+    ],
+    ['customers:new', section('customers')?.imported],
+    ['wallet:positive', section('wallet_openings')?.source],
+    ['wallet:negative', section('legacy_debts')?.source],
+    ['products:distinct_shapes', section('products')?.source],
+    ['panels:inventory_incomplete', legacyMigrationDryRunInventoryIncomplete(dryRun.warnings)],
+    ['services:ADOPTION_ELIGIBLE', section('services')?.imported],
+  ]);
+  for (const category of SERVICE_CANDIDATE_CATEGORIES) {
+    if (category !== 'ADOPTION_ELIGIBLE') dry.set(`services:${category}`, warning(category));
+  }
+  const out: LegacyMigrationCodeCount[] = [];
+  for (const [code, value] of Object.entries(applyCounts).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  )) {
+    if (!code.startsWith('apply:')) continue;
+    const key = code.slice('apply:'.length);
+    const before = dry.get(key);
+    if (before === undefined || before === value) continue;
+    out.push({ code: `dryrun:${key}`, count: before }, { code, count: value });
+  }
+  if (out.length === 0) out.push({ code: 'plan:changed_beyond_compared_counts', count: 1 });
+  return out;
+}
+
+/** The importer's dry run, summarised as the contract's counts. Never a row. Exported for its own test. */
+export function dryRunReportOf(
   report: LegacyImportReport,
   plan: PlanShape,
   hold: NxpkgOwnershipHold | null,
@@ -1392,12 +1529,19 @@ function dryRunReportOf(
       ? [{ code: 'OWNERSHIP_HOLD_CHANGED_NOT_REPORTED', count: hold?.hold.size ?? 0 }]
       : []),
     ...(extra.converterTotalsAbsent ? [{ code: 'CONVERTER_TOTALS_ABSENT', count: 1 }] : []),
+    // The production panels whose LIVE RickPanel inventory was not complete. Their invoices
+    // are the services' INVENTORY_INCOMPLETE, and the import reads the panel again: if it
+    // comes out different — complete, or another set of accounts — the plan is another plan
+    // and APPLY refuses DRY_RUN_MISMATCH. Said here, so no owner approves a plan without
+    // knowing that; a production-like target refuses to approve it at all.
+    ...providerWarnings(report),
     // Said on every target, not only where it refuses (a staging dry run must show it too).
+    // Its own code: `INVENTORY_INCOMPLETE` is the services category (a panel's live read).
     ...(extra.inventoryVerdict === 'COMPLETE'
       ? []
       : [
           {
-            code: 'INVENTORY_INCOMPLETE',
+            code: 'TABLE_INVENTORY_INCOMPLETE',
             count: Math.max(1, extra.tables.filter((t) => t.class === 'UNCLASSIFIED').length),
           },
         ]),

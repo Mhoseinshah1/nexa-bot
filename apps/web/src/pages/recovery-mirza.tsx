@@ -4,6 +4,8 @@ import {
   BACKUP_ARCHIVE_MAGIC,
   isLegacyNxpkgTerminalStatus,
   LEGACY_MIGRATION_COMMAND_STATES,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
+  legacyMigrationDryRunInventoryIncomplete,
   type LegacyMigrationBackupOutcome,
   type LegacyMigrationBlocker,
   type LegacyMigrationCapabilitiesResponse,
@@ -216,6 +218,12 @@ const FAULTS: Readonly<Record<string, WebKey>> = {
 
 export function legacyMigrationFault(error: unknown): string {
   if (error instanceof ApiError) {
+    if (
+      error.code === 'legacy_migration.invalid_state' &&
+      error.details?.['reason'] === LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE
+    ) {
+      return t('web.mrz_inventory_incomplete_body');
+    }
     const key = FAULTS[error.code];
     if (key !== undefined) return t(key);
   }
@@ -1063,6 +1071,10 @@ function ConfirmStep({
     onError: (error) => key.settleOn(error, { onConflict: invalidate }),
   });
   const matches = phrase === capabilities.approvalPhrase;
+  // A courtesy: the server refuses this approval whatever is drawn here.
+  const inventoryIncomplete =
+    capabilities.productionLikeTarget &&
+    legacyMigrationDryRunInventoryIncomplete(row.dryRunReport?.warnings) > 0;
   return (
     <Step title={t('web.mrz_step_confirm')}>
       <KV
@@ -1090,9 +1102,14 @@ function ConfirmStep({
       <Banner tone="warn" title={t('web.mrz_protective_title')}>
         {t('web.mrz_protective_body')}
       </Banner>
+      {inventoryIncomplete && (
+        <Banner tone="danger" title={t('web.mrz_inventory_incomplete_title')}>
+          {t('web.mrz_inventory_incomplete_body')}
+        </Banner>
+      )}
       {!mayApply ? (
         <Banner tone="neutral">{t('web.lmg_approval_owner_only')}</Banner>
-      ) : (
+      ) : inventoryIncomplete ? null : (
         <form
           className="stack inset danger-zone"
           onSubmit={(event) => {

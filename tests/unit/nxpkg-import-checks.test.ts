@@ -850,7 +850,8 @@ describe('decideAllServices with an ownership hold', () => {
           : v,
     ) as Record<string, unknown>;
     const reversed = Object.fromEntries(Object.entries(reordered).reverse());
-    expect(planTalliesDigest({ tallies: reversed as never })).toBe(d);
+    const services = before.out.services;
+    expect(planTalliesDigest({ tallies: reversed as never, services })).toBe(d);
     const wallet = before.out.tallies.wallet;
     expect(
       planTalliesDigest({
@@ -858,6 +859,7 @@ describe('decideAllServices with an ownership hold', () => {
           ...before.out.tallies,
           wallet: { ...wallet, legacySumMinor: wallet.legacySumMinor + 1n },
         },
+        services,
       }),
     ).not.toBe(d);
     expect(
@@ -866,6 +868,7 @@ describe('decideAllServices with an ownership hold', () => {
           ...before.out.tallies,
           wallet: { ...wallet, legacySumMinor: Number(wallet.legacySumMinor) as never },
         },
+        services,
       }),
     ).not.toBe(d);
     const eligible = before.out.services.find((s) => s.decision.category === 'ADOPTION_ELIGIBLE');
