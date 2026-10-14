@@ -119,8 +119,13 @@ bytes. Counts and milliseconds only — never a token, a credential, a name or a
 What it costs a panel of N accounts at page size P and interval I (the defaults, P = 100,
 I = 1 s): 1 login + 2 × ⌈N / P⌉ pages, one at a time, so ≈ (1 + 2⌈N/P⌉) × I per complete read
 — 10 000 accounts: 201 requests, ≈ 3.4 min; 30 000: 601, ≈ 10 min; 50 000: 1 001, ≈ 17 min —
-longer when the panel answers slower than I. An incomplete read is walked again at most twice
-more (Web Admin only), after 15 s and 45 s.
+longer when the panel answers slower than I. The Web Admin's read is TARGETED (§Per-name
+resolution): one double walk, never walked again; when the panel moved, + 1 canary + at most
+one exact lookup per needed name the walks could not decide (bounded by
+`RICKPANEL_INVENTORY_MAX_LOOKUPS`), each one interval apart. A synthetic 100 000-account panel
+with 77 000 needed names and churn during the walks cost 2 304 requests (1 login, 2 005 pages,
+298 lookups), ≈ 38 min. A non-targeted read (the CLI, the rehearsal) reads once; one built with
+`inventoryAttempts` > 1 walks again at most twice more, after 15 s and 45 s.
 
 Tested: `tests/unit/rickpanel-load-protection.test.ts` (a large inventory paged and paced,
 one in flight, a slow panel, two concurrent jobs, login reuse and refresh, 429 and the budget,
@@ -209,9 +214,9 @@ carries the backup's exact spelling (null when two invoices spell it differently
    end — **unresolved**. Lookups go in name order, at most `RICKPANEL_INVENTORY_MAX_LOOKUPS`
    per panel read (default 5 000 ≈ 83 min at one a second), and none after the first that
    did not answer — a struggling panel is not asked again thousands of times. A name beyond
-   the bound or after that stop is unresolved, never guessed. A name no walk saw is asked by
-   its canonical (lowercase) spelling; RickPanel matching it case-sensitively, an account
-   spelled otherwise answers 404 and is reported missing — manual review, never created.
+   the bound or after that stop is unresolved, never guessed. A lookup always asks for the
+   backup's EXACT spelling (`Alice` stays `Alice`), the account Mirza created; a name the
+   backup spells two ways is never looked up and stays unresolved.
 
 Accounts on the panel that are not in the backup are ignored: they decide nothing and are never
 looked up. A panel the backup asks nothing of is not read at all (`NOTHING_NEEDED`, never reported
