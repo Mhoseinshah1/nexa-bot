@@ -1344,6 +1344,8 @@ export function providerChurnWarnings(report: LegacyImportReport): LegacyMigrati
       continue;
     }
     const r = resolution as { reason?: unknown; lookups?: unknown; unresolved?: unknown };
+    // A panel the backup asks nothing of was never read: it did not change while read.
+    if (r.reason === 'NOTHING_NEEDED') continue;
     panels += 1;
     const reason = closedReason(r.reason);
     byReason.set(reason, (byReason.get(reason) ?? 0) + 1);

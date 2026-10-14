@@ -97,8 +97,11 @@ import {
  * that is how retries would multiply into a storm on a panel that is already struggling.
  */
 
+/** `.` and `..` are path segments, not names: never put in a lookup's path. */
+const lookupSafe = (name: string) => name !== '.' && name !== '..';
+
 /**
- * Exact lookups one per-name resolution may send. At one request a second, 5 000 is about 83
+ * Exact lookups one per-name resolution may send (the canary included). At one request a second, 5 000 is about 83
  * minutes — the read's whole budget for the names two walks could not decide. Configurable
  * (`RICKPANEL_INVENTORY_MAX_LOOKUPS`); a name past it stays unresolved.
  */
@@ -329,7 +332,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     panelId: string,
     target: ProviderTarget,
     http: RickpanelReadOnlyHttp,
-    needed: ReadonlySet<string>,
+    needed: ReadonlyMap<string, string | null>,
     load: () => LegacyInventoryLoad,
   ): Promise<LegacyInventoryRead> {
     const signal = this.options.signal;
@@ -369,6 +372,9 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     signal?.throwIfAborted();
     const second = await this.reader.walk(target, http, walkOptions);
     if (!second.ok) return this.finish(panelId, second, 1, load());
+    // Every runtime fact is stamped no later than the walk it may come from: a lookup's record
+    // is newer, never older, so `usage_synced_at` never claims a freshness it lacks.
+    const observedAt = this.now();
     const evidence = { first: first.evidence, second: second.evidence };
     const firstSeen = first.consistent ? first.accounts : first.observed;
     const secondSeen = second.consistent ? second.accounts : second.observed;
@@ -392,6 +398,20 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
           load(),
         );
       }
+    }
+    // A walk whose total held still yet whose rows do not add up to it is not churn: the list
+    // systematically withholds rows, and a withheld row may be the case variant that makes a
+    // name a collision. That panel stays incomplete, exactly as before (audit finding 1).
+    if (
+      (!first.consistent && first.reason === 'COUNT_MISMATCH') ||
+      (!second.consistent && second.reason === 'COUNT_MISMATCH')
+    ) {
+      return this.finish(
+        panelId,
+        { ok: true, complete: false, reason: 'COUNT_MISMATCH', evidence },
+        1,
+        load(),
+      );
     }
     const reason = !first.consistent
       ? first.reason
@@ -444,8 +464,27 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const maxLookups = Math.max(0, Math.trunc(this.options.maxLookups ?? INVENTORY_MAX_LOOKUPS));
     let lookups = 0;
     let stopped = false;
+    // A 404 is trusted only from a route that answers 200 for an account both walks saw (the
+    // canary): a missing route or a proxy answers 404 to every name, and "absent" from such an
+    // answer would report a held account missing. No canary, or a canary not found → no
+    // lookup is trusted, so none is sent.
+    if (toLookup.length > 0) {
+      const inFirst = new Set(firstSeen.map((a) => a.providerUsername));
+      const canary = secondSeen
+        .map((a) => a.providerUsername)
+        .filter((n) => inFirst.has(n) && lookupSafe(n))
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))[0];
+      if (canary === undefined || lookups >= maxLookups) {
+        stopped = true;
+      } else {
+        signal?.throwIfAborted();
+        lookups += 1;
+        const probe = await this.reader.findAccount(target, http, canary);
+        if (!probe.ok || !probe.found || probe.account.providerUsername !== canary) stopped = true;
+      }
+    }
     for (const [name, ask] of toLookup) {
-      if (stopped || lookups >= maxLookups) {
+      if (stopped || lookups >= maxLookups || !lookupSafe(ask.ask)) {
         resolved.set(name, { kind: 'UNRESOLVED' });
         continue;
       }
@@ -487,7 +526,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       accounts: secondSeen.length,
       states,
       runtime,
-      observedAt: this.now(),
+      observedAt,
       resolution: resolutionOf(reason, resolutionCounts(resolved), lookups),
       diagnostics: {
         attempts: 1,

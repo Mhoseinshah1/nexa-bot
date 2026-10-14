@@ -239,6 +239,27 @@ export function openingPlanFor(
 }
 
 /**
+ * The source user ids the plan imports (its `importedUsers` keys): not a duplicated id, and a
+ * customer decision that is neither INVALID_IDENTITY nor MANUAL_REVIEW. The same rule as
+ * `planLegacyImport`, which a test pins it to; what the per-name inventory resolution asks of
+ * a panel is limited to these owners' invoices, the only ones the matcher consults it for.
+ */
+export function importableLegacyUserIds(
+  users: LegacySnapshot['users'],
+  existingCustomers: ReadonlyMap<string, string>,
+): Set<string> {
+  const duplicates = duplicateSourceIds(users);
+  const out = new Set<string>();
+  for (const row of users) {
+    if (duplicates.has(row.id)) continue;
+    const decision = decideLegacyUser(row, existingCustomers.has(row.id));
+    if (decision.kind === 'INVALID_IDENTITY' || decision.kind === 'MANUAL_REVIEW') continue;
+    out.add(row.id);
+  }
+  return out;
+}
+
+/**
  * Mirza PR4 — the source ids that occur on more than one row. Only ids that ARE Telegram
  * ids are counted (any other id is INVALID_IDENTITY whatever its multiplicity), and the
  * comparison is exact: a Telegram id has one spelling.
@@ -567,7 +588,22 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
   const inventories: PanelInventorySummary[] = [];
   for (const panelId of input.mapping.policy.productionPanelIds) {
     const read = input.inventories.get(panelId);
-    if (read !== undefined && read.ok && read.complete) {
+    if (read !== undefined && read.ok && read.complete && (read.resolution?.unresolved ?? 0) > 0) {
+      // A per-name resolution that left needed names unresolved: its index still decides the
+      // names it covers (the rest stay UNDECIDABLE), but the panel is NOT reported complete —
+      // every consumer of `complete` (the TARGET precheck, the import's own gate, the final
+      // report, reconcile, the dry run's warnings) reads it as "not fully read".
+      indexes.set(panelId, read.index);
+      inventories.push({
+        panelId,
+        complete: false,
+        accounts: null,
+        reason: 'UNRESOLVED',
+        states: {},
+        diagnostics: read.diagnostics ?? null,
+        resolution: read.resolution ?? null,
+      });
+    } else if (read !== undefined && read.ok && read.complete) {
       indexes.set(panelId, read.index);
       inventories.push({
         panelId,

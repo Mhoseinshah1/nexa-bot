@@ -6779,10 +6779,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // RICKPANEL_INVENTORY_PAGE_SIZE (100): few enough requests that, paced at one a second, a
     // double walk stays short, while a page stays well under the panel client's response cap
     // (RickPanel's row size is unmeasured; each read reports its largest page). The walk still
-    // fails closed on any change (DRY_RUN_MISMATCH). And up to INVENTORY_READ_ATTEMPTS double
-    // walks when a read came out incomplete: a production-like dry run that planned on an
-    // incomplete read is not approvable, so a panel that moved for a moment must not cost the
-    // owner a dry run. All of it inside the panel's read gate, on one login.
+    // fails closed on any change (DRY_RUN_MISMATCH). The read is TARGETED: a panel that moved
+    // while read (Mirza still selling) has each backup username decided on its own evidence
+    // (`inventory-resolution.ts`) instead of repeated double walks, so INVENTORY_READ_ATTEMPTS
+    // does not apply to it; what stays undecided blocks approval. All of it inside the panel's
+    // read gate, on one login.
     importer: (signal) =>
       container.legacyImporter({
         inventoryPageSize: config.RICKPANEL_INVENTORY_PAGE_SIZE,

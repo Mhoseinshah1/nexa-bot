@@ -173,8 +173,17 @@ as a matter of course, so `complete: false` (`TOTAL_CHANGED`, `COUNT_MISMATCH`, 
 is the normal answer, and it used to leave every backup candidate on that panel
 `INVENTORY_INCOMPLETE` and the dry run unapprovable. The question the backup asks is narrower
 than "what is on the panel": it is "is each of THESE usernames on it, and how is it spelled".
-So, when the two walks are not one complete snapshot, each username the backup needs on that
-panel (canonical, lowercase) is decided on its own evidence, in this order:
+So, when the two walks are not one complete snapshot because the panel MOVED (`TOTAL_CHANGED`,
+or two consistent walks that differ, `WALKS_DIFFER`), each username the backup needs on that
+panel (canonical, lowercase) is decided on its own evidence, in this order. A `COUNT_MISMATCH`
+— a total that held still while the rows did not add up to it — is not churn: the list is
+withholding rows, and a withheld row may be the case variant that makes a name a collision. That
+panel stays incomplete, exactly as before.
+
+The names needed are those of live, real (`is_test = 0`) invoices whose owner the plan imports
+(`importableLegacyUserIds`, pinned to the plan's own rule by a test), on their mapped panel; a
+declared-missing code asks every production panel; an operator's ADOPT asks its panel. Each
+carries the backup's exact spelling (null when two invoices spell it differently).
 
 1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of
    both walks: a collision (`USERNAME_CASE_COLLISION`), never eligible. A union, because a
@@ -186,7 +195,12 @@ panel (canonical, lowercase) is decided on its own evidence, in this order:
    request in flight, the same pacing, the same login and the same retry budget as the walks.
    Found (a record whose name folds to the needed key): **present**, with the panel's spelling.
    404: **proven absent** (`PROVIDER_MISSING` is then a fact, not an inference from a partial
-   walk). Anything else — a timeout, a 429 past its budget, a 5xx, a malformed body, the read's
+   walk) — but only when the spelling asked is evidence of the account: one a walk saw, or the
+   backup's own exact spelling (the account Mirza created). A 404 for a guessed spelling (the
+   backup spells the name two ways) is **unresolved**. And no 404 is trusted until a **canary**
+   — one account both walks saw, the first by name — has answered 200 for its own spelling: a
+   missing route or a proxy answers 404 to every name. No canary, or a failed one: no lookup
+   is sent and every name that needed one is unresolved. `.` and `..` are never put in a path. Anything else — a timeout, a 429 past its budget, a 5xx, a malformed body, the read's
    end — **unresolved**. Lookups go in name order, at most `RICKPANEL_INVENTORY_MAX_LOOKUPS`
    per panel read (default 5 000 ≈ 83 min at one a second), and none after the first that
    did not answer — a struggling panel is not asked again thousands of times. A name beyond
@@ -195,18 +209,38 @@ panel (canonical, lowercase) is decided on its own evidence, in this order:
    spelled otherwise answers 404 and is reported missing — manual review, never created.
 
 Accounts on the panel that are not in the backup are ignored: they decide nothing and are never
-looked up. Such a read is reported `complete: true` with a `resolution` (`mode: 'TARGETED'`, the
+looked up. A panel the backup asks nothing of is not read at all (`NOTHING_NEEDED`, never reported
+as churn). Runtime facts (usage, state, link) are stamped when the second walk ended, never
+later, so an adoption's `usage_synced_at` never claims a freshness it lacks. Such a read is
+reported `complete: true` with a `resolution` (`mode: 'TARGETED'`, the
 reason, and the counts `needed`, `presentByWalks`, `presentByLookup`, `absentByLookup`,
 `collisions`, `unresolved`, `lookups`) — counts only, never a name — and the index it builds
 covers ONLY the needed names: any other name asked of that panel is `UNDECIDABLE`, never
 "missing" (`PanelInventoryIndex.covered`).
 
 **An unresolved name blocks approval.** Its invoice stays services `INVENTORY_INCOMPLETE`, and
-`legacyMigrationDryRunInventoryIncomplete` refuses a production-like approval while any is
-counted. The dry run reports `PROVIDER_INVENTORY_CHURN` (informational) and, when non-zero,
+the plan reports that panel `complete: false`, reason `UNRESOLVED` (its partial index still
+decides the names it covers) — so every consumer of `complete` reads it as not fully read: the
+dry run's `PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED`, the TARGET precheck, the import's own gate,
+reconcile and the final report. `legacyMigrationDryRunInventoryIncomplete` refuses a
+production-like approval while any is counted. The dry run reports `PROVIDER_INVENTORY_CHURN` (informational) and, when non-zero,
 `PROVIDER_INVENTORY_LOOKUPS` and `PROVIDER_INVENTORY_UNRESOLVED`. The remedy is to run the dry
 run again, not to stop selling. A panel whose read FAILED (credentials, unreachable, timeouts) is
 still `PROVIDER_INVENTORY_INCOMPLETE`, unchanged.
+
+Residual risks, stated rather than hidden:
+
+- **A case variant skipped by both walks.** A name seen with one spelling by both walks is
+  present without a lookup; an exact lookup could not reveal a variant anyway. A variant of it
+  (`ACC5` beside `acc5`) that BOTH walks slipped past — each needs a deletion ahead of it while
+  the cursor passes — is not seen, and the name is adopted as the single spelling seen, which is
+  the spelling the backup holds. A complete snapshot is the only proof there is none.
+- **A no-panel invoice's ADOPT on a moving panel.** An invoice with an empty `code_panel` asks no
+  panel until an operator approves an ADOPT onto one; on a panel that is not one snapshot, its
+  evidence lists every panel as undecided, so no panel is offered for that approval. Fail-closed:
+  such invoices stay `NO_PANEL` (manual review) until a dry run reads a still panel.
+- **The lookup route is unproven on a real panel** (below): its 404 semantics and case
+  sensitivity are inferred.
 
 Scope: the Web Admin `.nxpkg` importer only. The CLI and the rehearsal walk are unchanged: they
 read with `listAll()` and treat anything but one complete snapshot as before.

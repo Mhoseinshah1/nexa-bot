@@ -331,11 +331,12 @@ export interface LegacyInventoryResolution {
 /** What the importer asks of a panel read beyond "read it". */
 export interface LegacyInventoryReadOptions {
   /**
-   * The canonical (lowercase) usernames the backup needs decided on this panel. A source that
+   * The canonical (lowercase) usernames the backup needs decided on this panel, each with the
+   * backup's exact spelling (null when the backup spells it more than one way). A source that
    * resolves per name decides these and only these when the panel is not one complete
    * snapshot; a source that does not ignores it.
    */
-  readonly needed?: ReadonlySet<string>;
+  readonly needed?: ReadonlyMap<string, string | null>;
 }
 
 export type LegacyInventoryRead =

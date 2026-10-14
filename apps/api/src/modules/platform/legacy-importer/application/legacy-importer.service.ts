@@ -68,6 +68,7 @@ import {
 } from './panel-mapping.js';
 import {
   decideAllServices,
+  importableLegacyUserIds,
   inventoryIndexes,
   planLegacyImport,
   PLAN_DIGEST_FORMAT_OUTDATED,
@@ -578,7 +579,7 @@ export class LegacyImporterService {
     // panel that keeps selling — and only these; any other source ignores them.
     const needed = neededNamesByPanel(
       snapshot.liveInvoices,
-      new Set(snapshot.users.map((u) => u.id)),
+      importableLegacyUserIds(snapshot.users, existingCustomers),
       mapping.policy,
       review.inputs.operatorPanels ?? new Map(),
       canonicalLegacyUsername,
@@ -589,7 +590,7 @@ export class LegacyImporterService {
       inventories.set(
         panelId,
         await this.deps.inventory.read(scope, panelId, {
-          needed: needed.get(panelId) ?? new Set(),
+          needed: needed.get(panelId) ?? new Map(),
         }),
       );
     }

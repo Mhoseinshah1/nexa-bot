@@ -37,8 +37,18 @@ export interface ObservedAccount {
 export type WalkEvidence =
   | { readonly kind: 'PRESENT'; readonly spelling: string }
   | { readonly kind: 'COLLISION'; readonly spellings: readonly string[] }
-  /** Ask the panel: `ask` is the exact spelling a walk saw, or the canonical name if none did. */
-  | { readonly kind: 'LOOKUP'; readonly ask: string; readonly seen: string | null };
+  /**
+   * Ask the panel: `ask` is the exact spelling a walk saw; if none did, the backup's own
+   * spelling (`backupSpelling`), or the canonical name when the backup spells it more than one
+   * way.
+   */
+  | {
+      readonly kind: 'LOOKUP';
+      readonly ask: string;
+      readonly seen: string | null;
+      /** True when `ask` is the exact spelling the backup holds (the one Mirza created). */
+      readonly backupSpelling: boolean;
+    };
 
 /** What the panel answered an exact lookup. */
 export type LookupAnswer =
@@ -61,7 +71,7 @@ const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
  * complete walk's accounts, or an inconsistent walk's `observed`), at least two.
  */
 export function classifyNeededNames(
-  needed: ReadonlySet<string>,
+  needed: ReadonlyMap<string, string | null>,
   walks: readonly (readonly ObservedAccount[])[],
 ): Map<string, WalkEvidence> {
   if (walks.length < 2) throw new Error('a per-name resolution needs at least two walks');
@@ -78,10 +88,15 @@ export function classifyNeededNames(
     }
   }
   const out = new Map<string, WalkEvidence>();
-  for (const name of needed) {
+  for (const [name, backup] of needed) {
     const spellings = seen.get(name);
     if (spellings === undefined || spellings.size === 0) {
-      out.set(name, { kind: 'LOOKUP', ask: name, seen: null });
+      out.set(
+        name,
+        backup === null
+          ? { kind: 'LOOKUP', ask: name, seen: null, backupSpelling: false }
+          : { kind: 'LOOKUP', ask: backup, seen: null, backupSpelling: true },
+      );
       continue;
     }
     if (spellings.size >= 2) {
@@ -93,7 +108,12 @@ export function classifyNeededNames(
       name,
       walksSeen === walks.length
         ? { kind: 'PRESENT', spelling }
-        : { kind: 'LOOKUP', ask: spelling, seen: spelling },
+        : {
+            kind: 'LOOKUP',
+            ask: spelling,
+            seen: spelling,
+            backupSpelling: spelling === needed.get(name),
+          },
     );
   }
   return out;
@@ -105,7 +125,15 @@ export function resolveLookup(
   answer: LookupAnswer,
 ): NameResolution {
   if (answer.kind === 'UNANSWERED') return { kind: 'UNRESOLVED' };
-  if (answer.kind === 'NOT_FOUND') return { kind: 'ABSENT' };
+  if (answer.kind === 'NOT_FOUND') {
+    // A 404 proves only the spelling asked absent (RickPanel addresses a user by exact name).
+    // It decides the name when that spelling is evidence of the account: one a walk saw (it
+    // was there, and is gone), or the backup's own (the account Mirza created). A guess at a
+    // spelling proves nothing about another one a walk may have skipped.
+    return evidence.seen !== null || evidence.backupSpelling
+      ? { kind: 'ABSENT' }
+      : { kind: 'UNRESOLVED' };
+  }
   if (evidence.seen !== null && answer.spelling !== evidence.seen) {
     // A walk saw one spelling and the panel answers with another that folds to the same
     // name: two accounts, or a rename mid-read — either way not one account to adopt.
@@ -148,10 +176,13 @@ export interface NeedingInvoice {
 }
 
 /**
- * Per production panel, the canonical usernames the matcher may ask of it: exactly the
+ * Per production panel, the canonical usernames the matcher may ask of it, each with the
+ * backup's exact spelling (null when two of its invoices spell it differently): exactly the
  * questions `decideServiceCandidate` can put to an index, and no other (so a per-name
  * resolution decides — and looks up — only what the backup needs). A live, real (`is_test =
- * 0`), owned invoice with a comparable username asks its mapped panel; a code the operator
+ * 0`) invoice of an IMPORTABLE owner (`importableUserIds`: the plan's own `importedUsers`; any
+ * other owner is decided `CUSTOMER_NOT_IMPORTED` before an index is asked) with a comparable
+ * username asks its mapped panel; a code the operator
  * declared missing asks every production panel; an operator's ADOPT approval asks the panel
  * it names. A test panel's row, an unmapped code and a row naming no panel ask nothing — the
  * matcher decides those without any inventory. A superset is harmless (an extra name is only
@@ -159,7 +190,7 @@ export interface NeedingInvoice {
  */
 export function neededNamesByPanel(
   invoices: readonly NeedingInvoice[],
-  userIds: ReadonlySet<string>,
+  importableUserIds: ReadonlySet<string>,
   policy: {
     readonly knownPanels: ReadonlyMap<string, string>;
     readonly testPanels: ReadonlySet<string>;
@@ -169,33 +200,35 @@ export function neededNamesByPanel(
   operatorPanels: ReadonlyMap<string, string>,
   canonical: (raw: string) => string | null,
   isInvoiceKey: (key: string) => boolean,
-): Map<string, Set<string>> {
-  const out = new Map<string, Set<string>>();
-  for (const panelId of policy.productionPanelIds) out.set(panelId, new Set());
-  const add = (panelId: string, name: string) => {
+): Map<string, Map<string, string | null>> {
+  const out = new Map<string, Map<string, string | null>>();
+  for (const panelId of policy.productionPanelIds) out.set(panelId, new Map());
+  const add = (panelId: string, name: string, spelling: string) => {
     let names = out.get(panelId);
     if (names === undefined) {
-      names = new Set();
+      names = new Map();
       out.set(panelId, names);
     }
-    names.add(name);
+    const known = names.get(name);
+    names.set(name, known === undefined || known === spelling ? spelling : null);
   };
   for (const invoice of invoices) {
     if (!isInvoiceKey(invoice.idInvoice)) continue;
     if (invoice.isTest?.trim() !== '0') continue;
-    if (invoice.idUser === null || !userIds.has(invoice.idUser)) continue;
-    const name = canonical(invoice.username ?? '');
+    if (invoice.idUser === null || !importableUserIds.has(invoice.idUser)) continue;
+    const spelling = invoice.username ?? '';
+    const name = canonical(spelling);
     if (name === null) continue;
     const override = operatorPanels.get(invoice.idInvoice);
-    if (override !== undefined) add(override, name);
+    if (override !== undefined) add(override, name, spelling);
     const raw = invoice.codePanel?.trim() ?? '';
     const code = raw === '' ? null : raw;
     if (code === null || policy.testPanels.has(code)) continue;
     const mapped = policy.knownPanels.get(code);
     if (mapped !== undefined) {
-      add(mapped, name);
+      add(mapped, name, spelling);
     } else if (policy.missingPanels.has(code)) {
-      for (const panelId of policy.productionPanelIds) add(panelId, name);
+      for (const panelId of policy.productionPanelIds) add(panelId, name, spelling);
     }
   }
   return out;

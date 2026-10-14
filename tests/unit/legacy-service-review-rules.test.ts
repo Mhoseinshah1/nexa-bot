@@ -417,6 +417,24 @@ describe('the evidence and the section', () => {
     expect(JSON.stringify(e)).not.toContain('svc_');
   });
 
+  it('a per-name read that did not decide this name is an incomplete panel, never "no holder here"', () => {
+    const narrowed = new Map(inventories);
+    const b = narrowed.get(PANEL_B);
+    if (b === undefined || !b.ok || !b.complete) throw new Error('fixture');
+    narrowed.set(PANEL_B, { ...b, index: { ...b.index, covered: new Set<string>() } });
+    const e = candidateEvidence(row(), {
+      mapping,
+      inventories: narrowed,
+      userIds: new Set(['1']),
+      importedUsers: new Map([['1', '1']]),
+      productCodes: new Set(),
+      tariffOf: () => 'RESOLVED',
+      claimsByName: claimsByName([row()], new Set()),
+    });
+    expect(e.holders).toEqual([]);
+    expect(e.incompletePanels).toContain(PANEL_B);
+  });
+
   it('the closure: every candidate exactly one outcome from this run — missing, another run, another source all break it', () => {
     const snap = {
       fingerprint: H('f'),
