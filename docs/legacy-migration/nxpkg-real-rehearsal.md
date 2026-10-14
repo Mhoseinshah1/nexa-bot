@@ -93,7 +93,10 @@ On the admin page **«مهاجرت از میرزا»**:
    - one `table:<class>:<name>` per Mirza table — no `table:UNCLASSIFIED:…` line may exist, and
      no `TABLE_INVENTORY_INCOMPLETE` warning (a production-like dry run refuses it), and no
      `INVENTORY_INCOMPLETE` / `PROVIDER_INVENTORY_INCOMPLETE` warning (a production-like
-     approval refuses it: a panel was not read completely — see `nxpkg-importer.md` §4a);
+     approval refuses it: a panel read failed, or a backup service could not be verified on the
+     panel — `PROVIDER_INVENTORY_UNRESOLVED`; see `nxpkg-importer.md` §4a). A
+     `PROVIDER_INVENTORY_CHURN` warning is information, not a refusal: the panel changed while it
+     was read (normal while it sells) and each backup service was checked on its own;
    - warnings and quarantine; the wallet and debt totals; the ownership summary;
    - the seven cutover values.
      Write the figures down (or save the page) — §6 compares them.

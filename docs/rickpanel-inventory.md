@@ -66,7 +66,8 @@ Offset pagination over `GET api/users` (shape: `OQ-P5-01`).
   when both are consistent AND their exact username sets are identical; otherwise
   `complete: false` with a closed reason (`TOTAL_CHANGED`, `COUNT_MISMATCH`,
   `WALKS_DIFFER`). `inventoryIndex()` accepts only that, so a single walk cannot be indexed
-  (by type) and an incomplete inventory makes every dependent decision `UNDECIDABLE`.
+  (by type) and an incomplete inventory makes every dependent decision `UNDECIDABLE` — unless
+  the Web Admin importer decides the needed names one by one (§Per-name resolution below).
 
 Tested: first page, multiple pages with a short final page (not omitted), exact multiple
 (no wasted request), empty panel, no total (ends on empty page), capped page size, offset
@@ -163,6 +164,52 @@ panel is `MANUAL_REVIEW USERNAME_CASE_COLLISION`, never eligible. `ELIGIBLE` car
 or prefix match (tested, including a source assertion). Reason names match Migration P4's
 `LEGACY_IMPORT_REASON_CODES`; `USERNAME_CASE_COLLISION` joins that contract set when P4 is
 restacked.
+
+## Per-name resolution (a panel that keeps selling)
+
+Owner requirement: a Mirza `.nxpkg` dry run must be approvable while Mirza keeps selling on the
+live RickPanel. A production panel serving customers changes between the two walks of `listAll()`
+as a matter of course, so `complete: false` (`TOTAL_CHANGED`, `COUNT_MISMATCH`, `WALKS_DIFFER`)
+is the normal answer, and it used to leave every backup candidate on that panel
+`INVENTORY_INCOMPLETE` and the dry run unapprovable. The question the backup asks is narrower
+than "what is on the panel": it is "is each of THESE usernames on it, and how is it spelled".
+So, when the two walks are not one complete snapshot, each username the backup needs on that
+panel (canonical, lowercase) is decided on its own evidence, in this order:
+
+1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of
+   both walks: a collision (`USERNAME_CASE_COLLISION`), never eligible. A union, because a
+   spelling seen once was on the panel at some moment.
+2. **One spelling in BOTH walks** — present, with that spelling. A name seen in one walk only
+   may have been deleted or created mid-read, so it is not decided by the walks.
+3. **Anything else** — one exact lookup, `GET api/user/{username}` (`USER_PATH`, the route the
+   RickPanel adapter's `lookupUser` already reads), on the same protected read session: one
+   request in flight, the same pacing, the same login and the same retry budget as the walks.
+   Found (a record whose name folds to the needed key): **present**, with the panel's spelling.
+   404: **proven absent** (`PROVIDER_MISSING` is then a fact, not an inference from a partial
+   walk). Anything else — a timeout, a 429 past its budget, a 5xx, a malformed body, the read's
+   end — **unresolved**. The lookups are bounded per read; a name beyond the bound is
+   unresolved, never guessed.
+
+Accounts on the panel that are not in the backup are ignored: they decide nothing and are never
+looked up. Such a read is reported `complete: true` with a `resolution` (`mode: 'TARGETED'`, the
+reason, and the counts `needed`, `presentByWalks`, `presentByLookup`, `absentByLookup`,
+`collisions`, `unresolved`, `lookups`) — counts only, never a name — and the index it builds
+covers ONLY the needed names: any other name asked of that panel is `UNDECIDABLE`, never
+"missing" (`PanelInventoryIndex.covered`).
+
+**An unresolved name blocks approval.** Its invoice stays services `INVENTORY_INCOMPLETE`, and
+`legacyMigrationDryRunInventoryIncomplete` refuses a production-like approval while any is
+counted. The dry run reports `PROVIDER_INVENTORY_CHURN` (informational) and, when non-zero,
+`PROVIDER_INVENTORY_LOOKUPS` and `PROVIDER_INVENTORY_UNRESOLVED`. The remedy is to run the dry
+run again, not to stop selling. A panel whose read FAILED (credentials, unreachable, timeouts) is
+still `PROVIDER_INVENTORY_INCOMPLETE`, unchanged.
+
+Scope: the Web Admin `.nxpkg` importer only. The CLI and the rehearsal walk are unchanged: they
+read with `listAll()` and treat anything but one complete snapshot as before.
+
+Not run against a real panel: `GET api/user/{username}` is exercised by the adapter's
+`lookupUser`, but its use by the inventory has no real-panel evidence yet (gate G6 open,
+`docs/legacy-migration/readiness-record.md`; runbook `docs/rickpanel-inventory-acceptance.md`).
 
 ## Real-panel acceptance
 
