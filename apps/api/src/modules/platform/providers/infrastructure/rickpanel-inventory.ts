@@ -219,6 +219,14 @@ export type RickpanelInventoryWalk =
       readonly consistent: false;
       readonly reason: 'TOTAL_CHANGED' | 'COUNT_MISMATCH';
       readonly evidence: RickpanelInventoryEvidence;
+      /**
+       * Every account this walk DID receive. Each one is real — the panel returned it — but
+       * the set is not coverage: a row the cursor slipped past is simply not here. Only a
+       * per-name resolution may use it, and only as positive evidence (`listAll` ignores it).
+       */
+      readonly observed: readonly RickpanelInventoryAccount[];
+      /** Only when `subscriptionLinks` was asked for. */
+      readonly subscriptionLinks?: RickpanelSubscriptionLinks;
     }
   | RickpanelInventoryFailure;
 
@@ -263,7 +271,16 @@ export type RickpanelInventoryOutcome =
 
 export type RickpanelAccountLookup =
   | { readonly ok: true; readonly found: false }
-  | { readonly ok: true; readonly found: true; readonly account: RickpanelInventoryAccount }
+  | {
+      readonly ok: true;
+      readonly found: true;
+      readonly account: RickpanelInventoryAccount;
+      /**
+       * Only when `subscriptionLinks` was asked for: `subscriptionFrom` over the SAME record,
+       * exactly as a list row's link is derived. No request of its own.
+       */
+      readonly subscriptionLink?: string | null;
+    }
   | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
 
 /**
@@ -493,14 +510,23 @@ export class RickpanelInventoryReader {
       firstPageRows,
       lastPageRows,
     };
-    if (totalChanged) return { ok: true, consistent: false, reason: 'TOTAL_CHANGED', evidence };
-    if (evidence.reportedTotal !== null && byName.size !== evidence.reportedTotal) {
-      return { ok: true, consistent: false, reason: 'COUNT_MISMATCH', evidence };
-    }
     const key = (a: RickpanelInventoryAccount) => `${a.username}\u0000${a.providerUsername}`;
     const accounts = [...byName.values()].sort((a, b) =>
       key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0,
     );
+    const inconsistent = (reason: 'TOTAL_CHANGED' | 'COUNT_MISMATCH') =>
+      ({
+        ok: true,
+        consistent: false,
+        reason,
+        evidence,
+        observed: accounts,
+        ...(links === null ? {} : { subscriptionLinks: links }),
+      }) as const;
+    if (totalChanged) return inconsistent('TOTAL_CHANGED');
+    if (evidence.reportedTotal !== null && byName.size !== evidence.reportedTotal) {
+      return inconsistent('COUNT_MISMATCH');
+    }
     return {
       ok: true,
       consistent: true,
@@ -520,6 +546,7 @@ export class RickpanelInventoryReader {
     target: ProviderTarget,
     http: RickpanelReadOnlyHttp,
     username: string,
+    options: { readonly subscriptionLinks?: boolean } = {},
   ): Promise<RickpanelAccountLookup> {
     const canonical = canonicalUsername(username);
     if (canonical === null) {
@@ -543,6 +570,13 @@ export class RickpanelInventoryReader {
     if (account === null || account.username !== canonical) {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: read.status };
     }
-    return { ok: true, found: true, account };
+    return {
+      ok: true,
+      found: true,
+      account,
+      ...(options.subscriptionLinks === true && record !== null
+        ? { subscriptionLink: subscriptionFrom(target.baseUrl, record) }
+        : {}),
+    };
   }
 }

@@ -799,6 +799,13 @@ export interface LegacyInventoryOptions {
   readonly inventorySignal?: AbortSignal;
   /** Overrides `RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS` for this importer (tests). */
   readonly inventoryRequestIntervalMs?: number;
+  /**
+   * Per-name resolution of a panel that is not one complete snapshot (a live panel that keeps
+   * selling): the Web Admin's `.nxpkg` importer only. Absent: the read is exactly as before.
+   */
+  readonly inventoryTargeted?: boolean;
+  /** Overrides `RICKPANEL_INVENTORY_MAX_LOOKUPS` for this importer (tests). */
+  readonly inventoryMaxLookups?: number;
 }
 
 export interface Container {
@@ -6780,6 +6787,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       container.legacyImporter({
         inventoryPageSize: config.RICKPANEL_INVENTORY_PAGE_SIZE,
         inventoryAttempts: INVENTORY_READ_ATTEMPTS,
+        // A live panel (Mirza still selling) is decided per backup username, not left whole.
+        inventoryTargeted: true,
         ...(signal === undefined ? {} : { inventorySignal: signal }),
       }),
     history: () => container.legacyHistoryIngest,
@@ -7018,6 +7027,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         requestIntervalMs:
           options.inventoryRequestIntervalMs ?? config.RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS,
         gate: panelReadGate,
+        ...(options.inventoryTargeted === true
+          ? {
+              targeted: true,
+              maxLookups: options.inventoryMaxLookups ?? config.RICKPANEL_INVENTORY_MAX_LOOKUPS,
+            }
+          : {}),
       },
       () => clock.now(),
     );

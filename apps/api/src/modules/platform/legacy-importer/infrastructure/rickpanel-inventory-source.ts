@@ -2,6 +2,7 @@ import type {
   ProviderHttpClient,
   ProviderHttpRequest,
   ProviderHttpResult,
+  ProviderTarget,
   TenantContext,
 } from '@nexa/contracts';
 import { toProviderCredentials } from '../../panels/application/probe-core.js';
@@ -10,7 +11,9 @@ import {
   effectiveInventoryPageSize,
   inventoryIndex,
   readOnlyRickpanelHttp,
+  type RickpanelInventoryAccount,
   type RickpanelInventoryOutcome,
+  type RickpanelReadOnlyHttp,
 } from '../../providers/infrastructure/rickpanel-inventory.js';
 import { TOKEN_PATH } from '../../providers/infrastructure/rickpanel-protocol.js';
 import type {
@@ -19,7 +22,18 @@ import type {
   LegacyInventoryLoad,
   LegacyInventoryPort,
   LegacyInventoryRead,
+  LegacyInventoryReadOptions,
+  LegacyInventoryResolution,
 } from '../application/ports.js';
+import {
+  classifyNeededNames,
+  resolutionCounts,
+  resolveLookup,
+  type LookupAnswer,
+  type NameResolution,
+  type WalkEvidence,
+} from '../application/inventory-resolution.js';
+import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
 import { PROCESS_PANEL_READ_GATE, panelReadKey, type PanelReadGate } from './panel-read-gate.js';
 import {
   DEFAULT_PANEL_READ_POLICY,
@@ -82,6 +96,13 @@ import {
  * budget, by the session; a read that still failed is not walked again from the start —
  * that is how retries would multiply into a storm on a panel that is already struggling.
  */
+
+/**
+ * Exact lookups one per-name resolution may send. At one request a second, 5 000 is about 83
+ * minutes — the read's whole budget for the names two walks could not decide. Configurable
+ * (`RICKPANEL_INVENTORY_MAX_LOOKUPS`); a name past it stays unresolved.
+ */
+export const INVENTORY_MAX_LOOKUPS = 5_000;
 
 /** Double walks per panel read the Web Admin's `.nxpkg` importer asks for. */
 export const INVENTORY_READ_ATTEMPTS = 3;
@@ -185,6 +206,15 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       readonly policy?: Partial<Omit<PanelReadPolicy, 'requestIntervalMs'>>;
       /** Orders the reads of one panel; the process-local gate unless the container gives one. */
       readonly gate?: PanelReadGate;
+      /**
+       * Per-name resolution (the Web Admin's `.nxpkg` importer only): when the importer names
+       * the usernames the backup needs and the panel is not one complete snapshot, decide
+       * those names one by one instead of leaving the whole panel undecided. Absent (the CLI,
+       * the rehearsal walk): the read is exactly as before.
+       */
+      readonly targeted?: boolean;
+      /** Exact lookups one per-name resolution may send (`INVENTORY_MAX_LOOKUPS`). */
+      readonly maxLookups?: number;
     } = {},
     private readonly now: () => Date = () => {
       throw new Error('RickpanelInventorySource needs the Clock to stamp a read');
@@ -207,7 +237,11 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     return effectiveInventoryPageSize(this.options.pageSize);
   }
 
-  async read(scope: TenantContext, panelId: string): Promise<LegacyInventoryRead> {
+  async read(
+    scope: TenantContext,
+    panelId: string,
+    readOptions: LegacyInventoryReadOptions = {},
+  ): Promise<LegacyInventoryRead> {
     const panel = await this.access.panel(scope, panelId);
     if (panel === null || panel.providerType !== 'rickpanel') {
       return { ok: false, failure: 'NOT_A_RICKPANEL' };
@@ -242,6 +276,22 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
           leaseLost: () => lease.isLost(),
         },
       );
+      const load = (): LegacyInventoryLoad => ({
+        ...counters,
+        pageSize: this.pageSize(),
+        lockWaitMs: Math.max(0, startedAt - queuedAt),
+        durationMs: Math.max(0, this.clock.now() - startedAt),
+      });
+      const needed = readOptions.needed;
+      if (this.options.targeted === true && needed !== undefined) {
+        return await this.readTargeted(
+          panelId,
+          { baseUrl: panel.baseUrl, credentials },
+          http,
+          needed,
+          load,
+        );
+      }
       const attempts = Math.max(1, Math.trunc(this.options.attempts ?? 1));
       let outcome: RickpanelInventoryOutcome | undefined;
       let attempt = 0;
@@ -261,15 +311,192 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         if (!inventoryRetryable(outcome)) break;
       }
       if (outcome === undefined) throw new Error('an inventory read made no attempt');
-      return this.finish(panelId, outcome, attempt, {
-        ...counters,
-        pageSize: this.pageSize(),
-        lockWaitMs: Math.max(0, startedAt - queuedAt),
-        durationMs: Math.max(0, this.clock.now() - startedAt),
-      });
+      return this.finish(panelId, outcome, attempt, load());
     } finally {
       await lease.release();
     }
+  }
+
+  /**
+   * The per-name resolution (`inventory-resolution.ts`). Two walks, always — a first walk the
+   * panel moved under does not end the read, because what it DID see is evidence. If the two
+   * are one complete snapshot, the read is exactly the complete read it always was. Otherwise
+   * each needed name is decided from the walks, and what they cannot decide is asked of the
+   * panel by an exact lookup, in name order, within `maxLookups`, stopping at the first
+   * lookup that does not answer (a struggling panel is not asked a thousand more times).
+   */
+  private async readTargeted(
+    panelId: string,
+    target: ProviderTarget,
+    http: RickpanelReadOnlyHttp,
+    needed: ReadonlySet<string>,
+    load: () => LegacyInventoryLoad,
+  ): Promise<LegacyInventoryRead> {
+    const signal = this.options.signal;
+    const resolutionOf = (
+      reason: string,
+      counts: ReturnType<typeof resolutionCounts>,
+      lookups: number,
+    ): LegacyInventoryResolution => ({
+      mode: 'TARGETED',
+      reason,
+      needed: needed.size,
+      ...counts,
+      lookups,
+    });
+    if (needed.size === 0) {
+      // Nothing the backup holds names this panel: nothing to decide, so nothing is read.
+      const index: PanelInventoryIndex = { panelId, usernames: new Map(), covered: new Set() };
+      return {
+        ok: true,
+        complete: true,
+        index,
+        accounts: 0,
+        states: {},
+        runtime: new Map(),
+        observedAt: this.now(),
+        resolution: resolutionOf('NOTHING_NEEDED', resolutionCounts(new Map()), 0),
+        diagnostics: { attempts: 0, walks: [], pagination: null, status: null, load: load() },
+      };
+    }
+    const walkOptions = {
+      ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
+      subscriptionLinks: true,
+    };
+    signal?.throwIfAborted();
+    const first = await this.reader.walk(target, http, walkOptions);
+    if (!first.ok) return this.finish(panelId, first, 1, load());
+    signal?.throwIfAborted();
+    const second = await this.reader.walk(target, http, walkOptions);
+    if (!second.ok) return this.finish(panelId, second, 1, load());
+    const evidence = { first: first.evidence, second: second.evidence };
+    const firstSeen = first.consistent ? first.accounts : first.observed;
+    const secondSeen = second.consistent ? second.accounts : second.observed;
+    const secondLinks = second.subscriptionLinks;
+
+    // One complete snapshot after all: the complete read it always was (the listAll rule).
+    if (first.consistent && second.consistent) {
+      const a = first.accounts.map((x) => x.providerUsername);
+      const b = new Set(second.accounts.map((x) => x.providerUsername));
+      if (a.length === b.size && a.every((name) => b.has(name))) {
+        return this.finish(
+          panelId,
+          {
+            ok: true,
+            complete: true,
+            accounts: second.accounts,
+            evidence,
+            ...(secondLinks === undefined ? {} : { subscriptionLinks: secondLinks }),
+          },
+          1,
+          load(),
+        );
+      }
+    }
+    const reason = !first.consistent
+      ? first.reason
+      : !second.consistent
+        ? second.reason
+        : 'WALKS_DIFFER';
+
+    const classified = classifyNeededNames(needed, [firstSeen, secondSeen]);
+    const resolved = new Map<string, NameResolution>();
+    const runtime = new Map<string, AccountRuntime>();
+    const bySpelling = new Map(secondSeen.map((a) => [a.providerUsername, a]));
+    const runtimeOf = (
+      account: RickpanelInventoryAccount,
+      link: string | null,
+    ): AccountRuntime => ({
+      state: account.state,
+      usage:
+        account.usage === null
+          ? null
+          : {
+              usedBytes: account.usage.usedBytes,
+              totalBytes: account.usage.totalBytes,
+              expiresAt: account.usage.expiresAt,
+            },
+      subscriptionUrl: link,
+    });
+    const toLookup: [string, Extract<WalkEvidence, { kind: 'LOOKUP' }>][] = [];
+    for (const [name, found] of classified) {
+      if (found.kind === 'LOOKUP') {
+        toLookup.push([name, found]);
+        continue;
+      }
+      if (found.kind === 'COLLISION') {
+        resolved.set(name, { kind: 'COLLISION', spellings: found.spellings });
+        continue;
+      }
+      // Present in BOTH walks: adopt from the SECOND walk's record, as a complete read does.
+      const account = bySpelling.get(found.spelling);
+      if (account === undefined) {
+        resolved.set(name, { kind: 'UNRESOLVED' });
+        continue;
+      }
+      resolved.set(name, { kind: 'PRESENT', spelling: found.spelling, by: 'WALKS' });
+      runtime.set(found.spelling, runtimeOf(account, secondLinks?.get(found.spelling) ?? null));
+    }
+
+    // Exact lookups, in name order (so a dry run and its import ask the same names first),
+    // within the bound, and none after the first that did not answer.
+    toLookup.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const maxLookups = Math.max(0, Math.trunc(this.options.maxLookups ?? INVENTORY_MAX_LOOKUPS));
+    let lookups = 0;
+    let stopped = false;
+    for (const [name, ask] of toLookup) {
+      if (stopped || lookups >= maxLookups) {
+        resolved.set(name, { kind: 'UNRESOLVED' });
+        continue;
+      }
+      signal?.throwIfAborted();
+      lookups += 1;
+      const answer = await this.reader.findAccount(target, http, ask.ask, {
+        subscriptionLinks: true,
+      });
+      let result: LookupAnswer;
+      if (!answer.ok) {
+        stopped = true;
+        result = { kind: 'UNANSWERED' };
+      } else if (!answer.found) {
+        result = { kind: 'NOT_FOUND' };
+      } else {
+        result = { kind: 'FOUND', spelling: answer.account.providerUsername };
+      }
+      const final = resolveLookup(ask, result);
+      resolved.set(name, final);
+      if (final.kind === 'PRESENT' && answer.ok && answer.found) {
+        runtime.set(final.spelling, runtimeOf(answer.account, answer.subscriptionLink ?? null));
+      }
+    }
+
+    const usernames = new Map<string, readonly string[]>();
+    const covered = new Set<string>();
+    for (const [name, r] of resolved) {
+      if (r.kind === 'UNRESOLVED') continue;
+      covered.add(name);
+      if (r.kind === 'PRESENT') usernames.set(name, [r.spelling]);
+      else if (r.kind === 'COLLISION') usernames.set(name, r.spellings);
+    }
+    const states: Record<string, number> = {};
+    for (const account of secondSeen) states[account.state] = (states[account.state] ?? 0) + 1;
+    return {
+      ok: true,
+      complete: true,
+      index: { panelId, usernames, covered },
+      accounts: secondSeen.length,
+      states,
+      runtime,
+      observedAt: this.now(),
+      resolution: resolutionOf(reason, resolutionCounts(resolved), lookups),
+      diagnostics: {
+        attempts: 1,
+        walks: [{ ...first.evidence }, { ...second.evidence }],
+        pagination: null,
+        status: null,
+        load: load(),
+      },
+    };
   }
 
   private finish(
