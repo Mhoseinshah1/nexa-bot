@@ -26,7 +26,12 @@ import {
   type ServiceCandidateDecision,
 } from './decisions.js';
 import { unmappedCodePanels, type PanelMapping } from './panel-mapping.js';
-import type { LegacyInventoryDiagnostics, LegacyInventoryRead, RecordedDebt } from './ports.js';
+import type {
+  LegacyInventoryDiagnostics,
+  LegacyInventoryRead,
+  LegacyInventoryResolution,
+  RecordedDebt,
+} from './ports.js';
 import {
   sha256Hex,
   type LegacyInvoiceRow,
@@ -99,6 +104,11 @@ export interface PanelInventorySummary {
   readonly states: Readonly<Record<string, number>>;
   /** How the read came out, as counts (attempts, each walk's pages and totals). */
   readonly diagnostics: LegacyInventoryDiagnostics | null;
+  /**
+   * Present when the panel was not one complete snapshot and its needed names were decided
+   * one by one (`complete` is then true for the names covered). Counts only.
+   */
+  readonly resolution: LegacyInventoryResolution | null;
 }
 
 export interface LegacyPlan {
@@ -566,6 +576,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
         reason: null,
         states: read.states,
         diagnostics: read.diagnostics ?? null,
+        resolution: read.resolution ?? null,
       });
     } else {
       inventories.push({
@@ -575,6 +586,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
         reason: read === undefined ? 'NOT_READ' : read.ok ? read.reason : read.failure,
         states: {},
         diagnostics: read?.diagnostics ?? null,
+        resolution: null,
       });
     }
   }
