@@ -163,18 +163,23 @@ reaching it was not.
 - **Complete means two consecutive walks, each consistent with the panel's `total`, returning the
   identical set of exact provider spellings** (`docs/rickpanel-inventory.md`). Unchanged.
 - **The Web Admin's importer attempts a read up to `INVENTORY_READ_ATTEMPTS` (3) double walks**,
-  pausing 15 s and 45 s, when it came out incomplete or a list page failed on the transport
-  (`TIMEOUT`, `UNREACHABLE`, `RATE_LIMITED`, `PROVIDER_ERROR` with no status or a 5xx). At the
-  login only `TIMEOUT` and `UNREACHABLE` are retried: any answer the token exchange gave is one
-  more failed login if asked again (a lockout is worse than a refusal). A 4xx or a page-shape
-  fault is never retried. Only an attempt complete on its own is indexed. Each attempt is a full
-  `listAll`, and each of its two walks exchanges its own token: a panel read logs in at most
-  `2 × INVENTORY_READ_ATTEMPTS` (6) times, all SUCCESSFUL logins (before the retries: 2), and an
-  attempt whose first walk was already inconsistent stops after one. A failed login ends the read
-  and is never asked again. The pause between attempts ends on the executor step's signal: a
-  worker that lost its lease stops before another attempt, inside the importer's `prepare`,
-  before the import's first write.
-  The CLI and the rehearsal walk read once, as before (`inventoryAttempts`).
+  pausing 15 s and 45 s, when it came out INCOMPLETE (the panel moved). Only an attempt complete
+  on its own is indexed. A transport failure, a 429 or a 5xx is not a reason to walk again from
+  the start: the read session already asked that page again, within the read's one retry
+  budget (see _Load on the panel_ below). The CLI and the rehearsal walk read once, as before
+  (`inventoryAttempts`).
+- **Load on the panel** (owner requirement, `docs/rickpanel-inventory.md` §Load protection):
+  every read — Web Admin, CLI, rehearsal — is one read of that panel at a time in the whole
+  installation (a PostgreSQL advisory lock per panel origin), one request in flight, at least
+  `RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS` (1000) between request starts and longer after a slow
+  answer, on ONE login per read (a 401 mid-read buys one fresh login; a refused login is never
+  asked again). A 429 waits the panel's `Retry-After` (over 2 minutes: not asked again); a
+  timeout, an unreachable panel or a 5xx waits 2 / 5 / 15 / 30 s; all retries of a read draw on
+  one budget of 4. The Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (100) rows a page. The
+  step's signal ends the read before its next request and ends every wait — a worker that lost
+  its lease stops inside the importer's `prepare`, before the import's first write. Each read
+  reports its cost in `diagnostics.load` (requests, logins, reuses, refreshes, retries, waits,
+  queue time, duration, page size, largest page in bytes) — counts only.
 - **The dry run says so**: `PROVIDER_INVENTORY_INCOMPLETE` (production panels) and one
   `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason. The importer's `sections.provider.panels`
   carries each read's counts (`diagnostics`: attempts, and per walk the pages, rows, distinct

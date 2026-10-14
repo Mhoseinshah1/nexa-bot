@@ -279,6 +279,28 @@ export interface LegacyInventoryDiagnostics {
   readonly pagination: string | null;
   /** The HTTP status the last attempt failed with, when it failed with one. */
   readonly status: number | null;
+  /** What the read cost the panel (counts and milliseconds only). */
+  readonly load: LegacyInventoryLoad;
+}
+
+/**
+ * The load a panel read put on the panel, for the operator and for tuning the page size and
+ * the pacing from evidence: requests and logins sent, logins reused, fresh logins after an
+ * expiry, retries, the time spent waiting (pacing, backoff, `Retry-After`), the time spent
+ * queued behind another read of the same panel, the read's duration, and the largest list
+ * page received. Never a token, a name or a row.
+ */
+export interface LegacyInventoryLoad {
+  readonly requests: number;
+  readonly logins: number;
+  readonly tokenReuses: number;
+  readonly tokenRefreshes: number;
+  readonly retries: number;
+  readonly waitedMs: number;
+  readonly lockWaitMs: number;
+  readonly durationMs: number;
+  readonly pageSize: number;
+  readonly maxPageBytes: number;
 }
 
 export type LegacyInventoryRead =

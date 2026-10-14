@@ -527,6 +527,46 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expectOnlyReads();
   });
 
+  it('load protection: a PACED read (one login per panel, every request ≥ the interval apart) plans exactly what an unpaced one does', async () => {
+    const { connector: c, binding, holdFor } = await setup();
+    const session = await c.open();
+    let snapshot: LegacySnapshot;
+    try {
+      snapshot = await readFromSession(c.label, session);
+    } finally {
+      await session.close();
+    }
+    const hold = await holdFor(snapshot);
+    const mapping = parsePanelMapping(binding.text, TENANT);
+    const plan = (inventoryRequestIntervalMs: number) =>
+      ctx.container
+        .legacyImporter({ inventoryPageSize: 3, inventoryRequestIntervalMs })
+        .prepare(tenantA, snapshot, mapping, false, { ownershipHold: hold });
+
+    const unpaced = await plan(0);
+    const sentBefore = panelA.requests.length + panelB.requests.length;
+    const interval = 25;
+    const started = Date.now();
+    const paced = await plan(interval);
+    const elapsed = Date.now() - started;
+    const sent = panelA.requests.length + panelB.requests.length - sentBefore;
+
+    // The same decisions, the same digest: pacing changes how the panel is asked, not what
+    // the read decides (two walks, identical exact sets) nor what the plan adopts.
+    expect(planTalliesDigest(paced.plan)).toBe(planTalliesDigest(unpaced.plan));
+    expect(paced.plan.inventories.every((p) => p.complete)).toBe(true);
+    // Each panel: ONE login for both walks; each request a full interval after the last
+    // (the first a full interval after the read began), so the reads took at least that long.
+    for (const inventory of paced.plan.inventories) {
+      expect(inventory.diagnostics?.load).toMatchObject({ logins: 1, tokenReuses: 1, retries: 0 });
+    }
+    expect(sent).toBe(
+      paced.plan.inventories.reduce((n, p) => n + (p.diagnostics?.load.requests ?? 0), 0),
+    );
+    expect(elapsed).toBeGreaterThanOrEqual(sent * interval - 5);
+    expectOnlyReads();
+  });
+
   it('DRY_RUN_MISMATCH at the root: the import plans only on a complete panel read that decides what the approved dry run decided', async () => {
     const { connector: c, binding, holdFor } = await setup();
     const session = await c.open();

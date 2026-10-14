@@ -353,7 +353,7 @@ import {
   INVENTORY_READ_ATTEMPTS,
   RickpanelInventorySource,
 } from './modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source.js';
-import { INVENTORY_MAX_PAGE_SIZE } from './modules/platform/providers/infrastructure/rickpanel-inventory.js';
+import { PgPanelReadGate } from './modules/platform/legacy-importer/infrastructure/panel-read-gate.js';
 import { DrizzleLegacyImportRepository } from './modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
 import {
@@ -797,6 +797,8 @@ export interface LegacyInventoryOptions {
   readonly inventorySleep?: (ms: number) => Promise<void>;
   /** The executor step's signal: a lost lease ends an inventory read before another attempt. */
   readonly inventorySignal?: AbortSignal;
+  /** Overrides `RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS` for this importer (tests). */
+  readonly inventoryRequestIntervalMs?: number;
 }
 
 export interface Container {
@@ -6767,15 +6769,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const nxpkgMigration = new NxpkgMigrationAdapters({
     db: database.db,
     // Resolved at call time: both are members of the container built below.
-    // The CLI's own default page size, the reader's maximum: the fewest provider reads and the
-    // shortest double walk, so a live panel has the least time to move under the dry run's
-    // read and the import's (DRY_RUN_MISMATCH). The walk still fails closed on any change.
-    // And up to INVENTORY_READ_ATTEMPTS double walks when a read is incomplete or a page did
-    // not answer: a production-like dry run that planned on an incomplete read is not
-    // approvable, so a panel that moved for a moment must not cost the owner a dry run.
+    // RICKPANEL_INVENTORY_PAGE_SIZE (100): few enough requests that, paced at one a second, a
+    // double walk stays short, while a page stays well under the panel client's response cap
+    // (RickPanel's row size is unmeasured; each read reports its largest page). The walk still
+    // fails closed on any change (DRY_RUN_MISMATCH). And up to INVENTORY_READ_ATTEMPTS double
+    // walks when a read came out incomplete: a production-like dry run that planned on an
+    // incomplete read is not approvable, so a panel that moved for a moment must not cost the
+    // owner a dry run. All of it inside the panel's read gate, on one login.
     importer: (signal) =>
       container.legacyImporter({
-        inventoryPageSize: INVENTORY_MAX_PAGE_SIZE,
+        inventoryPageSize: config.RICKPANEL_INVENTORY_PAGE_SIZE,
         inventoryAttempts: INVENTORY_READ_ATTEMPTS,
         ...(signal === undefined ? {} : { inventorySignal: signal }),
       }),
@@ -6991,6 +6994,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * the rehearsal's P4 panel-state walk — which is why it is built here, outside the
    * application service, with no write path of its own.
    */
+  // One migration read of a panel at a time in the whole installation (a session advisory
+  // lock per panel origin, on a connection of its own for the length of the read).
+  const panelReadGate = new PgPanelReadGate(config.DATABASE_URL);
   const legacyInventory = (options: LegacyInventoryOptions = {}) =>
     new RickpanelInventorySource(
       {
@@ -7008,6 +7014,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         ...(options.inventoryAttempts === undefined ? {} : { attempts: options.inventoryAttempts }),
         ...(options.inventorySleep === undefined ? {} : { sleep: options.inventorySleep }),
         ...(options.inventorySignal === undefined ? {} : { signal: options.inventorySignal }),
+        // Every read of a panel — Web Admin, CLI, rehearsal — paced and queued installation-wide.
+        requestIntervalMs:
+          options.inventoryRequestIntervalMs ?? config.RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS,
+        gate: panelReadGate,
       },
       () => clock.now(),
     );

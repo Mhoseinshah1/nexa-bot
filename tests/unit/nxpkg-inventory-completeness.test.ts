@@ -34,6 +34,11 @@ import {
 } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters';
 import { SERVICE_CANDIDATE_CATEGORIES } from '../../apps/api/src/modules/platform/legacy-importer/application/decisions';
 import { LegacyMigrationStepFailure } from '../../apps/api/src/modules/platform/legacy-migration/application/ports';
+import { InProcessPanelReadGate } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/panel-read-gate';
+import {
+  DEFAULT_PANEL_READ_POLICY,
+  INVENTORY_BACKOFF_MS,
+} from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/rickpanel-read-session';
 import { buildSyntheticLegacyDataset } from '../fixtures/legacy/synthetic-legacy';
 import { syntheticInventories, syntheticMappingFile } from '../fixtures/legacy/synthetic-support';
 
@@ -102,8 +107,12 @@ function clientOf(panel: Panel): ProviderHttpClient {
   };
 }
 
-function sourceFor(panel: Panel, options: { attempts?: number } = {}) {
+function sourceFor(panel: Panel, options: Record<string, unknown> = {}) {
+  /** The pauses BETWEEN attempts (the walk again after an incomplete answer). */
   const sleeps: number[] = [];
+  /** Every wait of the read, by kind: pacing, backoff, Retry-After, attempt, gate. */
+  const waits: { ms: number; kind: string | undefined }[] = [];
+  let now = 0;
   const source = new RickpanelInventorySource(
     {
       panel: async () => ({ baseUrl: 'https://panel.invalid', providerType: 'rickpanel' }),
@@ -113,14 +122,18 @@ function sourceFor(panel: Panel, options: { attempts?: number } = {}) {
     {
       pageSize: 2,
       attempts: INVENTORY_READ_ATTEMPTS,
-      sleep: async (ms) => {
-        sleeps.push(ms);
+      clock: () => now,
+      sleep: async (ms: number, _signal?: AbortSignal, kind?: string) => {
+        waits.push({ ms, kind });
+        if (kind === 'attempt') sleeps.push(ms);
+        now += ms;
       },
+      gate: new InProcessPanelReadGate(),
       ...options,
     },
     () => new Date('2026-10-13T08:00:00.000Z'),
   );
-  return { source, sleeps };
+  return { source, sleeps, waits };
 }
 
 const SCOPE = { tenantId: '11111111-1111-4111-8111-111111111111' } as never;
@@ -151,7 +164,7 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
     expect(source.requestCounts().refusedWrites).toBe(0);
   });
 
-  it('a panel that never settles: INCOMPLETE after exactly INVENTORY_READ_ATTEMPTS, never indexed', async () => {
+  it('a panel that never settles: INCOMPLETE after exactly INVENTORY_READ_ATTEMPTS, never indexed — on ONE login', async () => {
     const panel = panelOf(NAMES);
     let created = 0;
     // Every walk, an account is created mid-walk (a live bot still selling).
@@ -164,8 +177,10 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
     expect(read).toMatchObject({ ok: true, complete: false, reason: 'TOTAL_CHANGED' });
     expect(read.diagnostics?.attempts).toBe(INVENTORY_READ_ATTEMPTS);
     expect(sleeps).toEqual([...INVENTORY_RETRY_DELAYS_MS]);
-    // An inconsistent first walk ends the attempt: one walk per attempt.
-    expect(panel.tokenExchanges).toBe(INVENTORY_READ_ATTEMPTS);
+    // Three attempts, one walk each (an inconsistent first walk ends the attempt), and the
+    // read's one login reused by all of them.
+    expect(panel.tokenExchanges).toBe(1);
+    expect(read.diagnostics?.load).toMatchObject({ logins: 1, tokenReuses: 2 });
     expect('index' in read).toBe(false);
   });
 
@@ -185,7 +200,7 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
     expect(read.diagnostics?.attempts).toBe(INVENTORY_READ_ATTEMPTS);
   });
 
-  it('a page that timed out is read again; the read that follows is complete', async () => {
+  it('a page that timed out is asked again within the SAME walk, after a backoff; the read is complete in one attempt', async () => {
     const panel = panelOf(NAMES);
     let timedOut = false;
     panel.beforePage = (_walk, offset) => {
@@ -195,39 +210,69 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
       }
       return undefined;
     };
-    const { source } = sourceFor(panel);
+    const { source, sleeps, waits } = sourceFor(panel);
     const read = await source.read(SCOPE, 'panel');
     expect(read).toMatchObject({ ok: true, complete: true, accounts: 5 });
-    expect(read.diagnostics?.attempts).toBe(2);
+    expect(read.diagnostics?.attempts).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(waits.filter((w) => w.kind === 'backoff').map((w) => w.ms)).toEqual([
+      INVENTORY_BACKOFF_MS[0],
+    ]);
+    expect(read.diagnostics?.load).toMatchObject({ retries: 1, logins: 1 });
   });
 
-  it('a panel that always times out: a FAILED read after the attempts, never an empty inventory', async () => {
+  it('a panel that always times out: a FAILED read once the ONE retry budget is spent — no attempt starts over, no storm', async () => {
     const panel = panelOf(NAMES);
     panel.beforePage = () => ({ ok: false, failure: 'TIMEOUT', status: null });
-    const { source } = sourceFor(panel);
+    const { source, sleeps, waits } = sourceFor(panel);
     const read = await source.read(SCOPE, 'panel');
     expect(read).toMatchObject({ ok: false, failure: 'TIMEOUT' });
-    expect(read.diagnostics).toMatchObject({ attempts: INVENTORY_READ_ATTEMPTS, walks: [] });
+    expect(read.diagnostics).toMatchObject({ attempts: 1, walks: [] });
+    const budget = DEFAULT_PANEL_READ_POLICY.maxRetries;
+    expect(read.diagnostics?.load).toMatchObject({ retries: budget, logins: 1 });
+    // One login, then the page once and once per retry: nothing else reached the panel.
+    expect(panel.requests).toHaveLength(1 + 1 + budget);
+    expect(sleeps).toEqual([]);
+    expect(waits.filter((w) => w.kind === 'backoff').map((w) => w.ms)).toEqual(
+      INVENTORY_BACKOFF_MS.slice(0, budget),
+    );
   });
 
-  it('a rate limit (429) is waited out and read again', async () => {
+  it("a rate limit (429) waits the panel's own Retry-After, then asks the same page again", async () => {
     const panel = panelOf(NAMES);
     let limited = 0;
-    panel.beforePage = () => (limited++ < 1 ? answer(429, { detail: 'slow down' }) : undefined);
-    const { source, sleeps } = sourceFor(panel);
+    panel.beforePage = () =>
+      limited++ < 1
+        ? { ...answer(429, { detail: 'slow down' }), headers: { 'retry-after': '7' } }
+        : undefined;
+    const { source, sleeps, waits } = sourceFor(panel);
     const read = await source.read(SCOPE, 'panel');
     expect(read).toMatchObject({ ok: true, complete: true });
-    expect(sleeps).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+    expect(waits.filter((w) => w.kind === 'retry-after').map((w) => w.ms)).toEqual([7_000]);
+  });
+
+  it('a 429 asking for longer than the cap is not asked again: the read fails RATE_LIMITED, nothing more is sent', async () => {
+    const panel = panelOf(NAMES);
+    panel.beforePage = () => ({
+      ...answer(429, { detail: 'come back later' }),
+      headers: { 'retry-after': String(DEFAULT_PANEL_READ_POLICY.maxRetryAfterMs / 1000 + 1) },
+    });
+    const { source, waits } = sourceFor(panel);
+    expect(await source.read(SCOPE, 'panel')).toMatchObject({ ok: false, failure: 'RATE_LIMITED' });
+    expect(panel.listCalls).toBe(1);
+    expect(waits.filter((w) => w.kind === 'retry-after')).toEqual([]);
   });
 
   it('a refused login is NEVER retried: one token exchange (a lockout is worse than a refusal)', async () => {
     const panel = panelOf(NAMES);
     panel.login = 'refused';
-    const { source, sleeps } = sourceFor(panel);
+    const { source, sleeps, waits } = sourceFor(panel);
     const read = await source.read(SCOPE, 'panel');
     expect(read).toMatchObject({ ok: false, failure: 'AUTHENTICATION_FAILED' });
     expect(panel.tokenExchanges).toBe(1);
     expect(sleeps).toEqual([]);
+    expect(waits.filter((w) => w.kind === 'backoff' || w.kind === 'retry-after')).toEqual([]);
   });
 
   it('a page shape a second attempt would meet identically is not retried', async () => {
@@ -237,6 +282,7 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
     const read = await source.read(SCOPE, 'panel');
     expect(read).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
     expect(read.diagnostics).toMatchObject({ attempts: 1, pagination: 'NOT_A_PAGE' });
+    expect(panel.listCalls).toBe(1);
   });
 
   it('a 429 at the LOGIN is not asked again (a login limiter counts every attempt)', async () => {
@@ -248,7 +294,7 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
     expect(sleeps).toEqual([]);
   });
 
-  it('a 4xx on a list page is not asked again; a 5xx is', async () => {
+  it('a 4xx on a list page is not asked again; a 5xx is, after a backoff', async () => {
     const bad = panelOf(NAMES);
     bad.beforePage = () => answer(404, { detail: 'Not Found' });
     const one = sourceFor(bad);
@@ -256,7 +302,8 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
       ok: false,
       failure: 'PROVIDER_ERROR',
     });
-    expect(one.sleeps).toEqual([]);
+    expect(bad.listCalls).toBe(1);
+    expect(one.waits.filter((w) => w.kind === 'backoff')).toEqual([]);
 
     const flaky = panelOf(NAMES);
     let failed = false;
@@ -267,7 +314,7 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
     };
     const two = sourceFor(flaky);
     expect(await two.source.read(SCOPE, 'panel')).toMatchObject({ ok: true, complete: true });
-    expect(two.sleeps).toHaveLength(1);
+    expect(two.waits.filter((w) => w.kind === 'backoff')).toHaveLength(1);
   });
 
   it('without `attempts` (the CLI, the rehearsal walk) a read is made once, as before', async () => {
@@ -276,17 +323,10 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
       if (walk === 1 && offset === 2) panel.names.pop();
       return undefined;
     };
-    const source = new RickpanelInventorySource(
-      {
-        panel: async () => ({ baseUrl: 'https://panel.invalid', providerType: 'rickpanel' }),
-        credentials: async () => ({ username: 'admin', password: 'synthetic', apiToken: null }),
-        http: () => clientOf(panel),
-      },
-      { pageSize: 2, sleep: async () => expect.fail('no pause without attempts') },
-      () => new Date('2026-10-13T08:00:00.000Z'),
-    );
+    const { source, sleeps } = sourceFor(panel, { attempts: undefined });
     const read = await source.read(SCOPE, 'panel');
     expect(read).toMatchObject({ complete: false, diagnostics: { attempts: 1 } });
+    expect(sleeps).toEqual([]);
     expect(panel.tokenExchanges).toBe(1);
   });
 
@@ -309,38 +349,47 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
         credentials: async () => ({ username: 'admin', password: 'synthetic', apiToken: null }),
         http: () => clientOf(panel),
       },
-      // No `sleep` seam: the real pause, which must end on the signal, not after 15 s.
-      { pageSize: 2, attempts: INVENTORY_READ_ATTEMPTS, signal: lease.signal },
+      // No `sleep` seam: the real pause, which must end on the signal, not after 15 s. No
+      // pacing, so the only long wait is the pause between attempts.
+      {
+        pageSize: 2,
+        attempts: INVENTORY_READ_ATTEMPTS,
+        signal: lease.signal,
+        requestIntervalMs: 0,
+        gate: new InProcessPanelReadGate(),
+      },
       () => new Date('2026-10-13T08:00:00.000Z'),
     );
     const started = Date.now();
     await expect(source.read(SCOPE, 'panel')).rejects.toThrow('lease lost');
     expect(Date.now() - started).toBeLessThan(5_000);
-    // One attempt's logins only: nothing was read after the lease was lost.
-    const loginsAtAbort = panel.tokenExchanges;
+    // Nothing was sent after the lease was lost.
+    const requestsAtAbort = panel.requests.length;
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(panel.tokenExchanges).toBe(loginsAtAbort);
-    expect(loginsAtAbort).toBeLessThanOrEqual(2);
+    expect(panel.requests).toHaveLength(requestsAtAbort);
+    expect(panel.tokenExchanges).toBe(1);
   });
 
-  it('a lease lost during the pause seam is checked before the next attempt', async () => {
+  it('a lease lost during the pause between attempts is checked before the next attempt', async () => {
     const panel = panelOf(NAMES);
     panel.beforePage = (walk, offset) => {
       if (walk === 1 && offset === 2) panel.names.pop();
       return undefined;
     };
     const lease = new AbortController();
+    let now = 0;
     const { source } = sourceFor(panel, {
-      sleep: async () => {
-        lease.abort(new Error('lease lost'));
+      clock: () => now,
+      sleep: async (ms: number, _signal?: AbortSignal, kind?: string) => {
+        now += ms;
+        if (kind === 'attempt') lease.abort(new Error('lease lost'));
       },
       signal: lease.signal,
-    } as never);
-    const before = panel.tokenExchanges;
+    });
     await expect(source.read(SCOPE, 'panel')).rejects.toThrow('lease lost');
-    // The first attempt's walks only (an inconsistent first walk ends the attempt): no
-    // token exchange after the pause.
-    expect(panel.tokenExchanges - before).toBe(1);
+    // The first attempt's one walk only: no request after the pause.
+    expect(panel.listCalls).toBe(2);
+    expect(panel.tokenExchanges).toBe(1);
   });
 
   it('attempts: 1 reads once', async () => {
@@ -354,7 +403,7 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
     expect(sleeps).toEqual([]);
   });
 
-  it('inventoryRetryable: incomplete and transport failures only', () => {
+  it('inventoryRetryable: only an incomplete answer starts another attempt (failures were retried by the session)', () => {
     const incomplete = {
       ok: true,
       complete: false,
@@ -362,41 +411,20 @@ describe('the inventory read: attempts under the SAME strict criterion', () => {
       evidence: { first: {} as never, second: null },
     } as const;
     expect(inventoryRetryable(incomplete)).toBe(true);
-    for (const failure of ['TIMEOUT', 'UNREACHABLE', 'RATE_LIMITED', 'PROVIDER_ERROR'] as const) {
-      expect(inventoryRetryable({ ok: false, failure, status: null })).toBe(true);
-    }
-    expect(inventoryRetryable({ ok: false, failure: 'PROVIDER_ERROR', status: 503 })).toBe(true);
-    expect(inventoryRetryable({ ok: false, failure: 'PROVIDER_ERROR', status: 400 })).toBe(false);
-    // At the login only the transport is asked again.
-    for (const [failure, status, retried] of [
-      ['TIMEOUT', null, true],
-      ['UNREACHABLE', null, true],
-      ['RATE_LIMITED', 429, false],
-      ['PROVIDER_ERROR', 500, false],
-      ['PROVIDER_ERROR', 400, false],
-    ] as const) {
-      expect(inventoryRetryable({ ok: false, failure, status, phase: 'LOGIN' }), failure).toBe(
-        retried,
-      );
-    }
     for (const failure of [
+      'TIMEOUT',
+      'UNREACHABLE',
+      'RATE_LIMITED',
+      'PROVIDER_ERROR',
       'AUTHENTICATION_FAILED',
       'AUTHENTICATION_REQUIRES_INTERACTION',
       'TLS_FAILED',
       'BLOCKED_TARGET',
       'MALFORMED_RESPONSE',
     ] as const) {
-      expect(inventoryRetryable({ ok: false, failure, status: null })).toBe(false);
+      expect(inventoryRetryable({ ok: false, failure, status: null }), failure).toBe(false);
+      expect(inventoryRetryable({ ok: false, failure, status: 503 }), failure).toBe(false);
     }
-    // A pagination fault is the panel's shape, not a moment.
-    expect(
-      inventoryRetryable({
-        ok: false,
-        failure: 'PROVIDER_ERROR',
-        status: 200,
-        pagination: 'NO_PROGRESS',
-      }),
-    ).toBe(false);
   });
 });
 

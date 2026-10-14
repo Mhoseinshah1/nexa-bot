@@ -58,6 +58,10 @@ export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): AppConfi
     DEPLOYMENT_TOPOLOGY: 'direct',
     OUTBOX_RELAY_ENABLED: 'false',
     OUTBOX_RELAY_POLL_INTERVAL_MS: '50',
+    // No pacing between the fake panel's requests: the suite drives hundreds of reads, and
+    // the pacing itself is pinned by tests/unit/rickpanel-load-protection.test.ts and by one
+    // integration case that asks for it. Production is forbidden values below 250.
+    RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS: '0',
     ...overrides,
   });
 }

@@ -823,6 +823,29 @@ export const configSchema = z
      * diagnosis needs while the diagnosis is still happening.
      */
     BACKUP_RUN_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(365),
+    /**
+     * The least time, in milliseconds, between two requests a migration's live inventory read
+     * sends ONE RickPanel (owner requirement on PR #281). One read of a panel runs at a time
+     * in the whole installation, so this is the panel's rate across every concurrent job:
+     * 1000 (one request a second) is the conservative start. Lower it only on evidence — a
+     * documented panel limit and a measured read — and never below 250 in production. 0 is a
+     * test affordance and is refused in production.
+     */
+    RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(60_000)
+      .default(1_000),
+    /**
+     * Rows per list page the Web Admin's Mirza importer asks a RickPanel for. 100, not the
+     * reader's 200 maximum: the panel client keeps at most PANEL_HTTP_MAX_RESPONSE_BYTES
+     * (512 KiB by default) and a page past it fails the read, and RickPanel's row size is
+     * unmeasured. Each read reports its largest page in bytes (`load.maxPageBytes`); raise
+     * this from that evidence. A panel that caps its pages lower loses nothing — the walk
+     * advances by the rows it received.
+     */
+    RICKPANEL_INVENTORY_PAGE_SIZE: z.coerce.number().int().min(1).max(200).default(100),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()
@@ -1140,6 +1163,17 @@ export const configSchema = z
             ' Remove the setting.',
         });
       }
+    }
+
+    if (config.NODE_ENV === 'production' && config.RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS < 250) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS'],
+        message:
+          'RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS below 250 is refused in production: a ' +
+          "migration's inventory read would ask a live RickPanel more than four times a second. " +
+          'Remove the setting (1000) or raise it.',
+      });
     }
 
     if (config.PASSWORD_HASH_PROFILE === 'fast' && config.NODE_ENV === 'production') {
