@@ -2,7 +2,9 @@ import { readFile } from 'node:fs/promises';
 import {
   isNexaError,
   LEGACY_IMPORT_ERROR_CODES,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   LEGACY_NXPKG_ERROR_CODES,
   legacyMigrationDryRunInventoryIncomplete,
   type ActorContext,
@@ -1303,10 +1305,7 @@ export function providerIncompleteReasons(report: LegacyImportReport): LegacyMig
   for (const p of providerPanels(report)) {
     const panel = p as { complete?: unknown; reason?: unknown } | null;
     if (panel?.complete === true) continue;
-    const reason =
-      typeof panel?.reason === 'string' && /^[A-Z][A-Z_]{0,39}$/u.test(panel.reason)
-        ? panel.reason
-        : 'UNKNOWN';
+    const reason = closedReason(panel?.reason);
     byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
   }
   return [...byReason].map(([reason, count]) => ({
@@ -1315,17 +1314,72 @@ export function providerIncompleteReasons(report: LegacyImportReport): LegacyMig
   }));
 }
 
+/** A reason in the closed shape, or `UNKNOWN`: a provider string is never echoed. */
+function closedReason(value: unknown): string {
+  return typeof value === 'string' && /^[A-Z][A-Z_]{0,39}$/u.test(value) ? value : 'UNKNOWN';
+}
+
+/** A count the report can carry: a safe non-negative integer, else 0 (never trusted further). */
+function safeCount(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * The production panels that changed while read and whose needed usernames the importer
+ * decided one by one (a non-null `resolution`): `PROVIDER_INVENTORY_CHURN` (how many panels),
+ * one `PROVIDER_INVENTORY_CHURN:<reason>` per reason, `PROVIDER_INVENTORY_LOOKUPS` (exact
+ * lookups sent, when any) and `PROVIDER_INVENTORY_UNRESOLVED` (needed names neither walk nor
+ * lookup decided, when any). Informational: what blocks an approval is the services category
+ * `INVENTORY_INCOMPLETE` those unresolved names leave behind, through the contract rule.
+ * Counts only, never a name. Exported for its own test.
+ */
+export function providerChurnWarnings(report: LegacyImportReport): LegacyMigrationCodeCount[] {
+  let panels = 0;
+  let lookups = 0;
+  let unresolved = 0;
+  const byReason = new Map<string, number>();
+  for (const p of providerPanels(report)) {
+    const resolution = (p as { resolution?: unknown } | null)?.resolution;
+    if (typeof resolution !== 'object' || resolution === null || Array.isArray(resolution)) {
+      continue;
+    }
+    const r = resolution as { reason?: unknown; lookups?: unknown; unresolved?: unknown };
+    panels += 1;
+    const reason = closedReason(r.reason);
+    byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
+    lookups += safeCount(r.lookups);
+    unresolved += safeCount(r.unresolved);
+  }
+  if (panels === 0) return [];
+  return [
+    { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN, count: panels },
+    ...[...byReason].map(([reason, count]) => ({
+      code: `${LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN}:${reason}`,
+      count,
+    })),
+    ...(lookups > 0 ? [{ code: 'PROVIDER_INVENTORY_LOOKUPS', count: lookups }] : []),
+    ...(unresolved > 0
+      ? [{ code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: unresolved }]
+      : []),
+  ];
+}
+
 /**
  * The dry run's provider warnings: `PROVIDER_INVENTORY_INCOMPLETE` (how many production panels)
- * and one `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason; none when every read was
- * complete. Exported for its own test.
+ * and one `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason, when a read was not complete;
+ * then the churn warnings of the panels resolved one name at a time (`providerChurnWarnings`).
+ * None when every read was one complete snapshot. Exported for its own test.
  */
 export function providerWarnings(report: LegacyImportReport): LegacyMigrationCodeCount[] {
   const incomplete = providerIncomplete(report);
-  if (incomplete === 0) return [];
   return [
-    { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE, count: incomplete },
-    ...providerIncompleteReasons(report),
+    ...(incomplete === 0
+      ? []
+      : [
+          { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE, count: incomplete },
+          ...providerIncompleteReasons(report),
+        ]),
+    ...providerChurnWarnings(report),
   ];
 }
 
@@ -1542,7 +1596,9 @@ export function dryRunReportOf(
     // are the services' INVENTORY_INCOMPLETE, and the import reads the panel again: if it
     // comes out different — complete, or another set of accounts — the plan is another plan
     // and APPLY refuses DRY_RUN_MISMATCH. Said here, so no owner approves a plan without
-    // knowing that; a production-like target refuses to approve it at all.
+    // knowing that; a production-like target refuses to approve it at all. Then the panels
+    // that changed while read and were decided one needed name at a time (CHURN): not a
+    // blocker in itself — a name left unresolved is its invoice's INVENTORY_INCOMPLETE.
     ...providerWarnings(report),
     // Said on every target, not only where it refuses (a staging dry run must show it too).
     // Its own code: `INVENTORY_INCOMPLETE` is the services category (a panel's live read).

@@ -5,7 +5,9 @@ import {
   isLegacyNxpkgTerminalStatus,
   LEGACY_MIGRATION_COMMAND_STATES,
   LEGACY_MIGRATION_PLAN_DIGEST_MISSING,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   legacyMigrationDryRunInventoryIncomplete,
   type LegacyMigrationBackupOutcome,
   type LegacyMigrationBlocker,
@@ -30,7 +32,7 @@ import {
   setLegacyMigrationPanelBindings,
   uploadLegacyMigrationDecisions,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinalWhile } from '../polling';
 import { useLinkHandler } from '../router';
@@ -959,6 +961,7 @@ function DryRunStep({
               [t('web.lmg_customers'), <Num key="c" value={report.wallets.customers} />],
             ]}
           />
+          <InventoryChurnNotice warnings={report.warnings} />
           <SectionTable rows={report.sections} />
           <h4 className="card-subtitle">{t('web.mrz_money_title')}</h4>
           <KV
@@ -1024,6 +1027,38 @@ function DryRunStep({
         <Banner tone="danger">{legacyMigrationFault(error)}</Banner>
       )}
     </Step>
+  );
+}
+
+/**
+ * A production panel changed while the dry run read it (normal while Mirza keeps selling) and
+ * each service in the backup was decided on its own. Information, never a blocker: whether
+ * the confirmation is withheld is the contract rule's decision alone (the services that stayed
+ * undecided are `INVENTORY_INCOMPLETE`), and this notice draws nothing that changes it.
+ */
+function InventoryChurnNotice({
+  warnings,
+}: {
+  warnings: readonly LegacyMigrationCodeCount[] | null | undefined;
+}) {
+  const sum = (code: string) =>
+    (warnings ?? []).filter((w) => w.code === code).reduce((a, w) => a + w.count, 0);
+  if (sum(LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN) === 0) return null;
+  const unresolved = sum(LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED);
+  return (
+    <Banner tone="info" title={t('web.mrz_inventory_churn_title')}>
+      <p>
+        {t('web.mrz_inventory_churn_body').replace(
+          '{lookups}',
+          formatNumber(sum('PROVIDER_INVENTORY_LOOKUPS')),
+        )}
+      </p>
+      {unresolved > 0 && (
+        <p>
+          {t('web.mrz_inventory_churn_unresolved').replace('{count}', formatNumber(unresolved))}
+        </p>
+      )}
+    </Banner>
   );
 }
 
@@ -1113,6 +1148,7 @@ function ConfirmStep({
       <Banner tone="warn" title={t('web.mrz_protective_title')}>
         {t('web.mrz_protective_body')}
       </Banner>
+      <InventoryChurnNotice warnings={row.dryRunReport?.warnings} />
       {inventoryIncomplete && (
         <Banner tone="danger" title={t('web.mrz_inventory_incomplete_title')}>
           {t('web.mrz_inventory_incomplete_body')}
