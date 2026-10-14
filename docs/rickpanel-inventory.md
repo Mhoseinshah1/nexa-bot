@@ -187,8 +187,12 @@ panel (canonical, lowercase) is decided on its own evidence, in this order:
    Found (a record whose name folds to the needed key): **present**, with the panel's spelling.
    404: **proven absent** (`PROVIDER_MISSING` is then a fact, not an inference from a partial
    walk). Anything else — a timeout, a 429 past its budget, a 5xx, a malformed body, the read's
-   end — **unresolved**. The lookups are bounded per read; a name beyond the bound is
-   unresolved, never guessed.
+   end — **unresolved**. Lookups go in name order, at most `RICKPANEL_INVENTORY_MAX_LOOKUPS`
+   per panel read (default 5 000 ≈ 83 min at one a second), and none after the first that
+   did not answer — a struggling panel is not asked again thousands of times. A name beyond
+   the bound or after that stop is unresolved, never guessed. A name no walk saw is asked by
+   its canonical (lowercase) spelling; RickPanel matching it case-sensitively, an account
+   spelled otherwise answers 404 and is reported missing — manual review, never created.
 
 Accounts on the panel that are not in the backup are ignored: they decide nothing and are never
 looked up. Such a read is reported `complete: true` with a `resolution` (`mode: 'TARGETED'`, the
