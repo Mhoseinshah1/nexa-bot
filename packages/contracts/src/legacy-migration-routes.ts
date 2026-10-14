@@ -360,7 +360,8 @@ export const LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE = 'PROVIDER_INVENTOR
 
 /**
  * The dry run report's warning for the production panels that CHANGED while they were read
- * (the double walk was not one snapshot: `TOTAL_CHANGED`, `COUNT_MISMATCH`, `WALKS_DIFFER`) and
+ * (the double walk was not one snapshot because the panel moved: `TOTAL_CHANGED`,
+ * `WALKS_DIFFER` — never `COUNT_MISMATCH`, which stays an incomplete panel) and
  * whose needed usernames were therefore decided one by one — by both walks, or by an exact
  * lookup. Beside it, one `PROVIDER_INVENTORY_CHURN:<reason>` per reason and, when any lookup
  * was made, `PROVIDER_INVENTORY_LOOKUPS`. Informational and NOT blocking: a panel that keeps
@@ -397,7 +398,8 @@ export const LEGACY_MIGRATION_PLAN_DIGEST_MISSING = 'PLAN_DIGEST_MISSING';
  * `INVENTORY_INCOMPLETE` is the only trace (a production-like dry run with an incomplete TABLE
  * inventory never reaches DRY_RUN_DONE, so on such a target that code is the services one).
  *
- * A panel that changed while read (`TOTAL_CHANGED` and its siblings) but whose needed usernames
+ * A panel that moved while read (`TOTAL_CHANGED`, `WALKS_DIFFER`; a `COUNT_MISMATCH` is never
+ * resolved per name and stays incomplete) but whose needed usernames
  * were ALL decided one by one is reported as complete, with `PROVIDER_INVENTORY_CHURN`, and is
  * not counted here: the plan binds only those decisions. A needed name it could not decide
  * leaves its invoice `INVENTORY_INCOMPLETE`, which this rule still counts.
