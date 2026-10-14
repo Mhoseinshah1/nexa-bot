@@ -359,6 +359,26 @@ export type LegacyMigrationDryRunReport = z.infer<typeof legacyMigrationDryRunRe
 export const LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE = 'PROVIDER_INVENTORY_INCOMPLETE';
 
 /**
+ * The dry run report's warning for the production panels that CHANGED while they were read
+ * (the double walk was not one snapshot: `TOTAL_CHANGED`, `COUNT_MISMATCH`, `WALKS_DIFFER`) and
+ * whose needed usernames were therefore decided one by one — by both walks, or by an exact
+ * lookup. Beside it, one `PROVIDER_INVENTORY_CHURN:<reason>` per reason and, when any lookup
+ * was made, `PROVIDER_INVENTORY_LOOKUPS`. Informational and NOT blocking: a panel that keeps
+ * selling while it is read is the normal case, and what such a read could not decide is
+ * reported separately (`PROVIDER_INVENTORY_UNRESOLVED`).
+ */
+export const LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN = 'PROVIDER_INVENTORY_CHURN';
+
+/**
+ * The dry run report's warning for the needed usernames that neither walk nor an exact lookup
+ * decided (a lookup that failed or was not made). Its count is the number of such names; the
+ * invoices behind them are services category `INVENTORY_INCOMPLETE`, which is what blocks
+ * approval through `legacyMigrationDryRunInventoryIncomplete` — this code itself is a count for
+ * the operator and is not read by that rule.
+ */
+export const LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED = 'PROVIDER_INVENTORY_UNRESOLVED';
+
+/**
  * The `reason` a production-like approval refusal (`legacy_migration.invalid_state`) carries
  * when the dry run reported no plan digest: without it the import could be bound to no approved
  * plan (`DRY_RUN_MISMATCH` would compare nothing). The server's refusal and the Web Admin's
@@ -376,6 +396,11 @@ export const LEGACY_MIGRATION_PLAN_DIGEST_MISSING = 'PLAN_DIGEST_MISSING';
  * Fails closed for a report written before the warning existed: there the services category
  * `INVENTORY_INCOMPLETE` is the only trace (a production-like dry run with an incomplete TABLE
  * inventory never reaches DRY_RUN_DONE, so on such a target that code is the services one).
+ *
+ * A panel that changed while read (`TOTAL_CHANGED` and its siblings) but whose needed usernames
+ * were ALL decided one by one is reported as complete, with `PROVIDER_INVENTORY_CHURN`, and is
+ * not counted here: the plan binds only those decisions. A needed name it could not decide
+ * leaves its invoice `INVENTORY_INCOMPLETE`, which this rule still counts.
  */
 export function legacyMigrationDryRunInventoryIncomplete(
   warnings: readonly LegacyMigrationCodeCount[] | null | undefined,
