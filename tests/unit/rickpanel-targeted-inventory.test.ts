@@ -165,7 +165,7 @@ describe('a live panel that keeps selling during the dry run', () => {
       unresolved: 0,
       lookups: 2, // the canary, then the name
     });
-    expect(lookups(panel)).toEqual(['acc00001', name(101)]);
+    expect(lookups(panel)).toEqual([name(250), name(101)]);
     expect(read.index.usernames.get(name(101))).toEqual([name(101)]);
     expect(read.runtime.get(name(101))?.state).toBeDefined();
   });
@@ -200,16 +200,16 @@ describe('a live panel that keeps selling during the dry run', () => {
         panel.names.splice(0, 3); // three unrelated rows gone: three needed rows skipped
       }
     };
-    // The canary (acc00004, the first name both walks saw) answers; the needed names do not.
-    panel.onLookup = (u) => (u === 'acc00004' ? undefined : answer(503, { detail: 'busy' }));
-    const needed = need([name(101), name(102), name(103), name(290)]);
+    // The canary (acc00290, the first needed name both walks saw) answers; the others do not.
+    panel.onLookup = (u) => (u === name(290) ? undefined : answer(503, { detail: 'busy' }));
+    const needed = need([name(101), name(102), name(103), name(290)]); // acc00290: the canary
     const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed }));
     const r = read.resolution;
     expect(r?.lookups).toBe(2);
     expect(r?.unresolved).toBe(3);
     expect(r?.presentByWalks).toBe(1);
     // Five sends of one lookup (the first and the read's whole budget of 4), then none.
-    expect(new Set(lookups(panel))).toEqual(new Set(['acc00004', name(101)]));
+    expect(new Set(lookups(panel))).toEqual(new Set([name(290), name(101)]));
     for (const n of [name(101), name(102), name(103)]) {
       expect(indexCovers(read.index, n)).toBe(false);
     }
@@ -220,7 +220,7 @@ describe('a live panel that keeps selling during the dry run', () => {
     panel.beforePage = (_offset, page) => {
       if (page === 1) panel.names.splice(0, 2);
     };
-    const needed = need([name(101), name(102)]);
+    const needed = need([name(101), name(102), name(250)]);
     const read = complete(await sourceOf(panel, { maxLookups: 2 }).read(SCOPE, 'p1', { needed }));
     expect(read.resolution).toMatchObject({ lookups: 2, presentByLookup: 1, unresolved: 1 });
     expect(indexCovers(read.index, name(101))).toBe(true);
@@ -447,7 +447,7 @@ describe('Codex review on #283', () => {
     let stamps = 0;
     const stamp = () => new Date(Date.UTC(2026, 9, 14, 8, 0, stamps++));
     const read = complete(
-      await sourceOf(panel, {}, stamp).read(SCOPE, 'p1', { needed: need([name(101)]) }),
+      await sourceOf(panel, {}, stamp).read(SCOPE, 'p1', { needed: need([name(101), name(250)]) }),
     );
     expect(read.resolution?.lookups).toBe(2);
     // The first (and only) stamp of the read, taken before the lookup was sent.
@@ -568,10 +568,10 @@ describe('independent audit on #283', () => {
     };
     panel.onLookup = () => answer(404, { detail: 'Not Found' });
     const read = complete(
-      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(101), name(102)]) }),
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(101), name(102), name(250)]) }),
     );
     expect(read.resolution).toMatchObject({ absentByLookup: 0, unresolved: 2, lookups: 1 });
-    expect(lookups(panel)).toEqual(['acc00003']); // the canary only
+    expect(lookups(panel)).toEqual([name(250)]); // the canary only
   });
 
   it('a list that withholds a row under a total that never moved (COUNT_MISMATCH) stays incomplete', async () => {
@@ -644,7 +644,9 @@ describe('independent audit on #283', () => {
       }
       return undefined;
     };
-    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(101)]) }));
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(101), name(250)]) }),
+    );
     expect(read.resolution).toMatchObject({ presentByLookup: 1, unresolved: 0 });
     expect(read.diagnostics?.load?.retries).toBe(1);
   });
@@ -657,5 +659,20 @@ describe('independent audit on #283', () => {
     const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need(['..']) }));
     expect(read.resolution).toMatchObject({ unresolved: 1 });
     expect(lookups(panel).some((l) => l.includes('..'))).toBe(false);
+  });
+});
+
+describe('the canary is a name the backup needs', () => {
+  it('never asks for an account the backup does not name; with no needed name both walks saw, no lookup is sent', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_offset, page) => {
+      if (page === 1) panel.names.splice(0, 2);
+    };
+    // acc00101 and acc00102 slipped past the first walk; nothing the backup needs was seen by both.
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(101), name(102)]) }),
+    );
+    expect(lookups(panel)).toEqual([]);
+    expect(read.resolution).toMatchObject({ lookups: 0, unresolved: 2 });
   });
 });

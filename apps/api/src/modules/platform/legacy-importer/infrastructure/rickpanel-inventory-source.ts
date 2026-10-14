@@ -466,13 +466,12 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     let stopped = false;
     // A 404 is trusted only from a route that answers 200 for an account both walks saw (the
     // canary): a missing route or a proxy answers 404 to every name, and "absent" from such an
-    // answer would report a held account missing. No canary, or a canary not found → no
-    // lookup is trusted, so none is sent.
+    // answer would report a held account missing. The canary is a name the BACKUP needs (an
+    // account it does not name is never asked for, not even read). No canary, or a canary not
+    // found → no lookup is trusted, so none is sent.
     if (toLookup.length > 0) {
-      const inFirst = new Set(firstSeen.map((a) => a.providerUsername));
-      const canary = secondSeen
-        .map((a) => a.providerUsername)
-        .filter((n) => inFirst.has(n) && lookupSafe(n))
+      const canary = [...resolved.values()]
+        .flatMap((r) => (r.kind === 'PRESENT' && lookupSafe(r.spelling) ? [r.spelling] : []))
         .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))[0];
       if (canary === undefined || lookups >= maxLookups) {
         stopped = true;

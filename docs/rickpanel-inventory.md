@@ -198,7 +198,7 @@ carries the backup's exact spelling (null when two invoices spell it differently
    walk) — but only when the spelling asked is evidence of the account: one a walk saw, or the
    backup's own exact spelling (the account Mirza created). A 404 for a guessed spelling (the
    backup spells the name two ways) is **unresolved**. And no 404 is trusted until a **canary**
-   — one account both walks saw, the first by name — has answered 200 for its own spelling: a
+   — the first (by name) of the backup's needed names that both walks saw; an account the backup does not name is never asked for — has answered 200 for its own spelling: a
    missing route or a proxy answers 404 to every name. No canary, or a failed one: no lookup
    is sent and every name that needed one is unresolved. `.` and `..` are never put in a path. Anything else — a timeout, a 429 past its budget, a 5xx, a malformed body, the read's
    end — **unresolved**. Lookups go in name order, at most `RICKPANEL_INVENTORY_MAX_LOOKUPS`

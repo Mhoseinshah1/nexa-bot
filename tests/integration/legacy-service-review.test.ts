@@ -654,15 +654,13 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       sql`SELECT panel_id, provider_username FROM services WHERE id = ${after.serviceId}`,
     );
     expect(services.rows).toEqual([{ panel_id: panelBId, provider_username: 'svc_nullmatch' }]);
-    // The manual account is nobody's: never adopted. Both walks saw it and it is the
-    // lexically first such account, so it is the read's CANARY — asked once, first, only to
-    // prove the lookup route answers 200 for an account it holds; it decides nothing.
+    // The manual account is nobody's: never adopted, and never asked for — a canary is
+    // always a name the backup needs.
     expect(await count('services', "provider_username = 'manual_mid_walk'")).toBe(0);
     const lookups = panelB.requests
       .filter((r) => r.method === 'GET' && /^\/api\/user\/[^/?]+$/u.test(r.path))
       .map((r) => r.path.slice('/api/user/'.length));
-    expect(lookups.filter((n) => n === 'manual_mid_walk')).toHaveLength(1);
-    expect(lookups[0]).toBe('manual_mid_walk');
+    expect(lookups.filter((n) => n === 'manual_mid_walk')).toHaveLength(0);
     expectOnlyReads();
   });
 

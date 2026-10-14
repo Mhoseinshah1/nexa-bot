@@ -582,10 +582,11 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   );
 
   /**
-   * The canary every per-name resolution of panel A asks first: the lexically first account
-   * both walks saw (code-unit order, so the capitalised spelling sorts before the rest).
+   * The canary every per-name resolution of panel A asks first: the lexically first NEEDED
+   * name both walks saw (never an account the backup does not name; Case_X is a collision,
+   * so not a candidate canary).
    */
-  const CANARY = 'Case_X';
+  const CANARY = 'svc_a1';
 
   /** Names no backup row holds: a manual account, or a sale Mirza made after the backup. */
   const NOT_IN_BACKUP = /^(manual_|mirza_sale_)/u;
@@ -757,7 +758,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(w['PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED']).toBe(1);
     // After the canary: svc_a1 (seen by the first walk only → 404), svc_a3 (seen by the
     // second only → found), svc_missing (seen by neither → 404), in name order.
-    expect(lookupsOf(panelA, before)).toEqual([CANARY, 'svc_a1', 'svc_a3', 'svc_missing']);
+    // svc_a1 is gone from the second walk, so the canary here is svc_a2.
+    expect(lookupsOf(panelA, before)).toEqual(['svc_a2', 'svc_a1', 'svc_a3', 'svc_missing']);
     expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBe(4);
     expect(w['PROVIDER_MISSING']).toBe(2);
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
