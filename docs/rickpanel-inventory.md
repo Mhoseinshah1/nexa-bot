@@ -188,8 +188,13 @@ carries the backup's exact spelling (null when two invoices spell it differently
 1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of
    both walks: a collision (`USERNAME_CASE_COLLISION`), never eligible. A union, because a
    spelling seen once was on the panel at some moment.
-2. **One spelling in BOTH walks** — present, with that spelling. A name seen in one walk only
-   may have been deleted or created mid-read, so it is not decided by the walks.
+2. **The backup's exact spelling, and only it, in BOTH walks** — present. A name seen in one
+   walk only may have been deleted or created mid-read, and a spelling other than the backup's
+   may stand beside the backup's own account that both walks skipped: neither is decided by the
+   walks. Such a name asks for the backup's spelling (step 3): found beside another spelling →
+   collision; 404 while every walk saw one other spelling → that spelling is the one account,
+   exactly as a complete read decides it; 404 otherwise → unresolved. A name the backup spells
+   two ways is unresolved whatever the walks saw.
 3. **Anything else** — one exact lookup, `GET api/user/{username}` (`USER_PATH`, the route the
    RickPanel adapter's `lookupUser` already reads), on the same protected read session: one
    request in flight, the same pacing, the same login and the same retry budget as the walks.
@@ -230,11 +235,13 @@ still `PROVIDER_INVENTORY_INCOMPLETE`, unchanged.
 
 Residual risks, stated rather than hidden:
 
-- **A case variant skipped by both walks.** A name seen with one spelling by both walks is
-  present without a lookup; an exact lookup could not reveal a variant anyway. A variant of it
-  (`ACC5` beside `acc5`) that BOTH walks slipped past — each needs a deletion ahead of it while
-  the cursor passes — is not seen, and the name is adopted as the single spelling seen, which is
-  the spelling the backup holds. A complete snapshot is the only proof there is none.
+- **A case variant skipped by both walks, beside the backup's own account.** When both walks saw
+  exactly the backup's spelling (`acc5`), the name is present without a lookup. A variant
+  (`ACC5`) that BOTH walks slipped past — each needs a deletion ahead of it while the cursor
+  passes — is not seen, and the account adopted is the one whose name is byte for byte the
+  backup's; a complete read would have sent the name to manual review as a collision. No exact
+  lookup can reveal an unknown variant; only a complete snapshot proves there is none. Recorded
+  for the owner's decision (it is the price of approving while Mirza sells).
 - **A no-panel invoice's ADOPT on a moving panel.** An invoice with an empty `code_panel` asks no
   panel until an operator approves an ADOPT onto one; on a panel that is not one snapshot, its
   evidence lists every panel as undecided, so no panel is offered for that approval. Fail-closed:

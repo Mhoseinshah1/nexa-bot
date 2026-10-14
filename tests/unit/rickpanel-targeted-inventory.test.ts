@@ -293,8 +293,21 @@ describe('classifyNeededNames / resolveLookup', () => {
       [acc('a'), acc('C')],
     ]);
     expect(out.get('a')).toEqual({ kind: 'PRESENT', spelling: 'a' });
-    expect(out.get('b')).toEqual({ kind: 'LOOKUP', ask: 'b', seen: 'b', backupSpelling: true });
-    expect(out.get('c')).toEqual({ kind: 'LOOKUP', ask: 'C', seen: 'C', backupSpelling: false });
+    expect(out.get('b')).toEqual({
+      kind: 'LOOKUP',
+      ask: 'b',
+      seen: 'b',
+      backupSpelling: true,
+      seenByAll: false,
+    });
+    // Seen under another spelling than the backup's: the backup's own is what is asked.
+    expect(out.get('c')).toEqual({
+      kind: 'LOOKUP',
+      ask: 'c',
+      seen: 'C',
+      backupSpelling: true,
+      seenByAll: false,
+    });
   });
 
   it('a collision seen across different walks still counts (the union of walks)', () => {
@@ -759,5 +772,78 @@ describe('Codex review on a2c54ea7', () => {
       ],
     ]);
     expect(observedAtFor('p1', notRead)).toBeNull();
+  });
+});
+
+describe("Codex review on 96472a03: presence by walks needs the backup's exact spelling", () => {
+  const acc = (u: string) => ({ username: u.toLowerCase(), providerUsername: u });
+
+  it('both walks saw only ALICE, the backup says alice: the backup spelling is asked, never adopted on the walks alone', () => {
+    const out = classifyNeededNames(new Map([['alice', 'alice']]), [
+      [acc('ALICE')],
+      [acc('ALICE')],
+    ]);
+    const evidence = out.get('alice');
+    expect(evidence).toEqual({
+      kind: 'LOOKUP',
+      ask: 'alice',
+      seen: 'ALICE',
+      backupSpelling: true,
+      seenByAll: true,
+    });
+    if (evidence?.kind !== 'LOOKUP') throw new Error('shape');
+    // alice exists after all (both walks skipped it): two accounts — a collision.
+    expect(resolveLookup(evidence, { kind: 'FOUND', spelling: 'alice' })).toEqual({
+      kind: 'COLLISION',
+      spellings: ['ALICE', 'alice'],
+    });
+    // alice does not exist: ALICE is the one account, as a complete read decides it.
+    expect(resolveLookup(evidence, { kind: 'NOT_FOUND' })).toEqual({
+      kind: 'PRESENT',
+      spelling: 'ALICE',
+      by: 'WALKS',
+    });
+    // Seen by one walk only and the backup's spelling absent: undecided.
+    expect(resolveLookup({ ...evidence, seenByAll: false }, { kind: 'NOT_FOUND' })).toEqual({
+      kind: 'UNRESOLVED',
+    });
+  });
+
+  it('a name the backup spells two ways is undecidable even when both walks saw one spelling', () => {
+    const out = classifyNeededNames(new Map([['alice', null]]), [[acc('alice')], [acc('alice')]]);
+    expect(out.get('alice')).toEqual({ kind: 'UNDECIDABLE' });
+  });
+
+  it('end to end: the backup alice hidden from both walks beside a listed ALICE is found by lookup and is a collision', async () => {
+    const panel = fakePanel(300);
+    panel.names.push('ALICE');
+    panel.beforePage = (_offset, page) => {
+      if (page === 1) panel.names.splice(0, 1);
+    };
+    panel.onLookup = (u) =>
+      u === 'alice' ? answer(200, { username: 'alice', status: 'active' }) : undefined;
+    const needed = new Map<string, string | null>([
+      [name(250), name(250)],
+      ['alice', 'alice'],
+    ]);
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed }));
+    expect(lookups(panel)).toContain('alice');
+    expect(read.index.usernames.get('alice')).toEqual(['ALICE', 'alice']);
+    expect(read.resolution).toMatchObject({ collisions: 1 });
+  });
+
+  it('end to end: ALICE listed, the backup alice proven absent — ALICE is the one account, from the walks', async () => {
+    const panel = fakePanel(300);
+    panel.names.push('ALICE');
+    panel.beforePage = (_offset, page) => {
+      if (page === 1) panel.names.splice(0, 1);
+    };
+    const needed = new Map<string, string | null>([
+      [name(250), name(250)],
+      ['alice', 'alice'],
+    ]);
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed }));
+    expect(read.index.usernames.get('alice')).toEqual(['ALICE']);
+    expect(read.runtime.has('ALICE')).toBe(true);
   });
 });

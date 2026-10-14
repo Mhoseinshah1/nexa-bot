@@ -438,6 +438,10 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         resolved.set(name, { kind: 'COLLISION', spellings: found.spellings });
         continue;
       }
+      if (found.kind === 'UNDECIDABLE') {
+        resolved.set(name, { kind: 'UNRESOLVED' });
+        continue;
+      }
       // Present in BOTH walks: adopt from the SECOND walk's record, as a complete read does.
       const account = bySpelling.get(found.spelling);
       if (account === undefined) {
@@ -496,8 +500,15 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       }
       const final = resolveLookup(ask, result);
       resolved.set(name, final);
-      if (final.kind === 'PRESENT' && answer.ok && answer.found) {
+      if (final.kind === 'PRESENT' && final.by === 'LOOKUP' && answer.ok && answer.found) {
         runtime.set(final.spelling, runtimeOf(answer.account, answer.subscriptionLink ?? null));
+      } else if (final.kind === 'PRESENT' && final.by === 'WALKS') {
+        // Every walk saw this spelling; the backup's own is proven absent. The record is the
+        // second walk's, as a complete read's would be.
+        const account = bySpelling.get(final.spelling);
+        if (account === undefined) resolved.set(name, { kind: 'UNRESOLVED' });
+        else
+          runtime.set(final.spelling, runtimeOf(account, secondLinks?.get(final.spelling) ?? null));
       }
     }
 

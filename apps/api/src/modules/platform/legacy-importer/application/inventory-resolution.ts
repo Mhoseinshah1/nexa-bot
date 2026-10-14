@@ -37,10 +37,12 @@ export interface ObservedAccount {
 export type WalkEvidence =
   | { readonly kind: 'PRESENT'; readonly spelling: string }
   | { readonly kind: 'COLLISION'; readonly spellings: readonly string[] }
+  /** Nothing the walks or a lookup could show decides it (the backup spells it two ways). */
+  | { readonly kind: 'UNDECIDABLE' }
   /**
-   * Ask the panel: `ask` is the exact spelling a walk saw; if none did, the backup's own
-   * spelling (`backupSpelling`), or the canonical name when the backup spells it more than one
-   * way.
+   * Ask the panel for `ask`: the backup's own exact spelling (`backupSpelling`), or — only in
+   * a hand-built evidence — the canonical name. `seen` is the one spelling any walk saw, if
+   * any; `seenByAll` whether every walk saw it.
    */
   | {
       readonly kind: 'LOOKUP';
@@ -48,6 +50,7 @@ export type WalkEvidence =
       readonly seen: string | null;
       /** True when `ask` is the exact spelling the backup holds (the one Mirza created). */
       readonly backupSpelling: boolean;
+      readonly seenByAll?: boolean;
     };
 
 /** What the panel answered an exact lookup. */
@@ -104,17 +107,24 @@ export function classifyNeededNames(
       continue;
     }
     const [spelling, walksSeen] = [...spellings.entries()][0] as [string, number];
-    out.set(
-      name,
-      walksSeen === walks.length
-        ? { kind: 'PRESENT', spelling }
-        : {
-            kind: 'LOOKUP',
-            ask: spelling,
-            seen: spelling,
-            backupSpelling: spelling === needed.get(name),
-          },
-    );
+    const seenByAll = walksSeen === walks.length;
+    if (backup === null) {
+      // Two backup spellings of one name: which account each invoice meant is a guess.
+      out.set(name, { kind: 'UNDECIDABLE' });
+    } else if (seenByAll && spelling === backup) {
+      // Every walk saw exactly the account the backup names, byte for byte.
+      out.set(name, { kind: 'PRESENT', spelling });
+    } else {
+      // Seen by some walks only, or seen under ANOTHER spelling than the backup's: a walk that
+      // skipped rows may have skipped the backup's own account. Ask for it exactly.
+      out.set(name, {
+        kind: 'LOOKUP',
+        ask: backup,
+        seen: spelling,
+        backupSpelling: true,
+        seenByAll,
+      });
+    }
   }
   return out;
 }
@@ -127,11 +137,17 @@ export function resolveLookup(
   if (answer.kind === 'UNANSWERED') return { kind: 'UNRESOLVED' };
   if (answer.kind === 'NOT_FOUND') {
     // A 404 proves only the spelling asked absent (RickPanel addresses a user by exact name).
-    // It decides the name when that spelling is evidence of the account: one a walk saw (it
-    // was there, and is gone), or the backup's own (the account Mirza created). A guess at a
-    // spelling proves nothing about another one a walk may have skipped.
-    return evidence.seen !== null || evidence.backupSpelling
-      ? { kind: 'ABSENT' }
+    if (evidence.seen === null) {
+      // No walk saw the name: absent when the backup's own spelling was asked (the account
+      // Mirza created); a guessed spelling proves nothing.
+      return evidence.backupSpelling ? { kind: 'ABSENT' } : { kind: 'UNRESOLVED' };
+    }
+    // A walk saw the spelling asked, and it is gone now.
+    if (evidence.seen === evidence.ask) return { kind: 'ABSENT' };
+    // The backup's spelling is absent, and every walk saw one other spelling: the one account
+    // there is, exactly as a complete read decides it. Seen by some walks only: undecided.
+    return evidence.seenByAll === true
+      ? { kind: 'PRESENT', spelling: evidence.seen, by: 'WALKS' }
       : { kind: 'UNRESOLVED' };
   }
   if (evidence.seen === null && !evidence.backupSpelling) {
