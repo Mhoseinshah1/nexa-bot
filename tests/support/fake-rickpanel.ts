@@ -106,6 +106,17 @@ export interface FakeRickpanelUser {
   subToken: string;
 }
 
+/**
+ * TEST-HARNESS HOOK (`intercept`): what the panel does instead of handling a request — an
+ * answer with any status (and optional headers, e.g. `retry-after`), a dropped connection,
+ * or no answer at all (`hang`, which the client's own timeout ends). NOT EVIDENCE about how a
+ * real RickPanel fails; it lets a test put a 401/403/429/5xx/timeout on one route.
+ */
+export type FakeRickpanelInterception =
+  | { readonly status: number; readonly body?: unknown; readonly headers?: Record<string, string> }
+  | 'drop'
+  | 'hang';
+
 export interface FakeRickpanelRequest {
   readonly method: string;
   readonly path: string;
@@ -167,6 +178,11 @@ export interface FakeRickpanel {
   beforeListPage: ((offset: number) => void) | null;
   /** How many `GET /api/users` reached the panel. */
   listCalls(): number;
+  /**
+   * TEST-HARNESS HOOK: asked for every request after it is recorded and before it is handled;
+   * a non-null answer replaces the panel's own (`FakeRickpanelInterception`).
+   */
+  intercept: ((request: FakeRickpanelRequest) => FakeRickpanelInterception | null) | null;
   /** Put an account on the panel directly, as an operator's own panel would hold it. */
   seedUser(name: string, fields?: Partial<Omit<FakeRickpanelUser, 'username'>>): void;
   /** An account deleted on the panel by its own operator (between two reads, or mid-walk). */
@@ -274,6 +290,8 @@ export async function startFakeRickpanel(
   let listMode: RickpanelListMode = 'documented';
   let listPageCap = 10;
   let beforeListPage: ((offset: number) => void) | null = null;
+  let intercept: ((request: FakeRickpanelRequest) => FakeRickpanelInterception | null) | null =
+    null;
 
   const num = (value: number): number | string => (stringNumbers ? String(value) : value);
   const present = (user: FakeRickpanelUser): Record<string, unknown> => ({
@@ -300,7 +318,18 @@ export async function startFakeRickpanel(
       const body = Buffer.concat(chunks).toString('utf8');
       const rawUrl = request.url ?? '/';
       const method = request.method ?? 'GET';
-      requests.push({ method, path: rawUrl, body });
+      const recorded = { method, path: rawUrl, body };
+      requests.push(recorded);
+      const instead = intercept?.(recorded) ?? null;
+      if (instead === 'hang') return;
+      if (instead === 'drop') return void response.destroy();
+      if (instead !== null) {
+        response.writeHead(instead.status, {
+          'content-type': 'application/json',
+          ...(instead.headers ?? {}),
+        });
+        return void response.end(JSON.stringify(instead.body ?? { detail: 'intercepted' }));
+      }
 
       const json = (status: number, value: unknown): void => {
         response.writeHead(status, { 'content-type': 'application/json' });
@@ -638,6 +667,14 @@ export async function startFakeRickpanel(
     },
     set beforeListPage(next: ((offset: number) => void) | null) {
       beforeListPage = next;
+    },
+    get intercept() {
+      return intercept;
+    },
+    set intercept(
+      next: ((request: FakeRickpanelRequest) => FakeRickpanelInterception | null) | null,
+    ) {
+      intercept = next;
     },
     listCalls: () =>
       requests.filter((one) => one.method === 'GET' && one.path.split('?')[0] === '/api/users')
