@@ -249,6 +249,11 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     if (panel === null || panel.providerType !== 'rickpanel') {
       return { ok: false, failure: 'NOT_A_RICKPANEL' };
     }
+    // A panel the backup asks nothing of is not read at all: no credential, no read gate, no
+    // request — so a missing credential or another job's long read cannot make it matter.
+    if (this.options.targeted === true && readOptions.needed?.size === 0) {
+      return this.nothingNeeded(panelId);
+    }
     const credentials = toProviderCredentials(
       await this.access.credentials(scope, panelId),
       'USERNAME_PASSWORD',
@@ -347,21 +352,6 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       ...counts,
       lookups,
     });
-    if (needed.size === 0) {
-      // Nothing the backup holds names this panel: nothing to decide, so nothing is read.
-      const index: PanelInventoryIndex = { panelId, usernames: new Map(), covered: new Set() };
-      return {
-        ok: true,
-        complete: true,
-        index,
-        accounts: 0,
-        states: {},
-        runtime: new Map(),
-        observedAt: this.now(),
-        resolution: resolutionOf('NOTHING_NEEDED', resolutionCounts(new Map()), 0),
-        diagnostics: { attempts: 0, walks: [], pagination: null, status: null, load: load() },
-      };
-    }
     const walkOptions = {
       ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
       subscriptionLinks: true,
@@ -533,6 +523,43 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         pagination: null,
         status: null,
         load: load(),
+      },
+    };
+  }
+
+  /** The read of a panel the backup names nothing on: decided without a request. */
+  private nothingNeeded(panelId: string): LegacyInventoryRead {
+    const index: PanelInventoryIndex = { panelId, usernames: new Map(), covered: new Set() };
+    return {
+      ok: true,
+      complete: true,
+      index,
+      accounts: 0,
+      states: {},
+      runtime: new Map(),
+      observedAt: this.now(),
+      resolution: {
+        mode: 'TARGETED',
+        reason: 'NOTHING_NEEDED',
+        needed: 0,
+        presentByWalks: 0,
+        presentByLookup: 0,
+        absentByLookup: 0,
+        collisions: 0,
+        unresolved: 0,
+        lookups: 0,
+      },
+      diagnostics: {
+        attempts: 0,
+        walks: [],
+        pagination: null,
+        status: null,
+        load: {
+          ...emptyPanelReadCounters(),
+          pageSize: this.pageSize(),
+          lockWaitMs: 0,
+          durationMs: 0,
+        },
       },
     };
   }

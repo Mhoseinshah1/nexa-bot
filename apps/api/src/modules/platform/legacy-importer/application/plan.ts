@@ -605,12 +605,15 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
       });
     } else if (read !== undefined && read.ok && read.complete) {
       indexes.set(panelId, read.index);
+      // A per-name resolution's walks were not one snapshot: what they saw is not the panel's
+      // count or its states, so neither is reported as if it were.
+      const perName = read.resolution !== undefined;
       inventories.push({
         panelId,
         complete: true,
-        accounts: read.accounts,
+        accounts: perName ? null : read.accounts,
         reason: null,
-        states: read.states,
+        states: perName ? {} : read.states,
         diagnostics: read.diagnostics ?? null,
         resolution: read.resolution ?? null,
       });

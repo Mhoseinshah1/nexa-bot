@@ -531,7 +531,7 @@ describe('Codex review on #283', () => {
       const fine = (await planWith(withResolution(0))).plan.inventories.find(
         (p) => p.panelId === PANEL_A,
       );
-      expect(fine).toMatchObject({ complete: true, reason: null });
+      expect(fine).toMatchObject({ complete: true, reason: null, accounts: null, states: {} });
     });
 
     it('the services the partial index covers are still decided from it', async () => {
@@ -674,5 +674,36 @@ describe('the canary is a name the backup needs', () => {
     );
     expect(lookups(panel)).toEqual([]);
     expect(read.resolution).toMatchObject({ lookups: 0, unresolved: 2 });
+  });
+});
+
+describe('Codex review on 00128603', () => {
+  it('a panel the backup names nothing on needs no credential and never takes the read gate', async () => {
+    let acquired = 0;
+    const source = new RickpanelInventorySource(
+      {
+        panel: async () => ({ baseUrl: 'https://panel.invalid', providerType: 'rickpanel' }),
+        credentials: async () => null as never,
+        http: () => {
+          throw new Error('no client may be built');
+        },
+      },
+      {
+        pageSize: 100,
+        clock: () => 0,
+        sleep: async () => undefined,
+        gate: {
+          acquire: async () => {
+            acquired += 1;
+            throw new Error('the gate must not be taken');
+          },
+        } as never,
+        targeted: true,
+      },
+      STAMP,
+    );
+    const read = complete(await source.read(SCOPE, 'p1', { needed: new Map() }));
+    expect(read.resolution).toMatchObject({ reason: 'NOTHING_NEEDED', needed: 0 });
+    expect(acquired).toBe(0);
   });
 });
