@@ -8,6 +8,7 @@ import {
   resolveLookup,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/inventory-resolution';
 import { indexCovers } from '../../apps/api/src/modules/platform/legacy-import/application/legacy-service-matching';
+import { observedAtFor } from '../../apps/api/src/modules/platform/legacy-importer/application/service-outcomes';
 import type { LegacyInventoryRead } from '../../apps/api/src/modules/platform/legacy-importer/application/ports';
 import {
   importableLegacyUserIds,
@@ -705,5 +706,58 @@ describe('Codex review on 00128603', () => {
     const read = complete(await source.read(SCOPE, 'p1', { needed: new Map() }));
     expect(read.resolution).toMatchObject({ reason: 'NOTHING_NEEDED', needed: 0 });
     expect(acquired).toBe(0);
+  });
+});
+
+describe('Codex review on a2c54ea7', () => {
+  it('a name the backup spells two ways that no walk saw is never asked, and a hit would not decide it', async () => {
+    expect(
+      resolveLookup(
+        { kind: 'LOOKUP', ask: 'alice', seen: null, backupSpelling: false },
+        { kind: 'FOUND', spelling: 'alice' },
+      ),
+    ).toEqual({ kind: 'UNRESOLVED' });
+    const panel = fakePanel(300);
+    panel.beforePage = (_offset, page) => {
+      if (page === 1) panel.names.splice(0, 1);
+    };
+    // 'zz-hidden' is not on the panel's list at all; the backup spells it two ways (null).
+    const needed = new Map<string, string | null>([
+      [name(250), name(250)],
+      ['zz-hidden', null],
+    ]);
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed }));
+    expect(lookups(panel)).not.toContain('zz-hidden');
+    expect(indexCovers(read.index, 'zz-hidden')).toBe(false);
+    expect(read.resolution).toMatchObject({ unresolved: 1 });
+  });
+
+  it('observedAtFor records no observation for a panel that was never read', () => {
+    const notRead = new Map<string, LegacyInventoryRead>([
+      [
+        'p1',
+        {
+          ok: true,
+          complete: true,
+          index: { panelId: 'p1', usernames: new Map(), covered: new Set() },
+          accounts: 0,
+          states: {},
+          runtime: new Map(),
+          observedAt: new Date('2026-10-14T08:00:00Z'),
+          resolution: {
+            mode: 'TARGETED',
+            reason: 'NOTHING_NEEDED',
+            needed: 0,
+            presentByWalks: 0,
+            presentByLookup: 0,
+            absentByLookup: 0,
+            collisions: 0,
+            unresolved: 0,
+            lookups: 0,
+          },
+        },
+      ],
+    ]);
+    expect(observedAtFor('p1', notRead)).toBeNull();
   });
 });

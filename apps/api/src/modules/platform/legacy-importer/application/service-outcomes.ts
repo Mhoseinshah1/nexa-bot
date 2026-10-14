@@ -274,7 +274,9 @@ export function observedAtFor(
 ): Date | null {
   if (panelId === null) return null;
   const read = inventories.get(panelId);
-  return read !== undefined && read.ok && read.complete ? read.observedAt : null;
+  // A panel the backup names nothing on was never read: there is no observation to record.
+  if (read === undefined || !read.ok || !read.complete) return null;
+  return read.resolution?.reason === 'NOTHING_NEEDED' ? null : read.observedAt;
 }
 
 // --- the approval gate ------------------------------------------------------------------------

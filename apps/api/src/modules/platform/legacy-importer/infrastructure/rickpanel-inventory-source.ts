@@ -473,7 +473,10 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       }
     }
     for (const [name, ask] of toLookup) {
-      if (stopped || lookups >= maxLookups || !lookupSafe(ask.ask)) {
+      // A guessed spelling (the backup spells it two ways, no walk saw it) decides nothing
+      // whatever the panel answers, so it is not asked.
+      const guess = ask.seen === null && !ask.backupSpelling;
+      if (guess || stopped || lookups >= maxLookups || !lookupSafe(ask.ask)) {
         resolved.set(name, { kind: 'UNRESOLVED' });
         continue;
       }

@@ -168,15 +168,17 @@ reaching it was not.
   identical set of exact provider spellings** (`docs/rickpanel-inventory.md`). Unchanged.
 - **A panel that keeps selling while it is read is not a blocker** (owner requirement: the dry run
   must be approvable while Mirza sells on the live RickPanel). When the double walks are not one
-  complete snapshot (`TOTAL_CHANGED`, `COUNT_MISMATCH`, `WALKS_DIFFER`), the Web Admin's importer
+  complete snapshot because the panel MOVED (`TOTAL_CHANGED`, `WALKS_DIFFER`), the Web Admin's importer
   decides each username the backup needs on that panel on its own — two spellings seen anywhere
   are a collision, one spelling seen in both walks is present, anything else is one exact
   `GET api/user/{username}` (found: present; 404: proven absent; anything else: unresolved) —
   and ignores every account on the panel that is not in the backup (`docs/rickpanel-inventory.md`
   §Per-name resolution). Such a read is reported complete, with a `resolution` in
   `sections.provider.panels[i]` (counts only). A needed name it could not decide leaves its
-  invoice `INVENTORY_INCOMPLETE`.
-- **The Web Admin's importer attempts a read up to `INVENTORY_READ_ATTEMPTS` (3) double walks**,
+  invoice `INVENTORY_INCOMPLETE` and the panel `complete: false`, reason `UNRESOLVED`. A
+  `COUNT_MISMATCH` (a total that held still while the rows did not add up to it) is NOT resolved
+  per name: the list is withholding rows, and that panel stays incomplete — fail-closed.
+- **A non-targeted read (none in the Web Admin today) attempts up to `INVENTORY_READ_ATTEMPTS` (3) double walks**,
   pausing 15 s and 45 s, when it came out INCOMPLETE (the panel moved). Only an attempt complete
   on its own is indexed. A transport failure, a 429 or a 5xx is not a reason to walk again from
   the start: the read session already asked that page again, within the read's one retry

@@ -134,6 +134,11 @@ export function resolveLookup(
       ? { kind: 'ABSENT' }
       : { kind: 'UNRESOLVED' };
   }
+  if (evidence.seen === null && !evidence.backupSpelling) {
+    // The backup spells this name more than one way and no walk saw it: the canonical lookup
+    // is a guess, and a hit proves nothing about the other spelling. Never adopted on it.
+    return { kind: 'UNRESOLVED' };
+  }
   if (evidence.seen !== null && answer.spelling !== evidence.seen) {
     // A walk saw one spelling and the panel answers with another that folds to the same
     // name: two accounts, or a rename mid-read — either way not one account to adopt.
