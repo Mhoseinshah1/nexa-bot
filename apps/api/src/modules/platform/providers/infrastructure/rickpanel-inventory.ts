@@ -192,6 +192,8 @@ export interface RickpanelInventoryFailure {
   readonly failure: ProviderFailureKind;
   readonly status: number | null;
   readonly pagination?: InventoryPaginationFault;
+  /** `LOGIN` when the token exchange failed, before any page was asked for. */
+  readonly phase?: 'LOGIN';
 }
 
 /**
@@ -405,7 +407,7 @@ export class RickpanelInventoryReader {
     const maxPages = Math.max(1, Math.trunc(options.maxPages ?? INVENTORY_DEFAULT_MAX_PAGES));
 
     const auth = await exchangeRickpanelToken(target, (form) => http.exchangeToken(form));
-    if (!auth.ok) return { ok: false, failure: auth.failure, status: auth.status };
+    if (!auth.ok) return { ok: false, failure: auth.failure, status: auth.status, phase: 'LOGIN' };
 
     const byName = new Map<string, RickpanelInventoryAccount>();
     const links = options.subscriptionLinks === true ? new Map<string, string | null>() : null;

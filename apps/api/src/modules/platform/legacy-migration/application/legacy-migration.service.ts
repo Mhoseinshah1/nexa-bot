@@ -1,7 +1,10 @@
 import {
   errors,
   LEGACY_MIGRATION_APPROVAL_PHRASE,
+  legacyMigrationDryRunInventoryIncomplete,
   LEGACY_MIGRATION_DECISIONS_MAX_BYTES,
+  LEGACY_MIGRATION_PLAN_DIGEST_MISSING,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
   LEGACY_MIGRATION_HTTP_ERROR_CODES,
   LEGACY_MIGRATION_PAGE_MAX,
   LEGACY_NXPKG_AUDIT_ACTIONS,
@@ -636,6 +639,34 @@ export class LegacyMigrationService {
           );
         }
         if (row.keyCiphertext === null) throw invalidState(row.status);
+        // Production-like: a dry run that planned on an incomplete live RickPanel inventory
+        // is not approvable. The import reads the panel again; a plan made on a read that
+        // did not hold is not one it can be compared with (DRY_RUN_MISMATCH), and which
+        // accounts it would adopt is exactly what that read left undecided.
+        if (
+          this.deps.productionLikeTarget &&
+          legacyMigrationDryRunInventoryIncomplete(row.dryRunReport?.warnings) > 0
+        ) {
+          throw errors.conflict(
+            CODES.INVALID_STATE,
+            'This dry run planned on an incomplete RickPanel inventory. Run the dry run again until every production panel is read completely. Nothing was approved.',
+            { status: row.status, reason: LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE },
+          );
+        }
+        // Production-like: a dry run without the plan's digest cannot bind the import to it.
+        // Not only `null`: the stored report is not re-parsed, and a row written by a release
+        // before the field existed has no key at all — the import would then be given no
+        // digest and compare nothing. Anything that is not the digest string is refused.
+        if (
+          this.deps.productionLikeTarget &&
+          typeof row.dryRunReport?.planTalliesDigest !== 'string'
+        ) {
+          throw errors.conflict(
+            CODES.INVALID_STATE,
+            'This dry run reported no plan digest. Run the dry run again. Nothing was approved.',
+            { status: row.status, reason: LEGACY_MIGRATION_PLAN_DIGEST_MISSING },
+          );
+        }
         const values = row.dryRunReport?.cutover;
         if (values === undefined || row.verifyReport === null) throw invalidState(row.status);
         if (await this.deps.recoveryActive(tx)) {

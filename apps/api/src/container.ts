@@ -349,7 +349,11 @@ import type {
 } from './modules/platform/legacy-importer/application/ports.js';
 import { DrizzleLegacyImporterRepository } from './modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.js';
 import { PgLegacyImportProcessLock } from './modules/platform/legacy-importer/infrastructure/pg-legacy-import-process-lock.js';
-import { RickpanelInventorySource } from './modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source.js';
+import {
+  INVENTORY_READ_ATTEMPTS,
+  RickpanelInventorySource,
+} from './modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source.js';
+import { PgPanelReadGate } from './modules/platform/legacy-importer/infrastructure/panel-read-gate.js';
 import { DrizzleLegacyImportRepository } from './modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository.js';
 import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
 import {
@@ -783,6 +787,19 @@ import type { NotificationTransport } from './modules/control/notifications/appl
  */
 export type ProcessRole =
   'api' | 'worker' | 'monitor' | 'recovery' | 'provisioner' | 'assistant' | 'migration';
+
+/** How the importer's read-only RickPanel inventory walks a panel. */
+export interface LegacyInventoryOptions {
+  readonly inventoryPageSize?: number;
+  /** Double walks per panel read (one when absent; the Web Admin asks `INVENTORY_READ_ATTEMPTS`). */
+  readonly inventoryAttempts?: number;
+  /** A seam for the pause between attempts (tests); the real one waits. */
+  readonly inventorySleep?: (ms: number) => Promise<void>;
+  /** The executor step's signal: a lost lease ends an inventory read before another attempt. */
+  readonly inventorySignal?: AbortSignal;
+  /** Overrides `RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS` for this importer (tests). */
+  readonly inventoryRequestIntervalMs?: number;
+}
 
 export interface Container {
   readonly config: AppConfig;
@@ -1397,18 +1414,17 @@ export interface Container {
    * ADOPT's service is wired) and the inventory page size. Its provider surface is the
    * read-only RickPanel inventory and nothing else; no surface reaches it.
    */
-  readonly legacyImporter: (options?: {
-    readonly adoption?: LegacyAdoptionPort | null;
-    readonly inventoryPageSize?: number;
-  }) => LegacyImporterService;
+  readonly legacyImporter: (
+    options?: {
+      readonly adoption?: LegacyAdoptionPort | null;
+    } & LegacyInventoryOptions,
+  ) => LegacyImporterService;
 
   /**
    * WP-D4: the read-only inventory port alone, for the rehearsal's panel-state walk
    * (tests/support/legacy-rehearsal-panel-state.ts). Reads only; no surface reaches it.
    */
-  readonly legacyPanelInventory: (options?: {
-    readonly inventoryPageSize?: number;
-  }) => LegacyInventoryPort;
+  readonly legacyPanelInventory: (options?: LegacyInventoryOptions) => LegacyInventoryPort;
 
   shutdown(): Promise<void>;
 }
@@ -6753,7 +6769,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const nxpkgMigration = new NxpkgMigrationAdapters({
     db: database.db,
     // Resolved at call time: both are members of the container built below.
-    importer: () => container.legacyImporter(),
+    // RICKPANEL_INVENTORY_PAGE_SIZE (100): few enough requests that, paced at one a second, a
+    // double walk stays short, while a page stays well under the panel client's response cap
+    // (RickPanel's row size is unmeasured; each read reports its largest page). The walk still
+    // fails closed on any change (DRY_RUN_MISMATCH). And up to INVENTORY_READ_ATTEMPTS double
+    // walks when a read came out incomplete: a production-like dry run that planned on an
+    // incomplete read is not approvable, so a panel that moved for a moment must not cost the
+    // owner a dry run. All of it inside the panel's read gate, on one login.
+    importer: (signal) =>
+      container.legacyImporter({
+        inventoryPageSize: config.RICKPANEL_INVENTORY_PAGE_SIZE,
+        inventoryAttempts: INVENTORY_READ_ATTEMPTS,
+        ...(signal === undefined ? {} : { inventorySignal: signal }),
+      }),
     history: () => container.legacyHistoryIngest,
     cutover: () => container.legacyCutover,
     uow,
@@ -6966,7 +6994,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * the rehearsal's P4 panel-state walk — which is why it is built here, outside the
    * application service, with no write path of its own.
    */
-  const legacyInventory = (options: { readonly inventoryPageSize?: number } = {}) =>
+  // One migration read of a panel at a time in the whole installation (a session advisory
+  // lock per panel origin, on a connection of its own for the length of the read).
+  const panelReadGate = new PgPanelReadGate(config.DATABASE_URL);
+  const legacyInventory = (options: LegacyInventoryOptions = {}) =>
     new RickpanelInventorySource(
       {
         panel: async (scope, panelId) => {
@@ -6978,7 +7009,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         credentials: (scope, panelId) => panelCredentials.read(scope, panelId),
         http: (baseUrl) => panelHttp.forBase(baseUrl),
       },
-      options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize },
+      {
+        ...(options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize }),
+        ...(options.inventoryAttempts === undefined ? {} : { attempts: options.inventoryAttempts }),
+        ...(options.inventorySleep === undefined ? {} : { sleep: options.inventorySleep }),
+        ...(options.inventorySignal === undefined ? {} : { signal: options.inventorySignal }),
+        // Every read of a panel — Web Admin, CLI, rehearsal — paced and queued installation-wide.
+        requestIntervalMs:
+          options.inventoryRequestIntervalMs ?? config.RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS,
+        gate: panelReadGate,
+      },
       () => clock.now(),
     );
 

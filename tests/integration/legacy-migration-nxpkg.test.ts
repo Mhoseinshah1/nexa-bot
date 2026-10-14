@@ -16,6 +16,7 @@ import {
 import { runAsLegacyMigration } from '../../apps/api/src/infrastructure/persistence/write-gate';
 import { LegacyMigrationExecutor } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
 import { NxpkgMigrationAdapters } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters';
+import { INVENTORY_READ_ATTEMPTS } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source';
 import { PipelineBackupPort } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/migration-adapters';
 import { LegacyMigrationService } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration.service';
 import type { ApplyPhase } from '../../apps/api/src/modules/platform/legacy-importer/application/legacy-importer.service';
@@ -1033,6 +1034,211 @@ describe('legacy migration: the executor over a real package', () => {
     expect(await ledger()).toEqual(before);
   }, 600_000);
 
+  /**
+   * The restore page of a production-like installation, as the Phase 7 test builds it — the
+   * SAME service told the truth about its target, the executor with the REAL backup pipeline —
+   * with no real pause between inventory attempts.
+   */
+  function productionLikePage() {
+    const target = { host: 'db.internal', port: '5432', database: 'nexa' };
+    const ack = targetAcknowledgement(target, TENANT);
+    const container = ctx.container;
+    const db = container.database.db;
+    const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
+    const pageService = new LegacyMigrationService({
+      repository: container.legacyNxpkgImports,
+      workspaces: container.migrationWorkspaces,
+      cipher: container.cipher,
+      guard: container.guard,
+      uow: container.uow,
+      audit: container.audit,
+      opsLog: container.opsLog,
+      sessions: container.sessions,
+      idempotency: container.idempotency,
+      scopeActivity: container.tenants,
+      clock: container.clock,
+      ids: container.ids,
+      enabled: true,
+      maxUploadBytes: 1024 * 1024 * 1024,
+      productionLikeTarget: true,
+      targetAcknowledgement: (tenantId) => targetAcknowledgement(target, tenantId),
+      cutover: () => container.legacyCutover,
+      recoveryActive: async (tx) =>
+        (await container.recoveryRequests.installationLock(tx)) !== null,
+      logger: quiet,
+    });
+    // Every importer the adapter asks for, and the step signal it was handed (the lease).
+    const importerSignals: (AbortSignal | undefined)[] = [];
+    const adapters = new NxpkgMigrationAdapters({
+      db,
+      importer: (signal) => {
+        importerSignals.push(signal);
+        return container.legacyImporter({
+          inventoryAttempts: INVENTORY_READ_ATTEMPTS,
+          inventorySleep: async () => undefined,
+          ...(signal === undefined ? {} : { inventorySignal: signal }),
+        });
+      },
+      history: () => container.legacyHistoryIngest,
+      cutover: () => container.legacyCutover,
+      uow: container.uow,
+      target,
+      guardEnv: () => ({ NODE_ENV: 'production' }),
+      logger: { warn: () => undefined, error: () => undefined },
+    });
+    const executor = new LegacyMigrationExecutor({
+      repository: container.legacyNxpkgImports,
+      workspaces: container.migrationWorkspaces,
+      cipher: container.cipher,
+      verifier: adapters,
+      runner: adapters,
+      freshTarget: adapters,
+      history: adapters,
+      backup: new PipelineBackupPort(container.backup, container.recoveryQuiesced),
+      recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
+      latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
+      asImportWriter: runAsLegacyMigration,
+      clock: container.clock,
+      correlation: () => 'corr-inventory' as CorrelationId,
+      leaseOwner: 'recovery:inventory',
+      tickIntervalMs: 1000,
+      enabled: true,
+      logger: quiet,
+    });
+    const service = container.legacyMigration;
+    /** Upload, key, verify, bindings, dry run: the restore page's steps up to the review. */
+    const toDryRun = async (path: string, keyFileText: string) => {
+      const id = await upload(path);
+      await service.setKey(tenantA, owner, id, { idempotencyKey: key(), keyFileText });
+      await executor.tick();
+      await service.setPanelBindings(tenantA, owner, id, {
+        idempotencyKey: key(),
+        bindings: [
+          { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelAId },
+          { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelBId },
+        ],
+      });
+      await service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
+      await executor.tick();
+      return id;
+    };
+    const approve = async (id: string) =>
+      pageService.approve(tenantA, owner, id, {
+        idempotencyKey: key(),
+        dryRunSha256: (await detail(id)).dryRunSha256,
+        confirmation: LEGACY_MIGRATION_APPROVAL_PHRASE,
+        targetAcknowledgement: ack,
+      });
+    return { executor, service, toDryRun, approve, importerSignals };
+  }
+
+  const codes = (rows: readonly { code: string; count: number }[] | undefined) =>
+    Object.fromEntries((rows ?? []).map((w) => [w.code, w.count]));
+
+  it('production-like: a dry run planned on an incomplete RickPanel read is NOT approvable; asked again over a settled panel it is, and imports', async () => {
+    const page = productionLikePage();
+    const pkg = await writePackage({ real: true, clean: true });
+
+    // The panel never settles during the dry run: an account is created before every page
+    // (each walk is one page at this size, so the two walks of every attempt differ).
+    let churn = 0;
+    panelA.beforeListPage = () => {
+      panelA.seedUser(`churn_${String((churn += 1))}`);
+    };
+    const id = await page.toDryRun(pkg.path, pkg.keyFileText);
+    const dry = await detail(id);
+    expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
+    const warnings = codes(dry.dryRunReport?.warnings);
+    expect(warnings['PROVIDER_INVENTORY_INCOMPLETE']).toBe(1);
+    expect(warnings['PROVIDER_INVENTORY_INCOMPLETE:WALKS_DIFFER']).toBe(1);
+    expect(warnings['INVENTORY_INCOMPLETE']).toBeGreaterThan(0);
+
+    // Not approvable: nothing approved, no cutover approval recorded, nothing written.
+    await expect(page.approve(id)).rejects.toMatchObject({
+      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+      details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
+    });
+    expect((await row(id))?.['status']).toBe('DRY_RUN_DONE');
+    expect(await count('legacy_cutover_approvals')).toBe(0);
+    expect(await count('customers')).toBe(0);
+
+    // The panel settles; the owner asks for the dry run again — same import, no new upload.
+    panelA.beforeListPage = null;
+    await page.service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
+    await page.executor.tick();
+    const again = await detail(id);
+    expect(again.status).toBe('DRY_RUN_DONE');
+    expect(codes(again.dryRunReport?.warnings)['PROVIDER_INVENTORY_INCOMPLETE']).toBeUndefined();
+    expect(codes(again.dryRunReport?.warnings)['INVENTORY_INCOMPLETE']).toBeUndefined();
+    expect((await page.approve(id)).status).toBe('APPROVED');
+
+    await page.executor.tick();
+    const done = await detail(id);
+    expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
+    // The executor's step signal reaches every importer the adapter built, so a lost lease
+    // ends the importer's live panel read (and its pause) before the import's first write.
+    expect(page.importerSignals.length).toBeGreaterThan(0);
+    for (const signal of page.importerSignals) expect(signal).toBeInstanceOf(AbortSignal);
+    for (const fake of [panelA, panelB]) {
+      expect(
+        fake.requests.filter(
+          (r) => !(r.method === 'GET' || (r.method === 'POST' && r.path === '/api/admin/token')),
+        ),
+      ).toEqual([]);
+    }
+  }, 600_000);
+
+  it('production-like: the panel changed between the approval and the apply — FAILED DRY_RUN_MISMATCH with both sides counted, nothing written; the same .nxpkg again imports', async () => {
+    const page = productionLikePage();
+    const pkg = await writePackage({ real: true, clean: true });
+    const id = await page.toDryRun(pkg.path, pkg.keyFileText);
+    expect((await detail(id)).status).toBe('DRY_RUN_DONE');
+    expect((await page.approve(id)).status).toBe('APPROVED');
+
+    // Between the owner's approval and the apply, panel A's accounts are deleted on the panel.
+    const removed = [...SYNTHETIC_PANEL_ACCOUNTS.A];
+    for (const name of removed) panelA.removeUser(name);
+    await page.executor.tick();
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(failed.applyLegacyRunId).toBeNull();
+    const refusal = codes(failed.progress.refusalCounts);
+    // Each moved number, both sides; the money did not move and is not listed. The invoices
+    // whose accounts were deleted are now PROVIDER_MISSING (in this package they were spread
+    // over other categories before, not ADOPTION_ELIGIBLE: what moved is what is recorded).
+    expect(refusal['apply:services:PROVIDER_MISSING']).toBeGreaterThan(
+      refusal['dryrun:services:PROVIDER_MISSING'] ?? Infinity,
+    );
+    expect(Object.keys(refusal).some((k) => /customers|wallet/u.test(k))).toBe(false);
+    for (const code of Object.keys(refusal)) {
+      // Only the panel read moved, so only service categories are listed — each as a pair.
+      expect(code).toMatch(/^(dryrun|apply):services:[A-Z_]+$/u);
+      const other = code.startsWith('dryrun:')
+        ? code.replace('dryrun:', 'apply:')
+        : code.replace('apply:', 'dryrun:');
+      expect(refusal[other], other).toBeDefined();
+    }
+    expect(await count('customers')).toBe(0);
+    expect(await count('wallet_entries')).toBe(0);
+    expect(await count('services')).toBe(0);
+
+    // The retry: the accounts are back, the SAME .nxpkg is uploaded again (a FAILED import is
+    // final), dry-run, approved — and imported.
+    for (const name of removed) {
+      panelA.seedUser(name, {
+        expire: Math.floor(Date.UTC(2027, 0, 1) / 1000),
+        dataLimit: 30 * 1024 ** 3,
+        usedTraffic: 1024 ** 3,
+      });
+    }
+    const retry = await page.toDryRun(pkg.path, pkg.keyFileText);
+    expect((await detail(retry)).status).toBe('DRY_RUN_DONE');
+    expect((await page.approve(retry)).status).toBe('APPROVED');
+    await page.executor.tick();
+    const done = await detail(retry);
+    expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
+  }, 600_000);
+
   it('production-like: every legacy table is classified from the package coverage report, or the dry run is refused naming it', async () => {
     const target = { host: 'db.internal', port: '5432', database: 'nexa' };
     const env: { NODE_ENV: string; [TARGET_ACK_ENV]?: string } = {
@@ -1117,6 +1323,9 @@ describe('legacy migration: the executor over a real package', () => {
     expect(sections.get('table:SECRETS_MANUAL:admin')).toMatchObject({ source: 1, skipped: 1 });
     expect(sections.get('table:SUPPORTED:user')?.source).toBeGreaterThan(0);
     expect([...sections.keys()].filter((k) => k.startsWith('table:UNCLASSIFIED'))).toEqual([]);
+    expect(done.dryRunReport?.warnings.map((w) => w.code)).not.toContain(
+      'TABLE_INVENTORY_INCOMPLETE',
+    );
     expect(done.dryRunReport?.warnings.map((w) => w.code)).not.toContain('INVENTORY_INCOMPLETE');
     expect(await count('customers')).toBe(0);
   }, 300_000);

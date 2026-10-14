@@ -16,7 +16,7 @@ A row of the Mirza backup reaches NEXA through exactly one of them:
 
 Every legacy table is also accounted for by name in the dry run: one `table:<class>:<name>`
 section each, with the converter's own row breakdown (§5a of the design). A production-like
-import refuses a package with any table NEXA cannot classify (`INVENTORY_INCOMPLETE`).
+import refuses a package with any table NEXA cannot classify (`TABLE_INVENTORY_INCOMPLETE`).
 
 ## 2. The categories asked about
 
@@ -58,14 +58,14 @@ import refuses a package with any table NEXA cannot classify (`INVENTORY_INCOMPL
 
 ## 4. Where a count could be lost, and what stops it
 
-| Risk                                                                       | Guard                                                                                                                                                  |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A table nobody classified                                                  | Converter: `UNCLASSIFIED_TABLE` blocks the package. NEXA: `INVENTORY_INCOMPLETE` warning; refused on a production-like target and by the cutover gate. |
-| Rows of a classified table not accounted                                   | Converter: `COVERAGE_INCOMPLETE` blocks. NEXA: such a table stays `UNCLASSIFIED` (rule in §5a).                                                        |
-| A file or record type NEXA does not know                                   | The history ingest refuses an unknown file under `records/`, an unknown or misfiled `record_type` and any live flag, before writing (`record-map.ts`). |
-| A package altered after conversion                                         | AES-256-GCM STREAM per chunk, a manifest of SHA-256 per file; any change fails `VERIFY` (`NXPKG_*`).                                                   |
-| The converter's customers / openings / debts differ from NEXA's derivation | `DRY_RUN_MISMATCH` (count and sum).                                                                                                                    |
-| History written partially                                                  | Two passes: the second writes only after the first validated every line; written must equal validated (`source_changed` otherwise); idempotent keys.   |
+| Risk                                                                       | Guard                                                                                                                                                        |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A table nobody classified                                                  | Converter: `UNCLASSIFIED_TABLE` blocks the package. NEXA: `TABLE_INVENTORY_INCOMPLETE` warning; refused on a production-like target and by the cutover gate. |
+| Rows of a classified table not accounted                                   | Converter: `COVERAGE_INCOMPLETE` blocks. NEXA: such a table stays `UNCLASSIFIED` (rule in §5a).                                                              |
+| A file or record type NEXA does not know                                   | The history ingest refuses an unknown file under `records/`, an unknown or misfiled `record_type` and any live flag, before writing (`record-map.ts`).       |
+| A package altered after conversion                                         | AES-256-GCM STREAM per chunk, a manifest of SHA-256 per file; any change fails `VERIFY` (`NXPKG_*`).                                                         |
+| The converter's customers / openings / debts differ from NEXA's derivation | `DRY_RUN_MISMATCH` (count and sum).                                                                                                                          |
+| History written partially                                                  | Two passes: the second writes only after the first validated every line; written must equal validated (`source_changed` otherwise); idempotent keys.         |
 
 Not cross-checked today (an owner decision, listed in the rehearsal guide §9): NEXA does not
 compare its service-candidate and invoice-archive counts with the converter's

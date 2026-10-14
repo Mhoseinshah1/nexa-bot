@@ -64,6 +64,9 @@ NEXA importer that consumes it. Everything here **extends** the existing legacy 
 DRY_RUN_REQUESTED, DRY_RUN_RUNNING, DRY_RUN_DONE, DRY_RUN_FAILED, APPROVED, APPLYING,
 COMPLETED, COMPLETED_WITH_DISCREPANCY, FAILED, CANCELLED`.
 - `LEGACY_HISTORY_RECORD_TYPES`: the closed set of archive record types (§5).
+- `LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE` and `legacyMigrationDryRunInventoryIncomplete`
+  (v0.5.7): the dry run's incomplete-panel warning and the one rule that refuses its approval on a
+  production-like target (§4a). No state, error code or column was added.
 
 ## 3. Source adapter
 
@@ -97,7 +100,8 @@ share — adds, before the snapshot is read:
 - `dry-run` and `import` refuse a tenant that is not fresh (§6, `FRESH_TARGET_NOT_EMPTY`), and
   `import` decides it again inside its start transaction;
 - `import --expected-plan-tallies-digest HEX` (or the worker's `dryRunTalliesDigest`) binds the
-  import to the approved dry run's `sections.planTalliesDigest` (`DRY_RUN_MISMATCH`).
+  import to the approved dry run's `sections.planTalliesDigest` (`DRY_RUN_MISMATCH`). See §4a for
+  what the digest binds and why the live RickPanel read is part of it.
 
 ## 4. Import lifecycle (`legacy_nxpkg_imports`, process role `migration`)
 
@@ -146,6 +150,66 @@ any non-terminal → CANCELLED
   the restore page's approval carries the acknowledgement and records the cutover approval itself,
   and the import's write freeze stands for stop-sales.)
 
+## 4a. The live RickPanel read (DRY_RUN_MISMATCH)
+
+The plan is a function of the package AND of one input none of the seven cutover values binds:
+a LIVE read of each production panel's accounts (`RickpanelInventorySource` → `listAll`). The dry
+run reads the panels, and the import reads them again, minutes or hours later. Before v0.5.7 a
+dry run that planned on an incomplete read — tens of thousands of invoices `INVENTORY_INCOMPLETE`
+— could be approved, and an import whose own read came out complete planned another plan and
+was refused `DRY_RUN_MISMATCH` (an owner's Web Admin import, 2026-10-13). The refusal was right;
+reaching it was not.
+
+- **Complete means two consecutive walks, each consistent with the panel's `total`, returning the
+  identical set of exact provider spellings** (`docs/rickpanel-inventory.md`). Unchanged.
+- **The Web Admin's importer attempts a read up to `INVENTORY_READ_ATTEMPTS` (3) double walks**,
+  pausing 15 s and 45 s, when it came out INCOMPLETE (the panel moved). Only an attempt complete
+  on its own is indexed. A transport failure, a 429 or a 5xx is not a reason to walk again from
+  the start: the read session already asked that page again, within the read's one retry
+  budget (see _Load on the panel_ below). The CLI and the rehearsal walk read once, as before
+  (`inventoryAttempts`).
+- **Load on the panel** (owner requirement, `docs/rickpanel-inventory.md` §Load protection):
+  every read — Web Admin, CLI, rehearsal — is one read of that panel at a time in the whole
+  installation (a PostgreSQL advisory lock per panel origin), one request in flight, at least
+  `RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS` (1000) between request starts and longer after a slow
+  answer, on ONE login per read (a 401 mid-read buys one fresh login; a refused login is never
+  asked again). A 429 waits the panel's `Retry-After` (over 2 minutes: not asked again); a
+  timeout, an unreachable panel or a 5xx waits 2 / 5 / 15 / 30 s; all retries of a read draw on
+  one budget of 4. The Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (100) rows a page. The
+  step's signal ends the read before its next request and ends every wait — a worker that lost
+  its lease stops inside the importer's `prepare`, before the import's first write. Each read
+  reports its cost in `diagnostics.load` (requests, logins, reuses, refreshes, retries, waits,
+  queue time, duration, page size, largest page in bytes) — counts only.
+- **The dry run says so**: `PROVIDER_INVENTORY_INCOMPLETE` (production panels) and one
+  `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason. The importer's `sections.provider.panels`
+  carries each read's counts (`diagnostics`: attempts, and per walk the pages, rows, distinct
+  spellings, duplicate rows, the panel's `total`, the first and last page's rows) — never a name.
+- **Production-like: such a dry run is not approvable** (`legacy_migration.invalid_state`,
+  `reason: PROVIDER_INVENTORY_INCOMPLETE`; one rule, `legacyMigrationDryRunInventoryIncomplete`, for
+  the server and the restore page). The owner asks for the dry run again once the panel holds
+  still. An approval recorded by an earlier release is stopped at the apply's TARGET precheck,
+  before the protective backup (`DRY_RUN_MISMATCH`, `dryrun:panels:inventory_incomplete`).
+- **Production-like: the import plans only on a complete read of its own**; anything else is
+  `DRY_RUN_MISMATCH` before the digest and before any write — for every `.nxpkg` import and
+  every import given a digest, whether or not the CLI was given `--expected-plan-tallies-digest`.
+- **Production-like: a dry run that reported no plan digest is not approvable** (`reason:
+PLAN_DIGEST_MISSING`), and the TARGET precheck refuses one approved earlier
+  (`dryrun:plan:digest_missing`).
+- **The digest (v2) binds every live invoice's service decision** — category and, for an eligible
+  one, panel, exact spelling, product path and customer — beside the tallies: an account deleted
+  and another created between the two reads could leave every count as it was and still adopt an
+  account the owner never saw. Usage, state and links are NOT bound: they move by the minute and
+  the import adopts from its own read.
+- **Upgrading**: a dry run approved before v0.5.7 carries the v1 digest. Its apply is refused
+  `DRY_RUN_MISMATCH` with `plan:digest_format_outdated` (the importer recognises the v1 digest of
+  the same plan — it is never accepted). Upgrade with no import APPROVED, and dry-run again.
+- **What a mismatch records** (`progress.refusalCounts`): each number the approved report and the
+  import's plan both carry, where they differ, as `dryrun:<key>` / `apply:<key>` pairs (services
+  by category, new and importable customers, openings, debts, shapes, incomplete panels), or
+  `plan:changed_beyond_compared_counts` when only the per-invoice decisions moved. Counts only.
+- A FAILED import is final: the retry is the SAME `.nxpkg`, uploaded again (§6 lets its own read
+  sets stand), dry-run and approved again.
+
 ## 5. History archive (`legacy_history_records`)
 
 `(tenant_id, package_import_id, idempotency_key)` unique; `record_type`, `legacy_user_id`,
@@ -184,8 +248,10 @@ write a package with a non-empty uncatalogued table or with rows it did not acco
 
 `ARCHIVE` means read-only history (`legacy_history_records`); no read set reads such a table's
 rows from a package. A MySQL source never gets this: there a table stays `UNCLASSIFIED` until a
-reviewed commit classifies it. The dry run warns `INVENTORY_INCOMPLETE` on every target (a
-production-like one refuses, naming the unclassified tables). Pinned by
+reviewed commit classifies it. The dry run warns `TABLE_INVENTORY_INCOMPLETE` on every target
+(a production-like one refuses, naming the unclassified tables). The code was
+`INVENTORY_INCOMPLETE` before v0.5.7, which is also the services category of a panel read that
+was not complete (§4a); it was renamed so a warning names one thing. Pinned by
 `tests/unit/nxpkg-table-accounting.test.ts`, including the converter-written fixture package's
 50 tables (none unclassified).
 

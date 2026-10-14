@@ -26,7 +26,10 @@ import {
 } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/nxpkg-fresh-target';
 import { NxpkgImportRefused } from '../../apps/api/src/modules/platform/legacy-importer/application/nxpkg-panel-binding';
 import { parsePanelMapping } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
-import { planTalliesDigest } from '../../apps/api/src/modules/platform/legacy-importer/application/plan';
+import {
+  planTalliesDigest,
+  planTalliesDigestV1,
+} from '../../apps/api/src/modules/platform/legacy-importer/application/plan';
 import {
   readFromSession,
   type LegacySnapshot,
@@ -475,7 +478,14 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
         'corr-mm',
         context,
       ),
-    ).rejects.toMatchObject({ code: 'DRY_RUN_MISMATCH' });
+    ).rejects.toMatchObject({
+      code: 'DRY_RUN_MISMATCH',
+      // The import's own tallies ride with the refusal, so the operator sees what moved.
+      counts: expect.objectContaining({
+        'apply:panels:inventory_incomplete': 0,
+        'apply:customers:importable': expect.any(Number),
+      }),
+    });
     expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(0);
 
     // H1: the importer itself, past the CLI's courtesy read — a customer lands after it. The
@@ -514,6 +524,146 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect(refused).toMatchObject({ code: 'FRESH_TARGET_NOT_EMPTY', counts: { customers: 1 } });
     expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(0);
     expect(await count('customers')).toBe(1);
+    expectOnlyReads();
+  });
+
+  it('load protection: a PACED read (one login per panel, every request ≥ the interval apart) plans exactly what an unpaced one does', async () => {
+    const { connector: c, binding, holdFor } = await setup();
+    const session = await c.open();
+    let snapshot: LegacySnapshot;
+    try {
+      snapshot = await readFromSession(c.label, session);
+    } finally {
+      await session.close();
+    }
+    const hold = await holdFor(snapshot);
+    const mapping = parsePanelMapping(binding.text, TENANT);
+    const plan = (inventoryRequestIntervalMs: number) =>
+      ctx.container
+        .legacyImporter({ inventoryPageSize: 3, inventoryRequestIntervalMs })
+        .prepare(tenantA, snapshot, mapping, false, { ownershipHold: hold });
+
+    const unpaced = await plan(0);
+    const sentBefore = panelA.requests.length + panelB.requests.length;
+    const interval = 25;
+    const started = Date.now();
+    const paced = await plan(interval);
+    const elapsed = Date.now() - started;
+    const sent = panelA.requests.length + panelB.requests.length - sentBefore;
+
+    // The same decisions, the same digest: pacing changes how the panel is asked, not what
+    // the read decides (two walks, identical exact sets) nor what the plan adopts.
+    expect(planTalliesDigest(paced.plan)).toBe(planTalliesDigest(unpaced.plan));
+    expect(paced.plan.inventories.every((p) => p.complete)).toBe(true);
+    // Each panel: ONE login for both walks; each request a full interval after the last
+    // (the first a full interval after the read began), so the reads took at least that long.
+    for (const inventory of paced.plan.inventories) {
+      expect(inventory.diagnostics?.load).toMatchObject({ logins: 1, tokenReuses: 1, retries: 0 });
+    }
+    expect(sent).toBe(
+      paced.plan.inventories.reduce((n, p) => n + (p.diagnostics?.load.requests ?? 0), 0),
+    );
+    expect(elapsed).toBeGreaterThanOrEqual(sent * interval - 5);
+    expectOnlyReads();
+  });
+
+  it('DRY_RUN_MISMATCH at the root: the import plans only on a complete panel read that decides what the approved dry run decided', async () => {
+    const { connector: c, binding, holdFor } = await setup();
+    const session = await c.open();
+    let snapshot: LegacySnapshot;
+    try {
+      snapshot = await readFromSession(c.label, session);
+    } finally {
+      await session.close();
+    }
+    const hold = await holdFor(snapshot);
+    const mapping = parsePanelMapping(binding.text, TENANT);
+    // No real pause between attempts: the attempts themselves are what is under test.
+    const importer = ctx.container.legacyImporter({
+      inventoryPageSize: 3,
+      inventoryAttempts: 3,
+      inventorySleep: async () => undefined,
+    });
+    const digestNow = async () =>
+      planTalliesDigest(
+        (await importer.prepare(tenantA, snapshot, mapping, false, { ownershipHold: hold })).plan,
+      );
+    const input = (productionLikeTarget: boolean | undefined, dryRunTalliesDigest: string) => ({
+      scope: tenantA,
+      actor: job('apply'),
+      snapshot,
+      mapping,
+      ...(productionLikeTarget === undefined ? {} : { productionLikeTarget }),
+      ownershipHold: hold,
+      ownershipDecisionsDigest: null,
+      freshTarget: true,
+      mode: 'IMPORT' as const,
+      dryRunTalliesDigest,
+    });
+    const approved = await digestNow();
+    // 0. A dry run approved before the v2 digest: refused, and said as an outdated format.
+    const v1 = planTalliesDigestV1(
+      (await importer.prepare(tenantA, snapshot, mapping, false, { ownershipHold: hold })).plan,
+    );
+    await expect(importer.apply(input(false, v1))).rejects.toMatchObject({
+      code: 'DRY_RUN_MISMATCH',
+      counts: { 'plan:digest_format_outdated': 1 },
+    });
+    const nothingWritten = async () => {
+      expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(0);
+      expect(await count('customers')).toBe(0);
+      expect(await count('wallet_entries')).toBe(0);
+      expect(await count('services')).toBe(0);
+    };
+
+    // 1. Usage and state move on a live panel by the minute: never a reason to refuse.
+    panelA.seedUser('svc_a1', {
+      expire: Math.floor(Date.UTC(2027, 0, 1) / 1000),
+      dataLimit: 30 * 1024 ** 3,
+      usedTraffic: 7 * 1024 ** 3,
+      status: 'limited',
+    });
+    expect(await digestNow()).toBe(approved);
+
+    // 2. Production-like (the flag absent: the importer fails closed to production-like, and
+    //    no cutover gate is asked of it here): the import's own read of panel A never settles
+    //    (an account created before every page). Refused as itself, before the digest and
+    //    before any write — the reads it made were attempts, every one of them a read.
+    let churn = 0;
+    panelA.beforeListPage = () => {
+      panelA.seedUser(`churn_${String((churn += 1))}`);
+    };
+    const incomplete = await importer.apply(input(undefined, approved)).catch((e: unknown) => e);
+    expect(incomplete).toBeInstanceOf(NxpkgImportRefused);
+    expect(incomplete).toMatchObject({
+      code: 'DRY_RUN_MISMATCH',
+      counts: expect.objectContaining({ 'apply:panels:inventory_incomplete': 1 }),
+    });
+    expect(churn).toBeGreaterThanOrEqual(3);
+    await nothingWritten();
+    panelA.beforeListPage = null;
+
+    // Accounts nobody's invoice names are not a decision: the panel settled with the churned
+    // accounts on it, and the approved plan is still the plan.
+    expect(await digestNow()).toBe(approved);
+
+    // 3. Both reads complete, one account deleted on the panel in between: the invoice that
+    //    adopted it is now PROVIDER_MISSING — another plan, refused before any write.
+    panelA.removeUser('svc_a1');
+    const changed = await importer.apply(input(false, approved)).catch((e: unknown) => e);
+    expect(changed).toBeInstanceOf(NxpkgImportRefused);
+    expect(changed).toMatchObject({
+      code: 'DRY_RUN_MISMATCH',
+      counts: expect.objectContaining({ 'apply:panels:inventory_incomplete': 0 }),
+    });
+    await nothingWritten();
+
+    // 4. The retry: a NEW dry run over the panel as it now is, approved, imports.
+    const fresh = await digestNow();
+    expect(fresh).not.toBe(approved);
+    const report = await importer.apply(input(false, fresh));
+    expect(report.verdict).not.toBe('BLOCKED');
+    expect(await count('legacy_import_runs', "mode = 'APPLY'")).toBe(1);
     expectOnlyReads();
   });
 

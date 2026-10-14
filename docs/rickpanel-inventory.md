@@ -76,6 +76,58 @@ delete-A/append-K (one walk misses F; `listAll` says `WALKS_DIFFER`), a quiet pa
 Mutation-checked: advancing by `limit`, stopping on a short page, removing the
 no-progress stop, and dropping the two-walk comparison each fail a named case.
 
+## Load protection (owner requirement, PR #281)
+
+A migration reads EVERY account of a production panel, twice, and a panel serving customers
+must not feel it. `RickpanelInventorySource` (the only caller of `listAll` in the importer,
+the CLI and the rehearsal walk) puts two things UNDER the reader, at its read-only HTTP
+surface — the reader itself, and so every rule above, is unchanged:
+
+- **`PanelReadGate`** — one read of a panel at a time in the whole installation: a session
+  advisory lock (`pg_try_advisory_lock`, class `RI`) keyed by the panel's ORIGIN (two panel rows
+  can point at one machine), on a connection of its own for the length of the read. A second
+  job — another dry run, the CLI, another replica — waits its turn, polling every 2 s, and its
+  wait ends on its step signal. A holder that dies loses the lock with its session.
+- **`protectedReadSession`** — inside the read:
+  - one request in flight (the reader awaits each), at least `requestIntervalMs` between the
+    STARTS of two requests (`RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS`, default 1000; production
+    refuses less than 250), the first a full interval after the lock was taken; after an answer
+    slower than 2 s, as long again before the next request (≤ 30 s) — a struggling panel is
+    asked at most half the time;
+  - ONE login per read: a successful token exchange is reused by every later walk and attempt
+    of that read, held in that read's closure only. A 401 on a page (the token expired) buys
+    one fresh login and the same page again; a refused login is never asked again;
+  - a 429 waits the panel's `Retry-After` (delta-seconds or an HTTP date); one asking for more
+    than 2 minutes is not asked again. A timeout, an unreachable panel or a 5xx waits 2 / 5 / 15
+    / 30 s. Every retry of the read — pages and logins — draws on ONE budget of 4, so retries
+    cannot multiply; the source starts another double walk only when the answer was
+    INCOMPLETE (the panel moved), never after a failure. A 4xx, a page-shape fault, an
+    oversized or malformed answer, a TLS failure or a blocked target is final;
+  - the step's signal (a lost lease, a cancelled job) and a lost gate lease stop the read
+    before its next request and end every wait.
+
+The page size is `limit` on the one list route there is; no batch endpoint is assumed. The
+reader's own bound is 200; the Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (default 100)
+because a page larger than `PANEL_HTTP_MAX_RESPONSE_BYTES` (512 KiB) fails the read and
+RickPanel's row size is unmeasured. A panel that caps pages lower loses nothing.
+
+Each read reports `diagnostics.load`: requests, logins, token reuses, token refreshes,
+retries, time waited, time queued for the gate, duration, page size and the largest page in
+bytes. Counts and milliseconds only — never a token, a credential, a name or a row.
+
+What it costs a panel of N accounts at page size P and interval I (the defaults, P = 100,
+I = 1 s): 1 login + 2 × ⌈N / P⌉ pages, one at a time, so ≈ (1 + 2⌈N/P⌉) × I per complete read
+— 10 000 accounts: 201 requests, ≈ 3.4 min; 30 000: 601, ≈ 10 min; 50 000: 1 001, ≈ 17 min —
+longer when the panel answers slower than I. An incomplete read is walked again at most twice
+more (Web Admin only), after 15 s and 45 s.
+
+Tested: `tests/unit/rickpanel-load-protection.test.ts` (a large inventory paged and paced,
+one in flight, a slow panel, two concurrent jobs, login reuse and refresh, 429 and the budget,
+cancellation while paced and while queued, nothing sensitive reported),
+`tests/unit/nxpkg-inventory-completeness.test.ts`, `tests/integration/panel-read-gate.test.ts`
+(across sessions, a cancelled waiter, a dead holder) and `tests/integration/nxpkg-importer.test.ts`
+(a paced read plans exactly what an unpaced one does).
+
 ## Canonical username
 
 ASCII lowercase (§11: duplicates `(code_panel, lower(username))` = 0, mixed-case = 0 in
