@@ -185,9 +185,10 @@ function complete(read: LegacyInventoryRead): Complete {
   return read;
 }
 
-function neededNames(): Set<string> {
-  const needed = new Set<string>();
-  for (let i = 0; i < ACCOUNTS; i += 1) if (isNeeded(i)) needed.add(nameOf(i));
+/** Canonical name → the backup's exact spelling (the same here: every name is lowercase). */
+function neededNames(): Map<string, string | null> {
+  const needed = new Map<string, string | null>();
+  for (let i = 0; i < ACCOUNTS; i += 1) if (isNeeded(i)) needed.set(nameOf(i), nameOf(i));
   return needed;
 }
 
@@ -219,19 +220,23 @@ describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel
 
     // Ground truth, name by name: present exactly when the panel still holds it.
     let wrong = 0;
-    for (const name of needed) {
+    for (const name of needed.keys()) {
       if (!indexCovers(read.index, name)) wrong += 1;
       else if (read.index.usernames.has(name) !== panel.held.has(name)) wrong += 1;
     }
     expect(wrong).toBe(0);
     // Nothing the backup does not need is indexed or looked up.
     expect(read.index.usernames.size).toBe(77_000 - r.absentByLookup);
-    for (const name of panel.requests.lookupNames) expect(needed.has(name)).toBe(true);
+    // The first lookup is the canary — the lexically first account both walks saw — so no
+    // 404 is trusted from a route that 404s everything; every other one is a needed name.
+    const [canary, ...asked] = panel.requests.lookupNames;
+    expect(canary).toBe(nameOf(0));
+    for (const name of asked) expect(needed.has(name)).toBe(true);
 
     // The load on the panel.
     expect(panel.requests.logins).toBe(1);
     expect(r.lookups).toBe(panel.requests.lookups);
-    expect(r.lookups).toBe(r.presentByLookup + r.absentByLookup);
+    expect(r.lookups).toBe(r.presentByLookup + r.absentByLookup + 1);
     expect(r.lookups).toBeLessThanOrEqual(INVENTORY_MAX_LOOKUPS);
     const walks = read.diagnostics?.walks ?? [];
     expect(walks).toHaveLength(2);
@@ -275,12 +280,14 @@ describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel
     const r = read.resolution;
     if (r === undefined) throw new Error('expected a per-name resolution');
     expect(panel.requests.lookups).toBe(25);
+    // The canary counts against the bound: 24 needed names were asked.
     expect(r.lookups).toBe(25);
+    expect(r.presentByLookup + r.absentByLookup).toBe(24);
     expect(r.unresolved).toBeGreaterThan(0);
     expect(r.presentByWalks + r.presentByLookup + r.absentByLookup + r.unresolved).toBe(77_000);
     // An unresolved name is not covered: the matcher keeps its invoice INVENTORY_INCOMPLETE.
     let uncovered = 0;
-    for (const name of needed) if (!indexCovers(read.index, name)) uncovered += 1;
+    for (const name of needed.keys()) if (!indexCovers(read.index, name)) uncovered += 1;
     expect(uncovered).toBe(r.unresolved);
     expect(panel.requests.logins).toBe(1);
     console.info(

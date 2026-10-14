@@ -197,10 +197,12 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
   }
 
   /** The real P6 (the container default) unless a port is given. */
-  function importer(adoption?: LegacyAdoptionPort | null): LegacyImporterService {
+  function importer(adoption?: LegacyAdoptionPort | null, targeted = false): LegacyImporterService {
     return ctx.container.legacyImporter({
       ...(adoption === undefined ? {} : { adoption }),
       inventoryPageSize: 3,
+      // The Web Admin's per-name resolution of a panel that changes while it is read.
+      ...(targeted ? { inventoryTargeted: true } : {}),
     });
   }
 
@@ -212,9 +214,10 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       readonly adoption?: LegacyAdoptionPort | null;
       readonly mode?: 'IMPORT' | 'RESUME';
       readonly afterPhase?: (phase: string) => Promise<void> | void;
+      readonly targeted?: boolean;
     } = {},
   ) {
-    return importer(options.adoption).apply({
+    return importer(options.adoption, options.targeted).apply({
       scope: tenantA,
       actor: job(name),
       snapshot: snap,
@@ -609,6 +612,57 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     expect((run.sections as Record<string, any>)['applied'].services.approvals).toMatchObject({
       executed: 0,
     });
+    expectOnlyReads();
+  });
+
+  it("an explicit ADOPT on a panel that keeps changing while the Web Admin importer reads it: the approved name is decided on the operator's panel and adopted — the ADOPT is a needed name of that panel", async () => {
+    const snap = await snapshot();
+    await apply('import', snap);
+    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    expect(nullmatch.outcome).toBe('NO_PANEL');
+    await approve(nullmatch, panelBId);
+
+    // svc_nullmatch names no panel: only the operator's approval makes panel B ask for it.
+    // Panel B changes under the first walk (an account created before its second page), so
+    // B is not one snapshot and is decided per needed name.
+    let changed = false;
+    panelB.beforeListPage = (offset) => {
+      if (offset > 0 && !changed) {
+        changed = true;
+        panelB.seedUser('manual_mid_walk');
+      }
+    };
+    const run = await apply('import-2', snap, { targeted: true });
+    panelB.beforeListPage = null;
+    expect(changed).toBe(true);
+    const provider = (run.sections as Record<string, any>)['provider'];
+    const panelBRead = (provider.panels as Record<string, any>[]).find(
+      (p) => p['panelId'] === panelBId,
+    );
+    expect(panelBRead?.['resolution']).toMatchObject({
+      mode: 'TARGETED',
+      reason: 'TOTAL_CHANGED',
+      unresolved: 0,
+    });
+    const after = await candidate(nullmatch.invoiceKey);
+    expect(after).toMatchObject({
+      outcome: 'ADOPTED',
+      reviewState: 'ADOPTED',
+      lastApprovalRefusal: null,
+    });
+    const services = await db().execute<{ panel_id: string; provider_username: string }>(
+      sql`SELECT panel_id, provider_username FROM services WHERE id = ${after.serviceId}`,
+    );
+    expect(services.rows).toEqual([{ panel_id: panelBId, provider_username: 'svc_nullmatch' }]);
+    // The manual account is nobody's: never adopted. Both walks saw it and it is the
+    // lexically first such account, so it is the read's CANARY — asked once, first, only to
+    // prove the lookup route answers 200 for an account it holds; it decides nothing.
+    expect(await count('services', "provider_username = 'manual_mid_walk'")).toBe(0);
+    const lookups = panelB.requests
+      .filter((r) => r.method === 'GET' && /^\/api\/user\/[^/?]+$/u.test(r.path))
+      .map((r) => r.path.slice('/api/user/'.length));
+    expect(lookups.filter((n) => n === 'manual_mid_walk')).toHaveLength(1);
+    expect(lookups[0]).toBe('manual_mid_walk');
     expectOnlyReads();
   });
 
