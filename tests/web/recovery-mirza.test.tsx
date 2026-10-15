@@ -725,9 +725,7 @@ describe('the confirmation', () => {
     ).toBeInTheDocument();
     // Once in the dry-run review and once beside the confirmation.
     expect(screen.getAllByText(t('web.mrz_inventory_churn_title'))).toHaveLength(2);
-    expect(
-      screen.getAllByText(t('web.mrz_inventory_churn_body')),
-    ).toHaveLength(2);
+    expect(screen.getAllByText(t('web.mrz_inventory_churn_body'))).toHaveLength(2);
     expect(screen.queryByText(t('web.mrz_inventory_incomplete_title'))).toBeNull();
     expect(
       screen.queryByText(t('web.mrz_inventory_churn_unresolved'), { exact: false }),
