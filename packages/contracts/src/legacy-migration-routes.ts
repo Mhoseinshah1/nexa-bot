@@ -604,8 +604,9 @@ export type LegacyMigrationProgress = z.infer<typeof legacyMigrationProgressSche
  * Counts and codes only: never an invoice key, a username or a Telegram id.
  *
  * - `verdict`: the importer's — `COMPLETED`, `COMPLETED_WITH_FAILURES` (an approval left for a
- *   person, or one whose adoption the map does not confirm) or `NOTHING_TO_ADOPT` (no approval
- *   was waiting: no run was started and nothing was read or written);
+ *   person, one whose adoption the map does not confirm, or one still unresolved) or
+ *   `NOTHING_TO_ADOPT` (no approval was waiting and no lane run of this source was left
+ *   RUNNING: no run was started and nothing was read or written);
  * - `approvals`: the approvals the lane met (waiting or claimed); `adopted` became a service;
  *   `stillUnresolved` were settled back to OPEN because the targeted read still could not
  *   decide their name (`INVENTORY_INCOMPLETE`); `refused` every refusal by code (that one
