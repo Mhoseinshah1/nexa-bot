@@ -3445,6 +3445,17 @@ real staging copy (NOT RUN) — never by guessing.
   `usersWallets.users.legacyStatus` and `.blocked`. Still the owner's: whether a blocked
   user's legacy debt or credit should be treated differently later (today it is not), and
   whether the MirzaBot block reason text should ever be carried (today it is not read).
+- **OQ-LWD-08 — UNKNOWN: the converter's wallet-history verdict vocabulary.** The one
+  `wallet_history_checks.jsonl` verdict this repository has evidence for is `MATCHES_SNAPSHOT`
+  (the 1.4.0 fixture). The dry run counts every OTHER verdict as "does not confirm the snapshot
+  balance" (`WALLET_HISTORY_NOT_MATCHING_SNAPSHOT`, and one `WALLET_HISTORY_CHECK:<verdict>`
+  warning per code as the converter spelled it) — a warning, never a refusal, because the
+  snapshot `Balance` is the opening figure and the history is archive only. It blocks only on a
+  record whose OWN reading of the snapshot cell (`snapshot_balance.amount_minor`,
+  `features.snapshot_minor`) differs from the importer's (`DRY_RUN_MISMATCH`,
+  `wallet_history:snapshot_disagrees`). Settle from the converter's source: the full verdict
+  set, which ones mean "history incomplete" rather than "contradicts", and whether a
+  `snapshot_balance` without an `amount_minor` means "unreadable" or "not read".
 
 ## OQ-LSR — legacy service review (Mirza PR5): what the evidence does not settle
 

@@ -44,7 +44,20 @@ import type { NxpkgPackage } from '../../../../infrastructure/nxpkg/reader.js';
 import type { LegacyImporterService } from '../../legacy-importer/application/legacy-importer.service.js';
 import type { LegacyImportReport } from '../../legacy-importer/application/report.js';
 import type { LegacySnapshot } from '../../legacy-importer/application/source-snapshot.js';
-import { readImportV1Identity } from '../../legacy-importer/application/source-snapshot.js';
+import {
+  readImportV1Identity,
+  readLegacySnapshot,
+} from '../../legacy-importer/application/source-snapshot.js';
+import {
+  crossCheckConverterMoney,
+  perCustomerMismatches,
+  PER_CUSTOMER_MISMATCH_KEYS,
+  walletExpectation,
+  walletHistoryVerdicts,
+  type PerCustomerTally,
+  type WalletExpectation,
+  type WalletHistoryVerdicts,
+} from '../../legacy-importer/application/converter-wallet-crosscheck.js';
 import { PanelMappingRefused } from '../../legacy-importer/application/panel-mapping.js';
 import {
   LEGACY_LIVE_STATUSES,
@@ -363,6 +376,14 @@ export class NxpkgMigrationAdapters
       const tallies = (run.report.sections['plan'] ?? {}) as PlanShape;
       const converter = await converterTotals(opened.pkg);
       const absent = this.compareWithConverter(context, converter, tallies);
+      // The importer's own reading of the snapshot's money, by customer: the converter's
+      // records are compared with it one by one (money, so a difference blocks like the
+      // totals do), and the wallet-history verdicts are counted against it.
+      const expectation = await this.walletExpectationOf(context, opened);
+      if (converter !== null) {
+        await this.compareCustomersWithConverter(context, opened, expectation, tallies);
+      }
+      const walletHistory = await this.walletHistoryOf(context, opened, expectation);
       const cutover: LegacyMigrationCutoverValues = {
         sourceFingerprint: fingerprint,
         panelMapFingerprint: (await this.binding(context, opened.pkg)).mapping.fingerprint,
@@ -382,6 +403,7 @@ export class NxpkgMigrationAdapters
             holdChangedCategory:
               typeof holdSection?.changedCategory === 'number' ? holdSection.changedCategory : null,
             converterTotalsAbsent: absent,
+            walletHistory,
             inventoryVerdict: observed.inventoryVerdict,
             tables: observed.tables,
             coverage: opened.connector.coverage,
@@ -986,6 +1008,107 @@ export class NxpkgMigrationAdapters
     );
   }
 
+  /** The importer's per-customer money for THIS source (the fingerprint the dry run is bound to). */
+  private async walletExpectationOf(context: Context, opened: Opened): Promise<WalletExpectation> {
+    const snapshot = await readLegacySnapshot(opened.connector);
+    if (snapshot.fingerprint !== requireFingerprint(context)) {
+      throw new LegacyMigrationStepFailure(
+        'PACKAGE_CHANGED',
+        'The snapshot read for the per-customer comparison is not the verified source.',
+      );
+    }
+    return walletExpectation(snapshot.users);
+  }
+
+  /**
+   * M8, per customer: `wallet_opening_balances.jsonl` and `legacy_debts.jsonl` against the
+   * importer's expectation, by Telegram id. Equal totals can hide two customers' amounts
+   * swapped, a credit moved to somebody else, or a record for the wrong person — each one money
+   * credited to the wrong wallet. Any mismatch is `DRY_RUN_MISMATCH`, exactly as a total that
+   * differs is, with the counts (never an id or an amount). The expectation is also held to
+   * the plan's own totals: two answers to "what does this source credit" would be one too many.
+   */
+  private async compareCustomersWithConverter(
+    context: Context,
+    { pkg }: Opened,
+    expectation: WalletExpectation,
+    plan: PlanShape,
+  ): Promise<void> {
+    const planDiffers =
+      BigInt(expectation.totals.openings.count) !== BigInt(n(plan.wallet?.positive?.count)) ||
+      expectation.totals.openings.sumMinor !== bigintOf(plan.wallet?.positive?.sumMinor) ||
+      BigInt(expectation.totals.debts.count) !== BigInt(n(plan.wallet?.negative?.count)) ||
+      expectation.totals.debts.sumMinor !== -bigintOf(plan.wallet?.negative?.sumMinor);
+    const openings = await crossCheckConverterMoney(
+      expectation.openings,
+      pkg.iterJsonl(OPENINGS_PATH),
+      'legacy:opening:',
+    );
+    const debts = await crossCheckConverterMoney(
+      expectation.debts,
+      pkg.iterJsonl(DEBTS_PATH),
+      'legacy:debt:',
+    );
+    if (!planDiffers && perCustomerMismatches(openings) + perCustomerMismatches(debts) === 0) {
+      return;
+    }
+    const counts: LegacyMigrationCodeCount[] = [
+      ...perCustomerCounts('wallet_openings', openings),
+      ...perCustomerCounts('legacy_debts', debts),
+      ...(planDiffers ? [{ code: 'per_customer:plan_totals_differ', count: 1 }] : []),
+    ];
+    this.deps.logger.warn(
+      { importId: context.importId, counts },
+      "the converter's money records disagree with the importer customer by customer; the dry run is refused",
+    );
+    throw new LegacyMigrationStepFailure(
+      'DRY_RUN_MISMATCH',
+      "The converter's per-customer money records differ from the importer's plan.",
+      { counts },
+    );
+  }
+
+  /**
+   * The converter's wallet-history verdicts (`wallet_history_checks.jsonl`,
+   * `wallet_difference_analysis.jsonl`): archived as history and NEVER applied — the snapshot
+   * `Balance` is the opening figure. Their contradictions are REPORTED as dry-run warnings.
+   * Only a record whose own reading of the snapshot cell differs from the importer's blocks
+   * (`DRY_RUN_MISMATCH`): then the figure every opening is taken from is itself in dispute.
+   */
+  private async walletHistoryOf(
+    context: Context,
+    { pkg }: Opened,
+    expectation: WalletExpectation,
+  ): Promise<WalletHistoryVerdicts> {
+    const verdicts = await walletHistoryVerdicts(
+      expectation.snapshot,
+      pkg.has(WALLET_HISTORY_CHECKS_PATH) ? pkg.iterJsonl(WALLET_HISTORY_CHECKS_PATH) : null,
+      pkg.has(WALLET_DIFFERENCES_PATH) ? pkg.iterJsonl(WALLET_DIFFERENCES_PATH) : null,
+    );
+    if (verdicts.notMatching + verdicts.differences > 0) {
+      this.deps.logger.warn(
+        {
+          importId: context.importId,
+          notMatching: verdicts.notMatching,
+          differences: verdicts.differences,
+        },
+        'the wallet history contradicts some snapshot balances; the snapshot balance stays the opening figure',
+      );
+    }
+    if (verdicts.snapshotDisagrees > 0) {
+      throw new LegacyMigrationStepFailure(
+        'DRY_RUN_MISMATCH',
+        "The converter's reading of the snapshot balance differs from the importer's.",
+        {
+          counts: [
+            { code: 'wallet_history:snapshot_disagrees', count: verdicts.snapshotDisagrees },
+          ],
+        },
+      );
+    }
+    return verdicts;
+  }
+
   /** A refusal becomes a step verdict with its contract code; anything else passes through. */
   private classify(error: unknown, context: Context): unknown {
     if (error instanceof LegacyMigrationStepFailure) return error;
@@ -1454,6 +1577,8 @@ export function dryRunReportOf(
     /** The importer's count of held invoices it would otherwise have adopted, if reported. */
     readonly holdChangedCategory: number | null;
     readonly converterTotalsAbsent: boolean;
+    /** The converter's wallet-history verdicts, counted (absent: not read). */
+    readonly walletHistory?: WalletHistoryVerdicts | null;
     /** The package inventory: every legacy table, its class and rows (§5a). */
     readonly inventoryVerdict: string;
     readonly tables: readonly InventoryTableLine[];
@@ -1600,6 +1725,8 @@ export function dryRunReportOf(
       ? [{ code: 'OWNERSHIP_HOLD_CHANGED_NOT_REPORTED', count: hold?.hold.size ?? 0 }]
       : []),
     ...(extra.converterTotalsAbsent ? [{ code: 'CONVERTER_TOTALS_ABSENT', count: 1 }] : []),
+    // The wallet history's contradictions with the snapshot balance: reported, never applied.
+    ...walletHistoryWarnings(extra.walletHistory ?? null),
     // The production panels whose LIVE RickPanel inventory was not complete. Their invoices
     // are the services' INVENTORY_INCOMPLETE, and the import reads the panel again: if it
     // comes out different — complete, or another set of accounts — the plan is another plan
@@ -1649,6 +1776,42 @@ export function dryRunReportOf(
 const CUSTOMERS_PATH = 'records/customers.jsonl';
 const OPENINGS_PATH = 'records/wallet_opening_balances.jsonl';
 const DEBTS_PATH = 'records/legacy_debts.jsonl';
+const WALLET_HISTORY_CHECKS_PATH = 'records/wallet_history_checks.jsonl';
+const WALLET_DIFFERENCES_PATH = 'records/wallet_difference_analysis.jsonl';
+
+/** One money file's per-customer mismatches as the contract's counts (non-zero only). */
+function perCustomerCounts(file: string, tally: PerCustomerTally): LegacyMigrationCodeCount[] {
+  return PER_CUSTOMER_MISMATCH_KEYS.filter((k) => tally[k] > 0).map((k) => ({
+    code: `per_customer:${file}:${k}`,
+    count: tally[k],
+  }));
+}
+
+/**
+ * The wallet-history verdicts as dry-run warnings: how many checks do not confirm the snapshot
+ * balance (and by verdict), how many differences the converter analysed (and by cause), and
+ * the records that could not be set beside a source row. Counts and codes only.
+ */
+export function walletHistoryWarnings(
+  verdicts: WalletHistoryVerdicts | null,
+): LegacyMigrationCodeCount[] {
+  if (verdicts === null) return [];
+  const out: LegacyMigrationCodeCount[] = [];
+  const add = (code: string, count: number) => {
+    if (count > 0) out.push({ code, count });
+  };
+  add('WALLET_HISTORY_NOT_MATCHING_SNAPSHOT', verdicts.notMatching);
+  for (const [verdict, count] of Object.entries(verdicts.byVerdict)) {
+    if (verdict !== 'MATCHES_SNAPSHOT') add(`WALLET_HISTORY_CHECK:${verdict}`, count);
+  }
+  add('WALLET_DIFFERENCE_ANALYSED', verdicts.differences);
+  for (const [cause, count] of Object.entries(verdicts.byCause)) {
+    add(`WALLET_DIFFERENCE:${cause}`, count);
+  }
+  add('WALLET_HISTORY_OPENING_NOT_SNAPSHOT', verdicts.openingNotSnapshot);
+  add('WALLET_HISTORY_UNKNOWN_CUSTOMER', verdicts.unknownCustomer);
+  return out;
+}
 
 interface ConverterTotals {
   readonly customers: bigint;

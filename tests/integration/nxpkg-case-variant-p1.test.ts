@@ -207,6 +207,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
         openings.push({
           record_type: 'wallet_opening_balance',
           idempotency_key: `legacy:opening:${tg}`,
+          telegram_user_id: tg,
           amount_minor: d.balanceMinor.toString(),
           currency: 'IRT',
         });
@@ -214,6 +215,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
         debts.push({
           record_type: 'legacy_debt',
           idempotency_key: `legacy:debt:${tg}`,
+          telegram_user_id: tg,
           amount_minor: (-d.balanceMinor).toString(),
           currency: 'IRT',
         });

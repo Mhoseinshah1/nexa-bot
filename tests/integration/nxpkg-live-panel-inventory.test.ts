@@ -202,6 +202,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
         openings.push({
           record_type: 'wallet_opening_balance',
           idempotency_key: `legacy:opening:${tg}`,
+          telegram_user_id: tg,
           amount_minor: d.balanceMinor.toString(),
           currency: 'IRT',
         });
@@ -209,6 +210,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
         debts.push({
           record_type: 'legacy_debt',
           idempotency_key: `legacy:debt:${tg}`,
+          telegram_user_id: tg,
           amount_minor: (-d.balanceMinor).toString(),
           currency: 'IRT',
         });

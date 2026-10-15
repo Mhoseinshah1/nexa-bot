@@ -62,6 +62,7 @@ function converterFiles(users: readonly Record<string, unknown>[]): Record<strin
       openings.push({
         record_type: 'wallet_opening_balance',
         idempotency_key: `legacy:opening:${tg}`,
+        telegram_user_id: tg,
         amount_minor: d.balanceMinor.toString(),
         currency: 'IRT',
       });
@@ -69,6 +70,7 @@ function converterFiles(users: readonly Record<string, unknown>[]): Record<strin
       debts.push({
         record_type: 'legacy_debt',
         idempotency_key: `legacy:debt:${tg}`,
+        telegram_user_id: tg,
         amount_minor: (-d.balanceMinor).toString(),
         currency: 'IRT',
       });
