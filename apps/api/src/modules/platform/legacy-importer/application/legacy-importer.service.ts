@@ -336,6 +336,17 @@ export interface ApplyTallies {
     debtRecordedSumMinor: bigint;
     /** A ledger DEBIT opening from before owner decision 6: left as it is, never doubled. */
     PRIOR_DEBIT_OPENING: number;
+    /**
+     * Importable users whose customer the customers phase did NOT write this run (its map row
+     * refused it: a closed review, a changed source, another entity). No opening and no debt
+     * is written for them — counted here with their money by sign, never skipped silently.
+     * Each one is already a customers-phase count (`reviewClosed`, `sourceChanged`,
+     * `entityMismatch`), so it is reported, not added to the attention total twice.
+     */
+    CUSTOMER_NOT_IMPORTED: number;
+    customerNotImportedPositiveSumMinor: bigint;
+    /** Magnitude. */
+    customerNotImportedNegativeSumMinor: bigint;
   };
   trials: {
     APPLIED: number;
@@ -1087,6 +1098,9 @@ export class LegacyImporterService {
         DEBT_ALREADY_RECORDED: 0,
         debtRecordedSumMinor: 0n,
         PRIOR_DEBIT_OPENING: 0,
+        CUSTOMER_NOT_IMPORTED: 0,
+        customerNotImportedPositiveSumMinor: 0n,
+        customerNotImportedNegativeSumMinor: 0n,
       },
       trials: { APPLIED: 0, REPLAYED: 0, CONFLICT: 0, decisions: {} },
       products: { created: 0, existing: 0, unmappable: 0, tariff: {} },
@@ -1530,7 +1544,15 @@ export class LegacyImporterService {
     for (const planned of prepared.plan.users) {
       if (planned.decision.kind !== 'IMPORT') continue;
       const who = imported.get(planned.row.id);
-      if (who === undefined) continue;
+      if (who === undefined) {
+        // The customers phase refused this user's map row: nothing is written for their
+        // money, and that is COUNTED, with the amount by sign — never a silent skip.
+        const balance = planned.decision.balanceMinor;
+        tallies.openings.CUSTOMER_NOT_IMPORTED += 1;
+        if (balance > 0n) tallies.openings.customerNotImportedPositiveSumMinor += balance;
+        else if (balance < 0n) tallies.openings.customerNotImportedNegativeSumMinor += -balance;
+        continue;
+      }
       try {
         const outcome = await this.deps.openings.post(scope, actor, {
           customerId: who.customerId,

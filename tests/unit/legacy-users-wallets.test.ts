@@ -289,8 +289,14 @@ describe('the users-and-wallets section', () => {
       debtTotals: { count: 0, sumMinor: 0n, byState: {}, synthetic: 0 },
     });
     const failed = section.checks.filter((c) => !c.holds).map((c) => c.id);
-    expect(failed).toEqual(['U2', 'U3', 'U4', 'U5', 'U6', 'U7']);
+    // U9/U10: neither balance is in a bucket that accounts for it (a DEBIT opening, nothing).
+    expect(failed).toEqual(['U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U9', 'U10']);
     expect(section.wallet.perUser).toMatchObject({ priorDebitOpening: 1, missingDebt: 1 });
+    expect(section.wallet.sourceMoney.unaccounted).toEqual({
+      rows: 2,
+      positive: { rows: 0, sumMinor: '0' },
+      negative: { rows: 2, sumMinor: '320' },
+    });
   });
 
   it('U8: a real snapshot never reconciles while a debt from a synthetic source is recorded', () => {

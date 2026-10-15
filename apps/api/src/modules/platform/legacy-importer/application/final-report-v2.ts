@@ -489,12 +489,17 @@ export function buildFinalReportV2(input: FinalReportV2Input) {
     {
       id: 'WALLETS_RECONCILED',
       statement:
-        'wallet sums reconciled (v1 W1, W4, W5; PR4 U2–U8); debts and conflicts reported, never netted',
+        'wallet sums reconciled (v1 W1, W4, W5; PR4 U2–U10); debts and conflicts reported, never netted',
       holds:
-        v1('W1') && v1('W4') && v1('W5') && ['U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8'].every(u),
+        v1('W1') &&
+        v1('W4') &&
+        v1('W5') &&
+        ['U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9', 'U10'].every(u),
       evidence:
         `debts=${String(debts.recorded)} debtsSumMinor=${debts.recordedSumMinor} ` +
-        `conflicts=${String(usersWallets.wallet.perUser.conflicting)} sourceChanged=${String(usersWallets.sourceChanged.users)}`,
+        `conflicts=${String(usersWallets.wallet.perUser.conflicting)} sourceChanged=${String(usersWallets.sourceChanged.users)} ` +
+        `heldRows=${String(usersWallets.wallet.sourceMoney.held.rows)} unreadableRows=${String(usersWallets.wallet.sourceMoney.unreadable.rows)} ` +
+        `unaccountedRows=${String(usersWallets.wallet.sourceMoney.unaccounted.rows)}`,
     },
     {
       id: 'SERVICES_ONE_OUTCOME',

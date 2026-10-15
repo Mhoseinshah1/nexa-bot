@@ -1279,6 +1279,13 @@ describe('Migration P7: the legacy importer', () => {
     });
     const applied = (report.sections as Record<string, any>)['applied'];
     expect(applied.customers.sourceChanged).toBe(1);
+    // The openings phase skips that user EXPLICITLY: counted, with the snapshot's figure by
+    // sign, never a silent `continue`.
+    expect(applied.openings).toMatchObject({
+      CUSTOMER_NOT_IMPORTED: 1,
+      customerNotImportedPositiveSumMinor: 99n,
+      customerNotImportedNegativeSumMinor: 0n,
+    });
     // Nothing further is written for that user: the opening stays as first posted.
     const opening = await ctx.container.database.db.execute<{ amount: string }>(sql`
       SELECT amount::text FROM wallet_entries WHERE reference = 'legacy:opening:100000001'`);

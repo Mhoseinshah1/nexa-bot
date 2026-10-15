@@ -45,11 +45,12 @@ function holdingInput(): Mutable<FinalReportV2Input> {
       })),
     } as never,
     usersWallets: {
-      checks: ['U1', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8'].map(check),
+      checks: ['U1', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9', 'U10'].map(check),
       holds: true,
       wallet: {
         legacyDebts: { users: 1, recorded: 1, recordedSumMinor: '20000' },
         perUser: { conflicting: 0 },
+        sourceMoney: { held: { rows: 0 }, unreadable: { rows: 0 }, unaccounted: { rows: 0 } },
       },
       sourceChanged: { users: 0 },
     } as never,
@@ -211,6 +212,20 @@ describe('final report v2: the verdict is the AND of every section and every inv
       'a debt check U4',
       (i) => {
         (i.usersWallets as any).checks[3].holds = false;
+      },
+    ],
+    [
+      'WALLETS_RECONCILED',
+      'a source balance in no money bucket, or unaccounted (U9)',
+      (i) => {
+        (i.usersWallets as any).checks[8].holds = false;
+      },
+    ],
+    [
+      'WALLETS_RECONCILED',
+      'source money not accounted exactly by sign (U10)',
+      (i) => {
+        (i.usersWallets as any).checks[9].holds = false;
       },
     ],
     [
