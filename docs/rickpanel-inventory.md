@@ -254,7 +254,7 @@ the last walk NOT decisive, no name is present on one spelling, nor absent: a ca
    walks: a collision (`USERNAME_CASE_COLLISION`), never eligible.
 2. **One spelling in the decision walk, the same row in a later walk** — present, with that
    spelling (the backup's, or the one account there is, exactly as a complete read decides it),
-   unless any walk from the decision walk on returned that spelling with ANOTHER creation time:
+   unless ANY walk of the read — before the decision walk too — returned that spelling with ANOTHER creation time:
    the name was deleted and created again, and the account it now holds is another account,
    possibly another customer's (the second review's R1, R2) — unresolved. A walk records every
    creation time it saw per spelling, not only the first.

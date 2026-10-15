@@ -120,13 +120,15 @@ export function decideNeededNames(
       continue;
     }
     // Exactly one spelling, the only one any walk saw (else a collision above). Present when a
-    // later walk returned THIS row (one creation time, seen again) and no walk returned that
-    // spelling with any other: a re-created account is another account, possibly another
+    // later walk returned THIS row (one creation time, seen again) and no walk — before or after
+    // the decision walk — returned that spelling with any other: a re-created account is another account, possibly another
     // customer's, and which one the backup's service belongs to is not a guess to make.
     const spelling = [...now][0] as string;
     const stamps = at.createdAt.get(spelling);
     const created = stamps !== undefined && stamps.size === 1 ? ([...stamps][0] as string) : null;
-    const otherwise = later.some((w) =>
+    // ANY walk, before the decision walk too: an account re-created between two earlier walks is
+    // as much another account as one re-created after (Codex).
+    const otherwise = walks.some((w) =>
       [...(w.createdAt.get(spelling) ?? [])].some((c) => c !== created),
     );
     if (

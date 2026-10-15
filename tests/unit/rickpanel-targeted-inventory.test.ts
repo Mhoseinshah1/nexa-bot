@@ -364,8 +364,10 @@ describe('Codex P1: a needed row read, then deleted, during the decision walk', 
     };
     const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(300)]) }));
     expect(read.resolution).toBeDefined();
-    // Decided on the second walk, confirmed by a third: the account that exists now.
-    expect(read.resolution).toMatchObject({ walks: 3, present: 1 });
+    // The second walk would decide, confirmed by a third — but the first saw that name as
+    // ANOTHER account (another creation time): which one the backup meant is not a guess.
+    expect(read.resolution).toMatchObject({ walks: 3, present: 0, unresolved: 1 });
+    expect(indexCovers(read.index, name(300))).toBe(false);
   });
 
   it('another row deleted behind the cursor in every walk: the needed row is confirmed by the next walk returning it — PRESENT', async () => {
@@ -797,6 +799,13 @@ describe('decideNeededNames', () => {
     expect(out.get('f')).toEqual({ kind: 'UNRESOLVED' });
     // Returned again — and also re-created: the name now holds another account. Undecided.
     expect(out.get('g')).toEqual({ kind: 'UNRESOLVED' });
+    // Re-created BEFORE the decision walk (an earlier walk saw another creation time): undecided.
+    const before = decideNeededNames(
+      need(['h']),
+      [walk(['h'], { h: ['t0'] }), walk(['h'], { h: ['t1'] }), walk(['h'], { h: ['t1'] })],
+      1,
+    );
+    expect(before.get('h')).toEqual({ kind: 'UNRESOLVED' });
   });
   it('not returned again, and no later gap-free walk: UNRESOLVED; absent in the decision walk but returned later: UNRESOLVED', () => {
     const out = decideNeededNames(need(['a', 'c']), [walk(['a']), walk(['c'], {}, false)], 0);
