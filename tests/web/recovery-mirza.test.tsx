@@ -712,7 +712,6 @@ describe('the confirmation', () => {
       ...dryRunReport.warnings,
       { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN, count: 1 },
       { code: 'PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED', count: 1 },
-      { code: 'PROVIDER_INVENTORY_LOOKUPS', count: 37 },
       ...extra,
     ],
   });
@@ -727,7 +726,7 @@ describe('the confirmation', () => {
     // Once in the dry-run review and once beside the confirmation.
     expect(screen.getAllByText(t('web.mrz_inventory_churn_title'))).toHaveLength(2);
     expect(
-      screen.getAllByText(t('web.mrz_inventory_churn_body').replace('{lookups}', formatNumber(37))),
+      screen.getAllByText(t('web.mrz_inventory_churn_body')),
     ).toHaveLength(2);
     expect(screen.queryByText(t('web.mrz_inventory_incomplete_title'))).toBeNull();
     expect(

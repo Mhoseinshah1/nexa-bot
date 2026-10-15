@@ -1047,12 +1047,7 @@ function InventoryChurnNotice({
   const unresolved = sum(LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED);
   return (
     <Banner tone="info" title={t('web.mrz_inventory_churn_title')}>
-      <p>
-        {t('web.mrz_inventory_churn_body').replace(
-          '{lookups}',
-          formatNumber(sum('PROVIDER_INVENTORY_LOOKUPS')),
-        )}
-      </p>
+      <p>{t('web.mrz_inventory_churn_body')}</p>
       {unresolved > 0 && (
         <p>
           {t('web.mrz_inventory_churn_unresolved').replace('{count}', formatNumber(unresolved))}

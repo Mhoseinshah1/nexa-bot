@@ -3,27 +3,27 @@
  * resolution).
  *
  * The owner keeps Mirza selling while a dry run reads the live RickPanel, so a walk of a busy
- * panel is rarely one complete snapshot: accounts are created and deleted while the cursor
- * moves (`TOTAL_CHANGED`), and offset pagination can then skip rows. A row a walk received is
- * real; a row it did NOT receive proves nothing — unless the walk is GAP-FREE
- * (`RickpanelWalkCoverage`: overlapping pages, every boundary chained, ended at its own
- * total), in which case it returned every account that existed throughout it.
+ * panel is rarely one complete snapshot (`TOTAL_CHANGED`). A row a walk received is real; a row
+ * it did NOT receive proves nothing — unless the walk is GAP-FREE (`RickpanelWalkCoverage`:
+ * overlapping pages, every boundary chained, no insertion ahead of the cursor missed, ended at
+ * its own total). A gap-free walk returned every account there was as of its end: it is a
+ * snapshot of the panel, taken while the panel kept selling.
  *
- * Every needed name is decided on its own evidence, and only what that evidence proves:
+ * So every needed name is decided from the walks alone, and only on a gap-free LAST walk:
  *
- * - **Collision** — two or more exact spellings that fold to the name were seen in ANY walk
- *   (or a lookup answers with one a walk did not see): `USERNAME_CASE_COLLISION`, manual review.
- * - **Present** — the backup's exact spelling was seen by EVERY walk, and at least one walk was
- *   gap-free and saw no other spelling: no case variant existed throughout that walk.
- * - **Lookup** — the panel is asked for the backup's exact spelling. Found → present, again
- *   only with a gap-free walk that saw no variant; 404 → absent, again only with a gap-free
- *   walk that saw no spelling of it (a 404 for one spelling says nothing about another).
- * - **Unresolved** — anything else: no gap-free walk, a failed or unanswered lookup, a name the
- *   backup spells two ways. It stays `INVENTORY_INCOMPLETE`, which a production-like approval
- *   refuses — never a guessed owner, never a guessed absence.
+ * - **Collision** — two or more exact spellings that fold to the name seen in ANY walk:
+ *   `USERNAME_CASE_COLLISION`, manual review.
+ * - **Present** — the last walk is gap-free and returned exactly one spelling of it.
+ * - **Absent** — the last walk is gap-free and returned none (`PROVIDER_MISSING`, manual
+ *   review — never a created account).
+ * - **Unresolved** — anything else: the last walk not gap-free, or a name the backup spells two
+ *   ways. It stays `INVENTORY_INCOMPLETE`, which a production-like approval refuses — never a
+ *   guessed owner, never a guessed absence.
  *
- * Names the backup does not need — a manual account, a sale Mirza made after the backup — are
- * never decided, counted or looked up: they cannot become anyone's service.
+ * No exact lookup is sent: a lookup happens after a walk, which is exactly when a case variant
+ * can appear unseen, and a 404 for one spelling says nothing about another. Names the backup
+ * does not need — a manual account, a sale Mirza made after the backup — are never decided,
+ * counted or indexed: they cannot become anyone's service.
  */
 
 export interface ObservedAccount {
@@ -33,36 +33,9 @@ export interface ObservedAccount {
   readonly providerUsername: string;
 }
 
-/** What the walks alone say about one needed name. */
-export type WalkEvidence =
-  | { readonly kind: 'PRESENT'; readonly spelling: string }
-  | { readonly kind: 'COLLISION'; readonly spellings: readonly string[] }
-  /** Nothing the walks or a lookup could show decides it. */
-  | { readonly kind: 'UNDECIDABLE' }
-  /**
-   * Ask the panel for `ask`, the backup's exact spelling (`backupSpelling`; false only in a
-   * hand-built evidence). `seen` is the one spelling any walk saw, if any; `seenByAll` whether
-   * every walk saw it; `gapFree` whether a gap-free walk is there to exclude a variant.
-   */
-  | {
-      readonly kind: 'LOOKUP';
-      readonly ask: string;
-      readonly seen: string | null;
-      readonly backupSpelling: boolean;
-      readonly seenByAll?: boolean;
-      readonly gapFree?: boolean;
-    };
-
-/** What the panel answered an exact lookup. */
-export type LookupAnswer =
-  | { readonly kind: 'FOUND'; readonly spelling: string }
-  | { readonly kind: 'NOT_FOUND' }
-  /** A failure, a malformed answer, or no lookup left in the read's bound. */
-  | { readonly kind: 'UNANSWERED' };
-
-/** The final evidence for one needed name. */
+/** The decision for one needed name. */
 export type NameResolution =
-  | { readonly kind: 'PRESENT'; readonly spelling: string; readonly by: 'WALKS' | 'LOOKUP' }
+  | { readonly kind: 'PRESENT'; readonly spelling: string }
   | { readonly kind: 'COLLISION'; readonly spellings: readonly string[] }
   | { readonly kind: 'ABSENT' }
   | { readonly kind: 'UNRESOLVED' };
@@ -70,117 +43,79 @@ export type NameResolution =
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
- * The walks' evidence for every needed name. `walks` are the accounts each walk received (a
- * complete walk's accounts, or an inconsistent walk's `observed`), at least two. `gapFree`:
- * at least one of them was a gap-free walk, and the walks agree on one stable order.
+ * Every needed name, decided. `walks` are the accounts each walk received, in walk order (a
+ * consistent walk's `accounts` or an inconsistent one's `observed`), at least two; the LAST is
+ * the one decisions rest on. `gapFree`: that last walk was gap-free and agreed with the one
+ * before it on one relative order.
  */
-export function classifyNeededNames(
+export function decideNeededNames(
   needed: ReadonlyMap<string, string | null>,
   walks: readonly (readonly ObservedAccount[])[],
-  gapFree = false,
-): Map<string, WalkEvidence> {
+  gapFree: boolean,
+): Map<string, NameResolution> {
   if (walks.length < 2) throw new Error('a per-name resolution needs at least two walks');
-  // name → spelling → how many walks saw it. Only needed names are held.
-  const seen = new Map<string, Map<string, number>>();
-  for (const accounts of walks) {
-    const thisWalk = new Set<string>();
+  const spellingsOf = (accounts: readonly ObservedAccount[]) => {
+    const out = new Map<string, Set<string>>();
     for (const account of accounts) {
-      if (!needed.has(account.username) || thisWalk.has(account.providerUsername)) continue;
-      thisWalk.add(account.providerUsername);
-      const spellings = seen.get(account.username) ?? new Map<string, number>();
-      spellings.set(account.providerUsername, (spellings.get(account.providerUsername) ?? 0) + 1);
-      seen.set(account.username, spellings);
+      if (!needed.has(account.username)) continue;
+      const set = out.get(account.username) ?? new Set<string>();
+      set.add(account.providerUsername);
+      out.set(account.username, set);
+    }
+    return out;
+  };
+  // Every spelling any walk saw: a spelling seen once was on the panel at some moment.
+  const union = new Map<string, Set<string>>();
+  for (const accounts of walks) {
+    for (const [name, set] of spellingsOf(accounts)) {
+      const all = union.get(name) ?? new Set<string>();
+      for (const spelling of set) all.add(spelling);
+      union.set(name, all);
     }
   }
-  const out = new Map<string, WalkEvidence>();
+  const last = spellingsOf(walks[walks.length - 1] as readonly ObservedAccount[]);
+  const out = new Map<string, NameResolution>();
   for (const [name, backup] of needed) {
-    const spellings = seen.get(name);
-    if (spellings !== undefined && spellings.size >= 2) {
-      out.set(name, { kind: 'COLLISION', spellings: [...spellings.keys()].sort(byCodeUnit) });
+    const seen = union.get(name);
+    if (seen !== undefined && seen.size >= 2) {
+      out.set(name, { kind: 'COLLISION', spellings: [...seen].sort(byCodeUnit) });
       continue;
     }
-    if (backup === null) {
-      // Two backup spellings of one name: which account each invoice meant is a guess.
-      out.set(name, { kind: 'UNDECIDABLE' });
+    // Two backup spellings of one name: which account each invoice meant is a guess.
+    if (backup === null || !gapFree) {
+      out.set(name, { kind: 'UNRESOLVED' });
       continue;
     }
-    if (spellings === undefined || spellings.size === 0) {
-      out.set(name, { kind: 'LOOKUP', ask: backup, seen: null, backupSpelling: true, gapFree });
+    const now = last.get(name);
+    if (now === undefined || now.size === 0) {
+      out.set(name, { kind: 'ABSENT' });
       continue;
     }
-    const [spelling, walksSeen] = [...spellings.entries()][0] as [string, number];
-    const seenByAll = walksSeen === walks.length;
-    if (seenByAll && spelling === backup && gapFree) {
-      // Every walk saw exactly the account the backup names, and a gap-free walk saw no other
-      // spelling of it: no case variant existed throughout that walk.
-      out.set(name, { kind: 'PRESENT', spelling });
-      continue;
-    }
-    out.set(name, {
-      kind: 'LOOKUP',
-      ask: backup,
-      seen: spelling,
-      backupSpelling: true,
-      seenByAll,
-      gapFree,
-    });
+    // Exactly one spelling, the only one any walk saw (else a collision above): the account,
+    // exactly as a complete read decides it.
+    out.set(name, { kind: 'PRESENT', spelling: [...now][0] as string });
   }
   return out;
 }
 
-/** The final evidence for a name the walks sent to a lookup. */
-export function resolveLookup(
-  evidence: Extract<WalkEvidence, { kind: 'LOOKUP' }>,
-  answer: LookupAnswer,
-): NameResolution {
-  if (answer.kind === 'UNANSWERED') return { kind: 'UNRESOLVED' };
-  // Without the backup's own spelling, an answer for a guessed one decides nothing.
-  if (!evidence.backupSpelling) return { kind: 'UNRESOLVED' };
-  if (answer.kind === 'FOUND') {
-    if (evidence.seen !== null && answer.spelling !== evidence.seen) {
-      // A walk saw one spelling and the panel answers with another that folds to the same
-      // name: two accounts, or a rename mid-read — either way not one account to adopt.
-      return { kind: 'COLLISION', spellings: [evidence.seen, answer.spelling].sort(byCodeUnit) };
-    }
-    // The account exists. It is THE account only if no variant can hide beside it.
-    return evidence.gapFree === true
-      ? { kind: 'PRESENT', spelling: answer.spelling, by: 'LOOKUP' }
-      : { kind: 'UNRESOLVED' };
-  }
-  // A 404 proves only the spelling asked absent (RickPanel addresses a user by exact name);
-  // without a gap-free walk another spelling may hide beside it, so it proves nothing.
-  if (evidence.gapFree !== true) return { kind: 'UNRESOLVED' };
-  // No walk saw any spelling, or a walk saw the backup's own and it is gone now.
-  if (evidence.seen === null || evidence.seen === evidence.ask) return { kind: 'ABSENT' };
-  // The backup's spelling is absent, and every walk saw one other spelling: the one account
-  // there is, exactly as a complete read decides it. Seen by some walks only: undecided.
-  return evidence.seenByAll === true
-    ? { kind: 'PRESENT', spelling: evidence.seen, by: 'WALKS' }
-    : { kind: 'UNRESOLVED' };
-}
-
 /** The resolution's counts, as the read reports them. */
 export function resolutionCounts(resolved: ReadonlyMap<string, NameResolution>): {
-  readonly presentByWalks: number;
-  readonly presentByLookup: number;
-  readonly absentByLookup: number;
+  readonly present: number;
+  readonly absent: number;
   readonly collisions: number;
   readonly unresolved: number;
 } {
-  let presentByWalks = 0;
-  let presentByLookup = 0;
-  let absentByLookup = 0;
+  let present = 0;
+  let absent = 0;
   let collisions = 0;
   let unresolved = 0;
   for (const r of resolved.values()) {
-    if (r.kind === 'PRESENT') {
-      if (r.by === 'WALKS') presentByWalks += 1;
-      else presentByLookup += 1;
-    } else if (r.kind === 'ABSENT') absentByLookup += 1;
+    if (r.kind === 'PRESENT') present += 1;
+    else if (r.kind === 'ABSENT') absent += 1;
     else if (r.kind === 'COLLISION') collisions += 1;
     else unresolved += 1;
   }
-  return { presentByWalks, presentByLookup, absentByLookup, collisions, unresolved };
+  return { present, absent, collisions, unresolved };
 }
 
 /** The invoice fields that decide whether, and where, the matcher will ask for a name. */

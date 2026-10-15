@@ -804,8 +804,6 @@ export interface LegacyInventoryOptions {
    * selling): the Web Admin's `.nxpkg` importer only. Absent: the read is exactly as before.
    */
   readonly inventoryTargeted?: boolean;
-  /** Overrides `RICKPANEL_INVENTORY_MAX_LOOKUPS` for this importer (tests). */
-  readonly inventoryMaxLookups?: number;
 }
 
 export interface Container {
@@ -7028,12 +7026,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         requestIntervalMs:
           options.inventoryRequestIntervalMs ?? config.RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS,
         gate: panelReadGate,
-        ...(options.inventoryTargeted === true
-          ? {
-              targeted: true,
-              maxLookups: options.inventoryMaxLookups ?? config.RICKPANEL_INVENTORY_MAX_LOOKUPS,
-            }
-          : {}),
+        ...(options.inventoryTargeted === true ? { targeted: true } : {}),
       },
       () => clock.now(),
     );

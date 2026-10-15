@@ -846,15 +846,6 @@ export const configSchema = z
      * advances by the rows it received.
      */
     RICKPANEL_INVENTORY_PAGE_SIZE: z.coerce.number().int().min(1).max(200).default(100),
-    /**
-     * Exact lookups (`GET api/user/{name}`) ONE per-name resolution of a live RickPanel may
-     * send — for the backup usernames two walks of a panel that kept changing could not
-     * decide (seen by one walk only, or by none). Paced like every request
-     * (RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS): 5000 at one a second is about 83 minutes. A
-     * name past the bound stays unresolved, and a production-like approval refuses the dry
-     * run until it is decided. Web Admin importer only.
-     */
-    RICKPANEL_INVENTORY_MAX_LOOKUPS: z.coerce.number().int().min(0).max(200_000).default(5_000),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()

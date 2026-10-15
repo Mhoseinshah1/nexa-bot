@@ -13,6 +13,7 @@ import {
   readOnlyRickpanelHttp,
   type RickpanelInventoryAccount,
   type RickpanelInventoryOutcome,
+  type RickpanelInventoryWalk,
   type RickpanelReadOnlyHttp,
 } from '../../providers/infrastructure/rickpanel-inventory.js';
 import { TOKEN_PATH } from '../../providers/infrastructure/rickpanel-protocol.js';
@@ -25,14 +26,7 @@ import type {
   LegacyInventoryReadOptions,
   LegacyInventoryResolution,
 } from '../application/ports.js';
-import {
-  classifyNeededNames,
-  resolutionCounts,
-  resolveLookup,
-  type LookupAnswer,
-  type NameResolution,
-  type WalkEvidence,
-} from '../application/inventory-resolution.js';
+import { decideNeededNames, resolutionCounts } from '../application/inventory-resolution.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
 import { PROCESS_PANEL_READ_GATE, panelReadKey, type PanelReadGate } from './panel-read-gate.js';
 import {
@@ -121,15 +115,11 @@ export function sameRelativeOrder(
   return commonA.length === commonB.length && commonA.every((n, i) => n === commonB[i]);
 }
 
-/** `.` and `..` are path segments, not names: never put in a lookup's path. */
-const lookupSafe = (name: string) => name !== '.' && name !== '..';
-
 /**
- * Exact lookups one per-name resolution may send (the canary included). At one request a second, 5 000 is about 83
- * minutes — the read's whole budget for the names two walks could not decide. Configurable
- * (`RICKPANEL_INVENTORY_MAX_LOOKUPS`); a name past it stays unresolved.
+ * Walks one per-name resolution may make: two, and up to one more when the last was not
+ * gap-free (a burst of deletions, an insertion ahead of the cursor). Each is a full paced walk.
  */
-export const INVENTORY_MAX_LOOKUPS = 5_000;
+export const TARGETED_MAX_WALKS = 3;
 
 /** Double walks per panel read the Web Admin's `.nxpkg` importer asks for. */
 export const INVENTORY_READ_ATTEMPTS = 3;
@@ -240,8 +230,6 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
        * the rehearsal walk): the read is exactly as before.
        */
       readonly targeted?: boolean;
-      /** Exact lookups one per-name resolution may send (`INVENTORY_MAX_LOOKUPS`). */
-      readonly maxLookups?: number;
     } = {},
     private readonly now: () => Date = () => {
       throw new Error('RickpanelInventorySource needs the Clock to stamp a read');
@@ -350,12 +338,12 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
   }
 
   /**
-   * The per-name resolution (`inventory-resolution.ts`). Two walks, always — a first walk the
-   * panel moved under does not end the read, because what it DID see is evidence. If the two
-   * are one complete snapshot, the read is exactly the complete read it always was. Otherwise
-   * each needed name is decided from the walks, and what they cannot decide is asked of the
-   * panel by an exact lookup, in name order, within `maxLookups`, stopping at the first
-   * lookup that does not answer (a struggling panel is not asked a thousand more times).
+   * The per-name resolution (`inventory-resolution.ts`). Two walks at least, with overlapping
+   * pages — a first walk the panel moved under does not end the read. If the two are one
+   * complete snapshot, the read is exactly the complete read it always was. Otherwise each
+   * needed name is decided from the walks, and only on a gap-free LAST walk; when the last is
+   * not gap-free (a burst of deletions, an insertion ahead of the cursor), the panel is walked
+   * again, at most `TARGETED_MAX_WALKS` walks in all. No exact lookup is sent.
    */
   private async readTargeted(
     panelId: string,
@@ -365,17 +353,6 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     load: () => LegacyInventoryLoad,
   ): Promise<LegacyInventoryRead> {
     const signal = this.options.signal;
-    const resolutionOf = (
-      reason: string,
-      counts: ReturnType<typeof resolutionCounts>,
-      lookups: number,
-    ): LegacyInventoryResolution => ({
-      mode: 'TARGETED',
-      reason,
-      needed: needed.size,
-      ...counts,
-      lookups,
-    });
     const walkOptions = {
       ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
       subscriptionLinks: true,
@@ -387,13 +364,6 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     signal?.throwIfAborted();
     const second = await this.reader.walk(target, http, walkOptions);
     if (!second.ok) return this.finish(panelId, second, 1, load());
-    // Every runtime fact is stamped no later than the walk it may come from: a lookup's record
-    // is newer, never older, so `usage_synced_at` never claims a freshness it lacks.
-    const observedAt = this.now();
-    const evidence = { first: first.evidence, second: second.evidence };
-    const firstSeen = first.consistent ? first.accounts : first.observed;
-    const secondSeen = second.consistent ? second.accounts : second.observed;
-    const secondLinks = second.subscriptionLinks;
 
     // One complete snapshot after all: the complete read it always was (the listAll rule).
     if (first.consistent && second.consistent) {
@@ -406,21 +376,38 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
             ok: true,
             complete: true,
             accounts: second.accounts,
-            evidence,
-            ...(secondLinks === undefined ? {} : { subscriptionLinks: secondLinks }),
+            evidence: { first: first.evidence, second: second.evidence },
+            ...(second.subscriptionLinks === undefined
+              ? {}
+              : { subscriptionLinks: second.subscriptionLinks }),
           },
           1,
           load(),
         );
       }
     }
+
+    const walks: Extract<RickpanelInventoryWalk, { ok: true }>[] = [first, second];
+    // FEWER distinct names than a total that held still: the list withholds rows. (More names
+    // than the total is churn — a row read, then deleted, while a sale was appended — which
+    // the gap-free proof already accounts for.)
+    const countMismatch = (w: Extract<RickpanelInventoryWalk, { ok: true }>) =>
+      !w.consistent &&
+      w.reason === 'COUNT_MISMATCH' &&
+      w.evidence.reportedTotal !== null &&
+      w.evidence.distinctUsernames < w.evidence.reportedTotal;
+    const lastGapFree = () => (walks[walks.length - 1]?.coverage?.gapFree ?? false) === true;
+    while (!lastGapFree() && walks.length < TARGETED_MAX_WALKS && !walks.some(countMismatch)) {
+      signal?.throwIfAborted();
+      const next = await this.reader.walk(target, http, walkOptions);
+      if (!next.ok) return this.finish(panelId, next, 1, load());
+      walks.push(next);
+    }
+    const evidence = { first: first.evidence, second: second.evidence };
     // A walk whose total held still yet whose rows do not add up to it is not churn: the list
     // systematically withholds rows, and a withheld row may be the case variant that makes a
-    // name a collision. That panel stays incomplete, exactly as before (audit finding 1).
-    if (
-      (!first.consistent && first.reason === 'COUNT_MISMATCH') ||
-      (!second.consistent && second.reason === 'COUNT_MISMATCH')
-    ) {
+    // name a collision. That panel stays incomplete, exactly as before.
+    if (walks.some(countMismatch)) {
       return this.finish(
         panelId,
         { ok: true, complete: false, reason: 'COUNT_MISMATCH', evidence },
@@ -433,140 +420,67 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       : !second.consistent
         ? second.reason
         : 'WALKS_DIFFER';
-
-    // A variant of a name can hide only where a walk may have skipped rows. A gap-free walk
-    // skipped none that existed throughout it; the two walks must also agree on one stable
-    // order (an unordered list would make chaining a coincidence).
+    // Every runtime fact is the LAST walk's, stamped when it ended.
+    const observedAt = this.now();
+    const last = walks[walks.length - 1] as Extract<RickpanelInventoryWalk, { ok: true }>;
+    const previous = walks[walks.length - 2] as Extract<RickpanelInventoryWalk, { ok: true }>;
+    // Decisions rest on the last walk: gap-free, and in one stable order with the walk before
+    // it (an unordered list would make chaining a coincidence).
     const gapFree =
-      ((first.coverage?.gapFree ?? false) || (second.coverage?.gapFree ?? false)) &&
-      sameRelativeOrder(first.coverage?.order, second.coverage?.order);
-    const classified = classifyNeededNames(needed, [firstSeen, secondSeen], gapFree);
-    const resolved = new Map<string, NameResolution>();
+      lastGapFree() && sameRelativeOrder(previous.coverage?.order, last.coverage?.order);
+    const seen = walks.map((w) => (w.consistent ? w.accounts : w.observed));
+    const lastSeen = seen[seen.length - 1] as readonly RickpanelInventoryAccount[];
+    const resolved = decideNeededNames(needed, seen, gapFree);
+
+    const bySpelling = new Map(lastSeen.map((a) => [a.providerUsername, a]));
+    const links = last.subscriptionLinks;
     const runtime = new Map<string, AccountRuntime>();
-    const bySpelling = new Map(secondSeen.map((a) => [a.providerUsername, a]));
-    const runtimeOf = (
-      account: RickpanelInventoryAccount,
-      link: string | null,
-    ): AccountRuntime => ({
-      state: account.state,
-      usage:
-        account.usage === null
-          ? null
-          : {
-              usedBytes: account.usage.usedBytes,
-              totalBytes: account.usage.totalBytes,
-              expiresAt: account.usage.expiresAt,
-            },
-      subscriptionUrl: link,
-    });
-    const toLookup: [string, Extract<WalkEvidence, { kind: 'LOOKUP' }>][] = [];
-    for (const [name, found] of classified) {
-      if (found.kind === 'LOOKUP') {
-        toLookup.push([name, found]);
-        continue;
-      }
-      if (found.kind === 'COLLISION') {
-        resolved.set(name, { kind: 'COLLISION', spellings: found.spellings });
-        continue;
-      }
-      if (found.kind === 'UNDECIDABLE') {
-        resolved.set(name, { kind: 'UNRESOLVED' });
-        continue;
-      }
-      // Present in BOTH walks: adopt from the SECOND walk's record, as a complete read does.
-      const account = bySpelling.get(found.spelling);
-      if (account === undefined) {
-        resolved.set(name, { kind: 'UNRESOLVED' });
-        continue;
-      }
-      resolved.set(name, { kind: 'PRESENT', spelling: found.spelling, by: 'WALKS' });
-      runtime.set(found.spelling, runtimeOf(account, secondLinks?.get(found.spelling) ?? null));
-    }
-
-    // Exact lookups, in name order (so a dry run and its import ask the same names first),
-    // within the bound, and none after the first that did not answer.
-    toLookup.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    const maxLookups = Math.max(0, Math.trunc(this.options.maxLookups ?? INVENTORY_MAX_LOOKUPS));
-    let lookups = 0;
-    // Without a gap-free walk no lookup can decide a name (a hit or a 404 for one spelling
-    // says nothing about a variant beside it), so none is sent.
-    let stopped = !gapFree;
-    // A 404 is trusted only from a route that answers 200 for an account both walks saw (the
-    // canary): a missing route or a proxy answers 404 to every name, and "absent" from such an
-    // answer would report a held account missing. The canary is a name the BACKUP needs (an
-    // account it does not name is never asked for, not even read). No canary, or a canary not
-    // found → no lookup is trusted, so none is sent.
-    if (toLookup.length > 0 && !stopped) {
-      const canary = [...resolved.values()]
-        .flatMap((r) => (r.kind === 'PRESENT' && lookupSafe(r.spelling) ? [r.spelling] : []))
-        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))[0];
-      if (canary === undefined || lookups >= maxLookups) {
-        stopped = true;
-      } else {
-        signal?.throwIfAborted();
-        lookups += 1;
-        const probe = await this.reader.findAccount(target, http, canary);
-        if (!probe.ok || !probe.found || probe.account.providerUsername !== canary) stopped = true;
-      }
-    }
-    for (const [name, ask] of toLookup) {
-      // A guessed spelling (the backup spells it two ways, no walk saw it) decides nothing
-      // whatever the panel answers, so it is not asked.
-      const guess = ask.seen === null && !ask.backupSpelling;
-      if (guess || stopped || lookups >= maxLookups || !lookupSafe(ask.ask)) {
-        resolved.set(name, { kind: 'UNRESOLVED' });
-        continue;
-      }
-      signal?.throwIfAborted();
-      lookups += 1;
-      const answer = await this.reader.findAccount(target, http, ask.ask, {
-        subscriptionLinks: true,
-      });
-      let result: LookupAnswer;
-      if (!answer.ok) {
-        stopped = true;
-        result = { kind: 'UNANSWERED' };
-      } else if (!answer.found) {
-        result = { kind: 'NOT_FOUND' };
-      } else {
-        result = { kind: 'FOUND', spelling: answer.account.providerUsername };
-      }
-      const final = resolveLookup(ask, result);
-      resolved.set(name, final);
-      if (final.kind === 'PRESENT' && final.by === 'LOOKUP' && answer.ok && answer.found) {
-        runtime.set(final.spelling, runtimeOf(answer.account, answer.subscriptionLink ?? null));
-      } else if (final.kind === 'PRESENT' && final.by === 'WALKS') {
-        // Every walk saw this spelling; the backup's own is proven absent. The record is the
-        // second walk's, as a complete read's would be.
-        const account = bySpelling.get(final.spelling);
-        if (account === undefined) resolved.set(name, { kind: 'UNRESOLVED' });
-        else
-          runtime.set(final.spelling, runtimeOf(account, secondLinks?.get(final.spelling) ?? null));
-      }
-    }
-
     const usernames = new Map<string, readonly string[]>();
     const covered = new Set<string>();
     for (const [name, r] of resolved) {
       if (r.kind === 'UNRESOLVED') continue;
+      if (r.kind === 'PRESENT') {
+        const account = bySpelling.get(r.spelling);
+        if (account === undefined) continue; // never: a present spelling is the last walk's
+        runtime.set(r.spelling, {
+          state: account.state,
+          usage:
+            account.usage === null
+              ? null
+              : {
+                  usedBytes: account.usage.usedBytes,
+                  totalBytes: account.usage.totalBytes,
+                  expiresAt: account.usage.expiresAt,
+                },
+          subscriptionUrl: links?.get(r.spelling) ?? null,
+        });
+        usernames.set(name, [r.spelling]);
+      } else if (r.kind === 'COLLISION') {
+        usernames.set(name, r.spellings);
+      }
       covered.add(name);
-      if (r.kind === 'PRESENT') usernames.set(name, [r.spelling]);
-      else if (r.kind === 'COLLISION') usernames.set(name, r.spellings);
     }
     const states: Record<string, number> = {};
-    for (const account of secondSeen) states[account.state] = (states[account.state] ?? 0) + 1;
+    for (const account of lastSeen) states[account.state] = (states[account.state] ?? 0) + 1;
     return {
       ok: true,
       complete: true,
       index: { panelId, usernames, covered },
-      accounts: secondSeen.length,
+      accounts: lastSeen.length,
       states,
       runtime,
       observedAt,
-      resolution: resolutionOf(reason, resolutionCounts(resolved), lookups),
+      resolution: {
+        mode: 'TARGETED',
+        reason,
+        needed: needed.size,
+        ...resolutionCounts(resolved),
+        walks: walks.length,
+        gapFree,
+      },
       diagnostics: {
         attempts: 1,
-        walks: [{ ...first.evidence }, { ...second.evidence }],
+        walks: walks.map((w) => ({ ...w.evidence })),
         pagination: null,
         status: null,
         load: load(),
@@ -589,12 +503,12 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         mode: 'TARGETED',
         reason: 'NOTHING_NEEDED',
         needed: 0,
-        presentByWalks: 0,
-        presentByLookup: 0,
-        absentByLookup: 0,
+        present: 0,
+        absent: 0,
         collisions: 0,
         unresolved: 0,
-        lookups: 0,
+        walks: 0,
+        gapFree: false,
       },
       diagnostics: {
         attempts: 0,

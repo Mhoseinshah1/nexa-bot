@@ -306,26 +306,27 @@ export interface LegacyInventoryLoad {
 /**
  * How a panel read that was NOT one complete snapshot still decided every username the backup
  * needs (Web Admin `.nxpkg` importer only; `docs/rickpanel-inventory.md` §Per-name resolution).
- * A live panel that keeps selling while it is read (`TOTAL_CHANGED`, `COUNT_MISMATCH`,
- * `WALKS_DIFFER`) is no reason to leave every candidate on it undecided: each needed name is
- * decided on its own evidence — two spellings seen anywhere are a collision; one spelling seen
- * in BOTH walks is present; anything else is asked of the panel by an exact lookup (found:
- * present; 404: proven absent; anything else: unresolved). Counts only, never a name.
+ * A live panel that keeps selling while it is read (`TOTAL_CHANGED`, `WALKS_DIFFER`) is no
+ * reason to leave every candidate on it undecided: each needed name is decided from the walks,
+ * and only on a GAP-FREE last walk — two spellings seen anywhere are a collision; one spelling
+ * in that walk is present; none is absent; without a gap-free last walk, unresolved. No exact
+ * lookup is sent. Counts only, never a name.
  */
 export interface LegacyInventoryResolution {
   readonly mode: 'TARGETED';
-  /** Why the two walks were not one complete snapshot. */
+  /** Why the walks were not one complete snapshot (or `NOTHING_NEEDED`: the panel was not read). */
   readonly reason: string;
   /** Usernames the backup needs on this panel. */
   readonly needed: number;
-  readonly presentByWalks: number;
-  readonly presentByLookup: number;
-  readonly absentByLookup: number;
+  readonly present: number;
+  readonly absent: number;
   readonly collisions: number;
-  /** Needed names neither walk nor lookup decided: their invoices stay `INVENTORY_INCOMPLETE`. */
+  /** Needed names no gap-free walk decided: their invoices stay `INVENTORY_INCOMPLETE`. */
   readonly unresolved: number;
-  /** Exact lookups sent (`GET api/user/{name}`). */
-  readonly lookups: number;
+  /** Walks made (two, or more when the last was not gap-free; at most three). */
+  readonly walks: number;
+  /** Whether the last walk was gap-free — the condition for any presence or absence. */
+  readonly gapFree: boolean;
 }
 
 /** What the importer asks of a panel read beyond "read it". */

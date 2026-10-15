@@ -1327,15 +1327,13 @@ function safeCount(value: unknown): number {
 /**
  * The production panels that changed while read and whose needed usernames the importer
  * decided one by one (a non-null `resolution`): `PROVIDER_INVENTORY_CHURN` (how many panels),
- * one `PROVIDER_INVENTORY_CHURN:<reason>` per reason, `PROVIDER_INVENTORY_LOOKUPS` (exact
- * lookups sent, when any) and `PROVIDER_INVENTORY_UNRESOLVED` (needed names neither walk nor
- * lookup decided, when any). Informational: what blocks an approval is the services category
+ * one `PROVIDER_INVENTORY_CHURN:<reason>` per reason, and `PROVIDER_INVENTORY_UNRESOLVED`
+ * (needed names no gap-free walk decided, when any). Informational: what blocks an approval is the services category
  * `INVENTORY_INCOMPLETE` those unresolved names leave behind, through the contract rule.
  * Counts only, never a name. Exported for its own test.
  */
 export function providerChurnWarnings(report: LegacyImportReport): LegacyMigrationCodeCount[] {
   let panels = 0;
-  let lookups = 0;
   let unresolved = 0;
   const byReason = new Map<string, number>();
   for (const p of providerPanels(report)) {
@@ -1343,13 +1341,12 @@ export function providerChurnWarnings(report: LegacyImportReport): LegacyMigrati
     if (typeof resolution !== 'object' || resolution === null || Array.isArray(resolution)) {
       continue;
     }
-    const r = resolution as { reason?: unknown; lookups?: unknown; unresolved?: unknown };
+    const r = resolution as { reason?: unknown; unresolved?: unknown };
     // A panel the backup asks nothing of was never read: it did not change while read.
     if (r.reason === 'NOTHING_NEEDED') continue;
     panels += 1;
     const reason = closedReason(r.reason);
     byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
-    lookups += safeCount(r.lookups);
     unresolved += safeCount(r.unresolved);
   }
   if (panels === 0) return [];
@@ -1359,7 +1356,6 @@ export function providerChurnWarnings(report: LegacyImportReport): LegacyMigrati
       code: `${LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN}:${reason}`,
       count,
     })),
-    ...(lookups > 0 ? [{ code: 'PROVIDER_INVENTORY_LOOKUPS', count: lookups }] : []),
     ...(unresolved > 0
       ? [{ code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: unresolved }]
       : []),

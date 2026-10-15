@@ -22,26 +22,26 @@ const resolution = (overrides: Record<string, unknown> = {}) => ({
   mode: 'TARGETED',
   reason: 'TOTAL_CHANGED',
   needed: 10,
-  presentByWalks: 7,
-  presentByLookup: 2,
-  absentByLookup: 1,
+  present: 9,
+  absent: 1,
   collisions: 0,
   unresolved: 0,
-  lookups: 3,
+  walks: 2,
+  gapFree: true,
   ...overrides,
 });
 
 describe('providerChurnWarnings', () => {
-  it('counts the churned panels, their reasons and the lookups; nothing for a still panel', () => {
+  it('counts the churned panels and their reasons; nothing for a still panel', () => {
     expect(
       providerChurnWarnings(
         report([
           { complete: true, reason: null, resolution: resolution() },
-          { complete: true, reason: null, resolution: resolution({ lookups: 4 }) },
+          { complete: true, reason: null, resolution: resolution({ walks: 3 }) },
           {
             complete: true,
             reason: null,
-            resolution: resolution({ reason: 'WALKS_DIFFER', lookups: 0 }),
+            resolution: resolution({ reason: 'WALKS_DIFFER' }),
           },
           { complete: true, reason: null, resolution: null },
           { complete: true, reason: null },
@@ -51,18 +51,17 @@ describe('providerChurnWarnings', () => {
       { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN, count: 3 },
       { code: 'PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED', count: 2 },
       { code: 'PROVIDER_INVENTORY_CHURN:WALKS_DIFFER', count: 1 },
-      { code: 'PROVIDER_INVENTORY_LOOKUPS', count: 7 },
     ]);
     expect(providerChurnWarnings(report([{ complete: true, reason: null }]))).toEqual([]);
     expect(providerChurnWarnings({ sections: {} } as never)).toEqual([]);
   });
 
-  it('sums the unresolved names, and says nothing about lookups when none were sent', () => {
+  it('sums the unresolved names', () => {
     expect(
       providerChurnWarnings(
         report([
-          { complete: true, resolution: resolution({ unresolved: 2, lookups: 0 }) },
-          { complete: true, resolution: resolution({ unresolved: 3, lookups: 0 }) },
+          { complete: true, resolution: resolution({ unresolved: 2, gapFree: false }) },
+          { complete: true, resolution: resolution({ unresolved: 3, gapFree: false }) },
         ]),
       ),
     ).toEqual([
@@ -161,7 +160,6 @@ describe('a churned panel is not an incomplete one', () => {
       { code: 'PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED', count: 1 },
       { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 },
       { code: 'PROVIDER_INVENTORY_INCOMPLETE:TIMEOUT', count: 1 },
-      { code: 'PROVIDER_INVENTORY_LOOKUPS', count: 3 },
     ]);
     expect(legacyMigrationDryRunInventoryIncomplete(warnings)).toBe(1);
   });

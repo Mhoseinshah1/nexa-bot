@@ -294,9 +294,21 @@ export async function startFakeRickpanel(
     null;
 
   const num = (value: number): number | string => (stringNumbers ? String(value) : value);
+  // `created_at`, Marzban v0.8.4's naive-UTC rendering: the list is the panel's insertion order,
+  // oldest first, and every row says when it was created (unproven on a real RickPanel).
+  const createdAt = new Map<string, number>();
+  let createdClock = 0;
+  const stampCreated = (name: string) => {
+    if (createdAt.has(name)) return;
+    createdClock += 1;
+    createdAt.set(name, createdClock);
+  };
+  const created = (name: string) =>
+    new Date(Date.UTC(2026, 0, 1) + (createdAt.get(name) ?? 0) * 1000).toISOString().slice(0, 19);
   const present = (user: FakeRickpanelUser): Record<string, unknown> => ({
     username: user.username,
     status: user.status,
+    created_at: created(user.username),
     expire: num(user.expire),
     data_limit: num(user.dataLimit),
     data_limit_reset_strategy: 'no_reset',
@@ -419,6 +431,7 @@ export async function startFakeRickpanel(
         for (const protocol of GENERATED_PROTOCOLS) {
           proxies[protocol] = { id: `internal-${protocol}-${String(userCounter)}` };
         }
+        stampCreated(name);
         users.set(name, {
           username: name,
           status: 'active',
@@ -681,9 +694,11 @@ export async function startFakeRickpanel(
         .length,
     removeUser: (name: string) => {
       users.delete(name);
+      createdAt.delete(name);
     },
     seedUser: (name: string, fields: Partial<Omit<FakeRickpanelUser, 'username'>> = {}) => {
       userCounter += 1;
+      stampCreated(name);
       users.set(name, {
         username: name,
         status: fields.status ?? 'active',
