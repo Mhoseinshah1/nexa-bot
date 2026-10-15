@@ -185,7 +185,8 @@ describe('the inventory hold: a read that held, with names it could not decide, 
     complete: false,
     reason: 'UNRESOLVED',
     accounts: null,
-    resolution: resolution({ unresolved: 3, gapFree: false }),
+    // A read that HELD: it found a gap-free decision walk, and still left 3 names undecided.
+    resolution: resolution({ unresolved: 3, gapFree: true }),
   };
   const digest = 'e'.repeat(64);
   const summarise = (panels: unknown[], inventoryHold?: unknown) =>
@@ -223,6 +224,12 @@ describe('the inventory hold: a read that held, with names it could not decide, 
     expect(providerIncomplete(report([{ ...unresolvedPanel, resolution: null }]))).toBe(1);
     expect(providerIncomplete(report([{ complete: false, reason: 'UNRESOLVED' }]))).toBe(1);
     expect(providerIncomplete(report([{ ...unresolvedPanel, resolution: [1] }]))).toBe(1);
+    // Review H P1: a per-name read that found NO gap-free walk decided nothing — a failure.
+    expect(
+      providerIncomplete(
+        report([{ ...unresolvedPanel, resolution: resolution({ unresolved: 3, gapFree: false }) }]),
+      ),
+    ).toBe(1);
     // Another reason with a resolution object is still a failure (COUNT_MISMATCH, TIMEOUT, …).
     expect(providerIncomplete(report([{ ...unresolvedPanel, reason: 'COUNT_MISMATCH' }]))).toBe(1);
     expect(

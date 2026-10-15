@@ -871,7 +871,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
 
   // ── F: unresolved ──────────────────────────────────────────────────────────────────────
 
-  it('F: no gap-free walk (a deletion burst behind the cursor in EVERY walk) — every needed name UNRESOLVED, never PROVIDER_MISSING: INVENTORY_INCOMPLETE, QUARANTINED (not a blocker), no per-user request; the apply imports the money and adopts none of them even when its own read resolves them', async () => {
+  it('F: no gap-free walk (a deletion burst behind the cursor in EVERY walk) — every needed name UNRESOLVED, never PROVIDER_MISSING: INVENTORY_INCOMPLETE, and the read decided nothing, so it is a failed read that blocks (review H P1), no per-user request', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
     // A lookup route that would fail if it were asked: it is not.
@@ -894,40 +894,24 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(w['INVENTORY_INCOMPLETE']).toBeGreaterThanOrEqual(4);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
-    // The read itself HELD: no whole-panel failure is reported. Every invoice it left
-    // undecided is the inventory hold's — quarantined, and counted as such.
-    expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
-    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBe(w['INVENTORY_INCOMPLETE']);
-    expect(dry.dryRunReport?.inventoryHold).toMatchObject({
-      version: 1,
-      invoices: w['INVENTORY_INCOMPLETE'],
-    });
+    // Review H P1: no walk was gap-free, so the read decided nothing about panel A — a
+    // whole-panel read failure, never a hold. (A read that HELD is the Q cases below.)
+    expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBeUndefined();
+    // Nothing held: a report holding nothing carries no hold or a hold of zero invoices.
+    expect(dry.dryRunReport?.inventoryHold?.invoices ?? 0).toBe(0);
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
-    expect((await page.approve(id)).status).toBe('APPROVED');
-
-    // The apply reads a panel that now holds still: its read RESOLVES every name. The held
-    // invoices stay quarantined all the same — nothing adopted the owner did not approve.
-    await page.executor.tick();
-    const done = await detail(id);
-    expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
-    expect(await services()).toEqual([]);
-    expect(await count('customers')).toBeGreaterThan(0);
-    expect(await count('wallet_entries')).toBeGreaterThan(0);
-    expect(await count('legacy_wallet_debts')).toBeGreaterThan(0);
-    const decided = await candidates();
-    expect(decided['a0000001']?.outcome).toBe('INVENTORY_INCOMPLETE');
-    const open = await ctx.container.database.db.execute<{ n: number }>(
-      sql`SELECT count(*)::int AS n FROM legacy_service_candidates
-           WHERE tenant_id = ${TENANT} AND outcome = 'INVENTORY_INCOMPLETE' AND review_state = 'OPEN'`,
-    );
-    expect(open.rows[0]?.n).toBe(w['INVENTORY_INCOMPLETE']);
+    await expect(page.approve(id)).rejects.toMatchObject({
+      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+    });
+    expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
     expect(lookupsOf(panelA)).toEqual([]);
     expectReadsOnly(panelA);
     expectReadsOnly(panelB);
   }, 600_000);
 
-  it('F: a missing account (svc_missing) with no gap-free walk — UNRESOLVED, never PROVIDER_MISSING, even beside a route that answers 404 to everything (never asked); quarantined, so approvable, and nothing written by the dry run', async () => {
+  it('F: a missing account (svc_missing) with no gap-free walk — UNRESOLVED, never PROVIDER_MISSING, even beside a route that answers 404 to everything (never asked); a failed read that blocks (review H P1), and nothing written by the dry run', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
     failOn(panelA, (r) => r.method === 'GET' && r.path.startsWith('/api/user/'), {
@@ -945,11 +929,13 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // Four mapped names and the three panel-less ones (see above).
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
-    expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBeUndefined();
-    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBe(w['INVENTORY_INCOMPLETE']);
+    expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBeUndefined();
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
     expect(await services()).toEqual([]);
-    expect((await page.approve(id)).status).toBe('APPROVED');
+    await expect(page.approve(id)).rejects.toMatchObject({
+      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+    });
     expectReadsOnly(panelA);
   }, 600_000);
 

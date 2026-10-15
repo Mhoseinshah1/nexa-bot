@@ -1446,11 +1446,13 @@ export function providerIncomplete(report: LegacyImportReport): number {
 function readFailed(p: unknown): boolean {
   const panel = p as { complete?: unknown; reason?: unknown; resolution?: unknown } | null;
   if (panel?.complete === true) return false;
+  // Held only when the per-name read found a gap-free decision walk (review H P1).
   return !(
     panel?.reason === 'UNRESOLVED' &&
     typeof panel.resolution === 'object' &&
     panel.resolution !== null &&
-    !Array.isArray(panel.resolution)
+    !Array.isArray(panel.resolution) &&
+    (panel.resolution as { gapFree?: unknown }).gapFree === true
   );
 }
 

@@ -617,6 +617,25 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
   }
 
   /**
+   * Review H P1: a per-name read that found NO gap-free walk decided nothing about the panel, so
+   * it is a whole-panel read failure — reported `PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED`, no
+   * hold recorded anywhere, and the approval refused exactly as before the hold existed.
+   */
+  async function expectBlockedNoDecisionWalk(id: string): Promise<void> {
+    const report = (await detail(id)).dryRunReport;
+    const w = codes(report?.warnings);
+    expect(w['PROVIDER_INVENTORY_INCOMPLETE']).toBe(1);
+    expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
+    expect(w['INVENTORY_INCOMPLETE']).toBeGreaterThan(0);
+    // Nothing held: a report holding nothing carries no hold or a hold of zero invoices.
+    expect(report?.inventoryHold?.invoices ?? 0).toBe(0);
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBeUndefined();
+    expect(
+      legacyMigrationDryRunInventoryIncomplete(report?.warnings, report?.inventoryHold),
+    ).toBeGreaterThan(0);
+  }
+
+  /**
    * The names the backup needs on panel A (live, real, importable owner, rp1): svc_a1
    * (eligible), svc_a2 (product unresolved), svc_a4 (unsupported shape), case_x (Case_X and
    * case_x on the panel: a collision whatever the walks prove), svc_missing (no account).
@@ -819,7 +838,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
 
   // ── R2 ─────────────────────────────────────────────────────────────────────────────────
 
-  it('R2: every walk loses rows (a 2-row deletion burst behind the cursor, overlap 1, in EACH walk) — every needed name UNRESOLVED, no per-user GET, quarantined (not a blocker), nothing written; over a quieter panel the same package is approvable and adopts each candidate onto its own owner only', async () => {
+  it('R2: every walk loses rows (a 2-row deletion burst behind the cursor, overlap 1, in EACH walk) — every needed name UNRESOLVED, no per-user GET, blocked as a failed read (review H P1), nothing written; over a quieter panel the same package is approvable and adopts each candidate onto its own owner only', async () => {
     const PAGE = 2;
     const page = productionLikePage(PAGE);
     const id = await page.toVerified(
@@ -841,12 +860,11 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     // svc_a3 is needed too here: five names undecided, the collision decided by its spellings.
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE + 1);
     expect(w['INVENTORY_INCOMPLETE']).toBe(UNRESOLVED_WITHOUT_GAP_FREE + 1);
-    expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBeUndefined();
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['ADOPTION_ELIGIBLE']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
-    await expectQuarantinedNotBlocking(id);
+    await expectBlockedNoDecisionWalk(id);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
     await expectOwners({});
 
@@ -893,7 +911,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(bw['PROVIDER_MISSING']).toBeUndefined();
     expect(bw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE);
     expect(lookupsOf(panelA, before)).toEqual([]);
-    await expectQuarantinedNotBlocking(id);
+    await expectBlockedNoDecisionWalk(id);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
 
     // A gap-free walk: one sale appended during the second walk.
@@ -919,7 +937,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
 
   // ── R4 ─────────────────────────────────────────────────────────────────────────────────
 
-  it('R4: a list order that is not stable while the panel changes — nothing PRESENT or ABSENT, quarantined (not a blocker), nothing written', async () => {
+  it('R4: a list order that is not stable while the panel changes — nothing PRESENT or ABSENT, blocked when no walk is gap-free (review H P1), nothing written', async () => {
     const PAGE = 2;
     const page = productionLikePage(PAGE);
     const id = await page.toVerified(await writePackage());
@@ -938,7 +956,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(rw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE);
     expect(rw['PROVIDER_MISSING']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
-    await expectQuarantinedNotBlocking(id);
+    await expectBlockedNoDecisionWalk(id);
 
     // (b) Nothing re-created: the panel lists its last two accounts swapped from the second
     // walk on (an ORDER BY-less list), every row keeping its own `created_at`, while a sale is
@@ -964,7 +982,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(tw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE);
     expect(tw['PROVIDER_MISSING']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
-    await expectQuarantinedNotBlocking(id);
+    await expectBlockedNoDecisionWalk(id);
 
     // (c) An offset-dependent order: pages at an odd offset are cut from the list in reverse
     // (a different statement plan per offset), while a sale is appended.
