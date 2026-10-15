@@ -197,43 +197,105 @@ every customer, wallet opening, legacy debt and decided service still imports.
   run's inputs; resume, reconcile and report under another hold are refused
   (`INVENTORY_HOLD_MISMATCH`).
 
-### 4b. Adopting a quarantined service after the import — DESIGN ONLY, not built
+### 4b. Adopting a quarantined service after the import — the "adopt approved" lane
 
-Today an ADOPT approval executes only inside a RUNNING `APPLY` run (§4.2), and once a `.nxpkg`
-import has COMPLETED no new run can start (`FRESH_TARGET_NOT_EMPTY`). So a quarantined service
-can be reviewed and approved, but its approval waits with nothing to execute it. A bounded
-"adopt approved" lane would close that. It was **not built in this change**: it needs a new run
-mode the importer's run table, the map's write guard and the write freeze do not yet know, and
-each of those is a guard that must not be weakened to make room for it. The design:
+An ADOPT approval executes inside a RUNNING `APPLY` run (§4.2), and once a `.nxpkg` import has
+COMPLETED no new import can start (`FRESH_TARGET_NOT_EMPTY`). So a quarantined service could be
+reviewed and approved, but its approval waited with nothing to execute it. The bounded **"adopt
+approved" lane** closes that. It is built as designed, with the deviations listed at the end of
+this section, each made because the design could not be built without weakening a guard.
 
-1. **A new run mode, `ADOPT_APPROVED`** (a contract change: `LEGACY_IMPORT_RUN_MODES` and the
-   runs' CHECK), started only for a tenant whose latest `.nxpkg` APPLY run is COMPLETED from the
-   same source fingerprint. It is exempt from the fresh-target guard BY MODE — the guard itself is
-   unchanged and still refuses every IMPORT — and it is refused while any run is RUNNING
-   (`legacy_import_runs_one_running_idx` already enforces one).
-2. **Scope: ADOPT_APPROVED candidates only.** It reads `listApprovals`, passes each through
-   `approvalGate` (synthetic, source class, live, checksum, panel mapped), claims ADOPT_APPROVED →
-   ADOPTING by version, and touches no other candidate, customer, wallet, debt, trial or shape.
-3. **Targeted re-read.** Only the panels the claimed approvals name, with the existing per-name
-   read (`inventory.read(scope, panelId, { needed })`) where `needed` is exactly the claimed
-   invoices' canonical names — never a whole-panel walk of anything else.
-4. **Decide again, under the invoice lock.** `decideServiceCandidate` with the operator panel
-   (`matchOnPanel`), then the ownership rule over ALL live invoices of the snapshot (a second
-   owner's claim on the same account must still make it `AMBIGUOUS_OWNERSHIP`), then P6
-   `adoptCandidate` — runtime state, customer, product, panel lock and type, name not already a
-   NEXA service or reservation — in one transaction with the invoice lock. A name still
-   unresolved settles the approval back to OPEN with `last_approval_refusal = INVENTORY_INCOMPLETE`.
-5. **Guards it keeps.** `legacy.services.decide` to approve and the executing permission
-   (`maintenance.run` / the migration role) to run; `ScopeActivityReader` inside every
-   transaction; the installation write freeze (a recovery or another import APPLYING refuses it);
-   the map's "only inside a RUNNING run" rule (the lane IS a run); idempotent claims; audit of
-   every execution and refusal. The run's inputs record the ownership and inventory holds it was
-   started under, compared as for a resume.
-6. **Tests it needs before it ships:** a held invoice approved after the import is adopted only
-   when the targeted read now resolves exactly one spelling; still unresolved → OPEN with the
-   refusal; a second owner's claim → AMBIGUOUS_OWNERSHIP, nothing adopted; a non-approved
-   candidate is untouched; the fresh-target guard still refuses an IMPORT on the same tenant;
-   a frozen installation refuses the lane; mutation of each guard turns a test red.
+**How the operator runs it (Web Admin).** Approve the candidates on `/legacy-services` (unchanged:
+`legacy.services.decide`; the page now says when approvals wait and links to the restore page).
+Then upload the SAME `.nxpkg` again on «بکاپ و بازیابی ← عملیات بازیابی», give its key (and the
+ownership decisions file, if the import had one) and bind the panels exactly as for the import.
+The page recognises a package whose source a finished restore came from: it never requests a dry
+run for it (the tenant is not fresh) and offers «اجرای انتقال‌های تأییدشده» instead
+(`POST /legacy-migration/imports/:id/adopt`, CRITICAL `legacy.migration.apply`, audited
+`legacy.migration.adopt_request`, listed in `AUDIT_CRITICAL_ACTIONS`). The `recovery` role runs
+the lane (`VERIFIED → ADOPT_REQUESTED → ADOPT_RUNNING → ADOPT_DONE | FAILED`) and the page shows
+its counts (`adopt_report`): approvals met, adopted, still unresolved, refused by reason (in
+Persian, the code beside it), left for a person, panels read, provider reads, provider writes (0).
+CLI: `legacy-import adopt-approved` (same flags as `reconcile`, `--evidence-class` required).
+
+1. **A run mode, `ADOPT_APPROVED`** (contract `LEGACY_IMPORT_RUN_MODES`; the runs' CHECK in
+   migration `0249`). `LegacyImporterService.adoptApproved` starts it only for a tenant whose
+   latest APPLY run is COMPLETED from THIS `.nxpkg` source (`runMadeFrom`, as reconcile asks it,
+   plus engine `NXPKG` on both the snapshot and the run's inputs), under the same panel map,
+   ownership-hold digest and inventory-hold digest. On the restore page it is also bound to the
+   finished import the re-upload belongs to (`expectedApplyRunId` = that import's apply run; the
+   inventory hold its APPROVED dry run recorded). Anything else refuses `ADOPT_REFUSED`, before a
+   panel is read or a row written. It is exempt from the fresh-target guard BY MODE (the CLI's
+   courtesy check and the import's in-transaction check run for `dry-run`/`import` only); the
+   guard itself is unchanged and still refuses every IMPORT (tested after a lane). It is refused
+   while any other run is RUNNING — by the restore page's precheck (the request waits,
+   `ADOPT_REQUESTED`, cancellable), by the importer, and by `startOrResume` — except its OWN
+   interrupted run of this source, which it resumes like an APPLY run.
+2. **Scope: ADOPT_APPROVED / ADOPTING candidates only.** The one implementation an APPLY run
+   uses (`claimApprovals`, `settleClaims`, `outcomesOf`, `adoptEligible` — the APPLY path was
+   refactored onto them, behaviour unchanged): `listApprovals`, `approvalGate` (synthetic, source
+   class, live, checksum, panel mapped), claim ADOPT_APPROVED → ADOPTING by version. No other
+   candidate row, customer, wallet, debt, trial, shape or user map row is written (tested: every
+   other candidate row byte-identical; customers, wallet entries, debts, trials, shapes and user
+   map rows unchanged). The map's write rule now admits a RUNNING `ADOPT_APPROVED` run for
+   `invoice` rows only — a customer row is refused `RUN_NOT_WRITABLE` whatever the caller asks.
+3. **Targeted re-read** (`laneNeededNamesByPanel`): the existing per-name read
+   (`inventory.read(scope, panelId, { needed })`) of only the panels the CLAIMED approvals name,
+   with exactly their canonical names. A panel no claim names is never read (tested: panel B
+   receives no request; panel A only GETs and the token exchange).
+4. **Decide again.** `decideAllServices` over every live invoice of the snapshot, the claimed
+   approvals on the operator's panel, kept-as-history and the ownership hold applied — then the
+   ownership rule over ALL live invoices: another owner's invoice resolving to the same account
+   makes the approved one `AMBIGUOUS_OWNERSHIP` (tested). Then P6 for the claimed invoices still
+   eligible, and nothing else, under the invoice lock (runtime state, customer, product, panel
+   lock and type, name not a NEXA service or reservation). An approved name the read still cannot
+   decide settles back to OPEN with `last_approval_refusal = INVENTORY_INCOMPLETE` (tested).
+5. **Guards it keeps.** `legacy.services.decide` to approve; the CRITICAL `legacy.migration.apply`
+   to request the lane; `maintenance.run` (SYSTEM_JOB, through the guard, never by actor type) for
+   every write it makes; `ScopeActivityReader` inside every transaction (`mutate`, and P6's own);
+   the installation write gate (the lane never runs as an import's writer: while any import is
+   APPLYING or a restore is confirmed it WAITS with the blocker shown, and its writes would be
+   refused anyway); the map's "only inside a RUNNING run" rule (the lane IS a run); idempotent
+   claims and P6 keys (`p6:<run>:<invoice>:<hash>`); audit of every execution, refusal, release
+   and the run's start/finish (codes and ids only); the run's inputs record the panel map, the
+   ownership hold and the inventory hold it started under, compared on its resume.
+6. **Tests** (`tests/integration/nxpkg-live-panel-inventory.test.ts` §4b, the Web Admin's own
+   importer on fake RickPanels, production-like target; `legacy-import-metadata.test.ts`;
+   `tests/unit/legacy-migration.test.ts`; `tests/web/recovery-mirza.test.tsx`,
+   `tests/web/legacy-services.test.tsx`): adopted only when the targeted read now resolves exactly
+   one spelling; still unresolved → OPEN with the refusal; a second owner's claim →
+   AMBIGUOUS_OWNERSHIP, nothing adopted, the unapproved claim untouched; non-approved candidates
+   untouched; no customer, money or debt change; GETs only; the fresh-target guard still refuses
+   another import; another RUNNING run and the write freeze each make the lane wait with nothing
+   read or adopted, then it runs; a source with no finished import is refused.
+
+**Deviations from the design, and why.**
+
+- **The Web Admin action is on the restore page, not on `/legacy-services`.** The lane must
+  decide from the snapshot (the ownership rule over every live invoice, the ownership hold, the
+  checksum each approval is bound to), and a finished import keeps neither its package nor its
+  key (the key is erased at every terminal state; the files are swept). Rebuilding the snapshot
+  from the invoice archive would be a second reading of the source and could not reproduce the
+  ownership hold. So the package is uploaded again — the same verification, the key once, the
+  same bindings — and `/legacy-services` says so and links there.
+- **The inventory hold is not applied in the lane.** It only demotes; applied, it would keep the
+  very invoice the operator approved `INVENTORY_INCOMPLETE` for ever, and would make another
+  held owner's invoice no claim on the account. The lane applies the ownership hold (it only
+  removes adoptions) and treats every invoice the read now resolves as a claim.
+- **Production-like gates.** The lane is no import: it takes no protective backup, holds no write
+  freeze and is not asked the cutover approval or stop-sales (sales are open again after an
+  import; P6's own checks under the invoice and panel locks are what keep a concurrent sale
+  out). A synthetic package is still refused on a production-like target (`precheck('ADOPT')`).
+- **CLI.** `legacy-import adopt-approved` exists (it is `runMode`'s, which the restore page's
+  adapter calls), but the CLI cannot pass an inventory hold (it never could for `reconcile` or
+  `report` either): after an import made under a hold it refuses `INVENTORY_HOLD_MISMATCH` —
+  fail closed. Use the restore page.
+
+**What remains.** NOT RUN against the real dump, RickPanel or a staging copy (§7 applies). A
+refused approval keeps the evidence and the map row the import recorded (the lane rewrites
+neither; the refusal code is on the candidate). A re-upload of a DIFFERENT package of the same
+source is accepted only when it reproduces the import's panel map, ownership hold and inventory
+hold digests; otherwise it is refused `ADOPT_REFUSED`.
 
 ## 5. Concurrency, crash and resume (all tested)
 

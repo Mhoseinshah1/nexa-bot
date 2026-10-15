@@ -482,3 +482,20 @@ Tests: `tests/unit/legacy-migration.test.ts`, `tests/unit/legacy-migration-write
 `tests/integration/legacy-migration-nxpkg.test.ts` (the production-like restore-page case),
 `tests/integration/legacy-migration-restore-page.test.ts` (the recovery role's executor, the
 backup failure) and `tests/integration/recovery-executor.test.ts` (mutual exclusion).
+
+### 10b. The "adopt approved" lane (a re-upload after a finished restore)
+
+`docs/legacy-migration/service-review.md` §4b is the design and the record. On this page's
+terms: the SAME package uploaded again after its restore finished is verified as any upload, but
+— its source being one a COMPLETED / COMPLETED_WITH_DISCREPANCY import of this tenant came from —
+the page requests no dry run (the tenant is not fresh) and offers the lane:
+`VERIFIED → ADOPT_REQUESTED → ADOPT_RUNNING → ADOPT_DONE | FAILED` (migration `0249`; the
+request is charged on the CRITICAL `legacy.migration.apply`). The `recovery` role runs it as the
+importer's `ADOPT_APPROVED` run, bound to that finished import's apply run and its approved dry
+run's inventory hold: it executes only the operators' ADOPT approvals, reads only the panels they
+name (GETs), and writes no customer, wallet, debt, trial or shape. It holds no write freeze and
+takes no backup; it WAITS (blocker shown, still cancellable) while any import is APPLYING, a
+restore is confirmed, or another run is RUNNING. `ADOPT_RUNNING` is not cancellable (a claim may
+be taken; the lane resumes its own run). Tests: `tests/unit/legacy-migration.test.ts` (the
+lane's lifecycle, permission and waits) and `tests/integration/nxpkg-live-panel-inventory.test.ts`
+(§4b, end to end).
