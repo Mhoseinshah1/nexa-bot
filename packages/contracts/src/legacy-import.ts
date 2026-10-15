@@ -24,8 +24,15 @@
  *   run is NOT resumable — re-processing rows after a crash would count them twice — so a
  *   second start while one is RUNNING is refused with its id, to be aborted.
  * - `APPLY` — the run whose decisions become provenance.
+ * - `ADOPT_APPROVED` — the bounded "adopt approved" lane
+ *   (`docs/legacy-migration/service-review.md` §4b): after a `.nxpkg` APPLY run COMPLETED, it
+ *   executes ONLY the operators' ADOPT approvals of that source — a targeted read of the
+ *   panels they name, every adoption check again, P6 — and writes nothing else. It is a run,
+ *   so the map's "only inside a RUNNING run" rule holds for it; the map lets it write
+ *   `invoice` rows only (never a customer's), it resumes like an APPLY run (same source, same
+ *   mode), and the fresh-target guard, which refuses every new IMPORT, never applies to it.
  */
-export const LEGACY_IMPORT_RUN_MODES = ['DRY_RUN', 'APPLY'] as const;
+export const LEGACY_IMPORT_RUN_MODES = ['DRY_RUN', 'APPLY', 'ADOPT_APPROVED'] as const;
 export type LegacyImportRunMode = (typeof LEGACY_IMPORT_RUN_MODES)[number];
 
 /**

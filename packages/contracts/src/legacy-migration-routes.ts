@@ -45,6 +45,12 @@ export const LEGACY_MIGRATION_ROUTES = {
   dryRun: (id: string) => `/legacy-migration/imports/${encodeURIComponent(id)}/dry-run`,
   approve: (id: string) => `/legacy-migration/imports/${encodeURIComponent(id)}/approve`,
   cancel: (id: string) => `/legacy-migration/imports/${encodeURIComponent(id)}/cancel`,
+  /**
+   * The "adopt approved" lane (`docs/legacy-migration/service-review.md` §4b): a VERIFIED
+   * upload of a package whose import already COMPLETED executes the operators' ADOPT
+   * approvals of that source instead of a dry run.
+   */
+  adopt: (id: string) => `/legacy-migration/imports/${encodeURIComponent(id)}/adopt`,
 } as const;
 
 /**
@@ -68,6 +74,11 @@ export const LEGACY_MIGRATION_COMMAND_STATES = {
   uploadDecisions: ['UPLOADED', 'VERIFIED', 'DRY_RUN_DONE'],
   requestDryRun: ['VERIFIED', 'DRY_RUN_DONE'],
   approve: ['DRY_RUN_DONE'],
+  /**
+   * The "adopt approved" lane, from a VERIFIED upload only: the package was verified, never
+   * dry-run (a dry run of an imported tenant is refused `FRESH_TARGET_NOT_EMPTY`).
+   */
+  requestAdopt: ['VERIFIED'],
   cancel: [
     'UPLOADED',
     'VERIFYING',
@@ -76,6 +87,7 @@ export const LEGACY_MIGRATION_COMMAND_STATES = {
     'DRY_RUN_RUNNING',
     'DRY_RUN_DONE',
     'APPROVED',
+    'ADOPT_REQUESTED',
   ],
 } as const satisfies Readonly<Record<string, readonly LegacyNxpkgImportStatus[]>>;
 
@@ -107,6 +119,11 @@ export const LEGACY_MIGRATION_HTTP_ERROR_CODES = {
    * restore from the operator's view: one at a time, whichever came first. Nothing was approved.
    */
   RECOVERY_ACTIVE: 'legacy_migration.recovery_active',
+  /**
+   * The "adopt approved" lane was asked of a package whose source no COMPLETED import of this
+   * tenant came from. Nothing changed: an import of it must finish first.
+   */
+  NO_COMPLETED_IMPORT: 'legacy_migration.no_completed_import',
 } as const;
 export type LegacyMigrationHttpErrorCode =
   (typeof LEGACY_MIGRATION_HTTP_ERROR_CODES)[keyof typeof LEGACY_MIGRATION_HTTP_ERROR_CODES];
@@ -512,6 +529,8 @@ export const LEGACY_MIGRATION_PHASES = [
   'RECONCILE',
   'REPORT',
   'BACKUP',
+  /** The "adopt approved" lane (§4b): executing the ADOPT approvals of an imported source. */
+  'ADOPT',
 ] as const;
 export type LegacyMigrationPhase = (typeof LEGACY_MIGRATION_PHASES)[number];
 
@@ -566,6 +585,8 @@ export const legacyMigrationProgressSchema = z.object({
    */
   verifyAttempts: count,
   dryRunAttempts: count,
+  /** How many times the "adopt approved" lane was started (bounded like the dry run). */
+  adoptAttempts: count,
   importerVerdict: z.string().nullable(),
   reconcileVerdict: z.enum(['RECONCILED', 'DISCREPANCY']).nullable(),
   /** Archived history records per record type (design §5). */
@@ -577,6 +598,40 @@ export const legacyMigrationProgressSchema = z.object({
   blocker: z.enum(LEGACY_MIGRATION_BLOCKERS).nullable(),
 });
 export type LegacyMigrationProgress = z.infer<typeof legacyMigrationProgressSchema>;
+
+/**
+ * What the "adopt approved" lane did (stored as `adopt_report`, `service-review.md` §4b).
+ * Counts and codes only: never an invoice key, a username or a Telegram id.
+ *
+ * - `verdict`: the importer's — `COMPLETED`, `COMPLETED_WITH_FAILURES` (an approval left for a
+ *   person, or one whose adoption the map does not confirm) or `NOTHING_TO_ADOPT` (no approval
+ *   was waiting: no run was started and nothing was read or written);
+ * - `approvals`: the approvals the lane met (waiting or claimed); `adopted` became a service;
+ *   `stillUnresolved` were settled back to OPEN because the targeted read still could not
+ *   decide their name (`INVENTORY_INCOMPLETE`); `refused` every refusal by code (that one
+ *   included); `left` approvals a person must look at (synthetic, another source class);
+ * - `panelsRead` / `providerReads`: the targeted read — only the panels the claimed approvals
+ *   name, only their names; `providerWrites` is zero by construction.
+ */
+export const legacyMigrationAdoptReportSchema = z.object({
+  verdict: z.string(),
+  legacyRunId: z.string().nullable(),
+  /** The COMPLETED import run this lane executed approvals for. */
+  importLegacyRunId: z.string(),
+  approvals: count,
+  adopted: count,
+  stillUnresolved: count,
+  refused: z.array(legacyMigrationCodeCountSchema),
+  left: z.array(legacyMigrationCodeCountSchema),
+  claimLost: count,
+  withdrawnDuringRun: count,
+  unconfirmed: count,
+  released: count,
+  panelsRead: count,
+  providerReads: count,
+  providerWrites: count,
+});
+export type LegacyMigrationAdoptReport = z.infer<typeof legacyMigrationAdoptReportSchema>;
 
 // --- responses ------------------------------------------------------------------------------
 
@@ -602,8 +657,12 @@ export const legacyMigrationImportViewSchema = z.object({
   dryRunSha256: hex64.nullable(),
   approvedDryRunSha256: hex64.nullable(),
   applyReport: legacyMigrationApplyReportSchema.nullable(),
+  /** The "adopt approved" lane's outcome (`ADOPT_DONE`), or null. */
+  adoptReport: legacyMigrationAdoptReportSchema.nullable(),
   dryRunLegacyRunId: z.string().nullable(),
   applyLegacyRunId: z.string().nullable(),
+  /** The lane's own `ADOPT_APPROVED` legacy run, or null (none started, or not a lane). */
+  adoptLegacyRunId: z.string().nullable(),
   backupRunId: z.string().nullable(),
   /**
    * The mandatory protective backup the executor took BEFORE the import wrote anything

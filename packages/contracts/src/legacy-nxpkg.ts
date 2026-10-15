@@ -23,8 +23,17 @@ export const LEGACY_NXPKG_SOURCE_ENGINE = 'NXPKG' as const;
  * UPLOADED → VERIFYING → VERIFIED | VERIFY_FAILED
  * VERIFIED → DRY_RUN_REQUESTED → DRY_RUN_RUNNING → DRY_RUN_DONE | DRY_RUN_FAILED
  * DRY_RUN_DONE → APPROVED → APPLYING → COMPLETED | COMPLETED_WITH_DISCREPANCY | FAILED
+ * VERIFIED → ADOPT_REQUESTED → ADOPT_RUNNING → ADOPT_DONE | FAILED
  * any non-terminal → CANCELLED
  * ```
+ *
+ * The `ADOPT_*` path is the "adopt approved" lane (`docs/legacy-migration/service-review.md`
+ * §4b): the SAME package uploaded again after its import COMPLETED, verified, and — instead of
+ * a dry run, which the fresh-target guard refuses on an imported tenant — asked to execute the
+ * operators' ADOPT approvals of that source. It writes no customer, wallet, debt or trial,
+ * holds no write freeze and is never an import: an ADOPT_DONE row is terminal like a
+ * COMPLETED one, with its counts in `adopt_report`. ADOPT_RUNNING is not cancellable (a claim
+ * may have been taken; the lane's own resume settles it).
  *
  * Every transition is a conditional UPDATE naming its `from` states.
  */
@@ -43,6 +52,9 @@ export const LEGACY_NXPKG_IMPORT_STATUSES = [
   'COMPLETED_WITH_DISCREPANCY',
   'FAILED',
   'CANCELLED',
+  'ADOPT_REQUESTED',
+  'ADOPT_RUNNING',
+  'ADOPT_DONE',
 ] as const;
 export type LegacyNxpkgImportStatus = (typeof LEGACY_NXPKG_IMPORT_STATUSES)[number];
 export const legacyNxpkgImportStatusSchema = z.enum(LEGACY_NXPKG_IMPORT_STATUSES);
@@ -60,6 +72,7 @@ export const LEGACY_NXPKG_TERMINAL_STATUSES = [
   'COMPLETED_WITH_DISCREPANCY',
   'FAILED',
   'CANCELLED',
+  'ADOPT_DONE',
 ] as const satisfies readonly LegacyNxpkgImportStatus[];
 export type LegacyNxpkgTerminalStatus = (typeof LEGACY_NXPKG_TERMINAL_STATUSES)[number];
 
@@ -131,6 +144,12 @@ export const LEGACY_NXPKG_ERROR_CODES = [
   'APPROVAL_EXPIRED',
   /** The operator cancelled the import. */
   'CANCELLED',
+  /**
+   * The "adopt approved" lane (§4b) was refused before it adopted anything: the tenant's latest
+   * `.nxpkg` APPLY run is not COMPLETED from this package's source, or the lane's inputs (the
+   * panel map, the ownership or inventory hold) are not the ones that import ran under.
+   */
+  'ADOPT_REFUSED',
 ] as const;
 export type LegacyNxpkgErrorCode = (typeof LEGACY_NXPKG_ERROR_CODES)[number];
 export const legacyNxpkgErrorCodeSchema = z.enum(LEGACY_NXPKG_ERROR_CODES);
@@ -196,6 +215,12 @@ export const LEGACY_NXPKG_AUDIT_ACTIONS = {
   approve: 'legacy.migration.approve',
   /** The import was cancelled. */
   cancel: 'legacy.migration.cancel',
+  /**
+   * The owner asked the `recovery` role to execute the ADOPT approvals of an imported source
+   * (the "adopt approved" lane, `service-review.md` §4b). Charged on the CRITICAL
+   * `legacy.migration.apply`: it starts writes that adopt services.
+   */
+  requestAdopt: 'legacy.migration.adopt_request',
 } as const;
 export type LegacyNxpkgAuditAction =
   (typeof LEGACY_NXPKG_AUDIT_ACTIONS)[keyof typeof LEGACY_NXPKG_AUDIT_ACTIONS];

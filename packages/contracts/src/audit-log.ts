@@ -92,6 +92,9 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   // Mirza `.nxpkg` importer: approving a dry run's digest starts the import, charged on the
   // CRITICAL `legacy.migration.apply` (`LEGACY_NXPKG_AUDIT_ACTIONS.approve`).
   'legacy.migration.approve': ['legacy.migration.apply'],
+  // The "adopt approved" lane: the request that starts it is charged on the same CRITICAL key
+  // (`LEGACY_NXPKG_AUDIT_ACTIONS.requestAdopt`) — it starts writes that adopt services.
+  'legacy.migration.adopt_request': ['legacy.migration.apply'],
 };
 
 export const AUDIT_CRITICAL_ACTION_CODES: readonly string[] = Object.keys(AUDIT_CRITICAL_ACTIONS);
