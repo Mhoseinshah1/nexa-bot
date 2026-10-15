@@ -28,6 +28,8 @@ export interface FakeListPanel {
    */
   createdAtOf?: (username: string, seconds: number) => unknown;
   noTotal?: boolean;
+  /** Answers a bare array instead of `{users, total}` (another list shape). */
+  bareArray?: boolean;
   /** The panel's page size cap, by page index (or one cap for every page). */
   cap?: number | ((pageIndex: number) => number);
 }
@@ -97,6 +99,7 @@ export function fakeListClient(panel: FakeListPanel): ProviderHttpClient {
           ...(stamp === undefined ? {} : { created_at: stamp }),
         };
       });
+      if (panel.bareArray === true) return answer(200, users);
       return answer(200, panel.noTotal === true ? { users } : { users, total: panel.names.length });
     },
   };

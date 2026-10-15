@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compareOtherLimit,
+  compareSameOffset,
   g6ProbeExitCode,
   probePanelG6,
   probeWireCounter,
@@ -207,6 +209,70 @@ describe('G6 probe: each broken assumption, classified', () => {
       true,
     );
     expect(report.verdict).toBe('G6_FAILS');
+  });
+});
+
+describe('G6 probe: what a moving panel can and cannot settle', () => {
+  // Sample pages 0-2; 300 accounts walk in 4 pages each: walks at 3-6, 7-10, 11-14.
+  it('one deletion burst in the middle walk: a decision walk and a decisive last walk — holds', async () => {
+    const panel = fakeListPanel(300);
+    panel.beforePage = (_o, page) => {
+      if (page === 8) panel.names.splice(0, 15);
+    };
+    const report = await probe(panel);
+    expect(report.walks.map((w) => w.decisive)).toEqual([true, false, true]);
+    expect(report.verdict).toBe('G6_HOLDS');
+  });
+
+  it('bursts in the first two walks: only the last is decisive, nothing to decide from — fails', async () => {
+    const panel = fakeListPanel(300);
+    panel.beforePage = (_o, page) => {
+      if (page === 4 || page === 8) panel.names.splice(0, 15);
+    };
+    const report = await probe(panel);
+    expect(report.walks.map((w) => w.decisive)).toEqual([false, false, true]);
+    expect(report.verdict).toBe('G6_FAILS');
+  });
+
+  it('a list that is not a page: NOT_A_PAGE, a conclusion, not an inconclusive run', async () => {
+    const panel = fakeListPanel(30);
+    panel.bareArray = true;
+    const report = await probe(panel);
+    expect(report.shape.listShape).toBe('NOT_A_PAGE');
+    expect(report.findings).toEqual(['NOT_A_PAGE']);
+    expect(report.verdict).toBe('G6_FAILS');
+    expect(report.wire.listPage).toBe(1);
+  });
+});
+
+describe('G6 probe: the order comparisons', () => {
+  it('the same offset twice', () => {
+    expect(compareSameOffset(['a', 'b', 'c'], ['a', 'b', 'c'])).toBe('IDENTICAL');
+    // A sale appended to a list shorter than a page.
+    expect(compareSameOffset(['a', 'b'], ['a', 'b', 'c'])).toBe('IDENTICAL');
+    expect(compareSameOffset(['a', 'b', 'c'], ['c', 'a', 'b'])).toBe('SAME_ROWS_OTHER_ORDER');
+    // A deletion at the head between the two requests.
+    expect(compareSameOffset(['a', 'b', 'c'], ['b', 'c', 'd'])).toBe('DIFFERENT_ROWS');
+  });
+
+  it('an overlapping page with another limit', () => {
+    const a = ['a', 'b', 'c', 'd', 'e', 'f'];
+    expect(compareOtherLimit(a, 3, ['d', 'e', 'f', 'g'])).toBe('CONSISTENT');
+    // One row deleted ahead of them between the two requests: all moved by one.
+    expect(compareOtherLimit(a, 3, ['e', 'f', 'g'])).toBe('SHIFTED');
+    expect(compareOtherLimit(a, 3, ['f', 'e', 'd'])).toBe('INCONSISTENT');
+    expect(compareOtherLimit(a, 3, ['x', 'y'])).toBe('NOT_TESTABLE');
+  });
+
+  it('rows that moved between the two requests are informational: a busy panel still holds', async () => {
+    const panel = fakeListPanel(300);
+    panel.beforePage = (_o, page) => {
+      if (page === 1) panel.names.splice(0, 1);
+    };
+    const report = await probe(panel);
+    expect(report.order.sameOffsetTwice).toBe('DIFFERENT_ROWS');
+    expect(report.findings).toContain('ROWS_CHANGED_SAME_OFFSET');
+    expect(report.verdict).toBe('G6_HOLDS');
   });
 });
 

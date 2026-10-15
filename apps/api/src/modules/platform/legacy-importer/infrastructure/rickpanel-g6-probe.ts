@@ -164,7 +164,8 @@ export interface G6ProbeReport {
   readonly createdAt: G6ProbeCreatedAt;
   readonly order: {
     readonly sameOffsetTwice: 'IDENTICAL' | 'SAME_ROWS_OTHER_ORDER' | 'DIFFERENT_ROWS' | 'NOT_READ';
-    readonly otherLimitOverlap: 'CONSISTENT' | 'INCONSISTENT' | 'NOT_TESTABLE' | 'NOT_READ';
+    readonly otherLimitOverlap:
+      'CONSISTENT' | 'SHIFTED' | 'INCONSISTENT' | 'NOT_TESTABLE' | 'NOT_READ';
   };
   readonly walks: readonly LegacyInventoryWalkDiagnostics[];
   readonly churn: {
@@ -339,6 +340,47 @@ function createdAtOf(rows: readonly Record<string, unknown>[]): G6ProbeCreatedAt
   return { rows: rows.length, rowsWithout, rowsUnparsable, inversions, maxInversionMs, formats };
 }
 
+/**
+ * Offset 0 asked twice. `IDENTICAL` also when one answer extends the other (a sale appended to a
+ * list shorter than a page); `SAME_ROWS_OTHER_ORDER` — the same rows in another order — is an
+ * unstable order; `DIFFERENT_ROWS` is the list moving between the requests (informational).
+ * Exported for its own test.
+ */
+export function compareSameOffset(
+  a: readonly string[],
+  b: readonly string[],
+): 'IDENTICAL' | 'SAME_ROWS_OTHER_ORDER' | 'DIFFERENT_ROWS' {
+  const n = Math.min(a.length, b.length);
+  if (a.slice(0, n).every((id, i) => id === b[i])) return 'IDENTICAL';
+  const inB = new Set(b);
+  return a.length === b.length && a.every((id) => inB.has(id))
+    ? 'SAME_ROWS_OTHER_ORDER'
+    : 'DIFFERENT_ROWS';
+}
+
+/**
+ * The page at offset `k` asked with another limit, against the first page `a`: the rows they
+ * share must stand at the same absolute positions (`CONSISTENT`). Shared rows in the same
+ * relative order but all moved by one offset are the list moving between the requests (a
+ * deletion or insertion ahead of them: `SHIFTED`, informational); any other placement is an
+ * order that depends on the limit (`INCONSISTENT`). Exported for its own test.
+ */
+export function compareOtherLimit(
+  a: readonly string[],
+  k: number,
+  shifted: readonly string[],
+): 'CONSISTENT' | 'SHIFTED' | 'INCONSISTENT' | 'NOT_TESTABLE' {
+  const at = new Map(a.map((id, i) => [id, i]));
+  const moves: number[] = [];
+  for (let j = 0; j < shifted.length; j += 1) {
+    const i = at.get(shifted[j] as string);
+    if (i !== undefined) moves.push(k + j - i);
+  }
+  if (moves.length < 2) return 'NOT_TESTABLE';
+  if (moves.every((m) => m === 0)) return 'CONSISTENT';
+  return moves.every((m) => m === moves[0]) ? 'SHIFTED' : 'INCONSISTENT';
+}
+
 /** A row's identity, for comparing pages: its name and its raw `created_at`, never reported. */
 const idOf = (row: Record<string, unknown>) =>
   `${typeof row['username'] === 'string' ? row['username'] : ''}\u0000${String(row['created_at'] ?? '')}`;
@@ -482,13 +524,7 @@ export async function runG6Probe(
           else {
             const a = first.rows.map(idOf);
             const b = again.rows.map(idOf);
-            const sameSet = a.length === b.length && new Set(a).size === new Set([...a, ...b]).size;
-            sameOffsetTwice =
-              a.length === b.length && a.every((id, i) => id === b[i])
-                ? 'IDENTICAL'
-                : sameSet
-                  ? 'SAME_ROWS_OTHER_ORDER'
-                  : 'DIFFERENT_ROWS';
+            sameOffsetTwice = compareSameOffset(a, b);
             // 3b. An overlapping page asked with ANOTHER limit: shared rows at the same places.
             const k = Math.floor(first.rows.length / 2);
             const otherLimit = Math.max(
@@ -499,14 +535,7 @@ export async function runG6Probe(
             else {
               const shifted = await pageOf(auth.token, k, otherLimit);
               if (!isPage(shifted)) failed(shifted);
-              else {
-                const expected = a.slice(k);
-                const got = shifted.rows.map(idOf).slice(0, expected.length);
-                otherLimitOverlap =
-                  got.length > 0 && got.every((id, i) => id === expected[i])
-                    ? 'CONSISTENT'
-                    : 'INCONSISTENT';
-              }
+              else otherLimitOverlap = compareOtherLimit(a, k, shifted.rows.map(idOf));
             }
           }
         }
@@ -552,7 +581,7 @@ export async function runG6Probe(
             if (d.reportedTotalFirst !== null) totals.push(d.reportedTotalFirst);
             if (d.reportedTotalLast !== null) totals.push(d.reportedTotalLast);
           }
-          // Keep at most one walk's names: memory stays O(rows), not O(walks × rows).
+          // Keep at most two walks' orders: memory stays O(rows), not O(walks × rows).
           if (walkOrders.length > 2) walkOrders.shift();
         }
       }
@@ -612,16 +641,25 @@ export async function runG6Probe(
     }
     if (!finalWalks.some((w) => w.decisive)) findings.add('NO_DECISIVE_WALK');
   }
-  const concluded = failure === null && stoppedBy === null && finalWalks.length === walkCount;
-  // G6 holds when two CONSECUTIVE walks are decisive (what a moving panel needs to settle) and
-  // nothing on the way contradicts an assumption. Churn alone is not a failure: selling is normal.
-  const consecutiveDecisive = finalWalks.some(
-    (w, i) => i > 0 && w.decisive && (finalWalks[i - 1]?.decisive ?? false),
-  );
-  const blocking = [...findings].filter((f) => f !== 'CHURN' && f !== 'PAGE_CAP');
+  // G6 holds when the walks would SETTLE a dry run: a decisive walk with a later one (a decision
+  // walk), and the last walk decisive too — the dry run's own rule — and nothing on the way
+  // contradicts an assumption. Churn alone is not a failure: selling is normal.
+  const last = finalWalks.length - 1;
+  const settles =
+    last > 0 &&
+    (finalWalks[last]?.decisive ?? false) &&
+    finalWalks.slice(0, last).some((w) => w.decisive);
+  // A list that is not a page is a conclusion too: the shape differs from the inference.
+  const concluded =
+    failure === null &&
+    stoppedBy === null &&
+    (finalWalks.length === walkCount || listShape === 'NOT_A_PAGE');
+  // Selling, a page cap and rows that moved between two requests are what a live panel does.
+  const informational = new Set<G6ProbeFinding>(['CHURN', 'PAGE_CAP', 'ROWS_CHANGED_SAME_OFFSET']);
+  const blocking = [...findings].filter((f) => !informational.has(f));
   const verdict: G6ProbeVerdict = !concluded
     ? 'INCONCLUSIVE'
-    : consecutiveDecisive && blocking.length === 0
+    : settles && blocking.length === 0
       ? 'G6_HOLDS'
       : 'G6_FAILS';
   return {

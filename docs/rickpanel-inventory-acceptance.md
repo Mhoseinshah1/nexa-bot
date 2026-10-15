@@ -171,15 +171,17 @@ default `--max-pages 400` refuses: raise it to `--max-pages 1200 --max-minutes 2
 `verdict` (`G6_HOLDS` / `G6_FAILS` / `INCONCLUSIVE`) and `findings`, a closed set:
 `NOT_A_PAGE`, `NO_TOTAL`, `TOTAL_INCONSISTENT`, `PAGE_CAP` (informational), `CREATED_AT_MISSING`,
 `CREATED_AT_UNPARSABLE`, `CREATED_AT_EPOCH`, `CREATED_AT_OUT_OF_ORDER`,
-`ORDER_UNSTABLE_SAME_OFFSET` (offset 0 fetched twice, other order), `ROWS_CHANGED_SAME_OFFSET`,
+`ORDER_UNSTABLE_SAME_OFFSET` (offset 0 fetched twice, other order), `ROWS_CHANGED_SAME_OFFSET`
+(informational: the list moved between the two requests),
 `ORDER_UNSTABLE_OTHER_LIMIT` (an overlapping page asked with another `limit` put a shared row
-elsewhere), `CHURN` (informational), `NO_GAP_FREE_WALK`, `WALKS_ORDER_DIFFERS`,
+elsewhere; shared rows all moved by one offset are churn, reported `SHIFTED`, not a finding), `CHURN` (informational), `NO_GAP_FREE_WALK`, `WALKS_ORDER_DIFFERS`,
 `NO_DECISIVE_WALK`. Beside them: `shape` (list shape, rows of the first page, learned cap),
 `total` (pages with and without one, first, last, largest change), `createdAt` on the sample page,
 `order`, each walk's full gap-free breakdown (the dry run's own per-walk diagnostics), `churn`
 (duration, total change, accounts added and removed per minute), `budget`, `wire`, `load`.
 
-`G6_HOLDS` needs two CONSECUTIVE decisive walks and no finding but `CHURN` / `PAGE_CAP`. Exit:
+`G6_HOLDS` needs what settles a dry run — a decisive walk with a later one, and the last walk
+decisive — and no finding but the informational ones. A `NOT_A_PAGE` list is `G6_FAILS`. Exit:
 0 holds · 1 fails · 2 usage · 3 inconclusive (a failure, a cap, no such panel or credential) ·
 4 not read-only (a defect).
 
