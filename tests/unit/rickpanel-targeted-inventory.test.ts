@@ -180,6 +180,18 @@ const bursts = (panel: FakePanel, pages: readonly number[], count = 15) => {
   };
 };
 
+/**
+ * Also a sale during the third walk (page 9), so the last two walks are never one complete
+ * snapshot and the per-name resolution is what decides.
+ */
+const sellDuringThirdWalk = (panel: FakePanel) => {
+  const before = panel.beforePage;
+  panel.beforePage = (offset, page) => {
+    before(offset, page);
+    if (page === 9) add(panel, 'zz-third-walk-sale');
+  };
+};
+
 // 300 accounts at 100 a page, 90 per step: page indexes 0-3 are walk 1, 4-7 walk 2, 8-11 walk 3.
 
 describe('a live panel that keeps selling: decided from a gap-free last walk, never looked up', () => {
@@ -227,10 +239,28 @@ describe('a live panel that keeps selling: decided from a gap-free last walk, ne
   it('a burst in the first walk only: the second is gap-free and decides, confirmed by a third', async () => {
     const panel = fakePanel(300);
     bursts(panel, [1]);
+    sellDuringThirdWalk(panel);
     const read = complete(
       await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(101), name(290)]) }),
     );
     expect(read.resolution).toMatchObject({ walks: 3, gapFree: true, present: 2, unresolved: 0 });
+  });
+
+  it('Codex: a burst in the first walk only, then a still panel — the last two walks are one complete snapshot, as of the second walk’s end', async () => {
+    const panel = fakePanel(300);
+    bursts(panel, [1]);
+    let stamps = 0;
+    const stamp = () => new Date(Date.UTC(2026, 9, 14, 8, 0, stamps++));
+    const read = complete(
+      await sourceOf(panel, {}, stamp).read(SCOPE, 'p1', {
+        needed: need([name(101), name(5)]),
+      }),
+    );
+    expect(read.resolution).toBeUndefined();
+    expect(read.index.usernames.get(name(101))).toEqual([name(101)]);
+    // name(5) was deleted by the burst before the second walk.
+    expect(read.index.usernames.has(name(5))).toBe(false);
+    expect(read.observedAt.toISOString()).toBe('2026-10-14T08:00:01.000Z');
   });
 
   it('bursts in both walks: the gap-free third has no walk after it to confirm it — UNRESOLVED', async () => {
@@ -315,6 +345,7 @@ describe('Codex P1: a needed row read, then deleted, during the decision walk', 
         panel.names.splice(panel.names.indexOf(name(5)), 1);
       }
     };
+    sellDuringThirdWalk(panel);
     const read = complete(
       await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5), name(96)]) }),
     );
@@ -486,6 +517,7 @@ describe('Codex review on f4bcdd62', () => {
       out[j] = name(10);
       return out;
     };
+    sellDuringThirdWalk(panel);
     const read = complete(
       await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(200), 'zz-new']) }),
     );
@@ -570,6 +602,17 @@ describe('Codex review on 79f46fda', () => {
     expect(sameRelativeOrder([], [])).toBe(true);
     expect(sameRelativeOrder(['a', 'b', 'x'], ['a', 'y', 'b'])).toBe(true);
     expect(sameRelativeOrder(['a', 'b'], ['b', 'a'])).toBe(false);
+    // One shared row orders nothing.
+    expect(sameRelativeOrder(['a', 'x', 'y'], ['a', 'p', 'q'])).toBe(false);
+    expect(sameRelativeOrder(['a'], ['a'])).toBe(true);
+  });
+
+  it('Codex: a row an overlap repeats within one walk reports the facts of its LATER read', async () => {
+    const panel = fakePanel(300);
+    // name(95) is on page 4 and again on page 5 (the overlap); it is disabled in between.
+    panel.statusOf = (n, page) => (n === name(95) && page >= 5 ? 'disabled' : 'active');
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(95)]) }));
+    expect(read.runtime.get(name(95))?.state).toBe('disabled');
   });
 
   it('the snapshot shortcut, too: the same rows, their runtime facts as the second walk read them', async () => {
@@ -599,6 +642,7 @@ describe('case variants: a collision or unresolved, never an adoption', () => {
     add(panel, 'alice');
     add(panel, 'ALICE');
     bursts(panel, [1]);
+    sellDuringThirdWalk(panel);
     const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need(['alice']) }));
     expect(read.index.usernames.get('alice')).toEqual(['ALICE', 'alice']);
     expect(read.resolution).toMatchObject({ collisions: 1, present: 0 });
@@ -666,6 +710,7 @@ describe('case variants: a collision or unresolved, never an adoption', () => {
       const head = panel.names.slice(0, 60);
       panel.names = [...head.slice(1), ...head.slice(0, 1), ...panel.names.slice(60)];
     };
+    sellDuringThirdWalk(panel);
     const read = complete(
       await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(150), 'gone']) }),
     );
@@ -780,6 +825,7 @@ describe('the targeted read changes nothing it does not need to', () => {
   it('runtime facts come from the decision walk and are stamped when it ended', async () => {
     const panel = fakePanel(300);
     bursts(panel, [1]);
+    sellDuringThirdWalk(panel);
     let stamps = 0;
     const stamp = () => new Date(Date.UTC(2026, 9, 14, 8, 0, stamps++));
     const read = complete(

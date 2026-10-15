@@ -119,7 +119,13 @@ export function sameRelativeOrder(
   const inA = new Set(a);
   const commonA = a.filter((n) => inB.has(n));
   const commonB = b.filter((n) => inA.has(n));
-  if (commonA.length === 0 && (a.length > 0 || b.length > 0)) return false;
+  // One shared row orders nothing (Codex): two at least, unless a walk holds fewer than two.
+  if (
+    commonA.length < Math.min(2, a.length, b.length) ||
+    (commonA.length === 0 && (a.length > 0 || b.length > 0))
+  ) {
+    return false;
+  }
   return commonA.length === commonB.length && commonA.every((n, i) => n === commonB[i]);
 }
 
@@ -379,48 +385,9 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     if (!second.ok) return this.finish(panelId, second, 1, load());
     endedAt.push(this.now());
 
-    // One complete snapshot after all: the complete read it always was (the listAll rule), as
-    // of the FIRST walk's end — the second, returning every row of it unchanged (same name and
-    // creation time), is what proves each survived that moment. The second's own end proves
-    // nothing: a row it read may be deleted before it ends, unseen.
-    if (first.consistent && second.consistent) {
-      const a = first.accounts.map((x) => x.providerUsername);
-      const b = new Set(second.accounts.map((x) => x.providerUsername));
-      // Every row with exactly one creation time in each walk (a row deleted and created again
-      // while a walk read it shows two), the same in both. A row WITHOUT one proves nothing: an
-      // account deleted and created again between the walks would look the same (Codex).
-      const stampOf = (w: typeof first, name: string) => {
-        const stamps = w.coverage?.createdAt.get(name);
-        const only = stamps !== undefined && stamps.size === 1 ? [...stamps][0] : undefined;
-        // A creation time, not merely a string: an empty or malformed placeholder shared by an
-        // account and its replacement would prove nothing (Codex).
-        return only !== undefined && only !== '' && !Number.isNaN(Date.parse(only)) ? only : null;
-      };
-      const sameRows = a.every((name) => {
-        const stamp = stampOf(first, name);
-        return b.has(name) && stamp !== null && stamp === stampOf(second, name);
-      });
-      if (a.length === b.size && sameRows) {
-        return this.finish(
-          panelId,
-          {
-            ok: true,
-            complete: true,
-            // The same rows; their runtime facts as the SECOND walk read them (fresher —
-            // a link rotated between the walks is the current one; Codex), stamped with the
-            // first walk's end.
-            accounts: second.accounts,
-            evidence: { first: first.evidence, second: second.evidence },
-            ...(second.subscriptionLinks === undefined
-              ? {}
-              : { subscriptionLinks: second.subscriptionLinks }),
-          },
-          1,
-          load(),
-          endedAt[0],
-        );
-      }
-    }
+    // One complete snapshot after all: the complete read it always was (the listAll rule).
+    const snapshot = this.snapshotPair(panelId, first, second, endedAt[0], load);
+    if (snapshot !== null) return snapshot;
 
     const walks: Extract<RickpanelInventoryWalk, { ok: true }>[] = [first, second];
     // FEWER distinct names than a total that held still: the list withholds rows. (More names
@@ -478,6 +445,21 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       endedAt.push(this.now());
       walks.push(next);
       seen.push(next.consistent ? next.accounts : next.observed);
+    }
+    // The panel may have held still for the LAST two walks (Codex): one complete snapshot then,
+    // as of the second-to-last walk's end.
+    if (walks.length > 2) {
+      const before = walks[walks.length - 2] as Extract<RickpanelInventoryWalk, { ok: true }>;
+      const after = walks[walks.length - 1] as Extract<RickpanelInventoryWalk, { ok: true }>;
+      const late = this.snapshotPair(
+        panelId,
+        before,
+        after,
+        endedAt[walks.length - 2],
+        load,
+        walks.slice(0, walks.length - 2),
+      );
+      if (late !== null) return late;
     }
     const evidence = { first: first.evidence, second: second.evidence };
     // A walk whose total held still yet whose rows do not add up to it is not churn: the list
@@ -632,6 +614,64 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         load: load(),
       },
     };
+  }
+
+  /**
+   * Two consecutive walks that are one complete snapshot — both consistent, the same names, and
+   * every row with exactly one valid creation time, the same in both — read as the complete
+   * read it always was, as of the EARLIER walk's end: the later one, returning every row of it
+   * unchanged, is what proves each survived that moment (its own end proves nothing: a row it
+   * read may be deleted before it ends, unseen). A row without a creation time proves nothing:
+   * an account deleted and created again between the walks would look the same (Codex). The
+   * runtime facts are the LATER walk's (fresher — a link rotated between them is the current
+   * one). Null when the two are not one snapshot.
+   */
+  private snapshotPair(
+    panelId: string,
+    a: Extract<RickpanelInventoryWalk, { ok: true }>,
+    b: Extract<RickpanelInventoryWalk, { ok: true }>,
+    endedAt: Date | undefined,
+    load: () => LegacyInventoryLoad,
+    earlier: readonly Extract<RickpanelInventoryWalk, { ok: true }>[] = [],
+  ): LegacyInventoryRead | null {
+    if (!a.consistent || !b.consistent) return null;
+    const stampOf = (w: Extract<RickpanelInventoryWalk, { ok: true }>, name: string) => {
+      const stamps = w.coverage?.createdAt.get(name);
+      const only = stamps !== undefined && stamps.size === 1 ? [...stamps][0] : undefined;
+      return only !== undefined && only !== '' && !Number.isNaN(Date.parse(only)) ? only : null;
+    };
+    const names = new Set(b.accounts.map((x) => x.providerUsername));
+    const same =
+      a.accounts.length === names.size &&
+      a.accounts.every((x) => {
+        const stamp = stampOf(a, x.providerUsername);
+        return (
+          names.has(x.providerUsername) &&
+          stamp !== null &&
+          stamp === stampOf(b, x.providerUsername) &&
+          // An earlier walk that returned the name returned this same account (Codex: one
+          // re-created between earlier walks is another account).
+          earlier.every(
+            (e) =>
+              !(e.coverage?.order ?? []).includes(x.providerUsername) ||
+              stampOf(e, x.providerUsername) === stamp,
+          )
+        );
+      });
+    if (!same) return null;
+    return this.finish(
+      panelId,
+      {
+        ok: true,
+        complete: true,
+        accounts: b.accounts,
+        evidence: { first: a.evidence, second: b.evidence },
+        ...(b.subscriptionLinks === undefined ? {} : { subscriptionLinks: b.subscriptionLinks }),
+      },
+      1,
+      load(),
+      endedAt,
+    );
   }
 
   /** The read of a panel the backup names nothing on: decided without a request. */

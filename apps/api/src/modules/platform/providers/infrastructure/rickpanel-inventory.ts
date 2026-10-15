@@ -549,6 +549,16 @@ export class RickpanelInventoryReader {
         // case-sensitive panel, and folding them here would hide one of them.
         if (byName.has(account.providerUsername)) {
           duplicateRows += 1;
+          // The same row again (an overlap repeats it): its runtime facts and link as read LATER
+          // are the fresher ones (Codex) — only while it is the same account, one creation time.
+          const stamps = createdById.get(account.providerUsername);
+          if (typeof createdRaw === 'string' && stamps?.size === 1 && stamps.has(createdRaw)) {
+            byName.set(account.providerUsername, account);
+            links?.set(
+              account.providerUsername,
+              subscriptionFrom(target.baseUrl, row as Record<string, unknown>),
+            );
+          }
         } else {
           byName.set(account.providerUsername, account);
           links?.set(

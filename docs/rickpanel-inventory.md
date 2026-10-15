@@ -235,7 +235,7 @@ may be deleted before it ends — and an account deleted mid-read must never be 
 No check inside one walk sees every such deletion: a deletion behind the cursor is offset by an
 account listed at the head, or by a tie of `created_at` reordered between two requests (the
 independent review's F1 and F3), and the walk looks exactly like a still panel. (Two walks that
-share no row at all prove no common order either.) So survival is
+share no row at all — or only one — prove no common order either.) So survival is
 proven only ACROSS walks: a row is confirmed when a LATER walk returns the same row — the same
 name AND the same `created_at`, so an account deleted and created again under that name confirms
 nothing. Seen again, it existed from its read, past the earlier walk's end, to the later read.
@@ -265,10 +265,11 @@ the last walk NOT decisive, no name is present on one spelling, nor absent: a ca
    walk lacked that a later walk returned, or a name the backup spells two ways —
    **unresolved**. Never adopted, never "missing".
 
-Two walks that are one complete snapshot (the `listAll` rule: both consistent, the same names)
-are still read as one, but as of the FIRST walk's end, and only when the second returned every
-row unchanged — one `created_at` per row in each walk, the same in both — which is what proves
-each row survived that moment. Its runtime facts are the second walk's (fresher), stamped with the first walk's end.
+Two CONSECUTIVE walks that are one complete snapshot (the `listAll` rule: both consistent, the same names) — the first two, or the last two when a third was made after a first walk the panel moved under (Codex) — are still read as one, but as of the EARLIER walk's end, and only when the later returned every
+row unchanged — one `created_at` per row in each walk, the same in both, and the same in any walk
+before them that returned it — which is what proves each row survived that moment. Its runtime
+facts are the later walk's (fresher), stamped with the earlier walk's end; within one walk, a row
+the overlap repeats reports its later read.
 
 **No exact lookup is sent.** A lookup (`GET api/user/{name}`) happens after a walk — exactly when
 a case variant can appear unseen — and a 404 for one spelling says nothing about another. So a

@@ -934,6 +934,8 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
       },
       (walk, offset) => {
         if (walk === 1 && offset === 1) panelA.seedUser('mirza_sale_r4b', ACCOUNT);
+        // A sale in the third walk too: the last two walks are never one complete snapshot.
+        if (walk === 3 && offset === 1) panelA.seedUser('mirza_sale_r4b3', ACCOUNT);
       },
     );
     before = panelA.requests.length;

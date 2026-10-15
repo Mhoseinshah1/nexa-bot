@@ -766,6 +766,9 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // every later row shifts up by one — which the page overlap absorbs.
     onWalkPages(panelA, (walk, offset) => {
       if (walk === 1 && offset === 2) panelA.removeUser('svc_a1');
+      // A sale in any third walk: the last two walks are never one complete snapshot, so the
+      // per-name resolution is what decides.
+      if (walk === 3 && offset === 2) panelA.seedUser('mirza_sale_d3', ACCOUNT);
     });
     const before = panelA.requests.length;
     const dry = await page.dryRun(id);
