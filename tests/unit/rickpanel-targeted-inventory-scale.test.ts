@@ -109,6 +109,19 @@ function churn(panel: ScalePanel, offset: number): void {
       }
     }
   }
+  if (panel.walk === 1 && offset > PAGE_SIZE && p % 40 === 0) {
+    // A burst: 15 unneeded accounts behind the cursor deleted at once — more than the walk's
+    // page overlap absorbs, so the first walk really skips rows (and is not gap-free).
+    let removed = 0;
+    for (let i = offset - PAGE_SIZE; i >= 0 && removed < 15; i -= 1) {
+      const n = panel.names[i] ?? '';
+      if (n.startsWith('acc') && !isNeeded(Number(n.slice(3)))) {
+        removeAt(i);
+        panel.churn.deletedUnneeded += 1;
+        removed += 1;
+      }
+    }
+  }
   if (panel.walk === 1 && offset > PAGE_SIZE && p % 25 === 0) {
     for (let i = offset - PAGE_SIZE; i >= 0; i -= 1) {
       const n = panel.names[i] ?? '';
@@ -215,7 +228,8 @@ describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel
     // Every needed account deleted during the read is proven absent, by its lookup.
     expect(r.absentByLookup).toBe(panel.churn.deletedNeeded.length);
     expect(panel.churn.deletedNeeded.length).toBeGreaterThan(0);
-    // Rows that slipped past a walk were found again by lookup.
+    // Rows the bursts made slip past the first walk were found again by lookup (single
+    // deletions are absorbed by the page overlap and slip nothing).
     expect(r.presentByLookup).toBeGreaterThan(0);
 
     // Ground truth, name by name: present exactly when the panel still holds it.
@@ -242,10 +256,11 @@ describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel
     expect(walks).toHaveLength(2);
     const pages = walks.reduce((sum, w) => sum + w.pages, 0);
     expect(pages).toBe(panel.requests.pages);
-    // A walk is about total / 100 pages, plus the rows the panel grew by while it was walked.
+    // A walk is about total / 90 pages (each page repeats 10 rows of the one before, so a
+    // boundary stays chained under deletions), plus the rows the panel grew by while walked.
     for (const w of walks) {
-      expect(w.pages).toBeGreaterThanOrEqual(1_000);
-      expect(w.pages).toBeLessThanOrEqual(1_100);
+      expect(w.pages).toBeGreaterThanOrEqual(1_100);
+      expect(w.pages).toBeLessThanOrEqual(1_250);
     }
     const requests = panel.requests.logins + panel.requests.pages + panel.requests.lookups;
     expect(read.diagnostics?.load.requests).toBe(requests);

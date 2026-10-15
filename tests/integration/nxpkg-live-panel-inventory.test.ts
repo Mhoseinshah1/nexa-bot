@@ -737,7 +737,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
 
   // ── D ──────────────────────────────────────────────────────────────────────────────────
 
-  it('D: a candidate account deleted mid-walk is proven absent by its exact lookup — PROVIDER_MISSING, never adopted; the account the cursor slipped past is found by lookup and adopted', async () => {
+  it('D: a candidate account deleted mid-walk is proven absent by its exact lookup — PROVIDER_MISSING, never adopted; the account after it, which the page overlap kept in view, is adopted', async () => {
     const page = productionLikePage();
     // A second eligible candidate: svc_a3, owned by user 9 (rp1, 30 GB / 30 d).
     const id = await page.toVerified(
@@ -746,7 +746,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       }),
     );
     // During the first walk, after svc_a1 was served on page one, the operator deletes it:
-    // every later row shifts up, so the first walk never sees svc_a3 either.
+    // every later row shifts up by one — which the page overlap absorbs.
     onWalkPages(panelA, (walk, offset) => {
       if (walk === 1 && offset === 2) panelA.removeUser('svc_a1');
     });
@@ -756,11 +756,13 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(dry.status).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
     expect(w['PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED']).toBe(1);
-    // After the canary: svc_a1 (seen by the first walk only → 404), svc_a3 (seen by the
-    // second only → found), svc_missing (seen by neither → 404), in name order.
-    // svc_a1 is gone from the second walk, so the canary here is svc_a2.
-    expect(lookupsOf(panelA, before)).toEqual(['svc_a2', 'svc_a1', 'svc_a3', 'svc_missing']);
-    expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBe(4);
+    // Each page repeats a row of the one before, so the first walk read svc_a3 before the
+    // deletion could shift it past the cursor: it is decided by the walks (the second walk is
+    // gap-free). After the canary (svc_a2; svc_a1 is gone from the second walk): svc_a1 (seen
+    // by the first walk only → 404) and svc_missing (seen by neither → 404), in name order.
+    // The slip-then-lookup path is covered at scale in tests/unit.
+    expect(lookupsOf(panelA, before)).toEqual(['svc_a2', 'svc_a1', 'svc_missing']);
+    expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBe(3);
     expect(w['PROVIDER_MISSING']).toBe(2);
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();

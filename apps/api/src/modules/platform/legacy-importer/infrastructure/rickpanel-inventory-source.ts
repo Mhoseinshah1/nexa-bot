@@ -97,6 +97,30 @@ import {
  * that is how retries would multiply into a storm on a panel that is already struggling.
  */
 
+/**
+ * Rows each page of a per-name resolution's walk repeats from the previous one: how many rows
+ * may be deleted ahead of the cursor between two page requests (one interval apart) before a
+ * boundary stops being chained. Ten at the default page size of 100 (10% more pages).
+ */
+export const INVENTORY_WALK_OVERLAP = 10;
+
+export function walkOverlap(pageSize: number): number {
+  return Math.max(1, Math.min(INVENTORY_WALK_OVERLAP, Math.floor(pageSize / 4)));
+}
+
+/** True when the rows common to both orders come in the same relative order in each. */
+export function sameRelativeOrder(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return false;
+  const inB = new Set(b);
+  const inA = new Set(a);
+  const commonA = a.filter((n) => inB.has(n));
+  const commonB = b.filter((n) => inA.has(n));
+  return commonA.length === commonB.length && commonA.every((n, i) => n === commonB[i]);
+}
+
 /** `.` and `..` are path segments, not names: never put in a lookup's path. */
 const lookupSafe = (name: string) => name !== '.' && name !== '..';
 
@@ -355,6 +379,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const walkOptions = {
       ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
       subscriptionLinks: true,
+      overlap: walkOverlap(this.pageSize()),
     };
     signal?.throwIfAborted();
     const first = await this.reader.walk(target, http, walkOptions);
@@ -409,7 +434,13 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         ? second.reason
         : 'WALKS_DIFFER';
 
-    const classified = classifyNeededNames(needed, [firstSeen, secondSeen]);
+    // A variant of a name can hide only where a walk may have skipped rows. A gap-free walk
+    // skipped none that existed throughout it; the two walks must also agree on one stable
+    // order (an unordered list would make chaining a coincidence).
+    const gapFree =
+      ((first.coverage?.gapFree ?? false) || (second.coverage?.gapFree ?? false)) &&
+      sameRelativeOrder(first.coverage?.order, second.coverage?.order);
+    const classified = classifyNeededNames(needed, [firstSeen, secondSeen], gapFree);
     const resolved = new Map<string, NameResolution>();
     const runtime = new Map<string, AccountRuntime>();
     const bySpelling = new Map(secondSeen.map((a) => [a.providerUsername, a]));
@@ -457,13 +488,15 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     toLookup.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
     const maxLookups = Math.max(0, Math.trunc(this.options.maxLookups ?? INVENTORY_MAX_LOOKUPS));
     let lookups = 0;
-    let stopped = false;
+    // Without a gap-free walk no lookup can decide a name (a hit or a 404 for one spelling
+    // says nothing about a variant beside it), so none is sent.
+    let stopped = !gapFree;
     // A 404 is trusted only from a route that answers 200 for an account both walks saw (the
     // canary): a missing route or a proxy answers 404 to every name, and "absent" from such an
     // answer would report a held account missing. The canary is a name the BACKUP needs (an
     // account it does not name is never asked for, not even read). No canary, or a canary not
     // found → no lookup is trusted, so none is sent.
-    if (toLookup.length > 0) {
+    if (toLookup.length > 0 && !stopped) {
       const canary = [...resolved.values()]
         .flatMap((r) => (r.kind === 'PRESENT' && lookupSafe(r.spelling) ? [r.spelling] : []))
         .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))[0];

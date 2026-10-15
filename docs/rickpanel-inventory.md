@@ -122,9 +122,9 @@ I = 1 s): 1 login + 2 × ⌈N / P⌉ pages, one at a time, so ≈ (1 + 2⌈N/P�
 longer when the panel answers slower than I. The Web Admin's read is TARGETED (§Per-name
 resolution): one double walk, never walked again; when the panel moved, + 1 canary + at most
 one exact lookup per needed name the walks could not decide (bounded by
-`RICKPANEL_INVENTORY_MAX_LOOKUPS`), each one interval apart. A synthetic 100 000-account panel
-with 77 000 needed names and churn during the walks cost 2 304 requests (1 login, 2 005 pages,
-298 lookups), ≈ 38 min. A non-targeted read (the CLI, the rehearsal) reads once; one built with
+`RICKPANEL_INVENTORY_MAX_LOOKUPS`), each one interval apart. Its pages step by `limit − overlap` (≈ 11% more pages at the defaults). A synthetic 100 000-account
+panel with 77 000 needed names, sales, mid-list creations, single deletions and 15-row deletion
+bursts during the walks cost 2 373 requests (1 login, 2 218 pages, 154 lookups), ≈ 40 min. A non-targeted read (the CLI, the rehearsal) reads once; one built with
 `inventoryAttempts` > 1 walks again at most twice more, after 15 s and 45 s.
 
 Tested: `tests/unit/rickpanel-load-protection.test.ts` (a large inventory paged and paced,
@@ -190,33 +190,53 @@ The names needed are those of live, real (`is_test = 0`) invoices whose owner th
 declared-missing code asks every production panel; an operator's ADOPT asks its panel. Each
 carries the backup's exact spelling (null when two invoices spell it differently).
 
+**Gap-free walks.** Offset pagination can skip a row only at a page boundary, when rows ahead of
+the cursor are deleted between two page requests. So the per-name resolution walks with
+OVERLAPPING pages: each page starts `INVENTORY_WALK_OVERLAP` (10; at most a quarter of the page)
+rows before the previous one ended. A walk is **gap-free** when every boundary is chained — the
+next page shares at least one row with the previous one, in the same order (it then starts at or
+before that row, so nothing after it was skipped) — no page before the end was too short to
+overlap, and the walk ended on a page shorter than the limit whose end is exactly the `total`
+that same response reported (a list that withholds a row its count includes is never gap-free;
+the end is never inferred from a `total` alone, which the panel counts in another statement). The
+two walks must also agree on one relative order (Marzban's list has no `ORDER BY`; an unstable
+order makes chaining a coincidence, so it voids the proof). A gap-free walk returned every
+account that existed throughout it: **a spelling it did not return did not exist throughout it.**
+A panel that caps the page size below ours is learned from the first page. Up to 9 deletions
+between two page requests (one second apart) are absorbed; a larger burst breaks the chain of
+that walk only.
+
+Each needed name is then decided:
+
 1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of
-   both walks: a collision (`USERNAME_CASE_COLLISION`), never eligible. A union, because a
-   spelling seen once was on the panel at some moment.
-2. **The backup's exact spelling, and only it, in BOTH walks** — present. A name seen in one
-   walk only may have been deleted or created mid-read, and a spelling other than the backup's
-   may stand beside the backup's own account that both walks skipped: neither is decided by the
-   walks. Such a name asks for the backup's spelling (step 3): found beside another spelling →
-   collision; 404 while every walk saw one other spelling → that spelling is the one account,
-   exactly as a complete read decides it; 404 otherwise → unresolved. A name the backup spells
-   two ways is unresolved whatever the walks saw.
-3. **Anything else** — one exact lookup, `GET api/user/{username}` (`USER_PATH`, the route the
-   RickPanel adapter's `lookupUser` already reads), on the same protected read session: one
-   request in flight, the same pacing, the same login and the same retry budget as the walks.
-   Found (a record whose name folds to the needed key): **present**, with the panel's spelling.
-   404: **proven absent** (`PROVIDER_MISSING` is then a fact, not an inference from a partial
-   walk) — but only when the spelling asked is evidence of the account: one a walk saw, or the
-   backup's own exact spelling (the account Mirza created). A 404 for a guessed spelling (the
-   backup spells the name two ways) is **unresolved**. And no 404 is trusted until a **canary**
-   — the first (by name) of the backup's needed names that both walks saw; an account the backup does not name is never asked for — has answered 200 for its own spelling: a
-   missing route or a proxy answers 404 to every name. No canary, or a failed one: no lookup
-   is sent and every name that needed one is unresolved. `.` and `..` are never put in a path. Anything else — a timeout, a 429 past its budget, a 5xx, a malformed body, the read's
-   end — **unresolved**. Lookups go in name order, at most `RICKPANEL_INVENTORY_MAX_LOOKUPS`
-   per panel read (default 5 000 ≈ 83 min at one a second), and none after the first that
-   did not answer — a struggling panel is not asked again thousands of times. A name beyond
-   the bound or after that stop is unresolved, never guessed. A lookup always asks for the
-   backup's EXACT spelling (`Alice` stays `Alice`), the account Mirza created; a name the
-   backup spells two ways is never looked up and stays unresolved.
+   both walks (or a lookup answers with one a walk did not see): a collision
+   (`USERNAME_CASE_COLLISION`), never eligible.
+2. **The backup's exact spelling, seen by BOTH walks, with a gap-free walk** — present. Without a
+   gap-free walk a case variant could stand beside it unseen, so it is **unresolved** — never
+   adopted, even though the spelling matches byte for byte.
+3. **Anything else** — one exact lookup of the backup's spelling, `GET api/user/{username}`
+   (`USER_PATH`), on the same protected read session (one request in flight, the same pacing,
+   login and retry budget). Found → present, ONLY with a gap-free walk that saw no other
+   spelling (found under another spelling than a walk saw → collision). 404 → **absent**
+   (`PROVIDER_MISSING`), ONLY with a gap-free walk that saw no spelling of it, or saw exactly this
+   spelling and it is gone now; a 404 while every walk saw one OTHER spelling → that spelling is
+   the one account, exactly as a complete read decides it. **Without a gap-free walk no lookup is
+   sent at all**: neither a hit nor a 404 for one spelling says anything about a variant beside
+   it, so every such name is unresolved. A name the backup spells two ways is never looked up and
+   stays unresolved.
+
+   No 404 is trusted until a **canary** — the first (by name) of the backup's needed names that
+   both walks saw — has answered 200 for its own spelling: a missing route or a proxy answers 404
+   to every name. No canary, or a failed one: no lookup is sent. `.` and `..` are never put in a
+   path. Anything else — a timeout, a 429 past its budget, a 5xx, a malformed body, the read's
+   end — **unresolved**. Lookups go in name order, at most `RICKPANEL_INVENTORY_MAX_LOOKUPS` per
+   panel read (default 5 000 ≈ 83 min at one a second), and none after the first that did not
+   answer. A lookup always asks for the backup's EXACT spelling (`Alice` stays `Alice`).
+
+   The rules do not depend on the panel's case semantics, which are unverified (Marzban v0.8.4:
+   case-insensitive and unique on SQLite NOCASE, case-sensitive with coexisting variants on MySQL
+   `utf8mb4_bin`; RickPanel's backend is unknown). A case-insensitive lookup answering another
+   spelling is a collision or the one account, as above; a case-sensitive one is asked exactly.
 
 Accounts on the panel that are not in the backup are ignored: they decide nothing and are never
 looked up. A panel the backup asks nothing of is not read at all (`NOTHING_NEEDED`, never reported
@@ -240,19 +260,22 @@ still `PROVIDER_INVENTORY_INCOMPLETE`, unchanged.
 
 Residual risks, stated rather than hidden:
 
-- **A case variant skipped by both walks, beside the backup's own account.** When both walks saw
-  exactly the backup's spelling (`acc5`), the name is present without a lookup. A variant
-  (`ACC5`) that BOTH walks slipped past — each needs a deletion ahead of it while the cursor
-  passes — is not seen, and the account adopted is the one whose name is byte for byte the
-  backup's; a complete read would have sent the name to manual review as a collision. No exact
-  lookup can reveal an unknown variant; only a complete snapshot proves there is none. Recorded
-  for the owner's decision (it is the price of approving while Mirza sells).
+- **An account created DURING a walk ahead of its cursor.** A gap-free walk proves nothing about
+  an account that did not exist throughout it. A case variant created mid-read, inserted before
+  the cursor of the second walk (only possible when the list is not in creation order), is not
+  seen. The complete-read rule (`listAll`) has exactly the same exposure, and the import's own
+  read (bound to the dry run's digest by `DRY_RUN_MISMATCH`) is a second, later look.
+- **Visibility is the admin's.** Every list, lookup and 404 is scoped to the accounts the
+  credential's admin can see (RickPanel answers 404 for another admin's user). An account owned
+  by another admin is invisible, and is also one this installation could never operate.
 - **A no-panel invoice's ADOPT on a moving panel.** An invoice with an empty `code_panel` asks no
   panel until an operator approves an ADOPT onto one; on a panel that is not one snapshot, its
   evidence lists every panel as undecided, so no panel is offered for that approval. Fail-closed:
   such invoices stay `NO_PANEL` (manual review) until a dry run reads a still panel.
-- **The lookup route is unproven on a real panel** (below): its 404 semantics and case
-  sensitivity are inferred.
+- **Unproven on a real panel** (below): the lookup route's 404 semantics and case sensitivity,
+  the list's order stability and its `total`, and the page-size cap are inferred from Marzban
+  v0.8.4. Every one of them is checked at run time and fails closed — an unstable order, a
+  withheld row or a 404-everything route makes names unresolved, never decided.
 
 Scope: the Web Admin `.nxpkg` importer only. The CLI and the rehearsal walk are unchanged: they
 read with `listAll()` and treat anything but one complete snapshot as before.

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ProviderHttpClient, ProviderHttpRequest, ProviderHttpResult } from '@nexa/contracts';
-import { RickpanelInventorySource } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source';
+import {
+  RickpanelInventorySource,
+  sameRelativeOrder,
+} from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source';
+import {
+  RickpanelInventoryReader,
+  readOnlyRickpanelHttp,
+} from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel-inventory';
 import { InProcessPanelReadGate } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/panel-read-gate';
 import {
   classifyNeededNames,
@@ -155,7 +162,7 @@ describe('a live panel that keeps selling during the dry run', () => {
     // During the first walk's second page, an unrelated account on page one is deleted:
     // every later row shifts up by one and acc00101 is never served to the first walk.
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(panel.names.indexOf(name(7)), 1);
+      if (page === 1) panel.names.splice(5, 15); // more than the page overlap: the first walk really skips
     };
     const needed = need([name(101), name(250)]);
     const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed }));
@@ -198,7 +205,7 @@ describe('a live panel that keeps selling during the dry run', () => {
     const panel = fakePanel(300);
     panel.beforePage = (_offset, page) => {
       if (page === 1) {
-        panel.names.splice(0, 3); // three unrelated rows gone: three needed rows skipped
+        panel.names.splice(0, 15); // more rows than the page overlap: needed rows slip past
       }
     };
     // The canary (acc00290, the first needed name both walks saw) answers; the others do not.
@@ -219,7 +226,7 @@ describe('a live panel that keeps selling during the dry run', () => {
   it('the lookup bound: a name past maxLookups is UNRESOLVED, never guessed', async () => {
     const panel = fakePanel(300);
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 2);
+      if (page === 1) panel.names.splice(0, 15);
     };
     const needed = need([name(101), name(102), name(250)]);
     const read = complete(await sourceOf(panel, { maxLookups: 2 }).read(SCOPE, 'p1', { needed }));
@@ -288,10 +295,14 @@ describe('classifyNeededNames / resolveLookup', () => {
   const acc = (u: string) => ({ username: u.toLowerCase(), providerUsername: u });
 
   it('present only when one spelling is seen by every walk', () => {
-    const out = classifyNeededNames(need(['a', 'b', 'c']), [
-      [acc('a'), acc('b')],
-      [acc('a'), acc('C')],
-    ]);
+    const out = classifyNeededNames(
+      need(['a', 'b', 'c']),
+      [
+        [acc('a'), acc('b')],
+        [acc('a'), acc('C')],
+      ],
+      true,
+    );
     expect(out.get('a')).toEqual({ kind: 'PRESENT', spelling: 'a' });
     expect(out.get('b')).toEqual({
       kind: 'LOOKUP',
@@ -299,6 +310,7 @@ describe('classifyNeededNames / resolveLookup', () => {
       seen: 'b',
       backupSpelling: true,
       seenByAll: false,
+      gapFree: true,
     });
     // Seen under another spelling than the backup's: the backup's own is what is asked.
     expect(out.get('c')).toEqual({
@@ -307,6 +319,7 @@ describe('classifyNeededNames / resolveLookup', () => {
       seen: 'C',
       backupSpelling: true,
       seenByAll: false,
+      gapFree: true,
     });
   });
 
@@ -317,7 +330,13 @@ describe('classifyNeededNames / resolveLookup', () => {
 
   it('a needed name no walk saw is looked up by its canonical spelling; others are never classified', () => {
     const out = classifyNeededNames(need(['z']), [[acc('manual')], [acc('manual')]]);
-    expect(out.get('z')).toEqual({ kind: 'LOOKUP', ask: 'z', seen: null, backupSpelling: true });
+    expect(out.get('z')).toEqual({
+      kind: 'LOOKUP',
+      ask: 'z',
+      seen: null,
+      backupSpelling: true,
+      gapFree: false,
+    });
     expect(out.has('manual')).toBe(false);
   });
 
@@ -330,7 +349,7 @@ describe('classifyNeededNames / resolveLookup', () => {
     ).toEqual({ kind: 'COLLISION', spellings: ['A', 'a'] });
     expect(
       resolveLookup(
-        { kind: 'LOOKUP', ask: 'a', seen: null, backupSpelling: true },
+        { kind: 'LOOKUP', ask: 'a', seen: null, backupSpelling: true, gapFree: true },
         { kind: 'NOT_FOUND' },
       ),
     ).toEqual({
@@ -416,17 +435,18 @@ describe('neededNamesByPanel — exactly what the backup can ask', () => {
 describe('Codex review on #283', () => {
   it("a 404 for a name no walk saw decides it only when the backup's own spelling was asked", () => {
     const guessed = { kind: 'LOOKUP', ask: 'alice', seen: null, backupSpelling: false } as const;
-    const exact = { kind: 'LOOKUP', ask: 'Alice', seen: null, backupSpelling: true } as const;
+    const exact = {
+      kind: 'LOOKUP',
+      ask: 'Alice',
+      seen: null,
+      backupSpelling: true,
+      gapFree: true,
+    } as const;
     expect(resolveLookup(guessed, { kind: 'NOT_FOUND' })).toEqual({ kind: 'UNRESOLVED' });
     expect(resolveLookup(exact, { kind: 'NOT_FOUND' })).toEqual({ kind: 'ABSENT' });
     // The backup spells it two ways: the canonical name is a guess.
     const out = classifyNeededNames(new Map([['alice', null]]), [[], []]);
-    expect(out.get('alice')).toEqual({
-      kind: 'LOOKUP',
-      ask: 'alice',
-      seen: null,
-      backupSpelling: false,
-    });
+    expect(out.get('alice')).toEqual({ kind: 'UNDECIDABLE' });
     // The backup's mixed-case spelling is what is asked, not the lowercase key.
     const mixed = classifyNeededNames(new Map([['alice', 'Alice']]), [[], []]);
     expect(mixed.get('alice')).toEqual({
@@ -434,6 +454,7 @@ describe('Codex review on #283', () => {
       ask: 'Alice',
       seen: null,
       backupSpelling: true,
+      gapFree: false,
     });
   });
 
@@ -456,7 +477,7 @@ describe('Codex review on #283', () => {
   it('a runtime fact is stamped when the walks ended, not after the lookups', async () => {
     const panel = fakePanel(300);
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 1);
+      if (page === 1) panel.names.splice(0, 15);
     };
     let stamps = 0;
     const stamp = () => new Date(Date.UTC(2026, 9, 14, 8, 0, stamps++));
@@ -578,7 +599,7 @@ describe('independent audit on #283', () => {
   it('a route that answers 404 to everything (a proxy, a missing route): the canary fails, no name is called absent', async () => {
     const panel = fakePanel(300);
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 2);
+      if (page === 1) panel.names.splice(0, 15);
     };
     panel.onLookup = () => answer(404, { detail: 'Not Found' });
     const read = complete(
@@ -648,7 +669,7 @@ describe('independent audit on #283', () => {
   it('a lookup is retried like a page: a 503 then the record — present, one retry spent', async () => {
     const panel = fakePanel(300);
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 1);
+      if (page === 1) panel.names.splice(0, 15);
     };
     let failed = false;
     panel.onLookup = (u) => {
@@ -668,7 +689,7 @@ describe('independent audit on #283', () => {
   it('a dot segment is never put in a lookup path', async () => {
     const panel = fakePanel(300);
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 1);
+      if (page === 1) panel.names.splice(0, 15);
     };
     const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need(['..']) }));
     expect(read.resolution).toMatchObject({ unresolved: 1 });
@@ -680,7 +701,7 @@ describe('the canary is a name the backup needs', () => {
   it('never asks for an account the backup does not name; with no needed name both walks saw, no lookup is sent', async () => {
     const panel = fakePanel(300);
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 2);
+      if (page === 1) panel.names.splice(0, 15);
     };
     // acc00101 and acc00102 slipped past the first walk; nothing the backup needs was seen by both.
     const read = complete(
@@ -732,7 +753,7 @@ describe('Codex review on a2c54ea7', () => {
     ).toEqual({ kind: 'UNRESOLVED' });
     const panel = fakePanel(300);
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 1);
+      if (page === 1) panel.names.splice(0, 15);
     };
     // 'zz-hidden' is not on the panel's list at all; the backup spells it two ways (null).
     const needed = new Map<string, string | null>([
@@ -779,10 +800,11 @@ describe("Codex review on 96472a03: presence by walks needs the backup's exact s
   const acc = (u: string) => ({ username: u.toLowerCase(), providerUsername: u });
 
   it('both walks saw only ALICE, the backup says alice: the backup spelling is asked, never adopted on the walks alone', () => {
-    const out = classifyNeededNames(new Map([['alice', 'alice']]), [
-      [acc('ALICE')],
-      [acc('ALICE')],
-    ]);
+    const out = classifyNeededNames(
+      new Map([['alice', 'alice']]),
+      [[acc('ALICE')], [acc('ALICE')]],
+      true,
+    );
     const evidence = out.get('alice');
     expect(evidence).toEqual({
       kind: 'LOOKUP',
@@ -790,6 +812,7 @@ describe("Codex review on 96472a03: presence by walks needs the backup's exact s
       seen: 'ALICE',
       backupSpelling: true,
       seenByAll: true,
+      gapFree: true,
     });
     if (evidence?.kind !== 'LOOKUP') throw new Error('shape');
     // alice exists after all (both walks skipped it): two accounts — a collision.
@@ -818,7 +841,7 @@ describe("Codex review on 96472a03: presence by walks needs the backup's exact s
     const panel = fakePanel(300);
     panel.names.push('ALICE');
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 1);
+      if (page === 1) panel.names.splice(0, 15);
     };
     panel.onLookup = (u) =>
       u === 'alice' ? answer(200, { username: 'alice', status: 'active' }) : undefined;
@@ -836,7 +859,7 @@ describe("Codex review on 96472a03: presence by walks needs the backup's exact s
     const panel = fakePanel(300);
     panel.names.push('ALICE');
     panel.beforePage = (_offset, page) => {
-      if (page === 1) panel.names.splice(0, 1);
+      if (page === 1) panel.names.splice(0, 15);
     };
     const needed = new Map<string, string | null>([
       [name(250), name(250)],
@@ -845,5 +868,171 @@ describe("Codex review on 96472a03: presence by walks needs the backup's exact s
     const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed }));
     expect(read.index.usernames.get('alice')).toEqual(['ALICE']);
     expect(read.runtime.has('ALICE')).toBe(true);
+  });
+});
+
+describe('P1 (owner: option 2): no presence and no absence without a gap-free walk', () => {
+  /** Deletes `count` accounts at the head of the list before the given page indexes. */
+  const bursts = (panel: FakePanel, pages: readonly number[], count = 15) => {
+    panel.beforePage = (_offset, page) => {
+      if (pages.includes(page)) panel.names.splice(0, count);
+    };
+  };
+
+  it('both walks lose rows (bursts beyond the overlap): a name both saw exactly is UNRESOLVED, never adopted — a skipped variant could stand beside it', async () => {
+    const panel = fakePanel(400);
+    // 4 pages a walk at 100 rows, 90 per step: page indexes 1 and 6 are mid-walk in each.
+    bursts(panel, [1, 6]);
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(390), name(395)]) }),
+    );
+    expect(read.resolution).toMatchObject({ presentByWalks: 0, presentByLookup: 0, unresolved: 2 });
+    expect(lookups(panel)).toEqual([]); // no lookup can decide anything without a gap-free walk
+    expect(indexCovers(read.index, name(390))).toBe(false);
+  });
+
+  it('a gap-free walk that saw a case variant: a collision, never an adoption', async () => {
+    const panel = fakePanel(300);
+    panel.names.push('ACC00290');
+    bursts(panel, [1]); // walk 1 loses rows; walk 2 is gap-free and sees both spellings
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(290), name(250)]) }),
+    );
+    expect(read.index.usernames.get(name(290))).toEqual(['ACC00290', 'acc00290']);
+    expect(read.resolution).toMatchObject({ collisions: 1 });
+  });
+
+  it('an order that is not stable between requests (no ORDER BY): never gap-free, nothing decided on absence', async () => {
+    const panel = fakePanel(300);
+    let shuffled = 0;
+    panel.beforePage = (_offset, page) => {
+      if (page === 1) panel.names.push('zz-sale'); // churn: the read is not one snapshot
+      // Rotate a slice on every request: no stable order, so the walks disagree on it.
+      const head = panel.names.slice(0, 60);
+      panel.names = [...head.slice(1), ...head.slice(0, 1), ...panel.names.slice(60)];
+      shuffled += 1;
+    };
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(10), 'gone']) }),
+    );
+    expect(shuffled).toBeGreaterThan(0);
+    expect(read.resolution).toMatchObject({ presentByWalks: 0, absentByLookup: 0, unresolved: 2 });
+  });
+
+  it('a 404 is never proof of absence without a gap-free walk (missing account stays unresolved)', () => {
+    expect(
+      resolveLookup(
+        { kind: 'LOOKUP', ask: 'gone', seen: null, backupSpelling: true, gapFree: false },
+        { kind: 'NOT_FOUND' },
+      ),
+    ).toEqual({ kind: 'UNRESOLVED' });
+    expect(
+      resolveLookup(
+        { kind: 'LOOKUP', ask: 'acc1', seen: 'acc1', backupSpelling: true, gapFree: false },
+        { kind: 'FOUND', spelling: 'acc1' },
+      ),
+    ).toEqual({ kind: 'UNRESOLVED' });
+  });
+
+  it('a case-insensitive panel (the lookup answers the stored spelling): the other spelling is a collision', async () => {
+    const panel = fakePanel(300);
+    panel.names.push('ALICE');
+    bursts(panel, [1]);
+    // The backup says alice; the panel stores ALICE and matches lookups case-insensitively.
+    panel.onLookup = (u) =>
+      u.toLowerCase() === 'alice'
+        ? answer(200, { username: 'ALICE', status: 'active' })
+        : undefined;
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', {
+        needed: new Map<string, string | null>([
+          [name(250), name(250)],
+          ['alice', 'alice'],
+        ]),
+      }),
+    );
+    // Both walks saw ALICE only; asked for alice the panel answered ALICE: one account, the
+    // one spelling there is — exactly what a complete read decides (never a guessed second).
+    expect(read.index.usernames.get('alice')).toEqual(['ALICE']);
+  });
+});
+
+describe('the overlapping walk proves its own coverage', () => {
+  const walkOf = async (panel: FakePanel, overlap = 10, client?: ProviderHttpClient) => {
+    const reader = new RickpanelInventoryReader();
+    const http = readOnlyRickpanelHttp(client ?? clientOf(panel));
+    return reader.walk(
+      {
+        baseUrl: 'https://panel.invalid',
+        credentials: { shape: 'USERNAME_PASSWORD', username: 'a', password: 'b' },
+      } as never,
+      http,
+      { pageSize: 100, overlap },
+    );
+  };
+
+  it('a still panel: gap-free, every row once, pages step by limit − overlap', async () => {
+    const panel = fakePanel(250);
+    const walk = await walkOf(panel);
+    if (!walk.ok) throw new Error('walk');
+    expect(walk.coverage?.gapFree).toBe(true);
+    expect(walk.coverage?.order).toHaveLength(250);
+    expect(walk.evidence.pages).toBe(3); // offsets 0, 90, 180
+  });
+
+  it('deletions ahead of the cursor within the overlap: still chained and gap-free', async () => {
+    const panel = fakePanel(250);
+    panel.beforePage = (_o, page) => {
+      if (page === 1) panel.names.splice(0, 9);
+    };
+    const walk = await walkOf(panel);
+    if (!walk.ok) throw new Error('walk');
+    expect(walk.coverage?.gapFree).toBe(true);
+  });
+
+  it('a burst beyond the overlap breaks the chain: not gap-free', async () => {
+    const panel = fakePanel(250);
+    panel.beforePage = (_o, page) => {
+      if (page === 1) panel.names.splice(0, 15);
+    };
+    const walk = await walkOf(panel);
+    if (!walk.ok) throw new Error('walk');
+    expect(walk.coverage?.gapFree).toBe(false);
+  });
+
+  it('a list that withholds a row its total counts: not gap-free', async () => {
+    const panel = fakePanel(150);
+    const inner = clientOf(panel);
+    const hiding: ProviderHttpClient = {
+      send: async (request) => {
+        const result = await inner.send(request);
+        if (!result.ok || !request.path.startsWith('api/users')) return result;
+        const body = JSON.parse(result.bodyText) as { users: { username: string }[] };
+        return {
+          ...result,
+          bodyText: JSON.stringify({
+            ...body,
+            users: body.users.filter((u) => u.username !== name(120)),
+          }),
+        };
+      },
+    };
+    const walk = await walkOf(panel, 10, hiding);
+    if (!walk.ok) throw new Error('walk');
+    expect(walk.coverage?.gapFree).toBe(false);
+  });
+
+  it('without `overlap` the walk is exactly as before: no coverage reported', async () => {
+    const panel = fakePanel(250);
+    const walk = await walkOf(panel, 0);
+    if (!walk.ok) throw new Error('walk');
+    expect(walk.coverage).toBeUndefined();
+    expect(walk.evidence.pages).toBe(3); // offsets 0, 100, 200
+  });
+
+  it('sameRelativeOrder: common rows in one order, or not', () => {
+    expect(sameRelativeOrder(['a', 'b', 'c'], ['a', 'x', 'b', 'c'])).toBe(true);
+    expect(sameRelativeOrder(['a', 'b', 'c'], ['b', 'a', 'c'])).toBe(false);
+    expect(sameRelativeOrder(undefined, ['a'])).toBe(false);
   });
 });

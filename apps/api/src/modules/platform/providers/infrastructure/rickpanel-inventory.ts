@@ -212,6 +212,8 @@ export type RickpanelInventoryWalk =
       readonly evidence: RickpanelInventoryEvidence;
       /** Only when `subscriptionLinks` was asked for. */
       readonly subscriptionLinks?: RickpanelSubscriptionLinks;
+      /** Only when `overlap` was asked for. */
+      readonly coverage?: RickpanelWalkCoverage;
     }
   | {
       readonly ok: true;
@@ -227,6 +229,8 @@ export type RickpanelInventoryWalk =
       readonly observed: readonly RickpanelInventoryAccount[];
       /** Only when `subscriptionLinks` was asked for. */
       readonly subscriptionLinks?: RickpanelSubscriptionLinks;
+      /** Only when `overlap` was asked for. */
+      readonly coverage?: RickpanelWalkCoverage;
     }
   | RickpanelInventoryFailure;
 
@@ -341,6 +345,29 @@ export interface RickpanelInventoryOptions {
    * the exact provider spelling. Absent by default, so discovery never holds a link.
    */
   readonly subscriptionLinks?: boolean;
+  /**
+   * Opt-in (the per-name resolution only): start each page `overlap` rows before the previous
+   * one ended, and report whether the walk is GAP-FREE (`RickpanelWalkCoverage`). Offset
+   * pagination can only skip a row at a page boundary, when rows before the cursor are deleted
+   * between two page requests; a next page that still shares a row with the previous one
+   * starts at or before that row, so nothing after it was skipped. Absent: the walk is exactly
+   * as before.
+   */
+  readonly overlap?: number;
+}
+
+/**
+ * What an overlapping walk can prove about its own coverage. `gapFree`: every page boundary
+ * was chained (the next page shared at least one row with the previous one, in the same
+ * relative order), no page short of the limit came before the end, and the walk ended exactly
+ * at the `total` the final page itself reported. Such a walk returned every account that
+ * existed throughout it — so a spelling it did not return did not exist throughout it.
+ * `order`: the exact spellings in the order first received (to check two walks agree on one
+ * stable order). Only an overlapping walk reports these.
+ */
+export interface RickpanelWalkCoverage {
+  readonly gapFree: boolean;
+  readonly order: readonly string[];
 }
 
 /** Exact provider spelling → the link `subscriptionFrom` derives from its row, or null. */
@@ -436,6 +463,15 @@ export class RickpanelInventoryReader {
     let totalChanged = false;
     let firstPageRows = 0;
     let lastPageRows: number;
+    // Coverage, for an overlapping walk only (see `RickpanelInventoryOptions.overlap`).
+    const requested = Math.max(0, Math.trunc(options.overlap ?? 0));
+    const overlap = requested > 0 && requested * 2 <= pageSize ? requested : 0;
+    const order: string[] = [];
+    let previousPage: readonly string[] | null = null;
+    let chained = true;
+    let shortBeforeEnd = false;
+    let limit = pageSize;
+    let endedAtTotal = false;
 
     const fault = (pagination: InventoryPaginationFault, status: number | null) =>
       ({ ok: false, failure: 'MALFORMED_RESPONSE', status, pagination }) as const;
@@ -474,6 +510,7 @@ export class RickpanelInventoryReader {
       lastPageRows = rows.length;
       if (rows.length === 0) break;
 
+      const pageNames: string[] = [];
       let fresh = 0;
       for (const row of rows) {
         if (typeof row !== 'object' || row === null || Array.isArray(row)) {
@@ -482,6 +519,7 @@ export class RickpanelInventoryReader {
         const account = accountFrom(row as Record<string, unknown>);
         if (account === null) return fault('INVALID_ROW', answer.status);
         rowsFetched += 1;
+        pageNames.push(account.providerUsername);
         // Keyed by the EXACT provider spelling: `Alice` and `alice` are two accounts on a
         // case-sensitive panel, and folding them here would hide one of them.
         if (byName.has(account.providerUsername)) {
@@ -492,14 +530,62 @@ export class RickpanelInventoryReader {
             account.providerUsername,
             subscriptionFrom(target.baseUrl, row as Record<string, unknown>),
           );
+          order.push(account.providerUsername);
           fresh += 1;
         }
       }
-      if (fresh === 0) return fault('NO_PROGRESS', answer.status);
+      if (overlap === 0) {
+        if (fresh === 0) return fault('NO_PROGRESS', answer.status);
+        offset += rows.length;
+        if (total !== null && offset >= total) break;
+        continue;
+      }
 
-      offset += rows.length;
-      if (total !== null && offset >= total) break;
+      // An overlapping walk. A boundary is chained when this page shares a row with the
+      // previous one and their common rows come in the same order.
+      if (previousPage !== null) {
+        const here = new Set(pageNames);
+        const before = new Set(previousPage);
+        const commonHere = pageNames.filter((n) => before.has(n));
+        const commonBefore = previousPage.filter((n) => here.has(n));
+        if (
+          commonHere.length === 0 ||
+          commonHere.length !== commonBefore.length ||
+          commonHere.some((n, i) => n !== commonBefore[i])
+        ) {
+          chained = false;
+        }
+      }
+      previousPage = pageNames;
+      // The panel's own page size: a first page shorter than asked, of a longer list, is a cap.
+      if (pages === 1 && rows.length < limit && total !== null && rows.length < total) {
+        limit = rows.length;
+      }
+      // The list ends on a page SHORTER than the limit (that one statement returned the whole
+      // remainder) — never on merely reaching `total`, which the panel counts in another
+      // statement and which a concurrent change can make stale within the same response.
+      if (rows.length < limit) {
+        endedAtTotal = total !== null && offset + rows.length === total;
+        break;
+      }
+      if (fresh === 0) return fault('NO_PROGRESS', answer.status);
+      // A cap too small to overlap cannot chain its boundaries: such a walk is never gap-free.
+      const step = rows.length > overlap ? rows.length - overlap : rows.length;
+      if (step === rows.length) shortBeforeEnd = true;
+      offset += step;
     }
+    const coverage: RickpanelWalkCoverage | null =
+      overlap === 0
+        ? null
+        : {
+            gapFree:
+              firstTotal !== null &&
+              firstTotal !== undefined &&
+              chained &&
+              endedAtTotal &&
+              !shortBeforeEnd,
+            order,
+          };
 
     const evidence: RickpanelInventoryEvidence = {
       pages,
@@ -522,6 +608,7 @@ export class RickpanelInventoryReader {
         evidence,
         observed: accounts,
         ...(links === null ? {} : { subscriptionLinks: links }),
+        ...(coverage === null ? {} : { coverage }),
       }) as const;
     if (totalChanged) return inconsistent('TOTAL_CHANGED');
     if (evidence.reportedTotal !== null && byName.size !== evidence.reportedTotal) {
@@ -533,6 +620,7 @@ export class RickpanelInventoryReader {
       accounts,
       evidence,
       ...(links === null ? {} : { subscriptionLinks: links }),
+      ...(coverage === null ? {} : { coverage }),
     };
   }
 
