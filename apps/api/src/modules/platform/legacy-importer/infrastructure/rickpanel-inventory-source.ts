@@ -105,7 +105,11 @@ export function walkOverlap(pageSize: number): number {
   return Math.max(1, Math.min(INVENTORY_WALK_OVERLAP, Math.floor(pageSize / 4)));
 }
 
-/** True when the rows common to both orders come in the same relative order in each. */
+/**
+ * True when the two orders share rows and those come in the same relative order in each. Two
+ * walks with nothing in common prove no stable order at all (Codex): false, unless both are
+ * empty.
+ */
 export function sameRelativeOrder(
   a: readonly string[] | undefined,
   b: readonly string[] | undefined,
@@ -115,6 +119,7 @@ export function sameRelativeOrder(
   const inA = new Set(a);
   const commonA = a.filter((n) => inB.has(n));
   const commonB = b.filter((n) => inA.has(n));
+  if (commonA.length === 0 && (a.length > 0 || b.length > 0)) return false;
   return commonA.length === commonB.length && commonA.every((n, i) => n === commonB[i]);
 }
 
@@ -386,7 +391,10 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       // account deleted and created again between the walks would look the same (Codex).
       const stampOf = (w: typeof first, name: string) => {
         const stamps = w.coverage?.createdAt.get(name);
-        return stamps !== undefined && stamps.size === 1 ? ([...stamps][0] as string) : null;
+        const only = stamps !== undefined && stamps.size === 1 ? [...stamps][0] : undefined;
+        // A creation time, not merely a string: an empty or malformed placeholder shared by an
+        // account and its replacement would prove nothing (Codex).
+        return only !== undefined && only !== '' && !Number.isNaN(Date.parse(only)) ? only : null;
       };
       const sameRows = a.every((name) => {
         const stamp = stampOf(first, name);
@@ -498,7 +506,6 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const gapFree = chosen !== null;
     const at = chosen?.index ?? walks.length - 1;
     const observedAt = endedAt[at] ?? this.now();
-    const last = walks[at] as Extract<RickpanelInventoryWalk, { ok: true }>;
     const lastSeen = seen[at] as readonly RickpanelInventoryAccount[];
     // Unsettled at the cap with the LAST walk not gap-free: a case variant that exists as the
     // read ends may be one that walk skipped, so no name is called present on one spelling.
@@ -514,15 +521,44 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       ),
     );
 
-    const bySpelling = new Map(lastSeen.map((a) => [a.providerUsername, a]));
-    const links = last.subscriptionLinks;
+    // Runtime facts of a present account: from the LATEST walk that returned the same row (same
+    // spelling, one creation time — the decision walk's), so a link rotated between the walks is
+    // the current one (Codex); stamped no later than the decision walk's end (`observedAt`).
+    const bySpellingOf = new Map<number, Map<string, RickpanelInventoryAccount>>();
+    const accountIn = (i: number, spelling: string) => {
+      let map = bySpellingOf.get(i);
+      if (map === undefined) {
+        map = new Map((seen[i] ?? []).map((a) => [a.providerUsername, a]));
+        bySpellingOf.set(i, map);
+      }
+      return map.get(spelling);
+    };
+    const latestOf = (spelling: string): number => {
+      const stamps = walks[at]?.coverage?.createdAt.get(spelling);
+      const created = stamps !== undefined && stamps.size === 1 ? [...stamps][0] : undefined;
+      for (let j = walks.length - 1; j > at; j -= 1) {
+        const later = walks[j]?.coverage?.createdAt.get(spelling);
+        if (
+          created !== undefined &&
+          later !== undefined &&
+          later.size === 1 &&
+          later.has(created) &&
+          accountIn(j, spelling) !== undefined
+        ) {
+          return j;
+        }
+      }
+      return at;
+    };
     const runtime = new Map<string, AccountRuntime>();
     const usernames = new Map<string, readonly string[]>();
     const covered = new Set<string>();
     for (const [name, r] of resolved) {
       if (r.kind === 'UNRESOLVED') continue;
       if (r.kind === 'PRESENT') {
-        const account = bySpelling.get(r.spelling);
+        const from = latestOf(r.spelling);
+        const account = accountIn(from, r.spelling);
+        const links = walks[from]?.subscriptionLinks;
         if (account === undefined) continue; // never: a present spelling is the decision walk's
         runtime.set(r.spelling, {
           state: account.state,

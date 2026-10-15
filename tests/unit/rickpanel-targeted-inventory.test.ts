@@ -64,6 +64,10 @@ interface FakePanel {
   view?: (rows: string[], offset: number, limit: number) => string[];
   /** Leaves `created_at` off every row. */
   noCreatedAt?: boolean;
+  /** Sends this as every row's `created_at` instead (a malformed or empty stamp). */
+  createdAtAs?: string;
+  /** A row's `status`, by name and the page it is served on (default `active`). */
+  statusOf?: (username: string, pageIndex: number) => string;
 }
 
 function fakePanel(count: number): FakePanel {
@@ -110,10 +114,12 @@ function clientOf(panel: FakePanel): ProviderHttpClient {
       const rows = panel.view === undefined ? slice : panel.view(slice, offset, limit);
       const users = rows.map((username) => ({
         username,
-        status: 'active',
+        status: panel.statusOf?.(username, panel.pages - 1) ?? 'active',
         ...(panel.noCreatedAt === true
           ? {}
-          : { created_at: iso(panel.created.get(username) ?? 0) }),
+          : {
+              created_at: panel.createdAtAs ?? iso(panel.created.get(username) ?? 0),
+            }),
       }));
       return answer(200, { users, total: panel.names.length });
     },
@@ -500,6 +506,37 @@ describe('Codex review on f4bcdd62', () => {
     if (!read.ok || read.complete) throw new Error(`expected incomplete: ${JSON.stringify(read)}`);
     expect(read.reason).toBe('COUNT_MISMATCH');
     expect(read.diagnostics?.walks).toHaveLength(3);
+  });
+});
+
+describe('Codex review on 79f46fda', () => {
+  it('a still panel whose rows carry a malformed created_at: never one complete snapshot', async () => {
+    for (const stamp of ['', 'not-a-date']) {
+      const panel = fakePanel(300);
+      panel.createdAtAs = stamp;
+      const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
+      expect(read.resolution, stamp).toMatchObject({ mode: 'TARGETED', present: 0 });
+      expect(indexCovers(read.index, name(5))).toBe(false);
+    }
+  });
+
+  it('two walks that share no row prove no common order', () => {
+    expect(sameRelativeOrder(['a', 'b'], ['c', 'd'])).toBe(false);
+    expect(sameRelativeOrder([], [])).toBe(true);
+    expect(sameRelativeOrder(['a', 'b', 'x'], ['a', 'y', 'b'])).toBe(true);
+    expect(sameRelativeOrder(['a', 'b'], ['b', 'a'])).toBe(false);
+  });
+
+  it('runtime facts of a present account come from the latest walk that returned the same row', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_o, page) => {
+      if (page === 1) add(panel, 'zz-sale');
+    };
+    // The second walk (pages 4+) finds name(5) disabled: the current state, not the first's.
+    panel.statusOf = (n, page) => (n === name(5) && page >= 4 ? 'disabled' : 'active');
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
+    expect(read.resolution).toMatchObject({ walks: 2, present: 1 });
+    expect(read.runtime.get(name(5))?.state).toBe('disabled');
   });
 });
 

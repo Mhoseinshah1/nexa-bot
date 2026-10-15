@@ -234,7 +234,8 @@ panel held as of its end — a snapshot, taken while the panel kept selling.
 may be deleted before it ends — and an account deleted mid-read must never be called present.
 No check inside one walk sees every such deletion: a deletion behind the cursor is offset by an
 account listed at the head, or by a tie of `created_at` reordered between two requests (the
-independent review's F1 and F3), and the walk looks exactly like a still panel. So survival is
+independent review's F1 and F3), and the walk looks exactly like a still panel. (Two walks that
+share no row at all prove no common order either.) So survival is
 proven only ACROSS walks: a row is confirmed when a LATER walk returns the same row — the same
 name AND the same `created_at`, so an account deleted and created again under that name confirms
 nothing. Seen again, it existed from its read, past the earlier walk's end, to the later read.
@@ -279,7 +280,7 @@ variants with exact lookups on MySQL `utf8mb4_bin`; RickPanel's backend is unkno
 
 Accounts on the panel that are not in the backup are ignored: they decide nothing and are never
 indexed. A panel the backup asks nothing of is not read at all (`NOTHING_NEEDED`, never reported
-as churn). Runtime facts (usage, state, link) are the decision walk's, stamped when it ended. Such a
+as churn). Runtime facts (usage, state, link) of a present account come from the LATEST walk that returned the same row, so a link rotated between the walks is the current one; they are stamped with the decision walk's end (never later than the facts). Such a
 read is reported `complete: true` with a `resolution` (`mode: 'TARGETED'`, the reason, and the
 counts `needed`, `present`, `absent`, `collisions`, `unresolved`, `walks`, `gapFree`) — counts
 only, never a name — and the index it builds covers ONLY the needed names: any other name asked
