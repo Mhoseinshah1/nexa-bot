@@ -270,7 +270,7 @@ unresolved. Then:
 Two walks that are one complete snapshot (the `listAll` rule: both consistent, the same names)
 are still read as one, but as of the FIRST walk's end, and only when the second returned every
 row unchanged — one `created_at` per row in each walk, the same in both — which is what proves
-each row survived that moment.
+each row survived that moment. Its runtime facts are the second walk's (fresher), stamped with the first walk's end.
 
 **No exact lookup is sent.** A lookup (`GET api/user/{name}`) happens after a walk — exactly when
 a case variant can appear unseen — and a 404 for one spelling says nothing about another. So a

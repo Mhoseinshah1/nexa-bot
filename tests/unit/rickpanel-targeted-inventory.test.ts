@@ -527,6 +527,14 @@ describe('Codex review on 79f46fda', () => {
     expect(sameRelativeOrder(['a', 'b'], ['b', 'a'])).toBe(false);
   });
 
+  it('the snapshot shortcut, too: the same rows, their runtime facts as the second walk read them', async () => {
+    const panel = fakePanel(300);
+    panel.statusOf = (n, page) => (n === name(5) && page >= 4 ? 'disabled' : 'active');
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
+    expect(read.resolution).toBeUndefined();
+    expect(read.runtime.get(name(5))?.state).toBe('disabled');
+  });
+
   it('runtime facts of a present account come from the latest walk that returned the same row', async () => {
     const panel = fakePanel(300);
     panel.beforePage = (_o, page) => {

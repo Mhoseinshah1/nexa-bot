@@ -406,11 +406,14 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
           {
             ok: true,
             complete: true,
-            accounts: first.accounts,
+            // The same rows; their runtime facts as the SECOND walk read them (fresher —
+            // a link rotated between the walks is the current one; Codex), stamped with the
+            // first walk's end.
+            accounts: second.accounts,
             evidence: { first: first.evidence, second: second.evidence },
-            ...(first.subscriptionLinks === undefined
+            ...(second.subscriptionLinks === undefined
               ? {}
-              : { subscriptionLinks: first.subscriptionLinks }),
+              : { subscriptionLinks: second.subscriptionLinks }),
           },
           1,
           load(),
