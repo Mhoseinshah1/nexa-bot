@@ -294,6 +294,26 @@ CLI: `legacy-import adopt-approved` (same flags as `reconcile`, `--evidence-clas
   adapter calls), but the CLI cannot pass an inventory hold (it never could for `reconcile` or
   `report` either): after an import made under a hold it refuses `INVENTORY_HOLD_MISMATCH` —
   fail closed. Use the restore page.
+- **No typed target acknowledgement.** On a production-like target the lane skips the owner's
+  typed target acknowledgement (`precheck` returns for `ADOPT` before it), as a dry run does.
+  It writes services, zero-price `LEGACY_ADOPTION` orders and their reservations under the
+  CRITICAL `legacy.migration.apply` permission alone; it is bound to an import that already
+  acknowledged this very target, and moves no money.
+- **The request does not pin its approvals.** Like an APPLY run, the lane executes the approvals
+  waiting when it RUNS, not those waiting when the owner requested it: an approval made in
+  between by someone holding only `legacy.services.decide` is executed too (each one still
+  passes its own gate, checksum and the ownership rule). Request the lane after the decisions.
+- **The targeted re-read relies on a `.nxpkg` map declaring no missing panel.** It reads only the
+  claimed names on their own panels. Another owner's invoice whose panel code were declared
+  MISSING would be matched across every production panel and so be undecidable here — not a
+  claim — beside an approved one. A `.nxpkg` map never declares a missing panel; the lane also
+  refuses any map that does (`ADOPT_REFUSED`), and refuses every non-`.nxpkg` source.
+- **Crash and resume.** A lane run left RUNNING (a crash after its approvals settled, before it
+  finished) is resumed and finished by the next lane request of the same source, even with
+  nothing waiting — never reported `NOTHING_TO_ADOPT` over adoptions it made. An approval the
+  targeted read still cannot decide makes the verdict `COMPLETED_WITH_FAILURES`. A lane import
+  row that FAILED after its bounded attempts leaves its claims to its RUNNING run: upload the
+  package again and request the lane, which resumes that run.
 
 **What remains.** NOT RUN against the real dump, RickPanel or a staging copy (§7 applies). A
 refused approval keeps the evidence and the map row the import recorded (the lane rewrites

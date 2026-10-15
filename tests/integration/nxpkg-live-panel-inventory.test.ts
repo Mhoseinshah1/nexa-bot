@@ -1472,8 +1472,9 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     panelA.beforeListPage = null;
     const lane = await detail(laneId);
     expect(lane.status, JSON.stringify(lane.errorCode)).toBe('ADOPT_DONE');
+    // Still unresolved is not done: the verdict says so (adopt-lane review P2-4).
     expect(lane.adoptReport).toMatchObject({
-      verdict: 'COMPLETED',
+      verdict: 'COMPLETED_WITH_FAILURES',
       approvals: 1,
       adopted: 0,
       stillUnresolved: 1,
@@ -1524,6 +1525,38 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // The other owner's (unapproved) candidate is exactly as it was.
     expect(after['b0000004']).toEqual(before['b0000004']);
     expect(await services()).toEqual(BASELINE_SERVICES);
+    expect(await moneyState()).toEqual(money);
+    expectReadsOnly(panelA);
+  }, 900_000);
+
+  it('§4b review P2-4: a lane run left RUNNING after its approvals settled (a crash before it finished) is resumed and finished by the next lane — never NOTHING_TO_ADOPT, never left RUNNING, nothing adopted twice', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const firstId = await runLane(page, pkg);
+    const first = await detail(firstId);
+    expect(first.adoptReport).toMatchObject({ verdict: 'COMPLETED', adopted: 1 });
+    const laneRunId = first.adoptReport?.legacyRunId;
+    expect(laneRunId).toEqual(expect.any(String));
+    // The crash: the approval settled ADOPTED, the run never reached COMPLETED.
+    await ctx.container.database.db.execute(
+      sql`UPDATE legacy_import_runs SET status = 'RUNNING', finished_at = NULL
+           WHERE tenant_id = ${TENANT} AND id = ${laneRunId as string}`,
+    );
+    const held = await services();
+    const money = await moneyState();
+
+    const againId = await runLane(page, pkg);
+    const again = await detail(againId);
+    expect(again.status, JSON.stringify(again.errorCode)).toBe('ADOPT_DONE');
+    expect(again.adoptReport).toMatchObject({
+      verdict: 'COMPLETED',
+      legacyRunId: laneRunId,
+      approvals: 0,
+      adopted: 0,
+      providerWrites: 0,
+    });
+    expect(await laneRuns()).toEqual([{ mode: 'ADOPT_APPROVED', status: 'COMPLETED' }]);
+    expect(await services()).toEqual(held);
     expect(await moneyState()).toEqual(money);
     expectReadsOnly(panelA);
   }, 900_000);

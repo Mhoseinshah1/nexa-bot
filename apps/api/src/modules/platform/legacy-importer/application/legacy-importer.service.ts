@@ -1414,6 +1414,14 @@ export class LegacyImporterService {
     if (snapshot.descriptor.engine !== 'NXPKG') {
       throw refuse('The adopt-approved lane follows a .nxpkg import only.');
     }
+    // The targeted re-read covers only the claimed names' own panels. An invoice of another
+    // owner whose panel code is declared MISSING is matched across every production panel, so
+    // here it would be UNDECIDABLE — not a claim — and the approved invoice adopted beside it.
+    // A `.nxpkg` map never declares a missing panel; a map that does is refused, not trusted
+    // (adopt-lane review P2-1).
+    if (mapping.policy.missingPanels.size > 0) {
+      throw refuse('The adopt-approved lane needs a panel map that declares no missing panel.');
+    }
     // Never beside another run. A lane run of THIS source left RUNNING by a crash is resumed:
     // its claims are executed again (P6 is idempotent per invoice) and settled.
     const runningId = await this.deps.destination.runningRun(scope);
@@ -1474,7 +1482,10 @@ export class LegacyImporterService {
       unconfirmed: 0,
       released: 0,
     };
-    if (lane.review.approvals.length === 0) {
+    // A lane run of this source left RUNNING (a crash after its approvals settled) is resumed
+    // and finished even when nothing waits any more: never left RUNNING, never reported as
+    // NOTHING_TO_ADOPT over adoptions it made (adopt-lane review P2-4).
+    if (lane.review.approvals.length === 0 && runningId === null) {
       // Nothing waits: no run, no read, no write.
       return this.report(
         'ADOPT_APPROVED',
@@ -1638,15 +1649,19 @@ export class LegacyImporterService {
       throw new LegacyImportInterrupted(run.id, 'adoption', error);
     }
     const left = Object.values(approvals.left).reduce((a, b) => a + b, 0);
+    // An approval the targeted read still could not decide (a panel read that failed, or held
+    // no gap-free walk) is not done: the lane says so in its verdict, never a plain COMPLETED.
+    const stillUnresolved = approvals.refused['INVENTORY_INCOMPLETE'] ?? 0;
     const attention = {
       approvalLeft: left,
       approvalUnconfirmed: approvals.unconfirmed,
-      total: left + approvals.unconfirmed,
+      approvalStillUnresolved: stillUnresolved,
+      total: left + approvals.unconfirmed + stillUnresolved,
     };
     const tallies = {
       met: lane.review.approvals.length,
       claimed: claimedCount.n,
-      stillUnresolved: approvals.refused['INVENTORY_INCOMPLETE'] ?? 0,
+      stillUnresolved,
       ...approvals,
     };
     const finished = await this.finish(
