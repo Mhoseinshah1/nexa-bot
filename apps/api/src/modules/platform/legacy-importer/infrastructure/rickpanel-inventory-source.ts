@@ -24,7 +24,6 @@ import type {
   LegacyInventoryPort,
   LegacyInventoryRead,
   LegacyInventoryReadOptions,
-  LegacyInventoryResolution,
 } from '../application/ports.js';
 import { decideNeededNames, resolutionCounts } from '../application/inventory-resolution.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
