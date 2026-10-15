@@ -340,6 +340,57 @@ describe('case variants: a collision or unresolved, never an adoption', () => {
   });
 });
 
+describe('second review: a row returned again in another account’s place', () => {
+  /** alice, then 299 accounts with ALICE at `variantAt`, all in insertion order. */
+  function build(variantAt: number, sameSecond = false): FakePanel {
+    const panel = fakePanel(0);
+    add(panel, 'alice');
+    for (let i = 1; i < variantAt; i += 1) add(panel, name(i));
+    add(panel, 'ALICE');
+    for (let i = variantAt; i <= 299; i += 1) add(panel, name(i));
+    if (sameSecond) for (const n of panel.names) panel.created.set(n, 1);
+    return panel;
+  }
+  const selling = (panel: FakePanel) => {
+    panel.beforePage = (_o, page) => {
+      if (page % 4 === 1) add(panel, `zz-sale-${String(page)}`);
+    };
+  };
+
+  it('ALICE replaced on one page by a row already seen (a tied ORDER BY): never alice alone (F-A)', async () => {
+    const panel = build(250);
+    selling(panel);
+    panel.view = (rows, offset) =>
+      offset === 180 ? rows.map((n) => (n === 'ALICE' ? name(5) : n)) : rows;
+    neverAdopted(await sourceOf(panel).read(SCOPE, 'p1', { needed: need(['alice']) }), 'alice');
+  });
+
+  it('the same with every created_at equal (a bulk import): never alice alone (F-A, E)', async () => {
+    const panel = build(250, true);
+    selling(panel);
+    panel.view = (rows, offset) =>
+      offset === 180 ? rows.map((n) => (n === 'ALICE' ? name(5) : n)) : rows;
+    neverAdopted(await sourceOf(panel).read(SCOPE, 'p1', { needed: need(['alice']) }), 'alice');
+  });
+
+  it('a needed account replaced by a row already seen: never a wrong ABSENT (F-A, B2)', async () => {
+    const panel = build(250);
+    selling(panel);
+    panel.view = (rows, offset) =>
+      offset === 180 ? rows.map((n) => (n === name(240) ? name(5) : n)) : rows;
+    const read = await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(240)]) });
+    if (read.ok && read.complete) expect(read.resolution?.absent ?? 0).toBe(0);
+  });
+
+  it('a row withheld from a middle page ends the walk short of its total: never a wrong ABSENT (F-B)', async () => {
+    const panel = build(150);
+    panel.beforePage = (_o, page) => add(panel, `zz-sale-${String(page)}`);
+    panel.view = (rows) => rows.filter((n) => n !== 'ALICE');
+    const read = await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(280)]) });
+    if (read.ok && read.complete) expect(read.resolution).toMatchObject({ absent: 0 });
+  });
+});
+
 describe('a list that does not add up to its total', () => {
   it('fewer distinct names than a total that held still (a withheld row): the panel stays incomplete', async () => {
     const panel = fakePanel(150);

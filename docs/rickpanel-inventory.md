@@ -212,6 +212,11 @@ these hold, each checked on the rows themselves:
   shows fresh. More movement than that is an inserted row the walk skipped (Codex: a case
   variant created mid-walk) — the chain breaks. In insertion order a new account is appended,
   so selling never trips this; a row withheld from a page shifts every later index and does.
+- **Every row accounted for.** No row twice in one page, and a row the walk had already received
+  must be one of the previous page's (the overlap). A row returned again anywhere else stands
+  in a position another account should hold — the second review's case of a tied `ORDER BY`, or
+  a bulk import with one `created_at` for every row, where a variant was replaced by a row
+  already seen.
 - **No false cap, no short page before the end.** A first page shorter than asked, of a longer
   list, teaches a cap; a later page longer than it breaks the chain (a withheld row, not a cap).
 - **Ended at its own total.** The walk ends on a page shorter than the limit whose end is
@@ -266,8 +271,9 @@ Residual risks, stated rather than hidden:
   panel whose rows are in insertion order yet that lists a new one mid-list — not a Marzban
   behaviour.
 - **Accounts created in the same second.** `created_at` ties are allowed (non-decreasing); their
-  relative order is the panel's. A variant created in the same second as the account and listed
-  by an offset-dependent tie order is not excluded.
+  relative order is the panel's. A tie permuted between two requests either repeats a row
+  (detected: every row accounted for), or swaps rows inside an overlap (detected: chained order),
+  or swaps rows that both stay inside one page (harmless: none is skipped).
 - **After the read.** A variant created after the last walk ended is outside this read, as it
   is outside a complete read; the import's own read is a second, later look, and a changed
   decision fails it (`DRY_RUN_MISMATCH`, nothing written).
@@ -278,8 +284,9 @@ Residual risks, stated rather than hidden:
   panel until an operator approves an ADOPT onto one; on a panel that is not one snapshot, its
   evidence lists every panel as undecided, so no panel is offered for that approval.
   Fail-closed: such invoices stay `NO_PANEL` (manual review) until a dry run reads a still panel.
-- **Liveness depends on the real panel.** If RickPanel's rows carry no `created_at`, or its list
-  is not in insertion order, no walk is ever gap-free: every name of a moving panel stays
+- **Liveness depends on the real panel.** If RickPanel's rows carry no `created_at`, carry one out
+  of order anywhere (a single row stamped before its predecessor by a clock step, a null stamp
+  on an old row, epoch numbers), or its list is not in insertion order, no walk is ever gap-free: every name of a moving panel stays
   unresolved (safe, but the dry run is then approvable only over a panel that holds still for
   two walks). This, the list route, `total` and the page-size cap are inferred from Marzban
   v0.8.4 and must be confirmed on a real RickPanel (gate G6).

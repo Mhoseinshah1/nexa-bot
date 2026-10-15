@@ -582,6 +582,20 @@ export class RickpanelInventoryReader {
           if (moved > freshBefore) chained = false;
         }
       }
+      // Every row of a page is accounted for: none twice in one page, and a row the walk had
+      // already received must be one of the previous page's (the overlap). A row returned again
+      // anywhere else stands in a position another account should hold — an account the walk
+      // never sees (reviewer F-A: a tied `ORDER BY`, or a row repeated in a variant's place).
+      if (new Set(pageIds).size !== pageIds.length) chained = false;
+      if (previousPage !== null) {
+        const fromPrevious = new Set(previousPage);
+        const seenEarlier = new Set(order.slice(0, order.length - fresh));
+        for (let i = 0; i < pageIds.length; i += 1) {
+          if (seenEarlier.has(pageNames[i] as string) && !fromPrevious.has(pageIds[i] as string)) {
+            chained = false;
+          }
+        }
+      }
       previousPage = pageIds;
       // The panel's own page size: a first page shorter than asked, of a longer list, is a cap
       // (or a withheld row — which a later page longer than it then shows). The overlap follows
