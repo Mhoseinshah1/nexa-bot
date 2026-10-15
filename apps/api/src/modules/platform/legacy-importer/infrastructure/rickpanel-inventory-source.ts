@@ -119,13 +119,10 @@ export function sameRelativeOrder(
   const inA = new Set(a);
   const commonA = a.filter((n) => inB.has(n));
   const commonB = b.filter((n) => inA.has(n));
-  // One shared row orders nothing (Codex): two at least, unless a walk holds fewer than two.
-  if (
-    commonA.length < Math.min(2, a.length, b.length) ||
-    (commonA.length === 0 && (a.length > 0 || b.length > 0))
-  ) {
-    return false;
-  }
+  // One shared row orders nothing (Codex): two at least — unless BOTH walks are empty, or both
+  // hold exactly one row.
+  const singletons = a.length <= 1 && b.length <= 1 && a.length === b.length;
+  if (!singletons && commonA.length < 2) return false;
   return commonA.length === commonB.length && commonA.every((n, i) => n === commonB[i]);
 }
 
@@ -441,7 +438,19 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     while (!settled() && walks.length < TARGETED_MAX_WALKS && !walks.some(countMismatch)) {
       signal?.throwIfAborted();
       const next = await this.reader.walk(target, http, walkOptions);
-      if (!next.ok) return this.finish(panelId, next, 1, load());
+      if (!next.ok) {
+        // The walks already made are still reported (Codex): the failure is the latest one's.
+        const failed = this.finish(panelId, next, 1, load());
+        return failed.diagnostics === undefined
+          ? failed
+          : {
+              ...failed,
+              diagnostics: {
+                ...failed.diagnostics,
+                walks: walks.map((w) => ({ ...w.evidence })),
+              },
+            };
+      }
       endedAt.push(this.now());
       walks.push(next);
       seen.push(next.consistent ? next.accounts : next.observed);
@@ -482,30 +491,40 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     }
     // Two consistent walks of the same names that only lack a usable creation time on some row
     // are not churn: the panel held still, and no retry can mend its stamps (Codex).
-    const secondNames = new Set(
-      (second.consistent ? second.accounts : second.observed).map((y) => y.providerUsername),
-    );
-    const sameNames =
-      first.consistent &&
-      second.consistent &&
-      first.accounts.length === secondNames.size &&
-      first.accounts.every((x) => secondNames.has(x.providerUsername));
+    // Two consecutive walks of the same names that only lack a usable creation time on some row
+    // are not churn: the panel held still, and no retry can mend its stamps (Codex) — the first
+    // two, or the last two when a third was made.
     const usableStamp = (w: typeof first, name: string) => {
       const stamps = w.coverage?.createdAt.get(name);
       const only = stamps !== undefined && stamps.size === 1 ? [...stamps][0] : undefined;
       return only !== undefined && only !== '' && !Number.isNaN(Date.parse(only));
     };
-    const reason = !first.consistent
-      ? first.reason
-      : !second.consistent
-        ? second.reason
-        : sameNames &&
-            first.accounts.some(
-              (x) =>
-                !usableStamp(first, x.providerUsername) || !usableStamp(second, x.providerUsername),
-            )
-          ? 'NO_CREATION_TIME'
-          : 'WALKS_DIFFER';
+    const stillWithoutStamps = (a: typeof first, b: typeof first) => {
+      if (!a.consistent || !b.consistent) return false;
+      const names = new Set(b.accounts.map((y) => y.providerUsername));
+      return (
+        a.accounts.length === names.size &&
+        a.accounts.every((x) => names.has(x.providerUsername)) &&
+        a.accounts.some(
+          (x) => !usableStamp(a, x.providerUsername) || !usableStamp(b, x.providerUsername),
+        )
+      );
+    };
+    const lastTwo =
+      walks.length > 2
+        ? stillWithoutStamps(
+            walks[walks.length - 2] as typeof first,
+            walks[walks.length - 1] as typeof first,
+          )
+        : false;
+    const reason =
+      lastTwo || stillWithoutStamps(first, second)
+        ? 'NO_CREATION_TIME'
+        : !first.consistent
+          ? first.reason
+          : !second.consistent
+            ? second.reason
+            : 'WALKS_DIFFER';
     // Every decision and runtime fact is the DECISION walk's, stamped when it ended. With no
     // decision walk, the last one is reported and every name is unresolved.
     const chosen = decision();

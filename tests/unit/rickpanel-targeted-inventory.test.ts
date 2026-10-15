@@ -606,6 +606,45 @@ describe('Codex review on 79f46fda', () => {
     expect(read.index.usernames.get(name(3))).toEqual([name(3)]);
   });
 
+  it('Codex: a third walk that fails still reports the walks already made', async () => {
+    const panel = fakePanel(300);
+    bursts(panel, [1]);
+    // The third walk's first page answers 500.
+    const send = clientOf(panel).send;
+    const client = {
+      send: async (r: ProviderHttpRequest) =>
+        panel.pages === 8 && r.method !== 'POST' && !r.path.startsWith('api/user/')
+          ? ({ ok: true, status: 500, headers: {}, bodyText: '{}', setCookie: [] } as const)
+          : send(r),
+    };
+    const source = new RickpanelInventorySource(
+      {
+        panel: async () => ({ baseUrl: 'https://panel.invalid', providerType: 'rickpanel' }),
+        credentials: async () => ({ username: 'admin', password: 'synthetic', apiToken: null }),
+        http: () => client,
+      },
+      {
+        pageSize: 100,
+        clock: () => 0,
+        sleep: async () => undefined,
+        gate: new InProcessPanelReadGate(),
+        targeted: true,
+      },
+      STAMP,
+    );
+    const read = await source.read(SCOPE, 'p1', { needed: need([name(101)]) });
+    expect(read.ok).toBe(false);
+    expect(read.diagnostics?.walks).toHaveLength(2);
+  });
+
+  it('Codex: the last two walks of a still panel without creation times report NO_CREATION_TIME, not churn', async () => {
+    const panel = fakePanel(300);
+    panel.noCreatedAt = true;
+    bursts(panel, [1]);
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(101)]) }));
+    expect(read.resolution).toMatchObject({ reason: 'NO_CREATION_TIME', walks: 3 });
+  });
+
   it('two walks that share no row prove no common order', () => {
     expect(sameRelativeOrder(['a', 'b'], ['c', 'd'])).toBe(false);
     expect(sameRelativeOrder([], [])).toBe(true);
@@ -614,6 +653,9 @@ describe('Codex review on 79f46fda', () => {
     // One shared row orders nothing.
     expect(sameRelativeOrder(['a', 'x', 'y'], ['a', 'p', 'q'])).toBe(false);
     expect(sameRelativeOrder(['a'], ['a'])).toBe(true);
+    // A singleton beside a longer walk: one anchor still orders nothing (Codex).
+    expect(sameRelativeOrder(['a'], ['a', 'b', 'c'])).toBe(false);
+    expect(sameRelativeOrder(['a', 'b', 'c'], ['a'])).toBe(false);
   });
 
   it('Codex: a row an overlap repeats within one walk reports the facts of its LATER read', async () => {
