@@ -108,6 +108,92 @@ Gaps closed in this pass, each by a test written first and failing: no retry aft
 drift, `listAll` (what the matcher indexes) never exercised, the known name matched by a
 lowercase fold instead of its exact spelling, and no per-kind request evidence.
 
+## G6 — the list-shape probe (read-only, bounded, on staging)
+
+**Status: NOT RUN against a real panel.** Tested against the fake list only
+(`tests/unit/rickpanel-g6-probe.test.ts`), which proves the mechanics and the classification —
+not RickPanel.
+
+The per-name resolution (`docs/rickpanel-inventory.md` §Per-name resolution) rests on four
+facts inferred from Marzban v0.8.4: the list's `{users, total}` shape and its `total`, a page
+cap, `created_at` on every row in insertion order, and one order that no offset or limit
+changes. When a dry run leaves every needed name unresolved, its diagnostics say which walk
+condition failed; G6 answers whether the PANEL can meet them at all, without a dry run.
+
+**Why a CLI and not the C1 harness.** G6 runs where the panel and its stored credential already
+are — the staging installation — from the runtime image (`node dist/rickpanel-probe.cli.js`,
+checked by `pnpm check:runtime`), with no checkout, no devDependencies and no password in a
+shell. It reads the panel's STORED credential through the importer's own protected read
+(`RickpanelInventorySource.withReadSession`), so it inherits every load rule a dry run has.
+
+### Safety
+
+- **Read-only.** It sends the token exchange and `GET api/users?offset=&limit=` and nothing
+  else — no user lookup, no subscription fetch, no write. The read-only guard refuses anything
+  else before sending; the report counts what reached the wire by kind (`wire`), and the exit
+  code is 4 if anything but those two was sent or attempted.
+- **Paced and gated like a dry run.** One request in flight, at least
+  `RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS` apart (default 1 s; production refuses < 250 ms),
+  longer after a slow answer; one login; the bounded retry budget; and the installation-wide
+  panel read gate — it waits behind a dry run's read of the same panel, and a dry run waits
+  behind it.
+- **Bounded.** Hard caps on list pages (`--max-pages`, default 400, at most 5 000) and wall time
+  (`--max-minutes`, default 20, at most 90), checked before every request. A probe stopped by a
+  cap says so (`budget.stoppedBy`) and is `INCONCLUSIVE`, never a pass.
+- **No sales stop needed.** Selling during the probe is measured (`CHURN`, per minute), not a
+  failure. Use a read-only admin on the panel if RickPanel has one.
+- **Aggregate-only output.** One line of JSON: counts, milliseconds and closed codes. No name,
+  row, `created_at` value, token or address (tested).
+
+### Run
+
+On the staging server, inside the api container (the panel must already be a NEXA panel of the
+tenant, with its credential saved):
+
+```bash
+C='sudo docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml'
+$C exec -T api node dist/rickpanel-probe.cli.js --panel <panel-id> > g6.json; echo "exit=$?"
+# options: --tenant <slug> --page-size <n> --walks 2|3 --max-pages <n> --max-minutes <n>
+```
+
+(`<panel-id>` is the NEXA panel's id from «پنل‌ها»; the same compose invocation as
+`docs/backup.md`.)
+
+From a development checkout: `pnpm rickpanel-probe:dev --panel <panel-id>`.
+
+Cost at the defaults (page size 100, overlap 10, 1 s): 1 login + 3 sample pages + 3 walks of
+⌈N / 90⌉ pages — 10 000 accounts ≈ 337 requests ≈ 6 min; 33 000 ≈ 1 104 requests, which the
+default `--max-pages 400` refuses: raise it to `--max-pages 1200 --max-minutes 25`, or use
+`--walks 2` (≈ 740 requests, ≈ 13 min).
+
+### What it reports
+
+`verdict` (`G6_HOLDS` / `G6_FAILS` / `INCONCLUSIVE`) and `findings`, a closed set:
+`NOT_A_PAGE`, `NO_TOTAL`, `TOTAL_INCONSISTENT`, `PAGE_CAP` (informational), `CREATED_AT_MISSING`,
+`CREATED_AT_UNPARSABLE`, `CREATED_AT_EPOCH`, `CREATED_AT_OUT_OF_ORDER`,
+`ORDER_UNSTABLE_SAME_OFFSET` (offset 0 fetched twice, other order), `ROWS_CHANGED_SAME_OFFSET`,
+`ORDER_UNSTABLE_OTHER_LIMIT` (an overlapping page asked with another `limit` put a shared row
+elsewhere), `CHURN` (informational), `NO_GAP_FREE_WALK`, `WALKS_ORDER_DIFFERS`,
+`NO_DECISIVE_WALK`. Beside them: `shape` (list shape, rows of the first page, learned cap),
+`total` (pages with and without one, first, last, largest change), `createdAt` on the sample page,
+`order`, each walk's full gap-free breakdown (the dry run's own per-walk diagnostics), `churn`
+(duration, total change, accounts added and removed per minute), `budget`, `wire`, `load`.
+
+`G6_HOLDS` needs two CONSECUTIVE decisive walks and no finding but `CHURN` / `PAGE_CAP`. Exit:
+0 holds · 1 fails · 2 usage · 3 inconclusive (a failure, a cap, no such panel or credential) ·
+4 not read-only (a defect).
+
+### Reading the result
+
+- **`CREATED_AT_*` or `NO_TOTAL`** — the per-name resolution cannot prove completeness on this
+  panel; no retry mends it. Record the JSON here and decide the remedy (a sort the panel
+  accepts, another field, a stopped-sales window) as an owner decision — do not relax the rule.
+- **`ORDER_UNSTABLE_*` / `WALKS_ORDER_DIFFERS`** — the list has no stable order; same.
+- **`NO_DECISIVE_WALK` with only `CHURN`** — the panel churned harder than the overlap absorbs
+  (look at `chainBreaks`: `NO_COMMON_ROW` is a deletion burst); run again at a quieter hour.
+- **`G6_HOLDS`** — record the JSON and the panel version below; the four inferred facts hold on
+  this panel at this size.
+
 ## Results
 
 _None yet. MANUAL ACCEPTANCE, NOT RUN — no RickPanel credentials in this environment._

@@ -37,6 +37,8 @@ ENTRYPOINTS=(
   # Migration P7: the legacy importer runs from the runtime image during a rehearsal and
   # the cutover; it carries a runtime dependency (mysql2) no other entrypoint loads.
   "apps/api/dist/legacy-import.cli.js"
+  # Gate G6: the read-only RickPanel probe runs from the runtime image on staging.
+  "apps/api/dist/rickpanel-probe.cli.js"
 )
 
 # 1. The compiled entrypoints exist.
@@ -60,6 +62,7 @@ node --input-type=module -e "
   const backup = await import('./apps/api/dist/backup.cli.js');
   const reset2fa = await import('./apps/api/dist/admin-2fa-reset.cli.js');
   const legacyImport = await import('./apps/api/dist/legacy-import.cli.js');
+  const probe = await import('./apps/api/dist/rickpanel-probe.cli.js');
 
   const problems = [];
   if (typeof migrate.runMigrations !== 'function') problems.push('migrate.runMigrations');
@@ -79,6 +82,7 @@ node --input-type=module -e "
   if (typeof reset2fa.parseResetArgs !== 'function') problems.push('reset2fa.parseResetArgs');
   if (typeof legacyImport.parseArgs !== 'function') problems.push('legacyImport.parseArgs');
   if (typeof legacyImport.guardTarget !== 'function') problems.push('legacyImport.guardTarget');
+  if (typeof probe.parseProbeArgs !== 'function') problems.push('probe.parseProbeArgs');
 
   // The migrations have to be reachable FROM DIST. The folder is resolved
   // relative to the module, so a compiled layout that nests one level deeper

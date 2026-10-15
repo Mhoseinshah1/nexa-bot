@@ -354,23 +354,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const startedAt = this.clock.now();
     try {
       const counters = emptyPanelReadCounters();
-      const http = protectedReadSession(
-        readOnlyRickpanelHttp(readOnlyGuard(this.access.http(panel.baseUrl), this.counts)),
-        {
-          policy: {
-            ...DEFAULT_PANEL_READ_POLICY,
-            ...this.options.policy,
-            requestIntervalMs: Math.max(
-              0,
-              Math.trunc(this.options.requestIntervalMs ?? INVENTORY_REQUEST_INTERVAL_MS),
-            ),
-          },
-          clock: this.clock,
-          counters,
-          ...(signal === undefined ? {} : { signal }),
-          leaseLost: () => lease.isLost(),
-        },
-      );
+      const http = this.session(this.access.http(panel.baseUrl), counters, () => lease.isLost());
       const load = (): LegacyInventoryLoad => ({
         ...counters,
         pageSize: this.pageSize(),
@@ -407,6 +391,99 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       }
       if (outcome === undefined) throw new Error('an inventory read made no attempt');
       return this.finish(panelId, outcome, attempt, load());
+    } finally {
+      await lease.release();
+    }
+  }
+
+  /**
+   * The protected read surface of one panel read — the read-only guard under the three fixed
+   * reads, paced, authenticated once and bounded (`protectedReadSession`), stopped by the step's
+   * signal and a lost gate lease. ONE construction, used by `read` and `withReadSession`.
+   */
+  private session(
+    client: ProviderHttpClient,
+    counters: ReturnType<typeof emptyPanelReadCounters>,
+    leaseLost: () => boolean,
+  ): RickpanelReadOnlyHttp {
+    const signal = this.options.signal;
+    return protectedReadSession(readOnlyRickpanelHttp(readOnlyGuard(client, this.counts)), {
+      policy: {
+        ...DEFAULT_PANEL_READ_POLICY,
+        ...this.options.policy,
+        requestIntervalMs: Math.max(
+          0,
+          Math.trunc(this.options.requestIntervalMs ?? INVENTORY_REQUEST_INTERVAL_MS),
+        ),
+      },
+      clock: this.clock,
+      counters,
+      ...(signal === undefined ? {} : { signal }),
+      leaseLost,
+    });
+  }
+
+  /**
+   * Runs `fn` on ONE protected read of a panel, exactly as `read` reads it: the same panel and
+   * credential lookup, the same installation-wide gate, the same paced, once-authenticated,
+   * read-only session (the three fixed reads over the read-only guard). For a bounded
+   * diagnostic read — the G6 probe (`rickpanel-g6-probe.ts`) — that must load the panel no more
+   * than a dry run does and can send nothing a dry run could not. `wire` wraps the client
+   * BELOW the guard (it sees only what is sent). The credentials never leave the closure.
+   */
+  async withReadSession<T>(
+    scope: TenantContext,
+    panelId: string,
+    fn: (session: {
+      readonly target: ProviderTarget;
+      readonly http: RickpanelReadOnlyHttp;
+      readonly now: () => number;
+    }) => Promise<T>,
+    wire: (client: ProviderHttpClient) => ProviderHttpClient = (client) => client,
+  ): Promise<
+    | { readonly ok: false; readonly failure: 'NOT_A_RICKPANEL' | 'CREDENTIALS_MISSING' }
+    | {
+        readonly ok: true;
+        readonly value: T;
+        readonly load: LegacyInventoryLoad;
+        readonly refusedWrites: number;
+      }
+  > {
+    const panel = await this.access.panel(scope, panelId);
+    if (panel === null || panel.providerType !== 'rickpanel') {
+      return { ok: false, failure: 'NOT_A_RICKPANEL' };
+    }
+    const credentials = toProviderCredentials(
+      await this.access.credentials(scope, panelId),
+      'USERNAME_PASSWORD',
+    );
+    if (credentials === null) return { ok: false, failure: 'CREDENTIALS_MISSING' };
+    const refusedBefore = this.counts.refusedWrites;
+    const gate = this.options.gate ?? PROCESS_PANEL_READ_GATE;
+    const queuedAt = this.clock.now();
+    const lease = await gate.acquire(panelReadKey(panel.baseUrl), this.options.signal);
+    const startedAt = this.clock.now();
+    try {
+      const counters = emptyPanelReadCounters();
+      const http = this.session(wire(this.access.http(panel.baseUrl)), counters, () =>
+        lease.isLost(),
+      );
+      const value = await fn({
+        target: { baseUrl: panel.baseUrl, credentials },
+        http,
+        now: () => this.clock.now(),
+      });
+      return {
+        ok: true,
+        value,
+        load: {
+          ...counters,
+          pageSize: this.pageSize(),
+          lockWaitMs: Math.max(0, startedAt - queuedAt),
+          durationMs: Math.max(0, this.clock.now() - startedAt),
+        },
+        refusedWrites: this.counts.refusedWrites - refusedBefore,
+      };
     } finally {
       await lease.release();
     }
