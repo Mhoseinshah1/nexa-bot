@@ -1,4 +1,10 @@
-import type { ActorContext, LegacyReadSetName, TenantContext } from '@nexa/contracts';
+import type {
+  ActorContext,
+  LegacyInventoryWalkDiagnostics,
+  LegacyReadSetName,
+  RickpanelUnresolvedCause,
+  TenantContext,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
 import type { ProductReviewRowFacts } from './product-map-review.js';
@@ -281,6 +287,24 @@ export interface LegacyInventoryDiagnostics {
   readonly status: number | null;
   /** What the read cost the panel (counts and milliseconds only). */
   readonly load: LegacyInventoryLoad;
+  /**
+   * A per-name read only (`resolution` present, or the targeted read that turned out one
+   * complete snapshot): WHY each walk was or was not gap-free and decisive, which walk decided,
+   * and why each unresolved name stayed so. Diagnostics only — nothing reads it to decide.
+   */
+  readonly perName?: LegacyPerNameReadDiagnostics;
+}
+
+/** `LegacyInventoryDiagnostics.perName`: closed codes and counts, never a name. */
+export interface LegacyPerNameReadDiagnostics {
+  readonly walks: readonly LegacyInventoryWalkDiagnostics[];
+  /** The decision walk's 0-based index, or null when no walk could be one. */
+  readonly decisionWalk: number | null;
+  /** Unresolved names by cause, in `RICKPANEL_UNRESOLVED_CAUSES` order, zeros left out. */
+  readonly unresolvedByCause: readonly {
+    readonly code: RickpanelUnresolvedCause;
+    readonly count: number;
+  }[];
 }
 
 /**

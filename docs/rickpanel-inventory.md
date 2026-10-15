@@ -345,6 +345,44 @@ Residual risks, stated rather than hidden:
 Scope: the Web Admin `.nxpkg` importer only. The CLI and the rehearsal walk are unchanged: they
 read with `listAll()` and treat anything but one complete snapshot as before.
 
+## Diagnostics (why a name stayed unresolved)
+
+A real dry run against a live RickPanel once left all ~33 200 needed names unresolved, and the
+report could say only that: a `gapFree` boolean and a count. Every per-name read now reports WHY,
+as numbers and closed codes (`packages/contracts/src/legacy-inventory-diagnostics.ts`) — never a
+name, a row, a `created_at` value, a token, a link or an address. Diagnostics only: no rule reads
+them, and no decision changed (`decideNeededNames` is `decideNeededNamesWithCauses` with the
+causes dropped; the decision suites are untouched and green).
+
+Per walk (`RickpanelWalkCoverage.diagnostics`, an overlapping walk only):
+
+| field                                   | meaning                                                                                                                                                                                 |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `failures`                              | each gap-free condition that failed: `NO_OVERLAP`, `NO_TOTAL`, `CREATED_ORDER`, `UNCHAINED`, `SHORT_BEFORE_END`, `NOT_ENDED_AT_TOTAL` — empty exactly when `gapFree` (tested)           |
+| `firstFailure`                          | the earliest one, and the 0-based page it was observed on                                                                                                                               |
+| `overlapApplied`, `learnedLimit`        | the overlap the walk ended with; the page cap the first page taught                                                                                                                     |
+| `durationMs`                            | on the read's own clock                                                                                                                                                                 |
+| `reportedTotalFirst/Last`, `…MaxChange` | the `total` on the first and last page, and the largest move from the first                                                                                                             |
+| `endedOffsetMinusTotal`                 | where the walk ended minus the last page's `total` (0 when it ended at it)                                                                                                              |
+| `createdAt`                             | over the rows first received: without (absent/null/empty), unparsable, inversions and the largest step back (ms), format classes `NAIVE`/`OFFSET`/`EPOCH_LIKE`/`OTHER` (+ `FRACTIONAL`) |
+| `chainBreaks`                           | `NO_COMMON_ROW`, `COMMON_ORDER_DIFFERS`, `INSERT_AHEAD_MISSED`, `DUPLICATE_IN_PAGE`, `REPEAT_OUTSIDE_OVERLAP` (per row), `PAGE_LONGER_THAN_CAP`                                         |
+
+Per read (`LegacyInventoryDiagnostics.perName`): each walk's view plus `decisive` and
+`sameOrderAsPrevious`, the decision walk's index, and the unresolved names by cause —
+`NO_DECISION_WALK`, `LAST_NOT_DECISIVE` (decided, withheld because the last walk at the cap was not
+decisive), `BACKUP_TWO_SPELLINGS`, `MULTI_CREATED_AT` (another or no `created_at` for the
+spelling), `UNCONFIRMED` (not returned again, and no later decisive walk to call it gone),
+`REAPPEARED`. Every unresolved name has exactly one cause; their sum is `resolution.unresolved`.
+
+The dry-run report carries them as `providerDiagnostics` (one entry per production panel read per
+name; optional, so an older report parses; each entry re-validated against the contract and left
+out if anything does not fit). The Web Admin shows them under the dry run
+(`recovery-mirza-inventory-diagnostics.tsx`), each cause and failure in operator words with its
+remedy. A failure that a later dry run cannot clear — `CREATED_ORDER`, `NO_TOTAL`, `UNCHAINED` —
+points to the G6 probe (`docs/rickpanel-inventory-acceptance.md` §G6).
+
+Cost: O(1) per row beyond what the walk already keeps; nothing per name is retained.
+
 ## Real-panel acceptance
 
 Not run: no RickPanel credentials exist in this environment. See

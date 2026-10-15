@@ -59,6 +59,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { InventoryDiagnostics } from './recovery-mirza-inventory-diagnostics';
 
 /**
  * Restore from Mirza — the second source of «بکاپ و بازیابی ← عملیات بازیابی»
@@ -965,6 +966,7 @@ function DryRunStep({
             ]}
           />
           <InventoryChurnNotice warnings={report.warnings} />
+          <InventoryDiagnostics report={report} bindings={row.panelBindings} />
           <SectionTable rows={report.sections} />
           <h4 className="card-subtitle">{t('web.mrz_money_title')}</h4>
           <KV

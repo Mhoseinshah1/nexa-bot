@@ -6,8 +6,10 @@ import {
   LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   LEGACY_NXPKG_ERROR_CODES,
+  legacyInventoryPanelDiagnosticsSchema,
   legacyMigrationDryRunInventoryIncomplete,
   type ActorContext,
+  type LegacyInventoryPanelDiagnostics,
   type LegacyMigrationApplyReport,
   type LegacyMigrationCodeCount,
   type LegacyMigrationCutoverValues,
@@ -1496,6 +1498,42 @@ export function providerChurnWarnings(report: LegacyImportReport): LegacyMigrati
 }
 
 /**
+ * The per-name panel reads' DIAGNOSTICS, one entry per production panel whose needed names were
+ * decided one at a time (`docs/rickpanel-inventory.md` §Diagnostics): why each walk was or was
+ * not gap-free and decisive, and why each unresolved name stayed so. Every entry is re-validated
+ * against the contract's schema — closed codes, counts, a panel id — and one that does not fit
+ * is left out rather than passed through: nothing a provider sent is echoed. A panel the backup
+ * asked nothing of was never read and has none. Diagnostics only; no rule reads them.
+ * Exported for its own test.
+ */
+export function providerDiagnostics(report: LegacyImportReport): LegacyInventoryPanelDiagnostics[] {
+  const out: LegacyInventoryPanelDiagnostics[] = [];
+  for (const p of providerPanels(report)) {
+    const panel = p as {
+      panelId?: unknown;
+      resolution?: { reason?: unknown; needed?: unknown; unresolved?: unknown } | null;
+      diagnostics?: { perName?: Record<string, unknown> } | null;
+    } | null;
+    const resolution = panel?.resolution;
+    const perName = panel?.diagnostics?.perName;
+    if (typeof resolution !== 'object' || resolution === null) continue;
+    if (resolution.reason === 'NOTHING_NEEDED') continue;
+    if (typeof perName !== 'object' || perName === null) continue;
+    const parsed = legacyInventoryPanelDiagnosticsSchema.safeParse({
+      panelId: panel?.panelId,
+      reason: closedReason(resolution.reason),
+      needed: safeCount(resolution.needed),
+      unresolved: safeCount(resolution.unresolved),
+      decisionWalk: perName['decisionWalk'],
+      unresolvedByCause: perName['unresolvedByCause'],
+      walks: perName['walks'],
+    });
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+/**
  * The dry run's provider warnings: `PROVIDER_INVENTORY_INCOMPLETE` (how many production panels)
  * and one `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason, when a read was not complete;
  * then the churn warnings of the panels resolved one name at a time (`providerChurnWarnings`).
@@ -1746,6 +1784,7 @@ export function dryRunReportOf(
           },
         ]),
   ].sort(byCode);
+  const diagnostics = providerDiagnostics(report);
   return {
     importerVerdict: report.verdict ?? 'DRY_RUN',
     sections,
@@ -1768,6 +1807,8 @@ export function dryRunReportOf(
       totalMinor: (-bigintOf(plan.wallet?.negative?.sumMinor ?? 0n)).toString(),
     },
     ownership,
+    // Why each per-name panel read decided what it did (diagnostics only; absent when none).
+    ...(diagnostics.length === 0 ? {} : { providerDiagnostics: diagnostics }),
   };
 }
 

@@ -754,6 +754,36 @@ describe('the confirmation', () => {
     expect(posts(api)).toEqual([]);
   });
 
+  it('a report with per-panel diagnostics explains them on the review, through the contract schema', async () => {
+    page([
+      reviewed({
+        dryRunReport: {
+          ...churnReport([{ code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: 4 }]),
+          providerDiagnostics: [
+            {
+              panelId: RICK,
+              reason: 'TOTAL_CHANGED',
+              needed: 4,
+              unresolved: 4,
+              decisionWalk: null,
+              unresolvedByCause: [{ code: 'NO_DECISION_WALK', count: 4 }],
+              walks: [],
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(await screen.findByText(t('web.mrz_diag_title'))).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        t('web.mrz_diag_panel_summary')
+          .replace('{unresolved}', formatNumber(4))
+          .replace('{needed}', formatNumber(4)),
+        { exact: false },
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('never tells the operator to stop selling or stop creating accounts on the panel', () => {
     for (const key of [
       'web.mrz_inventory_incomplete_body',

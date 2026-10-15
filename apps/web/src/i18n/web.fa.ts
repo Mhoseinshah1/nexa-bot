@@ -9385,6 +9385,75 @@ export const WEB_FA = {
   'web.mrz_code_proven_owner_mismatch': 'مالک اثبات‌شده مالک فاکتور نیست',
   'web.mrz_code_no_ownership_record': 'سابقهٔ مالکیت نیست',
   // --- end Mirza .nxpkg importer (Customer 360) -----------------------------------------------
+  // --- Mirza restore: why a RickPanel read left names unresolved (providerDiagnostics) -------
+  'web.mrz_diag_title': 'عیب‌یابی خواندن پنل: چرا بعضی نام‌ها قطعی نشدند',
+  'web.mrz_diag_intro':
+    'برای هر پنلی که هنگام خواندن تغییر کرد، این بخش نشان می‌دهد هر پیمایش فهرست حساب‌ها کجا «بی‌شکاف» بودنش را از دست داد و هر نام قطعی‌نشده به چه دلیل ماند. فقط عدد و کد است؛ هیچ نام کاربری، ردیف یا نشانی‌ای نمایش داده نمی‌شود و این اطلاعات هیچ تصمیمی را تغییر نمی‌دهد.',
+  'web.mrz_diag_panel_summary': '— {unresolved} نام از {needed} نام لازم قطعی نشد',
+  'web.mrz_diag_reason': 'علت ناهمخوانی خواندن‌ها',
+  'web.mrz_diag_decision_walk': 'پیمایش تصمیم‌گیر',
+  'web.mrz_diag_decision_none': 'هیچ پیمایشی نتوانست تصمیم‌گیر باشد',
+  'web.mrz_diag_causes_title': 'نام‌های قطعی‌نشده، به تفکیک علت',
+  'web.mrz_diag_cause_no_decision_walk':
+    'هیچ پیمایشی بی‌شکاف نبود (یا پیمایشی پس از آن برای تأیید نبود)، پس هیچ حضور یا غیابی قابل اثبات نیست. علت هر پیمایش را در پایین ببینید؛ اگر ترتیب created_at یا total پنل مشکل دارد، کاوشگر فقط‌خواندنی G6 را اجرا کنید.',
+  'web.mrz_diag_cause_last_not_decisive':
+    'تصمیم گرفته شد، اما آخرین پیمایش بی‌شکاف نبود؛ ممکن است حسابی که در پایان خواندن وجود داشت دیده نشده باشد. اجرای آزمایشی را در زمانی کم‌تغییرتر دوباره درخواست کنید.',
+  'web.mrz_diag_cause_backup_two_spellings':
+    'خود بکاپ این نام را به دو شکل نوشته است؛ اینکه هر فاکتور کدام حساب را می‌خواست حدس‌زدنی نیست. این سرویس‌ها را دستی بررسی کنید؛ تکرار اجرا کمکی نمی‌کند.',
+  'web.mrz_diag_cause_multi_created_at':
+    'پنل این نام را با زمان ساخت (created_at) دیگری یا بدون آن برگرداند؛ ممکن است حساب حذف و دوباره ساخته شده و حالا حساب دیگری باشد. دستی بررسی کنید.',
+  'web.mrz_diag_cause_unconfirmed':
+    'حساب در پیمایش تصمیم‌گیر دیده شد ولی پیمایش بعدی آن را دوباره برنگرداند و آن پیمایش هم برای اعلام حذف کافی نبود. اجرای آزمایشی را دوباره درخواست کنید.',
+  'web.mrz_diag_cause_reappeared':
+    'حساب در پیمایش تصمیم‌گیر نبود اما پیمایش بعدی آن را برگرداند (ساخته‌شده در میانه یا جاافتاده). اجرای آزمایشی را دوباره درخواست کنید.',
+  'web.mrz_diag_probe_title': 'شکل فهرست این پنل باید با کاوشگر G6 سنجیده شود',
+  'web.mrz_diag_probe_body':
+    'دست‌کم یک پیمایش به دلیلی شکست خورد که تکرار اجرا آن را درست نمی‌کند (ترتیب یا نبود created_at، نبود total، یا زنجیره‌نشدن صفحه‌ها). کاوشگر فقط‌خواندنی G6 را روی staging با اعتبارنامهٔ فقط‌خواندنی اجرا کنید (docs/rickpanel-inventory-acceptance.md)؛ محدود و آهسته است و نیازی به توقف فروش ندارد.',
+  'web.mrz_diag_walks_title': 'پیمایش‌ها',
+  'web.mrz_diag_walk_title': 'پیمایش {n}',
+  'web.mrz_diag_gap_free': 'بی‌شکاف',
+  'web.mrz_diag_decisive': 'تصمیم‌گیر',
+  'web.mrz_diag_same_order': 'هم‌ترتیب با پیمایش قبلی',
+  'web.mrz_diag_first_failure': 'نخستین شکست',
+  'web.mrz_diag_first_failure_at': 'صفحهٔ {page}: {what}',
+  'web.mrz_diag_pages': 'صفحه‌ها',
+  'web.mrz_diag_rows': 'ردیف‌های دریافتی',
+  'web.mrz_diag_duration_ms': 'مدت (میلی‌ثانیه)',
+  'web.mrz_diag_overlap': 'هم‌پوشانی صفحه‌ها',
+  'web.mrz_diag_learned_limit': 'سقف صفحهٔ پنل',
+  'web.mrz_diag_total_first_last': 'total اولین ← آخرین صفحه',
+  'web.mrz_diag_total_absent': 'پنل total گزارش نکرد',
+  'web.mrz_diag_total_change': 'بیشترین تغییر total',
+  'web.mrz_diag_end_minus_total': 'پایان پیمایش منهای total',
+  'web.mrz_diag_created_without': 'ردیف‌های بدون created_at',
+  'web.mrz_diag_created_unparsable': 'ردیف‌های با created_at ناخوانا',
+  'web.mrz_diag_created_inversions': 'ردیف‌های خارج از ترتیب ساخت',
+  'web.mrz_diag_created_max_inversion_ms': 'بیشترین عقب‌گرد created_at (میلی‌ثانیه)',
+  'web.mrz_diag_created_formats': 'قالب‌های created_at',
+  'web.mrz_diag_failure_no_overlap':
+    'صفحه‌ها هم‌پوشانی نداشتند (اندازهٔ صفحه برای هم‌پوشانی کوچک است)؛ اندازهٔ صفحه را بزرگ‌تر کنید.',
+  'web.mrz_diag_failure_no_total':
+    'پنل total گزارش نمی‌کند؛ بدون آن پایان فهرست اثبات‌پذیر نیست. کاوشگر G6 را اجرا کنید.',
+  'web.mrz_diag_failure_created_order':
+    'ردیف‌های پنل به ترتیب ساخت نیستند (created_at ندارند، ناخوانا هستند یا عقب‌گرد دارند)؛ خواندن هدفمند نمی‌تواند کامل‌بودن را اثبات کند. کاوشگر G6 را اجرا کنید.',
+  'web.mrz_diag_failure_unchained':
+    'دست‌کم یک مرز صفحه زنجیره نشد؛ ممکن است ردیفی جا افتاده باشد. نوع شکست‌ها در پایین آمده است.',
+  'web.mrz_diag_failure_short_before_end':
+    'صفحه‌ای پیش از پایان آن‌قدر کوتاه بود که هم‌پوشانی نداشت؛ پنل احتمالاً سقف صفحهٔ کوچکی دارد.',
+  'web.mrz_diag_failure_not_ended_at_total':
+    'پیمایش دقیقاً روی total خودِ آخرین صفحه تمام نشد؛ فهرست در حین خواندن جابه‌جا شد یا total با ردیف‌ها نمی‌خواند.',
+  'web.mrz_diag_break_no_common_row':
+    'صفحهٔ بعد هیچ ردیف مشترکی با صفحهٔ قبل نداشت (حذف‌های پرشمار پشت مکان‌نما).',
+  'web.mrz_diag_break_common_order_differs':
+    'ردیف‌های مشترک دو صفحه با ترتیب دیگری آمدند (ترتیب ناپایدار فهرست).',
+  'web.mrz_diag_break_insert_ahead_missed':
+    'ردیفی جلوتر از مکان‌نما درج شد و پیمایش آن را ندید (درج در میانهٔ فهرست).',
+  'web.mrz_diag_break_duplicate_in_page': 'یک ردیف دو بار در یک صفحه آمد.',
+  'web.mrz_diag_break_repeat_outside_overlap':
+    'ردیفی که قبلاً دریافت شده بود بیرون از هم‌پوشانی دوباره آمد (ترتیب ناپایدار یا زمان ساخت یکسان).',
+  'web.mrz_diag_break_page_longer_than_cap':
+    'صفحه‌ای از سقفی که صفحهٔ اول نشان داده بود بلندتر بود (ردیفی در صفحهٔ اول نگه داشته شده بود).',
+  // --- end Mirza restore diagnostics ----------------------------------------------------------
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

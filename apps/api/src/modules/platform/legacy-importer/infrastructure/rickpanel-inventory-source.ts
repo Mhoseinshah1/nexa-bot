@@ -1,9 +1,14 @@
-import type {
-  ProviderHttpClient,
-  ProviderHttpRequest,
-  ProviderHttpResult,
-  ProviderTarget,
-  TenantContext,
+import {
+  RICKPANEL_CHAIN_BREAKS,
+  RICKPANEL_CREATED_AT_FORMATS,
+  RICKPANEL_UNRESOLVED_CAUSES,
+  type LegacyInventoryWalkDiagnostics,
+  type ProviderHttpClient,
+  type ProviderHttpRequest,
+  type ProviderHttpResult,
+  type ProviderTarget,
+  type RickpanelUnresolvedCause,
+  type TenantContext,
 } from '@nexa/contracts';
 import { toProviderCredentials } from '../../panels/application/probe-core.js';
 import {
@@ -22,11 +27,12 @@ import type {
   LegacyInventoryDiagnostics,
   LegacyInventoryLoad,
   LegacyInventoryPort,
+  LegacyPerNameReadDiagnostics,
   LegacyInventoryRead,
   LegacyInventoryReadOptions,
 } from '../application/ports.js';
 import {
-  decideNeededNames,
+  decideNeededNamesWithCauses,
   resolutionCounts,
   type NameResolution,
 } from '../application/inventory-resolution.js';
@@ -124,6 +130,63 @@ export function sameRelativeOrder(
   const singletons = a.length <= 1 && b.length <= 1 && a.length === b.length;
   if (!singletons && commonA.length < 2) return false;
   return commonA.length === commonB.length && commonA.every((n, i) => n === commonB[i]);
+}
+
+type OkWalk = Extract<RickpanelInventoryWalk, { ok: true }>;
+
+/**
+ * One walk of a per-name read as diagnostics (`LegacyInventoryWalkDiagnostics`): the reader's
+ * own counters, plus what only the read knows — whether the walk was decisive and in one order
+ * with the walk before it. Counts and closed codes only. Exported for its own test.
+ */
+export function walkDiagnosticsView(
+  walk: OkWalk,
+  decisive: boolean,
+  sameOrderAsPrevious: boolean | null,
+): LegacyInventoryWalkDiagnostics | null {
+  const d = walk.coverage?.diagnostics;
+  if (walk.coverage === undefined || d === undefined) return null;
+  return {
+    pages: walk.evidence.pages,
+    rowsFetched: walk.evidence.rowsFetched,
+    gapFree: walk.coverage.gapFree,
+    decisive,
+    sameOrderAsPrevious,
+    failures: [...d.failures],
+    firstFailure: d.firstFailure === null ? null : { ...d.firstFailure },
+    overlapApplied: d.overlapApplied,
+    learnedLimit: d.learnedLimit,
+    durationMs: d.durationMs,
+    reportedTotalFirst: d.reportedTotalFirst,
+    reportedTotalLast: d.reportedTotalLast,
+    reportedTotalMaxChange: d.reportedTotalMaxChange,
+    endedOffsetMinusTotal: d.endedOffsetMinusTotal,
+    createdAt: {
+      rowsWithout: d.createdAt.rowsWithout,
+      rowsUnparsable: d.createdAt.rowsUnparsable,
+      inversions: d.createdAt.inversions,
+      maxInversionMs: d.createdAt.maxInversionMs,
+      formats: RICKPANEL_CREATED_AT_FORMATS.filter((code) => d.createdAt.formats[code] > 0).map(
+        (code) => ({ code, count: d.createdAt.formats[code] }),
+      ),
+    },
+    chainBreaks: RICKPANEL_CHAIN_BREAKS.filter((code) => d.chainBreaks[code] > 0).map((code) => ({
+      code,
+      count: d.chainBreaks[code],
+    })),
+  };
+}
+
+/** Unresolved names by cause, in the contract's order, zeros left out. */
+function causeCounts(
+  causes: ReadonlyMap<string, RickpanelUnresolvedCause>,
+): { readonly code: RickpanelUnresolvedCause; readonly count: number }[] {
+  const by = new Map<RickpanelUnresolvedCause, number>();
+  for (const cause of causes.values()) by.set(cause, (by.get(cause) ?? 0) + 1);
+  return RICKPANEL_UNRESOLVED_CAUSES.filter((code) => (by.get(code) ?? 0) > 0).map((code) => ({
+    code,
+    count: by.get(code) ?? 0,
+  }));
 }
 
 /**
@@ -366,16 +429,20 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     load: () => LegacyInventoryLoad,
   ): Promise<LegacyInventoryRead> {
     const signal = this.options.signal;
+    const walks: OkWalk[] = [];
     const walkOptions = {
       ...(this.options.pageSize === undefined ? {} : { pageSize: this.options.pageSize }),
       subscriptionLinks: true,
       overlap: walkOverlap(this.pageSize()),
+      // The walks' `durationMs` diagnostic, on the read's own clock.
+      clock: () => this.clock.now(),
     };
     signal?.throwIfAborted();
     // When each walk ended: a decision's runtime facts are stamped with its own walk's end.
     const endedAt: Date[] = [];
     const first = await this.reader.walk(target, http, walkOptions);
     if (!first.ok) return this.finish(panelId, first, 1, load());
+    walks.push(first);
     endedAt.push(this.now());
     signal?.throwIfAborted();
     const second = await this.reader.walk(target, http, walkOptions);
@@ -386,13 +453,46 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         ? failed
         : { ...failed, diagnostics: { ...failed.diagnostics, walks: [{ ...first.evidence }] } };
     }
+    walks.push(second);
     endedAt.push(this.now());
+
+    // A walk decisions may rest on: gap-free, and in one relative order with a neighbouring walk
+    // (an unordered list would make chaining a coincidence).
+    const decisive = (i: number) =>
+      walks[i]?.coverage?.gapFree === true &&
+      ((i > 0 && sameRelativeOrder(walks[i - 1]?.coverage?.order, walks[i]?.coverage?.order)) ||
+        (i + 1 < walks.length &&
+          sameRelativeOrder(walks[i]?.coverage?.order, walks[i + 1]?.coverage?.order)));
+    // Diagnostics only (`LegacyPerNameReadDiagnostics`): what each walk was, and why each
+    // unresolved name is. Built from the decisions below, never an input to them.
+    const perName = (
+      decisionWalk: number | null,
+      causes: ReadonlyMap<string, RickpanelUnresolvedCause>,
+    ): LegacyPerNameReadDiagnostics => ({
+      walks: walks.flatMap((w, i) => {
+        const view = walkDiagnosticsView(
+          w,
+          decisive(i),
+          i === 0 ? null : sameRelativeOrder(walks[i - 1]?.coverage?.order, w.coverage?.order),
+        );
+        return view === null ? [] : [view];
+      }),
+      decisionWalk,
+      unresolvedByCause: causeCounts(causes),
+    });
+    const withPerName = (
+      read: LegacyInventoryRead,
+      decisionWalk: number | null,
+      causes: ReadonlyMap<string, RickpanelUnresolvedCause> = new Map(),
+    ): LegacyInventoryRead =>
+      read.diagnostics === undefined
+        ? read
+        : { ...read, diagnostics: { ...read.diagnostics, perName: perName(decisionWalk, causes) } };
 
     // One complete snapshot after all: the complete read it always was (the listAll rule).
     const snapshot = this.snapshotPair(panelId, first, second, endedAt[0], load);
-    if (snapshot !== null) return snapshot;
+    if (snapshot !== null) return withPerName(snapshot, null);
 
-    const walks: Extract<RickpanelInventoryWalk, { ok: true }>[] = [first, second];
     // FEWER distinct names than a total that held still: the list withholds rows. (More names
     // than the total is churn — a row read, then deleted, while a sale was appended — which
     // the gap-free proof already accounts for.)
@@ -402,13 +502,6 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       w.evidence.reportedTotal !== null &&
       w.evidence.distinctUsernames < w.evidence.reportedTotal;
     const seen = walks.map((w) => (w.consistent ? w.accounts : w.observed));
-    // A walk decisions may rest on: gap-free, and in one relative order with a neighbouring walk
-    // (an unordered list would make chaining a coincidence).
-    const decisive = (i: number) =>
-      walks[i]?.coverage?.gapFree === true &&
-      ((i > 0 && sameRelativeOrder(walks[i - 1]?.coverage?.order, walks[i]?.coverage?.order)) ||
-        (i + 1 < walks.length &&
-          sameRelativeOrder(walks[i]?.coverage?.order, walks[i + 1]?.coverage?.order)));
     const resolutionWalks = () =>
       walks.map((w, i) => ({
         accounts: seen[i] ?? [],
@@ -427,13 +520,17 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     // none before the last walk would have settled the read); settled when it leaves none.
     const decision = () => {
       const rw = resolutionWalks();
-      let best: { index: number; resolved: Map<string, NameResolution>; left: number } | null =
-        null;
+      let best: {
+        index: number;
+        resolved: Map<string, NameResolution>;
+        causes: Map<string, RickpanelUnresolvedCause>;
+        left: number;
+      } | null = null;
       for (let i = 0; i < walks.length - 1; i += 1) {
         if (!(rw[i]?.decisive ?? false)) continue;
-        const resolved = decideNeededNames(needed, rw, i);
+        const { resolved, causes } = decideNeededNamesWithCauses(needed, rw, i);
         const left = undecided(resolved);
-        if (best === null || left <= best.left) best = { index: i, resolved, left };
+        if (best === null || left <= best.left) best = { index: i, resolved, causes, left };
       }
       return best;
     };
@@ -461,6 +558,8 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       walks.push(next);
       seen.push(next.consistent ? next.accounts : next.observed);
     }
+    // The decision, once: what the read reports below (and its causes) is this one.
+    const chosen = decision();
     // The panel may have held still for the LAST two walks (Codex): one complete snapshot then,
     // as of the second-to-last walk's end.
     if (walks.length > 2) {
@@ -474,7 +573,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         load,
         walks.slice(0, walks.length - 2),
       );
-      if (late !== null) return late;
+      if (late !== null) return withPerName(late, null);
     }
     const evidence = { first: first.evidence, second: second.evidence };
     // A walk whose total held still yet whose rows do not add up to it is not churn: the list
@@ -488,12 +587,15 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         load(),
       );
       // Every walk made — the one that mismatched may be the third.
-      return failed.diagnostics === undefined
-        ? failed
-        : {
-            ...failed,
-            diagnostics: { ...failed.diagnostics, walks: walks.map((w) => ({ ...w.evidence })) },
-          };
+      return withPerName(
+        failed.diagnostics === undefined
+          ? failed
+          : {
+              ...failed,
+              diagnostics: { ...failed.diagnostics, walks: walks.map((w) => ({ ...w.evidence })) },
+            },
+        null,
+      );
     }
     // Two consistent walks of the same names that only lack a usable creation time on some row
     // are not churn: the panel held still, and no retry can mend its stamps (Codex).
@@ -533,7 +635,6 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
             : 'WALKS_DIFFER';
     // Every decision and runtime fact is the DECISION walk's, stamped when it ended. With no
     // decision walk, the last one is reported and every name is unresolved.
-    const chosen = decision();
     const gapFree = chosen !== null;
     const at = chosen?.index ?? walks.length - 1;
     const observedAt = endedAt[at] ?? this.now();
@@ -544,16 +645,17 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     // The last walk must be decisive itself — gap-free AND in one order with the walk before it
     // (raw chaining over an unstable or tied order can be coincidental; Codex).
     const lastGapFree = decisive(walks.length - 1);
+    const decided = chosen ?? decideNeededNamesWithCauses(needed, resolutionWalks(), null);
+    const causes = new Map(decided.causes);
     const resolved = new Map(
-      [...(chosen?.resolved ?? decideNeededNames(needed, resolutionWalks(), null))].map(
-        ([name, r]): [string, NameResolution] => [
-          name,
-          // ABSENT too: a name the broken last walk may have skipped (Codex).
-          (r.kind === 'PRESENT' || r.kind === 'ABSENT') && !lastGapFree
-            ? { kind: 'UNRESOLVED' }
-            : r,
-        ],
-      ),
+      [...decided.resolved].map(([name, r]): [string, NameResolution] => {
+        // ABSENT too: a name the broken last walk may have skipped (Codex).
+        if ((r.kind === 'PRESENT' || r.kind === 'ABSENT') && !lastGapFree) {
+          causes.set(name, 'LAST_NOT_DECISIVE');
+          return [name, { kind: 'UNRESOLVED' }];
+        }
+        return [name, r];
+      }),
     );
 
     // Runtime facts of a present account: from the LATEST walk that returned the same row (same
@@ -637,6 +739,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         pagination: null,
         status: null,
         load: load(),
+        perName: perName(chosen?.index ?? null, causes),
       },
     };
   }
