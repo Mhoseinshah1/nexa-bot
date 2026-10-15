@@ -155,7 +155,15 @@ import { takeLegacyInventory } from './modules/platform/legacy-importer/applicat
 
 export class UsageError extends Error {}
 
-export const MODES = ['audit', 'dry-run', 'import', 'resume', 'reconcile', 'report'] as const;
+export const MODES = [
+  'audit',
+  'dry-run',
+  'import',
+  'resume',
+  'reconcile',
+  'report',
+  'adopt-approved',
+] as const;
 export type Mode = (typeof MODES)[number];
 
 export const USAGE = [
@@ -173,7 +181,8 @@ export const USAGE = [
   '                     [--expected-plan-tallies-digest HEX]',
   `                     [${ALLOW_PRODUCTION_FLAG}]`,
   '',
-  '  MODE     audit | dry-run | import | resume | reconcile | report  (or --mode MODE)',
+  '  MODE     audit | dry-run | import | resume | reconcile | report | adopt-approved',
+  '           (or --mode MODE)',
   '  TENANT   the tenant uuid, or its slug',
   '  SOURCE   env:NAME                 a mysql:// DSN read from the environment variable NAME',
   '           mysql://USER@HOST:PORT/DB  (no password here; add --source-password-env NAME)',
@@ -214,6 +223,12 @@ export const USAGE = [
   "  --expected-plan-tallies-digest HEX  import: the approved dry run's planTalliesDigest; a",
   '                                      plan with other tallies is refused (DRY_RUN_MISMATCH).',
   '',
+  '  adopt-approved (nxpkg only): after the import of THIS source COMPLETED, execute the',
+  "  operators' ADOPT approvals (docs/legacy-migration/service-review.md §4b): only the",
+  '  approved candidates, a targeted read of the panels they name, every adoption check again.',
+  '  No fresh-target check (by mode); refused while any run is RUNNING. An import made under an',
+  '  inventory hold is decided under it: the Web Admin passes it; this CLI cannot, and refuses.',
+  '',
   '  nxpkg: every mode first re-checks the package (checkNxpkgForImport) and accepts the',
   '  --panel-map only if it is exactly the map the package targets make with its bindings;',
   '  dry-run and import refuse a target that is not fresh (FRESH_TARGET_NOT_EMPTY), and',
@@ -241,7 +256,7 @@ export interface Args {
   /** Whether `inventoryPageSize` was typed by the operator or is the CLI default. */
   readonly inventoryPageSizeSource: InventoryPageSizeSource;
   readonly format: 'md' | 'json';
-  /** Required for import, resume and report; checked against the source's marker. */
+  /** Required for import, resume, report and adopt-approved; checked against the source's marker. */
   readonly evidenceClass: EvidenceClass | null;
   /**
    * import/resume: the source fingerprint the owner approved. The snapshot must equal it or
@@ -416,7 +431,10 @@ export function parseArgs(argv: readonly string[]): Args {
   if (evidenceClass !== null && !(EVIDENCE_CLASSES as readonly string[]).includes(evidenceClass)) {
     throw new UsageError(`--evidence-class must be one of ${EVIDENCE_CLASSES.join(', ')}.`);
   }
-  if (evidenceClass === null && (mode === 'import' || mode === 'resume' || mode === 'report')) {
+  if (
+    evidenceClass === null &&
+    (mode === 'import' || mode === 'resume' || mode === 'report' || mode === 'adopt-approved')
+  ) {
     throw new UsageError(
       `--evidence-class is required for ${mode}: synthetic, staging or production. It is checked ` +
         'against the source (a SYNTHETIC-marked source is synthetic, nothing else).',
@@ -847,6 +865,8 @@ export async function runMode(
      * their own. The importer reads the keys back and accepts them only under this digest.
      */
     readonly inventoryHold?: { readonly digest: string; readonly invoices: number };
+    /** adopt-approved: the COMPLETED import run the lane is bound to (the restore page's). */
+    readonly expectedApplyRunId?: string;
   },
 ): Promise<LegacyImportReport | null> {
   const scope: TenantContext = { tenantId: context.tenantId as never, botInstanceId: null };
@@ -977,6 +997,15 @@ export async function runMode(
       });
     case 'reconcile':
       return importer.reconcile(input);
+    case 'adopt-approved':
+      // The "adopt approved" lane (§4b): exempt from the fresh-target check BY MODE (no new
+      // import starts), bound to the import of this source the importer finds COMPLETED.
+      return importer.adoptApproved({
+        ...input,
+        ...(context.expectedApplyRunId === undefined
+          ? {}
+          : { expectedApplyRunId: context.expectedApplyRunId }),
+      });
     case 'report': {
       // Mirza PR6: version 2 reads a fresh inventory in a session bound to THIS snapshot's
       // source, so its inventory section lists what was read, never what usually is.

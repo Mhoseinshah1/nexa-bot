@@ -514,6 +514,9 @@ describe('legacy migration (Mirza .nxpkg)', () => {
           sections: [],
           history: [...input.history],
         }),
+        adoptApproved: async () => {
+          throw new Error('the adopt lane is not exercised here');
+        },
         ...runner,
       },
       freshTarget: { check: async () => ({ fresh: true }) },

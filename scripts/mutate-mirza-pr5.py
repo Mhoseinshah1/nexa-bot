@@ -91,7 +91,7 @@ M = [
     ('I-18', [(SVC, "    if (found !== null) return reviveCandidate(found.result);",
                "    if (found !== null) {\n      const now = await this.deps.repository.findById(scope, id);\n      if (now !== null) return now;\n    }")], T_INT, 'explicit ADOPT'),
     # The claim: a person's reopen in between wins.
-    ('I-16', [(IMP, "        if (claimed === null) {\n          tallies.services.approvals.claimLost += 1;\n          continue;\n        }\n", "")], T_INT, 'reopening an approval mid-run'),
+    ('I-16', [(IMP, "      if (claimed === null) {\n        tallies.claimLost += 1;\n        continue;\n      }\n", "")], T_INT, 'reopening an approval mid-run'),
     # Codex #234: no claim outlives its run; a withdrawn refusal is not a refusal.
     ('I-20', [(IMP, "      const refusal: LegacyServiceApprovalRefusal =",
                "      if (o?.outcome === 'ADOPTION_ELIGIBLE') continue;\n      const refusal: LegacyServiceApprovalRefusal =")], T_INT, 'map does not confirm'),

@@ -279,3 +279,34 @@ export function neededNamesByPanel(
   }
   return out;
 }
+
+/**
+ * The "adopt approved" lane's TARGETED read (`docs/legacy-migration/service-review.md` §4b):
+ * `neededNamesByPanel` over the CLAIMED approvals' invoices alone, so each panel is asked
+ * exactly the names those approvals need — on the panel the operator named, the panel the
+ * invoice's code maps, or (a code declared missing, which the matcher searches) every
+ * production panel. A panel-less invoice with no named panel is `NO_PANEL` whatever any panel
+ * holds (owner decision 8), so it asks nothing. Only panels with a name are returned: a panel
+ * no claimed approval names is never read.
+ */
+export function laneNeededNamesByPanel(
+  claimed: readonly NeedingInvoice[],
+  importableUserIds: ReadonlySet<string>,
+  policy: Parameters<typeof neededNamesByPanel>[2],
+  operatorPanels: ReadonlyMap<string, string>,
+  canonical: (raw: string) => string | null,
+  isInvoiceKey: (key: string) => boolean,
+): Map<string, Map<string, string | null>> {
+  const asking = claimed.filter(
+    (invoice) => operatorPanels.has(invoice.idInvoice) || (invoice.codePanel?.trim() ?? '') !== '',
+  );
+  const needed = neededNamesByPanel(
+    asking,
+    importableUserIds,
+    policy,
+    operatorPanels,
+    canonical,
+    isInvoiceKey,
+  );
+  return new Map([...needed].filter(([, names]) => names.size > 0));
+}

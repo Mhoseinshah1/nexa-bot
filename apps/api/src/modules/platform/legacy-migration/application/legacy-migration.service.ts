@@ -8,6 +8,7 @@ import {
   LEGACY_MIGRATION_HTTP_ERROR_CODES,
   LEGACY_MIGRATION_PAGE_MAX,
   LEGACY_NXPKG_AUDIT_ACTIONS,
+  legacyMigrationAdoptReportSchema,
   legacyMigrationApplyReportSchema,
   legacyMigrationApproveRequestSchema,
   legacyMigrationCommandRequestSchema,
@@ -738,6 +739,115 @@ export class LegacyMigrationService {
     );
   }
 
+  /**
+   * The "adopt approved" lane (`docs/legacy-migration/service-review.md` §4b): a VERIFIED
+   * upload of a package whose import of this tenant already finished asks the `recovery` role
+   * to execute the operators' ADOPT approvals of that source — instead of a dry run, which the
+   * fresh-target guard refuses on an imported tenant.
+   *
+   * Charged on the CRITICAL `legacy.migration.apply` (audited as such): the lane writes
+   * adoptions, which `legacy.migration.manage` promises never to do. Every approval it executes
+   * was made under `legacy.services.decide`; the execution itself is the importer's, under
+   * `maintenance.run`, with every guard of §4b. Refused here — nothing changes — without the
+   * key or the panel bindings, for a source no finished import of this tenant came from
+   * (`NO_COMPLETED_IMPORT`), and while a restore of the installation is confirmed.
+   */
+  async requestAdopt(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    body: unknown,
+  ): Promise<LegacyMigrationImportView> {
+    const action = LEGACY_NXPKG_AUDIT_ACTIONS.requestAdopt;
+    this.assertEnabled();
+    await this.requirePermission(scope, actor, LEGACY_MIGRATION_APPLY_PERMISSION, {
+      action,
+      entityId: id,
+    });
+    const command = legacyMigrationCommandRequestSchema.parse(body);
+    const requestHash = hashRequest({ action, importId: id });
+    return this.idempotent(
+      scope,
+      actor,
+      {
+        idempotencyKey: command.idempotencyKey,
+        requestHash,
+        id,
+        action,
+        permission: LEGACY_MIGRATION_APPLY_PERMISSION,
+      },
+      async (tx) => {
+        const row = await this.lockFor(scope, id, LEGACY_MIGRATION_COMMAND_FROM.requestAdopt, tx);
+        if (row.keyCiphertext === null) {
+          throw errors.conflict(
+            CODES.INVALID_STATE,
+            'Give the package key again first: the idle one was erased.',
+            { status: row.status, reason: 'PACKAGE_KEY_MISSING' },
+          );
+        }
+        if (row.panelBindings === null || row.panelBindings.length === 0) {
+          throw errors.conflict(
+            CODES.INVALID_STATE,
+            'Choose the NEXA panels for the package panels first (the same as its import).',
+            { status: row.status, reason: 'PANEL_BINDINGS_MISSING' },
+          );
+        }
+        const source = row.packageSourceFingerprint;
+        if (source === null || row.verifyReport === null) throw invalidState(row.status);
+        const imported = await this.deps.repository.latestCompletedOf(scope.tenantId, source, tx);
+        if (imported === null) {
+          throw errors.conflict(
+            CODES.NO_COMPLETED_IMPORT,
+            'No finished import of this package’s source exists on this tenant. Nothing changed.',
+          );
+        }
+        if (await this.deps.recoveryActive(tx)) {
+          throw errors.conflict(
+            CODES.RECOVERY_ACTIVE,
+            'A restore of this installation is confirmed and not finished. Nothing changed.',
+          );
+        }
+        const moved = await this.deps.repository.transition(
+          {
+            id: row.id,
+            tenantId: scope.tenantId,
+            from: LEGACY_MIGRATION_COMMAND_FROM.requestAdopt,
+            to: 'ADOPT_REQUESTED',
+            unowned: true,
+            now: this.deps.clock.now(),
+            // A new request starts its own count (bounded like the dry run's).
+            patch: {
+              progress: { ...row.progress, phase: null, blocker: null, adoptAttempts: 0 },
+            },
+          },
+          tx,
+        );
+        if (!moved) throw invalidState(row.status);
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action,
+            entityType: ENTITY,
+            entityId: row.id,
+            before: { status: row.status },
+            after: {
+              status: 'ADOPT_REQUESTED',
+              fileSha256: row.fileSha256,
+              packageSourceFingerprint: source,
+              importId: imported.id,
+              importLegacyRunId: imported.applyLegacyRunId,
+            },
+            reason:
+              'The owner asked to execute the approved adoptions of an imported Mirza source.',
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+      },
+    );
+  }
+
   /** Any non-terminal state but APPLYING (an apply in progress is finished, never abandoned). */
   async cancel(
     scope: TenantContext,
@@ -1022,6 +1132,7 @@ export function legacyMigrationView(
   const verify = legacyMigrationVerifyReportSchema.safeParse(row.verifyReport);
   const dryRun = legacyMigrationDryRunReportSchema.safeParse(row.dryRunReport);
   const apply = legacyMigrationApplyReportSchema.safeParse(row.applyReport);
+  const adopt = legacyMigrationAdoptReportSchema.safeParse(row.adoptReport);
   return {
     id: row.id,
     status: row.status,
@@ -1048,8 +1159,10 @@ export function legacyMigrationView(
     dryRunSha256: row.dryRunSha256,
     approvedDryRunSha256: row.approvedDryRunSha256,
     applyReport: apply.success ? apply.data : null,
+    adoptReport: adopt.success ? adopt.data : null,
     dryRunLegacyRunId: row.dryRunLegacyRunId,
     applyLegacyRunId: row.applyLegacyRunId,
+    adoptLegacyRunId: row.adoptLegacyRunId,
     backupRunId: row.backupRunId,
     preImportBackupRunId: row.preImportBackupRunId,
     progress: { ...row.progress },

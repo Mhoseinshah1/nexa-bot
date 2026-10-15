@@ -1,5 +1,6 @@
 import type {
   ActorContext,
+  LegacyMigrationAdoptReport,
   LegacyMigrationBlocker,
   LegacyMigrationApplyReport,
   LegacyMigrationBackupOutcome,
@@ -56,8 +57,12 @@ export interface LegacyNxpkgImportRow {
   readonly dryRunSha256: string | null;
   readonly approvedDryRunSha256: string | null;
   readonly applyReport: LegacyMigrationApplyReport | null;
+  /** The "adopt approved" lane's counts, with ADOPT_DONE (`service-review.md` §4b). */
+  readonly adoptReport: LegacyMigrationAdoptReport | null;
   readonly dryRunLegacyRunId: string | null;
   readonly applyLegacyRunId: string | null;
+  /** The lane's own ADOPT_APPROVED run, when one was started. */
+  readonly adoptLegacyRunId: string | null;
   readonly backupRunId: string | null;
   /** Phase 7: the verified protective backup taken before the import wrote anything. */
   readonly preImportBackupRunId: string | null;
@@ -95,8 +100,10 @@ export interface LegacyNxpkgImportPatch {
   readonly approvedByAdminId?: string | null;
   readonly approvedAt?: Date | null;
   readonly applyReport?: LegacyMigrationApplyReport | null;
+  readonly adoptReport?: LegacyMigrationAdoptReport | null;
   readonly dryRunLegacyRunId?: string | null;
   readonly applyLegacyRunId?: string | null;
+  readonly adoptLegacyRunId?: string | null;
   readonly backupRunId?: string | null;
   readonly preImportBackupRunId?: string | null;
   readonly targetAck?: string | null;
@@ -157,6 +164,16 @@ export interface LegacyNxpkgImportRepository {
   byIdUnscoped(id: string): Promise<LegacyNxpkgImportRow | null>;
   /** The tenant's non-terminal import, if any. */
   active(tenantId: string, tx?: TransactionScope): Promise<LegacyNxpkgImportRow | null>;
+  /**
+   * The "adopt approved" lane (§4b): the tenant's newest import of `sourceFingerprint` that
+   * FINISHED its apply (COMPLETED or COMPLETED_WITH_DISCREPANCY, an apply run recorded), or
+   * null. The import whose approvals a re-upload of the same package may execute.
+   */
+  latestCompletedOf(
+    tenantId: string,
+    sourceFingerprint: string,
+    tx?: TransactionScope,
+  ): Promise<LegacyNxpkgImportRow | null>;
   /** Newest first, keyset on id (uuid v7). One row more than asked, so the caller sees a next page. */
   page(input: {
     readonly tenantId: string;
@@ -407,8 +424,14 @@ export interface MigrationRunner {
    *   acknowledgement again: TARGET decided it before the first write (review M3).
    *
    * A missing gate throws `LegacyMigrationBlocked`.
+   *
+   * - `ADOPT` (the "adopt approved" lane, §4b): as `DRY_RUN` — a synthetic package is never
+   *   allowed; the lane writes no customer or money and is bound to a finished import.
    */
-  precheck(context: MigrationStepContext, step: 'DRY_RUN' | 'TARGET' | 'APPLY'): Promise<void>;
+  precheck(
+    context: MigrationStepContext,
+    step: 'DRY_RUN' | 'TARGET' | 'APPLY' | 'ADOPT',
+  ): Promise<void>;
   /**
    * `importer.dryRun` plus the read-set FINGERPRINTS (digest only, the `expected = null`
    * observation): nothing durable is written for the read sets — no product review, no
@@ -441,6 +464,19 @@ export interface MigrationRunner {
   reconcile(context: MigrationStepContext): Promise<{
     readonly verdict: 'RECONCILED' | 'DISCREPANCY';
   }>;
+  /**
+   * The "adopt approved" lane (`service-review.md` §4b): `importer.adoptApproved` over the
+   * package, bound to the COMPLETED import it follows — that import's apply run and the
+   * inventory hold its APPROVED dry run recorded (the lane row was never dry-run). The
+   * importer refuses (`ADOPT_REFUSED`) anything that is not that import's source, map or hold.
+   */
+  adoptApproved(
+    context: MigrationStepContext,
+    input: {
+      readonly importLegacyRunId: string;
+      readonly inventoryHold: { readonly digest: string; readonly invoices: number } | null;
+    },
+  ): Promise<LegacyMigrationAdoptReport>;
   /** The v2 final report, summarised for the import row. */
   finalReport(
     context: MigrationStepContext,

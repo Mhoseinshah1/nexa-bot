@@ -13,6 +13,7 @@ import {
   validInventoryHold,
   type ActorContext,
   type LegacyInventoryPanelDiagnostics,
+  type LegacyMigrationAdoptReport,
   type LegacyMigrationApplyReport,
   type LegacyMigrationCodeCount,
   type LegacyMigrationCutoverValues,
@@ -195,8 +196,12 @@ export class NxpkgMigrationAdapters
    */
   async precheck(
     context: MigrationStepContext,
-    step: 'DRY_RUN' | 'TARGET' | 'APPLY',
+    step: 'DRY_RUN' | 'TARGET' | 'APPLY' | 'ADOPT',
   ): Promise<void> {
+    // The "adopt approved" lane waits (still ADOPT_REQUESTED, cancellable) while another run
+    // is RUNNING — anywhere, production-like or not. Its own interrupted run of this source is
+    // the one exception: the importer resumes it. The importer decides all of it again.
+    if (step === 'ADOPT') await this.laneNotBesideAnotherRun(context);
     if (!this.productionLikeTarget) return;
     const synthetic = context.verifyReport?.synthetic ?? true;
     if (synthetic) {
@@ -207,7 +212,10 @@ export class NxpkgMigrationAdapters
       );
     }
     // Phase 7: the dry run writes no customer and no money; the acknowledgement arms the apply.
-    if (step === 'DRY_RUN') return;
+    // The "adopt approved" lane (§4b) writes no customer and no money either, and is no
+    // import: it executes approvals made in this database, and the importer binds it to the
+    // finished import of this very source. A synthetic package is refused here as for both.
+    if (step === 'DRY_RUN' || step === 'ADOPT') return;
     // The acknowledgement is asked ONCE, before the first write (TARGET). An APPLY — the first
     // attempt's, right after TARGET, and every resume's — trusts that stored decision (review
     // M3): failing a partly written import because an environment changed between two
@@ -265,6 +273,19 @@ export class NxpkgMigrationAdapters
     }
     if (!stopSalesHolds(await cutover.stopSalesFacts(context.scope)).holds) {
       throw new LegacyMigrationBlocked('STOP_SALES_NOT_ACTIVE');
+    }
+  }
+
+  /** `precheck('ADOPT')`: another RUNNING run is a transient wait, never a verdict. */
+  private async laneNotBesideAnotherRun(context: MigrationStepContext): Promise<void> {
+    const running = await this.deps.importer(context.signal).runningRunRecord(context.scope);
+    if (
+      running !== null &&
+      !(
+        running.mode === 'ADOPT_APPROVED' && running.sourceFingerprint === context.sourceFingerprint
+      )
+    ) {
+      throw new LegacyMigrationRetry('RUN_CONFLICT');
     }
   }
 
@@ -533,6 +554,62 @@ export class NxpkgMigrationAdapters
     });
   }
 
+  /**
+   * The "adopt approved" lane (`service-review.md` §4b), through the CLI's own `runMode` like
+   * every other mode: the package opened again, its panel map and ownership hold made exactly
+   * as for its import, and the importer's `adoptApproved` bound to the finished import's run
+   * and the inventory hold its approved dry run recorded. Counts and codes come back.
+   */
+  async adoptApproved(
+    context: MigrationStepContext,
+    input: {
+      readonly importLegacyRunId: string;
+      readonly inventoryHold: { readonly digest: string; readonly invoices: number } | null;
+    },
+  ): Promise<LegacyMigrationAdoptReport> {
+    return this.withPackage(context, async (opened) => {
+      const run = await this.run('adopt-approved', context, opened, {
+        inventoryHold: input.inventoryHold,
+        expectedApplyRunId: input.importLegacyRunId,
+      });
+      const report = run.report;
+      const approvals = (report.sections['approvals'] ?? {}) as {
+        readonly met?: unknown;
+        readonly executed?: unknown;
+        readonly stillUnresolved?: unknown;
+        readonly refused?: unknown;
+        readonly left?: unknown;
+        readonly claimLost?: unknown;
+        readonly withdrawnDuringRun?: unknown;
+        readonly unconfirmed?: unknown;
+        readonly released?: unknown;
+      };
+      const provider = (report.sections['provider'] ?? {}) as {
+        readonly panelsRead?: unknown;
+        readonly reads?: unknown;
+        readonly refusedWrites?: unknown;
+      };
+      return {
+        verdict: report.verdict ?? 'UNKNOWN',
+        legacyRunId: runIdOf(report),
+        importLegacyRunId: input.importLegacyRunId,
+        approvals: countOf(approvals.met),
+        adopted: countOf(approvals.executed),
+        stillUnresolved: countOf(approvals.stillUnresolved),
+        refused: codeCountsOf(approvals.refused),
+        left: codeCountsOf(approvals.left),
+        claimLost: countOf(approvals.claimLost),
+        withdrawnDuringRun: countOf(approvals.withdrawnDuringRun),
+        unconfirmed: countOf(approvals.unconfirmed),
+        released: countOf(approvals.released),
+        panelsRead: countOf(provider.panelsRead),
+        providerReads: countOf(provider.reads),
+        // Requests refused before sending: zero by construction (a read-only port).
+        providerWrites: countOf(provider.refusedWrites),
+      };
+    });
+  }
+
   async reconcile(context: MigrationStepContext) {
     return this.withPackage(context, async (opened) => {
       const run = await this.run('reconcile', context, opened);
@@ -634,9 +711,17 @@ export class NxpkgMigrationAdapters
 
   /** Runs one importer mode through the CLI's own `runMode`, with the package's ownership hold. */
   private async run(
-    mode: 'dry-run' | 'import' | 'resume' | 'reconcile' | 'report',
+    mode: 'dry-run' | 'import' | 'resume' | 'reconcile' | 'report' | 'adopt-approved',
     context: Context,
     { connector, pkg }: Opened,
+    /**
+     * The "adopt approved" lane only: the inventory hold of the FINISHED import's approved dry
+     * run (the lane row was never dry-run), and that import's run the lane is bound to.
+     */
+    lane?: {
+      readonly inventoryHold: { readonly digest: string; readonly invoices: number } | null;
+      readonly expectedApplyRunId: string;
+    },
   ): Promise<{
     report: LegacyImportReport;
     hold: NxpkgOwnershipHold | null;
@@ -695,14 +780,19 @@ export class NxpkgMigrationAdapters
         // The inventory hold: every mode after the dry run is decided under the APPROVED
         // dry run's hold (the importer reads its keys back by this digest). A report without
         // one (or not exactly v1) gives none: an unresolved name then refuses, as before.
-        ...(mode !== 'dry-run' && validInventoryHold(context.dryRunReport?.inventoryHold)
+        ...(lane !== undefined
           ? {
-              inventoryHold: {
-                digest: context.dryRunReport.inventoryHold.digest,
-                invoices: context.dryRunReport.inventoryHold.invoices,
-              },
+              expectedApplyRunId: lane.expectedApplyRunId,
+              ...(lane.inventoryHold === null ? {} : { inventoryHold: lane.inventoryHold }),
             }
-          : {}),
+          : mode !== 'dry-run' && validInventoryHold(context.dryRunReport?.inventoryHold)
+            ? {
+                inventoryHold: {
+                  digest: context.dryRunReport.inventoryHold.digest,
+                  invoices: context.dryRunReport.inventoryHold.invoices,
+                },
+              }
+            : {}),
         ownershipHoldFor: (snapshot: LegacySnapshot) => {
           hold = nxpkgOwnershipHold({
             records: facts,
@@ -1291,6 +1381,20 @@ async function selectedTargets(
     });
   }
   return out;
+}
+
+/** A non-negative safe integer from a report section, or 0. */
+function countOf(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+/** A `{ code: count }` section as sorted code counts (non-zero only). */
+function codeCountsOf(value: unknown): LegacyMigrationCodeCount[] {
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.entries(value as Record<string, unknown>)
+    .map(([code, count]) => ({ code, count: countOf(count) }))
+    .filter((row) => row.count > 0)
+    .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
 }
 
 function runIdOf(report: LegacyImportReport): string | null {

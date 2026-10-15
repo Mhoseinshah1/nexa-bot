@@ -14,6 +14,7 @@ import {
   errors,
   LEGACY_MIGRATION_HTTP_ERROR_CODES,
   LEGACY_NXPKG_TERMINAL_STATUSES,
+  type LegacyMigrationAdoptReport,
   type LegacyMigrationApplyReport,
   type LegacyMigrationDryRunReport,
   type LegacyMigrationPanelBinding,
@@ -88,8 +89,10 @@ function toRow(row: Row): LegacyNxpkgImportRow {
     dryRunSha256: row.dryRunSha256,
     approvedDryRunSha256: row.approvedDryRunSha256,
     applyReport: row.applyReport as LegacyMigrationApplyReport | null,
+    adoptReport: row.adoptReport as LegacyMigrationAdoptReport | null,
     dryRunLegacyRunId: row.dryRunLegacyRunId,
     applyLegacyRunId: row.applyLegacyRunId,
+    adoptLegacyRunId: row.adoptLegacyRunId,
     backupRunId: row.backupRunId,
     preImportBackupRunId: row.preImportBackupRunId,
     targetAck: row.targetAck,
@@ -182,6 +185,27 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
       .where(
         and(eq(t.tenantId, tenantId), notInArray(t.status, [...LEGACY_NXPKG_TERMINAL_STATUSES])),
       )
+      .limit(1);
+    return row === undefined ? null : toRow(row);
+  }
+
+  async latestCompletedOf(
+    tenantId: string,
+    sourceFingerprint: string,
+    tx?: TransactionScope,
+  ): Promise<LegacyNxpkgImportRow | null> {
+    const [row] = await this.exec(tx)
+      .select()
+      .from(t)
+      .where(
+        and(
+          eq(t.tenantId, tenantId),
+          eq(t.packageSourceFingerprint, sourceFingerprint),
+          inArray(t.status, ['COMPLETED', 'COMPLETED_WITH_DISCREPANCY']),
+          isNotNull(t.applyLegacyRunId),
+        ),
+      )
+      .orderBy(desc(t.createdAt), desc(t.id))
       .limit(1);
     return row === undefined ? null : toRow(row);
   }
