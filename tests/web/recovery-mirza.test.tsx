@@ -5,6 +5,8 @@ import {
   API_PREFIX,
   BACKUP_ROUTES,
   LEGACY_MIGRATION_APPROVAL_PHRASE,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   RECOVERY_CONFIRMATION_PHRASE,
   RECOVERY_KIT_ROUTES,
   RECOVERY_ROUTES,
@@ -13,6 +15,7 @@ import {
 import { RecoveryPage } from '../../apps/web/src/pages/recovery';
 import { mirzaStepMarks, runStage } from '../../apps/web/src/pages/recovery-mirza';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { formatNumber } from '../../apps/web/src/format';
 import { NAV, ROUTE_PATTERNS, resolve } from '../../apps/web/src/app';
 import { MIRZA_PACKAGE_BYTES, NEXA_ARCHIVE_BYTES, panel, renderPage, stubApi } from './harness';
 
@@ -699,6 +702,70 @@ describe('the confirmation', () => {
     fireEvent.change(field, { target: { value: LEGACY_MIGRATION_APPROVAL_PHRASE } });
     fireEvent.click(screen.getByRole('button', { name: t('web.mrz_confirm_button') }));
     expect(await screen.findByText(t('web.mrz_inventory_incomplete_body'))).toBeInTheDocument();
+  });
+
+  // A production panel that kept selling while it was read, every needed name decided one by
+  // one (`complete: true` with a resolution): churn, never PROVIDER_INVENTORY_INCOMPLETE.
+  const churnReport = (extra: { code: string; count: number }[] = []) => ({
+    ...dryRunReport,
+    warnings: [
+      ...dryRunReport.warnings,
+      { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN, count: 1 },
+      { code: 'PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED', count: 1 },
+      ...extra,
+    ],
+  });
+
+  it('production-like: a panel that changed while read is said, not blocking, on the review and the confirmation', async () => {
+    page([reviewed({ dryRunReport: churnReport() })], {
+      capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK },
+    });
+    expect(
+      await screen.findByRole('button', { name: t('web.mrz_confirm_button') }),
+    ).toBeInTheDocument();
+    // Once in the dry-run review and once beside the confirmation.
+    expect(screen.getAllByText(t('web.mrz_inventory_churn_title'))).toHaveLength(2);
+    expect(screen.getAllByText(t('web.mrz_inventory_churn_body'))).toHaveLength(2);
+    expect(screen.queryByText(t('web.mrz_inventory_incomplete_title'))).toBeNull();
+    expect(
+      screen.queryByText(t('web.mrz_inventory_churn_unresolved'), { exact: false }),
+    ).toBeNull();
+  });
+
+  it('production-like: a churned panel with unresolved services still withholds the confirmation', async () => {
+    const api = page(
+      [
+        reviewed({
+          dryRunReport: churnReport([
+            { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: 3 },
+            { code: 'INVENTORY_INCOMPLETE', count: 3 },
+          ]),
+        }),
+      ],
+      { capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK } },
+    );
+    expect(await screen.findByText(t('web.mrz_inventory_incomplete_title'))).toBeInTheDocument();
+    expect(
+      screen.getAllByText(
+        t('web.mrz_inventory_churn_unresolved').replace('{count}', formatNumber(3)),
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
+    expect(posts(api)).toEqual([]);
+  });
+
+  it('never tells the operator to stop selling or stop creating accounts on the panel', () => {
+    for (const key of [
+      'web.mrz_inventory_incomplete_body',
+      'web.mrz_inventory_churn_body',
+      'web.mrz_inventory_churn_unresolved',
+    ] as const) {
+      expect(t(key)).not.toMatch(/متوقف کنید/u);
+      expect(t(key)).not.toContain('ساخت و حذف حساب');
+    }
+    expect(t('web.mrz_inventory_incomplete_body')).toContain(
+      LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
+    );
   });
 
   it('offers no confirmation without legacy.migration.apply', async () => {

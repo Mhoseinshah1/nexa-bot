@@ -68,6 +68,7 @@ import {
 } from './panel-mapping.js';
 import {
   decideAllServices,
+  importableLegacyUserIds,
   inventoryIndexes,
   planLegacyImport,
   PLAN_DIGEST_FORMAT_OUTDATED,
@@ -77,6 +78,8 @@ import {
   type LegacyPlan,
 } from './plan.js';
 import { freshTargetProblems, type FreshTargetCheck } from './fresh-target.js';
+import { neededNamesByPanel } from './inventory-resolution.js';
+import { canonicalLegacyUsername } from '../../legacy-import/application/legacy-service-matching.js';
 import { NxpkgImportRefused } from './nxpkg-panel-binding.js';
 import { ownershipHoldDigest } from './nxpkg-ownership.js';
 import type {
@@ -562,10 +565,8 @@ export class LegacyImporterService {
         destination.tariffCandidates(scope),
       ]);
 
-    const inventories = new Map<string, LegacyInventoryRead>();
-    for (const panelId of mapping.policy.productionPanelIds) {
-      inventories.set(panelId, await this.deps.inventory.read(scope, panelId));
-    }
+    // The review first (it reads no panel): an operator's ADOPT approval names a panel the
+    // matcher will ask, so its name is one the panel read must be able to decide.
     const review = await this.prepareReview(
       scope,
       snapshot,
@@ -573,6 +574,26 @@ export class LegacyImporterService {
       productionLikeTarget,
       options.ownershipHold,
     );
+    // Per panel, exactly the names the matcher may ask of it. A source that resolves per name
+    // (the Web Admin's) decides these when the panel is not one complete snapshot — a live
+    // panel that keeps selling — and only these; any other source ignores them.
+    const needed = neededNamesByPanel(
+      snapshot.liveInvoices,
+      importableLegacyUserIds(snapshot.users, existingCustomers),
+      mapping.policy,
+      review.inputs.operatorPanels ?? new Map(),
+      canonicalLegacyUsername,
+      (key) => isLegacyImportKey('invoice', key),
+    );
+    const inventories = new Map<string, LegacyInventoryRead>();
+    for (const panelId of mapping.policy.productionPanelIds) {
+      inventories.set(
+        panelId,
+        await this.deps.inventory.read(scope, panelId, {
+          needed: needed.get(panelId) ?? new Map(),
+        }),
+      );
+    }
 
     // Shape keys first (from a plan with no shapes known), then the real plan.
     const draft = planLegacyImport({
@@ -2496,6 +2517,10 @@ export class LegacyImporterService {
         reads: counts.reads,
         refusedWrites: counts.refusedWrites,
         inventoriesComplete: prepared.plan.inventories.every((p) => p.complete),
+        // No panel had anything to be asked (every read NOTHING_NEEDED): zero reads is right.
+        readsNeeded: !prepared.plan.inventories.every(
+          (p) => p.resolution?.reason === 'NOTHING_NEEDED',
+        ),
       },
     });
     // Mirza PR4: beside the closed v1 final report, never inside it (its schema is closed);

@@ -16,7 +16,10 @@ import {
   isReviewClosedToRerun,
   type LegacyImportMapRecord,
 } from '../../legacy-import/application/legacy-import-ports.js';
-import { canonicalLegacyUsername } from '../../legacy-import/application/legacy-service-matching.js';
+import {
+  canonicalLegacyUsername,
+  indexCovers,
+} from '../../legacy-import/application/legacy-service-matching.js';
 import type { LegacyServiceCandidateRecord } from '../../legacy-service-review/application/ports.js';
 import { isAdoptedOutcome } from '../../legacy-service-review/domain/candidate-rules.js';
 import { legacyCodePanel, type ServiceCandidateDecision } from './decisions.js';
@@ -201,7 +204,14 @@ export function candidateEvidence(
   const incompletePanels: string[] = [];
   for (const panelId of [...new Set(policy.productionPanelIds)].sort()) {
     const read = ctx.inventories.get(panelId);
-    if (read === undefined || !read.ok || !read.complete) {
+    // A per-name resolution decided only the names it covers: for any other name this panel
+    // is as undecided as one with no inventory (never "no holder here").
+    if (
+      read === undefined ||
+      !read.ok ||
+      !read.complete ||
+      (name !== null && !indexCovers(read.index, name))
+    ) {
       incompletePanels.push(panelId);
       continue;
     }
@@ -264,7 +274,9 @@ export function observedAtFor(
 ): Date | null {
   if (panelId === null) return null;
   const read = inventories.get(panelId);
-  return read !== undefined && read.ok && read.complete ? read.observedAt : null;
+  // A panel the backup names nothing on was never read: there is no observation to record.
+  if (read === undefined || !read.ok || !read.complete) return null;
+  return read.resolution?.reason === 'NOTHING_NEEDED' ? null : read.observedAt;
 }
 
 // --- the approval gate ------------------------------------------------------------------------

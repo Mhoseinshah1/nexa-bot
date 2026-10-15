@@ -303,11 +303,55 @@ export interface LegacyInventoryLoad {
   readonly maxPageBytes: number;
 }
 
+/**
+ * How a panel read that was NOT one complete snapshot still decided every username the backup
+ * needs (Web Admin `.nxpkg` importer only; `docs/rickpanel-inventory.md` §Per-name resolution).
+ * A live panel that keeps selling while it is read (`TOTAL_CHANGED`, `WALKS_DIFFER`) is no
+ * reason to leave every candidate on it undecided: each needed name is decided from the walks,
+ * as of the end of a GAP-FREE decision walk — two spellings seen anywhere are a collision; one
+ * spelling in that walk that a later walk returned unchanged (same `created_at`) is present;
+ * none, in that walk and after it, is absent; anything else, unresolved. No exact lookup is sent. Counts only, never a name.
+ */
+export interface LegacyInventoryResolution {
+  readonly mode: 'TARGETED';
+  /** Why the walks were not one complete snapshot (or `NOTHING_NEEDED`: the panel was not read). */
+  readonly reason: string;
+  /** Usernames the backup needs on this panel. */
+  readonly needed: number;
+  readonly present: number;
+  readonly absent: number;
+  readonly collisions: number;
+  /** Needed names no gap-free walk decided: their invoices stay `INVENTORY_INCOMPLETE`. */
+  readonly unresolved: number;
+  /** Walks made (two, or a third until one is a settled decision walk; at most three). */
+  readonly walks: number;
+  /** Whether a gap-free decision walk existed — the condition for any presence or absence. */
+  readonly gapFree: boolean;
+}
+
+/** What the importer asks of a panel read beyond "read it". */
+export interface LegacyInventoryReadOptions {
+  /**
+   * The canonical (lowercase) usernames the backup needs decided on this panel, each with the
+   * backup's exact spelling (null when the backup spells it more than one way). A source that
+   * resolves per name decides these and only these when the panel is not one complete
+   * snapshot; a source that does not ignores it.
+   */
+  readonly needed?: ReadonlyMap<string, string | null>;
+}
+
 export type LegacyInventoryRead =
   | {
       readonly ok: true;
+      /**
+       * Every decision this read is asked for can be made from it: either ONE complete
+       * snapshot (`resolution` absent — `index` covers every name), or a per-name resolution
+       * (`resolution` present — `index.covered` lists the names it decided; any other name
+       * is undecidable, never "missing").
+       */
       readonly complete: true;
       readonly index: PanelInventoryIndex;
+      readonly resolution?: LegacyInventoryResolution;
       readonly accounts: number;
       readonly states: Readonly<Record<string, number>>;
       /**
@@ -336,7 +380,11 @@ export type LegacyInventoryRead =
  * `RickpanelReadOnlyHttp` only; it holds no adapter and no client that can write.
  */
 export interface LegacyInventoryPort {
-  read(scope: TenantContext, panelId: string): Promise<LegacyInventoryRead>;
+  read(
+    scope: TenantContext,
+    panelId: string,
+    options?: LegacyInventoryReadOptions,
+  ): Promise<LegacyInventoryRead>;
   /** Requests sent (reads) and requests refused before sending (any non-read). */
   requestCounts(): { readonly reads: number; readonly refusedWrites: number };
   /**

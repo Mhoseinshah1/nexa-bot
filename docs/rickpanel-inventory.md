@@ -66,7 +66,8 @@ Offset pagination over `GET api/users` (shape: `OQ-P5-01`).
   when both are consistent AND their exact username sets are identical; otherwise
   `complete: false` with a closed reason (`TOTAL_CHANGED`, `COUNT_MISMATCH`,
   `WALKS_DIFFER`). `inventoryIndex()` accepts only that, so a single walk cannot be indexed
-  (by type) and an incomplete inventory makes every dependent decision `UNDECIDABLE`.
+  (by type) and an incomplete inventory makes every dependent decision `UNDECIDABLE` — unless
+  the Web Admin importer decides the needed names one by one (§Per-name resolution below).
 
 Tested: first page, multiple pages with a short final page (not omitted), exact multiple
 (no wasted request), empty panel, no total (ends on empty page), capped page size, offset
@@ -118,8 +119,15 @@ bytes. Counts and milliseconds only — never a token, a credential, a name or a
 What it costs a panel of N accounts at page size P and interval I (the defaults, P = 100,
 I = 1 s): 1 login + 2 × ⌈N / P⌉ pages, one at a time, so ≈ (1 + 2⌈N/P⌉) × I per complete read
 — 10 000 accounts: 201 requests, ≈ 3.4 min; 30 000: 601, ≈ 10 min; 50 000: 1 001, ≈ 17 min —
-longer when the panel answers slower than I. An incomplete read is walked again at most twice
-more (Web Admin only), after 15 s and 45 s.
+longer when the panel answers slower than I. The Web Admin's read is TARGETED (§Per-name
+resolution): its pages step by `limit − overlap` (≈ 11% more pages at the defaults), it sends NO
+exact lookup, and it walks a third time when the first two do not settle every name (a walk
+broken by a burst of deletions needs a gap-free walk AND one after it). A synthetic
+100 000-account panel with 77 000 needed names, sales, single deletions in every walk and
+15-row deletion bursts during the first cost 3 331 requests (1 login, 3 330 pages over three
+walks), ≈ 56 min; without the bursts, two walks. With bursts in every walk, three
+walks (3 316 pages) and every name unresolved. A non-targeted read (the
+CLI, the rehearsal) reads once; one built with `inventoryAttempts` > 1 walks again at most twice more, after 15 s and 45 s.
 
 Tested: `tests/unit/rickpanel-load-protection.test.ts` (a large inventory paged and paced,
 one in flight, a slow panel, two concurrent jobs, login reuse and refresh, 429 and the budget,
@@ -163,6 +171,179 @@ panel is `MANUAL_REVIEW USERNAME_CASE_COLLISION`, never eligible. `ELIGIBLE` car
 or prefix match (tested, including a source assertion). Reason names match Migration P4's
 `LEGACY_IMPORT_REASON_CODES`; `USERNAME_CASE_COLLISION` joins that contract set when P4 is
 restacked.
+
+## Per-name resolution (a panel that keeps selling)
+
+Owner requirement: a Mirza `.nxpkg` dry run must be approvable while Mirza keeps selling on the
+live RickPanel. A production panel serving customers changes between the two walks of `listAll()`
+as a matter of course, so `complete: false` (`TOTAL_CHANGED`, `COUNT_MISMATCH`, `WALKS_DIFFER`)
+is the normal answer, and it used to leave every backup candidate on that panel
+`INVENTORY_INCOMPLETE` and the dry run unapprovable. The question the backup asks is narrower
+than "what is on the panel": it is "is each of THESE usernames on it, and how is it spelled".
+So, when the two walks are not one complete snapshot because the panel MOVED (`TOTAL_CHANGED`,
+or two consistent walks that differ, `WALKS_DIFFER`), each username the backup needs on that
+panel (canonical, lowercase) is decided on its own — from the walks alone, and only when the
+last walk is a proven snapshot. A `COUNT_MISMATCH` with FEWER distinct names than a total that
+held still is not churn: the list is withholding rows, and that panel stays incomplete, exactly
+as before. (More names than the total is churn — a row read, then deleted, while a sale was
+appended — and is decided like any moving panel.)
+
+The names needed are those of live, real (`is_test = 0`) invoices whose owner the plan imports
+(`importableLegacyUserIds`, pinned to the plan's own rule by a test), on their mapped panel; a
+declared-missing code asks every production panel; an operator's ADOPT asks its panel; an
+invoice with an empty `code_panel` and no ADOPT yet asks every production panel too — the holders
+found are the panels an operator may be offered for that first ADOPT. Each
+carries the backup's exact spelling (null when two invoices spell it differently).
+
+**Gap-free walks.** Offset pagination can skip a row only at a page boundary, when rows ahead of
+the cursor change between two page requests. The per-name resolution walks with OVERLAPPING
+pages — each page starts `INVENTORY_WALK_OVERLAP` (10; at most a quarter of the page, and of a
+learned cap) rows before the previous one ended — and calls a walk **gap-free** only when ALL of
+these hold, each checked on the rows themselves:
+
+- **One order, verified.** Every row carries `created_at`, and the rows come oldest first: the
+  list is the panel's insertion order, which no offset or limit changes. Marzban's list has no
+  `ORDER BY`; its natural order is insertion order on SQLite and MySQL/InnoDB — but here it is
+  not assumed: a row without `created_at`, or out of order, voids the walk's proof. (Reviewer
+  F1: a deterministic order that differs by offset defeated every check short of this.)
+- **Every boundary chained.** The next page shares at least one row — the same name AND the same
+  creation time, so a row deleted and created again is not mistaken for the one seen — with the
+  previous page, in the same relative order. It then starts at or before that row: nothing
+  after it was skipped. Up to 9 deletions between two page requests (one second apart) are
+  absorbed.
+- **No insertion ahead of the cursor missed.** The first shared row moved by (insertions −
+  deletions) ahead of it; insertions that landed in this page before it are rows this page
+  shows fresh. More movement than that is an inserted row the walk skipped (Codex: a case
+  variant created mid-walk) — the chain breaks. In insertion order a new account is appended,
+  so selling never trips this; a row withheld from a page shifts every later index and does.
+- **Every row accounted for.** No row twice in one page, and a row the walk had already received
+  must be one of the previous page's (the overlap). A row returned again anywhere else stands
+  in a position another account should hold — the second review's case of a tied `ORDER BY`, or
+  a bulk import with one `created_at` for every row, where a variant was replaced by a row
+  already seen.
+- **No false cap, no short page before the end.** A first page shorter than asked, of a longer
+  list, teaches a cap; a later page longer than it breaks the chain (a withheld row, not a cap).
+- **Ended at its own total.** The walk ends on a page shorter than the limit whose end is
+  exactly the `total` that same response reported — never on a `total` alone, which Marzban
+  counts in another statement.
+
+The two walks must also agree on one relative order. A gap-free walk returned every account the
+panel held as of its end — a snapshot, taken while the panel kept selling.
+
+**Gap-free is not survival** (Codex P1). A gap-free walk misses no row, but a row it read early
+may be deleted before it ends — and an account deleted mid-read must never be called present.
+No check inside one walk sees every such deletion: a deletion behind the cursor is offset by an
+account listed at the head, or by a tie of `created_at` reordered between two requests (the
+independent review's F1 and F3), and the walk looks exactly like a still panel. (Two walks that
+share no row at all — or only one — prove no common order either.) So survival is
+proven only ACROSS walks: a row is confirmed when a LATER walk returns the same row — the same
+name AND the same `created_at`, so an account deleted and created again under that name confirms
+nothing. Seen again, it existed from its read, past the earlier walk's end, to the later read.
+
+**Decisions, as of the DECISION walk's end.** A decision walk is gap-free, agrees with a
+neighbouring walk on one relative order, and has a walk after it. Of those, the one leaving the
+fewest names undecided is chosen (the latest on a tie). The read is settled when it leaves none
+AND the last walk is decisive too (gap-free and in one order with the walk before it) — so every
+spelling that still exists as the read ends was
+seen and counts toward a collision. Until then the panel is walked again — at most
+`TARGETED_MAX_WALKS` (3) walks; a panel that only sells settles on two. Reaching the cap with
+the last walk NOT decisive, no name is present on one spelling, nor absent: a case variant or an account that walk skipped may exist as the read ends (the second review's R3; Codex), so each would-be present or absent name is unresolved. Then:
+
+1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of all
+   walks: a collision (`USERNAME_CASE_COLLISION`), never eligible.
+2. **One spelling in the decision walk, the same row in a later walk** — present, with that
+   spelling (the backup's, or the one account there is, exactly as a complete read decides it),
+   unless ANY walk of the read — before the decision walk too — returned that spelling with ANOTHER creation time:
+   the name was deleted and created again, and the account it now holds is another account,
+   possibly another customer's (the second review's R1, R2) — unresolved. A walk records every
+   creation time it saw per spelling, not only the first.
+3. **No spelling in the decision walk, and none later** — absent (`PROVIDER_MISSING`, manual
+   review; never a created account). Likewise a spelling the decision walk read that no later
+   walk returned, when a later gap-free walk returned no spelling of it at all: deleted.
+4. **Anything else** — no decision walk, a row neither confirmed nor shown gone (a later walk
+   returned it with another creation time, or no later walk was gap-free), a name the decision
+   walk lacked that a later walk returned, or a name the backup spells two ways —
+   **unresolved**. Never adopted, never "missing".
+
+Two CONSECUTIVE walks that are one complete snapshot (the `listAll` rule: both consistent, the same names) — the first two, or the last two when a third was made after a first walk the panel moved under (Codex) — are still read as one, but as of the EARLIER walk's end, and only when the later returned every
+row unchanged — one `created_at` per row in each walk, the same in both, and the same in any walk
+before them that returned it — which is what proves each row survived that moment. Its runtime
+facts are the later walk's (fresher), stamped with the earlier walk's end; within one walk, a row
+the overlap repeats reports its later read.
+
+**No exact lookup is sent.** A lookup (`GET api/user/{name}`) happens after a walk — exactly when
+a case variant can appear unseen — and a 404 for one spelling says nothing about another. So a
+404 is never evidence here, and the decisions do not depend on the panel's case semantics,
+which are unverified (Marzban v0.8.4: case-insensitive and unique on SQLite NOCASE; coexisting
+variants with exact lookups on MySQL `utf8mb4_bin`; RickPanel's backend is unknown).
+
+Accounts on the panel that are not in the backup are ignored: they decide nothing and are never
+indexed. A panel the backup asks nothing of is not read at all (`NOTHING_NEEDED`, never reported
+as churn). Runtime facts (usage, state, link) of a present account come from the LATEST walk that returned the same row, so a link rotated between the walks is the current one; they are stamped with the decision walk's end (never later than the facts). Such a
+read is reported `complete: true` with a `resolution` (`mode: 'TARGETED'`, the reason, and the
+counts `needed`, `present`, `absent`, `collisions`, `unresolved`, `walks`, `gapFree`) — counts
+only, never a name — and the index it builds covers ONLY the needed names: any other name asked
+of that panel is `UNDECIDABLE`, never "missing" (`PanelInventoryIndex.covered`).
+
+**An unresolved name blocks approval.** Its invoice stays services `INVENTORY_INCOMPLETE`, and
+the plan reports that panel `complete: false`, reason `UNRESOLVED` (its partial index still
+decides the names it covers) — so every consumer of `complete` reads it as not fully read: the
+dry run's `PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED`, the TARGET precheck, the import's own gate,
+reconcile and the final report. `legacyMigrationDryRunInventoryIncomplete` refuses a
+production-like approval while any is counted. The dry run reports `PROVIDER_INVENTORY_CHURN`
+(informational) and, when non-zero, `PROVIDER_INVENTORY_UNRESOLVED`. The remedy is to run the dry
+run again, not to stop selling. A panel whose read FAILED (credentials, unreachable, timeouts)
+is still `PROVIDER_INVENTORY_INCOMPLETE`, unchanged.
+
+Residual risks, stated rather than hidden:
+
+- **A row inserted and another deleted ahead of the cursor in the same interval.** The shared
+  row's movement nets them out, so the inserted row could go unseen. In insertion order (the
+  only order that is gap-free) a new account is appended, never inserted ahead of the cursor; a
+  panel that inserted elsewhere would show rows out of `created_at` order. What remains is a
+  panel whose rows are in insertion order yet that lists a new one mid-list — not a Marzban
+  behaviour.
+- **Accounts created in the same second.** `created_at` ties are allowed (non-decreasing); their
+  relative order is the panel's. A tie permuted between two requests either repeats a row
+  (detected: every row accounted for), or swaps rows inside an overlap (detected: chained order),
+  or swaps rows that both stay inside one page (harmless: none is skipped).
+- **A deletion of a name the decision walk never read, offset within one walk.** A row is
+  skipped only when rows ahead of the cursor shift between two requests; in insertion order with
+  no ties that breaks the chain. A tie reordered across the cursor, together with a deletion
+  behind it, could still skip a row unseen — then a needed name is called absent (manual
+  review), never present, and only if no later walk returns it either.
+- **Bursts in two walks.** A gap-free walk needs one after it, so bursts in the first two walks
+  leave the third without confirmation: every name of that panel is unresolved (run the dry run
+  again).
+- **Re-created within the second it was first created.** A row's identity across pages and
+  walks is its name and `created_at`; a panel that stamps whole seconds cannot tell an account
+  from one deleted and created again under its name in the SAME second as the original. Only an
+  account created during the read itself can be re-created that quickly; one the backup names
+  predates the read by far.
+- **Survival to the end of the read.** A sighting in a later walk proves an account survived the decision walk's end, never that it survived the later walk too: that would need yet another walk, and so on. Like any read, this one is a statement about a past moment; the import's own read is a second, later look, and a changed decision fails it (`DRY_RUN_MISMATCH`, nothing written).
+- **After the read.** A variant created after the decision walk ended is outside this read, as it
+  is outside a complete read; the import's own read is a second, later look, and a changed
+  decision fails it (`DRY_RUN_MISMATCH`, nothing written).
+- **Visibility is the admin's.** Every list is scoped to the accounts the credential's admin can
+  see. An account owned by another admin is invisible, and is also one this installation could
+  never operate.
+- **A no-panel invoice's ADOPT.** An invoice with an empty `code_panel` is decided on every
+  production panel like any needed name; a panel where it stays unresolved is listed as
+  undecided in its evidence and is not offered for an ADOPT. Fail-closed: such an invoice stays
+  `NO_PANEL` (manual review) until a dry run decides it there.
+- **Liveness depends on the real panel.** If RickPanel's rows carry a `created_at` out of order
+  anywhere (a single row stamped before its predecessor by a clock step, a null stamp on an old
+  row, epoch numbers), or its list is not in insertion order, no walk is ever gap-free: every
+  needed name of a moving panel stays unresolved, and the dry run is approvable only over a
+  panel that holds still for two walks. If its rows carry NO `created_at`, not even that: two
+  identical walks cannot tell an account from one deleted and created again under its name
+  between them (Codex), so the two-walk snapshot needs a creation time on every row too, and
+  such a panel's candidates are never decided by the Web Admin's read. Its churn reason is `NO_CREATION_TIME`, not `WALKS_DIFFER`: the panel held still, and no retry mends its stamps. Safe either way. This,
+  the list route, `total` and the page-size cap are inferred from Marzban v0.8.4 and must be
+  confirmed on a real RickPanel (gate G6).
+
+Scope: the Web Admin `.nxpkg` importer only. The CLI and the rehearsal walk are unchanged: they
+read with `listAll()` and treat anything but one complete snapshot as before.
 
 ## Real-panel acceptance
 

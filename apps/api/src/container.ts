@@ -799,6 +799,11 @@ export interface LegacyInventoryOptions {
   readonly inventorySignal?: AbortSignal;
   /** Overrides `RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS` for this importer (tests). */
   readonly inventoryRequestIntervalMs?: number;
+  /**
+   * Per-name resolution of a panel that is not one complete snapshot (a live panel that keeps
+   * selling): the Web Admin's `.nxpkg` importer only. Absent: the read is exactly as before.
+   */
+  readonly inventoryTargeted?: boolean;
 }
 
 export interface Container {
@@ -6772,14 +6777,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // RICKPANEL_INVENTORY_PAGE_SIZE (100): few enough requests that, paced at one a second, a
     // double walk stays short, while a page stays well under the panel client's response cap
     // (RickPanel's row size is unmeasured; each read reports its largest page). The walk still
-    // fails closed on any change (DRY_RUN_MISMATCH). And up to INVENTORY_READ_ATTEMPTS double
-    // walks when a read came out incomplete: a production-like dry run that planned on an
-    // incomplete read is not approvable, so a panel that moved for a moment must not cost the
-    // owner a dry run. All of it inside the panel's read gate, on one login.
+    // fails closed on any change (DRY_RUN_MISMATCH). The read is TARGETED: a panel that moved
+    // while read (Mirza still selling) has each backup username decided on its own evidence
+    // (`inventory-resolution.ts`) instead of repeated double walks, so INVENTORY_READ_ATTEMPTS
+    // does not apply to it; what stays undecided blocks approval. All of it inside the panel's
+    // read gate, on one login.
     importer: (signal) =>
       container.legacyImporter({
         inventoryPageSize: config.RICKPANEL_INVENTORY_PAGE_SIZE,
         inventoryAttempts: INVENTORY_READ_ATTEMPTS,
+        // A live panel (Mirza still selling) is decided per backup username, not left whole.
+        inventoryTargeted: true,
         ...(signal === undefined ? {} : { inventorySignal: signal }),
       }),
     history: () => container.legacyHistoryIngest,
@@ -7018,6 +7026,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         requestIntervalMs:
           options.inventoryRequestIntervalMs ?? config.RICKPANEL_INVENTORY_REQUEST_INTERVAL_MS,
         gate: panelReadGate,
+        ...(options.inventoryTargeted === true ? { targeted: true } : {}),
       },
       () => clock.now(),
     );

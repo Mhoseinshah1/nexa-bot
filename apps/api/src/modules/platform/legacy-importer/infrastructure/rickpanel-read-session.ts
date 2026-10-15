@@ -235,6 +235,50 @@ export function protectedReadSession(
     }
   };
 
+  /**
+   * One authenticated read, asked again within the read's ONE budget when the answer says
+   * nothing about the account: a transport failure, a 429 (after the panel's own
+   * `Retry-After`, never longer than the cap), a 5xx. A 401 — the reused token expired — buys
+   * one fresh login and the same request again. Anything else is the answer.
+   */
+  const ask = async (
+    request: (currentToken: string | null) => Promise<ProviderHttpResult>,
+    isPage: boolean,
+  ): Promise<ProviderHttpResult> => {
+    for (;;) {
+      const answer = await send(() => request(token));
+      if (!answer.ok) {
+        if (isTransport(answer) && (await retry(backoff(), 'backoff'))) continue;
+        return answer;
+      }
+      if (isPage) {
+        counters.maxPageBytes = Math.max(
+          counters.maxPageBytes,
+          Buffer.byteLength(answer.bodyText, 'utf8'),
+        );
+      }
+      if (answer.status === 401 && form !== null && refreshes < policy.maxTokenRefreshes) {
+        // The reused token expired mid-read: one fresh login, then this request again.
+        refreshes += 1;
+        counters.tokenRefreshes += 1;
+        const credentials: RickpanelTokenForm = form;
+        login = null;
+        token = null;
+        await exchange(credentials);
+        if (token !== null) continue;
+        return answer;
+      }
+      if (answer.status === 429) {
+        const asked = retryAfterDelayMs(answer.headers['retry-after'], Date.now());
+        if (asked !== null && asked > policy.maxRetryAfterMs) return answer;
+        if (await retry(asked ?? backoff(), asked === null ? 'backoff' : 'retry-after')) continue;
+        return answer;
+      }
+      if (answer.status >= 500 && (await retry(backoff(), 'backoff'))) continue;
+      return answer;
+    }
+  };
+
   return Object.freeze({
     exchangeToken: async (given: RickpanelTokenForm) => {
       if (login !== null && form !== null && sameForm(given, form)) {
@@ -243,41 +287,11 @@ export function protectedReadSession(
       }
       return exchange(given);
     },
-    listUsersPage: async (bearer: string, offset: number, limit: number) => {
-      for (;;) {
-        const answer = await send(() => http.listUsersPage(token ?? bearer, offset, limit));
-        if (!answer.ok) {
-          if (isTransport(answer) && (await retry(backoff(), 'backoff'))) continue;
-          return answer;
-        }
-        counters.maxPageBytes = Math.max(
-          counters.maxPageBytes,
-          Buffer.byteLength(answer.bodyText, 'utf8'),
-        );
-        if (answer.status === 401 && form !== null && refreshes < policy.maxTokenRefreshes) {
-          // The reused token expired mid-read: one fresh login, then this page again.
-          refreshes += 1;
-          counters.tokenRefreshes += 1;
-          const credentials: RickpanelTokenForm = form;
-          login = null;
-          token = null;
-          await exchange(credentials);
-          if (token !== null) continue;
-          return answer;
-        }
-        if (answer.status === 429) {
-          const asked = retryAfterDelayMs(answer.headers['retry-after'], Date.now());
-          if (asked !== null && asked > policy.maxRetryAfterMs) return answer;
-          if (await retry(asked ?? backoff(), asked === null ? 'backoff' : 'retry-after')) {
-            continue;
-          }
-          return answer;
-        }
-        if (answer.status >= 500 && (await retry(backoff(), 'backoff'))) continue;
-        return answer;
-      }
-    },
+    listUsersPage: (bearer: string, offset: number, limit: number) =>
+      ask((current) => http.listUsersPage(current ?? bearer, offset, limit), true),
+    // An exact lookup (a per-name resolution): the same pacing, budget and refresh as a page.
+    // A 404 is an ANSWER ("not on this panel"), handed to the reader like any other status.
     readUser: (bearer: string, username: string) =>
-      send(() => http.readUser(token ?? bearer, username)),
+      ask((current) => http.readUser(current ?? bearer, username), false),
   });
 }

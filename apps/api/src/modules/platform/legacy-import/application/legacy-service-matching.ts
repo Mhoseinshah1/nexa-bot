@@ -29,7 +29,9 @@
  *
  * Deliberately absent: the legacy inbound id, any fuzzy or prefix match, any
  * case-insensitive comparison other than the one lowercase fold, and any decision from an
- * INCOMPLETE inventory — zero matches in a partial walk is not "missing".
+ * INCOMPLETE inventory — zero matches in a partial walk is not "missing". A per-name
+ * resolution (`PanelInventoryIndex.covered`) decides only the names it covers; any other
+ * name on that panel is as undecidable as on a panel with no inventory at all.
  *
  * Reason codes are spelled as `LEGACY_IMPORT_REASON_CODES` (Migration P4) spells them;
  * `USERNAME_CASE_COLLISION` is added to that contract set when P4 is restacked.
@@ -54,6 +56,18 @@ export type LegacyMatchReason =
 export interface PanelInventoryIndex {
   readonly panelId: string;
   readonly usernames: ReadonlyMap<string, readonly string[]>;
+  /**
+   * Absent: the index is one COMPLETE inventory, so a name it does not hold is absent from
+   * the panel. Present: a per-name resolution of a panel that was not one complete snapshot —
+   * only these names were decided (held in `usernames`, or proven absent); any OTHER name is
+   * undecidable on this panel, never "missing".
+   */
+  readonly covered?: ReadonlySet<string>;
+}
+
+/** Whether `index` decided `username` (always, for a complete inventory). */
+export function indexCovers(index: PanelInventoryIndex, username: string): boolean {
+  return index.covered === undefined || index.covered.has(username);
 }
 
 export interface LegacyServiceRow {
@@ -129,7 +143,9 @@ function onMappedPanel(
   inventories: ReadonlyMap<string, PanelInventoryIndex>,
 ): LegacyServiceMatch {
   const inventory = inventories.get(panelId);
-  if (inventory === undefined) return { kind: 'UNDECIDABLE', reason: 'INVENTORY_INCOMPLETE' };
+  if (inventory === undefined || !indexCovers(inventory, username)) {
+    return { kind: 'UNDECIDABLE', reason: 'INVENTORY_INCOMPLETE' };
+  }
   return onePanel(panelId, username, inventory.usernames.get(username));
 }
 
@@ -187,7 +203,7 @@ export function matchLegacyService(
   let unavailable = 0;
   for (const panelId of new Set(policy.productionPanelIds)) {
     const inventory = inventories.get(panelId);
-    if (inventory === undefined) {
+    if (inventory === undefined || !indexCovers(inventory, username)) {
       unavailable += 1;
       continue;
     }

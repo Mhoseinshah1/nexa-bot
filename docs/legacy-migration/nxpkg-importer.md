@@ -67,6 +67,10 @@ COMPLETED, COMPLETED_WITH_DISCREPANCY, FAILED, CANCELLED`.
 - `LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE` and `legacyMigrationDryRunInventoryIncomplete`
   (v0.5.7): the dry run's incomplete-panel warning and the one rule that refuses its approval on a
   production-like target (§4a). No state, error code or column was added.
+- `LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN` and `LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED`:
+  the dry run's warnings for a production panel that changed while read and was decided one needed
+  name at a time (informational), and for the needed names that stayed undecided (§4a). The rule
+  above is unchanged. No state, error code or permission was added.
 
 ## 3. Source adapter
 
@@ -162,7 +166,24 @@ reaching it was not.
 
 - **Complete means two consecutive walks, each consistent with the panel's `total`, returning the
   identical set of exact provider spellings** (`docs/rickpanel-inventory.md`). Unchanged.
-- **The Web Admin's importer attempts a read up to `INVENTORY_READ_ATTEMPTS` (3) double walks**,
+- **A panel that keeps selling while it is read is not a blocker** (owner requirement: the dry run
+  must be approvable while Mirza sells on the live RickPanel). When the double walks are not one
+  complete snapshot because the panel MOVED (`TOTAL_CHANGED`, `WALKS_DIFFER`), the Web Admin's importer
+  decides each username the backup needs on that panel on its own — from the walks alone, and
+  only on a GAP-FREE decision walk (rows oldest first by `created_at`, overlapping pages
+  chained by name and creation time, no insertion ahead of the cursor missed, ended at its own
+  total, both walks in one order: a snapshot of the panel as of its end; at most three walks).
+  Gap-free is not survival, so a spelling the decision walk read is present only when a LATER
+  walk returned the same row (same name and `created_at`). Two spellings seen in any walk are a
+  collision; a confirmed spelling is present; none, in the decision walk and after it, is
+  absent; anything else is unresolved. No exact lookup is sent — a 404 is
+  never evidence. Every account on the panel that is not in the backup is ignored
+  (`docs/rickpanel-inventory.md` §Per-name resolution). Such a read is reported complete, with a
+  `resolution` in `sections.provider.panels[i]` (counts only). A needed name it could not decide
+  leaves its invoice `INVENTORY_INCOMPLETE` and the panel `complete: false`, reason
+  `UNRESOLVED`. A `COUNT_MISMATCH` with fewer names than a total that held still is NOT resolved
+  per name: the list is withholding rows, and that panel stays incomplete — fail-closed.
+- **A non-targeted read (none in the Web Admin today) attempts up to `INVENTORY_READ_ATTEMPTS` (3) double walks**,
   pausing 15 s and 45 s, when it came out INCOMPLETE (the panel moved). Only an attempt complete
   on its own is indexed. A transport failure, a 429 or a 5xx is not a reason to walk again from
   the start: the read session already asked that page again, within the read's one retry
@@ -180,16 +201,23 @@ reaching it was not.
   its lease stops inside the importer's `prepare`, before the import's first write. Each read
   reports its cost in `diagnostics.load` (requests, logins, reuses, refreshes, retries, waits,
   queue time, duration, page size, largest page in bytes) — counts only.
-- **The dry run says so**: `PROVIDER_INVENTORY_INCOMPLETE` (production panels) and one
-  `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason. The importer's `sections.provider.panels`
-  carries each read's counts (`diagnostics`: attempts, and per walk the pages, rows, distinct
-  spellings, duplicate rows, the panel's `total`, the first and last page's rows) — never a name.
-- **Production-like: such a dry run is not approvable** (`legacy_migration.invalid_state`,
-  `reason: PROVIDER_INVENTORY_INCOMPLETE`; one rule, `legacyMigrationDryRunInventoryIncomplete`, for
-  the server and the restore page). The owner asks for the dry run again once the panel holds
-  still. An approval recorded by an earlier release is stopped at the apply's TARGET precheck,
-  before the protective backup (`DRY_RUN_MISMATCH`, `dryrun:panels:inventory_incomplete`).
-- **Production-like: the import plans only on a complete read of its own**; anything else is
+- **The dry run says so**: `PROVIDER_INVENTORY_INCOMPLETE` (production panels whose read failed or
+  decided nothing) and one `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason; for a panel decided
+  one name at a time, `PROVIDER_INVENTORY_CHURN` (panels), `PROVIDER_INVENTORY_CHURN:<reason>`
+  and `PROVIDER_INVENTORY_UNRESOLVED` (needed names left undecided). The importer's `sections.provider.panels` carries each read's counts
+  (`diagnostics`: attempts, and per walk the pages, rows, distinct spellings, duplicate rows, the
+  panel's `total`, the first and last page's rows; `resolution`) — never a name. The restore page
+  shows the churn as information, not as a refusal.
+- **Production-like: a dry run with a panel read that failed, or with any candidate unresolved, is
+  not approvable** (`legacy_migration.invalid_state`, `reason: PROVIDER_INVENTORY_INCOMPLETE`; one
+  rule, `legacyMigrationDryRunInventoryIncomplete`, for the server and the restore page: it counts
+  `PROVIDER_INVENTORY_INCOMPLETE` panels and any services `INVENTORY_INCOMPLETE`). A panel that
+  changed while read with every needed name decided is not counted. The owner checks NEXA's access
+  to the panel (a failure) and asks for the dry run again; sales do not need to stop. An approval
+  recorded by an earlier release is stopped at the apply's TARGET precheck, before the protective
+  backup (`DRY_RUN_MISMATCH`, `dryrun:panels:inventory_incomplete`).
+- **Production-like: the import plans only on a read of its own that decides every candidate**
+  (one complete snapshot, or every needed name resolved as above); anything else is
   `DRY_RUN_MISMATCH` before the digest and before any write — for every `.nxpkg` import and
   every import given a digest, whether or not the CLI was given `--expected-plan-tallies-digest`.
 - **Production-like: a dry run that reported no plan digest is not approvable** (`reason:
@@ -200,6 +228,11 @@ PLAN_DIGEST_MISSING`), and the TARGET precheck refuses one approved earlier
   and another created between the two reads could leave every count as it was and still adopt an
   account the owner never saw. Usage, state and links are NOT bound: they move by the minute and
   the import adopts from its own read.
+- **The digest binds only the backup candidates' decisions**, never the panel's whole account
+  list. An account an operator creates by hand, or a new Mirza sale, during or between the dry
+  run's read and the import's does not move it. A candidate's account deleted or renamed between
+  the dry run and the apply changes that candidate's decision, and the apply is refused
+  `DRY_RUN_MISMATCH` before any write — nothing is written; dry-run again.
 - **Upgrading**: a dry run approved before v0.5.7 carries the v1 digest. Its apply is refused
   `DRY_RUN_MISMATCH` with `plan:digest_format_outdated` (the importer recognises the v1 digest of
   the same plan — it is never accepted). Upgrade with no import APPROVED, and dry-run again.
