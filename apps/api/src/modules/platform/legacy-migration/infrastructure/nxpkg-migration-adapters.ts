@@ -410,7 +410,7 @@ export class NxpkgMigrationAdapters
       // The importer's own reading of the snapshot's money, by customer: the converter's
       // records are compared with it one by one (money, so a difference blocks like the
       // totals do), and the wallet-history verdicts are counted against it.
-      const expectation = await this.walletExpectationOf(context, opened);
+      const expectation = await this.walletExpectationOf(context, opened, run.snapshot);
       if (converter !== null) {
         await this.compareCustomersWithConverter(context, opened, expectation, tallies);
       }
@@ -726,12 +726,15 @@ export class NxpkgMigrationAdapters
     report: LegacyImportReport;
     hold: NxpkgOwnershipHold | null;
     decisions: VerifiedOwnershipDecisions | null;
+    /** The snapshot the importer read and fingerprinted for this run (review H P2-1). */
+    snapshot: LegacySnapshot | null;
   }> {
     const cli = await import('../../../../legacy-import.cli.js');
     const mapping = await this.mapping(context, pkg);
     const decisions = await this.decisions(context, pkg);
     const { facts } = await readOwnershipRecords(pkg);
     let hold: NxpkgOwnershipHold | null = null;
+    let read: LegacySnapshot | null = null;
     const fingerprint = requireFingerprint(context);
     const synthetic = connector.syntheticMarker !== null;
     const evidence = synthetic ? 'synthetic' : this.productionLikeTarget ? 'production' : 'staging';
@@ -794,6 +797,7 @@ export class NxpkgMigrationAdapters
               }
             : {}),
         ownershipHoldFor: (snapshot: LegacySnapshot) => {
+          read = snapshot;
           hold = nxpkgOwnershipHold({
             records: facts,
             decisions,
@@ -816,7 +820,7 @@ export class NxpkgMigrationAdapters
         'The snapshot read is not the source verification recorded.',
       );
     }
-    return { report, hold, decisions };
+    return { report, hold, decisions, snapshot: read };
   }
 
   /** The panel map from the package's targets and the operator's bindings (§1). */
@@ -1119,9 +1123,18 @@ export class NxpkgMigrationAdapters
     );
   }
 
-  /** The importer's per-customer money for THIS source (the fingerprint the dry run is bound to). */
-  private async walletExpectationOf(context: Context, opened: Opened): Promise<WalletExpectation> {
-    const snapshot = await readLegacySnapshot(opened.connector);
+  /**
+   * The importer's per-customer money for THIS source (the fingerprint the dry run is bound to),
+   * from the snapshot the run itself read — a production backup is not read a second time
+   * (review H P2-1) — or, when the run handed none over, from a fresh read. Either way it is
+   * held to the verified fingerprint.
+   */
+  private async walletExpectationOf(
+    context: Context,
+    opened: Opened,
+    read: LegacySnapshot | null,
+  ): Promise<WalletExpectation> {
+    const snapshot = read ?? (await readLegacySnapshot(opened.connector));
     if (snapshot.fingerprint !== requireFingerprint(context)) {
       throw new LegacyMigrationStepFailure(
         'PACKAGE_CHANGED',
@@ -1550,11 +1563,13 @@ export function providerIncomplete(report: LegacyImportReport): number {
 function readFailed(p: unknown): boolean {
   const panel = p as { complete?: unknown; reason?: unknown; resolution?: unknown } | null;
   if (panel?.complete === true) return false;
+  // Held only when the per-name read found a gap-free decision walk (review H P1).
   return !(
     panel?.reason === 'UNRESOLVED' &&
     typeof panel.resolution === 'object' &&
     panel.resolution !== null &&
-    !Array.isArray(panel.resolution)
+    !Array.isArray(panel.resolution) &&
+    (panel.resolution as { gapFree?: unknown }).gapFree === true
   );
 }
 

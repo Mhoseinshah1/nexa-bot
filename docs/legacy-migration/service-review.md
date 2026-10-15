@@ -176,8 +176,12 @@ every customer, wallet opening, legacy debt and decided service still imports.
 - **Only a read that held quarantines.** The plan holds an invoice only when no production
   panel's read FAILED (transport, auth, `COUNT_MISMATCH`, `NOT_INDEXABLE`, …) — a per-name read
   with `resolution.unresolved > 0` is reported `complete: false, reason: UNRESOLVED` and is NOT a
-  failure (`inventoryReadFailed`). A failed read still blocks exactly as before: the approval
-  (`PROVIDER_INVENTORY_INCOMPLETE`), the TARGET precheck and the importer's own gate.
+  failure (`inventoryReadFailed`) **only when it found a gap-free decision walk**
+  (`resolution.gapFree === true`). A per-name read that never found one decided nothing on that
+  panel (for example, rows with no usable `created_at`): it is a whole-panel read failure, not a
+  quarantine of every invoice on it (review H P1). A failed read still blocks exactly as before:
+  the approval (`PROVIDER_INVENTORY_INCOMPLETE`), the TARGET precheck and the importer's own gate.
+  The dry run's `providerDiagnostics` and `pnpm rickpanel-probe` say which case a real panel is.
 - **The dry run records the hold** (`InventoryHold` in `plan.ts`): the sorted held invoice keys
   in its run inputs (`legacy_import_run_inputs.inventory_hold_keys`, migration `0248`) and their
   SHA-256 (`inventory_hold_digest`). Its report carries `inventoryHold` (`version: 1`, the count,

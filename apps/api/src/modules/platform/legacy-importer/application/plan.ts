@@ -175,9 +175,14 @@ export const INVENTORY_NAMES_UNRESOLVED = 'UNRESOLVED';
 export function inventoryReadFailed(
   panel: Pick<PanelInventorySummary, 'complete' | 'reason' | 'resolution'>,
 ): boolean {
+  // A per-name read counts as having HELD only when it found a gap-free decision walk. One that
+  // never did decided nothing on that panel: a whole-panel failure in substance (review H P1),
+  // which blocks exactly as a read error does — never a quarantine of the whole panel.
   return !(
     panel.complete ||
-    (panel.reason === INVENTORY_NAMES_UNRESOLVED && panel.resolution !== null)
+    (panel.reason === INVENTORY_NAMES_UNRESOLVED &&
+      panel.resolution !== null &&
+      panel.resolution.gapFree === true)
   );
 }
 
@@ -710,9 +715,9 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
   // failed, nothing is held (that failure blocks); otherwise an undecidable invoice is one whose
   // needed name a successful per-name read left unresolved — unless an operator's approval
   // names a panel that has no index at all, which no read decided.
-  const readFailures = input.mapping.policy.productionPanelIds.filter(
-    (panelId) => !indexes.has(panelId),
-  ).length;
+  // A panel with no index, or a per-name read that found no gap-free decision walk (review H
+  // P1), is a read failure: it blocks, and nothing is held anywhere.
+  const readFailures = inventories.filter(inventoryReadFailed).length;
   const unresolved = new Set(
     readFailures > 0
       ? []

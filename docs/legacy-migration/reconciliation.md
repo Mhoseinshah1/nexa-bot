@@ -428,6 +428,12 @@ The checks:
   balances = Σ credited + Σ held positives, and Σ |readable negative| = Σ debts recorded + Σ
   held negatives. Money on a review row is in `held.byOutcome`, per reason, so it is never
   invisible to pass/fail.
+  **U10 is not independent of U9.** A row is `credited` only when its opening EQUALS its source
+  balance (and `debtRecorded` only when the debt equals its magnitude), so with no row
+  `unaccounted` the sums agree by construction: U10 can fail only when U9 already has. It is
+  the same accounting stated in money, for the operator, not a second check. The independent
+  money checks are U2–U7 (the ledger and debt tables against the source) and the dry run's
+  per-customer comparison with the converter's records.
 
 `WALLETS_RECONCILED` in the v2 report requires U2–U10.
 

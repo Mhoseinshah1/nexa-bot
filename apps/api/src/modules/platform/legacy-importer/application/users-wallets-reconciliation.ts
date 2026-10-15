@@ -500,6 +500,9 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
       id: 'U10',
       // Exact, by sign, never netted: Σ readable positive source balances = Σ credited + Σ
       // held positives; Σ |readable negative| = Σ debts recorded + Σ held negatives.
+      // NOT independent of U9: a row is CREDITED / DEBT_RECORDED only when NEXA holds exactly its
+      // source figure, so with nothing unaccounted these sums agree by construction. It states
+      // U9's accounting in money for the operator; U2–U7 are the independent money checks.
       what: 'source money is accounted exactly: Σ positive = credited + held; Σ |negative| = debts + held (unreadable counted by rows)',
       holds:
         accountedPositive === money.source.positive.sumMinor &&
