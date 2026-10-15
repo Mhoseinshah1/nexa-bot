@@ -381,11 +381,16 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     if (first.consistent && second.consistent) {
       const a = first.accounts.map((x) => x.providerUsername);
       const b = new Set(second.accounts.map((x) => x.providerUsername));
-      const sameRows = a.every(
-        (name) =>
-          b.has(name) &&
-          first.coverage?.createdAt.get(name) === second.coverage?.createdAt.get(name),
-      );
+      // Every row with one creation time in each walk (a row deleted and created again while
+      // a walk read it shows two), the same in both.
+      const stampOf = (w: typeof first, name: string) => {
+        const stamps = w.coverage?.createdAt.get(name);
+        return stamps === undefined ? '' : stamps.size === 1 ? [...stamps][0] : null;
+      };
+      const sameRows = a.every((name) => {
+        const stamp = stampOf(first, name);
+        return b.has(name) && stamp !== null && stamp === stampOf(second, name);
+      });
       if (a.length === b.size && sameRows) {
         return this.finish(
           panelId,
@@ -425,7 +430,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const resolutionWalks = () =>
       walks.map((w, i) => ({
         accounts: seen[i] ?? [],
-        createdAt: w.coverage?.createdAt ?? new Map<string, string>(),
+        createdAt: w.coverage?.createdAt ?? new Map<string, ReadonlySet<string>>(),
         decisive: decisive(i),
       }));
     // Unresolved for want of evidence (a name the backup spells two ways never resolves).
@@ -436,7 +441,8 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       return count;
     };
     // The decision walk: a decisive walk with a later one to confirm it, leaving the fewest
-    // names undecided (the latest on a tie); settled when it leaves none.
+    // names undecided (the latest on a tie — reachable only unsettled: a decision walk leaving
+    // none before the last walk would have settled the read); settled when it leaves none.
     const decision = () => {
       const rw = resolutionWalks();
       let best: { index: number; resolved: Map<string, NameResolution>; left: number } | null =
@@ -487,7 +493,17 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const observedAt = endedAt[at] ?? this.now();
     const last = walks[at] as Extract<RickpanelInventoryWalk, { ok: true }>;
     const lastSeen = seen[at] as readonly RickpanelInventoryAccount[];
-    const resolved = chosen?.resolved ?? decideNeededNames(needed, resolutionWalks(), null);
+    // Unsettled at the cap with the LAST walk not gap-free: a case variant that exists as the
+    // read ends may be one that walk skipped, so no name is called present on one spelling.
+    const lastGapFree = walks[walks.length - 1]?.coverage?.gapFree === true;
+    const resolved = new Map(
+      [...(chosen?.resolved ?? decideNeededNames(needed, resolutionWalks(), null))].map(
+        ([name, r]): [string, NameResolution] => [
+          name,
+          r.kind === 'PRESENT' && !lastGapFree ? { kind: 'UNRESOLVED' } : r,
+        ],
+      ),
+    );
 
     const bySpelling = new Map(lastSeen.map((a) => [a.providerUsername, a]));
     const links = last.subscriptionLinks;

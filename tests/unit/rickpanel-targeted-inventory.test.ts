@@ -401,6 +401,56 @@ describe('Codex P1: a needed row read, then deleted, during the decision walk', 
   });
 });
 
+describe('second review: a name re-created as another account, and the cap', () => {
+  const recreate = (panel: FakePanel, n: string) => {
+    panel.names.splice(panel.names.indexOf(n), 1);
+    add(panel, n);
+  };
+
+  it('R1: a later walk confirms the old row, a gap-free walk after it shows a NEW row under the name: UNRESOLVED, never attached', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_o, page) => {
+      if (page === 6) panel.names.splice(0, 15);
+      if (page === 8) recreate(panel, name(50));
+    };
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(50), name(200)]) }),
+    );
+    expect(read.resolution?.walks).toBe(3);
+    expect(read.index.usernames.get(name(50))).toBeUndefined();
+    expect(indexCovers(read.index, name(50))).toBe(false);
+    expect(read.index.usernames.get(name(200))).toEqual([name(200)]);
+  });
+
+  it('R2: re-created while the second walk read it (that walk lists the old row and the new): not one snapshot, never attached', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_o, page) => {
+      if (page === 5) recreate(panel, name(50));
+    };
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(50), name(200)]) }),
+    );
+    expect(read.index.usernames.get(name(50))).toBeUndefined();
+    expect(indexCovers(read.index, name(50))).toBe(false);
+  });
+
+  it('R3: the cap reached with the last walk broken — a variant that walk may have skipped exists: nothing PRESENT on one spelling', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_o, page) => {
+      if (page === 6) panel.names.splice(0, 15);
+      if (page === 10) add(panel, 'ACC00050');
+      if (page === 11) panel.names.splice(0, 20);
+    };
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(50), name(200)]) }),
+    );
+    expect(panel.names).toContain('ACC00050');
+    expect(read.resolution).toMatchObject({ walks: 3, present: 0 });
+    expect(read.index.usernames.get(name(50))).toBeUndefined();
+    neverAdopted(read, name(50));
+  });
+});
+
 describe('case variants: a collision or unresolved, never an adoption', () => {
   it('a variant on the panel (ALICE beside the backup alice): COLLISION, both spellings indexed', async () => {
     const panel = fakePanel(300);
@@ -602,13 +652,16 @@ describe('the targeted read changes nothing it does not need to', () => {
 
 describe('decideNeededNames', () => {
   const acc = (u: string) => ({ username: u.toLowerCase(), providerUsername: u });
-  const walk = (names: string[], created: Record<string, string> = {}, decisive = true) => ({
+  const walk = (names: string[], created: Record<string, string[]> = {}, decisive = true) => ({
     accounts: names.map(acc),
-    createdAt: new Map(names.map((n) => [n, created[n] ?? 't0'])),
+    createdAt: new Map(names.map((n) => [n, new Set(created[n] ?? ['t0'])])),
     decisive,
   });
   it('present only when a later walk returns the same row; collision from any walk', () => {
-    const walks = [walk(['a', 'B', 'e', 'f']), walk(['a', 'b', 'f'], { f: 't1' })];
+    const walks = [
+      walk(['a', 'B', 'e', 'f', 'g']),
+      walk(['a', 'b', 'f', 'g'], { f: ['t1'], g: ['t0', 't1'] }),
+    ];
     const out = decideNeededNames(
       new Map<string, string | null>([
         ['a', 'a'],
@@ -617,6 +670,7 @@ describe('decideNeededNames', () => {
         ['d', null],
         ['e', 'e'],
         ['f', 'f'],
+        ['g', 'g'],
       ]),
       walks,
       0,
@@ -629,6 +683,8 @@ describe('decideNeededNames', () => {
     expect(out.get('e')).toEqual({ kind: 'ABSENT' });
     // Returned again with another creation time: another account — undecided.
     expect(out.get('f')).toEqual({ kind: 'UNRESOLVED' });
+    // Returned again — and also re-created: the name now holds another account. Undecided.
+    expect(out.get('g')).toEqual({ kind: 'UNRESOLVED' });
   });
   it('not returned again, and no later gap-free walk: UNRESOLVED; absent in the decision walk but returned later: UNRESOLVED', () => {
     const out = decideNeededNames(need(['a', 'c']), [walk(['a']), walk(['c'], {}, false)], 0);

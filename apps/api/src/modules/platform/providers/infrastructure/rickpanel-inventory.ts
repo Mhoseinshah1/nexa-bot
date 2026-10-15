@@ -364,13 +364,14 @@ export interface RickpanelWalkCoverage {
   readonly gapFree: boolean;
   readonly order: readonly string[];
   /**
-   * Exact spelling → the `created_at` its row carried: a row's identity across walks. Gap-free
+   * Exact spelling → every `created_at` a row of that spelling carried in this walk (two when
+   * it was deleted and created again while the walk read it): a row's identity across walks. Gap-free
    * is not survival — a row read early may be deleted before the walk ends, and no check
    * inside one walk sees every such deletion (a deletion behind the cursor can be offset by a
    * row listed ahead of it, or by a tie reordered). Only a LATER walk returning the same row,
    * same name and same creation time, proves it survived (`decideNeededNames`).
    */
-  readonly createdAt: ReadonlyMap<string, string>;
+  readonly createdAt: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /** Exact provider spelling → the link `subscriptionFrom` derives from its row, or null. */
@@ -475,7 +476,7 @@ export class RickpanelInventoryReader {
     // carry `created_at`, and the rows must come oldest first (the panel's insertion order) —
     // verified row by row. A row without it, or out of order, voids the walk's proof.
     let createdOrder = true;
-    const createdById = new Map<string, string>();
+    const createdById = new Map<string, Set<string>>();
     let lastCreated = -Infinity;
     let previousPage: readonly string[] | null = null;
     let chained = true;
@@ -535,8 +536,10 @@ export class RickpanelInventoryReader {
         rowsFetched += 1;
         pageNames.push(account.providerUsername);
         const createdRaw = (row as Record<string, unknown>)['created_at'];
-        if (typeof createdRaw === 'string' && !createdById.has(account.providerUsername)) {
-          createdById.set(account.providerUsername, createdRaw);
+        if (typeof createdRaw === 'string') {
+          const stamps = createdById.get(account.providerUsername) ?? new Set<string>();
+          stamps.add(createdRaw);
+          createdById.set(account.providerUsername, stamps);
         }
         const created = typeof createdRaw === 'string' ? Date.parse(createdRaw) : Number.NaN;
         pageIds.push(

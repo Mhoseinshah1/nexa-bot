@@ -50,8 +50,8 @@ const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 export interface ResolutionWalk {
   /** The accounts it received (a consistent walk's `accounts`, an inconsistent one's `observed`). */
   readonly accounts: readonly ObservedAccount[];
-  /** Exact spelling → the `created_at` its row carried (`RickpanelWalkCoverage.createdAt`). */
-  readonly createdAt: ReadonlyMap<string, string>;
+  /** Exact spelling → every `created_at` its rows carried (`RickpanelWalkCoverage.createdAt`). */
+  readonly createdAt: ReadonlyMap<string, ReadonlySet<string>>;
   /** Gap-free, and in one relative order with a neighbouring walk. */
   readonly decisive: boolean;
 }
@@ -120,10 +120,20 @@ export function decideNeededNames(
       continue;
     }
     // Exactly one spelling, the only one any walk saw (else a collision above). Present when a
-    // later walk returned THIS row; a re-created account (another creation time) is not it.
+    // later walk returned THIS row (one creation time, seen again) and no walk returned that
+    // spelling with any other: a re-created account is another account, possibly another
+    // customer's, and which one the backup's service belongs to is not a guess to make.
     const spelling = [...now][0] as string;
-    const created = at.createdAt.get(spelling);
-    if (created !== undefined && later.some((w) => w.createdAt.get(spelling) === created)) {
+    const stamps = at.createdAt.get(spelling);
+    const created = stamps !== undefined && stamps.size === 1 ? ([...stamps][0] as string) : null;
+    const otherwise = later.some((w) =>
+      [...(w.createdAt.get(spelling) ?? [])].some((c) => c !== created),
+    );
+    if (
+      created !== null &&
+      !otherwise &&
+      later.some((w) => w.createdAt.get(spelling)?.has(created))
+    ) {
       out.set(name, { kind: 'PRESENT', spelling });
       continue;
     }

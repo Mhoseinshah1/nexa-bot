@@ -242,12 +242,19 @@ neighbouring walk on one relative order, and has a walk after it. Of those, the 
 fewest names undecided is chosen (the latest on a tie). The read is settled when it leaves none
 AND the last walk is gap-free too — so every spelling that still exists as the read ends was
 seen and counts toward a collision. Until then the panel is walked again — at most
-`TARGETED_MAX_WALKS` (3) walks; a panel that only sells settles on two. Then:
+`TARGETED_MAX_WALKS` (3) walks; a panel that only sells settles on two. Reaching the cap with
+the last walk NOT gap-free, no name is present on one spelling: a case variant that walk
+skipped may exist as the read ends (the second review's R3), so each would-be present name is
+unresolved. Then:
 
 1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of all
    walks: a collision (`USERNAME_CASE_COLLISION`), never eligible.
 2. **One spelling in the decision walk, the same row in a later walk** — present, with that
-   spelling (the backup's, or the one account there is, exactly as a complete read decides it).
+   spelling (the backup's, or the one account there is, exactly as a complete read decides it),
+   unless any walk from the decision walk on returned that spelling with ANOTHER creation time:
+   the name was deleted and created again, and the account it now holds is another account,
+   possibly another customer's (the second review's R1, R2) — unresolved. A walk records every
+   creation time it saw per spelling, not only the first.
 3. **No spelling in the decision walk, and none later** — absent (`PROVIDER_MISSING`, manual
    review; never a created account). Likewise a spelling the decision walk read that no later
    walk returned, when a later gap-free walk returned no spelling of it at all: deleted.
@@ -258,7 +265,8 @@ seen and counts toward a collision. Until then the panel is walked again — at 
 
 Two walks that are one complete snapshot (the `listAll` rule: both consistent, the same names)
 are still read as one, but as of the FIRST walk's end, and only when the second returned every
-row unchanged — the same `created_at` — which is what proves each row survived that moment.
+row unchanged — one `created_at` per row in each walk, the same in both — which is what proves
+each row survived that moment.
 
 **No exact lookup is sent.** A lookup (`GET api/user/{name}`) happens after a walk — exactly when
 a case variant can appear unseen — and a 404 for one spelling says nothing about another. So a
@@ -304,10 +312,11 @@ Residual risks, stated rather than hidden:
 - **Bursts in two walks.** A gap-free walk needs one after it, so bursts in the first two walks
   leave the third without confirmation: every name of that panel is unresolved (run the dry run
   again).
-- **Deleted and created again within one second.** A row's identity across pages and walks is
-  its name and `created_at`; a panel that stamps whole seconds cannot tell an account deleted and
-  re-created in the same second from the one it replaced. Both are accounts of that name held
-  by the panel's admin at the decision time.
+- **Re-created within the second it was first created.** A row's identity across pages and
+  walks is its name and `created_at`; a panel that stamps whole seconds cannot tell an account
+  from one deleted and created again under its name in the SAME second as the original. Only an
+  account created during the read itself can be re-created that quickly; one the backup names
+  predates the read by far.
 - **After the read.** A variant created after the decision walk ended is outside this read, as it
   is outside a complete read; the import's own read is a second, later look, and a changed
   decision fails it (`DRY_RUN_MISMATCH`, nothing written).
