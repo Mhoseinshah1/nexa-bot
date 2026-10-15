@@ -9,19 +9,19 @@
  * its own total). A gap-free walk returned every account there was as of its end: it is a
  * snapshot of the panel, taken while the panel kept selling.
  *
- * Gap-free is not survival: a row read early may be deleted before the walk ends. A row the next
- * page should have repeated and did not is gone (absent); a row read before a later deletion
- * behind the cursor is unconfirmed until a later walk returns the same row (same name and
- * creation time). So every needed name is decided from the walks alone, and only on a gap-free
- * DECISION walk:
+ * Gap-free is not survival: a row read early may be deleted before the walk ends, and no check
+ * inside one walk sees every such deletion. So every needed name is decided from the walks
+ * alone, as of the end of a gap-free DECISION walk, and only with a later walk to confirm it:
  *
  * - **Collision** — two or more exact spellings that fold to the name seen in ANY walk:
  *   `USERNAME_CASE_COLLISION`, manual review.
- * - **Present** — the decision walk returned exactly one spelling of it, not gone, confirmed.
- * - **Absent** — the decision walk returned none, or only a gone one (`PROVIDER_MISSING`,
- *   manual review — never a created account).
- * - **Unresolved** — anything else: no gap-free decision walk, an unconfirmed row, or a name
- *   the backup spells two ways. It stays `INVENTORY_INCOMPLETE`, which a production-like approval refuses — never a
+ * - **Present** — the decision walk returned exactly one spelling of it, and a later walk
+ *   returned the same row (same spelling, same `created_at`).
+ * - **Absent** — the decision walk returned none and no later walk returned it; or it returned
+ *   one that no later walk returned again, and a later gap-free walk returned no spelling of it
+ *   (`PROVIDER_MISSING`, manual review — never a created account).
+ * - **Unresolved** — anything else: no decision walk, a row neither confirmed nor shown gone,
+ *   or a name the backup spells two ways. It stays `INVENTORY_INCOMPLETE`, which a production-like approval refuses — never a
  *   guessed owner, never a guessed absence.
  *
  * No exact lookup is sent: a lookup happens after a walk, which is exactly when a case variant
@@ -46,28 +46,34 @@ export type NameResolution =
 
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
+/** One walk, as the per-name resolution sees it. */
+export interface ResolutionWalk {
+  /** The accounts it received (a consistent walk's `accounts`, an inconsistent one's `observed`). */
+  readonly accounts: readonly ObservedAccount[];
+  /** Exact spelling → the `created_at` its row carried (`RickpanelWalkCoverage.createdAt`). */
+  readonly createdAt: ReadonlyMap<string, string>;
+  /** Gap-free, and in one relative order with a neighbouring walk. */
+  readonly decisive: boolean;
+}
+
 /**
- * Every needed name, decided. `walks` are the accounts each walk received, in walk order (a
- * consistent walk's `accounts` or an inconsistent one's `observed`), at least two; the one at
- * `decision` (the last, by default) is the one decisions rest on, and every walk's spellings
- * count toward a collision. `gapFree`: that walk was gap-free and agreed with the one before it
- * on one relative order. `survival`: its rows seen deleted after being read (`gone` — absent
- * at its end) and rows a later deletion behind the cursor may have taken that no later walk
- * returned again (`unconfirmed` — their survival unproven, so never present). Exact spellings.
+ * Every needed name, decided as of the end of the DECISION walk `walks[decision]` — a decisive
+ * walk with at least one walk after it — or every name unresolved when `decision` is null.
+ * Every walk's spellings count toward a collision. A spelling the decision walk returned is
+ * present only when a LATER walk returned the same row (same spelling and `created_at`): it
+ * existed from its read, past the decision walk's end, to that later read. Exact spellings.
  */
 export function decideNeededNames(
   needed: ReadonlyMap<string, string | null>,
-  walks: readonly (readonly ObservedAccount[])[],
-  gapFree: boolean,
-  survival: {
-    readonly gone: ReadonlySet<string>;
-    readonly unconfirmed: ReadonlySet<string>;
-  } = { gone: new Set(), unconfirmed: new Set() },
-  decision: number = walks.length - 1,
+  walks: readonly ResolutionWalk[],
+  decision: number | null,
 ): Map<string, NameResolution> {
   if (walks.length < 2) throw new Error('a per-name resolution needs at least two walks');
-  if (!Number.isInteger(decision) || decision < 1 || decision >= walks.length) {
-    throw new Error('the decision walk must follow another walk');
+  if (
+    decision !== null &&
+    (!Number.isInteger(decision) || decision < 0 || decision >= walks.length - 1)
+  ) {
+    throw new Error('the decision walk must have a walk after it');
   }
   const spellingsOf = (accounts: readonly ObservedAccount[]) => {
     const out = new Map<string, Set<string>>();
@@ -79,20 +85,18 @@ export function decideNeededNames(
     }
     return out;
   };
+  const perWalk = walks.map((w) => spellingsOf(w.accounts));
   // Every spelling any walk saw: a spelling seen once was on the panel at some moment.
   const union = new Map<string, Set<string>>();
-  for (const accounts of walks) {
-    for (const [name, set] of spellingsOf(accounts)) {
+  for (const spellings of perWalk) {
+    for (const [name, set] of spellings) {
       const all = union.get(name) ?? new Set<string>();
       for (const spelling of set) all.add(spelling);
       union.set(name, all);
     }
   }
-  const last = spellingsOf(
-    (walks[decision] as readonly ObservedAccount[]).filter(
-      (a) => !survival.gone.has(a.providerUsername),
-    ),
-  );
+  const later = decision === null ? [] : walks.slice(decision + 1);
+  const laterSpellings = decision === null ? [] : perWalk.slice(decision + 1);
   const out = new Map<string, NameResolution>();
   for (const [name, backup] of needed) {
     const seen = union.get(name);
@@ -101,21 +105,33 @@ export function decideNeededNames(
       continue;
     }
     // Two backup spellings of one name: which account each invoice meant is a guess.
-    if (backup === null || !gapFree) {
+    if (backup === null || decision === null) {
       out.set(name, { kind: 'UNRESOLVED' });
       continue;
     }
-    const now = last.get(name);
+    const at = walks[decision] as ResolutionWalk;
+    const now = perWalk[decision]?.get(name);
+    const seenLater = laterSpellings.some((s) => s.has(name));
     if (now === undefined || now.size === 0) {
-      out.set(name, { kind: 'ABSENT' });
+      // The decision walk is gap-free: nothing that existed throughout it was missed. A later
+      // walk that returns the name all the same (created after, or missed after all) is not
+      // overruled by a guess either way.
+      out.set(name, seenLater ? { kind: 'UNRESOLVED' } : { kind: 'ABSENT' });
       continue;
     }
-    // Exactly one spelling, the only one any walk saw (else a collision above): the account,
-    // exactly as a complete read decides it — if it is proven to have survived the walk.
+    // Exactly one spelling, the only one any walk saw (else a collision above). Present when a
+    // later walk returned THIS row; a re-created account (another creation time) is not it.
     const spelling = [...now][0] as string;
+    const created = at.createdAt.get(spelling);
+    if (created !== undefined && later.some((w) => w.createdAt.get(spelling) === created)) {
+      out.set(name, { kind: 'PRESENT', spelling });
+      continue;
+    }
+    // Not returned again: deleted after its read. Absent only when a later gap-free walk
+    // returned no spelling of it at all; otherwise undecided.
     out.set(
       name,
-      survival.unconfirmed.has(spelling) ? { kind: 'UNRESOLVED' } : { kind: 'PRESENT', spelling },
+      !seenLater && later.some((w) => w.decisive) ? { kind: 'ABSENT' } : { kind: 'UNRESOLVED' },
     );
   }
   return out;

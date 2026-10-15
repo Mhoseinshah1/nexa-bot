@@ -18,10 +18,10 @@ import type { LegacyInventoryRead } from '../../apps/api/src/modules/platform/le
  * deletions behind the cursor, and — during the first walk only — needed accounts deleted and
  * 15-row deletion bursts that break that walk's chain.
  *
- * What it pins: the second walk is gap-free, but the single deletions behind its cursor leave
- * the needed rows it read before them unconfirmed — any of them could have been the deleted
- * row — so a third walk is made, and returning those same rows (same name and creation time)
- * confirms them. Decisions rest on the second walk: every needed name is decided and decided
+ * What it pins: the first walk is broken; the second is gap-free, and a third walk returning
+ * the same rows (same name and creation time) confirms that each survived the second's end —
+ * a gap-free walk alone does not prove that a row it read was not deleted before it ended.
+ * Decisions rest on the second walk: every needed name is decided and decided
  * RIGHT — present exactly when the panel held it when that walk ended, checked name by name
  * against the panel's own state at that moment; nothing the backup does not need is indexed;
  * not one exact lookup is sent; one login; and what the read costs in requests, simulated time

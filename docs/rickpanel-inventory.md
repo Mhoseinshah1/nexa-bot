@@ -121,11 +121,11 @@ I = 1 s): 1 login + 2 × ⌈N / P⌉ pages, one at a time, so ≈ (1 + 2⌈N/P�
 — 10 000 accounts: 201 requests, ≈ 3.4 min; 30 000: 601, ≈ 10 min; 50 000: 1 001, ≈ 17 min —
 longer when the panel answers slower than I. The Web Admin's read is TARGETED (§Per-name
 resolution): its pages step by `limit − overlap` (≈ 11% more pages at the defaults), it sends NO
-exact lookup, and it walks a third time when the second walk was not gap-free or a deletion
-during it left a needed row's survival unconfirmed. A synthetic 100 000-account panel with
-77 000 needed names, sales, single deletions in every walk and 15-row deletion bursts during the
-first cost 3 331 requests (1 login, 3 330 pages over three walks), ≈ 56 min; a panel that only
-sells, with no deletion during the second walk, costs two. With bursts in every walk, three
+exact lookup, and it walks a third time when the first two do not settle every name (a walk
+broken by a burst of deletions needs a gap-free walk AND one after it). A synthetic
+100 000-account panel with 77 000 needed names, sales, single deletions in every walk and
+15-row deletion bursts during the first cost 3 331 requests (1 login, 3 330 pages over three
+walks), ≈ 56 min; without the bursts, two walks. With bursts in every walk, three
 walks (3 316 pages) and every name unresolved. A non-targeted read (the
 CLI, the rehearsal) reads once; one built with `inventoryAttempts` > 1 walks again at most twice more, after 15 s and 45 s.
 
@@ -230,31 +230,35 @@ panel held as of its end — a snapshot, taken while the panel kept selling.
 
 **Gap-free is not survival** (Codex P1). A gap-free walk misses no row, but a row it read early
 may be deleted before it ends — and an account deleted mid-read must never be called present.
-The walk tracks this on the rows themselves:
+No check inside one walk sees every such deletion: a deletion behind the cursor is offset by an
+account listed at the head, or by a tie of `created_at` reordered between two requests (the
+independent review's F1 and F3), and the walk looks exactly like a still panel. So survival is
+proven only ACROSS walks: a row is confirmed when a LATER walk returns the same row — the same
+name AND the same `created_at`, so an account deleted and created again under that name confirms
+nothing. Seen again, it existed from its read, past the earlier walk's end, to the later read.
 
-- **Gone.** Rows of a page after the shared row belong in the next page too; one missing there
-  was deleted after being read, and is absent at the walk's end.
-- **Unconfirmed.** A deletion BEHIND the cursor shows as the shared row arriving earlier than
-  expected (in insertion order nothing is ever inserted there). It could have been any row read
-  before it, unseen — so every row last seen before the last such deletion is unconfirmed.
-
-An unconfirmed row is confirmed only by a LATER walk returning the same row — the same name AND
-the same `created_at`, so an account deleted and created again under that name confirms nothing.
-Seen again, it existed from its first read past the earlier walk's end.
-
-**Decisions, from the DECISION walk.** The decision walk is the latest walk that is gap-free,
-agrees with the one before it on one relative order, and has every needed row confirmed; failing
-that, the latest such walk with its unconfirmed rows unresolved. Until one is settled the panel
-is walked again — at most `TARGETED_MAX_WALKS` (3) walks. Then:
+**Decisions, as of the DECISION walk's end.** A decision walk is gap-free, agrees with a
+neighbouring walk on one relative order, and has a walk after it. Of those, the one leaving the
+fewest names undecided is chosen (the latest on a tie). The read is settled when it leaves none
+AND the last walk is gap-free too — so every spelling that still exists as the read ends was
+seen and counts toward a collision. Until then the panel is walked again — at most
+`TARGETED_MAX_WALKS` (3) walks; a panel that only sells settles on two. Then:
 
 1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of all
    walks: a collision (`USERNAME_CASE_COLLISION`), never eligible.
-2. **One spelling in the decision walk, not gone, confirmed** — present, with that spelling (the
-   backup's, or the one account there is, exactly as a complete read decides it).
-3. **No spelling in the decision walk, or only a gone one** — absent (`PROVIDER_MISSING`, manual
-   review; never a created account).
-4. **Anything else** — no decision walk, an unconfirmed row, or a name the backup spells two
-   ways — **unresolved**. Never adopted, never "missing".
+2. **One spelling in the decision walk, the same row in a later walk** — present, with that
+   spelling (the backup's, or the one account there is, exactly as a complete read decides it).
+3. **No spelling in the decision walk, and none later** — absent (`PROVIDER_MISSING`, manual
+   review; never a created account). Likewise a spelling the decision walk read that no later
+   walk returned, when a later gap-free walk returned no spelling of it at all: deleted.
+4. **Anything else** — no decision walk, a row neither confirmed nor shown gone (a later walk
+   returned it with another creation time, or no later walk was gap-free), a name the decision
+   walk lacked that a later walk returned, or a name the backup spells two ways —
+   **unresolved**. Never adopted, never "missing".
+
+Two walks that are one complete snapshot (the `listAll` rule: both consistent, the same names)
+are still read as one, but as of the FIRST walk's end, and only when the second returned every
+row unchanged — the same `created_at` — which is what proves each row survived that moment.
 
 **No exact lookup is sent.** A lookup (`GET api/user/{name}`) happens after a walk — exactly when
 a case variant can appear unseen — and a 404 for one spelling says nothing about another. So a
@@ -292,6 +296,14 @@ Residual risks, stated rather than hidden:
   relative order is the panel's. A tie permuted between two requests either repeats a row
   (detected: every row accounted for), or swaps rows inside an overlap (detected: chained order),
   or swaps rows that both stay inside one page (harmless: none is skipped).
+- **A deletion of a name the decision walk never read, offset within one walk.** A row is
+  skipped only when rows ahead of the cursor shift between two requests; in insertion order with
+  no ties that breaks the chain. A tie reordered across the cursor, together with a deletion
+  behind it, could still skip a row unseen — then a needed name is called absent (manual
+  review), never present, and only if no later walk returns it either.
+- **Bursts in two walks.** A gap-free walk needs one after it, so bursts in the first two walks
+  leave the third without confirmation: every name of that panel is unresolved (run the dry run
+  again).
 - **Deleted and created again within one second.** A row's identity across pages and walks is
   its name and `created_at`; a panel that stamps whole seconds cannot tell an account deleted and
   re-created in the same second from the one it replaced. Both are accounts of that name held

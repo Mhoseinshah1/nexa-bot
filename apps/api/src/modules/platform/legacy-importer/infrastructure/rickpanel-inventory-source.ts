@@ -25,7 +25,11 @@ import type {
   LegacyInventoryRead,
   LegacyInventoryReadOptions,
 } from '../application/ports.js';
-import { decideNeededNames, resolutionCounts } from '../application/inventory-resolution.js';
+import {
+  decideNeededNames,
+  resolutionCounts,
+  type NameResolution,
+} from '../application/inventory-resolution.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
 import { PROCESS_PANEL_READ_GATE, panelReadKey, type PanelReadGate } from './panel-read-gate.js';
 import {
@@ -115,8 +119,9 @@ export function sameRelativeOrder(
 }
 
 /**
- * Walks one per-name resolution may make: two, and up to one more when the last was not
- * gap-free (a burst of deletions, an insertion ahead of the cursor). Each is a full paced walk.
+ * Walks one per-name resolution may make: two, and one more when they do not settle every name
+ * (a walk broken by a burst of deletions or a missed insertion; a decision walk with no gap-free
+ * walk after it). Each is a full paced walk.
  */
 export const TARGETED_MAX_WALKS = 3;
 
@@ -339,11 +344,11 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
   /**
    * The per-name resolution (`inventory-resolution.ts`). Two walks at least, with overlapping
    * pages — a first walk the panel moved under does not end the read. If the two are one
-   * complete snapshot, the read is exactly the complete read it always was. Otherwise each
-   * needed name is decided from the walks, and only on a gap-free DECISION walk whose needed
-   * rows survived it; until there is one (a burst of deletions, an insertion ahead of the
-   * cursor, a needed row a deletion behind the cursor may have taken), the panel is walked
-   * again, at most `TARGETED_MAX_WALKS` walks in all. No exact lookup is sent.
+   * complete snapshot (the same rows, same creation times), the read is the complete read it
+   * always was, as of the first walk's end. Otherwise each needed name is decided from the
+   * walks, as of a gap-free DECISION walk's end, a spelling present only when a later walk
+   * returned the same row; until that settles every name and the last walk is gap-free, the
+   * panel is walked again, at most `TARGETED_MAX_WALKS` walks in all. No exact lookup is sent.
    */
   private async readTargeted(
     panelId: string,
@@ -369,28 +374,33 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     if (!second.ok) return this.finish(panelId, second, 1, load());
     endedAt.push(this.now());
 
-    // One complete snapshot after all: the complete read it always was (the listAll rule) —
-    // unless the second walk saw a row deleted after its read, which only the per-name
-    // resolution's survival rules account for.
-    const survivedWhole = (w: typeof second) =>
-      (w.coverage?.gone.length ?? 0) === 0 && (w.coverage?.unconfirmed.length ?? 0) === 0;
-    if (first.consistent && second.consistent && survivedWhole(second)) {
+    // One complete snapshot after all: the complete read it always was (the listAll rule), as
+    // of the FIRST walk's end — the second, returning every row of it unchanged (same name and
+    // creation time), is what proves each survived that moment. The second's own end proves
+    // nothing: a row it read may be deleted before it ends, unseen.
+    if (first.consistent && second.consistent) {
       const a = first.accounts.map((x) => x.providerUsername);
       const b = new Set(second.accounts.map((x) => x.providerUsername));
-      if (a.length === b.size && a.every((name) => b.has(name))) {
+      const sameRows = a.every(
+        (name) =>
+          b.has(name) &&
+          first.coverage?.createdAt.get(name) === second.coverage?.createdAt.get(name),
+      );
+      if (a.length === b.size && sameRows) {
         return this.finish(
           panelId,
           {
             ok: true,
             complete: true,
-            accounts: second.accounts,
+            accounts: first.accounts,
             evidence: { first: first.evidence, second: second.evidence },
-            ...(second.subscriptionLinks === undefined
+            ...(first.subscriptionLinks === undefined
               ? {}
-              : { subscriptionLinks: second.subscriptionLinks }),
+              : { subscriptionLinks: first.subscriptionLinks }),
           },
           1,
           load(),
+          endedAt[0],
         );
       }
     }
@@ -405,48 +415,46 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       w.evidence.reportedTotal !== null &&
       w.evidence.distinctUsernames < w.evidence.reportedTotal;
     const seen = walks.map((w) => (w.consistent ? w.accounts : w.observed));
-    // A walk decisions may rest on: gap-free, and in one stable order with the walk before it
+    // A walk decisions may rest on: gap-free, and in one relative order with a neighbouring walk
     // (an unordered list would make chaining a coincidence).
     const decisive = (i: number) =>
-      i >= 1 &&
       walks[i]?.coverage?.gapFree === true &&
-      sameRelativeOrder(walks[i - 1]?.coverage?.order, walks[i]?.coverage?.order);
-    // Gap-free is not survival. A needed row the decision walk read before a later deletion
-    // behind its cursor may have been that deletion: unconfirmed until a LATER walk returns the
-    // same row — same spelling AND same creation time, so a deleted and re-created account does
-    // not count. Seen again, it existed from its first read past the decision walk's end.
-    const unconfirmedNeeded = (i: number) => {
-      const coverage = walks[i]?.coverage;
-      const unconfirmed = new Set(coverage?.unconfirmed ?? []);
-      const out = new Set<string>();
-      for (const account of seen[i] ?? []) {
-        if (!needed.has(account.username) || !unconfirmed.has(account.providerUsername)) continue;
-        const created = coverage?.createdAt.get(account.providerUsername);
-        const confirmed =
-          created !== undefined &&
-          walks
-            .slice(i + 1)
-            .some((later) => later.coverage?.createdAt.get(account.providerUsername) === created);
-        if (!confirmed) out.add(account.providerUsername);
-      }
-      return out;
+      ((i > 0 && sameRelativeOrder(walks[i - 1]?.coverage?.order, walks[i]?.coverage?.order)) ||
+        (i + 1 < walks.length &&
+          sameRelativeOrder(walks[i]?.coverage?.order, walks[i + 1]?.coverage?.order)));
+    const resolutionWalks = () =>
+      walks.map((w, i) => ({
+        accounts: seen[i] ?? [],
+        createdAt: w.coverage?.createdAt ?? new Map<string, string>(),
+        decisive: decisive(i),
+      }));
+    // Unresolved for want of evidence (a name the backup spells two ways never resolves).
+    const undecided = (resolved: ReadonlyMap<string, NameResolution>) => {
+      let count = 0;
+      for (const [name, r] of resolved)
+        if (r.kind === 'UNRESOLVED' && needed.get(name) !== null) count += 1;
+      return count;
     };
-    // The decision walk: the latest decisive walk whose needed rows are all confirmed; failing
-    // that, the latest decisive walk, its unconfirmed rows unresolved; failing that, none.
+    // The decision walk: a decisive walk with a later one to confirm it, leaving the fewest
+    // names undecided (the latest on a tie); settled when it leaves none.
     const decision = () => {
-      let fallback: number | null = null;
-      for (let i = walks.length - 1; i >= 1; i -= 1) {
-        if (!decisive(i)) continue;
-        if (unconfirmedNeeded(i).size === 0) return { index: i, settled: true };
-        fallback ??= i;
+      const rw = resolutionWalks();
+      let best: { index: number; resolved: Map<string, NameResolution>; left: number } | null =
+        null;
+      for (let i = 0; i < walks.length - 1; i += 1) {
+        if (!(rw[i]?.decisive ?? false)) continue;
+        const resolved = decideNeededNames(needed, rw, i);
+        const left = undecided(resolved);
+        if (best === null || left <= best.left) best = { index: i, resolved, left };
       }
-      return fallback === null ? null : { index: fallback, settled: false };
+      return best;
     };
-    while (
-      decision()?.settled !== true &&
-      walks.length < TARGETED_MAX_WALKS &&
-      !walks.some(countMismatch)
-    ) {
+    // Settled: the decision walk leaves no name undecided, and the LAST walk is gap-free too —
+    // so every spelling that still exists as the read ends was seen, and counts toward a
+    // collision (a case variant created after the decision walk is not left unseen).
+    const settled = () =>
+      walks[walks.length - 1]?.coverage?.gapFree === true && decision()?.left === 0;
+    while (!settled() && walks.length < TARGETED_MAX_WALKS && !walks.some(countMismatch)) {
       signal?.throwIfAborted();
       const next = await this.reader.walk(target, http, walkOptions);
       if (!next.ok) return this.finish(panelId, next, 1, load());
@@ -472,23 +480,14 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
         ? second.reason
         : 'WALKS_DIFFER';
     // Every decision and runtime fact is the DECISION walk's, stamped when it ended. With no
-    // decisive walk, the last one is reported and every name is unresolved.
+    // decision walk, the last one is reported and every name is unresolved.
     const chosen = decision();
     const gapFree = chosen !== null;
     const at = chosen?.index ?? walks.length - 1;
     const observedAt = endedAt[at] ?? this.now();
     const last = walks[at] as Extract<RickpanelInventoryWalk, { ok: true }>;
     const lastSeen = seen[at] as readonly RickpanelInventoryAccount[];
-    const resolved = decideNeededNames(
-      needed,
-      seen,
-      gapFree,
-      {
-        gone: new Set(last.coverage?.gone ?? []),
-        unconfirmed: gapFree ? unconfirmedNeeded(at) : new Set(),
-      },
-      at,
-    );
+    const resolved = chosen?.resolved ?? decideNeededNames(needed, resolutionWalks(), null);
 
     const bySpelling = new Map(lastSeen.map((a) => [a.providerUsername, a]));
     const links = last.subscriptionLinks;
@@ -588,6 +587,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     outcome: RickpanelInventoryOutcome,
     attempt: number,
     load: LegacyInventoryLoad,
+    observedAt?: Date,
   ): LegacyInventoryRead {
     const diagnostics = diagnosticsOf(outcome, attempt, load);
     if (!outcome.ok) return { ok: false, failure: outcome.failure, diagnostics };
@@ -625,7 +625,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       accounts: outcome.accounts.length,
       states,
       runtime,
-      observedAt: this.now(),
+      observedAt: observedAt ?? this.now(),
       diagnostics,
     };
   }

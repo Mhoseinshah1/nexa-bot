@@ -754,7 +754,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expectReadsOnly(panelA, panelB);
   }, 600_000);
 
-  it('R1 (Codex P1): a case variant SVC_A1 listed BEHIND the cursor from the middle of the second walk on (a list not in creation order) — no later walk is gap-free: svc_a1 is a collision from the union, every other needed name UNRESOLVED, approval refused, nothing attached', async () => {
+  it('R1 (Codex P1): a case variant SVC_A1 listed BEHIND the cursor from the middle of the second walk on (a list not in creation order) — no later walk is gap-free: svc_a1 is a collision from the union; every other needed name is decided as of the FIRST walk’s end (gap-free, in creation order), confirmed row by row by the later walks; nothing attached', async () => {
     // Page 8 (overlap 2): the shifted page still holds fresh rows. At page 2 (overlap 1) the
     // same insertion leaves the next page with none, and the walk fails NO_PROGRESS — the
     // panel is then PROVIDER_INVENTORY_INCOMPLETE (read failed), also refused.
@@ -783,11 +783,11 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     const w = codes(dry.dryRunReport?.warnings);
     expect(walksOf(panelA, before)).toBe(MAX_WALKS);
     expect(w['USERNAME_CASE_COLLISION']).toBe(2);
-    // svc_a2, svc_a4, svc_missing: never present, never absent.
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE - 1);
-    expect(w['PROVIDER_MISSING']).toBeUndefined();
+    // svc_a2 and svc_a4 present (the same rows returned again), svc_missing absent: decided as
+    // of the first walk's end, never from the walks the variant disordered.
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
+    expect(w['PROVIDER_MISSING']).toBe(1);
     expect(lookupsOf(panelA, before)).toEqual([]);
-    await expectApprovalRefused(page, id);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
     await expectOwners({});
     expectReadsOnly(panelA, panelB);

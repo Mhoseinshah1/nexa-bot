@@ -170,13 +170,13 @@ reaching it was not.
   must be approvable while Mirza sells on the live RickPanel). When the double walks are not one
   complete snapshot because the panel MOVED (`TOTAL_CHANGED`, `WALKS_DIFFER`), the Web Admin's importer
   decides each username the backup needs on that panel on its own — from the walks alone, and
-  only when the LAST walk is GAP-FREE (rows oldest first by `created_at`, overlapping pages
+  only on a GAP-FREE decision walk (rows oldest first by `created_at`, overlapping pages
   chained by name and creation time, no insertion ahead of the cursor missed, ended at its own
   total, both walks in one order: a snapshot of the panel as of its end; at most three walks).
-  A needed row read and then deleted during that walk is absent, and one a later deletion
-  behind the cursor may have taken is present only once a later walk returns the same row
-  (same name and `created_at`). Two spellings seen in any walk are a collision; one surviving
-  spelling in the decision walk is present; none is absent; anything else is unresolved. No exact lookup is sent — a 404 is
+  Gap-free is not survival, so a spelling the decision walk read is present only when a LATER
+  walk returned the same row (same name and `created_at`). Two spellings seen in any walk are a
+  collision; a confirmed spelling is present; none, in the decision walk and after it, is
+  absent; anything else is unresolved. No exact lookup is sent — a 404 is
   never evidence. Every account on the panel that is not in the backup is ignored
   (`docs/rickpanel-inventory.md` §Per-name resolution). Such a read is reported complete, with a
   `resolution` in `sections.provider.panels[i]` (counts only). A needed name it could not decide
