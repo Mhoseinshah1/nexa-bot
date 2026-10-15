@@ -5,6 +5,7 @@ import {
   legacyNxpkgKeyKindSchema,
   type LegacyNxpkgImportStatus,
 } from './legacy-nxpkg.js';
+import { legacyInventoryPanelDiagnosticsSchema } from './legacy-inventory-diagnostics.js';
 
 /**
  * Mirza `.nxpkg` importer — the Web Admin surface «مهاجرت از میرزا»
@@ -347,6 +348,12 @@ export const legacyMigrationDryRunReportSchema = z.object({
    * tallies differ (`DRY_RUN_MISMATCH`). Null only when the importer reported none.
    */
   planTalliesDigest: hex64.nullable(),
+  /**
+   * Per production panel decided one needed name at a time: WHY each walk was or was not
+   * gap-free and why each unresolved name stayed so (`legacy-inventory-diagnostics.ts`).
+   * Diagnostics only — nothing reads it to decide. Absent on a report written before it.
+   */
+  providerDiagnostics: z.array(legacyInventoryPanelDiagnosticsSchema).optional(),
 });
 export type LegacyMigrationDryRunReport = z.infer<typeof legacyMigrationDryRunReportSchema>;
 
