@@ -362,8 +362,8 @@ export const LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE = 'PROVIDER_INVENTOR
  * The dry run report's warning for the production panels that CHANGED while they were read
  * (the double walk was not one snapshot because the panel moved: `TOTAL_CHANGED`,
  * `WALKS_DIFFER` — never a `COUNT_MISMATCH` of withheld rows, which stays an incomplete panel)
- * and whose needed usernames were therefore decided one by one, from a gap-free last walk only
- * (no exact lookup). Beside it, one `PROVIDER_INVENTORY_CHURN:<reason>` per reason.
+ * and whose needed usernames were therefore decided one by one, from the walks alone — a
+ * gap-free decision walk, each presence confirmed by a later walk (no exact lookup). Beside it, one `PROVIDER_INVENTORY_CHURN:<reason>` per reason.
  * Informational and NOT blocking: a panel that keeps
  * selling while it is read is the normal case, and what such a read could not decide is
  * reported separately (`PROVIDER_INVENTORY_UNRESOLVED`).
@@ -371,8 +371,9 @@ export const LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE = 'PROVIDER_INVENTOR
 export const LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN = 'PROVIDER_INVENTORY_CHURN';
 
 /**
- * The dry run report's warning for the needed usernames that neither walk nor an exact lookup
- * decided (a lookup that failed or was not made). Its count is the number of such names; the
+ * The dry run report's warning for the needed usernames the walks could not decide (no exact
+ * lookup is ever made: no gap-free decision walk, a row no later walk confirmed, or a name
+ * seen under two creation times). Its count is the number of such names; the
  * invoices behind them are services category `INVENTORY_INCOMPLETE`, which is what blocks
  * approval through `legacyMigrationDryRunInventoryIncomplete` — this code itself is a count for
  * the operator and is not read by that rule.
