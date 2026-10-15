@@ -379,7 +379,13 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     endedAt.push(this.now());
     signal?.throwIfAborted();
     const second = await this.reader.walk(target, http, walkOptions);
-    if (!second.ok) return this.finish(panelId, second, 1, load());
+    if (!second.ok) {
+      // The first walk is still reported (Codex): the failure is the second's.
+      const failed = this.finish(panelId, second, 1, load());
+      return failed.diagnostics === undefined
+        ? failed
+        : { ...failed, diagnostics: { ...failed.diagnostics, walks: [{ ...first.evidence }] } };
+    }
     endedAt.push(this.now());
 
     // One complete snapshot after all: the complete read it always was (the listAll rule).
@@ -660,6 +666,16 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       return only !== undefined && only !== '' && !Number.isNaN(Date.parse(only)) ? only : null;
     };
     const names = new Set(b.accounts.map((x) => x.providerUsername));
+    // Every spelling an earlier walk saw, by canonical name: a case variant seen there and gone
+    // since still makes the name a collision (Codex) — which only the per-name resolution says.
+    const earlierSpellings = new Map<string, Set<string>>();
+    for (const e of earlier) {
+      for (const x of e.consistent ? e.accounts : e.observed) {
+        const set = earlierSpellings.get(x.username) ?? new Set<string>();
+        set.add(x.providerUsername);
+        earlierSpellings.set(x.username, set);
+      }
+    }
     const same =
       a.accounts.length === names.size &&
       a.accounts.every((x) => {
@@ -668,6 +684,8 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
           names.has(x.providerUsername) &&
           stamp !== null &&
           stamp === stampOf(b, x.providerUsername) &&
+          // No earlier walk saw another spelling of this name (a case variant since gone).
+          [...(earlierSpellings.get(x.username) ?? [])].every((n) => n === x.providerUsername) &&
           // An earlier walk that returned the name returned this same account (Codex: one
           // re-created between earlier walks is another account).
           earlier.every(

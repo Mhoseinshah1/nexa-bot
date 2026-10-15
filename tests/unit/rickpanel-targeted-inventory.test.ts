@@ -655,6 +655,51 @@ describe('Codex review on 79f46fda', () => {
     }
   });
 
+  it('Codex: a case variant the first walk saw and that is gone since — the late snapshot is refused, never alice alone', async () => {
+    const panel = fakePanel(300);
+    add(panel, 'alice');
+    add(panel, 'ALICE');
+    bursts(panel, [1]);
+    const before = panel.beforePage;
+    panel.beforePage = (o, page) => {
+      before(o, page);
+      // ALICE is deleted after the first walk; the second and third walks are one still pair.
+      if (page === 4) panel.names.splice(panel.names.indexOf('ALICE'), 1);
+    };
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need(['alice']) }));
+    expect(read.resolution).toBeDefined();
+    expect(read.index.usernames.get('alice')).toEqual(['ALICE', 'alice']);
+  });
+
+  it('Codex: a second walk that fails still reports the first', async () => {
+    const panel = fakePanel(300);
+    const send = clientOf(panel).send;
+    const client = {
+      send: async (r: ProviderHttpRequest) =>
+        panel.pages === 4 && r.method !== 'POST'
+          ? ({ ok: true, status: 500, headers: {}, bodyText: '{}', setCookie: [] } as const)
+          : send(r),
+    };
+    const source = new RickpanelInventorySource(
+      {
+        panel: async () => ({ baseUrl: 'https://panel.invalid', providerType: 'rickpanel' }),
+        credentials: async () => ({ username: 'admin', password: 'synthetic', apiToken: null }),
+        http: () => client,
+      },
+      {
+        pageSize: 100,
+        clock: () => 0,
+        sleep: async () => undefined,
+        gate: new InProcessPanelReadGate(),
+        targeted: true,
+      },
+      STAMP,
+    );
+    const read = await source.read(SCOPE, 'p1', { needed: need([name(5)]) });
+    expect(read.ok).toBe(false);
+    expect(read.diagnostics?.walks).toHaveLength(1);
+  });
+
   it('two walks that share no row prove no common order', () => {
     expect(sameRelativeOrder(['a', 'b'], ['c', 'd'])).toBe(false);
     expect(sameRelativeOrder([], [])).toBe(true);
