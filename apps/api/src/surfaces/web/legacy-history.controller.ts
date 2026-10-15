@@ -2,7 +2,12 @@ import { Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  LEGACY_INVOICE_PRICE_CURRENCY,
+  legacyCustomerAdoptionsQuerySchema,
+  legacyCustomerInvoicesQuerySchema,
   legacyHistoryListQuerySchema,
+  type LegacyCustomerAdoptionsResponse,
+  type LegacyCustomerInvoicesResponse,
   type LegacyHistoryResponse,
   type TenantContext,
 } from '@nexa/contracts';
@@ -49,6 +54,71 @@ export class LegacyHistoryController {
       invoiceArchive: page.invoiceArchive === null ? null : { ...page.invoiceArchive },
       walletDebts: page.walletDebts === null ? null : { ...page.walletDebts },
     };
+  }
+
+  /**
+   * The customer's Mirza invoices beside the importer's outcome for each (read-only). The
+   * service charges `users.view` and `legacy.invoices.view`, and nulls the candidate without
+   * `legacy.services.view` and the username without `legacy.invoices.pii.view`.
+   */
+  @Get('users/:id/legacy-invoices')
+  async invoices(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Query() query: unknown,
+  ): Promise<LegacyCustomerInvoicesResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = legacyCustomerInvoicesQuerySchema.parse(query ?? {});
+    const page = await this.container.legacyHistoryRead.invoicesForCustomer(
+      scope,
+      actor,
+      id,
+      input,
+    );
+    return {
+      invoices: page.rows.map((row) => ({
+        archiveId: row.archiveId,
+        invoiceKey: row.invoiceKey,
+        revision: row.revision,
+        classification: row.classification,
+        live: row.live,
+        status: row.status,
+        isTest: row.isTest,
+        username: row.username,
+        panelCode: row.panelCode,
+        productCode: row.productCode,
+        productName: row.productName,
+        priceMinor: row.priceMinor === null ? null : row.priceMinor.toString(),
+        // The archive's CHECK admits IRT or NULL (owner decision 7).
+        priceCurrency:
+          row.priceCurrency === LEGACY_INVOICE_PRICE_CURRENCY
+            ? LEGACY_INVOICE_PRICE_CURRENCY
+            : null,
+        soldAt: row.soldAt === null ? null : row.soldAt.toISOString(),
+        candidate: row.candidate === null ? null : { ...row.candidate },
+      })),
+      nextCursor: page.nextCursor,
+      piiRedacted: page.piiRedacted,
+      candidatesVisible: page.candidatesVisible,
+    };
+  }
+
+  /** Which of the given services of the customer were adopted from Mirza (`legacy.services.view`). */
+  @Get('users/:id/legacy-adopted-services')
+  async adoptions(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Query() query: unknown,
+  ): Promise<LegacyCustomerAdoptionsResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = legacyCustomerAdoptionsQuerySchema.parse(query ?? {});
+    const adoptions = await this.container.legacyHistoryRead.adoptionsForCustomer(
+      scope,
+      actor,
+      id,
+      input,
+    );
+    return { adoptions: adoptions.map((row) => ({ ...row })) };
   }
 
   private async authenticate(
