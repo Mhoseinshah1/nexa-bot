@@ -1344,12 +1344,22 @@ export function providerChurnWarnings(report: LegacyImportReport): LegacyMigrati
     const r = resolution as { reason?: unknown; unresolved?: unknown };
     // A panel the backup asks nothing of was never read: it did not change while read.
     if (r.reason === 'NOTHING_NEEDED') continue;
+    // A panel that held still but whose rows carry no usable creation time did not change
+    // either (Codex): its undecided names are counted, never reported as churn.
+    if (r.reason === 'NO_CREATION_TIME') {
+      unresolved += safeCount(r.unresolved);
+      continue;
+    }
     panels += 1;
     const reason = closedReason(r.reason);
     byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
     unresolved += safeCount(r.unresolved);
   }
-  if (panels === 0) return [];
+  if (panels === 0) {
+    return unresolved > 0
+      ? [{ code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: unresolved }]
+      : [];
+  }
   return [
     { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN, count: panels },
     ...[...byReason].map(([reason, count]) => ({

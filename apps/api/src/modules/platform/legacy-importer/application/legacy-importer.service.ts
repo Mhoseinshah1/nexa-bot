@@ -2517,6 +2517,10 @@ export class LegacyImporterService {
         reads: counts.reads,
         refusedWrites: counts.refusedWrites,
         inventoriesComplete: prepared.plan.inventories.every((p) => p.complete),
+        // No panel had anything to be asked (every read NOTHING_NEEDED): zero reads is right.
+        readsNeeded: !prepared.plan.inventories.every(
+          (p) => p.resolution?.reason === 'NOTHING_NEEDED',
+        ),
       },
     });
     // Mirza PR4: beside the closed v1 final report, never inside it (its schema is closed);

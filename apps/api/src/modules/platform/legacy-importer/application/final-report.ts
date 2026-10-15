@@ -70,7 +70,21 @@ export interface FinalReportInput {
     readonly reads: number;
     readonly refusedWrites: number;
     readonly inventoriesComplete: boolean;
+    /**
+     * Whether any panel had to be read: false when every production panel's targeted read was
+     * `NOTHING_NEEDED` (the backup asked it nothing), where zero reads is the right count.
+     * Absent: reads were needed.
+     */
+    readonly readsNeeded?: boolean;
   };
+}
+
+/**
+ * P3: no write was ever attempted, and the panels were read — unless no panel had anything to
+ * be asked (every targeted read `NOTHING_NEEDED`), where zero reads is the right count.
+ */
+export function providerReconciles(provider: FinalReportInput['provider']): boolean {
+  return provider.refusedWrites === 0 && (provider.reads > 0 || provider.readsNeeded === false);
 }
 
 function mapCount(
@@ -305,8 +319,8 @@ export function buildFinalReport(input: FinalReportInput) {
       },
       {
         id: 'P3',
-        holds: input.provider.refusedWrites === 0 && input.provider.reads > 0,
-        expected: 'writes=0 reads>0',
+        holds: providerReconciles(input.provider),
+        expected: input.provider.readsNeeded === false ? 'writes=0' : 'writes=0 reads>0',
         actual: `writes=${String(input.provider.refusedWrites)} reads=${String(input.provider.reads)}`,
       },
     ],

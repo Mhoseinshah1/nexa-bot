@@ -56,6 +56,19 @@ describe('providerChurnWarnings', () => {
     expect(providerChurnWarnings({ sections: {} } as never)).toEqual([]);
   });
 
+  it('Codex: a panel that held still but carries no usable creation time is not churn; its undecided names still count', () => {
+    expect(
+      providerChurnWarnings(
+        report([
+          {
+            complete: true,
+            resolution: resolution({ reason: 'NO_CREATION_TIME', unresolved: 4, gapFree: false }),
+          },
+        ]),
+      ),
+    ).toEqual([{ code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: 4 }]);
+  });
+
   it('sums the unresolved names', () => {
     expect(
       providerChurnWarnings(

@@ -554,6 +554,17 @@ describe('Codex review on 79f46fda', () => {
     expect(panel.log.filter((r) => r.method !== 'POST').length).toBeGreaterThan(2);
   });
 
+  it('Codex: no total, a cap, and a panel that ignores offset — NO_PROGRESS on the second page, never a page loop', async () => {
+    const panel = fakePanel(300);
+    panel.noTotal = true;
+    panel.cap = 50;
+    panel.view = (rows) => panel.names.slice(0, rows.length); // offset ignored
+    const read = await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(250)]) });
+    expect(read.ok).toBe(false);
+    // A handful of requests, never the page limit.
+    expect(panel.log.length).toBeLessThan(10);
+  });
+
   it('two walks that share no row prove no common order', () => {
     expect(sameRelativeOrder(['a', 'b'], ['c', 'd'])).toBe(false);
     expect(sameRelativeOrder([], [])).toBe(true);

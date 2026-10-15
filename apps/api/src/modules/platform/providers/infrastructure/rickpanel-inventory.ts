@@ -629,7 +629,9 @@ export class RickpanelInventoryReader {
         }
         // No `total`: a short page may be a server cap smaller than the one asked for, not the
         // end (Codex). Keep paging — past this page, without overlap — until an empty page.
-        // (Such a walk is never gap-free; it only has to be complete.)
+        // (Such a walk is never gap-free; it only has to be complete.) A page with nothing new
+        // is a panel that ignores `offset`: stop, as below, never re-ask it (Codex).
+        if (fresh === 0) return fault('NO_PROGRESS', answer.status);
         offset += rows.length;
         lastStep = rows.length;
         continue;
