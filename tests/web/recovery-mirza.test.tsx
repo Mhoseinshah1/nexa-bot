@@ -784,6 +784,60 @@ describe('the confirmation', () => {
     ).toBeInTheDocument();
   });
 
+  // The inventory hold: the services a per-name read that HELD left undecided are recorded as
+  // quarantined (history and an open review candidate), not a blocker.
+  const heldReport = (extra: { code: string; count: number }[] = []) => ({
+    ...churnReport([
+      { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: 3 },
+      { code: 'INVENTORY_INCOMPLETE', count: 3 },
+      { code: 'PROVIDER_INVENTORY_QUARANTINED', count: 3 },
+      ...extra,
+    ]),
+    inventoryHold: { version: 1, invoices: 3, digest: 'f'.repeat(64) },
+  });
+  const quarantineBody = () =>
+    t('web.mrz_inventory_quarantine_body').replace('{count}', formatNumber(3));
+
+  it('production-like: services quarantined by the inventory hold are said in words, and the confirmation is offered', async () => {
+    page([reviewed({ dryRunReport: heldReport() })], {
+      capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK },
+    });
+    expect(
+      await screen.findByRole('button', { name: t('web.mrz_confirm_button') }),
+    ).toBeInTheDocument();
+    // Once in the dry-run review and once beside the confirmation.
+    expect(screen.getAllByText(t('web.mrz_inventory_quarantine_title'))).toHaveLength(2);
+    expect(screen.getAllByText(quarantineBody())).toHaveLength(2);
+    // Not the "not approvable" banner: a held-only report is approvable.
+    expect(screen.queryByText(t('web.mrz_inventory_incomplete_title'))).toBeNull();
+  });
+
+  it('production-like: a real read failure beside the hold keeps the banner and withholds the confirmation', async () => {
+    const api = page(
+      [
+        reviewed({
+          dryRunReport: heldReport([
+            { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 },
+            { code: 'PROVIDER_INVENTORY_INCOMPLETE:TIMEOUT', count: 1 },
+          ]),
+        }),
+      ],
+      { capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK } },
+    );
+    expect(await screen.findByText(t('web.mrz_inventory_incomplete_title'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
+    expect(posts(api)).toEqual([]);
+  });
+
+  it('the quarantine text says history and review, never that the service is adopted or lost', () => {
+    const body = t('web.mrz_inventory_quarantine_body');
+    expect(body).toContain('{count}');
+    expect(body).toContain('سابقه');
+    expect(body).toContain('بازبینی');
+    expect(body).toContain('مانع تأیید نیست');
+    expect(body).not.toMatch(/متوقف کنید/u);
+  });
+
   it('never tells the operator to stop selling or stop creating accounts on the panel', () => {
     for (const key of [
       'web.mrz_inventory_incomplete_body',

@@ -9,6 +9,7 @@ import {
   LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   legacyMigrationDryRunInventoryIncomplete,
+  validInventoryHold,
   type LegacyMigrationBackupOutcome,
   type LegacyMigrationBlocker,
   type LegacyMigrationCapabilitiesResponse,
@@ -967,6 +968,7 @@ function DryRunStep({
           />
           <InventoryChurnNotice warnings={report.warnings} />
           <InventoryDiagnostics report={report} bindings={row.panelBindings} />
+          <InventoryQuarantineNotice hold={report.inventoryHold} />
           <SectionTable rows={report.sections} />
           <h4 className="card-subtitle">{t('web.mrz_money_title')}</h4>
           <KV
@@ -1062,6 +1064,21 @@ function InventoryChurnNotice({
   );
 }
 
+/**
+ * The services the dry run's inventory hold quarantines: a needed username a per-name read that
+ * itself SUCCEEDED could not prove present or absent. Kept as history and an open review
+ * candidate, never adopted — and not a blocker. Drawn only for a hold of exactly the contract's
+ * shape; whether the confirmation is withheld stays the contract rule's decision alone.
+ */
+function InventoryQuarantineNotice({ hold }: { hold: unknown }) {
+  if (!validInventoryHold(hold) || hold.invoices === 0) return null;
+  return (
+    <Banner tone="info" title={t('web.mrz_inventory_quarantine_title')}>
+      {t('web.mrz_inventory_quarantine_body').replace('{count}', formatNumber(hold.invoices))}
+    </Banner>
+  );
+}
+
 /** Minor units as stored, with the currency named: never converted, never rounded here. */
 function Amount({ minor, currency }: { minor: string; currency: string }) {
   return (
@@ -1114,9 +1131,14 @@ function ConfirmStep({
   });
   const matches = phrase === capabilities.approvalPhrase;
   // A courtesy: the server refuses this approval whatever is drawn here.
+  // The services the report's inventory hold quarantines are not counted (they import as
+  // history and review); a whole-panel read failure, or a report with no hold, still is.
   const inventoryIncomplete =
     capabilities.productionLikeTarget &&
-    legacyMigrationDryRunInventoryIncomplete(row.dryRunReport?.warnings) > 0;
+    legacyMigrationDryRunInventoryIncomplete(
+      row.dryRunReport?.warnings,
+      row.dryRunReport?.inventoryHold,
+    ) > 0;
   // Likewise a dry run that reported no plan digest (null, or a report from a release before
   // the field existed): the import could be bound to no approved plan.
   const digestMissing =
@@ -1149,6 +1171,7 @@ function ConfirmStep({
         {t('web.mrz_protective_body')}
       </Banner>
       <InventoryChurnNotice warnings={row.dryRunReport?.warnings} />
+      <InventoryQuarantineNotice hold={row.dryRunReport?.inventoryHold} />
       {inventoryIncomplete && (
         <Banner tone="danger" title={t('web.mrz_inventory_incomplete_title')}>
           {t('web.mrz_inventory_incomplete_body')}
