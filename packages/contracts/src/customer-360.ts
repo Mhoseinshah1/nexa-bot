@@ -555,4 +555,8 @@ export const CUSTOMER_360_ROUTES = {
   workspace: (id: string) => `/users/${encodeURIComponent(id)}/workspace`,
   /** Mirza `.nxpkg` importer: the archived Mirza history (`legacy.history.view`). */
   legacyHistory: (id: string) => `/users/${encodeURIComponent(id)}/legacy-history`,
+  /** The customer's Mirza invoices beside the import's outcome (`legacy.invoices.view`). */
+  legacyInvoices: (id: string) => `/users/${encodeURIComponent(id)}/legacy-invoices`,
+  /** Which of the customer's services were adopted from Mirza (`legacy.services.view`). */
+  legacyAdoptedServices: (id: string) => `/users/${encodeURIComponent(id)}/legacy-adopted-services`,
 } as const;
