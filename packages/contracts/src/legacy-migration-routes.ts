@@ -354,8 +354,60 @@ export const legacyMigrationDryRunReportSchema = z.object({
    * Diagnostics only — nothing reads it to decide. Absent on a report written before it.
    */
   providerDiagnostics: z.array(legacyInventoryPanelDiagnosticsSchema).optional(),
+  /**
+   * The inventory hold this dry run recorded (`LEGACY_MIGRATION_INVENTORY_HOLD_VERSION`): the
+   * live invoices whose needed username a SUCCESSFUL per-name RickPanel read could not prove
+   * present or absent. They are quarantined — kept as history and an OPEN review candidate,
+   * never adopted — instead of blocking the whole import. `invoices` is how many, `digest` the
+   * SHA-256 of their sorted keys (never a key). The importer binds the same hold into the plan
+   * digest and the apply is given exactly this hold back: it only demotes (a held invoice
+   * stays `INVENTORY_INCOMPLETE` even if the apply's read now resolves it), and an invoice
+   * unresolved at the apply that is NOT in it refuses `DRY_RUN_MISMATCH`.
+   *
+   * ABSENT on a report written before the hold existed: `legacyMigrationDryRunInventoryIncomplete`
+   * then counts every `INVENTORY_INCOMPLETE` service exactly as before — fail closed.
+   */
+  inventoryHold: z
+    .object({
+      version: z.literal(1),
+      invoices: count,
+      digest: hex64,
+    })
+    .strict()
+    .optional(),
 });
 export type LegacyMigrationDryRunReport = z.infer<typeof legacyMigrationDryRunReportSchema>;
+export type LegacyMigrationInventoryHold = NonNullable<
+  LegacyMigrationDryRunReport['inventoryHold']
+>;
+
+/** The one version of `inventoryHold` this release writes and reads. */
+export const LEGACY_MIGRATION_INVENTORY_HOLD_VERSION = 1;
+
+/**
+ * Whether a STORED report's `inventoryHold` is exactly the version-1 shape. The stored JSON is
+ * not re-parsed by the server, so the rule never trusts a field it did not check.
+ */
+export function validInventoryHold(hold: unknown): hold is LegacyMigrationInventoryHold {
+  if (typeof hold !== 'object' || hold === null) return false;
+  const h = hold as { version?: unknown; invoices?: unknown; digest?: unknown };
+  return (
+    h.version === LEGACY_MIGRATION_INVENTORY_HOLD_VERSION &&
+    typeof h.invoices === 'number' &&
+    Number.isSafeInteger(h.invoices) &&
+    h.invoices >= 0 &&
+    typeof h.digest === 'string' &&
+    /^[0-9a-f]{64}$/u.test(h.digest)
+  );
+}
+
+/**
+ * The dry run report's warning for the invoices the inventory hold quarantines
+ * (`inventoryHold.invoices`): services kept as history and an OPEN review candidate because a
+ * needed username was left UNRESOLVED by a per-name read that itself succeeded. Informational:
+ * it does not block an approval (wallets, debts and every decided service still import).
+ */
+export const LEGACY_MIGRATION_PROVIDER_INVENTORY_QUARANTINED = 'PROVIDER_INVENTORY_QUARANTINED';
 
 /**
  * The dry run report's warning for the production panels whose LIVE RickPanel inventory was
@@ -381,9 +433,10 @@ export const LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN = 'PROVIDER_INVENTORY_CHU
  * The dry run report's warning for the needed usernames the walks could not decide (no exact
  * lookup is ever made: no gap-free decision walk, a row no later walk confirmed, or a name
  * seen under two creation times). Its count is the number of such names; the
- * invoices behind them are services category `INVENTORY_INCOMPLETE`, which is what blocks
- * approval through `legacyMigrationDryRunInventoryIncomplete` — this code itself is a count for
- * the operator and is not read by that rule.
+ * invoices behind them are services category `INVENTORY_INCOMPLETE`. A report with the
+ * inventory hold quarantines them (`PROVIDER_INVENTORY_QUARANTINED`) instead of blocking; one
+ * without it blocks approval through `legacyMigrationDryRunInventoryIncomplete` — this code
+ * itself is a count for the operator and is not read by that rule.
  */
 export const LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED = 'PROVIDER_INVENTORY_UNRESOLVED';
 
@@ -410,10 +463,15 @@ export const LEGACY_MIGRATION_PLAN_DIGEST_MISSING = 'PLAN_DIGEST_MISSING';
  * rows is never resolved per name and stays incomplete) but whose needed usernames were ALL
  * decided one by one, from a gap-free last walk, is reported as complete, with `PROVIDER_INVENTORY_CHURN`, and is
  * not counted here: the plan binds only those decisions. A needed name it could not decide
- * leaves its invoice `INVENTORY_INCOMPLETE`, which this rule still counts.
+ * leaves its invoice `INVENTORY_INCOMPLETE`, which this rule still counts — UNLESS the report
+ * carries the inventory hold (`inventoryHold`, version 1) and that invoice is one it holds: a
+ * held invoice is quarantined, not a blocker. Only the `INVENTORY_INCOMPLETE` services beyond
+ * the hold's count are counted; a whole-panel read failure (`PROVIDER_INVENTORY_INCOMPLETE`)
+ * blocks whatever the hold says. A report without the hold fails closed exactly as before.
  */
 export function legacyMigrationDryRunInventoryIncomplete(
   warnings: readonly LegacyMigrationCodeCount[] | null | undefined,
+  inventoryHold?: LegacyMigrationInventoryHold | null,
 ): number {
   let provider = 0;
   let services = 0;
@@ -421,7 +479,13 @@ export function legacyMigrationDryRunInventoryIncomplete(
     if (w.code === LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE) provider += w.count;
     if (w.code === 'INVENTORY_INCOMPLETE') services += w.count;
   }
-  return Math.max(provider, services > 0 ? 1 : 0);
+  // The inventory hold covers only what it says it covers, and only in the version this release
+  // reads. A stored report is not re-parsed, so anything that is not exactly the v1 shape (a
+  // safe non-negative count, a digest) is no hold at all. A hold claiming MORE invoices than
+  // the report counts is inconsistent: blocked.
+  const held = validInventoryHold(inventoryHold) ? inventoryHold.invoices : 0;
+  const uncovered = held > services ? 1 : services - held;
+  return Math.max(provider, uncovered > 0 ? 1 : 0);
 }
 
 /** The apply's outcome (stored as `apply_report`). */

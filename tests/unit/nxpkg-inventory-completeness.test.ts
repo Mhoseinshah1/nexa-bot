@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   legacyMigrationDryRunInventoryIncomplete,
+  validInventoryHold,
   money,
   type LegacyMigrationDryRunReport,
   type ProviderHttpClient,
@@ -656,6 +657,44 @@ describe('legacyMigrationDryRunInventoryIncomplete (the contract rule)', () => {
     expect(
       legacyMigrationDryRunInventoryIncomplete([{ code: 'TABLE_INVENTORY_INCOMPLETE', count: 3 }]),
     ).toBe(0);
+  });
+
+  it('the inventory hold: a held invoice is quarantine, not a blocker — and only what it covers', () => {
+    const digest = 'd'.repeat(64);
+    const hold = (invoices: number) => ({ version: 1 as const, invoices, digest });
+    const services = [{ code: 'INVENTORY_INCOMPLETE', count: 40 }];
+    // Every INVENTORY_INCOMPLETE service is held: approvable.
+    expect(legacyMigrationDryRunInventoryIncomplete(services, hold(40))).toBe(0);
+    // One beyond the hold still blocks.
+    expect(legacyMigrationDryRunInventoryIncomplete(services, hold(39))).toBe(1);
+    // A hold claiming MORE than the report counts is inconsistent: blocked.
+    expect(legacyMigrationDryRunInventoryIncomplete(services, hold(41))).toBe(1);
+    // A whole-panel read failure blocks whatever the hold says.
+    expect(
+      legacyMigrationDryRunInventoryIncomplete(
+        [...services, { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 }],
+        hold(40),
+      ),
+    ).toBe(1);
+    // An old report (no hold) fails closed exactly as before.
+    expect(legacyMigrationDryRunInventoryIncomplete(services)).toBe(1);
+    expect(legacyMigrationDryRunInventoryIncomplete(services, null)).toBe(1);
+    // A stored hold not exactly the v1 shape is no hold at all.
+    for (const bad of [
+      { version: 2, invoices: 40, digest },
+      { version: 1, invoices: '40', digest },
+      { version: 1, invoices: 40.5, digest },
+      { version: 1, invoices: -1, digest },
+      { version: 1, invoices: 40, digest: 'not-a-digest' },
+      { version: 1, invoices: 40 },
+    ]) {
+      expect(
+        legacyMigrationDryRunInventoryIncomplete(services, bad as never),
+        JSON.stringify(bad),
+      ).toBe(1);
+      expect(validInventoryHold(bad)).toBe(false);
+    }
+    expect(validInventoryHold(hold(0))).toBe(true);
   });
 });
 
