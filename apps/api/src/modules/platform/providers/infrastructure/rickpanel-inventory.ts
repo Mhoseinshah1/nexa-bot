@@ -653,11 +653,15 @@ export class RickpanelInventoryReader {
       offset += step;
       lastStep = step;
     }
+    // Reported whenever an overlap was ASKED for — also when the page is too small to overlap
+    // (page size 1): such a walk is never gap-free, but its rows' identities still let two
+    // walks of a still panel be one complete snapshot (Codex).
     const coverage: RickpanelWalkCoverage | null =
-      overlapAsked === 0
+      requested === 0
         ? null
         : {
             gapFree:
+              overlapAsked > 0 &&
               firstTotal !== null &&
               firstTotal !== undefined &&
               chained &&

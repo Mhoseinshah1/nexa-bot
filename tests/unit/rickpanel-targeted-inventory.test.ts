@@ -597,6 +597,15 @@ describe('Codex review on 79f46fda', () => {
     expect(panel.log.length).toBeLessThan(10);
   });
 
+  it('Codex: page size 1 (no overlap possible) — a still panel is still one complete snapshot, never three walks of nothing', async () => {
+    const panel = fakePanel(5);
+    const read = complete(
+      await sourceOf(panel, { pageSize: 1 }).read(SCOPE, 'p1', { needed: need([name(3)]) }),
+    );
+    expect(read.resolution).toBeUndefined();
+    expect(read.index.usernames.get(name(3))).toEqual([name(3)]);
+  });
+
   it('two walks that share no row prove no common order', () => {
     expect(sameRelativeOrder(['a', 'b'], ['c', 'd'])).toBe(false);
     expect(sameRelativeOrder([], [])).toBe(true);
