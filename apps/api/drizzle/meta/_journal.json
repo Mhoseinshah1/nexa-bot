@@ -1744,6 +1744,13 @@
       "when": 1792091890069,
       "tag": "0248_legacy_run_inputs_inventory_hold",
       "breakpoints": true
+    },
+    {
+      "idx": 249,
+      "version": "7",
+      "when": 1792097144222,
+      "tag": "0249_legacy_adopt_approved_lane",
+      "breakpoints": true
     }
   ]
 }
