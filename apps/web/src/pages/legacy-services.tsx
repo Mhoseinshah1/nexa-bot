@@ -22,7 +22,7 @@ import {
   reopenLegacyService,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { useRoute } from '../router';
+import { useLinkHandler, useRoute } from '../router';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
@@ -166,7 +166,7 @@ export function legacyServiceFault(error: unknown): string {
 }
 
 /** A refusal code is an outcome or one of the approval's own four; labelled either way. */
-function refusalLabel(code: string): string {
+export function legacyServiceRefusalLabel(code: string): string {
   const outcome = LEGACY_SERVICE_OUTCOME_LABELS[code as LegacyServiceOutcome];
   if (outcome !== undefined) return t(outcome);
   const own: Readonly<Record<string, WebKey>> = {
@@ -177,6 +177,26 @@ function refusalLabel(code: string): string {
   };
   const key = own[code];
   return key === undefined ? code : t(key);
+}
+
+/**
+ * Approvals wait for a run to execute them. After a COMPLETED Mirza restore no import runs
+ * again, so the page says where they are executed: the "adopt approved" lane on the restore
+ * page (`docs/legacy-migration/service-review.md` §4b), from the same package uploaded again.
+ */
+function ApprovalsWaiting({ count }: { count: number }) {
+  const onLink = useLinkHandler();
+  return (
+    <Banner tone="warn" icon="info">
+      <span>{t('web.lsr_approvals_waiting')}</span>{' '}
+      <span className="small">
+        {t('web.lsr_approvals_waiting_count')}: <Num value={count} />
+      </span>{' '}
+      <a className="link" href="/recovery" onClick={onLink}>
+        {t('web.lsr_approvals_waiting_link')}
+      </a>
+    </Banner>
+  );
 }
 
 type OutcomeFilter = LegacyServiceOutcome | 'ALL';
@@ -341,6 +361,9 @@ export function LegacyServicesPage({
       <Banner tone="info" icon="info">
         {t('web.lsr_banner')}
       </Banner>
+      {(summary.data?.byReviewState.ADOPT_APPROVED ?? 0) > 0 && (
+        <ApprovalsWaiting count={summary.data?.byReviewState.ADOPT_APPROVED ?? 0} />
+      )}
       {summary.data !== undefined && (
         <Card title={t('web.lsr_summary_title')}>
           <dl className="kv">
@@ -534,7 +557,7 @@ export function CandidateDetail({
           {row.lastApprovalRefusal !== null && (
             <>
               <dt>{t('web.lsr_last_refusal')}</dt>
-              <dd>{refusalLabel(row.lastApprovalRefusal)}</dd>
+              <dd>{legacyServiceRefusalLabel(row.lastApprovalRefusal)}</dd>
             </>
           )}
           {importOutcome !== null && (

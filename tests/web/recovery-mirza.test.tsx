@@ -72,6 +72,7 @@ const progress = {
   applyAttempts: 0,
   verifyAttempts: 0,
   dryRunAttempts: 0,
+  adoptAttempts: 0,
   importerVerdict: null,
   reconcileVerdict: null,
   history: [],
@@ -153,8 +154,10 @@ const view = (overrides: Record<string, unknown> = {}) => ({
   dryRunSha256: null,
   approvedDryRunSha256: null,
   applyReport: null,
+  adoptReport: null,
   dryRunLegacyRunId: null,
   applyLegacyRunId: null,
+  adoptLegacyRunId: null,
   backupRunId: null,
   preImportBackupRunId: null,
   progress,
@@ -1055,5 +1058,171 @@ describe('the old page', () => {
     const element = resolved.element as ReactElement<{ to: string }>;
     expect((element.type as { name?: string }).name).toBe('RedirectPage');
     expect(element.props.to).toBe('/recovery');
+  });
+});
+
+describe('the "adopt approved" lane (service-review.md §4b)', () => {
+  /** The finished restore of source H('a'), from an earlier visit. */
+  const finished = approved({
+    id: OLD_ID,
+    status: 'COMPLETED',
+    packageSourceFingerprint: H('a'),
+    preImportBackupRunId: PROTECTIVE,
+    applyReport,
+    applyLegacyRunId: '019600ab-cdef-7012-8345-6789abcd0601',
+    finishedAt: '2026-10-09T09:30:00.000Z',
+    createdAt: '2026-10-09T09:00:00.000Z',
+  });
+  /** The same package uploaded again and verified: a re-upload. */
+  const reupload = (overrides: Record<string, unknown> = {}) =>
+    view({
+      status: 'VERIFIED',
+      keyPresent: true,
+      keyKind: 'KEY_FILE',
+      verifyReport,
+      packageSourceFingerprint: H('a'),
+      ...overrides,
+    });
+  const adoptReport = {
+    verdict: 'COMPLETED',
+    legacyRunId: '019600ab-cdef-7012-8345-6789abcd0602',
+    importLegacyRunId: '019600ab-cdef-7012-8345-6789abcd0601',
+    approvals: 3,
+    adopted: 1,
+    stillUnresolved: 1,
+    refused: [
+      { code: 'AMBIGUOUS_OWNERSHIP', count: 1 },
+      { code: 'INVENTORY_INCOMPLETE', count: 1 },
+    ],
+    left: [],
+    claimLost: 0,
+    withdrawnDuringRun: 0,
+    unconfirmed: 0,
+    released: 0,
+    panelsRead: 1,
+    providerReads: 4,
+    providerWrites: 0,
+  };
+
+  it('never requests a dry run for a re-upload of a finished restore: saving the panels offers the lane instead, which sends the key alone', async () => {
+    const bound = reupload({ panelBindings: [{ codePanel: 'P1', panelId: RICK }] });
+    const api = page([finished, reupload()], {
+      extra: [
+        {
+          url: `/legacy-migration/imports/${ID}/panel-bindings`,
+          method: 'POST',
+          body: { import: bound },
+        },
+        {
+          url: `/legacy-migration/imports/${ID}/adopt`,
+          method: 'POST',
+          body: { import: { ...bound, status: 'ADOPT_REQUESTED' } },
+        },
+      ],
+    });
+    expect(await screen.findByText(t('web.mrz_reupload_banner'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.mrz_adopt_explained'))).toBeInTheDocument();
+    // Nothing to send before the panels are bound.
+    expect(screen.getByText(t('web.mrz_adopt_after_inputs'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.mrz_adopt_request') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.lmg_dry_run_request') })).toBeNull();
+    const select = await screen.findByLabelText(`${t('web.lmg_col_nexa_panel')} P1`);
+    await waitFor(() => expect(select).toHaveValue(RICK));
+    fireEvent.click(screen.getByRole('button', { name: t('web.mrz_panels_save') }));
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    // The bindings alone: no automatic dry run (the tenant is not fresh).
+    expect(posts(api)[0]?.url).toContain('/panel-bindings');
+  });
+
+  it('offers the lane once the key and the panels are given, and sends only an idempotency key', async () => {
+    const bound = reupload({ panelBindings: [{ codePanel: 'P1', panelId: RICK }] });
+    const api = page([finished, bound], {
+      extra: [
+        {
+          url: `/legacy-migration/imports/${ID}/adopt`,
+          method: 'POST',
+          body: { import: { ...bound, status: 'ADOPT_REQUESTED' } },
+        },
+      ],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: t('web.mrz_adopt_request') }));
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    expect(posts(api)[0]?.url).toContain(`/legacy-migration/imports/${ID}/adopt`);
+    expect(posts(api)[0]?.body).toEqual({ idempotencyKey: expect.any(String) });
+  });
+
+  it('offers no lane without legacy.migration.apply, and says why', async () => {
+    page([finished, reupload({ panelBindings: [{ codePanel: 'P1', panelId: RICK }] })], {
+      permissions: MIRZA_ALL.filter((p) => p !== 'legacy.migration.apply'),
+    });
+    expect(await screen.findByText(t('web.mrz_adopt_no_permission'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.mrz_adopt_request') })).toBeNull();
+  });
+
+  it('says in words when the server finds no finished restore of that source', async () => {
+    const bound = reupload({ panelBindings: [{ codePanel: 'P1', panelId: RICK }] });
+    page([finished, bound], {
+      extra: [
+        {
+          url: `/legacy-migration/imports/${ID}/adopt`,
+          method: 'POST',
+          status: 409,
+          body: {
+            error: {
+              kind: 'conflict',
+              code: 'legacy_migration.no_completed_import',
+              message: 'no completed import',
+              correlationId: 'c1',
+            },
+          },
+        },
+      ],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: t('web.mrz_adopt_request') }));
+    expect(await screen.findByText(t('web.mrz_fault_no_completed_import'))).toBeInTheDocument();
+  });
+
+  it('shows what the lane did: adopted, still unresolved, refused by reason in words, no panel write — and the way to the candidates', async () => {
+    page([
+      finished,
+      reupload({
+        status: 'ADOPT_DONE',
+        panelBindings: [{ codePanel: 'P1', panelId: RICK }],
+        adoptReport,
+        adoptLegacyRunId: adoptReport.legacyRunId,
+        keyPresent: false,
+        progress: { ...progress, phase: 'ADOPT', adoptAttempts: 1 },
+        finishedAt: '2026-10-10T09:40:00.000Z',
+      }),
+    ]);
+    await choose(MIRZA_PACKAGE_BYTES, 'restore.nxpkg');
+    await send();
+    expect(await screen.findByText(t('web.mrz_adopt_result_title'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.mrz_adopt_partial'))).toBeInTheDocument();
+    const value = (label: string) =>
+      screen.getByText(label).closest('div, li, tr, dl')?.textContent ?? '';
+    expect(value(t('web.mrz_adopt_adopted'))).toContain(formatNumber(1));
+    expect(value(t('web.mrz_adopt_unresolved'))).toContain(formatNumber(1));
+    expect(value(t('web.mrz_adopt_provider_writes'))).toContain(formatNumber(0));
+    // Each refusal in Persian, its code kept beside it.
+    expect(screen.getByText('AMBIGUOUS_OWNERSHIP')).toBeInTheDocument();
+    expect(screen.getByText('INVENTORY_INCOMPLETE')).toBeInTheDocument();
+    expect(screen.getAllByText(t('web.lsr_outcome_ambiguous_ownership')).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: t('web.mrz_adopt_services_link') })).toHaveAttribute(
+      'href',
+      '/legacy-services',
+    );
+    // No confirmation, no import run stages: a lane is never an import.
+    expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
+    expect(screen.queryByText(t('web.mrz_run_frozen'))).toBeNull();
+    const steps = Array.from(document.querySelectorAll('.lmg-steps li'));
+    expect(steps.map((li) => li.className)).toEqual(['done', 'done', 'done', 'done']);
+  });
+
+  it('marks a lane under way as the run step, and a finished one done', () => {
+    const marks = (overrides: Record<string, unknown>) => mirzaStepMarks(view(overrides) as never);
+    expect(marks({ status: 'ADOPT_REQUESTED' })).toEqual(['done', 'done', 'done', 'current']);
+    expect(marks({ status: 'ADOPT_RUNNING' })).toEqual(['done', 'done', 'done', 'current']);
+    expect(marks({ status: 'ADOPT_DONE' })).toEqual(['done', 'done', 'done', 'done']);
   });
 });

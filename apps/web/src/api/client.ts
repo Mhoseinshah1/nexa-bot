@@ -5679,6 +5679,21 @@ export function requestLegacyMigrationDryRun(
   );
 }
 
+/**
+ * The "adopt approved" lane (`legacy.migration.apply`, CRITICAL): a VERIFIED re-upload of an
+ * imported package executes the operators' ADOPT approvals of that source instead of a dry run.
+ */
+export function requestLegacyMigrationAdopt(
+  id: string,
+  idempotencyKey: string,
+): Promise<LegacyMigrationImportResponse> {
+  return post(
+    LEGACY_MIGRATION_ROUTES.adopt(id),
+    { idempotencyKey },
+    legacyMigrationImportResponseSchema,
+  );
+}
+
 /** The owner's approval of ONE dry run digest (`legacy.migration.apply`, CRITICAL). */
 export function approveLegacyMigration(
   id: string,

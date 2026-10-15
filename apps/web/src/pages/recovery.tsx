@@ -51,6 +51,7 @@ import {
   MirzaHistory,
   MirzaRestoreFlow,
   MirzaSteps,
+  importedSources,
   legacyMigrationFault,
   mirzaAccess,
   sniffRestoreFile,
@@ -674,7 +675,12 @@ function RecoveryOperations({
       </form>
 
       {showMirza && imports.capabilities !== null && (
-        <MirzaRestoreFlow row={mirzaRow} capabilities={imports.capabilities} access={mirza} />
+        <MirzaRestoreFlow
+          row={mirzaRow}
+          capabilities={imports.capabilities}
+          access={mirza}
+          imported={importedSources(imports.rows)}
+        />
       )}
       {mirzaReady && (
         <MirzaHistory rows={imports.rows.filter((row) => !(showMirza && row.id === mirzaRow.id))} />

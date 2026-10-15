@@ -28,6 +28,7 @@ import {
   fetchLegacyMigrationCapabilities,
   fetchLegacyMigrationImports,
   fetchPanels,
+  requestLegacyMigrationAdopt,
   requestLegacyMigrationDryRun,
   setLegacyMigrationKey,
   setLegacyMigrationPanelBindings,
@@ -39,7 +40,7 @@ import { pollUnlessFinalWhile } from '../polling';
 import { useLinkHandler } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
-import { LEGACY_SERVICE_OUTCOME_LABELS } from './legacy-services';
+import { LEGACY_SERVICE_OUTCOME_LABELS, legacyServiceRefusalLabel } from './legacy-services';
 import { migrationCodeView, migrationSectionView, type MigrationCodeView } from './mirza-labels';
 import {
   Badge,
@@ -143,6 +144,9 @@ const STATUS_LABELS: Readonly<Record<LegacyNxpkgImportStatus, WebKey>> = {
   COMPLETED_WITH_DISCREPANCY: 'web.lmg_status_completed_discrepancy',
   FAILED: 'web.lmg_status_failed',
   CANCELLED: 'web.lmg_status_cancelled',
+  ADOPT_REQUESTED: 'web.mrz_status_adopt_requested',
+  ADOPT_RUNNING: 'web.mrz_status_adopt_running',
+  ADOPT_DONE: 'web.mrz_status_adopt_done',
 };
 
 const STATUS_TONES: Readonly<Record<LegacyNxpkgImportStatus, Tone>> = {
@@ -160,6 +164,9 @@ const STATUS_TONES: Readonly<Record<LegacyNxpkgImportStatus, Tone>> = {
   COMPLETED_WITH_DISCREPANCY: 'warn',
   FAILED: 'danger',
   CANCELLED: 'neutral',
+  ADOPT_REQUESTED: 'info',
+  ADOPT_RUNNING: 'warn',
+  ADOPT_DONE: 'ok',
 };
 
 const ERROR_LABELS: Readonly<Record<LegacyNxpkgErrorCode, WebKey>> = {
@@ -181,6 +188,7 @@ const ERROR_LABELS: Readonly<Record<LegacyNxpkgErrorCode, WebKey>> = {
   PRE_IMPORT_BACKUP_FAILED: 'web.mrz_error_pre_import_backup',
   SUPERSEDED_BY_RESTORE: 'web.mrz_error_superseded',
   APPROVAL_EXPIRED: 'web.mrz_error_approval_expired',
+  ADOPT_REFUSED: 'web.mrz_error_adopt_refused',
 };
 
 const PHASE_LABELS: Readonly<Record<LegacyMigrationPhase, WebKey>> = {
@@ -192,6 +200,7 @@ const PHASE_LABELS: Readonly<Record<LegacyMigrationPhase, WebKey>> = {
   RECONCILE: 'web.lmg_phase_reconcile',
   REPORT: 'web.lmg_phase_report',
   BACKUP: 'web.lmg_phase_backup',
+  ADOPT: 'web.mrz_phase_adopt',
 };
 
 const BACKUP_LABELS: Readonly<Record<LegacyMigrationBackupOutcome, WebKey>> = {
@@ -219,6 +228,7 @@ const FAULTS: Readonly<Record<string, WebKey>> = {
   'legacy_migration.confirmation_invalid': 'web.lmg_fault_phrase',
   'legacy_migration.target_ack_mismatch': 'web.mrz_fault_target_ack',
   'legacy_migration.recovery_active': 'web.mrz_fault_recovery_active',
+  'legacy_migration.no_completed_import': 'web.mrz_fault_no_completed_import',
   'legacy_migration.request_invalid': 'web.lmg_fault_request',
   'legacy_migration.not_found': 'web.lmg_fault_not_found',
   'legacy_migration.scope_stopped': 'web.lmg_fault_stopped',
@@ -332,11 +342,14 @@ export function mirzaStepMarks(row: LegacyMigrationImportView | null): readonly 
       return at(3);
     case 'APPROVED':
     case 'APPLYING':
+    case 'ADOPT_REQUESTED':
+    case 'ADOPT_RUNNING':
       return at(4);
     case 'FAILED':
       return at(4, true);
     case 'COMPLETED':
     case 'COMPLETED_WITH_DISCREPANCY':
+    case 'ADOPT_DONE':
       return STEPS.map(() => 'done');
     case 'CANCELLED':
       return STEPS.map((_, index) => (index === 0 ? 'done' : 'todo'));
@@ -400,30 +413,65 @@ const REVIEW_STATES: readonly LegacyNxpkgImportStatus[] = [
   'DRY_RUN_FAILED',
 ];
 
+/**
+ * The source fingerprints of this tenant's FINISHED Mirza restores. A package of one of them
+ * uploaded again is a re-upload: never dry-run again (the tenant is not fresh), but offered
+ * the "adopt approved" lane (`docs/legacy-migration/service-review.md` §4b) instead.
+ */
+export function importedSources(rows: readonly LegacyMigrationImportView[]): ReadonlySet<string> {
+  return new Set(
+    rows
+      .filter((row) => row.status === 'COMPLETED' || row.status === 'COMPLETED_WITH_DISCREPANCY')
+      .map((row) => row.packageSourceFingerprint)
+      .filter((source): source is string => source !== null),
+  );
+}
+
+/** The import is (or was) the "adopt approved" lane, not an import. */
+export function isAdoptLane(row: LegacyMigrationImportView): boolean {
+  return (
+    row.status === 'ADOPT_REQUESTED' ||
+    row.status === 'ADOPT_RUNNING' ||
+    row.status === 'ADOPT_DONE' ||
+    (row.status === 'FAILED' && row.approvedAt === null && row.progress.adoptAttempts > 0)
+  );
+}
+
 /** The flow over ONE import, inline in the restore card. */
 export function MirzaRestoreFlow({
   row,
   capabilities,
   access,
+  imported = new Set<string>(),
 }: {
   row: LegacyMigrationImportView;
   capabilities: LegacyMigrationCapabilitiesResponse;
   access: MirzaAccess;
+  /** `importedSources` of the tenant's restores: a re-upload is offered the adopt lane. */
+  imported?: ReadonlySet<string>;
 }) {
   const inReview = REVIEW_STATES.includes(row.status);
+  const lane = isAdoptLane(row);
+  const reupload =
+    !lane && row.packageSourceFingerprint !== null && imported.has(row.packageSourceFingerprint);
   const started = row.approvedAt !== null || row.status === 'APPROVED' || row.status === 'APPLYING';
   const review = (
     <div className="stack">
       <KeyStep row={row} mayManage={access.mayManage} />
       <VerifyResult row={row} />
-      <ReviewSteps row={row} capabilities={capabilities} access={access} />
+      <ReviewSteps row={row} capabilities={capabilities} access={access} reupload={reupload} />
     </div>
   );
   return (
     <div className="stack inset mrz-flow">
-      {inReview && (
+      {inReview && !reupload && (
         <Banner tone="warn" icon="info">
           {t('web.lmg_banner')}
+        </Banner>
+      )}
+      {inReview && reupload && (
+        <Banner tone="info" icon="info">
+          {t('web.mrz_reupload_banner')}
         </Banner>
       )}
       <Summary row={row} mayManage={access.mayManage} />
@@ -443,6 +491,7 @@ export function MirzaRestoreFlow({
       )}
       {started && !isLegacyNxpkgTerminalStatus(row.status) && <ProgressStep row={row} />}
       {started && isLegacyNxpkgTerminalStatus(row.status) && <ResultStep row={row} />}
+      {lane && <AdoptLaneStep row={row} />}
     </div>
   );
 }
@@ -680,10 +729,13 @@ function ReviewSteps({
   row,
   capabilities,
   access,
+  reupload,
 }: {
   row: LegacyMigrationImportView;
   capabilities: LegacyMigrationCapabilitiesResponse;
   access: MirzaAccess;
+  /** A package of a finished restore: no dry run (never fresh); the adopt lane instead. */
+  reupload: boolean;
 }) {
   const invalidate = useInvalidate();
   const key = useSubmissionKey();
@@ -696,7 +748,7 @@ function ReviewSteps({
     onError: (error) => key.settleOn(error, { onConflict: invalidate }),
   });
   const requestIfReady = (next: LegacyMigrationImportView): void => {
-    if (canRequestDryRun(next, access.mayManage)) dryRun.mutate(next.id);
+    if (!reupload && canRequestDryRun(next, access.mayManage)) dryRun.mutate(next.id);
     else invalidate();
   };
   return (
@@ -708,14 +760,123 @@ function ReviewSteps({
         onSaved={requestIfReady}
       />
       <PanelsStep row={row} access={access} onSaved={requestIfReady} />
-      <DryRunStep
-        row={row}
-        mayManage={access.mayManage}
-        pending={dryRun.isPending}
-        error={dryRun.error}
-        onRequest={() => dryRun.mutate(row.id)}
-      />
+      {reupload ? (
+        <AdoptStep row={row} mayApply={access.mayApply} />
+      ) : (
+        <DryRunStep
+          row={row}
+          mayManage={access.mayManage}
+          pending={dryRun.isPending}
+          error={dryRun.error}
+          onRequest={() => dryRun.mutate(row.id)}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * The "adopt approved" lane, asked of a re-upload of a finished restore's package
+ * (`docs/legacy-migration/service-review.md` §4b). Offered only with `legacy.migration.apply`
+ * (the server charges it, CRITICAL), once the key and the panels are given.
+ */
+function AdoptStep({ row, mayApply }: { row: LegacyMigrationImportView; mayApply: boolean }) {
+  const invalidate = useInvalidate();
+  const key = useSubmissionKey();
+  const adopt = useMutation({
+    mutationFn: () => requestLegacyMigrationAdopt(row.id, key.current({ adopt: row.id })),
+    onSuccess: () => {
+      key.settle();
+      invalidate();
+    },
+    onError: (error) => key.settleOn(error, { onConflict: invalidate }),
+  });
+  const ready =
+    row.keyPresent &&
+    row.panelBindings !== null &&
+    row.panelBindings.length > 0 &&
+    (LEGACY_MIGRATION_COMMAND_STATES.requestAdopt as readonly string[]).includes(row.status);
+  return (
+    <Step title={t('web.mrz_adopt_title')} hint={t('web.mrz_adopt_hint')}>
+      <Banner tone="info">{t('web.mrz_adopt_explained')}</Banner>
+      {!mayApply && <p className="muted small">{t('web.mrz_adopt_no_permission')}</p>}
+      {mayApply && !ready && <p className="muted small">{t('web.mrz_adopt_after_inputs')}</p>}
+      {mayApply && ready && (
+        <div className="btn-group">
+          <Button
+            variant="primary"
+            icon="play"
+            disabled={adopt.isPending}
+            onClick={() => adopt.mutate()}
+          >
+            {t('web.mrz_adopt_request')}
+          </Button>
+        </div>
+      )}
+      {adopt.error !== null && <Banner tone="danger">{legacyMigrationFault(adopt.error)}</Banner>}
+    </Step>
+  );
+}
+
+/** The lane under way, or what it did: counts and codes, never an invoice or a name. */
+function AdoptLaneStep({ row }: { row: LegacyMigrationImportView }) {
+  const onLink = useLinkHandler();
+  const report = row.adoptReport;
+  const running = row.status === 'ADOPT_REQUESTED' || row.status === 'ADOPT_RUNNING';
+  const complete =
+    report !== null && report.verdict !== 'NOTHING_TO_ADOPT' && report.adopted === report.approvals;
+  return (
+    <Step title={t('web.mrz_adopt_result_title')}>
+      {running && <Banner tone="info">{t('web.mrz_adopt_running')}</Banner>}
+      {row.status === 'FAILED' && <Banner tone="danger">{t('web.mrz_adopt_failed')}</Banner>}
+      {report !== null && report.verdict === 'NOTHING_TO_ADOPT' && (
+        <Banner tone="neutral">{t('web.mrz_adopt_nothing')}</Banner>
+      )}
+      {report !== null && report.verdict !== 'NOTHING_TO_ADOPT' && (
+        <Banner tone={complete ? 'ok' : 'warn'}>
+          {t(complete ? 'web.mrz_adopt_all_done' : 'web.mrz_adopt_partial')}
+        </Banner>
+      )}
+      {report !== null && (
+        <>
+          <KV
+            items={[
+              [t('web.mrz_adopt_met'), <Num key="m" value={report.approvals} />],
+              [t('web.mrz_adopt_adopted'), <Num key="a" value={report.adopted} />],
+              [t('web.mrz_adopt_unresolved'), <Num key="u" value={report.stillUnresolved} />],
+              [t('web.mrz_adopt_panels_read'), <Num key="p" value={report.panelsRead} />],
+              [t('web.mrz_adopt_provider_reads'), <Num key="r" value={report.providerReads} />],
+              [t('web.mrz_adopt_provider_writes'), <Num key="w" value={report.providerWrites} />],
+            ]}
+          />
+          <div className="stack">
+            <h4 className="card-subtitle">{t('web.mrz_adopt_refused_title')}</h4>
+            {report.refused.length === 0 ? (
+              <p className="muted small">{t('web.lmg_none')}</p>
+            ) : (
+              <KV
+                items={report.refused.map((r) => [
+                  <CellMain
+                    key={r.code}
+                    primary={legacyServiceRefusalLabel(r.code)}
+                    secondary={<Ltr>{r.code}</Ltr>}
+                  />,
+                  <Num key="n" value={r.count} />,
+                ])}
+              />
+            )}
+          </div>
+          {report.left.length > 0 && (
+            <CodeCounts title={t('web.mrz_adopt_left_title')} rows={report.left} />
+          )}
+        </>
+      )}
+      <p className="small">
+        <a className="link" href="/legacy-services" onClick={onLink}>
+          {t('web.mrz_adopt_services_link')}
+        </a>
+      </p>
+    </Step>
   );
 }
 
@@ -1243,6 +1404,8 @@ const PHASE_STAGE: Readonly<Record<LegacyMigrationPhase, number>> = {
   RECONCILE: 2,
   REPORT: 3,
   BACKUP: 4,
+  // The adopt lane is no import: it never shows the run stages.
+  ADOPT: 0,
 };
 
 /**

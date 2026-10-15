@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { LEGACY_SERVICE_OUTCOMES, LEGACY_SERVICE_REVIEW_STATES } from '@nexa/contracts';
 import { LegacyServicesPage } from '../../apps/web/src/pages/legacy-services';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { formatNumber } from '../../apps/web/src/format';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { panel as panelFixture, renderPage, stubApi } from './harness';
 
@@ -73,12 +74,13 @@ function page(
     mayDecide?: boolean;
     row?: Record<string, unknown>;
     adoptPanels?: string[];
+    summary?: typeof summary;
   } = {},
 ) {
   const row = candidate(options.row);
   const api = stubApi([
     { url: '/legacy-services', method: 'GET', body: { candidates: [row], nextCursor: null } },
-    { url: '/legacy-services/summary', method: 'GET', body: summary },
+    { url: '/legacy-services/summary', method: 'GET', body: options.summary ?? summary },
     {
       url: `/legacy-services/${ID}`,
       method: 'GET',
@@ -275,6 +277,27 @@ describe('the legacy service candidates page', () => {
     expect(screen.getByText('حساب درست روی پنل B است')).toBeInTheDocument();
     expect(screen.getByText('019600ab-cdef-7012-8345-6789abcd0aaa')).toBeInTheDocument();
     expect(screen.getByText(t('web.lsr_decided_at'))).toBeInTheDocument();
+  });
+
+  it('§4b: approvals waiting for a run say where they are executed after a finished restore, with the count and a link', async () => {
+    page({
+      summary: {
+        ...summary,
+        byReviewState: { ...summary.byReviewState, OPEN: 0, ADOPT_APPROVED: 2 },
+      },
+    });
+    const banner = await screen.findByText(t('web.lsr_approvals_waiting'));
+    expect(banner.closest('[role="status"], .banner, div')?.textContent).toContain(formatNumber(2));
+    expect(screen.getByRole('link', { name: t('web.lsr_approvals_waiting_link') })).toHaveAttribute(
+      'href',
+      '/recovery',
+    );
+  });
+
+  it('§4b: with no approval waiting there is no such banner', async () => {
+    page();
+    await screen.findByText(t('web.lsr_summary_title'));
+    expect(screen.queryByText(t('web.lsr_approvals_waiting'))).toBeNull();
   });
 
   it('without legacy.services.decide nothing on the page writes', async () => {
