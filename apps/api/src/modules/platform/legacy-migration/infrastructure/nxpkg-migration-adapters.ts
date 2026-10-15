@@ -1629,6 +1629,9 @@ export function mismatchCounts(
   if (validInventoryHold(dryRun.inventoryHold)) {
     dry.set('inventory_hold:invoices', dryRun.inventoryHold.invoices);
     dry.set('inventory_hold:unheld', 0);
+    // The approved hold is, by definition, the one its dry run recorded: an apply that cannot
+    // read its keys back under its digest says `apply:inventory_hold:verified` 0.
+    dry.set('inventory_hold:verified', 1);
   }
   for (const category of SERVICE_CANDIDATE_CATEGORIES) {
     if (category !== 'ADOPTION_ELIGIBLE') dry.set(`services:${category}`, warning(category));

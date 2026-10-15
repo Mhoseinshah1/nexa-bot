@@ -1126,6 +1126,12 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     const failed = await detail(id);
     expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
     expect(failed.applyLegacyRunId).toBeNull();
+    // Refused because the keys could not be read back under that digest — before any panel
+    // read decided anything (not by the gate or the plan digest further on).
+    expect(failed.progress.refusalCounts).toEqual([
+      { code: 'dryrun:inventory_hold:verified', count: 1 },
+      { code: 'apply:inventory_hold:verified', count: 0 },
+    ]);
     for (const table of ['customers', 'wallet_entries', 'legacy_wallet_debts', 'services']) {
       expect(await count(table), table).toBe(0);
     }

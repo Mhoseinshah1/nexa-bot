@@ -764,7 +764,8 @@ export class LegacyImporterService {
         [
           "the approved dry run's inventory hold is not recorded for this source (or does not match its digest): nothing can be held that the owner did not approve. Nothing was written; run and approve a new dry run.",
         ],
-        { 'dryrun:inventory_hold:invoices': approved.invoices },
+        // Paired by the adapter with the approved report's `dryrun:inventory_hold:verified` 1.
+        { 'apply:inventory_hold:verified': 0 },
       );
     }
     return new Set(keys);
