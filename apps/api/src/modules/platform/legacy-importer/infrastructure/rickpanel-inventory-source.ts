@@ -381,11 +381,12 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     if (first.consistent && second.consistent) {
       const a = first.accounts.map((x) => x.providerUsername);
       const b = new Set(second.accounts.map((x) => x.providerUsername));
-      // Every row with one creation time in each walk (a row deleted and created again while
-      // a walk read it shows two), the same in both.
+      // Every row with exactly one creation time in each walk (a row deleted and created again
+      // while a walk read it shows two), the same in both. A row WITHOUT one proves nothing: an
+      // account deleted and created again between the walks would look the same (Codex).
       const stampOf = (w: typeof first, name: string) => {
         const stamps = w.coverage?.createdAt.get(name);
-        return stamps === undefined ? '' : stamps.size === 1 ? [...stamps][0] : null;
+        return stamps !== undefined && stamps.size === 1 ? ([...stamps][0] as string) : null;
       };
       const sameRows = a.every((name) => {
         const stamp = stampOf(first, name);
@@ -458,8 +459,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     // Settled: the decision walk leaves no name undecided, and the LAST walk is gap-free too —
     // so every spelling that still exists as the read ends was seen, and counts toward a
     // collision (a case variant created after the decision walk is not left unseen).
-    const settled = () =>
-      walks[walks.length - 1]?.coverage?.gapFree === true && decision()?.left === 0;
+    const settled = () => decisive(walks.length - 1) && decision()?.left === 0;
     while (!settled() && walks.length < TARGETED_MAX_WALKS && !walks.some(countMismatch)) {
       signal?.throwIfAborted();
       const next = await this.reader.walk(target, http, walkOptions);
@@ -473,12 +473,19 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     // systematically withholds rows, and a withheld row may be the case variant that makes a
     // name a collision. That panel stays incomplete, exactly as before.
     if (walks.some(countMismatch)) {
-      return this.finish(
+      const failed = this.finish(
         panelId,
         { ok: true, complete: false, reason: 'COUNT_MISMATCH', evidence },
         1,
         load(),
       );
+      // Every walk made — the one that mismatched may be the third.
+      return failed.diagnostics === undefined
+        ? failed
+        : {
+            ...failed,
+            diagnostics: { ...failed.diagnostics, walks: walks.map((w) => ({ ...w.evidence })) },
+          };
     }
     const reason = !first.consistent
       ? first.reason
@@ -495,7 +502,9 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const lastSeen = seen[at] as readonly RickpanelInventoryAccount[];
     // Unsettled at the cap with the LAST walk not gap-free: a case variant that exists as the
     // read ends may be one that walk skipped, so no name is called present on one spelling.
-    const lastGapFree = walks[walks.length - 1]?.coverage?.gapFree === true;
+    // The last walk must be decisive itself — gap-free AND in one order with the walk before it
+    // (raw chaining over an unstable or tied order can be coincidental; Codex).
+    const lastGapFree = decisive(walks.length - 1);
     const resolved = new Map(
       [...(chosen?.resolved ?? decideNeededNames(needed, resolutionWalks(), null))].map(
         ([name, r]): [string, NameResolution] => [

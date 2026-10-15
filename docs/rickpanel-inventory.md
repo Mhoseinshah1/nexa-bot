@@ -190,7 +190,9 @@ appended — and is decided like any moving panel.)
 
 The names needed are those of live, real (`is_test = 0`) invoices whose owner the plan imports
 (`importableLegacyUserIds`, pinned to the plan's own rule by a test), on their mapped panel; a
-declared-missing code asks every production panel; an operator's ADOPT asks its panel. Each
+declared-missing code asks every production panel; an operator's ADOPT asks its panel; an
+invoice with an empty `code_panel` and no ADOPT yet asks every production panel too — the holders
+found are the panels an operator may be offered for that first ADOPT. Each
 carries the backup's exact spelling (null when two invoices spell it differently).
 
 **Gap-free walks.** Offset pagination can skip a row only at a page boundary, when rows ahead of
@@ -240,10 +242,11 @@ nothing. Seen again, it existed from its read, past the earlier walk's end, to t
 **Decisions, as of the DECISION walk's end.** A decision walk is gap-free, agrees with a
 neighbouring walk on one relative order, and has a walk after it. Of those, the one leaving the
 fewest names undecided is chosen (the latest on a tie). The read is settled when it leaves none
-AND the last walk is gap-free too — so every spelling that still exists as the read ends was
+AND the last walk is decisive too (gap-free and in one order with the walk before it) — so every
+spelling that still exists as the read ends was
 seen and counts toward a collision. Until then the panel is walked again — at most
 `TARGETED_MAX_WALKS` (3) walks; a panel that only sells settles on two. Reaching the cap with
-the last walk NOT gap-free, no name is present on one spelling: a case variant that walk
+the last walk NOT decisive, no name is present on one spelling: a case variant that walk
 skipped may exist as the read ends (the second review's R3), so each would-be present name is
 unresolved. Then:
 
@@ -323,16 +326,20 @@ Residual risks, stated rather than hidden:
 - **Visibility is the admin's.** Every list is scoped to the accounts the credential's admin can
   see. An account owned by another admin is invisible, and is also one this installation could
   never operate.
-- **A no-panel invoice's ADOPT on a moving panel.** An invoice with an empty `code_panel` asks no
-  panel until an operator approves an ADOPT onto one; on a panel that is not one snapshot, its
-  evidence lists every panel as undecided, so no panel is offered for that approval.
-  Fail-closed: such invoices stay `NO_PANEL` (manual review) until a dry run reads a still panel.
-- **Liveness depends on the real panel.** If RickPanel's rows carry no `created_at`, carry one out
-  of order anywhere (a single row stamped before its predecessor by a clock step, a null stamp
-  on an old row, epoch numbers), or its list is not in insertion order, no walk is ever gap-free: every name of a moving panel stays
-  unresolved (safe, but the dry run is then approvable only over a panel that holds still for
-  two walks). This, the list route, `total` and the page-size cap are inferred from Marzban
-  v0.8.4 and must be confirmed on a real RickPanel (gate G6).
+- **A no-panel invoice's ADOPT.** An invoice with an empty `code_panel` is decided on every
+  production panel like any needed name; a panel where it stays unresolved is listed as
+  undecided in its evidence and is not offered for an ADOPT. Fail-closed: such an invoice stays
+  `NO_PANEL` (manual review) until a dry run decides it there.
+- **Liveness depends on the real panel.** If RickPanel's rows carry a `created_at` out of order
+  anywhere (a single row stamped before its predecessor by a clock step, a null stamp on an old
+  row, epoch numbers), or its list is not in insertion order, no walk is ever gap-free: every
+  needed name of a moving panel stays unresolved, and the dry run is approvable only over a
+  panel that holds still for two walks. If its rows carry NO `created_at`, not even that: two
+  identical walks cannot tell an account from one deleted and created again under its name
+  between them (Codex), so the two-walk snapshot needs a creation time on every row too, and
+  such a panel's candidates are never decided by the Web Admin's read. Safe either way. This,
+  the list route, `total` and the page-size cap are inferred from Marzban v0.8.4 and must be
+  confirmed on a real RickPanel (gate G6).
 
 Scope: the Web Admin `.nxpkg` importer only. The CLI and the rehearsal walk are unchanged: they
 read with `listAll()` and treat anything but one complete snapshot as before.

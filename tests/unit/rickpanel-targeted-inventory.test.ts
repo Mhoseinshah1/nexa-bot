@@ -419,7 +419,9 @@ describe('second review: a name re-created as another account, and the cap', () 
     expect(read.resolution?.walks).toBe(3);
     expect(read.index.usernames.get(name(50))).toBeUndefined();
     expect(indexCovers(read.index, name(50))).toBe(false);
-    expect(read.index.usernames.get(name(200))).toEqual([name(200)]);
+    // The re-created row moved name(50) in the list: the third walk's order disagrees with the
+    // second's, so it is not decisive and nothing is present on one spelling.
+    expect(read.resolution?.present).toBe(0);
   });
 
   it('R2: re-created while the second walk read it (that walk lists the old row and the new): not one snapshot, never attached', async () => {
@@ -448,6 +450,56 @@ describe('second review: a name re-created as another account, and the cap', () 
     expect(read.resolution).toMatchObject({ walks: 3, present: 0 });
     expect(read.index.usernames.get(name(50))).toBeUndefined();
     neverAdopted(read, name(50));
+  });
+});
+
+describe('Codex review on f4bcdd62', () => {
+  it('the last walk gap-free but in another order than the one before it: not decisive — nothing present on one spelling', async () => {
+    const panel = fakePanel(300);
+    // name(10) and name(11) share a creation time (a tie), so either order is oldest first.
+    panel.created.set(name(11), panel.created.get(name(10)) as number);
+    panel.beforePage = (_o, page) => {
+      // Between the first and second walk a needed account is created: the first walk cannot
+      // decide it, so a third walk is made after the (gap-free) second.
+      if (page === 4) add(panel, 'zz-new');
+    };
+    panel.view = (rows) => {
+      // The third walk (pages 8+) lists the tie the other way round.
+      if (panel.pages <= 8) return rows;
+      const i = rows.indexOf(name(10));
+      const j = rows.indexOf(name(11));
+      if (i < 0 || j < 0) return rows;
+      const out = [...rows];
+      out[i] = name(11);
+      out[j] = name(10);
+      return out;
+    };
+    const read = complete(
+      await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(200), 'zz-new']) }),
+    );
+    expect(read.resolution?.walks).toBe(3);
+    expect(read.resolution?.present).toBe(0);
+    expect(read.index.usernames.get(name(200))).toBeUndefined();
+  });
+
+  it('a still panel whose rows carry no created_at: never one complete snapshot — every name unresolved', async () => {
+    const panel = fakePanel(300);
+    panel.noCreatedAt = true;
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
+    expect(read.resolution).toMatchObject({ mode: 'TARGETED', present: 0, unresolved: 1 });
+    expect(indexCovers(read.index, name(5))).toBe(false);
+  });
+
+  it('a COUNT_MISMATCH found on the third walk reports every walk made', async () => {
+    const panel = fakePanel(300);
+    bursts(panel, [1]);
+    // The third walk withholds one row of its second page: fewer names than its total.
+    panel.view = (rows, offset) =>
+      panel.pages === 10 && offset > 0 ? rows.filter((r) => r !== name(150)) : rows;
+    const read = await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) });
+    if (!read.ok || read.complete) throw new Error(`expected incomplete: ${JSON.stringify(read)}`);
+    expect(read.reason).toBe('COUNT_MISMATCH');
+    expect(read.diagnostics?.walks).toHaveLength(3);
   });
 });
 
@@ -884,7 +936,7 @@ describe('neededNamesByPanel — exactly what the backup can ask', () => {
     expect([...(out.get('panel-b') ?? new Map()).keys()]).toEqual([]);
   });
 
-  it('asks nothing for an unowned, test, invalid-key, nameless, unmapped or panel-less invoice', () => {
+  it('asks nothing for an unowned, test, invalid-key, nameless or unmapped invoice', () => {
     const out = run([
       invoice({ idUser: 'stranger' }),
       invoice({ idUser: null }),
@@ -893,10 +945,15 @@ describe('neededNamesByPanel — exactly what the backup can ask', () => {
       invoice({ username: '  ' }),
       invoice({ codePanel: 'code-unknown' }),
       invoice({ codePanel: 'code-test' }),
-      invoice({ codePanel: null }),
     ]);
     expect([...(out.get('panel-a') ?? new Map()).keys()]).toEqual([]);
     expect([...(out.get('panel-b') ?? new Map()).keys()]).toEqual([]);
+  });
+
+  it('Codex: a panel-less invoice without an ADOPT asks every production panel — its holders are what an operator may be offered', () => {
+    const out = run([invoice({ codePanel: null }), invoice({ codePanel: '  ' })]);
+    expect([...(out.get('panel-a') ?? new Map()).keys()]).toEqual(['alice']);
+    expect([...(out.get('panel-b') ?? new Map()).keys()]).toEqual(['alice']);
   });
 
   it('a declared-missing code asks every production panel; an operator ADOPT asks its panel', () => {

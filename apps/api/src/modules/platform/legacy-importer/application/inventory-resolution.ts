@@ -185,8 +185,10 @@ export interface NeedingInvoice {
  * other owner is decided `CUSTOMER_NOT_IMPORTED` before an index is asked) with a comparable
  * username asks its mapped panel; a code the operator
  * declared missing asks every production panel; an operator's ADOPT approval asks the panel
- * it names. A test panel's row, an unmapped code and a row naming no panel ask nothing — the
- * matcher decides those without any inventory. A superset is harmless (an extra name is only
+ * it names; a row naming NO panel, without an ADOPT yet, asks every production panel too — the
+ * holders found are the panels an operator may be offered for that first ADOPT (Codex: asked
+ * nothing, it could never be offered one). A test panel's row and an unmapped code ask
+ * nothing — the matcher decides those without any inventory. A superset is harmless (an extra name is only
  * decided); a missing name would only leave its invoice undecidable, never wrongly decided.
  */
 export function neededNamesByPanel(
@@ -224,7 +226,13 @@ export function neededNamesByPanel(
     if (override !== undefined) add(override, name, spelling);
     const raw = invoice.codePanel?.trim() ?? '';
     const code = raw === '' ? null : raw;
-    if (code === null || policy.testPanels.has(code)) continue;
+    if (code === null) {
+      if (override === undefined) {
+        for (const panelId of policy.productionPanelIds) add(panelId, name, spelling);
+      }
+      continue;
+    }
+    if (policy.testPanels.has(code)) continue;
     const mapped = policy.knownPanels.get(code);
     if (mapped !== undefined) {
       add(mapped, name, spelling);

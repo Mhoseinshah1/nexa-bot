@@ -602,9 +602,14 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
    * The names the backup needs on panel A (live, real, importable owner, rp1): svc_a1
    * (eligible), svc_a2 (product unresolved), svc_a4 (unsupported shape), case_x (Case_X and
    * case_x on the panel: a collision whatever the walks prove), svc_missing (no account).
-   * Without a gap-free walk every one but the collision is UNRESOLVED.
+   * Without a gap-free walk every one but the collision is UNRESOLVED — four invoices
+   * `INVENTORY_INCOMPLETE`, and, among the names, also the three panel-less invoices' (asked of
+   * every production panel so their holders can be offered for an ADOPT; their outcome stays
+   * `NO_PANEL`).
    */
   const UNRESOLVED_WITHOUT_GAP_FREE = 4;
+  const PANEL_LESS_NAMES = 3;
+  const NAMES_UNRESOLVED_WITHOUT_GAP_FREE = UNRESOLVED_WITHOUT_GAP_FREE + PANEL_LESS_NAMES;
 
   /** The one eligible candidate of the synthetic backup, on its own account and owner. */
   const BASELINE = { 'A:svc_a1': '100000001' } as const;
@@ -784,7 +789,8 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(walksOf(panelA, before)).toBe(MAX_WALKS);
     expect(w['USERNAME_CASE_COLLISION']).toBe(2);
     // svc_a2, svc_a4: never present on one spelling; svc_missing: absent (no walk returned it).
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE - 2);
+    // svc_a2, svc_a4 and the panel-less name panel A holds: present on one spelling, demoted.
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(3);
     expect(w['PROVIDER_MISSING']).toBe(1);
     expect(lookupsOf(panelA, before)).toEqual([]);
     await expectApprovalRefused(page, id);
@@ -815,7 +821,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     const w = codes(dry.dryRunReport?.warnings);
     expect(w['PROVIDER_INVENTORY_CHURN']).toBe(1);
     // svc_a3 is needed too here: five names undecided, the collision decided by its spellings.
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE + 1);
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE + 1);
     expect(w['INVENTORY_INCOMPLETE']).toBe(UNRESOLVED_WITHOUT_GAP_FREE + 1);
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
@@ -867,7 +873,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     const bw = codes(blind.dryRunReport?.warnings);
     expect(bw['PROVIDER_INVENTORY_CHURN']).toBe(1);
     expect(bw['PROVIDER_MISSING']).toBeUndefined();
-    expect(bw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE);
+    expect(bw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE);
     expect(lookupsOf(panelA, before)).toEqual([]);
     await expectApprovalRefused(page, id);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
@@ -911,7 +917,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     panelA.beforeListPage = null;
     const rw = codes(recreated.dryRunReport?.warnings);
     expect(rw['PROVIDER_INVENTORY_CHURN']).toBe(1);
-    expect(rw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE);
+    expect(rw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE);
     expect(rw['PROVIDER_MISSING']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
     await expectApprovalRefused(page, id);
@@ -935,7 +941,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     panelA.intercept = null;
     const tw = codes(swapped.dryRunReport?.warnings);
     expect(walksOf(panelA, before)).toBe(MAX_WALKS);
-    expect(tw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE);
+    expect(tw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE);
     expect(tw['PROVIDER_MISSING']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
     await expectApprovalRefused(page, id);

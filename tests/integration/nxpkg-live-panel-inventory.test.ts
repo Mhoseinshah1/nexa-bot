@@ -702,6 +702,12 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       holders: [{ panel: 'A', spellings: 2 }],
     });
     expect(decided['7c1f']).toEqual({ outcome: 'PROVIDER_MISSING', holders: [] });
+    // Codex: a panel-less invoice is asked of every production panel, so its holder is found
+    // through the targeted read and can be offered for an ADOPT — never adopted automatically.
+    expect(decided['1700001b2c3d4e5']).toEqual({
+      outcome: 'NO_PANEL',
+      holders: [{ panel: 'B', spellings: 1 }],
+    });
     // A/B: no customer that is not the backup's.
     for (const tg of await customerTelegramIds()) expect(BACKUP_USERS.has(tg), tg).toBe(true);
     // Neither the dry run nor the import ever asked a panel about a name nobody needs.
@@ -876,8 +882,10 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(dry.status).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
     expect(w['PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED']).toBe(1);
-    // svc_a1, svc_a2, svc_a4, svc_missing; case_x is a collision whatever the walks prove.
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(4);
+    // svc_a1, svc_a2, svc_a4, svc_missing, and the three panel-less invoices' names (asked of
+    // every production panel, for holder discovery); case_x is a collision whatever the walks
+    // prove.
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
     expect(w['INVENTORY_INCOMPLETE']).toBeGreaterThanOrEqual(4);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
@@ -918,7 +926,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(dry.status).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
     expect(lookupsOf(panelA, before)).toEqual([]);
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(4);
+    // Four mapped names and the three panel-less ones (see above).
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
     await expect(page.approve(id)).rejects.toMatchObject({
