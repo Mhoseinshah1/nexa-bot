@@ -1570,10 +1570,23 @@ export class LegacyImporterService {
       // 3. Decide again — every live invoice, so the ownership rule sees every claim on an
       //    account; the inventory hold is NOT applied (the operator's approval is the decision
       //    about a held invoice, and a held invoice of another owner is a claim again).
+      // A per-name read that found no gap-free decision walk decided NOTHING on its panel
+      // (review H P1): never an index here, so every name on it stays INVENTORY_INCOMPLETE.
+      const deciding = new Map(
+        [...inventories].filter(
+          ([, read]) =>
+            !(
+              read.ok &&
+              read.complete &&
+              read.resolution !== undefined &&
+              !read.resolution.gapFree
+            ),
+        ),
+      );
       const decided = decideAllServices(
         snapshot,
         mapping,
-        inventoryIndexes(mapping, inventories),
+        inventoryIndexes(mapping, deciding),
         new Map([...lane.imported].map(([legacyId, who]) => [legacyId, who.telegramUserId])),
         (key) => (lane.shapes.get(key)?.resolved === true ? 'RESOLVED' : 'UNRESOLVED'),
         {
