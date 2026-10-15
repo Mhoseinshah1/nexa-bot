@@ -527,11 +527,13 @@ export class DrizzleLegacyImporterRepository
       INSERT INTO legacy_import_run_inputs (
         tenant_id, run_id, source_engine, source_schema_hash, panel_mapping_fingerprint,
         wallet_currency, pre_import_wallet_total_minor, pre_import_customers, recorded_at,
-        ownership_hold_digest)
+        ownership_hold_digest, inventory_hold_digest, inventory_hold_keys)
       VALUES (${tenantId}, ${inputs.runId}, ${inputs.sourceEngine}, ${inputs.sourceSchemaHash},
               ${inputs.panelMappingFingerprint}, ${inputs.walletCurrency},
               ${inputs.preImportWalletTotalMinor.toString()}::bigint, ${inputs.preImportCustomers},
-              ${inputs.recordedAt.toISOString()}::timestamptz, ${inputs.ownershipHoldDigest})
+              ${inputs.recordedAt.toISOString()}::timestamptz, ${inputs.ownershipHoldDigest},
+              ${inputs.inventoryHoldDigest},
+              ${inputs.inventoryHoldKeys === null ? null : JSON.stringify(inputs.inventoryHoldKeys)}::jsonb)
       ON CONFLICT (tenant_id, run_id) DO NOTHING
     `);
     const stored = await this.find(scope, inputs.runId, tx);
@@ -551,10 +553,12 @@ export class DrizzleLegacyImporterRepository
       pre_import_customers: number;
       recorded_at: Date | string;
       ownership_hold_digest: string | null;
+      inventory_hold_digest: string | null;
+      inventory_hold_keys: unknown;
     }>(sql`
       SELECT run_id, source_engine, source_schema_hash, panel_mapping_fingerprint,
              wallet_currency, pre_import_wallet_total_minor::text AS pre, pre_import_customers,
-             recorded_at, ownership_hold_digest
+             recorded_at, ownership_hold_digest, inventory_hold_digest, inventory_hold_keys
         FROM legacy_import_run_inputs WHERE tenant_id = ${tenantId} AND run_id = ${runId}
     `);
     const row = result.rows[0];
@@ -569,7 +573,29 @@ export class DrizzleLegacyImporterRepository
       preImportCustomers: row.pre_import_customers,
       recordedAt: new Date(row.recorded_at),
       ownershipHoldDigest: row.ownership_hold_digest,
+      inventoryHoldDigest: row.inventory_hold_digest,
+      inventoryHoldKeys: holdKeys(row.inventory_hold_keys),
     };
+  }
+
+  async findInventoryHold(
+    scope: TenantContext,
+    sourceFingerprint: string,
+    digest: string,
+  ): Promise<readonly string[] | null> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(undefined).execute<{ inventory_hold_keys: unknown }>(sql`
+      SELECT i.inventory_hold_keys
+        FROM legacy_import_run_inputs i
+        JOIN legacy_import_runs r ON r.tenant_id = i.tenant_id AND r.id = i.run_id
+       WHERE i.tenant_id = ${tenantId}
+         AND r.source_fingerprint = ${sourceFingerprint}
+         AND i.inventory_hold_digest = ${digest}
+       ORDER BY i.recorded_at ASC, i.run_id ASC
+       LIMIT 1
+    `);
+    const row = result.rows[0];
+    return row === undefined ? null : holdKeys(row.inventory_hold_keys);
   }
 
   // --- read set runs (Mirza migration PR1) -------------------------------------------------
@@ -701,4 +727,18 @@ export class DrizzleLegacyImporterRepository
       throw new Error('a conflicting customer row vanished inside the transaction');
     return { customerId: row.id, created: false };
   }
+}
+
+/**
+ * `legacy_import_run_inputs.inventory_hold_keys` (a JSON array of invoice keys) as stored, or
+ * null. Anything else is refused rather than read as "no hold": a hold is what keeps an
+ * invoice from being adopted, so a value nobody can read is never an empty one.
+ */
+function holdKeys(value: unknown): readonly string[] | null {
+  if (value === null || value === undefined) return null;
+  const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!Array.isArray(parsed) || !parsed.every((k): k is string => typeof k === 'string')) {
+    throw new Error('legacy_import_run_inputs.inventory_hold_keys is not an array of keys');
+  }
+  return parsed;
 }

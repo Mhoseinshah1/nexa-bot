@@ -69,7 +69,9 @@ import {
 import {
   decideAllServices,
   importableLegacyUserIds,
+  inventoryHoldDigest,
   inventoryIndexes,
+  inventoryReadFailed,
   planLegacyImport,
   PLAN_DIGEST_FORMAT_OUTDATED,
   planTalliesDigest,
@@ -241,6 +243,15 @@ export interface LegacyImportInput {
    * reconcile and report.
    */
   readonly ownershipDecisionsDigest?: string | null;
+  /**
+   * Mirza `.nxpkg` inventory hold (`InventoryHold`): the APPROVED dry run's hold, as its report
+   * carries it (`inventoryHold`: how many invoices, the digest of their keys). Given to import,
+   * resume, reconcile and report; never to a dry run, which computes its own. The keys are read
+   * back from the run inputs the dry run recorded and accepted only when they hash to `digest`.
+   * Absent: nothing is held, and an import that finds a needed name unresolved refuses
+   * `DRY_RUN_MISMATCH` exactly as before (the CLI, and an approval from before the hold).
+   */
+  readonly inventoryHold?: { readonly digest: string; readonly invoices: number };
 }
 
 /**
@@ -494,6 +505,27 @@ function holdOf(input: LegacyImportInput): { readonly ownershipHold?: ReadonlySe
   return input.ownershipHold === undefined ? {} : { ownershipHold: input.ownershipHold };
 }
 
+/** M7 for the inventory hold: a run is decided under ONE inventory hold; any other is refused. */
+function inventoryHoldMismatch(runId: string, purpose: string) {
+  return errors.conflict(
+    LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+    `INVENTORY_HOLD_MISMATCH: run ${runId} was started under a different inventory hold ` +
+      `(another approved dry run); ${purpose} needs the same one.`,
+  );
+}
+
+/** `sections.inventoryHold` of a report: how many invoices are held, and the digest of which. */
+function inventoryHoldSection(plan: Pick<LegacyPlan, 'inventoryHold'>) {
+  return {
+    inventoryHold: {
+      invoices: plan.inventoryHold.keys.size,
+      digest: plan.inventoryHold.digest,
+      given: plan.inventoryHold.given,
+      unheld: plan.inventoryHold.unheld,
+    },
+  };
+}
+
 /** `sections.ownershipHold` of a report, for an input with a hold; nothing otherwise. */
 function ownershipHoldSection(
   input: LegacyImportInput,
@@ -534,7 +566,11 @@ export class LegacyImporterService {
     snapshot: LegacySnapshot,
     mapping: PanelMapping,
     productionLikeTarget = true,
-    options: { readonly forApply?: boolean; readonly ownershipHold?: ReadonlySet<string> } = {},
+    options: {
+      readonly forApply?: boolean;
+      readonly ownershipHold?: ReadonlySet<string>;
+      readonly inventoryHold?: ReadonlySet<string>;
+    } = {},
   ): Promise<Prepared> {
     const { destination } = this.deps;
     if (!(await destination.tenantExists(scope))) {
@@ -584,6 +620,7 @@ export class LegacyImporterService {
       mapping,
       productionLikeTarget,
       options.ownershipHold,
+      options.inventoryHold,
     );
     // Per panel, exactly the names the matcher may ask of it. A source that resolves per name
     // (the Web Admin's) decides these when the panel is not one complete snapshot — a live
@@ -653,6 +690,7 @@ export class LegacyImporterService {
     mapping: PanelMapping,
     productionLikeTarget: boolean,
     ownershipHold: ReadonlySet<string> | undefined,
+    inventoryHold: ReadonlySet<string> | undefined,
   ): Promise<PreparedReview> {
     const live = new Map(snapshot.liveInvoices.map((i) => [i.idInvoice, i]));
     const keys = [...live.keys()].filter(recordableKey);
@@ -690,8 +728,46 @@ export class LegacyImporterService {
         operatorPanels,
         keptAsHistory,
         ...(ownershipHold === undefined ? {} : { ownershipHold }),
+        ...(inventoryHold === undefined ? {} : { inventoryHold }),
       },
     };
+  }
+
+  /**
+   * The approved dry run's inventory hold, as a set of invoice keys: read back from the run
+   * inputs that recorded it for THIS source and accepted only when the keys hash to the
+   * approved digest and number what the approval says. Anything else is a plan the owner did
+   * not approve (`DRY_RUN_MISMATCH`), refused before any read of a panel and before any write.
+   */
+  private async inventoryHoldKeys(
+    scope: TenantContext,
+    input: LegacyImportInput,
+  ): Promise<ReadonlySet<string> | undefined> {
+    const approved = input.inventoryHold;
+    if (approved === undefined) return undefined;
+    const keys =
+      approved.invoices === 0
+        ? []
+        : await this.deps.runInputs.findInventoryHold(
+            scope,
+            input.snapshot.fingerprint,
+            approved.digest,
+          );
+    if (
+      keys === null ||
+      keys.length !== approved.invoices ||
+      new Set(keys).size !== keys.length ||
+      inventoryHoldDigest(keys) !== approved.digest
+    ) {
+      throw new NxpkgImportRefused(
+        'DRY_RUN_MISMATCH',
+        [
+          "the approved dry run's inventory hold is not recorded for this source (or does not match its digest): nothing can be held that the owner did not approve. Nothing was written; run and approve a new dry run.",
+        ],
+        { 'dryrun:inventory_hold:invoices': approved.invoices },
+      );
+    }
+    return new Set(keys);
   }
 
   private providerSection(prepared: Prepared) {
@@ -772,7 +848,9 @@ export class LegacyImporterService {
       blockers.push(`sales currency is ${prepared.salesCurrency}; legacy balances are Toman (IRT)`);
     }
     for (const panel of prepared.plan.inventories) {
-      if (!panel.complete)
+      // A read that held and left names unresolved is the inventory hold's (quarantined),
+      // never a blocker; a read that failed is.
+      if (inventoryReadFailed(panel))
         blockers.push(`inventory of panel ${panel.panelId} is incomplete (${panel.reason ?? '?'})`);
     }
     // WP-D2 / G10: every live real code_panel is mapped, a test panel, declared missing,
@@ -831,6 +909,8 @@ export class LegacyImporterService {
         prepared.salesCurrency,
         holdDigestOf(input),
         tx,
+        undefined,
+        prepared.plan.inventoryHold,
       );
       await this.auditRun(scope, actor, 'legacy_import.run.start', outcome.run, mapping, tx);
     });
@@ -871,6 +951,7 @@ export class LegacyImporterService {
         // What an import is given back as `dryRunTalliesDigest` (DRY_RUN_MISMATCH).
         planTalliesDigest: planTalliesDigest(prepared.plan),
         ...ownershipHoldSection(input, prepared.plan),
+        ...inventoryHoldSection(prepared.plan),
       },
       'NO_BUSINESS_WRITE',
     );
@@ -923,9 +1004,11 @@ export class LegacyImporterService {
         await this.requireStopSales(scope, 'START', tx);
       });
     }
+    const inventoryHold = await this.inventoryHoldKeys(scope, input);
     const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
       forApply: true,
       ...holdOf(input),
+      ...(inventoryHold === undefined ? {} : { inventoryHold }),
     });
     // G10, the same predicate as the audit, decided again NOW: an import never starts on
     // a map that forgets a live code_panel — whatever the audit said earlier.
@@ -944,17 +1027,26 @@ export class LegacyImporterService {
     // dry run met. Refused as itself, before the digest and whether or not a digest was given
     // (the CLI's flag is optional), even where it would not move a tally: what the import
     // adopts from must be a read that held. A resume is not refused: its own writes stand.
-    const unread = prepared.plan.inventories.filter((p) => !p.complete).length;
+    //
+    // A per-name read that HELD but left needed names unresolved is not a failed read: those
+    // invoices are the inventory hold's. Only the approved hold may cover them — an invoice this
+    // read leaves unresolved that the approval did not hold (one it found eligible, missing, …,
+    // or any at all when no hold was given) is a plan the owner never saw.
+    const unread = prepared.plan.inventories.filter(inventoryReadFailed).length;
+    const hold = prepared.plan.inventoryHold;
+    const unheld = hold.given ? hold.unheld : hold.keys.size;
     if (
       input.mode === 'IMPORT' &&
       input.productionLikeTarget !== false &&
       (input.dryRunTalliesDigest !== undefined || snapshot.descriptor.engine === 'NXPKG') &&
-      unread > 0
+      (unread > 0 || unheld > 0)
     ) {
       throw new NxpkgImportRefused(
         'DRY_RUN_MISMATCH',
         [
-          `${String(unread)} production panel(s) had no complete RickPanel inventory when the import read them: the plan cannot be compared with the approved dry run. Nothing was written; run and approve a new dry run.`,
+          unread > 0
+            ? `${String(unread)} production panel(s) had no complete RickPanel inventory when the import read them: the plan cannot be compared with the approved dry run. Nothing was written; run and approve a new dry run.`
+            : `${String(unheld)} live invoice(s) have a username the import's RickPanel read left unresolved that the approved dry run did not hold: the plan is not the approved one. Nothing was written; run and approve a new dry run.`,
         ],
         planTalliesRefusalCounts(prepared.plan),
       );
@@ -1048,6 +1140,7 @@ export class LegacyImporterService {
         holdDigest,
         tx,
         preImport,
+        inventoryHold === undefined ? null : prepared.plan.inventoryHold,
       );
       if (stored.panelMappingFingerprint !== mapping.fingerprint) {
         throw errors.conflict(
@@ -1057,6 +1150,9 @@ export class LegacyImporterService {
       }
       if (stored.ownershipHoldDigest !== holdDigest) {
         throw ownershipHoldMismatch(outcome.run.id, 'resume');
+      }
+      if (stored.inventoryHoldDigest !== (input.inventoryHold?.digest ?? null)) {
+        throw inventoryHoldMismatch(outcome.run.id, 'resume');
       }
       await this.auditRun(
         scope,
@@ -1768,6 +1864,9 @@ export class LegacyImporterService {
         ...(review.inputs.ownershipHold === undefined
           ? {}
           : { ownershipHold: review.inputs.ownershipHold }),
+        ...(review.inputs.inventoryHold === undefined
+          ? {}
+          : { inventoryHold: review.inputs.inventoryHold }),
       },
     );
     tallies.services.categories = { ...decided.categories };
@@ -2245,14 +2344,13 @@ export class LegacyImporterService {
       mapping,
       'reconcile',
       holdDigestOf(input),
+      input.inventoryHold?.digest ?? null,
     );
-    const prepared = await this.prepare(
-      scope,
-      snapshot,
-      mapping,
-      input.productionLikeTarget,
-      holdOf(input),
-    );
+    const inventoryHold = await this.inventoryHoldKeys(scope, input);
+    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
+      ...holdOf(input),
+      ...(inventoryHold === undefined ? {} : { inventoryHold }),
+    });
     const { destination } = this.deps;
     const tallies = prepared.plan.tallies;
     const [wallet, openings, native, trials, shapes, since] = await Promise.all([
@@ -2394,9 +2492,11 @@ export class LegacyImporterService {
       check('provider.writes', 'provider requests that were not reads', 0, counts.refusedWrites),
       check(
         'provider.complete',
-        'every production panel inventory complete',
+        // A read that held and left names unresolved is complete for this check: those
+        // invoices are quarantined by the inventory hold, never adopted.
+        'every production panel inventory read (no read failed)',
         prepared.plan.inventories.length,
-        prepared.plan.inventories.filter((p) => p.complete).length,
+        prepared.plan.inventories.filter((p) => !inventoryReadFailed(p)).length,
       ),
     ];
     const ok = checks.every((c) => c.ok);
@@ -2487,15 +2587,14 @@ export class LegacyImporterService {
       mapping,
       'report',
       holdDigestOf(input),
+      input.inventoryHold?.digest ?? null,
     );
     const { destination } = this.deps;
-    const prepared = await this.prepare(
-      scope,
-      snapshot,
-      mapping,
-      input.productionLikeTarget,
-      holdOf(input),
-    );
+    const inventoryHold = await this.inventoryHoldKeys(scope, input);
+    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
+      ...holdOf(input),
+      ...(inventoryHold === undefined ? {} : { inventoryHold }),
+    });
     const currency = inputs.walletCurrency;
     const [openings, trials, shapes, map, native, actual, resumes, tenantSlug] = await Promise.all([
       destination.openingAggregates(scope),
@@ -2538,7 +2637,7 @@ export class LegacyImporterService {
       provider: {
         reads: counts.reads,
         refusedWrites: counts.refusedWrites,
-        inventoriesComplete: prepared.plan.inventories.every((p) => p.complete),
+        inventoriesComplete: prepared.plan.inventories.every((p) => !inventoryReadFailed(p)),
         // No panel had anything to be asked (every read NOTHING_NEEDED): zero reads is right.
         readsNeeded: !prepared.plan.inventories.every(
           (p) => p.resolution?.reason === 'NOTHING_NEEDED',
@@ -2649,6 +2748,7 @@ export class LegacyImporterService {
     mapping: PanelMapping,
     purpose: 'reconcile' | 'report',
     holdDigest: string | null,
+    inventoryHoldDigestGiven: string | null,
   ): Promise<{ readonly run: LegacyImportRunRecord; readonly inputs: LegacyRunInputs }> {
     const run = await this.latestApplyRun(scope);
     if (purpose === 'reconcile' && run.status !== 'COMPLETED') {
@@ -2679,6 +2779,9 @@ export class LegacyImporterService {
       );
     }
     if (inputs.ownershipHoldDigest !== holdDigest) throw ownershipHoldMismatch(run.id, purpose);
+    if (inputs.inventoryHoldDigest !== inventoryHoldDigestGiven) {
+      throw inventoryHoldMismatch(run.id, purpose);
+    }
     return { run, inputs };
   }
 
@@ -2898,6 +3001,7 @@ export class LegacyImporterService {
     ownershipHoldDigest: string | null,
     tx: TransactionScope,
     preImport?: { readonly totalMinor: bigint; readonly customers: number },
+    inventoryHold?: { readonly keys: ReadonlySet<string>; readonly digest: string } | null,
   ): Promise<LegacyRunInputs> {
     const totals =
       preImport ??
@@ -2914,6 +3018,11 @@ export class LegacyImporterService {
         preImportCustomers: totals.customers,
         recordedAt: this.deps.clock.now(),
         ownershipHoldDigest,
+        inventoryHoldDigest: inventoryHold?.digest ?? null,
+        inventoryHoldKeys:
+          inventoryHold === undefined || inventoryHold === null
+            ? null
+            : [...inventoryHold.keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
       },
       tx,
     );

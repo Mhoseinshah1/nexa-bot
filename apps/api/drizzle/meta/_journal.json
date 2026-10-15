@@ -1737,6 +1737,13 @@
       "when": 1791800294340,
       "tag": "0247_gateway_row_failures",
       "breakpoints": true
+    },
+    {
+      "idx": 248,
+      "version": "7",
+      "when": 1792091890069,
+      "tag": "0248_legacy_run_inputs_inventory_hold",
+      "breakpoints": true
     }
   ]
 }

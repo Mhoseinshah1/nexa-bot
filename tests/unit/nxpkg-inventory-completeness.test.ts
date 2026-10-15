@@ -785,6 +785,23 @@ describe('the apply, before the protective backup: an approval from before the g
       code: 'DRY_RUN_MISMATCH',
       counts: [{ code: 'dryrun:plan:digest_missing', count: 1 }],
     });
+    // A dry run whose INVENTORY_INCOMPLETE services are all held by its inventory hold passes
+    // this gate (they are quarantined); the same report without the hold does not.
+    const heldReport = {
+      warnings: [{ code: 'INVENTORY_INCOMPLETE', count: 3 }],
+      planTalliesDigest: 'a'.repeat(64),
+      inventoryHold: { version: 1, invoices: 3, digest: 'b'.repeat(64) },
+    };
+    await expect(
+      adapters.precheck({ ...(context as object), dryRunReport: heldReport } as never, 'TARGET'),
+    ).rejects.toMatchObject({ blocker: 'TARGET_ACK_MISSING' });
+    const { inventoryHold: _hold, ...unheldReport } = heldReport;
+    await expect(
+      adapters.precheck({ ...(context as object), dryRunReport: unheldReport } as never, 'TARGET'),
+    ).rejects.toMatchObject({
+      code: 'DRY_RUN_MISMATCH',
+      counts: [{ code: 'dryrun:panels:inventory_incomplete', count: 1 }],
+    });
     // A complete dry run passes this gate and meets the next one (the acknowledgement).
     const complete = {
       ...(context as object),

@@ -164,6 +164,14 @@ export interface LegacyRunInputs {
    * null for a run without one. A resume, reconcile or report under another hold is refused.
    */
   readonly ownershipHoldDigest: string | null;
+  /**
+   * Mirza `.nxpkg` inventory hold (`InventoryHold`): the digest of the held invoice keys and
+   * the keys themselves, sorted. A dry run records the hold it computed (what its report's
+   * `inventoryHold` digest names); an apply records the approved hold it was given, and its
+   * resume, reconcile and report are refused under any other. Null for a run without one.
+   */
+  readonly inventoryHoldDigest: string | null;
+  readonly inventoryHoldKeys: readonly string[] | null;
 }
 
 export interface LegacyRunInputsRepository {
@@ -174,6 +182,15 @@ export interface LegacyRunInputsRepository {
     tx: TransactionScope,
   ): Promise<LegacyRunInputs>;
   find(scope: TenantContext, runId: string): Promise<LegacyRunInputs | null>;
+  /**
+   * The held invoice keys a run of THIS source recorded under `digest` (the approved dry run's,
+   * as a rule), or null when none did. The caller hashes them again before trusting them.
+   */
+  findInventoryHold(
+    scope: TenantContext,
+    sourceFingerprint: string,
+    digest: string,
+  ): Promise<readonly string[] | null>;
 }
 
 /**

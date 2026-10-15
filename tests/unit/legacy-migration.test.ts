@@ -472,6 +472,37 @@ describe('LegacyMigrationService', () => {
     }
     // The complete dry run of the same package is approvable on the same kind of target.
     expect((await (await seeded(dryRunReport, true)).approve()).status).toBe('APPROVED');
+    // The inventory hold: services left INVENTORY_INCOMPLETE by a per-name read that HELD are
+    // quarantined — the dry run that records them as its hold is approvable.
+    const hold = { version: 1 as const, invoices: 7, digest: 'c'.repeat(64) };
+    const held: LegacyMigrationDryRunReport = {
+      ...dryRunReport,
+      warnings: [
+        ...dryRunReport.warnings,
+        { code: 'INVENTORY_INCOMPLETE', count: 7 },
+        { code: 'PROVIDER_INVENTORY_QUARANTINED', count: 7 },
+      ],
+      inventoryHold: hold,
+    };
+    expect((await (await seeded(held, true)).approve()).status).toBe('APPROVED');
+    // …but only what it holds; a whole-panel read failure beside it; or a report from before
+    // the hold (the same warnings, no marker): refused as before.
+    for (const report of [
+      { ...held, inventoryHold: { ...hold, invoices: 6 } },
+      {
+        ...held,
+        warnings: [...held.warnings, { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 }],
+      },
+      { ...held, inventoryHold: undefined },
+    ] as LegacyMigrationDryRunReport[]) {
+      const { h, id, approve } = await seeded(report, true);
+      await expect(approve()).rejects.toMatchObject({
+        code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+        details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
+      });
+      expect(h.repository.rows.get(id)).toMatchObject({ status: 'DRY_RUN_DONE' });
+      expect(h.cutoverApprovals).toEqual([]);
+    }
     // Off a production-like target the warning is shown, and the owner decides.
     expect((await (await seeded(incomplete, false)).approve()).status).toBe('APPROVED');
     // Production-like: a dry run that reported no plan digest cannot bind the import.

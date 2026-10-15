@@ -871,7 +871,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
 
   // ── F: unresolved ──────────────────────────────────────────────────────────────────────
 
-  it('F: no gap-free walk (a deletion burst behind the cursor in EVERY walk) — every needed name UNRESOLVED, never PROVIDER_MISSING: INVENTORY_INCOMPLETE, approval refused, nothing written, no per-user request; over a quieter panel it is approvable', async () => {
+  it('F: no gap-free walk (a deletion burst behind the cursor in EVERY walk) — every needed name UNRESOLVED, never PROVIDER_MISSING: INVENTORY_INCOMPLETE, QUARANTINED (not a blocker), no per-user request; the apply imports the money and adopts none of them even when its own read resolves them', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
     // A lookup route that would fail if it were asked: it is not.
@@ -894,29 +894,40 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(w['INVENTORY_INCOMPLETE']).toBeGreaterThanOrEqual(4);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
-    // A read that left a needed name unresolved is not a complete read of that panel.
-    expect(w['PROVIDER_INVENTORY_INCOMPLETE']).toBe(1);
-    expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
-    expect(lookupsOf(panelA, before)).toEqual([]);
-    await expect(page.approve(id)).rejects.toMatchObject({
-      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
-      details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
+    // The read itself HELD: no whole-panel failure is reported. Every invoice it left
+    // undecided is the inventory hold's — quarantined, and counted as such.
+    expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBe(w['INVENTORY_INCOMPLETE']);
+    expect(dry.dryRunReport?.inventoryHold).toMatchObject({
+      version: 1,
+      invoices: w['INVENTORY_INCOMPLETE'],
     });
+    expect(lookupsOf(panelA, before)).toEqual([]);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
-
-    // Quieter: one manual account appended mid-walk; the same import is approvable.
-    manualAccountMidWalk('manual_op_2');
-    const again = await page.dryRun(id);
-    panelA.beforeListPage = null;
-    const aw = codes(again.dryRunReport?.warnings);
-    expect(aw['INVENTORY_INCOMPLETE']).toBeUndefined();
-    expect(aw['PROVIDER_MISSING']).toBe(1);
     expect((await page.approve(id)).status).toBe('APPROVED');
+
+    // The apply reads a panel that now holds still: its read RESOLVES every name. The held
+    // invoices stay quarantined all the same — nothing adopted the owner did not approve.
+    await page.executor.tick();
+    const done = await detail(id);
+    expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
+    expect(await services()).toEqual([]);
+    expect(await count('customers')).toBeGreaterThan(0);
+    expect(await count('wallet_entries')).toBeGreaterThan(0);
+    expect(await count('legacy_wallet_debts')).toBeGreaterThan(0);
+    const decided = await candidates();
+    expect(decided['a0000001']?.outcome).toBe('INVENTORY_INCOMPLETE');
+    const open = await ctx.container.database.db.execute<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM legacy_service_candidates
+           WHERE tenant_id = ${TENANT} AND outcome = 'INVENTORY_INCOMPLETE' AND review_state = 'OPEN'`,
+    );
+    expect(open.rows[0]?.n).toBe(w['INVENTORY_INCOMPLETE']);
     expect(lookupsOf(panelA)).toEqual([]);
     expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
   }, 600_000);
 
-  it('F: a missing account (svc_missing) with no gap-free walk — UNRESOLVED, never PROVIDER_MISSING, even beside a route that answers 404 to everything (never asked); approval refused', async () => {
+  it('F: a missing account (svc_missing) with no gap-free walk — UNRESOLVED, never PROVIDER_MISSING, even beside a route that answers 404 to everything (never asked); quarantined, so approvable, and nothing written by the dry run', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
     failOn(panelA, (r) => r.method === 'GET' && r.path.startsWith('/api/user/'), {
@@ -934,14 +945,190 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // Four mapped names and the three panel-less ones (see above).
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
-    expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
-    await expect(page.approve(id)).rejects.toMatchObject({
-      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
-      details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
-    });
+    expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBeUndefined();
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBe(w['INVENTORY_INCOMPLETE']);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
     expect(await services()).toEqual([]);
+    expect((await page.approve(id)).status).toBe('APPROVED');
     expectReadsOnly(panelA);
+  }, 600_000);
+
+  // ── Q: the inventory hold beside decided names ─────────────────────────────────────────
+
+  /**
+   * svc_a3 (an extra eligible invoice, user 9) is DELETED and RE-CREATED on panel A between
+   * the first and the second walk of every read: a name seen under two creation times is
+   * another account, possibly another customer's — UNRESOLVED. Every other name is decided.
+   */
+  function recreateBetweenWalks(name: string): void {
+    onWalkPages(panelA, (walk, offset) => {
+      if (walk === 2 && offset === 0) {
+        panelA.removeUser(name);
+        panelA.seedUser(name, ACCOUNT);
+      }
+    });
+  }
+  const withSvcA3 = () =>
+    writePackage({
+      invoices: (rows) => [...rows, extraInvoice(rows, 'b0000003', '100000009', 'svc_a3')],
+    });
+
+  it('Q: one needed name unresolved beside decided ones — approvable; the apply writes customers, wallets and debts, adopts ONLY the eligible invoice, and keeps the held one as an OPEN INVENTORY_INCOMPLETE candidate with no service', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await withSvcA3());
+    panelA.seedUser('svc_a3', ACCOUNT);
+    recreateBetweenWalks('svc_a3');
+    const dry = await page.dryRun(id);
+    expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
+    const w = codes(dry.dryRunReport?.warnings);
+    expect(w['INVENTORY_INCOMPLETE']).toBe(1);
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(1);
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBe(1);
+    expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
+    expect(dry.dryRunReport?.inventoryHold).toMatchObject({ version: 1, invoices: 1 });
+    expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+
+    // The apply's own read holds still (the hook fired in the dry run's second walk only), so
+    // it RESOLVES svc_a3 — and the approved hold still quarantines it: the same plan.
+    await page.executor.tick();
+    panelA.beforeListPage = null;
+    const done = await detail(id);
+    expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
+    // Money: every importable customer, every positive opening and every legacy debt.
+    expect(await count('customers')).toBeGreaterThan(0);
+    expect(await count('wallet_entries')).toBeGreaterThan(0);
+    expect(await count('legacy_wallet_debts')).toBeGreaterThan(0);
+    // Reconcile is decided under the same hold: the quarantine is no discrepancy.
+    expect(done.progress.reconcileVerdict).toBe('RECONCILED');
+    expect(
+      { holds: done.applyReport?.reportHolds, failed: done.applyReport?.failedSections },
+      JSON.stringify(done.applyReport?.failedInvariants),
+    ).toEqual({ holds: true, failed: [] });
+    // Only the decided, eligible invoice is a service; the held one is not.
+    const held = await services();
+    expect(held).toEqual(BASELINE_SERVICES);
+    expectOneServicePerAccount(held);
+    const decided = await candidates();
+    expect(decided['a0000001']?.outcome).toBe('ADOPTED');
+    // Its evidence shows the one account the apply's read found — for a person's review —
+    // but the outcome is the quarantine, and no service names it.
+    expect(decided['b0000003']).toEqual({
+      outcome: 'INVENTORY_INCOMPLETE',
+      holders: [{ panel: 'A', spellings: 1 }],
+    });
+    const state = await ctx.container.database.db.execute<{ review_state: string }>(
+      sql`SELECT review_state FROM legacy_service_candidates
+           WHERE tenant_id = ${TENANT} AND invoice_key = 'b0000003'`,
+    );
+    expect(state.rows.map((r) => r.review_state)).toEqual(['OPEN']);
+    // The approved hold is the one the apply run was started under.
+    const inputs = await ctx.container.database.db.execute<{ digest: string; n: number }>(
+      sql`SELECT i.inventory_hold_digest AS digest, jsonb_array_length(i.inventory_hold_keys) AS n
+            FROM legacy_import_run_inputs i
+           WHERE i.tenant_id = ${TENANT} AND i.run_id = ${done.applyLegacyRunId}`,
+    );
+    expect(inputs.rows).toEqual([{ digest: dry.dryRunReport?.inventoryHold?.digest, n: 1 }]);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
+  }, 600_000);
+
+  it('Q: a name ELIGIBLE at approval is unresolved at the apply — FAILED DRY_RUN_MISMATCH, nothing written', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await withSvcA3());
+    panelA.seedUser('svc_a3', ACCOUNT);
+    recreateBetweenWalks('svc_a3');
+    const dry = await page.dryRun(id);
+    expect(codes(dry.dryRunReport?.warnings)['PROVIDER_INVENTORY_QUARANTINED']).toBe(1);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+
+    // At the apply, svc_a1 (eligible, adopted by the approved plan) is re-created between
+    // walks too: unresolved now, and the approval never held it.
+    onWalkPages(panelA, (walk, offset) => {
+      if (walk === 2 && offset === 0) {
+        for (const name of ['svc_a3', 'svc_a1']) {
+          panelA.removeUser(name);
+          panelA.seedUser(name, ACCOUNT);
+        }
+      }
+    });
+    await page.executor.tick();
+    panelA.beforeListPage = null;
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(failed.applyLegacyRunId).toBeNull();
+    const refusal = codes(failed.progress.refusalCounts);
+    expect(refusal['apply:inventory_hold:unheld']).toBe(1);
+    expect(refusal['dryrun:inventory_hold:unheld']).toBe(0);
+    for (const table of [
+      'customers',
+      'wallet_entries',
+      'legacy_wallet_debts',
+      'services',
+      'orders',
+    ]) {
+      expect(await count(table), table).toBe(0);
+    }
+    expectReadsOnly(panelA);
+  }, 600_000);
+
+  /**
+   * The approved row's stored report, edited in place AFTER the approval (the executor binds
+   * the approval to `dry_run_sha256`, not to a re-hash of the JSON): what an apply would meet
+   * if a report reached it that carries no hold, or another one.
+   */
+  async function editApprovedReport(id: string, edit: string): Promise<void> {
+    await ctx.container.database.db.execute(
+      sql.raw(
+        `UPDATE legacy_nxpkg_imports SET dry_run_report = ${edit} WHERE id = '${id}' AND tenant_id = '${TENANT}'`,
+      ),
+    );
+  }
+
+  it('Q: an apply handed NO hold that finds a name unresolved refuses DRY_RUN_MISMATCH — even where the plan digest would match — nothing written', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await withSvcA3());
+    panelA.seedUser('svc_a3', ACCOUNT);
+    recreateBetweenWalks('svc_a3');
+    await page.dryRun(id);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+    // The report as if it had held nothing and planned nothing undecided (so the TARGET
+    // precheck lets it through): the importer's own gate is what is left.
+    await editApprovedReport(
+      id,
+      `(dry_run_report - 'inventoryHold') || jsonb_build_object('warnings', COALESCE((SELECT jsonb_agg(w) FROM jsonb_array_elements(dry_run_report->'warnings') w WHERE w->>'code' NOT IN ('INVENTORY_INCOMPLETE', 'PROVIDER_INVENTORY_QUARANTINED')), '[]'::jsonb))`,
+    );
+    // The apply's read sees the same re-creation: svc_a3 unresolved again.
+    recreateBetweenWalks('svc_a3');
+    await page.executor.tick();
+    panelA.beforeListPage = null;
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(failed.applyLegacyRunId).toBeNull();
+    for (const table of ['customers', 'wallet_entries', 'legacy_wallet_debts', 'services']) {
+      expect(await count(table), table).toBe(0);
+    }
+  }, 600_000);
+
+  it('Q: an apply handed a hold whose keys no dry run of this source recorded refuses DRY_RUN_MISMATCH — nothing written', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await withSvcA3());
+    panelA.seedUser('svc_a3', ACCOUNT);
+    recreateBetweenWalks('svc_a3');
+    await page.dryRun(id);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+    await editApprovedReport(
+      id,
+      `jsonb_set(dry_run_report, '{inventoryHold,digest}', to_jsonb('${'a'.repeat(64)}'::text))`,
+    );
+    panelA.beforeListPage = null;
+    await page.executor.tick();
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(failed.applyLegacyRunId).toBeNull();
+    for (const table of ['customers', 'wallet_entries', 'legacy_wallet_debts', 'services']) {
+      expect(await count(table), table).toBe(0);
+    }
   }, 600_000);
 
   // ── G ──────────────────────────────────────────────────────────────────────────────────

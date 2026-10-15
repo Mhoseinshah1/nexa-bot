@@ -642,10 +642,15 @@ export class LegacyMigrationService {
         // Production-like: a dry run that planned on an incomplete live RickPanel inventory
         // is not approvable. The import reads the panel again; a plan made on a read that
         // did not hold is not one it can be compared with (DRY_RUN_MISMATCH), and which
-        // accounts it would adopt is exactly what that read left undecided.
+        // accounts it would adopt is exactly what that read left undecided. The invoices the
+        // report's inventory hold quarantines (a per-name read that held, a name it could not
+        // decide) are not counted: they import as history and review, never adopted.
         if (
           this.deps.productionLikeTarget &&
-          legacyMigrationDryRunInventoryIncomplete(row.dryRunReport?.warnings) > 0
+          legacyMigrationDryRunInventoryIncomplete(
+            row.dryRunReport?.warnings,
+            row.dryRunReport?.inventoryHold,
+          ) > 0
         ) {
           throw errors.conflict(
             CODES.INVALID_STATE,

@@ -13299,6 +13299,16 @@ export const legacyImportRunInputs = pgTable(
      * refused, so one run is never decided under two different holds.
      */
     ownershipHoldDigest: text('ownership_hold_digest'),
+    /**
+     * Mirza `.nxpkg` inventory hold: SHA-256 of the sorted held invoice keys
+     * (`inventoryHoldDigest`) and the keys themselves, a JSON array. A dry run records the
+     * invoices it quarantined because a needed username was left UNRESOLVED by a per-name read
+     * that held; an apply records the approved hold it was given back. NULL for a run without
+     * one. Legacy invoice keys only — the same keys `legacy_import_map` holds — and never in a
+     * report: the report carries the count and this digest.
+     */
+    inventoryHoldDigest: text('inventory_hold_digest'),
+    inventoryHoldKeys: jsonb('inventory_hold_keys'),
   },
   (table) => [
     primaryKey({ name: 'legacy_import_run_inputs_pk', columns: [table.tenantId, table.runId] }),
@@ -13320,6 +13330,10 @@ export const legacyImportRunInputs = pgTable(
     check(
       'legacy_import_run_inputs_hold_digest_check',
       sql`ownership_hold_digest IS NULL OR ownership_hold_digest ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_import_run_inputs_inventory_hold_check',
+      sql`((inventory_hold_digest IS NULL) = (inventory_hold_keys IS NULL)) AND (inventory_hold_digest IS NULL OR inventory_hold_digest ~ '^[0-9a-f]{64}$') AND (inventory_hold_keys IS NULL OR jsonb_typeof(inventory_hold_keys) = 'array')`,
     ),
   ],
 );

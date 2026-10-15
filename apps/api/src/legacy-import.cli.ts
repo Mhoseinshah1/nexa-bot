@@ -841,6 +841,12 @@ export async function runMode(
      * import refuses another plan (`DRY_RUN_MISMATCH`). Overrides `--expected-plan-tallies-digest`.
      */
     readonly dryRunTalliesDigest?: string;
+    /**
+     * `.nxpkg` import, resume, reconcile and report: the APPROVED dry run's inventory hold
+     * (`inventoryHold` of its report). Never given to a dry run or an audit, which compute
+     * their own. The importer reads the keys back and accepts them only under this digest.
+     */
+    readonly inventoryHold?: { readonly digest: string; readonly invoices: number };
   },
 ): Promise<LegacyImportReport | null> {
   const scope: TenantContext = { tenantId: context.tenantId as never, botInstanceId: null };
@@ -933,6 +939,9 @@ export async function runMode(
     ...(ownershipHold === undefined
       ? {}
       : { ownershipHold, ownershipDecisionsDigest: context.ownershipDecisionsDigest ?? null }),
+    ...(context.inventoryHold === undefined || args.mode === 'dry-run' || args.mode === 'audit'
+      ? {}
+      : { inventoryHold: context.inventoryHold }),
   };
   const dryRunTalliesDigest = context.dryRunTalliesDigest ?? args.expectedPlanTalliesDigest ?? null;
   const readContext = { scope, actor, productionLikeTarget: context.productionLikeTarget };

@@ -21,7 +21,7 @@
  *   one that no later walk returned again, and a later gap-free walk returned no spelling of it
  *   (`PROVIDER_MISSING`, manual review — never a created account).
  * - **Unresolved** — anything else: no decision walk, a row neither confirmed nor shown gone,
- *   or a name the backup spells two ways. It stays `INVENTORY_INCOMPLETE`, which a production-like approval refuses — never a
+ *   or a name the backup spells two ways. It stays `INVENTORY_INCOMPLETE`, quarantined by the inventory hold (never adopted) — never a
  *   guessed owner, never a guessed absence.
  *
  * No exact lookup is sent: a lookup happens after a walk, which is exactly when a case variant

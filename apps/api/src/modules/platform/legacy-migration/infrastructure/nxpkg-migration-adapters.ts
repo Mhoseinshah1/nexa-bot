@@ -3,11 +3,14 @@ import {
   isNexaError,
   LEGACY_IMPORT_ERROR_CODES,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN,
+  LEGACY_MIGRATION_INVENTORY_HOLD_VERSION,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_INCOMPLETE,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_QUARANTINED,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   LEGACY_NXPKG_ERROR_CODES,
   legacyInventoryPanelDiagnosticsSchema,
   legacyMigrationDryRunInventoryIncomplete,
+  validInventoryHold,
   type ActorContext,
   type LegacyInventoryPanelDiagnostics,
   type LegacyMigrationApplyReport,
@@ -15,6 +18,7 @@ import {
   type LegacyMigrationCutoverValues,
   type UnitOfWork,
   type LegacyMigrationDryRunReport,
+  type LegacyMigrationInventoryHold,
   type LegacyMigrationOwnershipSummary,
   type LegacyMigrationPanelTarget,
   type LegacyMigrationSectionCounts,
@@ -212,8 +216,12 @@ export class NxpkgMigrationAdapters
       // The approval refuses a dry run that planned on an incomplete live RickPanel read
       // (`LegacyMigrationService.approve`); asked again here, before the protective backup
       // and the freeze, for an approval recorded by a release that did not refuse it.
-      // One-sided by nature (nothing was read yet to compare with): `dryrun:` alone.
-      const unread = legacyMigrationDryRunInventoryIncomplete(context.dryRunReport?.warnings);
+      // One-sided by nature (nothing was read yet to compare with): `dryrun:` alone. The
+      // invoices the report's inventory hold quarantines are not counted; an old report has none.
+      const unread = legacyMigrationDryRunInventoryIncomplete(
+        context.dryRunReport?.warnings,
+        context.dryRunReport?.inventoryHold,
+      );
       if (unread > 0) {
         throw new LegacyMigrationStepFailure(
           'DRY_RUN_MISMATCH',
@@ -683,6 +691,17 @@ export class NxpkgMigrationAdapters
         // very report). A resume continues its own run and is not asked.
         ...(mode === 'import' && context.dryRunReport?.planTalliesDigest != null
           ? { dryRunTalliesDigest: context.dryRunReport.planTalliesDigest }
+          : {}),
+        // The inventory hold: every mode after the dry run is decided under the APPROVED
+        // dry run's hold (the importer reads its keys back by this digest). A report without
+        // one (or not exactly v1) gives none: an unresolved name then refuses, as before.
+        ...(mode !== 'dry-run' && validInventoryHold(context.dryRunReport?.inventoryHold)
+          ? {
+              inventoryHold: {
+                digest: context.dryRunReport.inventoryHold.digest,
+                invoices: context.dryRunReport.inventoryHold.invoices,
+              },
+            }
           : {}),
         ownershipHoldFor: (snapshot: LegacySnapshot) => {
           hold = nxpkgOwnershipHold({
@@ -1413,10 +1432,26 @@ function providerPanels(report: LegacyImportReport): unknown[] {
  * read. Exported for its own test.
  */
 export function providerIncomplete(report: LegacyImportReport): number {
-  // Fail closed: anything that is not a panel read reported exactly complete counts.
-  return providerPanels(report).filter(
-    (p) => (p as { complete?: unknown } | null)?.complete !== true,
-  ).length;
+  // Fail closed: anything that is not a panel read reported exactly complete counts — except
+  // a per-name read that HELD and left needed names unresolved, whose invoices the inventory
+  // hold quarantines (`PROVIDER_INVENTORY_UNRESOLVED` / `_QUARANTINED` report it).
+  return providerPanels(report).filter(readFailed).length;
+}
+
+/**
+ * A provider panel line whose READ failed. `complete: false` with reason `UNRESOLVED` and a
+ * resolution object is a read that held (the importer's `inventoryReadFailed`); every other
+ * line not exactly `complete: true` failed.
+ */
+function readFailed(p: unknown): boolean {
+  const panel = p as { complete?: unknown; reason?: unknown; resolution?: unknown } | null;
+  if (panel?.complete === true) return false;
+  return !(
+    panel?.reason === 'UNRESOLVED' &&
+    typeof panel.resolution === 'object' &&
+    panel.resolution !== null &&
+    !Array.isArray(panel.resolution)
+  );
 }
 
 /**
@@ -1429,7 +1464,7 @@ export function providerIncompleteReasons(report: LegacyImportReport): LegacyMig
   const byReason = new Map<string, number>();
   for (const p of providerPanels(report)) {
     const panel = p as { complete?: unknown; reason?: unknown } | null;
-    if (panel?.complete === true) continue;
+    if (!readFailed(p)) continue;
     const reason = closedReason(panel?.reason);
     byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
   }
@@ -1453,8 +1488,9 @@ function safeCount(value: unknown): number {
  * The production panels that changed while read and whose needed usernames the importer
  * decided one by one (a non-null `resolution`): `PROVIDER_INVENTORY_CHURN` (how many panels),
  * one `PROVIDER_INVENTORY_CHURN:<reason>` per reason, and `PROVIDER_INVENTORY_UNRESOLVED`
- * (needed names no gap-free walk decided, when any). Informational: what blocks an approval is the services category
- * `INVENTORY_INCOMPLETE` those unresolved names leave behind, through the contract rule.
+ * (needed names no gap-free walk decided, when any). Informational: the invoices those names
+ * leave `INVENTORY_INCOMPLETE` are the inventory hold's (`PROVIDER_INVENTORY_QUARANTINED`),
+ * quarantined rather than blocking; only a report WITHOUT the hold blocks on them.
  * Counts only, never a name. Exported for its own test.
  */
 export function providerChurnWarnings(report: LegacyImportReport): LegacyMigrationCodeCount[] {
@@ -1562,7 +1598,7 @@ export function providerWarnings(report: LegacyImportReport): LegacyMigrationCod
  * Exported for its own test.
  */
 export function mismatchCounts(
-  dryRun: Pick<LegacyMigrationDryRunReport, 'sections' | 'warnings'>,
+  dryRun: Pick<LegacyMigrationDryRunReport, 'sections' | 'warnings' | 'inventoryHold'>,
   applyCounts: Readonly<Record<string, number>>,
 ): LegacyMigrationCodeCount[] {
   // The approval's digest is an earlier format of this same plan: nothing moved but the format.
@@ -1583,9 +1619,17 @@ export function mismatchCounts(
     ['wallet:positive', section('wallet_openings')?.source],
     ['wallet:negative', section('legacy_debts')?.source],
     ['products:distinct_shapes', section('products')?.source],
-    ['panels:inventory_incomplete', legacyMigrationDryRunInventoryIncomplete(dryRun.warnings)],
+    [
+      'panels:inventory_incomplete',
+      legacyMigrationDryRunInventoryIncomplete(dryRun.warnings, dryRun.inventoryHold),
+    ],
     ['services:ADOPTION_ELIGIBLE', section('services')?.imported],
   ]);
+  // The approved hold, when the report carries one: how many it held, and none unheld.
+  if (validInventoryHold(dryRun.inventoryHold)) {
+    dry.set('inventory_hold:invoices', dryRun.inventoryHold.invoices);
+    dry.set('inventory_hold:unheld', 0);
+  }
   for (const category of SERVICE_CANDIDATE_CATEGORIES) {
     if (category !== 'ADOPTION_ELIGIBLE') dry.set(`services:${category}`, warning(category));
   }
@@ -1623,6 +1667,7 @@ export function dryRunReportOf(
     readonly coverage: ReadonlyMap<string, NxpkgCoverageEntry> | null;
   },
 ): Omit<LegacyMigrationDryRunReport, 'cutover' | 'planTalliesDigest'> {
+  const inventoryHold = inventoryHoldOf(report);
   // L5: the currency is the importer's, stated — never assumed. A Fresh Migration's ledger is
   // Toman (IRT): legacy balances are Toman, and the importer's audit blocks any other.
   const currency = plan.wallet?.currency;
@@ -1765,13 +1810,19 @@ export function dryRunReportOf(
     ...(extra.converterTotalsAbsent ? [{ code: 'CONVERTER_TOTALS_ABSENT', count: 1 }] : []),
     // The wallet history's contradictions with the snapshot balance: reported, never applied.
     ...walletHistoryWarnings(extra.walletHistory ?? null),
+    // The invoices the inventory hold quarantines: kept as history and an OPEN review
+    // candidate, never adopted; not a blocker (the contract rule subtracts them).
+    ...(inventoryHold !== undefined && inventoryHold.invoices > 0
+      ? [{ code: LEGACY_MIGRATION_PROVIDER_INVENTORY_QUARANTINED, count: inventoryHold.invoices }]
+      : []),
     // The production panels whose LIVE RickPanel inventory was not complete. Their invoices
     // are the services' INVENTORY_INCOMPLETE, and the import reads the panel again: if it
     // comes out different — complete, or another set of accounts — the plan is another plan
     // and APPLY refuses DRY_RUN_MISMATCH. Said here, so no owner approves a plan without
     // knowing that; a production-like target refuses to approve it at all. Then the panels
     // that changed while read and were decided one needed name at a time (CHURN): not a
-    // blocker in itself — a name left unresolved is its invoice's INVENTORY_INCOMPLETE.
+    // blocker in itself — a name left unresolved is its invoice's INVENTORY_INCOMPLETE, which
+    // the inventory hold quarantines (`PROVIDER_INVENTORY_QUARANTINED`, below).
     ...providerWarnings(report),
     // Said on every target, not only where it refuses (a staging dry run must show it too).
     // Its own code: `INVENTORY_INCOMPLETE` is the services category (a panel's live read).
@@ -1809,7 +1860,26 @@ export function dryRunReportOf(
     ownership,
     // Why each per-name panel read decided what it did (diagnostics only; absent when none).
     ...(diagnostics.length === 0 ? {} : { providerDiagnostics: diagnostics }),
+    ...(inventoryHold === undefined ? {} : { inventoryHold }),
   };
+}
+
+/**
+ * The importer dry run's inventory hold (`sections.inventoryHold`), as the contract's v1 shape,
+ * or undefined when the importer reported none or anything other than a COMPUTED hold with
+ * nothing unheld (a dry run is never given one). Undefined fails closed: every
+ * `INVENTORY_INCOMPLETE` service then blocks a production-like approval, as before.
+ */
+function inventoryHoldOf(report: LegacyImportReport): LegacyMigrationInventoryHold | undefined {
+  const section = report.sections['inventoryHold'] as
+    { invoices?: unknown; digest?: unknown; given?: unknown; unheld?: unknown } | undefined;
+  if (section === undefined || section.given !== false || section.unheld !== 0) return undefined;
+  const hold = {
+    version: LEGACY_MIGRATION_INVENTORY_HOLD_VERSION,
+    invoices: section.invoices,
+    digest: section.digest,
+  };
+  return validInventoryHold(hold) ? hold : undefined;
 }
 
 // --- the converter's own totals (M8) ---------------------------------------------------------
