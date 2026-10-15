@@ -164,6 +164,77 @@ and the adoption uses the run's own fresh walk; a panel that changes during the 
 approval closed (`INVENTORY_INCOMPLETE`), and the evidence then shows no holder on it, so a new
 approval waits for a run with a complete inventory.
 
+### 4a. The inventory hold (Mirza `.nxpkg`, unresolved names are quarantined)
+
+A live RickPanel that keeps selling while it is read is decided one needed name at a time
+(`inventory-resolution.ts`). A name no gap-free walk decided is UNRESOLVED and its invoice
+`INVENTORY_INCOMPLETE`. That is an uncertain SERVICE, not an uncertain import, so it no longer
+blocks the import (owner requirement): the invoice is **quarantined** — kept as history and an
+OPEN review candidate (outcome `INVENTORY_INCOMPLETE`), never adopted, no service created — and
+every customer, wallet opening, legacy debt and decided service still imports.
+
+- **Only a read that held quarantines.** The plan holds an invoice only when no production
+  panel's read FAILED (transport, auth, `COUNT_MISMATCH`, `NOT_INDEXABLE`, …) — a per-name read
+  with `resolution.unresolved > 0` is reported `complete: false, reason: UNRESOLVED` and is NOT a
+  failure (`inventoryReadFailed`). A failed read still blocks exactly as before: the approval
+  (`PROVIDER_INVENTORY_INCOMPLETE`), the TARGET precheck and the importer's own gate.
+- **The dry run records the hold** (`InventoryHold` in `plan.ts`): the sorted held invoice keys
+  in its run inputs (`legacy_import_run_inputs.inventory_hold_keys`, migration `0248`) and their
+  SHA-256 (`inventory_hold_digest`). Its report carries `inventoryHold` (`version: 1`, the count,
+  the digest — never a key) and the warning `PROVIDER_INVENTORY_QUARANTINED`. The digest is bound
+  into `planTalliesDigest` (only when non-empty, so every plan without a hold keeps its digest).
+- **The contract rule** (`legacyMigrationDryRunInventoryIncomplete(warnings, inventoryHold)`)
+  subtracts the held count from the `INVENTORY_INCOMPLETE` services. A report without the hold
+  (every report written before it) fails closed exactly as before; a hold claiming more than the
+  report counts is inconsistent and blocks.
+- **The apply is given the approved hold back** (the adapter passes the report's `inventoryHold`;
+  the importer reads the keys by that digest for THIS source and accepts them only when they hash
+  to it). The hold only DEMOTES: a held invoice whose category the inventory decides is
+  `INVENTORY_INCOMPLETE` whatever the apply's read says, so a name that resolves now is still
+  not adopted and the digest stays the approved one. An invoice the apply's read leaves
+  unresolved that the approval did NOT hold — one that was eligible, missing, or anything else
+  at approval — refuses `DRY_RUN_MISMATCH` before any write. The hold is recorded on the APPLY
+  run's inputs; resume, reconcile and report under another hold are refused
+  (`INVENTORY_HOLD_MISMATCH`).
+
+### 4b. Adopting a quarantined service after the import — DESIGN ONLY, not built
+
+Today an ADOPT approval executes only inside a RUNNING `APPLY` run (§4.2), and once a `.nxpkg`
+import has COMPLETED no new run can start (`FRESH_TARGET_NOT_EMPTY`). So a quarantined service
+can be reviewed and approved, but its approval waits with nothing to execute it. A bounded
+"adopt approved" lane would close that. It was **not built in this change**: it needs a new run
+mode the importer's run table, the map's write guard and the write freeze do not yet know, and
+each of those is a guard that must not be weakened to make room for it. The design:
+
+1. **A new run mode, `ADOPT_APPROVED`** (a contract change: `LEGACY_IMPORT_RUN_MODES` and the
+   runs' CHECK), started only for a tenant whose latest `.nxpkg` APPLY run is COMPLETED from the
+   same source fingerprint. It is exempt from the fresh-target guard BY MODE — the guard itself is
+   unchanged and still refuses every IMPORT — and it is refused while any run is RUNNING
+   (`legacy_import_runs_one_running_idx` already enforces one).
+2. **Scope: ADOPT_APPROVED candidates only.** It reads `listApprovals`, passes each through
+   `approvalGate` (synthetic, source class, live, checksum, panel mapped), claims ADOPT_APPROVED →
+   ADOPTING by version, and touches no other candidate, customer, wallet, debt, trial or shape.
+3. **Targeted re-read.** Only the panels the claimed approvals name, with the existing per-name
+   read (`inventory.read(scope, panelId, { needed })`) where `needed` is exactly the claimed
+   invoices' canonical names — never a whole-panel walk of anything else.
+4. **Decide again, under the invoice lock.** `decideServiceCandidate` with the operator panel
+   (`matchOnPanel`), then the ownership rule over ALL live invoices of the snapshot (a second
+   owner's claim on the same account must still make it `AMBIGUOUS_OWNERSHIP`), then P6
+   `adoptCandidate` — runtime state, customer, product, panel lock and type, name not already a
+   NEXA service or reservation — in one transaction with the invoice lock. A name still
+   unresolved settles the approval back to OPEN with `last_approval_refusal = INVENTORY_INCOMPLETE`.
+5. **Guards it keeps.** `legacy.services.decide` to approve and the executing permission
+   (`maintenance.run` / the migration role) to run; `ScopeActivityReader` inside every
+   transaction; the installation write freeze (a recovery or another import APPLYING refuses it);
+   the map's "only inside a RUNNING run" rule (the lane IS a run); idempotent claims; audit of
+   every execution and refusal. The run's inputs record the ownership and inventory holds it was
+   started under, compared as for a resume.
+6. **Tests it needs before it ships:** a held invoice approved after the import is adopted only
+   when the targeted read now resolves exactly one spelling; still unresolved → OPEN with the
+   refusal; a second owner's claim → AMBIGUOUS_OWNERSHIP, nothing adopted; a non-approved
+   candidate is untouched; the fresh-target guard still refuses an IMPORT on the same tenant;
+   a frozen installation refuses the lane; mutation of each guard turns a test red.
+
 ## 5. Concurrency, crash and resume (all tested)
 
 - Two operators deciding one candidate at one version: one wins, the other is refused
