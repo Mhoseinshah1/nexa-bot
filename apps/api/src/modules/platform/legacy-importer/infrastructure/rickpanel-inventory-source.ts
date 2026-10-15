@@ -340,8 +340,9 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
    * The per-name resolution (`inventory-resolution.ts`). Two walks at least, with overlapping
    * pages — a first walk the panel moved under does not end the read. If the two are one
    * complete snapshot, the read is exactly the complete read it always was. Otherwise each
-   * needed name is decided from the walks, and only on a gap-free LAST walk; when the last is
-   * not gap-free (a burst of deletions, an insertion ahead of the cursor), the panel is walked
+   * needed name is decided from the walks, and only on a gap-free DECISION walk whose needed
+   * rows survived it; until there is one (a burst of deletions, an insertion ahead of the
+   * cursor, a needed row a deletion behind the cursor may have taken), the panel is walked
    * again, at most `TARGETED_MAX_WALKS` walks in all. No exact lookup is sent.
    */
   private async readTargeted(
@@ -358,14 +359,22 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       overlap: walkOverlap(this.pageSize()),
     };
     signal?.throwIfAborted();
+    // When each walk ended: a decision's runtime facts are stamped with its own walk's end.
+    const endedAt: Date[] = [];
     const first = await this.reader.walk(target, http, walkOptions);
     if (!first.ok) return this.finish(panelId, first, 1, load());
+    endedAt.push(this.now());
     signal?.throwIfAborted();
     const second = await this.reader.walk(target, http, walkOptions);
     if (!second.ok) return this.finish(panelId, second, 1, load());
+    endedAt.push(this.now());
 
-    // One complete snapshot after all: the complete read it always was (the listAll rule).
-    if (first.consistent && second.consistent) {
+    // One complete snapshot after all: the complete read it always was (the listAll rule) —
+    // unless the second walk saw a row deleted after its read, which only the per-name
+    // resolution's survival rules account for.
+    const survivedWhole = (w: typeof second) =>
+      (w.coverage?.gone.length ?? 0) === 0 && (w.coverage?.unconfirmed.length ?? 0) === 0;
+    if (first.consistent && second.consistent && survivedWhole(second)) {
       const a = first.accounts.map((x) => x.providerUsername);
       const b = new Set(second.accounts.map((x) => x.providerUsername));
       if (a.length === b.size && a.every((name) => b.has(name))) {
@@ -395,12 +404,55 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       w.reason === 'COUNT_MISMATCH' &&
       w.evidence.reportedTotal !== null &&
       w.evidence.distinctUsernames < w.evidence.reportedTotal;
-    const lastGapFree = () => (walks[walks.length - 1]?.coverage?.gapFree ?? false) === true;
-    while (!lastGapFree() && walks.length < TARGETED_MAX_WALKS && !walks.some(countMismatch)) {
+    const seen = walks.map((w) => (w.consistent ? w.accounts : w.observed));
+    // A walk decisions may rest on: gap-free, and in one stable order with the walk before it
+    // (an unordered list would make chaining a coincidence).
+    const decisive = (i: number) =>
+      i >= 1 &&
+      walks[i]?.coverage?.gapFree === true &&
+      sameRelativeOrder(walks[i - 1]?.coverage?.order, walks[i]?.coverage?.order);
+    // Gap-free is not survival. A needed row the decision walk read before a later deletion
+    // behind its cursor may have been that deletion: unconfirmed until a LATER walk returns the
+    // same row — same spelling AND same creation time, so a deleted and re-created account does
+    // not count. Seen again, it existed from its first read past the decision walk's end.
+    const unconfirmedNeeded = (i: number) => {
+      const coverage = walks[i]?.coverage;
+      const unconfirmed = new Set(coverage?.unconfirmed ?? []);
+      const out = new Set<string>();
+      for (const account of seen[i] ?? []) {
+        if (!needed.has(account.username) || !unconfirmed.has(account.providerUsername)) continue;
+        const created = coverage?.createdAt.get(account.providerUsername);
+        const confirmed =
+          created !== undefined &&
+          walks
+            .slice(i + 1)
+            .some((later) => later.coverage?.createdAt.get(account.providerUsername) === created);
+        if (!confirmed) out.add(account.providerUsername);
+      }
+      return out;
+    };
+    // The decision walk: the latest decisive walk whose needed rows are all confirmed; failing
+    // that, the latest decisive walk, its unconfirmed rows unresolved; failing that, none.
+    const decision = () => {
+      let fallback: number | null = null;
+      for (let i = walks.length - 1; i >= 1; i -= 1) {
+        if (!decisive(i)) continue;
+        if (unconfirmedNeeded(i).size === 0) return { index: i, settled: true };
+        fallback ??= i;
+      }
+      return fallback === null ? null : { index: fallback, settled: false };
+    };
+    while (
+      decision()?.settled !== true &&
+      walks.length < TARGETED_MAX_WALKS &&
+      !walks.some(countMismatch)
+    ) {
       signal?.throwIfAborted();
       const next = await this.reader.walk(target, http, walkOptions);
       if (!next.ok) return this.finish(panelId, next, 1, load());
+      endedAt.push(this.now());
       walks.push(next);
+      seen.push(next.consistent ? next.accounts : next.observed);
     }
     const evidence = { first: first.evidence, second: second.evidence };
     // A walk whose total held still yet whose rows do not add up to it is not churn: the list
@@ -419,17 +471,24 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       : !second.consistent
         ? second.reason
         : 'WALKS_DIFFER';
-    // Every runtime fact is the LAST walk's, stamped when it ended.
-    const observedAt = this.now();
-    const last = walks[walks.length - 1] as Extract<RickpanelInventoryWalk, { ok: true }>;
-    const previous = walks[walks.length - 2] as Extract<RickpanelInventoryWalk, { ok: true }>;
-    // Decisions rest on the last walk: gap-free, and in one stable order with the walk before
-    // it (an unordered list would make chaining a coincidence).
-    const gapFree =
-      lastGapFree() && sameRelativeOrder(previous.coverage?.order, last.coverage?.order);
-    const seen = walks.map((w) => (w.consistent ? w.accounts : w.observed));
-    const lastSeen = seen[seen.length - 1] as readonly RickpanelInventoryAccount[];
-    const resolved = decideNeededNames(needed, seen, gapFree);
+    // Every decision and runtime fact is the DECISION walk's, stamped when it ended. With no
+    // decisive walk, the last one is reported and every name is unresolved.
+    const chosen = decision();
+    const gapFree = chosen !== null;
+    const at = chosen?.index ?? walks.length - 1;
+    const observedAt = endedAt[at] ?? this.now();
+    const last = walks[at] as Extract<RickpanelInventoryWalk, { ok: true }>;
+    const lastSeen = seen[at] as readonly RickpanelInventoryAccount[];
+    const resolved = decideNeededNames(
+      needed,
+      seen,
+      gapFree,
+      {
+        gone: new Set(last.coverage?.gone ?? []),
+        unconfirmed: gapFree ? unconfirmedNeeded(at) : new Set(),
+      },
+      at,
+    );
 
     const bySpelling = new Map(lastSeen.map((a) => [a.providerUsername, a]));
     const links = last.subscriptionLinks;
@@ -440,7 +499,7 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       if (r.kind === 'UNRESOLVED') continue;
       if (r.kind === 'PRESENT') {
         const account = bySpelling.get(r.spelling);
-        if (account === undefined) continue; // never: a present spelling is the last walk's
+        if (account === undefined) continue; // never: a present spelling is the decision walk's
         runtime.set(r.spelling, {
           state: account.state,
           usage:

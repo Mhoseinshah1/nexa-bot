@@ -18,11 +18,14 @@ import type { LegacyInventoryRead } from '../../apps/api/src/modules/platform/le
  * deletions behind the cursor, and — during the first walk only — needed accounts deleted and
  * 15-row deletion bursts that break that walk's chain.
  *
- * What it pins: the read completes on the second walk, which is gap-free; every needed name is
- * decided and decided RIGHT — present exactly when the panel holds it at the end, checked name
- * by name against the panel's own final state; nothing the backup does not need is indexed; not
- * one exact lookup is sent; one login; and what the read costs in requests, simulated time and
- * heap. SYNTHETIC data only.
+ * What it pins: the second walk is gap-free, but the single deletions behind its cursor leave
+ * the needed rows it read before them unconfirmed — any of them could have been the deleted
+ * row — so a third walk is made, and returning those same rows (same name and creation time)
+ * confirms them. Decisions rest on the second walk: every needed name is decided and decided
+ * RIGHT — present exactly when the panel held it when that walk ended, checked name by name
+ * against the panel's own state at that moment; nothing the backup does not need is indexed;
+ * not one exact lookup is sent; one login; and what the read costs in requests, simulated time
+ * and heap. SYNTHETIC data only.
  */
 
 const SCOPE = { tenantId: '11111111-1111-4111-8111-111111111111' } as never;
@@ -44,6 +47,8 @@ interface ScalePanel {
   requests: { logins: number; pages: number; lookups: number };
   walk: number;
   page: number;
+  /** The panel's accounts as each walk ended (taken as the next walk begins). */
+  endOfWalk: string[][];
   churn: { appended: number; deletedUnneeded: number; deletedNeeded: string[]; bursts: number };
   peakHeap: number;
   /** Bursts in every walk (the liveness bound), not only the first. */
@@ -59,6 +64,7 @@ function scalePanel(burstEveryWalk = false): ScalePanel {
     requests: { logins: 0, pages: 0, lookups: 0 },
     walk: 0,
     page: 0,
+    endOfWalk: [],
     churn: { appended: 0, deletedUnneeded: 0, deletedNeeded: [], bursts: 0 },
     peakHeap: 0,
     burstEveryWalk,
@@ -133,7 +139,10 @@ function clientOf(panel: ScalePanel): ProviderHttpClient {
       const query = new URLSearchParams(request.path.split('?')[1] ?? '');
       const offset = Number(query.get('offset'));
       const limit = Number(query.get('limit'));
-      if (offset === 0) panel.walk += 1;
+      if (offset === 0) {
+        if (panel.walk > 0) panel.endOfWalk.push([...panel.names]);
+        panel.walk += 1;
+      }
       churn(panel, offset);
       panel.page += 1;
       panel.requests.pages += 1;
@@ -184,7 +193,7 @@ function neededNames(): Map<string, string | null> {
 }
 
 describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel that keeps selling', () => {
-  it('decides every needed name right on a gap-free second walk; no lookup; one login; cost reported', async () => {
+  it('decides every needed name right on the gap-free second walk, its survivors confirmed by a third; no lookup; one login; cost reported', async () => {
     const panel = scalePanel();
     const needed = neededNames();
     expect(needed.size).toBe(77_000);
@@ -197,7 +206,7 @@ describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel
 
     const r = read.resolution;
     if (r === undefined) throw new Error('expected a per-name resolution');
-    expect(r).toMatchObject({ mode: 'TARGETED', reason: 'TOTAL_CHANGED', walks: 2, gapFree: true });
+    expect(r).toMatchObject({ mode: 'TARGETED', reason: 'TOTAL_CHANGED', walks: 3, gapFree: true });
     expect(panel.churn.bursts).toBeGreaterThan(0); // the first walk was really broken
     expect(r.needed).toBe(77_000);
     expect(r.unresolved).toBe(0);
@@ -206,8 +215,9 @@ describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel
     expect(panel.churn.deletedNeeded.length).toBeGreaterThan(0);
     expect(r.absent).toBe(panel.churn.deletedNeeded.length);
 
-    // Ground truth, name by name: present exactly when the panel holds it at the end.
-    const held = new Set(panel.names);
+    // Ground truth, name by name: present exactly when the panel held it as the decision walk
+    // (the second) ended.
+    const held = new Set(panel.endOfWalk[1]);
     let wrong = 0;
     for (const name of needed.keys()) {
       if (!indexCovers(read.index, name)) wrong += 1;
@@ -220,7 +230,7 @@ describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel
     expect(panel.requests.lookups).toBe(0);
     expect(panel.requests.logins).toBe(1);
     const walks = read.diagnostics?.walks ?? [];
-    expect(walks).toHaveLength(2);
+    expect(walks).toHaveLength(3);
     expect(walks.reduce((sum, w) => sum + w.pages, 0)).toBe(panel.requests.pages);
     // A walk is about total / 90 pages (each repeats 10 rows of the one before).
     for (const w of walks) {
@@ -232,11 +242,13 @@ describe('per-name resolution at scale: 100 000 accounts, 77 000 needed, a panel
     const simulatedMs = clock();
     expect(simulatedMs).toBeLessThanOrEqual(requests * INVENTORY_REQUEST_INTERVAL_MS);
     const heapDeltaMb = (Math.max(panel.peakHeap, heapAfter) - heapBefore) / 1024 ** 2;
-    expect(heapDeltaMb).toBeLessThan(512);
+    // A peak, garbage included (three walks of parsed pages, collected lazily): measured about
+    // 550 MB, while what the read retains after a collection measured under 10 MB.
+    expect(heapDeltaMb).toBeLessThan(768);
     console.info(
       `[scale] accounts=${String(ACCOUNTS)} needed=77000 churn={appended:${String(panel.churn.appended)},` +
         `deletedUnneeded:${String(panel.churn.deletedUnneeded)},deletedNeeded:${String(panel.churn.deletedNeeded.length)},bursts:${String(panel.churn.bursts)}} ` +
-        `requests=${String(requests)} (logins=1 pages=${String(panel.requests.pages)} [walk1=${String(walks[0]?.pages)} walk2=${String(walks[1]?.pages)}] lookups=0) ` +
+        `requests=${String(requests)} (logins=1 pages=${String(panel.requests.pages)} [walk1=${String(walks[0]?.pages)} walk2=${String(walks[1]?.pages)} walk3=${String(walks[2]?.pages)}] lookups=0) ` +
         `resolution={present:${String(r.present)},absent:${String(r.absent)}} ` +
         `simulated=${(simulatedMs / 60_000).toFixed(1)}min peakHeapDelta=${heapDeltaMb.toFixed(1)}MB wall=${(wallMs / 1000).toFixed(1)}s`,
     );

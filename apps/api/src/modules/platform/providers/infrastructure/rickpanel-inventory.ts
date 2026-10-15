@@ -363,6 +363,18 @@ export interface RickpanelInventoryOptions {
 export interface RickpanelWalkCoverage {
   readonly gapFree: boolean;
   readonly order: readonly string[];
+  /**
+   * Gap-free is not survival: a row read early may be deleted before the walk ends. Rows of a
+   * page that the next page should have repeated (after the shared row) and did not were
+   * deleted after being read: `gone`. A deletion BEHIND the cursor — in insertion order nothing
+   * is ever inserted there, so the shared row arriving earlier than expected counts it — could
+   * have taken any row read before it, unseen: every row last seen before the last such
+   * deletion is `unconfirmed`. Exact spellings, both.
+   */
+  readonly gone: readonly string[];
+  readonly unconfirmed: readonly string[];
+  /** Exact spelling → the `created_at` its row carried (a row's identity across walks). */
+  readonly createdAt: ReadonlyMap<string, string>;
 }
 
 /** Exact provider spelling → the link `subscriptionFrom` derives from its row, or null. */
@@ -467,6 +479,11 @@ export class RickpanelInventoryReader {
     // carry `created_at`, and the rows must come oldest first (the panel's insertion order) —
     // verified row by row. A row without it, or out of order, voids the walk's proof.
     let createdOrder = true;
+    // Survival (see `RickpanelWalkCoverage.gone` / `unconfirmed`).
+    const lastSeenPage = new Map<string, number>();
+    const createdById = new Map<string, string>();
+    const gone = new Set<string>();
+    let lastDeletionBehind = 0;
     let lastCreated = -Infinity;
     let previousPage: readonly string[] | null = null;
     let chained = true;
@@ -525,7 +542,10 @@ export class RickpanelInventoryReader {
         if (account === null) return fault('INVALID_ROW', answer.status);
         rowsFetched += 1;
         pageNames.push(account.providerUsername);
+        lastSeenPage.set(account.providerUsername, pages);
+        gone.delete(account.providerUsername);
         const createdRaw = (row as Record<string, unknown>)['created_at'];
+        if (typeof createdRaw === 'string') createdById.set(account.providerUsername, createdRaw);
         const created = typeof createdRaw === 'string' ? Date.parse(createdRaw) : Number.NaN;
         pageIds.push(
           `${account.providerUsername}\u0000${typeof createdRaw === 'string' ? createdRaw : ''}`,
@@ -580,6 +600,13 @@ export class RickpanelInventoryReader {
             .slice(0, pageIds.indexOf(c))
             .filter((n) => !before.has(n)).length;
           if (moved > freshBefore) chained = false;
+          // The shared row came EARLIER than expected: rows before it were deleted since the
+          // previous page — possibly rows read pages ago, which then no longer exist.
+          if (moved < freshBefore) lastDeletionBehind = pages;
+          // Rows of the previous page after `c` belong in this page; missing, they were deleted.
+          for (const id of previousPage.slice(previousPage.indexOf(c) + 1)) {
+            if (!here.has(id)) gone.add(id.slice(0, id.indexOf('\u0000')));
+          }
         }
       }
       // Every row of a page is accounted for: none twice in one page, and a row the walk had
@@ -630,6 +657,11 @@ export class RickpanelInventoryReader {
               !shortBeforeEnd &&
               createdOrder,
             order,
+            gone: [...gone],
+            unconfirmed: [...lastSeenPage]
+              .filter(([n, page]) => page < lastDeletionBehind && !gone.has(n))
+              .map(([n]) => n),
+            createdAt: createdById,
           };
 
     const evidence: RickpanelInventoryEvidence = {

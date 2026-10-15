@@ -308,9 +308,9 @@ export interface LegacyInventoryLoad {
  * needs (Web Admin `.nxpkg` importer only; `docs/rickpanel-inventory.md` §Per-name resolution).
  * A live panel that keeps selling while it is read (`TOTAL_CHANGED`, `WALKS_DIFFER`) is no
  * reason to leave every candidate on it undecided: each needed name is decided from the walks,
- * and only on a GAP-FREE last walk — two spellings seen anywhere are a collision; one spelling
- * in that walk is present; none is absent; without a gap-free last walk, unresolved. No exact
- * lookup is sent. Counts only, never a name.
+ * and only on a GAP-FREE decision walk — two spellings seen anywhere are a collision; one
+ * spelling in that walk that survived it is present; none (or only one deleted during it) is
+ * absent; anything else, unresolved. No exact lookup is sent. Counts only, never a name.
  */
 export interface LegacyInventoryResolution {
   readonly mode: 'TARGETED';
@@ -323,9 +323,9 @@ export interface LegacyInventoryResolution {
   readonly collisions: number;
   /** Needed names no gap-free walk decided: their invoices stay `INVENTORY_INCOMPLETE`. */
   readonly unresolved: number;
-  /** Walks made (two, or more when the last was not gap-free; at most three). */
+  /** Walks made (two, or a third until one is a settled decision walk; at most three). */
   readonly walks: number;
-  /** Whether the last walk was gap-free — the condition for any presence or absence. */
+  /** Whether a gap-free decision walk existed — the condition for any presence or absence. */
   readonly gapFree: boolean;
 }
 

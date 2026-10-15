@@ -9,15 +9,19 @@
  * its own total). A gap-free walk returned every account there was as of its end: it is a
  * snapshot of the panel, taken while the panel kept selling.
  *
- * So every needed name is decided from the walks alone, and only on a gap-free LAST walk:
+ * Gap-free is not survival: a row read early may be deleted before the walk ends. A row the next
+ * page should have repeated and did not is gone (absent); a row read before a later deletion
+ * behind the cursor is unconfirmed until a later walk returns the same row (same name and
+ * creation time). So every needed name is decided from the walks alone, and only on a gap-free
+ * DECISION walk:
  *
  * - **Collision** — two or more exact spellings that fold to the name seen in ANY walk:
  *   `USERNAME_CASE_COLLISION`, manual review.
- * - **Present** — the last walk is gap-free and returned exactly one spelling of it.
- * - **Absent** — the last walk is gap-free and returned none (`PROVIDER_MISSING`, manual
- *   review — never a created account).
- * - **Unresolved** — anything else: the last walk not gap-free, or a name the backup spells two
- *   ways. It stays `INVENTORY_INCOMPLETE`, which a production-like approval refuses — never a
+ * - **Present** — the decision walk returned exactly one spelling of it, not gone, confirmed.
+ * - **Absent** — the decision walk returned none, or only a gone one (`PROVIDER_MISSING`,
+ *   manual review — never a created account).
+ * - **Unresolved** — anything else: no gap-free decision walk, an unconfirmed row, or a name
+ *   the backup spells two ways. It stays `INVENTORY_INCOMPLETE`, which a production-like approval refuses — never a
  *   guessed owner, never a guessed absence.
  *
  * No exact lookup is sent: a lookup happens after a walk, which is exactly when a case variant
@@ -44,16 +48,27 @@ const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
  * Every needed name, decided. `walks` are the accounts each walk received, in walk order (a
- * consistent walk's `accounts` or an inconsistent one's `observed`), at least two; the LAST is
- * the one decisions rest on. `gapFree`: that last walk was gap-free and agreed with the one
- * before it on one relative order.
+ * consistent walk's `accounts` or an inconsistent one's `observed`), at least two; the one at
+ * `decision` (the last, by default) is the one decisions rest on, and every walk's spellings
+ * count toward a collision. `gapFree`: that walk was gap-free and agreed with the one before it
+ * on one relative order. `survival`: its rows seen deleted after being read (`gone` — absent
+ * at its end) and rows a later deletion behind the cursor may have taken that no later walk
+ * returned again (`unconfirmed` — their survival unproven, so never present). Exact spellings.
  */
 export function decideNeededNames(
   needed: ReadonlyMap<string, string | null>,
   walks: readonly (readonly ObservedAccount[])[],
   gapFree: boolean,
+  survival: {
+    readonly gone: ReadonlySet<string>;
+    readonly unconfirmed: ReadonlySet<string>;
+  } = { gone: new Set(), unconfirmed: new Set() },
+  decision: number = walks.length - 1,
 ): Map<string, NameResolution> {
   if (walks.length < 2) throw new Error('a per-name resolution needs at least two walks');
+  if (!Number.isInteger(decision) || decision < 1 || decision >= walks.length) {
+    throw new Error('the decision walk must follow another walk');
+  }
   const spellingsOf = (accounts: readonly ObservedAccount[]) => {
     const out = new Map<string, Set<string>>();
     for (const account of accounts) {
@@ -73,7 +88,11 @@ export function decideNeededNames(
       union.set(name, all);
     }
   }
-  const last = spellingsOf(walks[walks.length - 1] as readonly ObservedAccount[]);
+  const last = spellingsOf(
+    (walks[decision] as readonly ObservedAccount[]).filter(
+      (a) => !survival.gone.has(a.providerUsername),
+    ),
+  );
   const out = new Map<string, NameResolution>();
   for (const [name, backup] of needed) {
     const seen = union.get(name);
@@ -92,8 +111,12 @@ export function decideNeededNames(
       continue;
     }
     // Exactly one spelling, the only one any walk saw (else a collision above): the account,
-    // exactly as a complete read decides it.
-    out.set(name, { kind: 'PRESENT', spelling: [...now][0] as string });
+    // exactly as a complete read decides it — if it is proven to have survived the walk.
+    const spelling = [...now][0] as string;
+    out.set(
+      name,
+      survival.unconfirmed.has(spelling) ? { kind: 'UNRESOLVED' } : { kind: 'PRESENT', spelling },
+    );
   }
   return out;
 }

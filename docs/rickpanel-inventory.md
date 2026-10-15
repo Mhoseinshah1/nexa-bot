@@ -121,10 +121,12 @@ I = 1 s): 1 login + 2 × ⌈N / P⌉ pages, one at a time, so ≈ (1 + 2⌈N/P�
 — 10 000 accounts: 201 requests, ≈ 3.4 min; 30 000: 601, ≈ 10 min; 50 000: 1 001, ≈ 17 min —
 longer when the panel answers slower than I. The Web Admin's read is TARGETED (§Per-name
 resolution): its pages step by `limit − overlap` (≈ 11% more pages at the defaults), it sends NO
-exact lookup, and it walks a third time only when the second walk was not gap-free. A synthetic
-100 000-account panel with 77 000 needed names, sales, single deletions and 15-row deletion
-bursts during the first walk cost 2 219 requests (1 login, 2 218 pages), ≈ 37 min; with bursts
-in every walk, three walks (3 316 pages) and every name unresolved. A non-targeted read (the
+exact lookup, and it walks a third time when the second walk was not gap-free or a deletion
+during it left a needed row's survival unconfirmed. A synthetic 100 000-account panel with
+77 000 needed names, sales, single deletions in every walk and 15-row deletion bursts during the
+first cost 3 331 requests (1 login, 3 330 pages over three walks), ≈ 56 min; a panel that only
+sells, with no deletion during the second walk, costs two. With bursts in every walk, three
+walks (3 316 pages) and every name unresolved. A non-targeted read (the
 CLI, the rehearsal) reads once; one built with `inventoryAttempts` > 1 walks again at most twice more, after 15 s and 45 s.
 
 Tested: `tests/unit/rickpanel-load-protection.test.ts` (a large inventory paged and paced,
@@ -226,17 +228,33 @@ these hold, each checked on the rows themselves:
 The two walks must also agree on one relative order. A gap-free walk returned every account the
 panel held as of its end — a snapshot, taken while the panel kept selling.
 
-**Decisions, from the LAST walk.** When the second walk is not gap-free (a burst of deletions, a
-missed insertion), the panel is walked again — at most `TARGETED_MAX_WALKS` (3) walks. Then:
+**Gap-free is not survival** (Codex P1). A gap-free walk misses no row, but a row it read early
+may be deleted before it ends — and an account deleted mid-read must never be called present.
+The walk tracks this on the rows themselves:
+
+- **Gone.** Rows of a page after the shared row belong in the next page too; one missing there
+  was deleted after being read, and is absent at the walk's end.
+- **Unconfirmed.** A deletion BEHIND the cursor shows as the shared row arriving earlier than
+  expected (in insertion order nothing is ever inserted there). It could have been any row read
+  before it, unseen — so every row last seen before the last such deletion is unconfirmed.
+
+An unconfirmed row is confirmed only by a LATER walk returning the same row — the same name AND
+the same `created_at`, so an account deleted and created again under that name confirms nothing.
+Seen again, it existed from its first read past the earlier walk's end.
+
+**Decisions, from the DECISION walk.** The decision walk is the latest walk that is gap-free,
+agrees with the one before it on one relative order, and has every needed row confirmed; failing
+that, the latest such walk with its unconfirmed rows unresolved. Until one is settled the panel
+is walked again — at most `TARGETED_MAX_WALKS` (3) walks. Then:
 
 1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of all
    walks: a collision (`USERNAME_CASE_COLLISION`), never eligible.
-2. **The last walk gap-free, one spelling** — present, with that spelling (the backup's, or the
-   one account there is, exactly as a complete read decides it).
-3. **The last walk gap-free, no spelling** — absent (`PROVIDER_MISSING`, manual review; never a
-   created account).
-4. **Anything else** — the last walk not gap-free, or a name the backup spells two ways —
-   **unresolved**. Never adopted, never "missing".
+2. **One spelling in the decision walk, not gone, confirmed** — present, with that spelling (the
+   backup's, or the one account there is, exactly as a complete read decides it).
+3. **No spelling in the decision walk, or only a gone one** — absent (`PROVIDER_MISSING`, manual
+   review; never a created account).
+4. **Anything else** — no decision walk, an unconfirmed row, or a name the backup spells two
+   ways — **unresolved**. Never adopted, never "missing".
 
 **No exact lookup is sent.** A lookup (`GET api/user/{name}`) happens after a walk — exactly when
 a case variant can appear unseen — and a 404 for one spelling says nothing about another. So a
@@ -246,7 +264,7 @@ variants with exact lookups on MySQL `utf8mb4_bin`; RickPanel's backend is unkno
 
 Accounts on the panel that are not in the backup are ignored: they decide nothing and are never
 indexed. A panel the backup asks nothing of is not read at all (`NOTHING_NEEDED`, never reported
-as churn). Runtime facts (usage, state, link) are the last walk's, stamped when it ended. Such a
+as churn). Runtime facts (usage, state, link) are the decision walk's, stamped when it ended. Such a
 read is reported `complete: true` with a `resolution` (`mode: 'TARGETED'`, the reason, and the
 counts `needed`, `present`, `absent`, `collisions`, `unresolved`, `walks`, `gapFree`) — counts
 only, never a name — and the index it builds covers ONLY the needed names: any other name asked
@@ -274,7 +292,11 @@ Residual risks, stated rather than hidden:
   relative order is the panel's. A tie permuted between two requests either repeats a row
   (detected: every row accounted for), or swaps rows inside an overlap (detected: chained order),
   or swaps rows that both stay inside one page (harmless: none is skipped).
-- **After the read.** A variant created after the last walk ended is outside this read, as it
+- **Deleted and created again within one second.** A row's identity across pages and walks is
+  its name and `created_at`; a panel that stamps whole seconds cannot tell an account deleted and
+  re-created in the same second from the one it replaced. Both are accounts of that name held
+  by the panel's admin at the decision time.
+- **After the read.** A variant created after the decision walk ended is outside this read, as it
   is outside a complete read; the import's own read is a second, later look, and a changed
   decision fails it (`DRY_RUN_MISMATCH`, nothing written).
 - **Visibility is the admin's.** Every list is scoped to the accounts the credential's admin can

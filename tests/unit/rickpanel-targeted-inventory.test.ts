@@ -200,7 +200,7 @@ describe('a live panel that keeps selling: decided from a gap-free last walk, ne
     expect(read.index.usernames.has('gone')).toBe(false);
   });
 
-  it('single deletions within the overlap in both walks: still gap-free; a needed account deleted mid-read is absent', async () => {
+  it('single deletions in both walks: still gap-free; a needed account deleted mid-read is absent; one read before a later deletion is confirmed by a third walk', async () => {
     const panel = fakePanel(300);
     panel.beforePage = (_o, page) => {
       if (page === 1) panel.names.splice(panel.names.indexOf(name(7)), 1);
@@ -210,7 +210,10 @@ describe('a live panel that keeps selling: decided from a gap-free last walk, ne
     const read = complete(
       await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(101), name(250)]) }),
     );
-    expect(read.resolution).toMatchObject({ walks: 2, gapFree: true, present: 1, absent: 1 });
+    // Page 6 is the second walk’s (300 rows, 90 a step: pages 0-3, then 4-7): the three rows
+    // deleted behind its cursor could have included name(101), read before them — so a third
+    // walk is made, and returning name(101) confirms it.
+    expect(read.resolution).toMatchObject({ walks: 3, gapFree: true, present: 1, absent: 1 });
   });
 
   it('a burst in the first walk only: the second is gap-free and decides', async () => {
@@ -246,6 +249,92 @@ describe('a live panel that keeps selling: decided from a gap-free last walk, ne
     expect(indexCovers(read.index, name(395))).toBe(false);
     expect(indexCovers(read.index, 'gone')).toBe(false);
     expect(lookups(panel)).toEqual([]);
+  });
+});
+
+describe('Codex P1: a needed row read, then deleted, during the decision walk', () => {
+  it('deleted behind the cursor after its read: unconfirmed, so a third walk is made — it is gone there: ABSENT, never present', async () => {
+    const panel = fakePanel(300);
+    // Page 5 is the second walk's second page: name(5), read on page 4, is deleted behind it.
+    panel.beforePage = (_o, page) => {
+      if (page === 5) panel.names.splice(panel.names.indexOf(name(5)), 1);
+    };
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
+    expect(read.resolution).toMatchObject({ walks: 3, gapFree: true, present: 0, absent: 1 });
+    expect(read.index.usernames.has(name(5))).toBe(false);
+    expect(indexCovers(read.index, name(5))).toBe(true);
+    expect(lookups(panel)).toEqual([]);
+  });
+
+  it('deleted within the overlap after its read (the next page should have repeated it): ABSENT on the same walk', async () => {
+    const panel = fakePanel(300);
+    // name(95) sits in the rows page 5 repeats from page 4; it is deleted in between.
+    panel.beforePage = (_o, page) => {
+      if (page === 5) panel.names.splice(panel.names.indexOf(name(95)), 1);
+    };
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(95)]) }));
+    expect(read.resolution).toMatchObject({ walks: 2, gapFree: true, present: 0, absent: 1 });
+    expect(read.index.usernames.has(name(95))).toBe(false);
+  });
+
+  it('another row deleted behind the cursor in every walk: the needed row the decision walk read is confirmed by the next walk returning it — PRESENT', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_o, page) => {
+      if (page === 1 || page === 5 || page === 9) panel.names.splice(1, 1);
+    };
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
+    expect(read.resolution).toMatchObject({ walks: 3, gapFree: true, present: 1, unresolved: 0 });
+    expect(read.index.usernames.get(name(5))).toEqual([name(5)]);
+  });
+
+  it('deleted and created again under the same name: a new creation time confirms nothing — UNRESOLVED, never attached', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_o, page) => {
+      // The second walk reads name(5), then it is deleted behind its cursor.
+      if (page === 5) panel.names.splice(panel.names.indexOf(name(5)), 1);
+      // Before the third walk the name is created again — another account, a new created_at.
+      if (page === 8) add(panel, name(5));
+      // A burst breaks the third walk, so only the second can decide.
+      if (page === 9) panel.names.splice(0, 15);
+    };
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
+    expect(read.resolution).toMatchObject({
+      walks: 3,
+      gapFree: true,
+      present: 0,
+      absent: 0,
+      unresolved: 1,
+    });
+    expect(indexCovers(read.index, name(5))).toBe(false);
+    neverAdopted(read, name(5));
+  });
+
+  it('two consistent, identical walks that hide a deletion after its read: not taken as one complete snapshot', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_o, page) => {
+      // During the second walk: name(95), already read, is deleted, and an account listed at the
+      // head keeps the total — the walks agree, the total held still, and name(95) is gone.
+      if (page === 5) {
+        panel.names.splice(panel.names.indexOf(name(95)), 1);
+        insertAt(panel, 0, 'aa-head');
+      }
+    };
+    const read = await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(95)]) });
+    neverAdopted(read, name(95));
+    expect(complete(read).resolution).toMatchObject({ mode: 'TARGETED', present: 0 });
+  });
+
+  it('unconfirmed in the last walk the cap allows: UNRESOLVED, never present', async () => {
+    const panel = fakePanel(300);
+    panel.beforePage = (_o, page) => {
+      // A burst breaks walk 2, so walk 3 alone can decide — and name(5), which it reads, is
+      // deleted behind its cursor; no walk is left to confirm or refute it.
+      if (page === 5) panel.names.splice(20, 15);
+      if (page === 9) panel.names.splice(panel.names.indexOf(name(5)), 1);
+    };
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
+    expect(read.resolution).toMatchObject({ walks: 3, present: 0, absent: 0, unresolved: 1 });
+    neverAdopted(read, name(5));
   });
 });
 
@@ -433,7 +522,7 @@ describe('the targeted read changes nothing it does not need to', () => {
     expect(read.ok && read.complete).toBe(false);
   });
 
-  it('runtime facts come from the last walk and are stamped when it ended', async () => {
+  it('runtime facts come from the decision walk and are stamped when it ended', async () => {
     const panel = fakePanel(300);
     bursts(panel, [1, 5]);
     let stamps = 0;
@@ -443,12 +532,27 @@ describe('the targeted read changes nothing it does not need to', () => {
     );
     expect(read.resolution?.walks).toBe(3);
     expect(read.runtime.has(name(290))).toBe(true);
-    expect(read.observedAt.toISOString()).toBe('2026-10-14T08:00:00.000Z');
+    // One stamp as each walk ends; the third walk decided.
+    expect(read.observedAt.toISOString()).toBe('2026-10-14T08:00:02.000Z');
   });
 });
 
 describe('decideNeededNames', () => {
   const acc = (u: string) => ({ username: u.toLowerCase(), providerUsername: u });
+  it('survival: a gone row is absent, an unconfirmed one unresolved; the decision walk need not be the last', () => {
+    const walks = [[acc('a'), acc('b'), acc('c')], [acc('a'), acc('b'), acc('c')], [acc('c')]];
+    const out = decideNeededNames(
+      need(['a', 'b', 'c']),
+      walks,
+      true,
+      { gone: new Set(['a']), unconfirmed: new Set(['b']) },
+      1,
+    );
+    expect(out.get('a')).toEqual({ kind: 'ABSENT' });
+    expect(out.get('b')).toEqual({ kind: 'UNRESOLVED' });
+    expect(out.get('c')).toEqual({ kind: 'PRESENT', spelling: 'c' });
+    expect(() => decideNeededNames(need(['a']), walks, true, undefined, 0)).toThrow();
+  });
   it('collision from any walk; present / absent only from a gap-free last walk', () => {
     const walks = [
       [acc('a'), acc('B')],

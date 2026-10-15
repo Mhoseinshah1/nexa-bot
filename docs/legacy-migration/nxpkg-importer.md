@@ -173,8 +173,10 @@ reaching it was not.
   only when the LAST walk is GAP-FREE (rows oldest first by `created_at`, overlapping pages
   chained by name and creation time, no insertion ahead of the cursor missed, ended at its own
   total, both walks in one order: a snapshot of the panel as of its end; at most three walks).
-  Two spellings seen in any walk are a collision; one spelling in the gap-free last walk is
-  present; none is absent; anything else is unresolved. No exact lookup is sent — a 404 is
+  A needed row read and then deleted during that walk is absent, and one a later deletion
+  behind the cursor may have taken is present only once a later walk returns the same row
+  (same name and `created_at`). Two spellings seen in any walk are a collision; one surviving
+  spelling in the decision walk is present; none is absent; anything else is unresolved. No exact lookup is sent — a 404 is
   never evidence. Every account on the panel that is not in the backup is ignored
   (`docs/rickpanel-inventory.md` §Per-name resolution). Such a read is reported complete, with a
   `resolution` in `sections.provider.panels[i]` (counts only). A needed name it could not decide
