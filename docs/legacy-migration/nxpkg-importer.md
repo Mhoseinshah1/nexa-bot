@@ -169,18 +169,17 @@ reaching it was not.
 - **A panel that keeps selling while it is read is not a blocker** (owner requirement: the dry run
   must be approvable while Mirza sells on the live RickPanel). When the double walks are not one
   complete snapshot because the panel MOVED (`TOTAL_CHANGED`, `WALKS_DIFFER`), the Web Admin's importer
-  decides each username the backup needs on that panel on its own, and only on a GAP-FREE walk
-  (overlapping pages, every boundary chained, ended at its own total, both walks in one order:
-  it returned every account that existed throughout it) — two spellings seen anywhere are a
-  collision; the backup's exact spelling seen by both walks is present; anything else is one
-  exact `GET api/user/{username}` of the backup's spelling (found: present; 404: absent). With
-  no gap-free walk nothing is present or absent and no lookup is sent: a case variant could hide
-  beside the name, and a 404 for one spelling says nothing about another — every such name is
-  unresolved. Every account on the panel that is not in the backup is ignored
-  (`docs/rickpanel-inventory.md` §Per-name resolution). Such a read is reported complete, with a `resolution` in
-  `sections.provider.panels[i]` (counts only). A needed name it could not decide leaves its
-  invoice `INVENTORY_INCOMPLETE` and the panel `complete: false`, reason `UNRESOLVED`. A
-  `COUNT_MISMATCH` (a total that held still while the rows did not add up to it) is NOT resolved
+  decides each username the backup needs on that panel on its own — from the walks alone, and
+  only when the LAST walk is GAP-FREE (rows oldest first by `created_at`, overlapping pages
+  chained by name and creation time, no insertion ahead of the cursor missed, ended at its own
+  total, both walks in one order: a snapshot of the panel as of its end; at most three walks).
+  Two spellings seen in any walk are a collision; one spelling in the gap-free last walk is
+  present; none is absent; anything else is unresolved. No exact lookup is sent — a 404 is
+  never evidence. Every account on the panel that is not in the backup is ignored
+  (`docs/rickpanel-inventory.md` §Per-name resolution). Such a read is reported complete, with a
+  `resolution` in `sections.provider.panels[i]` (counts only). A needed name it could not decide
+  leaves its invoice `INVENTORY_INCOMPLETE` and the panel `complete: false`, reason
+  `UNRESOLVED`. A `COUNT_MISMATCH` with fewer names than a total that held still is NOT resolved
   per name: the list is withholding rows, and that panel stays incomplete — fail-closed.
 - **A non-targeted read (none in the Web Admin today) attempts up to `INVENTORY_READ_ATTEMPTS` (3) double walks**,
   pausing 15 s and 45 s, when it came out INCOMPLETE (the panel moved). Only an attempt complete
@@ -202,9 +201,8 @@ reaching it was not.
   queue time, duration, page size, largest page in bytes) — counts only.
 - **The dry run says so**: `PROVIDER_INVENTORY_INCOMPLETE` (production panels whose read failed or
   decided nothing) and one `PROVIDER_INVENTORY_INCOMPLETE:<reason>` per reason; for a panel decided
-  one name at a time, `PROVIDER_INVENTORY_CHURN` (panels), `PROVIDER_INVENTORY_CHURN:<reason>`,
-  `PROVIDER_INVENTORY_LOOKUPS` (exact lookups sent) and `PROVIDER_INVENTORY_UNRESOLVED` (needed
-  names left undecided). The importer's `sections.provider.panels` carries each read's counts
+  one name at a time, `PROVIDER_INVENTORY_CHURN` (panels), `PROVIDER_INVENTORY_CHURN:<reason>`
+  and `PROVIDER_INVENTORY_UNRESOLVED` (needed names left undecided). The importer's `sections.provider.panels` carries each read's counts
   (`diagnostics`: attempts, and per walk the pages, rows, distinct spellings, duplicate rows, the
   panel's `total`, the first and last page's rows; `resolution`) — never a name. The restore page
   shows the churn as information, not as a refusal.
