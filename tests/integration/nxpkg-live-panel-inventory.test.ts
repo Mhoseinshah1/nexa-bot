@@ -1289,7 +1289,11 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   // only the panels they name, every adoption check again, never a write to a panel.
 
   /** b0000003 (svc_a3, user 100000009) held INVENTORY_INCOMPLETE by a COMPLETED import. */
-  async function importHoldingSvcA3(extra: (rows: Row[]) => Row[] = (rows) => rows): Promise<{
+  async function importHoldingSvcA3(
+    extra: (rows: Row[]) => Row[] = (rows) => rows,
+    /** Further accounts the dry run must leave unresolved too (each re-created mid-read). */
+    alsoHeld: readonly string[] = [],
+  ): Promise<{
     page: ReturnType<typeof productionLikePage>;
     pkg: { path: string; keyFileText: string };
     applyRunId: string | null;
@@ -1299,8 +1303,16 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       invoices: (rows) => extra([...rows, extraInvoice(rows, 'b0000003', '100000009', 'svc_a3')]),
     });
     const id = await page.toVerified(pkg);
-    panelA.seedUser('svc_a3', ACCOUNT);
-    recreateBetweenWalks('svc_a3');
+    const held = ['svc_a3', ...alsoHeld];
+    for (const name of held) panelA.seedUser(name, ACCOUNT);
+    onWalkPages(panelA, (walk, offset) => {
+      if (walk === 2 && offset === 0) {
+        for (const name of held) {
+          panelA.removeUser(name);
+          panelA.seedUser(name, ACCOUNT);
+        }
+      }
+    });
     const dry = await page.dryRun(id);
     expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
     expect(codes(dry.dryRunReport?.warnings)['PROVIDER_INVENTORY_QUARANTINED']).toBeGreaterThan(0);
@@ -1388,7 +1400,13 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   }
 
   it('§4b: a held invoice approved after the import is adopted by the lane once the targeted read resolves exactly one spelling — only it, only GETs of its one panel, no customer or money touched; the fresh-target guard still refuses another import', async () => {
-    const { page, pkg, applyRunId } = await importHoldingSvcA3();
+    // b0000005: another held invoice (user 100000010, its own account), NOT approved. A still
+    // panel read resolves it as well — and the lane must still leave it alone.
+    const { page, pkg, applyRunId } = await importHoldingSvcA3(
+      (rows) => [...rows, extraInvoice(rows, 'b0000005', '100000010', 'svc_held_2')],
+      ['svc_held_2'],
+    );
+    expect((await candidates())['b0000005']?.outcome).toBe('INVENTORY_INCOMPLETE');
     await approveCandidate('b0000003');
     const before = await candidateRows();
     const money = await moneyState();
@@ -1577,7 +1595,20 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
            WHERE id = ${applyingId}`,
     );
 
-    // 3. Nothing in the way: the lane runs and adopts.
+    // 3. The tenant stopped accepting work: every write the lane would make is refused inside
+    //    its transaction — no run, no claim, no adoption.
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${TENANT}`,
+    );
+    await page.executor.tick();
+    expect((await candidateRows())['b0000003']?.['review_state']).toBe('ADOPT_APPROVED');
+    expect(await laneRuns()).toEqual([]);
+    expect(await services()).toEqual(BASELINE_SERVICES);
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${TENANT}`,
+    );
+
+    // 4. Nothing in the way: the lane runs and adopts.
     await page.executor.tick();
     const done = await detail(laneId);
     expect(done.status, JSON.stringify(done.errorCode)).toBe('ADOPT_DONE');
@@ -1587,6 +1618,34 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       { panel: 'A', username: 'svc_a3', owner: '100000009' },
     ]);
     expectReadsOnly(panelA);
+  }, 900_000);
+
+  it('§4b: a re-upload bound to OTHER panels than its import is refused ADOPT_REFUSED — no panel read, no claim, nothing adopted', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const service = ctx.container.legacyMigration;
+    const laneId = await upload(pkg.path);
+    await service.setKey(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await page.executor.tick();
+    // The two codes bound the other way round: another panel map than the import's.
+    await service.setPanelBindings(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+      bindings: [
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelBId },
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelAId },
+      ],
+    });
+    await service.requestAdopt(tenantA, owner, laneId, { idempotencyKey: key() });
+    const lists = panelA.listCalls() + panelB.listCalls();
+    await page.executor.tick();
+    expect(await detail(laneId)).toMatchObject({ status: 'FAILED', errorCode: 'ADOPT_REFUSED' });
+    expect(panelA.listCalls() + panelB.listCalls()).toBe(lists);
+    expect((await candidateRows())['b0000003']?.['review_state']).toBe('ADOPT_APPROVED');
+    expect(await laneRuns()).toEqual([]);
+    expect(await services()).toEqual(BASELINE_SERVICES);
   }, 900_000);
 
   it('§4b: the lane is refused for a source no finished import came from, and asks nothing of a panel', async () => {
