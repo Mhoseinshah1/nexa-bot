@@ -1645,4 +1645,92 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(panelA.requests.length + panelB.requests.length).toBe(before);
     expect(await laneRuns()).toEqual([]);
   }, 600_000);
+
+  // ── §4b review: the guards 65d238de added without a test ───────────────────────────────
+
+  /** Nothing the lane must not do happened: no read, no run, no claim, no service. */
+  async function expectLaneRefusedUntouched(
+    laneId: string,
+    lists: number,
+    before: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    expect(await detail(laneId)).toMatchObject({ status: 'FAILED', errorCode: 'ADOPT_REFUSED' });
+    expect(panelA.listCalls() + panelB.listCalls()).toBe(lists);
+    expect(await laneRuns()).toEqual([]);
+    expect(await candidateRows()).toEqual(before);
+    expect(await services()).toEqual(BASELINE_SERVICES);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
+  }
+
+  it('§4b review: the lane is bound to the import the restore page names — an import row whose apply run is not the tenant’s latest APPLY run is refused ADOPT_REFUSED (expectedApplyRunId), nothing read or claimed', async () => {
+    const { page, pkg, applyRunId } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    // The restore page's import row now names ANOTHER run of this tenant (its own dry run):
+    // the importer's latest APPLY run is not the one the lane was asked to follow.
+    const updated = await ctx.container.database.db.execute<{ id: string }>(
+      sql`UPDATE legacy_nxpkg_imports SET apply_legacy_run_id = dry_run_legacy_run_id
+           WHERE tenant_id = ${TENANT} AND status = 'COMPLETED' AND apply_legacy_run_id = ${applyRunId}
+             AND dry_run_legacy_run_id IS NOT NULL
+       RETURNING id`,
+    );
+    expect(updated.rows).toHaveLength(1);
+    const before = await candidateRows();
+    const lists = panelA.listCalls() + panelB.listCalls();
+    const laneId = await page.toVerified(pkg);
+    await ctx.container.legacyMigration.requestAdopt(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+    });
+    await page.executor.tick();
+    await expectLaneRefusedUntouched(laneId, lists, before);
+  }, 900_000);
+
+  it('§4b review: the lane follows a .nxpkg import only — an APPLY run whose recorded inputs are not NXPKG is refused ADOPT_REFUSED, nothing read or claimed', async () => {
+    const { page, pkg, applyRunId } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const updated = await ctx.container.database.db.execute<{ run_id: string }>(
+      sql`UPDATE legacy_import_run_inputs SET source_engine = 'MYSQL'
+           WHERE tenant_id = ${TENANT} AND run_id = ${applyRunId} RETURNING run_id`,
+    );
+    expect(updated.rows).toHaveLength(1);
+    const before = await candidateRows();
+    const lists = panelA.listCalls() + panelB.listCalls();
+    const laneId = await page.toVerified(pkg);
+    await ctx.container.legacyMigration.requestAdopt(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+    });
+    await page.executor.tick();
+    await expectLaneRefusedUntouched(laneId, lists, before);
+  }, 900_000);
+
+  it('§4b review (H P1): a targeted read with NO gap-free walk decides nothing in the lane — an approved name it saw under two spellings is INVENTORY_INCOMPLETE, never decided as a collision; nothing adopted', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const money = await moneyState();
+    // A case variant of the approved name, and a deletion burst behind the cursor in every
+    // walk of the lane's read: two spellings were seen, but no walk was gap-free.
+    panelA.seedUser('SVC_A3', ACCOUNT);
+    burstInEveryWalk(8);
+    const laneId = await runLane(page, pkg);
+    panelA.beforeListPage = null;
+    const lane = await detail(laneId);
+    expect(lane.status, JSON.stringify(lane.errorCode)).toBe('ADOPT_DONE');
+    expect(lane.adoptReport).toMatchObject({
+      approvals: 1,
+      adopted: 0,
+      stillUnresolved: 1,
+      refused: [{ code: 'INVENTORY_INCOMPLETE', count: 1 }],
+      panelsRead: 1,
+      providerWrites: 0,
+    });
+    expect((await candidateRows())['b0000003']).toMatchObject({
+      review_state: 'OPEN',
+      last_approval_refusal: 'INVENTORY_INCOMPLETE',
+      service_id: null,
+    });
+    expect(await services()).toEqual(BASELINE_SERVICES);
+    expect(await moneyState()).toEqual(money);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
+  }, 900_000);
 });
