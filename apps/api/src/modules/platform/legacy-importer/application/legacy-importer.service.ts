@@ -584,6 +584,7 @@ export class LegacyImporterService {
       review.inputs.operatorPanels ?? new Map(),
       canonicalLegacyUsername,
       (key) => isLegacyImportKey('invoice', key),
+      review.inputs.keptAsHistory ?? new Set(),
     );
     const inventories = new Map<string, LegacyInventoryRead>();
     for (const panelId of mapping.policy.productionPanelIds) {

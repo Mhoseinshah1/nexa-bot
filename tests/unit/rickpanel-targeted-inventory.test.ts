@@ -515,9 +515,24 @@ describe('Codex review on 79f46fda', () => {
       const panel = fakePanel(300);
       panel.createdAtAs = stamp;
       const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(5)]) }));
-      expect(read.resolution, stamp).toMatchObject({ mode: 'TARGETED', present: 0 });
+      expect(read.resolution, stamp).toMatchObject({
+        mode: 'TARGETED',
+        reason: 'NO_CREATION_TIME',
+        present: 0,
+      });
       expect(indexCovers(read.index, name(5))).toBe(false);
     }
+  });
+
+  it('the cap reached with the last walk broken: a name the decision walk lacked is not ABSENT either', async () => {
+    const panel = fakePanel(300);
+    // The first walk is gap-free and decides; the second and third are broken by bursts.
+    panel.beforePage = (_o, page) => {
+      if (page === 5 || page === 9) panel.names.splice(20, 15);
+    };
+    const read = complete(await sourceOf(panel).read(SCOPE, 'p1', { needed: need(['nobody']) }));
+    expect(read.resolution).toMatchObject({ walks: 3, absent: 0, unresolved: 1 });
+    expect(indexCovers(read.index, 'nobody')).toBe(false);
   });
 
   it('two walks that share no row prove no common order', () => {
@@ -965,7 +980,11 @@ describe('neededNamesByPanel — exactly what the backup can ask', () => {
     codePanel: 'code-a',
     ...over,
   });
-  const run = (invoices: ReturnType<typeof invoice>[], operator = new Map<string, string>()) =>
+  const run = (
+    invoices: ReturnType<typeof invoice>[],
+    operator = new Map<string, string>(),
+    kept = new Set<string>(),
+  ) =>
     neededNamesByPanel(
       invoices,
       new Set(['u1']),
@@ -973,7 +992,18 @@ describe('neededNamesByPanel — exactly what the backup can ask', () => {
       operator,
       (raw) => (raw.trim() === '' ? null : raw.trim().toLowerCase()),
       (key) => key.startsWith('inv-'),
+      kept,
     );
+
+  it('Codex: an invoice kept as history asks nothing — the import never acts on it', () => {
+    const out = run(
+      [invoice({}), invoice({ idInvoice: 'inv-2', username: 'bob', codePanel: null })],
+      new Map(),
+      new Set(['inv-1', 'inv-2']),
+    );
+    expect([...(out.get('panel-a') ?? new Map()).keys()]).toEqual([]);
+    expect([...(out.get('panel-b') ?? new Map()).keys()]).toEqual([]);
+  });
 
   it('a live owned invoice asks its mapped panel, canonically', () => {
     const out = run([invoice({})]);

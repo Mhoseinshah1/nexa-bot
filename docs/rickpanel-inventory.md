@@ -192,7 +192,8 @@ The names needed are those of live, real (`is_test = 0`) invoices whose owner th
 (`importableLegacyUserIds`, pinned to the plan's own rule by a test), on their mapped panel; a
 declared-missing code asks every production panel; an operator's ADOPT asks its panel; an
 invoice with an empty `code_panel` and no ADOPT yet asks every production panel too — the holders
-found are the panels an operator may be offered for that first ADOPT. Each
+found are the panels an operator may be offered for that first ADOPT. An invoice the operator
+kept as history asks nothing: the import never acts on it. Each
 carries the backup's exact spelling (null when two invoices spell it differently).
 
 **Gap-free walks.** Offset pagination can skip a row only at a page boundary, when rows ahead of
@@ -247,9 +248,7 @@ AND the last walk is decisive too (gap-free and in one order with the walk befor
 spelling that still exists as the read ends was
 seen and counts toward a collision. Until then the panel is walked again — at most
 `TARGETED_MAX_WALKS` (3) walks; a panel that only sells settles on two. Reaching the cap with
-the last walk NOT decisive, no name is present on one spelling: a case variant that walk
-skipped may exist as the read ends (the second review's R3), so each would-be present name is
-unresolved. Then:
+the last walk NOT decisive, no name is present on one spelling, nor absent: a case variant or an account that walk skipped may exist as the read ends (the second review's R3; Codex), so each would-be present or absent name is unresolved. Then:
 
 1. **Two spellings anywhere** — the name folds to two or more exact spellings in the UNION of all
    walks: a collision (`USERNAME_CASE_COLLISION`), never eligible.
@@ -321,6 +320,7 @@ Residual risks, stated rather than hidden:
   from one deleted and created again under its name in the SAME second as the original. Only an
   account created during the read itself can be re-created that quickly; one the backup names
   predates the read by far.
+- **Survival to the end of the read.** A sighting in a later walk proves an account survived the decision walk's end, never that it survived the later walk too: that would need yet another walk, and so on. Like any read, this one is a statement about a past moment; the import's own read is a second, later look, and a changed decision fails it (`DRY_RUN_MISMATCH`, nothing written).
 - **After the read.** A variant created after the decision walk ended is outside this read, as it
   is outside a complete read; the import's own read is a second, later look, and a changed
   decision fails it (`DRY_RUN_MISMATCH`, nothing written).
@@ -338,7 +338,7 @@ Residual risks, stated rather than hidden:
   panel that holds still for two walks. If its rows carry NO `created_at`, not even that: two
   identical walks cannot tell an account from one deleted and created again under its name
   between them (Codex), so the two-walk snapshot needs a creation time on every row too, and
-  such a panel's candidates are never decided by the Web Admin's read. Safe either way. This,
+  such a panel's candidates are never decided by the Web Admin's read. Its churn reason is `NO_CREATION_TIME`, not `WALKS_DIFFER`: the panel held still, and no retry mends its stamps. Safe either way. This,
   the list route, `total` and the page-size cap are inferred from Marzban v0.8.4 and must be
   confirmed on a real RickPanel (gate G6).
 

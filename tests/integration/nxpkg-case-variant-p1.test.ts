@@ -759,7 +759,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expectReadsOnly(panelA, panelB);
   }, 600_000);
 
-  it('R1 (Codex P1): a case variant SVC_A1 listed BEHIND the cursor from the middle of the second walk on (a list not in creation order) — no later walk is gap-free: svc_a1 is a collision from the union; with the last walk broken at the cap, no name is present on one spelling (a variant it skipped may exist) — svc_a2 and svc_a4 UNRESOLVED, svc_missing absent; approval refused, nothing attached', async () => {
+  it('R1 (Codex P1): a case variant SVC_A1 listed BEHIND the cursor from the middle of the second walk on (a list not in creation order) — no later walk is gap-free: svc_a1 is a collision from the union; with the last walk broken at the cap, no name is present on one spelling or absent (a row it skipped may exist) — every other needed name UNRESOLVED; approval refused, nothing attached', async () => {
     // Page 8 (overlap 2): the shifted page still holds fresh rows. At page 2 (overlap 1) the
     // same insertion leaves the next page with none, and the walk fails NO_PROGRESS — the
     // panel is then PROVIDER_INVENTORY_INCOMPLETE (read failed), also refused.
@@ -789,9 +789,9 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(walksOf(panelA, before)).toBe(MAX_WALKS);
     expect(w['USERNAME_CASE_COLLISION']).toBe(2);
     // svc_a2, svc_a4: never present on one spelling; svc_missing: absent (no walk returned it).
-    // svc_a2, svc_a4 and the panel-less name panel A holds: present on one spelling, demoted.
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(3);
-    expect(w['PROVIDER_MISSING']).toBe(1);
+    // Every needed name but the collision: never present, never absent.
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(NAMES_UNRESOLVED_WITHOUT_GAP_FREE - 1);
+    expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
     await expectApprovalRefused(page, id);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);

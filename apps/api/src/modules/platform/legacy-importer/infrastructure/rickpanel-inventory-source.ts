@@ -498,11 +498,32 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
             diagnostics: { ...failed.diagnostics, walks: walks.map((w) => ({ ...w.evidence })) },
           };
     }
+    // Two consistent walks of the same names that only lack a usable creation time on some row
+    // are not churn: the panel held still, and no retry can mend its stamps (Codex).
+    const secondNames = new Set(
+      (second.consistent ? second.accounts : second.observed).map((y) => y.providerUsername),
+    );
+    const sameNames =
+      first.consistent &&
+      second.consistent &&
+      first.accounts.length === secondNames.size &&
+      first.accounts.every((x) => secondNames.has(x.providerUsername));
+    const usableStamp = (w: typeof first, name: string) => {
+      const stamps = w.coverage?.createdAt.get(name);
+      const only = stamps !== undefined && stamps.size === 1 ? [...stamps][0] : undefined;
+      return only !== undefined && only !== '' && !Number.isNaN(Date.parse(only));
+    };
     const reason = !first.consistent
       ? first.reason
       : !second.consistent
         ? second.reason
-        : 'WALKS_DIFFER';
+        : sameNames &&
+            first.accounts.some(
+              (x) =>
+                !usableStamp(first, x.providerUsername) || !usableStamp(second, x.providerUsername),
+            )
+          ? 'NO_CREATION_TIME'
+          : 'WALKS_DIFFER';
     // Every decision and runtime fact is the DECISION walk's, stamped when it ended. With no
     // decision walk, the last one is reported and every name is unresolved.
     const chosen = decision();
@@ -510,8 +531,9 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
     const at = chosen?.index ?? walks.length - 1;
     const observedAt = endedAt[at] ?? this.now();
     const lastSeen = seen[at] as readonly RickpanelInventoryAccount[];
-    // Unsettled at the cap with the LAST walk not gap-free: a case variant that exists as the
-    // read ends may be one that walk skipped, so no name is called present on one spelling.
+    // Unsettled at the cap with the LAST walk not decisive: a case variant or an account that
+    // exists as the read ends may be one that walk skipped, so no name is called present on one
+    // spelling, nor absent.
     // The last walk must be decisive itself — gap-free AND in one order with the walk before it
     // (raw chaining over an unstable or tied order can be coincidental; Codex).
     const lastGapFree = decisive(walks.length - 1);
@@ -519,7 +541,10 @@ export class RickpanelInventorySource implements LegacyInventoryPort {
       [...(chosen?.resolved ?? decideNeededNames(needed, resolutionWalks(), null))].map(
         ([name, r]): [string, NameResolution] => [
           name,
-          r.kind === 'PRESENT' && !lastGapFree ? { kind: 'UNRESOLVED' } : r,
+          // ABSENT too: a name the broken last walk may have skipped (Codex).
+          (r.kind === 'PRESENT' || r.kind === 'ABSENT') && !lastGapFree
+            ? { kind: 'UNRESOLVED' }
+            : r,
         ],
       ),
     );
