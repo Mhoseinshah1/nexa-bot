@@ -406,12 +406,32 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     ).toEqual([]);
   }
 
-  /** The exact lookups (`GET /api/user/{name}`) the panel received, by name. */
+  /**
+   * Every `GET /api/user/…` the panel received (an exact lookup or any per-user read), by
+   * name. The targeted read decides from its walks alone and sends none.
+   */
   const lookupsOf = (fake: FakeRickpanel, since = 0): string[] =>
     fake.requests
       .slice(since)
-      .filter((r) => r.method === 'GET' && /^\/api\/user\/[^/?]+$/u.test(r.path))
+      .filter((r) => r.method === 'GET' && r.path.startsWith('/api/user/'))
       .map((r) => decodeURIComponent(r.path.slice('/api/user/'.length)));
+
+  /**
+   * `count` manual accounts at the FRONT of panel A's list (re-seeding the rest after them,
+   * so every row keeps an oldest-first `created_at`), and a burst of `size` deletions of rows
+   * the cursor already read before the 4th page of EVERY walk: no walk is gap-free.
+   */
+  function burstInEveryWalk(count: number, size = 2): void {
+    const existing = [...panelA.users.values()];
+    for (const u of existing) panelA.removeUser(u.username);
+    for (let i = 0; i < count; i += 1) panelA.seedUser(`manual_${String(i).padStart(2, '0')}`);
+    for (const u of existing) panelA.seedUser(u.username, { ...u });
+    onWalkPages(panelA, (_walk, offset) => {
+      if (offset !== 3) return;
+      const front = [...panelA.users.keys()].filter((n) => n.startsWith('manual_'));
+      for (const name of front.slice(0, size)) panelA.removeUser(name);
+    });
+  }
 
   /**
    * `fn(walk, offset)` before every list page: `walk` counts walks of this panel since the
@@ -581,13 +601,6 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     ((buildSyntheticLegacyDataset().tables['user'] ?? []) as Row[]).map((u) => String(u['id'])),
   );
 
-  /**
-   * The canary every per-name resolution of panel A asks first: the lexically first NEEDED
-   * name both walks saw (never an account the backup does not name; Case_X is a collision,
-   * so not a candidate canary).
-   */
-  const CANARY = 'svc_a1';
-
   /** Names no backup row holds: a manual account, or a sale Mirza made after the backup. */
   const NOT_IN_BACKUP = /^(manual_|mirza_sale_)/u;
 
@@ -615,8 +628,6 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   const isListPage = (offset: number) => (r: FakeRickpanelRequest) =>
     r.method === 'GET' &&
     r.path === `/api/users?offset=${String(offset)}&limit=${String(PAGE_SIZE)}`;
-  const isLookupOf = (name: string) => (r: FakeRickpanelRequest) =>
-    r.method === 'GET' && r.path === `/api/user/${name}`;
 
   /** A manual account created on panel A by its operator before the first walk's 2nd page. */
   function manualAccountMidWalk(name = 'manual_op_1'): void {
@@ -647,17 +658,17 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // F: the churn is reported as information and blocks nothing.
     expect(w['PROVIDER_INVENTORY_CHURN']).toBe(1);
     expect(w['PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED']).toBe(1);
-    // The canary and the one needed name: no 404 is trusted before the canary answers 200.
-    expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBe(2);
+    // Decided from the gap-free last walk alone: no lookup, no canary.
+    expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
     // The panel decided what a complete read decides: the missing account, the collision.
     expect(w['PROVIDER_MISSING']).toBe(1);
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
-    // A/B: the canary (the lexically first account both walks saw), then the one needed
-    // name no walk saw — the backup's own; never a manual account or a sale. B held still.
-    expect(lookupsOf(panelA, before.a)).toEqual([CANARY, 'svc_missing']);
+    // A/B: no per-user request at all — never a manual account or a sale, nor the backup's
+    // own names (svc_missing is absent because the gap-free last walk returned no spelling).
+    expect(lookupsOf(panelA, before.a)).toEqual([]);
     expect(lookupsOf(panelB, before.b)).toEqual([]);
     // H: the dry run wrote nothing and sent the panels nothing but reads.
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
@@ -737,7 +748,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
 
   // ── D ──────────────────────────────────────────────────────────────────────────────────
 
-  it('D: a candidate account deleted mid-walk is proven absent by its exact lookup — PROVIDER_MISSING, never adopted; the account after it, which the page overlap kept in view, is adopted', async () => {
+  it('D: a candidate account deleted mid-walk is absent from the gap-free last walk — PROVIDER_MISSING, never adopted, no lookup sent; the account after it is adopted', async () => {
     const page = productionLikePage();
     // A second eligible candidate: svc_a3, owned by user 9 (rp1, 30 GB / 30 d).
     const id = await page.toVerified(
@@ -756,13 +767,10 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(dry.status).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
     expect(w['PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED']).toBe(1);
-    // Each page repeats a row of the one before, so the first walk read svc_a3 before the
-    // deletion could shift it past the cursor: it is decided by the walks (the second walk is
-    // gap-free). After the canary (svc_a2; svc_a1 is gone from the second walk): svc_a1 (seen
-    // by the first walk only → 404) and svc_missing (seen by neither → 404), in name order.
-    // The slip-then-lookup path is covered at scale in tests/unit.
-    expect(lookupsOf(panelA, before)).toEqual(['svc_a2', 'svc_a1', 'svc_missing']);
-    expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBe(3);
+    // The second (last) walk is gap-free and returned no spelling of svc_a1 (deleted) or of
+    // svc_missing (never there): both absent, decided from the walk alone — no lookup.
+    expect(lookupsOf(panelA, before)).toEqual([]);
+    expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBeUndefined();
     expect(w['PROVIDER_MISSING']).toBe(2);
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
@@ -852,11 +860,15 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
 
   // ── F: unresolved ──────────────────────────────────────────────────────────────────────
 
-  it('F: a needed name whose lookup fails (5xx past the budget) stays UNRESOLVED — INVENTORY_INCOMPLETE, approval refused, nothing written; over a recovered panel it is approvable', async () => {
+  it('F: no gap-free walk (a deletion burst behind the cursor in EVERY walk) — every needed name UNRESOLVED, never PROVIDER_MISSING: INVENTORY_INCOMPLETE, approval refused, nothing written, no per-user request; over a quieter panel it is approvable', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
-    manualAccountMidWalk();
-    failOn(panelA, isLookupOf('svc_missing'), { status: 503, body: { detail: 'busy' } });
+    // A lookup route that would fail if it were asked: it is not.
+    failOn(panelA, (r) => r.method === 'GET' && r.path.startsWith('/api/user/'), {
+      status: 503,
+      body: { detail: 'busy' },
+    });
+    burstInEveryWalk(8);
     const before = panelA.requests.length;
     const dry = await page.dryRun(id);
     panelA.beforeListPage = null;
@@ -864,52 +876,49 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(dry.status).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
     expect(w['PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED']).toBe(1);
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(1);
-    expect(w['INVENTORY_INCOMPLETE']).toBe(1);
+    // svc_a1, svc_a2, svc_a4, svc_missing; case_x is a collision whatever the walks prove.
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(4);
+    expect(w['INVENTORY_INCOMPLETE']).toBeGreaterThanOrEqual(4);
+    expect(w['PROVIDER_MISSING']).toBeUndefined();
+    expect(w['USERNAME_CASE_COLLISION']).toBe(1);
     // A read that left a needed name unresolved is not a complete read of that panel.
     expect(w['PROVIDER_INVENTORY_INCOMPLETE']).toBe(1);
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
-    // Bounded: the canary once, then the first ask and the retry budget (4), no more.
-    const asked = lookupsOf(panelA, before);
-    expect(asked[0]).toBe(CANARY);
-    expect(asked.filter((n) => n === CANARY)).toHaveLength(1);
-    const failing = asked.filter((n) => n === 'svc_missing').length;
-    expect(failing).toBeGreaterThanOrEqual(1);
-    expect(failing).toBeLessThanOrEqual(5);
-    expect(new Set(asked)).toEqual(new Set([CANARY, 'svc_missing']));
+    expect(lookupsOf(panelA, before)).toEqual([]);
     await expect(page.approve(id)).rejects.toMatchObject({
       code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
       details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
     });
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
 
-    // The panel answers again; the same import, dry-run again, is approvable.
+    // Quieter: one manual account appended mid-walk; the same import is approvable.
     manualAccountMidWalk('manual_op_2');
     const again = await page.dryRun(id);
     panelA.beforeListPage = null;
-    expect(codes(again.dryRunReport?.warnings)['INVENTORY_INCOMPLETE']).toBeUndefined();
+    const aw = codes(again.dryRunReport?.warnings);
+    expect(aw['INVENTORY_INCOMPLETE']).toBeUndefined();
+    expect(aw['PROVIDER_MISSING']).toBe(1);
     expect((await page.approve(id)).status).toBe('APPROVED');
+    expect(lookupsOf(panelA)).toEqual([]);
     expectReadsOnly(panelA);
   }, 600_000);
 
-  it('F: a lookup route that answers 404 to everything (the canary not found) — no 404 is trusted: the needed name stays UNRESOLVED, never PROVIDER_MISSING, and approval is refused', async () => {
+  it('F: a missing account (svc_missing) with no gap-free walk — UNRESOLVED, never PROVIDER_MISSING, even beside a route that answers 404 to everything (never asked); approval refused', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
-    manualAccountMidWalk();
     failOn(panelA, (r) => r.method === 'GET' && r.path.startsWith('/api/user/'), {
       status: 404,
       body: { detail: 'Not Found' },
     });
+    burstInEveryWalk(8);
     const before = panelA.requests.length;
     const dry = await page.dryRun(id);
     panelA.beforeListPage = null;
     panelA.intercept = null;
     expect(dry.status).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
-    // Only the canary was asked; its 404 stopped every other lookup.
-    expect(lookupsOf(panelA, before)).toEqual([CANARY]);
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(1);
-    expect(w['INVENTORY_INCOMPLETE']).toBe(1);
+    expect(lookupsOf(panelA, before)).toEqual([]);
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(4);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
     await expect(page.approve(id)).rejects.toMatchObject({
@@ -917,6 +926,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
     });
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
+    expect(await services()).toEqual([]);
     expectReadsOnly(panelA);
   }, 600_000);
 
@@ -947,7 +957,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     { name: 'timeout', answer: 'hang', bound: 5 },
   ];
 
-  it('G: 401, 403, 429, 5xx and a timeout on a WALK page or on a LOOKUP — bounded, fail-closed: not approvable, nothing written, nothing adopted', async () => {
+  it('G: 401, 403, 429, 5xx and a timeout on a page of the FIRST or a LATER walk — bounded, fail-closed: not approvable, nothing written, nothing adopted', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
     for (const failure of FAILURES) {
@@ -973,27 +983,31 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
         code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
       });
 
-      // ── on the exact lookup a churned read needs ──
+      // ── on a page of the SECOND walk, after a first walk the panel moved under ──
       manualAccountMidWalk(`manual_${failure.name}`);
-      failOn(panelA, isLookupOf('svc_missing'), failure.answer);
+      let walkStarts = 0;
+      panelA.intercept = (r) => {
+        if (isListPage(0)(r)) walkStarts += 1;
+        return walkStarts >= 2 && isListPage(2)(r) ? failure.answer : null;
+      };
       before = panelA.requests.length;
-      const looked = await page.dryRun(id);
+      const later = await page.dryRun(id);
       panelA.intercept = null;
       panelA.beforeListPage = null;
-      expect(looked.status, failure.name).toBe('DRY_RUN_DONE');
-      const lw = codes(looked.dryRunReport?.warnings);
-      expect(lw['PROVIDER_INVENTORY_CHURN'], failure.name).toBe(1);
-      expect(lw['PROVIDER_INVENTORY_UNRESOLVED'], failure.name).toBe(1);
-      expect(lw['INVENTORY_INCOMPLETE'], failure.name).toBe(1);
-      expect(lw['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED'], failure.name).toBe(1);
-      const asked = lookupsOf(panelA, before);
-      expect(asked[0], failure.name).toBe(CANARY);
-      const failing = asked.filter((n) => n === 'svc_missing').length;
-      expect(failing, failure.name).toBeGreaterThanOrEqual(1);
-      expect(failing, failure.name).toBeLessThanOrEqual(failure.bound);
+      const laterSent = panelA.requests.slice(before);
+      expect(later.status, failure.name).toBe('DRY_RUN_DONE');
+      const lw = codes(later.dryRunReport?.warnings);
+      expect(lw['PROVIDER_INVENTORY_INCOMPLETE'], failure.name).toBe(1);
+      expect(lw['INVENTORY_INCOMPLETE'], failure.name).toBeGreaterThan(0);
+      expect(lw['PROVIDER_MISSING'], failure.name).toBeUndefined();
+      // Two walks started, the second stopped where it failed: bounded, no third walk.
+      expect(laterSent.filter(isListPage(0)).length, failure.name).toBe(2);
+      expect(laterSent.filter(isListPage(2)).length, failure.name).toBeLessThanOrEqual(
+        failure.bound + 1,
+      );
+      expect(lookupsOf(panelA, before), failure.name).toEqual([]);
       await expect(page.approve(id), failure.name).rejects.toMatchObject({
         code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
-        details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
       });
       expect(await businessCounts(), failure.name).toEqual(NOTHING_WRITTEN);
     }

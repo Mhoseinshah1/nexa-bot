@@ -612,6 +612,63 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
   /** The most walks one targeted read of a panel makes (a non-gap-free last walk walks again). */
   const MAX_WALKS = 3;
 
+  /**
+   * Takes over panel A's list route: each page is served from the panel's CURRENT accounts in
+   * the order `order(names, walk, offset)` gives, every row carrying the `created_at` the fake
+   * stamped (read once, over the real route, before the take-over; an account seeded later is
+   * stamped newer than all of them). Unlike `reorder`, nothing is re-created: only the ORDER of
+   * the list changes — a panel listing with no ORDER BY. `before(walk, offset)` runs first,
+   * like `beforeListPage`.
+   */
+  async function serveListInOrder(
+    fake: FakeRickpanel,
+    order: (names: string[], walk: number, offset: number) => string[],
+    before: (walk: number, offset: number) => void = () => undefined,
+  ): Promise<void> {
+    const token = (await (
+      await fetch(`${fake.baseUrl}/api/admin/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ username: fake.username, password: fake.password }).toString(),
+      })
+    ).json()) as { access_token: string };
+    const listed = (await (
+      await fetch(`${fake.baseUrl}/api/users?offset=0&limit=1000`, {
+        headers: { authorization: `Bearer ${token.access_token}` },
+      })
+    ).json()) as { users: { username: string; created_at: string }[] };
+    const created = new Map(listed.users.map((u) => [u.username, u.created_at]));
+    let later = 0;
+    const stamp = (name: string): string => {
+      let at = created.get(name);
+      if (at === undefined) {
+        later += 1;
+        at = new Date(Date.UTC(2026, 6, 1) + later * 1000).toISOString().slice(0, 19);
+        created.set(name, at);
+      }
+      return at;
+    };
+    let walk = 0;
+    fake.intercept = (request) => {
+      const [path, query] = request.path.split('?');
+      if (request.method !== 'GET' || path !== '/api/users') return null;
+      const params = new URLSearchParams(query ?? '');
+      const offset = Number(params.get('offset') ?? '0');
+      const limit = Number(params.get('limit') ?? '0');
+      if (offset === 0) walk += 1;
+      before(walk, offset);
+      const names = order([...fake.users.keys()], walk, offset);
+      const rows = names.map((n) => ({
+        ...recordOf(fake.users.get(n) as FakeRickpanelUser),
+        created_at: stamp(n),
+      }));
+      return {
+        status: 200,
+        body: { users: rows.slice(offset, offset + limit), total: rows.length },
+      };
+    };
+  }
+
   /** A burst of `n` deletions behind the cursor before the 4th page of EVERY walk. */
   function burstEveryWalk(fake: FakeRickpanel, n: number): number[] {
     const bursts: number[] = [];
@@ -663,26 +720,23 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expectReadsOnly(panelA, panelB);
   }, 600_000);
 
-  it('R1 (Codex P1): a case variant SVC_A1 inserted BEHIND the cursor during the second walk — the walk that missed it is not gap-free, the next walk sees both spellings: USERNAME_CASE_COLLISION in the dry run, svc_a1 attached to nobody', async () => {
+  it('R1 (Codex P1): a case variant SVC_A1 created DURING the second walk — the list is oldest first, so it lands ahead of the cursor and the walk returns it: USERNAME_CASE_COLLISION, svc_a1 attached to nobody', async () => {
     const PAGE = 2;
     const page = productionLikePage(PAGE);
     const id = await page.toVerified(await writePackage());
     onWalkPages(panelA, (walk, offset) => {
       if (walk === 1 && offset === 3) panelA.seedUser('mirza_sale_p1', ACCOUNT);
-      if (walk === 2 && offset === 4) {
-        // Behind the cursor: rows the walk already read shift down by one.
-        panelA.seedUser('SVC_A1', ACCOUNT);
-        reorder(panelA, ['SVC_A1', ...[...panelA.users.keys()].filter((n) => n !== 'SVC_A1')]);
-      }
+      if (walk === 2 && offset === 4) panelA.seedUser('SVC_A1', ACCOUNT);
     });
     const before = panelA.requests.length;
     const dry = await page.dryRun(id);
     panelA.beforeListPage = null;
     expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
-    // case_x, and svc_a1 now — never "present" on the strength of the walk that missed SVC_A1.
+    // case_x, and svc_a1 now.
     expect(w['USERNAME_CASE_COLLISION']).toBe(2);
     expect(w['ADOPTION_ELIGIBLE']).toBeUndefined();
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect(walksOf(panelA, before)).toBeLessThanOrEqual(MAX_WALKS);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
@@ -696,6 +750,45 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
       outcome: 'USERNAME_CASE_COLLISION',
       holders: [{ panel: 'A', spellings: 2 }],
     });
+    await expectOwners({});
+    expectReadsOnly(panelA, panelB);
+  }, 600_000);
+
+  it('R1 (Codex P1): a case variant SVC_A1 listed BEHIND the cursor from the middle of the second walk on (a list not in creation order) — no later walk is gap-free: svc_a1 is a collision from the union, every other needed name UNRESOLVED, approval refused, nothing attached', async () => {
+    // Page 8 (overlap 2): the shifted page still holds fresh rows. At page 2 (overlap 1) the
+    // same insertion leaves the next page with none, and the walk fails NO_PROGRESS — the
+    // panel is then PROVIDER_INVENTORY_INCOMPLETE (read failed), also refused.
+    const PAGE = 8;
+    const page = productionLikePage(PAGE);
+    const id = await page.toVerified(await writePackage());
+    manualFront(panelA, 12);
+    let variantAt: number | null = null;
+    await serveListInOrder(
+      panelA,
+      (names) =>
+        names.includes('SVC_A1') ? ['SVC_A1', ...names.filter((n) => n !== 'SVC_A1')] : names,
+      (walk, offset) => {
+        if (walk === 1 && offset === 6) panelA.seedUser('mirza_sale_p1b', ACCOUNT);
+        if (walk === 2 && offset === 6 && variantAt === null) {
+          variantAt = walk;
+          panelA.seedUser('SVC_A1', ACCOUNT);
+        }
+      },
+    );
+    const before = panelA.requests.length;
+    const dry = await page.dryRun(id);
+    panelA.intercept = null;
+    expect(variantAt).toBe(2);
+    expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
+    const w = codes(dry.dryRunReport?.warnings);
+    expect(walksOf(panelA, before)).toBe(MAX_WALKS);
+    expect(w['USERNAME_CASE_COLLISION']).toBe(2);
+    // svc_a2, svc_a4, svc_missing: never present, never absent.
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE - 1);
+    expect(w['PROVIDER_MISSING']).toBeUndefined();
+    expect(lookupsOf(panelA, before)).toEqual([]);
+    await expectApprovalRefused(page, id);
+    expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
     await expectOwners({});
     expectReadsOnly(panelA, panelB);
   }, 600_000);
@@ -802,43 +895,66 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
 
   // ── R4 ─────────────────────────────────────────────────────────────────────────────────
 
-  it('R4: a list order that is not stable between walks while the panel changes — nothing PRESENT or ABSENT, approval refused, nothing written', async () => {
+  it('R4: a list order that is not stable while the panel changes — nothing PRESENT or ABSENT, approval refused, nothing written', async () => {
     const PAGE = 2;
     const page = productionLikePage(PAGE);
     const id = await page.toVerified(await writePackage());
 
-    // (a) Each walk chains every boundary on its own, but every walk after the first lists
-    // in the reverse order of the one before: no two consecutive walks agree on one order.
+    // (a) Every account deleted and re-created in the reverse order before each later walk
+    // (every `created_at` new): no walk agrees with the one before it.
     onWalkPages(panelA, (walk, offset) => {
       if (walk === 1 && offset === 2) panelA.seedUser('mirza_sale_r4', ACCOUNT);
       if (walk >= 2 && offset === 0) reorder(panelA, [...panelA.users.keys()].reverse());
     });
     let before = panelA.requests.length;
-    const reversed = await page.dryRun(id);
+    const recreated = await page.dryRun(id);
     panelA.beforeListPage = null;
-    const rw = codes(reversed.dryRunReport?.warnings);
+    const rw = codes(recreated.dryRunReport?.warnings);
     expect(rw['PROVIDER_INVENTORY_CHURN']).toBe(1);
     expect(rw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE);
     expect(rw['PROVIDER_MISSING']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
     await expectApprovalRefused(page, id);
 
-    // (b) One local swap of the last two rows, AHEAD of the cursor, in every walk after the
-    // first (Marzban lists with no ORDER BY): still chained, but the order flips each walk.
-    onWalkPages(panelA, (walk, offset) => {
-      if (walk === 1 && offset === 1) panelA.seedUser('mirza_sale_r4b', ACCOUNT);
-      if (walk >= 2 && offset === 2) {
-        const names = [...panelA.users.keys()];
+    // (b) Nothing re-created: the panel lists its last two accounts swapped from the second
+    // walk on (an ORDER BY-less list), every row keeping its own `created_at`, while a sale is
+    // appended. The rows are no longer oldest first, so no later walk is gap-free.
+    await serveListInOrder(
+      panelA,
+      (names, walk) => {
+        if (walk < 2) return names;
         const n = names.length;
-        reorder(panelA, [...names.slice(0, n - 2), names[n - 1] as string, names[n - 2] as string]);
-      }
-    });
+        return [...names.slice(0, n - 2), names[n - 1] as string, names[n - 2] as string];
+      },
+      (walk, offset) => {
+        if (walk === 1 && offset === 1) panelA.seedUser('mirza_sale_r4b', ACCOUNT);
+      },
+    );
     before = panelA.requests.length;
     const swapped = await page.dryRun(id);
-    panelA.beforeListPage = null;
+    panelA.intercept = null;
     const tw = codes(swapped.dryRunReport?.warnings);
+    expect(walksOf(panelA, before)).toBe(MAX_WALKS);
     expect(tw['PROVIDER_INVENTORY_UNRESOLVED']).toBe(UNRESOLVED_WITHOUT_GAP_FREE);
     expect(tw['PROVIDER_MISSING']).toBeUndefined();
+    expect(lookupsOf(panelA, before)).toEqual([]);
+    await expectApprovalRefused(page, id);
+
+    // (c) An offset-dependent order: pages at an odd offset are cut from the list in reverse
+    // (a different statement plan per offset), while a sale is appended.
+    await serveListInOrder(
+      panelA,
+      (names, _walk, offset) => (offset % 2 === 1 ? [...names].reverse() : names),
+      (walk, offset) => {
+        if (walk === 1 && offset === 2) panelA.seedUser('mirza_sale_r4c', ACCOUNT);
+      },
+    );
+    before = panelA.requests.length;
+    const shifting = await page.dryRun(id);
+    panelA.intercept = null;
+    const sw = codes(shifting.dryRunReport?.warnings);
+    expect(sw['PROVIDER_MISSING']).toBeUndefined();
+    expect(sw['ADOPTION_ELIGIBLE']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
     await expectApprovalRefused(page, id);
 
@@ -968,10 +1084,11 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
         invoices: (rows) => [
           ...rows,
           extraInvoice(rows, 'b0000003', '100000009', 'svc_a3'),
-          extraInvoice(rows, 'b0000007', '100000011', 'svc_shared'),
+          extraInvoice(rows, 'b0000007', '100000011', 'svc_a7'),
         ],
       }),
     );
+    panelA.seedUser('svc_a7', ACCOUNT);
     manualFront(panelA, 60);
     let sales = 0;
     let deletions = 0;
@@ -1011,7 +1128,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     await expectOwners({
       ...BASELINE,
       'A:svc_a3': '100000009',
-      'A:svc_shared': '100000011',
+      'A:svc_a7': '100000011',
     });
     const decided = await candidates();
     for (const k of ['a0000001', 'b0000003', 'b0000007']) {
