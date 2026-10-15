@@ -126,11 +126,15 @@ export function decideNeededNames(
     const spelling = [...now][0] as string;
     const stamps = at.createdAt.get(spelling);
     const created = stamps !== undefined && stamps.size === 1 ? ([...stamps][0] as string) : null;
-    // ANY walk, before the decision walk too: an account re-created between two earlier walks is
-    // as much another account as one re-created after (Codex).
-    const otherwise = walks.some((w) =>
-      [...(w.createdAt.get(spelling) ?? [])].some((c) => c !== created),
-    );
+    // ANY walk, before the decision walk too, that returned this spelling with anything but
+    // exactly this one creation time — another stamp, or none at all — saw what may be another
+    // account under the name (Codex): an account re-created between two walks is as much
+    // another account as one re-created after.
+    const otherwise = walks.some((w, i) => {
+      if (perWalk[i]?.get(name)?.has(spelling) !== true) return false;
+      const seen = w.createdAt.get(spelling);
+      return seen === undefined || seen.size !== 1 || !seen.has(created ?? '');
+    });
     if (
       created !== null &&
       !otherwise &&
@@ -190,9 +194,7 @@ export interface NeedingInvoice {
  * it names; a row naming NO panel, without an ADOPT yet, asks every production panel too — the
  * holders found are the panels an operator may be offered for that first ADOPT (Codex: asked
  * nothing, it could never be offered one). A test panel's row and an unmapped code ask
- * nothing — the matcher decides those without any inventory, and so does an invoice the
- * operator kept as history (`keptAsHistory`: the import never acts on it, so it must neither
- * cost a walk nor leave a panel unresolved; Codex). A superset is harmless (an extra name is only
+ * nothing — the matcher decides those without any inventory. A superset is harmless (an extra name is only
  * decided); a missing name would only leave its invoice undecidable, never wrongly decided.
  */
 export function neededNamesByPanel(
@@ -207,7 +209,6 @@ export function neededNamesByPanel(
   operatorPanels: ReadonlyMap<string, string>,
   canonical: (raw: string) => string | null,
   isInvoiceKey: (key: string) => boolean,
-  keptAsHistory: ReadonlySet<string> = new Set(),
 ): Map<string, Map<string, string | null>> {
   const out = new Map<string, Map<string, string | null>>();
   for (const panelId of policy.productionPanelIds) out.set(panelId, new Map());
@@ -222,7 +223,6 @@ export function neededNamesByPanel(
   };
   for (const invoice of invoices) {
     if (!isInvoiceKey(invoice.idInvoice)) continue;
-    if (keptAsHistory.has(invoice.idInvoice)) continue;
     if (invoice.isTest?.trim() !== '0') continue;
     if (invoice.idUser === null || !importableUserIds.has(invoice.idUser)) continue;
     const spelling = invoice.username ?? '';

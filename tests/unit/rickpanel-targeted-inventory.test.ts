@@ -68,6 +68,10 @@ interface FakePanel {
   createdAtAs?: string;
   /** A row's `status`, by name and the page it is served on (default `active`). */
   statusOf?: (username: string, pageIndex: number) => string;
+  /** Leaves `total` off every page. */
+  noTotal?: boolean;
+  /** The panel's own page size: it serves at most this many rows whatever is asked. */
+  cap?: number;
 }
 
 function fakePanel(count: number): FakePanel {
@@ -107,7 +111,7 @@ function clientOf(panel: FakePanel): ProviderHttpClient {
       if (request.path.startsWith('api/user/')) return answer(500, { detail: 'not expected' });
       const query = new URLSearchParams(request.path.split('?')[1] ?? '');
       const offset = Number(query.get('offset'));
-      const limit = Number(query.get('limit'));
+      const limit = Math.min(Number(query.get('limit')), panel.cap ?? Number.MAX_SAFE_INTEGER);
       panel.beforePage(offset, panel.pages);
       panel.pages += 1;
       const slice = panel.names.slice(offset, offset + limit);
@@ -121,7 +125,7 @@ function clientOf(panel: FakePanel): ProviderHttpClient {
               created_at: panel.createdAtAs ?? iso(panel.created.get(username) ?? 0),
             }),
       }));
-      return answer(200, { users, total: panel.names.length });
+      return answer(200, panel.noTotal === true ? { users } : { users, total: panel.names.length });
     },
   };
 }
@@ -537,6 +541,19 @@ describe('Codex review on 79f46fda', () => {
     expect(indexCovers(read.index, 'nobody')).toBe(false);
   });
 
+  it('Codex: no total and a server cap below the page asked for — the walk keeps paging, never stops at the first page', async () => {
+    const panel = fakePanel(300);
+    panel.noTotal = true;
+    panel.cap = 50;
+    const read = await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(250)]) });
+    // Never a wrong ABSENT for an account past the first page: either it is read, or undecided.
+    if (read.ok && read.complete && indexCovers(read.index, name(250))) {
+      expect(read.index.usernames.get(name(250))).toEqual([name(250)]);
+    }
+    // The walk went past the first capped page.
+    expect(panel.log.filter((r) => r.method !== 'POST').length).toBeGreaterThan(2);
+  });
+
   it('two walks that share no row prove no common order', () => {
     expect(sameRelativeOrder(['a', 'b'], ['c', 'd'])).toBe(false);
     expect(sameRelativeOrder([], [])).toBe(true);
@@ -799,6 +816,17 @@ describe('decideNeededNames', () => {
     expect(out.get('f')).toEqual({ kind: 'UNRESOLVED' });
     // Returned again — and also re-created: the name now holds another account. Undecided.
     expect(out.get('g')).toEqual({ kind: 'UNRESOLVED' });
+    // An earlier walk saw the spelling with NO creation time: it may have been another account.
+    const unstamped = decideNeededNames(
+      need(['k']),
+      [
+        { accounts: [acc('k')], createdAt: new Map(), decisive: true },
+        walk(['k'], { k: ['t1'] }),
+        walk(['k'], { k: ['t1'] }),
+      ],
+      1,
+    );
+    expect(unstamped.get('k')).toEqual({ kind: 'UNRESOLVED' });
     // Re-created BEFORE the decision walk (an earlier walk saw another creation time): undecided.
     const before = decideNeededNames(
       need(['h']),
@@ -989,11 +1017,7 @@ describe('neededNamesByPanel — exactly what the backup can ask', () => {
     codePanel: 'code-a',
     ...over,
   });
-  const run = (
-    invoices: ReturnType<typeof invoice>[],
-    operator = new Map<string, string>(),
-    kept = new Set<string>(),
-  ) =>
+  const run = (invoices: ReturnType<typeof invoice>[], operator = new Map<string, string>()) =>
     neededNamesByPanel(
       invoices,
       new Set(['u1']),
@@ -1001,18 +1025,7 @@ describe('neededNamesByPanel — exactly what the backup can ask', () => {
       operator,
       (raw) => (raw.trim() === '' ? null : raw.trim().toLowerCase()),
       (key) => key.startsWith('inv-'),
-      kept,
     );
-
-  it('Codex: an invoice kept as history asks nothing — the import never acts on it', () => {
-    const out = run(
-      [invoice({}), invoice({ idInvoice: 'inv-2', username: 'bob', codePanel: null })],
-      new Map(),
-      new Set(['inv-1', 'inv-2']),
-    );
-    expect([...(out.get('panel-a') ?? new Map()).keys()]).toEqual([]);
-    expect([...(out.get('panel-b') ?? new Map()).keys()]).toEqual([]);
-  });
 
   it('a live owned invoice asks its mapped panel, canonically', () => {
     const out = run([invoice({})]);

@@ -192,8 +192,7 @@ The names needed are those of live, real (`is_test = 0`) invoices whose owner th
 (`importableLegacyUserIds`, pinned to the plan's own rule by a test), on their mapped panel; a
 declared-missing code asks every production panel; an operator's ADOPT asks its panel; an
 invoice with an empty `code_panel` and no ADOPT yet asks every production panel too — the holders
-found are the panels an operator may be offered for that first ADOPT. An invoice the operator
-kept as history asks nothing: the import never acts on it. Each
+found are the panels an operator may be offered for that first ADOPT. Each
 carries the backup's exact spelling (null when two invoices spell it differently).
 
 **Gap-free walks.** Offset pagination can skip a row only at a page boundary, when rows ahead of

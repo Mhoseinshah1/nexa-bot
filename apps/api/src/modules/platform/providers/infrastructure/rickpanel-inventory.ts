@@ -623,8 +623,16 @@ export class RickpanelInventoryReader {
       // remainder) — never on merely reaching `total`, which the panel counts in another
       // statement and which a concurrent change can make stale within the same response.
       if (rows.length < limit) {
-        endedAtTotal = total !== null && offset + rows.length === total;
-        break;
+        if (total !== null) {
+          endedAtTotal = offset + rows.length === total;
+          break;
+        }
+        // No `total`: a short page may be a server cap smaller than the one asked for, not the
+        // end (Codex). Keep paging — past this page, without overlap — until an empty page.
+        // (Such a walk is never gap-free; it only has to be complete.)
+        offset += rows.length;
+        lastStep = rows.length;
+        continue;
       }
       if (fresh === 0) return fault('NO_PROGRESS', answer.status);
       // A cap too small to overlap cannot chain its boundaries: such a walk is never gap-free.
