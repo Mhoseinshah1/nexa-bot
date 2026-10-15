@@ -645,6 +645,10 @@ import {
   customerServicesToggleResponseSchema,
   customerTimelineResponseSchema,
   legacyHistoryResponseSchema,
+  legacyCustomerAdoptionsResponseSchema,
+  legacyCustomerInvoicesResponseSchema,
+  type LegacyCustomerAdoptionsResponse,
+  type LegacyCustomerInvoicesResponse,
   type LegacyHistoryRecordType,
   type LegacyHistoryResponse,
   customerTransferPreviewResponseSchema,
@@ -4999,6 +5003,31 @@ export function fetchCustomerLegacyHistory(
   const suffix = params.toString();
   const path = CUSTOMER_360_ROUTES.legacyHistory(id);
   return authedGet(suffix ? `${path}?${suffix}` : path, legacyHistoryResponseSchema);
+}
+
+/** The customer's Mirza invoices beside the import's outcome for each (history, read-only). */
+export function fetchCustomerLegacyInvoices(
+  id: string,
+  query: { after?: string; limit?: number } = {},
+): Promise<LegacyCustomerInvoicesResponse> {
+  const params = new URLSearchParams();
+  if (query.after !== undefined) params.set('after', query.after);
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  const suffix = params.toString();
+  const path = CUSTOMER_360_ROUTES.legacyInvoices(id);
+  return authedGet(suffix ? `${path}?${suffix}` : path, legacyCustomerInvoicesResponseSchema);
+}
+
+/** Which of these services of the customer were adopted from a Mirza invoice. */
+export function fetchCustomerLegacyAdoptedServices(
+  id: string,
+  serviceIds: readonly string[],
+): Promise<LegacyCustomerAdoptionsResponse> {
+  const params = new URLSearchParams({ serviceIds: serviceIds.join(',') });
+  return authedGet(
+    `${CUSTOMER_360_ROUTES.legacyAdoptedServices(id)}?${params.toString()}`,
+    legacyCustomerAdoptionsResponseSchema,
+  );
 }
 
 /**

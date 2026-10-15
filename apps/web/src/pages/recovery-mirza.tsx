@@ -38,10 +38,13 @@ import { pollUnlessFinalWhile } from '../polling';
 import { useLinkHandler } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
+import { LEGACY_SERVICE_OUTCOME_LABELS } from './legacy-services';
+import { migrationCodeView, migrationSectionView, type MigrationCodeView } from './mirza-labels';
 import {
   Badge,
   Banner,
   Button,
+  CellMain,
   Copyable,
   DataTable,
   Disclosure,
@@ -1370,7 +1373,9 @@ export function SectionTable({ rows }: { rows: readonly LegacyMigrationSectionCo
         {
           key: 'section',
           header: t('web.lmg_col_section'),
-          render: (row) => <Ltr>{row.section}</Ltr>,
+          render: (row) => (
+            <CodeLabel code={row.section} view={migrationSectionView(row.section)} />
+          ),
         },
         count('source', 'web.lmg_col_source'),
         count('imported', 'web.lmg_col_imported'),
@@ -1395,13 +1400,36 @@ function CodeCounts({ title, rows }: { title: string; rows: readonly LegacyMigra
       ) : (
         <KV
           items={rows.map((row) => [
-            <Ltr key={row.code}>{row.code}</Ltr>,
+            <CodeLabel
+              key={row.code}
+              code={row.code}
+              view={migrationCodeView(row.code, LEGACY_SERVICE_OUTCOME_LABELS)}
+            />,
             <Num key="n" value={row.count} />,
           ])}
         />
       )}
     </div>
   );
+}
+
+/**
+ * A report code in Persian, with the code itself kept beside it (it is what the logs and the
+ * CLI print), and a link to the filtered list its records are on. A code without a known label
+ * is shown raw — never guessed.
+ */
+function CodeLabel({ code, view }: { code: string; view: MigrationCodeView }) {
+  const onLink = useLinkHandler();
+  if (view.label === null) return <Ltr>{code}</Ltr>;
+  const label =
+    view.href === null ? (
+      view.label
+    ) : (
+      <a className="link" href={view.href} onClick={onLink}>
+        {view.label}
+      </a>
+    );
+  return <CellMain primary={label} secondary={<Ltr>{code}</Ltr>} />;
 }
 
 /** Earlier Mirza restores, newest first, with the protective backup each one took. */

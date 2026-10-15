@@ -18,6 +18,7 @@ import {
   fetchCustomer,
   fetchOrders,
   fetchServices,
+  fetchCustomerLegacyAdoptedServices,
   fetchWallet,
   fetchWalletEntries,
   fetchCustomerTrial,
@@ -64,7 +65,12 @@ import {
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
 import { CustomerCrmSection } from './customer-360-crm';
 // Mirza `.nxpkg` importer: the archived legacy history card (read only).
-import { CustomerLegacyHistoryCard } from './customer-360-legacy';
+import {
+  CustomerLegacyDebtCard,
+  CustomerLegacyHistoryCard,
+  CustomerLegacyInvoicesCard,
+} from './customer-360-legacy';
+import { LEDGER_REASON_LABELS } from './mirza-labels';
 // Roadmap B5: the workspace — attention, the newest rows, support, shortcuts.
 import {
   CustomerAttentionCard,
@@ -144,6 +150,10 @@ export function UserDetailPage({
   mayViewTickets = false,
   mayViewBusinessChats = false,
   mayViewLegacyHistory = false,
+  mayViewLegacyInvoices = false,
+  mayViewLegacyPii = false,
+  mayViewLegacyServices = false,
+  mayViewLegacyDebts = false,
   denied,
 }: {
   id: string;
@@ -217,6 +227,14 @@ export function UserDetailPage({
   mayViewBusinessChats?: boolean;
   /** `legacy.history.view` — the archived Mirza history card; not drawn without it. */
   mayViewLegacyHistory?: boolean;
+  /** `legacy.invoices.view` — the customer's Mirza invoices card; not drawn without it. */
+  mayViewLegacyInvoices?: boolean;
+  /** `legacy.invoices.pii.view` — the legacy owner filter on the archive link. */
+  mayViewLegacyPii?: boolean;
+  /** `legacy.services.view` — the «migrated from Mirza» mark on the services card. */
+  mayViewLegacyServices?: boolean;
+  /** `legacy.debts.view` — the customer's legacy debt beside the wallet. */
+  mayViewLegacyDebts?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -501,7 +519,11 @@ export function UserDetailPage({
                   <CustomerLatestCard customerId={id} />
                   <div id="c360-services" className="stack">
                     <ServiceCountsStrip customerId={id} />
-                    <CustomerServicesCard customerId={id} mayView={mayViewServices} />
+                    <CustomerServicesCard
+                      customerId={id}
+                      mayView={mayViewServices}
+                      mayViewLegacy={mayViewLegacyServices}
+                    />
                     <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
                   </div>
                   <CustomerTicketsCard customerId={id} mayView={mayViewTickets} />
@@ -512,6 +534,10 @@ export function UserDetailPage({
                       mayView={mayViewWallet}
                       mayCredit={mayCredit}
                       mayDebit={mayDebit}
+                    />
+                    <CustomerLegacyDebtCard
+                      telegramUserId={row.telegramUserId}
+                      mayView={mayViewLegacyDebts}
                     />
                   </div>
                   {(mayViewMessages || mayMessage) && (
@@ -530,6 +556,12 @@ export function UserDetailPage({
                     mayManageTags={mayManageTags}
                   />
                   <TimelineCard customerId={id} mayView={mayViewAudit} />
+                  <CustomerLegacyInvoicesCard
+                    customerId={id}
+                    telegramUserId={row.telegramUserId}
+                    mayView={mayViewLegacyInvoices}
+                    mayViewPii={mayViewLegacyPii}
+                  />
                   <CustomerLegacyHistoryCard customerId={id} mayView={mayViewLegacyHistory} />
                 </>
               }
@@ -953,7 +985,16 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
  * carry `subscriptionUrl`, `subscriptionRef` or `providerClientId`, so there is
  * nothing here to leak and no edit to this file that could start leaking one.
  */
-function CustomerServicesCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
+function CustomerServicesCard({
+  customerId,
+  mayView,
+  mayViewLegacy = false,
+}: {
+  customerId: string;
+  mayView: boolean;
+  /** `legacy.services.view`: mark the services adopted from a Mirza invoice. */
+  mayViewLegacy?: boolean;
+}) {
   const onLink = useLinkHandler();
   const pages = useCursorTrail();
 
@@ -967,6 +1008,17 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
       }),
     enabled: mayView,
   });
+  // Which services on THIS page were adopted from Mirza — asked of the server for exactly
+  // the ids shown, never inferred from a name or a date.
+  const shownIds = (services.data?.services ?? []).map((row) => row.id);
+  const adoptions = useQuery({
+    queryKey: ['customer-legacy-adopted-services', customerId, shownIds],
+    queryFn: () => fetchCustomerLegacyAdoptedServices(customerId, shownIds),
+    enabled: mayView && mayViewLegacy && shownIds.length > 0,
+  });
+  const adoptedFrom = new Map(
+    (adoptions.data?.adoptions ?? []).map((row) => [row.serviceId, row.invoiceKey]),
+  );
 
   if (!mayView) {
     return (
@@ -981,9 +1033,19 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
       key: 'username',
       header: t('web.service_username'),
       render: (row) => (
-        <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          <Ltr>{row.providerUsername}</Ltr>
-        </a>
+        <span>
+          <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+            <Ltr>{row.providerUsername}</Ltr>
+          </a>
+          {adoptedFrom.has(row.id) && (
+            <>
+              {' '}
+              <Badge tone="info" outline title={t('web.c360_service_from_mirza_title')}>
+                {t('web.c360_service_from_mirza')}
+              </Badge>
+            </>
+          )}
+        </span>
       ),
     },
     {
@@ -1240,7 +1302,7 @@ function WalletCard({
     {
       key: 'reason',
       header: t('web.wallet_reason'),
-      render: (row) => <Ltr>{row.reason}</Ltr>,
+      render: (row) => <span title={row.reason}>{t(LEDGER_REASON_LABELS[row.reason])}</span>,
     },
     {
       key: 'actor',

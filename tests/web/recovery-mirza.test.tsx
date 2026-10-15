@@ -890,6 +890,77 @@ describe('the run and its result', () => {
   });
 });
 
+describe('the report in Persian', () => {
+  it('names sections and codes in Persian, keeps the code beside them, and links to the filtered lists', async () => {
+    page([
+      reviewed({
+        dryRunReport: {
+          ...dryRunReport,
+          sections: [
+            ...dryRunReport.sections,
+            {
+              section: 'services',
+              source: 5,
+              imported: 3,
+              archived: 1,
+              skipped: 0,
+              quarantined: 1,
+            },
+            {
+              section: 'invoice_archive',
+              source: 9,
+              imported: 0,
+              archived: 9,
+              skipped: 0,
+              quarantined: 0,
+            },
+            {
+              section: 'legacy_debts',
+              source: 1,
+              imported: 1,
+              archived: 0,
+              skipped: 0,
+              quarantined: 0,
+            },
+          ],
+          warnings: [
+            { code: 'NO_PANEL', count: 2 },
+            { code: 'PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED', count: 1 },
+            { code: 'SOMETHING_NEW', count: 1 },
+          ],
+          quarantine: [{ code: 'DECISION_QUARANTINED', count: 1 }],
+        },
+      }),
+    ]);
+    expect(await screen.findByText(t('web.mrz_section_customers'))).toBeInTheDocument();
+    expect(screen.getByText('customers')).toBeInTheDocument();
+    expect(
+      screen.getByText(`${t('web.mrz_section_history_of')} ${t('web.c360_legacy_type_payment')}`),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: t('web.mrz_section_services') })).toHaveAttribute(
+      'href',
+      '/legacy-services?reviewState=ALL',
+    );
+    expect(
+      screen.getByRole('link', { name: t('web.mrz_section_invoice_archive') }),
+    ).toHaveAttribute('href', '/legacy-invoices');
+    expect(screen.getByRole('link', { name: t('web.mrz_section_legacy_debts') })).toHaveAttribute(
+      'href',
+      '/legacy-debts?state=ALL',
+    );
+    // A service outcome links to the candidates holding it.
+    expect(screen.getByRole('link', { name: t('web.lsr_outcome_no_panel') })).toHaveAttribute(
+      'href',
+      '/legacy-services?outcome=NO_PANEL&reviewState=ALL',
+    );
+    expect(screen.getByText(t('web.mrz_code_provider_inventory_churn'))).toBeInTheDocument();
+    expect(screen.getByText('PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED')).toBeInTheDocument();
+    expect(screen.getByText(t('web.mrz_code_decision_quarantined'))).toBeInTheDocument();
+    // A code nobody named is shown raw, never guessed.
+    expect(screen.getByText('SOMETHING_NEW')).toBeInTheDocument();
+  });
+});
+
 describe('the old page', () => {
   it('is gone from the navigation, and its route redirects to the recovery page', () => {
     expect(NAV.some((entry) => entry.path === '/legacy-migration')).toBe(false);

@@ -18,6 +18,7 @@ import {
   type LegacyInvoiceArchiveQuery,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { useRoute } from '../router';
 import { t, type WebKey } from '../i18n/web.fa';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
@@ -182,6 +183,31 @@ export const NO_FILTERS: Filters = {
   test: 'ALL',
 };
 
+/**
+ * The filters a link may preset (`/legacy-invoices?legacyUserId=…`, from Customer 360 or the
+ * migration report). Read once, when the page opens; a closed-set value outside its set is
+ * ignored. A personal filter is kept in the state but `queryOf` sends it only to a PII reader.
+ */
+export function legacyInvoiceFiltersOf(query: URLSearchParams): Filters {
+  const text = (name: keyof Filters) => query.get(name) ?? '';
+  const classification = query.get('classification');
+  const test = query.get('test');
+  return {
+    invoiceId: text('invoiceId'),
+    legacyUserId: text('legacyUserId'),
+    username: text('username'),
+    status: text('status'),
+    panelCode: text('panelCode'),
+    productCode: text('productCode'),
+    classification:
+      classification !== null &&
+      (LEGACY_INVOICE_ARCHIVE_CLASSES as readonly string[]).includes(classification)
+        ? (classification as LegacyInvoiceArchiveClass)
+        : 'ALL',
+    test: test === 'true' || test === 'false' ? test : 'ALL',
+  };
+}
+
 /** The query a filter state sends. Exported so a test pins that PII filters need the key. */
 export function queryOf(filters: Filters, mayViewPii: boolean, after: string | undefined) {
   const query: Record<string, string> = {};
@@ -219,7 +245,8 @@ export function LegacyInvoicesPage({
   /** `legacy.invoices.pii.view`: personal cells shown, and searchable. */
   mayViewPii: boolean;
 }) {
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const route = useRoute();
+  const [filters, setFilters] = useState<Filters>(() => legacyInvoiceFiltersOf(route.query));
   const [trail, setTrail] = useState<readonly string[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const after = trail[trail.length - 1];

@@ -22,6 +22,7 @@ import {
   reopenLegacyService,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { useRoute } from '../router';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
@@ -181,6 +182,38 @@ function refusalLabel(code: string): string {
 type OutcomeFilter = LegacyServiceOutcome | 'ALL';
 type StateFilter = LegacyServiceReviewState | 'ALL';
 
+/**
+ * The filters a link may preset (`/legacy-services?outcome=NO_PANEL&reviewState=ALL`, from the
+ * migration report or Customer 360). Read once, when the page opens; a value outside its closed
+ * set is ignored rather than sent, and the review state defaults to OPEN as before.
+ */
+export function legacyServiceFiltersOf(query: URLSearchParams): {
+  readonly outcome: OutcomeFilter;
+  readonly reviewState: StateFilter;
+  readonly panelCode: string;
+  readonly productCode: string;
+  readonly invoiceId: string;
+} {
+  const outcome = query.get('outcome');
+  const reviewState = query.get('reviewState');
+  return {
+    outcome:
+      outcome !== null && (LEGACY_SERVICE_OUTCOMES as readonly string[]).includes(outcome)
+        ? (outcome as LegacyServiceOutcome)
+        : 'ALL',
+    reviewState:
+      reviewState === 'ALL'
+        ? 'ALL'
+        : reviewState !== null &&
+            (LEGACY_SERVICE_REVIEW_STATES as readonly string[]).includes(reviewState)
+          ? (reviewState as LegacyServiceReviewState)
+          : 'OPEN',
+    panelCode: query.get('panelCode') ?? '',
+    productCode: query.get('productCode') ?? '',
+    invoiceId: query.get('invoiceId') ?? '',
+  };
+}
+
 export function LegacyServicesPage({
   denied,
   mayDecide,
@@ -196,11 +229,13 @@ export function LegacyServicesPage({
   /** `legacy.invoices.view`: the archive revision's fields come with the detail. */
   mayViewArchive: boolean;
 }) {
-  const [outcome, setOutcome] = useState<OutcomeFilter>('ALL');
-  const [reviewState, setReviewState] = useState<StateFilter>('OPEN');
-  const [panelCode, setPanelCode] = useState('');
-  const [productCode, setProductCode] = useState('');
-  const [invoiceId, setInvoiceId] = useState('');
+  const route = useRoute();
+  const [initial] = useState(() => legacyServiceFiltersOf(route.query));
+  const [outcome, setOutcome] = useState<OutcomeFilter>(initial.outcome);
+  const [reviewState, setReviewState] = useState<StateFilter>(initial.reviewState);
+  const [panelCode, setPanelCode] = useState(initial.panelCode);
+  const [productCode, setProductCode] = useState(initial.productCode);
+  const [invoiceId, setInvoiceId] = useState(initial.invoiceId);
   const [trail, setTrail] = useState<readonly string[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const after = trail[trail.length - 1];
