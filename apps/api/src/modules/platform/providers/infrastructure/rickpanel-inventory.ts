@@ -621,6 +621,7 @@ export class RickpanelInventoryReader {
           }
         }
       }
+      const prior = previousPage;
       previousPage = pageIds;
       // The panel's own page size: a first page shorter than asked, of a longer list, is a cap
       // (or a withheld row — which a later page longer than it then shows). The overlap follows
@@ -640,8 +641,14 @@ export class RickpanelInventoryReader {
         // No `total`: a short page may be a server cap smaller than the one asked for, not the
         // end (Codex). Keep paging — past this page, without overlap — until an empty page.
         // (Such a walk is never gap-free; it only has to be complete.) A page with nothing new
-        // is a panel that ignores `offset`: stop, as below, never re-ask it (Codex).
-        if (fresh === 0) return fault('NO_PROGRESS', answer.status);
+        // is a panel that ignores `offset`: stop, as below, never re-ask it (Codex) — unless it is
+        // exactly the previous page's overlap, which the list's last page is when it ends where
+        // a full page did (Codex): step past it once more.
+        const overlapTail =
+          prior !== null &&
+          pageIds.length === prior.length - lastStep &&
+          pageIds.every((id, i) => id === prior[lastStep + i]);
+        if (fresh === 0 && !overlapTail) return fault('NO_PROGRESS', answer.status);
         offset += rows.length;
         lastStep = rows.length;
         continue;

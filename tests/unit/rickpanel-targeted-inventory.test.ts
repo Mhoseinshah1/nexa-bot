@@ -645,6 +645,16 @@ describe('Codex review on 79f46fda', () => {
     expect(read.resolution).toMatchObject({ reason: 'NO_CREATION_TIME', walks: 3 });
   });
 
+  it('Codex: no total, and a list that ends exactly where a full page did — the overlap-only last page is no NO_PROGRESS', async () => {
+    // One full page of 100: the next page (offset 90) holds only its 10-row overlap.
+    for (const count of [100, 190]) {
+      const panel = fakePanel(count);
+      panel.noTotal = true;
+      const read = await sourceOf(panel).read(SCOPE, 'p1', { needed: need([name(50)]) });
+      expect(read.ok, String(count)).toBe(true);
+    }
+  });
+
   it('two walks that share no row prove no common order', () => {
     expect(sameRelativeOrder(['a', 'b'], ['c', 'd'])).toBe(false);
     expect(sameRelativeOrder([], [])).toBe(true);
