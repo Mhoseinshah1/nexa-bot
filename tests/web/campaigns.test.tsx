@@ -322,6 +322,8 @@ describe('one campaign', () => {
       { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
     ]);
     renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    // The preview and confirmation open from the page head, in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: 'پیش‌نمایش و تأیید' }));
 
     // The exact liability is on screen before anything can be confirmed.
     await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
@@ -336,6 +338,10 @@ describe('one campaign', () => {
     fireEvent.click(confirm);
 
     await waitFor(() => expect(posts(api, '/schedule')).toHaveLength(1));
+    // Scheduled: the drawer closes; the outcome is the page's.
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'پیش‌نمایش و تأیید' })).toBeNull(),
+    );
     const body = posts(api, '/schedule')[0]?.body as Record<string, unknown>;
     expect(body).toMatchObject({
       expectedDefinitionHash: HASH,
@@ -363,6 +369,8 @@ describe('one campaign', () => {
       { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
     ]);
     renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    // The preview and confirmation open from the page head, in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: 'پیش‌نمایش و تأیید' }));
 
     await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
     expect(screen.queryByText(/^0$/)).toBeNull();
@@ -394,6 +402,8 @@ describe('one campaign', () => {
       { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
     ]);
     renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    // The preview and confirmation open from the page head, in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: 'پیش‌نمایش و تأیید' }));
     const reads = () =>
       api.calls.filter(
         (call) => call.method === 'GET' && call.url.endsWith(`/campaigns/${CAMPAIGN_ID}`),
@@ -428,6 +438,8 @@ describe('one campaign', () => {
       { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
     ]);
     renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    // The preview and confirmation open from the page head, in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: 'پیش‌نمایش و تأیید' }));
     await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
     const typedBox = () =>
       screen.getByLabelText('برای تأیید، تعداد را تایپ کنید') as HTMLInputElement;
@@ -685,6 +697,28 @@ describe('the campaign editor', () => {
       ).toHaveAttribute('aria-selected', 'true'),
     );
     expect(screen.getByTestId('tab-dot-window')).toHaveClass('danger');
+  });
+});
+
+describe('a campaign’s commands, in the page head', () => {
+  it('draws pause beside the head with its explanation, and nothing for a viewer', async () => {
+    stubApi([{ url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) }]);
+    const { unmount } = renderPage(
+      <CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />,
+    );
+    const pause = await screen.findByRole('button', { name: 'توقف موقت' });
+    expect(pause).toHaveAttribute('title', t('web.campaign_cancel_hint'));
+    expect(screen.getByTestId('campaign-commands-hint')).toHaveTextContent(
+      t('web.campaign_frozen_note'),
+    );
+    // No card of its own any more.
+    expect(screen.queryByRole('heading', { name: 'مدیریت اجرا' })).toBeNull();
+    unmount();
+    stubApi([{ url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) }]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} may={ALL} />);
+    await screen.findByText(detail().campaign.name);
+    expect(screen.queryByRole('button', { name: 'توقف موقت' })).toBeNull();
+    expect(screen.queryByTestId('campaign-commands-hint')).toBeNull();
   });
 });
 

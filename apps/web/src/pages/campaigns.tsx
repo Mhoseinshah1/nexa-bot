@@ -60,6 +60,7 @@ import {
   CursorPager,
   LIST_PAGE_SIZE,
   DataTable,
+  Drawer,
   Empty,
   Field,
   KV,
@@ -1629,52 +1630,116 @@ export function CampaignDetailPage({
     enabled: !denied,
   });
   const [editing, setEditing] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const campaign = detail.data?.campaign;
 
   return (
     <StateSwitch query={detail} denied={denied}>
       {campaign !== undefined && (
-        <>
-          <PageHead
-            title={campaign.name}
-            badge={<StateBadge value={campaign.state} />}
-            {...(campaign.description === '' ? {} : { subtitle: campaign.description })}
-            actions={
-              mayManage && campaign.state === 'DRAFT' && !editing ? (
+        <CampaignDetailBody
+          campaign={campaign}
+          presentation={detail.data?.presentation}
+          mayManage={mayManage}
+          may={may}
+          editing={editing}
+          setEditing={setEditing}
+          confirmOpen={confirmOpen}
+          setConfirmOpen={setConfirmOpen}
+        />
+      )}
+    </StateSwitch>
+  );
+}
+
+function CampaignDetailBody({
+  campaign,
+  presentation,
+  mayManage,
+  may,
+  editing,
+  setEditing,
+  confirmOpen,
+  setConfirmOpen,
+}: {
+  campaign: CampaignDetail;
+  presentation: { timezone: string; calendar: 'jalali' | 'gregorian' } | undefined;
+  mayManage: boolean;
+  may: CampaignActionPermissions;
+  editing: boolean;
+  setEditing: (next: boolean) => void;
+  confirmOpen: boolean;
+  setConfirmOpen: (next: boolean) => void;
+}) {
+  const commands = useCampaignCommands(campaign);
+  const draftConfirm = mayManage && campaign.state === 'DRAFT';
+  return (
+    <>
+      <PageHead
+        title={campaign.name}
+        badge={<StateBadge value={campaign.state} />}
+        {...(campaign.description === '' ? {} : { subtitle: campaign.description })}
+        actions={
+          mayManage && !editing ? (
+            <>
+              {campaign.state === 'DRAFT' && (
                 <Button icon="edit" onClick={() => setEditing(true)}>
                   {t('web.campaign_edit')}
                 </Button>
-              ) : undefined
-            }
-          />
-          {editing && detail.data !== undefined ? (
-            <CampaignForm
-              initial={formStateOf(campaign)}
-              campaignId={campaign.id}
-              presentation={detail.data.presentation}
-              may={may}
-              onSaved={() => setEditing(false)}
-            />
-          ) : (
-            <TwoColumn
-              main={
-                <>
-                  <ActionsCard campaign={campaign} />
-                  {campaign.state === 'DRAFT' && mayManage && <ConfirmCard campaign={campaign} />}
-                  {campaign.state !== 'DRAFT' && <ResultsCard id={campaign.id} />}
-                </>
-              }
-              side={
-                <>
-                  <SummaryCard campaign={campaign} />
-                  {mayManage && <CommandsCard campaign={campaign} />}
-                </>
-              }
-            />
-          )}
-        </>
+              )}
+              {draftConfirm && (
+                <Button
+                  variant="primary"
+                  icon="check"
+                  aria-haspopup="dialog"
+                  onClick={() => setConfirmOpen(true)}
+                >
+                  {t('web.campaign_section_preview')}
+                </Button>
+              )}
+              {commands.buttons}
+            </>
+          ) : undefined
+        }
+      />
+      {mayManage && !editing && (
+        <p className="muted small" data-testid="campaign-commands-hint">
+          {t('web.campaign_frozen_note')}
+        </p>
       )}
-    </StateSwitch>
+      {commands.dialog}
+      {editing && presentation !== undefined ? (
+        <CampaignForm
+          initial={formStateOf(campaign)}
+          campaignId={campaign.id}
+          presentation={presentation}
+          may={may}
+          onSaved={() => setEditing(false)}
+        />
+      ) : (
+        <TwoColumn
+          main={
+            <>
+              <ActionsCard campaign={campaign} />
+              {campaign.state !== 'DRAFT' && <ResultsCard id={campaign.id} />}
+            </>
+          }
+          side={<SummaryCard campaign={campaign} />}
+        />
+      )}
+      {/*
+       * The draft's preview and confirmation, in a live drawer: the same card, re-drawn on
+       * every change, so its figures, typed counts, reviewed tick and refusals behave as
+       * before. It closes once the campaign is scheduled.
+       */}
+      <Drawer
+        open={draftConfirm && confirmOpen && !editing}
+        onClose={() => setConfirmOpen(false)}
+        title={t('web.campaign_section_preview')}
+        wide
+      >
+        <ConfirmCard campaign={campaign} bare onScheduled={() => setConfirmOpen(false)} />
+      </Drawer>
+    </>
   );
 }
 
@@ -1871,7 +1936,16 @@ function TermsText({ kind, terms }: { kind: CampaignActionKind; terms: unknown }
  * and set, and the wallet gift's total. Where an engine asks for the count typed back, it is
  * typed here, once per engine.
  */
-function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
+function ConfirmCard({
+  campaign,
+  bare = false,
+  onScheduled,
+}: {
+  campaign: CampaignDetail;
+  /** Drawn inside a drawer that carries the title: no card around it. */
+  bare?: boolean;
+  onScheduled?: () => void;
+}) {
   const client = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -1936,6 +2010,7 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
       submission.settle();
       void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] });
       notify({ tone: 'ok', message: t('web.campaign_scheduled') });
+      onScheduled?.();
     },
     onError: (error) => {
       // A 409 (the campaign or its audience moved on): read both again.
@@ -1968,8 +2043,8 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
     </Field>
   );
 
-  return (
-    <Card title={t('web.campaign_section_preview')} hint={t('web.campaign_preview_hint')}>
+  const content = (
+    <>
       <StateSwitch query={preview}>
         {p !== undefined && (
           <>
@@ -2061,6 +2136,16 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
           </>
         )}
       </StateSwitch>
+    </>
+  );
+  return bare ? (
+    <div className="stack">
+      <p className="muted small">{t('web.campaign_preview_hint')}</p>
+      {content}
+    </div>
+  ) : (
+    <Card title={t('web.campaign_section_preview')} hint={t('web.campaign_preview_hint')}>
+      {content}
     </Card>
   );
 }
@@ -2089,7 +2174,16 @@ function bindingKeyOf(preview: CampaignPreviewResponse | undefined): string {
   ].join('|');
 }
 
-function CommandsCard({ campaign }: { campaign: CampaignDetail }) {
+/**
+ * The commands on a campaign — pause, resume, launch what is pending, cancel — as buttons
+ * for the page head. Pause, resume and launch act at once, as they always did; cancel asks
+ * through its own dialog. Their explanation is each button's title and the hint line the
+ * page draws under its head.
+ */
+function useCampaignCommands(campaign: CampaignDetail): {
+  readonly buttons: ReactNode;
+  readonly dialog: ReactNode;
+} {
   const client = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -2118,70 +2212,60 @@ function CommandsCard({ campaign }: { campaign: CampaignDetail }) {
   const pendingLaunch = campaign.actions.some((a) => a.state === 'PENDING' || a.state === 'FAILED');
   const live = ['SCHEDULED', 'ACTIVE', 'PAUSED'].includes(campaign.state);
   const cancellable = campaign.state !== 'COMPLETED' && campaign.state !== 'CANCELLED';
-  return (
-    <Card
-      title={t('web.campaign_section_commands')}
-      hint={t('web.campaign_cancel_hint')}
-      tone="danger"
-    >
-      <p className="muted small">{t('web.campaign_frozen_note')}</p>
-      <div className="form-actions">
-        {campaign.state === 'ACTIVE' && (
-          <Button
-            size="sm"
-            icon="pause"
-            disabled={run.isPending}
-            onClick={() => run.mutate('pause')}
-          >
-            {t('web.campaign_pause')}
-          </Button>
-        )}
-        {campaign.state === 'PAUSED' && (
-          <Button
-            size="sm"
-            icon="play"
-            disabled={run.isPending}
-            onClick={() => run.mutate('resume')}
-          >
-            {t('web.campaign_resume')}
-          </Button>
-        )}
-        {live && pendingLaunch && (
-          <Button
-            size="sm"
-            icon="send"
-            disabled={run.isPending}
-            onClick={() => run.mutate('launch')}
-          >
-            {t('web.campaign_launch_pending')}
-          </Button>
-        )}
-        {cancellable && (
-          <Button
-            size="sm"
-            variant="danger"
-            disabled={run.isPending}
-            onClick={() => setConfirming(true)}
-          >
-            {t('web.campaign_cancel')}
-          </Button>
-        )}
-      </div>
-      {confirming && (
-        <ConfirmDialog
-          title={t('web.campaign_cancel_confirm_title')}
-          question={t('web.campaign_cancel_confirm_body')}
-          confirmLabel={t('web.campaign_cancel_confirm')}
-          cancelLabel={t('web.campaign_cancel_keep')}
-          onConfirm={() => {
-            setConfirming(false);
-            run.mutate('cancel');
-          }}
-          onCancel={() => setConfirming(false)}
-        />
+  const hint = t('web.campaign_cancel_hint');
+  const buttons = (
+    <>
+      {campaign.state === 'ACTIVE' && (
+        <Button
+          icon="pause"
+          title={hint}
+          disabled={run.isPending}
+          onClick={() => run.mutate('pause')}
+        >
+          {t('web.campaign_pause')}
+        </Button>
       )}
-    </Card>
+      {campaign.state === 'PAUSED' && (
+        <Button
+          icon="play"
+          title={hint}
+          disabled={run.isPending}
+          onClick={() => run.mutate('resume')}
+        >
+          {t('web.campaign_resume')}
+        </Button>
+      )}
+      {live && pendingLaunch && (
+        <Button icon="send" disabled={run.isPending} onClick={() => run.mutate('launch')}>
+          {t('web.campaign_launch_pending')}
+        </Button>
+      )}
+      {cancellable && (
+        <Button
+          variant="danger"
+          title={hint}
+          disabled={run.isPending}
+          onClick={() => setConfirming(true)}
+        >
+          {t('web.campaign_cancel')}
+        </Button>
+      )}
+    </>
   );
+  const dialog = confirming ? (
+    <ConfirmDialog
+      title={t('web.campaign_cancel_confirm_title')}
+      question={t('web.campaign_cancel_confirm_body')}
+      confirmLabel={t('web.campaign_cancel_confirm')}
+      cancelLabel={t('web.campaign_cancel_keep')}
+      onConfirm={() => {
+        setConfirming(false);
+        run.mutate('cancel');
+      }}
+      onCancel={() => setConfirming(false)}
+    />
+  ) : null;
+  return { buttons, dialog };
 }
 
 function TallyList({ rows }: { rows: readonly CampaignTally[] }) {

@@ -36,4 +36,6 @@ export const WEB_FA_MARKETING = {
 export const WEB_FA_MARKETING_RETIRED: readonly string[] = [
   // terms: the enforcement switch is a row of its own, without a card title
   'web.terms_enforcement_title',
+  // campaigns: the commands are buttons in the page head, not a card
+  'web.campaign_section_commands',
 ];
