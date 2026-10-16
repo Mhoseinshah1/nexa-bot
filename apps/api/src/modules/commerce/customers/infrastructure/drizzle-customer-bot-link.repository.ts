@@ -48,21 +48,27 @@ export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkReposito
     tx?: unknown,
   ): Promise<number> {
     const tenantId = requireTenantId(scope);
+    // The batch is picked ONCE in a MATERIALIZED CTE and the UPDATE joins to it. Written as
+    // `WHERE id IN (SELECT … LIMIT n FOR UPDATE)`, PostgreSQL may evaluate the sub-select
+    // more than once and update more than `limit` rows (the integration test caught 3 rows
+    // in a batch of 2), so a batch would not be a batch.
     const r = await this.exec(tx).execute(sql`
+      WITH picked AS MATERIALIZED (
+        SELECT c2.id
+          FROM customers c2
+          JOIN legacy_import_map m
+            ON m.tenant_id = c2.tenant_id AND m.entity_type = 'CUSTOMER'
+           AND m.status = 'IMPORTED' AND m.entity_id = c2.id
+         WHERE c2.tenant_id = ${tenantId} AND c2.first_bot_instance_id IS NULL
+         ORDER BY c2.id
+         LIMIT ${input.limit}
+           FOR UPDATE OF c2 SKIP LOCKED)
       UPDATE customers c
          SET first_bot_instance_id = ${input.botInstanceId}, updated_at = ${input.now}
-       WHERE c.tenant_id = ${tenantId}
+        FROM picked
+       WHERE c.id = picked.id
+         AND c.tenant_id = ${tenantId}
          AND c.first_bot_instance_id IS NULL
-         AND c.id IN (
-           SELECT c2.id
-             FROM customers c2
-             JOIN legacy_import_map m
-               ON m.tenant_id = c2.tenant_id AND m.entity_type = 'CUSTOMER'
-              AND m.status = 'IMPORTED' AND m.entity_id = c2.id
-            WHERE c2.tenant_id = ${tenantId} AND c2.first_bot_instance_id IS NULL
-            ORDER BY c2.id
-            LIMIT ${input.limit}
-              FOR UPDATE OF c2 SKIP LOCKED)
       RETURNING c.id`);
     return r.rows.length;
   }
