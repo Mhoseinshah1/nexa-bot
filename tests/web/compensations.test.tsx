@@ -66,10 +66,9 @@ describe('the compensation list', () => {
       .map((b) => b.textContent?.trim())
       .filter((label) => label !== '');
     for (const label of labels) {
-      expect(
-        ['بعدی', 'قبلی'],
-        `a control on the compensation list: ${label ?? ''}`,
-      ).toContain(label);
+      expect(['بعدی', 'قبلی'], `a control on the compensation list: ${label ?? ''}`).toContain(
+        label,
+      );
     }
   });
 

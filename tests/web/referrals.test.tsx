@@ -136,9 +136,7 @@ describe('the attributions list', () => {
       expect(within(card).getByRole('button', { name: 'قبلی' })).not.toBeDisabled(),
     );
     fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
-    await waitFor(() =>
-      expect(within(card).getByRole('button', { name: 'قبلی' })).toBeDisabled(),
-    );
+    await waitFor(() => expect(within(card).getByRole('button', { name: 'قبلی' })).toBeDisabled());
   });
 
   it('says there are none rather than drawing an empty table', async () => {
