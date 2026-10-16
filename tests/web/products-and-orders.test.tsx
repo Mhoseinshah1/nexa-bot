@@ -200,6 +200,13 @@ describe('the product list', () => {
     expect(screen.getAllByText('گیگابایت')).toHaveLength(2);
   });
 
+  it('asks the server for ten products a page (W1.8)', async () => {
+    const api = stubApi(productList([product()]));
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('پلن یک‌ماهه');
+    expect(api.calls.find((call) => call.url.includes('/products?'))?.url).toContain('limit=10');
+  });
+
   it('takes a new product’s traffic in GB, and starts it unlimited, said by its own box', async () => {
     stubApi(productList([product()]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);

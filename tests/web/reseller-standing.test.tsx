@@ -131,6 +131,14 @@ const render = (keys: { wallet?: boolean; orders?: boolean; audit?: boolean } = 
   );
 
 describe('the reseller standing cards', () => {
+  it('asks for the purchases ten a page (W1.8)', async () => {
+    const api = stubApi(routes());
+    render();
+    await screen.findByText('Reza Reseller');
+    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    await waitFor(() => expect(gets(api, '/purchases?limit=10')).toHaveLength(1));
+  });
+
   it('draws the server’s balance and legacy debt, the purchase as recorded and the history', async () => {
     stubApi(routes());
     render();
