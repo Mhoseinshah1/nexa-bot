@@ -53,6 +53,7 @@ import { formatTimestamp, splitBytes } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { HandoffContextView } from './handoff-context';
+import { OpsActionDrawer } from './ops-drawer';
 import { HANDOFF_LABELS } from './handoff-labels';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
@@ -69,7 +70,6 @@ import {
   DataTable,
   Empty,
   Field,
-  FilterBar,
   FilterChip,
   FilterChips,
   IdentityCell,
@@ -84,6 +84,11 @@ import {
 } from '../ui/kit';
 import { ListFreshness, listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { Icon } from '../ui/icons';
+import { DateField } from '../ui/date-field';
+import { ListFilterBar } from '../ui/filter-bar';
+import { SavedViewsMenu } from '../ui/saved-views-menu';
+import type { SavedViewsRegistration } from '../ui/saved-views';
+import { OPS_LIST_PAGE_SIZE, dayRangeLabel } from '../ops-list-filters';
 // Review N8 (PR #240): the status vocabulary lives in its own module, shared with Customer 360.
 import { TICKET_STATUS_LABELS, TICKET_STATUS_TONES as STATUS_TONES } from '../ticket-labels';
 // Kept importable from this page under the names it exported before the move.
@@ -307,6 +312,47 @@ function useViewerId(): string | null {
 // The inbox
 // ---------------------------------------------------------------------------------------
 
+/** The inbox's filter parameters: what a saved view holds and «پاک کردن» clears. */
+const TICKET_VIEW_KEYS = [
+  'status',
+  'awaiting',
+  'categoryId',
+  'customer',
+  'assigned',
+  'from',
+  'to',
+] as const;
+
+/**
+ * Saved views (W1.4) over the inbox's URL filters, with the demo's three presets. Applying
+ * one is the same navigation the page's own controls make; no count is offered (the server
+ * has no total for a filter).
+ */
+export function ticketViews(route: Route): SavedViewsRegistration {
+  return {
+    page: 'tickets',
+    empty: Object.fromEntries(TICKET_VIEW_KEYS.map((key) => [key, ''])),
+    get: () => Object.fromEntries(TICKET_VIEW_KEYS.map((key) => [key, route.query.get(key) ?? ''])),
+    set: (state) =>
+      setQueries(
+        route,
+        TICKET_VIEW_KEYS.map((key) => {
+          const value = state[key] ?? '';
+          return [key, value === '' ? null : value] as const;
+        }),
+      ),
+    presets: [
+      { id: 'awaiting', name: 'web.tickets_view_awaiting', state: { awaiting: 'support' } },
+      {
+        id: 'mine',
+        name: 'web.tickets_view_mine',
+        state: { assigned: 'me', awaiting: 'support' },
+      },
+      { id: 'unassigned', name: 'web.tickets_view_unassigned', state: { assigned: 'none' } },
+    ],
+  };
+}
+
 export function TicketsPage({
   route,
   denied,
@@ -364,7 +410,12 @@ export function TicketsPage({
 
   const tickets = useQuery({
     queryKey: ['tickets', searchSignature, cursor ?? null],
-    queryFn: () => fetchTickets(cursor === undefined ? filters : { ...filters, cursor }),
+    queryFn: () =>
+      fetchTickets({
+        ...filters,
+        limit: OPS_LIST_PAGE_SIZE,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
     enabled: !denied,
   });
   const categories = useQuery({
@@ -506,143 +557,209 @@ export function TicketsPage({
       />
 
       <Card>
-        <FilterBar hidden={!requestable}>
-          <FilterChips label={t('web.status')}>
-            <FilterChip
-              pressed={status === null && awaiting === null}
-              onClick={() =>
-                setQueries(route, [
-                  ['status', null],
-                  ['awaiting', null],
-                ])
-              }
-            >
-              {t('web.ticket_filter_all')}
-            </FilterChip>
-            <FilterChip
-              pressed={status === null && awaiting === 'support'}
-              onClick={() =>
-                setQueries(route, [
-                  ['status', null],
-                  ['awaiting', 'support'],
-                ])
-              }
-            >
-              {t('web.ticket_filter_awaiting_support')}
-            </FilterChip>
-            <ChipDivider />
-            {TICKET_STATUSES.map((value) => (
-              <FilterChip
-                key={value}
-                pressed={status === value && awaiting === null}
-                onClick={() =>
+        {requestable && (
+          <ListFilterBar
+            label={t('web.tickets_title')}
+            search={
+              <form className="ops-search" onSubmit={apply}>
+                <input
+                  id="tickets-customer"
+                  className="input sm"
+                  dir="ltr"
+                  aria-label={t('web.ticket_customer')}
+                  placeholder={t('web.ticket_filter_customer_hint')}
+                  title={t('web.ticket_filter_customer_hint')}
+                  value={draftCustomer}
+                  onChange={(event) => editField({ customer: event.target.value })}
+                  {...debounce.composition}
+                />
+                <button type="submit" className="btn primary sm" disabled={dateProblem}>
+                  {t('web.users_search_apply')}
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  disabled={!filtering}
+                  onClick={() => {
+                    setDraft({ signature: '||', customer: '', fromDay: '', toDay: '' });
+                    setQueries(
+                      route,
+                      TICKET_VIEW_KEYS.map((key) => [key, null] as const),
+                    );
+                  }}
+                >
+                  {t('web.users_search_clear')}
+                </button>
+              </form>
+            }
+            filters={[
+              {
+                key: 'status',
+                label: t('web.status'),
+                active:
+                  status !== null
+                    ? t(TICKET_STATUS_LABELS[status])
+                    : awaiting === 'support'
+                      ? t('web.ticket_filter_awaiting_support')
+                      : null,
+                onClear: () =>
                   setQueries(route, [
-                    ['status', value],
+                    ['status', null],
                     ['awaiting', null],
-                  ])
-                }
-              >
-                {t(TICKET_STATUS_LABELS[value])}
-              </FilterChip>
-            ))}
-          </FilterChips>
-        </FilterBar>
-        <form className="toolbar tickets-filters" onSubmit={apply} hidden={!requestable}>
-          <Field label={t('web.ticket_category')} htmlFor="tickets-category" compact>
-            <select
-              id="tickets-category"
-              className="input sm"
-              value={categoryId}
-              onChange={(event) => setQuery(route, 'categoryId', event.target.value || null)}
-            >
-              <option value="">{t('web.ticket_filter_all')}</option>
-              {(categories.data?.categories ?? []).map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.title}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t('web.ticket_assignee')} htmlFor="tickets-assigned" compact>
-            <select
-              id="tickets-assigned"
-              className="input sm"
-              value={assigned}
-              onChange={(event) => setQuery(route, 'assigned', event.target.value || null)}
-            >
-              <option value="">{t('web.ticket_filter_all')}</option>
-              <option value="me">{t('web.ticket_filter_mine')}</option>
-              <option value="none">{t('web.ticket_unassigned')}</option>
-              {(assignees.data?.admins ?? []).map((admin) => (
-                <option key={admin.id} value={admin.id}>
-                  {admin.displayName} (@{admin.username})
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label={t('web.ticket_customer')}
-            hint={t('web.ticket_filter_customer_hint')}
-            htmlFor="tickets-customer"
-            compact
-          >
-            <input
-              id="tickets-customer"
-              className="input sm"
-              dir="ltr"
-              value={draftCustomer}
-              onChange={(event) => editField({ customer: event.target.value })}
-              {...debounce.composition}
-            />
-          </Field>
-          <Field label={t('web.ticket_filter_from')} htmlFor="tickets-from" compact>
-            <input
-              id="tickets-from"
-              className="input sm"
-              type="date"
-              value={draftFrom}
-              onChange={(event) => editField({ fromDay: event.target.value })}
-            />
-          </Field>
-          <Field
-            label={t('web.ticket_filter_to')}
-            htmlFor="tickets-to"
-            compact
-            {...(dateProblem ? { error: t('web.ticket_filter_dates_invalid') } : {})}
-          >
-            <input
-              id="tickets-to"
-              className="input sm"
-              type="date"
-              value={draftTo}
-              onChange={(event) => editField({ toDay: event.target.value })}
-            />
-          </Field>
-          <div className="tickets-filter-actions">
-            <button type="submit" className="btn primary sm" disabled={dateProblem}>
-              {t('web.users_search_apply')}
-            </button>
-            <button
-              type="button"
-              className="btn ghost sm"
-              disabled={!filtering}
-              onClick={() => {
-                setDraft({ signature: '||', customer: '', fromDay: '', toDay: '' });
-                setQueries(route, [
-                  ['status', null],
-                  ['awaiting', null],
-                  ['categoryId', null],
-                  ['customer', null],
-                  ['assigned', null],
-                  ['from', null],
-                  ['to', null],
-                ]);
-              }}
-            >
-              {t('web.users_search_clear')}
-            </button>
-          </div>
-        </form>
+                  ]),
+                control: (
+                  <FilterChips label={t('web.status')}>
+                    <FilterChip
+                      pressed={status === null && awaiting === null}
+                      onClick={() =>
+                        setQueries(route, [
+                          ['status', null],
+                          ['awaiting', null],
+                        ])
+                      }
+                    >
+                      {t('web.ticket_filter_all')}
+                    </FilterChip>
+                    <FilterChip
+                      pressed={status === null && awaiting === 'support'}
+                      onClick={() =>
+                        setQueries(route, [
+                          ['status', null],
+                          ['awaiting', 'support'],
+                        ])
+                      }
+                    >
+                      {t('web.ticket_filter_awaiting_support')}
+                    </FilterChip>
+                    <ChipDivider />
+                    {TICKET_STATUSES.map((value) => (
+                      <FilterChip
+                        key={value}
+                        pressed={status === value && awaiting === null}
+                        onClick={() =>
+                          setQueries(route, [
+                            ['status', value],
+                            ['awaiting', null],
+                          ])
+                        }
+                      >
+                        {t(TICKET_STATUS_LABELS[value])}
+                      </FilterChip>
+                    ))}
+                  </FilterChips>
+                ),
+              },
+              {
+                key: 'category',
+                label: t('web.ticket_category'),
+                active:
+                  categoryId === ''
+                    ? null
+                    : ((categories.data?.categories ?? []).find((one) => one.id === categoryId)
+                        ?.title ?? categoryId),
+                onClear: () => setQuery(route, 'categoryId', null),
+                control: (
+                  <select
+                    id="tickets-category"
+                    className="input sm"
+                    aria-label={t('web.ticket_category')}
+                    value={categoryId}
+                    onChange={(event) => setQuery(route, 'categoryId', event.target.value || null)}
+                  >
+                    <option value="">{t('web.ticket_filter_all')}</option>
+                    {(categories.data?.categories ?? []).map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.title}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+              {
+                key: 'assigned',
+                label: t('web.ticket_assignee'),
+                active:
+                  assigned === ''
+                    ? null
+                    : assigned === 'me'
+                      ? t('web.ticket_filter_mine')
+                      : assigned === 'none'
+                        ? t('web.ticket_unassigned')
+                        : (() => {
+                            const admin = (assignees.data?.admins ?? []).find(
+                              (one) => one.id === assigned,
+                            );
+                            return admin === undefined ? assigned : `@${admin.username}`;
+                          })(),
+                onClear: () => setQuery(route, 'assigned', null),
+                control: (
+                  <select
+                    id="tickets-assigned"
+                    className="input sm"
+                    aria-label={t('web.ticket_assignee')}
+                    value={assigned}
+                    onChange={(event) => setQuery(route, 'assigned', event.target.value || null)}
+                  >
+                    <option value="">{t('web.ticket_filter_all')}</option>
+                    <option value="me">{t('web.ticket_filter_mine')}</option>
+                    <option value="none">{t('web.ticket_unassigned')}</option>
+                    {(assignees.data?.admins ?? []).map((admin) => (
+                      <option key={admin.id} value={admin.id}>
+                        {admin.displayName} (@{admin.username})
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+              {
+                key: 'dates',
+                label: t('web.ops_filter_dates'),
+                active: dayRangeLabel(fromDay, toDay),
+                onClear: () => {
+                  edit({ fromDay: '', toDay: '' });
+                  setQueries(route, [
+                    ['from', null],
+                    ['to', null],
+                  ]);
+                },
+                control: (
+                  <div className="ops-date-range">
+                    <Field label={t('web.ticket_filter_from')} htmlFor="tickets-from" compact>
+                      <DateField
+                        id="tickets-from"
+                        size="sm"
+                        value={draftFrom}
+                        onChange={(value) => editField({ fromDay: value })}
+                      />
+                    </Field>
+                    <Field
+                      label={t('web.ticket_filter_to')}
+                      htmlFor="tickets-to"
+                      compact
+                      {...(dateProblem ? { error: t('web.ticket_filter_dates_invalid') } : {})}
+                    >
+                      <DateField
+                        id="tickets-to"
+                        size="sm"
+                        value={draftTo}
+                        onChange={(value) => editField({ toDay: value })}
+                        invalid={dateProblem}
+                      />
+                    </Field>
+                  </div>
+                ),
+              },
+            ]}
+            onClearAll={() => {
+              setDraft({ signature: '||', customer: '', fromDay: '', toDay: '' });
+              setQueries(
+                route,
+                TICKET_VIEW_KEYS.map((key) => [key, null] as const),
+              );
+            }}
+            savedViews={<SavedViewsMenu registration={ticketViews(route)} />}
+          />
+        )}
 
         <StateSwitch
           query={tickets}
@@ -708,6 +825,12 @@ function TicketCategoriesCard({
   const creation = useSubmissionKey();
   const [title, setTitle] = useState('');
   const [order, setOrder] = useState('');
+  // W3: the create form and the two row editors open in drawers, one at a time.
+  const [drawer, setDrawer] = useState<
+    | { readonly kind: 'create' }
+    | { readonly kind: 'rename' | 'reorder'; readonly category: TicketCategoryView }
+    | null
+  >(null);
   const refresh = () => void queries.invalidateQueries({ queryKey: ['ticket-categories'] });
 
   const create = useMutation({
@@ -717,6 +840,7 @@ function TicketCategoriesCard({
       creation.settle();
       setTitle('');
       setOrder('');
+      setDrawer(null);
       notify({ tone: 'ok', message: t('web.ticket_category_created') });
       refresh();
     },
@@ -726,6 +850,7 @@ function TicketCategoriesCard({
   const update = useMutation({
     mutationFn: updateTicketCategory,
     onSuccess: ({ changed }) => {
+      setDrawer(null);
       notify({
         tone: changed ? 'ok' : 'info',
         message: t(changed ? 'web.ticket_category_saved' : 'web.ticket_no_change'),
@@ -742,14 +867,12 @@ function TicketCategoriesCard({
     {
       key: 'title',
       header: t('web.ticket_category_title'),
-      render: (row) =>
-        mayEdit ? <CategoryTitleEditor category={row} onSave={update.mutate} /> : row.title,
+      render: (row) => row.title,
     },
     {
       key: 'order',
       header: t('web.ticket_category_order'),
-      render: (row) =>
-        mayEdit ? <CategoryOrderEditor category={row} onSave={update.mutate} /> : row.sortOrder,
+      render: (row) => row.sortOrder,
     },
     {
       key: 'active',
@@ -766,14 +889,30 @@ function TicketCategoriesCard({
             key: 'toggle',
             header: '',
             render: (row: TicketCategoryView) => (
-              <button
-                type="button"
-                className="btn sm"
-                disabled={update.isPending}
-                onClick={() => update.mutate({ id: row.id, isActive: !row.isActive })}
-              >
-                {t(row.isActive ? 'web.ticket_category_hide' : 'web.ticket_category_show')}
-              </button>
+              <span className="ops-row-actions">
+                <button
+                  type="button"
+                  className="btn sm ghost"
+                  onClick={() => setDrawer({ kind: 'rename', category: row })}
+                >
+                  {t('web.ticket_category_rename')}
+                </button>
+                <button
+                  type="button"
+                  className="btn sm ghost"
+                  onClick={() => setDrawer({ kind: 'reorder', category: row })}
+                >
+                  {t('web.ticket_category_reorder')}
+                </button>
+                <button
+                  type="button"
+                  className="btn sm"
+                  disabled={update.isPending}
+                  onClick={() => update.mutate({ id: row.id, isActive: !row.isActive })}
+                >
+                  {t(row.isActive ? 'web.ticket_category_hide' : 'web.ticket_category_show')}
+                </button>
+              </span>
             ),
           },
         ]
@@ -781,7 +920,23 @@ function TicketCategoriesCard({
   ];
 
   return (
-    <Card title={t('web.ticket_categories_title')} hint={t('web.ticket_categories_hint')}>
+    <Card
+      title={t('web.ticket_categories_title')}
+      hint={t('web.ticket_categories_hint')}
+      {...(mayEdit
+        ? {
+            actions: (
+              <button
+                type="button"
+                className="btn sm primary"
+                onClick={() => setDrawer({ kind: 'create' })}
+              >
+                {t('web.ticket_category_add')}
+              </button>
+            ),
+          }
+        : {})}
+    >
       <StateSwitch query={query} isEmpty={categories.length === 0}>
         <DataTable
           caption={t('web.ticket_categories_title')}
@@ -792,77 +947,133 @@ function TicketCategoriesCard({
         />
       </StateSwitch>
       {mayEdit && (
-        <form
-          className="toolbar tickets-category-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (normalized === null || sortOrder === null) return;
-            create.mutate({ title: normalized, sortOrder });
+        <OpsActionDrawer
+          open={drawer?.kind === 'create'}
+          title={t('web.ticket_category_add')}
+          dirty={title !== '' || order !== ''}
+          onClose={() => {
+            setTitle('');
+            setOrder('');
+            create.reset();
+            setDrawer(null);
           }}
         >
-          <Field
-            label={t('web.ticket_category_title')}
-            hint={t('web.ticket_category_title_hint')}
-            htmlFor="ticket-category-title"
+          <form
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (normalized === null || sortOrder === null) return;
+              create.mutate({ title: normalized, sortOrder });
+            }}
           >
-            <input
-              id="ticket-category-title"
-              className="input sm"
-              value={title}
-              maxLength={TICKET_CATEGORY_TITLE_MAX_LENGTH * 2}
-              onChange={(event) => setTitle(event.target.value)}
-            />
-          </Field>
-          <Field label={t('web.ticket_category_order')} htmlFor="ticket-category-order">
-            <input
-              id="ticket-category-order"
-              className="input sm tickets-order"
-              inputMode="numeric"
-              value={order}
-              onChange={(event) => setOrder(event.target.value)}
-            />
-          </Field>
-          <button
-            type="submit"
-            className="btn primary sm"
-            disabled={create.isPending || normalized === null || sortOrder === null}
-          >
-            {t('web.ticket_category_add')}
-          </button>
-        </form>
+            <Field
+              label={t('web.ticket_category_title')}
+              hint={t('web.ticket_category_title_hint')}
+              htmlFor="ticket-category-title"
+            >
+              <input
+                id="ticket-category-title"
+                className="input"
+                value={title}
+                maxLength={TICKET_CATEGORY_TITLE_MAX_LENGTH * 2}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            </Field>
+            <Field label={t('web.ticket_category_order')} htmlFor="ticket-category-order">
+              <input
+                id="ticket-category-order"
+                className="input tickets-order"
+                inputMode="numeric"
+                value={order}
+                onChange={(event) => setOrder(event.target.value)}
+              />
+            </Field>
+            {create.error !== null && <Banner tone="danger">{ticketFault(create.error)}</Banner>}
+            <div className="ops-row-actions">
+              <button
+                type="submit"
+                className="btn primary"
+                disabled={create.isPending || normalized === null || sortOrder === null}
+              >
+                {t('web.ticket_category_add')}
+              </button>
+            </div>
+          </form>
+        </OpsActionDrawer>
       )}
-      {create.error !== null && <Banner tone="danger">{ticketFault(create.error)}</Banner>}
+      {mayEdit && drawer !== null && drawer.kind === 'rename' && (
+        <CategoryTitleEditor
+          category={drawer.category}
+          pending={update.isPending}
+          onSave={(input) => update.mutate(input)}
+          onClose={() => setDrawer(null)}
+        />
+      )}
+      {mayEdit && drawer !== null && drawer.kind === 'reorder' && (
+        <CategoryOrderEditor
+          category={drawer.category}
+          pending={update.isPending}
+          onSave={(input) => update.mutate(input)}
+          onClose={() => setDrawer(null)}
+        />
+      )}
     </Card>
   );
 }
 
 function CategoryTitleEditor({
   category,
+  pending,
   onSave,
+  onClose,
 }: {
   category: TicketCategoryView;
+  pending: boolean;
   onSave: (input: { id: string; title: string }) => void;
+  onClose: () => void;
 }) {
   const [value, setValue] = useState(category.title);
-  useEffect(() => setValue(category.title), [category.title]);
   const normalized = normalizeTicketCategoryTitle(value);
   return (
-    <span className="tickets-inline-edit">
-      <input
-        aria-label={t('web.ticket_category_title')}
-        className="input sm"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-      />
-      <button
-        type="button"
-        className="btn sm"
-        disabled={normalized === null || normalized === category.title}
-        onClick={() => normalized !== null && onSave({ id: category.id, title: normalized })}
+    <OpsActionDrawer
+      open
+      title={`${t('web.ticket_category_rename')} — ${category.title}`}
+      dirty={value !== category.title}
+      onClose={onClose}
+    >
+      <form
+        className="stack"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (normalized !== null && normalized !== category.title) {
+            onSave({ id: category.id, title: normalized });
+          }
+        }}
       >
-        {t('web.ticket_category_rename')}
-      </button>
-    </span>
+        <Field
+          label={t('web.ticket_category_title')}
+          hint={t('web.ticket_category_title_hint')}
+          htmlFor="ticket-category-rename"
+        >
+          <input
+            id="ticket-category-rename"
+            className="input"
+            value={value}
+            maxLength={TICKET_CATEGORY_TITLE_MAX_LENGTH * 2}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        </Field>
+        <div className="ops-row-actions">
+          <button
+            type="submit"
+            className="btn primary"
+            disabled={pending || normalized === null || normalized === category.title}
+          >
+            {t('web.ticket_category_rename')}
+          </button>
+        </div>
+      </form>
+    </OpsActionDrawer>
   );
 }
 
@@ -873,34 +1084,54 @@ function CategoryTitleEditor({
  */
 function CategoryOrderEditor({
   category,
+  pending,
   onSave,
+  onClose,
 }: {
   category: TicketCategoryView;
+  pending: boolean;
   onSave: (input: { id: string; sortOrder: number }) => void;
+  onClose: () => void;
 }) {
   const [value, setValue] = useState(String(category.sortOrder));
-  useEffect(() => setValue(String(category.sortOrder)), [category.sortOrder]);
   const sortOrder = sortOrderOf(value);
   return (
-    <span className="tickets-inline-edit">
-      <input
-        aria-label={t('web.ticket_category_order')}
-        className="input sm tickets-order"
-        inputMode="numeric"
-        size={6}
-        value={value}
-        aria-invalid={sortOrder === null}
-        onChange={(event) => setValue(event.target.value)}
-      />
-      <button
-        type="button"
-        className="btn sm"
-        disabled={sortOrder === null || sortOrder === category.sortOrder}
-        onClick={() => sortOrder !== null && onSave({ id: category.id, sortOrder })}
+    <OpsActionDrawer
+      open
+      title={`${t('web.ticket_category_reorder')} — ${category.title}`}
+      dirty={value !== String(category.sortOrder)}
+      onClose={onClose}
+    >
+      <form
+        className="stack"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (sortOrder !== null && sortOrder !== category.sortOrder) {
+            onSave({ id: category.id, sortOrder });
+          }
+        }}
       >
-        {t('web.ticket_category_reorder')}
-      </button>
-    </span>
+        <Field label={t('web.ticket_category_order')} htmlFor="ticket-category-reorder">
+          <input
+            id="ticket-category-reorder"
+            className="input tickets-order"
+            inputMode="numeric"
+            value={value}
+            aria-invalid={sortOrder === null}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        </Field>
+        <div className="ops-row-actions">
+          <button
+            type="submit"
+            className="btn primary"
+            disabled={pending || sortOrder === null || sortOrder === category.sortOrder}
+          >
+            {t('web.ticket_category_reorder')}
+          </button>
+        </div>
+      </form>
+    </OpsActionDrawer>
   );
 }
 
@@ -951,7 +1182,7 @@ export function TicketDetailPage({
       />
       <StateSwitch query={ticket} denied={denied}>
         {data !== undefined && (
-          <div className="two-col ticket-layout">
+          <div className="two-col ticket-layout ops-sticky-cols">
             <div className="stack">
               <TicketConversationCard messages={data.messages} />
               {mayReply && <TicketReplyCard ticket={data.ticket} />}
@@ -1050,8 +1281,21 @@ function TicketContextCard({
         <Ltr>{value.slice(0, 8)}</Ltr>
       </a>
     );
+  const [editingLinks, setEditingLinks] = useState(false);
   return (
-    <Card title={t('web.ticket_context')} hint={t('web.ticket_context_hint')}>
+    <Card
+      title={t('web.ticket_context')}
+      hint={t('web.ticket_context_hint')}
+      {...(mayAssign
+        ? {
+            actions: (
+              <button type="button" className="btn sm" onClick={() => setEditingLinks(true)}>
+                {t('web.ticket_links_save')}
+              </button>
+            ),
+          }
+        : {})}
+    >
       <KV
         items={[
           [
@@ -1080,12 +1324,14 @@ function TicketContextCard({
           [t('web.ticket_link_payment'), link('payments', ticket.paymentId)],
         ]}
       />
-      {mayAssign && <TicketLinksForm ticket={ticket} />}
+      {mayAssign && editingLinks && (
+        <TicketLinksForm ticket={ticket} onClose={() => setEditingLinks(false)} />
+      )}
     </Card>
   );
 }
 
-function TicketLinksForm({ ticket }: { ticket: TicketSummary }) {
+function TicketLinksForm({ ticket, onClose }: { ticket: TicketSummary; onClose: () => void }) {
   const notify = useToast();
   const queries = useQueryClient();
   const [service, setService] = useState(ticket.serviceId ?? '');
@@ -1106,48 +1352,57 @@ function TicketLinksForm({ ticket }: { ticket: TicketSummary }) {
         message: t(changed ? 'web.ticket_links_saved' : 'web.ticket_no_change'),
       });
       void queries.invalidateQueries({ queryKey: ['ticket', ticket.id] });
+      onClose();
     },
   });
+  const dirty =
+    service !== (ticket.serviceId ?? '') ||
+    order !== (ticket.orderId ?? '') ||
+    payment !== (ticket.paymentId ?? '');
   return (
-    <form
-      className="ticket-links"
-      onSubmit={(event) => {
-        event.preventDefault();
-        save.mutate();
-      }}
-    >
-      <Field label={t('web.ticket_link_service')} htmlFor="ticket-link-service" compact>
-        <input
-          id="ticket-link-service"
-          className="input sm"
-          dir="ltr"
-          value={service}
-          onChange={(e) => setService(e.target.value)}
-        />
-      </Field>
-      <Field label={t('web.ticket_link_order')} htmlFor="ticket-link-order" compact>
-        <input
-          id="ticket-link-order"
-          className="input sm"
-          dir="ltr"
-          value={order}
-          onChange={(e) => setOrder(e.target.value)}
-        />
-      </Field>
-      <Field label={t('web.ticket_link_payment')} htmlFor="ticket-link-payment" compact>
-        <input
-          id="ticket-link-payment"
-          className="input sm"
-          dir="ltr"
-          value={payment}
-          onChange={(e) => setPayment(e.target.value)}
-        />
-      </Field>
-      <button type="submit" className="btn sm" disabled={save.isPending}>
-        {t('web.ticket_links_save')}
-      </button>
-      {save.error !== null && <Banner tone="danger">{ticketFault(save.error)}</Banner>}
-    </form>
+    <OpsActionDrawer open title={t('web.ticket_links_save')} dirty={dirty} onClose={onClose}>
+      <form
+        className="stack"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save.mutate();
+        }}
+      >
+        <Field label={t('web.ticket_link_service')} htmlFor="ticket-link-service">
+          <input
+            id="ticket-link-service"
+            className="input"
+            dir="ltr"
+            value={service}
+            onChange={(e) => setService(e.target.value)}
+          />
+        </Field>
+        <Field label={t('web.ticket_link_order')} htmlFor="ticket-link-order">
+          <input
+            id="ticket-link-order"
+            className="input"
+            dir="ltr"
+            value={order}
+            onChange={(e) => setOrder(e.target.value)}
+          />
+        </Field>
+        <Field label={t('web.ticket_link_payment')} htmlFor="ticket-link-payment">
+          <input
+            id="ticket-link-payment"
+            className="input"
+            dir="ltr"
+            value={payment}
+            onChange={(e) => setPayment(e.target.value)}
+          />
+        </Field>
+        {save.error !== null && <Banner tone="danger">{ticketFault(save.error)}</Banner>}
+        <div className="ops-row-actions">
+          <button type="submit" className="btn primary" disabled={save.isPending}>
+            {t('web.ticket_links_save')}
+          </button>
+        </div>
+      </form>
+    </OpsActionDrawer>
   );
 }
 
@@ -1163,6 +1418,7 @@ function TicketActionsCard({
   const notify = useToast();
   const queries = useQueryClient();
   const viewer = useViewerId();
+  const [picking, setPicking] = useState<'assignee' | 'priority' | null>(null);
   const assignees = useQuery({
     queryKey: ['ticket-assignees'],
     queryFn: fetchTicketAssignees,
@@ -1222,7 +1478,33 @@ function TicketActionsCard({
         </div>
       )}
       {mayAssign && (
-        <>
+        <div className="ops-row-actions ticket-manage">
+          <button type="button" className="btn sm" onClick={() => setPicking('assignee')}>
+            {t('web.ticket_assignee_change')}
+          </button>
+          {viewer !== null && viewer !== ticket.assignedAdminId && (
+            <button
+              type="button"
+              className="btn ghost sm"
+              disabled={assign.isPending}
+              onClick={() => assign.mutate(viewer)}
+            >
+              {t('web.ticket_assign_me')}
+            </button>
+          )}
+          <button type="button" className="btn sm" onClick={() => setPicking('priority')}>
+            {t('web.ticket_priority_change')}
+          </button>
+        </div>
+      )}
+      {mayAssign && (
+        // W3: the two selects open in a drawer; a choice still applies at once, as before.
+        <OpsActionDrawer
+          open={picking === 'assignee'}
+          title={t('web.ticket_assignee')}
+          dirty={false}
+          onClose={() => setPicking(null)}
+        >
           <Field label={t('web.ticket_assignee')} htmlFor="ticket-assignee">
             <select
               id="ticket-assignee"
@@ -1230,7 +1512,9 @@ function TicketActionsCard({
               value={ticket.assignedAdminId ?? ''}
               disabled={assign.isPending}
               onChange={(event) =>
-                assign.mutate(event.target.value === '' ? null : event.target.value)
+                assign.mutate(event.target.value === '' ? null : event.target.value, {
+                  onSuccess: () => setPicking(null),
+                })
               }
             >
               <option value="">{t('web.ticket_unassigned')}</option>
@@ -1241,25 +1525,26 @@ function TicketActionsCard({
               ))}
             </select>
           </Field>
-          {viewer !== null && viewer !== ticket.assignedAdminId && (
-            <div className="btn-group">
-              <button
-                type="button"
-                className="btn ghost sm"
-                disabled={assign.isPending}
-                onClick={() => assign.mutate(viewer)}
-              >
-                {t('web.ticket_assign_me')}
-              </button>
-            </div>
-          )}
+        </OpsActionDrawer>
+      )}
+      {mayAssign && (
+        <OpsActionDrawer
+          open={picking === 'priority'}
+          title={t('web.ticket_priority')}
+          dirty={false}
+          onClose={() => setPicking(null)}
+        >
           <Field label={t('web.ticket_priority')} htmlFor="ticket-priority">
             <select
               id="ticket-priority"
               className="input"
               value={ticket.priority}
               disabled={priority.isPending}
-              onChange={(event) => priority.mutate(event.target.value as TicketPriority)}
+              onChange={(event) =>
+                priority.mutate(event.target.value as TicketPriority, {
+                  onSuccess: () => setPicking(null),
+                })
+              }
             >
               {TICKET_PRIORITIES.map((value) => (
                 <option key={value} value={value}>
@@ -1268,7 +1553,7 @@ function TicketActionsCard({
               ))}
             </select>
           </Field>
-        </>
+        </OpsActionDrawer>
       )}
     </Card>
   );

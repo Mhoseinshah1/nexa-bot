@@ -17,6 +17,18 @@ export const WEB_FA_OPS = {
   'web.role_key_technical': 'فنی',
   'web.role_key_receipt_reviewer': 'بررسی رسید',
   'web.role_key_observer': 'ناظر',
+
+  // --- shared list filters (support, infra, system) ------------------------
+  'web.ops_filter_from': 'از',
+  'web.ops_filter_until': 'تا',
+  'web.ops_filter_dates': 'بازهٔ زمانی',
+
+  // --- tickets: saved-view presets -----------------------------------------
+  'web.tickets_view_awaiting': 'منتظر پاسخ ما',
+  'web.tickets_view_mine': 'تیکت‌های من',
+  'web.tickets_view_unassigned': 'بدون مسئول',
+  'web.ticket_assignee_change': 'مسئول پاسخ…',
+  'web.ticket_priority_change': 'اولویت…',
 } as const;
 
 /**

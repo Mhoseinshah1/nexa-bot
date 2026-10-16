@@ -326,18 +326,6 @@ form.set-row > * + * {
 
 /* --- WP-A7 tickets ------------------------------------------------------------- */
 
-/* The inbox's filter row: compact fields that wrap, the two buttons on the same line. */
-.tickets-filters {
-  align-items: flex-end;
-}
-.tickets-filters .field {
-  min-width: 140px;
-}
-.tickets-filter-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
 .tickets-number {
   font-size: var(--fs-ui);
 }
@@ -345,32 +333,13 @@ form.set-row > * + * {
 .tickets-row-closed td {
   color: var(--fg-3);
 }
-.tickets-inline-edit {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
 .tickets-order {
   width: 84px;
-}
-.tickets-category-form {
-  align-items: flex-end;
 }
 
 /* One ticket: the conversation and the reply in the main column, the rest beside it. */
 .ticket-transitions {
   flex-wrap: wrap;
-}
-.ticket-links {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-.ticket-links > .btn {
-  align-self: flex-start;
 }
 
 /*
