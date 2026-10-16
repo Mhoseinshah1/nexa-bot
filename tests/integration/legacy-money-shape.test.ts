@@ -86,7 +86,7 @@ function converterFiles(shape: MoneyShape): Record<string, Rec[]> {
     debts.push({
       record_type: 'legacy_debt',
       idempotency_key: `legacy:debt:${tg}`,
-      telegram_user_id: tg,
+      legacy_user_id: tg,
       amount_minor: amount.toString(),
       currency: 'IRT',
     });
