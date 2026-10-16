@@ -68,6 +68,7 @@ import {
   ButtonGroup,
   ChartCard,
   CursorPager,
+  LIST_PAGE_SIZE,
   Donut,
   FilterChip,
   FilterChips,
@@ -632,7 +633,7 @@ function usePerRange<T>(selection: ReportRangeSelection, initial: T): [T, (next:
 function TopProducts({ selection }: { selection: ReportRangeSelection }) {
   const [by, setBy] = useState<ReportProductRanking>('REVENUE');
   const [page, setPage] = usePerRange(selection, 1);
-  const limit = 25;
+  const limit = LIST_PAGE_SIZE;
   const products = useReport(
     ['products', selection, by, page, limit],
     () => fetchReportProducts(selection, { by, limit, page }),
@@ -728,8 +729,6 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
               hasNext={page * limit < data.totalRows}
               onPrevious={() => setPage(page - 1)}
               onNext={() => setPage(page + 1)}
-              previousLabel={'web.report_page_previous'}
-              nextLabel={'web.report_page_next'}
             />
           </>
         )}
@@ -846,7 +845,6 @@ export function ReportsPage({
           hint={t('web.report_owner_only_hint')}
           icon="lock"
         />
-        <NoLogsNote />
       </>
     );
   }
@@ -885,17 +883,8 @@ export function ReportsPage({
           {tab === 'failures' && <FailureSummary selection={selection} />}
         </ReportExportAllowed.Provider>
       </TabPanel>
-      <NoLogsNote />
     </>
   );
-}
-
-/**
- * Owner revision 25, which the planned placeholder carried and this page inherits: business
- * reports are aggregates, and there is no general log browser here or anywhere.
- */
-function NoLogsNote() {
-  return <p className="faint small">{t('web.planned_reports_no_logs')}</p>;
 }
 
 function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
@@ -1023,8 +1012,6 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
               hasNext={data.nextCursor !== null}
               onPrevious={() => setCursors(cursors.slice(0, -1))}
               onNext={() => data.nextCursor !== null && setCursors([...cursors, data.nextCursor])}
-              previousLabel={'web.report_page_previous'}
-              nextLabel={'web.report_page_next'}
             />
           </>
         )}
@@ -1446,7 +1433,6 @@ function InfrastructureReport({ selection }: { selection: ReportRangeSelection }
               caption={t('web.report_infra_providers')}
             />
             {data.truncated && <p className="faint small">{t('web.report_truncated')}</p>}
-            <p className="faint small">{t('web.report_location_unsupported')}</p>
           </>
         )}
       </StateSwitch>
@@ -1554,7 +1540,7 @@ export function ReferralAnalytics({
   const selection = rangeFromRoute(route, 'LAST_30_DAYS');
   const [by, setBy] = useState<ReportReferrerRanking>('SIGNUPS');
   const [page, setPage] = usePerRange(selection, 1);
-  const limit = 10;
+  const limit = LIST_PAGE_SIZE;
   const referrals = useReport(
     ['referrals', selection, by, page],
     () => fetchReportReferrals(selection, { by, limit, page }),
@@ -1680,8 +1666,6 @@ export function ReferralAnalytics({
               hasNext={page * limit < data.topReferrers.totalRows}
               onPrevious={() => setPage(page - 1)}
               onNext={() => setPage(page + 1)}
-              previousLabel={'web.report_page_previous'}
-              nextLabel={'web.report_page_next'}
             />
             <PeriodNote period={data.period} />
           </>
@@ -1824,17 +1808,11 @@ function FinancialReport({ selection, route }: { selection: ReportRangeSelection
                 lines={CASH_LINES}
                 totals={data.totals}
               />
-              <p className="muted small" data-testid="finance-provider-fee">
-                {t('web.finance_provider_fee_not_recorded')}
-              </p>
               <SectionTable
                 caption={t('web.finance_section_wallet_flow')}
                 lines={WALLET_LINES}
                 totals={data.totals}
               />
-              <p className="muted small" data-testid="finance-no-profit">
-                {t('web.finance_no_profit')}
-              </p>
             </div>
           )}
         </StateSwitch>

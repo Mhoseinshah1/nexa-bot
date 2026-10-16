@@ -343,7 +343,7 @@ describe('report exports and paging (WP12 review)', () => {
     const page = renderPage(
       <ReportsPage route={reportsRoute('range=THIS_MONTH')} denied={false} />,
     );
-    fireEvent.click(await screen.findByRole('button', { name: t('web.report_page_next') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() =>
       expect(api.calls.some((c) => c.url.includes('cursor=CURSOR-FROM-THIS-MONTH'))).toBe(true),
     );
@@ -457,10 +457,10 @@ describe('referral analytics', () => {
         />,
       );
       const card = (await screen.findByText('تحلیل معرفی')).closest('section') as HTMLElement;
-      const next = await within(card).findByRole('button', { name: t('web.report_page_next') });
+      const next = await within(card).findByRole('button', { name: t('web.page_next') });
       await waitFor(() => expect(card.textContent).toContain('145,000'));
       expect((next as HTMLButtonElement).disabled, `${totalRows} rows`).toBe(!nextOffered);
-      const previous = within(card).getByRole('button', { name: t('web.report_page_previous') });
+      const previous = within(card).getByRole('button', { name: t('web.page_previous') });
       expect((previous as HTMLButtonElement).disabled, 'page 1 has no previous').toBe(true);
       page.unmount();
     }

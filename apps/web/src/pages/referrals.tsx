@@ -251,11 +251,11 @@ export function ReferralsPage({
               />
             </Field>
             <Button type="submit" size="sm" variant="primary" icon="filter">
-              {t('web.referrals_filter_apply')}
+              {t('web.bx_referrals_filter_apply')}
             </Button>
             {applied !== '' && (
               <a className="btn sm ghost" href="/referrals" onClick={onLink}>
-                {t('web.referrals_filter_clear')}
+                {t('web.bx_referrals_filter_clear')}
               </a>
             )}
           </form>
@@ -334,7 +334,7 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
             title={
               referrerId === ''
                 ? t('web.referrals_attributions_empty')
-                : t('web.referrals_filter_empty')
+                : t('web.bx_referrals_filter_empty')
             }
             icon="link"
           />
@@ -513,7 +513,7 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
             title={
               state === 'ALL' && referrerId === ''
                 ? t('web.referrals_commissions_empty')
-                : t('web.referrals_filter_empty')
+                : t('web.bx_referrals_filter_empty')
             }
             icon="inbox"
           />
