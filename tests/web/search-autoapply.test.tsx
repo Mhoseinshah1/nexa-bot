@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState, type ReactElement } from 'react';
 import { PaymentsPage } from '../../apps/web/src/pages/payments';
 import { ProductsPage } from '../../apps/web/src/pages/products';
@@ -12,6 +12,7 @@ import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedApply } from '../../apps/web/src/u
 import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, product, renderPage } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * FIX-01 (2026-10-09): every data search in the Web Admin applies itself.
@@ -231,7 +232,7 @@ const SPECS: readonly Spec[] = [
       url.pathname.endsWith('/product-categories') ? { categories: [] } : undefined,
     terms: ['پلن', 'پلن یک'],
     paste: '  پلن یک‌ماهه \n',
-    next: 'web.newer',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
   {
@@ -576,10 +577,15 @@ describe('a draft cancelled by another navigation is not revived by returning', 
     await open(spec(), () => calls);
     type(spec(), 'پلن');
     await advance(SHORT);
-    fireEvent.click(screen.getByRole('button', { name: t('web.product_status_active') }));
+    // W1.3: the status chips are in the «فیلترها» panel.
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.product_status_active') }),
+    );
     await waitFor(() => expect(status()).toBe('ACTIVE'));
     await advance(50);
-    fireEvent.click(screen.getAllByRole('button', { name: t('web.users_filter_all') })[0]!);
+    fireEvent.click(
+      within(openFilterPanel()).getAllByRole('button', { name: t('web.users_filter_all') })[0]!,
+    );
     await waitFor(() => expect(status()).toBeNull());
     const before = calls.length;
     await advance(PAST * 2);

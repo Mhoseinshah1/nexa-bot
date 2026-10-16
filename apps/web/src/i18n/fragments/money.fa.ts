@@ -94,6 +94,11 @@ export const WEB_FA_MONEY = {
   'web.pay_provider_paid_yes': 'پول رسیده',
   'web.pay_provider_paid_no': 'پول نرسیده',
   'web.pay_mismatch_amount': 'مبلغ ناهمخوان',
+  // W2 — a tab's marker, said to assistive technology.
+  'web.money_tab_unsaved': 'تغییر ذخیره‌نشده',
+  'web.money_tab_problem': 'نیاز به اصلاح',
+  // W1.5 — the product page's action group.
+  'web.product_actions_catalogue': 'دسته و وضعیت',
 } as const;
 
 /**
@@ -106,4 +111,10 @@ export const WEB_FA_MONEY_RETIRED: readonly string[] = [
   'web.refund_answer_none',
   // The bulk operation's steering card (W3: its buttons are in the page head).
   'web.cb_steering',
+  // W5: the products page's «آنچه در این نسخه نیست» card (removed by the owner's polish list).
+  'web.products_scope_title',
+  'web.products_scope_body',
+  'web.products_panel_rule',
+  // W1.5: the product status card became a button in the action panel.
+  'web.product_status_title',
 ];
