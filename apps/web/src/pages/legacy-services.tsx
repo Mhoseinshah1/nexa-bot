@@ -24,6 +24,7 @@ import {
 import { formatTimestamp } from '../format';
 import { useLinkHandler, useRoute } from '../router';
 import { LegacyCode, NamedCode } from './code-name';
+import { ListFilterBar } from '../ui/filter-bar';
 import { LEGACY_INVOICE_CLASS_LABELS } from './legacy-invoices';
 import {
   LEGACY_IMPORT_MAP_STATUS_LABELS,
@@ -36,6 +37,7 @@ import { queryState } from '../view-state';
 import { messageFor } from './settings';
 import { everyPage } from './extra-devices';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -44,7 +46,6 @@ import {
   DataTable,
   Empty,
   Field,
-  FilterBar,
   Input,
   Ltr,
   Num,
@@ -274,6 +275,8 @@ export function LegacyServicesPage({
     // Verbatim: never trimmed.
     ...(invoiceId === '' ? {} : { invoiceId }),
     ...(after === undefined ? {} : { after }),
+    // W1.8: ten rows a page, on the same keyset.
+    limit: LIST_PAGE_SIZE,
   };
   const list = useQuery({
     queryKey: ['legacy-services', query],
@@ -389,83 +392,134 @@ export function LegacyServicesPage({
           </dl>
         </Card>
       )}
-      <FilterBar>
-        <Field label={t('web.lsr_col_outcome')} htmlFor="lsr-outcome" compact>
-          <Select
-            id="lsr-outcome"
-            size="sm"
-            value={outcome}
-            onChange={(event) => {
-              setOutcome(event.target.value as OutcomeFilter);
+      <ListFilterBar
+        label={t('web.lsr_title')}
+        search={
+          <Field label={t('web.lsr_search_invoice')} htmlFor="lsr-invoice" compact>
+            <Input
+              id="lsr-invoice"
+              size="sm"
+              dir="ltr"
+              value={invoiceId}
+              maxLength={300}
+              onChange={(event) => {
+                setInvoiceId(event.target.value);
+                resetPaging();
+              }}
+            />
+          </Field>
+        }
+        filters={[
+          {
+            key: 'outcome',
+            label: t('web.lsr_col_outcome'),
+            active: outcome === 'ALL' ? null : t(LEGACY_SERVICE_OUTCOME_LABELS[outcome]),
+            onClear: () => {
+              setOutcome('ALL');
               resetPaging();
-            }}
-          >
-            <option value="ALL">{t('web.lsr_filter_all_outcomes')}</option>
-            {LEGACY_SERVICE_OUTCOMES.map((o) => (
-              <option key={o} value={o}>
-                {t(LEGACY_SERVICE_OUTCOME_LABELS[o])}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label={t('web.lsr_col_state')} htmlFor="lsr-state" compact>
-          <Select
-            id="lsr-state"
-            size="sm"
-            value={reviewState}
-            onChange={(event) => {
-              setReviewState(event.target.value as StateFilter);
+            },
+            control: (
+              <Select
+                id="lsr-outcome"
+                size="sm"
+                aria-label={t('web.lsr_col_outcome')}
+                value={outcome}
+                onChange={(event) => {
+                  setOutcome(event.target.value as OutcomeFilter);
+                  resetPaging();
+                }}
+              >
+                <option value="ALL">{t('web.lsr_filter_all_outcomes')}</option>
+                {LEGACY_SERVICE_OUTCOMES.map((o) => (
+                  <option key={o} value={o}>
+                    {t(LEGACY_SERVICE_OUTCOME_LABELS[o])}
+                  </option>
+                ))}
+              </Select>
+            ),
+          },
+          {
+            key: 'reviewState',
+            label: t('web.lsr_col_state'),
+            // «باز» is the list's default, so it is no active filter.
+            active:
+              reviewState === 'OPEN'
+                ? null
+                : reviewState === 'ALL'
+                  ? t('web.lsr_filter_all_states')
+                  : t(LEGACY_SERVICE_STATE_LABELS[reviewState]),
+            onClear: () => {
+              setReviewState('OPEN');
               resetPaging();
-            }}
-          >
-            {LEGACY_SERVICE_REVIEW_STATES.map((s) => (
-              <option key={s} value={s}>
-                {t(LEGACY_SERVICE_STATE_LABELS[s])}
-              </option>
-            ))}
-            <option value="ALL">{t('web.lsr_filter_all_states')}</option>
-          </Select>
-        </Field>
-        <Field label={t('web.lsr_col_panel_code')} htmlFor="lsr-panel" compact>
-          <Input
-            id="lsr-panel"
-            size="sm"
-            dir="ltr"
-            value={panelCode}
-            maxLength={300}
-            onChange={(event) => {
-              setPanelCode(event.target.value);
+            },
+            control: (
+              <Select
+                id="lsr-state"
+                size="sm"
+                aria-label={t('web.lsr_col_state')}
+                value={reviewState}
+                onChange={(event) => {
+                  setReviewState(event.target.value as StateFilter);
+                  resetPaging();
+                }}
+              >
+                {LEGACY_SERVICE_REVIEW_STATES.map((one) => (
+                  <option key={one} value={one}>
+                    {t(LEGACY_SERVICE_STATE_LABELS[one])}
+                  </option>
+                ))}
+                <option value="ALL">{t('web.lsr_filter_all_states')}</option>
+              </Select>
+            ),
+          },
+          {
+            key: 'panelCode',
+            label: t('web.lsr_col_panel_code'),
+            active: panelCode.trim() === '' ? null : panelCode,
+            onClear: () => {
+              setPanelCode('');
               resetPaging();
-            }}
-          />
-        </Field>
-        <Field label={t('web.lsr_col_product_code')} htmlFor="lsr-product" compact>
-          <Input
-            id="lsr-product"
-            size="sm"
-            dir="ltr"
-            value={productCode}
-            maxLength={300}
-            onChange={(event) => {
-              setProductCode(event.target.value);
+            },
+            control: (
+              <Input
+                id="lsr-panel"
+                size="sm"
+                dir="ltr"
+                aria-label={t('web.lsr_col_panel_code')}
+                value={panelCode}
+                maxLength={300}
+                onChange={(event) => {
+                  setPanelCode(event.target.value);
+                  resetPaging();
+                }}
+              />
+            ),
+          },
+          {
+            key: 'productCode',
+            label: t('web.lsr_col_product_code'),
+            active: productCode.trim() === '' ? null : productCode,
+            onClear: () => {
+              setProductCode('');
               resetPaging();
-            }}
-          />
-        </Field>
-        <Field label={t('web.lsr_search_invoice')} htmlFor="lsr-invoice" compact>
-          <Input
-            id="lsr-invoice"
-            size="sm"
-            dir="ltr"
-            value={invoiceId}
-            maxLength={300}
-            onChange={(event) => {
-              setInvoiceId(event.target.value);
-              resetPaging();
-            }}
-          />
-        </Field>
-      </FilterBar>
+            },
+            control: (
+              <Input
+                id="lsr-product"
+                size="sm"
+                dir="ltr"
+                aria-label={t('web.lsr_col_product_code')}
+                value={productCode}
+                maxLength={300}
+                onChange={(event) => {
+                  setProductCode(event.target.value);
+                  resetPaging();
+                }}
+              />
+            ),
+          },
+        ]}
+      />
       <StateSwitch
         query={list}
         denied={denied}

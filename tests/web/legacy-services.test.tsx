@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { LEGACY_SERVICE_OUTCOMES, LEGACY_SERVICE_REVIEW_STATES } from '@nexa/contracts';
 import { LegacyServicesPage } from '../../apps/web/src/pages/legacy-services';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { formatNumber } from '../../apps/web/src/format';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { panel as panelFixture, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Mirza PR5 — the legacy service candidates page (owner decision 8). Fixtures go through the
@@ -145,13 +146,13 @@ describe('the legacy service candidates page', () => {
         true,
       ),
     );
-    fireEvent.change(screen.getByLabelText(t('web.lsr_col_outcome')), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_outcome')), {
       target: { value: 'NO_PANEL' },
     });
-    fireEvent.change(screen.getByLabelText(t('web.lsr_col_panel_code')), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_panel_code')), {
       target: { value: 'rp2' },
     });
-    fireEvent.change(screen.getByLabelText(t('web.lsr_col_product_code')), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_product_code')), {
       target: { value: 'p1' },
     });
     fireEvent.change(screen.getByLabelText(t('web.lsr_search_invoice')), {
@@ -164,7 +165,9 @@ describe('the legacy service candidates page', () => {
             c.url.includes('outcome=NO_PANEL') &&
             c.url.includes('panelCode=rp2') &&
             c.url.includes('productCode=p1') &&
-            c.url.includes('invoiceId=+a0+'),
+            c.url.includes('invoiceId=+a0+') &&
+            // W1.8: ten a page.
+            c.url.includes('limit=10'),
         ),
       ).toBe(true),
     );
