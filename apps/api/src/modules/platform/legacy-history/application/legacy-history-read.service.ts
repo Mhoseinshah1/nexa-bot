@@ -69,6 +69,8 @@ export interface LegacyHistoryReadItem {
   readonly payload: Readonly<Record<string, unknown>>;
   readonly redacted: readonly string[];
   readonly legacyUserId: string | null;
+  /** A ticket message: the id of its ticket record (this archive's own id); else absent. */
+  readonly ticketRecordId?: string | null;
 }
 
 export interface LegacyHistoryReadPage {
@@ -290,5 +292,6 @@ export function itemOf(row: LegacyHistoryRecordRow, pii: boolean): LegacyHistory
     payload: view.payload,
     redacted: view.redacted,
     legacyUserId: pii ? row.legacyUserId : null,
+    ...(row.ticketRecordId === undefined ? {} : { ticketRecordId: row.ticketRecordId }),
   };
 }

@@ -159,7 +159,11 @@ export function CustomerLegacyHistoryCard({
                     <h4>{t(TYPE_LABELS[recordType])}</h4>
                     <ul className="plain stack">
                       {items.map((item) => (
-                        <LegacyHistoryRow key={item.id} item={item} />
+                        <LegacyHistoryRow
+                          key={item.id}
+                          item={item}
+                          messages={messagesOf(item, data.items)}
+                        />
                       ))}
                     </ul>
                   </section>
@@ -184,7 +188,25 @@ export function CustomerLegacyHistoryCard({
   );
 }
 
-export function LegacyHistoryRow({ item }: { item: LegacyHistoryItem }) {
+/**
+ * The ticket messages of a ticket record, when both are on the page. A message whose ticket is
+ * not on this page (or matched none) stays under its own heading, so none is ever hidden.
+ */
+export function messagesOf(
+  item: LegacyHistoryItem,
+  all: readonly LegacyHistoryItem[],
+): LegacyHistoryItem[] {
+  if (item.recordType !== 'ticket') return [];
+  return all.filter((m) => m.recordType === 'ticket_message' && m.ticketRecordId === item.id);
+}
+
+export function LegacyHistoryRow({
+  item,
+  messages = [],
+}: {
+  item: LegacyHistoryItem;
+  messages?: readonly LegacyHistoryItem[];
+}) {
   const fields = Object.entries(item.summary).filter(([key]) => !HIDDEN_IN_ROW.has(key));
   return (
     <li className="stack">
@@ -209,6 +231,13 @@ export function LegacyHistoryRow({ item }: { item: LegacyHistoryItem }) {
           {JSON.stringify(item.payload, null, 2)}
         </pre>
       </Disclosure>
+      {messages.length > 0 && (
+        <ul className="plain stack" aria-label={t(TYPE_LABELS.ticket_message)}>
+          {messages.map((message) => (
+            <LegacyHistoryRow key={message.id} item={message} />
+          ))}
+        </ul>
+      )}
     </li>
   );
 }
@@ -218,7 +247,16 @@ function groupByType(
   items: readonly LegacyHistoryItem[],
 ): [LegacyHistoryRecordType, LegacyHistoryItem[]][] {
   const groups = new Map<LegacyHistoryRecordType, LegacyHistoryItem[]>();
+  const ticketIds = new Set(items.filter((i) => i.recordType === 'ticket').map((i) => i.id));
   for (const item of items) {
+    // Shown under its ticket when that ticket is on the page (see `messagesOf`).
+    if (
+      item.recordType === 'ticket_message' &&
+      item.ticketRecordId != null &&
+      ticketIds.has(item.ticketRecordId)
+    ) {
+      continue;
+    }
     const group = groups.get(item.recordType);
     if (group === undefined) groups.set(item.recordType, [item]);
     else group.push(item);

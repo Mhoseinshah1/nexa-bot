@@ -46,6 +46,7 @@ export class LegacyHistoryController {
         payload: { ...item.payload },
         redacted: [...item.redacted],
         legacyUserId: item.legacyUserId,
+        ...(item.ticketRecordId === undefined ? {} : { ticketRecordId: item.ticketRecordId }),
       })),
       matching: page.matching,
       offset: page.offset,
