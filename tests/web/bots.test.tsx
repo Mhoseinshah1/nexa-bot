@@ -204,7 +204,7 @@ describe('the Bots page', () => {
         },
       },
     ]);
-    const { container } = renderPage(page({ mayReplaceToken: true }));
+    renderPage(page({ mayReplaceToken: true }));
     await screen.findByText('@acme_store_bot');
     const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000999:${'B'.repeat(35)}` } });
@@ -356,7 +356,7 @@ describe('the Bots page', () => {
         },
       },
     ]);
-    const { container } = renderPage(page({ mayOperate: true, mayReplaceToken: true }));
+    renderPage(page({ mayOperate: true, mayReplaceToken: true }));
     fireEvent.click(await screen.findByRole('button', { name: 'بررسی زنده با تلگرام' }));
     expect(await screen.findByTestId('bot-diagnostic')).toBeInTheDocument();
 
@@ -389,7 +389,7 @@ describe('the Bots page', () => {
         },
       },
     ]);
-    const { container } = renderPage(page({ mayReplaceToken: true }));
+    renderPage(page({ mayReplaceToken: true }));
     await screen.findByText('@acme_store_bot');
     const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000001:${'D'.repeat(35)}` } });
@@ -430,7 +430,7 @@ describe('the Bots page', () => {
         },
       },
     ]);
-    const { container } = renderPage(page({ mayReplaceToken: true }));
+    renderPage(page({ mayReplaceToken: true }));
     await screen.findByText('@acme_store_bot');
     const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000001:${'E'.repeat(35)}` } });
@@ -469,7 +469,7 @@ describe('the Bots page', () => {
         },
       },
     ]);
-    const { container } = renderPage(page({ mayReplaceToken: true }));
+    renderPage(page({ mayReplaceToken: true }));
     await screen.findByText('@acme_store_bot');
     const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000001:${'F'.repeat(35)}` } });
