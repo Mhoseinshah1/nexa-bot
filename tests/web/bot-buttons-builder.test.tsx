@@ -829,13 +829,14 @@ describe('the button builder — banners and permissions', () => {
     expect(label.getByText(t('web.bot_buttons_label_duplicate'))).toBeTruthy();
     expect(label.getByText(t('web.bb_label_slash'))).toBeTruthy();
     expect(label.getByText(t('web.bb_label_note'))).toBeTruthy();
-    await waitFor(() =>
-      expect(document.querySelector('#bot-buttons-label-wallet details')).not.toBeNull(),
-    );
+    await waitFor(() => expect(document.querySelector('#bot-buttons-label-wallet')).not.toBeNull());
+    // «ویرایش متن» opens the label's own editor in a side sheet — no jump to another section.
+    const before = window.scrollY;
     fireEvent.click(label.getByRole('button', { name: t('web.bb_label_edit') }));
-    expect(
-      (document.querySelector('#bot-buttons-label-wallet details') as HTMLDetailsElement).open,
-    ).toBe(true);
+    const sheet = screen.getByRole('dialog', { name: '/x' });
+    expect(within(sheet).getByText(t('web.bot_buttons_label_duplicate'))).toBeTruthy();
+    expect(within(sheet).getAllByText('bot.menu.wallet').length).toBeGreaterThan(0);
+    expect(window.scrollY).toBe(before);
   });
 });
 

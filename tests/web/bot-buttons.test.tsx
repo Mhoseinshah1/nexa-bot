@@ -11,6 +11,7 @@ import {
   type TemplateKey,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
+import { INLINE_BUTTON_NAME } from '../../apps/web/src/pages/bot-buttons/inline-buttons';
 import { BotButtonsPage, syncErrorHint } from '../../apps/web/src/pages/bot-buttons';
 import { PanelTrialTab } from '../../apps/web/src/pages/panel-trial';
 import { NAV, resolve } from '../../apps/web/src/app';
@@ -203,6 +204,9 @@ function api(
   ]);
 }
 
+/** Opens one of the page's tabs. */
+const openTab = (name: string) => fireEvent.click(screen.getByRole('tab', { name }));
+
 const syncCard = () =>
   within(
     screen
@@ -225,11 +229,14 @@ describe('«دکمه‌های ربات»', () => {
     await waitFor(() => expect(menuReads()).toBe(1));
     const builderReads = reads('/bot-menu/builder');
 
-    const summary = screen.getByText(CATALOGUE_FA['bot.menu.wallet'], { selector: 'summary' });
-    const details = summary.closest('details') as HTMLDetailsElement;
-    details.open = true;
-    fireEvent(details, new Event('toggle'));
-    fireEvent.click(within(details).getByRole('button', { name: t('web.save') }));
+    openTab(t('web.bot_buttons_labels_title'));
+    fireEvent.click(
+      within(screen.getByTestId('bot-buttons-labels')).getByRole('button', {
+        name: CATALOGUE_FA['bot.menu.wallet'],
+      }),
+    );
+    const sheet = screen.getByRole('dialog', { name: CATALOGUE_FA['bot.menu.wallet'] });
+    fireEvent.click(within(sheet).getByRole('button', { name: t('web.save') }));
     await waitFor(() =>
       expect(calls.calls.some((call) => call.url.includes('/templates/bot.menu.wallet'))).toBe(
         true,
@@ -241,16 +248,26 @@ describe('«دکمه‌های ربات»', () => {
     await waitFor(() => expect(reads('/bot-menu/builder')).toBeGreaterThan(builderReads));
   });
 
-  it('places «دکمه‌های شیشه‌ای ربات» below the command menu and sync, above the texts (owner spec §6)', async () => {
+  it('splits the page into four tabs, the builder first, each section mounted once', async () => {
     api();
     renderPage(page());
-    const glass = await screen.findByRole('heading', { name: t('web.ib_title') });
-    const sync = await screen.findByRole('heading', { name: t('web.bot_buttons_sync_title') });
-    const texts = screen.getByRole('heading', { name: t('web.bot_buttons_labels_title') });
-    const follows = (a: Element, b: Element) =>
-      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-    expect(follows(sync, glass)).toBe(true);
-    expect(follows(glass, texts)).toBe(true);
+    await waitFor(() => expect(chip('wallet')).not.toBeNull());
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      t('web.bx_bb_tab_layout'),
+      t('web.ib_title'),
+      t('web.bot_buttons_labels_title'),
+      t('web.bot_buttons_commands_title'),
+    ]);
+    // The other sections wait, hidden, behind their tabs.
+    expect(screen.queryByRole('heading', { name: t('web.ib_title') })).toBeNull();
+    openTab(t('web.ib_title'));
+    expect(screen.getByRole('heading', { name: t('web.ib_title') })).toBeInTheDocument();
+    // The builder was hidden, not unmounted: its chips are still in the document.
+    expect(chip('wallet')).not.toBeNull();
+    openTab(t('web.bot_buttons_commands_title'));
+    expect(
+      await screen.findByRole('heading', { name: t('web.bot_buttons_sync_title') }),
+    ).toBeInTheDocument();
   });
 
   it('re-reads both menu models after a glass label that is a main-menu template is saved (Codex 4170910525)', async () => {
@@ -258,18 +275,17 @@ describe('«دکمه‌های ربات»', () => {
     renderPage(page());
     const reads = (suffix: string) =>
       calls.calls.filter((call) => call.method === 'GET' && call.url.endsWith(suffix)).length;
-    const host = await waitFor(() => {
-      const found = document.querySelector('[data-inline-button="apps.services"]');
-      expect(found).not.toBeNull();
-      return found as HTMLElement;
-    });
+    await waitFor(() => expect(document.querySelector('[data-inline-button]')).not.toBeNull());
     await waitFor(() => expect(reads('/bot-menu')).toBe(1));
     const menuReads = reads('/bot-menu');
     const builderReads = reads('/bot-menu/builder');
-    const details = host.querySelector('details') as HTMLDetailsElement;
-    details.open = true;
-    fireEvent(details, new Event('toggle'));
-    fireEvent.click(await within(host).findByRole('button', { name: t('web.save') }));
+    openTab(t('web.ib_title'));
+    const name = t(INLINE_BUTTON_NAME['apps.services']);
+    fireEvent.change(screen.getByLabelText(t('web.ib_filter')), { target: { value: name } });
+    const host = document.querySelector('[data-inline-button="apps.services"]') as HTMLElement;
+    fireEvent.click(within(host).getByRole('button', { name }));
+    const sheet = screen.getByRole('dialog', { name });
+    fireEvent.click(await within(sheet).findByRole('button', { name: t('web.save') }));
     await waitFor(() =>
       expect(calls.calls.some((call) => call.url.includes('/templates/bot.menu.services'))).toBe(
         true,
@@ -352,6 +368,8 @@ describe('«دکمه‌های ربات»', () => {
       ],
     });
     renderPage(page());
+    await waitFor(() => expect(screen.getAllByRole('tab').length).toBe(4));
+    openTab(t('web.bot_buttons_commands_title'));
     const status = await screen.findByTestId('bot-menu-sync');
     expect(within(status).getByText('4')).toBeInTheDocument();
     expect(within(status).getByText('telegram.unreachable')).toBeInTheDocument();
@@ -390,6 +408,7 @@ describe('«دکمه‌های ربات»', () => {
     renderPage(
       <BotButtonsPage mayEdit={false} denied={false} mayViewTemplates mayEditTemplates={false} />,
     );
+    openTab(t('web.bot_buttons_commands_title'));
     await screen.findByTestId('bot-menu-sync');
     expect(syncCard().queryByRole('button', { name: t('web.bot_buttons_sync_now') })).toBeNull();
     await waitFor(() => expect(chip('wallet')).not.toBeNull());

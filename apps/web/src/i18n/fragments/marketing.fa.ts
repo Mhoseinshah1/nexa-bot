@@ -8,6 +8,8 @@
  * fragment into `web.fa.ts` and deletes this file before the branch is pushed.
  */
 export const WEB_FA_MARKETING = {
+  // tabs with a dot for unsaved edits or a problem
+  'web.bx_tab_problem': 'نیاز به اصلاح',
   // bots — the compact card per bot
   'web.bx_bots_count': 'ربات',
   'web.bx_bots_attention': 'نیازمند توجه',
@@ -16,6 +18,12 @@ export const WEB_FA_MARKETING = {
   // reminders — five section cards with sheets
   'web.bx_rem_configure': 'تنظیم',
   'web.bx_rem_flags_on': '{n} از {m} یادآور روشن',
+  // bot buttons — the inline buttons as a compact table
+  'web.bx_ib_button': 'دکمه',
+  'web.bx_ib_group': 'گروه',
+  'web.bx_ib_group_all': 'همهٔ گروه‌ها',
+  'web.bx_bb_tab_layout': 'چیدمان منوی اصلی',
+  'web.bx_bb_duplicate': 'متن تکراری',
 } as const;
 
 /**

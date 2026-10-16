@@ -244,3 +244,96 @@ export function KeptSheet({
     document.body,
   );
 }
+
+/** One tab of a `DotTabs` strip. */
+export interface DotTab<T extends string> {
+  readonly id: T;
+  readonly label: string;
+  /** A small mark after the label: `warn` for unsaved edits, `danger` for a problem. */
+  readonly dot?: 'warn' | 'danger' | null;
+}
+
+/**
+ * The kit's tab strip, with a dot on a tab that holds unsaved edits (or the form's current
+ * problem), so a section switched away from can be found again. Same roles, roving tabindex
+ * and keyboard (RTL arrows, Home, End) as `Tabs`; `panelId` ties it to its `TabPanel`.
+ */
+export function DotTabs<T extends string>({
+  value,
+  onChange,
+  items,
+  panelId,
+  label,
+}: {
+  value: T;
+  onChange: (next: T) => void;
+  items: readonly DotTab<T>[];
+  panelId: string;
+  label?: string;
+}) {
+  const buttons = useRef(new Map<T, HTMLButtonElement | null>());
+  const select = (next: T) => {
+    onChange(next);
+    queueMicrotask(() => buttons.current.get(next)?.focus());
+  };
+  const move = (delta: number) => {
+    const at = items.findIndex((item) => item.id === value);
+    if (at < 0) return;
+    const next = items[(at + delta + items.length) % items.length];
+    if (next) select(next.id);
+  };
+  return (
+    <div
+      className="tabs bx-tabs"
+      role="tablist"
+      {...(label === undefined ? {} : { 'aria-label': label })}
+      onKeyDown={(event) => {
+        // RTL: the strip runs right-to-left, so ArrowLeft advances.
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          move(1);
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          move(-1);
+        } else if (event.key === 'Home') {
+          event.preventDefault();
+          if (items[0]) select(items[0].id);
+        } else if (event.key === 'End') {
+          event.preventDefault();
+          const last = items[items.length - 1];
+          if (last) select(last.id);
+        }
+      }}
+    >
+      {items.map((item) => (
+        <button
+          key={item.id}
+          ref={(node) => {
+            buttons.current.set(item.id, node);
+          }}
+          type="button"
+          role="tab"
+          id={`${panelId}-tab-${item.id}`}
+          aria-selected={item.id === value}
+          aria-controls={panelId}
+          tabIndex={item.id === value ? 0 : -1}
+          className={item.id === value ? 'on' : undefined}
+          onClick={() => onChange(item.id)}
+        >
+          {item.label}
+          {item.dot != null && (
+            <span
+              className={`bx-tdot ${item.dot}`}
+              data-testid={`tab-dot-${item.id}`}
+              title={t(item.dot === 'warn' ? 'web.ob_unsaved_row' : 'web.bx_tab_problem')}
+            >
+              <span className="visually-hidden">
+                {t(item.dot === 'warn' ? 'web.ob_unsaved_row' : 'web.bx_tab_problem')}
+              </span>
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
