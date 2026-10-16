@@ -25,6 +25,12 @@
 @import './styles/pages/commerce-b.css';
 @import './styles/pages/ops-a.css';
 @import './styles/pages/ops-b.css';
+@import './styles/ui.css';
+@import './styles/pages/w-customers.css';
+@import './styles/pages/w-money.css';
+@import './styles/pages/w-marketing.css';
+@import './styles/pages/w-ops.css';
+@import './styles/pages/w-errors.css';
 
 /*
  * `hidden` means hidden, whatever else a rule says about display.

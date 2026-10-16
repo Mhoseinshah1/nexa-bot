@@ -6,6 +6,13 @@
  * render — page titles, table headers, status labels — under the `web.*`
  * namespace, and is checked by the same missing-key script.
  */
+import { WEB_FA_UI } from './fragments/ui.fa';
+import { WEB_FA_CUSTOMERS } from './fragments/customers.fa';
+import { WEB_FA_MONEY } from './fragments/money.fa';
+import { WEB_FA_MARKETING } from './fragments/marketing.fa';
+import { WEB_FA_OPS } from './fragments/ops.fa';
+import { WEB_FA_ERRORS } from './fragments/errors.fa';
+
 export const WEB_FA = {
   'web.title': 'نکسا بات',
   'web.subtitle': 'پنل مدیریت',
@@ -9496,6 +9503,13 @@ export const WEB_FA = {
   'web.mrz_diag_break_page_longer_than_cap':
     'صفحه‌ای از سقفی که صفحهٔ اول نشان داده بود بلندتر بود (ردیفی در صفحهٔ اول نگه داشته شده بود).',
   // --- end Mirza restore diagnostics ----------------------------------------------------------
+  // TEMPORARY: the per-agent working fragments (see fragments/*.fa.ts), folded in before push.
+  ...WEB_FA_UI,
+  ...WEB_FA_CUSTOMERS,
+  ...WEB_FA_MONEY,
+  ...WEB_FA_MARKETING,
+  ...WEB_FA_OPS,
+  ...WEB_FA_ERRORS,
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;
