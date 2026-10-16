@@ -48,9 +48,10 @@ export const WEB_FA_OPS = {
   'web.bchat_fc_unreadable': 'پاسخ تلگرام خوانا نبود',
   'web.bchat_fc_connection_mismatch': 'پاسخ تلگرام با این اتصال نمی‌خواند',
   'web.bchat_fc_server_error': 'خطای سرور تلگرام',
-  // --- audit log: the search line reads like every other list's ----------
-  'web.audit_apply': 'جست‌وجو',
-  'web.audit_clear': 'پاک کردن',
+  // --- alerts: «filter», not «پالایه» -------------------------------------
+  'web.alerts_empty_filter': 'چیزی با این فیلترها پیدا نشد.',
+  'web.alerts_empty_filter_hint':
+    'این نتیجه فقط دربارهٔ فیلترهای کنونی است و نمی‌گوید هشدار بازی وجود ندارد. برای دیدن همهٔ شرط‌های باز، شدت را روی «همه» و وضعیت را روی «حل‌نشده» بگذارید.',
 
   // --- audit log: action names (subject — verb) ---------------------------
   'web.audit_subj_service': 'سرویس',
@@ -283,4 +284,11 @@ export const WEB_FA_OPS_RETIRED: readonly string[] = [
   // The kit pager now reads previous/next; panels no longer passes these overrides.
   'web.older',
   'web.newer',
+  // audit log: the search line uses the shared «جست‌وجو / پاک کردن».
+  'web.audit_apply',
+  'web.audit_clear',
+  // alerts: the scope banner lost its meta title; «پالایه» became «فیلتر».
+  'web.alerts_scope_title',
+  'web.alerts_empty_filtered',
+  'web.alerts_empty_filtered_hint',
 ];

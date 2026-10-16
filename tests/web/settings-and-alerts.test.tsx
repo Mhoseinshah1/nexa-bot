@@ -679,7 +679,7 @@ describe('management alerts', () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
     // The page defaults to HISTORY, so this is the filtered emptiness.
-    await screen.findByText(t('web.alerts_empty_filtered'));
+    await screen.findByText(t('web.alerts_empty_filter'));
     expect(screen.getByText('نمایش')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'قبلی' })).toBeInTheDocument();
   });

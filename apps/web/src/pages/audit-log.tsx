@@ -406,7 +406,7 @@ export function AuditLogPage({
                   {...debounce.composition}
                 />
                 <button type="submit" className="btn primary sm" disabled={blocked}>
-                  {t('web.audit_apply')}
+                  {t('web.users_search_apply')}
                 </button>
                 <button
                   type="button"
@@ -414,7 +414,7 @@ export function AuditLogPage({
                   disabled={!filtering}
                   onClick={clear}
                 >
-                  {t('web.audit_clear')}
+                  {t('web.users_search_clear')}
                 </button>
               </form>
             }
