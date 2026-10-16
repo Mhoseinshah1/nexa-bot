@@ -32,6 +32,14 @@ export interface FakeListPanel {
   bareArray?: boolean;
   /** The panel's page size cap, by page index (or one cap for every page). */
   cap?: number | ((pageIndex: number) => number);
+  /**
+   * The whole list's order when a request does NOT ask `sort=created_at`, as a real RickPanel
+   * answers (2026-10-16: neither creation order nor its reverse). With the parameter the list
+   * is served in creation order. Absent: every request is served in `names` order.
+   */
+  unsortedOrder?: (names: readonly string[]) => string[];
+  /** A panel that does not implement `sort`: `unsortedOrder` is served whatever is asked. */
+  ignoresSort?: boolean;
 }
 
 export const fakeName = (i: number) => `acc${String(i).padStart(5, '0')}`;
@@ -87,7 +95,12 @@ export function fakeListClient(panel: FakeListPanel): ProviderHttpClient {
       const limit = Math.min(Number(query.get('limit')), cap);
       panel.beforePage(offset, pageIndex);
       panel.pages += 1;
-      const slice = panel.names.slice(offset, offset + limit);
+      const sorted = query.get('sort') === 'created_at' && panel.ignoresSort !== true;
+      const listed =
+        panel.unsortedOrder === undefined || sorted
+          ? panel.names
+          : panel.unsortedOrder(panel.names);
+      const slice = listed.slice(offset, offset + limit);
       const rows = panel.view === undefined ? slice : panel.view(slice, offset, limit, pageIndex);
       const users = rows.map((username) => {
         const seconds = panel.created.get(username) ?? 0;
