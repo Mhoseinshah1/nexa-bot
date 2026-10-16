@@ -127,7 +127,7 @@ describe('the inbox: the customer’s wait and the ticket', () => {
    * PR #205 review, N2: the keyset's first key (handoffs first) is mutable, so a conversation
    * handed back to the AI between two pages is read again on the next one.
    */
-  it('draws a conversation once when «load more» reads it again, with the fresher read', async () => {
+  it('draws a conversation once when «بعدی» reads it again, with the fresher read', async () => {
     const SECOND = '019400ab-cdef-7012-8345-6789abcdef02';
     const THIRD = '019400ab-cdef-7012-8345-6789abcdef03';
     const second = { id: SECOND, peerTelegramUserId: '951002', customer: null };
@@ -162,7 +162,7 @@ describe('the inbox: the customer’s wait and the ticket', () => {
     ]);
     renderPage(<BusinessChatsPage route={inboxRoute} denied={false} />);
     const table = await screen.findByRole('table', { name: t('web.bchats_title') });
-    fireEvent.click(screen.getByRole('button', { name: t('web.bchat_load_more') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.ops_page_next') }));
     await waitFor(() =>
       expect(
         within(table).getAllByRole('link', { name: t('web.bchat_unknown_customer') }),

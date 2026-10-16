@@ -464,13 +464,6 @@ form.set-row > * + * {
 .bchat-wait {
   font-variant-numeric: tabular-nums;
 }
-.bchat-more {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding-top: 12px;
-}
 .bchat-controls {
   margin-top: 12px;
   flex-wrap: wrap;
