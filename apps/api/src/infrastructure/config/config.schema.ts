@@ -572,6 +572,20 @@ export const configSchema = z
      * a settings table is exactly what is unavailable then.
      */
     /**
+     * Whether a returning customer with NO bot link gets one on contact (OI-1).
+     *
+     * Imported (Mirza) customers have `customers.first_bot_instance_id = NULL`, and every
+     * customer notification, broadcast and reminder drops a NULL. When true, the customer
+     * upsert's ON CONFLICT branch sets it to the bot the customer just wrote to, ONCE
+     * (`COALESCE(existing, excluded)` — an existing link is never overwritten).
+     *
+     * OFF by default, and it must stay off wherever no message may reach an imported
+     * customer (a test server, or before the owner's go-live decision): turning it on makes
+     * each imported customer who contacts the bot start receiving reminders and notices.
+     * Off, the upsert is exactly what it was.
+     */
+    CUSTOMER_FIRST_BOT_FILL_ON_CONTACT: booleanish.default(false),
+    /**
      * The DEFAULT for whether the worker takes automatic backups.
      *
      * Since spec §13.2 the Web Admin's backup page stores the schedule in the settings

@@ -343,6 +343,8 @@ import {
 import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet.repository.js';
 import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
 import { MigrationOpeningBalanceService } from './modules/commerce/wallet/application/migration-opening-balance.service.js';
+import { CustomerBotLinkService } from './modules/commerce/customers/application/customer-bot-link.service.js';
+import { DrizzleCustomerBotLinkRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-bot-link.repository.js';
 import { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
 import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
 import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store.js';
@@ -1137,6 +1139,8 @@ export interface Container {
    * reaches it; the P7 CLI is its caller (`docs/legacy-import-metadata.md`).
    */
   readonly legacyReviewQueue: LegacyReviewQueueService;
+  /** OI-1: the cutover command that links imported customers to a bot (`customers-link-bot.cli.ts`). */
+  readonly customerBotLink: CustomerBotLinkService;
   /**
    * Migration P6: legacy service adoption. Migration-only — no surface reaches it; the P7
    * importer is its one caller (`docs/migration-p6-service-adoption.md`). Holds no provider
@@ -2003,7 +2007,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * their own idempotency view, and a replay handled by one would not be seen by the
    * other.
    */
-  const customerRepository = new DrizzleCustomerRepository(database.db);
+  const customerRepository = new DrizzleCustomerRepository(database.db, {
+    fillFirstBotOnContact: config.CUSTOMER_FIRST_BOT_FILL_ON_CONTACT,
+  });
   const productRepository = new DrizzleProductRepository(database.db);
   /*
    * A reseller's standing (WP9-B), built here because the catalogue asks it too: whose
@@ -2465,6 +2471,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     outbox,
     idempotency,
+    clock,
+  });
+  const customerBotLink = new CustomerBotLinkService({
+    repository: new DrizzleCustomerBotLinkRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
     clock,
   });
 
@@ -7199,6 +7214,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyServiceReview,
     legacyCutover,
     legacyReviewQueue,
+    customerBotLink,
     legacyAdoption,
     payments: paymentService,
     paymentAccounts: paymentAccountService,

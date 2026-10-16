@@ -31,7 +31,16 @@ import type {
  * `drizzle-panel.repository.ts` states.
  */
 export class DrizzleCustomerRepository implements CustomerRepository {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly options: {
+      /**
+       * OI-1 (`CUSTOMER_FIRST_BOT_FILL_ON_CONTACT`): fill a NULL `first_bot_instance_id`
+       * on contact. Default false = the upsert is exactly as it was.
+       */
+      readonly fillFirstBotOnContact?: boolean;
+    } = {},
+  ) {}
 
   /**
    * The open transaction's executor, or the pool.
@@ -126,6 +135,18 @@ export class DrizzleCustomerRepository implements CustomerRepository {
            */
           lastSeenAt: sql`greatest(${customers.lastSeenAt}, excluded.last_seen_at)`,
           updatedAt: input.now,
+          /*
+           * OI-1: fill the bot link ONCE. `COALESCE(stored, proposed)` keeps an existing
+           * link (the column means the FIRST bot) and fills a NULL one (an imported
+           * customer) in the same statement, so two concurrent first contacts cannot
+           * disagree: the row lock serialises them and the second sees the first's value.
+           * Absent unless the operator turned it on.
+           */
+          ...(this.options.fillFirstBotOnContact === true
+            ? {
+                firstBotInstanceId: sql`coalesce(${customers.firstBotInstanceId}, excluded.first_bot_instance_id)`,
+              }
+            : {}),
         },
       })
       .returning({
