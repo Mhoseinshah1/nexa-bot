@@ -46,6 +46,7 @@ import {
 } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
 import { ListFilterBar } from '../ui/filter-bar';
+import { jalaliDatesIn } from './editor-layout';
 import { FilePicker } from '../ui/file-picker';
 import { DateField } from '../ui/date-field';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -1704,7 +1705,7 @@ function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
       )}
       <ul className="small">
         {describeAudience(record.audience, botNames).map((line) => (
-          <li key={line}>{line}</li>
+          <li key={line}>{jalaliDatesIn(line)}</li>
         ))}
       </ul>
       {!isSourcedBroadcastKind(record.contentKind) && (

@@ -82,7 +82,7 @@ import {
   PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { DotTabs, SaveBar } from './editor-layout';
+import { DotTabs, SaveBar, jalaliDatesIn } from './editor-layout';
 import { ListFilterBar } from '../ui/filter-bar';
 import { DateField } from '../ui/date-field';
 
@@ -1762,7 +1762,7 @@ function SummaryCard({ campaign }: { campaign: CampaignDetail }) {
             t('web.campaign_audience'),
             <ul key="aud" className="plain">
               {describeAudience(campaign.audience, botNames).map((line) => (
-                <li key={line}>{line}</li>
+                <li key={line}>{jalaliDatesIn(line)}</li>
               ))}
             </ul>,
           ],

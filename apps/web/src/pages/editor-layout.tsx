@@ -4,6 +4,7 @@ import { t } from '../i18n/web.fa';
 import { Num } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { useFocusTrap } from '../ui/overlays';
+import { formatDateFieldValue } from '../ui/date-field';
 
 /**
  * Editor layout pieces shared by the commerce pages (products, discounts,
@@ -335,5 +336,17 @@ export function DotTabs<T extends string>({
         </button>
       ))}
     </div>
+  );
+}
+
+/**
+ * An audience summary line as the operator reads it: every Gregorian day (`YYYY-MM-DD`) the
+ * shared summary prints is shown as the Jalali day the date field shows. Presentation only —
+ * `describeAudience` and the definition it reads are unchanged.
+ */
+export function jalaliDatesIn(line: string): string {
+  return line.replace(
+    /\b(\d{4}-\d{2}-\d{2})\b/gu,
+    (day: string) => formatDateFieldValue('date', day) ?? day,
   );
 }
