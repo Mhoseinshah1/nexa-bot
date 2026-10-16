@@ -105,6 +105,8 @@ export const WEB_FA_MONEY = {
   // W5 — the plans page's pricing note, without «… وجود ندارد».
   'web.reseller_plans_pricing_note':
     'قیمت نماینده همان قیمت محصول است با نرخ سطح یا نرخ اختصاصی نماینده؛ هنگام خرید محاسبه و در سفارش ثبت می‌شود.',
+  // W5 — the debt decision banner without «… در این نسخه وجود ندارد».
+  'web.lwd_decision_no_money': 'هیچ تصمیمی پولی جابه‌جا نمی‌کند.',
 } as const;
 
 /**
@@ -127,4 +129,6 @@ export const WEB_FA_MONEY_RETIRED: readonly string[] = [
   'web.discounts_filter_empty',
   // W5: replaced by `web.reseller_plans_pricing_note` (no «وجود ندارد» meta sentence).
   'web.reseller_plans_pricing_rule',
+  // W5: replaced by `web.lwd_decision_no_money` (no «در این نسخه وجود ندارد»).
+  'web.lwd_decision_moves_no_money',
 ];

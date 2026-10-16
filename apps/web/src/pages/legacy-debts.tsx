@@ -20,6 +20,7 @@ import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -28,7 +29,6 @@ import {
   DataTable,
   Empty,
   Field,
-  FilterBar,
   Input,
   Ltr,
   Money,
@@ -41,7 +41,8 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
-import { Drawer } from '../ui/overlays';
+import { Drawer, Modal } from '../ui/overlays';
+import { ListFilterBar } from '../ui/filter-bar';
 
 /**
  * Mirza migration PR4 — legacy wallet debts (owner decision 6, 2026-10-07).
@@ -129,6 +130,8 @@ export function LegacyDebtsPage({
     ...(stateFilter === 'ALL' ? {} : { state: stateFilter }),
     ...(searchId === '' ? {} : { legacyUserId: searchId }),
     ...(after === undefined ? {} : { after }),
+    // W1.8: ten rows a page, on the same keyset.
+    limit: LIST_PAGE_SIZE,
   };
   const debts = useQuery({
     queryKey: ['legacy-debts', query],
@@ -219,40 +222,62 @@ export function LegacyDebtsPage({
           </dl>
         </Card>
       )}
-      <FilterBar>
-        <Field label={t('web.lwd_col_state')} htmlFor="lwd-state" compact>
-          <Select
-            id="lwd-state"
-            size="sm"
-            value={stateFilter}
-            onChange={(event) => {
-              setStateFilter(event.target.value as StateFilter);
+      <ListFilterBar
+        label={t('web.lwd_title')}
+        search={
+          <Field label={t('web.lwd_search_legacy_user')} htmlFor="lwd-user" compact>
+            <Input
+              id="lwd-user"
+              size="sm"
+              inputMode="numeric"
+              dir="ltr"
+              value={legacyUserId}
+              maxLength={20}
+              placeholder={t('web.lwd_search_legacy_user')}
+              onChange={(event) => {
+                setLegacyUserId(event.target.value);
+                resetPaging();
+              }}
+            />
+          </Field>
+        }
+        filters={[
+          {
+            key: 'state',
+            label: t('web.lwd_col_state'),
+            // «در انتظار بررسی» is the list's default, so it is no active filter.
+            active:
+              stateFilter === 'PENDING_REVIEW'
+                ? null
+                : stateFilter === 'ALL'
+                  ? t('web.lwd_filter_all')
+                  : t(LEGACY_DEBT_STATE_LABELS[stateFilter]),
+            onClear: () => {
+              setStateFilter('PENDING_REVIEW');
               resetPaging();
-            }}
-          >
-            {LEGACY_WALLET_DEBT_STATES.map((state) => (
-              <option key={state} value={state}>
-                {t(LEGACY_DEBT_STATE_LABELS[state])}
-              </option>
-            ))}
-            <option value="ALL">{t('web.lwd_filter_all')}</option>
-          </Select>
-        </Field>
-        <Field label={t('web.lwd_search_legacy_user')} htmlFor="lwd-user" compact>
-          <Input
-            id="lwd-user"
-            size="sm"
-            inputMode="numeric"
-            dir="ltr"
-            value={legacyUserId}
-            maxLength={20}
-            onChange={(event) => {
-              setLegacyUserId(event.target.value);
-              resetPaging();
-            }}
-          />
-        </Field>
-      </FilterBar>
+            },
+            control: (
+              <Select
+                id="lwd-state"
+                size="sm"
+                aria-label={t('web.lwd_col_state')}
+                value={stateFilter}
+                onChange={(event) => {
+                  setStateFilter(event.target.value as StateFilter);
+                  resetPaging();
+                }}
+              >
+                {LEGACY_WALLET_DEBT_STATES.map((state) => (
+                  <option key={state} value={state}>
+                    {t(LEGACY_DEBT_STATE_LABELS[state])}
+                  </option>
+                ))}
+                <option value="ALL">{t('web.lwd_filter_all')}</option>
+              </Select>
+            ),
+          },
+        ]}
+      />
       <StateSwitch
         query={debts}
         denied={denied}
@@ -349,11 +374,15 @@ export function DebtDetail({ row, mayDecide }: { row: LegacyWalletDebtView; mayD
   );
 }
 
+type Asking = LegacyWalletDebtDecision | 'reopen' | null;
+
 function Decisions({ row }: { row: LegacyWalletDebtView }) {
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
   const [reason, setReason] = useState('');
+  /** Which decision's dialog is open. */
+  const [asking, setAsking] = useState<Asking>(null);
 
   const decide = useMutation({
     mutationFn: (
@@ -383,6 +412,7 @@ function Decisions({ row }: { row: LegacyWalletDebtView }) {
     },
     onSuccess: () => {
       submission.settle();
+      setAsking(null);
       notify({ tone: 'ok', message: t('web.lwd_saved') });
       void queries.invalidateQueries({ queryKey: ['legacy-debts'] });
     },
@@ -394,55 +424,88 @@ function Decisions({ row }: { row: LegacyWalletDebtView }) {
   const busy = decide.isPending;
   const noReason = reason.trim() === '';
 
+  const TITLES: Readonly<Record<Exclude<Asking, null>, WebKey>> = {
+    ACKNOWLEDGED: 'web.lwd_acknowledge',
+    WAIVED: 'web.lwd_waive',
+    reopen: 'web.lwd_reopen',
+  };
+  const close = () => {
+    setAsking(null);
+    decide.reset();
+  };
+  const fault =
+    decide.error !== null ? (
+      <Banner tone="danger" role="alert">
+        {legacyDebtFault(decide.error)}
+      </Banner>
+    ) : null;
+
+  /*
+   * W3: the decide card is buttons; each opens a dialog with the banner, the reason (the
+   * button disabled until it is given) and the refusal said inside it.
+   */
   return (
     <Card title={t('web.lwd_decide_title')}>
-      <div className="stack">
-        <Banner tone="warn">{t('web.lwd_decision_moves_no_money')}</Banner>
-        <Field label={t('web.lwd_reason')} htmlFor="lwd-reason" hint={t('web.lwd_reason_hint')}>
-          <Input
-            id="lwd-reason"
-            value={reason}
-            maxLength={500}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </Field>
-        <div className="form-actions">
-          {row.state === 'PENDING_REVIEW' ? (
+      <div className="form-actions">
+        {row.state === 'PENDING_REVIEW' ? (
+          <>
+            <button
+              type="button"
+              className="btn primary sm"
+              onClick={() => setAsking('ACKNOWLEDGED')}
+            >
+              {t('web.lwd_acknowledge')}
+            </button>
+            <button type="button" className="btn sm" onClick={() => setAsking('WAIVED')}>
+              {t('web.lwd_waive')}
+            </button>
+          </>
+        ) : (
+          <button type="button" className="btn sm" onClick={() => setAsking('reopen')}>
+            {t('web.lwd_reopen')}
+          </button>
+        )}
+      </div>
+      {asking === null && fault}
+      <Modal
+        open={asking !== null}
+        onClose={close}
+        title={asking === null ? '' : t(TITLES[asking])}
+        foot={
+          asking === null ? undefined : (
             <>
+              <button type="button" className="btn sm" onClick={close}>
+                {t('web.money_cancel')}
+              </button>
               <button
                 type="button"
                 className="btn primary sm"
                 disabled={busy || noReason}
-                onClick={() => decide.mutate({ kind: 'decide', decision: 'ACKNOWLEDGED' })}
+                onClick={() =>
+                  decide.mutate(
+                    asking === 'reopen' ? { kind: 'reopen' } : { kind: 'decide', decision: asking },
+                  )
+                }
               >
-                {t('web.lwd_acknowledge')}
-              </button>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={busy || noReason}
-                onClick={() => decide.mutate({ kind: 'decide', decision: 'WAIVED' })}
-              >
-                {t('web.lwd_waive')}
+                {t(TITLES[asking])}
               </button>
             </>
-          ) : (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy || noReason}
-              onClick={() => decide.mutate({ kind: 'reopen' })}
-            >
-              {t('web.lwd_reopen')}
-            </button>
-          )}
+          )
+        }
+      >
+        <div className="stack">
+          <Banner tone="warn">{t('web.lwd_decision_no_money')}</Banner>
+          <Field label={t('web.lwd_reason')} htmlFor="lwd-reason" hint={t('web.lwd_reason_hint')}>
+            <Input
+              id="lwd-reason"
+              value={reason}
+              maxLength={500}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </Field>
+          {fault}
         </div>
-        {decide.error !== null && (
-          <Banner tone="danger" role="alert">
-            {legacyDebtFault(decide.error)}
-          </Banner>
-        )}
-      </div>
+      </Modal>
     </Card>
   );
 }
