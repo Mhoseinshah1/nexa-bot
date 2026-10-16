@@ -505,3 +505,78 @@ describe('the dry-run report projects the diagnostics, validated, per panel', ()
     expect(foreign.success).toBe(false);
   });
 });
+
+// A real RickPanel (2026-10-16) lists `api/users` in an order that is neither creation order nor
+// its reverse unless asked `sort=created_at`: every per-name walk failed CREATED_ORDER and the
+// adopt lane decided none of 200 approved names. The read now asks for creation order; the
+// proof still checks the order on the rows, so a panel that ignores the parameter fails closed.
+describe('the list is asked oldest first (sort=created_at)', () => {
+  /** Neither ascending nor descending: odd positions first, then even ones reversed. */
+  const scrambled = (names: readonly string[]) => [
+    ...names.filter((_n, i) => i % 2 === 1),
+    ...names.filter((_n, i) => i % 2 === 0).reverse(),
+  ];
+
+  /**
+   * A selling panel. 300 accounts at 100 a page, overlap 10: four pages a walk (pages 0-3, 4-7,
+   * 8-11). Created during the reads: `zz-sale-early` (walk 1), `zz-sale-late` (walk 2), and one
+   * per later page. Deleted during the reads: three accounts behind the cursor in walk 1 (a
+   * burst the overlap absorbs), and `acc00150` — read by walk 1 — before walk 2 starts.
+   */
+  function sellingPanel() {
+    const panel = fakeListPanel(300);
+    panel.unsortedOrder = scrambled;
+    panel.beforePage = (_offset, page) => {
+      if (page === 1) appendAccount(panel, 'zz-sale-early');
+      if (page === 2) panel.names.splice(5, 3); // acc00006..acc00008, behind the cursor
+      if (page === 4) panel.names.splice(panel.names.indexOf(name(150)), 1);
+      if (page === 6) appendAccount(panel, 'zz-sale-late');
+      if (page === 9) appendAccount(panel, `zz-sale-${String(page)}`);
+    };
+    return panel;
+  }
+  const needed = [name(10), name(150), name(7), 'zz-sale-early', 'zz-sale-late', 'zz-ghost'];
+
+  it('a selling panel, read oldest first: every needed name decided — none skipped, none counted twice, a deleted one never present', async () => {
+    const panel = sellingPanel();
+    const read = complete(
+      await fakeListSource(panel).source.read(SCOPE, PANEL_ID, { needed: needOf(needed) }),
+    );
+    expect(read.resolution).toMatchObject({ needed: 6, unresolved: 0, collisions: 0 });
+    const decided = (n: string) => indexCoversName(read, n);
+    const present = (n: string) => (read.index.usernames.get(n) ?? []).length === 1;
+    for (const n of needed) expect(decided(n)).toBe(true);
+    // Present through every walk, and created during the read and seen by a later walk.
+    expect(present(name(10))).toBe(true);
+    expect(present('zz-sale-early')).toBe(true);
+    // Deleted mid-read (after walk 1 saw it), deleted behind the cursor, never created.
+    expect(present(name(150))).toBe(false);
+    expect(present(name(7))).toBe(false);
+    expect(present('zz-ghost')).toBe(false);
+    expect(read.resolution?.present).toBe(needed.filter((n) => present(n)).length);
+    // Every list request asked for creation order; nothing but the token exchange and GETs.
+    const lists = panel.log.filter((r) => r.method === 'GET');
+    expect(lists.length).toBeGreaterThan(0);
+    for (const r of lists)
+      expect(r.path).toMatch(/^api\/users\?offset=\d+&limit=\d+&sort=created_at$/u);
+    expect(panel.log.every((r) => r.method === 'GET' || r.path === 'api/admin/token')).toBe(true);
+  });
+
+  it('the same panel ignoring the parameter: nothing decided, fail closed as before', async () => {
+    const panel = sellingPanel();
+    panel.ignoresSort = true;
+    const read = await fakeListSource(panel).source.read(SCOPE, PANEL_ID, {
+      needed: needOf(needed),
+    });
+    if (read.ok && read.complete) {
+      expect(read.resolution?.present).toBe(0);
+      expect(read.resolution?.unresolved).toBe(6);
+    } else {
+      expect(read.ok && read.complete).toBe(false);
+    }
+  });
+});
+
+function indexCoversName(read: Complete, n: string): boolean {
+  return read.index.covered === undefined || read.index.covered.has(n);
+}
