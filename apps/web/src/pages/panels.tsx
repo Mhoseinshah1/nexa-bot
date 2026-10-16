@@ -2210,7 +2210,7 @@ function OverviewTab({
               <button
                 type="button"
                 className="btn primary"
-                disabled={status.isPending || renameOnRestore.trim() === ''}
+                disabled={status.isPending || renameOnRestore === ''}
                 onClick={() => {
                   // Sent only once the server has said the old name is gone.
                   const command = { status: 'DISABLED' as PanelStatus, name: renameOnRestore };

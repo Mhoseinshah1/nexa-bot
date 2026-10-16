@@ -391,9 +391,7 @@ describe('Codex review of #161 (web)', () => {
 
   async function openSupportEditor() {
     // The seeded name reads in Persian, and the tickets domain shares the word: pick the row.
-    const supportRow = (await screen.findAllByText(t('web.role_key_support')))
-      .map((node) => node.closest('li.rbac-role'))
-      .find((row) => row !== null)!;
+    const supportRow = await roleRow(t('web.role_key_support'));
     fireEvent.click(
       within(supportRow).getByRole('button', { name: new RegExp(t('web.rbac_edit')) }),
     );
