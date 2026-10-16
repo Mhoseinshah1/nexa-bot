@@ -43,6 +43,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Button,
@@ -343,6 +344,8 @@ export function ProductsPage({
     queryKey: ['products', searchSignature, cursor ?? null],
     queryFn: () =>
       fetchProducts({
+        // W1.8: ten rows a page on the keyset.
+        limit: LIST_PAGE_SIZE,
         ...(cursor === undefined ? {} : { cursor }),
         ...(appliedStatus === null ? {} : { status: appliedStatus }),
         ...(appliedAudience === null ? {} : { audience: appliedAudience }),

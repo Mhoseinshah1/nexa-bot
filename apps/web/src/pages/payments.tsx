@@ -62,7 +62,7 @@ import { CodeName } from './code-name';
 import { queryChipFilter } from './money-filters';
 import { ListFilterBar } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
-import type { SavedViewsRegistration, ViewState } from '../ui/saved-views';
+import { routeViewRegistration, type SavedViewsRegistration } from '../ui/saved-views';
 import {
   LIST_PAGE_SIZE,
   Disclosure,
@@ -762,31 +762,19 @@ const PAYMENT_VIEW_KEYS = ['q', 'queue', 'gateway', 'range', 'state', 'method', 
  * the approved demo's, in its order.
  */
 export function paymentsViews(route: Route): SavedViewsRegistration {
-  const empty: ViewState = Object.fromEntries(PAYMENT_VIEW_KEYS.map((key) => [key, '']));
-  return {
-    page: 'payments',
-    empty,
-    get: () =>
-      Object.fromEntries(PAYMENT_VIEW_KEYS.map((key) => [key, route.query.get(key) ?? ''])),
-    set: (state) =>
-      setQueries(route, [
-        ...PAYMENT_VIEW_KEYS.map((key) => [key, state[key] ?? null] as const),
-        ['cursor', null],
-      ]),
-    presets: [
-      {
-        id: 'needs-action',
-        name: 'web.payments_view_needs_action',
-        state: { queue: 'NEEDS_ACTION' },
-      },
-      {
-        id: 'manual-pending',
-        name: 'web.payments_view_manual_pending',
-        state: { method: 'MANUAL_TRANSFER', state: 'PENDING' },
-      },
-      { id: 'unknown', name: 'web.payments_view_unknown', state: { state: 'UNKNOWN' } },
-    ],
-  };
+  return routeViewRegistration(route, 'payments', PAYMENT_VIEW_KEYS, [
+    {
+      id: 'needs-action',
+      name: 'web.payments_view_needs_action',
+      state: { queue: 'NEEDS_ACTION' },
+    },
+    {
+      id: 'manual-pending',
+      name: 'web.payments_view_manual_pending',
+      state: { method: 'MANUAL_TRANSFER', state: 'PENDING' },
+    },
+    { id: 'unknown', name: 'web.payments_view_unknown', state: { state: 'UNKNOWN' } },
+  ]);
 }
 
 /**
@@ -1018,6 +1006,7 @@ export function PaymentsPage({
               <ListSearchBox
                 route={route}
                 id="payments-search"
+                slim
                 // FIX-01: typing or pasting searches by itself, debounced, as on /users.
                 autoApply
                 hint={t('web.payments_search_hint')}
