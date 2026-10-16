@@ -37,6 +37,7 @@ import { messageFor } from './settings';
 import { PURPOSE_LABELS } from './discounts';
 import { PricingText, TIER_PRICING_LABELS, percentOf } from './resellers';
 import {
+  usePagedRows,
   Badge,
   Banner,
   Card,
@@ -353,6 +354,8 @@ export function ResellerTiersPage({
     enabled: !denied,
   });
   const rows = tiers.data?.tiers ?? [];
+  /** W1.8: the tiers, ten a page (the whole roster is one answer). */
+  const tierPage = usePagedRows(rows);
 
   /** Which tier's form, and which tier's grants, are open — by id, so a refetch shows. */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -454,12 +457,13 @@ export function ResellerTiersPage({
           <DataTable
             caption={t('web.reseller_tiers_list_title')}
             columns={columns}
-            rows={rows}
+            rows={tierPage.rows}
             rowKey={(row) => row.id}
             rowClassName={(row) =>
               row.id === grantsId || row.id === editingId ? 'selected' : undefined
             }
           />
+          {tierPage.pager}
         </StateSwitch>
       </Card>
 

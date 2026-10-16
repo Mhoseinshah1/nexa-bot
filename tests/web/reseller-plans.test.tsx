@@ -11,6 +11,7 @@ import {
 } from '../../apps/web/src/pages/reseller-plans';
 import { grantsStateOf } from '../../apps/web/src/pages/reseller-tiers';
 import { renderPage, stubApi, type Api } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Round N, package D on the Web Admin: «تنظیمات نمایندگان / پلن‌ها و حداقل فروش».
@@ -232,7 +233,8 @@ describe('the reseller plans page', () => {
     await waitFor(() =>
       expect(gets(api, 'period=PREVIOUS_MONTH').length).toBeGreaterThanOrEqual(1),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'رسیده به حداقل' }));
+    // W1.3: the state filter is in the «فیلترها» panel; the period stays a range chip.
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'رسیده به حداقل' }));
     await waitFor(() => expect(gets(api, 'filter=ACHIEVED').length).toBeGreaterThanOrEqual(1));
   });
 
@@ -249,6 +251,8 @@ describe('the reseller plans page', () => {
     render();
     fireEvent.click(await screen.findByRole('button', { name: 'حداقل فروش' }));
     const amount = await screen.findByLabelText('مبلغ حداقل (واحد خرد)');
+    // W2: in a side drawer, not a card further down the page.
+    expect(screen.getByRole('dialog')).toContainElement(amount);
     fireEvent.change(amount, { target: { value: '2000000' } });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     await waitFor(() => expect(posts(api, '/monthly-minimum')).toHaveLength(1));

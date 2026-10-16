@@ -102,6 +102,9 @@ export const WEB_FA_MONEY = {
   // W5 — «صافی» → «فیلتر»: new keys (a fragment cannot override an existing key's text).
   'web.discounts_filter_none': 'قاعده‌ای با این فیلتر پیدا نشد.',
   'web.resellers_filter_empty': 'موردی با این فیلتر پیدا نشد.',
+  // W5 — the plans page's pricing note, without «… وجود ندارد».
+  'web.reseller_plans_pricing_note':
+    'قیمت نماینده همان قیمت محصول است با نرخ سطح یا نرخ اختصاصی نماینده؛ هنگام خرید محاسبه و در سفارش ثبت می‌شود.',
 } as const;
 
 /**
@@ -122,4 +125,6 @@ export const WEB_FA_MONEY_RETIRED: readonly string[] = [
   'web.product_status_title',
   // W5: replaced by `web.discounts_filter_none` («فیلتر», not «صافی»).
   'web.discounts_filter_empty',
+  // W5: replaced by `web.reseller_plans_pricing_note` (no «وجود ندارد» meta sentence).
+  'web.reseller_plans_pricing_rule',
 ];
