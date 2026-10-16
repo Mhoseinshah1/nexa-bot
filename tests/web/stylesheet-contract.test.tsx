@@ -87,6 +87,12 @@ describe('the split stylesheet', () => {
       './styles/pages/commerce-b.css',
       './styles/pages/ops-a.css',
       './styles/pages/ops-b.css',
+      './styles/ui.css',
+      './styles/pages/w-customers.css',
+      './styles/pages/w-money.css',
+      './styles/pages/w-marketing.css',
+      './styles/pages/w-ops.css',
+      './styles/pages/w-errors.css',
     ]);
     expect(CSS).not.toMatch(/@import/);
     // The token sets and the kit arrived: one rule from each end of the chain.
