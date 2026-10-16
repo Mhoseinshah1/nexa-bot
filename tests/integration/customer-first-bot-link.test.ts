@@ -27,7 +27,8 @@ const ACTOR = systemJobActor('customers-link-bot-test', 'corr-link-bot' as Corre
 describe('customer first-bot link (OI-1)', () => {
   let ctx: TestContext;
   const db = () => ctx.container.database.db;
-  const repo = (fill: boolean) => new DrizzleCustomerRepository(db(), { fillFirstBotOnContact: fill });
+  const repo = (fill: boolean) =>
+    new DrizzleCustomerRepository(db(), { fillFirstBotOnContact: fill });
   const service = () => ctx.container.customerBotLink;
 
   let nextTelegram = 700_000_000;
@@ -51,7 +52,9 @@ describe('customer first-bot link (OI-1)', () => {
     return { id, telegramUserId };
   };
   const botOf = async (id: string): Promise<string | null> => {
-    const r = await db().execute(sql`SELECT first_bot_instance_id AS b FROM customers WHERE id = ${id}`);
+    const r = await db().execute(
+      sql`SELECT first_bot_instance_id AS b FROM customers WHERE id = ${id}`,
+    );
     return (r.rows[0] as { b: string | null }).b;
   };
   const contact = (fill: boolean, telegramUserId: string, bot: string) =>
@@ -80,7 +83,10 @@ describe('customer first-bot link (OI-1)', () => {
   describe('part 1: fill on contact', () => {
     it('is off by default in the configuration', () => {
       expect(testConfig().CUSTOMER_FIRST_BOT_FILL_ON_CONTACT).toBe(false);
-      expect(testConfig({ CUSTOMER_FIRST_BOT_FILL_ON_CONTACT: 'true' }).CUSTOMER_FIRST_BOT_FILL_ON_CONTACT).toBe(true);
+      expect(
+        testConfig({ CUSTOMER_FIRST_BOT_FILL_ON_CONTACT: 'true' })
+          .CUSTOMER_FIRST_BOT_FILL_ON_CONTACT,
+      ).toBe(true);
     });
 
     it('flag off: a NULL link stays NULL after contact (behaviour unchanged)', async () => {
@@ -143,7 +149,11 @@ describe('customer first-bot link (OI-1)', () => {
     });
 
     it('apply links only NULL + imported rows; re-run links 0; audited with counts', async () => {
-      const nullImported = [await customer({ imported: true }), await customer({ imported: true }), await customer({ imported: true })];
+      const nullImported = [
+        await customer({ imported: true }),
+        await customer({ imported: true }),
+        await customer({ imported: true }),
+      ];
       const linkedImported = await customer({ imported: true, bot: BOT2 });
       const organic = await customer({});
       const report = await service().apply(tenantA, ACTOR, BOT1 as never, 2);
@@ -162,8 +172,9 @@ describe('customer first-bot link (OI-1)', () => {
       const c = await customer({});
       await db().execute(sql`
         INSERT INTO legacy_import_map (tenant_id, legacy_table, legacy_id, run_id, checksum, status,
-                                       created_at, updated_at)
-        VALUES (${tenantA.tenantId}, 'user', ${c.telegramUserId}, ${RUN}, ${HASH}, 'SKIPPED', now(), now())`);
+                                       reason_code, created_at, updated_at)
+        VALUES (${tenantA.tenantId}, 'user', ${c.telegramUserId}, ${RUN}, ${HASH}, 'SKIPPED',
+                'HISTORY_NOT_IMPORTED', now(), now())`);
       expect((await service().apply(tenantA, ACTOR, BOT1 as never)).linked).toBe(0);
       expect(await botOf(c.id)).toBeNull();
     });
