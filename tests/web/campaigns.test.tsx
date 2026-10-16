@@ -716,7 +716,7 @@ describe('a campaign’s commands, in the page head', () => {
     unmount();
     stubApi([{ url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) }]);
     renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} may={ALL} />);
-    await screen.findByText(detail().campaign.name);
+    await screen.findByText('جشنواره پاییز');
     expect(screen.queryByRole('button', { name: 'توقف موقت' })).toBeNull();
     expect(screen.queryByTestId('campaign-commands-hint')).toBeNull();
   });

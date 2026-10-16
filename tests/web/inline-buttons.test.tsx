@@ -125,7 +125,7 @@ const sheet = (key: string) => {
 };
 
 const chooseStyle = (key: string, style: string) =>
-  fireEvent.click(within(sheet(key)).getByRole('radio', { name: STYLE_LABEL[style] }));
+  fireEvent.click(within(sheet(key)).getByRole('radio', { name: STYLE_LABEL[style] ?? style }));
 
 /** The style a row shows now. */
 const styleOf = (key: string) => show(key).getAttribute('data-style');
