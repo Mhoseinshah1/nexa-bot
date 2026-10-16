@@ -149,3 +149,32 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --- Bot texts: on a narrow screen the editor is a side sheet over the page ------------- */
+
+.bx-sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--overlay);
+}
+.content-editor.bx-sheet:not(.open) {
+  display: none;
+}
+.content-editor.bx-sheet.open {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 101;
+  inline-size: min(560px, 100vw);
+  overflow-y: auto;
+  background: var(--bg-1);
+  border-inline-start: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  padding: 12px;
+}
+.bx-sheet-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}

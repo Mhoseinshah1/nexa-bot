@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { t } from '../i18n/web.fa';
 
 /**
@@ -144,4 +144,21 @@ export function ChipGroup({ label, children }: { label: string; children: ReactN
       {children}
     </div>
   );
+}
+
+/**
+ * Whether the window is at most `maxWidth` px wide, following resizes. The same media query
+ * the CSS uses, so a layout decision made in a script and one made in a stylesheet agree.
+ */
+export function useNarrowScreen(maxWidth = 980): boolean {
+  const query = `(max-width: ${maxWidth}px)`;
+  const [narrow, setNarrow] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    setNarrow(list.matches);
+    const onChange = (event: MediaQueryListEvent) => setNarrow(event.matches);
+    list.addEventListener('change', onChange);
+    return () => list.removeEventListener('change', onChange);
+  }, [query]);
+  return narrow;
 }
