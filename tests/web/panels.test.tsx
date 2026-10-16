@@ -95,7 +95,7 @@ describe('the panel list', () => {
     }
 
     // The forward control on an ASCENDING keyset is NEWER — see the pin below.
-    const newer = screen.getByRole('button', { name: 'تازه‌تر' });
+    const newer = screen.getByRole('button', { name: t('web.page_next') });
     expect(newer).not.toBeDisabled();
     newer.click();
 
@@ -108,7 +108,7 @@ describe('the panel list', () => {
     stubApi(list([panel()], null));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
-    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_next') })).toBeDisabled();
   });
 
   /**
@@ -118,13 +118,13 @@ describe('the panel list', () => {
    * what each did. The forward control must say NEWER here and the way back
    * OLDER, while the descending lists keep the defaults.
    */
-  it('labels the forward control newer, because the panel keyset ascends', async () => {
+  it('pages forward toward newer panels and back again on the ascending keyset', async () => {
     const api = stubApi(list([panel()], 'opaque-cursor-1'));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    const forward = screen.getByRole('button', { name: 'تازه‌تر' });
-    const back = screen.getByRole('button', { name: 'قدیمی‌تر' });
+    const forward = screen.getByRole('button', { name: t('web.page_next') });
+    const back = screen.getByRole('button', { name: t('web.page_previous') });
     expect(forward).toBeEnabled();
     expect(back).toBeDisabled();
     forward.click();
@@ -133,7 +133,7 @@ describe('the panel list', () => {
     });
     // And the way back to the first — oldest — page is OLDER.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeEnabled();
     });
   });
 
@@ -186,8 +186,8 @@ describe('the panel list', () => {
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit={false} denied />);
     await screen.findByText('شما به این بخش دسترسی ندارید.');
 
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_previous') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_next') })).toBeNull();
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
@@ -231,8 +231,8 @@ describe('the panel list', () => {
 
     const toolbar = container.querySelector('.toolbar');
     expect((toolbar as HTMLElement).hasAttribute('hidden')).toBe(true);
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_previous') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_next') })).toBeNull();
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
@@ -261,7 +261,7 @@ describe('the panel list', () => {
     rerender(<PanelsPage route={LIVE_ROUTE} mayEdit denied />);
 
     expect(screen.queryByText('نمایش')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_previous') })).toBeNull();
   });
 
   /**
@@ -289,7 +289,7 @@ describe('the panel list', () => {
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('هنوز پنلی ثبت نشده است.');
     expect(screen.getByText('نمایش')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeInTheDocument();
   });
 
   it('distinguishes an empty fleet from a failed request', async () => {

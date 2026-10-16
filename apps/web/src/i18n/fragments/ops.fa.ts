@@ -67,4 +67,7 @@ export const WEB_FA_OPS_RETIRED: readonly string[] = [
   'web.monitor_user_sync_body',
   // business chats: «load more» became the ten-a-page pager.
   'web.bchat_load_more',
+  // The kit pager now reads previous/next; panels no longer passes these overrides.
+  'web.older',
+  'web.newer',
 ];

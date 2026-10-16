@@ -104,6 +104,7 @@ import {
   type Tone,
   PermissionDeniedState,
   Quantity,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal } from '../polling';
@@ -354,6 +355,7 @@ export function PanelsPage({
     queryKey: ['panels', archived ? 'archived' : 'live', cursor ?? null],
     queryFn: () =>
       fetchPanels({
+        limit: LIST_PAGE_SIZE,
         ...(cursor === undefined ? {} : { cursor }),
         ...(archived ? { archived: 'only' as const } : {}),
       }),
@@ -529,12 +531,8 @@ export function PanelsPage({
             hasNext={nextCursor !== null}
             onPrevious={popCursor}
             onNext={() => nextCursor !== null && pushCursor(nextCursor)}
-            // `GET /panels` pages an ASCENDING keyset — oldest panel first,
-            // `nextCursor` toward newer ones — so the next page is NEWER here.
-            // The default labels are the descending lists', and read backwards
-            // on this one.
-            nextLabel="web.newer"
-            previousLabel="web.older"
+            // `GET /panels` pages an ASCENDING keyset; the neutral previous/next
+            // labels read correctly in either direction.
           />
         )}
       </Card>
