@@ -559,4 +559,6 @@ export const CUSTOMER_360_ROUTES = {
   legacyInvoices: (id: string) => `/users/${encodeURIComponent(id)}/legacy-invoices`,
   /** Which of the customer's services were adopted from Mirza (`legacy.services.view`). */
   legacyAdoptedServices: (id: string) => `/users/${encodeURIComponent(id)}/legacy-adopted-services`,
+  /** The customer's Mirza money history beside the opening figure (`legacy.history.view`). */
+  legacyMoneyHistory: (id: string) => `/users/${encodeURIComponent(id)}/legacy-money-history`,
 } as const;
