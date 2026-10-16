@@ -54,7 +54,7 @@ export interface PermissionCatalogProps {
    * Extra note under a row (e.g. «لازمهٔ …، خودکار افزوده شد»).
    */
   noteFor?: (key: string) => ReactNode;
-  /** Extra badges after a row's name (e.g. «از راه مجوز ویژه» in the effective preview). */
+  /** Extra badges after a row's name (e.g. the via-grant badge in the effective preview). */
   badgeFor?: (key: string) => ReactNode;
   /**
    * When present, the «جدول مقایسه» view is offered.
