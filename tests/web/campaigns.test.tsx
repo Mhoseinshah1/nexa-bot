@@ -10,6 +10,7 @@ import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
+import { addAudienceCondition } from './ui-helpers';
 
 /** Holds every request whose URL contains `path` until `release` is called. */
 function holdRequests(path: string): { release: () => void } {
@@ -217,8 +218,12 @@ describe('a new campaign', () => {
     ]);
     renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
     // Broadcast's own builder, not a second one.
-    expect(await screen.findByText('چه کسانی')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('کاربران عادی (غیر نماینده)'));
+    expect(await screen.findByText(t('web.aud_status'))).toBeInTheDocument();
+    fireEvent.click(
+      within(addAudienceCondition(t('web.aq_segment'))).getByRole('button', {
+        name: 'کاربران عادی (غیر نماینده)',
+      }),
+    );
 
     const inputs = screen.getAllByRole('textbox');
     fireEvent.change(inputs[0] as HTMLElement, { target: { value: 'جشنواره پاییز' } });
@@ -268,7 +273,7 @@ describe('the new-campaign form, by permission and calendar', () => {
         may={{ ...ALL, cashback: false, walletGift: false }}
       />,
     );
-    await screen.findByText('چه کسانی');
+    await screen.findByText(t('web.aud_status'));
     const cashback = screen
       .getByRole('heading', { name: 'کش‌بک' })
       .closest('section') as HTMLElement;
@@ -646,7 +651,7 @@ describe('roadmap C3/C4 on the campaign page', () => {
   it('offers no service-announcement purpose: a campaign’s announcement is promotional, and says so', async () => {
     const api = stubApi([...pickers, { url: '/campaigns', body: detail() }]);
     renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
-    await screen.findByText('چه کسانی');
+    await screen.findByText(t('web.aud_status'));
     const section = document.getElementById('campaign-section-announcement') as HTMLElement;
     fireEvent.click(within(section).getByLabelText(t('web.campaign_action_on')));
     expect(within(section).queryByRole('combobox')).toBeNull();
