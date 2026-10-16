@@ -541,7 +541,9 @@ describe('the settings page', () => {
     fireEvent.change(field, { target: { value: '99' } });
     fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
 
-    expect(await screen.findByText(t('web.settings_invalid_value'))).toBeInTheDocument();
+    // W6: the registry's own schema refuses 99 before it is sent, in Persian; the
+    // server's refusal of the same value would be Persian too (`SaveError`).
+    expect(await screen.findByText(t('web.err_setting_range'))).toBeInTheDocument();
     const text = visibleText(container);
     expect(text).not.toContain('does not match its declaration');
     expect(text).not.toContain('Too big');
