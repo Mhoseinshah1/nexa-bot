@@ -1,5 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../i18n/web.fa';
+import { formatNumber } from '../format';
+import { Icon } from './icons';
+import { useFocusTrap } from './overlays';
+import { tabbable } from './focusable';
 
 /**
  * One compact filter line per list (W1.3).
@@ -10,13 +14,18 @@ import { t } from '../i18n/web.fa';
  *
  * «فیلترها» opens a panel with one row per filter (label on the side, the page's existing chip
  * group or select inside). Every change applies immediately — the page's own controls still
- * write the URL exactly as before — and the panel stays open across re-renders. It closes with
- * «نمایش نتیجه», ×, Esc or an outside click; on a phone it is a bottom sheet with a backdrop.
+ * write the URL exactly as before — and the panel stays open across re-renders (its state is
+ * this component's, so a page must keep the bar mounted while its list reloads). It closes
+ * with «نمایش نتیجه», ×, Esc or an outside click; on a phone it is a bottom sheet with a
+ * backdrop. While open it holds the keyboard (`useFocusTrap`): focus starts on the first
+ * filter and returns to «فیلترها» when it closes.
+ *
+ * Layout: the search's own buttons («جست‌وجو» … «پاک کردن») and the saved-filters menu share
+ * one grid column, so the menu is exactly as wide as those buttons (at least 170px) without
+ * any measuring script — see `ui.css`.
  *
  * CONTRACT FOR PAGES AND TESTS: a filter's `control` is mounted ONLY while the panel is open.
  * A test opens it with `openFilterPanel()` from `tests/web/ui-helpers.ts`.
- *
- * PHASE-0 INTERFACE STUB — agent A implements the look, chips, Esc/outside click and sheet.
  */
 export interface ListFilter {
   /** Stable id, unique on the page. */
@@ -32,6 +41,8 @@ export interface ListFilter {
   active: string | null;
   /** Puts this filter back to its default (the chip's ×). */
   onClear: () => void;
+  /** A wide control (a date range, a small form) takes the whole row under its label. */
+  wide?: boolean;
 }
 
 export interface ListFilterBarProps {
@@ -56,50 +67,153 @@ export function ListFilterBar({
   label,
 }: ListFilterBarProps) {
   const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
   const active = filters.filter((one) => one.active !== null);
   const clearAll = onClearAll ?? (() => active.forEach((one) => one.onClear()));
+  const hasSaved = savedViews !== undefined && savedViews !== null && savedViews !== false;
+  const hasSearch = search !== undefined && search !== null && search !== false;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (event: MouseEvent) => {
+      if (root.current !== null && !root.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
   return (
     <div
-      className="list-filter-bar"
+      ref={root}
+      className={`list-filter-bar${open ? ' open' : ''}${hasSaved ? ' with-saved' : ''}`}
       role="search"
       {...(label === undefined ? {} : { 'aria-label': label })}
     >
-      {search}
-      <button type="button" className="btn sm" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {t('web.filters')}
-        {active.length > 0 && <span className="cnt num">{active.length}</span>}
-      </button>
-      {active.map((one) => (
+      {hasSearch && <div className="lfb-search">{search}</div>}
+      <div className="lfb-line">
         <button
-          key={one.key}
+          ref={toggle}
           type="button"
-          className="chip on"
-          onClick={one.onClear}
-          aria-label={`${t('web.filters_remove')} ${one.label}`}
+          className={`btn sm lfb-open${active.length > 0 ? ' on' : ''}`}
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          {...(open ? { 'aria-controls': panelId } : {})}
+          onClick={() => {
+            if (!open) toggle.current?.focus();
+            setOpen(!open);
+          }}
         >
-          {one.label}: {one.active} ×
+          <Icon name="sliders" size={14} />
+          {t('web.filters')}
+          {active.length > 0 && <span className="lfb-n num">{formatNumber(active.length)}</span>}
         </button>
-      ))}
-      {active.length >= 2 && (
-        <button type="button" className="btn sm ghost" onClick={clearAll}>
-          {t('web.filters_clear_all')}
-        </button>
-      )}
-      {active.length === 0 && <span className="muted small">{t('web.filters_none')}</span>}
-      {savedViews}
-      {open && (
-        <div className="list-filter-panel" role="dialog" aria-label={t('web.filters')}>
-          {filters.map((one) => (
-            <div key={one.key} className="list-filter-row">
-              <span className="muted small">{one.label}</span>
-              {one.control}
-            </div>
+        <div className="lfb-active">
+          {active.map((one) => (
+            <span key={one.key} className="lfb-chip">
+              <span className="muted">{one.label}:</span> {one.active}
+              <button
+                type="button"
+                className="lfb-x"
+                aria-label={`${t('web.filters_remove')} ${one.label}`}
+                title={`${t('web.filters_remove')} ${one.label}`}
+                onClick={one.onClear}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </span>
           ))}
-          <button type="button" className="btn sm primary" onClick={() => setOpen(false)}>
-            {t('web.filters_show_result')}
-          </button>
+          {active.length >= 2 && (
+            <button type="button" className="lfb-clear" onClick={clearAll}>
+              {t('web.filters_clear_all')}
+            </button>
+          )}
+          {active.length === 0 && <span className="lfb-none">{t('web.filters_none')}</span>}
         </div>
+      </div>
+      {hasSaved && <div className="lfb-saved">{savedViews}</div>}
+      {open && (
+        <>
+          <div className="lfb-backdrop" aria-hidden="true" onMouseDown={() => setOpen(false)} />
+          <FilterPanel
+            id={panelId}
+            filters={filters}
+            anyActive={active.length > 0}
+            onClearAll={clearAll}
+            onClose={() => setOpen(false)}
+          />
+        </>
       )}
+    </div>
+  );
+}
+
+function FilterPanel({
+  id,
+  filters,
+  anyActive,
+  onClearAll,
+  onClose,
+}: {
+  id: string;
+  filters: readonly ListFilter[];
+  anyActive: boolean;
+  onClearAll: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const rows = useRef<HTMLDivElement>(null);
+  const initial = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  useLayoutEffect(() => {
+    initial.current = rows.current === null ? null : (tabbable(rows.current)[0] ?? null);
+  }, []);
+  useFocusTrap(ref, true, onClose, initial);
+  return (
+    <div
+      ref={ref}
+      id={id}
+      className="lfb-panel"
+      role="dialog"
+      aria-label={t('web.filters')}
+      aria-describedby={titleId}
+    >
+      <div className="lfb-ph">
+        <b>{t('web.filters')}</b>
+        <span className="muted" id={titleId}>
+          {t('web.filters_hint')}
+        </span>
+        <button
+          type="button"
+          className="btn ghost icon sm"
+          aria-label={t('web.close')}
+          title={t('web.close')}
+          onClick={onClose}
+        >
+          <Icon name="x" />
+        </button>
+      </div>
+      <div className="lfb-rows" ref={rows}>
+        {filters.map((one) => (
+          <div key={one.key} className={`lfb-row${one.wide === true ? ' wide' : ''}`}>
+            <div className="lfb-lbl">{one.label}</div>
+            <div className="lfb-ctl">{one.control}</div>
+          </div>
+        ))}
+      </div>
+      <div className="lfb-pf">
+        {anyActive ? (
+          <button type="button" className="btn sm ghost" onClick={onClearAll}>
+            {t('web.filters_clear_all')}
+          </button>
+        ) : (
+          <span />
+        )}
+        <button type="button" className="btn sm primary" onClick={onClose}>
+          {t('web.filters_show_result')}
+        </button>
+      </div>
     </div>
   );
 }
