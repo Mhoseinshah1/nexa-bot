@@ -621,7 +621,7 @@ export function InlineButtonsSection({
           <InlineButtonSheet
             entry={openEntry}
             name={t(INLINE_BUTTON_NAME[openEntry.key])}
-            style={inlineButtonStyleOf(openEntry.key, current)}
+            look={inlineButtonStyleOf(openEntry.key, current)}
             typedIcon={currentIcons[openEntry.key] ?? ''}
             icon={inlineButtonIconOf(openEntry.key, canonicalIcons(currentIcons))}
             iconBad={badIcons.includes(openEntry.key)}
@@ -630,7 +630,7 @@ export function InlineButtonsSection({
             mayViewTemplates={mayViewTemplates}
             mayEditTemplates={mayEditTemplates}
             busy={save.isPending}
-            onStyle={(style) => edit({ ...current, [openEntry.key]: style })}
+            onLook={(look) => edit({ ...current, [openEntry.key]: look })}
             onIcon={(icon) => editIcon(openEntry.key, icon)}
             onLabelChanged={onLabelChanged}
             foot={mayEdit ? saveControls : undefined}
@@ -650,7 +650,7 @@ export function InlineButtonsSection({
 function InlineButtonSheet({
   entry,
   name,
-  style,
+  look,
   typedIcon,
   icon,
   iconBad,
@@ -659,7 +659,7 @@ function InlineButtonSheet({
   mayViewTemplates,
   mayEditTemplates,
   busy,
-  onStyle,
+  onLook,
   onIcon,
   onLabelChanged,
   foot,
@@ -667,7 +667,7 @@ function InlineButtonSheet({
 }: {
   entry: (typeof INLINE_BUTTONS)[number];
   name: string;
-  style: InlineButtonStyle;
+  look: InlineButtonStyle;
   typedIcon: string;
   icon: string | null;
   iconBad: boolean;
@@ -676,7 +676,7 @@ function InlineButtonSheet({
   mayViewTemplates: boolean;
   mayEditTemplates: boolean;
   busy: boolean;
-  onStyle: (style: InlineButtonStyle) => void;
+  onLook: (look: InlineButtonStyle) => void;
   onIcon: (icon: string) => void;
   onLabelChanged: () => Promise<unknown> | void;
   foot: ReactNode;
@@ -692,7 +692,7 @@ function InlineButtonSheet({
       <div className="stack">
         <div className="bx-prev">
           <span
-            className={`menu-preview-key ib-preview bx-bigkey bb-style-${style}`}
+            className={`menu-preview-key ib-preview bx-bigkey bb-style-${look}`}
             data-testid="ib-sheet-preview"
           >
             {icon !== null && !iconBad && (
@@ -717,10 +717,10 @@ function InlineButtonSheet({
                 key={option}
                 type="button"
                 role="radio"
-                aria-checked={option === style}
+                aria-checked={option === look}
                 className={`bx-stopt bb-style-${option}`}
                 disabled={!mayEdit || busy}
-                onClick={() => onStyle(option)}
+                onClick={() => onLook(option)}
               >
                 <i aria-hidden="true" />
                 {t(STYLE_NAME[option])}

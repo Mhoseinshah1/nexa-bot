@@ -193,6 +193,12 @@ describe('the reminders page', () => {
     renderPage(
       <RemindersPage mayEdit denied={false} mayViewTemplates={false} mayEditTemplates={false} />,
     );
+    // The family's rows are in its «تنظیم» sheet.
+    fireEvent.click(
+      within(await screen.findByTestId('reminders-expiry')).getByRole('button', {
+        name: t('web.bx_rem_configure'),
+      }),
+    );
     const field = await screen.findByLabelText(t('web.reminders_first_days'));
     const form = field.closest('form') as HTMLFormElement;
     const save = within(form).getByRole('button', { name: t('web.save') });
