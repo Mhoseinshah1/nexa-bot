@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { TrialsPage } from '../../apps/web/src/pages/trials';
 import { customer, renderPage, stubApi } from './harness';
+import { openC360Tab } from './c360-helpers';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
@@ -62,6 +63,7 @@ describe("the customer's trial card", () => {
     renderPage(
       <UserDetailPage id={ROW_ID} mayBlock={false} mayEditTrial {...OFF} denied={false} />,
     );
+    await openC360Tab('controls');
 
     // The override as stored, beside the default it replaces.
     expect(await screen.findByText('سقف اختصاصی')).toBeInTheDocument();
@@ -70,8 +72,11 @@ describe("the customer's trial card", () => {
     expect(screen.queryByText('ندارد (از سقف پیش‌فرض پیروی می‌کند)')).toBeNull();
     expect(screen.getByRole('button', { name: 'حذف سقف اختصاصی' })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('سقف اختصاصی جدید'), { target: { value: '5' } });
+    // W3: «ثبت سقف اختصاصی» opens the dialog that holds the field.
     fireEvent.click(screen.getByRole('button', { name: 'ثبت سقف اختصاصی' }));
+    const dialog = screen.getByRole('dialog', { name: 'ثبت سقف اختصاصی' });
+    fireEvent.change(within(dialog).getByLabelText('سقف اختصاصی جدید'), { target: { value: '5' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ثبت سقف اختصاصی' }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.endsWith('/trial/override'))).toBe(true),
     );
@@ -89,6 +94,7 @@ describe("the customer's trial card", () => {
     renderPage(
       <UserDetailPage id={ROW_ID} mayBlock={false} mayEditTrial={false} {...OFF} denied={false} />,
     );
+    await openC360Tab('controls');
     expect(await screen.findByText('ندارد (از سقف پیش‌فرض پیروی می‌کند)')).toBeInTheDocument();
     expect(screen.getByText(/users\.trial\.edit/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'ثبت سقف اختصاصی' })).toBeNull();
@@ -130,6 +136,8 @@ describe('the global trial reset', () => {
     const api = stubApi(routes);
     renderPage(<TrialsPage mayViewOverrides mayReset mayViewHistory />);
 
+    // W3: the head's danger button opens the reset drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.trials_reset_title') }));
     fireEvent.click(await screen.findByRole('button', { name: 'پیش‌نمایش' }));
     expect(await screen.findByText('7')).toBeInTheDocument();
     const execute = screen.getByRole('button', { name: 'بازنشانی' });
