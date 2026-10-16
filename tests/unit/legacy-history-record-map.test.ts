@@ -192,7 +192,9 @@ describe('legacy user and time', () => {
     expect(
       legacyUserIdOf('archive_row', { class: 'x', customer: { telegram_user_id: '7000000071' } }),
     ).toBe('7000000071');
-    expect(legacyUserIdOf('archive_row', { class: 'x', customer: { telegram_user_id: null } })).toBeNull();
+    expect(
+      legacyUserIdOf('archive_row', { class: 'x', customer: { telegram_user_id: null } }),
+    ).toBeNull();
     expect(
       legacyUserIdOf('configuration_row', { customer: { telegram_user_id: '7000000071' } }),
     ).toBeNull();

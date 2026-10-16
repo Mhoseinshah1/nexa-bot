@@ -1,4 +1,9 @@
-import { isNexaError, systemJobActor, type CorrelationId, type TenantContext } from '@nexa/contracts';
+import {
+  isNexaError,
+  systemJobActor,
+  type CorrelationId,
+  type TenantContext,
+} from '@nexa/contracts';
 import type { BotInstanceId } from '@nexa/contracts';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
@@ -68,8 +73,14 @@ export function parseLinkBotArgs(
     if (flag === '--bot') bot = value;
     else if (flag === '--tenant') tenantSlug = value;
     else {
-      if (!/^[0-9]{1,5}$/u.test(value) || Number(value) < 1 || Number(value) > CUSTOMER_BOT_LINK_BATCH_MAX)
-        throw new LinkBotArgsError(`--batch-size must be 1..${String(CUSTOMER_BOT_LINK_BATCH_MAX)}.`);
+      if (
+        !/^[0-9]{1,5}$/u.test(value) ||
+        Number(value) < 1 ||
+        Number(value) > CUSTOMER_BOT_LINK_BATCH_MAX
+      )
+        throw new LinkBotArgsError(
+          `--batch-size must be 1..${String(CUSTOMER_BOT_LINK_BATCH_MAX)}.`,
+        );
       batchSize = Number(value);
     }
   }
