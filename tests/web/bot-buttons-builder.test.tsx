@@ -1274,3 +1274,34 @@ describe('the button builder — drag quality (owner, 2026-10-02)', () => {
     }
   });
 });
+
+describe('the builder’s editor under the preview', () => {
+  it('draws the selected button’s editor in three titled columns: place, look, show and target', async () => {
+    builderApi(builderView());
+    renderPage(page());
+    await ready();
+    select('wallet');
+    const inspector = screen.getByTestId('bb-inspector');
+    const columns = within(inspector).getAllByRole('group', {
+      name: new RegExp(
+        `^(${t('web.bx_bb_col_place')}|${t('web.bx_bb_col_look')}|${t('web.bx_bb_col_show')})$`,
+      ),
+    });
+    expect(columns.map((one) => one.getAttribute('aria-labelledby') !== null)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    const [place, look, show] = columns as [HTMLElement, HTMLElement, HTMLElement];
+    expect(within(place).getByTestId('bb-where')).toBeInTheDocument();
+    expect(within(look).getByTestId('bb-icon')).toBeInTheDocument();
+    expect(within(look).getByText(t('web.bb_style_title'))).toBeInTheDocument();
+    expect(within(show).getByTestId('bb-label')).toBeInTheDocument();
+    expect(within(show).getByText(t('web.bot_buttons_target'))).toBeInTheDocument();
+    // Below the canvas in the document, not beside it.
+    const canvas = document.querySelector('.bb-canvas') as HTMLElement;
+    expect(
+      canvas.compareDocumentPosition(inspector) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});

@@ -24,6 +24,9 @@ export const WEB_FA_MARKETING = {
   'web.bx_ib_group_all': 'همهٔ گروه‌ها',
   'web.bx_bb_tab_layout': 'چیدمان منوی اصلی',
   'web.bx_bb_duplicate': 'متن تکراری',
+  'web.bx_bb_col_place': 'جایگاه',
+  'web.bx_bb_col_look': 'ظاهر',
+  'web.bx_bb_col_show': 'نمایش و مقصد',
 } as const;
 
 /**
