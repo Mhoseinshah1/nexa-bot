@@ -58,6 +58,7 @@ import {
   Banner,
   Card,
   CursorPager,
+  LIST_PAGE_SIZE,
   DataTable,
   Empty,
   Field,
@@ -81,6 +82,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { SaveBar, SectionNav } from './editor-layout';
+import { ListFilterBar } from '../ui/filter-bar';
 
 /**
  * Campaigns — «کمپین‌ها» (round N, C1; `docs/round-n-campaigns-audit.md`).
@@ -242,6 +244,7 @@ export function CampaignsPage({
     queryKey: [CAMPAIGNS_KEY, 'list', filter, cursor ?? ''],
     queryFn: () =>
       fetchCampaigns({
+        limit: LIST_PAGE_SIZE,
         ...(filter === 'ALL' ? {} : { state: filter }),
         ...(cursor === undefined ? {} : { cursor }),
       }),
@@ -313,28 +316,41 @@ export function CampaignsPage({
         <p>{t('web.campaign_semantics_results')}</p>
       </Banner>
       <Card>
-        <FilterChips label={t('web.status')}>
-          {(
-            [
-              { id: 'ALL', label: t('web.campaign_filter_all') },
-              ...CAMPAIGN_STATES.map((state) => ({
-                id: state,
-                label: t(CAMPAIGN_STATE_LABELS[state]),
-              })),
-            ] as { id: StateFilter; label: string }[]
-          ).map((item) => (
-            <FilterChip
-              key={item.id}
-              pressed={filter === item.id}
-              onClick={() => {
-                const suffix = item.id === 'ALL' ? '' : `?state=${item.id}`;
-                navigate(`/campaigns${suffix}`, { replace: true });
-              }}
-            >
-              {item.label}
-            </FilterChip>
-          ))}
-        </FilterChips>
+        <ListFilterBar
+          label={t('web.campaigns_title')}
+          filters={[
+            {
+              key: 'state',
+              label: t('web.status'),
+              active: filter === 'ALL' ? null : t(CAMPAIGN_STATE_LABELS[filter]),
+              onClear: () => navigate('/campaigns', { replace: true }),
+              control: (
+                <FilterChips label={t('web.status')}>
+                  {(
+                    [
+                      { id: 'ALL', label: t('web.campaign_filter_all') },
+                      ...CAMPAIGN_STATES.map((state) => ({
+                        id: state,
+                        label: t(CAMPAIGN_STATE_LABELS[state]),
+                      })),
+                    ] as { id: StateFilter; label: string }[]
+                  ).map((item) => (
+                    <FilterChip
+                      key={item.id}
+                      pressed={filter === item.id}
+                      onClick={() => {
+                        const suffix = item.id === 'ALL' ? '' : `?state=${item.id}`;
+                        navigate(`/campaigns${suffix}`, { replace: true });
+                      }}
+                    >
+                      {item.label}
+                    </FilterChip>
+                  ))}
+                </FilterChips>
+              ),
+            },
+          ]}
+        />
         <StateSwitch
           query={list}
           denied={denied}

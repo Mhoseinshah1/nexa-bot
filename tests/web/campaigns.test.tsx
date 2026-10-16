@@ -10,6 +10,7 @@ import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /** Holds every request whose URL contains `path` until `release` is called. */
 function holdRequests(path: string): { release: () => void } {
@@ -191,6 +192,27 @@ describe('the campaigns list', () => {
     expect(row.textContent).not.toContain('SCHEDULED');
     // What a campaign does NOT do is said before anything else.
     expect(screen.getByText(/نه فقط برای مخاطبان/)).toBeInTheDocument();
+  });
+
+  it('asks for ten a page, and keeps the state filter in the filter panel', async () => {
+    const api = stubApi([{ url: '/campaigns', body: { campaigns: [], nextCursor: null } }]);
+    renderPage(
+      <CampaignsPage
+        route={{ path: '/campaigns', query: new URLSearchParams('state=ACTIVE') }}
+        denied={false}
+        mayManage
+      />,
+    );
+    await waitFor(() => expect(api.calls.length).toBeGreaterThan(0));
+    const list = new URL(api.calls[0]?.url ?? '', 'http://x');
+    expect(list.searchParams.get('limit')).toBe('10');
+    expect(list.searchParams.get('state')).toBe('ACTIVE');
+    // The active filter is a removable chip on the line; its choices sit in the panel.
+    expect(screen.queryByRole('button', { name: t('web.campaign_filter_all') })).toBeNull();
+    const panel = openFilterPanel();
+    expect(
+      within(panel).getByRole('button', { name: t('web.campaign_filter_all') }),
+    ).toBeInTheDocument();
   });
 
   it('is reachable from the navigation under its own view key', () => {
