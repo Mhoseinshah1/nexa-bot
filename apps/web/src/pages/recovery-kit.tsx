@@ -29,6 +29,7 @@ import {
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { errorText } from '../error-text';
 
 /**
  * The Recovery Kit section of the backup and recovery page (ADR-0032).
@@ -540,7 +541,7 @@ function StepUpCodeField({ value, onChange }: { value: string; onChange: (v: str
 export function kitMessage(error: unknown): string {
   if (error instanceof ApiError) {
     const key = KIT_ERRORS[error.code];
-    return key === undefined ? error.message : t(key);
+    return key === undefined ? errorText(error) : t(key);
   }
-  return t('web.error');
+  return errorText(error);
 }

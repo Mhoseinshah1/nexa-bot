@@ -1,0 +1,119 @@
+import type { ReactNode } from 'react';
+import {
+  errorIssues,
+  errorReference,
+  errorText,
+  type ErrorOverrides,
+  type ErrorIssue,
+} from '../error-text';
+import { t, type WebKey } from '../i18n/web.fa';
+import { Banner, Disclosure } from './kit';
+
+/**
+ * «جزئیات فنی»: what a provider, a log or a validator actually wrote.
+ *
+ * Raw provider text (`lastErrorMessage`, a Telegram description, Zod's English) is never the
+ * sentence an operator reads; it is kept here, closed by default, left-to-right and
+ * monospace, for whoever has to debug it. Renders nothing when there is nothing to show.
+ */
+export function TechnicalDetails({
+  lines,
+  children,
+}: {
+  lines?: readonly (string | null | undefined)[];
+  children?: ReactNode;
+}) {
+  const shown = (lines ?? []).filter(
+    (line): line is string => typeof line === 'string' && line.trim() !== '',
+  );
+  if (shown.length === 0 && (children === undefined || children === null)) return null;
+  return (
+    <Disclosure size="sm" summary={t('web.err_technical')} className="err-technical">
+      {shown.length > 0 && (
+        <ul className="err-technical-lines">
+          {shown.map((line, index) => (
+            <li key={`${index}:${line}`} dir="ltr" className="ltr mono">
+              {line}
+            </li>
+          ))}
+        </ul>
+      )}
+      {children}
+    </Disclosure>
+  );
+}
+
+/**
+ * The error's code and correlation id: small, muted, left-to-right, UNDER the Persian
+ * sentence — never instead of it. Support finds the log entry by the correlation id.
+ */
+export function ErrorRef({ error }: { error: unknown }) {
+  const reference = errorReference(error);
+  if (reference === null) return null;
+  return (
+    <p className="err-ref muted small">
+      <span>{t('web.err_ref_code')}</span>{' '}
+      <bdi dir="ltr" className="ltr mono">
+        {reference.code}
+      </bdi>
+      {reference.correlationId !== null && (
+        <>
+          {' · '}
+          <span>{t('web.err_ref_correlation')}</span>{' '}
+          <bdi dir="ltr" className="ltr mono">
+            {reference.correlationId}
+          </bdi>
+        </>
+      )}
+    </p>
+  );
+}
+
+function IssueLine({ issue }: { issue: ErrorIssue }) {
+  return (
+    <>
+      {issue.text}
+      {issue.token !== undefined && (
+        <>
+          {': '}
+          <bdi dir="ltr" className="ltr mono">{`{${issue.token}}`}</bdi>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * A refusal, in Persian: the sentence, one Persian line per refused field, the code and
+ * correlation id, and the server's own words behind «جزئیات فنی».
+ */
+export function ApiErrorReport({
+  error,
+  overrides,
+  fieldLabels,
+}: {
+  error: unknown;
+  overrides?: ErrorOverrides;
+  fieldLabels?: Readonly<Record<string, WebKey>>;
+}) {
+  const issues = errorIssues(error, fieldLabels);
+  return (
+    <>
+      <Banner tone="danger">
+        {errorText(error, overrides === undefined ? {} : { overrides })}
+        <ErrorRef error={error} />
+      </Banner>
+      {issues.length > 0 && (
+        <ul className="danger">
+          {issues.map((issue, index) => (
+            // The index is part of the key: two issues can carry the same sentence.
+            <li key={`${index}:${issue.text}:${issue.token ?? ''}`}>
+              <IssueLine issue={issue} />
+            </li>
+          ))}
+        </ul>
+      )}
+      <TechnicalDetails lines={issues.map((issue) => issue.raw)} />
+    </>
+  );
+}

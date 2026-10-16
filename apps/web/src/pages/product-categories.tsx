@@ -13,6 +13,7 @@ import {
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
+import { formatNumber } from '../format';
 import { messageFor } from './settings';
 import { useLinkHandler } from '../router';
 import {
@@ -93,7 +94,7 @@ function formOf(category: ProductCategoryListingResponse): FormState {
 function deleteMessage(error: unknown): string {
   if (error instanceof ApiError && error.code === 'commerce.category_not_empty') {
     const count = (error.details as { productCount?: unknown } | null)?.productCount;
-    if (typeof count === 'number') return `${error.message} (${count})`;
+    if (typeof count === 'number') return `${messageFor(error)} (${formatNumber(count)})`;
   }
   return messageFor(error);
 }

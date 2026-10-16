@@ -65,6 +65,7 @@ import { pollUnlessFinal } from '../polling';
 import { errorCopy, queryState, retryOf } from '../view-state';
 import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
+import { errorText } from '../error-text';
 
 /**
  * System and operations.
@@ -1520,7 +1521,7 @@ function refusalText(error: unknown, fallback: string | null): string {
       return fallback;
     }
   }
-  return error instanceof Error ? error.message : String(error);
+  return errorText(error);
 }
 
 /**
@@ -1584,7 +1585,7 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
       ) {
         setProblem(t('web.admin_telegram_id_taken'));
       } else {
-        setProblem(error instanceof Error ? error.message : String(error));
+        setProblem(errorText(error));
       }
     },
   });

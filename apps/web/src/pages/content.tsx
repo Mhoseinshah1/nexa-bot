@@ -1190,7 +1190,7 @@ function templateRefusal(
   }
 }
 
-/** One `validateTemplateBody` issue, by its kind. An unknown kind keeps its own words. */
+/** One `validateTemplateBody` issue, by its kind. An unknown kind gets a generic sentence. */
 function bodyIssue(issue: unknown): TemplateIssueCopy {
   const shaped = (typeof issue === 'object' && issue !== null ? issue : {}) as {
     kind?: unknown;
@@ -1214,8 +1214,8 @@ function bodyIssue(issue: unknown): TemplateIssueCopy {
     case 'UNKNOWN_ICON':
       return withToken('web.template_issue_unknown_icon');
     default:
-      if (typeof issue === 'string') return { text: issue };
-      return { text: typeof shaped.detail === 'string' ? shaped.detail : JSON.stringify(issue) };
+      // An unknown kind's own words are English for a log; the sentence stays Persian.
+      return { text: t('web.err_issue_generic') };
   }
 }
 

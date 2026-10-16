@@ -10,7 +10,7 @@ import {
   type ResolvedSettingResponse,
   type PermissionKey,
 } from '@nexa/contracts';
-import { ApiError, fetchSettings, saveSetting } from '../api/client';
+import { fetchSettings, saveSetting } from '../api/client';
 import { useSubmissionKey } from '../submission-key';
 import {
   BACKUP_INTERVAL_PRESETS,
@@ -38,6 +38,8 @@ import {
   StateSwitch,
   ToggleRow,
 } from '../ui/kit';
+import { errorText } from '../error-text';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * «زمان‌بندی بکاپ خودکار» — spec §13.2.
@@ -294,7 +296,8 @@ export function BackupScheduleCard({
       {save.isSuccess && <Banner tone="ok">{t('web.backup_schedule_saved')}</Banner>}
       {save.error !== null && (
         <Banner tone="danger">
-          {save.error instanceof ApiError ? save.error.message : t('web.error')}
+          {errorText(save.error)}
+          <ErrorRef error={save.error} />
         </Banner>
       )}
 

@@ -908,10 +908,21 @@ export class ApiError extends Error {
      * valid" and no way to see which of their placeholders was wrong.
      */
     readonly details?: Record<string, unknown>,
+    /**
+     * The server's error class (`VALIDATION`, `CONFLICT`, …) and the request's correlation
+     * id. Absent when the response did not carry an error body. The correlation id is shown
+     * small beside the Persian sentence, so support can find the log entry.
+     */
+    meta: { readonly kind?: string; readonly correlationId?: string } = {},
   ) {
     super(message);
     this.name = 'ApiError';
+    this.kind = meta.kind ?? null;
+    this.correlationId = meta.correlationId ?? null;
   }
+
+  readonly kind: string | null;
+  readonly correlationId: string | null;
 }
 
 function toApiError(status: number, payload: unknown): ApiError {
@@ -922,9 +933,12 @@ function toApiError(status: number, payload: unknown): ApiError {
       parsed.data.error.code,
       parsed.data.error.message,
       parsed.data.error.details,
+      { kind: parsed.data.error.kind, correlationId: parsed.data.error.correlationId },
     );
   }
-  return new ApiError(status, 'unknown', `Request failed with ${status}`);
+  // No error body to read. The message is for a log, never for an operator: `errorText`
+  // chooses the Persian sentence by this status.
+  return new ApiError(status, 'unknown', `HTTP ${status}`);
 }
 
 /**
