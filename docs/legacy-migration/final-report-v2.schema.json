@@ -611,7 +611,8 @@
                 "legacyDebts",
                 "ledgerDebitOpenings",
                 "perUser",
-                "carried"
+                "carried",
+                "sourceMoney"
               ],
               "properties": {
                 "currency": {
@@ -732,6 +733,191 @@
                     },
                     "absentDebts": {
                       "$ref": "#/$defs/countAndSum"
+                    }
+                  }
+                },
+                "sourceMoney": {
+                  "description": "Every source row's balance in exactly one bucket (U9), summed exactly by sign (U10): credited, recorded as a legacy debt, zero, held with the outcome that says why this snapshot's figure is not applied, unreadable (counted by rows, never summed), or unaccounted (never expected). Aggregates only.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "sourceRows",
+                    "readable",
+                    "unreadable",
+                    "credited",
+                    "debtRecorded",
+                    "zero",
+                    "held",
+                    "unaccounted"
+                  ],
+                  "properties": {
+                    "sourceRows": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "readable": {
+                      "$ref": "#/$defs/signedMoney"
+                    },
+                    "unreadable": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["rows", "byOutcome"],
+                      "properties": {
+                        "rows": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "byOutcome": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "IMPORTED_NEW": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "IMPORTED_EXISTING": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "SKIPPED_INVALID_IDENTITY": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "SKIPPED_BALANCE_UNREADABLE": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "SKIPPED_BALANCE_OUT_OF_RANGE": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "SKIPPED_DUPLICATE_SOURCE_ID": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "SKIPPED_STATUS_UNKNOWN": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "SKIPPED_REVIEW_CLOSED": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "SOURCE_CHANGED": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "NOT_YET_IMPORTED": {
+                              "$ref": "#/$defs/count"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "credited": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["rows", "sumMinor"],
+                      "properties": {
+                        "rows": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "sumMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "debtRecorded": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["rows", "sumMinor"],
+                      "properties": {
+                        "rows": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "sumMinor": {
+                          "$ref": "#/$defs/minor"
+                        }
+                      }
+                    },
+                    "zero": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["rows"],
+                      "properties": {
+                        "rows": {
+                          "$ref": "#/$defs/count"
+                        }
+                      }
+                    },
+                    "held": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["rows", "positive", "negative", "byOutcome"],
+                      "properties": {
+                        "rows": {
+                          "$ref": "#/$defs/count"
+                        },
+                        "positive": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["rows", "sumMinor"],
+                          "properties": {
+                            "rows": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "sumMinor": {
+                              "$ref": "#/$defs/minor"
+                            }
+                          }
+                        },
+                        "negative": {
+                          "description": "Magnitudes.",
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["rows", "sumMinor"],
+                          "properties": {
+                            "rows": {
+                              "$ref": "#/$defs/count"
+                            },
+                            "sumMinor": {
+                              "$ref": "#/$defs/minor"
+                            }
+                          }
+                        },
+                        "byOutcome": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "SKIPPED_INVALID_IDENTITY",
+                            "SKIPPED_BALANCE_UNREADABLE",
+                            "SKIPPED_BALANCE_OUT_OF_RANGE",
+                            "SKIPPED_DUPLICATE_SOURCE_ID",
+                            "SKIPPED_STATUS_UNKNOWN",
+                            "SKIPPED_REVIEW_CLOSED",
+                            "SOURCE_CHANGED",
+                            "NOT_YET_IMPORTED"
+                          ],
+                          "properties": {
+                            "SKIPPED_INVALID_IDENTITY": {
+                              "$ref": "#/$defs/signedMoney"
+                            },
+                            "SKIPPED_BALANCE_UNREADABLE": {
+                              "$ref": "#/$defs/signedMoney"
+                            },
+                            "SKIPPED_BALANCE_OUT_OF_RANGE": {
+                              "$ref": "#/$defs/signedMoney"
+                            },
+                            "SKIPPED_DUPLICATE_SOURCE_ID": {
+                              "$ref": "#/$defs/signedMoney"
+                            },
+                            "SKIPPED_STATUS_UNKNOWN": {
+                              "$ref": "#/$defs/signedMoney"
+                            },
+                            "SKIPPED_REVIEW_CLOSED": {
+                              "$ref": "#/$defs/signedMoney"
+                            },
+                            "SOURCE_CHANGED": {
+                              "$ref": "#/$defs/signedMoney"
+                            },
+                            "NOT_YET_IMPORTED": {
+                              "$ref": "#/$defs/signedMoney"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "unaccounted": {
+                      "$ref": "#/$defs/signedMoney"
                     }
                   }
                 }
@@ -1581,6 +1767,43 @@
         },
         "recordedAt": {
           "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "signedMoney": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rows", "positive", "negative"],
+      "properties": {
+        "rows": {
+          "$ref": "#/$defs/count"
+        },
+        "positive": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rows", "sumMinor"],
+          "properties": {
+            "rows": {
+              "$ref": "#/$defs/count"
+            },
+            "sumMinor": {
+              "$ref": "#/$defs/minor"
+            }
+          }
+        },
+        "negative": {
+          "description": "Magnitudes.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rows", "sumMinor"],
+          "properties": {
+            "rows": {
+              "$ref": "#/$defs/count"
+            },
+            "sumMinor": {
+              "$ref": "#/$defs/minor"
+            }
+          }
         }
       }
     }

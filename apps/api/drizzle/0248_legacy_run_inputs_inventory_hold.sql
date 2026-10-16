@@ -1,0 +1,3 @@
+ALTER TABLE "legacy_import_run_inputs" ADD COLUMN "inventory_hold_digest" text;--> statement-breakpoint
+ALTER TABLE "legacy_import_run_inputs" ADD COLUMN "inventory_hold_keys" jsonb;--> statement-breakpoint
+ALTER TABLE "legacy_import_run_inputs" ADD CONSTRAINT "legacy_import_run_inputs_inventory_hold_check" CHECK (((inventory_hold_digest IS NULL) = (inventory_hold_keys IS NULL)) AND (inventory_hold_digest IS NULL OR inventory_hold_digest ~ '^[0-9a-f]{64}$') AND (inventory_hold_keys IS NULL OR jsonb_typeof(inventory_hold_keys) = 'array'));

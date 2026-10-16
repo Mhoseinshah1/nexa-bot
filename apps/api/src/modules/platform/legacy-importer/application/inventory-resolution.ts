@@ -21,7 +21,7 @@
  *   one that no later walk returned again, and a later gap-free walk returned no spelling of it
  *   (`PROVIDER_MISSING`, manual review — never a created account).
  * - **Unresolved** — anything else: no decision walk, a row neither confirmed nor shown gone,
- *   or a name the backup spells two ways. It stays `INVENTORY_INCOMPLETE`, which a production-like approval refuses — never a
+ *   or a name the backup spells two ways. It stays `INVENTORY_INCOMPLETE`, quarantined by the inventory hold (never adopted) — never a
  *   guessed owner, never a guessed absence.
  *
  * No exact lookup is sent: a lookup happens after a walk, which is exactly when a case variant
@@ -29,6 +29,8 @@
  * does not need — a manual account, a sale Mirza made after the backup — are never decided,
  * counted or indexed: they cannot become anyone's service.
  */
+
+import type { RickpanelUnresolvedCause } from '@nexa/contracts';
 
 export interface ObservedAccount {
   /** The canonical (lowercase) name. */
@@ -68,6 +70,28 @@ export function decideNeededNames(
   walks: readonly ResolutionWalk[],
   decision: number | null,
 ): Map<string, NameResolution> {
+  return decideNeededNamesWithCauses(needed, walks, decision).resolved;
+}
+
+/**
+ * `decideNeededNames`, and beside it WHY each unresolved name is unresolved
+ * (`RICKPANEL_UNRESOLVED_CAUSES`) — diagnostics only. The decisions are the same function's:
+ * `decideNeededNames` is this one with the causes dropped, so the two cannot disagree. Every
+ * UNRESOLVED name has exactly one cause; no other name has one.
+ */
+export function decideNeededNamesWithCauses(
+  needed: ReadonlyMap<string, string | null>,
+  walks: readonly ResolutionWalk[],
+  decision: number | null,
+): {
+  readonly resolved: Map<string, NameResolution>;
+  readonly causes: Map<string, RickpanelUnresolvedCause>;
+} {
+  const causes = new Map<string, RickpanelUnresolvedCause>();
+  const unresolved = (name: string, cause: RickpanelUnresolvedCause): NameResolution => {
+    causes.set(name, cause);
+    return { kind: 'UNRESOLVED' };
+  };
   if (walks.length < 2) throw new Error('a per-name resolution needs at least two walks');
   if (
     decision !== null &&
@@ -106,7 +130,10 @@ export function decideNeededNames(
     }
     // Two backup spellings of one name: which account each invoice meant is a guess.
     if (backup === null || decision === null) {
-      out.set(name, { kind: 'UNRESOLVED' });
+      out.set(
+        name,
+        unresolved(name, backup === null ? 'BACKUP_TWO_SPELLINGS' : 'NO_DECISION_WALK'),
+      );
       continue;
     }
     const at = walks[decision] as ResolutionWalk;
@@ -116,7 +143,7 @@ export function decideNeededNames(
       // The decision walk is gap-free: nothing that existed throughout it was missed. A later
       // walk that returns the name all the same (created after, or missed after all) is not
       // overruled by a guess either way.
-      out.set(name, seenLater ? { kind: 'UNRESOLVED' } : { kind: 'ABSENT' });
+      out.set(name, seenLater ? unresolved(name, 'REAPPEARED') : { kind: 'ABSENT' });
       continue;
     }
     // Exactly one spelling, the only one any walk saw (else a collision above). Present when a
@@ -145,12 +172,16 @@ export function decideNeededNames(
     }
     // Not returned again: deleted after its read. Absent only when a later gap-free walk
     // returned no spelling of it at all; otherwise undecided.
+    // (A row that a later walk returned with another creation time, or one with no single
+    // creation time of its own, is `otherwise`: possibly another account under the name.)
     out.set(
       name,
-      !seenLater && later.some((w) => w.decisive) ? { kind: 'ABSENT' } : { kind: 'UNRESOLVED' },
+      !seenLater && later.some((w) => w.decisive)
+        ? { kind: 'ABSENT' }
+        : unresolved(name, created === null || otherwise ? 'MULTI_CREATED_AT' : 'UNCONFIRMED'),
     );
   }
-  return out;
+  return { resolved: out, causes };
 }
 
 /** The resolution's counts, as the read reports them. */
@@ -247,4 +278,35 @@ export function neededNamesByPanel(
     }
   }
   return out;
+}
+
+/**
+ * The "adopt approved" lane's TARGETED read (`docs/legacy-migration/service-review.md` §4b):
+ * `neededNamesByPanel` over the CLAIMED approvals' invoices alone, so each panel is asked
+ * exactly the names those approvals need — on the panel the operator named, the panel the
+ * invoice's code maps, or (a code declared missing, which the matcher searches) every
+ * production panel. A panel-less invoice with no named panel is `NO_PANEL` whatever any panel
+ * holds (owner decision 8), so it asks nothing. Only panels with a name are returned: a panel
+ * no claimed approval names is never read.
+ */
+export function laneNeededNamesByPanel(
+  claimed: readonly NeedingInvoice[],
+  importableUserIds: ReadonlySet<string>,
+  policy: Parameters<typeof neededNamesByPanel>[2],
+  operatorPanels: ReadonlyMap<string, string>,
+  canonical: (raw: string) => string | null,
+  isInvoiceKey: (key: string) => boolean,
+): Map<string, Map<string, string | null>> {
+  const asking = claimed.filter(
+    (invoice) => operatorPanels.has(invoice.idInvoice) || (invoice.codePanel?.trim() ?? '') !== '',
+  );
+  const needed = neededNamesByPanel(
+    asking,
+    importableUserIds,
+    policy,
+    operatorPanels,
+    canonical,
+    isInvoiceKey,
+  );
+  return new Map([...needed].filter(([, names]) => names.size > 0));
 }

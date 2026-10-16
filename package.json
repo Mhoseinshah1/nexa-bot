@@ -50,6 +50,8 @@
     "backup:dev": "pnpm --filter @nexa/api backup:dev",
     "legacy-import": "pnpm --filter @nexa/api legacy-import",
     "legacy-import:dev": "pnpm --filter @nexa/api legacy-import:dev",
+    "rickpanel-probe": "pnpm --filter @nexa/api rickpanel-probe",
+    "rickpanel-probe:dev": "pnpm --filter @nexa/api rickpanel-probe:dev",
     "dev:services": "bash scripts/dev-services.sh",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:citations && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build"
   },

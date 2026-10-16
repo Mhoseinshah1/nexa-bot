@@ -31,6 +31,10 @@ import type { PlannedUser } from './plan.js';
  * 3. What changed since the snapshot NEXA imported from? Every SOURCE_CHANGED user is
  *    classed by how its balance moved; the sign flips are listed for the owner by map ref.
  *    Nothing here — or anywhere — applies a changed figure.
+ * 4. Where is every source row's money? Each balance lands in exactly one bucket (credited,
+ *    recorded as a debt, zero, held with the outcome that says why, or unreadable — counted
+ *    by rows, never summed as 0), and the buckets add up EXACTLY, by sign, to the readable
+ *    source sum (U9/U10). Money on a review row is reported, never invisible.
  */
 
 export interface UsersWalletsInput {
@@ -111,6 +115,83 @@ export function userOutcome(
 const zeroOutcomes = () =>
   Object.fromEntries(LEGACY_USER_OUTCOMES.map((k) => [k, 0])) as Record<LegacyUserOutcome, number>;
 
+/** The outcomes whose row's money this snapshot does NOT apply: every one but the two IMPORTED. */
+export type HeldOutcome = Exclude<LegacyUserOutcome, 'IMPORTED_NEW' | 'IMPORTED_EXISTING'>;
+export const HELD_OUTCOMES = LEGACY_USER_OUTCOMES.filter(
+  (o): o is HeldOutcome => o !== 'IMPORTED_NEW' && o !== 'IMPORTED_EXISTING',
+);
+
+/**
+ * The money bucket ONE source row's balance lands in (the `sourceMoney` accounting, U9/U10).
+ * Exactly one per row, decided from the row, its outcome and what NEXA recorded for it:
+ *
+ * - `UNREADABLE`: the cell is not a whole number of Toman. Its value is unknown, so it is
+ *   counted by ROWS and never summed — never as a 0 (the closed v1 `legacyTotalMinor` does
+ *   read it as 0; this accounting is where that is said).
+ * - `CREDITED` / `DEBT_RECORDED` / `ZERO`: an imported user for whom NEXA holds EXACTLY the
+ *   source figure — one opening CREDIT of it, one legacy debt of its magnitude, or nothing.
+ * - `HELD`: readable, and not applied from this snapshot, with the outcome that says why
+ *   (manual review, an invalid identity, a duplicated id, a closed review, a changed source,
+ *   or not imported yet).
+ * - `UNACCOUNTED`: an imported user for whom NEXA holds something other than the source
+ *   figure (nothing, a different amount, the other kind, a DEBIT opening). Never expected.
+ */
+export type SourceMoneyBucket =
+  | { readonly kind: 'UNREADABLE' }
+  | { readonly kind: 'CREDITED'; readonly amountMinor: bigint }
+  | { readonly kind: 'DEBT_RECORDED'; readonly amountMinor: bigint }
+  | { readonly kind: 'ZERO' }
+  | { readonly kind: 'HELD'; readonly outcome: HeldOutcome; readonly balanceMinor: bigint }
+  | { readonly kind: 'UNACCOUNTED'; readonly balanceMinor: bigint };
+
+export function sourceMoneyBucket(
+  planned: PlannedUser,
+  outcome: LegacyUserOutcome,
+  opening: bigint | undefined,
+  debt: bigint | undefined,
+): SourceMoneyBucket {
+  const balance = parseLegacyBalance(planned.row.balance);
+  if (balance === null) return { kind: 'UNREADABLE' };
+  if (outcome !== 'IMPORTED_NEW' && outcome !== 'IMPORTED_EXISTING') {
+    return { kind: 'HELD', outcome, balanceMinor: balance };
+  }
+  if (balance > 0n && opening === balance && debt === undefined) {
+    return { kind: 'CREDITED', amountMinor: opening };
+  }
+  if (balance < 0n && debt === -balance && opening === undefined) {
+    return { kind: 'DEBT_RECORDED', amountMinor: debt };
+  }
+  if (balance === 0n && opening === undefined && debt === undefined) return { kind: 'ZERO' };
+  return { kind: 'UNACCOUNTED', balanceMinor: balance };
+}
+
+export interface SignedTally {
+  rows: number;
+  positive: { rows: number; sumMinor: bigint };
+  /** Magnitudes. */
+  negative: { rows: number; sumMinor: bigint };
+}
+const signedTally = (): SignedTally => ({
+  rows: 0,
+  positive: { rows: 0, sumMinor: 0n },
+  negative: { rows: 0, sumMinor: 0n },
+});
+function addSigned(t: SignedTally, balance: bigint): void {
+  t.rows += 1;
+  if (balance > 0n) {
+    t.positive.rows += 1;
+    t.positive.sumMinor += balance;
+  } else if (balance < 0n) {
+    t.negative.rows += 1;
+    t.negative.sumMinor += -balance;
+  }
+}
+const signedView = (t: SignedTally) => ({
+  rows: t.rows,
+  positive: { rows: t.positive.rows, sumMinor: t.positive.sumMinor.toString() },
+  negative: { rows: t.negative.rows, sumMinor: t.negative.sumMinor.toString() },
+});
+
 export function buildUsersWalletsSection(input: UsersWalletsInput) {
   const outcomes = zeroOutcomes();
   const agents = { sourceRows: 0, importedAsCustomers: 0 };
@@ -163,12 +244,56 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
     absentOpenings: { count: 0, sumMinor: 0n },
     absentDebts: { count: 0, sumMinor: 0n },
   };
+  /**
+   * The source-money accounting: every source row's balance in exactly one bucket
+   * (`sourceMoneyBucket`), the readable ones summed by sign, the unreadable ones counted.
+   */
+  const money = {
+    source: signedTally(),
+    unreadable: {
+      rows: 0,
+      byOutcome: zeroOutcomes(),
+    },
+    credited: { rows: 0, sumMinor: 0n },
+    debtRecorded: { rows: 0, sumMinor: 0n },
+    zero: { rows: 0 },
+    held: Object.fromEntries(HELD_OUTCOMES.map((o) => [o, signedTally()])) as Record<
+      HeldOutcome,
+      SignedTally
+    >,
+    unaccounted: signedTally(),
+  };
   const seen = new Set<string>();
   for (const planned of input.users) {
     seen.add(planned.row.id);
     const map = input.mapRows.get(planned.row.id);
     const outcome = userOutcome(planned, map);
     outcomes[outcome] += 1;
+    const bucket = sourceMoneyBucket(
+      planned,
+      outcome,
+      input.openings.get(planned.row.id),
+      input.debts.get(planned.row.id),
+    );
+    if (bucket.kind === 'UNREADABLE') {
+      money.unreadable.rows += 1;
+      money.unreadable.byOutcome[outcome] += 1;
+    } else {
+      addSigned(money.source, parseLegacyBalance(planned.row.balance) ?? 0n);
+      if (bucket.kind === 'CREDITED') {
+        money.credited.rows += 1;
+        money.credited.sumMinor += bucket.amountMinor;
+      } else if (bucket.kind === 'DEBT_RECORDED') {
+        money.debtRecorded.rows += 1;
+        money.debtRecorded.sumMinor += bucket.amountMinor;
+      } else if (bucket.kind === 'ZERO') {
+        money.zero.rows += 1;
+      } else if (bucket.kind === 'HELD') {
+        addSigned(money.held[bucket.outcome], bucket.balanceMinor);
+      } else {
+        addSigned(money.unaccounted, bucket.balanceMinor);
+      }
+    }
     legacyStatus[planned.row.status] += 1;
     if (planned.row.status === 'BLOCKED') {
       blocked.sourceRows += 1;
@@ -272,6 +397,23 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
     ]),
   );
   const changedTotal = Object.values(changes).reduce((a, t) => a + t.count, 0);
+  const heldTotal = signedTally();
+  for (const t of Object.values(money.held)) {
+    heldTotal.rows += t.rows;
+    heldTotal.positive.rows += t.positive.rows;
+    heldTotal.positive.sumMinor += t.positive.sumMinor;
+    heldTotal.negative.rows += t.negative.rows;
+    heldTotal.negative.sumMinor += t.negative.sumMinor;
+  }
+  const bucketRows =
+    money.unreadable.rows +
+    money.credited.rows +
+    money.debtRecorded.rows +
+    money.zero.rows +
+    heldTotal.rows +
+    money.unaccounted.rows;
+  const accountedPositive = money.credited.sumMinor + heldTotal.positive.sumMinor;
+  const accountedNegative = money.debtRecorded.sumMinor + heldTotal.negative.sumMinor;
   const debtByState = Object.fromEntries(
     Object.entries(input.debtTotals.byState).map(([k, v]) => [
       k,
@@ -345,6 +487,29 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
       expected: input.synthetic ? 'any' : '0',
       actual: String(input.debtTotals.synthetic),
     },
+    {
+      id: 'U9',
+      // Every source row's money is somewhere a person can see: credited, recorded as a debt,
+      // zero, held with its reason, or unreadable (counted) — and none is unaccounted for.
+      what: 'every source balance is in exactly one money bucket (credited, debt, zero, held with a reason, unreadable), none unaccounted',
+      holds: bucketRows === sourceRows && money.unaccounted.rows === 0,
+      expected: `rows=${String(sourceRows)} unaccounted=0`,
+      actual: `rows=${String(bucketRows)} unaccounted=${String(money.unaccounted.rows)}`,
+    },
+    {
+      id: 'U10',
+      // Exact, by sign, never netted: Σ readable positive source balances = Σ credited + Σ
+      // held positives; Σ |readable negative| = Σ debts recorded + Σ held negatives.
+      // NOT independent of U9: a row is CREDITED / DEBT_RECORDED only when NEXA holds exactly its
+      // source figure, so with nothing unaccounted these sums agree by construction. It states
+      // U9's accounting in money for the operator; U2–U7 are the independent money checks.
+      what: 'source money is accounted exactly: Σ positive = credited + held; Σ |negative| = debts + held (unreadable counted by rows)',
+      holds:
+        accountedPositive === money.source.positive.sumMinor &&
+        accountedNegative === money.source.negative.sumMinor,
+      expected: `+${minor(money.source.positive.sumMinor)} -${minor(money.source.negative.sumMinor)}`,
+      actual: `+${minor(accountedPositive)} -${minor(accountedNegative)}`,
+    },
   ];
 
   return {
@@ -386,6 +551,34 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
         changedDebts: aggregateView(carried.changedDebts),
         absentOpenings: aggregateView(carried.absentOpenings),
         absentDebts: aggregateView(carried.absentDebts),
+      },
+      /**
+       * Every source row's balance, in exactly one bucket (U9), summed exactly by sign (U10).
+       * `held` is keyed by the outcome that says why this snapshot's figure is not applied;
+       * `unreadable` is counted by rows (its value is unknown), by outcome.
+       */
+      sourceMoney: {
+        sourceRows,
+        readable: signedView(money.source),
+        unreadable: {
+          rows: money.unreadable.rows,
+          byOutcome: Object.fromEntries(
+            Object.entries(money.unreadable.byOutcome).filter(([, n]) => n > 0),
+          ),
+        },
+        credited: { rows: money.credited.rows, sumMinor: minor(money.credited.sumMinor) },
+        debtRecorded: {
+          rows: money.debtRecorded.rows,
+          sumMinor: minor(money.debtRecorded.sumMinor),
+        },
+        zero: { rows: money.zero.rows },
+        held: {
+          ...signedView(heldTotal),
+          byOutcome: Object.fromEntries(
+            HELD_OUTCOMES.map((o) => [o, signedView(money.held[o])]),
+          ) as Record<HeldOutcome, ReturnType<typeof signedView>>,
+        },
+        unaccounted: signedView(money.unaccounted),
       },
     },
     sourceChanged: {

@@ -79,9 +79,10 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     const resumeOrRefuse = (running: RunRow): LegacyImportStartOutcome => {
       // Only an APPLY run resumes: its progress is the map, keyed by legacy row, so a
       // re-processed row is UNCHANGED. A dry run's progress is counters, which a re-run
-      // would inflate.
+      // would inflate. The "adopt approved" lane resumes on the same terms: its writes are
+      // P6's (idempotent per invoice) and the claims it settles.
       if (
-        running.mode === 'APPLY' &&
+        (running.mode === 'APPLY' || running.mode === 'ADOPT_APPROVED') &&
         running.sourceFingerprint === input.sourceFingerprint &&
         running.mode === input.mode
       ) {
@@ -343,7 +344,9 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     const db = this.exec(tx);
 
     // The run must be RUNNING, APPLY and THIS tenant's — read under FOR SHARE so a
-    // concurrent finish waits for this write before it snapshots its counters.
+    // concurrent finish waits for this write before it snapshots its counters. The "adopt
+    // approved" lane is a run too, and writes INVOICE rows only (P6's adoption of an
+    // approved invoice): never a customer's row, whatever its caller asks.
     const runs = await db
       .select({ status: legacyImportRuns.status, mode: legacyImportRuns.mode })
       .from(legacyImportRuns)
@@ -353,10 +356,12 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     if (run === undefined) {
       throw errors.notFound(LEGACY_IMPORT_ERROR_CODES.RUN_NOT_FOUND, 'No such legacy import run.');
     }
-    if (run.status !== 'RUNNING' || run.mode !== 'APPLY') {
+    const writable =
+      run.mode === 'APPLY' || (run.mode === 'ADOPT_APPROVED' && write.legacyTable === 'invoice');
+    if (run.status !== 'RUNNING' || !writable) {
       throw errors.conflict(
         LEGACY_IMPORT_ERROR_CODES.RUN_NOT_WRITABLE,
-        'Only a RUNNING APPLY run writes legacy import map rows.',
+        'Only a RUNNING APPLY run writes legacy import map rows (an ADOPT_APPROVED run: invoice rows only).',
         { status: run.status, mode: run.mode },
       );
     }

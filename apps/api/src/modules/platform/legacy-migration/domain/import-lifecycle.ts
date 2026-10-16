@@ -16,8 +16,15 @@ import {
  * UPLOADED → VERIFYING → VERIFIED | VERIFY_FAILED
  * VERIFIED → DRY_RUN_REQUESTED → DRY_RUN_RUNNING → DRY_RUN_DONE | DRY_RUN_FAILED
  * DRY_RUN_DONE → APPROVED (binds dry_run_sha256) → APPLYING → COMPLETED | COMPLETED_WITH_DISCREPANCY | FAILED
- * any non-terminal except APPLYING → CANCELLED
+ * VERIFIED → ADOPT_REQUESTED → ADOPT_RUNNING → ADOPT_DONE | FAILED     (the "adopt approved" lane)
+ * any non-terminal except APPLYING and ADOPT_RUNNING → CANCELLED
  * ```
+ *
+ * The lane (`docs/legacy-migration/service-review.md` §4b) is the same package uploaded and
+ * verified AGAIN after its import COMPLETED: instead of a dry run (which the fresh-target guard
+ * refuses on an imported tenant) it executes the operators' ADOPT approvals of that source.
+ * ADOPT_RUNNING is not cancellable for APPLYING's reason: a claim may have been taken, and the
+ * lane's own resume is what settles it.
  *
  * Two edges are not in the design's diagram and both exist so a decision cannot outlive what
  * it decided about:
@@ -42,7 +49,7 @@ export const LEGACY_MIGRATION_TRANSITIONS: Readonly<
 > = {
   UPLOADED: ['VERIFYING', 'CANCELLED'],
   VERIFYING: ['VERIFIED', 'VERIFY_FAILED', 'CANCELLED'],
-  VERIFIED: ['DRY_RUN_REQUESTED', 'CANCELLED'],
+  VERIFIED: ['DRY_RUN_REQUESTED', 'ADOPT_REQUESTED', 'CANCELLED'],
   VERIFY_FAILED: [],
   DRY_RUN_REQUESTED: ['DRY_RUN_RUNNING', 'DRY_RUN_FAILED', 'CANCELLED'],
   DRY_RUN_RUNNING: ['DRY_RUN_DONE', 'DRY_RUN_FAILED', 'CANCELLED'],
@@ -54,6 +61,9 @@ export const LEGACY_MIGRATION_TRANSITIONS: Readonly<
   COMPLETED_WITH_DISCREPANCY: [],
   FAILED: [],
   CANCELLED: [],
+  ADOPT_REQUESTED: ['ADOPT_RUNNING', 'FAILED', 'CANCELLED'],
+  ADOPT_RUNNING: ['ADOPT_DONE', 'FAILED'],
+  ADOPT_DONE: [],
 };
 
 export function canTransition(from: LegacyNxpkgImportStatus, to: LegacyNxpkgImportStatus): boolean {
@@ -91,6 +101,8 @@ export const LEGACY_MIGRATION_WORK_STATUSES = [
   'DRY_RUN_RUNNING',
   'APPROVED',
   'APPLYING',
+  'ADOPT_REQUESTED',
+  'ADOPT_RUNNING',
 ] as const satisfies readonly LegacyNxpkgImportStatus[];
 
 /**
@@ -166,6 +178,7 @@ export const EMPTY_LEGACY_MIGRATION_PROGRESS: LegacyMigrationProgress = {
   applyAttempts: 0,
   verifyAttempts: 0,
   dryRunAttempts: 0,
+  adoptAttempts: 0,
   importerVerdict: null,
   reconcileVerdict: null,
   history: [],
@@ -174,12 +187,16 @@ export const EMPTY_LEGACY_MIGRATION_PROGRESS: LegacyMigrationProgress = {
   blocker: null,
 };
 
-/** Whether `reached` is at or past `phase` in the apply's fixed order. */
+/**
+ * Whether `reached` is at or past `phase` in the apply's fixed order. `ADOPT` is the lane's
+ * only phase and never an apply's: it is never "past" an apply phase, nor one past it.
+ */
 export function phaseReached(
   reached: LegacyMigrationPhase | null,
   phase: LegacyMigrationPhase,
 ): boolean {
   if (reached === null) return false;
+  if ((reached === 'ADOPT') !== (phase === 'ADOPT')) return false;
   return LEGACY_MIGRATION_PHASES.indexOf(reached) >= LEGACY_MIGRATION_PHASES.indexOf(phase);
 }
 

@@ -367,7 +367,13 @@ reads both the openings and the debts already recorded: `POST`, `ALREADY_POSTED`
 `ZERO_NO_ENTRY`, `RECORD_DEBT`, `DEBT_ALREADY_RECORDED`, `PRIOR_DEBIT_OPENING` (a DEBIT
 the code before the decision wrote — never rewritten, never doubled; counted in
 `attention.priorDebitOpening`, so the verdict is `COMPLETED_WITH_FAILURES`) or `CONFLICT`
-(a figure other than the recorded one, in amount, sign or evidence class). Trials: `LegacyTrialEligibilityService.preserveForImport`. Products: the hidden
+(a figure other than the recorded one, in amount, sign or evidence class). An importable
+user whose customer the customers phase did NOT write this run (its map row refused it: a
+closed review, a changed source, another entity) gets no opening and no debt, and the phase
+says so: `applied.openings.CUSTOMER_NOT_IMPORTED` with the snapshot's figures by sign
+(`customerNotImportedPositiveSumMinor`, `customerNotImportedNegativeSumMinor`) — never a
+silent skip. Each such user is already a customers-phase count (`sourceChanged`,
+`entityMismatch`, `reviewClosed`), so it is not added to `attention` a second time. Trials: `LegacyTrialEligibilityService.preserveForImport`. Products: the hidden
 legacy product of each distinct shape among live real invoices that are productless, name
 a product the legacy table lacks, or are custom — `ensureShapeForImport` then
 `resolveTariffMatchForImport` (MATCH only; stating a tariff is an operator's decision).

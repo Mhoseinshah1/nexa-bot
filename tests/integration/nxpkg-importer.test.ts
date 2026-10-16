@@ -27,6 +27,7 @@ import {
 import { NxpkgImportRefused } from '../../apps/api/src/modules/platform/legacy-importer/application/nxpkg-panel-binding';
 import { parsePanelMapping } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
 import {
+  inventoryHoldDigest,
   planTalliesDigest,
   planTalliesDigestV1,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/plan';
@@ -712,6 +713,12 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     await expect(
       importer.apply({ ...input, ownershipDecisionsDigest: 'f'.repeat(64), mode: 'RESUME' }),
     ).rejects.toThrow(/OWNERSHIP_HOLD_MISMATCH/u);
+    // And one INVENTORY hold per run: this run was started under none, so a resume handed
+    // one (even an empty one) is refused, as reconcile is below.
+    const emptyInventoryHold = { digest: inventoryHoldDigest([]), invoices: 0 };
+    await expect(
+      importer.apply({ ...input, inventoryHold: emptyInventoryHold, mode: 'RESUME' }),
+    ).rejects.toThrow(/INVENTORY_HOLD_MISMATCH/u);
     const resumed = await importer.apply({ ...input, mode: 'RESUME', freshTarget: true });
     expect(resumed.verdict).toBe('COMPLETED');
     expect((resumed.sections as Record<string, any>)['ownershipHold']).toEqual({
@@ -721,6 +728,9 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     await expect(
       importer.reconcile({ ...input, ownershipHold: new Set<string>() }),
     ).rejects.toThrow(/OWNERSHIP_HOLD_MISMATCH/u);
+    await expect(
+      importer.reconcile({ ...input, inventoryHold: emptyInventoryHold }),
+    ).rejects.toThrow(/INVENTORY_HOLD_MISMATCH/u);
     expect((await importer.reconcile(input)).verdict).toBe('RECONCILED');
     expectOnlyReads();
   });

@@ -154,6 +154,17 @@ export class LegacyMigrationController {
     return { import: await this.service.approve(scope, actor, id, body) };
   }
 
+  /** The "adopt approved" lane (`docs/legacy-migration/service-review.md` §4b). */
+  @Post(routePattern(LEGACY_MIGRATION_ROUTES.adopt, 'id'))
+  async adopt(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<LegacyMigrationImportResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return { import: await this.service.requestAdopt(scope, actor, id, body) };
+  }
+
   @Post(routePattern(LEGACY_MIGRATION_ROUTES.cancel, 'id'))
   async cancel(
     @Req() request: FastifyRequest,

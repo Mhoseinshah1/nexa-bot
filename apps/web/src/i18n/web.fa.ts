@@ -8814,7 +8814,12 @@ export const WEB_FA = {
   'web.lsr_view_only': 'برای بررسی و تأیید انتقال، دسترسی تصمیم درباره سرویس‌های قدیمی لازم است.',
   'web.lsr_no_decision': 'برای این ردیف تصمیمی لازم نیست.',
   'web.lsr_decide_title': 'بررسی',
-  'web.lsr_approved_waiting': 'انتقال تأیید شده و منتظر اجرای بعدی واردکردن است.',
+  'web.lsr_approved_waiting':
+    'انتقال تأیید شده و منتظر اجراست: اجرای بعدی واردکردن، یا پس از بازیابی کامل‌شده «اجرای انتقال‌های تأییدشده» در صفحهٔ بکاپ و بازیابی.',
+  'web.lsr_approvals_waiting':
+    'انتقال‌های تأییدشده‌ای منتظر اجرا هستند. اگر بازیابی از میرزا کامل شده است، همان بستهٔ میرزا را در «بکاپ و بازیابی ← عملیات بازیابی» دوباره بارگذاری کنید و «اجرای انتقال‌های تأییدشده» را بزنید. فقط همین موردها دوباره بررسی می‌شوند و هیچ تغییری در پنل داده نمی‌شود.',
+  'web.lsr_approvals_waiting_count': 'تأییدشده و منتظر اجرا',
+  'web.lsr_approvals_waiting_link': 'رفتن به بکاپ و بازیابی',
   'web.lsr_reason': 'دلیل',
   'web.lsr_reason_hint': 'برای هر تصمیم لازم است و در گزارش ممیزی می‌ماند.',
   'web.lsr_adopt_explained':
@@ -9118,12 +9123,15 @@ export const WEB_FA = {
   'web.mrz_confirm_button': 'تأیید و شروع بازیابی از میرزا',
   'web.mrz_inventory_incomplete_title': 'موجودی پنل RickPanel برای این اجرای آزمایشی قطعی نشد',
   'web.mrz_inventory_incomplete_body':
-    'این اجرای آزمایشی روی مقصد شبیه محیط عملیاتی قابل تأیید نیست: دست‌کم یک پنل اصلی خوانده نشد، یا وضعیت برخی سرویس‌های بکاپ روی پنل قطعی نشد (هشدار PROVIDER_INVENTORY_UNRESOLVED). اگر هشدار PROVIDER_INVENTORY_INCOMPLETE:… با TIMEOUT، UNREACHABLE یا RATE_LIMITED آمده، دسترسی NEXA به پنل را بررسی کنید؛ اگر با AUTHENTICATION_FAILED یا CREDENTIALS_MISSING، اطلاعات ورود پنل را اصلاح کنید. سپس اجرای آزمایشی را دوباره درخواست کنید. لازم نیست فروش روی پنل متوقف شود: تغییر پنل در حین خواندن به‌تنهایی مانع تأیید نیست.',
+    'این اجرای آزمایشی روی مقصد شبیه محیط عملیاتی قابل تأیید نیست: دست‌کم یک پنل اصلی خوانده نشد، یا وضعیت برخی سرویس‌های بکاپ روی پنل قطعی نشد (هشدار PROVIDER_INVENTORY_UNRESOLVED) و این اجرای آزمایشی آن‌ها را قرنطینه ثبت نکرده است (اجرای آزمایشی‌ای که نسخهٔ قبلی NEXA ساخته است؛ آن را دوباره درخواست کنید). اگر هشدار PROVIDER_INVENTORY_INCOMPLETE:… با TIMEOUT، UNREACHABLE یا RATE_LIMITED آمده، دسترسی NEXA به پنل را بررسی کنید؛ اگر با AUTHENTICATION_FAILED یا CREDENTIALS_MISSING، اطلاعات ورود پنل را اصلاح کنید. سپس اجرای آزمایشی را دوباره درخواست کنید. لازم نیست فروش روی پنل متوقف شود: تغییر پنل در حین خواندن به‌تنهایی مانع تأیید نیست.',
   'web.mrz_inventory_churn_title': 'پنل در حین خواندن تغییر کرد؛ هر سرویس جداگانه بررسی شد',
   'web.mrz_inventory_churn_body':
     'دست‌کم یک پنل اصلی در حین خواندن تغییر کرد؛ وقتی فروش ادامه دارد این عادی است. هر سرویسی از بکاپ که وضعیتش قطعی شد، فقط از روی خوانشی از پنل قطعی شد که ثابت شد هیچ حسابی را جا نینداخته است، و حساب‌هایی از پنل که در بکاپ نیستند نادیده گرفته شدند.',
   'web.mrz_inventory_churn_unresolved':
-    'وضعیت {count} نام کاربری از سرویس‌های بکاپ قطعی نشد: این سرویس‌ها وارد نمی‌شوند و روی مقصد شبیه محیط عملیاتی تأیید داده نمی‌شود. اجرای آزمایشی را دوباره درخواست کنید.',
+    'وضعیت {count} نام کاربری از سرویس‌های بکاپ روی پنل قطعی نشد: سرویس‌های این نام‌ها به هیچ حسابی روی پنل وصل نمی‌شوند.',
+  'web.mrz_inventory_quarantine_title': 'سرویس‌های قطعی‌نشده قرنطینه می‌شوند، نه مانع واردکردن',
+  'web.mrz_inventory_quarantine_body':
+    '{count} سرویس از بکاپ قرنطینه می‌شود: خواندن پنل موفق بود، اما وجود یا نبود نام کاربری این سرویس‌ها روی پنل قطعی نشد. این سرویس‌ها به‌صورت سابقه و یک مورد باز در صف بازبینی سرویس‌های قدیمی نگه داشته می‌شوند و هیچ‌کدام خودکار به حسابی روی پنل وصل نمی‌شود؛ بعداً می‌توان هر کدام را بررسی و برای پذیرش (adopt) تأیید کرد. مشتریان، کیف پول‌ها، بدهی‌ها و سرویس‌های قطعی‌شده بدون تغییر وارد می‌شوند و این قرنطینه مانع تأیید نیست.',
   'web.mrz_digest_missing_title': 'اجرای آزمایشی چکیدهٔ برنامه را گزارش نکرده است',
   'web.mrz_digest_missing_body':
     'این اجرای آزمایشی چکیدهٔ برنامه (plan digest) ندارد؛ بدون آن، واردکردن به برنامه‌ای که تأیید می‌کنید مقید نمی‌شود و روی مقصد شبیه محیط عملیاتی قابل تأیید نیست. این معمولاً اجرای آزمایشی‌ای است که نسخهٔ قبلی NEXA ساخته است. اجرای آزمایشی را دوباره درخواست کنید؛ بارگذاری دوبارهٔ فایل لازم نیست.',
@@ -9151,6 +9159,40 @@ export const WEB_FA = {
   'web.mrz_result_title': 'نتیجه',
   'web.mrz_result_ok': 'بازیابی از میرزا کامل شد و تطبیق برقرار است.',
   'web.mrz_result_failed': 'بازیابی از میرزا ناموفق بود.',
+  'web.mrz_status_adopt_requested': 'اجرای انتقال‌های تأییدشده در صف',
+  'web.mrz_status_adopt_running': 'در حال اجرای انتقال‌های تأییدشده',
+  'web.mrz_status_adopt_done': 'انتقال‌های تأییدشده اجرا شد',
+  'web.mrz_error_adopt_refused':
+    'اجرای انتقال‌های تأییدشده رد شد: این بسته منبعِ آخرین بازیابیِ کامل‌شده نیست، یا نگاشت پنل‌ها یا فایل تصمیم‌های مالکیت با همان بازیابی یکی نیست. هیچ سرویسی منتقل نشد.',
+  'web.mrz_phase_adopt': 'اجرای انتقال‌های تأییدشده',
+  'web.mrz_fault_no_completed_import':
+    'هیچ بازیابیِ کامل‌شده‌ای از منبعِ این بسته روی این نصب نیست؛ ابتدا بازیابی باید کامل شود. چیزی تغییر نکرد.',
+  'web.mrz_reupload_banner':
+    'این بسته از همان منبعِ یک بازیابیِ کامل‌شده است. اجرای آزمایشی دوباره ممکن نیست (پایگاه دیگر تازه نیست)؛ به‌جای آن می‌توانید انتقال‌هایی را که در «سرویس‌های قدیمی» تأیید کرده‌اید اجرا کنید.',
+  'web.mrz_adopt_title': 'اجرای انتقال‌های تأییدشده',
+  'web.mrz_adopt_hint':
+    'فقط سرویس‌هایی که تأیید انتقال دارند؛ پنل‌هایشان دوباره و فقط برای همان نام‌ها خوانده می‌شود.',
+  'web.mrz_adopt_explained':
+    'هر انتقال تأییدشده دوباره کامل بررسی می‌شود: حساب در خوانش تازهٔ پنل دقیقاً یک بار، مالک مطمئن (اگر مالک دیگری همان حساب را داشته باشد انتقال انجام نمی‌شود)، محصول و وضعیت سازگار و نبودن سرویس تکراری. هیچ تغییری در پنل داده نمی‌شود و هیچ مشتری، کیف پول یا بدهی تغییر نمی‌کند. نامی که هنوز روشن نشود به حالت «باز» برمی‌گردد.',
+  'web.mrz_adopt_request': 'اجرای انتقال‌های تأییدشده',
+  'web.mrz_adopt_after_inputs': 'ابتدا کلید بسته و پنل‌ها را مانند همان بازیابی ثبت کنید.',
+  'web.mrz_adopt_no_permission': 'اجرای انتقال‌ها فقط با دسترسی تأیید بازیابی (مالک) ممکن است.',
+  'web.mrz_adopt_result_title': 'نتیجهٔ اجرای انتقال‌های تأییدشده',
+  'web.mrz_adopt_running': 'در حال اجرا؛ نتیجه همین‌جا نمایش داده می‌شود.',
+  'web.mrz_adopt_failed': 'اجرای انتقال‌های تأییدشده انجام نشد؛ هیچ سرویسی منتقل نشد.',
+  'web.mrz_adopt_nothing': 'هیچ انتقال تأییدشده‌ای منتظر نبود؛ چیزی خوانده یا نوشته نشد.',
+  'web.mrz_adopt_all_done': 'همهٔ انتقال‌های تأییدشده انجام شد.',
+  'web.mrz_adopt_partial':
+    'همهٔ انتقال‌ها انجام نشد؛ دلیل هر کدام کنار همان سرویس در «سرویس‌های قدیمی» ثبت شده است.',
+  'web.mrz_adopt_met': 'انتقال‌های تأییدشده',
+  'web.mrz_adopt_adopted': 'منتقل‌شده',
+  'web.mrz_adopt_unresolved': 'هنوز نامشخص (به حالت باز برگشت)',
+  'web.mrz_adopt_refused_title': 'انجام‌نشده، بر اساس دلیل',
+  'web.mrz_adopt_left_title': 'نیازمند بررسی',
+  'web.mrz_adopt_panels_read': 'پنل‌های خوانده‌شده',
+  'web.mrz_adopt_provider_reads': 'درخواست‌های خواندن از پنل',
+  'web.mrz_adopt_provider_writes': 'نوشتن در پنل',
+  'web.mrz_adopt_services_link': 'مشاهدهٔ سرویس‌های قدیمی',
   'web.mrz_undo_hint':
     'برای برگرداندن این بازیابی، بکاپ محافظ بالا را از تاریخچهٔ بکاپ‌ها دریافت و در همین بخش بازیابی کنید.',
   'web.lco_title': 'تأیید انتقال نهایی',
@@ -9265,7 +9307,195 @@ export const WEB_FA = {
   'web.c360_legacy_f_panel': 'کد پنل',
   'web.c360_legacy_f_invoice': 'فاکتور',
   'web.c360_legacy_f_product': 'کد محصول',
+  // Mirza invoice `Status`, verbatim values whose writer is documented (converter
+  // docs/PANELS_AND_ADOPTION.md §2, docs/SOURCE_TABLES.md `invoice.Status`). As of the snapshot.
+  'web.mrz_status_active': 'فعال (پرداخت و ساخته شده)',
+  'web.mrz_status_send_on_hold': 'در انتظار شروع (on hold)',
+  'web.mrz_status_end_of_time': 'هشدار پایان زمان',
+  'web.mrz_status_end_of_volume': 'هشدار پایان حجم',
+  'web.mrz_status_sendedwarn': 'هشدار انقضا فرستاده شده',
+  'web.mrz_status_disabled': 'غیرفعال',
+  'web.mrz_status_disabledn': 'غیرفعال‌شده توسط کاربر',
+  'web.mrz_status_disablebyadmin': 'غیرفعال‌شده توسط مدیر',
+  'web.mrz_status_removebyuser': 'حذف‌شده توسط کاربر',
+  'web.mrz_status_removebyadmin': 'حذف‌شده توسط مدیر',
+  'web.mrz_status_removedbyadmin': 'حذف‌شده پس از پذیرش درخواست لغو',
+  'web.mrz_status_remove_time': 'حذف‌شده (پایان زمان)',
+  'web.mrz_status_remove_volume': 'حذف‌شده (پایان حجم)',
+  'web.mrz_status_unpaid': 'پرداخت‌نشده (هرگز ساخته نشد)',
+  'web.mrz_status_unsuccessful': 'ناموفق (ساخت در پنل شکست خورد)',
+  'web.mrz_status_unknown': 'نامشخص',
+  // Customer 360: the customer's Mirza invoices beside the import's outcome.
+  'web.c360_li_title': 'فاکتورهای میرزا',
+  'web.c360_li_hint':
+    'فاکتورهای این مشتری در ربات میرزا، با آخرین نسخهٔ بایگانی‌شده و نتیجهٔ انتقال هرکدام. این‌ها سابقه‌اند، نه سفارش فعال؛ وضعیت میرزا مربوط به زمان پشتیبان است، نه وضعیت امروز سرویس.',
+  'web.c360_li_empty': 'برای این مشتری فاکتوری از میرزا بایگانی نشده است.',
+  'web.c360_li_pii_redacted':
+    'نام کاربری حساب‌ها پنهان است؛ دیدن آن مجوز دیدن اطلاعات شخصی بایگانی میرزا را لازم دارد.',
+  'web.c360_li_outcomes_hidden':
+    'نتیجهٔ انتقال هر فاکتور (منتقل‌شده، در انتظار بررسی، سابقه) مجوز دیدن سرویس‌های قدیمی را لازم دارد.',
+  'web.c360_li_all': 'همهٔ فاکتورهای بایگانی',
+  'web.c360_li_col_invoice': 'فاکتور',
+  'web.c360_li_col_status': 'وضعیت در میرزا',
+  'web.c360_li_col_outcome': 'نتیجهٔ انتقال',
+  'web.c360_li_col_price': 'قیمت تاریخی (فقط سابقه)',
+  'web.c360_li_col_sold_at': 'زمان فروش در میرزا',
+  'web.c360_li_adopted': 'منتقل‌شده به سرویس فعلی',
+  'web.c360_li_open_service': 'دیدن سرویس',
+  'web.c360_li_kept': 'سابقه (تصمیم اپراتور)',
+  'web.c360_li_needs_review': 'نیازمند بررسی — وضعیت نامشخص',
+  'web.c360_li_not_decided': 'هنوز بررسی نشده',
+  'web.c360_li_history_only': 'فقط سابقه؛ منتقل نشده',
+  'web.c360_li_hidden': 'نیازمند مجوز',
+  'web.c360_li_reason': 'دلیل:',
+  'web.c360_li_review': 'بررسی:',
+  'web.c360_li_open_review': 'در صف بررسی',
+  'web.c360_li_test': 'آزمایشی',
+  // Customer 360: the services card, and the legacy debt beside the wallet.
+  'web.c360_service_from_mirza': 'منتقل‌شده از میرزا',
+  'web.c360_service_from_mirza_title':
+    'این حساب پیش از نکسا در میرزا فروخته شده و بدون ساخت دوباره در پنل، به این سامانه منتقل شده است.',
+  'web.c360_debt_title': 'بدهی قدیمی میرزا',
+  'web.c360_debt_hint':
+    'موجودی منفی این مشتری در میرزا. فقط برای بررسی ثبت شده و هرگز وصول نمی‌شود: موجودی کیف پول نکسا از صفر شروع شده و هیچ خرید، شارژ یا بازپرداختی آن را نمی‌خواند.',
+  'web.c360_debt_amount': 'مبلغ بدهی',
+  'web.c360_debt_state': 'تصمیم',
+  'web.c360_debt_recorded': 'ثبت در',
+  'web.c360_debt_open': 'دیدن در فهرست بدهی‌ها',
+  'web.c360_debt_synthetic': 'دادهٔ آزمایشی',
+  // Every ledger reason, for the wallet history.
+  'web.ledger_reason_topup_gateway': 'شارژ با درگاه',
+  'web.ledger_reason_topup_receipt': 'شارژ با رسید کارت‌به‌کارت',
+  'web.ledger_reason_topup_stars': 'شارژ با استارز تلگرام',
+  'web.ledger_reason_topup_crypto': 'شارژ با رمزارز',
+  'web.ledger_reason_receipt_credit': 'واریز مبلغ رسید به کیف پول',
+  'web.ledger_reason_purchase': 'خرید',
+  'web.ledger_reason_purchase_reversal': 'برگشت خرید',
+  'web.ledger_reason_refund': 'بازپرداخت',
+  'web.ledger_reason_cashback_gateway': 'بازگشت وجه پرداخت درگاهی',
+  'web.ledger_reason_cashback_topup': 'هدیهٔ شارژ',
+  'web.ledger_reason_cashback_renewal': 'بازگشت وجه تمدید',
+  'web.ledger_reason_cashback_purchase': 'بازگشت وجه خرید',
+  'web.ledger_reason_cashback_reversal': 'برگشت بازگشت وجه',
+  'web.ledger_reason_referral_commission': 'پورسانت معرفی',
+  'web.ledger_reason_referral_commission_reversal': 'برگشت پورسانت معرفی',
+  'web.ledger_reason_referral_signup_gift': 'هدیهٔ عضویت با معرفی',
+  'web.ledger_reason_start_gift': 'هدیهٔ شروع',
+  'web.ledger_reason_lottery_win': 'جایزهٔ قرعه‌کشی',
+  'web.ledger_reason_luck_wheel_win': 'جایزهٔ گردونهٔ شانس',
+  'web.ledger_reason_admin_credit': 'افزایش توسط مدیر',
+  'web.ledger_reason_admin_debit': 'کاهش توسط مدیر',
+  'web.ledger_reason_mass_credit': 'افزایش گروهی',
+  'web.ledger_reason_mass_debit': 'کاهش گروهی',
+  'web.ledger_reason_account_transfer_out': 'انتقال موجودی به حساب دیگر',
+  'web.ledger_reason_account_transfer_in': 'انتقال موجودی از حساب دیگر',
+  'web.ledger_reason_reseller_settlement': 'تسویهٔ نمایندگی',
+  'web.ledger_reason_reseller_membership_fee': 'حق عضویت نمایندگی',
+  'web.ledger_reason_migration_opening_balance': 'موجودی منتقل‌شده از میرزا',
+  'web.ledger_reason_chargeback': 'برگشت تراکنش بانکی',
+  'web.ledger_reason_correction': 'اصلاح',
+  'web.ledger_reason_other': 'سایر',
+  // The Mirza migration report: section names and codes.
+  'web.mrz_section_customers': 'مشتریان',
+  'web.mrz_section_customers_existing': 'مشتریان از پیش موجود',
+  'web.mrz_section_customers_invalid_identity': 'کاربران با شناسهٔ نامعتبر',
+  'web.mrz_section_wallet_openings': 'موجودی‌های منتقل‌شدهٔ کیف پول',
+  'web.mrz_section_legacy_debts': 'بدهی‌های قدیمی کیف پول',
+  'web.mrz_section_trials': 'سابقهٔ سرویس تست',
+  'web.mrz_section_products': 'محصولات',
+  'web.mrz_section_invoice_archive': 'بایگانی فاکتورها',
+  'web.mrz_section_services': 'سرویس‌ها',
+  'web.mrz_section_history': 'سوابق (همه)',
+  'web.mrz_section_history_of': 'سوابق:',
+  'web.mrz_section_table': 'جدول منبع',
+  'web.mrz_code_product': 'نگاشت محصول',
+  'web.mrz_code_ownership_hold_not_reported': 'تغییر دسته با نگه‌داشت مالکیت گزارش نشد',
+  'web.mrz_code_converter_totals_absent': 'جمع‌های مبدل در بسته نیست',
+  'web.mrz_code_provider_inventory_incomplete': 'فهرست زندهٔ پنل ناقص',
+  'web.mrz_code_provider_inventory_churn': 'پنل هنگام خواندن تغییر کرد',
+  'web.mrz_code_provider_inventory_unresolved': 'نام‌های کاربری تصمیم‌نشده',
+  'web.mrz_code_table_inventory_incomplete': 'فهرست جدول‌های منبع ناقص',
+  'web.mrz_code_balance_unreadable': 'موجودی ناخوانا',
+  'web.mrz_code_balance_out_of_range': 'موجودی خارج از بازه',
+  'web.mrz_code_duplicate_source_id': 'شناسهٔ تکراری در منبع',
+  'web.mrz_code_status_unknown': 'وضعیت کاربر ناشناخته',
+  'web.mrz_code_decision_quarantined': 'تصمیم مالکیت: قرنطینه',
+  'web.mrz_code_decision_rejected': 'تصمیم مالکیت: رد شده',
+  'web.mrz_code_decision_pending': 'تصمیم مالکیت: در انتظار',
+  'web.mrz_code_decision_stale': 'تصمیم مالکیت: کهنه',
+  'web.mrz_code_ownership_not_proven': 'مالکیت اثبات نشده',
+  'web.mrz_code_proven_owner_mismatch': 'مالک اثبات‌شده مالک فاکتور نیست',
+  'web.mrz_code_no_ownership_record': 'سابقهٔ مالکیت نیست',
   // --- end Mirza .nxpkg importer (Customer 360) -----------------------------------------------
+  // --- Mirza restore: why a RickPanel read left names unresolved (providerDiagnostics) -------
+  'web.mrz_diag_title': 'عیب‌یابی خواندن پنل: چرا بعضی نام‌ها قطعی نشدند',
+  'web.mrz_diag_intro':
+    'برای هر پنلی که هنگام خواندن تغییر کرد، این بخش نشان می‌دهد هر پیمایش فهرست حساب‌ها کجا «بی‌شکاف» بودنش را از دست داد و هر نام قطعی‌نشده به چه دلیل ماند. فقط عدد و کد است؛ هیچ نام کاربری، ردیف یا نشانی‌ای نمایش داده نمی‌شود و این اطلاعات هیچ تصمیمی را تغییر نمی‌دهد.',
+  'web.mrz_diag_panel_summary': '— {unresolved} نام از {needed} نام لازم قطعی نشد',
+  'web.mrz_diag_reason': 'علت ناهمخوانی خواندن‌ها',
+  'web.mrz_diag_decision_walk': 'پیمایش تصمیم‌گیر',
+  'web.mrz_diag_decision_none': 'هیچ پیمایشی نتوانست تصمیم‌گیر باشد',
+  'web.mrz_diag_causes_title': 'نام‌های قطعی‌نشده، به تفکیک علت',
+  'web.mrz_diag_cause_no_decision_walk':
+    'هیچ پیمایشی بی‌شکاف نبود (یا پیمایشی پس از آن برای تأیید نبود)، پس هیچ حضور یا غیابی قابل اثبات نیست. علت هر پیمایش را در پایین ببینید؛ اگر ترتیب created_at یا total پنل مشکل دارد، کاوشگر فقط‌خواندنی G6 را اجرا کنید.',
+  'web.mrz_diag_cause_last_not_decisive':
+    'تصمیم گرفته شد، اما آخرین پیمایش بی‌شکاف نبود؛ ممکن است حسابی که در پایان خواندن وجود داشت دیده نشده باشد. اجرای آزمایشی را در زمانی کم‌تغییرتر دوباره درخواست کنید.',
+  'web.mrz_diag_cause_backup_two_spellings':
+    'خود بکاپ این نام را به دو شکل نوشته است؛ اینکه هر فاکتور کدام حساب را می‌خواست حدس‌زدنی نیست. این سرویس‌ها را دستی بررسی کنید؛ تکرار اجرا کمکی نمی‌کند.',
+  'web.mrz_diag_cause_multi_created_at':
+    'پنل این نام را با زمان ساخت (created_at) دیگری یا بدون آن برگرداند؛ ممکن است حساب حذف و دوباره ساخته شده و حالا حساب دیگری باشد. دستی بررسی کنید.',
+  'web.mrz_diag_cause_unconfirmed':
+    'حساب در پیمایش تصمیم‌گیر دیده شد ولی پیمایش بعدی آن را دوباره برنگرداند و آن پیمایش هم برای اعلام حذف کافی نبود. اجرای آزمایشی را دوباره درخواست کنید.',
+  'web.mrz_diag_cause_reappeared':
+    'حساب در پیمایش تصمیم‌گیر نبود اما پیمایش بعدی آن را برگرداند (ساخته‌شده در میانه یا جاافتاده). اجرای آزمایشی را دوباره درخواست کنید.',
+  'web.mrz_diag_probe_title': 'شکل فهرست این پنل باید با کاوشگر G6 سنجیده شود',
+  'web.mrz_diag_probe_body':
+    'دست‌کم یک پیمایش به دلیلی شکست خورد که تکرار اجرا آن را درست نمی‌کند (ترتیب یا نبود created_at، نبود total، یا زنجیره‌نشدن صفحه‌ها). کاوشگر فقط‌خواندنی G6 را روی staging با اعتبارنامهٔ فقط‌خواندنی اجرا کنید (docs/rickpanel-inventory-acceptance.md)؛ محدود و آهسته است و نیازی به توقف فروش ندارد.',
+  'web.mrz_diag_walks_title': 'پیمایش‌ها',
+  'web.mrz_diag_walk_title': 'پیمایش {n}',
+  'web.mrz_diag_gap_free': 'بی‌شکاف',
+  'web.mrz_diag_decisive': 'تصمیم‌گیر',
+  'web.mrz_diag_same_order': 'هم‌ترتیب با پیمایش قبلی',
+  'web.mrz_diag_first_failure': 'نخستین شکست',
+  'web.mrz_diag_first_failure_at': 'صفحهٔ {page}: {what}',
+  'web.mrz_diag_pages': 'صفحه‌ها',
+  'web.mrz_diag_rows': 'ردیف‌های دریافتی',
+  'web.mrz_diag_duration_ms': 'مدت (میلی‌ثانیه)',
+  'web.mrz_diag_overlap': 'هم‌پوشانی صفحه‌ها',
+  'web.mrz_diag_learned_limit': 'سقف صفحهٔ پنل',
+  'web.mrz_diag_total_first_last': 'total اولین ← آخرین صفحه',
+  'web.mrz_diag_total_absent': 'پنل total گزارش نکرد',
+  'web.mrz_diag_total_change': 'بیشترین تغییر total',
+  'web.mrz_diag_end_minus_total': 'پایان پیمایش منهای total',
+  'web.mrz_diag_created_without': 'ردیف‌های بدون created_at',
+  'web.mrz_diag_created_unparsable': 'ردیف‌های با created_at ناخوانا',
+  'web.mrz_diag_created_inversions': 'ردیف‌های خارج از ترتیب ساخت',
+  'web.mrz_diag_created_max_inversion_ms': 'بیشترین عقب‌گرد created_at (میلی‌ثانیه)',
+  'web.mrz_diag_created_formats': 'قالب‌های created_at',
+  'web.mrz_diag_failure_no_overlap':
+    'صفحه‌ها هم‌پوشانی نداشتند (اندازهٔ صفحه برای هم‌پوشانی کوچک است)؛ اندازهٔ صفحه را بزرگ‌تر کنید.',
+  'web.mrz_diag_failure_no_total':
+    'پنل total گزارش نمی‌کند؛ بدون آن پایان فهرست اثبات‌پذیر نیست. کاوشگر G6 را اجرا کنید.',
+  'web.mrz_diag_failure_created_order':
+    'ردیف‌های پنل به ترتیب ساخت نیستند (created_at ندارند، ناخوانا هستند یا عقب‌گرد دارند)؛ خواندن هدفمند نمی‌تواند کامل‌بودن را اثبات کند. کاوشگر G6 را اجرا کنید.',
+  'web.mrz_diag_failure_unchained':
+    'دست‌کم یک مرز صفحه زنجیره نشد؛ ممکن است ردیفی جا افتاده باشد. نوع شکست‌ها در پایین آمده است.',
+  'web.mrz_diag_failure_short_before_end':
+    'صفحه‌ای پیش از پایان آن‌قدر کوتاه بود که هم‌پوشانی نداشت؛ پنل احتمالاً سقف صفحهٔ کوچکی دارد.',
+  'web.mrz_diag_failure_not_ended_at_total':
+    'پیمایش دقیقاً روی total خودِ آخرین صفحه تمام نشد؛ فهرست در حین خواندن جابه‌جا شد یا total با ردیف‌ها نمی‌خواند.',
+  'web.mrz_diag_break_no_common_row':
+    'صفحهٔ بعد هیچ ردیف مشترکی با صفحهٔ قبل نداشت (حذف‌های پرشمار پشت مکان‌نما).',
+  'web.mrz_diag_break_common_order_differs':
+    'ردیف‌های مشترک دو صفحه با ترتیب دیگری آمدند (ترتیب ناپایدار فهرست).',
+  'web.mrz_diag_break_insert_ahead_missed':
+    'ردیفی جلوتر از مکان‌نما درج شد و پیمایش آن را ندید (درج در میانهٔ فهرست).',
+  'web.mrz_diag_break_duplicate_in_page': 'یک ردیف دو بار در یک صفحه آمد.',
+  'web.mrz_diag_break_repeat_outside_overlap':
+    'ردیفی که قبلاً دریافت شده بود بیرون از هم‌پوشانی دوباره آمد (ترتیب ناپایدار یا زمان ساخت یکسان).',
+  'web.mrz_diag_break_page_longer_than_cap':
+    'صفحه‌ای از سقفی که صفحهٔ اول نشان داده بود بلندتر بود (ردیفی در صفحهٔ اول نگه داشته شده بود).',
+  // --- end Mirza restore diagnostics ----------------------------------------------------------
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

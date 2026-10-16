@@ -1,4 +1,10 @@
-import type { ActorContext, LegacyReadSetName, TenantContext } from '@nexa/contracts';
+import type {
+  ActorContext,
+  LegacyInventoryWalkDiagnostics,
+  LegacyReadSetName,
+  RickpanelUnresolvedCause,
+  TenantContext,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { TariffCandidate } from '../../../commerce/catalog/application/legacy-shape.js';
 import type { ProductReviewRowFacts } from './product-map-review.js';
@@ -158,6 +164,14 @@ export interface LegacyRunInputs {
    * null for a run without one. A resume, reconcile or report under another hold is refused.
    */
   readonly ownershipHoldDigest: string | null;
+  /**
+   * Mirza `.nxpkg` inventory hold (`InventoryHold`): the digest of the held invoice keys and
+   * the keys themselves, sorted. A dry run records the hold it computed (what its report's
+   * `inventoryHold` digest names); an apply records the approved hold it was given, and its
+   * resume, reconcile and report are refused under any other. Null for a run without one.
+   */
+  readonly inventoryHoldDigest: string | null;
+  readonly inventoryHoldKeys: readonly string[] | null;
 }
 
 export interface LegacyRunInputsRepository {
@@ -168,6 +182,15 @@ export interface LegacyRunInputsRepository {
     tx: TransactionScope,
   ): Promise<LegacyRunInputs>;
   find(scope: TenantContext, runId: string): Promise<LegacyRunInputs | null>;
+  /**
+   * The held invoice keys a run of THIS source recorded under `digest` (the approved dry run's,
+   * as a rule), or null when none did. The caller hashes them again before trusting them.
+   */
+  findInventoryHold(
+    scope: TenantContext,
+    sourceFingerprint: string,
+    digest: string,
+  ): Promise<readonly string[] | null>;
 }
 
 /**
@@ -281,6 +304,24 @@ export interface LegacyInventoryDiagnostics {
   readonly status: number | null;
   /** What the read cost the panel (counts and milliseconds only). */
   readonly load: LegacyInventoryLoad;
+  /**
+   * A per-name read only (`resolution` present, or the targeted read that turned out one
+   * complete snapshot): WHY each walk was or was not gap-free and decisive, which walk decided,
+   * and why each unresolved name stayed so. Diagnostics only — nothing reads it to decide.
+   */
+  readonly perName?: LegacyPerNameReadDiagnostics;
+}
+
+/** `LegacyInventoryDiagnostics.perName`: closed codes and counts, never a name. */
+export interface LegacyPerNameReadDiagnostics {
+  readonly walks: readonly LegacyInventoryWalkDiagnostics[];
+  /** The decision walk's 0-based index, or null when no walk could be one. */
+  readonly decisionWalk: number | null;
+  /** Unresolved names by cause, in `RICKPANEL_UNRESOLVED_CAUSES` order, zeros left out. */
+  readonly unresolvedByCause: readonly {
+    readonly code: RickpanelUnresolvedCause;
+    readonly count: number;
+  }[];
 }
 
 /**

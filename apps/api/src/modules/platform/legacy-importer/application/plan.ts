@@ -13,8 +13,10 @@ import {
 import { decideLegacyTrial } from '../../../commerce/trials/application/legacy-trial-eligibility.js';
 import type { PanelInventoryIndex } from '../../legacy-import/application/legacy-service-matching.js';
 import {
+  INVENTORY_DERIVED_CATEGORIES,
   INVOICE_MAP_DECISIONS,
   SERVICE_CANDIDATE_CATEGORIES,
+  inventoryHeldDecision,
   decideLegacyUser,
   decideServiceCandidate,
   legacyTelegramId,
@@ -123,6 +125,65 @@ export interface LegacyPlan {
    * `sections.ownershipHold.changedCategory`.
    */
   readonly ownershipHoldChanged: number;
+  /**
+   * Mirza `.nxpkg` inventory hold — the live invoices quarantined as `INVENTORY_INCOMPLETE`
+   * because a needed username was left UNRESOLVED by a per-name read that itself SUCCEEDED
+   * (`InventoryHold`). Bound into `planTalliesDigest`.
+   */
+  readonly inventoryHold: InventoryHold;
+}
+
+/**
+ * Mirza `.nxpkg` inventory hold (`docs/legacy-migration/service-review.md` §Inventory hold).
+ *
+ * A live panel that keeps selling while it is read is decided one needed name at a time; a
+ * name no gap-free walk decided is UNRESOLVED and its invoice `INVENTORY_INCOMPLETE`. That is
+ * an uncertain SERVICE, not an uncertain import: the invoice is quarantined — history and an
+ * OPEN review candidate, never adopted — and every customer, wallet and debt still imports.
+ *
+ * - `keys`: the held invoice keys. A dry run (no hold given) holds exactly the invoices it
+ *   found unresolved that way; an apply is given the APPROVED dry run's keys back.
+ * - `given`: whether `keys` was given (apply, resume, reconcile, report) or computed (dry run).
+ * - `unheld`: invoices this read left unresolved that `keys` does not hold. Always 0 for a dry
+ *   run; at an apply it is a plan the owner did not approve (`DRY_RUN_MISMATCH`).
+ *
+ * Only a read that held can quarantine: while ANY production panel's read failed (transport,
+ * auth, COUNT_MISMATCH, NOT_INDEXABLE, …) nothing is held, and that failure blocks as before.
+ */
+export interface InventoryHold {
+  readonly keys: ReadonlySet<string>;
+  readonly given: boolean;
+  readonly unheld: number;
+  /** `inventoryHoldDigest(keys)`. */
+  readonly digest: string;
+}
+
+/** SHA-256 of the sorted held invoice keys: what the report, the run inputs and the digest bind. */
+export function inventoryHoldDigest(keys: ReadonlySet<string> | readonly string[]): string {
+  const sorted = [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return sha256Hex(JSON.stringify({ format: 'nexa-legacy-inventory-hold/v1', hold: sorted }));
+}
+
+/** The `reason` a panel summary carries when its per-name resolution left names unresolved. */
+export const INVENTORY_NAMES_UNRESOLVED = 'UNRESOLVED';
+
+/**
+ * Whether a production panel's READ failed — as opposed to a read that held and left some
+ * needed names unresolved (`complete: false`, reason `UNRESOLVED`, with its resolution), whose
+ * invoices the inventory hold quarantines. A failed read blocks a production-like import.
+ */
+export function inventoryReadFailed(
+  panel: Pick<PanelInventorySummary, 'complete' | 'reason' | 'resolution'>,
+): boolean {
+  // A per-name read counts as having HELD only when it found a gap-free decision walk. One that
+  // never did decided nothing on that panel: a whole-panel failure in substance (review H P1),
+  // which blocks exactly as a read error does — never a quarantine of the whole panel.
+  return !(
+    panel.complete ||
+    (panel.reason === INVENTORY_NAMES_UNRESOLVED &&
+      panel.resolution !== null &&
+      panel.resolution.gapFree === true)
+  );
 }
 
 export interface PlanTallies {
@@ -311,6 +372,14 @@ export interface ServiceReviewInputs {
    * an invoice from adoption, never add one.
    */
   readonly ownershipHold?: ReadonlySet<string>;
+  /**
+   * Mirza `.nxpkg` inventory hold (`InventoryHold`): the APPROVED dry run's held invoice keys,
+   * given back to an apply (and its resume, reconcile and report). It only DEMOTES: a held
+   * invoice whose category the inventory decides is `INVENTORY_INCOMPLETE` whatever this read
+   * says, so a name the apply now resolves is still not adopted — nothing is adopted that the
+   * owner did not approve, and the plan's digest stays the approved one. Absent for a dry run.
+   */
+  readonly inventoryHold?: ReadonlySet<string>;
 }
 
 export function decideAllServices(
@@ -326,13 +395,17 @@ export function decideAllServices(
   readonly namedProductCandidates: number;
   /** Live invoices whose category the ownership hold changed (ADOPTION_ELIGIBLE → AMBIGUOUS_OWNERSHIP). */
   readonly ownershipHoldChanged: number;
+  /** Live invoices THIS read left `INVENTORY_INCOMPLETE` (before any inventory hold). */
+  readonly undecidable: ReadonlySet<string>;
 } {
   const userIds = new Set(snapshot.users.map((u) => u.id));
   const categories = zeroes<ServiceCandidateCategory>(SERVICE_CANDIDATE_CATEGORIES);
   const decided: PlannedService[] = [];
+  const undecidable = new Set<string>();
+  const inventoryHold = review.inventoryHold ?? new Set<string>();
   for (const invoice of snapshot.liveInvoices) {
     const panelId = review.operatorPanels?.get(invoice.idInvoice);
-    const decision = decideServiceCandidate(
+    const fresh = decideServiceCandidate(
       invoice,
       {
         userIds,
@@ -345,6 +418,13 @@ export function decideAllServices(
       },
       panelId === undefined ? null : { panelId },
     );
+    if (fresh.category === 'INVENTORY_INCOMPLETE') undecidable.add(invoice.idInvoice);
+    // The inventory hold first, before the ownership rule: a held invoice is no claim on an
+    // account, exactly as it was none when the approved dry run found it unresolved.
+    const decision =
+      inventoryHold.has(invoice.idInvoice) && INVENTORY_DERIVED_CATEGORIES.has(fresh.category)
+        ? inventoryHeldDecision()
+        : fresh;
     decided.push({ invoice, decision });
   }
   const ruled = withOwnershipRule(decided, review.keptAsHistory ?? new Set());
@@ -359,7 +439,7 @@ export function decideAllServices(
       namedProductCandidates += 1;
     }
   }
-  return { services, categories, namedProductCandidates, ownershipHoldChanged };
+  return { services, categories, namedProductCandidates, ownershipHoldChanged, undecidable };
 }
 
 /**
@@ -629,14 +709,31 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
       });
     }
   }
-  const { services, categories, namedProductCandidates, ownershipHoldChanged } = decideAllServices(
-    snapshot,
-    input.mapping,
-    indexes,
-    importedUsers,
-    tariffOf,
-    input.review,
+  const { services, categories, namedProductCandidates, ownershipHoldChanged, undecidable } =
+    decideAllServices(snapshot, input.mapping, indexes, importedUsers, tariffOf, input.review);
+  // The inventory hold: only a read that held can quarantine. With ANY production panel's read
+  // failed, nothing is held (that failure blocks); otherwise an undecidable invoice is one whose
+  // needed name a successful per-name read left unresolved — unless an operator's approval
+  // names a panel that has no index at all, which no read decided.
+  // A panel with no index, or a per-name read that found no gap-free decision walk (review H
+  // P1), is a read failure: it blocks, and nothing is held anywhere.
+  const readFailures = inventories.filter(inventoryReadFailed).length;
+  const unresolved = new Set(
+    readFailures > 0
+      ? []
+      : [...undecidable].filter((key) => {
+          const operatorPanel = input.review?.operatorPanels?.get(key);
+          return operatorPanel === undefined || indexes.has(operatorPanel);
+        }),
   );
+  const given = input.review?.inventoryHold;
+  const holdKeys: ReadonlySet<string> = given ?? unresolved;
+  const inventoryHold: InventoryHold = {
+    keys: holdKeys,
+    given: given !== undefined,
+    unheld: [...unresolved].filter((key) => !holdKeys.has(key)).length,
+    digest: inventoryHoldDigest(holdKeys),
+  };
   const realLive = snapshot.liveInvoices.filter((i) => i.isTest?.trim() === '0');
 
   return {
@@ -645,6 +742,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     services,
     inventories,
     ownershipHoldChanged,
+    inventoryHold,
     tallies: {
       customers,
       wallet,
@@ -686,12 +784,21 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
  * saw in the approved plan. Runtime facts (usage, state, link) are deliberately NOT in it:
  * they move by the minute on a live panel, and the import adopts from its own read anyway.
  */
-export function planTalliesDigest(plan: Pick<LegacyPlan, 'tallies' | 'services'>): string {
+export function planTalliesDigest(
+  plan: Pick<LegacyPlan, 'tallies' | 'services'> & {
+    readonly inventoryHold?: Pick<InventoryHold, 'keys' | 'digest'>;
+  },
+): string {
+  // The inventory hold is bound beside the decisions: WHICH `INVENTORY_INCOMPLETE` invoices are
+  // quarantined is part of what the owner approved. An empty (or absent) hold adds nothing, so
+  // the digest of every plan without one is the v2 digest it always was.
+  const hold = plan.inventoryHold;
   return sha256Hex(
     stableJson({
       format: 'nexa-legacy-plan-tallies/v2',
       tallies: plan.tallies,
       services: servicesDecisionDigest(plan.services),
+      inventoryHold: hold === undefined || hold.keys.size === 0 ? undefined : hold.digest,
     }),
   );
 }
@@ -744,7 +851,9 @@ export function servicesDecisionDigest(services: readonly PlannedService[]): str
  * sides can be set beside each other. Counts only: no key, no person, no panel id.
  */
 export function planTalliesRefusalCounts(
-  plan: Pick<LegacyPlan, 'tallies' | 'inventories'>,
+  plan: Pick<LegacyPlan, 'tallies' | 'inventories'> & {
+    readonly inventoryHold?: Pick<InventoryHold, 'keys' | 'unheld'>;
+  },
 ): Record<string, number> {
   const { tallies } = plan;
   const counts: Record<string, number> = {
@@ -753,8 +862,13 @@ export function planTalliesRefusalCounts(
     'apply:wallet:positive': tallies.wallet.positive.count,
     'apply:wallet:negative': tallies.wallet.negative.count,
     'apply:products:distinct_shapes': tallies.products.distinctShapes,
-    'apply:panels:inventory_incomplete': plan.inventories.filter((p) => !p.complete).length,
+    // A read that FAILED — never a per-name read that held and left names to the hold.
+    'apply:panels:inventory_incomplete': plan.inventories.filter(inventoryReadFailed).length,
   };
+  if (plan.inventoryHold !== undefined) {
+    counts['apply:inventory_hold:invoices'] = plan.inventoryHold.keys.size;
+    counts['apply:inventory_hold:unheld'] = plan.inventoryHold.unheld;
+  }
   for (const [category, count] of Object.entries(tallies.services.categories)) {
     counts[`apply:services:${category}`] = count;
   }

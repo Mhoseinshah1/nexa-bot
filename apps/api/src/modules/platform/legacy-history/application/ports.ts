@@ -1,4 +1,10 @@
-import type { LegacyHistoryRecordType, TenantContext } from '@nexa/contracts';
+import type {
+  LegacyHistoryRecordType,
+  LegacyInvoiceArchiveClass,
+  LegacyServiceOutcome,
+  LegacyServiceReviewState,
+  TenantContext,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
@@ -29,6 +35,35 @@ export interface NewLegacyHistoryRecord {
   readonly customerId: string | null;
   readonly occurredAt: Date | null;
   readonly payload: Record<string, unknown>;
+}
+
+/**
+ * One of a customer's legacy invoices as Customer 360 reads it: the latest VISIBLE archive
+ * revision (its run COMPLETED, no newer visible one) beside the service candidate of the same
+ * invoice key, when an import run decided one. Every field is the stored one, unchanged.
+ */
+export interface LegacyCustomerInvoiceRow {
+  readonly archiveId: string;
+  readonly invoiceKey: string;
+  readonly revision: number;
+  readonly classification: LegacyInvoiceArchiveClass;
+  readonly live: boolean;
+  readonly status: string | null;
+  readonly isTest: boolean | null;
+  readonly username: string | null;
+  readonly panelCode: string | null;
+  readonly productCode: string | null;
+  readonly productName: string | null;
+  readonly priceMinor: bigint | null;
+  readonly priceCurrency: string | null;
+  readonly soldAt: Date | null;
+  readonly candidate: {
+    readonly id: string;
+    readonly outcome: LegacyServiceOutcome;
+    readonly blocker: string | null;
+    readonly reviewState: LegacyServiceReviewState;
+    readonly serviceId: string | null;
+  } | null;
 }
 
 /** One stored row, as the reads return it. */
@@ -91,4 +126,23 @@ export interface LegacyHistoryRepository {
   invoiceArchiveCount(scope: TenantContext, telegramUserId: string): Promise<number>;
   /** Legacy wallet debts recorded for this customer. */
   walletDebtCount(scope: TenantContext, customerId: string): Promise<number>;
+  /**
+   * The latest visible archive revision of each legacy invoice whose `legacy_user_id` is this
+   * Telegram id, with its candidate. Invoice-key order; keys strictly after `after`.
+   */
+  invoicesForCustomer(
+    scope: TenantContext,
+    telegramUserId: string,
+    after: string | null,
+    limit: number,
+  ): Promise<readonly LegacyCustomerInvoiceRow[]>;
+  /**
+   * Of these service ids, the ones that belong to this customer AND are a candidate's adopted
+   * service, with the candidate's invoice key.
+   */
+  adoptionsForCustomer(
+    scope: TenantContext,
+    customerId: string,
+    serviceIds: readonly string[],
+  ): Promise<readonly { readonly serviceId: string; readonly invoiceKey: string }[]>;
 }

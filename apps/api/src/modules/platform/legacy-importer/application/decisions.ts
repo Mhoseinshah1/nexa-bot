@@ -423,3 +423,32 @@ type HeldCategory = keyof typeof INVOICE_MAP_DECISIONS;
 function held(category: HeldCategory): ServiceCandidateDecision {
   return { category, map: INVOICE_MAP_DECISIONS[category] };
 }
+
+/**
+ * The categories an invoice can reach only THROUGH the inventory: the matcher's own outcomes
+ * on a panel (present, missing, ambiguous, two spellings, undecidable) and what follows an
+ * eligible match (the product path). Every other category is decided from the snapshot alone,
+ * before any panel is asked. Exactly these are what the inventory hold may demote.
+ */
+export const INVENTORY_DERIVED_CATEGORIES: ReadonlySet<ServiceCandidateCategory> = new Set([
+  'INVENTORY_INCOMPLETE',
+  'PROVIDER_MISSING',
+  'AMBIGUOUS_PANEL',
+  'USERNAME_CASE_COLLISION',
+  'UNSUPPORTED_SHAPE',
+  'PRODUCT_UNRESOLVED',
+  'ADOPTION_ELIGIBLE',
+]);
+
+/**
+ * Mirza `.nxpkg` inventory hold — an invoice the approved dry run quarantined because a needed
+ * username was left UNRESOLVED: exactly the decision an undecidable match records (category
+ * `INVENTORY_INCOMPLETE`, the review queue's map decision for it), whatever the apply's own
+ * read now says. Kept as history and an OPEN review candidate; never adopted.
+ */
+export function inventoryHeldDecision(): ServiceCandidateDecision {
+  return {
+    category: 'INVENTORY_INCOMPLETE',
+    map: decisionForLegacyMatch({ kind: 'UNDECIDABLE', reason: 'INVENTORY_INCOMPLETE' }),
+  };
+}

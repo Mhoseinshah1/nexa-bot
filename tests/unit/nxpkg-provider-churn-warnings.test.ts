@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   LEGACY_MIGRATION_PROVIDER_INVENTORY_CHURN,
+  LEGACY_MIGRATION_PROVIDER_INVENTORY_QUARANTINED,
   LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   legacyMigrationDryRunInventoryIncomplete,
 } from '@nexa/contracts';
@@ -175,5 +176,105 @@ describe('a churned panel is not an incomplete one', () => {
       { code: 'PROVIDER_INVENTORY_INCOMPLETE:TIMEOUT', count: 1 },
     ]);
     expect(legacyMigrationDryRunInventoryIncomplete(warnings)).toBe(1);
+  });
+});
+
+describe('the inventory hold: a read that held, with names it could not decide, is quarantine', () => {
+  // What the importer's plan reports for a per-name read that left needed names unresolved.
+  const unresolvedPanel = {
+    complete: false,
+    reason: 'UNRESOLVED',
+    accounts: null,
+    // A read that HELD: it found a gap-free decision walk, and still left 3 names undecided.
+    resolution: resolution({ unresolved: 3, gapFree: true }),
+  };
+  const digest = 'e'.repeat(64);
+  const summarise = (panels: unknown[], inventoryHold?: unknown) =>
+    dryRunReportOf(
+      {
+        verdict: 'DRY_RUN',
+        sections: {
+          provider: { panels },
+          ...(inventoryHold === undefined ? {} : { inventoryHold }),
+        },
+      } as never,
+      {
+        wallet: { currency: 'IRT' },
+        services: {
+          candidates: 50,
+          categories: { INVENTORY_INCOMPLETE: 3, ADOPTION_ELIGIBLE: 47 },
+        },
+      } as never,
+      null,
+      null,
+      [],
+      {
+        invoiceArchiveRows: 0,
+        holdChangedCategory: null,
+        converterTotalsAbsent: false,
+        inventoryVerdict: 'COMPLETE',
+        tables: [],
+        coverage: null,
+      },
+    );
+
+  it('providerIncomplete does not count it; a failed read still counts, and so does any other shape', () => {
+    expect(providerIncomplete(report([unresolvedPanel]))).toBe(0);
+    // `UNRESOLVED` without the resolution that proves the read held: a failure.
+    expect(providerIncomplete(report([{ ...unresolvedPanel, resolution: null }]))).toBe(1);
+    expect(providerIncomplete(report([{ complete: false, reason: 'UNRESOLVED' }]))).toBe(1);
+    expect(providerIncomplete(report([{ ...unresolvedPanel, resolution: [1] }]))).toBe(1);
+    // Review H P1: a per-name read that found NO gap-free walk decided nothing — a failure.
+    expect(
+      providerIncomplete(
+        report([{ ...unresolvedPanel, resolution: resolution({ unresolved: 3, gapFree: false }) }]),
+      ),
+    ).toBe(1);
+    // Another reason with a resolution object is still a failure (COUNT_MISMATCH, TIMEOUT, …).
+    expect(providerIncomplete(report([{ ...unresolvedPanel, reason: 'COUNT_MISMATCH' }]))).toBe(1);
+    expect(
+      providerIncomplete(report([unresolvedPanel, { complete: false, reason: 'TIMEOUT' }])),
+    ).toBe(1);
+  });
+
+  it('the dry run report carries the hold, warns PROVIDER_INVENTORY_QUARANTINED, and is approvable', () => {
+    const out = summarise([unresolvedPanel], { invoices: 3, digest, given: false, unheld: 0 });
+    expect(out.inventoryHold).toEqual({ version: 1, invoices: 3, digest });
+    expect(out.warnings).toContainEqual({
+      code: LEGACY_MIGRATION_PROVIDER_INVENTORY_QUARANTINED,
+      count: 3,
+    });
+    expect(out.warnings.map((w) => w.code)).not.toContain('PROVIDER_INVENTORY_INCOMPLETE');
+    expect(legacyMigrationDryRunInventoryIncomplete(out.warnings, out.inventoryHold)).toBe(0);
+    // The same report without its hold blocks exactly as before.
+    expect(legacyMigrationDryRunInventoryIncomplete(out.warnings)).toBe(1);
+  });
+
+  it('no hold unless the importer reported a COMPUTED one with nothing unheld, in the exact shape', () => {
+    for (const section of [
+      undefined,
+      { invoices: 3, digest, given: true, unheld: 0 },
+      { invoices: 3, digest, given: false, unheld: 1 },
+      { invoices: '3', digest, given: false, unheld: 0 },
+      { invoices: 3, digest: 'nope', given: false, unheld: 0 },
+    ]) {
+      const out = summarise([unresolvedPanel], section);
+      expect(out.inventoryHold, JSON.stringify(section)).toBeUndefined();
+      expect(out.warnings.map((w) => w.code)).not.toContain(
+        LEGACY_MIGRATION_PROVIDER_INVENTORY_QUARANTINED,
+      );
+      expect(legacyMigrationDryRunInventoryIncomplete(out.warnings, out.inventoryHold)).toBe(1);
+    }
+  });
+
+  it('a whole-panel read failure beside the hold still blocks', () => {
+    const out = summarise([unresolvedPanel, { complete: false, reason: 'AUTHENTICATION_FAILED' }], {
+      invoices: 3,
+      digest,
+      given: false,
+      unheld: 0,
+    });
+    expect(out.warnings).toContainEqual({ code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 });
+    expect(legacyMigrationDryRunInventoryIncomplete(out.warnings, out.inventoryHold)).toBe(1);
   });
 });

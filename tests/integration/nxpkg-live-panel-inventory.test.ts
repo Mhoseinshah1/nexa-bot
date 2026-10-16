@@ -48,6 +48,7 @@ import {
   createAdmin,
   createTestContext,
   tenantA,
+  tenantB,
   validatePanelConnection,
   type TestContext,
 } from './harness';
@@ -202,6 +203,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
         openings.push({
           record_type: 'wallet_opening_balance',
           idempotency_key: `legacy:opening:${tg}`,
+          telegram_user_id: tg,
           amount_minor: d.balanceMinor.toString(),
           currency: 'IRT',
         });
@@ -209,6 +211,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
         debts.push({
           record_type: 'legacy_debt',
           idempotency_key: `legacy:debt:${tg}`,
+          telegram_user_id: tg,
           amount_minor: (-d.balanceMinor).toString(),
           currency: 'IRT',
         });
@@ -869,7 +872,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
 
   // ── F: unresolved ──────────────────────────────────────────────────────────────────────
 
-  it('F: no gap-free walk (a deletion burst behind the cursor in EVERY walk) — every needed name UNRESOLVED, never PROVIDER_MISSING: INVENTORY_INCOMPLETE, approval refused, nothing written, no per-user request; over a quieter panel it is approvable', async () => {
+  it('F: no gap-free walk (a deletion burst behind the cursor in EVERY walk) — every needed name UNRESOLVED, never PROVIDER_MISSING: INVENTORY_INCOMPLETE, and the read decided nothing, so it is a failed read that blocks (review H P1), no per-user request', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
     // A lookup route that would fail if it were asked: it is not.
@@ -892,29 +895,24 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(w['INVENTORY_INCOMPLETE']).toBeGreaterThanOrEqual(4);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
-    // A read that left a needed name unresolved is not a complete read of that panel.
-    expect(w['PROVIDER_INVENTORY_INCOMPLETE']).toBe(1);
+    // Review H P1: no walk was gap-free, so the read decided nothing about panel A — a
+    // whole-panel read failure, never a hold. (A read that HELD is the Q cases below.)
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBeUndefined();
+    // Nothing held: a report holding nothing carries no hold or a hold of zero invoices.
+    expect(dry.dryRunReport?.inventoryHold?.invoices ?? 0).toBe(0);
     expect(lookupsOf(panelA, before)).toEqual([]);
+    expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
     await expect(page.approve(id)).rejects.toMatchObject({
       code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
-      details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
     });
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
-
-    // Quieter: one manual account appended mid-walk; the same import is approvable.
-    manualAccountMidWalk('manual_op_2');
-    const again = await page.dryRun(id);
-    panelA.beforeListPage = null;
-    const aw = codes(again.dryRunReport?.warnings);
-    expect(aw['INVENTORY_INCOMPLETE']).toBeUndefined();
-    expect(aw['PROVIDER_MISSING']).toBe(1);
-    expect((await page.approve(id)).status).toBe('APPROVED');
     expect(lookupsOf(panelA)).toEqual([]);
     expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
   }, 600_000);
 
-  it('F: a missing account (svc_missing) with no gap-free walk — UNRESOLVED, never PROVIDER_MISSING, even beside a route that answers 404 to everything (never asked); approval refused', async () => {
+  it('F: a missing account (svc_missing) with no gap-free walk — UNRESOLVED, never PROVIDER_MISSING, even beside a route that answers 404 to everything (never asked); a failed read that blocks (review H P1), and nothing written by the dry run', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await writePackage());
     failOn(panelA, (r) => r.method === 'GET' && r.path.startsWith('/api/user/'), {
@@ -933,13 +931,197 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
-    await expect(page.approve(id)).rejects.toMatchObject({
-      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
-      details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
-    });
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBeUndefined();
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
     expect(await services()).toEqual([]);
+    await expect(page.approve(id)).rejects.toMatchObject({
+      code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+    });
     expectReadsOnly(panelA);
+  }, 600_000);
+
+  // ── Q: the inventory hold beside decided names ─────────────────────────────────────────
+
+  /**
+   * svc_a3 (an extra eligible invoice, user 9) is DELETED and RE-CREATED on panel A between
+   * the first and the second walk of every read: a name seen under two creation times is
+   * another account, possibly another customer's — UNRESOLVED. Every other name is decided.
+   */
+  function recreateBetweenWalks(name: string): void {
+    onWalkPages(panelA, (walk, offset) => {
+      if (walk === 2 && offset === 0) {
+        panelA.removeUser(name);
+        panelA.seedUser(name, ACCOUNT);
+      }
+    });
+  }
+  const withSvcA3 = () =>
+    writePackage({
+      invoices: (rows) => [...rows, extraInvoice(rows, 'b0000003', '100000009', 'svc_a3')],
+    });
+
+  it('Q: one needed name unresolved beside decided ones — approvable; the apply writes customers, wallets and debts, adopts ONLY the eligible invoice, and keeps the held one as an OPEN INVENTORY_INCOMPLETE candidate with no service', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await withSvcA3());
+    panelA.seedUser('svc_a3', ACCOUNT);
+    recreateBetweenWalks('svc_a3');
+    const dry = await page.dryRun(id);
+    expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
+    const w = codes(dry.dryRunReport?.warnings);
+    expect(w['INVENTORY_INCOMPLETE']).toBe(1);
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(1);
+    expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBe(1);
+    expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
+    expect(dry.dryRunReport?.inventoryHold).toMatchObject({ version: 1, invoices: 1 });
+    expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+
+    // The apply's own read holds still (the hook fired in the dry run's second walk only), so
+    // it RESOLVES svc_a3 — and the approved hold still quarantines it: the same plan.
+    await page.executor.tick();
+    panelA.beforeListPage = null;
+    const done = await detail(id);
+    expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
+    // Money: every importable customer, every positive opening and every legacy debt.
+    expect(await count('customers')).toBeGreaterThan(0);
+    expect(await count('wallet_entries')).toBeGreaterThan(0);
+    expect(await count('legacy_wallet_debts')).toBeGreaterThan(0);
+    // Reconcile is decided under the same hold: the quarantine is no discrepancy.
+    expect(done.progress.reconcileVerdict).toBe('RECONCILED');
+    expect(
+      { holds: done.applyReport?.reportHolds, failed: done.applyReport?.failedSections },
+      JSON.stringify(done.applyReport?.failedInvariants),
+    ).toEqual({ holds: true, failed: [] });
+    // Only the decided, eligible invoice is a service; the held one is not.
+    const held = await services();
+    expect(held).toEqual(BASELINE_SERVICES);
+    expectOneServicePerAccount(held);
+    const decided = await candidates();
+    expect(decided['a0000001']?.outcome).toBe('ADOPTED');
+    // Its evidence shows the one account the apply's read found — for a person's review —
+    // but the outcome is the quarantine, and no service names it.
+    expect(decided['b0000003']).toEqual({
+      outcome: 'INVENTORY_INCOMPLETE',
+      holders: [{ panel: 'A', spellings: 1 }],
+    });
+    const state = await ctx.container.database.db.execute<{ review_state: string }>(
+      sql`SELECT review_state FROM legacy_service_candidates
+           WHERE tenant_id = ${TENANT} AND invoice_key = 'b0000003'`,
+    );
+    expect(state.rows.map((r) => r.review_state)).toEqual(['OPEN']);
+    // The approved hold is the one the apply run was started under.
+    const inputs = await ctx.container.database.db.execute<{ digest: string; n: number }>(
+      sql`SELECT i.inventory_hold_digest AS digest, jsonb_array_length(i.inventory_hold_keys) AS n
+            FROM legacy_import_run_inputs i
+           WHERE i.tenant_id = ${TENANT} AND i.run_id = ${done.applyLegacyRunId}`,
+    );
+    expect(inputs.rows).toEqual([{ digest: dry.dryRunReport?.inventoryHold?.digest, n: 1 }]);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
+  }, 600_000);
+
+  it('Q: a name ELIGIBLE at approval is unresolved at the apply — FAILED DRY_RUN_MISMATCH, nothing written', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await withSvcA3());
+    panelA.seedUser('svc_a3', ACCOUNT);
+    recreateBetweenWalks('svc_a3');
+    const dry = await page.dryRun(id);
+    expect(codes(dry.dryRunReport?.warnings)['PROVIDER_INVENTORY_QUARANTINED']).toBe(1);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+
+    // At the apply, svc_a1 (eligible, adopted by the approved plan) is re-created between
+    // walks too: unresolved now, and the approval never held it.
+    onWalkPages(panelA, (walk, offset) => {
+      if (walk === 2 && offset === 0) {
+        for (const name of ['svc_a3', 'svc_a1']) {
+          panelA.removeUser(name);
+          panelA.seedUser(name, ACCOUNT);
+        }
+      }
+    });
+    await page.executor.tick();
+    panelA.beforeListPage = null;
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(failed.applyLegacyRunId).toBeNull();
+    const refusal = codes(failed.progress.refusalCounts);
+    expect(refusal['apply:inventory_hold:unheld']).toBe(1);
+    expect(refusal['dryrun:inventory_hold:unheld']).toBe(0);
+    for (const table of [
+      'customers',
+      'wallet_entries',
+      'legacy_wallet_debts',
+      'services',
+      'orders',
+    ]) {
+      expect(await count(table), table).toBe(0);
+    }
+    expectReadsOnly(panelA);
+  }, 600_000);
+
+  /**
+   * The approved row's stored report, edited in place AFTER the approval (the executor binds
+   * the approval to `dry_run_sha256`, not to a re-hash of the JSON): what an apply would meet
+   * if a report reached it that carries no hold, or another one.
+   */
+  async function editApprovedReport(id: string, edit: string): Promise<void> {
+    await ctx.container.database.db.execute(
+      sql.raw(
+        `UPDATE legacy_nxpkg_imports SET dry_run_report = ${edit} WHERE id = '${id}' AND tenant_id = '${TENANT}'`,
+      ),
+    );
+  }
+
+  it('Q: an apply handed NO hold that finds a name unresolved refuses DRY_RUN_MISMATCH — even where the plan digest would match — nothing written', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await withSvcA3());
+    panelA.seedUser('svc_a3', ACCOUNT);
+    recreateBetweenWalks('svc_a3');
+    await page.dryRun(id);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+    // The report as if it had held nothing and planned nothing undecided (so the TARGET
+    // precheck lets it through): the importer's own gate is what is left.
+    await editApprovedReport(
+      id,
+      `(dry_run_report - 'inventoryHold') || jsonb_build_object('warnings', COALESCE((SELECT jsonb_agg(w) FROM jsonb_array_elements(dry_run_report->'warnings') w WHERE w->>'code' NOT IN ('INVENTORY_INCOMPLETE', 'PROVIDER_INVENTORY_QUARANTINED')), '[]'::jsonb))`,
+    );
+    // The apply's read sees the same re-creation: svc_a3 unresolved again.
+    recreateBetweenWalks('svc_a3');
+    await page.executor.tick();
+    panelA.beforeListPage = null;
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(failed.applyLegacyRunId).toBeNull();
+    for (const table of ['customers', 'wallet_entries', 'legacy_wallet_debts', 'services']) {
+      expect(await count(table), table).toBe(0);
+    }
+  }, 600_000);
+
+  it('Q: an apply handed a hold whose keys no dry run of this source recorded refuses DRY_RUN_MISMATCH — nothing written', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await withSvcA3());
+    panelA.seedUser('svc_a3', ACCOUNT);
+    recreateBetweenWalks('svc_a3');
+    await page.dryRun(id);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+    await editApprovedReport(
+      id,
+      `jsonb_set(dry_run_report, '{inventoryHold,digest}', to_jsonb('${'a'.repeat(64)}'::text))`,
+    );
+    panelA.beforeListPage = null;
+    await page.executor.tick();
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    expect(failed.applyLegacyRunId).toBeNull();
+    // Refused because the keys could not be read back under that digest — before any panel
+    // read decided anything (not by the gate or the plan digest further on).
+    expect(failed.progress.refusalCounts).toEqual([
+      { code: 'dryrun:inventory_hold:verified', count: 1 },
+      { code: 'apply:inventory_hold:verified', count: 0 },
+    ]);
+    for (const table of ['customers', 'wallet_entries', 'legacy_wallet_debts', 'services']) {
+      expect(await count(table), table).toBe(0);
+    }
   }, 600_000);
 
   // ── G ──────────────────────────────────────────────────────────────────────────────────
@@ -1083,4 +1265,505 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expectReadsOnly(panelA);
     expectReadsOnly(panelB);
   }, 600_000);
+
+  // ── §4b: the "adopt approved" lane ─────────────────────────────────────────────────────
+  //
+  // `docs/legacy-migration/service-review.md` §4b. After a COMPLETED import that quarantined a
+  // name (the inventory hold), the operator approves the ADOPT and uploads the SAME package
+  // again; instead of a dry run (refused FRESH_TARGET_NOT_EMPTY on an imported tenant) the
+  // restore page asks the recovery role to execute the approvals. Only the approved candidates,
+  // only the panels they name, every adoption check again, never a write to a panel.
+
+  /** b0000003 (svc_a3, user 100000009) held INVENTORY_INCOMPLETE by a COMPLETED import. */
+  async function importHoldingSvcA3(
+    extra: (rows: Row[]) => Row[] = (rows) => rows,
+    /** Further accounts the dry run must leave unresolved too (each re-created mid-read). */
+    alsoHeld: readonly string[] = [],
+  ): Promise<{
+    page: ReturnType<typeof productionLikePage>;
+    pkg: { path: string; keyFileText: string };
+    applyRunId: string | null;
+  }> {
+    const page = productionLikePage();
+    const pkg = await writePackage({
+      invoices: (rows) => extra([...rows, extraInvoice(rows, 'b0000003', '100000009', 'svc_a3')]),
+    });
+    const id = await page.toVerified(pkg);
+    const held = ['svc_a3', ...alsoHeld];
+    for (const name of held) panelA.seedUser(name, ACCOUNT);
+    onWalkPages(panelA, (walk, offset) => {
+      if (walk === 2 && offset === 0) {
+        for (const name of held) {
+          panelA.removeUser(name);
+          panelA.seedUser(name, ACCOUNT);
+        }
+      }
+    });
+    const dry = await page.dryRun(id);
+    expect(dry.status, JSON.stringify(dry.errorCode)).toBe('DRY_RUN_DONE');
+    expect(codes(dry.dryRunReport?.warnings)['PROVIDER_INVENTORY_QUARANTINED']).toBeGreaterThan(0);
+    expect((await page.approve(id)).status).toBe('APPROVED');
+    await page.executor.tick();
+    panelA.beforeListPage = null;
+    const done = await detail(id);
+    expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
+    expect((await candidates())['b0000003']?.outcome).toBe('INVENTORY_INCOMPLETE');
+    return { page, pkg, applyRunId: done.applyLegacyRunId };
+  }
+
+  /** Every candidate row's review facts, by invoice key. */
+  async function candidateRows(): Promise<Record<string, Record<string, unknown>>> {
+    const result = await ctx.container.database.db.execute<Record<string, unknown>>(
+      sql`SELECT invoice_key, id, outcome, review_state, version, last_approval_refusal,
+                 service_id, approved_checksum, run_id, evidence_hash, updated_at::text AS updated_at
+            FROM legacy_service_candidates WHERE tenant_id = ${TENANT} ORDER BY invoice_key`,
+    );
+    return Object.fromEntries(result.rows.map((r) => [String(r['invoice_key']), r]));
+  }
+
+  /** The operator's explicit ADOPT approval of one candidate (no panel: its code is mapped). */
+  async function approveCandidate(invoiceKey: string): Promise<void> {
+    const row = (await candidateRows())[invoiceKey];
+    const approved = await ctx.container.legacyServiceReview.approveAdoption(
+      tenantA,
+      owner,
+      String(row?.['id']),
+      {
+        idempotencyKey: key(),
+        expectedVersion: Number(row?.['version']),
+        reason: 'حساب در پنل پیدا شد',
+      },
+    );
+    expect(approved.reviewState).toBe('ADOPT_APPROVED');
+  }
+
+  /** Customers, money and debts: what the lane must never touch. */
+  async function moneyState(): Promise<Record<string, unknown>> {
+    const one = async (q: ReturnType<typeof sql>) =>
+      (await ctx.container.database.db.execute<Record<string, unknown>>(q)).rows[0];
+    return {
+      customers: await one(
+        sql`SELECT count(*)::int AS n, md5(string_agg(id::text || status || updated_at::text, ',' ORDER BY id)) AS h
+              FROM customers WHERE tenant_id = ${TENANT}`,
+      ),
+      wallet: await one(
+        sql`SELECT count(*)::int AS n, md5(string_agg(id::text || direction || amount::text, ',' ORDER BY id)) AS h
+              FROM wallet_entries WHERE tenant_id = ${TENANT}`,
+      ),
+      debts: await one(
+        sql`SELECT count(*)::int AS n, md5(string_agg(id::text || state || version::text, ',' ORDER BY id)) AS h
+              FROM legacy_wallet_debts WHERE tenant_id = ${TENANT}`,
+      ),
+      trials: await count('legacy_trial_eligibility'),
+      shapes: await count('legacy_product_shapes'),
+      userMap: await one(
+        sql`SELECT count(*)::int AS n, md5(string_agg(legacy_id || status || run_id::text, ',' ORDER BY legacy_id)) AS h
+              FROM legacy_import_map WHERE tenant_id = ${TENANT} AND legacy_table = 'user'`,
+      ),
+    };
+  }
+
+  /** The package uploaded again, verified, bound — and the lane requested and run once. */
+  async function runLane(
+    page: ReturnType<typeof productionLikePage>,
+    pkg: { path: string; keyFileText: string },
+  ): Promise<string> {
+    const laneId = await page.toVerified(pkg);
+    const requested = await ctx.container.legacyMigration.requestAdopt(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+    });
+    expect(requested.status).toBe('ADOPT_REQUESTED');
+    await page.executor.tick();
+    return laneId;
+  }
+
+  async function laneRuns(): Promise<{ mode: string; status: string }[]> {
+    const result = await ctx.container.database.db.execute<{ mode: string; status: string }>(
+      sql`SELECT mode, status FROM legacy_import_runs
+           WHERE tenant_id = ${TENANT} AND mode = 'ADOPT_APPROVED' ORDER BY started_at`,
+    );
+    return result.rows;
+  }
+
+  it('§4b: a held invoice approved after the import is adopted by the lane once the targeted read resolves exactly one spelling — only it, only GETs of its one panel, no customer or money touched; the fresh-target guard still refuses another import', async () => {
+    // b0000005: another held invoice (user 100000010, its own account), NOT approved. A still
+    // panel read resolves it as well — and the lane must still leave it alone.
+    const { page, pkg, applyRunId } = await importHoldingSvcA3(
+      (rows) => [...rows, extraInvoice(rows, 'b0000005', '100000010', 'svc_held_2')],
+      ['svc_held_2'],
+    );
+    expect((await candidates())['b0000005']?.outcome).toBe('INVENTORY_INCOMPLETE');
+    await approveCandidate('b0000003');
+    const before = await candidateRows();
+    const money = await moneyState();
+    const requestsB = panelB.requests.length;
+    const listsA = panelA.listCalls();
+
+    const laneId = await runLane(page, pkg);
+    const lane = await detail(laneId);
+    expect(lane.status, JSON.stringify([lane.errorCode, lane.progress])).toBe('ADOPT_DONE');
+    expect(lane.adoptReport).toMatchObject({
+      verdict: 'COMPLETED',
+      importLegacyRunId: applyRunId,
+      approvals: 1,
+      adopted: 1,
+      stillUnresolved: 0,
+      refused: [],
+      left: [],
+      panelsRead: 1,
+      providerWrites: 0,
+    });
+    expect(lane.adoptLegacyRunId).toBe(lane.adoptReport?.legacyRunId);
+    expect(await laneRuns()).toEqual([{ mode: 'ADOPT_APPROVED', status: 'COMPLETED' }]);
+    // The held invoice is now the service of exactly its one account, its owner's.
+    const held = await services();
+    expect(held).toEqual([
+      ...BASELINE_SERVICES,
+      { panel: 'A', username: 'svc_a3', owner: '100000009' },
+    ]);
+    expectOneServicePerAccount(held);
+    const after = await candidateRows();
+    expect(after['b0000003']).toMatchObject({
+      outcome: 'ADOPTED',
+      review_state: 'ADOPTED',
+      last_approval_refusal: null,
+      approved_checksum: null,
+    });
+    expect(after['b0000003']?.['service_id']).not.toBeNull();
+    // Every other candidate exactly as the import left it.
+    for (const [invoiceKey, row] of Object.entries(before)) {
+      if (invoiceKey === 'b0000003') continue;
+      expect(after[invoiceKey], invoiceKey).toEqual(row);
+    }
+    // No customer, wallet, debt, trial, shape or user map row changed.
+    expect(await moneyState()).toEqual(money);
+    // The targeted read: panel A (svc_a3's one panel) only, by its walks; nothing else asked.
+    expect(panelA.listCalls()).toBeGreaterThan(listsA);
+    expect(panelB.requests.length).toBe(requestsB);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
+    // Audited: the execution, codes and ids only.
+    const executed = await ctx.container.database.db.execute<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM audit_logs
+           WHERE tenant_id = ${TENANT} AND action = 'legacy.service_candidate.approval_executed'`,
+    );
+    expect(executed.rows[0]?.n).toBe(1);
+
+    // The fresh-target guard is unchanged: the same package again is refused a dry run, and
+    // the importer's own check says the tenant is not fresh.
+    const again = await page.toVerified(pkg);
+    const refused = await page.dryRun(again);
+    expect(refused).toMatchObject({
+      status: 'DRY_RUN_FAILED',
+      errorCode: 'FRESH_TARGET_NOT_EMPTY',
+    });
+    const fresh = await ctx.container.legacyImporter().freshTarget(tenantA, null);
+    expect(fresh.fresh).toBe(false);
+  }, 900_000);
+
+  it('§4b: an approved name the targeted read still cannot decide is settled back to OPEN with INVENTORY_INCOMPLETE — nothing adopted, nothing else touched', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const before = await candidateRows();
+    const money = await moneyState();
+    // svc_a3 is re-created between the lane's own two walks: still unresolved.
+    recreateBetweenWalks('svc_a3');
+    const laneId = await runLane(page, pkg);
+    panelA.beforeListPage = null;
+    const lane = await detail(laneId);
+    expect(lane.status, JSON.stringify(lane.errorCode)).toBe('ADOPT_DONE');
+    // Still unresolved is not done: the verdict says so (adopt-lane review P2-4).
+    expect(lane.adoptReport).toMatchObject({
+      verdict: 'COMPLETED_WITH_FAILURES',
+      approvals: 1,
+      adopted: 0,
+      stillUnresolved: 1,
+      refused: [{ code: 'INVENTORY_INCOMPLETE', count: 1 }],
+    });
+    const after = await candidateRows();
+    expect(after['b0000003']).toMatchObject({
+      outcome: 'INVENTORY_INCOMPLETE',
+      review_state: 'OPEN',
+      last_approval_refusal: 'INVENTORY_INCOMPLETE',
+      service_id: null,
+    });
+    for (const [invoiceKey, row] of Object.entries(before)) {
+      if (invoiceKey === 'b0000003') continue;
+      expect(after[invoiceKey], invoiceKey).toEqual(row);
+    }
+    expect(await services()).toEqual(BASELINE_SERVICES);
+    expect(await moneyState()).toEqual(money);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
+  }, 900_000);
+
+  it("§4b: another owner's invoice naming the same account makes the approved one AMBIGUOUS_OWNERSHIP — nothing adopted; the unapproved claim is untouched", async () => {
+    // b0000004: user 100000010's invoice naming the same account, held by the same import.
+    const { page, pkg } = await importHoldingSvcA3((rows) => [
+      ...rows,
+      extraInvoice(rows, 'b0000004', '100000010', 'svc_a3'),
+    ]);
+    expect((await candidates())['b0000004']?.outcome).toBe('INVENTORY_INCOMPLETE');
+    await approveCandidate('b0000003');
+    const before = await candidateRows();
+    const money = await moneyState();
+    const laneId = await runLane(page, pkg);
+    const lane = await detail(laneId);
+    expect(lane.status, JSON.stringify(lane.errorCode)).toBe('ADOPT_DONE');
+    expect(lane.adoptReport).toMatchObject({
+      approvals: 1,
+      adopted: 0,
+      stillUnresolved: 0,
+      refused: [{ code: 'AMBIGUOUS_OWNERSHIP', count: 1 }],
+    });
+    const after = await candidateRows();
+    expect(after['b0000003']).toMatchObject({
+      review_state: 'OPEN',
+      last_approval_refusal: 'AMBIGUOUS_OWNERSHIP',
+      service_id: null,
+    });
+    // The other owner's (unapproved) candidate is exactly as it was.
+    expect(after['b0000004']).toEqual(before['b0000004']);
+    expect(await services()).toEqual(BASELINE_SERVICES);
+    expect(await moneyState()).toEqual(money);
+    expectReadsOnly(panelA);
+  }, 900_000);
+
+  it('§4b review P2-4: a lane run left RUNNING after its approvals settled (a crash before it finished) is resumed and finished by the next lane — never NOTHING_TO_ADOPT, never left RUNNING, nothing adopted twice', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const firstId = await runLane(page, pkg);
+    const first = await detail(firstId);
+    expect(first.adoptReport).toMatchObject({ verdict: 'COMPLETED', adopted: 1 });
+    const laneRunId = first.adoptReport?.legacyRunId;
+    expect(laneRunId).toEqual(expect.any(String));
+    // The crash: the approval settled ADOPTED, the run never reached COMPLETED.
+    await ctx.container.database.db.execute(
+      sql`UPDATE legacy_import_runs SET status = 'RUNNING', finished_at = NULL
+           WHERE tenant_id = ${TENANT} AND id = ${laneRunId as string}`,
+    );
+    const held = await services();
+    const money = await moneyState();
+
+    const againId = await runLane(page, pkg);
+    const again = await detail(againId);
+    expect(again.status, JSON.stringify(again.errorCode)).toBe('ADOPT_DONE');
+    expect(again.adoptReport).toMatchObject({
+      verdict: 'COMPLETED',
+      legacyRunId: laneRunId,
+      approvals: 0,
+      adopted: 0,
+      providerWrites: 0,
+    });
+    expect(await laneRuns()).toEqual([{ mode: 'ADOPT_APPROVED', status: 'COMPLETED' }]);
+    expect(await services()).toEqual(held);
+    expect(await moneyState()).toEqual(money);
+    expectReadsOnly(panelA);
+  }, 900_000);
+
+  it('§4b: the lane waits — cancellable, nothing read or adopted — while another run is RUNNING, and while any import holds the installation-wide write freeze; then it runs', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    // Prepared before the freeze below (which refuses every durable write but its own).
+    const otherOwner = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'owner-b-lane', roleKeys: ['owner'] }),
+    );
+    const laneId = await page.toVerified(pkg);
+    await ctx.container.legacyMigration.requestAdopt(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+    });
+    const lists = panelA.listCalls();
+
+    // 1. Another run RUNNING on the tenant (an operator's dry run, say).
+    const runId = '01900000-0000-7000-8000-0000000ad001';
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO legacy_import_runs (id, tenant_id, mode, status, source_fingerprint, started_at, last_progress_at)
+      VALUES (${runId}, ${TENANT}, 'DRY_RUN', 'RUNNING', ${'e'.repeat(64)}, now(), now())`);
+    await page.executor.tick();
+    let waiting = await detail(laneId);
+    expect(waiting.status).toBe('ADOPT_REQUESTED');
+    expect(waiting.progress.adoptAttempts).toBe(0);
+    expect((await candidateRows())['b0000003']?.['review_state']).toBe('ADOPT_APPROVED');
+    expect(panelA.listCalls()).toBe(lists);
+    expect(await laneRuns()).toEqual([]);
+    await ctx.container.database.db.execute(
+      sql`UPDATE legacy_import_runs SET status = 'ABORTED', finished_at = now() WHERE id = ${runId}`,
+    );
+
+    // 2. Another tenant's import APPLYING: the installation is frozen for every writer but it.
+    const applyingId = '01900000-0000-7000-8000-0000000ad002';
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO legacy_nxpkg_imports
+        (id, tenant_id, status, file_name, file_path, file_sha256, file_bytes, progress,
+         approved_dry_run_sha256, approved_by_admin_id, approved_at, pre_import_backup_run_id,
+         requested_by_admin_id, created_at, updated_at)
+      VALUES (${applyingId}, ${String(tenantB.tenantId)}, 'APPLYING', 'b.nxpkg', '/nowhere',
+              ${'7'.repeat(64)}, 1, '{}'::jsonb, ${'7'.repeat(64)}, ${String(otherOwner.id)}, now(),
+              '01900000-0000-7000-8000-0000000ad003', ${String(otherOwner.id)}, now(), now())`);
+    await page.executor.tick();
+    waiting = await detail(laneId);
+    expect(waiting.status).toBe('ADOPT_REQUESTED');
+    expect(waiting.progress.blocker).toBe('ANOTHER_IMPORT_APPLYING');
+    expect((await candidateRows())['b0000003']?.['review_state']).toBe('ADOPT_APPROVED');
+    expect(panelA.listCalls()).toBe(lists);
+    expect(await laneRuns()).toEqual([]);
+    // That import ends (rows are never deleted): the freeze lifts.
+    await ctx.container.database.db.execute(
+      sql`UPDATE legacy_nxpkg_imports
+             SET status = 'FAILED', error_code = 'IMPORT_FAILED', finished_at = now(), updated_at = now()
+           WHERE id = ${applyingId}`,
+    );
+
+    // 3. The tenant stopped accepting work: every write the lane would make is refused inside
+    //    its transaction — no run, no claim, no adoption.
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${TENANT}`,
+    );
+    await page.executor.tick();
+    expect((await candidateRows())['b0000003']?.['review_state']).toBe('ADOPT_APPROVED');
+    expect(await laneRuns()).toEqual([]);
+    expect(await services()).toEqual(BASELINE_SERVICES);
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${TENANT}`,
+    );
+
+    // 4. Nothing in the way: the lane runs and adopts.
+    await page.executor.tick();
+    const done = await detail(laneId);
+    expect(done.status, JSON.stringify(done.errorCode)).toBe('ADOPT_DONE');
+    expect(done.adoptReport).toMatchObject({ adopted: 1, approvals: 1 });
+    expect(await services()).toEqual([
+      ...BASELINE_SERVICES,
+      { panel: 'A', username: 'svc_a3', owner: '100000009' },
+    ]);
+    expectReadsOnly(panelA);
+  }, 900_000);
+
+  it('§4b: a re-upload bound to OTHER panels than its import is refused ADOPT_REFUSED — no panel read, no claim, nothing adopted', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const service = ctx.container.legacyMigration;
+    const laneId = await upload(pkg.path);
+    await service.setKey(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await page.executor.tick();
+    // The two codes bound the other way round: another panel map than the import's.
+    await service.setPanelBindings(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+      bindings: [
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelBId },
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelAId },
+      ],
+    });
+    await service.requestAdopt(tenantA, owner, laneId, { idempotencyKey: key() });
+    const lists = panelA.listCalls() + panelB.listCalls();
+    await page.executor.tick();
+    expect(await detail(laneId)).toMatchObject({ status: 'FAILED', errorCode: 'ADOPT_REFUSED' });
+    expect(panelA.listCalls() + panelB.listCalls()).toBe(lists);
+    expect((await candidateRows())['b0000003']?.['review_state']).toBe('ADOPT_APPROVED');
+    expect(await laneRuns()).toEqual([]);
+    expect(await services()).toEqual(BASELINE_SERVICES);
+  }, 900_000);
+
+  it('§4b: the lane is refused for a source no finished import came from, and asks nothing of a panel', async () => {
+    const page = productionLikePage();
+    const id = await page.toVerified(await writePackage());
+    const before = panelA.requests.length + panelB.requests.length;
+    await expect(
+      ctx.container.legacyMigration.requestAdopt(tenantA, owner, id, { idempotencyKey: key() }),
+    ).rejects.toMatchObject({ code: LEGACY_MIGRATION_HTTP_ERROR_CODES.NO_COMPLETED_IMPORT });
+    expect((await detail(id)).status).toBe('VERIFIED');
+    expect(panelA.requests.length + panelB.requests.length).toBe(before);
+    expect(await laneRuns()).toEqual([]);
+  }, 600_000);
+
+  // ── §4b review: the guards 65d238de added without a test ───────────────────────────────
+
+  /** Nothing the lane must not do happened: no read, no run, no claim, no service. */
+  async function expectLaneRefusedUntouched(
+    laneId: string,
+    lists: number,
+    before: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    expect(await detail(laneId)).toMatchObject({ status: 'FAILED', errorCode: 'ADOPT_REFUSED' });
+    expect(panelA.listCalls() + panelB.listCalls()).toBe(lists);
+    expect(await laneRuns()).toEqual([]);
+    expect(await candidateRows()).toEqual(before);
+    expect(await services()).toEqual(BASELINE_SERVICES);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
+  }
+
+  it('§4b review: the lane is bound to the import the restore page names — an import row whose apply run is not the tenant’s latest APPLY run is refused ADOPT_REFUSED (expectedApplyRunId), nothing read or claimed', async () => {
+    const { page, pkg, applyRunId } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    // The restore page's import row now names ANOTHER run of this tenant (its own dry run):
+    // the importer's latest APPLY run is not the one the lane was asked to follow.
+    const updated = await ctx.container.database.db.execute<{ id: string }>(
+      sql`UPDATE legacy_nxpkg_imports SET apply_legacy_run_id = dry_run_legacy_run_id
+           WHERE tenant_id = ${TENANT} AND status = 'COMPLETED' AND apply_legacy_run_id = ${applyRunId}
+             AND dry_run_legacy_run_id IS NOT NULL
+       RETURNING id`,
+    );
+    expect(updated.rows).toHaveLength(1);
+    const before = await candidateRows();
+    const lists = panelA.listCalls() + panelB.listCalls();
+    const laneId = await page.toVerified(pkg);
+    await ctx.container.legacyMigration.requestAdopt(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+    });
+    await page.executor.tick();
+    await expectLaneRefusedUntouched(laneId, lists, before);
+  }, 900_000);
+
+  it('§4b review: the lane follows a .nxpkg import only — an APPLY run whose recorded inputs are not NXPKG is refused ADOPT_REFUSED, nothing read or claimed', async () => {
+    const { page, pkg, applyRunId } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const updated = await ctx.container.database.db.execute<{ run_id: string }>(
+      sql`UPDATE legacy_import_run_inputs SET source_engine = 'MYSQL'
+           WHERE tenant_id = ${TENANT} AND run_id = ${applyRunId} RETURNING run_id`,
+    );
+    expect(updated.rows).toHaveLength(1);
+    const before = await candidateRows();
+    const lists = panelA.listCalls() + panelB.listCalls();
+    const laneId = await page.toVerified(pkg);
+    await ctx.container.legacyMigration.requestAdopt(tenantA, owner, laneId, {
+      idempotencyKey: key(),
+    });
+    await page.executor.tick();
+    await expectLaneRefusedUntouched(laneId, lists, before);
+  }, 900_000);
+
+  it('§4b review (H P1): a targeted read with NO gap-free walk decides nothing in the lane — an approved name it saw under two spellings is INVENTORY_INCOMPLETE, never decided as a collision; nothing adopted', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    await approveCandidate('b0000003');
+    const money = await moneyState();
+    // A case variant of the approved name, and a deletion burst behind the cursor in every
+    // walk of the lane's read: two spellings were seen, but no walk was gap-free.
+    panelA.seedUser('SVC_A3', ACCOUNT);
+    burstInEveryWalk(8);
+    const laneId = await runLane(page, pkg);
+    panelA.beforeListPage = null;
+    const lane = await detail(laneId);
+    expect(lane.status, JSON.stringify(lane.errorCode)).toBe('ADOPT_DONE');
+    expect(lane.adoptReport).toMatchObject({
+      approvals: 1,
+      adopted: 0,
+      stillUnresolved: 1,
+      refused: [{ code: 'INVENTORY_INCOMPLETE', count: 1 }],
+      panelsRead: 1,
+      providerWrites: 0,
+    });
+    expect((await candidateRows())['b0000003']).toMatchObject({
+      review_state: 'OPEN',
+      last_approval_refusal: 'INVENTORY_INCOMPLETE',
+      service_id: null,
+    });
+    expect(await services()).toEqual(BASELINE_SERVICES);
+    expect(await moneyState()).toEqual(money);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
+  }, 900_000);
 });

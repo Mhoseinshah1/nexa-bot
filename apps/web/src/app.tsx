@@ -375,6 +375,10 @@ export function resolve(
           mayViewTickets={may('tickets.view')}
           mayViewBusinessChats={may('business_chats.view')}
           mayViewLegacyHistory={may('legacy.history.view')}
+          mayViewLegacyInvoices={may('legacy.invoices.view')}
+          mayViewLegacyPii={may('legacy.invoices.pii.view')}
+          mayViewLegacyServices={may('legacy.services.view')}
+          mayViewLegacyDebts={may('legacy.debts.view')}
           denied={!may('users.view')}
         />
       ),

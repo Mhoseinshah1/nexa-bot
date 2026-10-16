@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { money } from '@nexa/contracts';
 import { parsePanelMapping } from '../../apps/api/src/modules/platform/legacy-importer/application/panel-mapping';
 import {
+  inventoryHoldDigest,
+  inventoryReadFailed,
   planLegacyImport,
   planTalliesDigest,
   planTalliesRefusalCounts,
@@ -28,7 +30,10 @@ const TENANT = '11111111-1111-4111-8111-111111111111';
 const PANEL_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PANEL_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
-async function planWith(inventories: ReadonlyMap<string, LegacyInventoryRead>) {
+async function planWith(
+  inventories: ReadonlyMap<string, LegacyInventoryRead>,
+  inventoryHold?: ReadonlySet<string>,
+) {
   const connector = new FixtureLegacySourceConnector(buildSyntheticLegacyDataset() as never);
   const snapshot = await readFromSession(connector.label, await connector.open());
   const mapping = parsePanelMapping(syntheticMappingFile(TENANT, PANEL_A, PANEL_B), TENANT);
@@ -54,6 +59,7 @@ async function planWith(inventories: ReadonlyMap<string, LegacyInventoryRead>) {
       },
     ],
     inventories,
+    ...(inventoryHold === undefined ? {} : { review: { inventoryHold } }),
   } as never);
 }
 
@@ -146,6 +152,128 @@ describe('DRY_RUN_MISMATCH: the plan tallies digest follows the live RickPanel r
       expect(Number.isSafeInteger(value) && value >= 0).toBe(true);
       expect(key).toMatch(/^apply:[a-z_]+:[A-Za-z_]+$/u);
     }
+  });
+});
+
+/**
+ * Panel A read one needed name at a time (it kept selling), every name decided except `names`:
+ * the read HELD, and only those names are undecidable on it.
+ */
+async function unresolvedOnA(...names: string[]): Promise<Map<string, LegacyInventoryRead>> {
+  const inventories = syntheticInventories(PANEL_A, PANEL_B);
+  const a = inventories.get(PANEL_A);
+  if (a === undefined || !a.ok || !a.complete) throw new Error('fixture');
+  const unresolved = new Set(names.map((n) => n.toLowerCase()));
+  const usernames = new Map([...a.index.usernames].filter(([k]) => !unresolved.has(k)));
+  // Every other name the backup asks of the panel was decided: held, or proven absent.
+  const asked = (await planWith(syntheticInventories(PANEL_A, PANEL_B))).services.map((s) =>
+    (s.invoice.username ?? '').toLowerCase(),
+  );
+  const covered = new Set([...usernames.keys(), ...asked].filter((k) => !unresolved.has(k)));
+  inventories.set(PANEL_A, {
+    ...a,
+    index: { panelId: PANEL_A, usernames, covered },
+    resolution: {
+      mode: 'TARGETED',
+      reason: 'TOTAL_CHANGED',
+      needed: a.index.usernames.size,
+      present: usernames.size,
+      absent: 0,
+      collisions: 0,
+      unresolved: unresolved.size,
+      walks: 3,
+      gapFree: true,
+    },
+  });
+  return inventories;
+}
+
+/** The invoice that adopts `name` when every read is complete. */
+async function invoiceOf(name: string): Promise<string> {
+  const plan = await planWith(syntheticInventories(PANEL_A, PANEL_B));
+  const found = plan.services.find(
+    (s) =>
+      s.decision.category === 'ADOPTION_ELIGIBLE' &&
+      s.decision.providerUsername.toLowerCase() === name.toLowerCase(),
+  );
+  if (found === undefined) throw new Error('fixture');
+  return found.invoice.idInvoice;
+}
+
+describe('the inventory hold: a name a held read left unresolved is quarantined, not a blocker', () => {
+  it('the dry run holds exactly the unresolved invoice; its panel is not a failed read', async () => {
+    const key = await invoiceOf('svc_a1');
+    const dry = await planWith(await unresolvedOnA('svc_a1'));
+    expect(dry.inventoryHold.given).toBe(false);
+    expect([...dry.inventoryHold.keys]).toEqual([key]);
+    expect(dry.inventoryHold.unheld).toBe(0);
+    expect(dry.inventoryHold.digest).toBe(inventoryHoldDigest([key]));
+    expect(dry.services.find((s) => s.invoice.idInvoice === key)?.decision.category).toBe(
+      'INVENTORY_INCOMPLETE',
+    );
+    const a = dry.inventories.find((p) => p.panelId === PANEL_A);
+    expect(a).toMatchObject({ complete: false, reason: 'UNRESOLVED' });
+    expect(inventoryReadFailed(a!)).toBe(false);
+    expect(planTalliesRefusalCounts(dry)['apply:panels:inventory_incomplete']).toBe(0);
+    // Money is untouched by the hold.
+    const full = await planWith(syntheticInventories(PANEL_A, PANEL_B));
+    expect(nonServiceTallies(dry.tallies)).toEqual(nonServiceTallies(full.tallies));
+  });
+
+  it('the hold is bound into the digest; an empty hold leaves the v2 digest as it always was', async () => {
+    const dry = await planWith(await unresolvedOnA('svc_a1'));
+    const { inventoryHold: _hold, ...withoutHold } = dry;
+    expect(planTalliesDigest(dry)).not.toBe(planTalliesDigest(withoutHold));
+    const full = await planWith(syntheticInventories(PANEL_A, PANEL_B));
+    expect(full.inventoryHold.keys.size).toBe(0);
+    const { inventoryHold: _empty, ...fullWithout } = full;
+    expect(planTalliesDigest(full)).toBe(planTalliesDigest(fullWithout));
+  });
+
+  it('apply given the approved hold, same read: the same digest, nothing unheld', async () => {
+    const dry = await planWith(await unresolvedOnA('svc_a1'));
+    const apply = await planWith(await unresolvedOnA('svc_a1'), dry.inventoryHold.keys);
+    expect(apply.inventoryHold).toMatchObject({ given: true, unheld: 0 });
+    expect(planTalliesDigest(apply)).toBe(planTalliesDigest(dry));
+  });
+
+  it('apply given the hold whose read now RESOLVES the name: still held (demoted), same digest', async () => {
+    const key = await invoiceOf('svc_a1');
+    const dry = await planWith(await unresolvedOnA('svc_a1'));
+    const apply = await planWith(syntheticInventories(PANEL_A, PANEL_B), dry.inventoryHold.keys);
+    expect(apply.services.find((s) => s.invoice.idInvoice === key)?.decision.category).toBe(
+      'INVENTORY_INCOMPLETE',
+    );
+    expect(apply.services.filter((s) => s.decision.category === 'ADOPTION_ELIGIBLE').length).toBe(
+      dry.tallies.services.categories.ADOPTION_ELIGIBLE,
+    );
+    expect(planTalliesDigest(apply)).toBe(planTalliesDigest(dry));
+  });
+
+  it('apply where a name ELIGIBLE at approval is now unresolved: unheld, and another digest', async () => {
+    const dry = await planWith(await unresolvedOnA('svc_a1'));
+    const apply = await planWith(await unresolvedOnA('svc_a1', 'svc_a2'), dry.inventoryHold.keys);
+    expect(apply.inventoryHold.unheld).toBe(1);
+    expect(planTalliesRefusalCounts(apply)['apply:inventory_hold:unheld']).toBe(1);
+    expect(planTalliesDigest(apply)).not.toBe(planTalliesDigest(dry));
+  });
+
+  it('an import given NO hold holds nothing it could refuse on: the keys it found are all unheld', async () => {
+    // The importer's gate reads `given ? unheld : keys.size` (`applyClaimed`).
+    const apply = await planWith(await unresolvedOnA('svc_a1'));
+    expect(apply.inventoryHold.given).toBe(false);
+    expect(apply.inventoryHold.keys.size).toBe(1);
+  });
+
+  it('a whole-panel read FAILURE beside an unresolved name: nothing is held, the failure counts', async () => {
+    const inventories = await unresolvedOnA('svc_a1');
+    inventories.set(PANEL_B, { ok: false, failure: 'AUTHENTICATION_FAILED' } as never);
+    const dry = await planWith(inventories);
+    expect(dry.inventoryHold.keys.size).toBe(0);
+    expect(dry.tallies.services.categories.INVENTORY_INCOMPLETE).toBeGreaterThan(0);
+    expect(planTalliesRefusalCounts(dry)['apply:panels:inventory_incomplete']).toBe(1);
+    const b = dry.inventories.find((p) => p.panelId === PANEL_B);
+    expect(inventoryReadFailed(b!)).toBe(true);
   });
 });
 

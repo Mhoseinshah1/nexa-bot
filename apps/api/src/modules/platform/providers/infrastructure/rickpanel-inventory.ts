@@ -1,3 +1,11 @@
+import {
+  RICKPANEL_CHAIN_BREAKS,
+  RICKPANEL_CREATED_AT_FORMATS,
+  RICKPANEL_GAP_FREE_FAILURES,
+  type RickpanelChainBreak,
+  type RickpanelCreatedAtFormat,
+  type RickpanelGapFreeFailure,
+} from '@nexa/contracts';
 import type {
   ProviderFailureKind,
   ProviderHttpClient,
@@ -345,7 +353,76 @@ export interface RickpanelInventoryOptions {
    * as before.
    */
   readonly overlap?: number;
+  /**
+   * Monotonic milliseconds, for the walk's `durationMs` diagnostic only (`Date.now` by
+   * default). Never an input to what the walk proves.
+   */
+  readonly clock?: () => number;
 }
+
+/**
+ * WHY an overlapping walk is or is not gap-free, as numbers and closed codes
+ * (`docs/rickpanel-inventory.md` §Diagnostics). Never a name, a row, a stamp or a token.
+ * Diagnostics only: `gapFree` is computed exactly as before, and a test pins that it is true
+ * precisely when `failures` is empty.
+ */
+export interface RickpanelWalkDiagnostics {
+  /** Each gap-free condition that failed, in `RICKPANEL_GAP_FREE_FAILURES` order. */
+  readonly failures: readonly RickpanelGapFreeFailure[];
+  /** The failure first observed, and the 0-based page it was observed on; null when gap-free. */
+  readonly firstFailure: {
+    readonly kind: RickpanelGapFreeFailure;
+    readonly pageIndex: number;
+  } | null;
+  /** The overlap the walk ended with (0: it did not overlap; smaller after a learned cap). */
+  readonly overlapApplied: number;
+  /** The page cap the first page taught (rows below the limit asked, of a longer list), or null. */
+  readonly learnedLimit: number | null;
+  readonly durationMs: number;
+  readonly reportedTotalFirst: number | null;
+  readonly reportedTotalLast: number | null;
+  /** The largest |total − first page's total| over the walk's pages. */
+  readonly reportedTotalMaxChange: number;
+  /** Where the walk ended (offset past its last row), minus the total its last page reported. */
+  readonly endedOffsetMinusTotal: number | null;
+  /** Over the rows the walk received FIRST (one per distinct spelling): what the order rule saw. */
+  readonly createdAt: {
+    /** No `created_at`, null, or an empty string. */
+    readonly rowsWithout: number;
+    /** A value present that is not a parseable date string (a number, garbage). */
+    readonly rowsUnparsable: number;
+    /** Rows older than the newest row received before them. */
+    readonly inversions: number;
+    /** The largest such step back, in milliseconds. */
+    readonly maxInversionMs: number;
+    readonly formats: Readonly<Record<RickpanelCreatedAtFormat, number>>;
+  };
+  /** Page boundaries (rows, for `REPEAT_OUTSIDE_OVERLAP`) that broke the chain, by how. */
+  readonly chainBreaks: Readonly<Record<RickpanelChainBreak, number>>;
+}
+
+/**
+ * The format class of one `created_at` value (`RICKPANEL_CREATED_AT_FORMATS`): the base class
+ * (NAIVE, OFFSET, EPOCH_LIKE or OTHER) and whether it carries fractional seconds. Pure;
+ * exported for its own test and for the G6 probe.
+ */
+export function createdAtFormat(value: unknown): {
+  readonly base: Exclude<RickpanelCreatedAtFormat, 'FRACTIONAL'>;
+  readonly fractional: boolean;
+} {
+  if (typeof value === 'number') return { base: 'EPOCH_LIKE', fractional: false };
+  if (typeof value !== 'string') return { base: 'OTHER', fractional: false };
+  if (/^[0-9]{1,16}(?:\.[0-9]+)?$/u.test(value)) return { base: 'EPOCH_LIKE', fractional: false };
+  const iso =
+    /^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:?[0-9]{2})?$/iu.exec(
+      value,
+    );
+  if (iso === null) return { base: 'OTHER', fractional: false };
+  return { base: iso[2] === undefined ? 'NAIVE' : 'OFFSET', fractional: iso[1] !== undefined };
+}
+
+const zeroCounts = <K extends string>(keys: readonly K[]): Record<K, number> =>
+  Object.fromEntries(keys.map((k) => [k, 0])) as Record<K, number>;
 
 /**
  * What an overlapping walk can prove about its own coverage. `gapFree`: every row carried a
@@ -372,6 +449,8 @@ export interface RickpanelWalkCoverage {
    * same name and same creation time, proves it survived (`decideNeededNames`).
    */
   readonly createdAt: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Why the walk is or is not gap-free (diagnostics only). */
+  readonly diagnostics: RickpanelWalkDiagnostics;
 }
 
 /** Exact provider spelling → the link `subscriptionFrom` derives from its row, or null. */
@@ -484,6 +563,23 @@ export class RickpanelInventoryReader {
     let limit = pageSize;
     let lastStep = 0;
     let endedAtTotal = false;
+    // Diagnostics only (`RickpanelWalkDiagnostics`): none of these decides anything.
+    const clock = options.clock ?? Date.now;
+    const startedAt = clock();
+    const firstSeenOn = new Map<RickpanelGapFreeFailure, number>();
+    const note = (kind: RickpanelGapFreeFailure, pageIndex: number) => {
+      if (!firstSeenOn.has(kind)) firstSeenOn.set(kind, pageIndex);
+    };
+    const chainBreaks = zeroCounts(RICKPANEL_CHAIN_BREAKS);
+    const formats = zeroCounts(RICKPANEL_CREATED_AT_FORMATS);
+    let rowsWithout = 0;
+    let rowsUnparsable = 0;
+    let inversions = 0;
+    let maxInversionMs = 0;
+    let lastTotal: number | null;
+    let maxTotalChange = 0;
+    let endOffset: number;
+    let learnedLimit: number | null = null;
 
     const fault = (pagination: InventoryPaginationFault, status: number | null) =>
       ({ ok: false, failure: 'MALFORMED_RESPONSE', status, pagination }) as const;
@@ -518,9 +614,17 @@ export class RickpanelInventoryReader {
       } else if (firstTotal !== total) {
         totalChanged = true;
       }
+      const pageIndex = pages - 1;
+      lastTotal = total;
+      if (total !== null && firstTotal !== null) {
+        maxTotalChange = Math.max(maxTotalChange, Math.abs(total - firstTotal));
+      }
 
       lastPageRows = rows.length;
-      if (rows.length === 0) break;
+      if (rows.length === 0) {
+        endOffset = offset;
+        break;
+      }
 
       const pageNames: string[] = [];
       // A row's identity for chaining: its name AND its creation time, so a row deleted and
@@ -566,33 +670,56 @@ export class RickpanelInventoryReader {
             subscriptionFrom(target.baseUrl, row as Record<string, unknown>),
           );
           order.push(account.providerUsername);
-          if (Number.isNaN(created) || created < lastCreated) createdOrder = false;
-          else lastCreated = created;
+          if (createdRaw === undefined || createdRaw === null || createdRaw === '') {
+            rowsWithout += 1;
+          } else {
+            const format = createdAtFormat(createdRaw);
+            formats[format.base] += 1;
+            if (format.fractional) formats.FRACTIONAL += 1;
+            if (Number.isNaN(created)) rowsUnparsable += 1;
+          }
+          if (Number.isNaN(created) || created < lastCreated) {
+            createdOrder = false;
+            note('CREATED_ORDER', pageIndex);
+            if (!Number.isNaN(created)) {
+              inversions += 1;
+              maxInversionMs = Math.max(maxInversionMs, lastCreated - created);
+            }
+          } else lastCreated = created;
           fresh += 1;
         }
       }
       if (overlapAsked === 0) {
         if (fresh === 0) return fault('NO_PROGRESS', answer.status);
         offset += rows.length;
-        if (total !== null && offset >= total) break;
+        if (total !== null && offset >= total) {
+          endOffset = offset;
+          break;
+        }
         continue;
       }
 
       // An overlapping walk. A boundary is chained when this page shares a row with the
       // previous one and their common rows come in the same order.
       // A page longer than the cap the first page taught is no cap: rows were withheld.
-      if (pages > 1 && rows.length > limit) chained = false;
+      const unchain = (kind: RickpanelChainBreak) => {
+        chained = false;
+        chainBreaks[kind] += 1;
+        note('UNCHAINED', pageIndex);
+      };
+      if (pages > 1 && rows.length > limit) unchain('PAGE_LONGER_THAN_CAP');
       if (previousPage !== null) {
         const here = new Set(pageIds);
         const before = new Set(previousPage);
         const commonHere = pageIds.filter((n) => before.has(n));
         const commonBefore = previousPage.filter((n) => here.has(n));
-        if (
-          commonHere.length === 0 ||
+        if (commonHere.length === 0) {
+          unchain('NO_COMMON_ROW');
+        } else if (
           commonHere.length !== commonBefore.length ||
           commonHere.some((n, i) => n !== commonBefore[i])
         ) {
-          chained = false;
+          unchain('COMMON_ORDER_DIFFERS');
         } else {
           // An insertion ahead of the cursor. The first shared row `c` moved by (insertions −
           // deletions) before it since the previous page; insertions that landed between this
@@ -604,20 +731,20 @@ export class RickpanelInventoryReader {
           const freshBefore = pageIds
             .slice(0, pageIds.indexOf(c))
             .filter((n) => !before.has(n)).length;
-          if (moved > freshBefore) chained = false;
+          if (moved > freshBefore) unchain('INSERT_AHEAD_MISSED');
         }
       }
       // Every row of a page is accounted for: none twice in one page, and a row the walk had
       // already received must be one of the previous page's (the overlap). A row returned again
       // anywhere else stands in a position another account should hold — an account the walk
       // never sees (reviewer F-A: a tied `ORDER BY`, or a row repeated in a variant's place).
-      if (new Set(pageIds).size !== pageIds.length) chained = false;
+      if (new Set(pageIds).size !== pageIds.length) unchain('DUPLICATE_IN_PAGE');
       if (previousPage !== null) {
         const fromPrevious = new Set(previousPage);
         const seenEarlier = new Set(order.slice(0, order.length - fresh));
         for (let i = 0; i < pageIds.length; i += 1) {
           if (seenEarlier.has(pageNames[i] as string) && !fromPrevious.has(pageIds[i] as string)) {
-            chained = false;
+            unchain('REPEAT_OUTSIDE_OVERLAP');
           }
         }
       }
@@ -628,6 +755,7 @@ export class RickpanelInventoryReader {
       // the cap, so a capped panel still steps by most of a page.
       if (pages === 1 && rows.length < limit && total !== null && rows.length < total) {
         limit = rows.length;
+        learnedLimit = limit;
         overlap = Math.min(overlap, Math.floor(limit / 4));
       }
       // The list ends on a page SHORTER than the limit (that one statement returned the whole
@@ -636,6 +764,7 @@ export class RickpanelInventoryReader {
       if (rows.length < limit) {
         if (total !== null) {
           endedAtTotal = offset + rows.length === total;
+          endOffset = offset + rows.length;
           break;
         }
         // No `total`: a short page may be a server cap smaller than the one asked for, not the
@@ -656,17 +785,54 @@ export class RickpanelInventoryReader {
       if (fresh === 0) return fault('NO_PROGRESS', answer.status);
       // A cap too small to overlap cannot chain its boundaries: such a walk is never gap-free.
       const step = overlap > 0 && rows.length > overlap ? rows.length - overlap : rows.length;
-      if (step === rows.length) shortBeforeEnd = true;
+      if (step === rows.length) {
+        shortBeforeEnd = true;
+        note('SHORT_BEFORE_END', pageIndex);
+      }
       offset += step;
       lastStep = step;
     }
     // Reported whenever an overlap was ASKED for — also when the page is too small to overlap
     // (page size 1): such a walk is never gap-free, but its rows' identities still let two
     // walks of a still panel be one complete snapshot (Codex).
+    const failed: Record<RickpanelGapFreeFailure, boolean> = {
+      NO_OVERLAP: overlapAsked === 0,
+      NO_TOTAL: firstTotal === null || firstTotal === undefined,
+      CREATED_ORDER: !createdOrder,
+      UNCHAINED: !chained,
+      SHORT_BEFORE_END: shortBeforeEnd,
+      NOT_ENDED_AT_TOTAL: !endedAtTotal,
+    };
+    const failures = RICKPANEL_GAP_FREE_FAILURES.filter((kind) => failed[kind]);
+    // A walk-wide condition (no overlap, no total) is "seen" on the first page; not ending at
+    // the total, on the last. The earliest page wins; a tie keeps the canonical order.
+    const pageOf = (kind: RickpanelGapFreeFailure) =>
+      kind === 'NOT_ENDED_AT_TOTAL' ? pages - 1 : (firstSeenOn.get(kind) ?? 0);
+    const firstFailure = failures.reduce<RickpanelWalkDiagnostics['firstFailure']>(
+      (best, kind) =>
+        best === null || pageOf(kind) < best.pageIndex
+          ? { kind, pageIndex: Math.max(0, pageOf(kind)) }
+          : best,
+      null,
+    );
+    const diagnostics: RickpanelWalkDiagnostics = {
+      failures,
+      firstFailure,
+      overlapApplied: overlapAsked === 0 ? 0 : overlap,
+      learnedLimit,
+      durationMs: Math.max(0, Math.round(clock() - startedAt)),
+      reportedTotalFirst: firstTotal ?? null,
+      reportedTotalLast: lastTotal,
+      reportedTotalMaxChange: maxTotalChange,
+      endedOffsetMinusTotal: lastTotal === null ? null : endOffset - lastTotal,
+      createdAt: { rowsWithout, rowsUnparsable, inversions, maxInversionMs, formats },
+      chainBreaks,
+    };
     const coverage: RickpanelWalkCoverage | null =
       requested === 0
         ? null
         : {
+            diagnostics,
             gapFree:
               overlapAsked > 0 &&
               firstTotal !== null &&

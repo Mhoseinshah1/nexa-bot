@@ -152,7 +152,7 @@ describe('legacy migration: the executor over a real package', () => {
    */
   function converterFiles(
     dataset: ReturnType<typeof buildSyntheticLegacyDataset>,
-    skew: 'none' | 'customers' | 'openings_sum' = 'none',
+    skew: 'none' | 'customers' | 'openings_sum' | 'per_customer' = 'none',
   ) {
     const users = (dataset.tables['user'] ?? []) as Record<string, string | null>[];
     const seen = new Map<string, number>();
@@ -177,6 +177,7 @@ describe('legacy migration: the executor over a real package', () => {
         openings.push({
           record_type: 'wallet_opening_balance',
           idempotency_key: `legacy:opening:${tg}`,
+          telegram_user_id: tg,
           amount_minor: d.balanceMinor.toString(),
           currency: 'IRT',
         });
@@ -184,6 +185,7 @@ describe('legacy migration: the executor over a real package', () => {
         debts.push({
           record_type: 'legacy_debt',
           idempotency_key: `legacy:debt:${tg}`,
+          telegram_user_id: tg,
           amount_minor: (-d.balanceMinor).toString(),
           currency: 'IRT',
         });
@@ -191,6 +193,16 @@ describe('legacy migration: the executor over a real package', () => {
     }
     if (skew === 'customers') {
       customers.push({ record_type: 'customer', idempotency_key: 'legacy:customer:999999999' });
+    }
+    // Two customers' amounts swapped: every count and sum still equal (M8's totals agree), and
+    // each of the two is credited the other's money.
+    if (skew === 'per_customer') {
+      const [a, b] = openings;
+      if (a === undefined || b === undefined || a['amount_minor'] === b['amount_minor']) {
+        throw new Error('the fixture needs two openings of different amounts');
+      }
+      openings[0] = { ...a, amount_minor: b['amount_minor'] };
+      openings[1] = { ...b, amount_minor: a['amount_minor'] };
     }
     if (skew === 'openings_sum' && openings[0] !== undefined) {
       const first = openings[0];
@@ -217,7 +229,7 @@ describe('legacy migration: the executor over a real package', () => {
        * only for a source with none, so only such a source can import COMPLETED.
        */
       readonly clean?: boolean;
-      readonly converter?: 'absent' | 'none' | 'customers' | 'openings_sum';
+      readonly converter?: 'absent' | 'none' | 'customers' | 'openings_sum' | 'per_customer';
       readonly extra?: Record<string, { records: Record<string, unknown>[] }>;
       /**
        * §5a: two more legacy tables in the source catalogue, as a real backup has —
@@ -578,6 +590,37 @@ describe('legacy migration: the executor over a real package', () => {
     expect(failed).toMatchObject({ status: 'DRY_RUN_FAILED', errorCode: 'DRY_RUN_MISMATCH' });
     const counts = new Map(failed.progress.refusalCounts.map((c) => [c.code, c.count]));
     expect(counts.get('converter:customers')).toBe((counts.get('importer:customers') ?? -1) + 1);
+    expect((await row(id))?.['key_ciphertext']).toBeNull();
+  }, 300_000);
+
+  it("refuses a dry run whose converter credits a customer another's money, though every total agrees", async () => {
+    const pkg = await writePackage({ converter: 'per_customer' });
+    const id = await upload(pkg.path);
+    const service = ctx.container.legacyMigration;
+    const executor = ctx.container.migrationExecutor;
+    await service.setKey(tenantA, owner, id, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await executor.tick();
+    await service.setPanelBindings(tenantA, owner, id, {
+      idempotencyKey: key(),
+      bindings: [
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelAId },
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelBId },
+      ],
+    });
+    await service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
+    await executor.tick();
+    const failed = await detail(id);
+    expect(failed).toMatchObject({ status: 'DRY_RUN_FAILED', errorCode: 'DRY_RUN_MISMATCH' });
+    const counts = new Map(failed.progress.refusalCounts.map((c) => [c.code, c.count]));
+    // The two swapped customers, and nothing else: the totals agreed.
+    expect(Object.fromEntries(counts)).toEqual({
+      'per_customer:wallet_openings:amountDiffers': 2,
+    });
+    expect(await count('customers')).toBe(0);
+    expect(await count('wallet_entries')).toBe(0);
     expect((await row(id))?.['key_ciphertext']).toBeNull();
   }, 300_000);
 

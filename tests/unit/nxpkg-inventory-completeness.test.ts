@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   legacyMigrationDryRunInventoryIncomplete,
+  validInventoryHold,
   money,
   type LegacyMigrationDryRunReport,
   type ProviderHttpClient,
@@ -657,6 +658,44 @@ describe('legacyMigrationDryRunInventoryIncomplete (the contract rule)', () => {
       legacyMigrationDryRunInventoryIncomplete([{ code: 'TABLE_INVENTORY_INCOMPLETE', count: 3 }]),
     ).toBe(0);
   });
+
+  it('the inventory hold: a held invoice is quarantine, not a blocker — and only what it covers', () => {
+    const digest = 'd'.repeat(64);
+    const hold = (invoices: number) => ({ version: 1 as const, invoices, digest });
+    const services = [{ code: 'INVENTORY_INCOMPLETE', count: 40 }];
+    // Every INVENTORY_INCOMPLETE service is held: approvable.
+    expect(legacyMigrationDryRunInventoryIncomplete(services, hold(40))).toBe(0);
+    // One beyond the hold still blocks.
+    expect(legacyMigrationDryRunInventoryIncomplete(services, hold(39))).toBe(1);
+    // A hold claiming MORE than the report counts is inconsistent: blocked.
+    expect(legacyMigrationDryRunInventoryIncomplete(services, hold(41))).toBe(1);
+    // A whole-panel read failure blocks whatever the hold says.
+    expect(
+      legacyMigrationDryRunInventoryIncomplete(
+        [...services, { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 }],
+        hold(40),
+      ),
+    ).toBe(1);
+    // An old report (no hold) fails closed exactly as before.
+    expect(legacyMigrationDryRunInventoryIncomplete(services)).toBe(1);
+    expect(legacyMigrationDryRunInventoryIncomplete(services, null)).toBe(1);
+    // A stored hold not exactly the v1 shape is no hold at all.
+    for (const bad of [
+      { version: 2, invoices: 40, digest },
+      { version: 1, invoices: '40', digest },
+      { version: 1, invoices: 40.5, digest },
+      { version: 1, invoices: -1, digest },
+      { version: 1, invoices: 40, digest: 'not-a-digest' },
+      { version: 1, invoices: 40 },
+    ]) {
+      expect(
+        legacyMigrationDryRunInventoryIncomplete(services, bad as never),
+        JSON.stringify(bad),
+      ).toBe(1);
+      expect(validInventoryHold(bad)).toBe(false);
+    }
+    expect(validInventoryHold(hold(0))).toBe(true);
+  });
 });
 
 describe('providerIncompleteReasons', () => {
@@ -745,6 +784,23 @@ describe('the apply, before the protective backup: an approval from before the g
     await expect(adapters.precheck(unkeyed, 'TARGET')).rejects.toMatchObject({
       code: 'DRY_RUN_MISMATCH',
       counts: [{ code: 'dryrun:plan:digest_missing', count: 1 }],
+    });
+    // A dry run whose INVENTORY_INCOMPLETE services are all held by its inventory hold passes
+    // this gate (they are quarantined); the same report without the hold does not.
+    const heldReport = {
+      warnings: [{ code: 'INVENTORY_INCOMPLETE', count: 3 }],
+      planTalliesDigest: 'a'.repeat(64),
+      inventoryHold: { version: 1, invoices: 3, digest: 'b'.repeat(64) },
+    };
+    await expect(
+      adapters.precheck({ ...(context as object), dryRunReport: heldReport } as never, 'TARGET'),
+    ).rejects.toMatchObject({ blocker: 'TARGET_ACK_MISSING' });
+    const { inventoryHold: _hold, ...unheldReport } = heldReport;
+    await expect(
+      adapters.precheck({ ...(context as object), dryRunReport: unheldReport } as never, 'TARGET'),
+    ).rejects.toMatchObject({
+      code: 'DRY_RUN_MISMATCH',
+      counts: [{ code: 'dryrun:panels:inventory_incomplete', count: 1 }],
     });
     // A complete dry run passes this gate and meets the next one (the acknowledgement).
     const complete = {

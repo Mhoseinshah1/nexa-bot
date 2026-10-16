@@ -144,6 +144,25 @@ any non-terminal → CANCELLED
   the importer's plan (importable users, positive and negative balances); any difference is
   `DRY_RUN_MISMATCH` with both numbers in `progress.refusalCounts`. A package without those files
   is refused on a production-like target and reported `CONVERTER_TOTALS_ABSENT` elsewhere.
+- Then the same files PER CUSTOMER (`converter-wallet-crosscheck.ts`): every
+  `wallet_opening_balances.jsonl` / `legacy_debts.jsonl` record, by its `telegram_user_id`
+  (its `idempotency_key`, when present, must name the same customer), against the importer's
+  own reading of the snapshot — the plan's rule, pinned to `planLegacyImport` by a unit test.
+  Equal totals can hide two amounts swapped or a credit moved to the wrong person, so any
+  `missing`, `unexpected`, `amountDiffers`, `duplicate` or `unidentified` record is
+  `DRY_RUN_MISMATCH` exactly as a differing total is, with `per_customer:<file>:<kind>`
+  counts (never an id or an amount). Streamed: one pass per file, one map in memory.
+- The converter's wallet-history verdicts (`wallet_history_checks.jsonl`,
+  `wallet_difference_analysis.jsonl`) are archived as history and never applied: the snapshot
+  `Balance` is the opening figure. The dry run REPORTS them as warnings —
+  `WALLET_HISTORY_NOT_MATCHING_SNAPSHOT` (every check whose verdict is not
+  `MATCHES_SNAPSHOT`), `WALLET_HISTORY_CHECK:<verdict>`, `WALLET_DIFFERENCE_ANALYSED`,
+  `WALLET_DIFFERENCE:<cause>`, `WALLET_HISTORY_OPENING_NOT_SNAPSHOT`,
+  `WALLET_HISTORY_UNKNOWN_CUSTOMER`. A history that disagrees with the snapshot does not make
+  the snapshot wrong, so it does not block. What blocks (`DRY_RUN_MISMATCH`,
+  `wallet_history:snapshot_disagrees`) is a record whose own reading of the snapshot cell
+  differs from the importer's: then the one figure every opening is taken from is in dispute
+  between two readers of it. The verdict vocabulary beyond `MATCHES_SNAPSHOT` is `OQ-LWD-08`.
 - COMPLETED means the importer's verdict is exactly `COMPLETED`, the reconcile is RECONCILED and
   the v2 final report holds (`finalV2.verdict`; its `failedSections` and `failedInvariants` are on
   the apply report). Anything else that finished is COMPLETED_WITH_DISCREPANCY. The verdict is
@@ -463,3 +482,20 @@ Tests: `tests/unit/legacy-migration.test.ts`, `tests/unit/legacy-migration-write
 `tests/integration/legacy-migration-nxpkg.test.ts` (the production-like restore-page case),
 `tests/integration/legacy-migration-restore-page.test.ts` (the recovery role's executor, the
 backup failure) and `tests/integration/recovery-executor.test.ts` (mutual exclusion).
+
+### 10b. The "adopt approved" lane (a re-upload after a finished restore)
+
+`docs/legacy-migration/service-review.md` §4b is the design and the record. On this page's
+terms: the SAME package uploaded again after its restore finished is verified as any upload, but
+— its source being one a COMPLETED / COMPLETED_WITH_DISCREPANCY import of this tenant came from —
+the page requests no dry run (the tenant is not fresh) and offers the lane:
+`VERIFIED → ADOPT_REQUESTED → ADOPT_RUNNING → ADOPT_DONE | FAILED` (migration `0249`; the
+request is charged on the CRITICAL `legacy.migration.apply`). The `recovery` role runs it as the
+importer's `ADOPT_APPROVED` run, bound to that finished import's apply run and its approved dry
+run's inventory hold: it executes only the operators' ADOPT approvals, reads only the panels they
+name (GETs), and writes no customer, wallet, debt, trial or shape. It holds no write freeze and
+takes no backup; it WAITS (blocker shown, still cancellable) while any import is APPLYING, a
+restore is confirmed, or another run is RUNNING. `ADOPT_RUNNING` is not cancellable (a claim may
+be taken; the lane resumes its own run). Tests: `tests/unit/legacy-migration.test.ts` (the
+lane's lifecycle, permission and waits) and `tests/integration/nxpkg-live-panel-inventory.test.ts`
+(§4b, end to end).

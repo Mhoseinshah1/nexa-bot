@@ -13299,6 +13299,16 @@ export const legacyImportRunInputs = pgTable(
      * refused, so one run is never decided under two different holds.
      */
     ownershipHoldDigest: text('ownership_hold_digest'),
+    /**
+     * Mirza `.nxpkg` inventory hold: SHA-256 of the sorted held invoice keys
+     * (`inventoryHoldDigest`) and the keys themselves, a JSON array. A dry run records the
+     * invoices it quarantined because a needed username was left UNRESOLVED by a per-name read
+     * that held; an apply records the approved hold it was given back. NULL for a run without
+     * one. Legacy invoice keys only — the same keys `legacy_import_map` holds — and never in a
+     * report: the report carries the count and this digest.
+     */
+    inventoryHoldDigest: text('inventory_hold_digest'),
+    inventoryHoldKeys: jsonb('inventory_hold_keys'),
   },
   (table) => [
     primaryKey({ name: 'legacy_import_run_inputs_pk', columns: [table.tenantId, table.runId] }),
@@ -13320,6 +13330,10 @@ export const legacyImportRunInputs = pgTable(
     check(
       'legacy_import_run_inputs_hold_digest_check',
       sql`ownership_hold_digest IS NULL OR ownership_hold_digest ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'legacy_import_run_inputs_inventory_hold_check',
+      sql`((inventory_hold_digest IS NULL) = (inventory_hold_keys IS NULL)) AND (inventory_hold_digest IS NULL OR inventory_hold_digest ~ '^[0-9a-f]{64}$') AND (inventory_hold_keys IS NULL OR jsonb_typeof(inventory_hold_keys) = 'array')`,
     ),
   ],
 );
@@ -14147,8 +14161,15 @@ export const legacyNxpkgImports = pgTable(
     /** The dry-run digest the owner approved; APPLY refuses any other (`DRY_RUN_MISMATCH`). */
     approvedDryRunSha256: text('approved_dry_run_sha256'),
     applyReport: jsonb('apply_report'),
+    /**
+     * The "adopt approved" lane's counts (`legacyMigrationAdoptReportSchema`,
+     * `docs/legacy-migration/service-review.md` §4b), set with ADOPT_DONE. Codes and counts.
+     */
+    adoptReport: jsonb('adopt_report'),
     dryRunLegacyRunId: uuid('dry_run_legacy_run_id'),
     applyLegacyRunId: uuid('apply_legacy_run_id'),
+    /** The lane's own `ADOPT_APPROVED` run (none when no approval was waiting). */
+    adoptLegacyRunId: uuid('adopt_legacy_run_id'),
     /** The standard backup requested after COMPLETED (`backup_runs.id`; no FK — rows are purged). */
     backupRunId: uuid('backup_run_id'),
     /**
@@ -14215,6 +14236,19 @@ export const legacyNxpkgImports = pgTable(
       columns: [table.tenantId, table.applyLegacyRunId],
       foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
     }),
+    foreignKey({
+      name: 'legacy_nxpkg_imports_tenant_adopt_run_fk',
+      columns: [table.tenantId, table.adoptLegacyRunId],
+      foreignColumns: [legacyImportRuns.tenantId, legacyImportRuns.id],
+    }),
+    /**
+     * The lane's result exists exactly on a finished lane, and a lane is never an import: an
+     * ADOPT_* row carries no approval, no apply run and no protective backup.
+     */
+    check(
+      'legacy_nxpkg_imports_adopt_check',
+      sql`((status = 'ADOPT_DONE') = (adopt_report IS NOT NULL)) AND (adopt_legacy_run_id IS NULL OR adopt_report IS NOT NULL) AND (status NOT IN ('ADOPT_REQUESTED', 'ADOPT_RUNNING', 'ADOPT_DONE') OR (approved_at IS NULL AND apply_legacy_run_id IS NULL AND pre_import_backup_run_id IS NULL))`,
+    ),
     check('legacy_nxpkg_imports_status_check', enumCheck('status', LEGACY_NXPKG_IMPORT_STATUSES)),
     check(
       'legacy_nxpkg_imports_error_code_check',

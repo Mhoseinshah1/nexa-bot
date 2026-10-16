@@ -1430,6 +1430,11 @@ export interface Container {
    * (tests/support/legacy-rehearsal-panel-state.ts). Reads only; no surface reaches it.
    */
   readonly legacyPanelInventory: (options?: LegacyInventoryOptions) => LegacyInventoryPort;
+  /**
+   * The same read-only source, as itself: for the G6 probe CLI (`rickpanel-probe.cli.ts`),
+   * which reads through `withReadSession` — the importer's gate, pacing and one login.
+   */
+  readonly rickpanelInventorySource: () => RickpanelInventorySource;
 
   shutdown(): Promise<void>;
 }
@@ -7534,6 +7539,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     installationKeyRepository,
     installationKeys,
     legacyPanelInventory: (options = {}) => legacyInventory(options),
+    rickpanelInventorySource: () => legacyInventory(),
     legacyImporter: (options = {}) => {
       const importerRepository = new DrizzleLegacyImporterRepository(database.db, (scope) =>
         settingsResolver.valueOf<CurrencyCode>(scope, 'sales.currency'),

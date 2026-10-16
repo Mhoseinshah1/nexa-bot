@@ -645,6 +645,10 @@ import {
   customerServicesToggleResponseSchema,
   customerTimelineResponseSchema,
   legacyHistoryResponseSchema,
+  legacyCustomerAdoptionsResponseSchema,
+  legacyCustomerInvoicesResponseSchema,
+  type LegacyCustomerAdoptionsResponse,
+  type LegacyCustomerInvoicesResponse,
   type LegacyHistoryRecordType,
   type LegacyHistoryResponse,
   customerTransferPreviewResponseSchema,
@@ -5001,6 +5005,31 @@ export function fetchCustomerLegacyHistory(
   return authedGet(suffix ? `${path}?${suffix}` : path, legacyHistoryResponseSchema);
 }
 
+/** The customer's Mirza invoices beside the import's outcome for each (history, read-only). */
+export function fetchCustomerLegacyInvoices(
+  id: string,
+  query: { after?: string; limit?: number } = {},
+): Promise<LegacyCustomerInvoicesResponse> {
+  const params = new URLSearchParams();
+  if (query.after !== undefined) params.set('after', query.after);
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  const suffix = params.toString();
+  const path = CUSTOMER_360_ROUTES.legacyInvoices(id);
+  return authedGet(suffix ? `${path}?${suffix}` : path, legacyCustomerInvoicesResponseSchema);
+}
+
+/** Which of these services of the customer were adopted from a Mirza invoice. */
+export function fetchCustomerLegacyAdoptedServices(
+  id: string,
+  serviceIds: readonly string[],
+): Promise<LegacyCustomerAdoptionsResponse> {
+  const params = new URLSearchParams({ serviceIds: serviceIds.join(',') });
+  return authedGet(
+    `${CUSTOMER_360_ROUTES.legacyAdoptedServices(id)}?${params.toString()}`,
+    legacyCustomerAdoptionsResponseSchema,
+  );
+}
+
 /**
  * Roadmap B5: what about one customer waits for a person, and their newest orders and
  * payments. Each section the viewer may not open is null; `users.view` is charged.
@@ -5645,6 +5674,21 @@ export function requestLegacyMigrationDryRun(
 ): Promise<LegacyMigrationImportResponse> {
   return post(
     LEGACY_MIGRATION_ROUTES.dryRun(id),
+    { idempotencyKey },
+    legacyMigrationImportResponseSchema,
+  );
+}
+
+/**
+ * The "adopt approved" lane (`legacy.migration.apply`, CRITICAL): a VERIFIED re-upload of an
+ * imported package executes the operators' ADOPT approvals of that source instead of a dry run.
+ */
+export function requestLegacyMigrationAdopt(
+  id: string,
+  idempotencyKey: string,
+): Promise<LegacyMigrationImportResponse> {
+  return post(
+    LEGACY_MIGRATION_ROUTES.adopt(id),
     { idempotencyKey },
     legacyMigrationImportResponseSchema,
   );

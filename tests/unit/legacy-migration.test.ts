@@ -136,14 +136,37 @@ describe('the import lifecycle', () => {
     }
   });
 
-  it('never cancels an APPLYING import, and cancels every other non-terminal one', () => {
-    expect(canTransition('APPLYING', 'CANCELLED')).toBe(false);
-    expect(LEGACY_MIGRATION_COMMAND_FROM.cancel).not.toContain('APPLYING');
+  it('never cancels an APPLYING import nor a RUNNING adopt lane, and cancels every other non-terminal one', () => {
+    // The "adopt approved" lane (service-review.md §4b): ADOPT_RUNNING may hold a claimed
+    // approval, which only the lane's own resume settles — APPLYING's reason, for one claim.
+    for (const running of ['APPLYING', 'ADOPT_RUNNING'] as const) {
+      expect(canTransition(running, 'CANCELLED'), running).toBe(false);
+      expect(LEGACY_MIGRATION_COMMAND_FROM.cancel, running).not.toContain(running);
+    }
     const terminal: readonly string[] = LEGACY_NXPKG_TERMINAL_STATUSES;
     for (const status of LEGACY_NXPKG_IMPORT_STATUSES) {
-      if (terminal.includes(status) || status === 'APPLYING') continue;
+      if (terminal.includes(status) || status === 'APPLYING' || status === 'ADOPT_RUNNING') {
+        continue;
+      }
       expect(canTransition(status, 'CANCELLED'), status).toBe(true);
     }
+  });
+
+  it('starts the adopt lane from a VERIFIED import only, and never as an import', () => {
+    expect(LEGACY_MIGRATION_COMMAND_FROM.requestAdopt).toEqual(['VERIFIED']);
+    expect(LEGACY_NXPKG_IMPORT_STATUSES.filter((s) => canTransition(s, 'ADOPT_REQUESTED'))).toEqual(
+      ['VERIFIED'],
+    );
+    expect(LEGACY_NXPKG_IMPORT_STATUSES.filter((s) => canTransition(s, 'ADOPT_DONE'))).toEqual([
+      'ADOPT_RUNNING',
+    ]);
+    // A lane never reaches an import's states, nor an import the lane's.
+    for (const lane of ['ADOPT_REQUESTED', 'ADOPT_RUNNING'] as const) {
+      for (const importing of ['APPROVED', 'APPLYING', 'COMPLETED'] as const) {
+        expect(canTransition(lane, importing), `${lane} → ${importing}`).toBe(false);
+      }
+    }
+    expect(LEGACY_NXPKG_TERMINAL_STATUSES).toContain('ADOPT_DONE');
   });
 
   it('approves only a DRY_RUN_DONE import, and only into APPROVED', () => {
@@ -472,6 +495,37 @@ describe('LegacyMigrationService', () => {
     }
     // The complete dry run of the same package is approvable on the same kind of target.
     expect((await (await seeded(dryRunReport, true)).approve()).status).toBe('APPROVED');
+    // The inventory hold: services left INVENTORY_INCOMPLETE by a per-name read that HELD are
+    // quarantined — the dry run that records them as its hold is approvable.
+    const hold = { version: 1 as const, invoices: 7, digest: 'c'.repeat(64) };
+    const held: LegacyMigrationDryRunReport = {
+      ...dryRunReport,
+      warnings: [
+        ...dryRunReport.warnings,
+        { code: 'INVENTORY_INCOMPLETE', count: 7 },
+        { code: 'PROVIDER_INVENTORY_QUARANTINED', count: 7 },
+      ],
+      inventoryHold: hold,
+    };
+    expect((await (await seeded(held, true)).approve()).status).toBe('APPROVED');
+    // …but only what it holds; a whole-panel read failure beside it; or a report from before
+    // the hold (the same warnings, no marker): refused as before.
+    for (const report of [
+      { ...held, inventoryHold: { ...hold, invoices: 6 } },
+      {
+        ...held,
+        warnings: [...held.warnings, { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 }],
+      },
+      { ...held, inventoryHold: undefined },
+    ] as LegacyMigrationDryRunReport[]) {
+      const { h, id, approve } = await seeded(report, true);
+      await expect(approve()).rejects.toMatchObject({
+        code: LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+        details: expect.objectContaining({ reason: 'PROVIDER_INVENTORY_INCOMPLETE' }),
+      });
+      expect(h.repository.rows.get(id)).toMatchObject({ status: 'DRY_RUN_DONE' });
+      expect(h.cutoverApprovals).toEqual([]);
+    }
     // Off a production-like target the warning is shown, and the owner decides.
     expect((await (await seeded(incomplete, false)).approve()).status).toBe('APPROVED');
     // Production-like: a dry run that reported no plan digest cannot bind the import.
@@ -701,8 +755,10 @@ function emptyRow() {
     dryRunSha256: null,
     approvedDryRunSha256: null,
     applyReport: null,
+    adoptReport: null,
     dryRunLegacyRunId: null,
     applyLegacyRunId: null,
+    adoptLegacyRunId: null,
     backupRunId: null,
     preImportBackupRunId: null,
     targetAck: null,
@@ -711,6 +767,7 @@ function emptyRow() {
       applyAttempts: 0,
       verifyAttempts: 0,
       dryRunAttempts: 0,
+      adoptAttempts: 0,
       importerVerdict: null,
       reconcileVerdict: null,
       history: [],
@@ -800,6 +857,32 @@ function executorHarness(
           history: [],
         };
       },
+      adoptApproved: async (
+        _context: MigrationStepContext,
+        input: {
+          importLegacyRunId: string;
+          inventoryHold: { digest: string; invoices: number } | null;
+        },
+      ) => {
+        calls.push(`adopt:${input.importLegacyRunId}:${input.inventoryHold?.digest ?? 'no-hold'}`);
+        return {
+          verdict: 'COMPLETED',
+          legacyRunId: null,
+          importLegacyRunId: input.importLegacyRunId,
+          approvals: 1,
+          adopted: 1,
+          stillUnresolved: 0,
+          refused: [],
+          left: [],
+          claimLost: 0,
+          withdrawnDuringRun: 0,
+          unconfirmed: 0,
+          released: 0,
+          panelsRead: 1,
+          providerReads: 4,
+          providerWrites: 0,
+        };
+      },
     } as MigrationRunner,
   };
   const h: ExecutorHarness = {
@@ -878,6 +961,7 @@ function executorHarness(
       apply: (c, i) => state.runner.apply(c, i),
       reconcile: (c) => state.runner.reconcile(c),
       finalReport: (c, i) => state.runner.finalReport(c, i),
+      adoptApproved: (c, i) => state.runner.adoptApproved(c, i),
     },
     freshTarget: {
       check: async () =>
@@ -1866,6 +1950,236 @@ describe('LegacyMigrationExecutor', () => {
     await executor.tick();
     expect([...repository.rows.values()][0]?.claimedBy).toBeNull();
     expect(executor.isFresh(new Date('2026-10-10T10:00:01.000Z').getTime())).toBe(true);
+  });
+});
+
+// --- the "adopt approved" lane (service-review.md §4b) ----------------------------------------
+
+const LANE_SOURCE = H('a');
+const IMPORT_RUN = '019600ab-cdef-7012-8345-6789abcd0aaa';
+const HOLD = { version: 1 as const, invoices: 2, digest: H('9') };
+
+/** A finished import of `source`, its apply run recorded and its approved dry run held. */
+function finishedImport(
+  put: (row: never) => void,
+  source = LANE_SOURCE,
+  overrides: Record<string, unknown> = {},
+): string {
+  const row = {
+    ...emptyRow(),
+    status: 'COMPLETED',
+    packageSourceFingerprint: source,
+    verifyReport,
+    dryRunReport: { ...dryRunReport, inventoryHold: HOLD },
+    dryRunSha256: reportDigest(dryRunReport),
+    approvedDryRunSha256: reportDigest(dryRunReport),
+    approvedByAdminId: ADMIN,
+    approvedAt: new Date('2026-10-09T10:00:00.000Z'),
+    applyLegacyRunId: IMPORT_RUN,
+    preImportBackupRunId: PRE_BACKUP_RUN,
+    finishedAt: new Date('2026-10-09T11:00:00.000Z'),
+    createdAt: new Date('2026-10-09T09:00:00.000Z'),
+    ...overrides,
+  };
+  put(row as never);
+  return row.id;
+}
+
+describe('LegacyMigrationService.requestAdopt — the "adopt approved" lane (§4b)', () => {
+  const verified = (h: Harness, source = LANE_SOURCE) => {
+    const row = {
+      ...emptyRow(),
+      status: 'VERIFIED' as const,
+      keyCiphertext: 'sealed',
+      keyKeyId: 'key-1',
+      keyKind: 'PASSPHRASE' as const,
+      verifyReport,
+      packageSourceFingerprint: source,
+      panelBindings: [{ codePanel: 'P1', panelId: '019600ab-cdef-7012-8345-6789abcd0fff' }],
+    };
+    h.repository.put(row as never);
+    return row.id;
+  };
+
+  it('is charged on the CRITICAL legacy.migration.apply — manage alone is refused and audited DENIED', async () => {
+    const h = harness({ granted: ['legacy.migration.view', 'legacy.migration.manage'] });
+    finishedImport((row) => h.repository.put(row));
+    const id = verified(h);
+    await expect(
+      h.service.requestAdopt(scope, actor, id, { idempotencyKey: key() }),
+    ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+    expect(h.audits).toContainEqual(
+      expect.objectContaining({ action: 'legacy.migration.adopt_request', result: 'DENIED' }),
+    );
+    expect(h.repository.rows.get(id)?.status).toBe('VERIFIED');
+  });
+
+  it('refuses a source no finished import of this tenant came from (another source does not count), and while a restore holds the installation', async () => {
+    const h = harness();
+    finishedImport((row) => h.repository.put(row), H('b'));
+    finishedImport((row) => h.repository.put(row), LANE_SOURCE, {
+      status: 'FAILED',
+      errorCode: 'IMPORT_FAILED',
+    });
+    const id = verified(h);
+    expect(await codeOf(h.service.requestAdopt(scope, actor, id, { idempotencyKey: key() }))).toBe(
+      LEGACY_MIGRATION_HTTP_ERROR_CODES.NO_COMPLETED_IMPORT,
+    );
+    expect(h.repository.rows.get(id)?.status).toBe('VERIFIED');
+
+    const busy = harness({ recoveryActive: true });
+    finishedImport((row) => busy.repository.put(row));
+    const other = verified(busy);
+    expect(
+      await codeOf(busy.service.requestAdopt(scope, actor, other, { idempotencyKey: key() })),
+    ).toBe(LEGACY_MIGRATION_HTTP_ERROR_CODES.RECOVERY_ACTIVE);
+    expect(busy.repository.rows.get(other)?.status).toBe('VERIFIED');
+  });
+
+  it('moves a VERIFIED re-upload to ADOPT_REQUESTED, audited with the import it follows; a replay is the same answer; it stays cancellable', async () => {
+    const h = harness();
+    const imported = finishedImport((row) => h.repository.put(row));
+    const id = verified(h);
+    const body = { idempotencyKey: key() };
+    const view = await h.service.requestAdopt(scope, actor, id, body);
+    expect(view.status).toBe('ADOPT_REQUESTED');
+    expect(h.audits).toContainEqual(
+      expect.objectContaining({
+        action: 'legacy.migration.adopt_request',
+        result: 'SUCCESS',
+        after: expect.objectContaining({ importId: imported, importLegacyRunId: IMPORT_RUN }),
+      }),
+    );
+    expect((await h.service.requestAdopt(scope, actor, id, body)).status).toBe('ADOPT_REQUESTED');
+    expect(
+      h.audits.filter(
+        (a) => (a as { action?: string }).action === 'legacy.migration.adopt_request',
+      ),
+    ).toHaveLength(1);
+    // Not from a dry-run state, nor twice.
+    expect(await codeOf(h.service.requestAdopt(scope, actor, id, { idempotencyKey: key() }))).toBe(
+      LEGACY_MIGRATION_HTTP_ERROR_CODES.INVALID_STATE,
+    );
+    await h.service.cancel(scope, actor, id, { idempotencyKey: key() });
+    expect(h.repository.rows.get(id)?.status).toBe('CANCELLED');
+  });
+});
+
+describe('LegacyMigrationExecutor — the "adopt approved" lane (§4b)', () => {
+  const laneRow = (h: ExecutorHarness, overrides: Record<string, unknown> = {}) =>
+    seed(h, {
+      status: 'ADOPT_REQUESTED',
+      verifyReport,
+      packageSourceFingerprint: LANE_SOURCE,
+      createdAt: new Date('2026-10-10T09:30:00.000Z'),
+      ...overrides,
+    });
+
+  it("runs the lane bound to the finished import's run and its approved dry run's hold, and records ADOPT_DONE with the counts — the key erased", async () => {
+    const h = executorHarness();
+    finishedImport((row) => h.repository.put(row));
+    const id = laneRow(h);
+    await h.executor.tick();
+    expect(h.calls).toEqual([`adopt:${IMPORT_RUN}:${HOLD.digest}`]);
+    expect(h.repository.rows.get(id)).toMatchObject({
+      status: 'ADOPT_DONE',
+      keyCiphertext: null,
+      claimedBy: null,
+      adoptReport: expect.objectContaining({ adopted: 1, importLegacyRunId: IMPORT_RUN }),
+    });
+    expect(h.repository.rows.get(id)?.progress).toMatchObject({ phase: 'ADOPT', adoptAttempts: 1 });
+    // No protective backup, no write freeze: the lane is no import.
+    expect(h.calls).not.toContain('backup:before');
+    expect(h.writers).toEqual([]);
+  });
+
+  it('WAITS — still ADOPT_REQUESTED, the attempt given back, nothing run — while a restore is confirmed or any import holds the write freeze', async () => {
+    for (const blocker of ['RECOVERY_ACTIVE', 'ANOTHER_IMPORT_APPLYING'] as const) {
+      const h = executorHarness();
+      finishedImport((row) => h.repository.put(row));
+      const id = laneRow(h);
+      if (blocker === 'RECOVERY_ACTIVE') h.recoveryActive = true;
+      else {
+        seed(h, {
+          status: 'APPLYING',
+          tenantId: '019600ab-cdef-7012-8345-6789abcd0009',
+          preImportBackupRunId: PRE_BACKUP_RUN,
+          approvedDryRunSha256: H('7'),
+          approvedByAdminId: ADMIN,
+          approvedAt: h.now,
+          claimedBy: 'recovery:other',
+          leaseUntil: new Date(h.now.getTime() + 600_000),
+        });
+      }
+      await h.executor.tick();
+      expect(h.repository.rows.get(id), blocker).toMatchObject({
+        status: 'ADOPT_REQUESTED',
+        claimedBy: null,
+      });
+      expect(h.repository.rows.get(id)?.progress, blocker).toMatchObject({
+        blocker,
+        adoptAttempts: 0,
+      });
+      expect(h.calls, blocker).toEqual([]);
+    }
+  });
+
+  it('another run RUNNING (a transient RUN_CONFLICT from the runner) leaves it ADOPT_REQUESTED, uncounted', async () => {
+    const h = executorHarness();
+    finishedImport((row) => h.repository.put(row));
+    const id = laneRow(h);
+    h.runner = {
+      ...h.runner,
+      precheck: async (_c, step) => {
+        if (step === 'ADOPT') throw new LegacyMigrationRetry('RUN_CONFLICT');
+      },
+    };
+    await h.executor.tick();
+    expect(h.repository.rows.get(id)).toMatchObject({ status: 'ADOPT_REQUESTED', claimedBy: null });
+    expect(h.repository.rows.get(id)?.progress.adoptAttempts).toBe(0);
+    expect(h.calls).toEqual([]);
+  });
+
+  it('with no finished import of its source it is FAILED ADOPT_REFUSED and the importer is never asked; a refusal from the importer fails it with its code', async () => {
+    const h = executorHarness();
+    const id = laneRow(h);
+    await h.executor.tick();
+    expect(h.repository.rows.get(id)).toMatchObject({
+      status: 'FAILED',
+      errorCode: 'ADOPT_REFUSED',
+      keyCiphertext: null,
+    });
+    expect(h.calls).toEqual([]);
+
+    const refused = executorHarness();
+    finishedImport((row) => refused.repository.put(row));
+    const other = laneRow(refused);
+    refused.runner = {
+      ...refused.runner,
+      adoptApproved: async () => {
+        throw new LegacyMigrationStepFailure('ADOPT_REFUSED', 'another map');
+      },
+    };
+    await refused.executor.tick();
+    expect(refused.repository.rows.get(other)).toMatchObject({
+      status: 'FAILED',
+      errorCode: 'ADOPT_REFUSED',
+    });
+  });
+
+  it('is bounded: a lane started too many times is FAILED IMPORT_FAILED without running again', async () => {
+    const h = executorHarness();
+    finishedImport((row) => h.repository.put(row));
+    const id = laneRow(h, {
+      status: 'ADOPT_RUNNING',
+      progress: { ...emptyRow().progress, phase: 'ADOPT', adoptAttempts: 5 },
+    });
+    await h.executor.tick();
+    expect(h.repository.rows.get(id)).toMatchObject({
+      status: 'FAILED',
+      errorCode: 'IMPORT_FAILED',
+    });
+    expect(h.calls).toEqual([]);
   });
 });
 

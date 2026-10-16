@@ -22,6 +22,7 @@ import {
   reopenLegacyService,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { useLinkHandler, useRoute } from '../router';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
@@ -165,7 +166,7 @@ export function legacyServiceFault(error: unknown): string {
 }
 
 /** A refusal code is an outcome or one of the approval's own four; labelled either way. */
-function refusalLabel(code: string): string {
+export function legacyServiceRefusalLabel(code: string): string {
   const outcome = LEGACY_SERVICE_OUTCOME_LABELS[code as LegacyServiceOutcome];
   if (outcome !== undefined) return t(outcome);
   const own: Readonly<Record<string, WebKey>> = {
@@ -178,8 +179,60 @@ function refusalLabel(code: string): string {
   return key === undefined ? code : t(key);
 }
 
+/**
+ * Approvals wait for a run to execute them. After a COMPLETED Mirza restore no import runs
+ * again, so the page says where they are executed: the "adopt approved" lane on the restore
+ * page (`docs/legacy-migration/service-review.md` §4b), from the same package uploaded again.
+ */
+function ApprovalsWaiting({ count }: { count: number }) {
+  const onLink = useLinkHandler();
+  return (
+    <Banner tone="warn" icon="info">
+      <span>{t('web.lsr_approvals_waiting')}</span>{' '}
+      <span className="small">
+        {t('web.lsr_approvals_waiting_count')}: <Num value={count} />
+      </span>{' '}
+      <a className="link" href="/recovery" onClick={onLink}>
+        {t('web.lsr_approvals_waiting_link')}
+      </a>
+    </Banner>
+  );
+}
+
 type OutcomeFilter = LegacyServiceOutcome | 'ALL';
 type StateFilter = LegacyServiceReviewState | 'ALL';
+
+/**
+ * The filters a link may preset (`/legacy-services?outcome=NO_PANEL&reviewState=ALL`, from the
+ * migration report or Customer 360). Read once, when the page opens; a value outside its closed
+ * set is ignored rather than sent, and the review state defaults to OPEN as before.
+ */
+export function legacyServiceFiltersOf(query: URLSearchParams): {
+  readonly outcome: OutcomeFilter;
+  readonly reviewState: StateFilter;
+  readonly panelCode: string;
+  readonly productCode: string;
+  readonly invoiceId: string;
+} {
+  const outcome = query.get('outcome');
+  const reviewState = query.get('reviewState');
+  return {
+    outcome:
+      outcome !== null && (LEGACY_SERVICE_OUTCOMES as readonly string[]).includes(outcome)
+        ? (outcome as LegacyServiceOutcome)
+        : 'ALL',
+    reviewState:
+      reviewState === 'ALL'
+        ? 'ALL'
+        : reviewState !== null &&
+            (LEGACY_SERVICE_REVIEW_STATES as readonly string[]).includes(reviewState)
+          ? (reviewState as LegacyServiceReviewState)
+          : 'OPEN',
+    panelCode: query.get('panelCode') ?? '',
+    productCode: query.get('productCode') ?? '',
+    invoiceId: query.get('invoiceId') ?? '',
+  };
+}
 
 export function LegacyServicesPage({
   denied,
@@ -196,11 +249,13 @@ export function LegacyServicesPage({
   /** `legacy.invoices.view`: the archive revision's fields come with the detail. */
   mayViewArchive: boolean;
 }) {
-  const [outcome, setOutcome] = useState<OutcomeFilter>('ALL');
-  const [reviewState, setReviewState] = useState<StateFilter>('OPEN');
-  const [panelCode, setPanelCode] = useState('');
-  const [productCode, setProductCode] = useState('');
-  const [invoiceId, setInvoiceId] = useState('');
+  const route = useRoute();
+  const [initial] = useState(() => legacyServiceFiltersOf(route.query));
+  const [outcome, setOutcome] = useState<OutcomeFilter>(initial.outcome);
+  const [reviewState, setReviewState] = useState<StateFilter>(initial.reviewState);
+  const [panelCode, setPanelCode] = useState(initial.panelCode);
+  const [productCode, setProductCode] = useState(initial.productCode);
+  const [invoiceId, setInvoiceId] = useState(initial.invoiceId);
   const [trail, setTrail] = useState<readonly string[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const after = trail[trail.length - 1];
@@ -306,6 +361,9 @@ export function LegacyServicesPage({
       <Banner tone="info" icon="info">
         {t('web.lsr_banner')}
       </Banner>
+      {(summary.data?.byReviewState.ADOPT_APPROVED ?? 0) > 0 && (
+        <ApprovalsWaiting count={summary.data?.byReviewState.ADOPT_APPROVED ?? 0} />
+      )}
       {summary.data !== undefined && (
         <Card title={t('web.lsr_summary_title')}>
           <dl className="kv">
@@ -499,7 +557,7 @@ export function CandidateDetail({
           {row.lastApprovalRefusal !== null && (
             <>
               <dt>{t('web.lsr_last_refusal')}</dt>
-              <dd>{refusalLabel(row.lastApprovalRefusal)}</dd>
+              <dd>{legacyServiceRefusalLabel(row.lastApprovalRefusal)}</dd>
             </>
           )}
           {importOutcome !== null && (

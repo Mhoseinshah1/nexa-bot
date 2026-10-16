@@ -1,5 +1,23 @@
-import { and, count, countDistinct, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import type { LegacyHistoryRecordType, TenantContext } from '@nexa/contracts';
+import {
+  and,
+  asc,
+  count,
+  countDistinct,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  or,
+  sql,
+} from 'drizzle-orm';
+import type {
+  LegacyHistoryRecordType,
+  LegacyInvoiceArchiveClass,
+  LegacyServiceOutcome,
+  LegacyServiceReviewState,
+  TenantContext,
+} from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -10,9 +28,12 @@ import {
   legacyImportMap,
   legacyInvoiceArchive,
   legacyNxpkgImports,
+  legacyServiceCandidates,
   legacyWalletDebts,
+  services,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  LegacyCustomerInvoiceRow,
   LegacyHistoryRecordRow,
   LegacyHistoryRepository,
   NewLegacyHistoryRecord,
@@ -211,6 +232,111 @@ export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
         ),
       );
     return Number(rows[0]?.n ?? 0);
+  }
+
+  async invoicesForCustomer(
+    scope: TenantContext,
+    telegramUserId: string,
+    after: string | null,
+    limit: number,
+  ): Promise<readonly LegacyCustomerInvoiceRow[]> {
+    const tenantId = requireTenantId(scope);
+    const a = legacyInvoiceArchive;
+    const c = legacyServiceCandidates;
+    // The archive's own visibility rule (`DrizzleLegacyInvoiceArchiveRepository`): a revision
+    // is read only once its run COMPLETED, and only the newest such revision of a key.
+    const visible = sql`EXISTS (SELECT 1 FROM legacy_invoice_archive_runs vr
+      WHERE vr.tenant_id = ${a.tenantId} AND vr.id = ${a.runId} AND vr.state = 'COMPLETED')`;
+    const latest = sql`NOT EXISTS (SELECT 1 FROM legacy_invoice_archive nb
+      JOIN legacy_invoice_archive_runs nr ON nr.tenant_id = nb.tenant_id AND nr.id = nb.run_id
+        AND nr.state = 'COMPLETED'
+      WHERE nb.tenant_id = ${a.tenantId} AND nb.invoice_key = ${a.invoiceKey}
+        AND nb.revision > ${a.revision})`;
+    const rows = await this.db
+      .select({
+        archiveId: a.id,
+        invoiceKey: a.invoiceKey,
+        revision: a.revision,
+        classification: a.classification,
+        live: a.live,
+        status: a.status,
+        isTest: a.isTest,
+        username: a.username,
+        panelCode: a.panelCode,
+        productCode: a.productCode,
+        productName: a.productName,
+        priceMinor: a.priceMinor,
+        priceCurrency: a.priceCurrency,
+        soldAt: a.soldAt,
+        candidateId: c.id,
+        outcome: c.outcome,
+        blocker: c.blocker,
+        reviewState: c.reviewState,
+        serviceId: c.serviceId,
+      })
+      .from(a)
+      // One candidate per (tenant, invoice key): the unique key makes this join at most 1:1.
+      .leftJoin(c, and(eq(c.tenantId, a.tenantId), eq(c.invoiceKey, a.invoiceKey)))
+      .where(
+        and(
+          eq(a.tenantId, tenantId),
+          eq(a.legacyUserId, telegramUserId),
+          visible,
+          latest,
+          after === null ? undefined : gt(a.invoiceKey, after),
+        ),
+      )
+      .orderBy(asc(a.invoiceKey))
+      .limit(limit);
+    return rows.map((row) => ({
+      archiveId: row.archiveId,
+      invoiceKey: row.invoiceKey,
+      revision: row.revision,
+      classification: row.classification as LegacyInvoiceArchiveClass,
+      live: row.live,
+      status: row.status,
+      isTest: row.isTest,
+      username: row.username,
+      panelCode: row.panelCode,
+      productCode: row.productCode,
+      productName: row.productName,
+      priceMinor: row.priceMinor,
+      priceCurrency: row.priceCurrency,
+      soldAt: row.soldAt,
+      candidate:
+        row.candidateId === null || row.outcome === null || row.reviewState === null
+          ? null
+          : {
+              id: row.candidateId,
+              outcome: row.outcome as LegacyServiceOutcome,
+              blocker: row.blocker,
+              reviewState: row.reviewState as LegacyServiceReviewState,
+              serviceId: row.serviceId,
+            },
+    }));
+  }
+
+  async adoptionsForCustomer(
+    scope: TenantContext,
+    customerId: string,
+    serviceIds: readonly string[],
+  ): Promise<readonly { readonly serviceId: string; readonly invoiceKey: string }[]> {
+    if (serviceIds.length === 0) return [];
+    const tenantId = requireTenantId(scope);
+    const c = legacyServiceCandidates;
+    const rows = await this.db
+      .select({ serviceId: services.id, invoiceKey: c.invoiceKey })
+      .from(c)
+      .innerJoin(services, and(eq(services.tenantId, c.tenantId), eq(services.id, c.serviceId)))
+      .where(
+        and(
+          eq(c.tenantId, tenantId),
+          eq(services.customerId, customerId),
+          inArray(c.serviceId, [...serviceIds]),
+        ),
+      )
+      .orderBy(asc(services.id));
+    return rows;
   }
 
   /** Linked to the customer, or not linked to anyone and filed under its Telegram id. */

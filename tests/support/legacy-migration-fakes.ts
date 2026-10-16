@@ -52,8 +52,10 @@ export class InMemoryLegacyNxpkgImports implements LegacyNxpkgImportRepository {
       dryRunSha256: null,
       approvedDryRunSha256: null,
       applyReport: null,
+      adoptReport: null,
       dryRunLegacyRunId: null,
       applyLegacyRunId: null,
+      adoptLegacyRunId: null,
       backupRunId: null,
       preImportBackupRunId: null,
       targetAck: null,
@@ -85,6 +87,23 @@ export class InMemoryLegacyNxpkgImports implements LegacyNxpkgImportRepository {
       [...this.rows.values()].find(
         (row) => row.tenantId === tenantId && !isLegacyMigrationTerminal(row.status),
       ) ?? null
+    );
+  }
+
+  async latestCompletedOf(
+    tenantId: string,
+    sourceFingerprint: string,
+  ): Promise<LegacyNxpkgImportRow | null> {
+    return (
+      [...this.rows.values()]
+        .filter(
+          (row) =>
+            row.tenantId === tenantId &&
+            row.packageSourceFingerprint === sourceFingerprint &&
+            (row.status === 'COMPLETED' || row.status === 'COMPLETED_WITH_DISCREPANCY') &&
+            row.applyLegacyRunId !== null,
+        )
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null
     );
   }
 

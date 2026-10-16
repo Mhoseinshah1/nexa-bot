@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { LEGACY_HISTORY_RECORD_TYPES } from './legacy-nxpkg.js';
+import { LEGACY_INVOICE_ARCHIVE_CLASSES } from './legacy-invoice-archive.js';
+import { LEGACY_SERVICE_OUTCOMES, LEGACY_SERVICE_REVIEW_STATES } from './legacy-service-review.js';
 
 /**
  * Mirza `.nxpkg` importer — the archived Mirza history of a customer
@@ -86,3 +88,104 @@ export const LEGACY_HISTORY_ERROR_CODES = {
   SCOPE_STOPPED: 'legacy_history.scope_stopped',
   REQUEST_INVALID: 'legacy_history.request_invalid',
 } as const;
+
+// --- a customer's legacy invoices, with what the import decided about each ------------------
+
+/**
+ * Customer 360 — the customer's Mirza INVOICES (the latest visible revision of each
+ * `legacy_invoice_archive` row whose `id_user` is the customer's Telegram id), each beside the
+ * ONE outcome the importer gave it as a service (`legacy_service_candidates`, joined by the
+ * invoice key) when there is one.
+ *
+ * History, never an order: nothing here is a sale, a payment or a live service. `status` is
+ * Mirza's `Status` VERBATIM as of the snapshot; the Web Admin labels only the values whose
+ * writer is documented and shows any other as unknown, with the raw value. Charged on
+ * `users.view` then `legacy.invoices.view`; the candidate is null for every row unless the
+ * reader also holds `legacy.services.view` (`candidatesVisible`); `username` is null unless
+ * the reader holds `legacy.invoices.pii.view` (`piiRedacted`), and an unredacted page is
+ * audited like the archive's own list.
+ */
+export const LEGACY_CUSTOMER_INVOICES_PAGE_MAX = 50;
+export const LEGACY_CUSTOMER_INVOICES_PAGE_DEFAULT = 20;
+
+export const legacyCustomerInvoicesQuerySchema = z
+  .object({
+    /** Opaque keyset cursor: the `nextCursor` of the page before (invoice-key order). */
+    after: z.string().min(2).max(2000).optional(),
+    limit: z.coerce.number().int().min(1).max(LEGACY_CUSTOMER_INVOICES_PAGE_MAX).optional(),
+  })
+  .strict();
+export type LegacyCustomerInvoicesQuery = z.infer<typeof legacyCustomerInvoicesQuerySchema>;
+
+/** What the importer decided about the invoice as a service. Codes and NEXA ids only. */
+export const legacyCustomerInvoiceCandidateSchema = z.object({
+  id: z.string(),
+  outcome: z.enum(LEGACY_SERVICE_OUTCOMES),
+  /** The raw map or adoption reason behind the outcome, when there is one. */
+  blocker: z.string().nullable(),
+  reviewState: z.enum(LEGACY_SERVICE_REVIEW_STATES),
+  /** The adopted NEXA service: set exactly when the outcome is ADOPTED or ALREADY_ADOPTED. */
+  serviceId: z.string().nullable(),
+});
+export type LegacyCustomerInvoiceCandidate = z.infer<typeof legacyCustomerInvoiceCandidateSchema>;
+
+export const legacyCustomerInvoiceSchema = z.object({
+  /** The archive revision shown (the latest visible one). */
+  archiveId: z.string(),
+  invoiceKey: z.string(),
+  revision: z.number().int().positive(),
+  classification: z.enum(LEGACY_INVOICE_ARCHIVE_CLASSES),
+  /** `Status` is in the importer's live set. */
+  live: z.boolean(),
+  /** Mirza's `Status` verbatim (case-sensitive), as of the snapshot. */
+  status: z.string().nullable(),
+  isTest: z.boolean().nullable(),
+  /** The legacy panel account name (personal): null without `legacy.invoices.pii.view`. */
+  username: z.string().nullable(),
+  panelCode: z.string().nullable(),
+  productCode: z.string().nullable(),
+  productName: z.string().nullable(),
+  /** Historical metadata, never a price anybody is charged: IRT minor units as a decimal. */
+  priceMinor: z.string().nullable(),
+  priceCurrency: z.literal('IRT').nullable(),
+  soldAt: z.iso.datetime().nullable(),
+  /** Null when no import run decided it, or when `candidatesVisible` is false. */
+  candidate: legacyCustomerInvoiceCandidateSchema.nullable(),
+});
+export type LegacyCustomerInvoice = z.infer<typeof legacyCustomerInvoiceSchema>;
+
+export const legacyCustomerInvoicesResponseSchema = z.object({
+  invoices: z.array(legacyCustomerInvoiceSchema).max(LEGACY_CUSTOMER_INVOICES_PAGE_MAX),
+  nextCursor: z.string().nullable(),
+  piiRedacted: z.boolean(),
+  /** The reader holds `legacy.services.view`: a null `candidate` means "never decided". */
+  candidatesVisible: z.boolean(),
+});
+export type LegacyCustomerInvoicesResponse = z.infer<typeof legacyCustomerInvoicesResponseSchema>;
+
+/**
+ * Customer 360 — which of the given services of this customer were ADOPTED from a Mirza
+ * invoice (a panel account that existed before NEXA, represented here). Bounded by the page
+ * of services the caller is showing; a service of another customer is never answered.
+ * Charged on `users.view` then `legacy.services.view`.
+ */
+export const LEGACY_CUSTOMER_ADOPTIONS_MAX = 50;
+
+export const legacyCustomerAdoptionsQuerySchema = z
+  .object({
+    /** Comma-separated service ids (uuid), 1 to `LEGACY_CUSTOMER_ADOPTIONS_MAX`. */
+    serviceIds: z
+      .string()
+      .max(LEGACY_CUSTOMER_ADOPTIONS_MAX * 40)
+      .transform((value) => value.split(',').filter((part) => part !== ''))
+      .pipe(z.array(z.uuid()).min(1).max(LEGACY_CUSTOMER_ADOPTIONS_MAX)),
+  })
+  .strict();
+export type LegacyCustomerAdoptionsQuery = z.infer<typeof legacyCustomerAdoptionsQuerySchema>;
+
+export const legacyCustomerAdoptionsResponseSchema = z.object({
+  adoptions: z
+    .array(z.object({ serviceId: z.string(), invoiceKey: z.string() }))
+    .max(LEGACY_CUSTOMER_ADOPTIONS_MAX),
+});
+export type LegacyCustomerAdoptionsResponse = z.infer<typeof legacyCustomerAdoptionsResponseSchema>;

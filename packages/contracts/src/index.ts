@@ -163,6 +163,8 @@ export * from './legacy-cutover.js';
 export * from './legacy-nxpkg.js';
 /** Mirza `.nxpkg` importer: the Web Admin routes, requests and views («مهاجرت از میرزا»). */
 export * from './legacy-migration-routes.js';
+/** Per-name RickPanel read diagnostics: closed causes and counts, never a name. */
+export * from './legacy-inventory-diagnostics.js';
 /** Mirza `.nxpkg` importer: the archived history read on Customer 360. */
 export * from './legacy-history.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */

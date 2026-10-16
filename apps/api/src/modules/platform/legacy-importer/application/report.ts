@@ -9,7 +9,15 @@
 
 export const LEGACY_REPORT_FORMAT = 'nexa-legacy-import-report/v1';
 
-export type LegacyReportMode = 'AUDIT' | 'DRY_RUN' | 'IMPORT' | 'RESUME' | 'RECONCILE' | 'REPORT';
+export type LegacyReportMode =
+  | 'AUDIT'
+  | 'DRY_RUN'
+  | 'IMPORT'
+  | 'RESUME'
+  | 'RECONCILE'
+  | 'REPORT'
+  /** The "adopt approved" lane (`docs/legacy-migration/service-review.md` §4b). */
+  | 'ADOPT_APPROVED';
 
 export interface LegacyImportReport {
   readonly format: typeof LEGACY_REPORT_FORMAT;

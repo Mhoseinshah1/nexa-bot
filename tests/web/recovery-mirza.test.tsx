@@ -72,6 +72,7 @@ const progress = {
   applyAttempts: 0,
   verifyAttempts: 0,
   dryRunAttempts: 0,
+  adoptAttempts: 0,
   importerVerdict: null,
   reconcileVerdict: null,
   history: [],
@@ -153,8 +154,10 @@ const view = (overrides: Record<string, unknown> = {}) => ({
   dryRunSha256: null,
   approvedDryRunSha256: null,
   applyReport: null,
+  adoptReport: null,
   dryRunLegacyRunId: null,
   applyLegacyRunId: null,
+  adoptLegacyRunId: null,
   backupRunId: null,
   preImportBackupRunId: null,
   progress,
@@ -754,6 +757,90 @@ describe('the confirmation', () => {
     expect(posts(api)).toEqual([]);
   });
 
+  it('a report with per-panel diagnostics explains them on the review, through the contract schema', async () => {
+    page([
+      reviewed({
+        dryRunReport: {
+          ...churnReport([{ code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: 4 }]),
+          providerDiagnostics: [
+            {
+              panelId: RICK,
+              reason: 'TOTAL_CHANGED',
+              needed: 4,
+              unresolved: 4,
+              decisionWalk: null,
+              unresolvedByCause: [{ code: 'NO_DECISION_WALK', count: 4 }],
+              walks: [],
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(await screen.findByText(t('web.mrz_diag_title'))).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        t('web.mrz_diag_panel_summary')
+          .replace('{unresolved}', formatNumber(4))
+          .replace('{needed}', formatNumber(4)),
+        { exact: false },
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // The inventory hold: the services a per-name read that HELD left undecided are recorded as
+  // quarantined (history and an open review candidate), not a blocker.
+  const heldReport = (extra: { code: string; count: number }[] = []) => ({
+    ...churnReport([
+      { code: LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED, count: 3 },
+      { code: 'INVENTORY_INCOMPLETE', count: 3 },
+      { code: 'PROVIDER_INVENTORY_QUARANTINED', count: 3 },
+      ...extra,
+    ]),
+    inventoryHold: { version: 1, invoices: 3, digest: 'f'.repeat(64) },
+  });
+  const quarantineBody = () =>
+    t('web.mrz_inventory_quarantine_body').replace('{count}', formatNumber(3));
+
+  it('production-like: services quarantined by the inventory hold are said in words, and the confirmation is offered', async () => {
+    page([reviewed({ dryRunReport: heldReport() })], {
+      capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK },
+    });
+    expect(
+      await screen.findByRole('button', { name: t('web.mrz_confirm_button') }),
+    ).toBeInTheDocument();
+    // Once in the dry-run review and once beside the confirmation.
+    expect(screen.getAllByText(t('web.mrz_inventory_quarantine_title'))).toHaveLength(2);
+    expect(screen.getAllByText(quarantineBody())).toHaveLength(2);
+    // Not the "not approvable" banner: a held-only report is approvable.
+    expect(screen.queryByText(t('web.mrz_inventory_incomplete_title'))).toBeNull();
+  });
+
+  it('production-like: a real read failure beside the hold keeps the banner and withholds the confirmation', async () => {
+    const api = page(
+      [
+        reviewed({
+          dryRunReport: heldReport([
+            { code: 'PROVIDER_INVENTORY_INCOMPLETE', count: 1 },
+            { code: 'PROVIDER_INVENTORY_INCOMPLETE:TIMEOUT', count: 1 },
+          ]),
+        }),
+      ],
+      { capabilities: { productionLikeTarget: true, targetAcknowledgement: ACK } },
+    );
+    expect(await screen.findByText(t('web.mrz_inventory_incomplete_title'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
+    expect(posts(api)).toEqual([]);
+  });
+
+  it('the quarantine text says history and review, never that the service is adopted or lost', () => {
+    const body = t('web.mrz_inventory_quarantine_body');
+    expect(body).toContain('{count}');
+    expect(body).toContain('سابقه');
+    expect(body).toContain('بازبینی');
+    expect(body).toContain('مانع تأیید نیست');
+    expect(body).not.toMatch(/متوقف کنید/u);
+  });
+
   it('never tells the operator to stop selling or stop creating accounts on the panel', () => {
     for (const key of [
       'web.mrz_inventory_incomplete_body',
@@ -890,6 +977,77 @@ describe('the run and its result', () => {
   });
 });
 
+describe('the report in Persian', () => {
+  it('names sections and codes in Persian, keeps the code beside them, and links to the filtered lists', async () => {
+    page([
+      reviewed({
+        dryRunReport: {
+          ...dryRunReport,
+          sections: [
+            ...dryRunReport.sections,
+            {
+              section: 'services',
+              source: 5,
+              imported: 3,
+              archived: 1,
+              skipped: 0,
+              quarantined: 1,
+            },
+            {
+              section: 'invoice_archive',
+              source: 9,
+              imported: 0,
+              archived: 9,
+              skipped: 0,
+              quarantined: 0,
+            },
+            {
+              section: 'legacy_debts',
+              source: 1,
+              imported: 1,
+              archived: 0,
+              skipped: 0,
+              quarantined: 0,
+            },
+          ],
+          warnings: [
+            { code: 'NO_PANEL', count: 2 },
+            { code: 'PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED', count: 1 },
+            { code: 'SOMETHING_NEW', count: 1 },
+          ],
+          quarantine: [{ code: 'DECISION_QUARANTINED', count: 1 }],
+        },
+      }),
+    ]);
+    expect(await screen.findByText(t('web.mrz_section_customers'))).toBeInTheDocument();
+    expect(screen.getByText('customers')).toBeInTheDocument();
+    expect(
+      screen.getByText(`${t('web.mrz_section_history_of')} ${t('web.c360_legacy_type_payment')}`),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: t('web.mrz_section_services') })).toHaveAttribute(
+      'href',
+      '/legacy-services?reviewState=ALL',
+    );
+    expect(
+      screen.getByRole('link', { name: t('web.mrz_section_invoice_archive') }),
+    ).toHaveAttribute('href', '/legacy-invoices');
+    expect(screen.getByRole('link', { name: t('web.mrz_section_legacy_debts') })).toHaveAttribute(
+      'href',
+      '/legacy-debts?state=ALL',
+    );
+    // A service outcome links to the candidates holding it.
+    expect(screen.getByRole('link', { name: t('web.lsr_outcome_no_panel') })).toHaveAttribute(
+      'href',
+      '/legacy-services?outcome=NO_PANEL&reviewState=ALL',
+    );
+    expect(screen.getByText(t('web.mrz_code_provider_inventory_churn'))).toBeInTheDocument();
+    expect(screen.getByText('PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED')).toBeInTheDocument();
+    expect(screen.getByText(t('web.mrz_code_decision_quarantined'))).toBeInTheDocument();
+    // A code nobody named is shown raw, never guessed.
+    expect(screen.getByText('SOMETHING_NEW')).toBeInTheDocument();
+  });
+});
+
 describe('the old page', () => {
   it('is gone from the navigation, and its route redirects to the recovery page', () => {
     expect(NAV.some((entry) => entry.path === '/legacy-migration')).toBe(false);
@@ -900,5 +1058,171 @@ describe('the old page', () => {
     const element = resolved.element as ReactElement<{ to: string }>;
     expect((element.type as { name?: string }).name).toBe('RedirectPage');
     expect(element.props.to).toBe('/recovery');
+  });
+});
+
+describe('the "adopt approved" lane (service-review.md §4b)', () => {
+  /** The finished restore of source H('a'), from an earlier visit. */
+  const finished = approved({
+    id: OLD_ID,
+    status: 'COMPLETED',
+    packageSourceFingerprint: H('a'),
+    preImportBackupRunId: PROTECTIVE,
+    applyReport,
+    applyLegacyRunId: '019600ab-cdef-7012-8345-6789abcd0601',
+    finishedAt: '2026-10-09T09:30:00.000Z',
+    createdAt: '2026-10-09T09:00:00.000Z',
+  });
+  /** The same package uploaded again and verified: a re-upload. */
+  const reupload = (overrides: Record<string, unknown> = {}) =>
+    view({
+      status: 'VERIFIED',
+      keyPresent: true,
+      keyKind: 'KEY_FILE',
+      verifyReport,
+      packageSourceFingerprint: H('a'),
+      ...overrides,
+    });
+  const adoptReport = {
+    verdict: 'COMPLETED',
+    legacyRunId: '019600ab-cdef-7012-8345-6789abcd0602',
+    importLegacyRunId: '019600ab-cdef-7012-8345-6789abcd0601',
+    approvals: 3,
+    adopted: 1,
+    stillUnresolved: 1,
+    refused: [
+      { code: 'AMBIGUOUS_OWNERSHIP', count: 1 },
+      { code: 'INVENTORY_INCOMPLETE', count: 1 },
+    ],
+    left: [],
+    claimLost: 0,
+    withdrawnDuringRun: 0,
+    unconfirmed: 0,
+    released: 0,
+    panelsRead: 1,
+    providerReads: 4,
+    providerWrites: 0,
+  };
+
+  it('never requests a dry run for a re-upload of a finished restore: saving the panels offers the lane instead, which sends the key alone', async () => {
+    const bound = reupload({ panelBindings: [{ codePanel: 'P1', panelId: RICK }] });
+    const api = page([finished, reupload()], {
+      extra: [
+        {
+          url: `/legacy-migration/imports/${ID}/panel-bindings`,
+          method: 'POST',
+          body: { import: bound },
+        },
+        {
+          url: `/legacy-migration/imports/${ID}/adopt`,
+          method: 'POST',
+          body: { import: { ...bound, status: 'ADOPT_REQUESTED' } },
+        },
+      ],
+    });
+    expect(await screen.findByText(t('web.mrz_reupload_banner'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.mrz_adopt_explained'))).toBeInTheDocument();
+    // Nothing to send before the panels are bound.
+    expect(screen.getByText(t('web.mrz_adopt_after_inputs'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.mrz_adopt_request') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.lmg_dry_run_request') })).toBeNull();
+    const select = await screen.findByLabelText(`${t('web.lmg_col_nexa_panel')} P1`);
+    await waitFor(() => expect(select).toHaveValue(RICK));
+    fireEvent.click(screen.getByRole('button', { name: t('web.mrz_panels_save') }));
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    // The bindings alone: no automatic dry run (the tenant is not fresh).
+    expect(posts(api)[0]?.url).toContain('/panel-bindings');
+  });
+
+  it('offers the lane once the key and the panels are given, and sends only an idempotency key', async () => {
+    const bound = reupload({ panelBindings: [{ codePanel: 'P1', panelId: RICK }] });
+    const api = page([finished, bound], {
+      extra: [
+        {
+          url: `/legacy-migration/imports/${ID}/adopt`,
+          method: 'POST',
+          body: { import: { ...bound, status: 'ADOPT_REQUESTED' } },
+        },
+      ],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: t('web.mrz_adopt_request') }));
+    await waitFor(() => expect(posts(api)).toHaveLength(1));
+    expect(posts(api)[0]?.url).toContain(`/legacy-migration/imports/${ID}/adopt`);
+    expect(posts(api)[0]?.body).toEqual({ idempotencyKey: expect.any(String) });
+  });
+
+  it('offers no lane without legacy.migration.apply, and says why', async () => {
+    page([finished, reupload({ panelBindings: [{ codePanel: 'P1', panelId: RICK }] })], {
+      permissions: MIRZA_ALL.filter((p) => p !== 'legacy.migration.apply'),
+    });
+    expect(await screen.findByText(t('web.mrz_adopt_no_permission'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t('web.mrz_adopt_request') })).toBeNull();
+  });
+
+  it('says in words when the server finds no finished restore of that source', async () => {
+    const bound = reupload({ panelBindings: [{ codePanel: 'P1', panelId: RICK }] });
+    page([finished, bound], {
+      extra: [
+        {
+          url: `/legacy-migration/imports/${ID}/adopt`,
+          method: 'POST',
+          status: 409,
+          body: {
+            error: {
+              kind: 'conflict',
+              code: 'legacy_migration.no_completed_import',
+              message: 'no completed import',
+              correlationId: 'c1',
+            },
+          },
+        },
+      ],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: t('web.mrz_adopt_request') }));
+    expect(await screen.findByText(t('web.mrz_fault_no_completed_import'))).toBeInTheDocument();
+  });
+
+  it('shows what the lane did: adopted, still unresolved, refused by reason in words, no panel write — and the way to the candidates', async () => {
+    page([
+      finished,
+      reupload({
+        status: 'ADOPT_DONE',
+        panelBindings: [{ codePanel: 'P1', panelId: RICK }],
+        adoptReport,
+        adoptLegacyRunId: adoptReport.legacyRunId,
+        keyPresent: false,
+        progress: { ...progress, phase: 'ADOPT', adoptAttempts: 1 },
+        finishedAt: '2026-10-10T09:40:00.000Z',
+      }),
+    ]);
+    await choose(MIRZA_PACKAGE_BYTES, 'restore.nxpkg');
+    await send();
+    expect(await screen.findByText(t('web.mrz_adopt_result_title'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.mrz_adopt_partial'))).toBeInTheDocument();
+    const value = (label: string) =>
+      screen.getByText(label).closest('div, li, tr, dl')?.textContent ?? '';
+    expect(value(t('web.mrz_adopt_adopted'))).toContain(formatNumber(1));
+    expect(value(t('web.mrz_adopt_unresolved'))).toContain(formatNumber(1));
+    expect(value(t('web.mrz_adopt_provider_writes'))).toContain(formatNumber(0));
+    // Each refusal in Persian, its code kept beside it.
+    expect(screen.getByText('AMBIGUOUS_OWNERSHIP')).toBeInTheDocument();
+    expect(screen.getByText('INVENTORY_INCOMPLETE')).toBeInTheDocument();
+    expect(screen.getAllByText(t('web.lsr_outcome_ambiguous_ownership')).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: t('web.mrz_adopt_services_link') })).toHaveAttribute(
+      'href',
+      '/legacy-services',
+    );
+    // No confirmation, no import run stages: a lane is never an import.
+    expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
+    expect(screen.queryByText(t('web.mrz_run_frozen'))).toBeNull();
+    const steps = Array.from(document.querySelectorAll('.lmg-steps li'));
+    expect(steps.map((li) => li.className)).toEqual(['done', 'done', 'done', 'done']);
+  });
+
+  it('marks a lane under way as the run step, and a finished one done', () => {
+    const marks = (overrides: Record<string, unknown>) => mirzaStepMarks(view(overrides) as never);
+    expect(marks({ status: 'ADOPT_REQUESTED' })).toEqual(['done', 'done', 'done', 'current']);
+    expect(marks({ status: 'ADOPT_RUNNING' })).toEqual(['done', 'done', 'done', 'current']);
+    expect(marks({ status: 'ADOPT_DONE' })).toEqual(['done', 'done', 'done', 'done']);
   });
 });

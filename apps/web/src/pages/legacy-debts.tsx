@@ -15,7 +15,7 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { useLinkHandler } from '../router';
+import { useLinkHandler, useRoute } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
@@ -83,6 +83,27 @@ export function legacyDebtFault(error: unknown): string {
 
 type StateFilter = LegacyWalletDebtState | 'ALL';
 
+/**
+ * The filters a link may preset (`/legacy-debts?state=ALL&legacyUserId=…`, from Customer 360
+ * or the migration report). Read once, when the page opens; an unknown state keeps the
+ * default, PENDING_REVIEW.
+ */
+export function legacyDebtFiltersOf(query: URLSearchParams): {
+  readonly state: StateFilter;
+  readonly legacyUserId: string;
+} {
+  const state = query.get('state');
+  return {
+    state:
+      state === 'ALL'
+        ? 'ALL'
+        : state !== null && (LEGACY_WALLET_DEBT_STATES as readonly string[]).includes(state)
+          ? (state as LegacyWalletDebtState)
+          : 'PENDING_REVIEW',
+    legacyUserId: query.get('legacyUserId') ?? '',
+  };
+}
+
 function Owed({ row }: { row: Pick<LegacyWalletDebtView, 'amountMinor' | 'currency'> }) {
   return <Money value={{ amountMinor: row.amountMinor, currency: row.currency }} />;
 }
@@ -96,8 +117,10 @@ export function LegacyDebtsPage({
   /** `legacy.debts.decide`. */
   mayDecide: boolean;
 }) {
-  const [stateFilter, setStateFilter] = useState<StateFilter>('PENDING_REVIEW');
-  const [legacyUserId, setLegacyUserId] = useState('');
+  const route = useRoute();
+  const [initial] = useState(() => legacyDebtFiltersOf(route.query));
+  const [stateFilter, setStateFilter] = useState<StateFilter>(initial.state);
+  const [legacyUserId, setLegacyUserId] = useState(initial.legacyUserId);
   const [trail, setTrail] = useState<readonly string[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const after = trail[trail.length - 1];

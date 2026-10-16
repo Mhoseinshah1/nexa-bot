@@ -2,6 +2,7 @@ import {
   asId,
   LEGACY_MIGRATION_APPROVAL_TTL_MS,
   systemJobActor,
+  validInventoryHold,
   type Clock,
   type CorrelationId,
   type LegacyMigrationBlocker,
@@ -120,6 +121,8 @@ class LeaseLost extends Error {
  *   RECONCILE       MigrationRunner.reconcile
  *   REPORT          MigrationRunner.finalReport (v2)
  *   BACKUP          BackupPort.runAfterImport (the standard backup; quiesce honoured)
+ * ADOPT_REQUESTED → ADOPT_RUNNING → ADOPT_DONE | FAILED            (the "adopt approved" lane)
+ *   ADOPT           MigrationRunner.adoptApproved, bound to the finished import of the source
  * ```
  *
  * Every write is a lease-guarded conditional UPDATE; one that matches nothing means the row is
@@ -375,6 +378,12 @@ export class LegacyMigrationExecutor {
           // as this import's own writer: the only writer its APPLYING freeze lets through.
           await this.deps.asImportWriter(row.id, () => this.apply(row, abort.signal));
           break;
+        case 'ADOPT_REQUESTED':
+        case 'ADOPT_RUNNING':
+          // NOT as an import writer: the lane holds no freeze and passes none. While any
+          // import is APPLYING (or a restore quiesces), its writes are refused like any other.
+          await this.adopt(row, abort.signal);
+          break;
         default:
           // Not work (a claim predicate would have to be wrong to get here): give it back.
           await this.release(row.id);
@@ -541,6 +550,98 @@ export class LegacyMigrationExecutor {
     } catch (error) {
       if (error instanceof LegacyMigrationRetry || error instanceof LegacyMigrationBlocked) {
         await this.uncount(row, { dryRunAttempts: row.progress.dryRunAttempts - 1 });
+      }
+      throw error;
+    }
+  }
+
+  // --- ADOPT APPROVED (`service-review.md` §4b) ------------------------------------------
+
+  /**
+   * The "adopt approved" lane: a re-upload of a package whose import of this tenant FINISHED,
+   * verified, executes the operators' ADOPT approvals of that source through the importer's
+   * `adoptApproved` (every guard of §4b is the importer's). Here, before the package is
+   * opened for it:
+   *
+   * - bounded like the dry run (`LEGACY_MIGRATION_MAX_STEP_ATTEMPTS`), every start counted;
+   * - a production-like target refuses a synthetic package (`precheck('ADOPT')`);
+   * - a confirmed restore, or ANY import APPLYING (the installation-wide write freeze): the
+   *   lane WAITS, with the blocker shown — it never runs as an import's writer, so its writes
+   *   would be refused anyway;
+   * - the package is the uploaded one, and a finished import of its source exists: the lane is
+   *   bound to THAT import's apply run and to the inventory hold its approved dry run recorded.
+   *
+   * Another run RUNNING or another importer process is transient (`LegacyMigrationRetry`, not
+   * counted); a refusal is FAILED with its code (`ADOPT_REFUSED`, …), nothing adopted; an
+   * interruption runs again and the importer resumes its own lane run.
+   */
+  private async adopt(claimed: LegacyNxpkgImportRow, signal: AbortSignal): Promise<void> {
+    let row = claimed;
+    if (row.progress.adoptAttempts >= LEGACY_MIGRATION_MAX_STEP_ATTEMPTS) {
+      this.deps.logger.error(
+        { importId: row.id, attempts: row.progress.adoptAttempts },
+        'an adopt-approved lane was started too many times and is failed',
+      );
+      await this.fail(row, ['ADOPT_REQUESTED', 'ADOPT_RUNNING'], 'FAILED', 'IMPORT_FAILED');
+      return;
+    }
+    row = await this.bookmark(row, {
+      blocker: null,
+      adoptAttempts: row.progress.adoptAttempts + 1,
+    });
+    try {
+      await this.withStep(row, signal, async (context) => {
+        try {
+          await this.deps.runner.precheck(context, 'ADOPT');
+          if (await this.deps.recoveryActive()) throw new LegacyMigrationBlocked('RECOVERY_ACTIVE');
+          if ((await this.deps.repository.applyingImportId()) !== null) {
+            throw new LegacyMigrationBlocked('ANOTHER_IMPORT_APPLYING');
+          }
+          await this.assertPackageUnchanged(row);
+          const source = row.packageSourceFingerprint;
+          const imported =
+            source === null
+              ? null
+              : await this.deps.repository.latestCompletedOf(row.tenantId, source);
+          if (imported === null || imported.applyLegacyRunId === null) {
+            throw new LegacyMigrationStepFailure(
+              'ADOPT_REFUSED',
+              'No finished import of this package’s source exists on this tenant.',
+            );
+          }
+          if (row.status === 'ADOPT_REQUESTED') {
+            row = await this.advance(row, ['ADOPT_REQUESTED'], 'ADOPT_RUNNING', {
+              progress: { ...row.progress, phase: 'ADOPT', refusalCounts: [], blocker: null },
+            });
+          }
+          const hold = imported.dryRunReport?.inventoryHold;
+          const report = await this.deps.runner.adoptApproved(context, {
+            importLegacyRunId: imported.applyLegacyRunId,
+            inventoryHold: validInventoryHold(hold)
+              ? { digest: hold.digest, invoices: hold.invoices }
+              : null,
+          });
+          await this.advance(
+            row,
+            ['ADOPT_RUNNING'],
+            'ADOPT_DONE',
+            { adoptReport: report, adoptLegacyRunId: report.legacyRunId },
+            { release: true },
+          );
+        } catch (error) {
+          if (!(error instanceof LegacyMigrationStepFailure)) throw error;
+          await this.fail(
+            row,
+            ['ADOPT_REQUESTED', 'ADOPT_RUNNING'],
+            'FAILED',
+            error.code,
+            error.counts,
+          );
+        }
+      });
+    } catch (error) {
+      if (error instanceof LegacyMigrationRetry || error instanceof LegacyMigrationBlocked) {
+        await this.uncount(row, { adoptAttempts: row.progress.adoptAttempts - 1 });
       }
       throw error;
     }
@@ -965,7 +1066,10 @@ export class LegacyMigrationExecutor {
   private async uncount(
     row: LegacyNxpkgImportRow,
     progress: Partial<
-      Pick<LegacyMigrationProgress, 'verifyAttempts' | 'dryRunAttempts' | 'applyAttempts'>
+      Pick<
+        LegacyMigrationProgress,
+        'verifyAttempts' | 'dryRunAttempts' | 'applyAttempts' | 'adoptAttempts'
+      >
     >,
   ): Promise<void> {
     const current = await this.deps.repository.byIdUnscoped(row.id);

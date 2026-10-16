@@ -1,12 +1,17 @@
 import {
   COMMERCE_ERROR_CODES,
+  LEGACY_CUSTOMER_INVOICES_PAGE_DEFAULT,
   LEGACY_HISTORY_AUDIT_ACTIONS,
+  LEGACY_HISTORY_ERROR_CODES,
   LEGACY_HISTORY_PAGE_DEFAULT,
   LEGACY_HISTORY_RECORD_TYPES,
+  LEGACY_INVOICE_ARCHIVE_AUDIT_ACTIONS,
   errors,
   userIdSchema,
   type ActorContext,
   type AuditWriter,
+  type LegacyCustomerAdoptionsQuery,
+  type LegacyCustomerInvoicesQuery,
   type LegacyHistoryListQuery,
   type LegacyHistoryRecordType,
   type PermissionKey,
@@ -14,7 +19,11 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
-import type { LegacyHistoryRecordRow, LegacyHistoryRepository } from './ports.js';
+import type {
+  LegacyCustomerInvoiceRow,
+  LegacyHistoryRecordRow,
+  LegacyHistoryRepository,
+} from './ports.js';
 import { summaryOf } from './record-map.js';
 import { redactHistoryPayload } from './redaction.js';
 
@@ -34,6 +43,7 @@ export const LEGACY_HISTORY_PII_PERMISSION = 'legacy.invoices.pii.view' satisfie
 const CUSTOMER_VIEW = 'users.view' satisfies PermissionKey;
 const INVOICES_VIEW = 'legacy.invoices.view' satisfies PermissionKey;
 const DEBTS_VIEW = 'legacy.debts.view' satisfies PermissionKey;
+const SERVICES_VIEW = 'legacy.services.view' satisfies PermissionKey;
 
 /** The customer as this read needs it. */
 export interface LegacyHistoryCustomerReader {
@@ -77,16 +87,115 @@ export interface LegacyHistoryReadPage {
 }
 
 const ROW_ENTITY = 'LegacyHistoryRecord';
+const ARCHIVE_ENTITY = 'LegacyInvoiceArchive';
+
+/** A customer's legacy invoices page (`invoicesForCustomer`). */
+export interface LegacyCustomerInvoicesPage {
+  readonly rows: readonly LegacyCustomerInvoiceRow[];
+  readonly nextCursor: string | null;
+  readonly piiRedacted: boolean;
+  readonly candidatesVisible: boolean;
+}
+
+/** The keyset cursor: the last invoice key of the page, opaque to the client. */
+export function encodeCustomerInvoiceCursor(invoiceKey: string): string {
+  return `k${Buffer.from(invoiceKey, 'utf8').toString('base64url')}`;
+}
+
+export function decodeCustomerInvoiceCursor(cursor: string): string {
+  const key = Buffer.from(cursor.slice(1), 'base64url').toString('utf8');
+  if (!cursor.startsWith('k') || encodeCustomerInvoiceCursor(key) !== cursor) {
+    throw errors.validation(LEGACY_HISTORY_ERROR_CODES.REQUEST_INVALID, 'Bad cursor.');
+  }
+  return key;
+}
 
 export class LegacyHistoryReadService {
   constructor(private readonly deps: LegacyHistoryReadDeps) {}
 
-  async forCustomer(
+  /**
+   * The customer's Mirza invoices — the latest visible archive revision of each, beside the
+   * importer's ONE outcome for it as a service. History only: nothing here is an order. Charged
+   * on `users.view`, the customer existing, then `legacy.invoices.view`; the candidates come
+   * only with `legacy.services.view`, the legacy username only with `legacy.invoices.pii.view`
+   * (and such a page is audited as the archive audits its own unredacted list).
+   */
+  async invoicesForCustomer(
     scope: TenantContext,
     actor: ActorContext,
     id: string,
-    query: LegacyHistoryListQuery,
-  ): Promise<LegacyHistoryReadPage> {
+    query: LegacyCustomerInvoicesQuery,
+  ): Promise<LegacyCustomerInvoicesPage> {
+    const customer = await this.customerOf(scope, actor, id);
+    await this.deps.guard.check(scope, actor, INVOICES_VIEW);
+    const held = await this.deps.guard.permissionsOf(scope, actor);
+    const pii = held.has(LEGACY_HISTORY_PII_PERMISSION);
+    const candidatesVisible = held.has(SERVICES_VIEW);
+    const limit = query.limit ?? LEGACY_CUSTOMER_INVOICES_PAGE_DEFAULT;
+    const after = query.after === undefined ? null : decodeCustomerInvoiceCursor(query.after);
+    const fetched = await this.deps.repository.invoicesForCustomer(
+      scope,
+      customer.telegramUserId,
+      after,
+      limit + 1,
+    );
+    const page = fetched.slice(0, limit);
+    const last = page[page.length - 1];
+    if (pii && page.length > 0) {
+      await this.deps.audit.record(scope, actor, {
+        action: LEGACY_INVOICE_ARCHIVE_AUDIT_ACTIONS.piiView,
+        entityType: ARCHIVE_ENTITY,
+        entityId: null,
+        before: null,
+        // Ids and a count only: never a Telegram id or a username.
+        after: {
+          list: true,
+          customerId: customer.id,
+          count: page.length,
+          rowIds: page.map((row) => row.archiveId),
+        },
+        result: 'SUCCESS',
+      });
+    }
+    return {
+      rows: page.map((row) => ({
+        ...row,
+        username: pii ? row.username : null,
+        candidate: candidatesVisible ? row.candidate : null,
+      })),
+      nextCursor:
+        fetched.length > limit && last !== undefined
+          ? encodeCustomerInvoiceCursor(last.invoiceKey)
+          : null,
+      piiRedacted: !pii,
+      candidatesVisible,
+    };
+  }
+
+  /**
+   * Which of these services of the customer were adopted from a Mirza invoice. Charged on
+   * `users.view`, the customer existing, then `legacy.services.view`. A service of another
+   * customer (or tenant) is simply not in the answer.
+   */
+  async adoptionsForCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    query: LegacyCustomerAdoptionsQuery,
+  ): Promise<readonly { readonly serviceId: string; readonly invoiceKey: string }[]> {
+    const customer = await this.customerOf(scope, actor, id);
+    await this.deps.guard.check(scope, actor, SERVICES_VIEW);
+    return this.deps.repository.adoptionsForCustomer(scope, customer.id, [
+      ...new Set(query.serviceIds),
+    ]);
+  }
+
+  /** `users.view`, then the customer in this tenant (a 404 otherwise). */
+  private async customerOf(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+  ): Promise<{ readonly id: string; readonly telegramUserId: string }> {
     await this.deps.guard.check(scope, actor, CUSTOMER_VIEW);
     const parsed = userIdSchema.safeParse(id);
     if (!parsed.success) {
@@ -99,6 +208,16 @@ export class LegacyHistoryReadService {
     if (customer === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
+    return customer;
+  }
+
+  async forCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    query: LegacyHistoryListQuery,
+  ): Promise<LegacyHistoryReadPage> {
+    const customer = await this.customerOf(scope, actor, id);
     await this.deps.guard.check(scope, actor, LEGACY_HISTORY_VIEW_PERMISSION);
     const held = await this.deps.guard.permissionsOf(scope, actor);
     const pii = held.has(LEGACY_HISTORY_PII_PERMISSION);

@@ -981,6 +981,27 @@ describe('the wallet card', () => {
     expect(screen.getByText(/محاسبه می‌شود/u)).toBeTruthy();
   });
 
+  it('names the Mirza opening balance in words, never as a raw code', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }, [
+        walletEntry({ reason: 'MIGRATION_OPENING_BALANCE', note: null }),
+      ]),
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
+    expect(await screen.findByText('موجودی منتقل‌شده از میرزا')).toBeTruthy();
+    expect(screen.queryByText('MIGRATION_OPENING_BALANCE')).toBeNull();
+  });
+
   it('shows the ledger with its direction, and says it cannot be edited', async () => {
     stubApi([
       { url: `/users/${ROW_ID}`, body: { customer: customer() } },
@@ -1001,7 +1022,9 @@ describe('the wallet card', () => {
 
     await screen.findByText('تاریخچه تراکنش‌ها');
     expect(await screen.findByText('برداشت')).toBeTruthy();
-    expect(screen.getByText('PURCHASE')).toBeTruthy();
+    // The reason in words; the code stays on the cell's title for whoever greps the ledger.
+    expect(screen.getByText('خرید')).toBeTruthy();
+    expect(screen.getByTitle('PURCHASE')).toBeTruthy();
     // A flow, not a person: `actorAdminId` is null and the page says so rather
     // than leaving the column blank.
     expect(screen.getByText('سامانه')).toBeTruthy();
@@ -1375,6 +1398,62 @@ describe("a customer's orders and services", () => {
    * as unprovisioned — for which the obvious remedy is to provision it again,
    * on somebody's panel, a second time.
    */
+  it('marks a service adopted from Mirza, asking the server about exactly the ids shown', async () => {
+    const other = '019240ab-cdef-7012-8345-6789abcdef02';
+    const api = withCards([
+      { url: '/orders', body: { orders: [], nextCursor: null } },
+      {
+        url: '/services',
+        body: {
+          services: [service(), service({ id: other, providerUsername: 'nx-0000aa' })],
+          nextCursor: null,
+        },
+      },
+      {
+        url: `/users/${ROW_ID}/legacy-adopted-services`,
+        body: { adoptions: [{ serviceId: SERVICE_ID, invoiceKey: 'inv-1' }] },
+      },
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        mayViewLegacyServices
+        denied={false}
+      />,
+    );
+    await screen.findByText('nx-7f3a91');
+    const adopted = screen.getByText('nx-7f3a91').closest('tr') as HTMLElement;
+    expect(await within(adopted).findByText('منتقل‌شده از میرزا')).toBeTruthy();
+    const plain = screen.getByText('nx-0000aa').closest('tr') as HTMLElement;
+    expect(within(plain).queryByText('منتقل‌شده از میرزا')).toBeNull();
+    const asked = api.calls.find((call) => call.url.includes('/legacy-adopted-services'));
+    expect(decodeURIComponent(asked?.url ?? '')).toContain(`serviceIds=${SERVICE_ID},${other}`);
+  });
+
+  it('asks nothing about Mirza without legacy.services.view', async () => {
+    const api = withCards([
+      { url: '/orders', body: { orders: [], nextCursor: null } },
+      { url: '/services', body: { services: [service()], nextCursor: null } },
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
+    );
+    await screen.findByText('nx-7f3a91');
+    expect(api.calls.some((call) => call.url.includes('legacy'))).toBe(false);
+    expect(screen.queryByText('منتقل‌شده از میرزا')).toBeNull();
+  });
+
   it('draws a delivered failure as ACTIVE and FAILED, never as one merged state', async () => {
     withCards([
       { url: '/orders', body: { orders: [], nextCursor: null } },

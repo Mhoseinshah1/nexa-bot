@@ -378,6 +378,18 @@ Shape (`LEGACY_USERS_WALLETS_SECTION_VERSION` = `nexa-legacy-users-wallets/v1`):
       "absentOpenings": { "count": 0, "sumMinor": "0" },
       "absentDebts": { "count": 0, "sumMinor": "0" },
     },
+    // U9/U10: every source row's balance in exactly one bucket; signed = { rows, positive:
+    // { rows, sumMinor }, negative: { rows, sumMinor (magnitudes) } }
+    "sourceMoney": {
+      "sourceRows": 0,
+      "readable": {}, // signed
+      "unreadable": { "rows": 0, "byOutcome": {} }, // counted, never summed
+      "credited": { "rows": 0, "sumMinor": "0" },
+      "debtRecorded": { "rows": 0, "sumMinor": "0" },
+      "zero": { "rows": 0 },
+      "held": { "rows": 0, "positive": {}, "negative": {}, "byOutcome": {} }, // signed, per outcome
+      "unaccounted": {}, // signed; never expected
+    },
   },
   "sourceChanged": {
     "users": 0,
@@ -405,6 +417,25 @@ The checks:
   fails it.
 - **U8** no debt recorded from a synthetic source, unless the snapshot reconciled is
   synthetic (PR3's review lesson on recorded state).
+- **U9** every source row's balance is in exactly ONE money bucket (`wallet.sourceMoney`):
+  `credited` (an imported user holding exactly one opening of it), `debtRecorded`, `zero`,
+  `held` (readable, not applied from this snapshot, keyed by the outcome that says why:
+  manual review, invalid identity, duplicated id, closed review, changed source, not imported
+  yet), `unreadable` (counted by ROWS, never summed — the closed v1 `legacyTotalMinor` reads it
+  as 0; this is where that is said) — and none is `unaccounted` (an imported user holding
+  anything else).
+- **U10** source money is accounted EXACTLY, by sign, never netted: Σ readable positive
+  balances = Σ credited + Σ held positives, and Σ |readable negative| = Σ debts recorded + Σ
+  held negatives. Money on a review row is in `held.byOutcome`, per reason, so it is never
+  invisible to pass/fail.
+  **U10 is not independent of U9.** A row is `credited` only when its opening EQUALS its source
+  balance (and `debtRecorded` only when the debt equals its magnitude), so with no row
+  `unaccounted` the sums agree by construction: U10 can fail only when U9 already has. It is
+  the same accounting stated in money, for the operator, not a second check. The independent
+  money checks are U2–U7 (the ledger and debt tables against the source) and the dry run's
+  per-customer comparison with the converter's records.
+
+`WALLETS_RECONCILED` in the v2 report requires U2–U10.
 
 **A newer snapshot (owner constraint 4).** A user whose row changed since the snapshot NEXA
 imported from is `SOURCE_CHANGED`: the customers phase skips it, so no second opening, no

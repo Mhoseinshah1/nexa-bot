@@ -55,7 +55,11 @@ describe('legacy import metadata', () => {
   const run = <T>(scope: TenantContext, fn: (tx: unknown) => Promise<T>): Promise<T> =>
     ctx.container.uow.run(scope, fn);
 
-  const start = (scope: TenantContext, mode: 'APPLY' | 'DRY_RUN' = 'APPLY', fp = FP1) =>
+  const start = (
+    scope: TenantContext,
+    mode: 'APPLY' | 'DRY_RUN' | 'ADOPT_APPROVED' = 'APPLY',
+    fp = FP1,
+  ) =>
     run(scope, (tx) =>
       repo.startOrResume(
         scope,
@@ -316,6 +320,46 @@ describe('legacy import metadata', () => {
         ),
       ),
     ).toBe(LEGACY_IMPORT_ERROR_CODES.RUN_NOT_WRITABLE);
+  });
+
+  it('an ADOPT_APPROVED run (the §4b lane) resumes like an APPLY run, writes invoice rows only — never a customer row — and never beside another run', async () => {
+    const lane = await start(A, 'ADOPT_APPROVED');
+    expect(lane.kind).toBe('STARTED');
+    // Its own interrupted run is resumed; any other start is refused while it runs.
+    expect((await start(A, 'ADOPT_APPROVED')).kind).toBe('RESUMED');
+    expect(await codeOf(start(A, 'APPLY'))).toBe(LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT);
+    expect(await codeOf(start(A, 'ADOPT_APPROVED', FP2))).toBe(
+      LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
+    );
+    const write = (legacyTable: 'user' | 'invoice', legacyId: string) =>
+      run(A, (tx) =>
+        repo.recordDecision(
+          A,
+          {
+            runId: lane.run.id,
+            legacyTable,
+            legacyId,
+            checksum: SUM1,
+            decision:
+              legacyTable === 'user'
+                ? customerDecision(randomUUID())
+                : ({
+                    status: 'IMPORTED',
+                    entityType: 'SERVICE',
+                    entityId: randomUUID(),
+                    reasonCode: null,
+                  } as const),
+            now: at(1),
+          },
+          tx,
+        ),
+      );
+    expect((await write('invoice', 'a0000001')).kind).toBe('INSERTED');
+    expect(await codeOf(write('user', '1000001'))).toBe(LEGACY_IMPORT_ERROR_CODES.RUN_NOT_WRITABLE);
+    const done = await run(A, (tx) =>
+      repo.finish(A, lane.run.id, { status: 'COMPLETED' }, at(2), tx),
+    );
+    expect(done).toMatchObject({ status: 'COMPLETED', rowsImported: 1 });
   });
 
   it('a finish waits for an in-flight map write and counts it', async () => {
