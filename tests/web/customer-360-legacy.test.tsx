@@ -70,3 +70,31 @@ describe('the Mirza history card', () => {
     );
   });
 });
+
+describe('ticket messages on the Mirza history card', () => {
+  it('nests a message under its ticket; one whose ticket is off the page keeps its section', async () => {
+    const ticket = item(3, 'ticket', { status: 'open' });
+    const nested = { ...item(4, 'ticket_message', { seq: 1 }), ticketRecordId: ticket.id };
+    const orphan = { ...item(5, 'ticket_message', { seq: 7 }), ticketRecordId: 'elsewhere' };
+    stubApi([
+      {
+        url: `/users/${ID}/legacy-history`,
+        body: page({
+          items: [ticket, nested, orphan],
+          matching: 3,
+          byType: [
+            { recordType: 'ticket', count: 1 },
+            { recordType: 'ticket_message', count: 2 },
+          ],
+        }),
+      },
+    ]);
+    renderPage(<CustomerLegacyHistoryCard customerId={ID} mayView />);
+    await screen.findByRole('heading', { level: 4, name: 'تیکت‌ها' });
+    // The ticket's section nests the first message; the orphan has a section of its own.
+    expect(screen.getAllByRole('heading', { level: 4 })).toHaveLength(2);
+    const nestedList = screen.getByRole('list', { name: 'پیام‌های تیکت' });
+    expect(nestedList.textContent).toContain('1');
+    expect(nestedList.textContent).not.toContain('7');
+  });
+});
