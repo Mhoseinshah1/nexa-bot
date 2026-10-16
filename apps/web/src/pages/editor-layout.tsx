@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { t } from '../i18n/web.fa';
+import { Num } from '../ui/kit';
 
 /**
  * Editor layout pieces shared by the commerce pages (products, discounts,
@@ -161,4 +162,24 @@ export function useNarrowScreen(maxWidth = 980): boolean {
     return () => list.removeEventListener('change', onChange);
   }, [query]);
   return narrow;
+}
+
+/** One figure of the page's summary line: a count and what it counts. */
+export function SummaryPill({
+  value,
+  label,
+  tone,
+}: {
+  value: number;
+  label: string;
+  tone?: 'ok' | 'warn' | 'info';
+}) {
+  return (
+    <span className={tone === undefined ? 'bx-pill' : `bx-pill ${tone}`}>
+      <b>
+        <Num value={value} />
+      </b>
+      {label}
+    </span>
+  );
 }

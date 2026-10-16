@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   QR_BACKGROUND_MAX_SIDE,
@@ -30,6 +30,7 @@ import {
   uploadTenantMedia,
 } from '../api/client';
 import { formatTimestamp, splitBytes } from '../format';
+import { FilePicker } from '../ui/file-picker';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
@@ -202,6 +203,8 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
   const current = media.data?.media ?? null;
 
   const [picked, setPicked] = useState<Picked>({ kind: 'NONE' });
+  /** The file the picker shows: what was chosen, read or not, valid or not. */
+  const [chosen, setChosen] = useState<File | null>(null);
   const [draft, setDraft] = useState<{
     readonly fields: Draft;
     readonly basis: number | null;
@@ -278,6 +281,7 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
     onSuccess: async () => {
       uploadKey.settle();
       setPicked({ kind: 'NONE' });
+      setChosen(null);
       notify({ tone: 'ok', message: t('web.qrt_uploaded') });
       await refresh();
     },
@@ -343,8 +347,9 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
       basis: before === null ? (setting?.version ?? null) : before.basis,
     }));
 
-  const onPick = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const onPick = (files: readonly File[]) => {
+    const file = files[0];
+    setChosen(file ?? null);
     if (file === undefined) {
       setPicked({ kind: 'NONE' });
       return;
@@ -408,11 +413,13 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
                 htmlFor="qrt-file"
                 {...(picked.kind === 'INVALID' ? { error: picked.message } : {})}
               >
-                <input
+                <FilePicker
                   id="qrt-file"
-                  type="file"
+                  kind="image"
                   accept="image/png"
-                  onChange={onPick}
+                  onFiles={onPick}
+                  selected={chosen}
+                  onClear={() => onPick([])}
                   disabled={busy}
                 />
               </Field>

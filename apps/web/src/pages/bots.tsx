@@ -24,7 +24,6 @@ import { messageFor } from './settings';
 import {
   Badge,
   Banner,
-  Card,
   ConfirmDialog,
   Copyable,
   Drawer,
@@ -38,6 +37,7 @@ import {
   Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { SummaryPill } from './editor-layout';
 
 /**
  * Bots — this installation's Telegram bot instances (WP13,
@@ -232,26 +232,6 @@ export function BotsPage({
         <strong>{t('web.bots_add_title')}</strong> — {t('web.bots_add_body')}
       </p>
     </>
-  );
-}
-
-/** One figure of the page's summary line: a count and what it counts. */
-export function SummaryPill({
-  value,
-  label,
-  tone,
-}: {
-  value: number;
-  label: string;
-  tone?: 'ok' | 'warn' | 'info';
-}) {
-  return (
-    <span className={tone === undefined ? 'bx-pill' : `bx-pill ${tone}`}>
-      <b>
-        <Num value={value} />
-      </b>
-      {label}
-    </span>
   );
 }
 

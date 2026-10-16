@@ -178,3 +178,57 @@
   justify-content: flex-end;
   margin-bottom: 8px;
 }
+
+/* --- Appearance: compact slot rows beside the test card; one slot's sheet ---------------- */
+
+.bx-side-split {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+}
+.bx-side-split > :last-child {
+  position: sticky;
+  top: 16px;
+}
+.bx-rowlink {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: start;
+}
+.bx-rowlink:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.bx-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.bx-prev {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--radius-card);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+.bx-glyph {
+  font-size: 34px;
+  line-height: 1;
+}
+@media (max-width: 1100px) {
+  .bx-side-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bx-side-split > :last-child {
+    position: static;
+  }
+}

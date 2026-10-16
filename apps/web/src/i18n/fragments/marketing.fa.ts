@@ -11,6 +11,8 @@ export const WEB_FA_MARKETING = {
   // bots — the compact card per bot
   'web.bx_bots_count': 'ربات',
   'web.bx_bots_attention': 'نیازمند توجه',
+  // appearance — slots as compact rows, each opening a sheet
+  'web.bx_appearance_stored': 'شناسهٔ ذخیره‌شده',
 } as const;
 
 /**
