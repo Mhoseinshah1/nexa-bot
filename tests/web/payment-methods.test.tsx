@@ -334,6 +334,18 @@ describe('a provider’s own view', () => {
       ),
     ).toBeInTheDocument();
     expect(name).toBeInTheDocument();
+    // W2: in a side drawer over the page, which Esc closes like «انصراف».
+    const drawer = screen.getByRole('dialog');
+    expect(drawer).toContainElement(name);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    // The API key drawer, likewise; one drawer at a time.
+    fireEvent.click(screen.getByRole('button', { name: t('web.payment_gateway_credential_edit') }));
+    expect(
+      within(screen.getByRole('dialog')).getByLabelText(t('web.payment_gateway_credential_input')),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(t('web.payment_gateway_name'))).toBeNull();
   });
 
   it('keeps the range filter on the same provider', async () => {

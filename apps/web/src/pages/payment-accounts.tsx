@@ -32,6 +32,7 @@ import {
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { Drawer } from '../ui/overlays';
 
 /**
  * Payment accounts — where an out-of-band transfer is told to go.
@@ -402,12 +403,14 @@ export function CardAccountsSection({
         is exactly the installation whose card-to-card button is not drawn to customers —
         and an edit-only role, whose list read is refused, can still add one.
       */}
-      {formOpen && (
-        <Card
-          title={t(editing === null ? 'web.payment_account_new' : 'web.payment_account_editing')}
-          hint={t('web.payment_account_form_hint')}
-          className="accounts-form"
-        >
+      {/* W2: a side drawer, never a card further down; ×, Esc and the backdrop cancel. */}
+      <Drawer
+        open={formOpen}
+        onClose={reset}
+        title={t(editing === null ? 'web.payment_account_new' : 'web.payment_account_editing')}
+      >
+        <div className="accounts-form">
+          <p className="muted small">{t('web.payment_account_form_hint')}</p>
           <div className="form-grid">
             <Field label={t('web.payment_account_label')} htmlFor="pa-label">
               <input
@@ -522,8 +525,8 @@ export function CardAccountsSection({
             </p>
           )}
           {save.error != null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
-        </Card>
-      )}
+        </div>
+      </Drawer>
     </>
   );
 }
