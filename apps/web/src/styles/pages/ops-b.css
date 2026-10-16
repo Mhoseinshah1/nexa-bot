@@ -987,7 +987,7 @@ form.set-row > * + * {
   background: var(--bg-1);
 }
 @media (max-width: 980px) {
-  }
+}
 
 /* --- Recovery (ADR-0025, ADR-0028) ------------------------------------------------ */
 
