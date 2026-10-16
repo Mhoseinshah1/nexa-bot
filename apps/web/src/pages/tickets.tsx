@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type FormEvent,
-  type ReactNode,
-} from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
@@ -86,6 +79,7 @@ import {
 import { ListFreshness, listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { Icon } from '../ui/icons';
 import { DateField } from '../ui/date-field';
+import { FilePicker } from '../ui/file-picker';
 import { ListFilterBar } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type SavedViewsRegistration } from '../ui/saved-views';
@@ -1805,18 +1799,21 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
           htmlFor="ticket-reply-file"
           {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
         >
-          <input
+          <FilePicker
             key={fileInput}
             id="ticket-reply-file"
-            type="file"
+            kind="any"
             accept={[
               ...TICKET_REPLY_FILE_MIME_TYPES,
               ...TICKET_REPLY_FILE_TYPES.flatMap((type) =>
                 type.extensions.map((extension) => `.${extension}`),
               ),
             ].join(',')}
+            extensions={TICKET_REPLY_FILE_TYPES.flatMap((type) =>
+              type.extensions.map((extension) => `.${extension}`),
+            )}
             disabled={reply.isPending}
-            onChange={(event: ChangeEvent<HTMLInputElement>) => onPick(event.target.files?.[0])}
+            onFiles={(files) => onPick(files[0])}
           />
         </Field>
         <div className="form-actions ticket-reply-actions">

@@ -67,6 +67,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { ActionPanel } from '../ui/action-panel';
+import { DateField } from '../ui/date-field';
 import { Modal } from '../ui/overlays';
 
 /**
@@ -1080,20 +1081,20 @@ function IncidentFormModal({
             hint={t('web.inc_scheduled_start_hint')}
             htmlFor="inc-start"
           >
-            <Input
+            <DateField
               id="inc-start"
-              type="datetime-local"
+              mode="datetime"
               value={form.scheduledStartAt}
-              onChange={(event) => set('scheduledStartAt', event.target.value)}
+              onChange={(value) => set('scheduledStartAt', value)}
             />
           </Field>
         )}
         <Field label={t('web.inc_scheduled_end')} htmlFor="inc-end">
-          <Input
+          <DateField
             id="inc-end"
-            type="datetime-local"
+            mode="datetime"
             value={form.scheduledEndAt}
-            onChange={(event) => set('scheduledEndAt', event.target.value)}
+            onChange={(value) => set('scheduledEndAt', value)}
           />
         </Field>
       </div>
