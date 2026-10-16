@@ -415,3 +415,290 @@
     flex: 1;
   }
 }
+
+/* ============================================================ W1.3 filter bar */
+.list-filter-bar {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+/* The search's buttons and the saved-filters menu share the second column, so the menu is
+   exactly as wide as «جست‌وجو» … «پاک کردن»: the menu contributes 170px to the column's size
+   (its floor) and then stretches to whatever the buttons need. */
+.list-filter-bar.with-saved {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.lfb-search {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+}
+.lfb-search > * {
+  grid-column: 1 / -1;
+}
+.ca-search.slim {
+  flex-wrap: nowrap;
+  align-items: center;
+  padding: 0;
+  border: 0;
+}
+.ca-search.slim .ca-search-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ca-search.slim .field {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+}
+.ca-search.slim .field > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.ca-search.slim .field input {
+  width: 100%;
+}
+.ca-search.slim .ca-search-actions {
+  padding-top: 0;
+  align-self: center;
+}
+.ca-search.slim [data-testid='list-search-kind'] {
+  white-space: nowrap;
+}
+.list-filter-bar.with-saved .lfb-search > .ca-search.slim {
+  display: contents;
+}
+.list-filter-bar.with-saved .lfb-search > .ca-search.slim > .ca-search-main {
+  grid-column: 1;
+}
+.list-filter-bar.with-saved .lfb-search > .ca-search.slim > .ca-search-actions {
+  grid-column: 2;
+  justify-content: stretch;
+  margin: 0;
+}
+.list-filter-bar.with-saved .lfb-search > .ca-search.slim > .ca-search-actions > .btn {
+  flex: 1;
+}
+.lfb-line {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.list-filter-bar.with-saved .lfb-line {
+  grid-column: 1;
+}
+.lfb-saved {
+  grid-column: 2;
+  position: relative;
+  width: 170px;
+  min-width: 100%;
+}
+.lfb-open {
+  gap: 6px;
+  border-radius: var(--radius-pill);
+  padding-inline: 14px;
+}
+.lfb-open.on {
+  border-color: var(--accent);
+}
+.list-filter-bar.open .lfb-open {
+  background: var(--bg-3);
+}
+.lfb-n {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding-inline: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-2xs);
+}
+.lfb-active {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.lfb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding-inline: 12px 4px;
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  font-size: var(--fs-ui);
+  white-space: nowrap;
+}
+.lfb-chip .muted {
+  font-size: var(--fs-xs);
+}
+.lfb-x {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.lfb-x:hover {
+  background: var(--bg-4);
+  color: var(--danger);
+}
+.lfb-clear {
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.lfb-none {
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+}
+.lfb-backdrop {
+  display: none;
+}
+.lfb-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-start: 0;
+  z-index: 30;
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+  box-shadow: var(--shadow);
+  animation: pop-up 0.14s ease;
+}
+.lfb-ph {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-block-end: 10px;
+}
+.lfb-ph b {
+  font-size: var(--fs-body);
+}
+.lfb-ph .muted {
+  flex: 1;
+  font-size: var(--fs-xs);
+}
+.lfb-rows {
+  display: flex;
+  flex-direction: column;
+}
+.lfb-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding-block: 10px;
+  border-block-start: 1px solid var(--line);
+}
+.lfb-row:first-child {
+  border-block-start: 0;
+}
+.lfb-row.wide {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+.lfb-lbl {
+  padding-block-start: 6px;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+.lfb-row.wide .lfb-lbl {
+  padding-block-start: 0;
+}
+.lfb-ctl {
+  min-width: 0;
+}
+.lfb-ctl .filter-row,
+.lfb-ctl .toolbar {
+  padding: 0;
+  border: 0;
+}
+.lfb-ctl select,
+.lfb-ctl .field {
+  width: 100%;
+  max-width: 320px;
+}
+.lfb-pf {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-block-start: 10px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--line);
+}
+@media (max-width: 640px) {
+  .list-filter-bar.with-saved {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .list-filter-bar.with-saved .lfb-search > .ca-search.slim {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .list-filter-bar.with-saved .lfb-line,
+  .lfb-saved {
+    grid-column: 1;
+    width: 100%;
+  }
+  .lfb-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 59;
+    background: var(--overlay);
+  }
+  .lfb-panel {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 60;
+    width: 100%;
+    max-height: 78vh;
+    border-radius: var(--radius-card) var(--radius-card) 0 0;
+  }
+  .lfb-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .lfb-lbl {
+    padding-block-start: 0;
+  }
+}

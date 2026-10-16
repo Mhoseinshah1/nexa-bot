@@ -67,6 +67,7 @@ export const WEB_FA_UI = {
   'web.filters_clear_all': 'پاک کردن همه',
   'web.filters_none': 'بدون فیلتر — همه نمایش داده می‌شوند',
   'web.filters_remove': 'حذف این فیلتر',
+  'web.filters_hint': 'هر انتخاب همان لحظه روی لیست اعمال می‌شود.',
 
   // W1.5 — the action panel
   'web.action_panel_title': 'عملیات',
