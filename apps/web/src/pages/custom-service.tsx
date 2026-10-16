@@ -30,7 +30,7 @@ import {
   updateCustomServiceRule,
   type CustomServiceRuleWriteInput,
 } from '../api/client';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
@@ -326,6 +326,8 @@ function Locations({
    * or closed (`null`). It is modal, so no other row can replace a draft behind it.
    */
   const [editing, setEditing] = useState<{ row: LocationRow | null } | null>(null);
+  // The location form's key outlives its drawer, as the rule form's does.
+  const locationSubmission = useSubmissionKey();
   /** The row whose offer is being withdrawn, while the question is open. */
   const [deleting, setDeleting] = useState<LocationRow | null>(null);
 
@@ -442,6 +444,7 @@ function Locations({
             row={editing.row}
             options={options}
             onDone={() => setEditing(null)}
+            submission={locationSubmission}
           />
         )
       )}
@@ -486,15 +489,17 @@ function LocationForm({
   row,
   options,
   onDone,
+  submission,
 }: {
   row: LocationRow | null;
   options: PickerOptions;
   /** Closes the drawer: after a save, or once a close over a draft was agreed to. */
   onDone: () => void;
+  /** Held by the section, which outlives the drawer (see `RuleForm`). */
+  submission: SubmissionKey;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
   const blank: LocationFormState = { panelId: row?.panelId ?? '', label: '', enabled: true };
   const loaded: LocationFormState =
     row === null || row.location === null
@@ -676,6 +681,8 @@ function Rules({
 
   /** W3: the rule form is a drawer — a rule (`rule`), a new one (`{}`), or closed (`null`). */
   const [editing, setEditing] = useState<{ rule?: CustomServiceRuleSummaryResponse } | null>(null);
+  // The rule form's key outlives its drawer (see `RuleForm`'s `submission`).
+  const ruleSubmission = useSubmissionKey();
   /** The rule whose deletion is being asked about. */
   const [deleting, setDeleting] = useState<CustomServiceRuleSummaryResponse | null>(null);
 
@@ -824,9 +831,10 @@ function Rules({
           rule={editing.rule}
           options={options}
           onDone={() => setEditing(null)}
+          submission={ruleSubmission}
         />
       ) : (
-        <RuleForm options={options} onDone={() => setEditing(null)} />
+        <RuleForm options={options} onDone={() => setEditing(null)} submission={ruleSubmission} />
       )}
 
       {deleting !== null && (
@@ -967,17 +975,22 @@ function RuleForm({
   rule,
   options,
   onDone,
+  submission,
 }: {
   rule?: CustomServiceRuleSummaryResponse;
   options: PickerOptions;
   /** Closes the drawer: after a save, or once a close over a draft was agreed to. */
   onDone: () => void;
+  /**
+   * Held by the section, which outlives the drawer: a key kept after an unanswered failure
+   * must survive closing and reopening it, or the retry creates a second rule.
+   */
+  submission: SubmissionKey;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `custom-rule-${mode}`;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
   const [state, setState] = useState<RuleFormState>(
     rule === undefined ? BLANK_RULE : ruleStateOf(rule),
   );

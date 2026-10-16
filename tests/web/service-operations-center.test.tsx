@@ -6,6 +6,7 @@ import { BulkOperationDetailPage } from '../../apps/web/src/pages/bulk-operation
 import {
   ServiceGrantButton,
   grantMoveReasons,
+  ServiceMassActionButton,
   ServiceMassActionCard,
   massDefinitionOf,
   useRefreshOnOperationChange,
@@ -178,6 +179,74 @@ describe('the mass action over the filtered set', () => {
       expectedFingerprint: 'b'.repeat(32),
       confirmed: true,
     });
+  });
+
+  it('replays a lost mass action under the SAME key after the drawer is closed and reopened', async () => {
+    const api = stubApi([
+      {
+        url: '/bulk-operations/preview',
+        body: {
+          preview: {
+            kind: 'SERVICE_SUSPEND',
+            asOf: '2026-09-20T10:00:00.000Z',
+            definition: { version: 1 },
+            definitionHash: 'a'.repeat(64),
+            count: 4,
+            customers: 4,
+            fingerprint: 'b'.repeat(32),
+            totalLiability: null,
+            trafficBytesPerItem: null,
+            durationDaysPerItem: null,
+            sample: [],
+            ineligible: { selected: 4, notInState: 0, panelNotOperable: 0, other: 0, sample: [] },
+          },
+        },
+      },
+      {
+        url: '/bulk-operations',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: {
+            kind: 'INTERNAL',
+            code: 'internal.unhandled',
+            message: 'x',
+            correlationId: 'c',
+          },
+        },
+      },
+    ]);
+    renderPage(<ServiceMassActionButton filters={FILTERS} mayStatus mayGrant={false} />);
+    const runOnce = async () => {
+      fireEvent.click(screen.getByRole('button', { name: t('web.soc_mass_title') }));
+      fireEvent.click(await screen.findByRole('button', { name: t('web.bulk_preview_button') }));
+      const execute = await screen.findByRole('button', { name: t('web.bulk_execute') });
+      fireEvent.change(screen.getByLabelText(t('web.bulk_reason')), {
+        target: { value: 'panel maintenance' },
+      });
+      fireEvent.click(execute);
+      fireEvent.click(
+        within(screen.getByRole('alertdialog')).getByRole('button', {
+          name: t('web.cb_bulk_run_yes'),
+        }),
+      );
+    };
+    const posts = () =>
+      api.calls.filter((call) => call.method === 'POST' && call.url.endsWith('/bulk-operations'));
+    await runOnce();
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    // Close the drawer over the typed reason (agreeing to discard), then do it all again.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    const discard = screen.queryByRole('button', { name: t('web.discard') });
+    if (discard !== null) fireEvent.click(discard);
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: t('web.bulk_preview_button') })).toBeNull(),
+    );
+    await runOnce();
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    const [first, second] = posts();
+    const keyOf = (body: unknown) => (body as { idempotencyKey: string }).idempotencyKey;
+    expect(keyOf(second!.body)).toBe(keyOf(first!.body));
   });
 
   it('offers no mass action for filters it cannot express', () => {

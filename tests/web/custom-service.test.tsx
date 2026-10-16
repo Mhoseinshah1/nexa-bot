@@ -229,6 +229,49 @@ describe('writing a price rule', () => {
     });
   });
 
+  it('creates a lost rule again under the SAME key after the drawer is closed and reopened', async () => {
+    const api = stubApi([
+      // The list answers GETs only, so the create below is the 503 and nothing else.
+      { ...routes()[0]!, method: 'GET' },
+      ...routes().slice(1),
+      {
+        url: '/custom-service/rules',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: {
+            kind: 'INTERNAL',
+            code: 'internal.unhandled',
+            message: 'x',
+            correlationId: 'c',
+          },
+        },
+      },
+    ]);
+    render();
+    await screen.findByText('Bulk volume');
+    const createOnce = () => {
+      fireEvent.click(screen.getByRole('button', { name: t('web.custom_service_rule_new_title') }));
+      fill('10', '20', '1500');
+      fireEvent.click(screen.getByRole('button', { name: t('web.custom_service_rule_create') }));
+    };
+    createOnce();
+    await waitFor(() => expect(posts(api, '/custom-service/rules')).toHaveLength(1));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    const discard = screen.queryByRole('button', { name: t('web.discard') });
+    if (discard !== null) fireEvent.click(discard);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: t('web.custom_service_rule_create') }),
+      ).toBeNull(),
+    );
+    createOnce();
+    await waitFor(() => expect(posts(api, '/custom-service/rules')).toHaveLength(2));
+    const keyOf = (body: unknown) => (body as { idempotencyKey: string }).idempotencyKey;
+    const [first, second] = posts(api, '/custom-service/rules');
+    expect(keyOf(second!.body)).toBe(keyOf(first!.body));
+  });
+
   it('holds a TIME rule to whole days up to the ceiling', async () => {
     const api = stubApi(routes());
     render();

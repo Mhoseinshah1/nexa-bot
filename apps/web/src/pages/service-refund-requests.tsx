@@ -18,7 +18,7 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import {
   Badge,
   Banner,
@@ -351,6 +351,13 @@ function DecisionButtons({
   serviceId: string;
 }) {
   const [drawer, setDrawer] = useState<'approve' | 'reject' | null>(null);
+  /*
+   * The keys live HERE, in the row that outlives the drawer: a key kept after an unanswered
+   * failure (a 5xx that may have committed) must survive closing and reopening the drawer,
+   * or the retry is a second decision rather than the replay of the first.
+   */
+  const approval = useSubmissionKey();
+  const rejection = useSubmissionKey();
   return (
     <span className="wb-row-actions" role="group" aria-label={t('web.service_refund_decide')}>
       <Button size="sm" variant="danger" onClick={() => setDrawer('approve')}>
@@ -364,6 +371,8 @@ function DecisionButtons({
           request={request}
           serviceId={serviceId}
           part={drawer}
+          approval={approval}
+          rejection={rejection}
           onClose={() => setDrawer(null)}
         />
       )}
@@ -375,17 +384,19 @@ function DecisionForm({
   request,
   serviceId,
   part,
+  approval,
+  rejection,
   onClose,
 }: {
   request: ServiceRefundRequestView;
   serviceId: string;
   part: 'approve' | 'reject';
+  approval: SubmissionKey;
+  rejection: SubmissionKey;
   onClose: () => void;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const approval = useSubmissionKey();
-  const rejection = useSubmissionKey();
   const [amount, setAmount] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [reason, setReason] = useState('');
