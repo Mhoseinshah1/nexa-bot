@@ -104,7 +104,7 @@ describe('the customer list tag filter', () => {
         denied={false}
       />,
     );
-    await screen.findByText(customer().telegramUserId);
+    await screen.findByText(customer().telegramUserId as string);
     // The catalogue answers after the list; the tag filter joins the panel once it has.
     await waitFor(() => {
       openFilterPanel();

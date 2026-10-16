@@ -1039,7 +1039,7 @@ export function ServiceDetailPage({
 
             {refundRequests}
 
-            {/* W4: «مشخصات سرویس» and «تحویل به مشتری» share one height. */}
+            {/* W4: the identity card and the delivery card share one height. */}
             <BalancedColumns
               main={<ServiceIdentity row={row} />}
               side={<ServiceDelivery row={row} />}

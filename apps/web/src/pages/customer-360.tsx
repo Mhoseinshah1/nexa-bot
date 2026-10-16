@@ -135,7 +135,7 @@ export type CustomerTab =
   | 'crm'
   | 'timeline';
 
-/** The tabs in order; «پیام‌ها» only for a viewer who may read or send a message. */
+/** The tabs in order; the messages tab only for a viewer who may read or send a message. */
 export function customerTabs(messages: boolean): { id: CustomerTab; label: string }[] {
   const all: { id: CustomerTab; label: WebKey }[] = [
     { id: 'overview', label: 'web.c360_tab_overview' },
@@ -619,7 +619,7 @@ export function UserDetailPage({
             {/*
               W2: nine real tabs, only the chosen one drawn. A link that used to scroll to a
               card switches to the tab that holds it and flashes the card; another customer
-              opens on «نمای کلی».
+              opens on the overview tab.
             */}
             <Tabs value={tab} onChange={selectTab} items={tabs} panelId="c360-tab-panel" />
             <TabPanel id="c360-tab-panel" labelledBy={`c360-tab-panel-tab-${tab}`}>
@@ -1062,7 +1062,7 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
               rowKey={(row) => row.id}
               dense
             />
-            {/* «قبلی / بعدی», as every list (W1.8); `nextCursor` walks towards newer rows. */}
+            {/* The kit's previous / next labels, as every list (W1.8); `nextCursor` walks towards newer rows. */}
             <CursorPager
               shown={orders.data.orders.length}
               hasPrevious={pages.hasPrevious}
