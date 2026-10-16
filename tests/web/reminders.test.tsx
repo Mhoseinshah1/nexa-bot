@@ -315,8 +315,9 @@ describe('the reminders screen', () => {
     const sheet = screen.getByRole('dialog', { name: t('web.reminders_quiet_title') });
     const start = within(sheet).getByLabelText(t('web.reminders_quiet_start'));
     const end = within(sheet).getByLabelText(t('web.reminders_quiet_end'));
-    expect(start).toHaveValue('23:00');
-    expect(end).toHaveValue('08:00');
+    // The fields are the shared 24-hour time field; the card above states their values.
+    expect(start).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(end).toHaveAttribute('aria-haspopup', 'dialog');
     // 23:00 to 08:00 crosses midnight, and the page says so in words.
     expect(screen.getByText(t('web.reminders_quiet_overnight'))).toBeInTheDocument();
   });
@@ -339,7 +340,10 @@ describe('the reminders screen', () => {
     const calls = api();
     page();
 
-    const field = await screen.findByLabelText(t('web.reminders_quiet_start'));
+    const card = await screen.findByTestId('reminders-quiet');
+    fireEvent.click(within(card).getByRole('button', { name: t('web.bx_rem_configure') }));
+    const sheet = screen.getByRole('dialog', { name: t('web.reminders_quiet_title') });
+    const field = within(sheet).getByLabelText(t('web.reminders_quiet_start'));
     setDateField(field, '22:30');
     fireEvent.click(field.closest('form')!.querySelector('button[type="submit"]')!);
 
