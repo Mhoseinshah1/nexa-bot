@@ -135,3 +135,17 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --- A wide drawer holding an editor and its preview, side by side on a desk ------------- */
+
+.bx-drawer-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 340px);
+  gap: var(--gap);
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .bx-drawer-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
