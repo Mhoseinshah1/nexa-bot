@@ -383,7 +383,14 @@ export function customerShortcuts(
   return all.filter((one) => one.allowed).map(({ key, label, href }) => ({ key, label, href }));
 }
 
-export function OperatorShortcutsCard({ shortcuts }: { shortcuts: readonly Shortcut[] }) {
+export function OperatorShortcutsCard({
+  shortcuts,
+  onJump,
+}: {
+  shortcuts: readonly Shortcut[];
+  /** W2: an in-page shortcut (`#card`) switches to the tab holding the card, never scrolls. */
+  onJump?: (cardId: string) => void;
+}) {
   const onLink = useLinkHandler();
   return (
     <Card title={t('web.c360ws_shortcuts_title')} hint={t('web.c360ws_shortcuts_hint')}>
@@ -396,7 +403,15 @@ export function OperatorShortcutsCard({ shortcuts }: { shortcuts: readonly Short
               <a
                 href={shortcut.href}
                 className="btn sm ghost"
-                {...(shortcut.href.startsWith('#') ? {} : { onClick: onLink })}
+                onClick={(event) => {
+                  if (!shortcut.href.startsWith('#')) {
+                    onLink(event);
+                    return;
+                  }
+                  if (onJump === undefined) return;
+                  event.preventDefault();
+                  onJump(shortcut.href.slice(1));
+                }}
               >
                 {t(shortcut.label)}
               </a>

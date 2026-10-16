@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 import { UsersPage, UserDetailPage } from '../../apps/web/src/pages/users';
 import { resolve } from '../../apps/web/src/app';
 import { customer, order, renderPage, stubApi } from './harness';
+import { openC360Tab, openWalletDialog, submitWalletDialog } from './c360-helpers';
 import { openFilterPanel } from './ui-helpers';
 
 /**
@@ -870,6 +871,7 @@ describe('the route table', () => {
       'orders.view',
     ]);
     renderPage(resolved.element as ReactElement);
+    await openC360Tab('services');
 
     // Orders granted, so the card has drawn — the services denial below is a
     // decision rather than a card that has not rendered yet.
@@ -890,6 +892,7 @@ describe('the route table', () => {
       'services.view',
     ]);
     renderPage(resolved.element as ReactElement);
+    await openC360Tab('services');
 
     const orders = await screen.findByText('همهٔ سفارش‌های این مشتری');
     const services = await screen.findByText('همهٔ سرویس‌های این مشتری');
@@ -918,6 +921,7 @@ describe('the route table', () => {
       'users.view',
     ]);
     renderPage(resolved.element as ReactElement);
+    await openC360Tab('services');
     // The head and the general card both name the username (Customer 360).
     await screen.findAllByText('ali_tehran', { exact: false });
 
@@ -934,6 +938,7 @@ describe('the route table', () => {
       'users.wallet.credit',
     ]);
     renderPage(resolved.element as ReactElement);
+    await openC360Tab('financial');
 
     // Credit is granted, so the card has drawn — the absence below is a decision
     // rather than a card that has not rendered yet.
@@ -968,6 +973,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
 
     const card = (await screen.findByRole('heading', { name: 'کیف پول' })).closest(
       'section',
@@ -1001,6 +1007,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     expect(await screen.findByText('موجودی منتقل‌شده از میرزا')).toBeTruthy();
     expect(screen.queryByText('MIGRATION_OPENING_BALANCE')).toBeNull();
   });
@@ -1022,6 +1029,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
 
     await screen.findByText('تاریخچه تراکنش‌ها');
     expect(await screen.findByText('برداشت')).toBeTruthy();
@@ -1049,6 +1057,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     await screen.findByText('کیف پول');
 
     /*
@@ -1098,11 +1107,11 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ثبت تراکنش دستی');
+    const dialog = await openWalletDialog('CREDIT');
 
     fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '250000' } });
     fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'goodwill' } });
-    fireEvent.click(screen.getByText('واریز به کیف پول'));
+    submitWalletDialog(dialog, 'CREDIT');
 
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('/wallet/adjust'))).toBe(true);
@@ -1137,14 +1146,17 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ثبت تراکنش دستی');
+    let dialog = await openWalletDialog('CREDIT');
 
     fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '1000' } });
     fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'twice' } });
-    fireEvent.click(screen.getByText('واریز به کیف پول'));
+    submitWalletDialog(dialog, 'CREDIT');
     await waitFor(() => {
       expect(api.calls.filter((c) => c.url.includes('/wallet/adjust'))).toHaveLength(1);
     });
+    // The dialog closes on success; the operator opens it again.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    dialog = await openWalletDialog('CREDIT');
 
     // The form clears on success, so the operator retypes the same figures — which
     // is a NEW command, and correctly gets a new key. What must be stable is the
@@ -1153,7 +1165,7 @@ describe('the wallet card', () => {
     // payload rather than to the component's lifetime.
     fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '1000' } });
     fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'twice' } });
-    fireEvent.click(screen.getByText('واریز به کیف پول'));
+    submitWalletDialog(dialog, 'CREDIT');
     await waitFor(() => {
       expect(api.calls.filter((c) => c.url.includes('/wallet/adjust'))).toHaveLength(2);
     });
@@ -1194,12 +1206,13 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ثبت تراکنش دستی');
+    const dialog = await openWalletDialog('CREDIT');
 
+    // A refused movement keeps the dialog open with the draft, as the form did.
     const submit = (amount: string, note: string) => {
       fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: amount } });
       fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: note } });
-      fireEvent.click(screen.getByText('واریز به کیف پول'));
+      submitWalletDialog(dialog, 'CREDIT');
     };
     submit('1000', 'spacing');
     await waitFor(() => {
@@ -1242,9 +1255,9 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ثبت تراکنش دستی');
+    await openC360Tab('financial');
 
-    expect(screen.getByText('واریز به کیف پول')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'واریز به کیف پول' })).toBeTruthy();
     expect(screen.queryByText('برداشت از کیف پول')).toBeNull();
     // And it NAMES the permission that is missing, rather than a disabled button.
     expect(screen.getByText(/users.wallet.debit/u)).toBeTruthy();
@@ -1264,6 +1277,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     await screen.findByText('کیف پول');
 
     expect(screen.getByText(/users.view/u)).toBeTruthy();
@@ -1291,6 +1305,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     await screen.findByText('تاریخچه تراکنش‌ها');
 
     fireEvent.click(await screen.findByText('بعدی'));
@@ -1374,6 +1389,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('پلن یک‌ماهه');
     await screen.findByText('nx-7f3a91');
 
@@ -1428,6 +1444,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
     const adopted = screen.getByText('nx-7f3a91').closest('tr') as HTMLElement;
     expect(await within(adopted).findByText('منتقل‌شده از میرزا')).toBeTruthy();
@@ -1452,6 +1469,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
     expect(api.calls.some((call) => call.url.includes('legacy'))).toBe(false);
     expect(screen.queryByText('منتقل‌شده از میرزا')).toBeNull();
@@ -1478,6 +1496,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
 
     const row = screen.getByText('nx-7f3a91').closest('tr');
@@ -1509,6 +1528,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     // The ROW first, so the card below is the loaded one and not its skeleton.
     await screen.findByText('پلن یک‌ماهه');
     // Located by the "all orders" link, which is the one string in this card that
@@ -1542,6 +1562,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
     const card = screen.getByText('همهٔ سرویس‌های این مشتری').closest('section');
     expect(card).not.toBeNull();
@@ -1595,6 +1616,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('plan-page-1');
     const card = screen.getByText('همهٔ سفارش‌های این مشتری').closest('section') as HTMLElement;
 
@@ -1648,6 +1670,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('سرویس‌های این مشتری');
 
     expect(screen.getByText(/orders\.view/u)).toBeTruthy();
@@ -1672,6 +1695,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('سفارش‌های این مشتری');
 
     expect(screen.getByText(/services\.view/u)).toBeTruthy();
@@ -1700,6 +1724,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('این مشتری هنوز سفارشی ثبت نکرده است.');
     await screen.findByText('این مشتری هنوز سرویسی ندارد.');
 
@@ -1735,6 +1760,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
 
     const card = (screen.getByText('همهٔ سرویس‌های این مشتری').closest('section') ??

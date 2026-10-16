@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
@@ -32,6 +32,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
+import { FormDialog } from './form-dialog';
 /*
  * The OTHER two screens' badge vocabularies, borrowed rather than copied.
  *
@@ -51,15 +52,16 @@ import { OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
 import {
   CustomerControlsCard,
-  DangerZoneCard,
   FinancialSummaryCard,
   GeneralInfoCard,
   ManualOrderModal,
   ServiceCountsStrip,
   TimelineCard,
+  useCustomerDangerActions,
   useCustomerOverview,
   useFinancialSummary,
 } from './customer-360-sections';
+import { ActionPanel } from '../ui/action-panel';
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
 import { CustomerCrmSection } from './customer-360-crm';
@@ -97,8 +99,9 @@ import {
   Num,
   PageHead,
   StateSwitch,
+  TabPanel,
+  Tabs,
   TwoColumn,
-  useUnsavedChanges,
   useToast,
   type Column,
   type Tone,
@@ -120,6 +123,51 @@ import {
  * operations — disabling every configuration, transferring the account — sit apart at
  * the bottom, each behind its own confirmation.
  */
+/** W2: Customer 360's nine tabs. */
+export type CustomerTab =
+  | 'overview'
+  | 'services'
+  | 'support'
+  | 'financial'
+  | 'controls'
+  | 'relations'
+  | 'messages'
+  | 'crm'
+  | 'timeline';
+
+/** The tabs in order; «پیام‌ها» only for a viewer who may read or send a message. */
+export function customerTabs(messages: boolean): { id: CustomerTab; label: string }[] {
+  const all: { id: CustomerTab; label: WebKey }[] = [
+    { id: 'overview', label: 'web.c360_tab_overview' },
+    { id: 'services', label: 'web.c360_tab_services' },
+    { id: 'support', label: 'web.c360_tab_support' },
+    { id: 'financial', label: 'web.c360_tab_financial' },
+    { id: 'controls', label: 'web.c360_tab_controls' },
+    { id: 'relations', label: 'web.c360_tab_relations' },
+    { id: 'messages', label: 'web.c360_tab_messages' },
+    { id: 'crm', label: 'web.c360_tab_crm' },
+    { id: 'timeline', label: 'web.c360_tab_timeline' },
+  ];
+  return all
+    .filter((item) => messages || item.id !== 'messages')
+    .map((item) => ({ id: item.id, label: t(item.label) }));
+}
+
+/** Which tab holds a card a jump names (the ids the in-page anchors used to scroll to). */
+export const CARD_TABS: Readonly<Record<string, CustomerTab>> = {
+  'c360-general': 'overview',
+  'c360-latest': 'overview',
+  'c360-services': 'services',
+  'c360-support': 'support',
+  'c360-wallet': 'financial',
+  'c360-financial': 'financial',
+  'c360-controls': 'controls',
+  'c360-relations': 'relations',
+  'c360-messages': 'messages',
+  'c360-crm': 'crm',
+  'c360-timeline': 'timeline',
+};
+
 export function UserDetailPage({
   id,
   mayBlock,
@@ -326,6 +374,47 @@ export function UserDetailPage({
     mutate.reset();
   };
 
+  // W3: the wallet movement is a dialog for one direction, opened from the panel or the card.
+  const [walletDialog, setWalletDialog] = useState<LedgerDirection | null>(null);
+  // W1.5: the sensitive actions, each under its own permission.
+  const danger = useCustomerDangerActions({
+    customerId: id,
+    mayTransfer,
+    // The toggle lists the services it planned: it reads them too.
+    mayEditServices: mayEditServices && mayViewServices,
+  });
+
+  /*
+   * W2: the tabs. The choice belongs to THIS customer — opening another one starts again on
+   * «نمای کلی» — and a jump (a shortcut that used to scroll) switches to the tab holding the
+   * card and flashes it.
+   */
+  const tabs = customerTabs(mayViewMessages || mayMessage);
+  const [tabState, setTabState] = useState<{ id: string; tab: CustomerTab }>({
+    id,
+    tab: 'overview',
+  });
+  const chosen = tabState.id === id ? tabState.tab : 'overview';
+  const tab = tabs.some((item) => item.id === chosen) ? chosen : 'overview';
+  const selectTab = (next: CustomerTab) => setTabState({ id, tab: next });
+  const [flash, setFlash] = useState<string | null>(null);
+  const jumpTo = (cardId: string) => {
+    const owner = CARD_TABS[cardId];
+    if (owner === undefined) return;
+    selectTab(owner);
+    setFlash(cardId);
+  };
+  useEffect(() => {
+    if (flash === null) return undefined;
+    const card = document.getElementById(flash);
+    card?.classList.add('wb-flash');
+    const timer = setTimeout(() => {
+      card?.classList.remove('wb-flash');
+      setFlash(null);
+    }, 1600);
+    return () => clearTimeout(timer);
+  }, [flash, tab]);
+
   return (
     <>
       {/*
@@ -343,85 +432,93 @@ export function UserDetailPage({
               mayViewWallet={mayViewWallet}
               exempt={controls !== undefined && controls.channelMembershipExemptAt !== null}
               isReseller={isReseller === true}
-              actions={
-                <>
-                  {mayCredit && mayViewWallet && (
-                    <a className="btn sm" href="#c360-wallet">
-                      {t('web.c360_increase_balance')}
-                    </a>
-                  )}
-                  {mayDebit && mayViewWallet && (
-                    <a className="btn sm" href="#c360-wallet">
-                      {t('web.c360_decrease_balance')}
-                    </a>
-                  )}
-                  {/* A manual order spends the wallet: the server also charges users.wallet.debit. */}
-                  {mayManualOrder && mayDebit && (
-                    <Button size="sm" icon="plus" onClick={() => setManualOrderOpen(true)}>
-                      {t('web.c360_manual_order')}
-                    </Button>
-                  )}
-                  {mayMessage && (
-                    <Button size="sm" icon="send" onClick={() => setMessageOpen(true)}>
-                      {t('web.dm_send')}
-                    </Button>
-                  )}
-                  {mayViewOrders && (
-                    <a
-                      className="btn sm ghost"
-                      href={`/orders?q=${encodeURIComponent(id)}`}
-                      onClick={onLink}
-                    >
-                      {t('web.c360_view_orders')}
-                    </a>
-                  )}
-                  {mayBlock &&
-                    (row.status === 'ACTIVE' ? (
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        icon="lock"
-                        disabled={mutate.isPending}
-                        onClick={() => setPending('BLOCK')}
-                      >
-                        {t('web.user_block')}
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        icon="check"
-                        disabled={mutate.isPending}
-                        onClick={() => setPending('UNBLOCK')}
-                      >
-                        {t('web.user_unblock')}
-                      </Button>
-                    ))}
-                </>
-              }
             />
+
+            {/* W1.5: every action on this customer, in one panel under the head. */}
+            <ActionPanel
+              title={t('web.c360_action_panel_title')}
+              groups={[
+                {
+                  key: 'wallet',
+                  title: t('web.c360_group_wallet'),
+                  actions: [
+                    mayCredit && mayViewWallet && (
+                      <Button key="credit" icon="plus" onClick={() => setWalletDialog('CREDIT')}>
+                        {t('web.c360_increase_balance')}
+                      </Button>
+                    ),
+                    mayDebit && mayViewWallet && (
+                      <Button key="debit" onClick={() => setWalletDialog('DEBIT')}>
+                        {t('web.c360_decrease_balance')}
+                      </Button>
+                    ),
+                  ],
+                },
+                {
+                  key: 'orders',
+                  title: t('web.c360_group_orders'),
+                  actions: [
+                    /* A manual order spends the wallet: the server also charges users.wallet.debit. */
+                    mayManualOrder && mayDebit && (
+                      <Button key="manual" icon="plus" onClick={() => setManualOrderOpen(true)}>
+                        {t('web.c360_manual_order')}
+                      </Button>
+                    ),
+                    mayViewOrders && (
+                      <a
+                        key="orders"
+                        className="btn ghost"
+                        href={`/orders?q=${encodeURIComponent(id)}`}
+                        onClick={onLink}
+                      >
+                        {t('web.c360_view_orders')}
+                      </a>
+                    ),
+                  ],
+                },
+                {
+                  key: 'contact',
+                  title: t('web.c360_group_contact'),
+                  actions: [
+                    mayMessage && (
+                      <Button key="message" icon="send" onClick={() => setMessageOpen(true)}>
+                        {t('web.dm_send')}
+                      </Button>
+                    ),
+                    mayBlock &&
+                      (row.status === 'ACTIVE' ? (
+                        <Button
+                          key="block"
+                          variant="danger"
+                          icon="lock"
+                          disabled={mutate.isPending}
+                          onClick={() => setPending('BLOCK')}
+                        >
+                          {t('web.user_block')}
+                        </Button>
+                      ) : (
+                        <Button
+                          key="unblock"
+                          variant="primary"
+                          icon="check"
+                          disabled={mutate.isPending}
+                          onClick={() => setPending('UNBLOCK')}
+                        >
+                          {t('web.user_unblock')}
+                        </Button>
+                      )),
+                  ],
+                },
+              ]}
+              sensitive={danger.buttons}
+            />
+            {danger.modals}
 
             {row.status === 'BLOCKED' && (
               <Banner tone="danger" title={t('web.user_blocked_banner_title')}>
                 {t('web.user_blocked_banner_body')}
               </Banner>
             )}
-
-            <nav className="c360-nav" aria-label={t('web.c360_nav_label')}>
-              <a href="#c360-attention">{t('web.c360_nav_attention')}</a>
-              <a href="#c360-general">{t('web.c360_nav_general')}</a>
-              <a href="#c360-services">{t('web.c360_nav_services')}</a>
-              <a href="#c360-support">{t('web.c360_nav_support')}</a>
-              <a href="#c360-financial">{t('web.c360_nav_financial')}</a>
-              <a href="#c360-controls">{t('web.c360_nav_controls')}</a>
-              <a href="#c360-relations">{t('web.c360_nav_relations')}</a>
-              {(mayViewMessages || mayMessage) && <a href="#c360-messages">{t('web.dm_nav')}</a>}
-              <a href="#c360-crm">{t('web.crm_nav')}</a>
-              <a href="#c360-timeline">{t('web.c360_nav_timeline')}</a>
-              {(mayTransfer || mayEditServices) && (
-                <a href="#c360-danger">{t('web.c360_nav_danger')}</a>
-              )}
-            </nav>
 
             {/*
               Step two of a block or an unblock, never one click (WP10G, closing
@@ -511,132 +608,144 @@ export function UserDetailPage({
               onClose={() => setMessageOpen(false)}
             />
 
+            <WalletAdjustDialog
+              customerId={id}
+              direction={mayViewWallet ? walletDialog : null}
+              onClose={() => setWalletDialog(null)}
+            />
+
             <CustomerAttentionCard customerId={id} />
 
-            <TwoColumn
-              main={
-                <>
-                  <CustomerLatestCard customerId={id} />
-                  <div id="c360-services" className="stack">
-                    <ServiceCountsStrip customerId={id} />
-                    <CustomerServicesCard
-                      customerId={id}
-                      mayView={mayViewServices}
-                      mayViewLegacy={mayViewLegacyServices}
-                    />
-                    <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
-                  </div>
-                  <CustomerTicketsCard customerId={id} mayView={mayViewTickets} />
-                  <FinancialSummaryCard customerId={id} />
-                  <div id="c360-wallet">
+            {/*
+              W2: nine real tabs, only the chosen one drawn. A link that used to scroll to a
+              card switches to the tab that holds it and flashes the card; another customer
+              opens on «نمای کلی».
+            */}
+            <Tabs value={tab} onChange={selectTab} items={tabs} panelId="c360-tab-panel" />
+            <TabPanel id="c360-tab-panel" labelledBy={`c360-tab-panel-tab-${tab}`}>
+              {tab === 'overview' && (
+                <TwoColumn
+                  main={
+                    <>
+                      <CustomerLatestCard customerId={id} />
+                      <OperatorShortcutsCard
+                        shortcuts={customerShortcuts(id, {
+                          orders: mayViewOrders,
+                          services: mayViewServices,
+                          payments: mayViewPayments,
+                          tickets: mayViewTickets,
+                          wallet: mayViewWallet,
+                          businessChats: mayViewBusinessChats,
+                        })}
+                        onJump={jumpTo}
+                      />
+                    </>
+                  }
+                  side={
+                    <>
+                      <GeneralInfoCard
+                        row={row}
+                        overview={controls}
+                        resellerLabel={
+                          isReseller === undefined
+                            ? undefined
+                            : isReseller
+                              ? t('web.c360_group_reseller')
+                              : t('web.c360_group_regular')
+                        }
+                      />
+                      <Card title={t('web.user_access_title')}>
+                        <KV
+                          items={[
+                            [t('web.status'), <StatusBadge key="s" status={row.status} />],
+                            [
+                              t('web.user_blocked_at'),
+                              row.blockedAt === null ? (
+                                <Dash key="b" />
+                              ) : (
+                                formatTimestamp(row.blockedAt)
+                              ),
+                            ],
+                            [
+                              t('web.user_blocked_reason'),
+                              row.blockedReason === null ? <Dash key="r" /> : row.blockedReason,
+                            ],
+                            ...(row.status === 'BLOCKED' && row.blockedReason !== null
+                              ? ([
+                                  [
+                                    t('web.user_blocked_reason_shown'),
+                                    row.blockedReasonShown
+                                      ? t('web.user_blocked_reason_shown_yes')
+                                      : t('web.user_blocked_reason_shown_no'),
+                                  ],
+                                ] as [ReactNode, ReactNode][])
+                              : []),
+                            // Round N close (§D): the customer's own promotional opt-out.
+                            [
+                              t('web.user_marketing'),
+                              row.marketingOptOutAt === null
+                                ? t('web.user_marketing_in')
+                                : t('web.user_marketing_out'),
+                            ],
+                            ...(row.marketingOptOutAt === null
+                              ? []
+                              : ([
+                                  [
+                                    t('web.user_marketing_since'),
+                                    formatTimestamp(row.marketingOptOutAt),
+                                  ],
+                                ] as [ReactNode, ReactNode][])),
+                          ]}
+                        />
+                        <p className="muted small">{t('web.user_marketing_hint')}</p>
+                        {/* No disabled button. A disabled control and this sentence make
+                        the same claim, and only one of them names the permission. */}
+                        {!mayBlock && <Banner tone="info">{t('web.user_block_denied')}</Banner>}
+                      </Card>
+                    </>
+                  }
+                />
+              )}
+              {tab === 'services' && (
+                <div id="c360-services" className="stack">
+                  <ServiceCountsStrip customerId={id} />
+                  <CustomerServicesCard
+                    customerId={id}
+                    mayView={mayViewServices}
+                    mayViewLegacy={mayViewLegacyServices}
+                  />
+                  <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
+                </div>
+              )}
+              {tab === 'support' && (
+                <CustomerTicketsCard customerId={id} mayView={mayViewTickets} />
+              )}
+              {tab === 'financial' && (
+                <div className="stack">
+                  <div id="c360-wallet" className="stack">
                     <WalletCard
                       customerId={id}
                       mayView={mayViewWallet}
                       mayCredit={mayCredit}
                       mayDebit={mayDebit}
+                      onAdjust={setWalletDialog}
                     />
                     <CustomerLegacyDebtCard
                       telegramUserId={row.telegramUserId}
                       mayView={mayViewLegacyDebts}
                     />
                   </div>
-                  {(mayViewMessages || mayMessage) && (
-                    <DirectMessagesCard
-                      customerId={id}
-                      mayView={mayViewMessages}
-                      maySend={mayMessage}
-                      onCompose={() => setMessageOpen(true)}
-                    />
-                  )}
-                  <CustomerCrmSection
-                    customerId={id}
-                    mayViewNotes={mayViewNotes}
-                    mayWriteNotes={mayWriteNotes}
-                    mayAssignTags={mayAssignTags}
-                    mayManageTags={mayManageTags}
-                  />
-                  <TimelineCard customerId={id} mayView={mayViewAudit} />
+                  <FinancialSummaryCard customerId={id} />
                   <CustomerLegacyInvoicesCard
                     customerId={id}
                     telegramUserId={row.telegramUserId}
                     mayView={mayViewLegacyInvoices}
                     mayViewPii={mayViewLegacyPii}
                   />
-                  <CustomerLegacyHistoryCard customerId={id} mayView={mayViewLegacyHistory} />
-                </>
-              }
-              side={
-                <>
-                  <OperatorShortcutsCard
-                    shortcuts={customerShortcuts(id, {
-                      orders: mayViewOrders,
-                      services: mayViewServices,
-                      payments: mayViewPayments,
-                      tickets: mayViewTickets,
-                      wallet: mayViewWallet,
-                      businessChats: mayViewBusinessChats,
-                    })}
-                  />
-                  <GeneralInfoCard
-                    row={row}
-                    overview={controls}
-                    resellerLabel={
-                      isReseller === undefined
-                        ? undefined
-                        : isReseller
-                          ? t('web.c360_group_reseller')
-                          : t('web.c360_group_regular')
-                    }
-                  />
-                  <Card title={t('web.user_access_title')}>
-                    <KV
-                      items={[
-                        [t('web.status'), <StatusBadge key="s" status={row.status} />],
-                        [
-                          t('web.user_blocked_at'),
-                          row.blockedAt === null ? (
-                            <Dash key="b" />
-                          ) : (
-                            formatTimestamp(row.blockedAt)
-                          ),
-                        ],
-                        [
-                          t('web.user_blocked_reason'),
-                          row.blockedReason === null ? <Dash key="r" /> : row.blockedReason,
-                        ],
-                        ...(row.status === 'BLOCKED' && row.blockedReason !== null
-                          ? ([
-                              [
-                                t('web.user_blocked_reason_shown'),
-                                row.blockedReasonShown
-                                  ? t('web.user_blocked_reason_shown_yes')
-                                  : t('web.user_blocked_reason_shown_no'),
-                              ],
-                            ] as [ReactNode, ReactNode][])
-                          : []),
-                        // Round N close (§D): the customer's own promotional opt-out.
-                        [
-                          t('web.user_marketing'),
-                          row.marketingOptOutAt === null
-                            ? t('web.user_marketing_in')
-                            : t('web.user_marketing_out'),
-                        ],
-                        ...(row.marketingOptOutAt === null
-                          ? []
-                          : ([
-                              [
-                                t('web.user_marketing_since'),
-                                formatTimestamp(row.marketingOptOutAt),
-                              ],
-                            ] as [ReactNode, ReactNode][])),
-                      ]}
-                    />
-                    <p className="muted small">{t('web.user_marketing_hint')}</p>
-                    {/* No disabled button. A disabled control and this sentence make
-                        the same claim, and only one of them names the permission. */}
-                    {!mayBlock && <Banner tone="info">{t('web.user_block_denied')}</Banner>}
-                  </Card>
-
+                </div>
+              )}
+              {tab === 'controls' && (
+                <div className="stack">
                   <CustomerControlsCard
                     customerId={id}
                     overview={controls}
@@ -645,32 +754,44 @@ export function UserDetailPage({
                     mayEditLocation={mayEditLocation}
                     mayEditNotifications={mayEditNotifications}
                   />
-
                   <TrialCard customerId={id} mayEdit={mayEditTrial} />
-
-                  <div id="c360-relations" className="stack">
-                    <ResellerCard
-                      customerId={id}
-                      telegramUserId={row.telegramUserId}
-                      mayView={mayViewReseller}
-                      mayEdit={mayEditReseller}
-                    />
-                    <CustomerReferralCard customerId={id} mayView={mayViewReferrals} />
-                  </div>
-
-                  <DangerZoneCard
+                </div>
+              )}
+              {tab === 'relations' && (
+                <div id="c360-relations" className="stack">
+                  <ResellerCard
                     customerId={id}
-                    mayTransfer={mayTransfer}
-                    // The toggle lists the services it planned: it reads them too.
-                    mayEditServices={mayEditServices && mayViewServices}
+                    telegramUserId={row.telegramUserId}
+                    mayView={mayViewReseller}
+                    mayEdit={mayEditReseller}
                   />
-
-                  <Card tone="muted" title={t('web.users_scope_title')}>
-                    <p className="muted small">{t('web.users_scope_body')}</p>
-                  </Card>
-                </>
-              }
-            />
+                  <CustomerReferralCard customerId={id} mayView={mayViewReferrals} />
+                </div>
+              )}
+              {tab === 'messages' && (
+                <DirectMessagesCard
+                  customerId={id}
+                  mayView={mayViewMessages}
+                  maySend={mayMessage}
+                  onCompose={() => setMessageOpen(true)}
+                />
+              )}
+              {tab === 'crm' && (
+                <CustomerCrmSection
+                  customerId={id}
+                  mayViewNotes={mayViewNotes}
+                  mayWriteNotes={mayWriteNotes}
+                  mayAssignTags={mayAssignTags}
+                  mayManageTags={mayManageTags}
+                />
+              )}
+              {tab === 'timeline' && (
+                <div className="stack">
+                  <TimelineCard customerId={id} mayView={mayViewAudit} />
+                  <CustomerLegacyHistoryCard customerId={id} mayView={mayViewLegacyHistory} />
+                </div>
+              )}
+            </TabPanel>
           </div>
         )}
       </StateSwitch>
@@ -692,13 +813,11 @@ function UserHead({
   mayViewWallet,
   exempt,
   isReseller,
-  actions,
 }: {
   row: CustomerSummaryResponse;
   mayViewWallet: boolean;
   exempt: boolean;
   isReseller: boolean;
-  actions: ReactNode;
 }) {
   const wallet = useQuery({
     queryKey: ['wallet', row.id],
@@ -755,7 +874,6 @@ function UserHead({
           </span>
         </>
       }
-      actions={<div className="c360-actions">{actions}</div>}
       stats={[
         { label: t('web.user_first_seen'), value: formatTimestamp(row.firstSeenAt) },
         { label: t('web.user_last_seen'), value: formatTimestamp(row.lastSeenAt) },
@@ -1150,32 +1268,22 @@ function WalletCard({
   mayView,
   mayCredit,
   mayDebit,
+  onAdjust,
 }: {
   customerId: string;
   mayView: boolean;
   mayCredit: boolean;
   mayDebit: boolean;
+  /** W3: opens the page's wallet dialog for one direction. */
+  onAdjust: (direction: LedgerDirection) => void;
 }) {
-  const notify = useToast();
-  const queries = useQueryClient();
-  const submission = useSubmissionKey();
   const [cursor, setCursor] = useState<string | null>(null);
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
 
   const wallet = useQuery({
     queryKey: ['wallet', customerId],
     queryFn: () => fetchWallet(customerId),
     enabled: mayView,
   });
-  /*
-   * Whether an adjustment can name a currency yet.
-   *
-   * The balance response carries the denomination every movement is made in, so an
-   * operator may not submit one before it has arrived — the amount would travel under
-   * a guess. The fieldset below reads this.
-   */
-  const walletReady = wallet.data !== undefined;
   const entries = useQuery({
     queryKey: ['wallet-entries', customerId, cursor],
     queryFn: () =>
@@ -1186,6 +1294,204 @@ function WalletCard({
     enabled: mayView,
   });
 
+  if (!mayView) {
+    return (
+      <Card title={t('web.wallet_title')}>
+        <Banner tone="info">{t('web.wallet_denied')}</Banner>
+      </Card>
+    );
+  }
+
+  const columns: Column<WalletEntrySummaryResponse>[] = [
+    {
+      key: 'direction',
+      header: t('web.wallet_direction'),
+      render: (row) => (
+        <Badge tone={DIRECTION_TONES[row.direction]}>{t(DIRECTION_LABELS[row.direction])}</Badge>
+      ),
+    },
+    {
+      key: 'amount',
+      header: t('web.wallet_balance'),
+      // Positive, always, with the sign carried by the direction beside it — the
+      // ledger's own shape, preserved to the screen.
+      render: (row) => (
+        <span className={row.direction === 'CREDIT' ? 'ca-amount credit' : 'ca-amount debit'}>
+          <Money value={{ amountMinor: row.amount, currency: row.currency }} />
+        </span>
+      ),
+    },
+    {
+      key: 'reason',
+      header: t('web.wallet_reason'),
+      // W5: the Persian name, the raw key in `title`; an unknown key stays raw, never blank.
+      render: (row) => {
+        const label = (LEDGER_REASON_LABELS as Readonly<Record<string, WebKey | undefined>>)[
+          row.reason
+        ];
+        return label === undefined ? (
+          <Ltr>{row.reason}</Ltr>
+        ) : (
+          <span title={row.reason}>{t(label)}</span>
+        );
+      },
+    },
+    {
+      key: 'actor',
+      header: t('web.wallet_actor'),
+      render: (row) =>
+        row.actorAdminId === null ? (
+          <span className="faint">{t('web.wallet_actor_system')}</span>
+        ) : (
+          <Copyable value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />
+        ),
+    },
+    {
+      key: 'note',
+      header: t('web.wallet_note'),
+      render: (row) => (row.note === null ? <Dash /> : row.note),
+    },
+    {
+      key: 'createdAt',
+      header: t('web.wallet_created_at'),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+    },
+  ];
+
+  const balance = wallet.data?.wallet;
+  /*
+   * BELOW ZERO is a real state now, and only for one reason: a reseller's purchase drawn
+   * on their credit line (`docs/wp9-reseller-audit.md` R8). The figure is drawn exactly
+   * as derived — `Money` carries the sign — and said in words beside it, because a
+   * negative balance read as a rendering glitch is a debt nobody follows up.
+   */
+  const negative = balance?.balanceAmount.startsWith('-') ?? false;
+
+  return (
+    <Card
+      title={t('web.wallet_title')}
+      hint={t('web.wallet_balance_hint')}
+      actions={
+        mayCredit || mayDebit ? (
+          <>
+            {mayCredit && (
+              <Button size="sm" icon="plus" onClick={() => onAdjust('CREDIT')}>
+                {t('web.c360_wallet_credit_open')}
+              </Button>
+            )}
+            {mayDebit && (
+              <Button size="sm" onClick={() => onAdjust('DEBIT')}>
+                {t('web.c360_wallet_debit_open')}
+              </Button>
+            )}
+          </>
+        ) : undefined
+      }
+    >
+      <StateSwitch query={wallet}>
+        {balance === undefined ? null : (
+          <>
+            <div className="ca-balance">
+              <KV
+                inline
+                items={[
+                  [
+                    t('web.wallet_balance'),
+                    <span key="b" className={negative ? 'ca-amount negative' : 'ca-amount'}>
+                      <Money
+                        value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
+                      />
+                      {negative && (
+                        <>
+                          {' '}
+                          <Badge tone="warn">{t('web.wallet_balance_negative')}</Badge>
+                        </>
+                      )}
+                    </span>,
+                  ],
+                  [t('web.wallet_entry_count'), String(balance.entryCount)],
+                ]}
+              />
+            </div>
+            {negative && <Banner tone="warn">{t('web.wallet_balance_negative_hint')}</Banner>}
+          </>
+        )}
+      </StateSwitch>
+
+      <h3 className="ca-subhead">{t('web.wallet_history_title')}</h3>
+      <StateSwitch query={entries}>
+        {entries.data === undefined ? null : entries.data.entries.length === 0 ? (
+          <Empty variant="compact" title={t('web.wallet_history_empty')} />
+        ) : (
+          <>
+            <DataTable
+              caption={t('web.wallet_history_title')}
+              columns={columns}
+              rows={entries.data.entries}
+              rowKey={(row) => row.id}
+              dense
+            />
+            <CursorPager
+              shown={entries.data.entries.length}
+              hasPrevious={cursor !== null}
+              hasNext={entries.data.nextCursor !== null}
+              onPrevious={() => setCursor(null)}
+              onNext={() => setCursor(entries.data?.nextCursor ?? null)}
+            />
+          </>
+        )}
+      </StateSwitch>
+      <p className="muted small">{t('web.wallet_immutable')}</p>
+
+      {/*
+        Named separately, because the two permissions are separate decisions with
+        different risk labels. An operator who may credit and not debit is told
+        which one they are missing rather than shown a card with one button and no
+        explanation.
+      */}
+      {!mayCredit && <Banner tone="info">{t('web.wallet_credit_denied')}</Banner>}
+      {!mayDebit && <Banner tone="info">{t('web.wallet_debit_denied')}</Banner>}
+    </Card>
+  );
+}
+
+/**
+ * W3: the manual wallet movement, as a dialog for ONE direction — opened from the wallet
+ * card's header and from the action panel. The rules are the ones the always-open form had:
+ *
+ * - DISABLED until the balance has loaded, because the balance carries the currency this
+ *   movement is denominated in — there is no fallback currency.
+ * - The idempotency key is bound to the NORMALISED body (trimmed amount and note, the
+ *   direction and the currency), so a retry after a 5xx that differs only in whitespace is
+ *   the same command, never a second movement of somebody's money.
+ * - A typed amount or note asks before the dialog closes or the page is left.
+ */
+function WalletAdjustDialog({
+  customerId,
+  direction,
+  onClose,
+}: {
+  customerId: string;
+  direction: LedgerDirection | null;
+  onClose: () => void;
+}) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const submission = useSubmissionKey();
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const wallet = useQuery({
+    queryKey: ['wallet', customerId],
+    queryFn: () => fetchWallet(customerId),
+    enabled: direction !== null,
+  });
+  const walletReady = wallet.data !== undefined;
+  const close = () => {
+    setAmount('');
+    setNote('');
+    adjust.reset();
+    onClose();
+  };
   const adjust = useMutation({
     mutationFn: (input: { direction: LedgerDirection }) => {
       /*
@@ -1249,8 +1555,7 @@ function WalletCard({
             ? t('web.wallet_credit_done')
             : t('web.wallet_debit_done'),
       });
-      setAmount('');
-      setNote('');
+      close();
       // Both are re-read rather than patched: the balance is DERIVED, so a client
       // that adjusted its own copy would be inventing the one number this whole
       // design exists to keep computed.
@@ -1262,197 +1567,49 @@ function WalletCard({
     // be a SECOND movement of somebody's money.
     onError: (error) => submission.settleOn(error),
   });
-  // A typed movement is lost by navigating away; the guard asks first.
-  useUnsavedChanges(mayView && (amount.trim() !== '' || note.trim() !== ''));
 
-  if (!mayView) {
-    return (
-      <Card title={t('web.wallet_title')}>
-        <Banner tone="info">{t('web.wallet_denied')}</Banner>
-      </Card>
-    );
-  }
-
-  const columns: Column<WalletEntrySummaryResponse>[] = [
-    {
-      key: 'direction',
-      header: t('web.wallet_direction'),
-      render: (row) => (
-        <Badge tone={DIRECTION_TONES[row.direction]}>{t(DIRECTION_LABELS[row.direction])}</Badge>
-      ),
-    },
-    {
-      key: 'amount',
-      header: t('web.wallet_balance'),
-      // Positive, always, with the sign carried by the direction beside it — the
-      // ledger's own shape, preserved to the screen.
-      render: (row) => (
-        <span className={row.direction === 'CREDIT' ? 'ca-amount credit' : 'ca-amount debit'}>
-          <Money value={{ amountMinor: row.amount, currency: row.currency }} />
-        </span>
-      ),
-    },
-    {
-      key: 'reason',
-      header: t('web.wallet_reason'),
-      render: (row) => <span title={row.reason}>{t(LEDGER_REASON_LABELS[row.reason])}</span>,
-    },
-    {
-      key: 'actor',
-      header: t('web.wallet_actor'),
-      render: (row) =>
-        row.actorAdminId === null ? (
-          <span className="faint">{t('web.wallet_actor_system')}</span>
-        ) : (
-          <Copyable value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />
-        ),
-    },
-    {
-      key: 'note',
-      header: t('web.wallet_note'),
-      render: (row) => (row.note === null ? <Dash /> : row.note),
-    },
-    {
-      key: 'createdAt',
-      header: t('web.wallet_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
-    },
-  ];
-
-  const balance = wallet.data?.wallet;
-  /*
-   * BELOW ZERO is a real state now, and only for one reason: a reseller's purchase drawn
-   * on their credit line (`docs/wp9-reseller-audit.md` R8). The figure is drawn exactly
-   * as derived — `Money` carries the sign — and said in words beside it, because a
-   * negative balance read as a rendering glitch is a debt nobody follows up.
-   */
-  const negative = balance?.balanceAmount.startsWith('-') ?? false;
-
+  const credit = direction === 'CREDIT';
   return (
-    <Card title={t('web.wallet_title')} hint={t('web.wallet_balance_hint')}>
-      <StateSwitch query={wallet}>
-        {balance === undefined ? null : (
-          <>
-            <div className="ca-balance">
-              <KV
-                inline
-                items={[
-                  [
-                    t('web.wallet_balance'),
-                    <span key="b" className={negative ? 'ca-amount negative' : 'ca-amount'}>
-                      <Money
-                        value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
-                      />
-                      {negative && (
-                        <>
-                          {' '}
-                          <Badge tone="warn">{t('web.wallet_balance_negative')}</Badge>
-                        </>
-                      )}
-                    </span>,
-                  ],
-                  [t('web.wallet_entry_count'), String(balance.entryCount)],
-                ]}
-              />
-            </div>
-            {negative && <Banner tone="warn">{t('web.wallet_balance_negative_hint')}</Banner>}
-          </>
-        )}
-      </StateSwitch>
-
-      <h3 className="ca-subhead">{t('web.wallet_history_title')}</h3>
-      <StateSwitch query={entries}>
-        {entries.data === undefined ? null : entries.data.entries.length === 0 ? (
-          <Empty variant="compact" title={t('web.wallet_history_empty')} />
-        ) : (
-          <>
-            <DataTable
-              caption={t('web.wallet_history_title')}
-              columns={columns}
-              rows={entries.data.entries}
-              rowKey={(row) => row.id}
-              dense
-            />
-            <CursorPager
-              shown={entries.data.entries.length}
-              hasPrevious={cursor !== null}
-              hasNext={entries.data.nextCursor !== null}
-              onPrevious={() => setCursor(null)}
-              onNext={() => setCursor(entries.data?.nextCursor ?? null)}
-            />
-          </>
-        )}
-      </StateSwitch>
-      <p className="muted small">{t('web.wallet_immutable')}</p>
-
-      {mayCredit || mayDebit ? (
-        /*
-         * DISABLED until the balance has loaded, because the balance carries the
-         * currency this movement will be denominated in.
-         *
-         * This block is a sibling of the `StateSwitch` above rather than inside it —
-         * an operator may adjust a wallet whose history failed to page — so without
-         * the fieldset the buttons were live while `wallet.data` was undefined, and
-         * the request went out under a hard-coded fallback currency.
-         */
-        <fieldset className="ca-fieldset" disabled={walletReady === false}>
-          <h3 className="ca-subhead">{t('web.wallet_adjust_title')}</h3>
-          <p className="muted small">{t('web.wallet_adjust_hint')}</p>
-          <div className="form-grid">
-            <Field label={t('web.wallet_adjust_amount')} htmlFor="wallet-amount">
-              <Input
-                id="wallet-amount"
-                inputMode="numeric"
-                dir="ltr"
-                value={amount}
-                onChange={(event) => setAmount(event.target.value)}
-              />
-            </Field>
-            <Field label={t('web.wallet_adjust_note')} htmlFor="wallet-note">
-              <Input
-                id="wallet-note"
-                value={note}
-                maxLength={500}
-                onChange={(event) => setNote(event.target.value)}
-              />
-            </Field>
-          </div>
-          <div className="form-actions">
-            {mayCredit && (
-              <Button
-                variant="primary"
-                size="sm"
-                icon="plus"
-                disabled={adjust.isPending}
-                onClick={() => adjust.mutate({ direction: 'CREDIT' })}
-              >
-                {t('web.wallet_credit')}
-              </Button>
-            )}
-            {mayDebit && (
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={adjust.isPending}
-                onClick={() => adjust.mutate({ direction: 'DEBIT' })}
-              >
-                {t('web.wallet_debit')}
-              </Button>
-            )}
-          </div>
-          {adjust.error !== null && <Banner tone="danger">{messageFor(adjust.error)}</Banner>}
-        </fieldset>
-      ) : null}
-
-      {/*
-        Named separately, because the two permissions are separate decisions with
-        different risk labels. An operator who may credit and not debit is told
-        which one they are missing rather than shown a card with one button and no
-        explanation.
-      */}
-      {!mayCredit && <Banner tone="info">{t('web.wallet_credit_denied')}</Banner>}
-      {!mayDebit && <Banner tone="info">{t('web.wallet_debit_denied')}</Banner>}
-    </Card>
+    <FormDialog
+      open={direction !== null}
+      title={t(credit ? 'web.c360_wallet_credit_open' : 'web.c360_wallet_debit_open')}
+      danger={direction === 'DEBIT'}
+      dirty={amount.trim() !== '' || note.trim() !== ''}
+      onClose={close}
+      foot={
+        <Button
+          variant={credit ? 'primary' : 'danger'}
+          size="sm"
+          {...(credit ? { icon: 'plus' as const } : {})}
+          disabled={!walletReady || adjust.isPending || amount.trim() === ''}
+          onClick={() => direction !== null && adjust.mutate({ direction })}
+        >
+          {t(credit ? 'web.wallet_credit' : 'web.wallet_debit')}
+        </Button>
+      }
+    >
+      <p className="muted small">{t('web.wallet_adjust_hint')}</p>
+      <div className="form-grid">
+        <Field label={t('web.wallet_adjust_amount')} htmlFor="wallet-amount">
+          <Input
+            id="wallet-amount"
+            inputMode="numeric"
+            dir="ltr"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        </Field>
+        <Field label={t('web.wallet_adjust_note')} htmlFor="wallet-note">
+          <Input
+            id="wallet-note"
+            value={note}
+            maxLength={500}
+            onChange={(event) => setNote(event.target.value)}
+          />
+        </Field>
+      </div>
+      {adjust.error !== null && <Banner tone="danger">{messageFor(adjust.error)}</Banner>}
+    </FormDialog>
   );
 }
 
@@ -1473,6 +1630,8 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
   const submission = useSubmissionKey();
   const [limit, setLimit] = useState('');
   const [reason, setReason] = useState('');
+  // W3: the override's two writes are dialogs opened from the card's header.
+  const [dialog, setDialog] = useState<'set' | 'remove' | null>(null);
 
   const trial = useQuery({
     queryKey: ['customer-trial', customerId],
@@ -1508,6 +1667,7 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
       });
       setLimit('');
       setReason('');
+      setDialog(null);
       queries.setQueryData(['customer-trial', customerId], response);
       void queries.invalidateQueries({ queryKey: ['trial-overrides'] });
     },
@@ -1515,12 +1675,42 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
     onError: (error) => submission.settleOn(error),
   });
 
-  // A typed override is lost by navigating away; the guard asks first.
-  useUnsavedChanges(mayEdit && (limit.trim() !== '' || reason.trim() !== ''));
+  const closeDialog = () => {
+    setDialog(null);
+    setLimit('');
+    setReason('');
+    write.reset();
+  };
 
   const row = trial.data?.trial;
+  const reasonField = (
+    <Field label={t('web.trial_reason_label')} htmlFor="trial-reason">
+      <Input
+        id="trial-reason"
+        value={reason}
+        maxLength={TRIAL_ADMIN_REASON_MAX_LENGTH}
+        onChange={(event) => setReason(event.target.value)}
+      />
+    </Field>
+  );
   return (
-    <Card title={t('web.trial_card_title')}>
+    <Card
+      title={t('web.trial_card_title')}
+      actions={
+        mayEdit && row !== undefined ? (
+          <>
+            <Button size="sm" icon="plus" onClick={() => setDialog('set')}>
+              {t('web.c360_trial_set_open')}
+            </Button>
+            {row.override !== null && (
+              <Button size="sm" onClick={() => setDialog('remove')}>
+                {t('web.c360_trial_remove_open')}
+              </Button>
+            )}
+          </>
+        ) : undefined
+      }
+    >
       <StateSwitch query={trial}>
         {row === undefined ? null : (
           <>
@@ -1540,37 +1730,43 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
             <p className="muted small">{t('web.trial_zero_hint')}</p>
             {mayEdit ? (
               <>
-                <div className="form-grid">
-                  <Field label={t('web.trial_override_label')} htmlFor="trial-limit">
-                    <Input
-                      id="trial-limit"
+                <FormDialog
+                  open={dialog === 'set'}
+                  title={t('web.c360_trial_set_open')}
+                  dirty={limit.trim() !== '' || reason.trim() !== ''}
+                  onClose={closeDialog}
+                  foot={
+                    <Button
+                      variant="primary"
                       size="sm"
-                      inputMode="numeric"
-                      dir="ltr"
-                      value={limit}
-                      onChange={(event) => setLimit(event.target.value)}
-                    />
-                  </Field>
-                  <Field label={t('web.trial_reason_label')} htmlFor="trial-reason">
-                    <Input
-                      id="trial-reason"
-                      size="sm"
-                      value={reason}
-                      maxLength={TRIAL_ADMIN_REASON_MAX_LENGTH}
-                      onChange={(event) => setReason(event.target.value)}
-                    />
-                  </Field>
-                </div>
-                <div className="form-actions">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={write.isPending || limit.trim() === ''}
-                    onClick={() => write.mutate({ remove: false })}
-                  >
-                    {t('web.trial_override_set')}
-                  </Button>
-                  {row.override !== null && (
+                      disabled={write.isPending || limit.trim() === ''}
+                      onClick={() => write.mutate({ remove: false })}
+                    >
+                      {t('web.trial_override_set')}
+                    </Button>
+                  }
+                >
+                  <div className="form-grid">
+                    <Field label={t('web.trial_override_label')} htmlFor="trial-limit">
+                      <Input
+                        id="trial-limit"
+                        inputMode="numeric"
+                        dir="ltr"
+                        value={limit}
+                        onChange={(event) => setLimit(event.target.value)}
+                      />
+                    </Field>
+                    {reasonField}
+                  </div>
+                  <p className="muted small">{t('web.trial_zero_hint')}</p>
+                  {write.error !== null && <Banner tone="danger">{messageFor(write.error)}</Banner>}
+                </FormDialog>
+                <FormDialog
+                  open={dialog === 'remove' && row.override !== null}
+                  title={t('web.c360_trial_remove_open')}
+                  dirty={reason.trim() !== ''}
+                  onClose={closeDialog}
+                  foot={
                     <Button
                       size="sm"
                       disabled={write.isPending}
@@ -1578,9 +1774,11 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
                     >
                       {t('web.trial_override_remove')}
                     </Button>
-                  )}
-                </div>
-                {write.error !== null && <Banner tone="danger">{messageFor(write.error)}</Banner>}
+                  }
+                >
+                  {reasonField}
+                  {write.error !== null && <Banner tone="danger">{messageFor(write.error)}</Banner>}
+                </FormDialog>
               </>
             ) : (
               <Banner tone="info">{t('web.trial_override_denied')}</Banner>
