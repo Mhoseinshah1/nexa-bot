@@ -159,6 +159,12 @@ const listWithPresentation = {
   },
 };
 
+/** Brings one section of the campaign form to the front: the form is a tab per section. */
+const section = (label: string) => {
+  fireEvent.click(screen.getByRole('tab', { name: new RegExp(label) }));
+  return screen.getByRole('tabpanel');
+};
+
 const posts = (api: Api, path: string) =>
   api.calls.filter((call) => call.method === 'POST' && call.url.includes(path));
 
@@ -238,12 +244,16 @@ describe('a new campaign', () => {
       { url: '/campaigns', body: detail() },
     ]);
     renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
+    await screen.findByLabelText(t('web.campaign_name'));
     // Broadcast's own builder, not a second one.
+    section(t('web.campaign_section_audience'));
     expect(await screen.findByText('چه کسانی')).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('کاربران عادی (غیر نماینده)'));
 
+    section(t('web.campaign_section_identity'));
     const inputs = screen.getAllByRole('textbox');
     fireEvent.change(inputs[0] as HTMLElement, { target: { value: 'جشنواره پاییز' } });
+    section(t('web.campaign_window'));
     fireEvent.change(screen.getByPlaceholderText('1405-07-10'), {
       target: { value: '1405-07-10' },
     });
@@ -278,6 +288,8 @@ describe('the new-campaign form, by permission and calendar', () => {
   it('draws the window in the tenant calendar and zone, loaded before the inputs', async () => {
     stubApi(routes);
     renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
+    await screen.findByLabelText(t('web.campaign_name'));
+    section(t('web.campaign_window'));
     expect(await screen.findByText(/تقویم شمسی · Asia\/Tehran/)).toBeInTheDocument();
   });
 
@@ -290,17 +302,14 @@ describe('the new-campaign form, by permission and calendar', () => {
         may={{ ...ALL, cashback: false, walletGift: false }}
       />,
     );
-    await screen.findByText('چه کسانی');
-    const cashback = screen
-      .getByRole('heading', { name: 'کش‌بک' })
-      .closest('section') as HTMLElement;
+    await screen.findByLabelText(t('web.campaign_name'));
+    const cashback = section('کش‌بک');
     expect(within(cashback).queryByRole('checkbox')).toBeNull();
     expect(within(cashback).getByText(/شما مجوز این اقدام را ندارید/)).toBeInTheDocument();
     // The discount editor, which the actor may use, is still offered.
-    const discount = screen
-      .getByRole('heading', { name: 'تخفیف' })
-      .closest('section') as HTMLElement;
+    const discount = section('تخفیف');
     expect(within(discount).getByRole('checkbox')).toBeInTheDocument();
+    section(t('web.campaign_section_gifts'));
     expect(screen.queryByLabelText('هدیهٔ کیف پول')).toBeNull();
   });
 });
@@ -639,18 +648,43 @@ describe('the campaign editor', () => {
     expect(window.location.pathname).toBe('/orders');
   });
 
-  it('moves focus into the section the section list names', async () => {
+  it('shows one section at a time, as tabs, and marks the ones holding unsaved edits', async () => {
     stubApi([...pickers, listWithPresentation]);
     renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
     await screen.findByLabelText(t('web.campaign_name'));
-    const nav = screen.getByRole('navigation', { name: t('web.cb_sections') });
-    for (const [label, id] of [
-      [t('web.campaign_window'), 'campaign-section-window'],
-      [t('web.campaign_action_announcement'), 'campaign-section-announcement'],
-    ] as const) {
-      fireEvent.click(within(nav).getByRole('button', { name: label }));
-      await waitFor(() => expect(document.activeElement?.id).toBe(id));
-    }
+    expect(screen.getAllByRole('tab')).toHaveLength(7);
+    expect(screen.queryByPlaceholderText('1405-07-10')).toBeNull();
+    const before = window.scrollY;
+    fireEvent.change(screen.getByLabelText(t('web.campaign_name')), {
+      target: { value: 'جشنواره' },
+    });
+    expect(screen.getByTestId('tab-dot-identity')).toBeInTheDocument();
+    expect(screen.queryByTestId('tab-dot-window')).toBeNull();
+    section(t('web.campaign_window'));
+    expect(screen.getByPlaceholderText('1405-07-10')).toBeInTheDocument();
+    expect(screen.queryByLabelText(t('web.campaign_name'))).toBeNull();
+    expect(window.scrollY).toBe(before);
+    // The draft survives the switch.
+    section(t('web.campaign_section_identity'));
+    expect(screen.getByLabelText(t('web.campaign_name'))).toHaveValue('جشنواره');
+    // The save bar is under every tab.
+    expect(screen.getByRole('button', { name: 'ذخیرهٔ پیش‌نویس' })).toBeInTheDocument();
+  });
+
+  it('brings a refused save to the section its problem is in, marked', async () => {
+    stubApi([...pickers, listWithPresentation]);
+    renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
+    fireEvent.change(await screen.findByLabelText(t('web.campaign_name')), {
+      target: { value: 'جشنواره' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ پیش‌نویس' }));
+    // No dates yet: the window is the problem.
+    await waitFor(() =>
+      expect(
+        screen.getByRole('tab', { name: new RegExp(t('web.campaign_window')) }),
+      ).toHaveAttribute('aria-selected', 'true'),
+    );
+    expect(screen.getByTestId('tab-dot-window')).toHaveClass('danger');
   });
 });
 
@@ -668,24 +702,24 @@ describe('roadmap C3/C4 on the campaign page', () => {
   it('offers no service-announcement purpose: a campaign’s announcement is promotional, and says so', async () => {
     const api = stubApi([...pickers, { url: '/campaigns', body: detail() }]);
     renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
-    await screen.findByText('چه کسانی');
-    const section = document.getElementById('campaign-section-announcement') as HTMLElement;
-    fireEvent.click(within(section).getByLabelText(t('web.campaign_action_on')));
-    expect(within(section).queryByRole('combobox')).toBeNull();
-    expect(within(section).queryByText(t('web.bc_purpose_service'))).toBeNull();
-    expect(
-      within(section).getByText(t('web.campaign_purpose_promotional_hint')),
-    ).toBeInTheDocument();
-
+    await screen.findByLabelText(t('web.campaign_name'));
     const inputs = screen.getAllByRole('textbox');
     fireEvent.change(inputs[0] as HTMLElement, { target: { value: 'جشنواره' } });
+    section(t('web.campaign_window'));
     fireEvent.change(screen.getByPlaceholderText('1405-07-10'), {
       target: { value: '1405-07-10' },
     });
     fireEvent.change(screen.getByPlaceholderText('1405-07-20'), {
       target: { value: '1405-07-20' },
     });
-    fireEvent.change(within(section).getByLabelText(t('web.campaign_announcement_body')), {
+    const announcement = section(t('web.campaign_action_announcement'));
+    fireEvent.click(within(announcement).getByLabelText(t('web.campaign_action_on')));
+    expect(within(announcement).queryByRole('combobox')).toBeNull();
+    expect(within(announcement).queryByText(t('web.bc_purpose_service'))).toBeNull();
+    expect(
+      within(announcement).getByText(t('web.campaign_purpose_promotional_hint')),
+    ).toBeInTheDocument();
+    fireEvent.change(within(announcement).getByLabelText(t('web.campaign_announcement_body')), {
       target: { value: 'سلام' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ پیش‌نویس' }));
