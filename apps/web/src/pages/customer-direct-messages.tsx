@@ -14,6 +14,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { readReplyFile, type PickedReplyFile } from './tickets';
+import { FilePicker } from '../ui/file-picker';
 import {
   Badge,
   Banner,
@@ -120,6 +121,8 @@ export function DirectMessageComposeModal({
   const selection = useRef(0);
   // Re-keys the file input, so a cleared or discarded file is not still shown as chosen.
   const [fileInput, setFileInput] = useState(0);
+  // The file the picker shows (W1.2): its name and size, with «تغییر» and «حذف».
+  const [chosen, setChosen] = useState<File | null>(null);
 
   const hasFile = picked.kind === 'READY';
   const max = hasFile ? DIRECT_MESSAGE_CAPTION_MAX_LENGTH : DIRECT_MESSAGE_TEXT_MAX_LENGTH;
@@ -133,6 +136,7 @@ export function DirectMessageComposeModal({
   const clearFile = () => {
     selection.current += 1;
     setPicked({ kind: 'NONE' });
+    setChosen(null);
     setFileInput((value) => value + 1);
   };
 
@@ -187,6 +191,7 @@ export function DirectMessageComposeModal({
     selection.current += 1;
     const pick = selection.current;
     // The previous pick is gone the moment a new one is made, ready or not.
+    setChosen(file ?? null);
     if (file === undefined) {
       setPicked({ kind: 'NONE' });
       return;
@@ -274,21 +279,19 @@ export function DirectMessageComposeModal({
               htmlFor="dm-file"
               {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
             >
-              <input
+              <FilePicker
                 key={fileInput}
                 id="dm-file"
-                type="file"
+                kind="any"
+                extensions={['.jpg', '.png', '.pdf', '.txt']}
                 accept="image/jpeg,image/png,application/pdf,text/plain,.jpg,.jpeg,.png,.pdf,.txt"
-                onChange={(event) => choose(event.target.files?.[0])}
+                selected={chosen}
+                onFiles={(files) => choose(files[0])}
+                onClear={clearFile}
               />
             </Field>
             {picked.kind === 'READING' && (
               <span className="muted small">{t('web.dm_file_reading')}</span>
-            )}
-            {picked.kind !== 'NONE' && (
-              <Button size="sm" variant="ghost" onClick={clearFile}>
-                {t('web.ticket_reply_file_clear')}
-              </Button>
             )}
           </div>
         ) : (

@@ -277,7 +277,7 @@ describe('Customer 360’s terms line', () => {
     expect(document.body.textContent).toContain(t('web.c360_terms_last'));
   });
 
-  it('says accepted, and keeps "unavailable" for a server without the domain', () => {
+  it('says accepted, and shows a dash (never "not accepted") for a server without the domain', () => {
     const { unmount } = renderPage(
       <GeneralInfoCard
         row={row}
@@ -313,6 +313,8 @@ describe('Customer 360’s terms line', () => {
         overview={{ ...base, terms: { available: false } }}
       />,
     );
-    expect(screen.getByText(t('web.c360_terms_unavailable'))).toBeInTheDocument();
+    // W5: no «not built» note; a dash, and certainly not «not accepted».
+    expect(screen.queryByText(t('web.c360_terms_not_accepted'))).toBeNull();
+    expect(screen.getByText(t('web.c360_terms')).closest('div')?.textContent).toContain('—');
   });
 });

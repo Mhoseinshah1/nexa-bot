@@ -27,6 +27,7 @@ import {
   stubApi,
   type Api,
 } from './harness';
+import { openC360Tab } from './c360-helpers';
 
 /**
  * WP9-B on the Web Admin: the Resellers page, the Tiers page and its grants editor, the
@@ -987,6 +988,7 @@ describe("the customer's reseller card", () => {
     renderPage(
       <UserDetailPage id={CUSTOMER_ID} {...OFF} mayViewReseller mayEditReseller denied={false} />,
     );
+    await openC360Tab('relations');
     const card = (await screen.findByRole('heading', { name: 'نمایندگی' })).closest(
       'section',
     ) as HTMLElement;
@@ -1017,6 +1019,7 @@ describe("the customer's reseller card", () => {
         denied={false}
       />,
     );
+    await openC360Tab('relations');
     await screen.findByText('این مشتری نماینده نیست.');
     expect(screen.queryByText('ثبت این مشتری به‌عنوان نماینده')).toBeNull();
   });
@@ -1033,6 +1036,7 @@ describe("the customer's reseller card", () => {
     renderPage(
       <UserDetailPage id={CUSTOMER_ID} {...OFF} mayViewReseller mayEditReseller denied={false} />,
     );
+    await openC360Tab('relations');
     const card = (await screen.findByRole('heading', { name: 'نمایندگی' })).closest(
       'section',
     ) as HTMLElement;
@@ -1059,6 +1063,7 @@ describe("the customer's reseller card", () => {
     renderPage(
       <UserDetailPage id={CUSTOMER_ID} {...OFF} mayViewReseller mayEditReseller denied={false} />,
     );
+    await openC360Tab('relations');
     const card = (await screen.findByRole('heading', { name: 'نمایندگی' })).closest(
       'section',
     ) as HTMLElement;
@@ -1083,6 +1088,7 @@ describe("the customer's reseller card", () => {
         denied={false}
       />,
     );
+    await openC360Tab('relations');
     expect(await screen.findByText(/resellers\.view/u)).toBeInTheDocument();
     expect(gets(api, '/resellers')).toHaveLength(0);
   });
@@ -1113,6 +1119,7 @@ describe("the customer's reseller card", () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     const card = (await screen.findByRole('heading', { name: 'کیف پول' })).closest(
       'section',
     ) as HTMLElement;
@@ -1144,6 +1151,7 @@ describe("the customer's reseller card", () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     const card = (await screen.findByRole('heading', { name: 'کیف پول' })).closest(
       'section',
     ) as HTMLElement;

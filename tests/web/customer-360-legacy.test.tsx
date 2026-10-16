@@ -29,7 +29,7 @@ const page = (over: Record<string, unknown> = {}) => ({
   ],
   matching: 30,
   offset: 0,
-  limit: 25,
+  limit: 10,
   byType: [
     { recordType: 'payment', count: 20 },
     { recordType: 'service_operation', count: 10 },
@@ -66,7 +66,7 @@ describe('the Mirza history card', () => {
     await screen.findByRole('heading', { name: 'پرداخت‌ها' });
     fireEvent.click(await screen.findByRole('button', { name: /بعدی/ }));
     await waitFor(() =>
-      expect(api.calls.some((call) => call.url.includes('offset=25'))).toBe(true),
+      expect(api.calls.some((call) => call.url.includes('offset=10'))).toBe(true),
     );
   });
 });
