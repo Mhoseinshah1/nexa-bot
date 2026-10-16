@@ -264,6 +264,9 @@ const USER_ID_PATHS: Readonly<Partial<Record<LegacyHistoryRecordType, readonly P
   wheel_result: [['customer', 'telegram_user_id']],
   support_message: [['customer', 'telegram_user_id']],
   ticket: [['customer', 'telegram_user_id']],
+  // Converter 0.8.0 per-customer archive tables. `configuration_row` is installation-wide
+  // settings with no customer, so it is deliberately absent.
+  archive_row: [['customer', 'telegram_user_id']],
 };
 
 /**
