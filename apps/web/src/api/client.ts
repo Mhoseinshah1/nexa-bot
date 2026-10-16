@@ -5380,6 +5380,8 @@ export interface LegacyInvoiceArchiveQuery {
   readonly classification?: LegacyInvoiceArchiveClass;
   readonly test?: 'true' | 'false';
   readonly after?: string;
+  /** The page size (W1.8). */
+  readonly limit?: number;
 }
 
 /**
