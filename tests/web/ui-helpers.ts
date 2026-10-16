@@ -103,3 +103,28 @@ export function openFilterPanel(container: HTMLElement = document.body): HTMLEle
   if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
   return screen.getByRole('dialog', { name: t('web.filters') });
 }
+
+/**
+ * Adds a condition to the audience builder by its label (from the catalogue) through
+ * «+ افزودن شرط», and returns the condition's open editor.
+ */
+export function addAudienceCondition(label: string): HTMLElement {
+  fireEvent.click(screen.getByRole('button', { name: t('web.aq_add') }));
+  const menu = screen.getByRole('group', { name: t('web.aq_add') });
+  fireEvent.click(within(menu).getByRole('button', { name: label }));
+  return audienceConditionEditor(label);
+}
+
+/** Opens (if closed) and returns the editor of a condition already in the list. */
+export function audienceConditionEditor(label: string): HTMLElement {
+  const close = screen.queryByRole('button', { name: `${t('web.aq_close')} ${label}` });
+  if (close === null) {
+    fireEvent.click(screen.getByRole('button', { name: `${t('web.aq_change')} ${label}` }));
+  }
+  const row = screen
+    .getByRole('button', { name: `${t('web.aq_close')} ${label}` })
+    .closest('.aq-row');
+  const editor = row?.querySelector<HTMLElement>('.aq-ed');
+  if (editor === null || editor === undefined) throw new Error(`no editor for ${label}`);
+  return editor;
+}

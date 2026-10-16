@@ -141,10 +141,69 @@ export const WEB_FA_UI = {
   'web.pc_matrix_permission': 'دسترسی',
   'web.pc_has': 'دارد',
   'web.pc_lacks': 'ندارد',
+
+  // W1.6 — the audience builder
+  'web.aq_count_title': 'مخاطبان',
+  'web.aq_customers': 'مشتری',
+  'web.aq_reachable': '{n} نفر قابل دسترس در ربات',
+  'web.aq_counting': 'در حال شمارش…',
+  'web.aq_quick': 'شروع سریع:',
+  'web.aq_preset_all': 'همهٔ کاربران فعال',
+  'web.aq_preset_never': 'هرگز خرید نکرده‌اند',
+  'web.aq_preset_lapsed': '۶۰ روز است خرید نکرده‌اند',
+  'web.aq_preset_no_service': 'سرویس فعال ندارند',
+  'web.aq_preset_expiring': 'سرویسشان تا ۳ روز تمام می‌شود',
+  'web.aq_group_who': 'چه کسانی',
+  'web.aq_group_act': 'رفتار و وضعیت',
+  'web.aq_group_time': 'زمان',
+  'web.aq_group_money': 'کیف پول',
+  'web.aq_group_svc': 'سرویس‌ها',
+  'web.aq_add': 'افزودن شرط',
+  'web.aq_clear_all': 'پاک کردن همهٔ شرط‌ها',
+  'web.aq_change': 'تغییر',
+  'web.aq_close': 'بستن',
+  'web.aq_remove': 'حذف شرط {label}',
+  'web.aq_pending': 'انتخاب نشده — یکی را انتخاب کنید',
+  'web.aq_note_all': 'مشتری باید همهٔ شرط‌ها را داشته باشد.',
+  'web.aq_note_none': 'بدون شرط دیگر، فقط وضعیت حساب در نظر گرفته می‌شود.',
+  'web.aq_note_service':
+    'شرط‌های سرویس یعنی دست‌کم یکی از سرویس‌های مشتری همهٔ آن‌ها را داشته باشد.',
+  'web.aq_segment': 'نوع کاربر',
+  'web.aq_registered': 'تاریخ عضویت',
+  'web.aq_age': 'عمر حساب',
+  'web.aq_last_purchase': 'تاریخ آخرین خرید',
+  'web.aq_lapse': 'بدون خرید اخیر',
+  'web.aq_lapse_summary': 'در {n} روز اخیر خرید نکرده',
+  'web.aq_wallet': 'موجودی کیف پول',
+  'web.aq_expiry': 'انقضای سرویس',
+  'web.aq_expiry_24': '۲۴ ساعت آینده',
+  'web.aq_expiry_72': '۳ روز آینده',
+  'web.aq_expiry_168': '۷ روز آینده',
+  'web.aq_expiring_days': 'تا {n} روز آینده منقضی می‌شود',
+  'web.aq_expiring_hours': 'تا {n} ساعت آینده منقضی می‌شود',
+  'web.aq_days': '{n} روز',
+  'web.aq_day_unit': 'روز',
+  'web.aq_or': 'یا',
+  'web.aq_people': '{n} نفر مشخص',
+  'web.aq_tag_has': 'دارد: {list}',
+  'web.aq_tag_hasnt': 'ندارد: {list}',
+  'web.aq_more': '{list} و {n} مورد دیگر',
+  'web.aq_range_from_to': 'از {a} تا {b}',
+  'web.aq_range_from': 'از {a} به بعد',
+  'web.aq_range_to': 'تا {b}',
+  'web.aq_before': 'پیش از {d}',
+  'web.aq_from': 'از {a}',
 } as const;
 
 /**
  * Keys of `web.fa.ts` this agent's work no longer renders. Listing a key here keeps
  * `check:i18n` quiet until the lead deletes it from `web.fa.ts` when folding.
  */
-export const WEB_FA_UI_RETIRED: readonly string[] = [];
+export const WEB_FA_UI_RETIRED: readonly string[] = [
+  // W1.6: the old audience form's section titles and its count button
+  'web.cb_aud_profile',
+  'web.cb_aud_dates',
+  'web.cb_aud_wallet',
+  'web.aud_count',
+  'web.aud_count_customers',
+];
