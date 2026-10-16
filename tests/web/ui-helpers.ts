@@ -88,10 +88,13 @@ export function setDateField(field: HTMLElement, value: string): void {
   pickDay(pop, value);
 }
 
+/** «فیلترها», with or without its count — never «فیلترهای ذخیره‌شده». */
+export const FILTERS_TOGGLE = new RegExp(`^\\s*${t('web.filters')}(?!\\p{L})`, 'u');
+
 /** Opens the «فیلترها» panel of the (only, or given) filter bar and returns the panel. */
 export function openFilterPanel(container: HTMLElement = document.body): HTMLElement {
   const scope = within(container);
-  const toggle = scope.getAllByRole('button', { name: new RegExp(t('web.filters')) })[0];
+  const toggle = scope.getAllByRole('button', { name: FILTERS_TOGGLE })[0];
   if (toggle === undefined) throw new Error('no filter bar');
   if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
   return screen.getByRole('dialog', { name: t('web.filters') });

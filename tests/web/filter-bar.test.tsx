@@ -5,7 +5,7 @@ import { ListFilterBar, type ListFilter } from '../../apps/web/src/ui/filter-bar
 import { ListSearchBox } from '../../apps/web/src/ui/list-search';
 import { FilterChip, FilterChips } from '../../apps/web/src/ui/kit';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { openFilterPanel } from './ui-helpers';
+import { FILTERS_TOGGLE, openFilterPanel } from './ui-helpers';
 
 /** W1.3 — one filter line, a panel of filters, chips for what is on. */
 
@@ -58,7 +58,7 @@ function Page({ saved = false, onCleared }: { saved?: boolean; onCleared?: () =>
   );
 }
 
-const toggle = () => screen.getByRole('button', { name: new RegExp(t('web.filters')) });
+const toggle = () => screen.getByRole('button', { name: FILTERS_TOGGLE });
 
 describe('the filter line', () => {
   it('says there is no filter, and mounts no control until the panel opens', () => {

@@ -59,7 +59,7 @@ export function appliedListSearch(route: Route): string {
  */
 const draftResets = new Set<() => void>();
 
-function resetSearchDrafts(): void {
+export function resetSearchDrafts(): void {
   for (const reset of draftResets) reset();
 }
 
