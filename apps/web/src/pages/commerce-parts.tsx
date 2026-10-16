@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { CursorPager, FilterChip, TwoColumn } from '../ui/kit';
+import { FilterChip, TwoColumn } from '../ui/kit';
 import { setQueries, type Route } from '../router';
 import type { SavedViewsRegistration, ViewPreset, ViewState } from '../ui/saved-views';
 
@@ -124,35 +124,4 @@ export function BalancedColumns({
       {tail !== undefined && <div className="wb-balance-tail stack">{tail}</div>}
     </>
   );
-}
-
-/** W1.8: the page size of every list this agent's pages draw. */
-export const LIST_PAGE_SIZE = 10;
-
-/**
- * W1.8 for a list the server sends WHOLE (a bounded history, a small catalogue): ten rows at
- * a time with «قبلی / بعدی», paged in memory. Never for a keyset list — those ask the
- * server for ten. The page index is clamped, so a list that shrinks under it stays drawn.
- */
-export function useClientPage<T>(
-  rows: readonly T[],
-  size: number = LIST_PAGE_SIZE,
-): { readonly rows: readonly T[]; readonly pager: ReactNode } {
-  const [page, setPage] = useState(0);
-  const last = Math.max(0, Math.ceil(rows.length / size) - 1);
-  const current = Math.min(page, last);
-  const shown = rows.slice(current * size, current * size + size);
-  const pager =
-    rows.length <= size ? null : (
-      <CursorPager
-        shown={shown.length}
-        hasPrevious={current > 0}
-        hasNext={current < last}
-        onPrevious={() => setPage(current - 1)}
-        onNext={() => setPage(current + 1)}
-        previousLabel="web.report_page_previous"
-        nextLabel="web.report_page_next"
-      />
-    );
-  return { rows: shown, pager };
 }

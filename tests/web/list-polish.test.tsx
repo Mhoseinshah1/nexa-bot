@@ -147,12 +147,12 @@ describe('the cursor trail after a filter change', () => {
       .filter((c) => c.method === 'GET' && new URL(c.url, 'http://x').pathname.endsWith(path))
       .at(-1)!;
 
-  // `GET /orders` pages ascending, so its "next" button is «تازه‌تر».
+  // Every list's pager reads «قبلی / بعدی» (W1.8).
   it('starts the orders list again from its first page when every filter is cleared', async () => {
     navigate('/orders', { replace: true, force: true });
     const api = stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: 'C2' } }]);
     renderPage(<LiveOrders />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.newer') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('cursor=C2'));
     fireEvent.click(
       within(openFilterPanel()).getByRole('button', { name: t('web.order_state_paid') }),
@@ -172,7 +172,7 @@ describe('the cursor trail after a filter change', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: 'C2' } }]);
     renderPage(<LiveOrders />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.newer') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('cursor=C2'));
     const box = screen.getByLabelText(t('web.list_search_label'));
     fireEvent.change(box, { target: { value: 'alir' } });
@@ -192,7 +192,7 @@ describe('the cursor trail after a filter change', () => {
       { url: '/customer-tags', body: { tags: [] } },
     ]);
     renderPage(<LiveUsers />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.newer') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(lastRead(api.calls, '/users').url).toContain('cursor=C2'));
     fireEvent.click(
       within(openFilterPanel()).getByRole('button', { name: t('web.user_status_blocked') }),
@@ -206,7 +206,7 @@ describe('the cursor trail after a filter change', () => {
     // The first page of the unfiltered list (served from cache here, so asked of the pager):
     // no trail behind it, so nothing to go back to.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: t('web.older') })).toBeDisabled(),
+      expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled(),
     );
     expect(lastRead(api.calls, '/users').url).not.toContain('cursor=');
   });

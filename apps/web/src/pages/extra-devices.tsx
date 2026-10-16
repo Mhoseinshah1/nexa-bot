@@ -38,6 +38,7 @@ import {
   useDiscardGuard,
   useUnsavedChanges,
   type Column,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { SaveBar, revealField } from './editor-layout';
 
@@ -93,7 +94,7 @@ export async function everyPage<T>(
 }
 
 /** One page of rates. The list pages by the server's keyset cursor, never by a cap. */
-const RATE_PAGE_SIZE = 50;
+const RATE_PAGE_SIZE = LIST_PAGE_SIZE;
 
 const EMPTY_FORM = {
   title: '',
@@ -422,8 +423,6 @@ export function ExtraDevicesPage({
                 setTrail([...trail, cursor]);
                 setCursor(next);
               }}
-              nextLabel="web.newer"
-              previousLabel="web.older"
             />
           </Card>
         </StateSwitch>

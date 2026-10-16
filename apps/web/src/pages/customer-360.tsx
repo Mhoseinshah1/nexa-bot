@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
   TRIAL_ADMIN_REASON_MAX_LENGTH,
-  WALLET_PAGE_DEFAULT,
   type CustomerReferralResponse,
   type CustomerStatus,
   type CustomerSummaryResponse,
@@ -103,6 +102,7 @@ import {
   useToast,
   type Column,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 
 // ---------------------------------------------------------------------------
@@ -801,7 +801,7 @@ function UserHead({
  * honest — an operator can always reach the next page — which is what a bounded
  * list owes and a "recent N" with no pager does not.
  */
-const EMBEDDED_PAGE = 10;
+const EMBEDDED_PAGE = LIST_PAGE_SIZE;
 
 /**
  * The cursor trail both embedded cards page with.
@@ -944,20 +944,13 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
               rowKey={(row) => row.id}
               dense
             />
-            {/*
-              The labels are SWAPPED, exactly as on `/orders`.
-              `nextCursor` walks towards newer rows here, so the button that
-              fetches it says "newer". Leaving the defaults on an ascending
-              traversal is the defect `services.tsx` warns about in reverse.
-            */}
+            {/* «قبلی / بعدی», as every list (W1.8); `nextCursor` walks towards newer rows. */}
             <CursorPager
               shown={orders.data.orders.length}
               hasPrevious={pages.hasPrevious}
               hasNext={orders.data.nextCursor !== null}
               onPrevious={pages.back}
               onNext={() => pages.forward(orders.data?.nextCursor ?? null)}
-              nextLabel="web.newer"
-              previousLabel="web.older"
             />
           </>
         )}
@@ -1187,7 +1180,7 @@ function WalletCard({
     queryKey: ['wallet-entries', customerId, cursor],
     queryFn: () =>
       fetchWalletEntries(customerId, {
-        limit: WALLET_PAGE_DEFAULT,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === null ? {} : { cursor }),
       }),
     enabled: mayView,

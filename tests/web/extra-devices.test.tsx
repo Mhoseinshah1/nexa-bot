@@ -132,8 +132,8 @@ describe('the extra users / devices screen', () => {
      */
     const later = { ...RATE, id: '019250ab-cdef-7012-8345-6789abcdef78', title: 'تعرفهٔ دوم' };
     const api = stubApi([
-      { url: '/service-addons?limit=50&kind', body: { addons: [RATE], nextCursor: 'c-2' } },
-      { url: '/service-addons?limit=50&cursor=c-2', body: { addons: [later], nextCursor: null } },
+      { url: '/service-addons?limit=10&kind', body: { addons: [RATE], nextCursor: 'c-2' } },
+      { url: '/service-addons?limit=10&cursor=c-2', body: { addons: [later], nextCursor: null } },
       { url: '/panels', body: { panels: [panel()], nextCursor: null } },
       { url: '/products', body: { products: [product()], nextCursor: null } },
     ]);
@@ -141,13 +141,13 @@ describe('the extra users / devices screen', () => {
     await screen.findByText('کاربر اضافه');
     expect(screen.queryByText('تعرفهٔ دوم')).toBeNull();
 
-    fireEvent.click(screen.getByText('تازه‌تر'));
+    fireEvent.click(screen.getByText('بعدی'));
     await screen.findByText('تعرفهٔ دوم');
     expect(api.calls.some((call) => call.url.includes('cursor=c-2'))).toBe(true);
     expect(screen.queryByText('کاربر اضافه')).toBeNull();
 
     // And back, to exactly the page it came from.
-    fireEvent.click(screen.getByText('قدیمی‌تر'));
+    fireEvent.click(screen.getByText('قبلی'));
     await screen.findByText('کاربر اضافه');
     cleanup();
   });

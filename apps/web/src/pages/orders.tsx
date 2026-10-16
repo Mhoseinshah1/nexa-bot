@@ -66,6 +66,7 @@ import {
   DataTable,
   Empty,
   KV,
+  LIST_PAGE_SIZE,
   Ltr,
   Money,
   Num,
@@ -189,9 +190,6 @@ function Duration({ days }: { days: number }) {
 /** Every URL key the order list filters on, its search included (clear-all, saved views). */
 const ORDER_FILTER_KEYS = ['q', 'state'] as const;
 
-/** W1.8: ten orders a page. */
-export const ORDERS_PAGE_SIZE = 10;
-
 /** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
 export const ORDER_PRESETS: readonly ViewPreset[] = [
   { id: 'awaiting', name: 'web.orders_view_awaiting', state: { state: 'AWAITING_PAYMENT' } },
@@ -234,7 +232,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
     queryKey: ['orders', searchSignature, cursor ?? null],
     queryFn: () =>
       fetchOrders({
-        limit: ORDERS_PAGE_SIZE,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === undefined ? {} : { cursor }),
         ...(appliedState === null ? {} : { state: appliedState }),
         ...(appliedSearch === '' ? {} : { q: appliedSearch }),
@@ -400,9 +398,6 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
               nextCursor !== null &&
               setTrail({ signature: searchSignature, cursors: [...cursors, nextCursor] })
             }
-            // `GET /orders` pages an ASCENDING keyset, so "next" is NEWER here.
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         )}
       </Card>

@@ -21,6 +21,7 @@ import {
   CursorPager,
   DataTable,
   Empty,
+  LIST_PAGE_SIZE,
   Ltr,
   PageHead,
   Select,
@@ -81,7 +82,7 @@ export function customersQuery(input: {
     queryKey: ['customers', searchSignature, cursor ?? null],
     queryFn: () =>
       fetchCustomers({
-        limit: USERS_PAGE_SIZE,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === undefined ? {} : { cursor }),
         // Only for an actor holding `users.search`: the server charges it for `q`, and a
         // search left in the URL by somebody else must not turn the list into a 403.
@@ -114,9 +115,6 @@ const USER_FILTER_KEYS = ['q', 'status', 'tag'] as const;
 export const USER_PRESETS: readonly ViewPreset[] = [
   { id: 'blocked', name: 'web.users_view_blocked', state: { status: 'BLOCKED' } },
 ];
-
-/** W1.8: ten customers a page. */
-export const USERS_PAGE_SIZE = 10;
 
 export function UsersPage({
   route,
@@ -443,12 +441,6 @@ export function UsersPage({
             hasNext={nextCursor !== null}
             onPrevious={popCursor}
             onNext={() => nextCursor !== null && pushCursor(nextCursor)}
-            // `GET /users` pages an ASCENDING keyset — the earliest customer
-            // first, `nextCursor` toward newer ones — so "next" is NEWER here.
-            // The default labels belong to the descending lists and read
-            // backwards on this one.
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         )}
       </Card>

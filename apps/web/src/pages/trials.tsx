@@ -2,8 +2,6 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TRIAL_ADMIN_REASON_MAX_LENGTH,
-  TRIAL_OVERRIDE_PAGE_DEFAULT,
-  TRIAL_RESET_PAGE_DEFAULT,
   trafficInputOf,
   type PanelTrialOverviewRow,
   type TrialOverrideRowResponse,
@@ -41,6 +39,7 @@ import {
   useToast,
   useUnsavedChanges,
   type Column,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 
 /**
@@ -174,7 +173,7 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
     queryKey: ['trial-overrides', cursor],
     queryFn: () =>
       fetchTrialOverrides({
-        limit: TRIAL_OVERRIDE_PAGE_DEFAULT,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === null ? {} : { cursor }),
       }),
     enabled: mayView,
@@ -391,7 +390,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
   const resets = useQuery({
     queryKey: ['trial-resets', cursor],
     queryFn: () =>
-      fetchTrialResets({ limit: TRIAL_RESET_PAGE_DEFAULT, ...(cursor === null ? {} : { cursor }) }),
+      fetchTrialResets({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
     enabled: mayView,
   });
 

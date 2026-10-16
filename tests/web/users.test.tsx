@@ -392,7 +392,7 @@ describe('the customer list', () => {
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5551234567');
 
-    fireEvent.click(screen.getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('cursor=Y3Vyc29yLW9uZQ'))).toBe(true),
     );
@@ -400,7 +400,7 @@ describe('the customer list', () => {
     // The pager is a sibling of `StateSwitch` and is drawn only in the `ready`
     // state, so it is gone while the new page is in flight. Waiting for it back
     // is waiting for the second page to have arrived.
-    const back = await screen.findByRole('button', { name: 'قدیمی‌تر' });
+    const back = await screen.findByRole('button', { name: 'قبلی' });
     // Back pops the trail rather than asking the server to reverse: a keyset
     // cursor only goes forward, and the previous page's start is a cursor this
     // component already held.
@@ -410,7 +410,7 @@ describe('the customer list', () => {
     // freshness window (`NAV_PREFETCH_FRESH_MS`, Issue 16), otherwise re-asked —
     // and in neither case by a request carrying a cursor.
     await screen.findByText('5551234567');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'قبلی' })).toBeDisabled());
     for (const call of api.calls.slice(forward)) expect(call.url).not.toContain('cursor=');
   });
 
@@ -420,8 +420,8 @@ describe('the customer list', () => {
     await screen.findByText('5551234567');
     // `nextCursor: null` is the last page. An enabled button here would push a
     // cursor, change the query key and issue a request for nothing.
-    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'قبلی' })).toBeDisabled();
   });
 
   it('says the list is empty without claiming a search found nothing', async () => {
@@ -1516,7 +1516,7 @@ describe("a customer's orders and services", () => {
     const card = screen.getByText('همهٔ سفارش‌های این مشتری').closest('section');
     expect(card).not.toBeNull();
 
-    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'بعدی' }));
 
     await waitFor(() => {
       expect(
@@ -1605,11 +1605,11 @@ describe("a customer's orders and services", () => {
      * still showing its skeleton and has no pager to press — which is how the first
      * version of this case failed on its second click rather than on its assertion.
      */
-    fireEvent.click(within(card).getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
     await screen.findByText('plan-page-2');
     expect(api.calls.some((call) => call.url.includes('cursor=page-2'))).toBe(true);
 
-    fireEvent.click(within(card).getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
     await screen.findByText('plan-page-3');
     expect(api.calls.some((call) => call.url.includes('cursor=page-3'))).toBe(true);
 
@@ -1619,7 +1619,7 @@ describe("a customer's orders and services", () => {
      * cached hit issues no new request.
      */
     const before = api.calls.length;
-    fireEvent.click(within(card).getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
     await screen.findByText('plan-page-2');
 
     const after = api.calls.slice(before);
@@ -1628,7 +1628,7 @@ describe("a customer's orders and services", () => {
       'Previous went somewhere other than the page before',
     ).toBe(true);
     /* And the first page is only reachable by pressing it again. */
-    fireEvent.click(within(card).getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
     await screen.findByText('plan-page-1');
   });
 

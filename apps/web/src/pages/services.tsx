@@ -37,7 +37,6 @@ import {
   BalancedColumns,
   ChipGroup,
   urlViewsRegistration,
-  useClientPage,
   useListClearAll,
 } from './commerce-parts';
 import { ActionPanel } from '../ui/action-panel';
@@ -52,12 +51,14 @@ import {
   DataTable,
   Empty,
   KV,
+  LIST_PAGE_SIZE,
   Ltr,
   Num,
   PageHead,
   Progress,
   StatCard,
   StateSwitch,
+  usePagedRows,
   useToast,
   type Column,
   type Tone,
@@ -261,9 +262,6 @@ const SERVICE_FILTER_KEYS = [
   'expiring',
 ] as const;
 
-/** W1.8: ten services a page. */
-export const SERVICES_PAGE_SIZE = 10;
-
 /** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
 export const SERVICE_PRESETS: readonly ViewPreset[] = [
   {
@@ -334,7 +332,7 @@ export function ServicesPage({
     ],
     queryFn: () =>
       fetchServices({
-        limit: SERVICES_PAGE_SIZE,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === null ? {} : { cursor }),
         ...(state === null ? {} : { state: state as ServiceState }),
         ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
@@ -1083,7 +1081,7 @@ export function ServiceDetailPage({
 
 /** The history, ten operations at a time (W1.8); the server sends it whole, newest first. */
 function OperationsTable({ operations }: { operations: readonly ServiceOperationResponse[] }) {
-  const page = useClientPage(operations);
+  const page = usePagedRows(operations);
   return (
     <>
       <DataTable
