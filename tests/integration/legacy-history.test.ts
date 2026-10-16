@@ -533,6 +533,48 @@ describe('Mirza .nxpkg importer: the history archive', () => {
       await expect(controller.list(request, customerA, { type: 'nope' })).rejects.toThrow();
     });
 
+    // Live data (2026-10-16): 47 ticket messages were listed for their ticket's customer, but
+    // every `ticketRecordId` was NULL — the select field's outer columns were rendered
+    // unqualified and resolved inside the sub-select. Shaped like the real records: the ticket
+    // names the customer and its own `source_pk`; the message names its ticket by `ticket_ref`.
+    it("a customer's ticket messages carry their ticket's record id", async () => {
+      const ticket = {
+        record_type: 'legacy_ticket',
+        schema: 'm2n.support.ticket.v1',
+        idempotency_key: 'legacy:support:ticket:7',
+        customer: { telegram_user_id: TG_A },
+        source_pk: '7',
+        status: 'closed',
+        provenance: { source_table: 'ticket', source_pk: '7' },
+        ...flagsOff,
+      };
+      const message = (n: number, ref: string): Rec => ({
+        ...ticketMessage(n),
+        ticket_ref: { raw: ref },
+      });
+      await run({
+        ...standard(),
+        'records/support/tickets.jsonl': [ticket],
+        'records/support/ticket_messages.jsonl': [
+          message(1, '7'),
+          message(2, '7'),
+          message(3, '99'),
+        ],
+      });
+      const page = await ctx.container.legacyHistoryRead.forCustomer(
+        tenantA,
+        ownerActor,
+        customerA,
+        {},
+      );
+      const ticketRow = page.items.find((item) => item.recordType === 'ticket');
+      const messages = page.items.filter((item) => item.recordType === 'ticket_message');
+      expect(ticketRow).toBeDefined();
+      // Message 3 names a ticket that does not exist: not this customer's, not listed.
+      expect(messages).toHaveLength(2);
+      for (const m of messages) expect(m.ticketRecordId).toBe(ticketRow?.id);
+    });
+
     it('an unlinked record is found under the customer Telegram id', async () => {
       // B's customer is unknown to the lookup at ingest time: the rows stay unlinked.
       await ingest().ingest(tenantA, job, {

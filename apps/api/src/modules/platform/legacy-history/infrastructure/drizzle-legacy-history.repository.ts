@@ -170,9 +170,15 @@ export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
     const rows = await this.db
       .select({
         row: legacyHistoryRecords,
+        // The outer row is named by its table explicitly: in a select field Drizzle renders
+        // its columns unqualified, which inside this sub-select resolved to `t` itself, so
+        // the id was always NULL (found on the live data: 47 messages, 0 nested).
         ticketRecordId: sql<string | null>`(SELECT t.id FROM legacy_history_records t
-          WHERE ${legacyHistoryRecords.recordType} = 'ticket_message'
-            AND ${this.ticketOfMessage(sql`t`)}
+          WHERE "legacy_history_records".record_type = 'ticket_message'
+            AND t.tenant_id = "legacy_history_records".tenant_id
+            AND t.package_import_id = "legacy_history_records".package_import_id
+            AND t.record_type = 'ticket'
+            AND t.payload->>'source_pk' = "legacy_history_records".payload->'ticket_ref'->>'raw'
           ORDER BY t.id LIMIT 1)`,
       })
       .from(legacyHistoryRecords)
