@@ -1344,17 +1344,20 @@ form.set-row > * + * {
   gap: 8px;
   margin-block-end: var(--gap);
 }
-.incident-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-block: 12px;
-}
-/* One column at 390px; the scope and timeline beside the summary on a desk. */
+/*
+ * W4: the summary on one side, the scope and the timeline stacked on the other; one
+ * column at 390px.
+ */
 .incident-detail {
   display: grid;
   gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .incident-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .incident-text {
   white-space: pre-wrap;

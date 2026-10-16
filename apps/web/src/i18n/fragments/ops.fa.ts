@@ -268,6 +268,10 @@ export const WEB_FA_OPS = {
   'web.notif_cat_finance': 'مالی',
   'web.notif_cat_support': 'پشتیبانی',
   'web.notif_cat_notice': 'اعلان',
+
+  // --- incidents: the action panel's groups --------------------------------
+  'web.inc_actions_incident': 'رخداد',
+  'web.inc_actions_sales': 'اقدام برای فروش و مشتریان',
 } as const;
 
 /**

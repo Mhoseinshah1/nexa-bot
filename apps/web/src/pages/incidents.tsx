@@ -66,6 +66,7 @@ import {
   useToast,
   type Tone,
 } from '../ui/kit';
+import { ActionPanel } from '../ui/action-panel';
 import { Modal } from '../ui/overlays';
 
 /**
@@ -434,41 +435,77 @@ export function IncidentDetailPage({
             </Banner>
           )}
           {live && (mayManage || mayNotify) && (
-            <div className="incident-actions">
-              {mayManage && (
-                <Button size="sm" onClick={() => setEditing(true)}>
-                  {t('web.inc_edit')}
-                </Button>
-              )}
-              {mayManage && incident.status === 'SCHEDULED' && (
-                <Button size="sm" variant="primary" onClick={() => setConfirming('start')}>
-                  {t('web.inc_start')}
-                </Button>
-              )}
-              {mayManage && incident.status === 'ACTIVE' && incident.stopSales && (
-                <Button size="sm" disabled={apply.isPending} onClick={() => apply.mutate()}>
-                  {apply.isPending ? t('web.working') : t('web.inc_apply_effects')}
-                </Button>
-              )}
-              {mayManage && incident.status === 'ACTIVE' && (
-                <Button size="sm" variant="primary" onClick={() => setConfirming('resolve')}>
-                  {t('web.inc_resolve')}
-                </Button>
-              )}
-              {mayManage && incident.status === 'SCHEDULED' && (
-                <Button size="sm" variant="danger" onClick={() => setConfirming('cancel')}>
-                  {t('web.inc_cancel')}
-                </Button>
-              )}
-              {mayNotify && incident.customerMessage !== null && (
-                <Button size="sm" onClick={() => setNoticing(true)}>
-                  {t('web.inc_notice')}
-                </Button>
-              )}
-            </div>
+            <ActionPanel
+              groups={[
+                {
+                  key: 'incident',
+                  title: t('web.inc_actions_incident'),
+                  actions: [
+                    mayManage && (
+                      <Button key="edit" size="sm" onClick={() => setEditing(true)}>
+                        {t('web.inc_edit')}
+                      </Button>
+                    ),
+                    mayManage && incident.status === 'SCHEDULED' && (
+                      <Button
+                        key="start"
+                        size="sm"
+                        variant="primary"
+                        onClick={() => setConfirming('start')}
+                      >
+                        {t('web.inc_start')}
+                      </Button>
+                    ),
+                    mayManage && incident.status === 'ACTIVE' && (
+                      <Button
+                        key="resolve"
+                        size="sm"
+                        variant="primary"
+                        onClick={() => setConfirming('resolve')}
+                      >
+                        {t('web.inc_resolve')}
+                      </Button>
+                    ),
+                  ],
+                },
+                {
+                  key: 'sales',
+                  title: t('web.inc_actions_sales'),
+                  actions: [
+                    mayManage && incident.status === 'ACTIVE' && incident.stopSales && (
+                      <Button
+                        key="apply"
+                        size="sm"
+                        disabled={apply.isPending}
+                        onClick={() => apply.mutate()}
+                      >
+                        {apply.isPending ? t('web.working') : t('web.inc_apply_effects')}
+                      </Button>
+                    ),
+                    mayNotify && incident.customerMessage !== null && (
+                      <Button key="notice" size="sm" onClick={() => setNoticing(true)}>
+                        {t('web.inc_notice')}
+                      </Button>
+                    ),
+                  ],
+                },
+              ]}
+              sensitive={[
+                mayManage && incident.status === 'SCHEDULED' && (
+                  <Button
+                    key="cancel"
+                    size="sm"
+                    variant="danger"
+                    onClick={() => setConfirming('cancel')}
+                  >
+                    {t('web.inc_cancel')}
+                  </Button>
+                ),
+              ]}
+            />
           )}
           <div className="incident-detail">
-            <Card title={t('web.inc_summary')}>
+            <Card title={t('web.inc_summary')} className="incident-summary">
               <KV
                 items={[
                   [t('web.inc_col_status'), <StatusBadge key="s" status={incident.status} />],
@@ -512,32 +549,34 @@ export function IncidentDetailPage({
                 <p className="incident-text">{incident.customerMessage}</p>
               )}
             </Card>
-            <Card title={t('web.inc_scope')}>
-              {incident.targets.length === 0 ? (
-                <p className="faint small">{t('web.inc_no_targets')}</p>
-              ) : (
-                <ul className="incident-targets">
-                  {incident.targets.map((target) => (
-                    <li key={`${target.kind}:${target.ref}`}>
-                      <Badge tone="neutral">{t(INCIDENT_TARGET_LABELS[target.kind])}</Badge>{' '}
-                      <Ltr>{target.ref}</Ltr>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <EffectsTable effects={incident.effects} />
-            </Card>
-            <Card title={t('web.inc_timeline')}>
-              <Timeline
-                items={(detail.data?.timeline ?? []).map((event) => ({
-                  key: event.id,
-                  at: formatTimestamp(event.occurredAt),
-                  title: t(INCIDENT_EVENT_LABELS[event.kind]),
-                  detail: eventDetail(event),
-                  ...(event.kind === 'EFFECTS_PENDING' ? { tone: 'warn' as const } : {}),
-                }))}
-              />
-            </Card>
+            <div className="stack incident-side">
+              <Card title={t('web.inc_scope')}>
+                {incident.targets.length === 0 ? (
+                  <p className="faint small">{t('web.inc_no_targets')}</p>
+                ) : (
+                  <ul className="incident-targets">
+                    {incident.targets.map((target) => (
+                      <li key={`${target.kind}:${target.ref}`}>
+                        <Badge tone="neutral">{t(INCIDENT_TARGET_LABELS[target.kind])}</Badge>{' '}
+                        <Ltr>{target.ref}</Ltr>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <EffectsTable effects={incident.effects} />
+              </Card>
+              <Card title={t('web.inc_timeline')}>
+                <Timeline
+                  items={(detail.data?.timeline ?? []).map((event) => ({
+                    key: event.id,
+                    at: formatTimestamp(event.occurredAt),
+                    title: t(INCIDENT_EVENT_LABELS[event.kind]),
+                    detail: eventDetail(event),
+                    ...(event.kind === 'EFFECTS_PENDING' ? { tone: 'warn' as const } : {}),
+                  }))}
+                />
+              </Card>
+            </div>
           </div>
           {editing && (
             <IncidentFormModal
