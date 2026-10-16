@@ -107,6 +107,18 @@ export const WEB_FA_MONEY = {
     'قیمت نماینده همان قیمت محصول است با نرخ سطح یا نرخ اختصاصی نماینده؛ هنگام خرید محاسبه و در سفارش ثبت می‌شود.',
   // W5 — the debt decision banner without «… در این نسخه وجود ندارد».
   'web.lwd_decision_no_money': 'هیچ تصمیمی پولی جابه‌جا نمی‌کند.',
+  // W5 — legacy review codes by name (raw code kept beside them).
+  'web.mrz_map_status_imported': 'منتقل شد',
+  'web.mrz_map_status_skipped': 'منتقل نشد',
+  'web.mrz_map_status_manual_review': 'نیازمند بررسی دستی',
+  'web.mrz_map_status_failed': 'ناموفق',
+  'web.mrz_review_state_open': 'باز',
+  'web.mrz_review_state_resolved': 'رسیدگی‌شده',
+  'web.mrz_review_state_dismissed': 'کنار گذاشته‌شده',
+  'web.mrz_run_status_running': 'در حال اجرا',
+  'web.mrz_run_status_completed': 'کامل شد',
+  'web.mrz_run_status_failed': 'ناموفق',
+  'web.mrz_run_status_aborted': 'متوقف شد',
 } as const;
 
 /**

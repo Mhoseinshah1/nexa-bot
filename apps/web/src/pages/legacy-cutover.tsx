@@ -16,6 +16,8 @@ import {
   revokeLegacyCutover,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { LegacyCode } from './code-name';
+import { LEGACY_IMPORT_RUN_STATUS_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
@@ -192,7 +194,7 @@ export function LegacyCutoverPage({
       header: t('web.lco_col_run'),
       render: (row) => (
         <CellMain
-          primary={<Ltr>{row.status}</Ltr>}
+          primary={<LegacyCode value={row.status} labels={LEGACY_IMPORT_RUN_STATUS_LABELS} />}
           secondary={<span className="muted small">{formatTimestamp(row.startedAt)}</span>}
         />
       ),

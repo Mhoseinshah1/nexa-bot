@@ -18,3 +18,32 @@ export function CodeName({
   const key = codeNameKey(labels, value);
   return key === null ? <Ltr>{value}</Ltr> : <span title={value}>{t(key)}</span>;
 }
+
+/**
+ * A legacy review code (W5): its Persian name, with the raw code in the `title` and again in
+ * small muted left-to-right text beside it, for whoever matches it against the importer's
+ * report. No name → the raw code alone, never blank.
+ */
+export function NamedCode({ name, raw }: { name: string | null; raw: string }) {
+  if (name === null) return <Ltr>{raw}</Ltr>;
+  return (
+    <span title={raw}>
+      {name}{' '}
+      <span className="muted small" dir="ltr">
+        {raw}
+      </span>
+    </span>
+  );
+}
+
+/** `NamedCode` over a lookup map. */
+export function LegacyCode({
+  value,
+  labels,
+}: {
+  value: string;
+  labels: Readonly<Record<string, WebKey>>;
+}) {
+  const key = codeNameKey(labels, value);
+  return <NamedCode name={key === null ? null : t(key)} raw={value} />;
+}

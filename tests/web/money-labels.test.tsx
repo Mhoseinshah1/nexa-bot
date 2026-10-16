@@ -22,7 +22,17 @@ import {
   PROVIDER_STATUS_LABELS,
   providerPaidKey,
 } from '../../apps/web/src/payment-labels';
-import { CodeName } from '../../apps/web/src/pages/code-name';
+import { CodeName, LegacyCode } from '../../apps/web/src/pages/code-name';
+import {
+  LEGACY_IMPORT_MAP_STATUSES,
+  LEGACY_IMPORT_RUN_STATUSES,
+  LEGACY_REVIEW_STATES,
+} from '@nexa/contracts';
+import {
+  LEGACY_IMPORT_MAP_STATUS_LABELS,
+  LEGACY_IMPORT_RUN_STATUS_LABELS,
+  LEGACY_REVIEW_STATE_LABELS,
+} from '../../apps/web/src/pages/mirza-labels';
 
 /**
  * W5: no machine key as primary text. Every key of each closed vocabulary the money pages
@@ -68,5 +78,28 @@ describe('the payment vocabularies have Persian names', () => {
     expect(screen.getByText('brand_new_status')).toBeInTheDocument();
     // An inherited property is not a name.
     expect(screen.getByText('toString')).toBeInTheDocument();
+  });
+});
+
+describe('the legacy review codes have Persian names (W5)', () => {
+  it.each([
+    ['import map statuses', LEGACY_IMPORT_MAP_STATUS_LABELS, LEGACY_IMPORT_MAP_STATUSES],
+    ['review states', LEGACY_REVIEW_STATE_LABELS, LEGACY_REVIEW_STATES],
+    ['apply run statuses', LEGACY_IMPORT_RUN_STATUS_LABELS, LEGACY_IMPORT_RUN_STATUSES],
+  ] as const)('%s', (_, labels, keys) => {
+    named(labels as Readonly<Record<string, string>>, keys);
+  });
+
+  it('draws the name with the raw code in the title and beside it, and an unknown code raw', () => {
+    render(
+      <>
+        <LegacyCode value="MANUAL_REVIEW" labels={LEGACY_IMPORT_MAP_STATUS_LABELS} />
+        <LegacyCode value="SOMETHING_NEW" labels={LEGACY_IMPORT_MAP_STATUS_LABELS} />
+      </>,
+    );
+    const named = screen.getByTitle('MANUAL_REVIEW');
+    expect(named).toHaveTextContent('نیازمند بررسی دستی');
+    expect(named).toHaveTextContent('MANUAL_REVIEW');
+    expect(screen.getByText('SOMETHING_NEW')).toBeInTheDocument();
   });
 });

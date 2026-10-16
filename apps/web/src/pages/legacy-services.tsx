@@ -23,6 +23,13 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useLinkHandler, useRoute } from '../router';
+import { LegacyCode, NamedCode } from './code-name';
+import { LEGACY_INVOICE_CLASS_LABELS } from './legacy-invoices';
+import {
+  LEGACY_IMPORT_MAP_STATUS_LABELS,
+  LEGACY_REVIEW_STATE_LABELS,
+  migrationCodeView,
+} from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
@@ -550,7 +557,10 @@ export function CandidateDetail({
             <>
               <dt>{t('web.lsr_blocker')}</dt>
               <dd>
-                <Ltr>{row.blocker}</Ltr>
+                <NamedCode
+                  name={migrationCodeView(row.blocker, LEGACY_SERVICE_OUTCOME_LABELS).label}
+                  raw={row.blocker}
+                />
               </dd>
             </>
           )}
@@ -564,11 +574,22 @@ export function CandidateDetail({
             <>
               <dt>{t('web.lsr_map_row')}</dt>
               <dd>
-                <Ltr>
-                  {[importOutcome.status, importOutcome.reasonCode, importOutcome.reviewState]
-                    .filter((x) => x !== null)
-                    .join(' · ')}
-                </Ltr>
+                <LegacyCode value={importOutcome.status} labels={LEGACY_IMPORT_MAP_STATUS_LABELS} />
+                {importOutcome.reasonCode !== null && (
+                  <>
+                    {' · '}
+                    <Ltr>{importOutcome.reasonCode}</Ltr>
+                  </>
+                )}
+                {importOutcome.reviewState !== null && (
+                  <>
+                    {' · '}
+                    <LegacyCode
+                      value={importOutcome.reviewState}
+                      labels={LEGACY_REVIEW_STATE_LABELS}
+                    />
+                  </>
+                )}
               </dd>
             </>
           )}
@@ -649,7 +670,8 @@ export function CandidateDetail({
           <dl className="kv">
             <dt>{t('web.lsr_archive_revision')}</dt>
             <dd>
-              <Num value={archive.revision} /> · <Ltr>{archive.classification}</Ltr>
+              <Num value={archive.revision} /> ·{' '}
+              <LegacyCode value={archive.classification} labels={LEGACY_INVOICE_CLASS_LABELS} />
             </dd>
             <dt>{t('web.lsr_archive_status')}</dt>
             <dd>

@@ -19,6 +19,8 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useRoute } from '../router';
+import { LegacyCode } from './code-name';
+import { LEGACY_IMPORT_MAP_STATUS_LABELS, LEGACY_REVIEW_STATE_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
@@ -657,7 +659,7 @@ export function InvoiceDetail({ id }: { id: string }) {
           <dl className="kv small">
             <dt>{t('web.lia_import_status')}</dt>
             <dd>
-              <Ltr>{importOutcome.status}</Ltr>
+              <LegacyCode value={importOutcome.status} labels={LEGACY_IMPORT_MAP_STATUS_LABELS} />
             </dd>
             <dt>{t('web.lia_import_reason')}</dt>
             <dd>
@@ -672,7 +674,7 @@ export function InvoiceDetail({ id }: { id: string }) {
               {importOutcome.reviewState === null ? (
                 <Muted />
               ) : (
-                <Ltr>{importOutcome.reviewState}</Ltr>
+                <LegacyCode value={importOutcome.reviewState} labels={LEGACY_REVIEW_STATE_LABELS} />
               )}
             </dd>
           </dl>
