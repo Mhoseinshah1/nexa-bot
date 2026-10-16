@@ -72,6 +72,7 @@ export const WEB_FA_UI = {
   // W1.5 — the action panel
   'web.action_panel_title': 'عملیات',
   'web.action_panel_sensitive': 'عملیات حساس',
+  'web.action_panel_why': 'چرا {n} دکمه غیرفعال است؟',
 
   // W1.2 — the file picker
   'web.file_drop': 'فایل را اینجا رها کنید یا انتخاب کنید',
