@@ -79,6 +79,35 @@ const page = (props: { mayOperate?: boolean; mayReplaceToken?: boolean; denied?:
     />
   ) as ReactElement;
 
+/** Opens a bot's «جایگزینی توکن» drawer and returns its field and its submit button. */
+const openToken = () => {
+  const opener = screen
+    .getAllByRole('button', { name: 'جایگزینی توکن' })
+    .find((button) => button.closest('[role="dialog"]') === null);
+  if (opener === undefined) throw new Error('no token button');
+  fireEvent.click(opener);
+  const drawer = screen.getByRole('dialog', { name: 'توکن ربات' });
+  return {
+    input: within(drawer).getByLabelText(/توکن جدید|توکن/u, {
+      selector: 'input',
+    }) as HTMLInputElement,
+    submit: within(drawer).getByRole('button', { name: 'جایگزینی توکن' }),
+  };
+};
+
+/**
+ * The token is gone once an attempt settles: the drawer closes with its field, and opening
+ * it again shows an empty one — nothing typed stays anywhere in the page.
+ */
+const expectTokenCleared = async () => {
+  await waitFor(() => expect(document.querySelector('input[type="password"]')).toBeNull());
+  const { input } = openToken();
+  expect(input.value).toBe('');
+  fireEvent.click(
+    within(screen.getByRole('dialog', { name: 'توکن ربات' })).getByRole('button', { name: 'بستن' }),
+  );
+};
+
 describe('the Bots page', () => {
   it('shows a view-only role the bot, its binding and every readiness cause, and nothing to press', async () => {
     stubApi([listRoute()]);
@@ -141,14 +170,17 @@ describe('the Bots page', () => {
     const { container, rerender } = renderPage(page({ mayOperate: true }));
     await screen.findByText('@acme_store_bot');
     expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'جایگزینی توکن' })).toBeNull();
 
     rerender(page({ mayOperate: true, mayReplaceToken: true }));
-    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    const { input, submit } = openToken();
     expect(input.value).toBe('');
+    // Nothing typed, nothing to send.
+    expect(submit).toBeDisabled();
     fireEvent.change(input, { target: { value: token } });
-    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+    fireEvent.click(submit);
 
-    await waitFor(() => expect(input.value).toBe(''));
+    await expectTokenCleared();
     const sent = api.calls.filter((call) => call.url.endsWith(`/bots/${BOT_ID}/token`));
     expect(sent).toHaveLength(1);
     expect(sent[0]?.body).toMatchObject({ token });
@@ -174,12 +206,12 @@ describe('the Bots page', () => {
     ]);
     const { container } = renderPage(page({ mayReplaceToken: true }));
     await screen.findByText('@acme_store_bot');
-    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000999:${'B'.repeat(35)}` } });
-    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+    fireEvent.click(submit);
 
     expect(await screen.findByText(/متعلق به ربات دیگری است/u)).toBeInTheDocument();
-    expect(input.value).toBe('');
+    await expectTokenCleared();
   });
 
   it('reports what Telegram holds, and says when it is not what was recorded', async () => {
@@ -328,9 +360,9 @@ describe('the Bots page', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'بررسی زنده با تلگرام' }));
     expect(await screen.findByTestId('bot-diagnostic')).toBeInTheDocument();
 
-    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000001:${'C'.repeat(35)}` } });
-    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+    fireEvent.click(submit);
     // The rejection was about the OLD credential; it must not stand beside the new one.
     // What stands instead is the verification the replacement made (R4).
     await waitFor(() =>
@@ -359,9 +391,9 @@ describe('the Bots page', () => {
     ]);
     const { container } = renderPage(page({ mayReplaceToken: true }));
     await screen.findByText('@acme_store_bot');
-    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000001:${'D'.repeat(35)}` } });
-    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+    fireEvent.click(submit);
 
     const result = await screen.findByTestId('bot-diagnostic');
     expect(within(result).getByText('ربات آمادهٔ دریافت پیام است.')).toBeInTheDocument();
@@ -400,9 +432,9 @@ describe('the Bots page', () => {
     ]);
     const { container } = renderPage(page({ mayReplaceToken: true }));
     await screen.findByText('@acme_store_bot');
-    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000001:${'E'.repeat(35)}` } });
-    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+    fireEvent.click(submit);
 
     const failure = await screen.findByTestId('bot-replacement-failure');
     expect(screen.getByText(/بازخوانی آن دقیقاً نشانی این نصب را نشان نداد/u)).toBeInTheDocument();
@@ -410,7 +442,7 @@ describe('the Bots page', () => {
     expect(within(failure).getByText('https://elsewhere.example.test/…')).toBeInTheDocument();
     expect(failure.textContent).toContain('به حالت قبل');
     expect(screen.queryByText(/توکن جایگزین شد/u)).toBeNull();
-    expect(input.value).toBe('');
+    await expectTokenCleared();
   });
 
   it("shows Telegram's own reason when it refuses the webhook", async () => {
@@ -439,9 +471,9 @@ describe('the Bots page', () => {
     ]);
     const { container } = renderPage(page({ mayReplaceToken: true }));
     await screen.findByText('@acme_store_bot');
-    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    const { input, submit } = openToken();
     fireEvent.change(input, { target: { value: `7000000001:${'F'.repeat(35)}` } });
-    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+    fireEvent.click(submit);
     const failure = await screen.findByTestId('bot-replacement-failure');
     expect(
       within(failure).getByText('Bad Request: bad webhook: Failed to resolve host'),
@@ -513,6 +545,33 @@ describe('the Bots page', () => {
     expect(screen.queryByRole('button', { name: 'بررسی زنده با تلگرام' })).toBeNull();
   });
 
+  it('keeps the full details in a side sheet, and counts the bots that need attention', async () => {
+    stubApi([
+      listRoute([
+        bot(),
+        bot({
+          id: `${BOT_ID.slice(0, -1)}2`,
+          username: 'second_bot',
+          status: 'STOPPED',
+          readiness: { state: 'REGISTERED', causes: [] },
+        }),
+      ]),
+    ]);
+    renderPage(page({}));
+    await screen.findByText('@acme_store_bot');
+    const summary = screen.getByTestId('bots-summary');
+    expect(summary).toHaveTextContent(/2\s*ربات/u);
+    expect(summary).toHaveTextContent(/1\s*فعال/u);
+    expect(summary).toHaveTextContent(/1\s*نیازمند توجه/u);
+    // The internal id is not on the card; it is one click away, in the sheet.
+    expect(screen.queryByText(BOT_ID)).toBeNull();
+    const card = screen.getByRole('region', { name: '@acme_store_bot' });
+    fireEvent.click(within(card).getByRole('button', { name: 'مشخصات ربات' }));
+    const sheet = screen.getByRole('dialog');
+    expect(within(sheet).getByText(BOT_ID)).toBeInTheDocument();
+    expect(within(sheet).getByText('مجموعه')).toBeInTheDocument();
+  });
+
   it('fetches nothing for a role without settings.view', () => {
     const api = stubApi([listRoute()]);
     renderPage(page({ denied: true }));
@@ -568,11 +627,10 @@ describe('the /bots route wires the token replacement to settings.destructive', 
   });
 
   it('offers token replacement to a role holding settings.destructive, even without settings.edit', async () => {
-    const { container } = open(['settings.view', 'settings.destructive']);
+    open(['settings.view', 'settings.destructive']);
     await screen.findByText('@acme_store_bot');
 
-    expect(container.querySelector('input[type="password"]')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'جایگزینی توکن' })).toBeInTheDocument();
+    expect(openToken().input).toHaveAttribute('type', 'password');
     // And the permission it holds grants nothing it does not name.
     expect(screen.queryByRole('button', { name: 'توقف ربات' })).toBeNull();
   });

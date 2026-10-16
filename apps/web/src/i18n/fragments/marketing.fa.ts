@@ -7,7 +7,11 @@
  * `web.fa.ts` OVERRIDES that key's text (the fragment is spread last). The lead folds every
  * fragment into `web.fa.ts` and deletes this file before the branch is pushed.
  */
-export const WEB_FA_MARKETING = {} as const;
+export const WEB_FA_MARKETING = {
+  // bots — the compact card per bot
+  'web.bx_bots_count': 'ربات',
+  'web.bx_bots_attention': 'نیازمند توجه',
+} as const;
 
 /**
  * Keys of `web.fa.ts` this agent's work no longer renders. Listing a key here keeps
