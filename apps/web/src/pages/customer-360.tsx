@@ -70,6 +70,7 @@ import {
   CustomerLegacyHistoryCard,
   CustomerLegacyInvoicesCard,
 } from './customer-360-legacy';
+import { CustomerLegacyMoneyCard } from './customer-360-legacy-money';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 // Roadmap B5: the workspace — attention, the newest rows, support, shortcuts.
 import {
@@ -562,6 +563,7 @@ export function UserDetailPage({
                     mayView={mayViewLegacyInvoices}
                     mayViewPii={mayViewLegacyPii}
                   />
+                  <CustomerLegacyMoneyCard customerId={id} mayView={mayViewLegacyHistory} />
                   <CustomerLegacyHistoryCard customerId={id} mayView={mayViewLegacyHistory} />
                 </>
               }
