@@ -96,7 +96,7 @@ interface Spec {
   readonly terms: readonly [string, string];
   readonly paste: string;
   /** The pager's "next" button, and the request parameter its cursor travels in. */
-  readonly next: 'web.older' | 'web.newer';
+  readonly next: 'web.page_next' | 'web.newer';
   readonly cursorParam: string;
 }
 
@@ -211,7 +211,7 @@ const SPECS: readonly Spec[] = [
     body: (rows, next) => ({ payments: rowsOf(PAYMENT, rows), nextCursor: next ? 'C2' : null }),
     terms: ['ali', 'alireza'],
     paste: '  5551234567 \n',
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
   {
@@ -264,7 +264,7 @@ const SPECS: readonly Spec[] = [
     extras: (url) => (url.pathname.endsWith('/reseller-tiers') ? { tiers: [] } : undefined),
     terms: ['رضا', 'رضا رس'],
     paste: '  5551234567 \n',
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
   {
@@ -287,7 +287,7 @@ const SPECS: readonly Spec[] = [
     extras: (url) => (url.pathname.endsWith('/ticket-categories') ? { categories: [] } : undefined),
     terms: ['mar', 'mary'],
     paste: '  951001 \n',
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'before',
   },
   {
@@ -302,7 +302,7 @@ const SPECS: readonly Spec[] = [
     body: (rows, next) => ({ entries: rowsOf(AUDIT_ENTRY, rows), nextCursor: next ? 'C2' : null }),
     terms: ['own', 'owner'],
     paste: '  owner \n',
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
   {
@@ -326,7 +326,7 @@ const SPECS: readonly Spec[] = [
     // Only a complete id is a referrer filter: both terms are ids.
     terms: [UUID_A, UUID_B],
     paste: `  ${UUID_A} \n`,
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
 ];

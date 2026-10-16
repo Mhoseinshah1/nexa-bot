@@ -350,6 +350,13 @@
 }
 
 .topbar {
+  /*
+   * Its own layer, above every page layer (sticky columns, action panels, filter
+   * panels) and below the phone sidebar (44/45) and dialogs (100+): the user menu
+   * opened from here is drawn over the page, never under a sticky card (W5).
+   */
+  position: relative;
+  z-index: 35;
   height: var(--topbar-h);
   flex: none;
   display: flex;
@@ -359,6 +366,11 @@
   border-bottom: 1px solid var(--line);
   background: var(--bg-1);
   min-width: 0;
+}
+.topbar .menu {
+  /* Solid: nothing on the page shows through the menu (W5). */
+  background: var(--bg-1);
+  backdrop-filter: none;
 }
 .topbar .spacer {
   flex: 1;

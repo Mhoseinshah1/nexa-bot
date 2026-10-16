@@ -194,7 +194,7 @@ describe('the legacy invoice archive page', () => {
         ),
       ).toHaveLength(1),
     );
-    fireEvent.click(await screen.findByRole('button', { name: t('web.older') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(calls(api, 'GET', 'after=kYWIwMDAwMDE')).toHaveLength(1));
   });
 
