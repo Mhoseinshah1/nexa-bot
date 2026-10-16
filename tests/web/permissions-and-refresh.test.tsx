@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PermissionKey } from '@nexa/contracts';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
@@ -62,8 +63,9 @@ describe('the catalogue permission combinations', () => {
     expect(navPermitted(entry!, ['catalog.edit'])).toBe(true);
 
     open(['catalog.edit']);
-    // The capability they hold is offered...
-    expect(await screen.findByText(CREATE_FORM)).toBeInTheDocument();
+    // The capability they hold is offered: «محصول جدید» opens the create form (W3)...
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_product_new') }));
+    expect(await screen.findByRole('dialog', { name: CREATE_FORM })).toBeInTheDocument();
     // ...and the list they may not read says so rather than showing an empty table,
     // which would claim this tenant has no products.
     expect(await screen.findByText(DENIED)).toBeInTheDocument();

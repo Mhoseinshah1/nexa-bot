@@ -287,6 +287,8 @@ describe('retrying the FAILED items of a mass operation', () => {
         mayStatus
       />,
     );
+    // W3: the retry opens its dialog from the page head.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.bulk_retry_title') }));
     fireEvent.click(await screen.findByRole('button', { name: t('web.bulk_retry_preview') }));
     expect(await screen.findByText(t('web.bulk_retry_count'))).toBeInTheDocument();
     fireEvent.change(
