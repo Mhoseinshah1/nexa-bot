@@ -87,7 +87,7 @@ function partsOf(mode: DateFieldMode, value: string): Parts {
   return { day: g === null ? null : gregorianToDayNumber(g), time: null };
 }
 
-/** «۲۴ مهر ۱۴۰۵» for a day number. */
+/** A day number as the field shows it: day, Persian month name, year, in Persian digits. */
 export function jalaliDayLabel(day: number): string {
   const j = dayNumberToJalali(day);
   return `${faDigits(j.jd)} ${t(JALALI_MONTH_KEYS[j.jm - 1] ?? 'web.jalali_m1')} ${faDigits(j.jy)}`;
