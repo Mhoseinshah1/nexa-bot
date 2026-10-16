@@ -201,8 +201,8 @@ export const USAGE = [
   '  The final cutover gate:        legacy-import cutover-gate --help',
   '',
   `  --inventory-page-size N             rows per RickPanel list page, 1-${String(INVENTORY_MAX_PAGE_SIZE)}. Default here:`,
-  `                                      ${String(INVENTORY_MAX_PAGE_SIZE)}, the reader's maximum (fewest provider reads, shortest`,
-  '                                      double walk). The walk still fails closed on any change.',
+  '                                      200 (under the default response cap). Larger pages need',
+  '                                      PANEL_HTTP_MAX_RESPONSE_BYTES raised with them. The walk still fails closed on any change.',
   '  --out DIR                           also write the report there. A failure to write it',
   '                                      (after the report was computed) exits 73.',
   '',
@@ -299,7 +299,12 @@ export interface Args {
  * reached READY_FOR_DRY_RUN. Fewer reads is also less exposure of the live provider. The
  * consistency check itself is untouched: a panel that changes mid-walk still blocks.
  */
-export const LEGACY_IMPORT_DEFAULT_INVENTORY_PAGE_SIZE = INVENTORY_MAX_PAGE_SIZE;
+/**
+ * 200, the reader's maximum before it was raised to 2000: a page that size stays under the
+ * client's default response cap (512 KiB) at RickPanel's ~1.5 KB a row. Larger pages are the
+ * operator's explicit `--inventory-page-size` together with PANEL_HTTP_MAX_RESPONSE_BYTES.
+ */
+export const LEGACY_IMPORT_DEFAULT_INVENTORY_PAGE_SIZE = 200;
 export type InventoryPageSizeSource = 'CLI_DEFAULT' | 'OPERATOR';
 const POSITIVE_INTEGER = /^[1-9][0-9]{0,8}$/u;
 
