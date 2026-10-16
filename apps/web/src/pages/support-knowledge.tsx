@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ListFilterBar } from '../ui/filter-bar';
-import { ClientPager, useClientPaging } from './ops-paging';
 import {
   SUPPORT_KNOWLEDGE_ARTICLE_STATES,
   SUPPORT_KNOWLEDGE_CATEGORIES,
@@ -52,6 +51,7 @@ import {
   useToast,
   type Column,
   type Tone,
+  usePagedRows,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 
@@ -279,7 +279,7 @@ export function SupportKnowledgePage({
   });
   const rows = articles.data ?? [];
   // W1.8: the server sends the whole list; it is drawn ten at a time.
-  const paging = useClientPaging(rows, `${source}|${state}`);
+  const paging = usePagedRows(rows, `${source}|${state}`);
   const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
   const [form, setForm] = useState<ContentForm>(EMPTY_CONTENT);
   const [publishNow, setPublishNow] = useState(true);
@@ -578,13 +578,7 @@ export function SupportKnowledgePage({
             caption={t('web.sk_title')}
             dense
           />
-          <ClientPager
-            shown={paging.rows.length}
-            hasPrevious={paging.hasPrevious}
-            hasNext={paging.hasNextLoaded}
-            onPrevious={() => paging.go(paging.page - 1)}
-            onNext={() => paging.go(paging.page + 1)}
-          />
+          {paging.pager}
         </Card>
       </StateSwitch>
 
@@ -689,7 +683,7 @@ export function LearningCandidatesPage({
     enabled: !denied,
   });
   const rows = candidates.data ?? [];
-  const paging = useClientPaging(rows, state);
+  const paging = usePagedRows(rows, state);
   const [editing, setEditing] = useState<SupportLearningCandidateView | null>(null);
   const [form, setForm] = useState<ContentForm>(EMPTY_CONTENT);
 
@@ -872,13 +866,7 @@ export function LearningCandidatesPage({
             caption={t('web.sk_cand_title')}
             dense
           />
-          <ClientPager
-            shown={paging.rows.length}
-            hasPrevious={paging.hasPrevious}
-            hasNext={paging.hasNextLoaded}
-            onPrevious={() => paging.go(paging.page - 1)}
-            onNext={() => paging.go(paging.page + 1)}
-          />
+          {paging.pager}
         </Card>
       </StateSwitch>
 

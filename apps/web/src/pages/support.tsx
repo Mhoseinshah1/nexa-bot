@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClientPager, useClientPaging } from './ops-paging';
 import {
   SUPPORT_FAQ_ANSWER_MAX_LENGTH,
   SUPPORT_FAQ_QUESTION_MAX_LENGTH,
@@ -39,6 +38,7 @@ import {
   useToast,
   useUnsavedChanges,
   type Column,
+  usePagedRows,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 
@@ -126,7 +126,7 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
     enabled: !denied,
   });
   const rows = faqs.data?.items ?? [];
-  const paging = useClientPaging(rows, '');
+  const paging = usePagedRows(rows, '');
 
   const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -367,13 +367,7 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
             caption={t('web.support_title')}
             dense
           />
-          <ClientPager
-            shown={paging.rows.length}
-            hasPrevious={paging.hasPrevious}
-            hasNext={paging.hasNextLoaded}
-            onPrevious={() => paging.go(paging.page - 1)}
-            onNext={() => paging.go(paging.page + 1)}
-          />
+          {paging.pager}
         </Card>
       </StateSwitch>
 

@@ -218,7 +218,7 @@ describe('the business inbox', () => {
     ]);
     renderPage(<BusinessChatsPage route={route()} denied={false} />);
     // W1.8: «بعدی» past the rows read so far reads the server's next page.
-    fireEvent.click(await screen.findByRole('button', { name: t('web.ops_page_next') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     expect(await screen.findByText('دومی')).toBeTruthy();
     expect(screen.getByText('سرویس وصل نمی‌شود')).toBeTruthy();
     const second = listCall(api)[1]!;
@@ -226,7 +226,7 @@ describe('the business inbox', () => {
       '2026-10-01T10:00:00.000Z|abc',
     );
     // The last page draws no further control.
-    expect(screen.queryByRole('button', { name: t('web.ops_page_next') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_next') })).toBeNull();
   });
 
   it('says «no permission» and asks the server nothing without the view key', () => {
@@ -559,11 +559,11 @@ describe('W1.8 and W5 on the inbox and the conversation', () => {
     renderPage(<BusinessChatsPage route={route()} denied={false} />);
     const table = await screen.findByRole('table', { name: t('web.bchats_title') });
     expect(within(table).getAllByRole('row')).toHaveLength(11);
-    fireEvent.click(screen.getByRole('button', { name: t('web.ops_page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(3));
     // Nothing more was asked of the server: the second page was already in memory.
     expect(listCall(api)).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: t('web.ops_page_previous') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
     await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(11));
   });
 

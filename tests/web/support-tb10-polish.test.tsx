@@ -162,7 +162,7 @@ describe('the inbox: the customer’s wait and the ticket', () => {
     ]);
     renderPage(<BusinessChatsPage route={inboxRoute} denied={false} />);
     const table = await screen.findByRole('table', { name: t('web.bchats_title') });
-    fireEvent.click(screen.getByRole('button', { name: t('web.ops_page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() =>
       expect(
         within(table).getAllByRole('link', { name: t('web.bchat_unknown_customer') }),

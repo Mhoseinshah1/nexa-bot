@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { CursorPager } from '../ui/kit';
-import { OPS_LIST_PAGE_SIZE } from '../ops-list-filters';
+import { CursorPager, LIST_PAGE_SIZE } from '../ui/kit';
 
 /**
  * W1.8 for a list drawn from rows already in memory (a whole response, or the pages an
@@ -11,7 +10,7 @@ import { OPS_LIST_PAGE_SIZE } from '../ops-list-filters';
 export function useClientPaging<T>(
   rows: readonly T[],
   resetKey: string,
-  size: number = OPS_LIST_PAGE_SIZE,
+  size: number = LIST_PAGE_SIZE,
 ): {
   readonly rows: readonly T[];
   readonly page: number;
@@ -33,7 +32,10 @@ export function useClientPaging<T>(
   };
 }
 
-/** The pager for `useClientPaging`; `onNext` may first read another page from the server. */
+/**
+ * The pager for `useClientPaging` (the kit's `usePagedRows` cannot read on): `onNext` may
+ * first read another page from the server.
+ */
 export function ClientPager({
   shown,
   hasPrevious,
@@ -55,8 +57,6 @@ export function ClientPager({
       hasNext={hasNext}
       onPrevious={onPrevious}
       onNext={onNext}
-      previousLabel="web.ops_page_previous"
-      nextLabel="web.ops_page_next"
     />
   );
 }

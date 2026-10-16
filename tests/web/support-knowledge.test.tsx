@@ -159,7 +159,7 @@ describe('the knowledge page', () => {
     page(true, many);
     const table = await screen.findByRole('table', { name: t('web.sk_title') });
     expect(within(table).getAllByRole('row')).toHaveLength(11);
-    fireEvent.click(screen.getByRole('button', { name: t('web.ops_page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(4));
   });
 

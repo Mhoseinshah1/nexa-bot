@@ -6,9 +6,6 @@ import { t } from './i18n/web.fa';
  * the page wrote before.
  */
 
-/** Every keyset list on these pages asks the server for ten rows at a time (W1.8). */
-export const OPS_LIST_PAGE_SIZE = 10;
-
 const DAY = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' });
 
 /** A `YYYY-MM-DD` as a Jalali day; anything else is returned unchanged, never blank. */

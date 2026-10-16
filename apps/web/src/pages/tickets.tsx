@@ -81,6 +81,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { ListFreshness, listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { Icon } from '../ui/icons';
@@ -88,7 +89,7 @@ import { DateField } from '../ui/date-field';
 import { ListFilterBar } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import type { SavedViewsRegistration } from '../ui/saved-views';
-import { OPS_LIST_PAGE_SIZE, dayRangeLabel } from '../ops-list-filters';
+import { dayRangeLabel } from '../ops-list-filters';
 // Review N8 (PR #240): the status vocabulary lives in its own module, shared with Customer 360.
 import { TICKET_STATUS_LABELS, TICKET_STATUS_TONES as STATUS_TONES } from '../ticket-labels';
 // Kept importable from this page under the names it exported before the move.
@@ -413,7 +414,7 @@ export function TicketsPage({
     queryFn: () =>
       fetchTickets({
         ...filters,
-        limit: OPS_LIST_PAGE_SIZE,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === undefined ? {} : { cursor }),
       }),
     enabled: !denied,

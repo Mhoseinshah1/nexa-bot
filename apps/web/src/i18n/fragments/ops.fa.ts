@@ -22,8 +22,6 @@ export const WEB_FA_OPS = {
   'web.ops_filter_from': 'از',
   'web.ops_filter_until': 'تا',
   'web.ops_filter_dates': 'بازهٔ زمانی',
-  'web.ops_page_previous': 'قبلی',
-  'web.ops_page_next': 'بعدی',
 
   // --- tickets: saved-view presets -----------------------------------------
   'web.tickets_view_awaiting': 'منتظر پاسخ ما',
