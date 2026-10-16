@@ -272,6 +272,10 @@ export const WEB_FA_OPS = {
   // --- incidents: the action panel's groups --------------------------------
   'web.inc_actions_incident': 'رخداد',
   'web.inc_actions_sales': 'اقدام برای فروش و مشتریان',
+
+  // --- roles: the catalogue and the comparison table -----------------------
+  'web.rbac_catalog_title': 'فهرست دسترسی‌ها',
+  'web.rbac_catalog_hint': 'همهٔ دسترسی‌ها به تفکیک بخش؛ در «جدول مقایسه» هر ستون یک نقش است.',
 } as const;
 
 /**
