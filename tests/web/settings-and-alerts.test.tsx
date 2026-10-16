@@ -5,6 +5,7 @@ import { AlertsPage } from '../../apps/web/src/pages/alerts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { event, renderPage, setting, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
+import { openSettingsGroupOf } from './settings-tabs';
 import { MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
@@ -176,6 +177,7 @@ describe('the settings screen', () => {
       ]),
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('wallet.topup.minimum');
     await screen.findByRole('heading', { name: t('web.setting_topup_minimum') });
 
     const select = screen.getByLabelText('واحد پول — کمینهٔ شارژ کیف پول') as HTMLSelectElement;
@@ -196,6 +198,7 @@ describe('the settings screen', () => {
       ]),
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('referral.minimum_order_amount');
     await screen.findByRole('heading', { name: t('web.setting_referral_minimum_order_amount') });
     const select = screen.getByLabelText(
       `${t('web.currency')} — ${t('web.setting_referral_minimum_order_amount')}`,
