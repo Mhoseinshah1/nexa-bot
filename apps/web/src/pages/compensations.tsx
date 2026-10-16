@@ -58,13 +58,21 @@ function reasonOf(reason: string) {
   );
 }
 
+/** W1.8: the list's page size. */
+export const COMPENSATIONS_PAGE_SIZE = 10;
+
 export function CompensationsPage({ route, denied }: { route: Route; denied: boolean }) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
 
   const compensations = useQuery({
     queryKey: ['compensations', cursor],
-    queryFn: () => fetchCompensations(cursor === null ? {} : { cursor }),
+    // W1.8: ten rows a page, on the same keyset.
+    queryFn: () =>
+      fetchCompensations({
+        limit: COMPENSATIONS_PAGE_SIZE,
+        ...(cursor === null ? {} : { cursor }),
+      }),
     enabled: !denied,
   });
 

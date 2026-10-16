@@ -104,4 +104,6 @@ export const WEB_FA_MONEY_RETIRED: readonly string[] = [
   // The refund answer's select and section heading (W3: row buttons open the dialog).
   'web.refund_answer_title',
   'web.refund_answer_none',
+  // The bulk operation's steering card (W3: its buttons are in the page head).
+  'web.cb_steering',
 ];

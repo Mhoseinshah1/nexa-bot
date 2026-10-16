@@ -18,3 +18,8 @@
 .pay-balance + .stack {
   margin-top: var(--gap);
 }
+
+/* Hints that used to live in an action card, now under the page head (bulk operation). */
+.w-money-head-notes > * + * {
+  margin-top: 4px;
+}

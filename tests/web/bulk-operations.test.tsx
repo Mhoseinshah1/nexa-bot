@@ -6,6 +6,7 @@ import {
   BulkOperationNewPage,
 } from '../../apps/web/src/pages/bulk-operations';
 import { renderPage, stubApi } from './harness';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * «عملیات گروهی» in the Web Admin (round N, B2): a mass wallet credit shows the exact count
@@ -17,6 +18,20 @@ const ID = '019290ab-cdef-7012-8345-6789abcdef01';
 const OPTIONS = {
   url: '/audience/options',
   body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
+};
+
+const COUNTS = {
+  total: 2,
+  pending: 0,
+  credited: 0,
+  planned: 1,
+  awaitingReconciliation: 1,
+  succeeded: 1,
+  failed: 0,
+  skipped: 0,
+  cancelled: 0,
+  notified: 1,
+  notificationQueued: 0,
 };
 
 function operation(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -201,5 +216,58 @@ describe('mass operations in the Web Admin', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /*
+   * W3 and W1.8: steering and the retry are buttons in the page head (no steering card);
+   * the retry opens a dialog that counts first and sends nothing until confirmed; the
+   * items are read ten a page.
+   */
+  it('puts steering and the retry in the head, and the retry in a dialog', async () => {
+    const api = stubApi([
+      {
+        url: `/bulk-operations/${ID}`,
+        body: { operation: operation({ counts: { ...COUNTS, failed: 3 } }) },
+      },
+      { url: `/bulk-operations/${ID}/items`, body: { items: [], nextCursor: null } },
+      {
+        url: `/bulk-operations/${ID}/retry/preview`,
+        body: {
+          preview: {
+            operationId: ID,
+            kind: 'SERVICE_TRAFFIC',
+            count: 3,
+            fingerprint: 'c'.repeat(32),
+          },
+        },
+      },
+    ]);
+    renderPage(<BulkOperationDetailPage id={ID} denied={false} mayWallet={false} mayGrant />);
+    await screen.findByRole('button', { name: 'توقف موقت' });
+    expect(screen.queryByRole('heading', { name: 'کنترل اجرا' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'لغو موارد باقی‌مانده' })).toBeInTheDocument();
+    expect(api.calls.find((call) => call.url.includes('/items'))?.url).toContain('limit=10');
+
+    // The retry: nothing is counted or sent until the dialog asks for it.
+    expect(screen.queryByRole('button', { name: 'شمارش موارد ناموفق' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'تلاش دوباره برای موارد ناموفق' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'شمارش موارد ناموفق' }));
+    expect(await within(dialog).findByLabelText(t('web.bulk_reason'))).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'تلاش دوباره' })).toBeDisabled();
+    expect(api.calls.some((call) => call.url.endsWith('/retry'))).toBe(false);
+  });
+
+  it('draws no steering for an operator who may not run this kind', async () => {
+    stubApi([
+      { url: `/bulk-operations/${ID}`, body: { operation: operation() } },
+      { url: `/bulk-operations/${ID}/items`, body: { items: [], nextCursor: null } },
+    ]);
+    renderPage(
+      <BulkOperationDetailPage id={ID} denied={false} mayWallet={false} mayGrant={false} />,
+    );
+    await screen.findByText(t('web.bulk_report'));
+    expect(screen.queryByRole('button', { name: 'توقف موقت' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'لغو موارد باقی‌مانده' })).toBeNull();
   });
 });
