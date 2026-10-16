@@ -278,6 +278,36 @@ describe('the count and the quick start', () => {
     ).toBeInTheDocument();
   });
 
+  it('stops counting after the server refuses the administrator, rather than asking on every change', async () => {
+    const api = stubApi([
+      OPTIONS,
+      {
+        url: '/audience/preview',
+        method: 'POST',
+        status: 403,
+        body: {
+          error: {
+            kind: 'FORBIDDEN',
+            code: 'auth.forbidden',
+            message: 'forbidden',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<Harness />);
+    expect(
+      await screen.findByText(t('web.no_permission'), {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    const asked = () => api.calls.filter((call) => call.url.includes('/audience/preview')).length;
+    expect(asked()).toBe(1);
+    await loaded();
+    const segment = audienceConditionEditor(t('web.aq_segment'));
+    fireEvent.click(within(segment).getByRole('button', { name: /طلایی/u }));
+    await new Promise((done) => setTimeout(done, AUDIENCE_COUNT_DEBOUNCE_MS + 200));
+    expect(asked()).toBe(1);
+  });
+
   it('applies a quick start as a whole definition and marks it', async () => {
     stubApi([OPTIONS, preview(1, 1)]);
     let last: AudienceDraft = EMPTY_AUDIENCE;

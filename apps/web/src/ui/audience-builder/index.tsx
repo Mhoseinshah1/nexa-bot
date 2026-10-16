@@ -9,7 +9,7 @@ import {
   SERVICE_STATES,
   type AudienceOptionsResponse,
 } from '@nexa/contracts';
-import { fetchAudienceOptions, previewAudience } from '../../api/client';
+import { ApiError, fetchAudienceOptions, previewAudience } from '../../api/client';
 import { currencyLabel, formatNumber } from '../../format';
 import { t, type WebKey } from '../../i18n/web.fa';
 import { Banner, Field, Ltr } from '../kit';
@@ -993,19 +993,32 @@ function AudienceCount({ value }: { value: AudienceDraft }) {
     const timer = window.setTimeout(() => setSettled(wire), AUDIENCE_COUNT_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [wire, settled]);
+  /*
+   * The count is automatic now, so a refusal must not be asked again on every change: once
+   * the server says this administrator may not count (403), the card shows that and issues
+   * no further request — a denied capability issues no request.
+   */
+  const [refused, setRefused] = useState(false);
   const count = useQuery({
     queryKey: ['audience-preview', settled],
     queryFn: () => previewAudience(JSON.parse(settled) as unknown),
+    enabled: !refused,
     placeholderData: keepPreviousData,
     retry: false,
     staleTime: 30_000,
   });
+  const forbidden = count.error instanceof ApiError && count.error.status === 403;
+  useEffect(() => {
+    if (forbidden) setRefused(true);
+  }, [forbidden]);
   const preview = count.data?.preview;
-  const pending = settled !== wire || count.isFetching;
+  const pending = !refused && (settled !== wire || count.isFetching);
   return (
     <div className="aq-count" aria-live="polite" aria-busy={pending}>
       <span className="muted small aq-count-title">{t('web.aq_count_title')}</span>
-      {count.error !== null && !count.isFetching ? (
+      {refused ? (
+        <Banner tone="info">{t('web.no_permission')}</Banner>
+      ) : count.error !== null && !count.isFetching ? (
         <Banner tone="danger">{audienceMessage(count.error) ?? t('web.error')}</Banner>
       ) : (
         <>
