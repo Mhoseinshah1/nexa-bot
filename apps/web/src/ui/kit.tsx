@@ -55,7 +55,24 @@ function cx(...parts: readonly (string | false | null | undefined)[]): string {
  * comes out reordered. Isolation makes the span one neutral object.
  */
 export function Ltr({ children, mono = true }: { children: ReactNode; mono?: boolean }) {
+  if (isPersianText(children)) return <span className="fa-in-ltr">{children}</span>;
   return <span className={mono ? 'ltr mono' : 'ltr'}>{children}</span>;
+}
+
+/** Arabic-script letters: a value holding them is a Persian sentence, not a technical value. */
+const PERSIAN_LETTERS = /[\u0600-\u06FF]/;
+
+/**
+ * Whether a would-be technical value is actually Persian text (W5): a Persian
+ * error or label that reached an LTR / monospace box. Such text is drawn RTL in
+ * the UI font, still isolated — forcing it left-to-right in a code face reverses
+ * its punctuation and makes it hard to read. Only plain text is judged; a node
+ * tree is left as its author drew it.
+ */
+export function isPersianText(children: ReactNode): boolean {
+  const parts = Array.isArray(children) ? (children as readonly unknown[]) : [children];
+  if (!parts.every((part) => typeof part === 'string' || typeof part === 'number')) return false;
+  return PERSIAN_LETTERS.test(parts.join(''));
 }
 
 /**
@@ -273,7 +290,9 @@ export function CodeValue({
 }) {
   return (
     <span className="code-field">
-      <code className={cx('code', wrap && 'wrap')}>{value}</code>
+      <code className={cx('code', wrap && 'wrap', isPersianText(value) && 'fa-in-ltr')}>
+        {value}
+      </code>
       {copy && <CopyButton value={value} />}
     </span>
   );
@@ -1886,8 +1905,8 @@ export function CursorPager({
   hasPrevious,
   hasNext,
   shown,
-  nextLabel = 'web.older',
-  previousLabel = 'web.newer',
+  nextLabel = 'web.page_next',
+  previousLabel = 'web.page_previous',
   summary,
 }: {
   onPrevious: () => void;
@@ -1930,6 +1949,46 @@ export function CursorPager({
 }
 /** `CursorPager` by the name the kit inventory uses. The semantics are keyset. */
 export const Pagination = CursorPager;
+
+/**
+ * Rows per page on EVERY list the admin draws (W1.8). A keyset list asks the
+ * server for this many (`limit`); a list that already holds all its rows in
+ * memory shows them this many at a time (`usePagedRows`). One constant, so the
+ * owner's "ten per page" is one decision and one test.
+ */
+export const LIST_PAGE_SIZE = 10;
+
+/**
+ * Pages an in-memory list `LIST_PAGE_SIZE` rows at a time, with the same
+ * «قبلی / بعدی» pager. Goes back to the first page when `resetKey` changes (a
+ * new filter) or when the list shrinks below the page being shown. For rows the
+ * page ALREADY holds — never a reason to fetch everything and page it here; a
+ * server list pages by cursor.
+ */
+export function usePagedRows<T>(
+  rows: readonly T[],
+  resetKey: string = '',
+): { rows: readonly T[]; pager: ReactNode } {
+  const [state, setState] = useState({ key: resetKey, page: 0 });
+  const pages = Math.max(1, Math.ceil(rows.length / LIST_PAGE_SIZE));
+  const page = state.key === resetKey ? Math.min(state.page, pages - 1) : 0;
+  const shown = rows.slice(page * LIST_PAGE_SIZE, (page + 1) * LIST_PAGE_SIZE);
+  const pager =
+    rows.length > LIST_PAGE_SIZE ? (
+      <CursorPager
+        hasPrevious={page > 0}
+        hasNext={page < pages - 1}
+        onPrevious={() => setState({ key: resetKey, page: page - 1 })}
+        onNext={() => setState({ key: resetKey, page: page + 1 })}
+        summary={
+          <>
+            {t('web.page_of')} <Num value={page + 1} /> / <Num value={pages} />
+          </>
+        }
+      />
+    ) : null;
+  return { rows: shown, pager };
+}
 
 /* ---------------------------------------------------------------- toasts --- */
 

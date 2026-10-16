@@ -1214,7 +1214,7 @@ describe('bounds that were asserted only in comments', () => {
     ]);
     renderPage(<NotificationsPage mayTest denied={false} />);
     await screen.findByText('ops.settled');
-    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
     await waitFor(() => {
       expect(countOf(api.calls, 'before=')).toBeGreaterThan(0);
     });

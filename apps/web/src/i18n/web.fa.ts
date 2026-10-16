@@ -560,6 +560,9 @@ export const WEB_FA = {
   'web.move_down': 'انتقال به پایین',
   'web.showing': 'نمایش',
   'web.newer': 'تازه‌تر',
+  'web.page_previous': 'قبلی',
+  'web.page_next': 'بعدی',
+  'web.page_of': 'صفحهٔ',
   'web.error_hint': 'ارتباط با سرور برقرار نشد. دوباره تلاش کنید.',
   /*
    * A final answer that is NOT a refusal.
