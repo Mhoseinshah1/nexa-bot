@@ -93,6 +93,38 @@ export const WEB_FA_UI = {
 
   // W1.4 — saved filters
   'web.saved_views': 'فیلترهای ذخیره‌شده',
+  'web.saved_views_mine': 'ذخیره‌شده‌ها',
+  'web.saved_views_presets': 'پیشنهادی',
+  'web.saved_views_none': 'هنوز فیلتری ذخیره نکرده‌اید.',
+  'web.saved_views_save': '+ ذخیرهٔ فیلتر فعلی',
+  'web.saved_views_save_disabled': 'اول فیلترها را تنظیم کنید',
+  'web.saved_views_update': 'به‌روزرسانی «{name}»',
+  'web.saved_views_manage': 'مدیریت',
+  'web.saved_views_default': 'پیش‌فرض',
+  'web.saved_views_apply_title': 'اعمال این فیلتر',
+  'web.saved_views_clear_title': 'برداشتن این فیلتر',
+  'web.saved_views_save_title': 'ذخیرهٔ فیلتر فعلی',
+  'web.saved_views_save_hint':
+    'فیلترهای همین حالا روی لیست با یک نام ذخیره می‌شوند و بعداً با یک کلیک برمی‌گردند.',
+  'web.saved_views_name': 'نام',
+  'web.saved_views_name_placeholder': 'مثلاً سرویس‌های آلمان که تمام می‌شوند',
+  'web.saved_views_make_default': 'هر بار این صفحه را باز کردم، همین فیلتر اعمال شود',
+  'web.saved_views_cancel': 'انصراف',
+  'web.saved_views_submit': 'ذخیره',
+  'web.saved_views_err_short': 'یک نام دست‌کم دوحرفی بنویسید.',
+  'web.saved_views_err_taken': 'فیلتری با همین نام دارید؛ نام دیگری بنویسید.',
+  'web.saved_views_err_full': 'حداکثر ۱۲ فیلتر برای هر صفحه می‌شود ذخیره کرد؛ یکی را حذف کنید.',
+  'web.saved_views_saved': 'فیلتر «{name}» ذخیره شد',
+  'web.saved_views_updated': '«{name}» به‌روز شد',
+  'web.saved_views_renamed': 'نام عوض شد',
+  'web.saved_views_manage_title': 'مدیریت فیلترهای ذخیره‌شده',
+  'web.saved_views_manage_empty': 'فیلتری ندارید.',
+  'web.saved_views_up': 'بالا',
+  'web.saved_views_down': 'پایین',
+  'web.saved_views_delete': 'حذف',
+  'web.saved_views_no_default': 'بدون پیش‌فرض',
+  'web.saved_views_deleted': '«{name}» حذف شد',
+  'web.saved_views_undo': 'بازگرداندن',
 } as const;
 
 /**
