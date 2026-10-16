@@ -189,3 +189,95 @@ export const legacyCustomerAdoptionsResponseSchema = z.object({
     .max(LEGACY_CUSTOMER_ADOPTIONS_MAX),
 });
 export type LegacyCustomerAdoptionsResponse = z.infer<typeof legacyCustomerAdoptionsResponseSchema>;
+
+// --- the whole archive, not one customer's: «سوابق و تنظیمات میرزا» --------------------------
+
+/**
+ * The tenant-wide view of `legacy_history_records` (read only, `legacy.history.view`). The
+ * Customer 360 card lists one customer's records; about fifteen thousand records are never
+ * linked to a customer (panel registry, product proposals, discounts, tickets,
+ * configuration rows…), and the 80 000 service operations are keyed by invoice. This surface
+ * lists every type with its counts, pages a type or the customer-less records by record id,
+ * and reads a service's records through its adopted invoice key. Redaction is the card's:
+ * without `legacy.invoices.pii.view` every payload is reduced to its per-type allowlist.
+ */
+export const LEGACY_RECORDS_ROUTES = {
+  summary: '/legacy-records/summary',
+  list: '/legacy-records',
+  /** A service's Mirza records (`services.view` + `legacy.history.view`). */
+  service: (id: string) => `/services/${encodeURIComponent(id)}/legacy-history`,
+} as const;
+
+export const LEGACY_RECORDS_PAGE_MAX = 100;
+export const LEGACY_RECORDS_PAGE_DEFAULT = 25;
+/** The most records one service's section returns; `truncated` says when more exist. */
+export const LEGACY_SERVICE_RECORDS_MAX = 200;
+
+export const LEGACY_RECORDS_LINKED_FILTERS = ['yes', 'no'] as const;
+export type LegacyRecordsLinkedFilter = (typeof LEGACY_RECORDS_LINKED_FILTERS)[number];
+
+export const legacyRecordsListQuerySchema = z
+  .object({
+    type: z.enum(LEGACY_HISTORY_RECORD_TYPES).optional(),
+    /** `yes`: linked to a NEXA customer; `no`: no customer (customer_id null). */
+    linked: z.enum(LEGACY_RECORDS_LINKED_FILTERS).optional(),
+    /** Keyset cursor: the `nextCursor` of the page before (record id order). */
+    after: z.uuid().optional(),
+    limit: z.coerce.number().int().min(1).max(LEGACY_RECORDS_PAGE_MAX).optional(),
+  })
+  .strict();
+export type LegacyRecordsListQuery = z.infer<typeof legacyRecordsListQuerySchema>;
+
+export const legacyRecordItemSchema = legacyHistoryItemSchema.extend({
+  /** True when the record is linked to a NEXA customer. */
+  customerLinked: z.boolean(),
+});
+export type LegacyRecordItem = z.infer<typeof legacyRecordItemSchema>;
+
+export const legacyRecordsListResponseSchema = z.object({
+  items: z.array(legacyRecordItemSchema).max(LEGACY_RECORDS_PAGE_MAX),
+  nextCursor: z.uuid().nullable(),
+  piiRedacted: z.boolean(),
+});
+export type LegacyRecordsListResponse = z.infer<typeof legacyRecordsListResponseSchema>;
+
+/** A Mirza panel the registry records as not active (status other than ACTIVE). */
+export const legacyInactivePanelSchema = z.object({
+  /** The Mirza panel code (`code_panel`). */
+  code: z.string(),
+  /** The operator's own panel label, as Mirza stored it. */
+  name: z.string().nullable(),
+  panelType: z.string().nullable(),
+  /** Normalised status (`DISABLED`…); never the raw column. */
+  status: z.string(),
+});
+export type LegacyInactivePanel = z.infer<typeof legacyInactivePanelSchema>;
+
+export const legacyRecordsSummaryResponseSchema = z.object({
+  /** Every type that has at least one record, whether or not a customer is linked. */
+  byType: z.array(
+    z.object({
+      recordType: z.enum(LEGACY_HISTORY_RECORD_TYPES),
+      total: z.number().int().nonnegative(),
+      /** Records with no customer. */
+      unlinked: z.number().int().nonnegative(),
+    }),
+  ),
+  total: z.number().int().nonnegative(),
+  unlinked: z.number().int().nonnegative(),
+  inactivePanels: z.array(legacyInactivePanelSchema),
+});
+export type LegacyRecordsSummaryResponse = z.infer<typeof legacyRecordsSummaryResponseSchema>;
+
+/**
+ * One service's Mirza records: the invoice key(s) of the candidate(s) adopted as this service,
+ * and the service operations, cancellation requests and ownership records of those invoices.
+ */
+export const legacyServiceHistoryResponseSchema = z.object({
+  invoiceKeys: z.array(z.string()),
+  items: z.array(legacyRecordItemSchema).max(LEGACY_SERVICE_RECORDS_MAX),
+  /** True when more than `LEGACY_SERVICE_RECORDS_MAX` records exist and the rest were cut. */
+  truncated: z.boolean(),
+  piiRedacted: z.boolean(),
+});
+export type LegacyServiceHistoryResponse = z.infer<typeof legacyServiceHistoryResponseSchema>;
