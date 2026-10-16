@@ -73,6 +73,47 @@ export interface LegacyHistoryRecordRow extends NewLegacyHistoryRecord {
   readonly createdAt: Date;
 }
 
+/** A Mirza panel the registry records as not ACTIVE. */
+export interface LegacyInactivePanelRow {
+  readonly code: string;
+  readonly name: string | null;
+  readonly panelType: string | null;
+  readonly status: string;
+}
+
+/** The tenant-wide reads behind «سوابق و تنظیمات میرزا» and the service page's section. */
+export interface LegacyRecordsRepository {
+  /** Per record type: all records, and the ones with no customer. */
+  countsByType(
+    scope: TenantContext,
+  ): Promise<
+    readonly { readonly type: string; readonly records: number; readonly unlinked: number }[]
+  >;
+  /** Registry panels whose normalised status is not ACTIVE, by panel code. */
+  inactivePanels(scope: TenantContext): Promise<readonly LegacyInactivePanelRow[]>;
+  /** Records by id (keyset), optionally one type and/or linked / not linked to a customer. */
+  listRecords(
+    scope: TenantContext,
+    filter: {
+      readonly type: LegacyHistoryRecordType | null;
+      readonly linked: boolean | null;
+      readonly after: string | null;
+    },
+    limit: number,
+  ): Promise<readonly LegacyHistoryRecordRow[]>;
+  /** Invoice keys of the candidates adopted as this service. */
+  invoiceKeysOfService(scope: TenantContext, serviceId: string): Promise<readonly string[]>;
+  /**
+   * Service operations, cancellation requests and ownership records of these invoice keys,
+   * newest first (id as the tiebreak). The caller asks for one more than it shows.
+   */
+  recordsOfInvoices(
+    scope: TenantContext,
+    invoiceKeys: readonly string[],
+    limit: number,
+  ): Promise<readonly LegacyHistoryRecordRow[]>;
+}
+
 export interface LegacyHistoryRepository {
   /**
    * The package import row's own `package_import_id`: `undefined` when the tenant has no such

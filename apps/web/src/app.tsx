@@ -59,6 +59,7 @@ import { LegacyProductsPage } from './pages/legacy-products';
 import { LegacyInvoicesPage } from './pages/legacy-invoices';
 import { LegacyDebtsPage } from './pages/legacy-debts';
 import { LegacyServicesPage } from './pages/legacy-services';
+import { LegacyRecordsPage } from './pages/legacy-records';
 import { LegacyCutoverPage } from './pages/legacy-cutover';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
@@ -197,6 +198,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/legacy-debts',
   // Mirza PR5: legacy service candidates — one outcome each — and their review.
   '/legacy-services',
+  // The whole Mirza history archive, read only (global records included).
+  '/legacy-records',
   // Mirza PR6: the owner's cutover approval of one legacy snapshot.
   '/legacy-cutover',
   // Phase 7: the Mirza restore moved into «بکاپ و بازیابی»; served as a redirect so old links land.
@@ -456,6 +459,14 @@ export function resolve(
       title: t('web.lpr_title'),
     };
   }
+  // «سوابق و تنظیمات میرزا»: the whole history archive, read only.
+  if (route.path === '/legacy-records') {
+    return {
+      element: <LegacyRecordsPage denied={!may('legacy.history.view')} />,
+      crumbs: [{ label: t('web.lrec_title') }],
+      title: t('web.lrec_title'),
+    };
+  }
   // Mirza PR3: the legacy invoice archive (read-only; personal data behind its own key).
   if (route.path === '/legacy-invoices') {
     return {
@@ -604,6 +615,7 @@ export function resolve(
           mayDecideRefundRequests={may('refunds.issue') && may('services.terminate')}
           /* Program §13: an operator's free traffic or time. */
           mayGrant={may('services.grant')}
+          mayViewLegacyHistory={may('legacy.history.view')}
         />
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],

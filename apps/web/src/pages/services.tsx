@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ServiceLegacyHistoryCard } from './legacy-records';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SERVICE_DELIVERY_STATES,
@@ -784,11 +785,14 @@ export function ServiceDetailPage({
   mayViewRefundRequests = false,
   mayDecideRefundRequests = false,
   mayGrant = false,
+  mayViewLegacyHistory = false,
 }: {
   id: string;
   denied: boolean;
   mayEdit: boolean;
   mayTerminate: boolean;
+  /** `legacy.history.view`: this service's Mirza records. A courtesy; the server decides. */
+  mayViewLegacyHistory?: boolean;
   /** Program §13: `services.grant`, an operator's free traffic or time. */
   mayGrant?: boolean;
   /** `refunds.view`: this service's customer refund requests (WP19). */
@@ -953,6 +957,8 @@ export function ServiceDetailPage({
                 )}
               </StateSwitch>
             </Card>
+
+            <ServiceLegacyHistoryCard serviceId={row.id} mayView={mayViewLegacyHistory} />
 
             <Card tone="muted">
               <p className="muted small">{t('web.services_transfer_absent')}</p>

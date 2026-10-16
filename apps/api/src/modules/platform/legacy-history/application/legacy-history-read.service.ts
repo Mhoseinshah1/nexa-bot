@@ -275,7 +275,7 @@ export class LegacyHistoryReadService {
   }
 }
 
-function itemOf(row: LegacyHistoryRecordRow, pii: boolean): LegacyHistoryReadItem {
+export function itemOf(row: LegacyHistoryRecordRow, pii: boolean): LegacyHistoryReadItem {
   // Without the PII key the summary is read from the allowlisted projection, never the
   // packaged record: a summary field the allowlist does not carry is not shown either.
   const view = pii
