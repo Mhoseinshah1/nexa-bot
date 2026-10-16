@@ -88,7 +88,7 @@ import { Icon } from '../ui/icons';
 import { DateField } from '../ui/date-field';
 import { ListFilterBar } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
-import type { SavedViewsRegistration } from '../ui/saved-views';
+import { routeViewRegistration, type SavedViewsRegistration } from '../ui/saved-views';
 import { dayRangeLabel } from '../ops-list-filters';
 // Review N8 (PR #240): the status vocabulary lives in its own module, shared with Customer 360.
 import { TICKET_STATUS_LABELS, TICKET_STATUS_TONES as STATUS_TONES } from '../ticket-labels';
@@ -330,28 +330,11 @@ const TICKET_VIEW_KEYS = [
  * has no total for a filter).
  */
 export function ticketViews(route: Route): SavedViewsRegistration {
-  return {
-    page: 'tickets',
-    empty: Object.fromEntries(TICKET_VIEW_KEYS.map((key) => [key, ''])),
-    get: () => Object.fromEntries(TICKET_VIEW_KEYS.map((key) => [key, route.query.get(key) ?? ''])),
-    set: (state) =>
-      setQueries(
-        route,
-        TICKET_VIEW_KEYS.map((key) => {
-          const value = state[key] ?? '';
-          return [key, value === '' ? null : value] as const;
-        }),
-      ),
-    presets: [
-      { id: 'awaiting', name: 'web.tickets_view_awaiting', state: { awaiting: 'support' } },
-      {
-        id: 'mine',
-        name: 'web.tickets_view_mine',
-        state: { assigned: 'me', awaiting: 'support' },
-      },
-      { id: 'unassigned', name: 'web.tickets_view_unassigned', state: { assigned: 'none' } },
-    ],
-  };
+  return routeViewRegistration(route, 'tickets', TICKET_VIEW_KEYS, [
+    { id: 'awaiting', name: 'web.tickets_view_awaiting', state: { awaiting: 'support' } },
+    { id: 'mine', name: 'web.tickets_view_mine', state: { assigned: 'me', awaiting: 'support' } },
+    { id: 'unassigned', name: 'web.tickets_view_unassigned', state: { assigned: 'none' } },
+  ]);
 }
 
 export function TicketsPage({

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { AlertsPage } from '../../apps/web/src/pages/alerts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { event, renderPage, setting, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 import { MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
@@ -522,6 +523,7 @@ describe('management alerts', () => {
     const api = stubApi([route]);
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('Roles changed.');
+    openFilterPanel();
     expect(screen.getByRole('combobox')).toBeInTheDocument();
 
     route.status = 403;
@@ -727,7 +729,9 @@ describe('management alerts', () => {
       expect(api.calls.some((call) => call.url.includes('beforeId='))).toBe(true);
     });
 
-    fireEvent.change(screen.getByLabelText('شدت'), { target: { value: 'ERROR' } });
+    fireEvent.change(within(openFilterPanel()).getByLabelText('شدت'), {
+      target: { value: 'ERROR' },
+    });
     await waitFor(() => {
       expect(api.calls.at(-1)?.url).toContain('severity=ERROR');
     });
@@ -740,13 +744,13 @@ describe('management alerts', () => {
     // The cursor is the server's, not a guess from the last row on screen. The
     // reader over-fetches one row and hands back the pair it actually stopped
     // at, so the browser never has to reconstruct it.
-    const full = Array.from({ length: 25 }, (_, index) =>
+    const full = Array.from({ length: 10 }, (_, index) =>
       event({ id: `e${index}`, lastSeenAt: `2026-09-06T08:00:0${index % 10}.000Z` }),
     );
     const api = stubApi([
       {
         url: '/ops-log',
-        body: { events: full, nextCursor: { at: '2026-09-06T08:00:04.000Z', id: 'e24' } },
+        body: { events: full, nextCursor: { at: '2026-09-06T08:00:04.000Z', id: 'e9' } },
       },
     ]);
     renderPage(<AlertsPage denied={false} />);
@@ -755,7 +759,7 @@ describe('management alerts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
     await waitFor(() => {
       const paged = api.calls.find((call) => call.url.includes('beforeId'));
-      expect(paged?.url).toContain('beforeId=e24');
+      expect(paged?.url).toContain('beforeId=e9');
       // Both halves of the cursor: `firstSeenAt` alone is not unique, and a
       // strict comparison on it skips the tail of a group that straddles a page.
       expect(paged?.url).toContain('before=2026-09-06T08%3A00%3A04.000Z');
@@ -776,17 +780,17 @@ describe('management alerts', () => {
    * the server, and a full-but-final page reports `nextCursor: null`.
    */
   it('offers no older page on a FULL page the server reports as the last one', async () => {
-    const full = Array.from({ length: 25 }, (_, index) =>
+    const full = Array.from({ length: 10 }, (_, index) =>
       event({ id: `e${index}`, lastSeenAt: `2026-09-06T08:00:0${index % 10}.000Z` }),
     );
     const api = stubApi([{ url: '/ops-log', body: { events: full, nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
     await screen.findAllByText('Roles changed.');
 
-    // A page-length comparison would have enabled this: 25 rows, limit 25.
+    // A page-length comparison would have enabled this: 10 rows, limit 10.
     expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
     // And it asked for a bounded page, which is what makes the case reachable.
-    expect(api.calls[0]?.url).toContain('limit=25');
+    expect(api.calls[0]?.url).toContain('limit=10');
   });
 
   it('offers no older page when the page came back short', async () => {
@@ -795,7 +799,7 @@ describe('management alerts', () => {
     await screen.findByText('Roles changed.');
 
     expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
-    expect(api.calls[0]?.url).toContain('limit=25');
+    expect(api.calls[0]?.url).toContain('limit=10');
   });
 
   /**
@@ -910,8 +914,9 @@ describe('management alerts', () => {
   it('says plainly that it is not the operational history', async () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
-    expect(await screen.findByText('این صفحه تاریخچهٔ عملیاتی نیست')).toBeInTheDocument();
-    expect(screen.getByText(/گروه گزارش تلگرام/)).toBeInTheDocument();
+    expect(await screen.findByText(/گروه گزارش تلگرام/)).toBeInTheDocument();
+    // W5: the banner keeps its body and drops the meta title.
+    expect(screen.queryByText('این صفحه تاریخچهٔ عملیاتی نیست')).toBeNull();
   });
 
   /**
@@ -931,11 +936,11 @@ describe('management alerts', () => {
     // ask whether anything is open. This assertion used to name the open-alert
     // copy, which pinned the wrong string in place: the page said "there is no
     // open alert" over a view that had not asked the question.
-    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+    await screen.findByText(t('web.alerts_empty_filter'));
     expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
     expect(api.calls[0]?.url).not.toContain('open=');
 
-    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('open=true'))).toBe(true);
     });
@@ -951,12 +956,12 @@ describe('management alerts', () => {
   it('claims that nothing is open only from the unfiltered open view', async () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
-    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+    await screen.findByText(t('web.alerts_empty_filter'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     // Now it has asked, so now it may answer.
     await screen.findByText('هشدار بازی وجود ندارد.');
-    expect(screen.queryByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeNull();
+    expect(screen.queryByText(t('web.alerts_empty_filter'))).toBeNull();
   });
 
   /**
@@ -971,16 +976,18 @@ describe('management alerts', () => {
   it('does not deny that anything is open when a severity filter emptied the page', async () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
-    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
-    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    await screen.findByText(t('web.alerts_empty_filter'));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     await screen.findByText('هشدار بازی وجود ندارد.');
 
-    fireEvent.change(screen.getByLabelText('شدت'), { target: { value: 'ERROR' } });
+    fireEvent.change(within(openFilterPanel()).getByLabelText('شدت'), {
+      target: { value: 'ERROR' },
+    });
 
     // `findBy`, not `getBy`: the filter change refetches, and asserting during
     // the skeleton would pass for any implementation — the strong copy is
     // absent while loading too.
-    expect(await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeInTheDocument();
+    expect(await screen.findByText(t('web.alerts_empty_filter'))).toBeInTheDocument();
     expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
   });
 
@@ -1006,14 +1013,15 @@ describe('management alerts', () => {
       },
     ]);
     renderPage(<AlertsPage denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'باز' }));
+    await screen.findByText('A budget filled up.');
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     await screen.findByText('A budget filled up.');
 
     // Page two, and by then the condition has been resolved elsewhere.
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
 
-    expect(await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeInTheDocument();
+    expect(await screen.findByText(t('web.alerts_empty_filter'))).toBeInTheDocument();
     expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
   });
 
@@ -1065,13 +1073,13 @@ describe('management alerts', () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
     // The default view is history, so this is the filtered empty state.
-    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+    await screen.findByText(t('web.alerts_empty_filter'));
 
     const scopeOf = (url: string) =>
       new URL(url, 'https://admin.example.test').searchParams.get('scope');
     expect(scopeOf(api.calls[0]?.url ?? '')).toBe('MANAGEMENT');
 
-    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     await waitFor(() => {
       const open = api.calls.find((call) => call.url.includes('open=true'));
       expect(open, 'no open request was made').toBeDefined();
@@ -1082,7 +1090,7 @@ describe('management alerts', () => {
 
     // ...and going back to history restores the wide scope, so the narrowing
     // is a filter rather than a one-way door.
-    fireEvent.click(screen.getByRole('button', { name: 'همه' }));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'همه' }));
     await waitFor(() => {
       const last = api.calls[api.calls.length - 1];
       expect(scopeOf(last?.url ?? '')).toBe('MANAGEMENT');

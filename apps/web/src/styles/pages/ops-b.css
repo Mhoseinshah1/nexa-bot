@@ -967,29 +967,6 @@ form.set-row > * + * {
 .diagnostics-stats {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
-.system-separation {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-.system-separation li {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
-  padding: 10px 12px;
-}
-.system-separation-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.system-separation p {
-  margin: 0;
-}
 .system-roles {
   display: inline-flex;
   flex-wrap: wrap;
@@ -1010,10 +987,7 @@ form.set-row > * + * {
   background: var(--bg-1);
 }
 @media (max-width: 980px) {
-  .system-separation {
-    grid-template-columns: minmax(0, 1fr);
   }
-}
 
 /* --- Recovery (ADR-0025, ADR-0028) ------------------------------------------------ */
 

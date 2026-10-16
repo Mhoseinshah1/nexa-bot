@@ -262,6 +262,12 @@ export const WEB_FA_OPS = {
   'web.audit_verb_wallet_settle': 'تسویه از کیف پول',
   'web.audit_verb_attribute': 'انتساب',
   'web.audit_verb_bind': 'اتصال',
+
+  // --- notifications: the type of each message -----------------------------
+  'web.notif_type': 'نوع اعلان',
+  'web.notif_cat_finance': 'مالی',
+  'web.notif_cat_support': 'پشتیبانی',
+  'web.notif_cat_notice': 'اعلان',
 } as const;
 
 /**
@@ -291,4 +297,6 @@ export const WEB_FA_OPS_RETIRED: readonly string[] = [
   'web.alerts_scope_title',
   'web.alerts_empty_filtered',
   'web.alerts_empty_filtered_hint',
+  // notifications: the column reads «نوع اعلان» now.
+  'web.key',
 ];

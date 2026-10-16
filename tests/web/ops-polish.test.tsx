@@ -10,6 +10,13 @@ import {
 } from '../../apps/web/src/audit-action-labels';
 import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
+import { TEMPLATE_KEYS } from '@nexa/contracts';
+import {
+  NOTIFICATION_CATEGORY_LABELS,
+  NotificationsPage,
+  notificationCategoryOf,
+  notificationTypeName,
+} from '../../apps/web/src/pages/alerts';
 
 /**
  * W5 polish for the support, infra and system pages: no raw machine key as primary text.
@@ -85,5 +92,53 @@ describe('audit action names', () => {
     );
     expect(auditActionLabel('order.brand_new_verb')).toBeNull();
     expect(auditActionLabel('nothing')).toBeNull();
+  });
+});
+
+describe('notification types', () => {
+  it('names every operator-notification template in Persian', () => {
+    const ops = TEMPLATE_KEYS.filter((key) => key.startsWith('ops.'));
+    expect(ops.length).toBeGreaterThan(0);
+    for (const key of ops) expect(notificationTypeName(key), key).not.toBe(key);
+    expect(notificationTypeName('ops.brand_new')).toBe('ops.brand_new');
+    for (const key of Object.values(NOTIFICATION_CATEGORY_LABELS)) expect(WEB_FA[key]).toBeTruthy();
+  });
+
+  it('files each message under finance, support or notice', () => {
+    expect(notificationCategoryOf('ops.financial.order_paid')).toBe('FINANCE');
+    expect(notificationCategoryOf('ops.support.handoff_required')).toBe('SUPPORT');
+    expect(notificationCategoryOf('ops.notification.test')).toBe('NOTICE');
+  });
+
+  it('draws «نوع اعلان» as the Persian name, the chip beside it, the key in the tooltip', async () => {
+    stubApi([
+      {
+        url: '/notifications',
+        body: {
+          notifications: [
+            {
+              id: 'n1',
+              kind: 'OPERATIONAL_EVENT',
+              status: 'SENT',
+              templateKey: 'ops.financial.order_paid',
+              attemptCount: 1,
+              maxAttempts: 5,
+              createdAt: '2026-09-06T08:00:00.000Z',
+              lastAttemptAt: '2026-09-06T08:00:01.000Z',
+              completedAt: '2026-09-06T08:00:01.000Z',
+              correlationId: 'c1',
+            },
+          ],
+          nextCursor: null,
+        },
+      },
+    ]);
+    renderPage(<NotificationsPage mayTest={false} denied={false} />);
+    const name = await screen.findByRole('button', {
+      name: notificationTypeName('ops.financial.order_paid'),
+    });
+    expect(name).toHaveAttribute('title', 'ops.financial.order_paid');
+    expect(screen.getByText(t('web.notif_cat_finance'))).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: t('web.notif_type') })).toBeInTheDocument();
   });
 });

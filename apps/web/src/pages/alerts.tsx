@@ -39,6 +39,7 @@ import {
   LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { ListFilterBar } from '../ui/filter-bar';
+import { templateCopy } from '../template-copy';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
 
@@ -397,6 +398,26 @@ export function AlertsPage({ denied }: { denied: boolean }) {
   );
 }
 
+/** W5: what kind of message a notification is, by its template's family. */
+export type NotificationCategory = 'FINANCE' | 'SUPPORT' | 'NOTICE';
+
+export const NOTIFICATION_CATEGORY_LABELS: Readonly<Record<NotificationCategory, WebKey>> = {
+  FINANCE: 'web.notif_cat_finance',
+  SUPPORT: 'web.notif_cat_support',
+  NOTICE: 'web.notif_cat_notice',
+};
+
+export function notificationCategoryOf(templateKey: string): NotificationCategory {
+  if (templateKey.startsWith('ops.financial.')) return 'FINANCE';
+  if (/(^|\.)(support|ticket|tickets|business)(\.|_|$)/u.test(templateKey)) return 'SUPPORT';
+  return 'NOTICE';
+}
+
+/** The template's Persian name (the template catalogue's), or the raw key when it has none. */
+export function notificationTypeName(templateKey: string): string {
+  return templateCopy(templateKey, '').name;
+}
+
 const STATUS_KEYS: Record<string, WebKey> = {
   PENDING: 'web.status_pending',
   SENT: 'web.status_sent',
@@ -533,16 +554,23 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     },
     {
       key: 'template',
-      header: t('web.key'),
+      header: t('web.notif_type'),
+      wrap: true,
       render: (row) => (
-        <button
-          type="button"
-          className="link notifications-key"
-          aria-pressed={row.id === selected}
-          onClick={() => setSelected(row.id)}
-        >
-          <Ltr>{row.templateKey}</Ltr>
-        </button>
+        <span className="notifications-type">
+          <button
+            type="button"
+            className="link notifications-key"
+            aria-pressed={row.id === selected}
+            title={row.templateKey}
+            onClick={() => setSelected(row.id)}
+          >
+            {notificationTypeName(row.templateKey)}
+          </button>
+          <Badge tone="neutral" outline>
+            {t(NOTIFICATION_CATEGORY_LABELS[notificationCategoryOf(row.templateKey)])}
+          </Badge>
+        </span>
       ),
     },
     {

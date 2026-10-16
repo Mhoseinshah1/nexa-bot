@@ -50,3 +50,11 @@
     top: 16px;
   }
 }
+
+/* Notifications: the message's Persian name and its family chip on one wrapping line. */
+.notifications-type {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
