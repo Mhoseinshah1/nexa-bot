@@ -148,7 +148,7 @@ describe('the gateway form’s top-up gift', () => {
   };
 
   it('opens with the route’s gift, explains it, and saves the percentage as typed', async () => {
-    const { api, view, input } = await open();
+    const { api, input } = await open();
     expect(input.value).toBe('5');
     expect(document.body.textContent).toContain('به‌عنوان هدیه به کیف پول مشتری واریز می‌شود');
 

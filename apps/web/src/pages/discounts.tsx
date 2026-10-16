@@ -714,8 +714,6 @@ function DiscountRules({
             onPrevious={trail.pop}
             onNext={() => nextCursor !== null && trail.push(nextCursor)}
             // `GET /discounts` pages an ASCENDING keyset, so the next page is NEWER.
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         </StateSwitch>
 
@@ -1739,8 +1737,6 @@ function CashbackRules({
             hasNext={nextCursor !== null}
             onPrevious={trail.pop}
             onNext={() => nextCursor !== null && trail.push(nextCursor)}
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         </StateSwitch>
 

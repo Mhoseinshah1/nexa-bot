@@ -34,6 +34,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -122,9 +123,6 @@ const ITEM_LABELS: Readonly<Record<BulkItemState, WebKey>> = {
 /** How often a RUNNING operation's detail and its items are read again. */
 export const BULK_LIVE_REFRESH_MS = 5_000;
 
-/** W1.8: ten rows a page, for the operations and for one operation's items. */
-export const BULK_PAGE_SIZE = 10;
-
 /** The items page's query: its state filter, its cursor and the page size. */
 function bulkItemsQuery(
   state: BulkItemState | '',
@@ -132,7 +130,7 @@ function bulkItemsQuery(
 ): { state?: string; cursor?: string } {
   // `limit` is accepted by the server's items query; the client signature does not name it.
   const query = {
-    limit: BULK_PAGE_SIZE,
+    limit: LIST_PAGE_SIZE,
     ...(state === '' ? {} : { state }),
     ...(cursor === undefined ? {} : { cursor }),
   };
@@ -206,7 +204,7 @@ export function BulkOperationsPage({
        * W1.8: ten rows a page. The server's list query takes `limit` (1..BULK_PAGE_MAX);
        * the client signature does not name it yet, so it travels as a held object.
        */
-      const query = { limit: BULK_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) };
+      const query = { limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) };
       return fetchBulkOperations(query);
     },
     enabled: !denied,

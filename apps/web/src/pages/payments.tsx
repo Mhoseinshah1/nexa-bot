@@ -64,6 +64,7 @@ import { ListFilterBar } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import type { SavedViewsRegistration, ViewState } from '../ui/saved-views';
 import {
+  LIST_PAGE_SIZE,
   Disclosure,
   Badge,
   Banner,
@@ -752,9 +753,6 @@ function ReinquireButton({ paymentId }: { paymentId: string }) {
   );
 }
 
-/** W1.8: the list's page size. */
-export const PAYMENTS_PAGE_SIZE = 10;
-
 /** The URL parameters a saved filter holds on this list: the search and every filter. */
 const PAYMENT_VIEW_KEYS = ['q', 'queue', 'gateway', 'range', 'state', 'method', 'disposition'];
 
@@ -842,7 +840,7 @@ export function PaymentsPage({
     queryFn: () =>
       fetchPayments({
         // W1.8: ten rows a page; the keyset cursor is unchanged.
-        limit: PAYMENTS_PAGE_SIZE,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === null ? {} : { cursor }),
         ...(state === null ? {} : { state: state as PaymentState }),
         ...(method === null ? {} : { method: method as PaymentMethod }),

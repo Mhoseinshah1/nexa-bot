@@ -640,8 +640,6 @@ export function ProductsPage({
             onNext={() => nextCursor !== null && pushCursor(nextCursor)}
             // `GET /products` pages an ASCENDING keyset — the earliest product first —
             // so "next" is NEWER here, as on `/users`.
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         )}
       </Card>

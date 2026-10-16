@@ -149,7 +149,7 @@ describe('the discount rules list', () => {
 
     // The discount list's own pager: the cashback list has one too.
     const discountCard = discountTable().closest('section') as HTMLElement;
-    fireEvent.click(within(discountCard).getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(within(discountCard).getByRole('button', { name: 'بعدی' }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('/discounts?cursor=cursor-2'))).toBe(true),
     );

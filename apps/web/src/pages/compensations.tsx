@@ -5,6 +5,7 @@ import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Card,
   CursorPager,
@@ -58,9 +59,6 @@ function reasonOf(reason: string) {
   );
 }
 
-/** W1.8: the list's page size. */
-export const COMPENSATIONS_PAGE_SIZE = 10;
-
 export function CompensationsPage({ route, denied }: { route: Route; denied: boolean }) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
@@ -70,7 +68,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
     // W1.8: ten rows a page, on the same keyset.
     queryFn: () =>
       fetchCompensations({
-        limit: COMPENSATIONS_PAGE_SIZE,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === null ? {} : { cursor }),
       }),
     enabled: !denied,
