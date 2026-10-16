@@ -525,7 +525,8 @@ describe('the recovery step strip after a verification fails', () => {
     await waitFor(() => expect(send).toBeEnabled());
     fireEvent.click(send);
     fireEvent.click(await screen.findByRole('button', { name: t('web.recovery_verify') }));
-    await screen.findByText('FAILED');
+    // W5: the state reads in Persian, the raw value in its tooltip.
+    await screen.findAllByTitle('FAILED');
 
     const steps = Array.from(document.querySelectorAll('.recovery-steps li'));
     const [upload, verify, restore] = steps as [HTMLElement, HTMLElement, HTMLElement];

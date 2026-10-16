@@ -10,6 +10,7 @@ import {
   CATEGORY_LABELS,
 } from '../../apps/web/src/pages/notification-center';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Phase B3 — the Notification Center and its bell, against the shapes the server returns
@@ -136,7 +137,8 @@ describe('the inbox', () => {
     ]);
     renderPage(<NotificationCenterPage permissions={['payments.view', 'panels.view']} />);
     await screen.findByText('همهٔ اعلان‌ها خوانده شده‌اند.');
-    const select = screen.getByRole('combobox', { name: 'دسته' });
+    // W1.3: the category select lives in the filter panel.
+    const select = within(openFilterPanel()).getByRole('combobox', { name: 'دسته' });
     const options = within(select)
       .getAllByRole('option')
       .map((option) => option.textContent);

@@ -309,7 +309,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
               />
             </div>
 
-            <div className="two-col">
+            <div className="two-col ops-equal-cols">
               <Card
                 title={t('web.opsgroup_connection')}
                 actions={

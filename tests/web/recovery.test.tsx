@@ -247,7 +247,10 @@ describe('the recovery page', () => {
     expect(screen.getByText('آخرین بکاپ موفق')).toBeInTheDocument();
     expect(screen.getByText('عملیات بازیابی')).toBeInTheDocument();
     // The row came from the stubbed server through the real zod schema.
-    expect(await screen.findByText('SUCCEEDED')).toBeInTheDocument();
+    // W5: the state reads in Persian; the raw value stays in the tooltip.
+    const state = (await screen.findAllByTitle('SUCCEEDED'))[0]!;
+    expect(state.textContent).toBe('موفق');
+    expect(screen.queryByText('SUCCEEDED')).toBeNull();
   });
 
   it('offers no run button to an actor without backup.run', async () => {
@@ -372,7 +375,10 @@ describe('the recovery page', () => {
       );
       renderPage(<RecoveryPage route={route} permissions={ALL} />);
 
-      const button = await screen.findByRole('button', { name: 'ساخت و دریافت کیت' });
+      // W3: the form opens on the kit card's button, in a dialog.
+      fireEvent.click(await screen.findByRole('button', { name: 'ساخت و دریافت کیت' }));
+      const dialog = await screen.findByRole('dialog');
+      const button = within(dialog).getByRole('button', { name: 'ساخت و دریافت کیت' });
       expect(button).toBeDisabled();
       fireEvent.change(screen.getAllByLabelText('رمز ورود حساب شما')[0]!, {
         target: { value: 'my-account-password' },
@@ -431,8 +437,10 @@ describe('the recovery page', () => {
         },
       ]);
       renderPage(<RecoveryPage route={route} permissions={ALL} />);
-      const picker = await screen.findByLabelText('فایل کیت بازیابی (.nxkit)');
-      const importButton = screen.getByRole('button', { name: 'وارد کردن کیت' });
+      fireEvent.click(await screen.findByRole('button', { name: 'وارد کردن کیت' }));
+      const dialog = await screen.findByRole('dialog');
+      const picker = within(dialog).getByLabelText('فایل کیت بازیابی (.nxkit)');
+      const importButton = within(dialog).getByRole('button', { name: 'وارد کردن کیت' });
       const press = async (count: number) => {
         fireEvent.change(screen.getByLabelText('رمز کیت'), { target: { value: 'a passphrase' } });
         const passwords = screen.getAllByLabelText('رمز ورود حساب شما');
@@ -477,11 +485,13 @@ describe('the recovery page', () => {
         },
       ]);
       renderPage(<RecoveryPage route={route} permissions={ALL} />);
-      fireEvent.change(await screen.findByLabelText('فایل کیت بازیابی (.nxkit)'), {
+      fireEvent.click(await screen.findByRole('button', { name: 'وارد کردن کیت' }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('فایل کیت بازیابی (.nxkit)'), {
         target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxkit')] },
       });
       fireEvent.change(screen.getByLabelText('رمز کیت'), { target: { value: 'wrong one' } });
-      const importButton = screen.getByRole('button', { name: 'وارد کردن کیت' });
+      const importButton = within(dialog).getByRole('button', { name: 'وارد کردن کیت' });
       // The step-up (PR #144 review): no import without the account password.
       expect(importButton).toBeDisabled();
       const passwords = screen.getAllByLabelText('رمز ورود حساب شما');
@@ -773,7 +783,9 @@ describe('the recovery page', () => {
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );
-      await screen.findByText('RESTORE_TEST_PASSED');
+      expect((await screen.findAllByTitle('RESTORE_TEST_PASSED'))[0]!.textContent).toBe(
+        'آزمون بازیابی موفق',
+      );
       return api;
     }
 

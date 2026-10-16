@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ListFilterBar } from '../ui/filter-bar';
 import {
   SUPPORT_KNOWLEDGE_ARTICLE_STATES,
   SUPPORT_KNOWLEDGE_CATEGORIES,
@@ -42,7 +43,6 @@ import {
   Drawer,
   Empty,
   Field,
-  FilterBar,
   PageHead,
   Pills,
   RowActions,
@@ -51,6 +51,7 @@ import {
   useToast,
   type Column,
   type Tone,
+  usePagedRows,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 
@@ -277,6 +278,8 @@ export function SupportKnowledgePage({
     enabled: !denied,
   });
   const rows = articles.data ?? [];
+  // W1.8: the server sends the whole list; it is drawn ten at a time.
+  const paging = usePagedRows(rows, `${source}|${state}`);
   const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
   const [form, setForm] = useState<ContentForm>(EMPTY_CONTENT);
   const [publishNow, setPublishNow] = useState(true);
@@ -503,40 +506,59 @@ export function SupportKnowledgePage({
       <Banner tone="info" icon="info">
         {t('web.sk_only_approved')}
       </Banner>
-      <FilterBar>
-        <Field label={t('web.sk_col_source')} htmlFor="sk-source" compact>
-          <Select
-            id="sk-source"
-            size="sm"
-            value={source}
-            onChange={(event) => setSource(event.target.value as AnyFilter<SupportKnowledgeSource>)}
-          >
-            <option value="ALL">{t('web.sk_all')}</option>
-            {SUPPORT_KNOWLEDGE_SOURCES.map((value) => (
-              <option key={value} value={value}>
-                {t(KNOWLEDGE_SOURCE_LABELS[value])}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label={t('web.sk_col_state')} htmlFor="sk-state" compact>
-          <Select
-            id="sk-state"
-            size="sm"
-            value={state}
-            onChange={(event) =>
-              setState(event.target.value as AnyFilter<SupportKnowledgeArticleState>)
-            }
-          >
-            <option value="ALL">{t('web.sk_all')}</option>
-            {SUPPORT_KNOWLEDGE_ARTICLE_STATES.map((value) => (
-              <option key={value} value={value}>
-                {t(KNOWLEDGE_STATE_LABELS[value])}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </FilterBar>
+      <ListFilterBar
+        label={t('web.sk_title')}
+        filters={[
+          {
+            key: 'source',
+            label: t('web.sk_col_source'),
+            active: source === 'ALL' ? null : t(KNOWLEDGE_SOURCE_LABELS[source]),
+            onClear: () => setSource('ALL'),
+            control: (
+              <Select
+                id="sk-source"
+                size="sm"
+                aria-label={t('web.sk_col_source')}
+                value={source}
+                onChange={(event) =>
+                  setSource(event.target.value as AnyFilter<SupportKnowledgeSource>)
+                }
+              >
+                <option value="ALL">{t('web.sk_all')}</option>
+                {SUPPORT_KNOWLEDGE_SOURCES.map((value) => (
+                  <option key={value} value={value}>
+                    {t(KNOWLEDGE_SOURCE_LABELS[value])}
+                  </option>
+                ))}
+              </Select>
+            ),
+          },
+          {
+            key: 'state',
+            label: t('web.sk_col_state'),
+            active: state === 'ALL' ? null : t(KNOWLEDGE_STATE_LABELS[state]),
+            onClear: () => setState('ALL'),
+            control: (
+              <Select
+                id="sk-state"
+                size="sm"
+                aria-label={t('web.sk_col_state')}
+                value={state}
+                onChange={(event) =>
+                  setState(event.target.value as AnyFilter<SupportKnowledgeArticleState>)
+                }
+              >
+                <option value="ALL">{t('web.sk_all')}</option>
+                {SUPPORT_KNOWLEDGE_ARTICLE_STATES.map((value) => (
+                  <option key={value} value={value}>
+                    {t(KNOWLEDGE_STATE_LABELS[value])}
+                  </option>
+                ))}
+              </Select>
+            ),
+          },
+        ]}
+      />
       {control.error != null && (
         <Banner tone="danger" role="alert">
           {knowledgeFault(control.error)}
@@ -551,11 +573,12 @@ export function SupportKnowledgePage({
         <Card title={t('web.sk_title')}>
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.sk_title')}
             dense
           />
+          {paging.pager}
         </Card>
       </StateSwitch>
 
@@ -660,6 +683,7 @@ export function LearningCandidatesPage({
     enabled: !denied,
   });
   const rows = candidates.data ?? [];
+  const paging = usePagedRows(rows, state);
   const [editing, setEditing] = useState<SupportLearningCandidateView | null>(null);
   const [form, setForm] = useState<ContentForm>(EMPTY_CONTENT);
 
@@ -837,11 +861,12 @@ export function LearningCandidatesPage({
         <Card title={t('web.sk_cand_title')}>
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.sk_cand_title')}
             dense
           />
+          {paging.pager}
         </Card>
       </StateSwitch>
 

@@ -43,10 +43,17 @@ import {
   StatusDot,
   type Column,
 } from '../ui/kit';
+import { FilePicker } from '../ui/file-picker';
 import { Icon } from '../ui/icons';
 import { BackupScheduleCard } from './backup-schedule';
 import { RecoveryKitSection } from './recovery-kit';
-import { recoveryErrorText, recoveryFailureText } from '../recovery-failure-labels';
+import {
+  BACKUP_RUN_STATE_LABELS,
+  RECOVERY_STAGE_LABELS,
+  RECOVERY_STATE_LABELS,
+  recoveryErrorText,
+  recoveryFailureText,
+} from '../recovery-failure-labels';
 import {
   MirzaHistory,
   MirzaRestoreFlow,
@@ -626,16 +633,19 @@ function RecoveryOperations({
       )}
       <h3 className="card-subtitle">{t('web.recovery_upload_title')}</h3>
       <form onSubmit={onSubmit} className="stack">
-        <label className="field">
+        <div className="field">
           <span className="field-label">{t('web.recovery_upload_choose')}</span>
-          <input
-            type="file"
-            className="recovery-file"
+          <FilePicker
+            id="recovery-file"
+            label={t('web.recovery_upload_choose')}
+            kind="backup"
             accept={!nexaAllowed ? '.nxpkg' : mirza.mayView ? '.nxb,.nxpkg' : '.nxb'}
-            aria-describedby="recovery-file-kind"
-            onChange={(event) => onChoose(event.currentTarget.files?.[0] ?? null)}
+            extensions={!nexaAllowed ? ['.nxpkg'] : mirza.mayView ? ['.nxb', '.nxpkg'] : ['.nxb']}
+            selected={file}
+            onFiles={(files) => onChoose(files[0] ?? null)}
+            onClear={() => onChoose(null)}
           />
-        </label>
+        </div>
         <p className="muted small" id="recovery-file-kind" aria-live="polite">
           {file === null
             ? t('web.recovery_file_hint')
@@ -692,11 +702,16 @@ function RecoveryOperations({
             items={[
               [
                 t('web.recovery_state'),
-                <Badge key="s" tone={stateTone(current.state)}>
-                  {current.state}
+                <Badge key="s" tone={stateTone(current.state)} title={current.state}>
+                  {t(RECOVERY_STATE_LABELS[current.state])}
                 </Badge>,
               ],
-              [t('web.recovery_stage'), <Ltr key="g">{current.stage}</Ltr>],
+              [
+                t('web.recovery_stage'),
+                <span key="g" title={current.stage}>
+                  {t(RECOVERY_STAGE_LABELS[current.stage])}
+                </span>,
+              ],
               ...(current.verification === null
                 ? []
                 : ([
@@ -948,7 +963,11 @@ function historyColumns(mayDownload: boolean): readonly Column<BackupRunSummary>
     {
       key: 'state',
       header: t('web.recovery_state'),
-      render: (run) => <Badge tone={runTone(run)}>{run.state}</Badge>,
+      render: (run) => (
+        <Badge tone={runTone(run)} title={run.state}>
+          {t(BACKUP_RUN_STATE_LABELS[run.state])}
+        </Badge>
+      ),
     },
     {
       key: 'verified',
@@ -1004,12 +1023,16 @@ function recoveryColumns(): readonly Column<RecoveryRequestSummary>[] {
     {
       key: 'state',
       header: t('web.recovery_state'),
-      render: (row) => <Badge tone={stateTone(row.state)}>{row.state}</Badge>,
+      render: (row) => (
+        <Badge tone={stateTone(row.state)} title={row.state}>
+          {t(RECOVERY_STATE_LABELS[row.state])}
+        </Badge>
+      ),
     },
     {
       key: 'stage',
       header: t('web.recovery_stage'),
-      render: (row) => <Ltr>{row.stage}</Ltr>,
+      render: (row) => <span title={row.stage}>{t(RECOVERY_STAGE_LABELS[row.stage])}</span>,
     },
     {
       key: 'failure',

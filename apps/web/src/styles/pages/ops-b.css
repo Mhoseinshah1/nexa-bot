@@ -326,18 +326,6 @@ form.set-row > * + * {
 
 /* --- WP-A7 tickets ------------------------------------------------------------- */
 
-/* The inbox's filter row: compact fields that wrap, the two buttons on the same line. */
-.tickets-filters {
-  align-items: flex-end;
-}
-.tickets-filters .field {
-  min-width: 140px;
-}
-.tickets-filter-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
 .tickets-number {
   font-size: var(--fs-ui);
 }
@@ -345,32 +333,13 @@ form.set-row > * + * {
 .tickets-row-closed td {
   color: var(--fg-3);
 }
-.tickets-inline-edit {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
 .tickets-order {
   width: 84px;
-}
-.tickets-category-form {
-  align-items: flex-end;
 }
 
 /* One ticket: the conversation and the reply in the main column, the rest beside it. */
 .ticket-transitions {
   flex-wrap: wrap;
-}
-.ticket-links {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-.ticket-links > .btn {
-  align-self: flex-start;
 }
 
 /*
@@ -494,13 +463,6 @@ form.set-row > * + * {
 /* TB10: the customer's wait — a figure and its unit, never split across lines. */
 .bchat-wait {
   font-variant-numeric: tabular-nums;
-}
-.bchat-more {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding-top: 12px;
 }
 .bchat-controls {
   margin-top: 12px;
@@ -1005,29 +967,6 @@ form.set-row > * + * {
 .diagnostics-stats {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
-.system-separation {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-.system-separation li {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
-  padding: 10px 12px;
-}
-.system-separation-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.system-separation p {
-  margin: 0;
-}
 .system-roles {
   display: inline-flex;
   flex-wrap: wrap;
@@ -1048,9 +987,6 @@ form.set-row > * + * {
   background: var(--bg-1);
 }
 @media (max-width: 980px) {
-  .system-separation {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 /* --- Recovery (ADR-0025, ADR-0028) ------------------------------------------------ */
@@ -1301,20 +1237,6 @@ form.set-row > * + * {
 
 /* --- Phase D1 audit log -------------------------------------------------------- */
 
-/* The filter row: compact fields that wrap at 390px, the two buttons kept together. */
-.audit-filters {
-  align-items: flex-end;
-}
-.audit-filters .field {
-  min-width: 140px;
-  flex: 1 1 140px;
-}
-.audit-filter-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  flex-wrap: wrap;
-}
 .audit-code {
   font-size: var(--fs-ui);
 }
@@ -1422,17 +1344,20 @@ form.set-row > * + * {
   gap: 8px;
   margin-block-end: var(--gap);
 }
-.incident-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-block: 12px;
-}
-/* One column at 390px; the scope and timeline beside the summary on a desk. */
+/*
+ * W4: the summary on one side, the scope and the timeline stacked on the other; one
+ * column at 390px.
+ */
 .incident-detail {
   display: grid;
   gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .incident-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .incident-text {
   white-space: pre-wrap;

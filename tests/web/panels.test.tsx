@@ -34,6 +34,15 @@ const LIVE_ROUTE = { path: '/panels', query: new URLSearchParams() };
  * zod schemas the server validates against. A fixture that drifts from the
  * contract fails here rather than in production.
  */
+
+/** The restore button in force: the rename drawer's once it is open, else the head's. */
+function restoreButton(): HTMLElement {
+  const drawer = screen.queryByRole('dialog');
+  return drawer === null
+    ? screen.getByRole('button', { name: 'بازگردانی از بایگانی' })
+    : within(drawer).getByRole('button', { name: 'بازگردانی از بایگانی' });
+}
+
 describe('the panel list', () => {
   const list = (panels: unknown[], nextCursor: string | null = null) => [
     { url: '/panels', body: { panels, nextCursor } },
@@ -95,7 +104,7 @@ describe('the panel list', () => {
     }
 
     // The forward control on an ASCENDING keyset is NEWER — see the pin below.
-    const newer = screen.getByRole('button', { name: 'تازه‌تر' });
+    const newer = screen.getByRole('button', { name: t('web.page_next') });
     expect(newer).not.toBeDisabled();
     newer.click();
 
@@ -108,7 +117,7 @@ describe('the panel list', () => {
     stubApi(list([panel()], null));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
-    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_next') })).toBeDisabled();
   });
 
   /**
@@ -123,8 +132,8 @@ describe('the panel list', () => {
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    const forward = screen.getByRole('button', { name: 'تازه‌تر' });
-    const back = screen.getByRole('button', { name: 'قدیمی‌تر' });
+    const forward = screen.getByRole('button', { name: t('web.page_next') });
+    const back = screen.getByRole('button', { name: t('web.page_previous') });
     expect(forward).toBeEnabled();
     expect(back).toBeDisabled();
     forward.click();
@@ -133,7 +142,7 @@ describe('the panel list', () => {
     });
     // And the way back to the first — oldest — page is OLDER.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeEnabled();
     });
   });
 
@@ -186,8 +195,8 @@ describe('the panel list', () => {
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit={false} denied />);
     await screen.findByText('شما به این بخش دسترسی ندارید.');
 
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_previous') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_next') })).toBeNull();
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
@@ -231,8 +240,8 @@ describe('the panel list', () => {
 
     const toolbar = container.querySelector('.toolbar');
     expect((toolbar as HTMLElement).hasAttribute('hidden')).toBe(true);
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_previous') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_next') })).toBeNull();
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
@@ -261,7 +270,7 @@ describe('the panel list', () => {
     rerender(<PanelsPage route={LIVE_ROUTE} mayEdit denied />);
 
     expect(screen.queryByText('نمایش')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_previous') })).toBeNull();
   });
 
   /**
@@ -289,7 +298,7 @@ describe('the panel list', () => {
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('هنوز پنلی ثبت نشده است.');
     expect(screen.getByText('نمایش')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeInTheDocument();
   });
 
   it('distinguishes an empty fleet from a failed request', async () => {
@@ -621,7 +630,7 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     expect(container.textContent ?? '').not.toContain('*****');
     // Presence, and only presence.
@@ -634,7 +643,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     for (const label of ['نام کاربری', 'گذرواژه', 'توکن API']) {
       expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('');
@@ -658,7 +667,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     // The two the shape names are both there, as a presence row and a field.
     for (const label of ['نام کاربری', 'گذرواژه']) {
@@ -706,7 +715,7 @@ describe('the panel detail', () => {
     const { rerender } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
     fireEvent.change(screen.getByLabelText('توکن API'), { target: { value: 'a-real-token' } });
 
     rerender(<PanelDetailPage id="p2" mayEdit mayRotate denied={false} />);
@@ -720,7 +729,7 @@ describe('the panel detail', () => {
     // overview tab selected and nothing carried over.
     await screen.findByText('Frankfurt B');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
     expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('');
   });
 
@@ -729,7 +738,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     for (const label of ['نام کاربری', 'گذرواژه', 'توکن API']) {
       expect(screen.getByLabelText(label)).toBeInTheDocument();
@@ -774,7 +783,7 @@ describe('the panel detail', () => {
     expect(rowFor(t('web.cap_row_renew'))[1]).toBe(t('web.cap_supported'));
     expect(rowFor(t('web.cap_row_renew'))[3]).toBe(t('web.cap_customer_available'));
     expect(rowFor(t('web.cap_row_location_change'))[1]).toBe(t('web.cap_unsupported'));
-    expect(rowFor(t('web.cap_row_location_change'))[2]).toBe(t('web.cap_gap_not_supported'));
+    expect(rowFor(t('web.cap_row_location_change'))[2]).toBe(t('web.cap_gap_unsupported'));
     expect(rowFor(t('web.cap_row_extra_devices'))[3]).toBe(t('web.cap_blocker_unsupported'));
     expect(rowFor(t('web.cap_row_terminate'))[3]).toBe(t('web.cap_customer_operator_only'));
     // No internal identifier leaks into the operator's screen.
@@ -849,7 +858,7 @@ describe('the panel detail', () => {
     expect(box).toBeDisabled();
     expect((box as HTMLInputElement).checked).toBe(false);
     expect(
-      screen.getByText(`${t('web.policy_action_unsupported')} ${t('web.cap_gap_not_supported')}`),
+      screen.getByText(`${t('web.policy_action_unsupported')} ${t('web.cap_gap_unsupported')}`),
     ).toBeInTheDocument();
 
     fireEvent.click(box);
@@ -1064,13 +1073,15 @@ describe('the panel detail', () => {
     expect(screen.getByText(t('web.diag_verdict_fail'))).toBeInTheDocument();
   });
 
-  it('states that health is latest-state-only rather than drawing a trend it does not have', async () => {
+  it('draws the latest state and no trend it does not have', async () => {
     stubApi(detail());
     const { container } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'سلامت' }).click();
 
-    expect(await screen.findByText('فقط آخرین وضعیت')).toBeInTheDocument();
+    // W5: the latest-state card stays; the «فقط آخرین وضعیت» meta banner is gone.
+    expect(await screen.findByText(t('web.panel_health_latest_card'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.panel_health_latest_title'))).toBeNull();
     // No chart: the backend stores one row per panel, so a trend line could
     // only be illustrative — which is what the preview's was.
     expect(container.querySelector('svg.chart')).toBeNull();
@@ -1239,7 +1250,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     // Only the CONFIGURED credentials offer removal, and the fixture has two.
     const removes = screen.getAllByRole('button', { name: /^حذف — / });
@@ -1518,6 +1529,21 @@ describe('the panel detail', () => {
     expect(await screen.findByText(t('web.panel_workload_no_services'))).toBeTruthy();
   });
 
+  it('W3: draws the lifecycle buttons in the page head, on every tab', async () => {
+    stubApi([...detail(), ...workload([], [])]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    expect(screen.queryByRole('heading', { name: t('web.panel_lifecycle') })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_workload') }));
+    const archive = screen.getByRole('button', { name: t('web.panel_archive') });
+    // Above the tab strip, not inside the overview it used to sit in.
+    expect(archive.closest('[role="tabpanel"]')).toBeNull();
+    expect(screen.getByRole('button', { name: t('web.panel_disable') })).toHaveAttribute(
+      'title',
+      t('web.panel_lifecycle_hint'),
+    );
+  });
+
   it('does not archive on the first press', async () => {
     /*
      * The rule this pull request adds, and the one worth a test on its own:
@@ -1546,9 +1572,10 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     fireEvent.click(screen.getByRole('button', { name: t('web.panel_archive') }));
-    const confirmation = (await screen.findByText(t('web.panel_archive_confirm_title'))).closest(
-      'div.stack',
-    );
+    // W3: the confirmation is a dialog now.
+    const confirmation = await screen.findByRole('dialog', {
+      name: t('web.panel_archive_confirm_title'),
+    });
     // `Num` renders Western digits here, which is the shell's own choice and
     // not this test's to assert — what matters is that the COUNT is on screen.
     expect(confirmation?.textContent).toContain('7');
@@ -1630,7 +1657,7 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     expect(screen.queryByRole('button', { name: 'بایگانی' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    fireEvent.click(restoreButton());
     await waitFor(() => {
       const write = api.calls.find((call) => call.url.includes('/status'));
       // DISABLED, not ACTIVE: a restored panel does not silently resume being
@@ -1675,10 +1702,11 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    const restore = screen.getByRole('button', { name: 'بازگردانی از بایگانی' });
-    fireEvent.click(restore);
-    // The refusal opens the rename field, pre-filled with the current name.
+    fireEvent.click(restoreButton());
+    // The refusal opens the rename field, pre-filled with the current name, in a drawer
+    // whose own restore button carries it.
     await screen.findByText(t('web.panel_restore_name_taken'));
+    const restore = restoreButton();
     const field = document.getElementById(`restore-name-${PANEL_ID}`) as HTMLInputElement;
     expect(field.value).toBe('Frankfurt A');
     expect(restore.hasAttribute('disabled')).toBe(false);
@@ -1724,7 +1752,7 @@ describe('the panel detail', () => {
     expect(screen.getByLabelText('نام')).toBeDisabled();
     expect(screen.getByLabelText('نشانی پایه')).toBeDisabled();
     // The restore control is still there — the way out is not hidden too.
-    expect(screen.getByRole('button', { name: 'بازگردانی از بایگانی' })).toBeInTheDocument();
+    expect(restoreButton()).toBeInTheDocument();
   });
 
   /**
@@ -1781,7 +1809,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     // Visible: the row is there, and it is three, not two.
     const removes = screen.getAllByRole('button', { name: /^حذف — / });
@@ -1836,7 +1864,7 @@ describe('the panel detail', () => {
     // Nothing to resolve yet, so nothing is offered.
     expect(screen.queryByLabelText('نام تازه برای بازگردانی')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    fireEvent.click(restoreButton());
 
     // The refusal produces the one control that can act on it, pre-filled.
     const field = (await screen.findByLabelText('نام تازه برای بازگردانی')) as HTMLInputElement;
@@ -1845,7 +1873,7 @@ describe('the panel detail', () => {
 
     // And the retry carries it to the server.
     fireEvent.change(field, { target: { value: 'Frankfurt A (restored)' } });
-    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    fireEvent.click(restoreButton());
 
     await waitFor(() => {
       const writes = api.calls.filter((call) => call.method === 'POST');
@@ -2307,7 +2335,7 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     // The first restore is refused, which is what offers the rename field.
-    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    fireEvent.click(restoreButton());
     const field = (await screen.findByLabelText('نام تازه برای بازگردانی')) as HTMLInputElement;
     fireEvent.change(field, { target: { value: 'Frankfurt B' } });
 
@@ -2315,7 +2343,7 @@ describe('the panel detail', () => {
     statusRoute.status = 200;
     statusRoute.body = { panel: renamed };
     if (detailRoute) detailRoute.body = { panel: renamed };
-    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    fireEvent.click(restoreButton());
 
     await waitFor(() => {
       expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt B');
@@ -2357,7 +2385,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    const restore = () => screen.getByRole('button', { name: 'بازگردانی از بایگانی' });
+    const restore = () => restoreButton();
     fireEvent.click(restore());
     await screen.findByLabelText('نام تازه برای بازگردانی');
     await waitFor(() => {
@@ -2387,7 +2415,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
-    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    fireEvent.click(restoreButton());
     await waitFor(() => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
@@ -2523,7 +2551,7 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     // The name this panel had was claimed by a live panel while it was archived.
-    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    fireEvent.click(restoreButton());
     const replacement = await screen.findByLabelText('نام تازه برای بازگردانی');
     fireEvent.change(replacement, { target: { value: 'Frankfurt B' } });
 
@@ -2538,7 +2566,7 @@ describe('the panel detail', () => {
       }),
     };
     api.hold();
-    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    fireEvent.click(restoreButton());
 
     // Inside the held refetch: the write has landed, the query has not.
     await waitFor(() => {
@@ -2861,6 +2889,10 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     const rotate = async () => {
+      // W3: the replace form opens on the presence card's button.
+      if (screen.queryByLabelText('گذرواژه') === null) {
+        fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
+      }
       fireEvent.change(screen.getByLabelText('گذرواژه'), { target: { value: 'hunter2' } });
       fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     };
