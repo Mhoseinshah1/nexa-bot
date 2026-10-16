@@ -689,6 +689,7 @@ export function LearningCandidatesPage({
     enabled: !denied,
   });
   const rows = candidates.data ?? [];
+  const paging = useClientPaging(rows, state);
   const [editing, setEditing] = useState<SupportLearningCandidateView | null>(null);
   const [form, setForm] = useState<ContentForm>(EMPTY_CONTENT);
 
@@ -866,10 +867,17 @@ export function LearningCandidatesPage({
         <Card title={t('web.sk_cand_title')}>
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.sk_cand_title')}
             dense
+          />
+          <ClientPager
+            shown={paging.rows.length}
+            hasPrevious={paging.hasPrevious}
+            hasNext={paging.hasNextLoaded}
+            onPrevious={() => paging.go(paging.page - 1)}
+            onNext={() => paging.go(paging.page + 1)}
           />
         </Card>
       </StateSwitch>
