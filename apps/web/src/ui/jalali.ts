@@ -231,7 +231,12 @@ export function faDigits(value: number | string): string {
 
 /** Persian or Arabic-Indic digits back to Latin ones, for typed input. */
 export function latinDigits(value: string): string {
-  return value
-    .replace(/[۰-۹]/gu, (digit) => String(digit.charCodeAt(0) - 0x06f0))
-    .replace(/[٠-٩]/gu, (digit) => String(digit.charCodeAt(0) - 0x0660));
+  let out = '';
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code >= 0x06f0 && code <= 0x06f9) out += String(code - 0x06f0);
+    else if (code >= 0x0660 && code <= 0x0669) out += String(code - 0x0660);
+    else out += char;
+  }
+  return out;
 }
