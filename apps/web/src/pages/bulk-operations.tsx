@@ -127,14 +127,12 @@ export const BULK_LIVE_REFRESH_MS = 5_000;
 function bulkItemsQuery(
   state: BulkItemState | '',
   cursor: string | undefined,
-): { state?: string; cursor?: string } {
-  // `limit` is accepted by the server's items query; the client signature does not name it.
-  const query = {
+): { state?: string; cursor?: string; limit?: number } {
+  return {
     limit: LIST_PAGE_SIZE,
     ...(state === '' ? {} : { state }),
     ...(cursor === undefined ? {} : { cursor }),
   };
-  return query;
 }
 
 const NOTICE_LABELS: Readonly<Record<CustomerNotificationState, WebKey>> = {
@@ -199,14 +197,9 @@ export function BulkOperationsPage({
   const cursor = route.query.get('cursor');
   const list = useQuery({
     queryKey: ['bulk-operations', cursor],
-    queryFn: () => {
-      /*
-       * W1.8: ten rows a page. The server's list query takes `limit` (1..BULK_PAGE_MAX);
-       * the client signature does not name it yet, so it travels as a held object.
-       */
-      const query = { limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) };
-      return fetchBulkOperations(query);
-    },
+    // W1.8: ten rows a page, on the same keyset.
+    queryFn: () =>
+      fetchBulkOperations({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
     enabled: !denied,
   });
   const columns: readonly Column<BulkOperationResponseItem>[] = [
