@@ -8,6 +8,7 @@ import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
+import { openWalletDialog } from './c360-helpers';
 
 /**
  * What the commerce-A redesign ADDED, pinned where it can be reverted by accident.
@@ -166,6 +167,7 @@ describe('forms that can lose edits', () => {
         <LeaveGuardHost />
       </>,
     );
+    await openWalletDialog('CREDIT');
     const amount = await screen.findByLabelText(t('web.wallet_adjust_amount'));
     fireEvent.change(amount, { target: { value: '5000' } });
 

@@ -30,7 +30,7 @@ import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
-import type { ViewPreset } from '../ui/saved-views';
+import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 /*
  * The SERVICES page's vocabularies, borrowed rather than copied — the same rule
@@ -51,12 +51,7 @@ import {
 import { PRICE_LAYER_LABELS, PRICE_LAYER_STEPS } from './resellers';
 import { CUSTOM_SERVICE_LEVEL_LABELS } from './custom-service';
 import { OrderPlacement } from './order-placement';
-import {
-  BalancedColumns,
-  ChipGroup,
-  urlViewsRegistration,
-  useListClearAll,
-} from './commerce-parts';
+import { BalancedColumns, ChipGroup, useListClearAll } from './commerce-parts';
 import {
   Badge,
   Banner,
@@ -332,6 +327,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
             search={
               <ListSearchBox
                 key={searchKey}
+                slim
                 route={route}
                 id="orders-search"
                 // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
@@ -344,7 +340,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
             onClearAll={clearAll}
             savedViews={
               <SavedViewsMenu
-                registration={urlViewsRegistration(
+                registration={routeViewRegistration(
                   route,
                   'orders',
                   ORDER_FILTER_KEYS,

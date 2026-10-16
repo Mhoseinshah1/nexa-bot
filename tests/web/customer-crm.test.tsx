@@ -10,6 +10,7 @@ import {
 import type { Tone } from '../../apps/web/src/ui/kit';
 import { customer, renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
+import { openC360Tab } from './c360-helpers';
 
 /**
  * Customer notes and tags in the Web Admin (program §8), rendered against the shapes the
@@ -296,7 +297,7 @@ describe('Customer 360 — notes and tags', () => {
     expect(typeof post.body['idempotencyKey']).toBe('string');
   });
 
-  it('is part of the customer page, with its own entry in the section list', async () => {
+  it('is part of the customer page, in its own «یادداشت و برچسب» tab', async () => {
     stubApi([{ url: `/users/${ID}`, body: { customer: customer() } }, ...crmRoutes()]);
     const { container } = renderPage(
       <UserDetailPage
@@ -315,10 +316,11 @@ describe('Customer 360 — notes and tags', () => {
         denied={false}
       />,
     );
+    // Not drawn until its tab is chosen (W2): only the open tab is rendered.
+    await screen.findByRole('tablist');
+    expect(container.querySelector('#c360-crm')).toBeNull();
+    await openC360Tab('crm');
     await screen.findByText(/قول تمدید داد/);
-    expect(container.querySelector('a[href="#c360-crm"]')?.textContent).toBe(
-      'یادداشت‌ها و برچسب‌ها',
-    );
     expect(container.querySelector('#c360-crm')).not.toBeNull();
   });
 });

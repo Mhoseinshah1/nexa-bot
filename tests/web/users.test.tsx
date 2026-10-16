@@ -975,7 +975,7 @@ describe('the wallet card', () => {
     );
     await openC360Tab('financial');
 
-    const card = (await screen.findByRole('heading', { name: 'کیف پول' })).closest(
+    const card = (await screen.findByRole('heading', { name: 'کیف پول', level: 2 })).closest(
       'section',
     ) as HTMLElement;
     // The formatted amount, not the raw minor units — in the wallet card itself.
@@ -1047,7 +1047,7 @@ describe('the wallet card', () => {
       { url: `/users/${ROW_ID}`, body: { customer: customer() } },
       ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }, [walletEntry()]),
     ]);
-    const { container } = renderPage(
+    renderPage(
       <UserDetailPage
         mayEditTrial={false}
         id={ROW_ID}
@@ -1058,7 +1058,10 @@ describe('the wallet card', () => {
       />,
     );
     await openC360Tab('financial');
-    await screen.findByText('کیف پول');
+    // The wallet CARD, not the action panel's «کیف پول» group of the same name.
+    const card = (await screen.findByRole('heading', { name: 'کیف پول', level: 2 })).closest(
+      'section',
+    ) as HTMLElement;
 
     /*
      * Asserted by LOOKING, not by a comment.
@@ -1067,7 +1070,7 @@ describe('the wallet card', () => {
      * single easiest thing to add to this card by accident. Every button is
      * enumerated and required to be one of the two movements.
      */
-    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim());
+    const labels = [...card.querySelectorAll('button')].map((b) => b.textContent?.trim());
     for (const label of labels) {
       expect(
         label === 'واریز به کیف پول' ||
@@ -1083,7 +1086,7 @@ describe('the wallet card', () => {
         `the wallet card draws an unexpected control: ${String(label)}`,
       ).toBe(true);
     }
-    expect(container.textContent).not.toContain('صفر کردن');
+    expect(card.textContent).not.toContain('صفر کردن');
     // And no text input that is bound to the balance itself.
     expect(screen.queryByLabelText('موجودی')).toBeNull();
   });

@@ -4,6 +4,8 @@ import type * as TicketsModule from '../../apps/web/src/pages/tickets';
 import type { PickedReplyFile } from '../../apps/web/src/pages/tickets';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { customer, renderPage, stubApi } from './harness';
+import { openC360Tab } from './c360-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /*
  * The file read, held open by the test: each pick's `readReplyFile` resolves only when the
@@ -110,8 +112,10 @@ describe('Phase A2 — direct message on Customer 360', () => {
   it('draws neither the button nor the history without their permissions, and asks nothing', async () => {
     const api = stubApi(routes());
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
-    await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' });
+    await screen.findByRole('tablist');
     expect(screen.queryByRole('button', { name: 'ارسال پیام' })).toBeNull();
+    // No «پیام‌ها» tab at all without either permission.
+    expect(screen.queryByRole('tab', { name: t('web.c360_tab_messages') })).toBeNull();
     expect(screen.queryByText('پیام‌های مستقیم')).toBeNull();
     expect(api.calls.some((call) => call.url.includes('/direct-messages'))).toBe(false);
   });
@@ -144,6 +148,7 @@ describe('Phase A2 — direct message on Customer 360', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayViewMessages denied={false} />);
+    await openC360Tab('messages');
     const card = (await screen.findByText('پیام‌های مستقیم', { selector: 'h2' })).closest(
       '.card',
     ) as HTMLElement;

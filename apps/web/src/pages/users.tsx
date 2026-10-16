@@ -9,8 +9,8 @@ import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
-import type { ViewPreset } from '../ui/saved-views';
-import { ChipGroup, urlViewsRegistration, useListClearAll } from './commerce-parts';
+import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
+import { ChipGroup, useListClearAll } from './commerce-parts';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
 import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -375,6 +375,7 @@ export function UsersPage({
               maySearch ? (
                 <ListSearchBox
                   key={searchKey}
+                  slim
                   route={route}
                   id="users-search"
                   hint={t('web.users_search_hint')}
@@ -388,7 +389,7 @@ export function UsersPage({
             onClearAll={clearAll}
             savedViews={
               <SavedViewsMenu
-                registration={urlViewsRegistration(route, 'users', USER_FILTER_KEYS, USER_PRESETS)}
+                registration={routeViewRegistration(route, 'users', USER_FILTER_KEYS, USER_PRESETS)}
               />
             }
           />

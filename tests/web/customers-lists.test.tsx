@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { USER_PRESETS, UsersPage } from '../../apps/web/src/pages/users';
 import { SERVICE_PRESETS, ServicesPage } from '../../apps/web/src/pages/services';
 import { ORDER_PRESETS, OrderDetailPage, OrdersPage } from '../../apps/web/src/pages/orders';
-import { urlViewsRegistration } from '../../apps/web/src/pages/commerce-parts';
+import { routeViewRegistration } from '../../apps/web/src/ui/saved-views';
 import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, order, renderPage, stubApi } from './harness';
@@ -111,7 +111,7 @@ describe('saved filters are the URL filter keys', () => {
       path: '/users',
       query: new URLSearchParams(window.location.search),
     };
-    const views = urlViewsRegistration(route, 'users', ['q', 'status', 'tag'], USER_PRESETS);
+    const views = routeViewRegistration(route, 'users', ['q', 'status', 'tag'], USER_PRESETS);
     expect(views.empty).toEqual({ q: '', status: '', tag: '' });
     expect(views.get()).toEqual({ q: 'ali', status: 'ACTIVE', tag: '' });
     views.set({ status: 'BLOCKED' });

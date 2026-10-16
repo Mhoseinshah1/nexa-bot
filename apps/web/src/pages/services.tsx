@@ -31,14 +31,9 @@ import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
-import type { ViewPreset } from '../ui/saved-views';
+import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
-import {
-  BalancedColumns,
-  ChipGroup,
-  urlViewsRegistration,
-  useListClearAll,
-} from './commerce-parts';
+import { BalancedColumns, ChipGroup, useListClearAll } from './commerce-parts';
 import { ActionPanel } from '../ui/action-panel';
 import {
   Badge,
@@ -516,6 +511,7 @@ export function ServicesPage({
             search={
               <ListSearchBox
                 key={searchKey}
+                slim
                 route={route}
                 id="services-search"
                 // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
@@ -530,7 +526,7 @@ export function ServicesPage({
             onClearAll={clearAll}
             savedViews={
               <SavedViewsMenu
-                registration={urlViewsRegistration(
+                registration={routeViewRegistration(
                   route,
                   'services',
                   SERVICE_FILTER_KEYS,

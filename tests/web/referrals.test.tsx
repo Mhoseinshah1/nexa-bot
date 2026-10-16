@@ -5,6 +5,7 @@ import { ReferralsPage } from '../../apps/web/src/pages/referrals';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { customer, renderPage, stubApi, type Api } from './harness';
+import { openC360Tab } from './c360-helpers';
 
 /**
  * WP9-A on the Web Admin: the Referrals page and the referral card on a customer.
@@ -307,6 +308,7 @@ describe("the customer's referral card", () => {
   it('shows who referred them, how many they referred, and totals per currency', async () => {
     const api = stubApi(detailRoutes(customerReferral()));
     renderPage(<UserDetailPage id={REFEREE_ID} {...OFF} mayViewReferrals denied={false} />);
+    await openC360Tab('relations');
     const card = (await screen.findByRole('heading', { name: 'معرفی' })).closest(
       'section',
     ) as HTMLElement;
@@ -334,6 +336,7 @@ describe("the customer's referral card", () => {
       ),
     );
     renderPage(<UserDetailPage id={REFEREE_ID} {...OFF} mayViewReferrals denied={false} />);
+    await openC360Tab('relations');
     expect(
       await screen.findByText('این مشتری با معرفی کسی ثبت‌نام نکرده است.'),
     ).toBeInTheDocument();
@@ -344,6 +347,7 @@ describe("the customer's referral card", () => {
   it('names the key and issues no request without referrals.view', async () => {
     const api = stubApi(detailRoutes(customerReferral()));
     renderPage(<UserDetailPage id={REFEREE_ID} {...OFF} mayViewReferrals={false} denied={false} />);
+    await openC360Tab('relations');
     expect(await screen.findByText(/referrals\.view/)).toBeInTheDocument();
     expect(gets(api, '/referral')).toHaveLength(0);
   });
