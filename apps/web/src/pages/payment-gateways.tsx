@@ -925,7 +925,7 @@ export function PaymentGatewaysPage({
       */}
         {/*
           W2: a side drawer, not a card further down the page. Closing it (×, Esc, the
-          backdrop) is the same as «انصراف»: the typed key is dropped, never kept.
+          backdrop) is the same as "cancel": the typed key is dropped, never kept.
         */}
         <Drawer
           open={mayEdit && keying !== null}
@@ -1073,7 +1073,7 @@ export function PaymentGatewaysPage({
         its helper sentence, the ordering tucked under the advanced disclosure. Save is explicit and
         the page asks before leaving an unsaved change.
       */}
-        {/* W2: a wide side drawer; ×, Esc and the backdrop are «انصراف». */}
+        {/* W2: a wide side drawer; ×, Esc and the backdrop are "cancel". */}
         <Drawer
           open={mayEdit && editing !== null}
           onClose={reset}

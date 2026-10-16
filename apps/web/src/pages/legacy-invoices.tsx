@@ -371,7 +371,7 @@ export function LegacyInvoicesPage({
       onChange={(event) => set(name, event.target.value as never)}
     />
   );
-  /** A typed filter in the «فیلترها» panel: active while it holds text. */
+  /** A typed filter in the "Filters" panel: active while it holds text. */
   const textFilter = (name: keyof Filters, label: WebKey, disabled = false): ListFilter => ({
     key: name,
     label: t(label),

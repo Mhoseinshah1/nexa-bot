@@ -441,7 +441,7 @@ export function LegacyServicesPage({
           {
             key: 'reviewState',
             label: t('web.lsr_col_state'),
-            // «باز» is the list's default, so it is no active filter.
+            // "open" is the list's default, so it is no active filter.
             active:
               reviewState === 'OPEN'
                 ? null

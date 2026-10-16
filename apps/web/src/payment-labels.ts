@@ -179,7 +179,7 @@ export const KNOWN_PROVIDER_STATUSES: readonly string[] = [
   ...CENTRALPAY_STATUSES,
 ];
 
-/** «پول رسیده / پول نرسیده»: the provider's `paid` flag, in words. */
+/** "money arrived / not arrived": the provider's `paid` flag, in words. */
 export function providerPaidKey(paid: boolean): WebKey {
   return paid ? 'web.pay_provider_paid_yes' : 'web.pay_provider_paid_no';
 }

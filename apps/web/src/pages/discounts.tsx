@@ -722,7 +722,7 @@ function DiscountRules({
         </Card>
       )}
       {/*
-        W3: «افزودن» and a row's «ویرایش» open the form in a wide drawer — the same fields,
+        W3: "Add" and a row's "Edit" open the form in a wide drawer — the same fields,
         rules, inline problems and save bar. Closing it over a typed draft asks first; a
         save closes it.
       */}
@@ -1769,7 +1769,7 @@ function CashbackRules({
         </Card>
       )}
       {/*
-        W3: «افزودن» and a row's «ویرایش» open the form in a wide drawer — the same fields,
+        W3: "Add" and a row's "Edit" open the form in a wide drawer — the same fields,
         rules, inline problems and save bar. Closing it over a typed draft asks first; a
         save closes it.
       */}

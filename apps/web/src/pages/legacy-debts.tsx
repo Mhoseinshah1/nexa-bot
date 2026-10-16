@@ -245,7 +245,7 @@ export function LegacyDebtsPage({
           {
             key: 'state',
             label: t('web.lwd_col_state'),
-            // «در انتظار بررسی» is the list's default, so it is no active filter.
+            // "pending review" is the list's default, so it is no active filter.
             active:
               stateFilter === 'PENDING_REVIEW'
                 ? null

@@ -309,7 +309,7 @@ export function LegacyProductsPage({
           {
             key: 'state',
             label: t('web.lpr_col_state'),
-            // «نیازمند تصمیم» is the list's default, so it is no active filter.
+            // "needs a decision" is the list's default, so it is no active filter.
             active:
               stateFilter === 'ATTENTION'
                 ? null

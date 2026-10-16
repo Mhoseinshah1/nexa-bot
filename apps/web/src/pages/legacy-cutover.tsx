@@ -319,7 +319,7 @@ function Pager({
 
 /**
  * Record an approval. Every value exactly as the runbook printed it. W3: drawn inside the
- * dialog the page head's «ثبت تأیید مالک» opens; a recorded approval closes it.
+ * dialog the page head's "record owner approval" opens; a recorded approval closes it.
  */
 export function ApproveForm({ onDone }: { onDone?: () => void } = {}) {
   const queries = useQueryClient();
@@ -452,7 +452,7 @@ function Revoke({ row }: { row: LegacyCutoverApprovalView }) {
       submission.settleOn(error);
     },
   });
-  /* W3: the row's «لغو تأیید» opens a dialog with the approval, the reason and the refusal. */
+  /* W3: the row's "revoke" opens a dialog with the approval, the reason and the refusal. */
   return (
     <>
       <button type="button" className="btn ghost sm" onClick={() => setOpen(true)}>

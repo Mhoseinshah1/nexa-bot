@@ -7,7 +7,7 @@ import type { ListFilter } from '../ui/filter-bar';
  * The money & catalogue lists' filters, as `ListFilterBar` entries (W1.3).
  *
  * Each filter is the page's existing chip group, unchanged: the same URL parameter, the same
- * «همه» chip, the same server counts where a page had them, and the same keys reset on every
+ * "all" chip, the same server counts where a page had them, and the same keys reset on every
  * change (the keyset cursor). The bar only decides where the chips are drawn. The active
  * chip reads the chosen option's Persian label; an option the page no longer lists (a stale
  * link) reads its raw value rather than nothing.
@@ -34,7 +34,7 @@ export function queryChipFilter<T extends string>({
   /** The URL query parameter the filter writes. */
   param: string;
   label: string;
-  /** The value in force, or `null` for «همه». */
+  /** The value in force, or `null` for "all". */
   value: T | null;
   items: readonly ChipOption<T>[];
   allLabel: string;

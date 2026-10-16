@@ -591,7 +591,7 @@ export function ResellersPage({
 
       {/*
         W2: a reseller's standing opens in a wide drawer, never revealed under the list.
-        ×, Esc and the backdrop close it exactly as its own «بستن» does — asking first while
+        ×, Esc and the backdrop close it exactly as its own "close" does — asking first while
         the edit form holds unsaved changes.
       */}
       <Drawer
@@ -650,7 +650,7 @@ export function ResellersPage({
       )}
 
       {/*
-        W3: «ثبت نماینده جدید» opens the register form in a dialog — the picker, tier,
+        W3: "register a reseller" opens the register form in a dialog — the picker, tier,
         pricing, percent, problems, unsaved marker and the server's refusal, unchanged. A
         customer handed over by `?register=<id>` opens it with that customer. Closing it
         over a typed draft asks first; a registration closes it.

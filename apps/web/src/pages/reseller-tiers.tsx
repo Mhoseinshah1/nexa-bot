@@ -471,7 +471,7 @@ export function ResellerTiersPage({
         W2: a tier's edit, grants and history each open in a side drawer — never revealed
         further down the page. The create form stays on the page. Closing the edit drawer
         over unsaved changes asks first; closing the grants drawer discards its draft, as
-        its own «بستن» always did.
+        its own "close" always did.
       */}
       <Drawer
         open={granting !== undefined}

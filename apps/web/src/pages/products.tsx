@@ -653,7 +653,7 @@ export function ProductsPage({
       )}
 
       {/*
-        W3: «محصول تازه» opens the create form in a wide drawer — the same sections, rules,
+        W3: "new product" opens the create form in a wide drawer — the same sections, rules,
         save bar and toasts. Closing it early asks first when something was typed; a
         successful create closes it. Without `catalog.edit` there is no button, and the
         page keeps the sentence naming the permission.
