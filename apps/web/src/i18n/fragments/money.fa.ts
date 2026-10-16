@@ -99,6 +99,8 @@ export const WEB_FA_MONEY = {
   'web.money_tab_problem': 'نیاز به اصلاح',
   // W1.5 — the product page's action group.
   'web.product_actions_catalogue': 'دسته و وضعیت',
+  // W5 — «صافی» → «فیلتر» in the keys these pages render.
+  'web.discounts_filter_empty': 'قاعده‌ای با این فیلتر پیدا نشد.',
 } as const;
 
 /**
