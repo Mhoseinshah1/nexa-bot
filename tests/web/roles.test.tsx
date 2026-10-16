@@ -64,7 +64,7 @@ describe('the roles section', () => {
     renderPage(
       <SystemPage route={route} permissions={['admins.view', 'admins.permissions.edit']} />,
     );
-    const ownerRow = (await screen.findByText('Owner')).closest('li')!;
+    const ownerRow = (await screen.findByText(t('web.role_key_owner'))).closest('li')!;
     expect(within(ownerRow).getByText(t('web.rbac_immutable'))).toBeInTheDocument();
     expect(within(ownerRow).getByText(/Owner One/)).toBeInTheDocument();
     expect(
@@ -74,7 +74,7 @@ describe('the roles section', () => {
       within(ownerRow).queryByRole('button', { name: new RegExp(t('web.rbac_delete')) }),
     ).toBeNull();
     // A system role: editable, never deletable.
-    const supportRow = screen.getByText('Support').closest('li')!;
+    const supportRow = screen.getByText(t('web.role_key_support')).closest('li')!;
     expect(
       within(supportRow).getByRole('button', { name: new RegExp(t('web.rbac_edit')) }),
     ).toBeInTheDocument();
@@ -86,7 +86,7 @@ describe('the roles section', () => {
   it('draws no write controls for a viewer', async () => {
     stubApi(routes());
     renderPage(<SystemPage route={route} permissions={['admins.view']} />);
-    await screen.findByText('Support');
+    await screen.findByText(t('web.role_key_support'));
     expect(screen.queryByRole('button', { name: new RegExp(t('web.rbac_new_role')) })).toBeNull();
     expect(screen.queryByRole('button', { name: new RegExp(t('web.rbac_edit')) })).toBeNull();
   });
@@ -130,7 +130,7 @@ describe('the roles section', () => {
     renderPage(
       <SystemPage route={route} permissions={['admins.view', 'admins.permissions.edit']} />,
     );
-    const supportRow = (await screen.findByText('Support')).closest('li')!;
+    const supportRow = (await screen.findByText(t('web.role_key_support'))).closest('li')!;
     fireEvent.click(
       within(supportRow).getByRole('button', { name: new RegExp(t('web.rbac_edit')) }),
     );
@@ -322,7 +322,10 @@ describe('Codex review of #161 (web)', () => {
     api.calls.filter((call) => call.url.includes(fragment)).length;
 
   async function openSupportEditor() {
-    const supportRow = (await screen.findByText('Support')).closest('li')!;
+    // The seeded name reads in Persian, and the tickets domain shares the word: pick the row.
+    const supportRow = (await screen.findAllByText(t('web.role_key_support')))
+      .map((node) => node.closest('li.rbac-role'))
+      .find((row) => row !== null)!;
     fireEvent.click(
       within(supportRow).getByRole('button', { name: new RegExp(t('web.rbac_edit')) }),
     );

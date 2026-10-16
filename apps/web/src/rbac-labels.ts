@@ -1,5 +1,5 @@
-import type { PermissionDomain, PermissionKey } from '@nexa/contracts';
-import type { WebKey } from './i18n/web.fa';
+import { ROLE_SEEDS, type PermissionDomain, type PermissionKey } from '@nexa/contracts';
+import { t, type WebKey } from './i18n/web.fa';
 
 /**
  * Persian names for the frozen permission catalogue (Phase D3).
@@ -172,3 +172,37 @@ export const PERMISSION_DOMAIN_LABELS: Readonly<Record<PermissionDomain, WebKey>
   terms: 'web.perm_domain_terms',
   incidents: 'web.perm_domain_incidents',
 };
+
+/**
+ * Persian names for the SEEDED role keys (`ROLE_SEEDS`). The server stores a seeded role's
+ * name in English («Owner»), and a role key is a machine identifier: neither is what an
+ * operator should read first. A custom role keeps the name its author typed; a key this
+ * map does not know falls back to that name, then to the raw key — never to a blank.
+ */
+export const ROLE_KEY_LABELS: Readonly<Record<string, WebKey>> = {
+  owner: 'web.role_key_owner',
+  operator: 'web.role_key_operator',
+  finance: 'web.role_key_finance',
+  support: 'web.role_key_support',
+  sales: 'web.role_key_sales',
+  technical: 'web.role_key_technical',
+  receipt_reviewer: 'web.role_key_receipt_reviewer',
+  observer: 'web.role_key_observer',
+};
+
+const SEEDED_NAMES: ReadonlyMap<string, string> = new Map(
+  ROLE_SEEDS.map((seed) => [seed.key, seed.name]),
+);
+
+/**
+ * A role's name as an operator reads it. A seeded role still carrying its seeded English
+ * name reads in Persian; a role an operator renamed reads as they named it.
+ */
+export function roleLabel(key: string, name?: string): string {
+  const typed = name !== undefined && name.trim() !== '' ? name : undefined;
+  const known = ROLE_KEY_LABELS[key];
+  if (known !== undefined && (typed === undefined || typed === SEEDED_NAMES.get(key))) {
+    return t(known);
+  }
+  return typed ?? key;
+}

@@ -1192,7 +1192,7 @@ describe('system and operations', () => {
   });
 
   /** Owner revision 25 — the general logs surface does not exist. */
-  it('has no logs page, and says its absence is a decision', async () => {
+  it('has no logs page and no commit, and points the operational stream at the ops group', async () => {
     stubApi([
       { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
       {
@@ -1209,7 +1209,16 @@ describe('system and operations', () => {
     ]);
     renderPage(<SystemPage route={route} permissions={['panels.view', 'admins.view']} />);
 
-    expect(await screen.findByText('صفحهٔ لاگ عمومی وجود ندارد')).toBeInTheDocument();
+    expect(await screen.findByText(t('web.system_logs_title'))).toBeInTheDocument();
+    // W5: the meta note («… این یک تصمیم است») and the commit are gone; the build info keeps
+    // the version and the environment.
+    expect(screen.queryByText(t('web.system_logs_absent'))).toBeNull();
+    expect(screen.queryByText(t('web.commit'))).toBeNull();
+    expect(screen.queryByText(/abc123/)).toBeNull();
+    expect(screen.getByRole('link', { name: t('web.nav_ops_group') })).toHaveAttribute(
+      'href',
+      '/ops-group',
+    );
     // No tab leads to one, and nothing on the page is a log browser.
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
     // WP16's diagnostics tab is a queue of stuck work, not a log browser: it reads

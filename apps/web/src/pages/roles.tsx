@@ -28,7 +28,7 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { PERMISSION_DOMAIN_LABELS, PERMISSION_LABELS } from '../rbac-labels';
+import { PERMISSION_DOMAIN_LABELS, PERMISSION_LABELS, roleLabel } from '../rbac-labels';
 import { useSubmissionKey } from '../submission-key';
 import { Badge, Banner, Card, Drawer, Field, Ltr, Modal, StateSwitch, useToast } from '../ui/kit';
 import { useConfirmedClose } from '../ui/unsaved';
@@ -189,7 +189,7 @@ function RoleRow({
   return (
     <li className="rbac-role">
       <div className="row-inline">
-        <strong>{role.name}</strong>
+        <strong>{roleLabel(role.key, role.name)}</strong>
         <Ltr>{role.key}</Ltr>
         {role.immutable ? (
           <Badge tone="violet">{t('web.rbac_immutable')}</Badge>
@@ -710,7 +710,8 @@ function EffectiveList({ data }: { data: EffectivePermissionsResponse }) {
       {!data.active && <Banner tone="warn">{t('web.rbac_preview_disabled')}</Banner>}
       <div className="muted small">
         {t('web.rbac_preview_roles')}:{' '}
-        {data.roles.map((role) => role.name).join(t('web.list_separator')) || '—'}
+        {data.roles.map((role) => roleLabel(role.key, role.name)).join(t('web.list_separator')) ||
+          '—'}
         {' · '}
         {t('web.rbac_permission_count').replace('{count}', String(data.effective.length))}
       </div>
