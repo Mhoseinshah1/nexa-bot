@@ -10,7 +10,7 @@ import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
-import { openFilterPanel } from './ui-helpers';
+import { addAudienceCondition, openFilterPanel } from './ui-helpers';
 
 /** Holds every request whose URL contains `path` until `release` is called. */
 function holdRequests(path: string): { release: () => void } {
@@ -247,8 +247,12 @@ describe('a new campaign', () => {
     await screen.findByLabelText(t('web.campaign_name'));
     // Broadcast's own builder, not a second one.
     section(t('web.campaign_section_audience'));
-    expect(await screen.findByText('چه کسانی')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('کاربران عادی (غیر نماینده)'));
+    expect(await screen.findByText(t('web.aud_status'))).toBeInTheDocument();
+    fireEvent.click(
+      within(addAudienceCondition(t('web.aq_segment'))).getByRole('button', {
+        name: 'کاربران عادی (غیر نماینده)',
+      }),
+    );
 
     section(t('web.campaign_section_identity'));
     const inputs = screen.getAllByRole('textbox');
