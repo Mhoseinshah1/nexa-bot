@@ -9,6 +9,7 @@ import {
 } from '../../apps/web/src/pages/customer-360-crm';
 import type { Tone } from '../../apps/web/src/ui/kit';
 import { customer, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Customer notes and tags in the Web Admin (program §8), rendered against the shapes the
@@ -102,7 +103,13 @@ describe('the customer list tag filter', () => {
         denied={false}
       />,
     );
-    const select = (await screen.findByLabelText('برچسب')) as HTMLSelectElement;
+    await screen.findByText(customer().telegramUserId);
+    // The catalogue answers after the list; the tag filter joins the panel once it has.
+    await waitFor(() => {
+      openFilterPanel();
+      expect(screen.getByLabelText('برچسب')).toBeInTheDocument();
+    });
+    const select = screen.getByLabelText('برچسب') as HTMLSelectElement;
     const options = within(select)
       .getAllByRole('option')
       .map((option) => option.textContent);

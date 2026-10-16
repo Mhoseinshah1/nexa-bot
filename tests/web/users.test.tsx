@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 import { UsersPage, UserDetailPage } from '../../apps/web/src/pages/users';
 import { resolve } from '../../apps/web/src/app';
 import { customer, order, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * The Users surface, rendered against the shapes the server actually returns.
@@ -266,6 +267,7 @@ describe('the customer list', () => {
     stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch={false} denied={false} />);
     await screen.findByText('5551234567');
+    openFilterPanel();
     expect(screen.getByRole('button', { name: 'مسدود' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'فعال' })).toBeInTheDocument();
   });
@@ -341,7 +343,8 @@ describe('the customer list', () => {
         denied={false}
       />,
     );
-    fireEvent.click((await screen.findAllByText('پاک کردن'))[0] as HTMLButtonElement);
+    // The second render is the page whose URL carries the search.
+    fireEvent.click((await screen.findAllByText('پاک کردن')).at(-1) as HTMLButtonElement);
     await waitFor(() => {
       expect(window.location.search).toBe('?status=ACTIVE');
     });

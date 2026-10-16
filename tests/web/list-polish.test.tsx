@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { OrdersPage } from '../../apps/web/src/pages/orders';
 import { ServicesPage } from '../../apps/web/src/pages/services';
 import { LIST_SEARCH_DEBOUNCE_MS, ListFreshness } from '../../apps/web/src/ui/list-search';
@@ -7,6 +7,7 @@ import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, order, renderPage, stubApi } from './harness';
 import { UsersPage } from '../../apps/web/src/pages/users';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Roadmap B1/B4: the list polish on /orders and /services (and, through the same
@@ -182,9 +183,14 @@ describe('the cursor trail after a filter change', () => {
     renderPage(<LiveUsers />);
     fireEvent.click(await screen.findByRole('button', { name: t('web.newer') }));
     await waitFor(() => expect(lastRead(api.calls, '/users').url).toContain('cursor=C2'));
-    fireEvent.click(screen.getByRole('button', { name: t('web.user_status_blocked') }));
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.user_status_blocked') }),
+    );
     await waitFor(() => expect(lastRead(api.calls, '/users').url).toContain('status=BLOCKED'));
-    fireEvent.click(await screen.findByRole('button', { name: t('web.list_filters_clear') }));
+    // The filter's own «همه» puts the list back to unfiltered (one filter: no «پاک کردن همه»).
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.users_filter_all') }),
+    );
     await waitFor(() => expect(window.location.search).toBe(''));
     // The first page of the unfiltered list (served from cache here, so asked of the pager):
     // no trail behind it, so nothing to go back to.

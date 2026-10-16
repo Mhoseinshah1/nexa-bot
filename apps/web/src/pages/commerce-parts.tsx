@@ -1,4 +1,6 @@
 import { FilterChip } from '../ui/kit';
+import { setQueries, type Route } from '../router';
+import type { SavedViewsRegistration, ViewPreset, ViewState } from '../ui/saved-views';
 
 /**
  * Presentation pieces shared by the commerce list pages (users, services,
@@ -37,5 +39,43 @@ export function ChipGroup<T extends string>({
         </FilterChip>
       ))}
     </span>
+  );
+}
+
+/**
+ * A list whose filters all live in the URL registers them with the saved-filters menu
+ * (W1.4) through this one function: `get` reads the keys from the route, `set` writes every
+ * key in ONE navigation (a key the state leaves out is cleared) and drops the keyset cursor
+ * the page may hold in the URL, so applying a view is exactly what the page's own controls
+ * do. There is no `count`: no list has a server total to give it.
+ */
+export function urlViewsRegistration(
+  route: Route,
+  page: string,
+  keys: readonly string[],
+  presets: readonly ViewPreset[],
+): SavedViewsRegistration {
+  const empty: ViewState = Object.fromEntries(keys.map((key) => [key, '']));
+  return {
+    page,
+    empty,
+    presets,
+    get: () => Object.fromEntries(keys.map((key) => [key, route.query.get(key) ?? ''])),
+    set: (state) =>
+      setQueries(route, [
+        ...keys.map((key) => [key, state[key] ?? null] as const),
+        ['cursor', null] as const,
+      ]),
+  };
+}
+
+/**
+ * «پاک کردن همه» of a `ListFilterBar`: every filter key, the search and the cursor in ONE
+ * navigation — never one `setQuery` per key (`router.ts` says why).
+ */
+export function clearUrlFilters(route: Route, keys: readonly string[]): void {
+  setQueries(
+    route,
+    [...keys, 'cursor'].map((key) => [key, null] as const),
   );
 }
