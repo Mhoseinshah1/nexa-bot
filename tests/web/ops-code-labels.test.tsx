@@ -9,7 +9,7 @@ import {
   OPERATION_STATES,
   PROVIDER_FAILURE_KINDS,
 } from '@nexa/contracts';
-import { refundOutcomeLabel } from '../../apps/web/src/pages/service-refund-requests';
+import { refundFailureLabel } from '../../apps/web/src/pages/service-refund-requests';
 import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import {
   DELIVERY_CODE_LABELS,
@@ -68,7 +68,7 @@ describe('operational-event code names', () => {
       expect(errorCodeLabel(code)).toMatch(PERSIAN);
     }
     for (const token of [...PROVIDER_FAILURE_KINDS, ...OPERATION_STATES, 'RESERVATION_RELEASED']) {
-      expect(refundOutcomeLabel(token)).toMatch(PERSIAN);
+      expect(refundFailureLabel(token)).toMatch(PERSIAN);
     }
   });
 

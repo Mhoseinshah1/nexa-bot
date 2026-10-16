@@ -6,12 +6,16 @@ import {
   type ServiceOperatorAction,
 } from '@nexa/contracts';
 import type { ReactElement } from 'react';
-import { ServiceDetailPage, ServicesPage } from '../../apps/web/src/pages/services';
+import {
+  SERVICE_ACTION_GROUPS,
+  ServiceDetailPage,
+  ServicesPage,
+} from '../../apps/web/src/pages/services';
 import { formatNumber } from '../../apps/web/src/format';
 import { resolve } from '../../apps/web/src/app';
 import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { renderPage, stubApi } from './harness';
-import { t } from '../../apps/web/src/i18n/web.fa';
+import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Services, rendered against the shapes the server actually returns.
@@ -703,17 +707,14 @@ describe('the service detail', () => {
     });
   });
 
-  it('still says an operator transfer is not built, rather than drawing a disabled button', async () => {
+  it('draws no transfer control, and no longer the meta note about it (W5)', async () => {
     stubApi(detail());
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
     await screen.findByText('nx-7f3a91');
 
-    // Package F built the CUSTOMER's transfer, from the bot; the sentence says so, and
-    // where each transfer is recorded.
-    const sentence = screen.getByText(/انتقال سرویس از پنل مدیریت ساخته نشده است/);
-    expect(sentence).toBeInTheDocument();
-    expect(sentence.textContent).toMatch(/از داخل ربات/);
-    expect(sentence.textContent).toMatch(/service\.transfer/);
+    // Package F built the CUSTOMER's transfer, from the bot. The operator page has no
+    // transfer, not even a disabled one, and no longer narrates the absence.
+    expect(screen.queryByText(/انتقال سرویس از پنل مدیریت ساخته نشده است/)).toBeNull();
     expect(screen.queryByRole('button', { name: /انتقال/ })).toBeNull();
   });
 
@@ -796,28 +797,22 @@ describe('the promotion of /services', () => {
     expect(PLANNED_SURFACES.map((surface) => surface.key)).not.toContain('services');
   });
 
-  /** Owner revision 12 — protocol is not a normal service field. */
-  it('records that protocol stays out of the normal services UI', () => {
+  /**
+   * Owner revision 12 — protocol is not a normal service field — and the W5 polish: the
+   * «قاعده‌های این صفحه» card that only restated decisions is gone; the rule it named
+   * stays true of the page itself.
+   */
+  it('draws no protocol field, and no longer the page-rules card', () => {
     const { container } = renderList();
-    const text = container.textContent ?? '';
-    const sentence = text.split('.').find((part) => part.includes('پروتکل'));
-    expect(sentence).toBeDefined();
-    expect(sentence).toContain('نمایش داده نمی‌شود');
-    expect(sentence).toContain('لینک اشتراک');
-    // And nothing on the page is a protocol FIELD: no label, no column, no control.
+    expect(container.textContent).not.toContain(t('web.services_rules_title'));
+    expect(container.textContent).not.toContain('created_at');
+    // Nothing on the page is a protocol FIELD: no label, no column, no control.
     expect(screen.queryByLabelText(/پروتکل/)).toBeNull();
   });
 
-  /** Owner revisions 13 and 14 — server ordering, and a plan filter that replaces location. */
-  it('records the ordering rule and the plan filter, and no location filter', () => {
-    const { container } = renderList();
-    const text = container.textContent ?? '';
-    expect(text).toContain('created_at');
-    expect(text).toContain('id');
-    expect(text).toContain('پلن');
-    expect(text).toContain('لوکیشن'); // only as the thing being removed
-    expect(text).toContain('وجود نخواهد داشت');
-    // The filter it says does not exist, does not exist.
+  /** Owner revision 14: the plan (product) filter — drawn only with `catalog.view`. */
+  it('offers no location filter to a session that cannot read the catalogue', () => {
+    renderList();
     expect(screen.queryByLabelText(/لوکیشن/)).toBeNull();
   });
 
@@ -849,5 +844,107 @@ describe('the promotion of /services', () => {
     renderPage(<ServicesPage route={LIST_ROUTE} denied={true} />);
     expect(screen.getByText('شما به این بخش دسترسی ندارید.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+});
+
+/**
+ * The demo's service page (W1.5, W3, W4, W1.8): one action panel under the title with the
+ * five groups, terminate in the «عملیات حساس» strip, the reasons folded at its foot, the
+ * identity beside the delivery at one height, and the history ten at a time.
+ */
+describe('the service action panel', () => {
+  it('classifies every ordinary action into exactly one group', () => {
+    const grouped = SERVICE_ACTION_GROUPS.flatMap((group) => [...group.actions]);
+    const ordinary = SERVICE_OPERATOR_ACTIONS.filter(
+      (action) =>
+        action !== 'TERMINATE' &&
+        action !== 'ADD_TRAFFIC' &&
+        action !== 'ADD_TIME' &&
+        action !== 'CHANGE_LOCATION',
+    );
+    expect([...grouped].sort()).toEqual([...ordinary].sort());
+  });
+
+  it('draws each button inside its group, and terminate in the sensitive strip', async () => {
+    stubApi(detail({ actions: actionsWith({ SUSPEND: 'AVAILABLE', TERMINATE: 'AVAILABLE' }) }));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate mayGrant />);
+    await screen.findByText('nx-7f3a91');
+    const panel = screen.getByRole('region', { name: t('web.service_action_panel_title') });
+    const group = (key: WebKey) => within(panel).getByRole('group', { name: t(key) });
+    expect(
+      within(group('web.service_group_panel')).getByRole('button', {
+        name: t('web.service_action_sync_usage'),
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(group('web.service_group_link')).getByRole('button', {
+        name: t('web.service_action_rotate_link'),
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(group('web.service_group_state')).getByRole('button', {
+        name: t('web.service_action_suspend'),
+      }),
+    ).toBeEnabled();
+    for (const key of [
+      'web.service_action_add_traffic',
+      'web.service_action_add_time',
+      'web.service_action_change_location',
+    ] as const) {
+      expect(
+        within(group('web.service_group_gift')).getByRole('button', { name: t(key) }),
+      ).toBeInTheDocument();
+    }
+    expect(
+      within(group('web.action_panel_sensitive')).getByRole('button', { name: 'حذف سرویس…' }),
+    ).toBeEnabled();
+  });
+
+  it('opens the delete modal with the danger sentence first', async () => {
+    stubApi(detail({ actions: actionsWith({ TERMINATE: 'AVAILABLE' }) }));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    await screen.findByText('nx-7f3a91');
+    fireEvent.click(screen.getByRole('button', { name: 'حذف سرویس…' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(t('web.service_terminate_danger'))).toBeInTheDocument();
+  });
+
+  it('disables terminate on a server blocker and says why in the folded reasons', async () => {
+    stubApi(detail({ actions: actionsWith({ TERMINATE: 'IN_PROGRESS' }) }));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    await screen.findByText('nx-7f3a91');
+    const terminate = screen.getByRole('button', { name: 'حذف سرویس…' });
+    expect(terminate).toBeDisabled();
+    expect(terminate).toHaveAccessibleDescription(t('web.service_blocker_in_progress'));
+  });
+
+  it('draws the identity and the delivery as one balanced pair', async () => {
+    stubApi(detail());
+    const { container } = renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
+    );
+    await screen.findByText('nx-7f3a91');
+    const pair = container.querySelector('.wb-balance');
+    expect(pair).not.toBeNull();
+    expect(within(pair as HTMLElement).getByText(t('web.service_identity_title'))).toBeTruthy();
+    expect(within(pair as HTMLElement).getByText(t('web.service_delivery'))).toBeTruthy();
+  });
+
+  it('pages the operation history ten at a time', async () => {
+    const operations = Array.from({ length: 12 }, (_, index) =>
+      operation({
+        id: `019250cd-cdef-7012-8345-6789abcde${String(index).padStart(3, '0')}`,
+        failureMessage: `op-${index}`,
+        state: 'FAILED',
+      }),
+    );
+    stubApi(detail({}, operations));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    await screen.findByText('op-0');
+    expect(screen.getByText('op-9')).toBeInTheDocument();
+    expect(screen.queryByText('op-10')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.report_page_next') }));
+    expect(await screen.findByText('op-11')).toBeInTheDocument();
+    expect(screen.queryByText('op-0')).toBeNull();
   });
 });

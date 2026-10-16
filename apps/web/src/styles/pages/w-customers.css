@@ -1,1 +1,36 @@
 /* w-customers — owned by one agent during the web-admin demo implementation. */
+
+/* W4 — BalancedColumns: both columns as tall as the taller; each one's last card fills it. */
+.wb-balance > .two-col {
+  align-items: stretch;
+}
+.wb-balance > .two-col > .stack {
+  display: flex;
+  flex-direction: column;
+}
+.wb-balance > .two-col > .stack > :last-child {
+  flex: 1 1 auto;
+}
+.wb-balance + .wb-balance-tail {
+  margin-top: var(--gap);
+}
+
+/* A row's own small actions under its state badge (refund requests' OPEN row). */
+.wb-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* W2: a card a jump landed on is flashed once, never scrolled to. */
+.wb-flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  transition: outline-color 1.2s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-flash {
+    transition: none;
+  }
+}

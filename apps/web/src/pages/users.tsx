@@ -5,14 +5,12 @@ import { fetchCustomers } from '../api/client';
 import { formatTimestamp } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
-import { setQuery, useLinkHandler, type Route } from '../router';
-import {
-  ClearFiltersButton,
-  ListFreshness,
-  ListSearchBox,
-  appliedListSearch,
-} from '../ui/list-search';
-import { ChipGroup } from './commerce-parts';
+import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
+import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
+import { SavedViewsMenu } from '../ui/saved-views-menu';
+import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
+import { ChipGroup, useListClearAll } from './commerce-parts';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
 import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -23,6 +21,7 @@ import {
   CursorPager,
   DataTable,
   Empty,
+  LIST_PAGE_SIZE,
   Ltr,
   PageHead,
   Select,
@@ -83,6 +82,7 @@ export function customersQuery(input: {
     queryKey: ['customers', searchSignature, cursor ?? null],
     queryFn: () =>
       fetchCustomers({
+        limit: LIST_PAGE_SIZE,
         ...(cursor === undefined ? {} : { cursor }),
         // Only for an actor holding `users.search`: the server charges it for `q`, and a
         // search left in the URL by somebody else must not turn the list into a 403.
@@ -108,8 +108,13 @@ export function customersFirstScreen(): readonly PageQuery[] {
   ];
 }
 
-/** Every URL key the customer list filters on, its search included (`ClearFiltersButton`). */
+/** Every URL key the customer list filters on, its search included (clear-all, saved views). */
 const USER_FILTER_KEYS = ['q', 'status', 'tag'] as const;
+
+/** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
+export const USER_PRESETS: readonly ViewPreset[] = [
+  { id: 'blocked', name: 'web.users_view_blocked', state: { status: 'BLOCKED' } },
+];
 
 export function UsersPage({
   route,
@@ -254,7 +259,81 @@ export function UsersPage({
    * row carries the attribute itself, rather than one wrapper around both, so
    * the card can draw them flush with its edges as the reference's lists are.
    */
+  const { searchKey, clearAll } = useListClearAll(route, USER_FILTER_KEYS);
   const toolbarHidden = !mayRequest(customers, denied);
+
+  /*
+   * The status filter is NOT gated on `users.search`: the server charges that permission for
+   * the search box, not for narrowing the tenant's own list to its blocked half. The tag
+   * filter is offered once the catalogue has answered, and only when there is a tag to pick.
+   */
+  const tags = catalogue.data?.tags ?? [];
+  const tagLabel = (tag: (typeof tags)[number]) =>
+    tag.archivedAt === null
+      ? tag.label
+      : t('web.users_filter_tag_archived').replace('{label}', tag.label);
+  const appliedTagRow = tags.find((tag) => tag.id === appliedTag);
+  const userFilters: ListFilter[] = [
+    {
+      key: 'status',
+      label: t('web.status'),
+      active:
+        appliedStatus === null
+          ? null
+          : t(appliedStatus === 'ACTIVE' ? 'web.user_status_active' : 'web.user_status_blocked'),
+      onClear: () =>
+        setQueries(route, [
+          ['status', null],
+          ['cursor', null],
+        ]),
+      control: (
+        <ChipGroup
+          label={t('web.status')}
+          value={appliedStatus ?? 'ALL'}
+          onChange={(next) => setQuery(route, 'status', next === 'ALL' ? null : next)}
+          items={[
+            { id: 'ALL' as const, label: t('web.users_filter_all') },
+            { id: 'ACTIVE' as const, label: t('web.user_status_active') },
+            { id: 'BLOCKED' as const, label: t('web.user_status_blocked') },
+          ]}
+        />
+      ),
+    },
+  ];
+  if (tags.length > 0 || appliedTag !== null) {
+    userFilters.push({
+      key: 'tag',
+      label: t('web.users_filter_tag'),
+      active:
+        appliedTag === null
+          ? null
+          : appliedTagRow === undefined
+            ? appliedTag
+            : tagLabel(appliedTagRow),
+      onClear: () =>
+        setQueries(route, [
+          ['tag', null],
+          ['cursor', null],
+        ]),
+      control: (
+        <Select
+          size="sm"
+          aria-label={t('web.users_filter_tag')}
+          value={appliedTag ?? ''}
+          onChange={(event) =>
+            setQuery(route, 'tag', event.target.value === '' ? null : event.target.value)
+          }
+        >
+          <option value="">{t('web.users_filter_tag_all')}</option>
+          {tags.map((tag) => (
+            <option key={tag.id} value={tag.id}>
+              {tagLabel(tag)}
+            </option>
+          ))}
+        </Select>
+      ),
+    });
+  }
 
   return (
     <>
@@ -278,66 +357,42 @@ export function UsersPage({
       />
 
       <Card className="ca-list">
-        {maySearch ? (
-          <ListSearchBox
-            route={route}
-            id="users-search"
-            hint={t('web.users_search_hint')}
-            hidden={toolbarHidden}
-            // Issue 13: typing or pasting searches by itself, debounced; the button stays.
-            autoApply
-          />
-        ) : (
-          /*
-            No search form for an actor without `users.search`, and a sentence
-            rather than a disabled box. The server refuses the search and serves
-            the list, so this states the boundary that exists and names the
-            permission — the half an operator needs in order to ask for it.
-          */
+        {/*
+          No search box for an actor without `users.search`, and a sentence rather than a
+          disabled box. The server refuses the search and serves the list, so this states
+          the boundary that exists and names the permission — the half an operator needs in
+          order to ask for it.
+        */}
+        {!maySearch && (
           <div className="toolbar" hidden={toolbarHidden}>
             <Banner tone="info">{t('web.users_search_denied')}</Banner>
           </div>
         )}
-
-        {/*
-          The status filter is NOT gated on `users.search`: the server charges
-          that permission for the search box, not for narrowing the tenant's own
-          list to its blocked half. A non-text filter, so it stays its own control.
-        */}
-        <div className="filter-row" hidden={toolbarHidden}>
-          <ChipGroup
-            label={t('web.status')}
-            value={appliedStatus ?? 'ALL'}
-            onChange={(next) => setQuery(route, 'status', next === 'ALL' ? null : next)}
-            items={[
-              { id: 'ALL' as const, label: t('web.users_filter_all') },
-              { id: 'ACTIVE' as const, label: t('web.user_status_active') },
-              { id: 'BLOCKED' as const, label: t('web.user_status_blocked') },
-            ]}
+        <div hidden={toolbarHidden}>
+          <ListFilterBar
+            label={t('web.users_title')}
+            search={
+              maySearch ? (
+                <ListSearchBox
+                  key={searchKey}
+                  slim
+                  route={route}
+                  id="users-search"
+                  hint={t('web.users_search_hint')}
+                  hidden={toolbarHidden}
+                  // Issue 13: typing or pasting searches by itself, debounced; the button stays.
+                  autoApply
+                />
+              ) : undefined
+            }
+            filters={userFilters}
+            onClearAll={clearAll}
+            savedViews={
+              <SavedViewsMenu
+                registration={routeViewRegistration(route, 'users', USER_FILTER_KEYS, USER_PRESETS)}
+              />
+            }
           />
-          {/* Drawn once the catalogue has answered, and only when there is a tag to pick. */}
-          {(catalogue.data?.tags.length ?? 0) > 0 && (
-            <label className="filter-select">
-              <span>{t('web.users_filter_tag')}</span>
-              <Select
-                size="sm"
-                value={appliedTag ?? ''}
-                onChange={(event) =>
-                  setQuery(route, 'tag', event.target.value === '' ? null : event.target.value)
-                }
-              >
-                <option value="">{t('web.users_filter_tag_all')}</option>
-                {(catalogue.data?.tags ?? []).map((tag) => (
-                  <option key={tag.id} value={tag.id}>
-                    {tag.archivedAt === null
-                      ? tag.label
-                      : t('web.users_filter_tag_archived').replace('{label}', tag.label)}
-                  </option>
-                ))}
-              </Select>
-            </label>
-          )}
-          <ClearFiltersButton route={route} keys={USER_FILTER_KEYS} />
         </div>
 
         <StateSwitch
@@ -387,18 +442,8 @@ export function UsersPage({
             hasNext={nextCursor !== null}
             onPrevious={popCursor}
             onNext={() => nextCursor !== null && pushCursor(nextCursor)}
-            // `GET /users` pages an ASCENDING keyset — the earliest customer
-            // first, `nextCursor` toward newer ones — so "next" is NEWER here.
-            // The default labels belong to the descending lists and read
-            // backwards on this one.
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         )}
-      </Card>
-
-      <Card tone="muted" title={t('web.users_scope_title')}>
-        <p className="muted small">{t('web.users_scope_body')}</p>
       </Card>
     </>
   );

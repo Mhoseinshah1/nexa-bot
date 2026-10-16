@@ -4,6 +4,8 @@ import type { ReactElement } from 'react';
 import { UsersPage, UserDetailPage } from '../../apps/web/src/pages/users';
 import { resolve } from '../../apps/web/src/app';
 import { customer, order, renderPage, stubApi } from './harness';
+import { openC360Tab, openWalletDialog, submitWalletDialog } from './c360-helpers';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * The Users surface, rendered against the shapes the server actually returns.
@@ -266,6 +268,7 @@ describe('the customer list', () => {
     stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch={false} denied={false} />);
     await screen.findByText('5551234567');
+    openFilterPanel();
     expect(screen.getByRole('button', { name: 'مسدود' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'فعال' })).toBeInTheDocument();
   });
@@ -341,7 +344,8 @@ describe('the customer list', () => {
         denied={false}
       />,
     );
-    fireEvent.click((await screen.findAllByText('پاک کردن'))[0] as HTMLButtonElement);
+    // The second render is the page whose URL carries the search.
+    fireEvent.click((await screen.findAllByText('پاک کردن')).at(-1) as HTMLButtonElement);
     await waitFor(() => {
       expect(window.location.search).toBe('?status=ACTIVE');
     });
@@ -389,7 +393,7 @@ describe('the customer list', () => {
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5551234567');
 
-    fireEvent.click(screen.getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('cursor=Y3Vyc29yLW9uZQ'))).toBe(true),
     );
@@ -397,7 +401,7 @@ describe('the customer list', () => {
     // The pager is a sibling of `StateSwitch` and is drawn only in the `ready`
     // state, so it is gone while the new page is in flight. Waiting for it back
     // is waiting for the second page to have arrived.
-    const back = await screen.findByRole('button', { name: 'قدیمی‌تر' });
+    const back = await screen.findByRole('button', { name: 'قبلی' });
     // Back pops the trail rather than asking the server to reverse: a keyset
     // cursor only goes forward, and the previous page's start is a cursor this
     // component already held.
@@ -407,7 +411,7 @@ describe('the customer list', () => {
     // freshness window (`NAV_PREFETCH_FRESH_MS`, Issue 16), otherwise re-asked —
     // and in neither case by a request carrying a cursor.
     await screen.findByText('5551234567');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'قبلی' })).toBeDisabled());
     for (const call of api.calls.slice(forward)) expect(call.url).not.toContain('cursor=');
   });
 
@@ -417,8 +421,8 @@ describe('the customer list', () => {
     await screen.findByText('5551234567');
     // `nextCursor: null` is the last page. An enabled button here would push a
     // cursor, change the query key and issue a request for nothing.
-    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'قبلی' })).toBeDisabled();
   });
 
   it('says the list is empty without claiming a search found nothing', async () => {
@@ -867,6 +871,7 @@ describe('the route table', () => {
       'orders.view',
     ]);
     renderPage(resolved.element as ReactElement);
+    await openC360Tab('services');
 
     // Orders granted, so the card has drawn — the services denial below is a
     // decision rather than a card that has not rendered yet.
@@ -887,6 +892,7 @@ describe('the route table', () => {
       'services.view',
     ]);
     renderPage(resolved.element as ReactElement);
+    await openC360Tab('services');
 
     const orders = await screen.findByText('همهٔ سفارش‌های این مشتری');
     const services = await screen.findByText('همهٔ سرویس‌های این مشتری');
@@ -915,6 +921,7 @@ describe('the route table', () => {
       'users.view',
     ]);
     renderPage(resolved.element as ReactElement);
+    await openC360Tab('services');
     // The head and the general card both name the username (Customer 360).
     await screen.findAllByText('ali_tehran', { exact: false });
 
@@ -931,6 +938,7 @@ describe('the route table', () => {
       'users.wallet.credit',
     ]);
     renderPage(resolved.element as ReactElement);
+    await openC360Tab('financial');
 
     // Credit is granted, so the card has drawn — the absence below is a decision
     // rather than a card that has not rendered yet.
@@ -965,8 +973,9 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
 
-    const card = (await screen.findByRole('heading', { name: 'کیف پول' })).closest(
+    const card = (await screen.findByRole('heading', { name: 'کیف پول', level: 2 })).closest(
       'section',
     ) as HTMLElement;
     // The formatted amount, not the raw minor units — in the wallet card itself.
@@ -998,6 +1007,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     expect(await screen.findByText('موجودی منتقل‌شده از میرزا')).toBeTruthy();
     expect(screen.queryByText('MIGRATION_OPENING_BALANCE')).toBeNull();
   });
@@ -1019,6 +1029,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
 
     await screen.findByText('تاریخچه تراکنش‌ها');
     expect(await screen.findByText('برداشت')).toBeTruthy();
@@ -1036,7 +1047,7 @@ describe('the wallet card', () => {
       { url: `/users/${ROW_ID}`, body: { customer: customer() } },
       ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }, [walletEntry()]),
     ]);
-    const { container } = renderPage(
+    renderPage(
       <UserDetailPage
         mayEditTrial={false}
         id={ROW_ID}
@@ -1046,7 +1057,11 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('کیف پول');
+    await openC360Tab('financial');
+    // The wallet CARD, not the action panel's «کیف پول» group of the same name.
+    const card = (await screen.findByRole('heading', { name: 'کیف پول', level: 2 })).closest(
+      'section',
+    ) as HTMLElement;
 
     /*
      * Asserted by LOOKING, not by a comment.
@@ -1055,7 +1070,7 @@ describe('the wallet card', () => {
      * single easiest thing to add to this card by accident. Every button is
      * enumerated and required to be one of the two movements.
      */
-    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim());
+    const labels = [...card.querySelectorAll('button')].map((b) => b.textContent?.trim());
     for (const label of labels) {
       expect(
         label === 'واریز به کیف پول' ||
@@ -1071,7 +1086,7 @@ describe('the wallet card', () => {
         `the wallet card draws an unexpected control: ${String(label)}`,
       ).toBe(true);
     }
-    expect(container.textContent).not.toContain('صفر کردن');
+    expect(card.textContent).not.toContain('صفر کردن');
     // And no text input that is bound to the balance itself.
     expect(screen.queryByLabelText('موجودی')).toBeNull();
   });
@@ -1095,11 +1110,11 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ثبت تراکنش دستی');
+    const dialog = await openWalletDialog('CREDIT');
 
     fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '250000' } });
     fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'goodwill' } });
-    fireEvent.click(screen.getByText('واریز به کیف پول'));
+    submitWalletDialog(dialog, 'CREDIT');
 
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('/wallet/adjust'))).toBe(true);
@@ -1134,14 +1149,17 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ثبت تراکنش دستی');
+    let dialog = await openWalletDialog('CREDIT');
 
     fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '1000' } });
     fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'twice' } });
-    fireEvent.click(screen.getByText('واریز به کیف پول'));
+    submitWalletDialog(dialog, 'CREDIT');
     await waitFor(() => {
       expect(api.calls.filter((c) => c.url.includes('/wallet/adjust'))).toHaveLength(1);
     });
+    // The dialog closes on success; the operator opens it again.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    dialog = await openWalletDialog('CREDIT');
 
     // The form clears on success, so the operator retypes the same figures — which
     // is a NEW command, and correctly gets a new key. What must be stable is the
@@ -1150,7 +1168,7 @@ describe('the wallet card', () => {
     // payload rather than to the component's lifetime.
     fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '1000' } });
     fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'twice' } });
-    fireEvent.click(screen.getByText('واریز به کیف پول'));
+    submitWalletDialog(dialog, 'CREDIT');
     await waitFor(() => {
       expect(api.calls.filter((c) => c.url.includes('/wallet/adjust'))).toHaveLength(2);
     });
@@ -1191,12 +1209,13 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ثبت تراکنش دستی');
+    const dialog = await openWalletDialog('CREDIT');
 
+    // A refused movement keeps the dialog open with the draft, as the form did.
     const submit = (amount: string, note: string) => {
       fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: amount } });
       fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: note } });
-      fireEvent.click(screen.getByText('واریز به کیف پول'));
+      submitWalletDialog(dialog, 'CREDIT');
     };
     submit('1000', 'spacing');
     await waitFor(() => {
@@ -1239,9 +1258,9 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
-    await screen.findByText('ثبت تراکنش دستی');
+    await openC360Tab('financial');
 
-    expect(screen.getByText('واریز به کیف پول')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'واریز به کیف پول' })).toBeTruthy();
     expect(screen.queryByText('برداشت از کیف پول')).toBeNull();
     // And it NAMES the permission that is missing, rather than a disabled button.
     expect(screen.getByText(/users.wallet.debit/u)).toBeTruthy();
@@ -1261,6 +1280,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     await screen.findByText('کیف پول');
 
     expect(screen.getByText(/users.view/u)).toBeTruthy();
@@ -1288,6 +1308,7 @@ describe('the wallet card', () => {
         denied={false}
       />,
     );
+    await openC360Tab('financial');
     await screen.findByText('تاریخچه تراکنش‌ها');
 
     fireEvent.click(await screen.findByText('بعدی'));
@@ -1371,6 +1392,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('پلن یک‌ماهه');
     await screen.findByText('nx-7f3a91');
 
@@ -1425,6 +1447,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
     const adopted = screen.getByText('nx-7f3a91').closest('tr') as HTMLElement;
     expect(await within(adopted).findByText('منتقل‌شده از میرزا')).toBeTruthy();
@@ -1449,6 +1472,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
     expect(api.calls.some((call) => call.url.includes('legacy'))).toBe(false);
     expect(screen.queryByText('منتقل‌شده از میرزا')).toBeNull();
@@ -1475,6 +1499,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
 
     const row = screen.getByText('nx-7f3a91').closest('tr');
@@ -1506,6 +1531,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     // The ROW first, so the card below is the loaded one and not its skeleton.
     await screen.findByText('پلن یک‌ماهه');
     // Located by the "all orders" link, which is the one string in this card that
@@ -1513,7 +1539,7 @@ describe("a customer's orders and services", () => {
     const card = screen.getByText('همهٔ سفارش‌های این مشتری').closest('section');
     expect(card).not.toBeNull();
 
-    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'بعدی' }));
 
     await waitFor(() => {
       expect(
@@ -1539,6 +1565,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
     const card = screen.getByText('همهٔ سرویس‌های این مشتری').closest('section');
     expect(card).not.toBeNull();
@@ -1592,6 +1619,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('plan-page-1');
     const card = screen.getByText('همهٔ سفارش‌های این مشتری').closest('section') as HTMLElement;
 
@@ -1602,11 +1630,11 @@ describe("a customer's orders and services", () => {
      * still showing its skeleton and has no pager to press — which is how the first
      * version of this case failed on its second click rather than on its assertion.
      */
-    fireEvent.click(within(card).getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
     await screen.findByText('plan-page-2');
     expect(api.calls.some((call) => call.url.includes('cursor=page-2'))).toBe(true);
 
-    fireEvent.click(within(card).getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
     await screen.findByText('plan-page-3');
     expect(api.calls.some((call) => call.url.includes('cursor=page-3'))).toBe(true);
 
@@ -1616,7 +1644,7 @@ describe("a customer's orders and services", () => {
      * cached hit issues no new request.
      */
     const before = api.calls.length;
-    fireEvent.click(within(card).getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
     await screen.findByText('plan-page-2');
 
     const after = api.calls.slice(before);
@@ -1625,7 +1653,7 @@ describe("a customer's orders and services", () => {
       'Previous went somewhere other than the page before',
     ).toBe(true);
     /* And the first page is only reachable by pressing it again. */
-    fireEvent.click(within(card).getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
     await screen.findByText('plan-page-1');
   });
 
@@ -1645,6 +1673,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('سرویس‌های این مشتری');
 
     expect(screen.getByText(/orders\.view/u)).toBeTruthy();
@@ -1669,6 +1698,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('سفارش‌های این مشتری');
 
     expect(screen.getByText(/services\.view/u)).toBeTruthy();
@@ -1697,6 +1727,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('این مشتری هنوز سفارشی ثبت نکرده است.');
     await screen.findByText('این مشتری هنوز سرویسی ندارد.');
 
@@ -1732,6 +1763,7 @@ describe("a customer's orders and services", () => {
         denied={false}
       />,
     );
+    await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
 
     const card = (screen.getByText('همهٔ سرویس‌های این مشتری').closest('section') ??

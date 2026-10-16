@@ -9,6 +9,8 @@ import {
 } from '../../apps/web/src/pages/customer-360-crm';
 import type { Tone } from '../../apps/web/src/ui/kit';
 import { customer, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
+import { openC360Tab } from './c360-helpers';
 
 /**
  * Customer notes and tags in the Web Admin (program §8), rendered against the shapes the
@@ -102,7 +104,13 @@ describe('the customer list tag filter', () => {
         denied={false}
       />,
     );
-    const select = (await screen.findByLabelText('برچسب')) as HTMLSelectElement;
+    await screen.findByText(customer().telegramUserId as string);
+    // The catalogue answers after the list; the tag filter joins the panel once it has.
+    await waitFor(() => {
+      openFilterPanel();
+      expect(screen.getByLabelText('برچسب')).toBeInTheDocument();
+    });
+    const select = screen.getByLabelText('برچسب') as HTMLSelectElement;
     const options = within(select)
       .getAllByRole('option')
       .map((option) => option.textContent);
@@ -212,7 +220,11 @@ describe('Customer 360 — notes and tags', () => {
       ]),
     );
     renderPage(<CustomerCrmSection customerId={ID} {...ALL} />);
-    const picker = (await screen.findByLabelText('افزودن برچسب')) as HTMLSelectElement;
+    // W3: the card header's button opens the assignment dialog.
+    fireEvent.click(await screen.findByRole('button', { name: 'افزودن برچسب' }));
+    const dialog = screen.getByRole('dialog', { name: 'افزودن برچسب' });
+    const picker = within(dialog).getByLabelText('افزودن برچسب') as HTMLSelectElement;
+    expect(within(dialog).getByRole('button', { name: 'افزودن' })).toBeDisabled();
     await waitFor(() =>
       expect(
         within(picker)
@@ -221,7 +233,7 @@ describe('Customer 360 — notes and tags', () => {
       ).toEqual(['یک برچسب انتخاب کنید', 'پرریسک']),
     );
     fireEvent.change(picker, { target: { value: RISK } });
-    fireEvent.click(screen.getByRole('button', { name: 'افزودن' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'افزودن' }));
     await waitFor(() =>
       expect(
         api.calls.some((call) => call.method === 'POST' && call.url.endsWith(`/users/${ID}/tags`)),
@@ -271,7 +283,11 @@ describe('Customer 360 — notes and tags', () => {
       ]),
     );
     renderPage(<CustomerCrmSection customerId={ID} {...ALL} />);
-    const field = (await screen.findByLabelText('یادداشت تازه')) as HTMLTextAreaElement;
+    // W3: the card header's button opens the note dialog.
+    fireEvent.click(await screen.findByRole('button', { name: 'یادداشت تازه' }));
+    const field = within(screen.getByRole('dialog')).getByLabelText(
+      'یادداشت تازه',
+    ) as HTMLTextAreaElement;
     const add = screen.getByRole('button', { name: 'ثبت یادداشت' });
     fireEvent.change(field, { target: { value: '   ' } });
     expect((add as HTMLButtonElement).disabled).toBe(true);
@@ -289,7 +305,7 @@ describe('Customer 360 — notes and tags', () => {
     expect(typeof post.body['idempotencyKey']).toBe('string');
   });
 
-  it('is part of the customer page, with its own entry in the section list', async () => {
+  it('is part of the customer page, in its own «یادداشت و برچسب» tab', async () => {
     stubApi([{ url: `/users/${ID}`, body: { customer: customer() } }, ...crmRoutes()]);
     const { container } = renderPage(
       <UserDetailPage
@@ -308,10 +324,11 @@ describe('Customer 360 — notes and tags', () => {
         denied={false}
       />,
     );
+    // Not drawn until its tab is chosen (W2): only the open tab is rendered.
+    await screen.findByRole('tablist');
+    expect(container.querySelector('#c360-crm')).toBeNull();
+    await openC360Tab('crm');
     await screen.findByText(/قول تمدید داد/);
-    expect(container.querySelector('a[href="#c360-crm"]')?.textContent).toBe(
-      'یادداشت‌ها و برچسب‌ها',
-    );
     expect(container.querySelector('#c360-crm')).not.toBeNull();
   });
 });

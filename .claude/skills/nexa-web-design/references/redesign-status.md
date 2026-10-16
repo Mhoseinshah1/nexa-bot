@@ -1,10 +1,10 @@
 # Web Admin redesign — status
 
-| Field              | Value                                                                                     |
-| ------------------ | ----------------------------------------------------------------------------------------- |
-| State              | **APPROVED** — the owner approved the Web Admin demo (`nexa-admin-demo-polish.html`)      |
-| Since              | 2026-10-16 (owner instruction; previously paused since 2026-10-12)                        |
-| Approved reference | the owner's implementation pack (demo + `spec/*.md`); kept OUTSIDE the repository         |
+| Field              | Value                                                                                          |
+| ------------------ | ---------------------------------------------------------------------------------------------- |
+| State              | **APPROVED** — the owner approved the Web Admin demo (`nexa-admin-demo-polish.html`)           |
+| Since              | 2026-10-16 (owner instruction; previously paused since 2026-10-12)                             |
+| Approved reference | the owner's implementation pack (demo + `spec/*.md`); kept OUTSIDE the repository              |
 | Allowed now        | the changes the pack's specs list (W1–W6), implemented on `feat/web-admin-demo-implementation` |
 
 ## What the approved reference covers (2026-10-16)

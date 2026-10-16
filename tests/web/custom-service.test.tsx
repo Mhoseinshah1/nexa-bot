@@ -196,6 +196,8 @@ describe('writing a price rule', () => {
     const api = stubApi(routes());
     render();
     await screen.findByText('Bulk volume');
+    // W3: «قاعدهٔ تازه» opens the rule form in a drawer.
+    fireEvent.click(screen.getByRole('button', { name: t('web.custom_service_rule_new_title') }));
 
     fill('10.255', '20', '1500');
     const create = screen.getByRole('button', { name: t('web.custom_service_rule_create') });
@@ -231,6 +233,8 @@ describe('writing a price rule', () => {
     const api = stubApi(routes());
     render();
     await screen.findByText('Bulk volume');
+    // W3: «قاعدهٔ تازه» opens the rule form in a drawer.
+    fireEvent.click(screen.getByRole('button', { name: t('web.custom_service_rule_new_title') }));
     fireEvent.change(input('custom-rule-create-dimension'), { target: { value: 'TIME' } });
 
     for (const bad of ['1.5', '0', '3651']) {
@@ -268,7 +272,7 @@ describe('writing a price rule', () => {
     await screen.findByText('Bulk volume');
     fireEvent.click(within(rowOf('Bulk volume')).getByRole('button', { name: 'ویرایش' }));
     expect(input('custom-rule-edit-minimum').value).toBe('10.25');
-    const card = input('custom-rule-edit-minimum').closest('section') as HTMLElement;
+    const card = input('custom-rule-edit-minimum').closest('[role="dialog"]') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: t('web.rule_save') }));
     expect(
       await within(card).findByText(t('web.custom_service_error_overlap')),
@@ -353,7 +357,7 @@ describe('locations', () => {
     fireEvent.click(offer);
 
     fireEvent.change(input('custom-location-label'), { target: { value: '  🇩🇪 آلمان ' } });
-    const card = input('custom-location-label').closest('section') as HTMLElement;
+    const card = input('custom-location-label').closest('[role="dialog"]') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: t('web.rule_save') }));
 
     await waitFor(() =>
@@ -373,7 +377,7 @@ describe('locations', () => {
     fireEvent.click(within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: 'ویرایش' }));
     expect(input('custom-location-label').value).toBe('🇩🇪 آلمان');
 
-    const card = input('custom-location-label').closest('section') as HTMLElement;
+    const card = input('custom-location-label').closest('[role="dialog"]') as HTMLElement;
     fireEvent.change(input('custom-location-label'), { target: { value: ' ' } });
     expect(within(card).getByRole('button', { name: t('web.rule_save') })).toBeDisabled();
     expect(
@@ -543,56 +547,51 @@ describe('the /custom-service route', () => {
   });
 });
 
-describe('replacing a price rule form that holds unsaved input', () => {
-  it('asks before an edit replaces a new rule being typed', async () => {
+describe('closing a form drawer that holds unsaved input (W3)', () => {
+  const ask = () => screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+  const closeDrawer = () =>
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: t('web.close') }),
+    );
+
+  it('asks before closing a new rule being typed, and opens an edit once discarded', async () => {
     stubApi(routes());
     render();
     await screen.findByText('Bulk volume');
-    const edit = () =>
-      within(rowOf('Bulk volume')).getByRole('button', { name: t('web.rule_edit') });
+    fireEvent.click(screen.getByRole('button', { name: t('web.custom_service_rule_new_title') }));
     fireEvent.change(input('custom-rule-create-label'), { target: { value: 'Starter' } });
 
-    fireEvent.click(edit());
-    fireEvent.click(
-      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
-        'button',
-        { name: t('web.unsaved_stay') },
-      ),
-    );
+    closeDrawer();
+    fireEvent.click(within(ask()).getByRole('button', { name: t('web.unsaved_stay') }));
     expect(input('custom-rule-create-label').value).toBe('Starter');
 
-    fireEvent.click(edit());
-    fireEvent.click(
-      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
-        'button',
-        { name: t('web.discard') },
-      ),
-    );
-    await waitFor(() =>
-      expect(document.getElementById('custom-rule-edit-dimension')).not.toBeNull(),
-    );
-    expect(document.getElementById('custom-rule-create-label')).toBeNull();
+    closeDrawer();
+    fireEvent.click(within(ask()).getByRole('button', { name: t('web.discard') }));
+    await waitFor(() => expect(document.getElementById('custom-rule-create-label')).toBeNull());
+    fireEvent.click(within(rowOf('Bulk volume')).getByRole('button', { name: t('web.rule_edit') }));
+    expect(document.getElementById('custom-rule-edit-dimension')).not.toBeNull();
   });
-});
 
-describe('replacing a location form that holds unsaved input', () => {
-  it('asks before a row replaces a location being typed, and not once it is clean', async () => {
+  it('asks before closing a location being typed, and not once it is clean', async () => {
     stubApi(routes({ locations: [location()] }));
     render();
     await screen.findByText('🇩🇪 آلمان');
     const edit = () => within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: t('web.rule_edit') });
-    const ask = () => screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    expect(document.getElementById('custom-location-label')).toBeNull();
+    fireEvent.click(edit());
     fireEvent.change(input('custom-location-label'), { target: { value: 'پیش‌نویس' } });
 
-    fireEvent.click(edit());
+    closeDrawer();
     fireEvent.click(within(ask()).getByRole('button', { name: t('web.unsaved_stay') }));
     expect(input('custom-location-label').value).toBe('پیش‌نویس');
 
-    fireEvent.click(edit());
+    closeDrawer();
     fireEvent.click(within(ask()).getByRole('button', { name: t('web.discard') }));
-    await waitFor(() => expect(input('custom-location-label').value).toBe('🇩🇪 آلمان'));
-    // The same row again, untouched: nothing to ask.
+    await waitFor(() => expect(document.getElementById('custom-location-label')).toBeNull());
+    // The same row again, untouched: closing asks nothing.
     fireEvent.click(edit());
+    expect(input('custom-location-label').value).toBe('🇩🇪 آلمان');
+    closeDrawer();
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });

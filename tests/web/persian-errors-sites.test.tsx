@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { settingDraftProblems } from '../../apps/web/src/setting-checks';
@@ -7,6 +7,7 @@ import { settingPresentation } from '../../apps/web/src/settings-presentation';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, renderPage, setting, stubApi } from './harness';
+import { openWalletDialog } from './c360-helpers';
 
 /**
  * W6, per rewired site: a `request.invalid`, an unmapped 4xx and a 5xx all render Persian,
@@ -81,20 +82,21 @@ function renderWallet(refusal?: { status: number; error: Record<string, unknown>
 describe('Customer 360 wallet adjustment', () => {
   it('refuses letters in the amount in Persian, before anything is sent', async () => {
     const api = renderWallet();
+    const dialog = await openWalletDialog('CREDIT');
     const amount = await screen.findByLabelText(t('web.wallet_adjust_amount'));
     fireEvent.change(amount, { target: { value: '12abc' } });
     expect(
       await screen.findByText('مبلغ باید یک عدد صحیح بزرگ‌تر از صفر باشد.'),
     ).toBeInTheDocument();
-    const credit = screen.getByRole('button', { name: t('web.wallet_credit') });
+    const credit = within(dialog).getByRole('button', { name: t('web.wallet_credit') });
     expect(credit).toBeDisabled();
     fireEvent.click(credit);
     expect(api.calls.some((call) => call.url.includes('/wallet/adjust'))).toBe(false);
 
     fireEvent.change(amount, { target: { value: '0' } });
-    expect(screen.getByRole('button', { name: t('web.wallet_credit') })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: t('web.wallet_credit') })).toBeDisabled();
     fireEvent.change(amount, { target: { value: '5000' } });
-    expect(screen.getByRole('button', { name: t('web.wallet_credit') })).not.toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: t('web.wallet_credit') })).not.toBeDisabled();
     expect(screen.queryByText('مبلغ باید یک عدد صحیح بزرگ‌تر از صفر باشد.')).toBeNull();
   });
 
@@ -128,10 +130,11 @@ describe('Customer 360 wallet adjustment', () => {
     'says %s in Persian, with the code and correlation id LTR',
     async (_, status, error, key) => {
       renderWallet({ status, error });
+      const dialog = await openWalletDialog('CREDIT');
       fireEvent.change(await screen.findByLabelText(t('web.wallet_adjust_amount')), {
         target: { value: '5000' },
       });
-      fireEvent.click(screen.getByRole('button', { name: t('web.wallet_credit') }));
+      fireEvent.click(within(dialog).getByRole('button', { name: t('web.wallet_credit') }));
       const banner = await screen.findByText(t(key));
       expect(banner).toBeInTheDocument();
       expect(screen.getByText('corr-w6')).toHaveAttribute('dir', 'ltr');
@@ -145,7 +148,9 @@ describe('Customer 360 wallet adjustment', () => {
         expect(raw.closest('details')).not.toBeNull();
       }
       await waitFor(() =>
-        expect(screen.getByRole('button', { name: t('web.wallet_credit') })).not.toBeDisabled(),
+        expect(
+          within(dialog).getByRole('button', { name: t('web.wallet_credit') }),
+        ).not.toBeDisabled(),
       );
     },
   );

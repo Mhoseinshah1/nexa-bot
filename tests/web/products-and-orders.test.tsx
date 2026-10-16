@@ -6,6 +6,8 @@ import { catalogueGap, ProductDetailPage, ProductsPage } from '../../apps/web/sr
 import { OrderDetailPage, OrdersPage } from '../../apps/web/src/pages/orders';
 import { resolve } from '../../apps/web/src/app';
 import { categoryListing, order, panel, product, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Products and Orders, rendered against the shapes the server actually returns.
@@ -556,6 +558,7 @@ describe('the order list', () => {
     stubApi(orderList([order()]));
     renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
     await screen.findByText('پلن یک‌ماهه');
+    openFilterPanel();
 
     // `PAID` and `REFUNDED` need a payment. The filter offers them because an operator
     // who filters for "paid" and sees nothing has been told something true, while a
@@ -666,14 +669,13 @@ describe('the order list', () => {
   });
 
   /** Owner revisions 3, 6 and 11, which used to be recorded on the planned orders page. */
-  it('records the needs-attention, history and shared-projection rules', async () => {
+  it('no longer draws the «two endings» and future-rules cards (W5)', async () => {
     stubApi(orderList([order()]));
     const { container } = renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
     await screen.findByText('پلن یک‌ماهه');
     const text = container.textContent ?? '';
-    expect(text).toContain('نیازمند توجه');
-    expect(text).toContain('تاریخچهٔ واقعی سفارش');
-    expect(text).toContain('پروجکشن مشترک');
+    expect(text).not.toContain(t('web.orders_scope_title'));
+    expect(text).not.toContain('پروجکشن مشترک');
   });
 });
 
@@ -941,7 +943,7 @@ describe('the order detail', () => {
    * anyone's word for, and confirming a transfer happens on the payments page where the
    * evidence and the reviewer are recorded with it.
    */
-  it('says the order is waiting, and that this page has no mark-paid button', async () => {
+  it('says the order is waiting and where it is paid, and draws no mark-paid button', async () => {
     const { container } = detail({
       state: 'AWAITING_PAYMENT',
       confirmedAt: '2026-09-10T12:35:00.000Z',
@@ -949,8 +951,9 @@ describe('the order detail', () => {
     });
     expect(await screen.findByText('این سفارش منتظر پرداخت است')).toBeInTheDocument();
     const text = container.textContent ?? '';
-    expect(text).toContain('دکمهٔ «پرداخت شد» وجود ندارد');
     expect(text).toContain('صفحهٔ پرداخت‌ها');
+    // W5: the sentence no longer narrates the absent button.
+    expect(text).not.toContain('وجود ندارد');
     // And it does not, in fact, draw one.
     const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim());
     expect(labels).not.toContain('پرداخت شد');
