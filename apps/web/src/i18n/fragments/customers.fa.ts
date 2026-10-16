@@ -121,6 +121,7 @@ export const WEB_FA_CUSTOMERS_RETIRED: readonly string[] = [
   'web.c360_points_absent',
   'web.c360_terms_unavailable',
   'web.wallet_adjust_title',
+  'web.extra_devices_no_capable_panel',
   // W5: «دو پایان ممکن» and the future-rules card on /orders and /orders/:id.
   'web.orders_scope_title',
   'web.orders_scope_body',

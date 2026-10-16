@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { Drawer } from '../ui/overlays';
+import { useConfirmedClose } from '../ui/unsaved';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DEVICE_ADDON_MAX_QUANTITY,
@@ -40,7 +42,7 @@ import {
   type Column,
   LIST_PAGE_SIZE,
 } from '../ui/kit';
-import { SaveBar, revealField } from './editor-layout';
+import { SaveBar } from './editor-layout';
 
 /**
  * Extra users / devices (WP-A5) — the per-user rate a customer is charged for more
@@ -190,6 +192,8 @@ export function ExtraDevicesPage({
 
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  // W2: the editor is a drawer the head's «افزودن» and a row's «ویرایش» open — no scroll.
+  const [open, setOpen] = useState(false);
   const rows = rates.data?.addons ?? [];
   const editedRow = editing === null ? undefined : rows.find((row) => row.id === editing);
   const dirty =
@@ -211,6 +215,11 @@ export function ExtraDevicesPage({
   const reset = () => {
     setEditing(null);
     setForm(EMPTY_FORM);
+  };
+  const close = () => {
+    reset();
+    setOpen(false);
+    save.reset();
   };
   const refresh = () => {
     void queries.invalidateQueries({ queryKey: ['service-addons'] });
@@ -243,6 +252,7 @@ export function ExtraDevicesPage({
       submission.settle();
       notify({ tone: 'ok', message: t('web.extra_devices_saved') });
       reset();
+      setOpen(false);
       refresh();
     },
     onError: (error) => submission.settleOn(error),
@@ -263,7 +273,7 @@ export function ExtraDevicesPage({
   });
 
   const busy = save.isPending || toggle.isPending;
-  const failure = save.error ?? toggle.error;
+  const { requestClose, dialog: closeDialog } = useConfirmedClose(dirty, close);
 
   const columns: readonly Column<ServiceAddonSummaryResponse>[] = [
     {
@@ -324,7 +334,7 @@ export function ExtraDevicesPage({
                 discard.confirmDiscard(() => {
                   setEditing(row.id);
                   setForm(formOf(row));
-                  revealField('xd-title');
+                  setOpen(true);
                 })
               }
             >
@@ -364,7 +374,7 @@ export function ExtraDevicesPage({
                   onClick={() =>
                     discard.confirmDiscard(() => {
                       reset();
-                      revealField('xd-title');
+                      setOpen(true);
                     })
                   }
                 >
@@ -375,9 +385,8 @@ export function ExtraDevicesPage({
           : {})}
       />
 
-      {CAPABLE_PROVIDERS.length === 0 ? (
-        <Banner tone="warn">{t('web.extra_devices_no_capable_panel')}</Banner>
-      ) : (
+      {/* W5: no «none supports it in this version» note; the panel select says it per panel. */}
+      {CAPABLE_PROVIDERS.length > 0 && (
         <Banner tone="info">
           {t('web.extra_devices_capable_panels').replace(
             '{providers}',
@@ -385,6 +394,7 @@ export function ExtraDevicesPage({
           )}
         </Banner>
       )}
+      {toggle.error !== null && <Banner tone="danger">{messageFor(toggle.error)}</Banner>}
 
       <div className="stack">
         <StateSwitch
@@ -428,13 +438,15 @@ export function ExtraDevicesPage({
         </StateSwitch>
 
         {mayEdit && (
-          <Card
+          <Drawer
+            open={open}
+            onClose={requestClose}
+            wide
             title={t(editing === null ? 'web.extra_devices_new' : 'web.extra_devices_editing')}
-            hint={t('web.extra_devices_form_hint')}
             foot={
               <SaveBar dirty={dirty}>
                 {editing !== null && (
-                  <Button size="sm" disabled={busy} onClick={reset}>
+                  <Button size="sm" disabled={busy} onClick={requestClose}>
                     {t('web.extra_devices_cancel_edit')}
                   </Button>
                 )}
@@ -450,7 +462,8 @@ export function ExtraDevicesPage({
               </SaveBar>
             }
           >
-            <div className="form-grid c3">
+            <p className="muted small">{t('web.extra_devices_form_hint')}</p>
+            <div className="form-grid">
               <Field label={t('web.extra_devices_rate_title')} htmlFor="xd-title">
                 <input
                   id="xd-title"
@@ -548,11 +561,12 @@ export function ExtraDevicesPage({
             {(panels.isError || products.isError) && (
               <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
             )}
-            {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
-          </Card>
+            {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          </Drawer>
         )}
       </div>
       {discard.dialog}
+      {closeDialog}
     </>
   );
 }
