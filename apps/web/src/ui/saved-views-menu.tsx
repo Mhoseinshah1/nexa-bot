@@ -7,8 +7,10 @@ import {
   useState,
   type FormEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { t } from '../i18n/web.fa';
 import { Icon } from './icons';
+import { useLayer } from './layer';
 import { Drawer, Modal, useFocusTrap } from './overlays';
 import { Button, Checkbox, Field, Input, useToast } from './kit';
 import {
@@ -73,7 +75,6 @@ export function SavedViewsMenu({ registration }: { registration: SavedViewsRegis
   const [saving, setSaving] = useState(false);
   const [managing, setManaging] = useState(false);
   const [lastApplied, setLastApplied] = useState<string | null>(null);
-  const wrap = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panelId = useId();
 
@@ -105,14 +106,7 @@ export function SavedViewsMenu({ registration }: { registration: SavedViewsRegis
     }
   });
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDown = (event: MouseEvent) => {
-      if (wrap.current !== null && !wrap.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+  const layer = useLayer(open, () => setOpen(false));
 
   const apply = (state: ViewState, viewId: string | null) => {
     setLastApplied(viewId);
@@ -121,7 +115,11 @@ export function SavedViewsMenu({ registration }: { registration: SavedViewsRegis
   };
 
   return (
-    <div ref={wrap} className={`saved-views${open ? ' open' : ''}`} data-page={registration.page}>
+    <div
+      ref={layer.inside}
+      className={`saved-views${open ? ' open' : ''}`}
+      data-page={registration.page}
+    >
       <button
         ref={trigger}
         type="button"
@@ -141,39 +139,43 @@ export function SavedViewsMenu({ registration }: { registration: SavedViewsRegis
         )}
         <Icon name="chevron" size={12} />
       </button>
-      {open && (
-        <SavedViewsDropdown
-          id={panelId}
-          views={views}
-          presets={presets.map((preset) => ({
-            id: preset.id,
-            name: t(preset.name),
-            state: preset.state,
-          }))}
-          isActive={(state) => sameViewState(empty, current, { ...empty, ...state })}
-          canSave={canSave}
-          updatable={changed ? last : undefined}
-          onApply={apply}
-          onClear={() => apply(empty, null)}
-          onSave={() => {
-            setOpen(false);
-            setSaving(true);
-          }}
-          onUpdate={(view) => {
-            replace(updateViewState(views, view.id, normalizeViewState(empty, current)));
-            setOpen(false);
-            notify({
-              tone: 'ok',
-              message: t('web.saved_views_updated').replace('{name}', view.name),
-            });
-          }}
-          onManage={() => {
-            setOpen(false);
-            setManaging(true);
-          }}
-          onClose={() => setOpen(false)}
-        />
-      )}
+      {open &&
+        createPortal(
+          <div ref={layer.inside} className="saved-views-layer">
+            <SavedViewsDropdown
+              id={panelId}
+              views={views}
+              presets={presets.map((preset) => ({
+                id: preset.id,
+                name: t(preset.name),
+                state: preset.state,
+              }))}
+              isActive={(state) => sameViewState(empty, current, { ...empty, ...state })}
+              canSave={canSave}
+              updatable={changed ? last : undefined}
+              onApply={apply}
+              onClear={() => apply(empty, null)}
+              onSave={() => {
+                setOpen(false);
+                setSaving(true);
+              }}
+              onUpdate={(view) => {
+                replace(updateViewState(views, view.id, normalizeViewState(empty, current)));
+                setOpen(false);
+                notify({
+                  tone: 'ok',
+                  message: t('web.saved_views_updated').replace('{name}', view.name),
+                });
+              }}
+              onManage={() => {
+                setOpen(false);
+                setManaging(true);
+              }}
+              onClose={() => setOpen(false)}
+            />
+          </div>,
+          document.body,
+        )}
       {saving && (
         <SaveViewDialog
           onClose={() => setSaving(false)}

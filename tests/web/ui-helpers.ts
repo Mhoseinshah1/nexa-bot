@@ -71,7 +71,11 @@ export function setDateField(field: HTMLElement, value: string): void {
   const mode = trigger.getAttribute('data-date-field');
   if (value === '') {
     const clear = trigger.parentElement?.querySelector<HTMLElement>('.date-field-clear');
-    if (clear !== null && clear !== undefined) fireEvent.click(clear);
+    // No × means the field is already empty or disabled: clearing it would prove nothing.
+    if (clear === null || clear === undefined) {
+      throw new Error('setDateField: there is nothing to clear (empty or disabled field)');
+    }
+    fireEvent.click(clear);
     return;
   }
   const pop = popoverOf(trigger);
