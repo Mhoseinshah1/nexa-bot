@@ -220,7 +220,11 @@ describe('Customer 360 — notes and tags', () => {
       ]),
     );
     renderPage(<CustomerCrmSection customerId={ID} {...ALL} />);
-    const picker = (await screen.findByLabelText('افزودن برچسب')) as HTMLSelectElement;
+    // W3: the card header's button opens the assignment dialog.
+    fireEvent.click(await screen.findByRole('button', { name: 'افزودن برچسب' }));
+    const dialog = screen.getByRole('dialog', { name: 'افزودن برچسب' });
+    const picker = within(dialog).getByLabelText('افزودن برچسب') as HTMLSelectElement;
+    expect(within(dialog).getByRole('button', { name: 'افزودن' })).toBeDisabled();
     await waitFor(() =>
       expect(
         within(picker)
@@ -229,7 +233,7 @@ describe('Customer 360 — notes and tags', () => {
       ).toEqual(['یک برچسب انتخاب کنید', 'پرریسک']),
     );
     fireEvent.change(picker, { target: { value: RISK } });
-    fireEvent.click(screen.getByRole('button', { name: 'افزودن' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'افزودن' }));
     await waitFor(() =>
       expect(
         api.calls.some((call) => call.method === 'POST' && call.url.endsWith(`/users/${ID}/tags`)),
@@ -279,7 +283,11 @@ describe('Customer 360 — notes and tags', () => {
       ]),
     );
     renderPage(<CustomerCrmSection customerId={ID} {...ALL} />);
-    const field = (await screen.findByLabelText('یادداشت تازه')) as HTMLTextAreaElement;
+    // W3: the card header's button opens the note dialog.
+    fireEvent.click(await screen.findByRole('button', { name: 'یادداشت تازه' }));
+    const field = within(screen.getByRole('dialog')).getByLabelText(
+      'یادداشت تازه',
+    ) as HTMLTextAreaElement;
     const add = screen.getByRole('button', { name: 'ثبت یادداشت' });
     fireEvent.change(field, { target: { value: '   ' } });
     expect((add as HTMLButtonElement).disabled).toBe(true);

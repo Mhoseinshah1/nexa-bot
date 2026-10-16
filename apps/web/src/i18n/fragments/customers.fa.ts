@@ -64,6 +64,8 @@ const CUSTOMERS_NEW = {
   'web.c360_wallet_debit_open': 'برداشت از کیف پول',
   'web.c360_trial_set_open': 'ثبت سقف اختصاصی',
   'web.c360_trial_remove_open': 'حذف سقف اختصاصی',
+  'web.crm_tag_add_open': 'افزودن برچسب',
+  'web.crm_note_open': 'یادداشت تازه',
   // W5 why one service refused the suspend-all / resume-all.
   'web.c360_toggle_refused_not_allowed': 'این کار در وضعیت فعلی سرویس ممکن نیست',
   'web.c360_toggle_refused_in_progress': 'یک عملیات از همین نوع در جریان است',

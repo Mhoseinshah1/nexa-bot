@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { FormDialog } from './form-dialog';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_NOTE_MAX_LENGTH,
@@ -40,7 +41,6 @@ import {
   Textarea,
   useConfirmedClose,
   useToast,
-  useUnsavedChanges,
 } from '../ui/kit';
 
 /**
@@ -160,6 +160,8 @@ function CustomerTagsCard({
   const submission = useSubmissionKey();
   const [choice, setChoice] = useState('');
   const [managing, setManaging] = useState(false);
+  // W3: the assignment is a dialog opened from the card's header.
+  const [adding, setAdding] = useState(false);
   const tags = useQuery({
     queryKey: ['customer-tags', customerId],
     queryFn: () => fetchCustomerTags(customerId),
@@ -179,6 +181,7 @@ function CustomerTagsCard({
       if (!response.changed) notify({ tone: 'info', message: t('web.crm_unchanged') });
       queries.setQueryData(['customer-tags', customerId], { tags: response.tags });
       setChoice('');
+      setAdding(false);
       // A tag moves this customer in and out of the list's tag filter.
       void queries.invalidateQueries({ queryKey: ['customers'] });
       void queries.invalidateQueries({ queryKey: ['customer-timeline', customerId] });
@@ -198,10 +201,19 @@ function CustomerTagsCard({
       title={t('web.crm_tags_title')}
       hint={t('web.crm_tags_hint')}
       actions={
-        mayManage ? (
-          <Button size="sm" variant="ghost" icon="tag" onClick={() => setManaging(true)}>
-            {t('web.crm_tags_manage')}
-          </Button>
+        mayManage || (mayAssign && offered.length > 0) ? (
+          <>
+            {mayAssign && offered.length > 0 && (
+              <Button size="sm" icon="plus" onClick={() => setAdding(true)}>
+                {t('web.crm_tag_add_open')}
+              </Button>
+            )}
+            {mayManage && (
+              <Button size="sm" variant="ghost" icon="tag" onClick={() => setManaging(true)}>
+                {t('web.crm_tags_manage')}
+              </Button>
+            )}
+          </>
         ) : undefined
       }
     >
@@ -229,39 +241,51 @@ function CustomerTagsCard({
       </StateSwitch>
 
       {mayAssign ? (
-        catalogue.data === undefined ? null : offered.length === 0 ? (
+        catalogue.data !== undefined && offered.length === 0 ? (
           <p className="muted small">{t('web.crm_tags_none_assignable')}</p>
-        ) : (
-          <div className="crm-assign">
-            <Field label={t('web.crm_tag_add_label')} htmlFor={`crm-tag-${customerId}`} compact>
-              <Select
-                id={`crm-tag-${customerId}`}
-                size="sm"
-                value={choice}
-                onChange={(event) => setChoice(event.target.value)}
-              >
-                <option value="">{t('web.crm_tag_add_placeholder')}</option>
-                {offered.map((tag) => (
-                  <option key={tag.id} value={tag.id}>
-                    {tag.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Button
-              size="sm"
-              icon="plus"
-              disabled={choice === '' || write.isPending}
-              onClick={() => write.mutate({ op: 'assign', tagId: choice })}
-            >
-              {t('web.crm_tag_add')}
-            </Button>
-          </div>
-        )
+        ) : null
       ) : (
         <p className="muted small">{t('web.crm_tags_assign_denied')}</p>
       )}
-      {write.error !== null && <Banner tone="danger">{crmMessage(write.error)}</Banner>}
+      {!adding && write.error !== null && <Banner tone="danger">{crmMessage(write.error)}</Banner>}
+
+      <FormDialog
+        open={mayAssign && adding}
+        title={t('web.crm_tag_add_open')}
+        dirty={choice !== ''}
+        onClose={() => {
+          setAdding(false);
+          setChoice('');
+          write.reset();
+        }}
+        foot={
+          <Button
+            size="sm"
+            variant="primary"
+            icon="plus"
+            disabled={choice === '' || write.isPending}
+            onClick={() => write.mutate({ op: 'assign', tagId: choice })}
+          >
+            {t('web.crm_tag_add')}
+          </Button>
+        }
+      >
+        <Field label={t('web.crm_tag_add_label')} htmlFor={`crm-tag-${customerId}`}>
+          <Select
+            id={`crm-tag-${customerId}`}
+            value={choice}
+            onChange={(event) => setChoice(event.target.value)}
+          >
+            <option value="">{t('web.crm_tag_add_placeholder')}</option>
+            {offered.map((tag) => (
+              <option key={tag.id} value={tag.id}>
+                {tag.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {write.error !== null && <Banner tone="danger">{crmMessage(write.error)}</Banner>}
+      </FormDialog>
 
       <TagCatalogueModal open={mayManage && managing} onClose={() => setManaging(false)} />
     </Card>
@@ -285,10 +309,10 @@ function CustomerNotesCard({
   const queries = useQueryClient();
   const submission = useSubmissionKey();
   const [draft, setDraft] = useState('');
+  // W3: a new note is written in a dialog opened from the card's header.
+  const [writing, setWriting] = useState(false);
   const body = draft.trim();
   const tooLong = Array.from(body).length > CUSTOMER_NOTE_MAX_LENGTH;
-  // A note being typed is not lost to a sidebar click.
-  useUnsavedChanges(body !== '');
 
   const notes = useInfiniteQuery({
     queryKey: ['customer-notes', customerId],
@@ -308,6 +332,7 @@ function CustomerNotesCard({
       submission.settle();
       notify({ tone: 'ok', message: t('web.crm_note_added') });
       setDraft('');
+      setWriting(false);
       void queries.invalidateQueries({ queryKey: ['customer-notes', customerId] });
       void queries.invalidateQueries({ queryKey: ['customer-timeline', customerId] });
     },
@@ -317,22 +342,28 @@ function CustomerNotesCard({
   const all = notes.data?.pages.flatMap((page) => page.notes) ?? [];
 
   return (
-    <Card title={t('web.crm_notes_title')} hint={t('web.crm_notes_hint')}>
-      {mayWrite && (
-        <div className="crm-note-form">
-          <Field
-            label={t('web.crm_note_label')}
-            htmlFor={`crm-note-${customerId}`}
-            {...(tooLong ? { error: t('web.crm_note_too_long') } : {})}
-          >
-            <Textarea
-              id={`crm-note-${customerId}`}
-              rows={3}
-              value={draft}
-              aria-invalid={tooLong}
-              onChange={(event) => setDraft(event.target.value)}
-            />
-          </Field>
+    <Card
+      title={t('web.crm_notes_title')}
+      hint={t('web.crm_notes_hint')}
+      actions={
+        mayWrite ? (
+          <Button size="sm" icon="plus" onClick={() => setWriting(true)}>
+            {t('web.crm_note_open')}
+          </Button>
+        ) : undefined
+      }
+    >
+      <FormDialog
+        open={mayWrite && writing}
+        title={t('web.crm_note_open')}
+        // A note being typed is not lost to a close or a sidebar click.
+        dirty={body !== ''}
+        onClose={() => {
+          setWriting(false);
+          setDraft('');
+          add.reset();
+        }}
+        foot={
           <Button
             size="sm"
             variant="primary"
@@ -341,9 +372,23 @@ function CustomerNotesCard({
           >
             {t('web.crm_note_add')}
           </Button>
-          {add.error !== null && <Banner tone="danger">{crmMessage(add.error)}</Banner>}
-        </div>
-      )}
+        }
+      >
+        <Field
+          label={t('web.crm_note_label')}
+          htmlFor={`crm-note-${customerId}`}
+          {...(tooLong ? { error: t('web.crm_note_too_long') } : {})}
+        >
+          <Textarea
+            id={`crm-note-${customerId}`}
+            rows={5}
+            value={draft}
+            aria-invalid={tooLong}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        </Field>
+        {add.error !== null && <Banner tone="danger">{crmMessage(add.error)}</Banner>}
+      </FormDialog>
       {!mayView ? (
         <Banner tone="info">{t('web.crm_notes_denied')}</Banner>
       ) : (
