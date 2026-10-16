@@ -3666,15 +3666,14 @@ export function fetchResellerCredit(customerId: string): Promise<ResellerCreditR
 
 export function fetchResellerPurchases(
   customerId: string,
-  query: { cursor?: string } = {},
+  query: { cursor?: string; limit?: number } = {},
 ): Promise<ResellerPurchasePage> {
   const path = RESELLER_ROUTES.purchases(customerId);
-  return authedGet(
-    query.cursor === undefined || query.cursor === ''
-      ? path
-      : `${path}?cursor=${encodeURIComponent(query.cursor)}`,
-    resellerPurchasePageSchema,
-  );
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(suffix ? `${path}?${suffix}` : path, resellerPurchasePageSchema);
 }
 
 export function fetchResellerHistory(customerId: string): Promise<ResellerHistoryResponse> {

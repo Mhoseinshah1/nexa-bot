@@ -17,6 +17,7 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import {
+  LIST_PAGE_SIZE,
   usePagedRows,
   Badge,
   Banner,
@@ -182,7 +183,12 @@ export function ResellerPurchasesCard({
   const cursor = trail[trail.length - 1];
   const purchases = useQuery({
     queryKey: ['reseller-purchases', customerId, cursor ?? null],
-    queryFn: () => fetchResellerPurchases(customerId, cursor === undefined ? {} : { cursor }),
+    // W1.8: ten rows a page, on the same keyset.
+    queryFn: () =>
+      fetchResellerPurchases(customerId, {
+        limit: LIST_PAGE_SIZE,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
     enabled: mayViewOrders,
   });
   const rows = purchases.data?.purchases ?? [];
