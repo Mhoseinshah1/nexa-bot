@@ -30,6 +30,7 @@ import { queryState } from '../view-state';
 import { everyPage } from './extra-devices';
 import { messageFor } from './settings';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -38,7 +39,6 @@ import {
   DataTable,
   Empty,
   Field,
-  FilterBar,
   Input,
   Ltr,
   Money,
@@ -51,7 +51,8 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
-import { Drawer } from '../ui/overlays';
+import { Drawer, Modal } from '../ui/overlays';
+import { ListFilterBar } from '../ui/filter-bar';
 
 /**
  * Mirza migration PR2 — the legacy product review (`docs/legacy-product-review-design.md` §8).
@@ -197,6 +198,8 @@ export function LegacyProductsPage({
     ...(stateFilter !== 'ALL' && stateFilter !== 'ATTENTION' ? { state: stateFilter } : {}),
     ...(search.trim() === '' ? {} : { q: search.trim() }),
     ...(after === undefined ? {} : { after }),
+    // W1.8: ten rows a page, on the same keyset.
+    limit: LIST_PAGE_SIZE,
   };
   const reviews = useQuery({
     queryKey: ['legacy-products', query],
@@ -285,39 +288,61 @@ export function LegacyProductsPage({
       <Banner tone="info" icon="info">
         {t('web.lpr_banner')}
       </Banner>
-      <FilterBar>
-        <Field label={t('web.lpr_col_state')} htmlFor="lpr-state" compact>
-          <Select
-            id="lpr-state"
-            size="sm"
-            value={stateFilter}
-            onChange={(event) => {
-              setStateFilter(event.target.value as StateFilter);
+      <ListFilterBar
+        label={t('web.lpr_title')}
+        search={
+          <Field label={t('web.lpr_search')} htmlFor="lpr-search" compact>
+            <Input
+              id="lpr-search"
+              size="sm"
+              value={search}
+              maxLength={200}
+              placeholder={t('web.lpr_search')}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                resetPaging();
+              }}
+            />
+          </Field>
+        }
+        filters={[
+          {
+            key: 'state',
+            label: t('web.lpr_col_state'),
+            // «نیازمند تصمیم» is the list's default, so it is no active filter.
+            active:
+              stateFilter === 'ATTENTION'
+                ? null
+                : stateFilter === 'ALL'
+                  ? t('web.lpr_filter_all')
+                  : t(LEGACY_PRODUCT_STATE_LABELS[stateFilter]),
+            onClear: () => {
+              setStateFilter('ATTENTION');
               resetPaging();
-            }}
-          >
-            <option value="ATTENTION">{t('web.lpr_filter_attention')}</option>
-            <option value="ALL">{t('web.lpr_filter_all')}</option>
-            {LEGACY_PRODUCT_REVIEW_STATES.map((state) => (
-              <option key={state} value={state}>
-                {t(LEGACY_PRODUCT_STATE_LABELS[state])}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label={t('web.lpr_search')} htmlFor="lpr-search" compact>
-          <Input
-            id="lpr-search"
-            size="sm"
-            value={search}
-            maxLength={200}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              resetPaging();
-            }}
-          />
-        </Field>
-      </FilterBar>
+            },
+            control: (
+              <Select
+                id="lpr-state"
+                size="sm"
+                aria-label={t('web.lpr_col_state')}
+                value={stateFilter}
+                onChange={(event) => {
+                  setStateFilter(event.target.value as StateFilter);
+                  resetPaging();
+                }}
+              >
+                <option value="ATTENTION">{t('web.lpr_filter_attention')}</option>
+                <option value="ALL">{t('web.lpr_filter_all')}</option>
+                {LEGACY_PRODUCT_REVIEW_STATES.map((state) => (
+                  <option key={state} value={state}>
+                    {t(LEGACY_PRODUCT_STATE_LABELS[state])}
+                  </option>
+                ))}
+              </Select>
+            ),
+          },
+        ]}
+      />
       <StateSwitch
         query={reviews}
         denied={denied}
@@ -514,6 +539,8 @@ export function ReviewDetail({
   );
 }
 
+type Asking = 'existing' | 'new' | 'reject' | 'reopen' | null;
+
 function Decisions({
   row,
   mayCreateProduct,
@@ -527,6 +554,8 @@ function Decisions({
   const notify = useToast();
   const submission = useSubmissionKey();
   const [reason, setReason] = useState('');
+  /** Which decision's dialog is open. */
+  const [asking, setAsking] = useState<Asking>(null);
   const [productId, setProductId] = useState('');
   const [title, setTitle] = useState((row.title ?? '').slice(0, PRODUCT_TITLE_MAX_LENGTH));
   const [days, setDays] = useState(row.durationDays === null ? '' : String(row.durationDays));
@@ -547,6 +576,7 @@ function Decisions({
 
   const done = () => {
     submission.settle();
+    setAsking(null);
     notify({ tone: 'ok', message: t('web.lpr_saved') });
     void queries.invalidateQueries({ queryKey: ['legacy-products'] });
   };
@@ -619,22 +649,145 @@ function Decisions({
     title.trim() !== '' && trafficBytes !== null && durationDays !== null && durationDays <= 3650;
   const mayApprove = row.missingSinceReadFingerprint === null && row.sourceConflict === null;
 
+  /*
+   * W3: the decide card is buttons; each decision opens its own dialog with the reason and
+   * the fields it needs, the same rules for when it may be sent, and the refusal said inside
+   * it. A decision that lands closes its dialog.
+   */
+  const reasonField = (
+    <Field label={t('web.lpr_reason')} htmlFor="lpr-reason" hint={t('web.lpr_reason_hint')}>
+      <Input
+        id="lpr-reason"
+        value={reason}
+        maxLength={500}
+        onChange={(event) => setReason(event.target.value)}
+      />
+    </Field>
+  );
+  const fault =
+    decide.error !== null ? (
+      <Banner tone="danger" role="alert">
+        {legacyProductFault(decide.error)}
+      </Banner>
+    ) : null;
+  const close = () => {
+    setAsking(null);
+    decide.reset();
+  };
+  const submitOf = (which: Exclude<Asking, null>) => {
+    if (which === 'existing') {
+      return (
+        <button
+          type="button"
+          className="btn primary sm"
+          disabled={busy || productId === '' || !mayPickProduct}
+          onClick={() => decide.mutate({ kind: 'existing', productId })}
+        >
+          {t('web.lpr_approve_existing')}
+        </button>
+      );
+    }
+    if (which === 'new') {
+      return (
+        <button
+          type="button"
+          className="btn primary sm"
+          disabled={busy || !draftReady || !mayCreateProduct}
+          onClick={() =>
+            trafficBytes !== null &&
+            durationDays !== null &&
+            decide.mutate({
+              kind: 'new',
+              title: title.trim(),
+              durationDays,
+              trafficBytes: trafficBytes.toString(),
+            })
+          }
+        >
+          {t('web.lpr_approve_new')}
+        </button>
+      );
+    }
+    if (which === 'reject') {
+      return (
+        <button
+          type="button"
+          className="btn danger sm"
+          disabled={busy || reason.trim() === ''}
+          onClick={() => decide.mutate({ kind: 'reject' })}
+        >
+          {t('web.lpr_reject')}
+        </button>
+      );
+    }
+    return (
+      <button
+        type="button"
+        className="btn primary sm"
+        disabled={busy || reason.trim() === ''}
+        onClick={() => decide.mutate({ kind: 'reopen' })}
+      >
+        {t('web.lpr_reopen')}
+      </button>
+    );
+  };
+  const TITLES: Readonly<Record<Exclude<Asking, null>, WebKey>> = {
+    existing: 'web.lpr_approve_existing',
+    new: 'web.lpr_approve_new',
+    reject: 'web.lpr_reject',
+    reopen: 'web.lpr_reopen',
+  };
+
   return (
     <Card title={t('web.lpr_decide_title')}>
-      <div className="stack">
-        <Field label={t('web.lpr_reason')} htmlFor="lpr-reason" hint={t('web.lpr_reason_hint')}>
-          <Input
-            id="lpr-reason"
-            value={reason}
-            maxLength={500}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </Field>
-
+      <div className="form-actions">
         {decidable(row.state) && mayApprove && (
-          <div className="ca-decision-part">
-            <h3>{t('web.lpr_approve_existing')}</h3>
-            {mayPickProduct ? (
+          <button type="button" className="btn primary sm" onClick={() => setAsking('existing')}>
+            {t('web.lpr_approve_existing')}
+          </button>
+        )}
+        {decidable(row.state) && mayApprove && (
+          <button type="button" className="btn sm" onClick={() => setAsking('new')}>
+            {t('web.lpr_approve_new')}
+          </button>
+        )}
+        {decidable(row.state) && (
+          <button type="button" className="btn danger sm" onClick={() => setAsking('reject')}>
+            {t('web.lpr_reject')}
+          </button>
+        )}
+        {decided(row.state) && (
+          <button type="button" className="btn sm" onClick={() => setAsking('reopen')}>
+            {t('web.lpr_reopen')}
+          </button>
+        )}
+      </div>
+      {decided(row.state) && approved(row.state) && (
+        <p className="muted small">{t('web.lpr_reopen_hint')}</p>
+      )}
+      {/* A refusal after the dialog closed is still said here. */}
+      {asking === null && fault}
+
+      <Modal
+        open={asking !== null}
+        onClose={close}
+        title={asking === null ? '' : t(TITLES[asking])}
+        {...(asking === 'reject' ? { danger: true } : {})}
+        foot={
+          asking === null ? undefined : (
+            <>
+              <button type="button" className="btn sm" onClick={close}>
+                {t('web.money_cancel')}
+              </button>
+              {submitOf(asking)}
+            </>
+          )
+        }
+      >
+        <div className="stack">
+          {reasonField}
+          {asking === 'existing' &&
+            (mayPickProduct ? (
               <Field label={t('web.lpr_pick_product')} htmlFor="lpr-product">
                 <Select
                   id="lpr-product"
@@ -651,109 +804,48 @@ function Decisions({
               </Field>
             ) : (
               <Banner tone="info">{t('web.lpr_no_catalog_view')}</Banner>
-            )}
-            <div className="form-actions">
-              <button
-                type="button"
-                className="btn primary sm"
-                disabled={busy || productId === ''}
-                onClick={() => decide.mutate({ kind: 'existing', productId })}
-              >
-                {t('web.lpr_approve_existing')}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {decidable(row.state) && mayApprove && (
-          <div className="ca-decision-part">
-            <h3>{t('web.lpr_approve_new')}</h3>
-            <Banner tone="info">{t('web.lpr_draft_explained')}</Banner>
-            {mayCreateProduct ? (
-              <>
-                <Field label={t('web.lpr_draft_title')} htmlFor="lpr-draft-title">
-                  <Input
-                    id="lpr-draft-title"
-                    value={title}
-                    maxLength={PRODUCT_TITLE_MAX_LENGTH}
-                    onChange={(event) => setTitle(event.target.value)}
-                  />
-                </Field>
-                <Field label={t('web.lpr_draft_traffic')} htmlFor="lpr-draft-traffic">
-                  <Input
-                    id="lpr-draft-traffic"
-                    inputMode="decimal"
-                    value={traffic}
-                    onChange={(event) => setTraffic(event.target.value)}
-                  />
-                </Field>
-                <Field label={t('web.lpr_draft_days')} htmlFor="lpr-draft-days">
-                  <Input
-                    id="lpr-draft-days"
-                    inputMode="numeric"
-                    value={days}
-                    onChange={(event) => setDays(event.target.value)}
-                  />
-                </Field>
-                <div className="form-actions">
-                  <button
-                    type="button"
-                    className="btn sm"
-                    disabled={busy || !draftReady}
-                    onClick={() =>
-                      trafficBytes !== null &&
-                      durationDays !== null &&
-                      decide.mutate({
-                        kind: 'new',
-                        title: title.trim(),
-                        durationDays,
-                        trafficBytes: trafficBytes.toString(),
-                      })
-                    }
-                  >
-                    {t('web.lpr_approve_new')}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <Banner tone="info">{t('web.lpr_no_catalog_edit')}</Banner>
-            )}
-          </div>
-        )}
-
-        {decidable(row.state) && (
-          <div className="form-actions">
-            <button
-              type="button"
-              className="btn danger sm"
-              disabled={busy || reason.trim() === ''}
-              onClick={() => decide.mutate({ kind: 'reject' })}
-            >
-              {t('web.lpr_reject')}
-            </button>
-          </div>
-        )}
-
-        {decided(row.state) && (
-          <div className="form-actions">
-            {approved(row.state) && <span className="muted small">{t('web.lpr_reopen_hint')}</span>}
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy || reason.trim() === ''}
-              onClick={() => decide.mutate({ kind: 'reopen' })}
-            >
-              {t('web.lpr_reopen')}
-            </button>
-          </div>
-        )}
-
-        {decide.error !== null && (
-          <Banner tone="danger" role="alert">
-            {legacyProductFault(decide.error)}
-          </Banner>
-        )}
-      </div>
+            ))}
+          {asking === 'new' && (
+            <>
+              <Banner tone="info">{t('web.lpr_draft_explained')}</Banner>
+              {mayCreateProduct ? (
+                <>
+                  <Field label={t('web.lpr_draft_title')} htmlFor="lpr-draft-title">
+                    <Input
+                      id="lpr-draft-title"
+                      value={title}
+                      maxLength={PRODUCT_TITLE_MAX_LENGTH}
+                      onChange={(event) => setTitle(event.target.value)}
+                    />
+                  </Field>
+                  <Field label={t('web.lpr_draft_traffic')} htmlFor="lpr-draft-traffic">
+                    <Input
+                      id="lpr-draft-traffic"
+                      inputMode="decimal"
+                      value={traffic}
+                      onChange={(event) => setTraffic(event.target.value)}
+                    />
+                  </Field>
+                  <Field label={t('web.lpr_draft_days')} htmlFor="lpr-draft-days">
+                    <Input
+                      id="lpr-draft-days"
+                      inputMode="numeric"
+                      value={days}
+                      onChange={(event) => setDays(event.target.value)}
+                    />
+                  </Field>
+                </>
+              ) : (
+                <Banner tone="info">{t('web.lpr_no_catalog_edit')}</Banner>
+              )}
+            </>
+          )}
+          {asking === 'reopen' && approved(row.state) && (
+            <p className="muted small">{t('web.lpr_reopen_hint')}</p>
+          )}
+          {fault}
+        </div>
+      </Modal>
     </Card>
   );
 }
