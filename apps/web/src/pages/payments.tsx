@@ -48,7 +48,7 @@ import {
   reinquirePayment,
   requestRefund,
 } from '../api/client';
-import { formatDecimalText, formatMoneyText, formatTimestamp, splitBytes } from '../format';
+import { formatDecimalText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, staleAfterError } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -57,29 +57,30 @@ import { ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
-import { ChipGroup } from './commerce-parts';
+import { Modal } from '../ui/overlays';
+import { CodeName } from './code-name';
+import { queryChipFilter } from './money-filters';
+import { ListFilterBar } from '../ui/filter-bar';
+import { SavedViewsMenu } from '../ui/saved-views-menu';
+import type { SavedViewsRegistration, ViewState } from '../ui/saved-views';
 import {
   Disclosure,
   Badge,
   Banner,
   Button,
   Card,
-  ChipDivider,
   CopyButton,
   Copyable,
   CursorPager,
   DataTable,
   Empty,
   Field,
-  FilterChip,
-  FilterChips,
   Input,
   KV,
   Ltr,
   Money,
   PageHead,
   StateSwitch,
-  TwoColumn,
   useToast,
   useUnsavedChanges,
   type Column,
@@ -87,6 +88,10 @@ import {
   Num,
 } from '../ui/kit';
 import {
+  PAYMENT_EVIDENCE_KIND_LABELS,
+  PAYMENT_GATEWAY_LABELS,
+  PROVIDER_STATUS_LABELS,
+  providerPaidKey,
   PAYMENT_METHOD_LABELS as METHOD_LABELS,
   PAYMENT_STATE_LABELS as STATE_LABELS,
   PAYMENT_STATE_TONES as STATE_TONES,
@@ -273,14 +278,7 @@ export function TelegramIdentity({
 }
 
 /** The route a payment was offered through, by name, or a dash for a wallet settlement. */
-const GATEWAY_LABELS: Readonly<Record<PaymentGatewayProvider, WebKey>> = {
-  MANUAL_TRANSFER: 'web.payment_gateway_provider_manual_transfer',
-  TONPAYS: 'web.payment_gateway_provider_tonpays',
-  TONPAYS_TELEGRAM: 'web.payment_gateway_provider_tonpays_telegram',
-  TELEGRAM_STARS: 'web.payment_gateway_provider_telegram_stars',
-  NOWPAYMENTS: 'web.payment_gateway_provider_nowpayments',
-  CENTRALPAY: 'web.payment_gateway_provider_centralpay',
-};
+const GATEWAY_LABELS = PAYMENT_GATEWAY_LABELS;
 
 function gatewayLabel(provider: PaymentGatewayProvider): string {
   return t(GATEWAY_LABELS[provider]);
@@ -754,6 +752,45 @@ function ReinquireButton({ paymentId }: { paymentId: string }) {
   );
 }
 
+/** W1.8: the list's page size. */
+export const PAYMENTS_PAGE_SIZE = 10;
+
+/** The URL parameters a saved filter holds on this list: the search and every filter. */
+const PAYMENT_VIEW_KEYS = ['q', 'queue', 'gateway', 'range', 'state', 'method', 'disposition'];
+
+/**
+ * Saved filters (W1.4) on the payments list. A view is the list's filter parameters; applying
+ * one is the same navigation the chips make, and it starts at the first page. The presets are
+ * the approved demo's, in its order.
+ */
+export function paymentsViews(route: Route): SavedViewsRegistration {
+  const empty: ViewState = Object.fromEntries(PAYMENT_VIEW_KEYS.map((key) => [key, '']));
+  return {
+    page: 'payments',
+    empty,
+    get: () =>
+      Object.fromEntries(PAYMENT_VIEW_KEYS.map((key) => [key, route.query.get(key) ?? ''])),
+    set: (state) =>
+      setQueries(route, [
+        ...PAYMENT_VIEW_KEYS.map((key) => [key, state[key] ?? null] as const),
+        ['cursor', null],
+      ]),
+    presets: [
+      {
+        id: 'needs-action',
+        name: 'web.payments_view_needs_action',
+        state: { queue: 'NEEDS_ACTION' },
+      },
+      {
+        id: 'manual-pending',
+        name: 'web.payments_view_manual_pending',
+        state: { method: 'MANUAL_TRANSFER', state: 'PENDING' },
+      },
+      { id: 'unknown', name: 'web.payments_view_unknown', state: { state: 'UNKNOWN' } },
+    ],
+  };
+}
+
 /**
  * The Payment Operations Center (program §10): every payment, every route, with queues for
  * what needs attention. Reached at `/payments`: this list was already the cross-provider
@@ -804,6 +841,8 @@ export function PaymentsPage({
     ],
     queryFn: () =>
       fetchPayments({
+        // W1.8: ten rows a page; the keyset cursor is unchanged.
+        limit: PAYMENTS_PAGE_SIZE,
         ...(cursor === null ? {} : { cursor }),
         ...(state === null ? {} : { state: state as PaymentState }),
         ...(method === null ? {} : { method: method as PaymentMethod }),
@@ -974,134 +1013,89 @@ export function PaymentsPage({
       <PageHead title={t('web.payment_ops_title')} subtitle={t('web.payment_ops_intro')} />
 
       <Card className="ca-list">
-        <ListSearchBox
-          route={route}
-          id="payments-search"
-          // FIX-01: typing or pasting searches by itself, debounced, as on /users.
-          autoApply
-          hint={t('web.payments_search_hint')}
-          hidden={toolbarHidden}
-          // A new search starts at the first page: this list keeps its cursor in the URL.
-          resetKeys={['cursor']}
-        />
-
         <div hidden={toolbarHidden}>
-          <FilterChips label={t('web.payment_ops_queue')}>
-            <FilterChip
-              pressed={queue === null}
-              onClick={() =>
-                setQueries(route, [
-                  ['queue', null],
-                  ['cursor', null],
-                ])
-              }
-            >
-              {t('web.payment_ops_queue_all')}
-            </FilterChip>
-            {QUEUE_ORDER.map((one) => (
-              <FilterChip
-                key={one}
-                pressed={queue === one}
-                {...(counts === null ? {} : { count: counts[one] })}
-                onClick={() =>
-                  setQueries(route, [
-                    ['queue', one],
-                    ['cursor', null],
-                  ])
-                }
-              >
-                {t(QUEUE_LABELS[one])}
-              </FilterChip>
-            ))}
-          </FilterChips>
-          {/* The counts' own failure, said beside the chips rather than drawn over the list —
+          <ListFilterBar
+            label={t('web.payment_ops_title')}
+            search={
+              <ListSearchBox
+                route={route}
+                id="payments-search"
+                // FIX-01: typing or pasting searches by itself, debounced, as on /users.
+                autoApply
+                hint={t('web.payments_search_hint')}
+                hidden={toolbarHidden}
+                // A new search starts at the first page: this list keeps its cursor in the URL.
+                resetKeys={['cursor']}
+              />
+            }
+            filters={[
+              queryChipFilter({
+                route,
+                param: 'queue',
+                label: t('web.payment_ops_queue'),
+                value: queue,
+                allLabel: t('web.payment_ops_queue_all'),
+                items: QUEUE_ORDER.map((one) => ({
+                  id: one,
+                  label: t(QUEUE_LABELS[one]),
+                  ...(counts === null ? {} : { count: counts[one] }),
+                })),
+              }),
+              queryChipFilter({
+                route,
+                param: 'gateway',
+                label: t('web.payment_gateway'),
+                value: gateway,
+                allLabel: t('web.payment_ops_gateway_all'),
+                items: PAYMENT_GATEWAY_PROVIDERS.map((one) => ({
+                  id: one,
+                  label: gatewayLabel(one),
+                })),
+              }),
+              queryChipFilter({
+                route,
+                param: 'range',
+                label: t('web.payment_ops_range'),
+                value: range,
+                allLabel: t('web.payment_ops_range_all'),
+                items: RANGE_LABELS.map(([id, label]) => ({ id, label: t(label) })),
+              }),
+              queryChipFilter({
+                route,
+                param: 'state',
+                label: t('web.payment_state'),
+                value: state as PaymentState | null,
+                allLabel: t('web.payments_filter_all'),
+                items: PAYMENT_STATES.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
+              }),
+              queryChipFilter({
+                route,
+                param: 'method',
+                label: t('web.payment_method'),
+                value: method as PaymentMethod | null,
+                allLabel: t('web.payments_filter_all'),
+                items: PAYMENT_METHODS.map((one) => ({ id: one, label: t(METHOD_LABELS[one]) })),
+              }),
+              queryChipFilter({
+                route,
+                param: 'disposition',
+                label: t('web.payment_disposition'),
+                value: disposition as ReceiptDisposition | null,
+                allLabel: t('web.payments_filter_all'),
+                items: RECEIPT_DISPOSITIONS.map((one) => ({
+                  id: one,
+                  label: t(DISPOSITION_LABELS[one]),
+                })),
+              }),
+            ]}
+            savedViews={<SavedViewsMenu registration={paymentsViews(route)} />}
+          />
+          {/* The counts' own failure, said under the bar rather than drawn over the list —
               including a refresh that failed behind counts still on screen. */}
           {(queryState(attention) === 'error' || staleAfterError(attention)) && (
             <p className="muted small">{t('web.payment_ops_counts_error')}</p>
           )}
           {queue !== null && <p className="muted small">{t(QUEUE_HINTS[queue])}</p>}
-        </div>
-
-        <div className="filter-row" hidden={toolbarHidden}>
-          <ChipGroup
-            label={t('web.payment_gateway')}
-            value={gateway ?? 'ALL'}
-            onChange={(next) =>
-              setQueries(route, [
-                ['gateway', next === 'ALL' ? null : next],
-                ['cursor', null],
-              ])
-            }
-            items={[
-              { id: 'ALL', label: t('web.payment_ops_gateway_all') },
-              ...PAYMENT_GATEWAY_PROVIDERS.map((one) => ({ id: one, label: gatewayLabel(one) })),
-            ]}
-          />
-          <ChipDivider />
-          <ChipGroup
-            label={t('web.payment_ops_range')}
-            value={range ?? 'ALL'}
-            onChange={(next) =>
-              setQueries(route, [
-                ['range', next === 'ALL' ? null : next],
-                ['cursor', null],
-              ])
-            }
-            items={[
-              { id: 'ALL', label: t('web.payment_ops_range_all') },
-              ...RANGE_LABELS.map(([id, label]) => ({ id, label: t(label) })),
-            ]}
-          />
-        </div>
-
-        <div className="filter-row" hidden={toolbarHidden}>
-          <ChipGroup
-            label={t('web.payment_state')}
-            value={state ?? 'ALL'}
-            onChange={(next) =>
-              setQueries(route, [
-                ['state', next === 'ALL' ? null : next],
-                ['cursor', null],
-              ])
-            }
-            items={[
-              { id: 'ALL', label: t('web.payments_filter_all') },
-              ...PAYMENT_STATES.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
-            ]}
-          />
-          <ChipDivider />
-          <ChipGroup
-            label={t('web.payment_method')}
-            value={method ?? 'ALL'}
-            onChange={(next) =>
-              setQueries(route, [
-                ['method', next === 'ALL' ? null : next],
-                ['cursor', null],
-              ])
-            }
-            items={[
-              { id: 'ALL', label: t('web.payments_filter_all') },
-              ...PAYMENT_METHODS.map((one) => ({ id: one, label: t(METHOD_LABELS[one]) })),
-            ]}
-          />
-          <ChipDivider />
-          <ChipGroup
-            label={t('web.payment_disposition')}
-            value={disposition ?? 'ALL'}
-            onChange={(next) =>
-              setQueries(route, [
-                ['disposition', next === 'ALL' ? null : next],
-                ['cursor', null],
-              ])
-            }
-            items={[
-              { id: 'ALL', label: t('web.payments_filter_all') },
-              ...RECEIPT_DISPOSITIONS.map((one) => ({
-                id: one,
-                label: t(DISPOSITION_LABELS[one]),
-              })),
-            ]}
-          />
         </div>
         <p className="muted small ca-list-note" hidden={toolbarHidden}>
           {t('web.payment_ops_no_force_paid')}
@@ -1328,6 +1322,9 @@ function RefundsCard({
   const [reason, setReason] = useState('');
   /** Which AWAITING_EXTERNAL refund the operator is answering, and with what. */
   const [answering, setAnswering] = useState<string | null>(null);
+  /** Which answer's dialog is open for `answering`; the request has its own. */
+  const [answerKind, setAnswerKind] = useState<'complete' | 'abandon' | null>(null);
+  const [issueOpen, setIssueOpen] = useState(false);
   const [note, setNote] = useState('');
   const [externalReference, setExternalReference] = useState('');
 
@@ -1406,6 +1403,7 @@ function RefundsCard({
       notify({ tone: 'ok', message: t('web.refund_requested') });
       setAmount('');
       setReason('');
+      setIssueOpen(false);
       refresh(response);
     },
     /*
@@ -1437,6 +1435,7 @@ function RefundsCard({
       completion.settle();
       notify({ tone: 'ok', message: t('web.refund_completed') });
       setAnswering(null);
+      setAnswerKind(null);
       setNote('');
       setExternalReference('');
       refresh(response);
@@ -1461,6 +1460,7 @@ function RefundsCard({
       abandonment.settle();
       notify({ tone: 'ok', message: t('web.refund_failed_done') });
       setAnswering(null);
+      setAnswerKind(null);
       setNote('');
       setExternalReference('');
       refresh(response);
@@ -1486,6 +1486,22 @@ function RefundsCard({
   const issueFormShown = data !== undefined && data.refundable && remaining > 0n && mayIssue;
   const answerFormShown =
     mayIssue && answering !== null && awaiting.some((row) => row.id === answering);
+  const answeredRow = awaiting.find((row) => row.id === answering);
+
+  /**
+   * Opens one answer's dialog for one awaiting refund. Choosing ANOTHER refund starts a new
+   * note: what was typed was about the refund it was typed for.
+   */
+  const openAnswer = (refundId: string, kind: 'complete' | 'abandon') => {
+    if (refundId !== answering) {
+      setNote('');
+      setExternalReference('');
+      complete.reset();
+      abandon.reset();
+    }
+    setAnswering(refundId);
+    setAnswerKind(kind);
+  };
 
   // A typed refund or answer is lost by navigating away; the guard asks first.
   useUnsavedChanges(
@@ -1550,6 +1566,25 @@ function RefundsCard({
       render: (row) =>
         row.externalReference === null ? <Dash /> : <Ltr>{row.externalReference}</Ltr>,
     },
+    ...(mayIssue && awaiting.length > 0
+      ? [
+          {
+            key: 'answer',
+            header: t('web.refund_answer_column'),
+            render: (row: RefundView) =>
+              row.state === 'AWAITING_EXTERNAL' ? (
+                <span className="nowrap">
+                  <Button size="sm" onClick={() => openAnswer(row.id, 'complete')}>
+                    {t('web.refund_complete')}
+                  </Button>{' '}
+                  <Button size="sm" variant="danger" onClick={() => openAnswer(row.id, 'abandon')}>
+                    {t('web.refund_abandon')}
+                  </Button>
+                </span>
+              ) : null,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -1618,156 +1653,197 @@ function RefundsCard({
               />
             )}
 
-            {data.refundable && remaining > 0n && (
-              <div className="ca-decision-part">
-                <h3 className="ca-subhead">{t('web.refund_request_title')}</h3>
-                <p className="muted small">{t('web.refund_request_hint')}</p>
-                {mayIssue ? (
-                  <>
-                    <div className="form-grid">
-                      <Field label={t('web.refund_amount_minor')} htmlFor="refund-amount">
-                        <span className="ca-inline-control">
-                          <Input
-                            id="refund-amount"
-                            size="sm"
-                            dir="ltr"
-                            value={amount}
-                            inputMode="numeric"
-                            maxLength={19}
-                            onChange={(event) => setAmount(event.target.value)}
-                          />
-                          {/* The server's own remaining figure, not one computed here. */}
-                          <Button size="sm" onClick={() => setAmount(data.refundableMinor)}>
-                            {t('web.refund_amount_all')}
-                          </Button>
-                        </span>
-                      </Field>
-                      <Field label={t('web.refund_reason')} htmlFor="refund-reason">
-                        <Input
-                          id="refund-reason"
-                          size="sm"
-                          value={reason}
-                          maxLength={500}
-                          onChange={(event) => setReason(event.target.value)}
-                        />
-                      </Field>
-                    </div>
-                    <div className="form-actions">
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        disabled={
-                          issue.isPending || digitsOf(amount) === '0' || reason.trim().length < 3
-                        }
-                        onClick={() => issue.mutate()}
-                      >
-                        {t('web.refund_request')}
-                      </Button>
-                    </div>
-                  </>
-                ) : (
-                  // No disabled button: a disabled control and this sentence make the
-                  // same claim, and only one of them names the permission.
-                  <Banner tone="info">{t('web.refund_denied')}</Banner>
-                )}
-              </div>
-            )}
+            {/*
+              W3: the request is a button that opens a dialog with the same fields, hint,
+              figures and rules; what was typed is kept while the dialog is closed. Without
+              `refunds.issue` the sentence naming the permission stays on the card.
+            */}
+            {data.refundable &&
+              remaining > 0n &&
+              (mayIssue ? (
+                <div className="form-actions">
+                  <Button variant="primary" size="sm" onClick={() => setIssueOpen(true)}>
+                    {t('web.refund_request_title')}
+                  </Button>
+                </div>
+              ) : (
+                // No disabled button: a disabled control and this sentence make the
+                // same claim, and only one of them names the permission.
+                <Banner tone="info">{t('web.refund_denied')}</Banner>
+              ))}
 
             {/*
-              OUTSIDE the form, on purpose. A refusal re-reads the ledger, and for
-              DELIVERY_IN_PROGRESS the server then answers `refundable: false` — which
-              hides the form. A banner inside it would vanish with it, taking the one
-              sentence that said why.
+              The refusal is said inside the dialog while it is open, and on the card
+              otherwise. A refusal re-reads the ledger, and for DELIVERY_IN_PROGRESS the
+              server then answers `refundable: false` — which takes the dialog away. The
+              card keeps the one sentence that said why.
             */}
-            {issue.error !== null && <Banner tone="danger">{refundMessageFor(issue.error)}</Banner>}
+            {issue.error !== null && !(issueOpen && issueFormShown) && (
+              <Banner tone="danger">{refundMessageFor(issue.error)}</Banner>
+            )}
+
+            <Modal
+              open={issueOpen && issueFormShown}
+              onClose={() => setIssueOpen(false)}
+              title={t('web.refund_request_title')}
+              foot={
+                <>
+                  <Button size="sm" onClick={() => setIssueOpen(false)}>
+                    {t('web.money_cancel')}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={
+                      issue.isPending || digitsOf(amount) === '0' || reason.trim().length < 3
+                    }
+                    onClick={() => issue.mutate()}
+                  >
+                    {t('web.refund_request')}
+                  </Button>
+                </>
+              }
+            >
+              <p className="muted small">{t('web.refund_request_hint')}</p>
+              <KV
+                inline
+                items={[
+                  [
+                    t('web.refund_remaining'),
+                    <Money key="r" value={{ amountMinor: data.refundableMinor, currency }} />,
+                  ],
+                ]}
+              />
+              <div className="form-grid">
+                <Field label={t('web.refund_amount_minor')} htmlFor="refund-amount">
+                  <span className="ca-inline-control">
+                    <Input
+                      id="refund-amount"
+                      size="sm"
+                      dir="ltr"
+                      value={amount}
+                      inputMode="numeric"
+                      maxLength={19}
+                      onChange={(event) => setAmount(event.target.value)}
+                    />
+                    {/* The server's own remaining figure, not one computed here. */}
+                    <Button size="sm" onClick={() => setAmount(data.refundableMinor)}>
+                      {t('web.refund_amount_all')}
+                    </Button>
+                  </span>
+                </Field>
+                <Field label={t('web.refund_reason')} htmlFor="refund-reason">
+                  <Input
+                    id="refund-reason"
+                    size="sm"
+                    value={reason}
+                    maxLength={500}
+                    onChange={(event) => setReason(event.target.value)}
+                  />
+                </Field>
+              </div>
+              {issue.error !== null && (
+                <Banner tone="danger">{refundMessageFor(issue.error)}</Banner>
+              )}
+            </Modal>
 
             {/*
               The manual channel's second step, and the reason `AWAITING_EXTERNAL`
               exists. An operator says the money left, or says it never will — and
               saying the second RELEASES the amount back to the refundable balance
               rather than deleting the evidence, which is the over-refund achieved by
-              destroying the record.
+              destroying the record. Each awaiting row carries both answers; each opens
+              its own dialog, and the external reference is asked only where it is kept.
             */}
-            {mayIssue && awaiting.length > 0 && (
-              <div className="ca-decision-part ca-decision-approve">
-                <h3 className="ca-subhead">{t('web.refund_answer_title')}</h3>
-                <p className="muted small">{t('web.refund_answer_hint')}</p>
-                <Field label={t('web.refund_answer_which')} htmlFor="refund-answering">
-                  <select
-                    id="refund-answering"
-                    value={answering ?? ''}
-                    onChange={(event) =>
-                      setAnswering(event.target.value === '' ? null : event.target.value)
-                    }
-                  >
-                    <option value="">{t('web.refund_answer_none')}</option>
-                    {awaiting.map((row) => (
-                      <option key={row.id} value={row.id}>
-                        {`${formatMoneyText({ amountMinor: row.amountMinor, currency: row.currency })} — ${row.id}`}
-                      </option>
-                    ))}
-                  </select>
+            <Modal
+              open={answerFormShown && answerKind !== null}
+              onClose={() => setAnswerKind(null)}
+              title={t(answerKind === 'abandon' ? 'web.refund_abandon' : 'web.refund_complete')}
+              {...(answerKind === 'abandon' ? { danger: true } : {})}
+              foot={
+                <>
+                  <Button size="sm" onClick={() => setAnswerKind(null)}>
+                    {t('web.money_cancel')}
+                  </Button>
+                  {answerKind === 'abandon' ? (
+                    <button
+                      type="button"
+                      className="btn danger sm"
+                      disabled={complete.isPending || abandon.isPending || note.trim().length < 3}
+                      onClick={() => abandon.mutate()}
+                    >
+                      {t('web.refund_abandon')}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn primary sm"
+                      /*
+                       * Either answer in flight disables BOTH, for the reason the
+                       * confirm/reject pair carries: the two commands race one row
+                       * with different keys, and the operator gets whichever the
+                       * database serves second. Neither can be undone.
+                       */
+                      disabled={complete.isPending || abandon.isPending || note.trim().length < 3}
+                      onClick={() => complete.mutate()}
+                    >
+                      {t('web.refund_complete')}
+                    </button>
+                  )}
+                </>
+              }
+            >
+              <p className="muted small">{t('web.refund_answer_hint')}</p>
+              {answeredRow !== undefined && (
+                <KV
+                  inline
+                  items={[
+                    [
+                      t('web.refund_answer_which'),
+                      <span key="w">
+                        <Money
+                          value={{
+                            amountMinor: answeredRow.amountMinor,
+                            currency: answeredRow.currency,
+                          }}
+                        />{' '}
+                        <Ltr>{answeredRow.id}</Ltr>
+                      </span>,
+                    ],
+                  ]}
+                />
+              )}
+              <div className="form-grid">
+                <Field label={t('web.refund_answer_note')} htmlFor="refund-note">
+                  <Input
+                    id="refund-note"
+                    size="sm"
+                    value={note}
+                    maxLength={500}
+                    onChange={(event) => setNote(event.target.value)}
+                  />
                 </Field>
-                {answerFormShown && (
-                  <>
-                    <div className="form-grid">
-                      <Field label={t('web.refund_answer_note')} htmlFor="refund-note">
-                        <Input
-                          id="refund-note"
-                          size="sm"
-                          value={note}
-                          maxLength={500}
-                          onChange={(event) => setNote(event.target.value)}
-                        />
-                      </Field>
-                      <Field
-                        label={t('web.refund_external_reference')}
-                        htmlFor="refund-external-reference"
-                      >
-                        <Input
-                          id="refund-external-reference"
-                          size="sm"
-                          dir="ltr"
-                          value={externalReference}
-                          maxLength={140}
-                          onChange={(event) => setExternalReference(event.target.value)}
-                        />
-                      </Field>
-                    </div>
-                    <div className="form-actions">
-                      <button
-                        type="button"
-                        className="btn primary sm"
-                        /*
-                         * Either answer in flight disables BOTH, for the reason the
-                         * confirm/reject pair carries: the two commands race one row
-                         * with different keys, and the operator gets whichever the
-                         * database serves second. Neither can be undone.
-                         */
-                        disabled={complete.isPending || abandon.isPending || note.trim().length < 3}
-                        onClick={() => complete.mutate()}
-                      >
-                        {t('web.refund_complete')}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn danger sm"
-                        disabled={complete.isPending || abandon.isPending || note.trim().length < 3}
-                        onClick={() => abandon.mutate()}
-                      >
-                        {t('web.refund_abandon')}
-                      </button>
-                    </div>
-                    {complete.error !== null && (
-                      <Banner tone="danger">{refundMessageFor(complete.error)}</Banner>
-                    )}
-                    {abandon.error !== null && (
-                      <Banner tone="danger">{messageFor(abandon.error)}</Banner>
-                    )}
-                  </>
+                {answerKind === 'complete' && (
+                  <Field
+                    label={t('web.refund_external_reference')}
+                    htmlFor="refund-external-reference"
+                  >
+                    <Input
+                      id="refund-external-reference"
+                      size="sm"
+                      dir="ltr"
+                      value={externalReference}
+                      maxLength={140}
+                      onChange={(event) => setExternalReference(event.target.value)}
+                    />
+                  </Field>
                 )}
               </div>
-            )}
+              {complete.error !== null && (
+                <Banner tone="danger">{refundMessageFor(complete.error)}</Banner>
+              )}
+              {abandon.error !== null && <Banner tone="danger">{messageFor(abandon.error)}</Banner>}
+            </Modal>
           </>
         )}
       </StateSwitch>
@@ -1862,377 +1938,14 @@ export function PaymentDetailPage({
                 <strong>{formatTimestamp(row.providerReviewUntil)}</strong>
               </Banner>
             )}
-            <TwoColumn
-              main={
-                <>
-                  <SituationCard value={row.situation} />
-                  <Card title={t('web.payment_detail')}>
-                    <KV
-                      items={[
-                        [t('web.payment_id'), <Copyable key="id" value={row.id} />],
-                        [
-                          t('web.payment_disposition'),
-                          <DispositionBadge key="d" value={row.receiptDisposition} />,
-                        ],
-                        [
-                          t('web.payment_gateway'),
-                          <GatewayName key="g" provider={row.gatewayProvider} />,
-                        ],
-                        [
-                          t('web.payment_amount'),
-                          <Money
-                            key="a"
-                            value={{ amountMinor: row.amount, currency: row.currency }}
-                          />,
-                        ],
-                        [
-                          t('web.payment_customer'),
-                          <a
-                            key="c"
-                            href={`/users/${encodeURIComponent(row.customerId)}`}
-                            onClick={onLink}
-                          >
-                            <Ltr>{row.customerId}</Ltr>
-                          </a>,
-                        ],
-                        [
-                          t('web.payment_telegram'),
-                          <TelegramIdentity
-                            key="tg"
-                            telegramUserId={row.customerTelegramUserId}
-                            username={row.customerUsername}
-                          />,
-                        ],
-                        [
-                          t('web.payment_order'),
-                          row.orderId === null ? (
-                            // A top-up, named rather than dashed. See the list column.
-                            <span key="o" className="muted small">
-                              {t('web.payment_topup')}
-                            </span>
-                          ) : (
-                            <a
-                              key="o"
-                              href={`/orders/${encodeURIComponent(row.orderId)}`}
-                              onClick={onLink}
-                            >
-                              <Ltr>{row.orderId}</Ltr>
-                            </a>
-                          ),
-                        ],
-                        [
-                          t('web.payment_external_reference'),
-                          row.externalReference === null ? (
-                            <Dash key="x" />
-                          ) : (
-                            <Copyable key="x" value={row.externalReference} />
-                          ),
-                        ],
-                        [t('web.payment_created_at'), formatTimestamp(row.createdAt)],
-                        [t('web.payment_updated_at'), formatTimestamp(row.updatedAt)],
-                        [
-                          t('web.payment_expires_at'),
-                          row.expiresAt === null ? (
-                            <Dash key="e" />
-                          ) : (
-                            formatTimestamp(row.expiresAt)
-                          ),
-                        ],
-                        [
-                          t('web.payment_customer_signalled'),
-                          row.customerSignalledAt === null ? (
-                            // A SENTENCE, not a dash. "The customer has said nothing" is the
-                            // answer here rather than a missing value, and it is the half of
-                            // the picture a reviewer weighs before opening their bank.
-                            <span key="cs" className="muted small">
-                              {t('web.payment_customer_signalled_none')}
-                            </span>
-                          ) : (
-                            formatTimestamp(row.customerSignalledAt)
-                          ),
-                        ],
-                      ]}
-                    />
-                    {row.customerSignalledAt !== null && (
-                      <p className="muted small">{t('web.payment_customer_signalled_hint')}</p>
-                    )}
-                  </Card>
-                  {/*
-              What a confirmation RESTS on, and who made it.
-              `UNK-PR-010` records the legacy receipt review as storing neither the
-              reviewer nor the time, which is why "was this approved by a human" is
-              unanswerable there. Both are columns here, and both are shown.
+            {/*
+              W4: no holes. The situation and the payment's own facts sit beside the side
+              cards, whose last card stretches to the row's height; every later card of the
+              tall column runs full width below, so neither column leaves an empty tail.
+              A payment with no side card draws its head full width.
             */}
-                  <Card title={t('web.payment_evidence_kind')}>
-                    <KV
-                      items={[
-                        [
-                          t('web.payment_evidence_kind'),
-                          row.evidenceKind === null ? <Dash key="k" /> : row.evidenceKind,
-                        ],
-                        [
-                          t('web.payment_evidence_note'),
-                          row.evidenceNote === null ? <Dash key="n" /> : row.evidenceNote,
-                        ],
-                        [
-                          t('web.payment_reviewer'),
-                          row.confirmedByAdminId === null ? (
-                            <Dash key="w" />
-                          ) : (
-                            <Copyable key="w" value={row.confirmedByAdminId} />
-                          ),
-                        ],
-                        [
-                          t('web.payment_confirmed_at'),
-                          row.confirmedAt === null ? (
-                            <Dash key="t" />
-                          ) : (
-                            formatTimestamp(row.confirmedAt)
-                          ),
-                        ],
-                      ]}
-                    />
-                  </Card>
-                  {/*
-              How it ended WITHOUT money, when it did.
-              Its own card rather than three more rows in the evidence one, because
-              the two are mutually exclusive by constraint — `payments_confirmed_check`
-              and `payments_resolved_check` are both equalities — and a screen showing
-              both sets side by side invites reading a rejection as an approval.
-            */}
-                  {row.resolvedAt !== null && (
-                    <Card title={t('web.payment_resolution')}>
-                      <KV
-                        items={[
-                          [t('web.payment_resolved_at'), formatTimestamp(row.resolvedAt)],
-                          [
-                            t('web.payment_resolver'),
-                            row.resolvedByAdminId === null ? (
-                              // Null is the ANSWER, not a missing value: nobody decided an
-                              // expiry and a withdrawal is the customer's own.
-                              <Dash key="rw" />
-                            ) : (
-                              <Copyable key="rw" value={row.resolvedByAdminId} />
-                            ),
-                          ],
-                          [
-                            t('web.payment_resolution_note'),
-                            row.resolutionNote === null ? <Dash key="rn" /> : row.resolutionNote,
-                          ],
-                        ]}
-                      />
-                    </Card>
-                  )}
-                  {/*
-              The receipt's credit-to-wallet disposition, when that is how it was decided
-              (Payment File 02 §12, D2). READ-ONLY: it was decided in Telegram, and this
-              page shows what, by whom and when — never a control to make or undo one.
-              The amount is the reviewer's, which may differ from the payment's own; that
-              difference is the reason the disposition exists.
-            */}
-                  {row.receiptCredit !== null && (
-                    <Card title={t('web.payment_receipt_credit')}>
-                      <KV
-                        items={[
-                          [
-                            t('web.payment_receipt_credit_amount'),
-                            <Money
-                              key="ca"
-                              value={{
-                                amountMinor: row.receiptCredit.amountMinor,
-                                currency: row.receiptCredit.currency,
-                              }}
-                            />,
-                          ],
-                          [
-                            t('web.payment_receipt_credit_admin'),
-                            <Copyable key="cw" value={row.receiptCredit.decidedByAdminId} />,
-                          ],
-                          [
-                            t('web.payment_receipt_credit_at'),
-                            formatTimestamp(row.receiptCredit.decidedAt),
-                          ],
-                          [
-                            t('web.payment_receipt_credit_note'),
-                            row.receiptCredit.note === null ? (
-                              <Dash key="cn" />
-                            ) : (
-                              row.receiptCredit.note
-                            ),
-                          ],
-                        ]}
-                      />
-                      <p className="muted small">{t('web.payment_receipt_credit_hint')}</p>
-                    </Card>
-                  )}
-                  {/*
-                    The payment's money, the gateway fee (WP18) included, as the server
-                    computed it: ONE card, so the fee is never shown twice (review of PR #247).
-                  */}
-                  <AmountsCard value={row.amounts} />
-                  <RateProvenanceCard value={row.gatewayInvoice?.rateProvenance ?? null} />
-                  {/*
-              The external gateway's side of this payment (WP11A): the provider's ids,
-              what its INQUIRY last said, what its webhook last hinted and how the
-              attempt ended. The provider's amounts are metadata only — the payment's own
-              amount above is what Nexa charged — and no payment link is shown.
-            */}
-                  {row.gatewayInvoice !== null && (
-                    <Card
-                      title={t('web.payment_gateway_invoice')}
-                      hint={t('web.payment_gateway_invoice_hint')}
-                    >
-                      <Disclosure size="sm" summary={t('web.payment_tech_details')}>
-                        <KV
-                          items={[
-                            [
-                              t('web.payment_gateway_invoice_order_id'),
-                              <Copyable key="po" value={row.gatewayInvoice.providerOrderId} />,
-                            ],
-                            [
-                              t('web.payment_gateway_invoice_id'),
-                              row.gatewayInvoice.providerInvoiceId === null ? (
-                                <Dash key="pi" />
-                              ) : (
-                                <Copyable key="pi" value={row.gatewayInvoice.providerInvoiceId} />
-                              ),
-                            ],
-                            /*
-                             * The provider's own id for the CHARGE (Telegram Stars'
-                             * `telegram_payment_charge_id`): what an operator reconciles or refunds by,
-                             * so it is shown and copyable (Codex review of #85). Absent for a route
-                             * that has none, rather than a dash that suggests one is missing.
-                             */
-                            ...(row.gatewayInvoice.providerChargeId === null
-                              ? []
-                              : [
-                                  [
-                                    t('web.payment_gateway_charge_id'),
-                                    <Copyable
-                                      key="pc"
-                                      value={row.gatewayInvoice.providerChargeId}
-                                    />,
-                                  ] as [ReactNode, ReactNode],
-                                ]),
-                            /*
-                             * NOWPayments: the provider payment a verified IPN (or the invoice's
-                             * payment list) last named — what the next status read follows, and
-                             * what an operator looks up in the NOWPayments dashboard.
-                             */
-                            ...(row.gatewayInvoice.hintedPaymentId === null
-                              ? []
-                              : [
-                                  [
-                                    t('web.payment_gateway_provider_payment_id'),
-                                    <Copyable
-                                      key="pp"
-                                      value={row.gatewayInvoice.hintedPaymentId}
-                                    />,
-                                  ] as [ReactNode, ReactNode],
-                                ]),
-                            /*
-                             * CentralPay: the integer the gateway knows this customer by —
-                             * what an operator matches against CentralPay's own records.
-                             */
-                            ...(row.gatewayInvoice.providerUserId === null
-                              ? []
-                              : [
-                                  [
-                                    t('web.payment_gateway_provider_user_id'),
-                                    <Copyable key="pu" value={row.gatewayInvoice.providerUserId} />,
-                                  ] as [ReactNode, ReactNode],
-                                ]),
-                            [
-                              t('web.payment_gateway_invoice_creation'),
-                              <Ltr key="cs">
-                                {row.gatewayInvoice.creationState}
-                                {row.gatewayInvoice.creationErrorCode === null
-                                  ? ''
-                                  : ` · ${row.gatewayInvoice.creationErrorCode}`}
-                              </Ltr>,
-                            ],
-                            [
-                              t('web.payment_gateway_invoice_status'),
-                              <Ltr key="st">
-                                {row.gatewayInvoice.providerStatus ?? '—'}
-                                {row.gatewayInvoice.providerPaid === null
-                                  ? ''
-                                  : ` · paid=${String(row.gatewayInvoice.providerPaid)}`}
-                              </Ltr>,
-                            ],
-                            [
-                              t('web.payment_gateway_invoice_last_inquiry'),
-                              row.gatewayInvoice.lastInquiryAt === null ? (
-                                <Dash key="li" />
-                              ) : (
-                                <span key="li">
-                                  {formatTimestamp(row.gatewayInvoice.lastInquiryAt)}
-                                  {row.gatewayInvoice.lastInquiryErrorCode === null ? null : (
-                                    <>
-                                      {' '}
-                                      <Ltr>{row.gatewayInvoice.lastInquiryErrorCode}</Ltr>
-                                    </>
-                                  )}
-                                </span>
-                              ),
-                            ],
-                            [
-                              t('web.payment_gateway_invoice_webhook'),
-                              <span key="wh">
-                                <Ltr>{row.gatewayInvoice.webhookStatusHint ?? '—'}</Ltr>
-                                {` · ${String(row.gatewayInvoice.webhookCount)}`}
-                              </span>,
-                            ],
-                            [
-                              t('web.payment_gateway_invoice_amounts'),
-                              <Ltr key="am">
-                                {`${row.gatewayInvoice.sentAmount} / ${row.gatewayInvoice.requestAmount ?? '—'} / ${row.gatewayInvoice.finalAmount ?? '—'} / ${row.gatewayInvoice.creditAmount ?? '—'} ${row.gatewayInvoice.providerUnit}`}
-                              </Ltr>,
-                            ],
-                            /*
-                             * Package FX: how the provider figure was derived, and — for the central
-                             * rate — the snapshot it was derived from: the quote, its source and
-                             * times, the ratio and the effective figure per unit. Read from the
-                             * invoice row, never recomputed from today's rate.
-                             */
-                            [
-                              t('web.payment_gateway_invoice_policy'),
-                              t(CONVERSION_POLICY_LABELS[row.gatewayInvoice.conversionPolicy]),
-                            ],
-                            ...(row.gatewayInvoice.fx === null
-                              ? []
-                              : [
-                                  [
-                                    t('web.payment_gateway_invoice_fx'),
-                                    <Ltr key="fx">
-                                      {`${row.gatewayInvoice.fx.rate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.fx.baseAsset} · ${row.gatewayInvoice.fx.source} · ${row.gatewayInvoice.fx.quoteState} · ${formatTimestamp(row.gatewayInvoice.fx.fetchedAt)} · ×${row.gatewayInvoice.fx.unitRatio} → ${row.gatewayInvoice.fx.effectiveRate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.providerUnit} · v${String(row.gatewayInvoice.fx.policyVersion)}`}
-                                    </Ltr>,
-                                  ] as [ReactNode, ReactNode],
-                                ]),
-                            [
-                              t('web.payment_gateway_invoice_outcome'),
-                              <Ltr key="oc">{row.gatewayInvoice.outcome ?? '—'}</Ltr>,
-                            ],
-                            [
-                              t('web.payment_gateway_invoice_late'),
-                              row.gatewayInvoice.lateCompletionObservedAt === null ? (
-                                <Dash key="lt" />
-                              ) : (
-                                <Badge key="lt" tone="warn">
-                                  {formatTimestamp(row.gatewayInvoice.lateCompletionObservedAt)}
-                                </Badge>
-                              ),
-                            ],
-                            ...reviewFacts(row),
-                            ...cardTransferFacts(row.gatewayInvoice),
-                          ]}
-                        />
-                      </Disclosure>
-                    </Card>
-                  )}
-                </>
-              }
-              side={
+            {(() => {
+              const sideCards = (
                 <>
                   {/*
               An UNKNOWN gateway payment (TonPays Telegram §9.6.4): resolved from the
@@ -2315,8 +2028,390 @@ export function PaymentDetailPage({
             */}
                   {mayViewReceipts && <ReceiptsCard paymentId={id} />}
                 </>
-              }
-            />
+              );
+              const hasSide =
+                (row.state === 'UNKNOWN' && row.method === 'GATEWAY') ||
+                (row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER') ||
+                row.destination !== null ||
+                row.topupCashbackPercent !== null ||
+                mayViewReceipts;
+              return (
+                <div className={hasSide ? 'two-col pay-balance' : 'pay-balance solo'}>
+                  <div className="stack">
+                    <SituationCard value={row.situation} />
+                    <Card title={t('web.payment_detail')}>
+                      <KV
+                        items={[
+                          [t('web.payment_id'), <Copyable key="id" value={row.id} />],
+                          [
+                            t('web.payment_disposition'),
+                            <DispositionBadge key="d" value={row.receiptDisposition} />,
+                          ],
+                          [
+                            t('web.payment_gateway'),
+                            <GatewayName key="g" provider={row.gatewayProvider} />,
+                          ],
+                          [
+                            t('web.payment_amount'),
+                            <Money
+                              key="a"
+                              value={{ amountMinor: row.amount, currency: row.currency }}
+                            />,
+                          ],
+                          [
+                            t('web.payment_customer'),
+                            <a
+                              key="c"
+                              href={`/users/${encodeURIComponent(row.customerId)}`}
+                              onClick={onLink}
+                            >
+                              <Ltr>{row.customerId}</Ltr>
+                            </a>,
+                          ],
+                          [
+                            t('web.payment_telegram'),
+                            <TelegramIdentity
+                              key="tg"
+                              telegramUserId={row.customerTelegramUserId}
+                              username={row.customerUsername}
+                            />,
+                          ],
+                          [
+                            t('web.payment_order'),
+                            row.orderId === null ? (
+                              // A top-up, named rather than dashed. See the list column.
+                              <span key="o" className="muted small">
+                                {t('web.payment_topup')}
+                              </span>
+                            ) : (
+                              <a
+                                key="o"
+                                href={`/orders/${encodeURIComponent(row.orderId)}`}
+                                onClick={onLink}
+                              >
+                                <Ltr>{row.orderId}</Ltr>
+                              </a>
+                            ),
+                          ],
+                          [
+                            t('web.payment_external_reference'),
+                            row.externalReference === null ? (
+                              <Dash key="x" />
+                            ) : (
+                              <Copyable key="x" value={row.externalReference} />
+                            ),
+                          ],
+                          [t('web.payment_created_at'), formatTimestamp(row.createdAt)],
+                          [t('web.payment_updated_at'), formatTimestamp(row.updatedAt)],
+                          [
+                            t('web.payment_expires_at'),
+                            row.expiresAt === null ? (
+                              <Dash key="e" />
+                            ) : (
+                              formatTimestamp(row.expiresAt)
+                            ),
+                          ],
+                          [
+                            t('web.payment_customer_signalled'),
+                            row.customerSignalledAt === null ? (
+                              // A SENTENCE, not a dash. "The customer has said nothing" is the
+                              // answer here rather than a missing value, and it is the half of
+                              // the picture a reviewer weighs before opening their bank.
+                              <span key="cs" className="muted small">
+                                {t('web.payment_customer_signalled_none')}
+                              </span>
+                            ) : (
+                              formatTimestamp(row.customerSignalledAt)
+                            ),
+                          ],
+                        ]}
+                      />
+                      {row.customerSignalledAt !== null && (
+                        <p className="muted small">{t('web.payment_customer_signalled_hint')}</p>
+                      )}
+                    </Card>
+                  </div>
+                  {hasSide && <div className="stack">{sideCards}</div>}
+                </div>
+              );
+            })()}
+            <div className="stack">
+              {/*
+              What a confirmation RESTS on, and who made it.
+              `UNK-PR-010` records the legacy receipt review as storing neither the
+              reviewer nor the time, which is why "was this approved by a human" is
+              unanswerable there. Both are columns here, and both are shown.
+            */}
+              <Card title={t('web.payment_evidence_kind')}>
+                <KV
+                  items={[
+                    [
+                      t('web.payment_evidence_kind'),
+                      row.evidenceKind === null ? (
+                        <Dash key="k" />
+                      ) : (
+                        <CodeName
+                          key="k"
+                          value={row.evidenceKind}
+                          labels={PAYMENT_EVIDENCE_KIND_LABELS}
+                        />
+                      ),
+                    ],
+                    [
+                      t('web.payment_evidence_note'),
+                      row.evidenceNote === null ? <Dash key="n" /> : row.evidenceNote,
+                    ],
+                    [
+                      t('web.payment_reviewer'),
+                      row.confirmedByAdminId === null ? (
+                        <Dash key="w" />
+                      ) : (
+                        <Copyable key="w" value={row.confirmedByAdminId} />
+                      ),
+                    ],
+                    [
+                      t('web.payment_confirmed_at'),
+                      row.confirmedAt === null ? (
+                        <Dash key="t" />
+                      ) : (
+                        formatTimestamp(row.confirmedAt)
+                      ),
+                    ],
+                  ]}
+                />
+              </Card>
+              {/*
+              How it ended WITHOUT money, when it did.
+              Its own card rather than three more rows in the evidence one, because
+              the two are mutually exclusive by constraint — `payments_confirmed_check`
+              and `payments_resolved_check` are both equalities — and a screen showing
+              both sets side by side invites reading a rejection as an approval.
+            */}
+              {row.resolvedAt !== null && (
+                <Card title={t('web.payment_resolution')}>
+                  <KV
+                    items={[
+                      [t('web.payment_resolved_at'), formatTimestamp(row.resolvedAt)],
+                      [
+                        t('web.payment_resolver'),
+                        row.resolvedByAdminId === null ? (
+                          // Null is the ANSWER, not a missing value: nobody decided an
+                          // expiry and a withdrawal is the customer's own.
+                          <Dash key="rw" />
+                        ) : (
+                          <Copyable key="rw" value={row.resolvedByAdminId} />
+                        ),
+                      ],
+                      [
+                        t('web.payment_resolution_note'),
+                        row.resolutionNote === null ? <Dash key="rn" /> : row.resolutionNote,
+                      ],
+                    ]}
+                  />
+                </Card>
+              )}
+              {/*
+              The receipt's credit-to-wallet disposition, when that is how it was decided
+              (Payment File 02 §12, D2). READ-ONLY: it was decided in Telegram, and this
+              page shows what, by whom and when — never a control to make or undo one.
+              The amount is the reviewer's, which may differ from the payment's own; that
+              difference is the reason the disposition exists.
+            */}
+              {row.receiptCredit !== null && (
+                <Card title={t('web.payment_receipt_credit')}>
+                  <KV
+                    items={[
+                      [
+                        t('web.payment_receipt_credit_amount'),
+                        <Money
+                          key="ca"
+                          value={{
+                            amountMinor: row.receiptCredit.amountMinor,
+                            currency: row.receiptCredit.currency,
+                          }}
+                        />,
+                      ],
+                      [
+                        t('web.payment_receipt_credit_admin'),
+                        <Copyable key="cw" value={row.receiptCredit.decidedByAdminId} />,
+                      ],
+                      [
+                        t('web.payment_receipt_credit_at'),
+                        formatTimestamp(row.receiptCredit.decidedAt),
+                      ],
+                      [
+                        t('web.payment_receipt_credit_note'),
+                        row.receiptCredit.note === null ? (
+                          <Dash key="cn" />
+                        ) : (
+                          row.receiptCredit.note
+                        ),
+                      ],
+                    ]}
+                  />
+                  <p className="muted small">{t('web.payment_receipt_credit_hint')}</p>
+                </Card>
+              )}
+              {/*
+                    The payment's money, the gateway fee (WP18) included, as the server
+                    computed it: ONE card, so the fee is never shown twice (review of PR #247).
+                  */}
+              <AmountsCard value={row.amounts} />
+              <RateProvenanceCard value={row.gatewayInvoice?.rateProvenance ?? null} />
+              {/*
+              The external gateway's side of this payment (WP11A): the provider's ids,
+              what its INQUIRY last said, what its webhook last hinted and how the
+              attempt ended. The provider's amounts are metadata only — the payment's own
+              amount above is what Nexa charged — and no payment link is shown.
+            */}
+              {row.gatewayInvoice !== null && (
+                <Card
+                  title={t('web.payment_gateway_invoice')}
+                  hint={t('web.payment_gateway_invoice_hint')}
+                >
+                  <Disclosure size="sm" summary={t('web.payment_tech_details')}>
+                    <KV
+                      items={[
+                        [
+                          t('web.payment_gateway_invoice_order_id'),
+                          <Copyable key="po" value={row.gatewayInvoice.providerOrderId} />,
+                        ],
+                        [
+                          t('web.payment_gateway_invoice_id'),
+                          row.gatewayInvoice.providerInvoiceId === null ? (
+                            <Dash key="pi" />
+                          ) : (
+                            <Copyable key="pi" value={row.gatewayInvoice.providerInvoiceId} />
+                          ),
+                        ],
+                        /*
+                         * The provider's own id for the CHARGE (Telegram Stars'
+                         * `telegram_payment_charge_id`): what an operator reconciles or refunds by,
+                         * so it is shown and copyable (Codex review of #85). Absent for a route
+                         * that has none, rather than a dash that suggests one is missing.
+                         */
+                        ...(row.gatewayInvoice.providerChargeId === null
+                          ? []
+                          : [
+                              [
+                                t('web.payment_gateway_charge_id'),
+                                <Copyable key="pc" value={row.gatewayInvoice.providerChargeId} />,
+                              ] as [ReactNode, ReactNode],
+                            ]),
+                        /*
+                         * NOWPayments: the provider payment a verified IPN (or the invoice's
+                         * payment list) last named — what the next status read follows, and
+                         * what an operator looks up in the NOWPayments dashboard.
+                         */
+                        ...(row.gatewayInvoice.hintedPaymentId === null
+                          ? []
+                          : [
+                              [
+                                t('web.payment_gateway_provider_payment_id'),
+                                <Copyable key="pp" value={row.gatewayInvoice.hintedPaymentId} />,
+                              ] as [ReactNode, ReactNode],
+                            ]),
+                        /*
+                         * CentralPay: the integer the gateway knows this customer by —
+                         * what an operator matches against CentralPay's own records.
+                         */
+                        ...(row.gatewayInvoice.providerUserId === null
+                          ? []
+                          : [
+                              [
+                                t('web.payment_gateway_provider_user_id'),
+                                <Copyable key="pu" value={row.gatewayInvoice.providerUserId} />,
+                              ] as [ReactNode, ReactNode],
+                            ]),
+                        [
+                          t('web.payment_gateway_invoice_creation'),
+                          <Ltr key="cs">
+                            {row.gatewayInvoice.creationState}
+                            {row.gatewayInvoice.creationErrorCode === null
+                              ? ''
+                              : ` · ${row.gatewayInvoice.creationErrorCode}`}
+                          </Ltr>,
+                        ],
+                        [
+                          t('web.payment_gateway_invoice_status'),
+                          <Ltr key="st">
+                            {row.gatewayInvoice.providerStatus ?? '—'}
+                            {row.gatewayInvoice.providerPaid === null
+                              ? ''
+                              : ` · paid=${String(row.gatewayInvoice.providerPaid)}`}
+                          </Ltr>,
+                        ],
+                        [
+                          t('web.payment_gateway_invoice_last_inquiry'),
+                          row.gatewayInvoice.lastInquiryAt === null ? (
+                            <Dash key="li" />
+                          ) : (
+                            <span key="li">
+                              {formatTimestamp(row.gatewayInvoice.lastInquiryAt)}
+                              {row.gatewayInvoice.lastInquiryErrorCode === null ? null : (
+                                <>
+                                  {' '}
+                                  <Ltr>{row.gatewayInvoice.lastInquiryErrorCode}</Ltr>
+                                </>
+                              )}
+                            </span>
+                          ),
+                        ],
+                        [
+                          t('web.payment_gateway_invoice_webhook'),
+                          <span key="wh">
+                            <Ltr>{row.gatewayInvoice.webhookStatusHint ?? '—'}</Ltr>
+                            {` · ${String(row.gatewayInvoice.webhookCount)}`}
+                          </span>,
+                        ],
+                        [
+                          t('web.payment_gateway_invoice_amounts'),
+                          <Ltr key="am">
+                            {`${row.gatewayInvoice.sentAmount} / ${row.gatewayInvoice.requestAmount ?? '—'} / ${row.gatewayInvoice.finalAmount ?? '—'} / ${row.gatewayInvoice.creditAmount ?? '—'} ${row.gatewayInvoice.providerUnit}`}
+                          </Ltr>,
+                        ],
+                        /*
+                         * Package FX: how the provider figure was derived, and — for the central
+                         * rate — the snapshot it was derived from: the quote, its source and
+                         * times, the ratio and the effective figure per unit. Read from the
+                         * invoice row, never recomputed from today's rate.
+                         */
+                        [
+                          t('web.payment_gateway_invoice_policy'),
+                          t(CONVERSION_POLICY_LABELS[row.gatewayInvoice.conversionPolicy]),
+                        ],
+                        ...(row.gatewayInvoice.fx === null
+                          ? []
+                          : [
+                              [
+                                t('web.payment_gateway_invoice_fx'),
+                                <Ltr key="fx">
+                                  {`${row.gatewayInvoice.fx.rate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.fx.baseAsset} · ${row.gatewayInvoice.fx.source} · ${row.gatewayInvoice.fx.quoteState} · ${formatTimestamp(row.gatewayInvoice.fx.fetchedAt)} · ×${row.gatewayInvoice.fx.unitRatio} → ${row.gatewayInvoice.fx.effectiveRate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.providerUnit} · v${String(row.gatewayInvoice.fx.policyVersion)}`}
+                                </Ltr>,
+                              ] as [ReactNode, ReactNode],
+                            ]),
+                        [
+                          t('web.payment_gateway_invoice_outcome'),
+                          <Ltr key="oc">{row.gatewayInvoice.outcome ?? '—'}</Ltr>,
+                        ],
+                        [
+                          t('web.payment_gateway_invoice_late'),
+                          row.gatewayInvoice.lateCompletionObservedAt === null ? (
+                            <Dash key="lt" />
+                          ) : (
+                            <Badge key="lt" tone="warn">
+                              {formatTimestamp(row.gatewayInvoice.lateCompletionObservedAt)}
+                            </Badge>
+                          ),
+                        ],
+                        ...reviewFacts(row),
+                        ...cardTransferFacts(row.gatewayInvoice),
+                      ]}
+                    />
+                  </Disclosure>
+                </Card>
+              )}
+            </div>
             {/*
               Money going BACK, under its own two permissions.
               Placed after the evidence and before the decision forms, because that is
@@ -2455,6 +2550,8 @@ function ReconcileCard({
   const decision = useSubmissionKey();
   const asking = useSubmissionKey();
   const [note, setNote] = useState('');
+  /** Which decision's dialog is open. */
+  const [deciding, setDeciding] = useState<'CONFIRMED' | 'FAILED' | null>(null);
   const invoice = payment.gatewayInvoice;
 
   const refresh = () => {
@@ -2477,6 +2574,7 @@ function ReconcileCard({
       decision.settle();
       notify({ tone: 'ok', message: t('web.payment_reconcile_done') });
       setNote('');
+      setDeciding(null);
       refresh();
     },
     onError: (error) => {
@@ -2509,59 +2607,110 @@ function ReconcileCard({
   useUnsavedChanges(mayReconcile && note.trim() !== '');
   const busy = reconcile.isPending || reinquire.isPending;
 
+  /** The recorded answer, in words: the provider's status, and whether money arrived. */
+  const evidence =
+    invoice === null ? (
+      <Dash key="ev" />
+    ) : (
+      <span key="ev">
+        <CodeName value={invoice.providerStatus} labels={PROVIDER_STATUS_LABELS} />
+        {' · '}
+        {invoice.providerPaid === null ? (
+          <Dash />
+        ) : (
+          <span title={`paid=${String(invoice.providerPaid)}`}>
+            {t(providerPaidKey(invoice.providerPaid))}
+          </span>
+        )}
+      </span>
+    );
+  const evidenceFacts: [string, ReactNode][] = [
+    [t('web.payment_reconcile_evidence'), evidence],
+    [
+      t('web.payment_gateway_invoice_last_inquiry'),
+      invoice?.lastInquiryAt == null ? (
+        <Dash key="li" />
+      ) : (
+        <span key="li">{formatTimestamp(invoice.lastInquiryAt)}</span>
+      ),
+    ],
+  ];
+
   return (
     <Card title={t('web.payment_reconcile_title')} hint={t('web.payment_reconcile_hint')}>
-      <KV
-        items={[
-          [
-            t('web.payment_reconcile_evidence'),
-            invoice === null ? (
-              <Dash key="ev" />
-            ) : (
-              <Ltr key="ev">
-                {`${invoice.providerStatus ?? '—'} · paid=${invoice.providerPaid === null ? '—' : String(invoice.providerPaid)}`}
-              </Ltr>
-            ),
-          ],
-          [
-            t('web.payment_gateway_invoice_last_inquiry'),
-            invoice?.lastInquiryAt == null ? (
-              <Dash key="li" />
-            ) : (
-              <span key="li">{formatTimestamp(invoice.lastInquiryAt)}</span>
-            ),
-          ],
-        ]}
-      />
+      <KV items={evidenceFacts} />
       {mayReconcile ? (
         <>
-          <Field label={t('web.payment_reconcile_note')} htmlFor="reconcile-note">
-            <Input
-              id="reconcile-note"
-              size="sm"
-              value={note}
-              maxLength={500}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          </Field>
+          {/*
+            W3: the two decisions open a dialog with the rule, the recorded answer and the
+            note; the server's refusal of a decision the answer does not support is said
+            inside it. "Ask again" decides nothing and still runs at once.
+          */}
           <div className="form-actions">
             <Button
               variant="primary"
               size="sm"
               disabled={busy}
-              onClick={() => reconcile.mutate('CONFIRMED')}
+              onClick={() => setDeciding('CONFIRMED')}
             >
               {t('web.payment_reconcile_confirm')}
             </Button>
-            <Button size="sm" disabled={busy} onClick={() => reconcile.mutate('FAILED')}>
+            <Button size="sm" disabled={busy} onClick={() => setDeciding('FAILED')}>
               {t('web.payment_reconcile_fail')}
             </Button>
             <Button size="sm" disabled={busy} onClick={() => reinquire.mutate()}>
               {t('web.payment_reinquire')}
             </Button>
           </div>
-          {reconcile.error !== null && <Banner tone="danger">{messageFor(reconcile.error)}</Banner>}
+          {reconcile.error !== null && deciding === null && (
+            <Banner tone="danger">{messageFor(reconcile.error)}</Banner>
+          )}
           {reinquire.error !== null && <Banner tone="danger">{messageFor(reinquire.error)}</Banner>}
+          <Modal
+            open={deciding !== null}
+            onClose={() => setDeciding(null)}
+            title={t(
+              deciding === 'FAILED'
+                ? 'web.payment_reconcile_fail'
+                : 'web.payment_reconcile_confirm',
+            )}
+            foot={
+              <>
+                <Button size="sm" onClick={() => setDeciding(null)}>
+                  {t('web.money_cancel')}
+                </Button>
+                <Button
+                  variant={deciding === 'FAILED' ? 'default' : 'primary'}
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    if (deciding !== null) reconcile.mutate(deciding);
+                  }}
+                >
+                  {t(
+                    deciding === 'FAILED'
+                      ? 'web.payment_reconcile_fail'
+                      : 'web.payment_reconcile_confirm',
+                  )}
+                </Button>
+              </>
+            }
+          >
+            <p className="muted small">{t('web.payment_reconcile_hint')}</p>
+            <KV items={evidenceFacts} />
+            <Field label={t('web.payment_reconcile_note')} htmlFor="reconcile-note">
+              <Input
+                id="reconcile-note"
+                size="sm"
+                value={note}
+                maxLength={500}
+                onChange={(event) => setNote(event.target.value)}
+              />
+            </Field>
+            {reconcile.error !== null && (
+              <Banner tone="danger">{messageFor(reconcile.error)}</Banner>
+            )}
+          </Modal>
         </>
       ) : (
         <Banner tone="info">{t('web.payment_reconcile_denied')}</Banner>

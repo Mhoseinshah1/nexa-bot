@@ -62,7 +62,7 @@ const PURCHASE_PURPOSE_LABELS: Readonly<Record<OrderPurpose, WebKey>> = {
   CUSTOM_SERVICE: 'web.purpose_custom_service',
 };
 
-const ACTOR_TYPE_LABELS: Readonly<Record<ActorType, WebKey>> = {
+export const ACTOR_TYPE_LABELS: Readonly<Record<ActorType, WebKey>> = {
   CUSTOMER: 'web.history_actor_customer',
   TELEGRAM_ADMIN: 'web.history_actor_telegram_admin',
   WEB_ADMIN: 'web.history_actor_web_admin',
@@ -71,7 +71,7 @@ const ACTOR_TYPE_LABELS: Readonly<Record<ActorType, WebKey>> = {
   PROVIDER_SYNC: 'web.history_actor_provider',
 };
 
-const RESULT_LABELS: Readonly<Record<AuditResult, WebKey>> = {
+export const AUDIT_RESULT_LABELS: Readonly<Record<AuditResult, WebKey>> = {
   SUCCESS: 'web.history_result_success',
   DENIED: 'web.history_result_denied',
   FAILED: 'web.history_result_failed',
@@ -372,7 +372,7 @@ function HistoryCard({
       key: 'result',
       header: t('web.history_result'),
       render: (row) => (
-        <Badge tone={RESULT_TONES[row.result]}>{t(RESULT_LABELS[row.result])}</Badge>
+        <Badge tone={RESULT_TONES[row.result]}>{t(AUDIT_RESULT_LABELS[row.result])}</Badge>
       ),
     },
     {

@@ -1,1 +1,20 @@
 /* w-money — owned by one agent during the web-admin demo implementation. */
+
+/*
+ * W4 — the payment detail's head row: the situation and facts beside the side cards, both
+ * columns the row's height, the side column's last card stretched to fill it. The cards
+ * after it run full width below (the page's own markup, not a script).
+ */
+.two-col.pay-balance {
+  align-items: stretch;
+}
+.pay-balance > .stack {
+  display: flex;
+  flex-direction: column;
+}
+.pay-balance > .stack > :last-child {
+  flex: 1 1 auto;
+}
+.pay-balance + .stack {
+  margin-top: var(--gap);
+}

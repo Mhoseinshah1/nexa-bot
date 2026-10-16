@@ -136,6 +136,7 @@ describe('the refund consequences', () => {
     renderPage(refundPage(true));
     await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
 
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت بازگشت وجه' }));
     fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
       target: { value: '100000' },
     });
@@ -179,6 +180,7 @@ describe('the refund consequences', () => {
     renderPage(refundPage(false));
     await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
 
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت بازگشت وجه' }));
     fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
       target: { value: '100000' },
     });
