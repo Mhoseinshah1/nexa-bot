@@ -1,4 +1,10 @@
-import { PLATFORM_ERROR_CODES, type RecoveryFailureCode } from '@nexa/contracts';
+import {
+  PLATFORM_ERROR_CODES,
+  type BackupRunState,
+  type RecoveryFailureCode,
+  type RecoveryStage,
+  type RecoveryState,
+} from '@nexa/contracts';
 import { ApiError } from './api/client';
 import { t, type WebKey } from './i18n/web.fa';
 
@@ -84,3 +90,52 @@ export function recoveryErrorText(error: unknown): string {
   if (error.code in RECOVERY_FAILURE_TEXT) return recoveryFailureText(error.code);
   return `${t('web.recovery_error_generic')} (${error.code})`;
 }
+
+/**
+ * W5: recovery request states, pipeline stages and backup run states as Persian names.
+ * Total over the contract's lists (a new state without a name is a compile error); the
+ * page keeps the raw value in the tooltip.
+ */
+export const RECOVERY_STATE_LABELS: Readonly<Record<RecoveryState, WebKey>> = {
+  UPLOADED: 'web.recovery_state_uploaded',
+  VERIFYING: 'web.recovery_state_verifying',
+  VERIFIED: 'web.recovery_state_verified',
+  RESTORE_TESTING: 'web.recovery_state_restore_testing',
+  RESTORE_TEST_PASSED: 'web.recovery_state_restore_test_passed',
+  RESTORE_REQUESTED: 'web.recovery_state_restore_requested',
+  PRE_RESTORE_BACKUP: 'web.recovery_state_pre_restore_backup',
+  QUIESCING: 'web.recovery_state_quiescing',
+  RESTORING: 'web.recovery_state_restoring',
+  VALIDATING: 'web.recovery_state_validating',
+  CUTTING_OVER: 'web.recovery_state_cutting_over',
+  RESTARTING: 'web.recovery_state_restarting',
+  SUCCEEDED: 'web.recovery_state_succeeded',
+  FAILED: 'web.recovery_state_failed',
+};
+
+export const RECOVERY_STAGE_LABELS: Readonly<Record<RecoveryStage, WebKey>> = {
+  RECEIVE_UPLOAD: 'web.recovery_stage_receive_upload',
+  PARSE_CONTAINER: 'web.recovery_stage_parse_container',
+  DECRYPT: 'web.recovery_stage_decrypt',
+  CHECKSUM: 'web.recovery_stage_checksum',
+  MANIFEST: 'web.recovery_stage_manifest',
+  SCRATCH_RESTORE: 'web.recovery_stage_scratch_restore',
+  SCRATCH_INSPECT: 'web.recovery_stage_scratch_inspect',
+  AWAIT_CONFIRMATION: 'web.recovery_stage_await_confirmation',
+  EMERGENCY_BACKUP: 'web.recovery_stage_emergency_backup',
+  QUIESCE: 'web.recovery_stage_quiesce',
+  CREATE_CANDIDATE: 'web.recovery_stage_create_candidate',
+  RESTORE_CANDIDATE: 'web.recovery_stage_restore_candidate',
+  MIGRATE_CANDIDATE: 'web.recovery_stage_migrate_candidate',
+  VALIDATE_CANDIDATE: 'web.recovery_stage_validate_candidate',
+  CUTOVER: 'web.recovery_stage_cutover',
+  READINESS: 'web.recovery_stage_readiness',
+  CLEANUP: 'web.recovery_stage_cleanup',
+  DONE: 'web.recovery_stage_done',
+};
+
+export const BACKUP_RUN_STATE_LABELS: Readonly<Record<BackupRunState, WebKey>> = {
+  RUNNING: 'web.backup_run_state_running',
+  SUCCEEDED: 'web.backup_run_state_succeeded',
+  FAILED: 'web.backup_run_state_failed',
+};

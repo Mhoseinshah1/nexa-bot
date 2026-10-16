@@ -10,7 +10,17 @@ import {
 } from '../../apps/web/src/audit-action-labels';
 import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
-import { TEMPLATE_KEYS } from '@nexa/contracts';
+import {
+  BACKUP_RUN_STATES,
+  RECOVERY_STAGES,
+  RECOVERY_STATES,
+  TEMPLATE_KEYS,
+} from '@nexa/contracts';
+import {
+  BACKUP_RUN_STATE_LABELS,
+  RECOVERY_STAGE_LABELS,
+  RECOVERY_STATE_LABELS,
+} from '../../apps/web/src/recovery-failure-labels';
 import {
   NOTIFICATION_CATEGORY_LABELS,
   NotificationsPage,
@@ -140,5 +150,17 @@ describe('notification types', () => {
     expect(name).toHaveAttribute('title', 'ops.financial.order_paid');
     expect(screen.getByText(t('web.notif_cat_finance'))).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: t('web.notif_type') })).toBeInTheDocument();
+  });
+});
+
+describe('recovery states, stages and backup runs', () => {
+  it('names every state, stage and run state the contract declares', () => {
+    for (const state of RECOVERY_STATES)
+      expect(WEB_FA[RECOVERY_STATE_LABELS[state]], state).toBeTruthy();
+    for (const stage of RECOVERY_STAGES)
+      expect(WEB_FA[RECOVERY_STAGE_LABELS[stage]], stage).toBeTruthy();
+    for (const state of BACKUP_RUN_STATES) {
+      expect(WEB_FA[BACKUP_RUN_STATE_LABELS[state]], state).toBeTruthy();
+    }
   });
 });

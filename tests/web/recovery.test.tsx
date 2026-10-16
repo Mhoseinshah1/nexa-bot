@@ -247,7 +247,10 @@ describe('the recovery page', () => {
     expect(screen.getByText('آخرین بکاپ موفق')).toBeInTheDocument();
     expect(screen.getByText('عملیات بازیابی')).toBeInTheDocument();
     // The row came from the stubbed server through the real zod schema.
-    expect(await screen.findByText('SUCCEEDED')).toBeInTheDocument();
+    // W5: the state reads in Persian; the raw value stays in the tooltip.
+    const state = (await screen.findAllByTitle('SUCCEEDED'))[0]!;
+    expect(state.textContent).toBe('موفق');
+    expect(screen.queryByText('SUCCEEDED')).toBeNull();
   });
 
   it('offers no run button to an actor without backup.run', async () => {
@@ -780,7 +783,9 @@ describe('the recovery page', () => {
       fireEvent.click(
         await screen.findByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }),
       );
-      await screen.findByText('RESTORE_TEST_PASSED');
+      expect((await screen.findAllByTitle('RESTORE_TEST_PASSED'))[0]!.textContent).toBe(
+        'آزمون بازیابی موفق',
+      );
       return api;
     }
 
