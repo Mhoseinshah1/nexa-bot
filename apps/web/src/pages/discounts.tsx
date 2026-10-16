@@ -686,7 +686,7 @@ function DiscountRules({
           isEmpty={rows.length === 0 && trail.depth === 0}
           empty={
             filtered ? (
-              <Empty title={t('web.discounts_filter_empty')} icon="inbox" />
+              <Empty title={t('web.discounts_filter_none')} icon="inbox" />
             ) : (
               <Empty
                 title={t('web.discounts_empty')}
@@ -1738,7 +1738,7 @@ function CashbackRules({
           isEmpty={rows.length === 0 && trail.depth === 0}
           empty={
             status !== 'ALL' ? (
-              <Empty title={t('web.discounts_filter_empty')} icon="inbox" />
+              <Empty title={t('web.discounts_filter_none')} icon="inbox" />
             ) : (
               <Empty title={t('web.cashback_empty')} icon="discounts" />
             )

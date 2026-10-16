@@ -1,4 +1,7 @@
 import { useState, type FormEvent } from 'react';
+import { ListFilterBar } from '../ui/filter-bar';
+import { Drawer, Modal } from '../ui/overlays';
+import { chipFilter } from './money-filters';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   RESELLER_OVERRIDE_MODES,
@@ -31,6 +34,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -44,10 +48,7 @@ import {
   StateSwitch,
   Button,
   DetailHead,
-  FilterChip,
-  FilterChips,
   RowActions,
-  TwoColumn,
   useDiscardGuard,
   useReportDirty,
   useUnsavedChanges,
@@ -58,7 +59,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { listRouteKey, useDebouncedApply } from '../ui/list-search';
-import { SaveBar, revealField } from './editor-layout';
+import { SaveBar } from './editor-layout';
 import {
   ResellerBalanceCard,
   ResellerHistoryCard,
@@ -299,6 +300,7 @@ export function ResellersPage({
     queryKey: ['resellers', signature, trail.cursor ?? null],
     queryFn: () =>
       fetchResellers({
+        limit: LIST_PAGE_SIZE,
         ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
         ...(status === 'ALL' ? {} : { status }),
         ...(tierId === '' ? {} : { tierId }),
@@ -320,6 +322,25 @@ export function ResellersPage({
   const discard = useDiscardGuard();
   /** The reseller whose standing (credit, purchases, history) is open — a READ. */
   const [viewing, setViewing] = useState<string | null>(null);
+  /** W3: the register dialog; a handed-over customer opens it. */
+  const [registerOpen, setRegisterOpen] = useState(registering !== '');
+  const [handedOver, setHandedOver] = useState(registering);
+  if (handedOver !== registering) {
+    setHandedOver(registering);
+    if (registering !== '') setRegisterOpen(true);
+  }
+  const closeRegister = () => {
+    setRegisterOpen(false);
+    if (registering !== '') setQueries(route, [['register', null]]);
+  };
+  const closeStanding = () => {
+    const close = () => {
+      setViewing(null);
+      setEditing(null);
+    };
+    if (editing === null) close();
+    else discard.confirmDiscard(close);
+  };
 
   const apply = (event: FormEvent) => {
     event.preventDefault();
@@ -384,8 +405,8 @@ export function ResellersPage({
             icon="eye"
             onClick={() => {
               const open = () => {
+                if (registerOpen) closeRegister();
                 setViewing(row.customerId);
-                revealField('reseller-standing');
               };
               // The edit form moves out of the standing it was drawn in, and remounts.
               if (editing !== null && editing.customerId !== row.customerId) {
@@ -402,9 +423,9 @@ export function ResellersPage({
               icon="edit"
               onClick={() => {
                 const open = () => {
+                  if (registerOpen) closeRegister();
                   setEditing(row);
                   setViewing(row.customerId);
-                  revealField('reseller-standing');
                 };
                 if (editing?.customerId === row.customerId) open();
                 else discard.confirmDiscard(open);
@@ -438,9 +459,11 @@ export function ResellersPage({
                 variant="primary"
                 icon="userPlus"
                 onClick={() => {
+                  // One reseller form at a time: an open edit is asked about first.
                   const open = () => {
                     setEditing(null);
-                    revealField('reseller-register-customer');
+                    setViewing(null);
+                    setRegisterOpen(true);
                   };
                   if (editing === null) open();
                   else discard.confirmDiscard(open);
@@ -457,69 +480,78 @@ export function ResellersPage({
         {/* Hidden while the list cannot answer: a filter mints a request the server has
             just refused. */}
         <div className="cb-filters" hidden={!mayRequest(resellers, denied)}>
-          <form className="toolbar" onSubmit={apply}>
-            <div className="search cb-search">
-              <label className="visually-hidden" htmlFor="resellers-search">
-                {t('web.resellers_search')}
-              </label>
-              <Icon name="search" size={14} />
-              <input
-                id="resellers-search"
-                className="input"
-                type="search"
-                value={draft.value}
-                maxLength={64}
-                placeholder={t('web.resellers_search_hint')}
-                onChange={(event) => {
-                  setDraft({ applied, value: event.target.value });
-                  debounce.edited();
-                }}
-                {...debounce.composition}
-              />
-            </div>
-            <Button type="submit" size="sm" variant="primary">
-              {t('web.referrals_filter_apply')}
-            </Button>
-            {applied !== '' && (
-              <a className="btn sm ghost" href="/resellers" onClick={onLink}>
-                {t('web.referrals_filter_clear')}
-              </a>
-            )}
-            <span className="spacer" />
-            <Field label={t('web.reseller_tier')} htmlFor="resellers-tier" compact>
-              <select
-                id="resellers-tier"
-                value={tierId}
-                onChange={(event) => setTierId(event.target.value)}
-              >
-                <option value="">{t('web.reseller_tier_all')}</option>
-                {(tierRows ?? []).map((tier) => (
-                  <option key={tier.id} value={tier.id}>
-                    {tier.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </form>
-          <FilterChips>
-            {(
-              [
-                { id: 'ALL', label: t('web.reseller_status_all') },
-                ...RESELLER_STATUSES.map((one) => ({
+          <ListFilterBar
+            label={t('web.resellers_list_title')}
+            search={
+              <form className="toolbar" onSubmit={apply}>
+                <div className="search cb-search">
+                  <label className="visually-hidden" htmlFor="resellers-search">
+                    {t('web.resellers_search')}
+                  </label>
+                  <Icon name="search" size={14} />
+                  <input
+                    id="resellers-search"
+                    className="input"
+                    type="search"
+                    value={draft.value}
+                    maxLength={64}
+                    placeholder={t('web.resellers_search_hint')}
+                    title={t('web.resellers_search_hint')}
+                    onChange={(event) => {
+                      setDraft({ applied, value: event.target.value });
+                      debounce.edited();
+                    }}
+                    {...debounce.composition}
+                  />
+                </div>
+                <Button type="submit" size="sm" variant="primary">
+                  {t('web.users_search_apply')}
+                </Button>
+                {applied !== '' && (
+                  <a className="btn sm ghost" href="/resellers" onClick={onLink}>
+                    {t('web.users_search_clear')}
+                  </a>
+                )}
+              </form>
+            }
+            filters={[
+              {
+                key: 'tier',
+                label: t('web.reseller_tier'),
+                active:
+                  tierId === ''
+                    ? null
+                    : ((tierRows ?? []).find((tier) => tier.id === tierId)?.name ?? tierId),
+                onClear: () => setTierId(''),
+                control: (
+                  <select
+                    id="resellers-tier"
+                    aria-label={t('web.reseller_tier')}
+                    value={tierId}
+                    onChange={(event) => setTierId(event.target.value)}
+                  >
+                    <option value="">{t('web.reseller_tier_all')}</option>
+                    {(tierRows ?? []).map((tier) => (
+                      <option key={tier.id} value={tier.id}>
+                        {tier.name}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+              chipFilter({
+                key: 'status',
+                label: t('web.status'),
+                value: status === 'ALL' ? null : status,
+                allLabel: t('web.reseller_status_all'),
+                onChange: (next) => setStatus(next ?? 'ALL'),
+                items: RESELLER_STATUSES.map((one) => ({
                   id: one,
                   label: t(RESELLER_STATUS_LABELS[one]),
                 })),
-              ] as { id: StatusFilter; label: string }[]
-            ).map((item) => (
-              <FilterChip
-                key={item.id}
-                pressed={status === item.id}
-                onClick={() => setStatus(item.id)}
-              >
-                {item.label}
-              </FilterChip>
-            ))}
-          </FilterChips>
+              }),
+            ]}
+          />
         </div>
 
         <StateSwitch
@@ -528,7 +560,7 @@ export function ResellersPage({
           isEmpty={rows.length === 0 && trail.depth === 0}
           empty={
             filtered ? (
-              <Empty title={t('web.referrals_filter_empty')} icon="inbox" />
+              <Empty title={t('web.resellers_filter_empty')} icon="inbox" />
             ) : (
               <Empty
                 title={t('web.resellers_empty')}
@@ -557,85 +589,92 @@ export function ResellersPage({
         </StateSwitch>
       </Card>
 
-      {denied || viewing === null ? null : (
-        // Keyed by the customer, so a second reseller's cards never show the first's pages.
-        <div
-          key={`standing-${viewing}`}
-          id="reseller-standing"
-          className="stack resellers-standing"
-          tabIndex={-1}
-        >
-          <StandingHead
-            customerId={viewing}
-            row={rows.find((row) => row.customerId === viewing)}
-            onClose={() => {
-              const close = () => {
-                setViewing(null);
-                setEditing(null);
-              };
-              if (editing === null) close();
-              else discard.confirmDiscard(close);
-            }}
-          />
-          <TwoColumn
-            main={
-              <>
-                {mayEdit && editing !== null && editing.customerId === viewing && (
-                  // KEYED BY THE CUSTOMER: every `useState` initialiser must read the
-                  // reseller now open, not the one open before it.
-                  <ResellerForm
-                    key={`edit-${editing.customerId}`}
-                    reseller={editing}
-                    tiers={tierRows}
-                    onDone={() => setEditing(null)}
-                    onDirtyChange={discard.onDirtyChange}
-                  />
-                )}
-                {/* Round N: what this reseller may sell, inherited or their own, and the minimum. */}
-                <ResellerPolicyCard
-                  customerId={viewing}
-                  mayEdit={mayEdit}
-                  mayViewCatalog={mayViewCatalog}
-                  mayViewPanels={mayViewPanels}
+      {/*
+        W2: a reseller's standing opens in a wide drawer, never revealed under the list.
+        ×, Esc and the backdrop close it exactly as its own «بستن» does — asking first while
+        the edit form holds unsaved changes.
+      */}
+      <Drawer
+        open={!denied && viewing !== null}
+        onClose={closeStanding}
+        title={
+          rows.find((row) => row.customerId === viewing)?.displayName ??
+          t('web.reseller_standing_open')
+        }
+        wide
+      >
+        {viewing !== null && (
+          // Keyed by the customer, so a second reseller's cards never show the first's pages.
+          <div
+            key={`standing-${viewing}`}
+            id="reseller-standing"
+            className="stack resellers-standing"
+          >
+            <StandingHead
+              customerId={viewing}
+              row={rows.find((row) => row.customerId === viewing)}
+              onClose={closeStanding}
+            />
+            {/* One column in the drawer, the balance first. */}
+            <ResellerBalanceCard customerId={viewing} mayViewWallet={mayViewWallet} />
+            <>
+              {mayEdit && editing !== null && editing.customerId === viewing && (
+                // KEYED BY THE CUSTOMER: every `useState` initialiser must read the
+                // reseller now open, not the one open before it.
+                <ResellerForm
+                  key={`edit-${editing.customerId}`}
+                  reseller={editing}
+                  tiers={tierRows}
+                  onDone={() => setEditing(null)}
+                  onDirtyChange={discard.onDirtyChange}
                 />
-                <ResellerPurchasesCard customerId={viewing} mayViewOrders={mayViewOrders} />
-                <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
-              </>
-            }
-            side={<ResellerBalanceCard customerId={viewing} mayViewWallet={mayViewWallet} />}
-          />
-        </div>
+              )}
+              {/* Round N: what this reseller may sell, inherited or their own, and the minimum. */}
+              <ResellerPolicyCard
+                customerId={viewing}
+                mayEdit={mayEdit}
+                mayViewCatalog={mayViewCatalog}
+                mayViewPanels={mayViewPanels}
+              />
+              <ResellerPurchasesCard customerId={viewing} mayViewOrders={mayViewOrders} />
+              <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
+            </>
+          </div>
+        )}
+      </Drawer>
+
+      {!denied && !mayEdit && (
+        <Card title={t('web.reseller_register_title')}>
+          <Banner tone="info">{t('web.reseller_edit_denied')}</Banner>
+        </Card>
       )}
 
-      <div className="grid-2 resellers-foot">
-        {denied ? null : !mayEdit ? (
-          <Card title={t('web.reseller_register_title')}>
-            <Banner tone="info">{t('web.reseller_edit_denied')}</Banner>
-          </Card>
-        ) : editing !== null && editing.customerId !== viewing ? (
-          // An edit opened for a reseller whose standing is not shown (never, today):
-          // still the form, rather than nothing.
-          <ResellerForm
-            key={`edit-${editing.customerId}`}
-            reseller={editing}
-            tiers={tierRows}
-            onDone={() => setEditing(null)}
-            onDirtyChange={discard.onDirtyChange}
-          />
-        ) : editing === null ? (
-          // Keyed by the handed-over customer, so following a second "register" link
-          // re-reads it rather than keeping the first one's draft.
-          <ResellerForm
-            key={`register-${registering}`}
-            initialCustomerId={registering}
-            maySearchCustomers={maySearchCustomers}
-            mayViewCustomers={mayViewWallet}
-            tiers={tierRows}
-            onDone={() => undefined}
-            onDirtyChange={discard.onDirtyChange}
-          />
-        ) : null}
+      {/*
+        W3: «ثبت نماینده جدید» opens the register form in a dialog — the picker, tier,
+        pricing, percent, problems, unsaved marker and the server's refusal, unchanged. A
+        customer handed over by `?register=<id>` opens it with that customer. Closing it
+        over a typed draft asks first; a registration closes it.
+      */}
+      <Modal
+        open={!denied && mayEdit && registerOpen}
+        onClose={() => discard.confirmDiscard(closeRegister)}
+        title={t('web.reseller_register_title')}
+        size="lg"
+      >
+        {/* Keyed by the handed-over customer, so following a second "register" link
+            re-reads it rather than keeping the first one's draft. */}
+        <ResellerForm
+          key={`register-${registering}`}
+          initialCustomerId={registering}
+          maySearchCustomers={maySearchCustomers}
+          mayViewCustomers={mayViewWallet}
+          tiers={tierRows}
+          onDone={closeRegister}
+          onDirtyChange={discard.onDirtyChange}
+        />
+      </Modal>
 
+      <div className="resellers-foot">
         <Card title={t('web.resellers_scope_title')} tone="muted">
           <ul className="cb-notes">
             <li>{t('web.resellers_rule_identity')}</li>
@@ -917,8 +956,10 @@ function ResellerForm({
 
   return (
     <Card
-      title={mode === 'register' ? t('web.reseller_register_title') : t('web.reseller_edit_title')}
-      {...(mode === 'register' ? { hint: t('web.reseller_register_hint') } : {})}
+      // The register form lives in a dialog that carries its title (W3).
+      {...(mode === 'register'
+        ? { hint: t('web.reseller_register_hint') }
+        : { title: t('web.reseller_edit_title') })}
     >
       {tiers !== null && tiers.length === 0 && (
         <Banner tone="warn">

@@ -27,6 +27,7 @@ import {
   stubApi,
   type Api,
 } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * WP9-B on the Web Admin: the Resellers page, the Tiers page and its grants editor, the
@@ -121,6 +122,10 @@ const renderList = (
     />,
   );
 
+/** W3: «ثبت نماینده جدید» opens the register form in a dialog. */
+const openRegister = () =>
+  fireEvent.click(screen.getByRole('button', { name: t('web.cb_reseller_new') }));
+
 /** The picker's search: `GET /users?q=…`, the customer list's own search. */
 const searchRoute = (
   q: string,
@@ -134,7 +139,12 @@ const searchRoute = (
 /** Types into the picker and presses its search button. */
 const searchFor = (text: string) => {
   fireEvent.change(screen.getByLabelText('مشتری'), { target: { value: text } });
-  fireEvent.click(screen.getByRole('button', { name: t('web.customer_picker_search') }));
+  // Inside the register dialog: the list's own search button reads «جست‌وجو» too.
+  fireEvent.click(
+    within(screen.getByRole('dialog')).getByRole('button', {
+      name: t('web.customer_picker_search'),
+    }),
+  );
 };
 
 /** Picks one customer from the picker by a name only that row shows. */
@@ -255,12 +265,13 @@ describe('the reseller list', () => {
     const api = stubApi(listRoutes());
     renderList({ query: 'search=5551234567' });
     await screen.findByText('Reza Reseller');
-    expect(gets(api, '/resellers?search=5551234567')).toHaveLength(1);
+    expect(gets(api, '/resellers?limit=10&search=5551234567')).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'معلق' }));
+    // W1.3: the status chips and the tier select are in the «فیلترها» panel.
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'معلق' }));
     await waitFor(() => expect(gets(api, 'status=SUSPENDED')).toHaveLength(1));
 
-    fireEvent.change(screen.getByLabelText('سطح', { selector: '#resellers-tier' }), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText('سطح'), {
       target: { value: TIER_ID },
     });
     await waitFor(() => expect(gets(api, `tierId=${TIER_ID}`)).toHaveLength(1));
@@ -310,6 +321,7 @@ describe('registering and editing a reseller', () => {
     const api = stubApi([...listRoutes(), searchRoute('5551234567', [customer()])]);
     renderList();
     await screen.findByText('Reza Reseller');
+    openRegister();
     searchFor('5551234567');
     await pickRow('علی محمدی');
     fireEvent.change(screen.getByLabelText('سطح', { selector: '#reseller-register-tier' }), {
@@ -360,7 +372,7 @@ describe('registering and editing a reseller', () => {
     expect(body['customerId']).toBeUndefined();
     // Answered: the form closes and the list is asked again.
     expect(await screen.findByText('نماینده ذخیره شد.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'ثبت نماینده' })).toBeInTheDocument();
+    await waitFor(() => expect(document.getElementById('reseller-update-tier')).toBeNull());
   });
 
   it("says a refusal in the operator's language, not the server's", async () => {
@@ -410,6 +422,7 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     const api = stubApi([...listRoutes(), searchRoute('5551234567', [ALI])]);
     renderList();
     await screen.findByText('Reza Reseller');
+    openRegister();
     // No uuid box: the field is a search.
     expect(screen.getByLabelText('مشتری')).toHaveAttribute('type', 'search');
     searchFor('5551234567');
@@ -435,6 +448,7 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     ]);
     renderList();
     await screen.findByText('Reza Reseller');
+    openRegister();
     searchFor('@ALI_tehran');
     expect(await screen.findByText('@ali_tehran')).toBeInTheDocument();
     searchFor('ali_tehran');
@@ -447,6 +461,7 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     const api = stubApi([...listRoutes(), searchRoute('ali', [ALI, ALIREZA])]);
     renderList();
     await screen.findByText('Reza Reseller');
+    openRegister();
     searchFor('ali');
     expect(await screen.findByText(t('web.customer_picker_many'))).toBeInTheDocument();
     const results = screen.getByRole('list', { name: t('web.customer_picker_results') });
@@ -473,6 +488,7 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     ]);
     renderList();
     await screen.findByText('Reza Reseller');
+    openRegister();
     searchFor('nobody');
     expect(await screen.findByText(t('web.customer_picker_none'))).toBeInTheDocument();
     searchFor('a');
@@ -483,6 +499,7 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     const api = stubApi([...listRoutes(), searchRoute('ali', [ALI, ALIREZA])]);
     renderList();
     await screen.findByText('Reza Reseller');
+    openRegister();
     searchFor('ali');
     await pickRow('علی محمدی');
     fireEvent.click(screen.getByRole('button', { name: t('web.customer_picker_change') }));
@@ -495,6 +512,7 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     const api = stubApi(listRoutes());
     renderList({ maySearchCustomers: false });
     await screen.findByText('Reza Reseller');
+    openRegister();
     expect(screen.getByText(t('web.customer_picker_denied'))).toBeInTheDocument();
     expect(screen.getByText(/users\.search/u)).toBeInTheDocument();
     expect(gets(api, '/users')).toHaveLength(0);
@@ -514,11 +532,10 @@ describe('the register form picks a customer, never takes an internal id (UX bat
       ]);
       const view = renderPage(resolved.element as ReactElement);
       await within(view.container).findByText('Reza Reseller');
-      const box = view.container.querySelector('#reseller-register-customer');
+      openRegister();
+      const box = document.querySelector('#reseller-register-customer');
       expect(box?.getAttribute('type') === 'search', permissions.join(',')).toBe(searches);
-      expect(within(view.container).queryByText(t('web.customer_picker_denied')) !== null).toBe(
-        !searches,
-      );
+      expect(screen.queryByText(t('web.customer_picker_denied')) !== null).toBe(!searches);
       expect(gets(api, '/users')).toHaveLength(0);
       view.unmount();
     }
@@ -542,6 +559,7 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     ]);
     renderList();
     await screen.findByText('Reza Reseller');
+    openRegister();
     searchFor('ali');
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.queryByText(t('web.customer_picker_none'))).toBeNull();
@@ -554,6 +572,35 @@ describe('the register form picks a customer, never takes an internal id (UX bat
     const chosen = await screen.findByRole('group', { name: t('web.customer_picker_selected') });
     expect(await within(chosen).findByText('علی محمدی')).toBeInTheDocument();
     expect(within(chosen).getByText('5551234567')).toBeInTheDocument();
+  });
+});
+
+describe('the standing and register surfaces (W2/W3)', () => {
+  it('opens a standing in a side drawer, and the register form in a dialog', async () => {
+    stubApi(listRoutes());
+    renderList();
+    await screen.findByText('Reza Reseller');
+    expect(document.getElementById('reseller-standing')).toBeNull();
+    expect(document.getElementById('reseller-register-customer')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.reseller_standing_open') }));
+    const drawer = screen.getByRole('dialog');
+    expect(drawer).toContainElement(document.getElementById('reseller-standing'));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(document.getElementById('reseller-standing')).toBeNull());
+
+    openRegister();
+    expect(screen.getByRole('dialog', { name: t('web.reseller_register_title') })).toContainElement(
+      document.getElementById('reseller-register-customer'),
+    );
+  });
+
+  it('opens the register dialog for a customer handed over by link', async () => {
+    stubApi(listRoutes());
+    renderList({ query: `register=${CUSTOMER_ID}` });
+    expect(
+      await screen.findByRole('dialog', { name: t('web.reseller_register_title') }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -602,9 +649,9 @@ describe('unsaved edits on the reseller forms', () => {
     fireEvent.click(screen.getByRole('button', { name: 'ثبت نماینده' }));
     await waitFor(() => expect(posts(api, '/resellers')).toHaveLength(1));
     expect(await screen.findByText(t('web.reseller_registered'))).toBeInTheDocument();
-    // Cleared for the next one, and clean — although `?register=` is still in the URL.
-    expect((screen.getByLabelText('مشتری') as HTMLInputElement).value).toBe('');
-    expect(screen.queryByRole('group', { name: t('web.customer_picker_selected') })).toBeNull();
+    // W3: a registration closes the dialog and drops `?register=`; nothing is left unsaved.
+    await waitFor(() => expect(screen.queryByLabelText('مشتری')).toBeNull());
+    expect(new URLSearchParams(window.location.search).get('register')).toBeNull();
     expect(screen.queryByText(t('web.unsaved_changes'))).toBeNull();
     act(() => navigate('/orders'));
     expect(screen.queryByRole('alertdialog')).toBeNull();
@@ -637,6 +684,7 @@ describe('unsaved edits on the reseller forms', () => {
     stubApi([...listRoutes(), searchRoute('ali', [customer()])]);
     renderList();
     await screen.findByText('Reza Reseller');
+    openRegister();
     searchFor('ali');
     await pickRow('علی محمدی');
 
@@ -682,7 +730,6 @@ describe('unsaved edits on the reseller forms', () => {
     fireEvent.click(within(again).getByRole('button', { name: t('web.discard') }));
     await waitFor(() => expect(document.getElementById('reseller-standing')).toBeNull());
     expect(document.getElementById('reseller-update-tier')).toBeNull();
-    expect(document.getElementById('reseller-register-customer')).not.toBeNull();
   });
 });
 

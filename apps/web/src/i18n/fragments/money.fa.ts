@@ -99,8 +99,9 @@ export const WEB_FA_MONEY = {
   'web.money_tab_problem': 'نیاز به اصلاح',
   // W1.5 — the product page's action group.
   'web.product_actions_catalogue': 'دسته و وضعیت',
-  // W5 — «صافی» → «فیلتر» in the keys these pages render.
-  'web.discounts_filter_empty': 'قاعده‌ای با این فیلتر پیدا نشد.',
+  // W5 — «صافی» → «فیلتر»: new keys (a fragment cannot override an existing key's text).
+  'web.discounts_filter_none': 'قاعده‌ای با این فیلتر پیدا نشد.',
+  'web.resellers_filter_empty': 'موردی با این فیلتر پیدا نشد.',
 } as const;
 
 /**
@@ -119,4 +120,6 @@ export const WEB_FA_MONEY_RETIRED: readonly string[] = [
   'web.products_panel_rule',
   // W1.5: the product status card became a button in the action panel.
   'web.product_status_title',
+  // W5: replaced by `web.discounts_filter_none` («فیلتر», not «صافی»).
+  'web.discounts_filter_empty',
 ];
