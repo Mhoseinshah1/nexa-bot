@@ -13,6 +13,9 @@ export const WEB_FA_MARKETING = {
   'web.bx_bots_attention': 'نیازمند توجه',
   // appearance — slots as compact rows, each opening a sheet
   'web.bx_appearance_stored': 'شناسهٔ ذخیره‌شده',
+  // reminders — five section cards with sheets
+  'web.bx_rem_configure': 'تنظیم',
+  'web.bx_rem_flags_on': '{n} از {m} یادآور روشن',
 } as const;
 
 /**

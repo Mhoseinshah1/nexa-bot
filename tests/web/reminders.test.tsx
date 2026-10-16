@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { RemindersPage } from '../../apps/web/src/pages/reminders';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { setDateField } from './ui-helpers';
 import { renderPage, setting, stubApi } from './harness';
 
 /**
@@ -304,12 +305,16 @@ describe('the reminders screen', () => {
     expect(
       await screen.findByRole('heading', { name: t('web.reminders_quiet_title') }),
     ).toBeInTheDocument();
-    expect(screen.getByText(t('web.reminders_quiet_hint'))).toBeInTheDocument();
+    // The card says the window in force; its sheet holds the two 24-hour times.
+    const card = screen.getByTestId('reminders-quiet');
+    expect(within(card).getByText(t('web.reminders_quiet_hint'))).toBeInTheDocument();
     const toggle = screen.getByRole('switch', { name: t('web.reminders_flag_quiet') });
     expect(toggle).toHaveAttribute('aria-checked', 'false');
-    const start = screen.getByLabelText(t('web.reminders_quiet_start'));
-    const end = screen.getByLabelText(t('web.reminders_quiet_end'));
-    expect(start).toHaveAttribute('type', 'time');
+    expect(card).toHaveTextContent('23:00 ← 08:00');
+    fireEvent.click(within(card).getByRole('button', { name: t('web.bx_rem_configure') }));
+    const sheet = screen.getByRole('dialog', { name: t('web.reminders_quiet_title') });
+    const start = within(sheet).getByLabelText(t('web.reminders_quiet_start'));
+    const end = within(sheet).getByLabelText(t('web.reminders_quiet_end'));
     expect(start).toHaveValue('23:00');
     expect(end).toHaveValue('08:00');
     // 23:00 to 08:00 crosses midnight, and the page says so in words.
@@ -335,7 +340,7 @@ describe('the reminders screen', () => {
     page();
 
     const field = await screen.findByLabelText(t('web.reminders_quiet_start'));
-    fireEvent.change(field, { target: { value: '22:30' } });
+    setDateField(field, '22:30');
     fireEvent.click(field.closest('form')!.querySelector('button[type="submit"]')!);
 
     await waitFor(() =>
@@ -363,6 +368,42 @@ describe('the reminders screen', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
     const sent = calls.calls.find((call) => call.url.endsWith('/features/reminder_quiet_hours'));
     expect(sent?.body).toMatchObject({ enabled: true, expectedVersion: null });
+  });
+
+  it('keeps a row’s draft when its sheet closes, and marks the card and the page', async () => {
+    const calls = api();
+    page();
+    const card = await screen.findByTestId('reminders-usage');
+    // Nothing editable is on the card but its own switch.
+    expect(within(card).queryByRole('spinbutton')).toBeNull();
+    fireEvent.click(within(card).getByRole('button', { name: t('web.bx_rem_configure') }));
+    const sheet = screen.getByRole('dialog', { name: t('web.reminders_usage_title') });
+    fireEvent.change(within(sheet).getByLabelText(t('web.reminders_usage_first')), {
+      target: { value: '30' },
+    });
+    fireEvent.click(within(sheet).getByRole('button', { name: t('web.close') }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(card).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: t('web.bx_rem_configure') }));
+    expect(
+      within(screen.getByRole('dialog', { name: t('web.reminders_usage_title') })).getByLabelText(
+        t('web.reminders_usage_first'),
+      ),
+    ).toHaveValue(30);
+    expect(calls.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+  });
+
+  it('opens a family’s messages in their own sheet', async () => {
+    api();
+    page();
+    const card = await screen.findByTestId('reminders-wallet');
+    fireEvent.click(
+      within(card).getByRole('button', { name: new RegExp(t('web.reminders_templates')) }),
+    );
+    const sheet = screen.getByRole('dialog', {
+      name: `${t('web.reminders_wallet_title')} — ${t('web.reminders_templates')}`,
+    });
+    expect(within(sheet).getByText(t('web.reminders_templates_hint'))).toBeInTheDocument();
   });
 
   it('says so, rather than hiding the section, when templates cannot be read', async () => {

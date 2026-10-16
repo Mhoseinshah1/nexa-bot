@@ -1,6 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { t } from '../i18n/web.fa';
 import { Num } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { useFocusTrap } from '../ui/overlays';
 
 /**
  * Editor layout pieces shared by the commerce pages (products, discounts,
@@ -181,5 +184,63 @@ export function SummaryPill({
       </b>
       {label}
     </span>
+  );
+}
+
+/**
+ * A side sheet whose contents stay MOUNTED while it is closed.
+ *
+ * The kit's `Drawer` unmounts its body on close, which is right for a form whose draft lives
+ * in its caller. A sheet holding rows that keep their OWN drafts (a setting row, a template
+ * card) must not: closing it would discard what was typed without a word, and the page's
+ * unsaved count, fed by those rows, would forget it too. This one is hidden instead — same
+ * look, focus trap, Escape, backdrop and ✕ as the drawer.
+ */
+export function KeptSheet({
+  open,
+  onClose,
+  title,
+  hint,
+  wide = false,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: ReactNode;
+  hint?: ReactNode;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  const titleId = useId();
+  const ref = useRef<HTMLElement>(null);
+  useFocusTrap(ref, open, onClose);
+  return createPortal(
+    <>
+      {open && <div className="drawer-layer" onMouseDown={onClose} />}
+      <aside
+        ref={ref}
+        className={wide ? 'drawer wide bx-kept' : 'drawer bx-kept'}
+        hidden={!open}
+        aria-labelledby={titleId}
+        {...(open ? { role: 'dialog', 'aria-modal': true } : {})}
+      >
+        <div className="drawer-head">
+          <h2 id={titleId}>{title}</h2>
+          <button
+            type="button"
+            className="btn ghost icon sm"
+            aria-label={t('web.close')}
+            onClick={onClose}
+          >
+            <Icon name="x" />
+          </button>
+        </div>
+        <div className="drawer-body stack">
+          {hint !== undefined && <p className="muted small">{hint}</p>}
+          {children}
+        </div>
+      </aside>
+    </>,
+    document.body,
   );
 }
