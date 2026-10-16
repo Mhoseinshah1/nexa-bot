@@ -841,7 +841,7 @@ describe('the promotion of /services', () => {
     const pager = container.querySelector('.pager');
     expect(pager).not.toBeNull();
     const labels = [...pager!.querySelectorAll('button')].map((b) => b.textContent ?? '');
-    expect(labels).toEqual(['تازه‌تر', 'قدیمی‌تر']);
+    expect(labels).toEqual(['قبلی', 'بعدی']);
   });
 
   it('refuses to render the list at all without services.view', () => {

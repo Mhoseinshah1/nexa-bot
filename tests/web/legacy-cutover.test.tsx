@@ -18,7 +18,7 @@ import { renderPage, stubApi } from './harness';
  */
 
 const H = (c: string) => c.repeat(64);
-const NEXT_LABEL = 'web.older' as const;
+const NEXT_LABEL = 'web.page_next' as const;
 const ID = '019600ab-cdef-7012-8345-6789abcd0201';
 
 const approval = (overrides: Record<string, unknown> = {}) => ({

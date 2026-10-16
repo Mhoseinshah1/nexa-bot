@@ -64,7 +64,7 @@ describe('the Mirza history card', () => {
     );
     fireEvent.click(await screen.findByRole('button', { name: /^همه/ }));
     await screen.findByRole('heading', { name: 'پرداخت‌ها' });
-    fireEvent.click(await screen.findByRole('button', { name: /قدیمی‌تر/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /بعدی/ }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('offset=25'))).toBe(true),
     );
