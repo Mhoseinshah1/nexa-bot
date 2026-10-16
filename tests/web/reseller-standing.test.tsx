@@ -222,7 +222,7 @@ describe('the reseller standing cards', () => {
     );
     await within(view.container).findByText('Gold');
     fireEvent.click(within(view.container).getByRole('button', { name: 'تاریخچه' }));
-    const history = await within(view.container).findByRole('table', { name: 'تاریخچهٔ تغییرات' });
+    const history = await screen.findByRole('table', { name: 'تاریخچهٔ تغییرات' });
     expect(history.textContent).toContain('تغییر مجوزها');
     expect(gets(api, `/reseller-tiers/${TIER_ID}/history`)).toHaveLength(1);
   });
@@ -359,7 +359,7 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     await within(view.container).findByText('Gold');
     fireEvent.click(within(view.container).getByRole('button', { name: 'تاریخچه' }));
 
-    expect(await within(view.container).findByText(/audit\.view/u)).toBeInTheDocument();
+    expect(await screen.findByText(/audit\.view/u)).toBeInTheDocument();
     expect(gets(api, '/history')).toHaveLength(0);
   });
 
@@ -369,10 +369,8 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     await within(view.container).findByText('Gold');
     fireEvent.click(within(view.container).getByRole('button', { name: 'تاریخچه' }));
 
-    expect(
-      await within(view.container).findByRole('table', { name: 'تاریخچهٔ تغییرات' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: 'تاریخچهٔ تغییرات' })).toBeInTheDocument();
     expect(gets(api, `/reseller-tiers/${TIER_ID}/history`)).toHaveLength(1);
-    expect(within(view.container).queryByText(/audit\.view/u)).toBeNull();
+    expect(screen.queryByText(/audit\.view/u)).toBeNull();
   });
 });

@@ -56,7 +56,8 @@ import {
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { SaveBar, revealField } from './editor-layout';
+import { SaveBar } from './editor-layout';
+import { Drawer } from '../ui/overlays';
 import { TierHistoryCard } from './reseller-standing';
 
 /**
@@ -357,6 +358,8 @@ export function ResellerTiersPage({
   const [editingId, setEditingId] = useState<string | null>(null);
   /** Opening another tier's edit drops the open form's draft: asked first. */
   const discard = useDiscardGuard();
+  /** The edit drawer's own guard: closing it over unsaved changes asks first. */
+  const editGuard = useDiscardGuard();
   const [grantsId, setGrantsId] = useState<string | null>(null);
   const [historyId, setHistoryId] = useState<string | null>(null);
   const editing = rows.find((row) => row.id === editingId);
@@ -401,42 +404,14 @@ export function ResellerTiersPage({
       render: (row) => (
         <RowActions>
           {mayEdit && (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon="edit"
-              onClick={() => {
-                if (editingId === row.id) revealField('tier-edit-name');
-                else
-                  discard.confirmDiscard(() => {
-                    setEditingId(row.id);
-                    revealField('tier-edit-name');
-                  });
-              }}
-            >
+            <Button size="sm" variant="ghost" icon="edit" onClick={() => setEditingId(row.id)}>
               {t('web.rule_edit')}
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            icon="shield"
-            onClick={() => {
-              setGrantsId(row.id);
-              revealField('tier-grants');
-            }}
-          >
+          <Button size="sm" variant="ghost" icon="shield" onClick={() => setGrantsId(row.id)}>
             {t('web.reseller_grants_open')}
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            icon="clock"
-            onClick={() => {
-              setHistoryId(row.id);
-              revealField('tier-history');
-            }}
-          >
+          <Button size="sm" variant="ghost" icon="clock" onClick={() => setHistoryId(row.id)}>
             {t('web.history_open')}
           </Button>
         </RowActions>
@@ -488,38 +463,64 @@ export function ResellerTiersPage({
         </StateSwitch>
       </Card>
 
-      <div id="tier-grants" className="tiers-anchor" tabIndex={-1} />
-      {granting !== undefined &&
-        (mayEdit ? (
-          // KEYED BY THE TIER: the editor's state is initialised from the tier now open.
-          <GrantsEditor
-            key={granting.id}
-            tier={granting}
-            options={options}
-            names={names}
-            onClose={() => setGrantsId(null)}
-          />
-        ) : (
-          <GrantsReadOnly tier={granting} names={names} onClose={() => setGrantsId(null)} />
-        ))}
+      {/*
+        W2: a tier's edit, grants and history each open in a side drawer — never revealed
+        further down the page. The create form stays on the page. Closing the edit drawer
+        over unsaved changes asks first; closing the grants drawer discards its draft, as
+        its own «بستن» always did.
+      */}
+      <Drawer
+        open={granting !== undefined}
+        onClose={() => setGrantsId(null)}
+        title={`${t('web.reseller_grants_open')} — ${granting?.name ?? ''}`}
+        wide
+      >
+        {granting !== undefined &&
+          (mayEdit ? (
+            // KEYED BY THE TIER: the editor's state is initialised from the tier now open.
+            <GrantsEditor
+              key={granting.id}
+              tier={granting}
+              options={options}
+              names={names}
+              onClose={() => setGrantsId(null)}
+            />
+          ) : (
+            <GrantsReadOnly tier={granting} names={names} onClose={() => setGrantsId(null)} />
+          ))}
+      </Drawer>
 
-      <div id="tier-history" className="tiers-anchor" tabIndex={-1} />
-      {denied || historyId === null ? null : (
-        <TierHistoryCard key={historyId} tierId={historyId} mayViewAudit={mayViewAudit} />
-      )}
+      <Drawer
+        open={!denied && historyId !== null}
+        onClose={() => setHistoryId(null)}
+        title={`${t('web.history_open')} — ${rows.find((row) => row.id === historyId)?.name ?? ''}`}
+        wide
+      >
+        {historyId !== null && (
+          <TierHistoryCard key={historyId} tierId={historyId} mayViewAudit={mayViewAudit} />
+        )}
+      </Drawer>
+
+      <Drawer
+        open={mayEdit && editing !== undefined}
+        onClose={() => editGuard.confirmDiscard(() => setEditingId(null))}
+        title={`${t('web.reseller_tier_edit_title')} — ${editing?.name ?? ''}`}
+      >
+        {editing !== undefined && (
+          <TierForm
+            key={editing.id}
+            tier={editing}
+            onDone={() => setEditingId(null)}
+            onDirtyChange={editGuard.onDirtyChange}
+          />
+        )}
+      </Drawer>
 
       <div className="grid-2 tiers-foot">
         {denied ? null : !mayEdit ? (
           <Card title={t('web.reseller_tier_new_title')}>
             <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
           </Card>
-        ) : editing !== undefined ? (
-          <TierForm
-            key={editing.id}
-            tier={editing}
-            onDone={() => setEditingId(null)}
-            onDirtyChange={discard.onDirtyChange}
-          />
         ) : (
           <TierForm onDone={() => undefined} onDirtyChange={discard.onDirtyChange} />
         )}
@@ -539,6 +540,7 @@ export function ResellerTiersPage({
         </Card>
       </div>
       {discard.dialog}
+      {editGuard.dialog}
     </>
   );
 }

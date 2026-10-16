@@ -1299,7 +1299,12 @@ describe('the percentage field', () => {
 });
 
 describe('unsaved edits on the tier form', () => {
-  it('asks before an edit replaces a new tier holding unsaved input, and not after', async () => {
+  /*
+   * W2: a tier's edit opens in a drawer beside the create form, which keeps its draft —
+   * there is nothing to discard, so nothing is asked. Closing the edit drawer over unsaved
+   * changes asks first.
+   */
+  it('keeps a new tier draft while an edit opens in a drawer, and asks before closing a dirty edit', async () => {
     stubApi([{ url: '/reseller-tiers', body: { tiers: [tier()] } }]);
     renderPage(
       <ResellerTiersPage
@@ -1319,17 +1324,23 @@ describe('unsaved edits on the tier form', () => {
     fireEvent.change(name('tier-create-name')!, { target: { value: 'Platinum' } });
 
     fireEvent.click(edit());
-    const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
-    fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    const drawer = await screen.findByRole('dialog');
+    expect(drawer).toContainElement(name('tier-edit-name'));
+    expect(name('tier-edit-name')?.value).toBe('Gold');
     expect(name('tier-create-name')?.value).toBe('Platinum');
 
-    fireEvent.click(edit());
+    fireEvent.change(name('tier-edit-name')!, { target: { value: 'Gold+' } });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(name('tier-edit-name')?.value).toBe('Gold+');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
     const again = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
     fireEvent.click(within(again).getByRole('button', { name: t('web.discard') }));
-    await waitFor(() => expect(name('tier-edit-name')?.value).toBe('Gold'));
-    // The same tier again, untouched: nothing to ask.
-    fireEvent.click(edit());
-    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(name('tier-edit-name')).toBeNull());
+    expect(name('tier-create-name')?.value).toBe('Platinum');
   });
 });
 
