@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { COMMERCE_ERROR_CODES } from '@nexa/contracts';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
+import { TOGGLE_REFUSAL_LABELS } from '../../apps/web/src/pages/customer-360-sections';
 import { customer, product, renderPage, stubApi } from './harness';
 import { openC360Tab } from './c360-helpers';
-import { t } from '../../apps/web/src/i18n/web.fa';
+import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Customer 360 (spec §11) — the redesigned customer page, rendered against the shapes the
@@ -473,5 +475,20 @@ describe('Customer 360 — tabs and the action panel', () => {
         true,
       ),
     );
+  });
+});
+
+describe('Customer 360 — machine keys read in Persian (W5)', () => {
+  it('names every refusal a suspend-all / resume-all item can carry', () => {
+    for (const code of [
+      COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+      COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+      COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+      COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+    ]) {
+      const label = TOGGLE_REFUSAL_LABELS[code];
+      expect(label, code).toBeDefined();
+      expect(t(label as WebKey), code).toMatch(/[؀-ۿ]/u);
+    }
   });
 });

@@ -705,7 +705,11 @@ export function TimelineCard({ customerId, mayView }: { customerId: string; mayV
                 at: formatTimestamp(entry.occurredAt),
                 title: (
                   <span>
-                    {label === undefined ? <Ltr>{entry.action}</Ltr> : t(label)}
+                    {label === undefined ? (
+                      <Ltr>{entry.action}</Ltr>
+                    ) : (
+                      <span title={entry.action}>{t(label)}</span>
+                    )}
                     {entry.result !== 'SUCCESS' && (
                       <>
                         {' '}
