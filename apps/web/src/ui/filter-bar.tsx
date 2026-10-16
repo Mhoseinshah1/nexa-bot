@@ -1,7 +1,9 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { t } from '../i18n/web.fa';
 import { formatNumber } from '../format';
 import { Icon } from './icons';
+import { LayerContext, useLayer } from './layer';
 import { useFocusTrap } from './overlays';
 import { tabbable } from './focusable';
 
@@ -17,7 +19,8 @@ import { tabbable } from './focusable';
  * write the URL exactly as before — and the panel stays open across re-renders (its state is
  * this component's, so a page must keep the bar mounted while its list reloads). It closes
  * with «نمایش نتیجه», ×, Esc or an outside click; on a phone it is a bottom sheet with a
- * backdrop. While open it holds the keyboard (`useFocusTrap`): focus starts on the first
+ * backdrop. The panel renders in a portal (no card or drawer clips it), placed under the
+ * bar by CSS anchor positioning and centred where a browser has none. While open it holds the keyboard (`useFocusTrap`): focus starts on the first
  * filter and returns to «فیلترها» when it closes.
  *
  * Layout: the search's own buttons («جست‌وجو» … «پاک کردن») and the saved-filters menu share
@@ -67,7 +70,6 @@ export function ListFilterBar({
   label,
 }: ListFilterBarProps) {
   const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const active = filters.filter((one) => one.active !== null);
@@ -75,18 +77,11 @@ export function ListFilterBar({
   const hasSaved = savedViews !== undefined && savedViews !== null && savedViews !== false;
   const hasSearch = search !== undefined && search !== null && search !== false;
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDown = (event: MouseEvent) => {
-      if (root.current !== null && !root.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+  const layer = useLayer(open, () => setOpen(false));
 
   return (
     <div
-      ref={root}
+      ref={layer.inside}
       className={`list-filter-bar${open ? ' open' : ''}${hasSaved ? ' with-saved' : ''}`}
       role="search"
       {...(label === undefined ? {} : { 'aria-label': label })}
@@ -133,18 +128,22 @@ export function ListFilterBar({
         </div>
       </div>
       {hasSaved && <div className="lfb-saved">{savedViews}</div>}
-      {open && (
-        <>
-          <div className="lfb-backdrop" aria-hidden="true" onMouseDown={() => setOpen(false)} />
-          <FilterPanel
-            id={panelId}
-            filters={filters}
-            anyActive={active.length > 0}
-            onClearAll={clearAll}
-            onClose={() => setOpen(false)}
-          />
-        </>
-      )}
+      {open &&
+        createPortal(
+          <LayerContext.Provider value={layer.registry}>
+            <div ref={layer.inside} className="lfb-layer">
+              <div className="lfb-backdrop" aria-hidden="true" onMouseDown={() => setOpen(false)} />
+              <FilterPanel
+                id={panelId}
+                filters={filters}
+                anyActive={active.length > 0}
+                onClearAll={clearAll}
+                onClose={() => setOpen(false)}
+              />
+            </div>
+          </LayerContext.Provider>,
+          document.body,
+        )}
     </div>
   );
 }

@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { DateField, type DateFieldMode } from '../../apps/web/src/ui/date-field';
-import { Field } from '../../apps/web/src/ui/kit';
+import { Drawer, Field } from '../../apps/web/src/ui/kit';
+import { ListFilterBar } from '../../apps/web/src/ui/filter-bar';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { faDigits } from '../../apps/web/src/ui/jalali';
-import { setDateField } from './ui-helpers';
+import { openFilterPanel, setDateField } from './ui-helpers';
 
 /**
  * W1.1 — the Jalali date field. The wire value is what the native input sent; only the
@@ -297,5 +298,51 @@ describe('setDateField, the one way page tests set a date', () => {
   it('fails loudly on a day the field refuses', () => {
     render(<Harness min="2026-10-10" />);
     expect(() => setDateField(field(), '2026-10-01')).toThrow(/min\/max/);
+  });
+});
+
+describe('inside clipping containers', () => {
+  it('draws the calendar in a portal, so a Drawer body cannot clip it, and picks there', () => {
+    const seen: string[] = [];
+    render(
+      <Drawer open onClose={() => undefined} title="کشو">
+        <Harness onValue={(value) => seen.push(value)} />
+      </Drawer>,
+    );
+    fireEvent.click(field());
+    const pop = popover();
+    expect(pop.closest('.drawer')).toBeNull();
+    expect(pop.closest('.drawer-body')).toBeNull();
+    fireEvent.mouseDown(day(3));
+    fireEvent.click(day(3));
+    expect(seen).toEqual(['2026-09-25']);
+  });
+
+  it('a calendar opened from a filter panel does not close the panel when a day is pressed', () => {
+    const seen: string[] = [];
+    render(
+      <ListFilterBar
+        filters={[
+          {
+            key: 'from',
+            label: 'از',
+            active: null,
+            onClear: () => undefined,
+            control: <Harness onValue={(value) => seen.push(value)} />,
+          },
+        ]}
+      />,
+    );
+    const panel = openFilterPanel();
+    fireEvent.click(within(panel).getByLabelText('تاریخ'));
+    fireEvent.mouseDown(day(5));
+    fireEvent.click(day(5));
+    expect(seen).toEqual(['2026-09-27']);
+    expect(screen.getByRole('dialog', { name: t('web.filters') })).toBeInTheDocument();
+  });
+
+  it('setDateField refuses to clear a field that holds nothing', () => {
+    render(<Harness />);
+    expect(() => setDateField(field(), '')).toThrow(/nothing to clear/);
   });
 });
