@@ -28,6 +28,27 @@ const CUSTOMERS_NEW = {
   'web.services_view_suspended': 'موقتاً قطع',
   'web.orders_view_awaiting': 'منتظر پرداخت',
   'web.orders_view_refunded': 'برگشت‌خورده',
+  // W3 the OPEN refund request's two decisions.
+  'web.service_refund_decide': 'تصمیم دربارهٔ این درخواست',
+  // W5 refund-request failure kinds.
+  'web.rr_fk_authentication_failed': 'ورود به پنل رد شد',
+  'web.rr_fk_authentication_requires_interaction': 'پنل کد دومرحله‌ای خواست',
+  'web.rr_fk_unreachable': 'پنل در دسترس نبود',
+  'web.rr_fk_timeout': 'پاسخ پنل دیر رسید',
+  'web.rr_fk_tls_failed': 'گواهی TLS پنل پذیرفته نشد',
+  'web.rr_fk_blocked_target': 'نشانی پنل مجاز نیست',
+  'web.rr_fk_rate_limited': 'پنل درخواست‌ها را محدود کرد',
+  'web.rr_fk_malformed_response': 'پاسخ پنل نامفهوم بود',
+  'web.rr_fk_provider_error': 'پنل خطا داد',
+  'web.rr_fk_provider_refused': 'پنل حذف را نپذیرفت',
+  'web.rr_fk_unsupported_capability': 'نوع پنل این کار را پشتیبانی نمی‌کند',
+  'web.rr_fk_reservation_released': 'رزرو بازگشت وجه پیش‌تر آزاد شده بود',
+  // W1.5 the service page's action panel.
+  'web.service_action_panel_title': 'عملیات روی این سرویس',
+  'web.service_group_panel': 'پنل و همگام‌سازی',
+  'web.service_group_link': 'لینک اشتراک',
+  'web.service_group_state': 'وضعیت سرویس',
+  'web.service_group_gift': 'هدیه و تغییر',
 } as const;
 
 export const WEB_FA_CUSTOMERS = {
@@ -48,6 +69,13 @@ export const WEB_FA_CUSTOMERS_RETIRED: readonly string[] = [
   'web.services_rule_no_protocol',
   'web.services_rule_ordering',
   'web.services_rule_plan_filter',
+  // W5 / W1.5: the service page's transfer note, «why» card and terminate / grant cards.
+  'web.services_transfer_absent',
+  'web.service_actions_title',
+  'web.service_actions_hint',
+  'web.service_terminate_title',
+  'web.soc_grant_move_title',
+  'web.soc_grant_move_hint',
   // W5: «دو پایان ممکن» and the future-rules card on /orders and /orders/:id.
   'web.orders_scope_title',
   'web.orders_scope_body',

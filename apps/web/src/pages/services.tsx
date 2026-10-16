@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SERVICE_DELIVERY_STATES,
@@ -33,12 +33,18 @@ import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import type { ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
-import { ChipGroup, urlViewsRegistration, useListClearAll } from './commerce-parts';
+import {
+  BalancedColumns,
+  ChipGroup,
+  urlViewsRegistration,
+  useClientPage,
+  useListClearAll,
+} from './commerce-parts';
+import { ActionPanel } from '../ui/action-panel';
 import {
   Badge,
   Banner,
   Button,
-  ButtonGroup,
   Card,
   CopyButton,
   Copyable,
@@ -52,7 +58,6 @@ import {
   Progress,
   StatCard,
   StateSwitch,
-  TwoColumn,
   useToast,
   type Column,
   type Tone,
@@ -64,8 +69,10 @@ import {
 } from './service-refund-requests';
 import {
   INPUT_ACTIONS,
-  ServiceGrantMoveCard,
+  ServiceGrantButton,
   ServiceMassActionButton,
+  ServiceMoveButton,
+  grantMoveReasons,
   serviceFiltersOf,
   useServiceFilterRows,
   useRefreshOnOperationChange,
@@ -116,10 +123,10 @@ import {
  * server, which is the one that counts. `services.terminate` is its own key.
  *
  * `services.transfer` is still declared with no endpoint: Package F built the CUSTOMER's
- * transfer, from the bot, and no operator transfer. `services_transfer_absent` says so in
- * words, and that each customer transfer is in the audit log, rather than as a disabled
- * button: a disabled control claims "this exists and you lack permission", which is a
- * different and false statement.
+ * transfer, from the bot, and no operator transfer. The page draws no transfer control at
+ * all — not even a disabled one: a disabled control claims "this exists and you lack
+ * permission", which is a different and false statement. (The sentence that narrated the
+ * absence went in the demo's polish pass; meta notes about what is not built are not shown.)
  */
 
 export const STATE_LABELS: Readonly<Record<ServiceState, WebKey>> = {
@@ -686,139 +693,211 @@ function useServiceAction(id: string, onActed: () => void, onTerminated: () => v
 
 type ServiceAct = ReturnType<typeof useServiceAction>;
 
-/** The ordinary actions, one button each, in `SERVICE_OPERATOR_ACTIONS` order. */
-function ActionButtons({
-  actions,
+/**
+ * W1.5: the ordinary actions sorted into the service page's groups, in
+ * `SERVICE_OPERATOR_ACTIONS` order within each. Every ordinary action is classified here —
+ * an action the table forgets is drawn in no group, which the unit test over this table
+ * catches before an operator loses a button.
+ */
+export const SERVICE_ACTION_GROUPS = [
+  {
+    key: 'panel',
+    title: 'web.service_group_panel',
+    actions: ['SYNC_USAGE', 'RETRY_PROVISION', 'RECONCILE'],
+  },
+  { key: 'link', title: 'web.service_group_link', actions: ['RESEND_CONFIG', 'ROTATE_LINK'] },
+  { key: 'state', title: 'web.service_group_state', actions: ['SUSPEND', 'RESUME'] },
+] as const satisfies readonly {
+  key: string;
+  title: WebKey;
+  actions: readonly ServiceSimpleAction[];
+}[];
+
+/** One ordinary action's button, from the server's verdict. */
+function ActionButton({
+  entry,
   mayEdit,
   act,
 }: {
-  actions: readonly ServiceActionAvailability[];
+  entry: ServiceActionAvailability | undefined;
   mayEdit: boolean;
   act: ServiceAct;
 }) {
-  const byAction = new Map(actions.map((entry) => [entry.action, entry]));
-  const ordinary = SERVICE_OPERATOR_ACTIONS.filter(
-    (action): action is ServiceSimpleAction =>
-      !ACTION_NEEDS_TERMINATE[action] && !INPUT_ACTIONS.has(action),
-  );
+  if (entry === undefined) return null;
+  const action = entry.action as ServiceSimpleAction;
+  const why = !entry.available && entry.blocker !== null;
   return (
-    <ButtonGroup label={t('web.service_actions_title')}>
-      {ordinary.map((action) => {
-        const entry = byAction.get(action);
-        if (entry === undefined) return null;
-        const why = !entry.available && entry.blocker !== null;
-        return (
-          <Button
-            key={action}
-            size="sm"
-            disabled={!mayEdit || !entry.available || act.isPending}
-            {...(why ? { 'aria-describedby': `service-blocker-${action}` } : {})}
-            onClick={() => act.mutate({ action })}
-          >
-            {t(ACTION_LABELS[action])}
-          </Button>
-        );
-      })}
-    </ButtonGroup>
+    <Button
+      disabled={!mayEdit || !entry.available || act.isPending}
+      {...(why ? { 'aria-describedby': `service-blocker-${action}` } : {})}
+      onClick={() => act.mutate({ action })}
+    >
+      {t(ACTION_LABELS[action])}
+    </Button>
   );
 }
 
 /**
- * Why each unavailable action is unavailable, in words, and whether this session
- * may press any of them. A greyed-out control with no reason is the legacy
- * panel's entire style of refusal; each blocker sentence sends an operator
- * somewhere different.
+ * Why each unavailable ordinary action is unavailable, in words, and whether this session
+ * may press any of them — folded at the foot of the action panel (W1.5). A greyed-out
+ * control with no reason is the legacy panel's entire style of refusal; each blocker
+ * sentence sends an operator somewhere different. The sentence carries the id the button's
+ * `aria-describedby` names, and nothing else.
  */
-function ActionNotes({
-  actions,
-  mayEdit,
-}: {
-  actions: readonly ServiceActionAvailability[];
-  mayEdit: boolean;
-}) {
-  const byAction = new Map(actions.map((entry) => [entry.action, entry]));
-  const blocked = SERVICE_OPERATOR_ACTIONS.filter((action) => {
-    const entry = byAction.get(action);
-    return (
-      !ACTION_NEEDS_TERMINATE[action] &&
-      entry !== undefined &&
-      !entry.available &&
-      entry.blocker !== null
+function actionReasons(
+  actions: readonly ServiceActionAvailability[],
+  mayEdit: boolean,
+): ReactNode[] {
+  const reasons: ReactNode[] = [];
+  if (!mayEdit) {
+    reasons.push(<span key="edit-denied">{t('web.service_action_denied_edit')}</span>);
+  }
+  for (const action of SERVICE_OPERATOR_ACTIONS) {
+    const entry = actions.find((one) => one.action === action);
+    if (
+      ACTION_NEEDS_TERMINATE[action] ||
+      INPUT_ACTIONS.has(action) ||
+      entry === undefined ||
+      entry.available ||
+      entry.blocker === null
+    ) {
+      continue;
+    }
+    reasons.push(
+      <span key={action}>
+        <b>{t(ACTION_LABELS[action])}</b>{' '}
+        <span id={`service-blocker-${action}`}>{t(BLOCKER_LABELS[entry.blocker])}</span>
+      </span>,
     );
-  });
-  return (
-    <Card title={t('web.service_actions_title')} hint={t('web.service_actions_hint')}>
-      {!mayEdit && <Banner tone="neutral">{t('web.service_action_denied_edit')}</Banner>}
-      {blocked.length > 0 && (
-        <dl className="kv ca-blockers">
-          {blocked.map((action) => {
-            const blocker = byAction.get(action)?.blocker;
-            return (
-              <div key={action}>
-                <dt>{t(ACTION_LABELS[action])}</dt>
-                <dd id={`service-blocker-${action}`}>
-                  {blocker === null || blocker === undefined ? null : t(BLOCKER_LABELS[blocker])}
-                </dd>
-              </div>
-            );
-          })}
-        </dl>
-      )}
-    </Card>
-  );
+  }
+  return reasons;
 }
 
 /**
- * Terminate, isolated: its own permission, its own blocker — and, since item 11, a modal
- * that offers «فقط حذف سرویس» (the typed phrase, as before) or «حذف سرویس و بازگشت وجه».
+ * The page's ONE action panel (W1.5, W3): the ordinary actions in their groups, the grant
+ * and move as buttons opening drawers, terminate isolated in the «عملیات حساس» strip — its
+ * own permission, its own blocker, and the modal that offers «فقط حذف سرویس» (the typed
+ * phrase) or «حذف سرویس و بازگشت وجه» — and every reason a button is disabled folded at
+ * the foot.
  */
-function TerminateCard({
-  entry,
-  serviceId,
-  serviceUsername,
+function ServiceActionPanel({
+  row,
+  mayEdit,
   mayTerminate,
+  mayGrant,
   mayRefund,
   act,
-  open,
-  setOpen,
+  deleting,
+  setDeleting,
+  onActed,
 }: {
-  entry: ServiceActionAvailability;
-  serviceId: string;
-  serviceUsername: string;
+  row: ServiceDetail;
+  mayEdit: boolean;
   mayTerminate: boolean;
+  mayGrant: boolean;
   mayRefund: boolean;
   act: ServiceAct;
-  open: boolean;
-  setOpen: (next: boolean) => void;
+  deleting: boolean;
+  setDeleting: (next: boolean) => void;
+  onActed: () => void;
 }) {
+  const byAction = new Map(row.actions.map((entry) => [entry.action, entry]));
+  const terminate = byAction.get('TERMINATE');
+  const terminateBlocked =
+    terminate !== undefined && !terminate.available && terminate.blocker !== null;
+  const reasons = [
+    ...actionReasons(row.actions, mayEdit),
+    ...grantMoveReasons({
+      actions: row.actions,
+      mayGrant,
+      mayEdit,
+      blockerLabel: (blocker) => t(BLOCKER_LABELS[blocker]),
+    }),
+  ];
+  if (terminate !== undefined) {
+    if (!mayTerminate) {
+      reasons.push(<span key="terminate-denied">{t('web.service_action_denied_terminate')}</span>);
+    } else if (terminateBlocked && terminate.blocker !== null) {
+      reasons.push(
+        <span key="terminate">
+          <b>{t('web.service_delete_open')}</b>{' '}
+          <span id="service-blocker-TERMINATE">{t(BLOCKER_LABELS[terminate.blocker])}</span>
+        </span>,
+      );
+    }
+  }
   return (
-    <Card tone="danger" title={t('web.service_terminate_title')}>
-      <p className="muted small">{t('web.service_terminate_danger')}</p>
-      {!mayTerminate ? (
-        <Banner tone="neutral">{t('web.service_action_denied_terminate')}</Banner>
-      ) : !entry.available && entry.blocker !== null ? (
-        <p className="muted small">{t(BLOCKER_LABELS[entry.blocker])}</p>
-      ) : (
-        <>
-          <div className="form-actions">
-            <Button variant="danger" icon="trash" onClick={() => setOpen(true)}>
+    <>
+      <ActionPanel
+        title={t('web.service_action_panel_title')}
+        groups={[
+          ...SERVICE_ACTION_GROUPS.map((group) => ({
+            key: group.key,
+            title: t(group.title),
+            actions: group.actions.map((action) => (
+              <ActionButton key={action} entry={byAction.get(action)} mayEdit={mayEdit} act={act} />
+            )),
+          })),
+          {
+            key: 'gift',
+            title: t('web.service_group_gift'),
+            actions: [
+              <ServiceGrantButton
+                key="traffic"
+                serviceId={row.id}
+                kind="ADD_TRAFFIC"
+                entry={byAction.get('ADD_TRAFFIC')}
+                mayGrant={mayGrant}
+                onActed={onActed}
+              />,
+              <ServiceGrantButton
+                key="time"
+                serviceId={row.id}
+                kind="ADD_TIME"
+                entry={byAction.get('ADD_TIME')}
+                mayGrant={mayGrant}
+                onActed={onActed}
+              />,
+              <ServiceMoveButton
+                key="move"
+                serviceId={row.id}
+                entry={byAction.get('CHANGE_LOCATION')}
+                mayEdit={mayEdit}
+                onActed={onActed}
+              />,
+            ],
+          },
+        ]}
+        sensitive={[
+          terminate !== undefined && mayTerminate ? (
+            <Button
+              key="terminate"
+              variant="danger"
+              icon="trash"
+              disabled={terminateBlocked}
+              {...(terminateBlocked ? { 'aria-describedby': 'service-blocker-TERMINATE' } : {})}
+              onClick={() => setDeleting(true)}
+            >
               {t('web.service_delete_open')}
             </Button>
-          </div>
-          <ServiceDeleteModal
-            open={open}
-            onClose={() => setOpen(false)}
-            serviceId={serviceId}
-            serviceUsername={serviceUsername}
-            mayRefund={mayRefund}
-            deleteOnly={{
-              pending: act.isPending,
-              run: (phrase) => act.mutate({ action: 'TERMINATE', confirm: phrase }),
-            }}
-          />
-        </>
+          ) : null,
+        ]}
+        disabledReasons={reasons}
+      />
+      {terminate !== undefined && mayTerminate && !terminateBlocked && (
+        <ServiceDeleteModal
+          open={deleting}
+          onClose={() => setDeleting(false)}
+          serviceId={row.id}
+          serviceUsername={row.providerUsername}
+          mayRefund={mayRefund}
+          deleteOnly={{
+            pending: act.isPending,
+            run: (phrase) => act.mutate({ action: 'TERMINATE', confirm: phrase }),
+          }}
+        />
       )}
-    </Card>
+    </>
   );
 }
 
@@ -938,7 +1017,18 @@ export function ServiceDetailPage({
                 </span>
               }
               subtitle={t('web.service_detail')}
-              actions={<ActionButtons actions={row.actions} mayEdit={mayEdit} act={act} />}
+            />
+
+            <ServiceActionPanel
+              row={row}
+              mayEdit={mayEdit}
+              mayTerminate={mayTerminate}
+              mayGrant={mayGrant}
+              mayRefund={mayDecideRefundRequests}
+              act={act}
+              deleting={deleting}
+              setDeleting={setDeleting}
+              onActed={refresh}
             />
 
             {row.state === 'UNRECONCILED' && (
@@ -955,23 +1045,10 @@ export function ServiceDetailPage({
 
             {refundRequests}
 
-            <ServiceGrantMoveCard
-              serviceId={row.id}
-              actions={row.actions}
-              mayGrant={mayGrant}
-              mayEdit={mayEdit}
-              blockerLabel={(blocker) => t(BLOCKER_LABELS[blocker])}
-              onActed={refresh}
-            />
-
-            <TwoColumn
+            {/* W4: «مشخصات سرویس» and «تحویل به مشتری» share one height. */}
+            <BalancedColumns
               main={<ServiceIdentity row={row} />}
-              side={
-                <>
-                  <ActionNotes actions={row.actions} mayEdit={mayEdit} />
-                  <ServiceDelivery row={row} />
-                </>
-              }
+              side={<ServiceDelivery row={row} />}
             />
 
             <Card title={t('web.service_operations_title')} hint={t('web.service_operations_hint')}>
@@ -980,13 +1057,7 @@ export function ServiceDetailPage({
                   <Empty variant="compact" title={t('web.service_operations_empty')} />
                 ) : (
                   <>
-                    <DataTable
-                      caption={t('web.service_operations_title')}
-                      columns={OPERATION_COLUMNS}
-                      rows={operations.data.operations}
-                      rowKey={(op) => op.id}
-                      dense
-                    />
+                    <OperationsTable operations={operations.data.operations} />
                     {/*
                       Printed only when the server says the history was CUT, and with the
                       server's own bound. `operations.length === limit` is the wrong test
@@ -1003,29 +1074,26 @@ export function ServiceDetailPage({
                 )}
               </StateSwitch>
             </Card>
-
-            <Card tone="muted">
-              <p className="muted small">{t('web.services_transfer_absent')}</p>
-            </Card>
-
-            {(() => {
-              const terminate = row.actions.find((entry) => entry.action === 'TERMINATE');
-              return terminate === undefined ? null : (
-                <TerminateCard
-                  entry={terminate}
-                  serviceId={row.id}
-                  serviceUsername={row.providerUsername}
-                  mayTerminate={mayTerminate}
-                  mayRefund={mayDecideRefundRequests}
-                  act={act}
-                  open={deleting}
-                  setOpen={setDeleting}
-                />
-              );
-            })()}
           </>
         )}
       </StateSwitch>
+    </>
+  );
+}
+
+/** The history, ten operations at a time (W1.8); the server sends it whole, newest first. */
+function OperationsTable({ operations }: { operations: readonly ServiceOperationResponse[] }) {
+  const page = useClientPage(operations);
+  return (
+    <>
+      <DataTable
+        caption={t('web.service_operations_title')}
+        columns={OPERATION_COLUMNS}
+        rows={page.rows}
+        rowKey={(op) => op.id}
+        dense
+      />
+      {page.pager}
     </>
   );
 }

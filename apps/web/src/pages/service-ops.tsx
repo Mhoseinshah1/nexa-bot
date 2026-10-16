@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BULK_LARGE_OPERATION,
@@ -674,45 +674,105 @@ export const INPUT_ACTIONS: ReadonlySet<ServiceOperatorAction> = new Set<Service
 ]);
 
 /**
- * Free traffic or time (`services.grant`) and a move (`services.edit`), each drawn only when
- * the server says the action is available, each with a mandatory reason and an idempotency
- * key bound to its payload. The answer is the operation PLANNED, never "done": its outcome
- * appears in the history card, which the page refreshes.
+ * Why the grant and move buttons are unavailable, one sentence each, for the action panel's
+ * folded «چرا … غیرفعال است؟» (W1.5). A missing permission is said once per permission; a
+ * server verdict carries the id the button's `aria-describedby` names.
  */
-export function ServiceGrantMoveCard({
-  serviceId,
+export function grantMoveReasons({
   actions,
   mayGrant,
   mayEdit,
   blockerLabel,
-  onActed,
 }: {
-  serviceId: string;
   actions: readonly ServiceActionAvailability[];
   mayGrant: boolean;
   mayEdit: boolean;
   blockerLabel: (blocker: ServiceActionBlocker) => string;
+}): ReactNode[] {
+  const byAction = new Map(actions.map((entry) => [entry.action, entry]));
+  const reasons: ReactNode[] = [];
+  const verdict = (action: 'ADD_TRAFFIC' | 'ADD_TIME' | 'CHANGE_LOCATION', label: WebKey) => {
+    const entry = byAction.get(action);
+    if (entry?.available === true) return;
+    reasons.push(
+      <span key={action}>
+        <b>{t(label)}</b>{' '}
+        <span id={`service-blocker-${action}`}>
+          {entry?.blocker === null || entry?.blocker === undefined
+            ? t('web.soc_unavailable')
+            : blockerLabel(entry.blocker)}
+        </span>
+      </span>,
+    );
+  };
+  if (!mayGrant) {
+    reasons.push(
+      <span key="grant-denied" id="service-denied-grant">
+        {t('web.soc_grant_denied')}
+      </span>,
+    );
+  } else {
+    verdict('ADD_TRAFFIC', 'web.service_action_add_traffic');
+    verdict('ADD_TIME', 'web.service_action_add_time');
+  }
+  if (!mayEdit) {
+    reasons.push(
+      <span key="move-denied" id="service-denied-move">
+        {t('web.soc_move_denied')}
+      </span>,
+    );
+  } else {
+    verdict('CHANGE_LOCATION', 'web.service_action_change_location');
+  }
+  return reasons;
+}
+
+/** The id a disabled grant/move button is described by, or nothing when it is enabled. */
+function describedBy(
+  action: 'ADD_TRAFFIC' | 'ADD_TIME' | 'CHANGE_LOCATION',
+  may: boolean,
+  entry: ServiceActionAvailability | undefined,
+): { 'aria-describedby'?: string } {
+  if (!may) {
+    return {
+      'aria-describedby':
+        action === 'CHANGE_LOCATION' ? 'service-denied-move' : 'service-denied-grant',
+    };
+  }
+  return entry?.available === true ? {} : { 'aria-describedby': `service-blocker-${action}` };
+}
+
+/**
+ * Free traffic or time (`services.grant`), W3: a button in the action panel that opens a
+ * drawer with the amount and a mandatory reason, under an idempotency key bound to the
+ * payload. Enabled only when the server says the action is available. The answer is the
+ * operation PLANNED, never "done": its outcome appears in the history card, which the
+ * page refreshes. Closing the drawer over a typed value asks first.
+ */
+export function ServiceGrantButton({
+  serviceId,
+  kind,
+  entry,
+  mayGrant,
+  onActed,
+}: {
+  serviceId: string;
+  kind: 'ADD_TRAFFIC' | 'ADD_TIME';
+  entry: ServiceActionAvailability | undefined;
+  mayGrant: boolean;
   onActed: () => void;
 }) {
   const toast = useToast();
   const grantKey = useSubmissionKey();
-  const moveKey = useSubmissionKey();
-  const byAction = new Map(actions.map((entry) => [entry.action, entry]));
-  const traffic = byAction.get('ADD_TRAFFIC');
-  const time = byAction.get('ADD_TIME');
-  const move = byAction.get('CHANGE_LOCATION');
-  const [gb, setGb] = useState('');
-  const [days, setDays] = useState('');
-  const [grantReason, setGrantReason] = useState('');
-  const [target, setTarget] = useState('');
-  const [moveReason, setMoveReason] = useState('');
-
-  const targets = useQuery({
-    queryKey: ['service-location-targets', serviceId],
-    queryFn: () => fetchServiceLocationTargets(serviceId),
-    enabled: mayEdit && move?.available === true,
-  });
-
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const reset = () => {
+    setOpen(false);
+    setAmount('');
+    setReason('');
+  };
+  const { requestClose, dialog } = useConfirmedClose(amount !== '' || reason !== '', reset);
   const grant = useMutation({
     mutationFn: (
       body:
@@ -721,9 +781,7 @@ export function ServiceGrantMoveCard({
     ) => grantService(serviceId, { ...body, idempotencyKey: grantKey.current(body) }),
     onSuccess: () => {
       grantKey.settle();
-      setGb('');
-      setDays('');
-      setGrantReason('');
+      reset();
       toast({ tone: 'ok', message: t('web.service_action_planned') });
       onActed();
     },
@@ -732,13 +790,111 @@ export function ServiceGrantMoveCard({
       toast({ tone: 'danger', message: messageFor(error) });
     },
   });
+  const daysValue = Number(amount);
+  const amountOk =
+    kind === 'ADD_TRAFFIC'
+      ? TRAFFIC_GB_PATTERN.test(amount)
+      : Number.isInteger(daysValue) &&
+        daysValue >= 1 &&
+        daysValue <= SERVICE_GRANT_DURATION_MAX_DAYS;
+  const title = t(
+    kind === 'ADD_TRAFFIC' ? 'web.service_action_add_traffic' : 'web.service_action_add_time',
+  );
+  const fieldId = kind === 'ADD_TRAFFIC' ? 'soc-grant-gb' : 'soc-grant-days';
+  return (
+    <>
+      <Button
+        disabled={!mayGrant || entry?.available !== true}
+        {...describedBy(kind, mayGrant, entry)}
+        onClick={() => setOpen(true)}
+      >
+        {title}
+      </Button>
+      <Drawer open={open} onClose={requestClose} title={title}>
+        <div className="stack-sm">
+          <Field
+            label={t(kind === 'ADD_TRAFFIC' ? 'web.soc_grant_gb' : 'web.soc_grant_days')}
+            htmlFor={fieldId}
+          >
+            <Input
+              id={fieldId}
+              inputMode={kind === 'ADD_TRAFFIC' ? 'decimal' : 'numeric'}
+              value={amount}
+              onChange={(event) => setAmount(event.currentTarget.value.trim())}
+            />
+          </Field>
+          <Field label={t('web.soc_reason')} htmlFor="soc-grant-reason">
+            <Input
+              id="soc-grant-reason"
+              value={reason}
+              maxLength={SERVICE_OPERATOR_REASON_MAX_LENGTH}
+              onChange={(event) => setReason(event.currentTarget.value)}
+            />
+          </Field>
+          <div className="form-actions">
+            <Button
+              variant="primary"
+              disabled={!amountOk || reason.trim() === '' || grant.isPending}
+              onClick={() =>
+                grant.mutate(
+                  kind === 'ADD_TRAFFIC'
+                    ? { kind, trafficGb: amount, reason: reason.trim() }
+                    : { kind, durationDays: daysValue, reason: reason.trim() },
+                )
+              }
+            >
+              {t(
+                kind === 'ADD_TRAFFIC'
+                  ? 'web.soc_grant_traffic_button'
+                  : 'web.soc_grant_time_button',
+              )}
+            </Button>
+          </div>
+        </div>
+      </Drawer>
+      {dialog}
+    </>
+  );
+}
+
+/**
+ * A move (`services.edit`), W3: a button opening a drawer with the current location, the
+ * targets the server offers, a mandatory reason and the hint. The targets are read while the
+ * move is available, so an operation's end re-reads them (`useRefreshOnOperationChange`).
+ */
+export function ServiceMoveButton({
+  serviceId,
+  entry,
+  mayEdit,
+  onActed,
+}: {
+  serviceId: string;
+  entry: ServiceActionAvailability | undefined;
+  mayEdit: boolean;
+  onActed: () => void;
+}) {
+  const toast = useToast();
+  const moveKey = useSubmissionKey();
+  const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState('');
+  const [moveReason, setMoveReason] = useState('');
+  const targets = useQuery({
+    queryKey: ['service-location-targets', serviceId],
+    queryFn: () => fetchServiceLocationTargets(serviceId),
+    enabled: mayEdit && entry?.available === true,
+  });
+  const reset = () => {
+    setOpen(false);
+    setTarget('');
+    setMoveReason('');
+  };
+  const { requestClose, dialog } = useConfirmedClose(target !== '' || moveReason !== '', reset);
   const relocate = useMutation({
     mutationFn: (body: { locationId: string; reason: string }) =>
       changeServiceLocation(serviceId, { ...body, idempotencyKey: moveKey.current(body) }),
     onSuccess: () => {
       moveKey.settle();
-      setTarget('');
-      setMoveReason('');
+      reset();
       toast({ tone: 'ok', message: t('web.service_action_planned') });
       onActed();
     },
@@ -747,156 +903,57 @@ export function ServiceGrantMoveCard({
       toast({ tone: 'danger', message: messageFor(error) });
     },
   });
-
-  const unavailable = (entry: ServiceActionAvailability | undefined) =>
-    entry === undefined || !entry.available ? (
-      <p className="muted small">
-        {entry?.blocker === null || entry?.blocker === undefined
-          ? t('web.soc_unavailable')
-          : blockerLabel(entry.blocker)}
-      </p>
-    ) : null;
-  const daysValue = Number(days);
-  const daysOk =
-    Number.isInteger(daysValue) && daysValue >= 1 && daysValue <= SERVICE_GRANT_DURATION_MAX_DAYS;
-
   return (
-    <Card title={t('web.soc_grant_move_title')} hint={t('web.soc_grant_move_hint')}>
-      <div className="soc-grant-move">
-        <section className="stack-sm">
-          <h4>{t('web.service_action_add_traffic')}</h4>
-          {!mayGrant ? (
-            <p className="muted small">{t('web.soc_grant_denied')}</p>
-          ) : (
-            (unavailable(traffic) ?? (
-              <div className="form-grid">
-                <Field label={t('web.soc_grant_gb')} htmlFor="soc-grant-gb">
-                  <Input
-                    id="soc-grant-gb"
-                    inputMode="decimal"
-                    value={gb}
-                    onChange={(event) => setGb(event.currentTarget.value.trim())}
-                  />
-                </Field>
-              </div>
-            ))
+    <>
+      <Button
+        disabled={!mayEdit || entry?.available !== true}
+        {...describedBy('CHANGE_LOCATION', mayEdit, entry)}
+        onClick={() => setOpen(true)}
+      >
+        {t('web.service_action_change_location')}
+      </Button>
+      <Drawer open={open} onClose={requestClose} title={t('web.service_action_change_location')}>
+        <div className="stack-sm">
+          {targets.data?.current !== null && targets.data?.current !== undefined && (
+            <p className="muted small">
+              {t('web.soc_move_current')} {targets.data.current.label}
+            </p>
           )}
-        </section>
-        <section className="stack-sm">
-          <h4>{t('web.service_action_add_time')}</h4>
-          {!mayGrant ? (
-            <p className="muted small">{t('web.soc_grant_denied')}</p>
-          ) : (
-            (unavailable(time) ?? (
-              <div className="form-grid">
-                <Field label={t('web.soc_grant_days')} htmlFor="soc-grant-days">
-                  <Input
-                    id="soc-grant-days"
-                    inputMode="numeric"
-                    value={days}
-                    onChange={(event) => setDays(event.currentTarget.value.trim())}
-                  />
-                </Field>
-              </div>
-            ))
-          )}
-        </section>
-        {mayGrant && (traffic?.available === true || time?.available === true) && (
-          <div className="stack-sm">
-            <Field label={t('web.soc_reason')} htmlFor="soc-grant-reason">
-              <Input
-                id="soc-grant-reason"
-                value={grantReason}
-                maxLength={SERVICE_OPERATOR_REASON_MAX_LENGTH}
-                onChange={(event) => setGrantReason(event.currentTarget.value)}
-              />
-            </Field>
-            <div className="form-actions">
-              {traffic?.available === true && (
-                <Button
-                  disabled={
-                    !TRAFFIC_GB_PATTERN.test(gb) || grantReason.trim() === '' || grant.isPending
-                  }
-                  onClick={() =>
-                    grant.mutate({
-                      kind: 'ADD_TRAFFIC',
-                      trafficGb: gb,
-                      reason: grantReason.trim(),
-                    })
-                  }
-                >
-                  {t('web.soc_grant_traffic_button')}
-                </Button>
-              )}
-              {time?.available === true && (
-                <Button
-                  disabled={!daysOk || grantReason.trim() === '' || grant.isPending}
-                  onClick={() =>
-                    grant.mutate({
-                      kind: 'ADD_TIME',
-                      durationDays: daysValue,
-                      reason: grantReason.trim(),
-                    })
-                  }
-                >
-                  {t('web.soc_grant_time_button')}
-                </Button>
-              )}
-            </div>
+          <Field label={t('web.soc_move_target')} htmlFor="soc-move-target">
+            <Select
+              id="soc-move-target"
+              value={target}
+              onChange={(event) => setTarget(event.currentTarget.value)}
+            >
+              <option value="">{t('web.soc_move_choose')}</option>
+              {(targets.data?.targets ?? []).map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t('web.soc_reason')} htmlFor="soc-move-reason">
+            <Input
+              id="soc-move-reason"
+              value={moveReason}
+              maxLength={SERVICE_OPERATOR_REASON_MAX_LENGTH}
+              onChange={(event) => setMoveReason(event.currentTarget.value)}
+            />
+          </Field>
+          <p className="muted small">{t('web.soc_move_hint')}</p>
+          <div className="form-actions">
+            <Button
+              variant="primary"
+              disabled={target === '' || moveReason.trim() === '' || relocate.isPending}
+              onClick={() => relocate.mutate({ locationId: target, reason: moveReason.trim() })}
+            >
+              {t('web.soc_move_button')}
+            </Button>
           </div>
-        )}
-        <section className="stack-sm">
-          <h4>{t('web.service_action_change_location')}</h4>
-          {!mayEdit ? (
-            <p className="muted small">{t('web.soc_move_denied')}</p>
-          ) : (
-            (unavailable(move) ?? (
-              <>
-                {targets.data?.current !== null && targets.data?.current !== undefined && (
-                  <p className="muted small">
-                    {t('web.soc_move_current')} {targets.data.current.label}
-                  </p>
-                )}
-                <div className="form-grid">
-                  <Field label={t('web.soc_move_target')} htmlFor="soc-move-target">
-                    <Select
-                      id="soc-move-target"
-                      value={target}
-                      onChange={(event) => setTarget(event.currentTarget.value)}
-                    >
-                      <option value="">{t('web.soc_move_choose')}</option>
-                      {(targets.data?.targets ?? []).map((row) => (
-                        <option key={row.id} value={row.id}>
-                          {row.label}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <Field label={t('web.soc_reason')} htmlFor="soc-move-reason">
-                    <Input
-                      id="soc-move-reason"
-                      value={moveReason}
-                      maxLength={SERVICE_OPERATOR_REASON_MAX_LENGTH}
-                      onChange={(event) => setMoveReason(event.currentTarget.value)}
-                    />
-                  </Field>
-                </div>
-                <p className="muted small">{t('web.soc_move_hint')}</p>
-                <div className="form-actions">
-                  <Button
-                    disabled={target === '' || moveReason.trim() === '' || relocate.isPending}
-                    onClick={() =>
-                      relocate.mutate({ locationId: target, reason: moveReason.trim() })
-                    }
-                  >
-                    {t('web.soc_move_button')}
-                  </Button>
-                </div>
-              </>
-            ))
-          )}
-        </section>
-      </div>
-    </Card>
+        </div>
+      </Drawer>
+      {dialog}
+    </>
   );
 }

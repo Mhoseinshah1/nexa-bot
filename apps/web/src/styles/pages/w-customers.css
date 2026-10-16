@@ -14,3 +14,11 @@
 .wb-balance + .wb-balance-tail {
   margin-top: var(--gap);
 }
+
+/* A row's own small actions under its state badge (refund requests' OPEN row). */
+.wb-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
