@@ -57,7 +57,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
-import { Drawer } from '../ui/overlays';
+import { Drawer, Modal } from '../ui/overlays';
 
 /**
  * Mirza migration PR5 — legacy service candidates (Area D; owner decision 8, 2026-10-07).
@@ -835,6 +835,8 @@ export function DecisionRecord({
   );
 }
 
+type Asking = LegacyServiceReviewDecision | 'adopt' | 'reopen' | null;
+
 function Decisions({
   row,
   adoptPanels,
@@ -848,6 +850,8 @@ function Decisions({
   const notify = useToast();
   const submission = useSubmissionKey();
   const [reason, setReason] = useState('');
+  /** Which decision's dialog is open. */
+  const [asking, setAsking] = useState<Asking>(null);
   const needsPanel = row.evidence.mappedPanelId === null;
   const [panelId, setPanelId] = useState<string>(adoptPanels[0] ?? '');
 
@@ -881,6 +885,7 @@ function Decisions({
     },
     onSuccess: () => {
       submission.settle();
+      setAsking(null);
       notify({ tone: 'ok', message: t('web.lsr_saved') });
       void queries.invalidateQueries({ queryKey: ['legacy-services'] });
     },
@@ -904,91 +909,123 @@ function Decisions({
   if (!open && !acknowledged && !reopenable) {
     return <Banner tone="info">{t('web.lsr_no_decision')}</Banner>;
   }
+  const TITLES: Readonly<Record<Exclude<Asking, null>, WebKey>> = {
+    ACKNOWLEDGE: 'web.lsr_acknowledge',
+    KEEP_AS_HISTORY: 'web.lsr_keep',
+    adopt: 'web.lsr_adopt',
+    reopen: 'web.lsr_reopen',
+  };
+  const close = () => {
+    setAsking(null);
+    act.reset();
+  };
+  const fault =
+    act.error !== null ? (
+      <Banner tone="danger" role="alert">
+        {legacyServiceFault(act.error)}
+      </Banner>
+    ) : null;
+  const send = (which: Exclude<Asking, null>) =>
+    act.mutate(
+      which === 'adopt'
+        ? { kind: 'adopt' }
+        : which === 'reopen'
+          ? { kind: 'reopen' }
+          : { kind: 'decide', decision: which },
+    );
+  const sendDisabled = (which: Exclude<Asking, null>) =>
+    busy || noReason || (which === 'adopt' && (adoptBlocked || (needsPanel && panelId === '')));
+
+  /*
+   * W3: the decide card is buttons (the approved-and-waiting banner stays on it); each
+   * decision opens its own dialog with the reason, the adopt banner and panel picker where
+   * they apply, the same disabled rules, and the refusal said inside it.
+   */
   return (
     <Card title={t('web.lsr_decide_title')}>
-      <div className="stack">
-        {row.reviewState === 'ADOPT_APPROVED' && (
-          <Banner tone="info">{t('web.lsr_approved_waiting')}</Banner>
+      {row.reviewState === 'ADOPT_APPROVED' && (
+        <Banner tone="info">{t('web.lsr_approved_waiting')}</Banner>
+      )}
+      <div className="form-actions">
+        {open && (
+          <button type="button" className="btn sm" onClick={() => setAsking('ACKNOWLEDGE')}>
+            {t('web.lsr_acknowledge')}
+          </button>
         )}
-        <Field label={t('web.lsr_reason')} htmlFor="lsr-reason" hint={t('web.lsr_reason_hint')}>
-          <Input
-            id="lsr-reason"
-            value={reason}
-            maxLength={500}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </Field>
+        {(open || acknowledged) && (
+          <button type="button" className="btn sm" onClick={() => setAsking('KEEP_AS_HISTORY')}>
+            {t('web.lsr_keep')}
+          </button>
+        )}
         {adoptable && (
-          <>
-            <Banner tone="warn">{t('web.lsr_adopt_explained')}</Banner>
-            {needsPanel &&
-              (adoptBlocked ? (
-                <Banner tone="info">{t('web.lsr_adopt_no_panel_available')}</Banner>
-              ) : (
-                <Field label={t('web.lsr_adopt_panel')} htmlFor="lsr-adopt-panel">
-                  <Select
-                    id="lsr-adopt-panel"
-                    value={panelId}
-                    onChange={(event) => setPanelId(event.target.value)}
-                  >
-                    {adoptPanels.map((p) => (
-                      <option key={p} value={p}>
-                        {panelName(p)}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-              ))}
-          </>
+          <button type="button" className="btn primary sm" onClick={() => setAsking('adopt')}>
+            {t('web.lsr_adopt')}
+          </button>
         )}
-        <div className="form-actions">
-          {open && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy || noReason}
-              onClick={() => act.mutate({ kind: 'decide', decision: 'ACKNOWLEDGE' })}
-            >
-              {t('web.lsr_acknowledge')}
-            </button>
-          )}
-          {(open || acknowledged) && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy || noReason}
-              onClick={() => act.mutate({ kind: 'decide', decision: 'KEEP_AS_HISTORY' })}
-            >
-              {t('web.lsr_keep')}
-            </button>
-          )}
-          {adoptable && (
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={busy || noReason || adoptBlocked || (needsPanel && panelId === '')}
-              onClick={() => act.mutate({ kind: 'adopt' })}
-            >
-              {t('web.lsr_adopt')}
-            </button>
-          )}
-          {reopenable && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy || noReason}
-              onClick={() => act.mutate({ kind: 'reopen' })}
-            >
-              {t('web.lsr_reopen')}
-            </button>
-          )}
-        </div>
-        {act.error !== null && (
-          <Banner tone="danger" role="alert">
-            {legacyServiceFault(act.error)}
-          </Banner>
+        {reopenable && (
+          <button type="button" className="btn sm" onClick={() => setAsking('reopen')}>
+            {t('web.lsr_reopen')}
+          </button>
         )}
       </div>
+      {asking === null && fault}
+      <Modal
+        open={asking !== null}
+        onClose={close}
+        title={asking === null ? '' : t(TITLES[asking])}
+        foot={
+          asking === null ? undefined : (
+            <>
+              <button type="button" className="btn sm" onClick={close}>
+                {t('web.money_cancel')}
+              </button>
+              <button
+                type="button"
+                className={asking === 'adopt' ? 'btn primary sm' : 'btn sm'}
+                disabled={sendDisabled(asking)}
+                onClick={() => send(asking)}
+              >
+                {t(TITLES[asking])}
+              </button>
+            </>
+          )
+        }
+      >
+        <div className="stack">
+          <Field label={t('web.lsr_reason')} htmlFor="lsr-reason" hint={t('web.lsr_reason_hint')}>
+            <Input
+              id="lsr-reason"
+              value={reason}
+              maxLength={500}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </Field>
+          {asking === 'adopt' && (
+            <>
+              <Banner tone="warn">{t('web.lsr_adopt_explained')}</Banner>
+              {needsPanel &&
+                (adoptBlocked ? (
+                  <Banner tone="info">{t('web.lsr_adopt_no_panel_available')}</Banner>
+                ) : (
+                  <Field label={t('web.lsr_adopt_panel')} htmlFor="lsr-adopt-panel">
+                    <Select
+                      id="lsr-adopt-panel"
+                      value={panelId}
+                      onChange={(event) => setPanelId(event.target.value)}
+                    >
+                      {adoptPanels.map((p) => (
+                        <option key={p} value={p}>
+                          {panelName(p)}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                ))}
+            </>
+          )}
+          {fault}
+        </div>
+      </Modal>
     </Card>
   );
 }
