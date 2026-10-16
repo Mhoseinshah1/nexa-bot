@@ -4,6 +4,10 @@ import { ROLE_SEEDS } from '@nexa/contracts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { ROLE_KEY_LABELS, roleLabel } from '../../apps/web/src/rbac-labels';
 import {
+  OUTBOX_AGGREGATE_LABELS,
+  OUTBOX_EVENT_LABELS,
+} from '../../apps/web/src/pages/system-diagnostics';
+import {
   AUDIT_SUBJECT_LABELS,
   AUDIT_VERB_LABELS,
   auditActionLabel,
@@ -12,6 +16,7 @@ import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 import {
   BACKUP_RUN_STATES,
+  EVENT_TYPES,
   RECOVERY_STAGES,
   RECOVERY_STATES,
   TEMPLATE_KEYS,
@@ -161,6 +166,15 @@ describe('recovery states, stages and backup runs', () => {
       expect(WEB_FA[RECOVERY_STAGE_LABELS[stage]], stage).toBeTruthy();
     for (const state of BACKUP_RUN_STATES) {
       expect(WEB_FA[BACKUP_RUN_STATE_LABELS[state]], state).toBeTruthy();
+    }
+  });
+});
+
+describe('diagnostics outbox types', () => {
+  it('names every event type the contract declares, and every aggregate the API writes', () => {
+    for (const type of EVENT_TYPES) expect(WEB_FA[OUTBOX_EVENT_LABELS[type]], type).toBeTruthy();
+    for (const [type, key] of Object.entries(OUTBOX_AGGREGATE_LABELS)) {
+      expect(WEB_FA[key], type).toBeTruthy();
     }
   });
 });

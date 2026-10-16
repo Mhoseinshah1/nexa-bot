@@ -420,7 +420,7 @@ function SettingRow({
               )}
             </div>
             <p className="muted small">
-              {presentation === null ? t('web.settings_unknown_desc') : t(presentation.description)}
+              {presentation === null ? t('web.settings_unknown_note') : t(presentation.description)}
             </p>
             {setting.configures !== null && (
               <p className="faint small">{t('web.settings_needs_feature')}</p>
@@ -485,7 +485,7 @@ function SettingRow({
             has no effect yet — the legacy pattern this whole registry exists to end is
             a screen that answers "saved" for a change with no observable effect. */}
         {setting.consumer === 'PLANNED' && (
-          <Banner tone="info">{t('web.setting_no_consumer')}</Banner>
+          <Banner tone="info">{t('web.setting_no_consumer_note')}</Banner>
         )}
 
         {/* A stored value the registry no longer accepts. The default is in

@@ -31,6 +31,7 @@ describe('the settings screen', () => {
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
 
+    await openSettingsGroupOf('support.accounts');
     await screen.findByRole('heading', { name: t('web.setting_support_accounts') });
     // One label per row, distinguished by its position: three identically
     // labelled fields are indistinguishable to a screen reader.
@@ -240,7 +241,7 @@ describe('the settings screen', () => {
     await screen.findByRole('heading', { name: t('web.setting_sales_currency') });
 
     // Exactly one of the two rows carries the warning.
-    expect(screen.getAllByText(/چیزی آن را نمی‌خواند/)).toHaveLength(1);
+    expect(screen.getAllByText(t('web.setting_no_consumer_note'))).toHaveLength(1);
   });
 
   it('offers no save control without the edit permission', async () => {

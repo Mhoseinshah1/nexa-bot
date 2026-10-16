@@ -232,7 +232,7 @@ export function ActivationFields({
           <Field
             key={protocol}
             label={`${t('web.panel_inbound_tags')} — ${protocol}`}
-            hint={t('web.panel_inbound_tags_hint')}
+            hint={t('web.panel_inbound_tags_note')}
             htmlFor={`activation-tags-${protocol}`}
           >
             <input

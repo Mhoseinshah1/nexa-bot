@@ -160,18 +160,29 @@ describe('the settings page', () => {
     renderPage(<SettingsPage mayEdit denied={false} />);
     await screen.findByRole('tablist', { name: t('web.ob_sections') });
 
-    for (const key of VISIBLE_KEYS) {
+    let group: string | null = null;
+    const byGroup = [...VISIBLE_KEYS].sort((a, b) =>
+      SETTING_PRESENTATION[a].group.localeCompare(SETTING_PRESENTATION[b].group),
+    );
+    for (const key of byGroup) {
       const presentation = SETTING_PRESENTATION[key];
-      await openSettingsGroupOf(key);
-      const heading = screen.getByRole('heading', { name: t(presentation.title) });
-      const card = heading.closest('article') as HTMLElement;
+      if (presentation.group !== group) {
+        group = presentation.group;
+        await openSettingsGroupOf(key);
+      }
+      // By text inside its row: a role query over the whole page per key is slow.
+      const heading = screen
+        .getAllByText(t(presentation.title))
+        .find((node) => /^H[1-6]$/u.test(node.tagName) && node.closest('article') !== null);
+      expect(heading, key).toBeDefined();
+      const card = heading!.closest('article') as HTMLElement;
+      expect(card.closest('[hidden]'), key).toBeNull();
       expect(within(card).getByText(t(presentation.description))).toBeInTheDocument();
       expect(
         within(card).getByText(`${t('web.settings_current_value')}:`, { exact: false }),
       ).toBeInTheDocument();
       expect(within(card).getByRole('button', { name: t('web.save') })).toBeInTheDocument();
     }
-    // One save button per setting: each is saved on its own.
     // Hidden tabs included: every group stays mounted.
     expect(screen.getAllByRole('button', { name: t('web.save'), hidden: true })).toHaveLength(
       VISIBLE_KEYS.length,
@@ -525,7 +536,7 @@ describe('the settings page', () => {
     const card = heading.closest('article') as HTMLElement;
     expect(within(card).queryByText(t('web.settings_needs_feature'))).toBeNull();
     // No row on the page is a control nothing reads.
-    expect(screen.queryByText(t('web.setting_no_consumer'))).toBeNull();
+    expect(screen.queryByText(t('web.setting_no_consumer_note'))).toBeNull();
   });
 
   it('says a refused value in Persian and keeps the English detail out of sight', async () => {
