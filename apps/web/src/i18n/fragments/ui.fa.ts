@@ -75,6 +75,19 @@ export const WEB_FA_UI = {
   // W1.2 — the file picker
   'web.file_drop': 'فایل را اینجا رها کنید یا انتخاب کنید',
   'web.file_choose': 'انتخاب فایل',
+  'web.file_change': 'تغییر',
+  'web.file_remove': 'حذف',
+  'web.file_remove_label': 'حذف فایل',
+  'web.file_bytes': '{n} بایت',
+  'web.file_kb': '{n} کیلوبایت',
+  'web.file_mb': '{n} مگابایت',
+  'web.file_count': '{n} فایل',
+  'web.file_only': 'فقط {list}',
+  'web.file_kind_image': 'فقط تصویر',
+  'web.file_kind_pdf': 'فقط PDF',
+  'web.file_kind_video': 'فقط ویدیو',
+  'web.file_kind_any': 'هر نوع فایل',
+  'web.file_wrong_type': 'این نوع فایل پذیرفته نمی‌شود.',
 
   // W1.4 — saved filters
   'web.saved_views': 'فیلترهای ذخیره‌شده',
