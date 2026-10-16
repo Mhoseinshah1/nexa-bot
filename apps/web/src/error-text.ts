@@ -704,25 +704,36 @@ const TEMPLATE_ISSUE_TEXT: Readonly<Record<string, WebKey>> = {
   UNKNOWN_ICON: 'web.template_issue_unknown_icon',
 };
 
-function leafOf(path: string): string | null {
-  const segments = path.split('.').filter((segment) => segment !== '' && !/^\d+$/u.test(segment));
-  return segments.length === 0 ? null : (segments[segments.length - 1] ?? null);
+/** The named segments of a path, innermost first (`items.2.amountMinor` → amountMinor, items). */
+function segmentsOf(path: string): string[] {
+  return path
+    .split('.')
+    .filter((segment) => segment !== '' && !/^\d+$/u.test(segment))
+    .reverse();
 }
 
-/** The Persian sentence for a refused field, by its validation path. */
+/**
+ * The Persian sentence for a refused field, by its validation path.
+ *
+ * The innermost named segment that has a name wins (`inboundTags.vless` is the inbound tags
+ * field): first the page's labels (the full path, then each segment), then a rule the shared
+ * table can say outright, then the shared labels. A path nothing names gets a generic sentence.
+ */
 export function fieldText(
   path: string | undefined,
   fieldLabels: Readonly<Record<string, WebKey>> = {},
 ): string {
   if (path === undefined || path === '') return t('web.err_field_unknown');
-  const leaf = leafOf(path);
-  const label = fieldLabels[path] ?? (leaf === null ? undefined : fieldLabels[leaf]);
-  if (label !== undefined) return t('web.err_field_invalid').replace('{field}', t(label));
-  if (leaf === null) return t('web.err_field_unknown');
-  const rule = FIELD_RULES[leaf];
-  if (rule !== undefined) return t(rule);
-  const shared = FIELD_LABELS[leaf];
-  if (shared !== undefined) return t('web.err_field_invalid').replace('{field}', t(shared));
+  const named = (label: WebKey) => t('web.err_field_invalid').replace('{field}', t(label));
+  const segments = segmentsOf(path);
+  const own = fieldLabels[path] ?? segments.map((segment) => fieldLabels[segment]).find(Boolean);
+  if (own !== undefined) return named(own);
+  for (const segment of segments) {
+    const rule = FIELD_RULES[segment];
+    if (rule !== undefined) return t(rule);
+    const shared = FIELD_LABELS[segment];
+    if (shared !== undefined) return named(shared);
+  }
   return t('web.err_field_unknown');
 }
 

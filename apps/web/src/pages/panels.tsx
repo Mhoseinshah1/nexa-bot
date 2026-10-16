@@ -107,6 +107,8 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal } from '../polling';
+import { fieldText } from '../error-text';
+import { TechnicalDetails } from '../ui/technical-details';
 
 /**
  * How often an open panel detail re-reads its own row.
@@ -1573,7 +1575,11 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     if (activationChanged && activationParse.kind === 'INVALID') {
       toast({
         tone: 'danger',
-        message: `${t('web.panel_activation_invalid')} ${activationParse.fields.join(', ')}`,
+        message: `${t('web.panel_activation_invalid')} ${[
+          ...new Set(
+            activationParse.fields.map((field) => fieldText(field, ACTIVATION_FIELD_LABELS)),
+          ),
+        ].join(' ')}`,
       });
       return;
     }
@@ -1680,7 +1686,19 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
                 />
                 {activationChanged && activationParse.kind === 'INVALID' && (
                   <Banner tone="danger" title={t('web.panel_activation_invalid')}>
-                    <Ltr>{activationParse.fields.join(', ')}</Ltr>
+                    {/* W6: each refused field by name; the schema's paths only under «جزئیات فنی». */}
+                    <ul>
+                      {[
+                        ...new Set(
+                          activationParse.fields.map((field) =>
+                            fieldText(field, ACTIVATION_FIELD_LABELS),
+                          ),
+                        ),
+                      ].map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                    <TechnicalDetails lines={activationParse.fields} />
                   </Banner>
                 )}
               </div>

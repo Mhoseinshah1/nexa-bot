@@ -104,6 +104,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import { ApiErrorReport } from '../ui/technical-details';
 
 // ---------------------------------------------------------------------------
 // Customer 360 (spec §11)
@@ -1152,6 +1153,9 @@ const DIRECTION_TONES: Readonly<Record<LedgerDirection, Tone>> = {
  * The service charges both itself — the missing button is a courtesy, never the
  * enforcement.
  */
+/** A positive whole number of minor units: ASCII digits, not all zeros. */
+const POSITIVE_WHOLE = /^0*[1-9][0-9]*$/u;
+
 function WalletCard({
   customerId,
   mayView,
@@ -1169,6 +1173,8 @@ function WalletCard({
   const [cursor, setCursor] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
+  // W6: said in Persian before anything is sent — whole minor units, digits only, above zero.
+  const amountInvalid = amount.trim() !== '' && !POSITIVE_WHOLE.test(amount.trim());
 
   const wallet = useQuery({
     queryKey: ['wallet', customerId],
@@ -1406,7 +1412,11 @@ function WalletCard({
           <h3 className="ca-subhead">{t('web.wallet_adjust_title')}</h3>
           <p className="muted small">{t('web.wallet_adjust_hint')}</p>
           <div className="form-grid">
-            <Field label={t('web.wallet_adjust_amount')} htmlFor="wallet-amount">
+            <Field
+              label={t('web.wallet_adjust_amount')}
+              htmlFor="wallet-amount"
+              {...(amountInvalid ? { error: t('web.err_rule_amount_positive') } : {})}
+            >
               <Input
                 id="wallet-amount"
                 inputMode="numeric"
@@ -1430,7 +1440,7 @@ function WalletCard({
                 variant="primary"
                 size="sm"
                 icon="plus"
-                disabled={adjust.isPending}
+                disabled={adjust.isPending || amountInvalid}
                 onClick={() => adjust.mutate({ direction: 'CREDIT' })}
               >
                 {t('web.wallet_credit')}
@@ -1440,14 +1450,14 @@ function WalletCard({
               <Button
                 variant="danger"
                 size="sm"
-                disabled={adjust.isPending}
+                disabled={adjust.isPending || amountInvalid}
                 onClick={() => adjust.mutate({ direction: 'DEBIT' })}
               >
                 {t('web.wallet_debit')}
               </Button>
             )}
           </div>
-          {adjust.error !== null && <Banner tone="danger">{messageFor(adjust.error)}</Banner>}
+          {adjust.error !== null && <ApiErrorReport error={adjust.error} />}
         </fieldset>
       ) : null}
 
