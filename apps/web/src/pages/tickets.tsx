@@ -312,7 +312,7 @@ function useViewerId(): string | null {
 // The inbox
 // ---------------------------------------------------------------------------------------
 
-/** The inbox's filter parameters: what a saved view holds and «پاک کردن» clears. */
+/** The inbox's filter parameters: what a saved view holds and the clear button clears. */
 const TICKET_VIEW_KEYS = [
   'status',
   'awaiting',
