@@ -285,6 +285,8 @@ import { LegacyHistoryReadService } from './modules/platform/legacy-history/appl
 import { DrizzleLegacyHistoryRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-history.repository.js';
 import { LegacyRecordsReadService } from './modules/platform/legacy-history/application/legacy-records-read.service.js';
 import { DrizzleLegacyRecordsRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-records.repository.js';
+import { LegacyMoneyHistoryService } from './modules/platform/legacy-history/application/legacy-money-history.service.js';
+import { DrizzleLegacyMoneyHistoryReader } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-money-history.reader.js';
 import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
 import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
 import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
@@ -1020,6 +1022,8 @@ export interface Container {
   readonly legacyHistoryIngest: LegacyHistoryIngest;
   readonly legacyHistoryRead: LegacyHistoryReadService;
   readonly legacyRecordsRead: LegacyRecordsReadService;
+  /** Mirza money history beside the opening figure, and the tenant-wide report (read only). */
+  readonly legacyMoneyHistory: LegacyMoneyHistoryService;
   /**
    * Mirza PR4 (owner decision 6): the owner's review of legacy wallet debts — negative legacy
    * balances held beside the ledger. Reads under `legacy.debts.view`, decisions under
@@ -4496,6 +4500,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     audit,
   });
+  const legacyMoneyHistory = new LegacyMoneyHistoryService({
+    reader: new DrizzleLegacyMoneyHistoryReader(database.db),
+    customers: customerRepository,
+    guard,
+  });
   const customerAccountTransferService = new CustomerAccountTransferService({
     repository: new DrizzleCustomerAccountTransferRepository(database.db),
     customers: customerRepository,
@@ -7142,6 +7151,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyHistoryIngest,
     legacyHistoryRead,
     legacyRecordsRead,
+    legacyMoneyHistory,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,

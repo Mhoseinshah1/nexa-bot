@@ -653,12 +653,14 @@ import {
   type LegacyRecordsListResponse,
   type LegacyRecordsSummaryResponse,
   type LegacyServiceHistoryResponse,
+  legacyMoneyHistoryResponseSchema,
   legacyCustomerAdoptionsResponseSchema,
   legacyCustomerInvoicesResponseSchema,
   type LegacyCustomerAdoptionsResponse,
   type LegacyCustomerInvoicesResponse,
   type LegacyHistoryRecordType,
   type LegacyHistoryResponse,
+  type LegacyMoneyHistoryResponse,
   customerTransferPreviewResponseSchema,
   customerTransferResponseSchema,
   type CustomerChannelExemptionRequest,
@@ -5056,6 +5058,14 @@ export function fetchLegacyRecords(
 /** A service's Mirza records (`services.view` + `legacy.history.view`). */
 export function fetchServiceLegacyHistory(id: string): Promise<LegacyServiceHistoryResponse> {
   return authedGet(LEGACY_RECORDS_ROUTES.service(id), legacyServiceHistoryResponseSchema);
+}
+
+/**
+ * The customer's Mirza money history beside the migrated opening figure. Read only: nothing
+ * here is part of the balance. `users.view` + `legacy.history.view`.
+ */
+export function fetchCustomerLegacyMoneyHistory(id: string): Promise<LegacyMoneyHistoryResponse> {
+  return authedGet(CUSTOMER_360_ROUTES.legacyMoneyHistory(id), legacyMoneyHistoryResponseSchema);
 }
 
 /** The customer's Mirza invoices beside the import's outcome for each (history, read-only). */

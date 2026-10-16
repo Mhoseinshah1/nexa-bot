@@ -72,6 +72,7 @@ import {
   CustomerLegacyHistoryCard,
   CustomerLegacyInvoicesCard,
 } from './customer-360-legacy';
+import { CustomerLegacyMoneyCard } from './customer-360-legacy-money';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 // Roadmap B5: the workspace — attention, the newest rows, support, shortcuts.
 import {
@@ -768,6 +769,8 @@ export function UserDetailPage({
                     mayView={mayViewLegacyInvoices}
                     mayViewPii={mayViewLegacyPii}
                   />
+                  {/* The Mirza money history: evidence beside the money, never added to a balance. */}
+                  <CustomerLegacyMoneyCard customerId={id} mayView={mayViewLegacyHistory} />
                 </div>
               )}
               {tab === 'controls' && (
