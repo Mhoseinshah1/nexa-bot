@@ -38,6 +38,7 @@ import {
   type ReportRangeSelection,
 } from '../api/client';
 import { formatTrafficGbText } from '../format';
+import { LEDGER_REASON_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
 import {
@@ -48,6 +49,7 @@ import {
   formatRate,
   rangeFromRoute,
   rangeIsComplete,
+  failureKindKey,
 } from '../report-view';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import {
@@ -770,8 +772,8 @@ function FailureSummary({ selection }: { selection: ReportRangeSelection }) {
             {data.byFailureKind.length > 0 && (
               <ul className="side-list">
                 {data.byFailureKind.map((row) => (
-                  <li key={row.failureKind ?? 'none'}>
-                    <Ltr>{row.failureKind ?? '—'}</Ltr>
+                  <li key={row.failureKind ?? 'none'} title={row.failureKind ?? undefined}>
+                    <FailureKindName kind={row.failureKind} />
                     <span className="grow" />
                     <Num value={row.count} />
                   </li>
@@ -1305,7 +1307,7 @@ function WalletReport({ selection }: { selection: ReportRangeSelection }) {
                 {
                   key: 'reason',
                   header: t('web.report_col_reason'),
-                  render: (r) => <Ltr>{r.reason}</Ltr>,
+                  render: (r) => <span title={r.reason}>{t(LEDGER_REASON_LABELS[r.reason])}</span>,
                 },
                 {
                   key: 'group',
@@ -2065,4 +2067,10 @@ function ProductTable({ data }: { data: ReportFinancialResponse }) {
       </p>
     </>
   );
+}
+
+/** A failure kind's Persian name; an unknown one is shown as its raw key, never blank. */
+function FailureKindName({ kind }: { kind: string | null }) {
+  const key = failureKindKey(kind);
+  return key === null ? <Ltr>{kind ?? '—'}</Ltr> : <span>{t(key)}</span>;
 }
