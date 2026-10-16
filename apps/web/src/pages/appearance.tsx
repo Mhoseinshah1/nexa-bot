@@ -36,6 +36,7 @@ import {
   TabPanel,
   Tabs,
   ToggleRow,
+  usePagedRows,
   useToast,
   useUnsavedChanges,
   type Tone,
@@ -144,6 +145,7 @@ export function AppearancePage({
   const [open, setOpen] = useState<AppearanceSlot | null>(null);
 
   const slots = view?.slots ?? [];
+  const { rows: pageSlots, pager: slotPager } = usePagedRows(slots);
   const unsaved = slots.filter((slot) => draftState(slot, draftOf(slot, drafts)).dirty);
   // A slot edited and not saved: leaving the page asks first, whether its sheet is open or not.
   useUnsavedChanges(mayEdit && unsaved.length > 0);
@@ -219,7 +221,7 @@ export function AppearancePage({
                         </tr>
                       </thead>
                       <tbody>
-                        {view.slots.map((slot) => (
+                        {pageSlots.map((slot) => (
                           <SlotRow
                             key={slot.slot}
                             slot={slot}
@@ -229,6 +231,7 @@ export function AppearancePage({
                         ))}
                       </tbody>
                     </table>
+                    {slotPager}
                   </div>
                   <p className="muted small">{t('web.appearance_custom_id_hint')}</p>
                 </Card>

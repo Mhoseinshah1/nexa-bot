@@ -43,12 +43,21 @@ describe('the appearance page', () => {
     stubApi([route()]);
     const { container } = renderPage(<AppearancePage denied={false} mayEdit={false} />);
     await screen.findByText(t('web.appearance_slot_payment'));
-    const text = container.textContent ?? '';
+    // Ten slots a page; walking the pager shows every one of them, once.
+    let text = '';
+    let rows = 0;
+    for (;;) {
+      text += container.textContent ?? '';
+      rows += container.querySelectorAll('tbody tr').length;
+      const next = screen.queryByRole('button', { name: t('web.page_next') });
+      if (next === null || (next as HTMLButtonElement).disabled) break;
+      fireEvent.click(next);
+    }
     for (const name of APPEARANCE_SLOTS) {
       expect(text).toContain(APPEARANCE_SLOT_FALLBACKS[name]);
       expect(text).toContain(`{icon:${name}}`);
     }
-    expect(container.querySelectorAll('tbody tr')).toHaveLength(APPEARANCE_SLOTS.length);
+    expect(rows).toBe(APPEARANCE_SLOTS.length);
     expect(screen.queryByRole('button', { name: t('web.save') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.appearance_test_send') })).toBeNull();
     // Nothing decorated until a bot is tested: the page says so, in Persian.

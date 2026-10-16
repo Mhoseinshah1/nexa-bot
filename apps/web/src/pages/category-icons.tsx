@@ -21,7 +21,16 @@ import {
 import { fetchSettings, saveSetting } from '../api/client';
 import { t } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
-import { Badge, Banner, Button, Card, StateSwitch, useToast, useUnsavedChanges } from '../ui/kit';
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  StateSwitch,
+  usePagedRows,
+  useToast,
+  useUnsavedChanges,
+} from '../ui/kit';
 import { ErrorReport } from './settings';
 import { fill } from './bot-buttons/canvas';
 import { INLINE_BUTTONS_SETTING, INLINE_BUTTON_ICONS_SETTING } from './bot-buttons/inline-buttons';
@@ -163,6 +172,7 @@ export function CategoryIconsSection({
     });
 
   const rows = useMemo(() => orderedCategories(categories), [categories]);
+  const { rows: pageRows, pager } = usePagedRows(rows);
   const decorated = rows.filter(
     (row) => canonicalCategoryIcons(current)[row.id] !== undefined,
   ).length;
@@ -257,7 +267,7 @@ export function CategoryIconsSection({
               {fill(t('web.ci_count'), { n: decorated })}
             </p>
             <ul className="ib-list" data-testid="ci-list">
-              {rows.map((category) => {
+              {pageRows.map((category) => {
                 const name =
                   category.emoji === null ? category.name : `${category.emoji} ${category.name}`;
                 // The preview draws only what the bot would: an invalid typed value is not drawn.
@@ -311,6 +321,7 @@ export function CategoryIconsSection({
                 );
               })}
             </ul>
+            {pager}
           </>
         )}
         {save.isError && <ErrorReport error={save.error} />}

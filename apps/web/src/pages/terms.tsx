@@ -39,6 +39,7 @@ import {
   StateSwitch,
   ToggleRow,
   useConfirmedClose,
+  usePagedRows,
   useToast,
   useUnsavedChanges,
   type Column,
@@ -256,6 +257,7 @@ export function TermsPage({
   const { requestClose, dialog: discardQuestion } = useConfirmedClose(mayEdit && formDirty, close);
 
   const draft = data?.draft ?? null;
+  const { rows: historyPage, pager: historyPager } = usePagedRows(data?.history ?? []);
   const current = data?.current ?? null;
   // The draft moved under an open editor: a colleague saved, or it was published.
   const changedElsewhere =
@@ -464,12 +466,13 @@ export function TermsPage({
               ) : (
                 <DataTable
                   columns={historyColumns}
-                  rows={data.history}
+                  rows={historyPage}
                   rowKey={(row) => row.id}
                   caption={t('web.terms_history_title')}
                   dense
                 />
               )}
+              {historyPager}
             </Card>
           </div>
         )}

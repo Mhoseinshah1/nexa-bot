@@ -65,6 +65,7 @@ import {
   PageHead,
   RowActions,
   StateSwitch,
+  usePagedRows,
   useUnsavedChanges,
   useToast,
   type Column,
@@ -572,6 +573,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
     enabled: !denied,
   });
   const rows = apps.data?.items ?? [];
+  const { rows: pageRows, pager } = usePagedRows(rows);
 
   const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
   /** The entry the operator asked to delete, awaiting the dialog's answer. */
@@ -819,11 +821,12 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
         >
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={pageRows}
             rowKey={(row) => row.id}
             caption={t('web.client_apps_title')}
             dense
           />
+          {pager}
         </Card>
       </StateSwitch>
 
