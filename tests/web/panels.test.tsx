@@ -127,7 +127,7 @@ describe('the panel list', () => {
    * what each did. The forward control must say NEWER here and the way back
    * OLDER, while the descending lists keep the defaults.
    */
-  it('pages forward toward newer panels and back again on the ascending keyset', async () => {
+  it('labels the forward control newer, because the panel keyset ascends', async () => {
     const api = stubApi(list([panel()], 'opaque-cursor-1'));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
