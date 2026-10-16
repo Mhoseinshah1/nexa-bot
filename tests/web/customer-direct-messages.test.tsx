@@ -296,10 +296,10 @@ describe('Phase A2 — direct message on Customer 360', () => {
     fireEvent.change(within(dialog).getByLabelText('متن پیام'), { target: { value: 'سلام' } });
     pick(dialog, 'old-invoice.pdf');
     await within(dialog).findByText('در حال خواندن فایل…');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'حذف پیوست' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.file_remove_label') }));
     // The removed file's read lands now; it must not bring the file back.
     await finishRead('old-invoice.pdf', readyFile('old-invoice.pdf'));
-    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: t('web.file_remove_label') })).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'پیش‌نمایش' }));
     expect(within(dialog).queryByText('old-invoice.pdf')).toBeNull();
     fireEvent.click(await within(dialog).findByRole('button', { name: 'تأیید و ارسال' }));
@@ -358,7 +358,7 @@ describe('Phase A2 — direct message on Customer 360', () => {
     );
     dialog = await openComposer();
     expect((within(dialog).getByLabelText('متن پیام') as HTMLTextAreaElement).value).toBe('');
-    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: t('web.file_remove_label') })).toBeNull();
   });
 
   it('discards a draft with a file when Escape closes the composer and the discard is confirmed', async () => {
@@ -367,7 +367,7 @@ describe('Phase A2 — direct message on Customer 360', () => {
     let dialog = await openComposer();
     fireEvent.change(within(dialog).getByLabelText('متن پیام'), { target: { value: 'پیوست' } });
     pick(dialog, 'receipt.pdf');
-    await within(dialog).findByRole('button', { name: 'حذف پیوست' });
+    await within(dialog).findByRole('button', { name: t('web.file_remove_label') });
     fireEvent.keyDown(dialog, { key: 'Escape' });
     fireEvent.click(await screen.findByRole('button', { name: 'دورانداختن تغییرات' }));
     await waitFor(() =>
@@ -375,6 +375,6 @@ describe('Phase A2 — direct message on Customer 360', () => {
     );
     dialog = await openComposer();
     expect((within(dialog).getByLabelText('متن پیام') as HTMLTextAreaElement).value).toBe('');
-    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: t('web.file_remove_label') })).toBeNull();
   });
 });
