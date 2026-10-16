@@ -10,7 +10,7 @@ import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-sear
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import type { ViewPreset } from '../ui/saved-views';
-import { ChipGroup, clearUrlFilters, urlViewsRegistration } from './commerce-parts';
+import { ChipGroup, urlViewsRegistration, useListClearAll } from './commerce-parts';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
 import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -261,6 +261,7 @@ export function UsersPage({
    * row carries the attribute itself, rather than one wrapper around both, so
    * the card can draw them flush with its edges as the reference's lists are.
    */
+  const { searchKey, clearAll } = useListClearAll(route, USER_FILTER_KEYS);
   const toolbarHidden = !mayRequest(customers, denied);
 
   /*
@@ -375,6 +376,7 @@ export function UsersPage({
             search={
               maySearch ? (
                 <ListSearchBox
+                  key={searchKey}
                   route={route}
                   id="users-search"
                   hint={t('web.users_search_hint')}
@@ -385,7 +387,7 @@ export function UsersPage({
               ) : undefined
             }
             filters={userFilters}
-            onClearAll={() => clearUrlFilters(route, USER_FILTER_KEYS)}
+            onClearAll={clearAll}
             savedViews={
               <SavedViewsMenu
                 registration={urlViewsRegistration(route, 'users', USER_FILTER_KEYS, USER_PRESETS)}

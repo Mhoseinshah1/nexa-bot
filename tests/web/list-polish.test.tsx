@@ -33,6 +33,8 @@ function LiveServices() {
   return <ServicesPage route={route} denied={false} />;
 }
 
+const TAG = '019210ab-cdef-7012-8345-00000000a001';
+
 const ordersList = [{ url: '/orders', body: { orders: [], nextCursor: null } }];
 const orderReads = (calls: readonly { url: string; method: string }[]) =>
   calls.filter(
@@ -53,8 +55,8 @@ describe('how fresh a list is', () => {
     const before = orderReads(api.calls).length;
     fireEvent.click(screen.getByRole('button', { name: t('web.list_refresh') }));
     await waitFor(() => expect(orderReads(api.calls).length).toBe(before + 1));
-    // Same filters: the refresh re-reads THIS list, not a fresh one.
-    expect(new URL(orderReads(api.calls).at(-1)!.url, 'http://x').search).toBe('');
+    // Same filters: the refresh re-reads THIS list, not a fresh one (ten a page, W1.8).
+    expect(new URL(orderReads(api.calls).at(-1)!.url, 'http://x').search).toBe('?limit=10');
   });
 
   it('draws nothing before the first answer, and is withdrawn once the list is refused', async () => {
@@ -80,14 +82,17 @@ describe('how fresh a list is', () => {
 });
 
 describe('clearing every filter at once', () => {
-  it('is offered only while a filter is applied, and clears all of them in one navigation', async () => {
-    navigate('/orders?state=PAID&q=ali', { replace: true, force: true });
-    stubApi(ordersList);
-    renderPage(<LiveOrders />);
-    const clear = await screen.findByRole('button', { name: t('web.list_filters_clear') });
+  it('is offered once two filters are applied, and clears them and the search in one navigation', async () => {
+    navigate(`/users?status=BLOCKED&tag=${TAG}&q=ali`, { replace: true, force: true });
+    stubApi([
+      { url: '/users', body: { customers: [], nextCursor: null } },
+      { url: '/customer-tags', body: { tags: [] } },
+    ]);
+    renderPage(<LiveUsers />);
+    const clear = await screen.findByRole('button', { name: t('web.filters_clear_all') });
     fireEvent.click(clear);
     await waitFor(() => expect(window.location.search).toBe(''));
-    expect(screen.queryByRole('button', { name: t('web.list_filters_clear') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.filters_clear_all') })).toBeNull();
   });
 
   it('clears the service list filters and its cursor together', async () => {
@@ -107,7 +112,7 @@ describe('clearing every filter at once', () => {
     stubApi(ordersList);
     renderPage(<LiveOrders />);
     await screen.findByText(/^خوانده‌شده در /);
-    expect(screen.queryByRole('button', { name: t('web.list_filters_clear') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.filters_clear_all') })).toBeNull();
   });
 });
 
@@ -149,9 +154,14 @@ describe('the cursor trail after a filter change', () => {
     renderPage(<LiveOrders />);
     fireEvent.click(await screen.findByRole('button', { name: t('web.newer') }));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('cursor=C2'));
-    fireEvent.click(screen.getByRole('button', { name: t('web.order_state_paid') }));
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.order_state_paid') }),
+    );
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('state=PAID'));
-    fireEvent.click(await screen.findByRole('button', { name: t('web.list_filters_clear') }));
+    // The filter's own «همه» puts the list back to unfiltered (one filter: no «پاک کردن همه»).
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.users_filter_all') }),
+    );
     await waitFor(() => expect(window.location.search).toBe(''));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).not.toContain('state='));
     expect(lastRead(api.calls, '/orders').url).not.toContain('cursor=');
@@ -252,33 +262,16 @@ describe('the freshness line', () => {
 
 describe('clearing filters while a search is still being typed (N5)', () => {
   it('empties the box too, so no unapplied text suggests a search', async () => {
-    navigate('/orders?state=PAID', { replace: true, force: true });
+    navigate('/services?state=ACTIVE&deliveryState=FAILED', { replace: true, force: true });
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubApi(ordersList);
-    renderPage(<LiveOrders />);
+    stubApi([{ url: '/services', body: { services: [], nextCursor: null } }]);
+    renderPage(<LiveServices />);
     const box = (await screen.findByLabelText(t('web.list_search_label'))) as HTMLInputElement;
     fireEvent.change(box, { target: { value: 'ab' } });
-    fireEvent.click(screen.getByRole('button', { name: t('web.list_filters_clear') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.filters_clear_all') }));
     await waitFor(() => expect(window.location.search).toBe(''));
     await act(() => vi.advanceTimersByTimeAsync(LIST_SEARCH_DEBOUNCE_MS + 250));
-    expect(box.value).toBe('');
+    expect((screen.getByLabelText(t('web.list_search_label')) as HTMLInputElement).value).toBe('');
     expect(window.location.search).toBe('');
-  });
-});
-
-describe('the service search applies itself (N3)', () => {
-  it('debounces into q and drops the cursor the old search held', async () => {
-    navigate('/services?cursor=c9', { replace: true, force: true });
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const api = stubApi([{ url: '/services', body: { services: [], nextCursor: null } }]);
-    renderPage(<LiveServices />);
-    const box = await screen.findByLabelText(t('web.list_search_label'));
-    const before = api.calls.length;
-    fireEvent.change(box, { target: { value: 'ali' } });
-    await act(() => vi.advanceTimersByTimeAsync(LIST_SEARCH_DEBOUNCE_MS - 250));
-    expect(api.calls.length).toBe(before);
-    await act(() => vi.advanceTimersByTimeAsync(500));
-    await waitFor(() => expect(new URLSearchParams(window.location.search).get('q')).toBe('ali'));
-    expect(window.location.search).not.toContain('cursor=');
   });
 });

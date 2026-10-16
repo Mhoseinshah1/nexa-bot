@@ -1,1 +1,16 @@
 /* w-customers — owned by one agent during the web-admin demo implementation. */
+
+/* W4 — BalancedColumns: both columns as tall as the taller; each one's last card fills it. */
+.wb-balance > .two-col {
+  align-items: stretch;
+}
+.wb-balance > .two-col > .stack {
+  display: flex;
+  flex-direction: column;
+}
+.wb-balance > .two-col > .stack > :last-child {
+  flex: 1 1 auto;
+}
+.wb-balance + .wb-balance-tail {
+  margin-top: var(--gap);
+}

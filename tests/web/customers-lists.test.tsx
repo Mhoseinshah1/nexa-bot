@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { USER_PRESETS, UsersPage } from '../../apps/web/src/pages/users';
 import { SERVICE_PRESETS, ServicesPage } from '../../apps/web/src/pages/services';
+import { ORDER_PRESETS, OrderDetailPage, OrdersPage } from '../../apps/web/src/pages/orders';
 import { urlViewsRegistration } from '../../apps/web/src/pages/commerce-parts';
 import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { customer, renderPage, stubApi } from './harness';
+import { customer, order, renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
 
 /**
@@ -185,5 +186,53 @@ describe('the service list (W1, W3)', () => {
     renderPage(<LiveServices />);
     await screen.findByText(t('web.services_empty'));
     expect(screen.queryByRole('button', { name: t('web.soc_mass_title') })).toBeNull();
+  });
+});
+
+describe('the order list and page (W1, W4)', () => {
+  function LiveOrders() {
+    const route = useRoute();
+    return <OrdersPage route={route} denied={false} />;
+  }
+
+  it('asks the server for ten orders a page, and suggests exactly the demo presets', async () => {
+    navigate('/orders', { replace: true, force: true });
+    const api = stubApi([{ url: '/orders', body: { orders: [], nextCursor: null } }]);
+    renderPage(<LiveOrders />);
+    await screen.findByText(t('web.orders_empty'));
+    const read = api.calls.find((call) =>
+      new URL(call.url, 'http://x').pathname.endsWith('/orders'),
+    );
+    expect(new URL(read!.url, 'http://x').searchParams.get('limit')).toBe('10');
+    expect(ORDER_PRESETS.map((preset) => [t(preset.name), preset.state])).toEqual([
+      [t('web.orders_view_awaiting'), { state: 'AWAITING_PAYMENT' }],
+      [t('web.orders_view_refunded'), { state: 'REFUNDED' }],
+    ]);
+  });
+
+  it('draws the pricing under the two balanced columns, never in the tall one', async () => {
+    stubApi([{ url: '/orders/019230ab', body: { order: order() } }]);
+    const { container } = renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={false}
+        mayViewServices={false}
+      />,
+    );
+    await screen.findByText(t('web.order_line_title'));
+    const balanced = container.querySelector('.wb-balance');
+    const tail = container.querySelector('.wb-balance-tail');
+    expect(balanced).not.toBeNull();
+    expect(tail).not.toBeNull();
+    // The snapshot and the lifecycle side by side; pricing and the service underneath.
+    expect(
+      within(balanced as HTMLElement).getByText(t('web.order_line_title')),
+    ).toBeInTheDocument();
+    expect(
+      within(balanced as HTMLElement).getByText(t('web.order_lifecycle_title')),
+    ).toBeInTheDocument();
+    expect(within(tail as HTMLElement).getByText(t('web.order_service_title'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.orders_scope_title'))).toBeNull();
   });
 });

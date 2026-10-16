@@ -1,4 +1,5 @@
-import { FilterChip } from '../ui/kit';
+import { useState, type ReactNode } from 'react';
+import { FilterChip, TwoColumn } from '../ui/kit';
 import { setQueries, type Route } from '../router';
 import type { SavedViewsRegistration, ViewPreset, ViewState } from '../ui/saved-views';
 
@@ -77,5 +78,50 @@ export function clearUrlFilters(route: Route, keys: readonly string[]): void {
   setQueries(
     route,
     [...keys, 'cursor'].map((key) => [key, null] as const),
+  );
+}
+
+/**
+ * The bar's «پاک کردن همه», and the `key` to give the page's `ListSearchBox`. Clearing every
+ * filter also empties a search still being typed (review of #242, N5): the box is drawn
+ * again from the cleared URL, which drops its draft and cancels its pending apply, so no
+ * unapplied text is left suggesting a search the list is not under.
+ */
+export function useListClearAll(
+  route: Route,
+  keys: readonly string[],
+): { readonly searchKey: number; readonly clearAll: () => void } {
+  const [searchKey, setSearchKey] = useState(0);
+  return {
+    searchKey,
+    clearAll: () => {
+      setSearchKey((current) => current + 1);
+      clearUrlFilters(route, keys);
+    },
+  };
+}
+
+/**
+ * W4, no layout holes: a long main + side detail page. The two columns share one height —
+ * each column's LAST card stretches to it — and what would make the taller column run on
+ * alone (`tail`) is drawn as full-width rows underneath. Pure CSS grid; nothing moves in
+ * the DOM after render.
+ */
+export function BalancedColumns({
+  main,
+  side,
+  tail,
+}: {
+  main: ReactNode;
+  side: ReactNode;
+  tail?: ReactNode;
+}) {
+  return (
+    <>
+      <div className="wb-balance">
+        <TwoColumn main={main} side={side} />
+      </div>
+      {tail !== undefined && <div className="wb-balance-tail stack">{tail}</div>}
+    </>
   );
 }

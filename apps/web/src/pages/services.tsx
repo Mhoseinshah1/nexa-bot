@@ -33,7 +33,7 @@ import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import type { ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
-import { ChipGroup, clearUrlFilters, urlViewsRegistration } from './commerce-parts';
+import { ChipGroup, urlViewsRegistration, useListClearAll } from './commerce-parts';
 import {
   Badge,
   Banner,
@@ -418,6 +418,7 @@ export function ServicesPage({
 
   // Hidden while the list cannot answer: a control that mints a new query key is
   // a fresh request against a question the server has just refused.
+  const { searchKey, clearAll } = useListClearAll(route, SERVICE_FILTER_KEYS);
   const toolbarHidden = !mayRequest(services, denied);
 
   const setFilter = (key: string, value: string | null) =>
@@ -509,6 +510,7 @@ export function ServicesPage({
             label={t('web.services_title')}
             search={
               <ListSearchBox
+                key={searchKey}
                 route={route}
                 id="services-search"
                 // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
@@ -520,7 +522,7 @@ export function ServicesPage({
               />
             }
             filters={serviceFilters}
-            onClearAll={() => clearUrlFilters(route, SERVICE_FILTER_KEYS)}
+            onClearAll={clearAll}
             savedViews={
               <SavedViewsMenu
                 registration={urlViewsRegistration(
