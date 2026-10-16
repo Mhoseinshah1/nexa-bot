@@ -71,6 +71,11 @@ export interface LegacyHistoryRecordRow extends NewLegacyHistoryRecord {
   readonly nxpkgImportId: string;
   readonly packageImportId: string;
   readonly createdAt: Date;
+  /**
+   * A `ticket_message` read for a customer: the id of the `ticket` record (same tenant, same
+   * package import) it belongs to. Only the customer reads fill it; null elsewhere.
+   */
+  readonly ticketRecordId?: string | null;
 }
 
 /** A Mirza panel the registry records as not ACTIVE. */

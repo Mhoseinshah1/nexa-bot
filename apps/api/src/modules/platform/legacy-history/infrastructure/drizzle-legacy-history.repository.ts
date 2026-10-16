@@ -10,6 +10,7 @@ import {
   isNull,
   or,
   sql,
+  type SQL,
 } from 'drizzle-orm';
 import type {
   LegacyHistoryRecordType,
@@ -167,7 +168,13 @@ export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
     limit: number,
   ): Promise<readonly LegacyHistoryRecordRow[]> {
     const rows = await this.db
-      .select()
+      .select({
+        row: legacyHistoryRecords,
+        ticketRecordId: sql<string | null>`(SELECT t.id FROM legacy_history_records t
+          WHERE ${legacyHistoryRecords.recordType} = 'ticket_message'
+            AND ${this.ticketOfMessage(sql`t`)}
+          ORDER BY t.id LIMIT 1)`,
+      })
       .from(legacyHistoryRecords)
       .where(
         and(
@@ -182,7 +189,7 @@ export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
       )
       .offset(offset)
       .limit(limit);
-    return rows.map((row) => ({
+    return rows.map(({ row, ticketRecordId }) => ({
       id: row.id,
       nxpkgImportId: row.nxpkgImportId,
       packageImportId: row.packageImportId,
@@ -193,6 +200,7 @@ export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
       occurredAt: row.occurredAt,
       payload: row.payload as Record<string, unknown>,
       createdAt: row.createdAt,
+      ...(row.recordType === 'ticket_message' ? { ticketRecordId } : {}),
     }));
   }
 
@@ -339,11 +347,17 @@ export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
     return rows;
   }
 
-  /** Linked to the customer, or not linked to anyone and filed under its Telegram id. */
+  /**
+   * Linked to the customer, or not linked to anyone and filed under its Telegram id — or a
+   * `ticket_message`, which names no customer itself but whose ticket (same tenant, same
+   * package import, joined on the ticket's source key) is the customer's.
+   */
   private ofCustomer(
     scope: TenantContext,
     customer: { readonly id: string; readonly telegramUserId: string },
   ) {
+    const own = (r: SQL) =>
+      sql`(${r}.customer_id = ${customer.id} OR (${r}.customer_id IS NULL AND ${r}.legacy_user_id = ${customer.telegramUserId}))`;
     return and(
       eq(legacyHistoryRecords.tenantId, requireTenantId(scope)),
       or(
@@ -352,7 +366,21 @@ export class DrizzleLegacyHistoryRepository implements LegacyHistoryRepository {
           isNull(legacyHistoryRecords.customerId),
           eq(legacyHistoryRecords.legacyUserId, customer.telegramUserId),
         ),
+        and(
+          eq(legacyHistoryRecords.recordType, 'ticket_message'),
+          isNull(legacyHistoryRecords.customerId),
+          sql`EXISTS (SELECT 1 FROM legacy_history_records t
+            WHERE ${this.ticketOfMessage(sql`t`)} AND ${own(sql`t`)})`,
+        ),
       ),
     );
+  }
+
+  /** `t` is a `ticket` record of the same tenant and package import as the outer message. */
+  private ticketOfMessage(t: SQL) {
+    const m = legacyHistoryRecords;
+    return sql`${t}.tenant_id = ${m.tenantId} AND ${t}.package_import_id = ${m.packageImportId}
+      AND ${t}.record_type = 'ticket'
+      AND ${t}.payload->>'source_pk' = ${m.payload}->'ticket_ref'->>'raw'`;
   }
 }
