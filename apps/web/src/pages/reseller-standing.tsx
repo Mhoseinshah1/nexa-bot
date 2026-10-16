@@ -17,6 +17,7 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import {
+  usePagedRows,
   Badge,
   Banner,
   Card,
@@ -339,6 +340,8 @@ function HistoryCard({
   entries: readonly ResellerHistoryEntry[];
   mayViewAudit: boolean;
 }) {
+  /** W1.8: the history is one answer, drawn ten entries a page. */
+  const paged = usePagedRows(entries);
   const columns: readonly Column<ResellerHistoryEntry>[] = [
     {
       key: 'when',
@@ -395,9 +398,10 @@ function HistoryCard({
             dense
             caption={t('web.history_title')}
             columns={columns}
-            rows={entries}
+            rows={paged.rows}
             rowKey={(row) => row.id}
           />
+          {paged.pager}
         </StateSwitch>
       )}
     </Card>
