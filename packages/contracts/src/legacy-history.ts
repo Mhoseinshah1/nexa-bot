@@ -48,6 +48,12 @@ export const legacyHistoryItemSchema = z.object({
   redacted: z.array(z.string()),
   /** The legacy user id (a Telegram id): null when redacted. */
   legacyUserId: z.string().nullable(),
+  /**
+   * A `ticket_message` only: the `id` of the `ticket` record it belongs to (this archive's own
+   * record id, never a Mirza id), so Customer 360 can show it under its ticket. Null when no
+   * ticket record of the same package matches; absent on every other type.
+   */
+  ticketRecordId: z.string().nullable().optional(),
 });
 export type LegacyHistoryItem = z.infer<typeof legacyHistoryItemSchema>;
 
