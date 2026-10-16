@@ -345,4 +345,7 @@ export const WEB_FA_OPS_RETIRED: readonly string[] = [
   'web.key',
   // panels: the lifecycle card's title (its buttons moved to the page head).
   'web.panel_lifecycle',
+  // panels: the health tab's «latest only» meta banner.
+  'web.panel_health_latest_title',
+  'web.panel_health_latest_body',
 ];

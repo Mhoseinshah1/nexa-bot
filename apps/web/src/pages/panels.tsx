@@ -2234,10 +2234,6 @@ function HealthTab({ panel }: { panel: PanelSummaryResponse }) {
   const fresh = splitDuration(PANEL_HEALTH_FRESH_FOR_MS);
   return (
     <>
-      <Banner tone="info" title={t('web.panel_health_latest_title')}>
-        {t('web.panel_health_latest_body')}
-      </Banner>
-
       {/*
         Said, not merely not-offered. Removing the test button from a panel
         whose credentials cannot authenticate stops the screen making a false
@@ -2351,6 +2347,14 @@ function CredentialsTab({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [apiToken, setApiToken] = useState('');
+  const [replacing, setReplacing] = useState(false);
+  // Closing throws the typed secrets away (after asking, when something was typed).
+  const closeReplace = () => {
+    setUsername('');
+    setPassword('');
+    setApiToken('');
+    setReplacing(false);
+  };
 
   /**
    * Which credential fields this panel's provider can actually USE.
@@ -2415,6 +2419,7 @@ function CredentialsTab({
       setUsername('');
       setPassword('');
       setApiToken('');
+      setReplacing(false);
       toast({ tone: 'ok', message: t('web.saved') });
       await onDone();
     },
@@ -2481,8 +2486,24 @@ function CredentialsTab({
         <p className="faint small">{t('web.credential_stored_unusable')}</p>
       )}
 
-      <div className="grid-2">
-        <Card title={t('web.panel_tab_credentials')} hint={t('web.credentials_presence_hint')}>
+      <div className="stack">
+        <Card
+          title={t('web.panel_tab_credentials')}
+          hint={t('web.credentials_presence_hint')}
+          {...(mayWrite
+            ? {
+                actions: (
+                  <button
+                    type="button"
+                    className="btn sm primary"
+                    onClick={() => setReplacing(true)}
+                  >
+                    {t('web.credentials_replace')}
+                  </button>
+                ),
+              }
+            : {})}
+        >
           <div className="list-editor">
             {shows('username') && (
               <Secret
@@ -2517,9 +2538,16 @@ function CredentialsTab({
           </div>
         </Card>
 
+        {/* W3: the replace form opens on the presence card's button, in a drawer. */}
         {mayWrite && (
-          <Card title={t('web.credentials_replace')} hint={t('web.credentials_replace_hint')}>
+          <OpsActionDrawer
+            open={replacing}
+            title={t('web.credentials_replace')}
+            dirty={username !== '' || password !== '' || apiToken !== ''}
+            onClose={closeReplace}
+          >
             <form onSubmit={onSubmit} className="stack">
+              <p className="muted small">{t('web.credentials_replace_hint')}</p>
               {accepts('username') && (
                 <Field label={t('web.username')} htmlFor={`cu-${panel.id}`}>
                   <input
@@ -2565,7 +2593,7 @@ function CredentialsTab({
                 </button>
               </div>
             </form>
-          </Card>
+          </OpsActionDrawer>
         )}
       </div>
     </>

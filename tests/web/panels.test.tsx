@@ -630,7 +630,7 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     expect(container.textContent ?? '').not.toContain('*****');
     // Presence, and only presence.
@@ -643,7 +643,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     for (const label of ['نام کاربری', 'گذرواژه', 'توکن API']) {
       expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('');
@@ -667,7 +667,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     // The two the shape names are both there, as a presence row and a field.
     for (const label of ['نام کاربری', 'گذرواژه']) {
@@ -715,7 +715,7 @@ describe('the panel detail', () => {
     const { rerender } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
     fireEvent.change(screen.getByLabelText('توکن API'), { target: { value: 'a-real-token' } });
 
     rerender(<PanelDetailPage id="p2" mayEdit mayRotate denied={false} />);
@@ -729,7 +729,7 @@ describe('the panel detail', () => {
     // overview tab selected and nothing carried over.
     await screen.findByText('Frankfurt B');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
     expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('');
   });
 
@@ -738,7 +738,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     for (const label of ['نام کاربری', 'گذرواژه', 'توکن API']) {
       expect(screen.getByLabelText(label)).toBeInTheDocument();
@@ -1073,13 +1073,15 @@ describe('the panel detail', () => {
     expect(screen.getByText(t('web.diag_verdict_fail'))).toBeInTheDocument();
   });
 
-  it('states that health is latest-state-only rather than drawing a trend it does not have', async () => {
+  it('draws the latest state and no trend it does not have', async () => {
     stubApi(detail());
     const { container } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'سلامت' }).click();
 
-    expect(await screen.findByText('فقط آخرین وضعیت')).toBeInTheDocument();
+    // W5: the latest-state card stays; the «فقط آخرین وضعیت» meta banner is gone.
+    expect(await screen.findByText(t('web.panel_health_latest_card'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.panel_health_latest_title'))).toBeNull();
     // No chart: the backend stores one row per panel, so a trend line could
     // only be illustrative — which is what the preview's was.
     expect(container.querySelector('svg.chart')).toBeNull();
@@ -1248,7 +1250,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     // Only the CONFIGURED credentials offer removal, and the fixture has two.
     const removes = screen.getAllByRole('button', { name: /^حذف — / });
@@ -1807,7 +1809,7 @@ describe('the panel detail', () => {
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
-    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
 
     // Visible: the row is there, and it is three, not two.
     const removes = screen.getAllByRole('button', { name: /^حذف — / });
@@ -2887,6 +2889,10 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     const rotate = async () => {
+      // W3: the replace form opens on the presence card's button.
+      if (screen.queryByLabelText('گذرواژه') === null) {
+        fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
+      }
       fireEvent.change(screen.getByLabelText('گذرواژه'), { target: { value: 'hunter2' } });
       fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     };
