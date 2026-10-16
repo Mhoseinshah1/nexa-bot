@@ -984,3 +984,175 @@
     border-radius: var(--radius-card) var(--radius-card) 0 0;
   }
 }
+
+/* ===================================================== W1.7 permission catalogue */
+.perm-cat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.perm-cat-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.perm-cat-search {
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+.perm-cat-switch {
+  margin-inline-start: auto;
+}
+.perm-cat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-items: start;
+  gap: 10px;
+}
+.perm-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-2);
+}
+.perm-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.perm-card-caret {
+  flex: none;
+  color: var(--fg-3);
+  transform: rotate(90deg);
+  transition: transform 0.15s;
+}
+.perm-card.open .perm-card-caret {
+  transform: none;
+}
+.perm-card-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+}
+.perm-card-count {
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+}
+.perm-card-body {
+  padding: 0 12px 10px;
+  border-block-start: 1px solid var(--line);
+}
+.perm-card-bulk {
+  display: flex;
+  gap: 6px;
+  padding-block: 6px;
+}
+.perm-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.perm-row {
+  padding-block: 6px;
+  border-block-end: 1px dashed var(--line);
+}
+.perm-row:last-child {
+  border-block-end: 0;
+}
+.perm-row.locked {
+  opacity: 0.6;
+}
+.perm-row-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.perm-row.locked .perm-row-check {
+  cursor: not-allowed;
+}
+.perm-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.perm-row-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.perm-row-kind {
+  flex: none;
+  color: var(--fg-3);
+}
+.perm-row.risk-critical .perm-row-kind {
+  color: var(--danger);
+}
+.perm-row-key {
+  color: var(--fg-3);
+  font-size: var(--fs-2xs);
+}
+.perm-row-note {
+  color: var(--info);
+}
+.perm-matrix-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+}
+.perm-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.perm-matrix th,
+.perm-matrix td {
+  padding: 6px 10px;
+  border-block-end: 1px solid var(--line);
+  text-align: start;
+}
+.perm-matrix thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.perm-matrix tbody th {
+  font-weight: 400;
+}
+.perm-matrix-section th,
+.perm-matrix-section td {
+  background: var(--bg-2);
+  font-weight: 700;
+}
+.perm-matrix-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.perm-matrix-cell {
+  color: var(--ok);
+  text-align: center;
+}
