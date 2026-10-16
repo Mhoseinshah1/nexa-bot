@@ -65,6 +65,19 @@ export const WEB_FA_ERRORS = {
   'web.err_field_confirmation': 'تأیید',
   'web.err_field_traffic': 'حجم',
   'web.err_field_duration': 'مدت',
+  // --- a setting's draft, checked before it is sent (setting-checks.ts) ---------------
+  'web.err_setting_integer': 'یک عدد صحیح وارد کنید (فقط رقم).',
+  'web.err_setting_range': 'این عدد خارج از بازهٔ مجاز است.',
+  'web.err_setting_decimal': 'یک عدد اعشاری درست وارد کنید؛ مثلاً 1.5',
+  'web.err_setting_money': 'مبلغ باید یک عدد صحیح بدون اعشار باشد.',
+  'web.err_setting_currency': 'واحد پول پذیرفته نیست.',
+  'web.err_setting_duplicate': 'یک مورد دو بار در فهرست آمده است.',
+  'web.err_setting_handle':
+    'شناسهٔ تلگرام باید با @ شروع شود و ۵ تا ۳۲ حرف انگلیسی، رقم یا خط زیر داشته باشد و با حرف شروع شود.',
+  'web.err_setting_chat_id': 'شناسهٔ عددی کانال باید یک عدد صحیح باشد؛ مثلاً -1001234567890',
+  'web.err_setting_join_url': 'پیوند عضویت باید نشانی‌ای با https://t.me/ باشد.',
+  'web.err_setting_channel_identity': 'هر کانال به شناسهٔ @ یا شناسهٔ عددی نیاز دارد.',
+  'web.err_setting_channel_open': 'کانال اجباری به شناسهٔ @ یا پیوند عضویت نیاز دارد.',
   // --- a provider's or log's own words, summarised (the raw text is under «جزئیات فنی») -
   'web.err_provider_operation': 'پنل این کار را انجام نداد.',
   'web.err_provider_outbox': 'ارسال این پیام خطا داد.',

@@ -11,6 +11,7 @@ import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/con
 import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatMoneyText, formatNumber, formatTimestamp } from '../format';
 import { errorIssues, errorText } from '../error-text';
+import { settingDraftProblems } from '../setting-checks';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -293,6 +294,8 @@ function SettingRow({
    */
   const [basis, setBasis] = useState<ResolvedSettingResponse>(setting);
   const [draft, setDraft] = useState<unknown>(setting.value);
+  // W6: what the registry's own schema refuses in the draft, said in Persian before sending.
+  const [draftProblems, setDraftProblems] = useState<readonly WebKey[]>([]);
   /** Bumped to remount the editor, whose half-typed text is its own state. */
   const [epoch, setEpoch] = useState(0);
   /** The selling-currency change waiting on its question. */
@@ -384,6 +387,9 @@ function SettingRow({
     event.preventDefault();
     // Snapshotted HERE, at the click, so the retry cannot see a later edit.
     const command = { value: draft, expectedVersion: basis.version };
+    const problems = settingDraftProblems(setting.key, presentation?.control ?? null, draft);
+    setDraftProblems(problems);
+    if (problems.length > 0) return;
     // The selling currency re-prices nothing, and every money setting and top-up preset
     // stored in the old one stops applying: asked once, in words, before it is sent.
     if (
@@ -510,6 +516,15 @@ function SettingRow({
           </Banner>
         )}
 
+        {draftProblems.length > 0 && (
+          <Banner tone="danger">
+            <ul>
+              {draftProblems.map((problem) => (
+                <li key={problem}>{t(problem)}</li>
+              ))}
+            </ul>
+          </Banner>
+        )}
         {save.isError && <SaveError error={save.error} settingKey={setting.key} />}
         {/* A no-op says so. The legacy screens answer "✅ updated" either way,
             and one of them said it three times while nothing changed. */}

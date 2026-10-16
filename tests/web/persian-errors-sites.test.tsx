@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
+import { SettingsPage } from '../../apps/web/src/pages/settings';
+import { settingDraftProblems } from '../../apps/web/src/setting-checks';
+import { settingPresentation } from '../../apps/web/src/settings-presentation';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { customer, renderPage, stubApi } from './harness';
+import { customer, renderPage, setting, stubApi } from './harness';
 
 /**
  * W6, per rewired site: a `request.invalid`, an unmapped 4xx and a 5xx all render Persian,
@@ -146,4 +149,58 @@ describe('Customer 360 wallet adjustment', () => {
       );
     },
   );
+});
+
+describe('a setting refused before it is sent', () => {
+  const problems = (key: string, draft: unknown) =>
+    settingDraftProblems(key, settingPresentation(key as never)?.control ?? null, draft);
+
+  it('says each kind of mistake in Persian, by the registry schema', () => {
+    expect(problems('support.accounts', ['@Support1'])).toEqual([]);
+    expect(problems('support.accounts', ['support'])).toEqual(['web.err_setting_handle']);
+    expect(problems('support.accounts', ['@Support1', '@support1'])).toEqual([
+      'web.err_setting_duplicate',
+    ]);
+    expect(problems('telegram.channels', [{ chatId: '12ab', mandatory: false }])).toEqual([
+      'web.err_setting_chat_id',
+    ]);
+    expect(
+      problems('telegram.channels', [
+        { handle: '@channel1', joinUrl: 'http://x', mandatory: true },
+      ]),
+    ).toEqual(['web.err_setting_join_url']);
+    expect(problems('telegram.channels', [{ mandatory: true }])).toEqual([
+      'web.err_setting_channel_identity',
+    ]);
+    expect(problems('ops.notifications.max_per_minute', 'ten')).toEqual([
+      'web.err_setting_integer',
+    ]);
+    expect(problems('ops.notifications.max_per_minute', 100000)).toEqual(['web.err_setting_range']);
+  });
+
+  it('shows the Persian sentence and sends nothing', async () => {
+    const api = stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            setting({
+              key: 'support.accounts',
+              value: ['@Support1'],
+              zeroMeaning: 'DISABLES',
+              configures: null,
+              version: 3,
+              source: 'TENANT',
+            }),
+          ],
+        },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    await screen.findByRole('heading', { name: t('web.setting_support_accounts') });
+    fireEvent.change(screen.getByLabelText('شناسهٔ پشتیبانی 1'), { target: { value: 'nope' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    expect(await screen.findByText(t('web.err_setting_handle'))).toBeInTheDocument();
+    expect(api.calls.some((call) => call.method !== 'GET')).toBe(false);
+  });
 });
