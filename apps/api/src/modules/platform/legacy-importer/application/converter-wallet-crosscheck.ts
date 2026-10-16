@@ -109,8 +109,8 @@ const AMOUNT = /^(0|[1-9][0-9]*)$/u;
 /**
  * The field that names the customer, per money file, as the converter writes it
  * (`mirza2nexa/convert.py`, contract 1.x): a `wallet_opening_balance` carries
- * `telegram_user_id`, a `legacy_debt` carries `legacy_user_id` — the column of
- * `legacy_wallet_debts` it lands in (`docs/MAPPING.md` of the converter). Both hold the Mirza
+ * `telegram_user_id`, a `legacy_debt` carries `legacy_user_id` — the name of the debt table's
+ * own column it lands in (`docs/MAPPING.md` of the converter). Both hold the Mirza
  * `user.id`, which is the Telegram id. A record without its own file's field is unidentified;
  * the other file's field is never read in its place.
  */
