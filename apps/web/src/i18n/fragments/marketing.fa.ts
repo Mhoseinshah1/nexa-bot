@@ -17,4 +17,7 @@ export const WEB_FA_MARKETING = {
  * Keys of `web.fa.ts` this agent's work no longer renders. Listing a key here keeps
  * `check:i18n` quiet until the lead deletes it from `web.fa.ts` when folding.
  */
-export const WEB_FA_MARKETING_RETIRED: readonly string[] = [];
+export const WEB_FA_MARKETING_RETIRED: readonly string[] = [
+  // terms: the enforcement switch is a row of its own, without a card title
+  'web.terms_enforcement_title',
+];

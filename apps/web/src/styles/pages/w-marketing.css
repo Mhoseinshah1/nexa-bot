@@ -112,3 +112,26 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* --- Terms: current version and draft side by side, one height ----------------------- */
+
+.bx-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gap);
+  align-items: stretch;
+}
+.bx-pair > .card {
+  margin: 0;
+}
+.bx-clip {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+@media (max-width: 900px) {
+  .bx-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
