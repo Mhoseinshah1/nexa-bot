@@ -343,4 +343,6 @@ export const WEB_FA_OPS_RETIRED: readonly string[] = [
   'web.alerts_empty_filtered_hint',
   // notifications: the column reads «نوع اعلان» now.
   'web.key',
+  // panels: the lifecycle card's title (its buttons moved to the page head).
+  'web.panel_lifecycle',
 ];
