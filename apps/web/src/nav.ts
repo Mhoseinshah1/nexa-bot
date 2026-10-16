@@ -288,6 +288,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    // The whole Mirza history archive, read only: every record type including the global
+    // ones (settings, panel registry, proposals) that no customer page can show.
+    id: 'legacy-records',
+    path: '/legacy-records',
+    label: 'web.nav_legacy_records',
+    icon: 'archive',
+    permission: 'legacy.history.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     // Mirza migration PR6 (owner constraint 3): the owner's approval of ONE frozen legacy
     // snapshot for import, bound to seven exact values. Its own MEDIUM view permission;
     // approving is CRITICAL and owner-only.

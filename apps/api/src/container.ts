@@ -283,6 +283,8 @@ import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy
 import { LegacyHistoryIngest } from './modules/platform/legacy-history/application/legacy-history-ingest.js';
 import { LegacyHistoryReadService } from './modules/platform/legacy-history/application/legacy-history-read.service.js';
 import { DrizzleLegacyHistoryRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-history.repository.js';
+import { LegacyRecordsReadService } from './modules/platform/legacy-history/application/legacy-records-read.service.js';
+import { DrizzleLegacyRecordsRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-records.repository.js';
 import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
 import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
 import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
@@ -1017,6 +1019,7 @@ export interface Container {
    */
   readonly legacyHistoryIngest: LegacyHistoryIngest;
   readonly legacyHistoryRead: LegacyHistoryReadService;
+  readonly legacyRecordsRead: LegacyRecordsReadService;
   /**
    * Mirza PR4 (owner decision 6): the owner's review of legacy wallet debts — negative legacy
    * balances held beside the ledger. Reads under `legacy.debts.view`, decisions under
@@ -4488,6 +4491,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     audit,
   });
+  const legacyRecordsRead = new LegacyRecordsReadService({
+    repository: new DrizzleLegacyRecordsRepository(database.db),
+    guard,
+    audit,
+  });
   const customerAccountTransferService = new CustomerAccountTransferService({
     repository: new DrizzleCustomerAccountTransferRepository(database.db),
     customers: customerRepository,
@@ -7133,6 +7141,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyInvoiceArchive: legacyInvoiceArchiveService,
     legacyHistoryIngest,
     legacyHistoryRead,
+    legacyRecordsRead,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,

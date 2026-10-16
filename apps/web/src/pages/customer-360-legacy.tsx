@@ -186,7 +186,7 @@ export function CustomerLegacyHistoryCard({
   );
 }
 
-function LegacyHistoryRow({ item }: { item: LegacyHistoryItem }) {
+export function LegacyHistoryRow({ item }: { item: LegacyHistoryItem }) {
   const fields = Object.entries(item.summary).filter(([key]) => !HIDDEN_IN_ROW.has(key));
   return (
     <li className="stack">

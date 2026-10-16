@@ -645,6 +645,14 @@ import {
   customerServicesToggleResponseSchema,
   customerTimelineResponseSchema,
   legacyHistoryResponseSchema,
+  LEGACY_RECORDS_ROUTES,
+  legacyRecordsListResponseSchema,
+  legacyRecordsSummaryResponseSchema,
+  legacyServiceHistoryResponseSchema,
+  type LegacyRecordsLinkedFilter,
+  type LegacyRecordsListResponse,
+  type LegacyRecordsSummaryResponse,
+  type LegacyServiceHistoryResponse,
   legacyCustomerAdoptionsResponseSchema,
   legacyCustomerInvoicesResponseSchema,
   type LegacyCustomerAdoptionsResponse,
@@ -5019,6 +5027,35 @@ export function fetchCustomerLegacyHistory(
   const suffix = params.toString();
   const path = CUSTOMER_360_ROUTES.legacyHistory(id);
   return authedGet(suffix ? `${path}?${suffix}` : path, legacyHistoryResponseSchema);
+}
+
+/** The Mirza records page: every record type with its counts and the inactive Mirza panels. */
+export function fetchLegacyRecordsSummary(): Promise<LegacyRecordsSummaryResponse> {
+  return authedGet(LEGACY_RECORDS_ROUTES.summary, legacyRecordsSummaryResponseSchema);
+}
+
+/** One page of the Mirza history archive (by record id), optionally filtered. */
+export function fetchLegacyRecords(
+  query: {
+    type?: LegacyHistoryRecordType;
+    linked?: LegacyRecordsLinkedFilter;
+    after?: string;
+    limit?: number;
+  } = {},
+): Promise<LegacyRecordsListResponse> {
+  const params = new URLSearchParams();
+  if (query.type !== undefined) params.set('type', query.type);
+  if (query.linked !== undefined) params.set('linked', query.linked);
+  if (query.after !== undefined) params.set('after', query.after);
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  const suffix = params.toString();
+  const path = LEGACY_RECORDS_ROUTES.list;
+  return authedGet(suffix ? `${path}?${suffix}` : path, legacyRecordsListResponseSchema);
+}
+
+/** A service's Mirza records (`services.view` + `legacy.history.view`). */
+export function fetchServiceLegacyHistory(id: string): Promise<LegacyServiceHistoryResponse> {
+  return authedGet(LEGACY_RECORDS_ROUTES.service(id), legacyServiceHistoryResponseSchema);
 }
 
 /** The customer's Mirza invoices beside the import's outcome for each (history, read-only). */

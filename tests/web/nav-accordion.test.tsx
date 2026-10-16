@@ -13,7 +13,7 @@ import { navGroupHeader, renderPage, stubApi } from './harness';
  * The sidebar's information architecture and its single-open accordion.
  *
  * What this file defends: the ten groups hold exactly the owner's entries, in the owner's
- * order; every one of the 55 entries survived with its path, label, icon, permission and
+ * order; every one of the 56 entries survived with its path, label, icon, permission and
  * owner-only flag untouched (a snapshot taken from the navigation BEFORE the regrouping); only
  * one group is open at a time; the group that owns the current route opens on the first
  * render and on every navigation; permission filtering happens before anything is drawn.
@@ -114,6 +114,14 @@ const BEFORE: readonly [
     false,
   ],
   // Mirza PR5: legacy service candidates and their review (its own MEDIUM permission).
+  [
+    'legacy-records',
+    '/legacy-records',
+    'web.nav_legacy_records',
+    'archive',
+    'legacy.history.view',
+    false,
+  ],
   [
     'legacy-services',
     '/legacy-services',
@@ -261,6 +269,7 @@ const GROUPS: readonly [string, readonly string[]][] = [
       'legacy-invoices',
       'legacy-debts',
       'legacy-services',
+      'legacy-records',
       'legacy-cutover',
       'custom-service',
       'extra-devices',
@@ -354,10 +363,10 @@ const drawnHrefs = () =>
 const head = (group: string) => navGroupHeader(group) as HTMLButtonElement;
 
 describe('the navigation’s information architecture', () => {
-  it('keeps all 55 entries exactly once, each with its path, label, icon and permission', () => {
-    expect(NAV).toHaveLength(55);
-    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(55);
-    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(55);
+  it('keeps all 56 entries exactly once, each with its path, label, icon and permission', () => {
+    expect(NAV).toHaveLength(56);
+    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(56);
+    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(56);
     const now = [...NAV]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((entry) => [
@@ -553,7 +562,7 @@ describe('the single-open accordion', () => {
   it('keeps every icon in the collapsed rail, where a header has no room for its label', () => {
     sidebar('/', ALL, OWNER, { collapsed: true });
     expect(document.querySelectorAll('.nav-group-head')).toHaveLength(0);
-    expect(drawnHrefs()).toHaveLength(55);
+    expect(drawnHrefs()).toHaveLength(56);
   });
 });
 

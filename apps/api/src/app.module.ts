@@ -58,6 +58,7 @@ import { LegacyCutoverController } from './surfaces/web/legacy-cutover.controlle
 import { LegacyMigrationController } from './surfaces/web/legacy-migration.controller.js';
 import { LegacyInvoicesController } from './surfaces/web/legacy-invoices.controller.js';
 import { LegacyHistoryController } from './surfaces/web/legacy-history.controller.js';
+import { LegacyRecordsController } from './surfaces/web/legacy-records.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
 import { RecoveryController } from './surfaces/web/recovery.controller.js';
@@ -168,6 +169,7 @@ export class AppModule implements NestModule {
         LegacyMigrationController as never,
         LegacyInvoicesController as never,
         LegacyHistoryController as never,
+        LegacyRecordsController as never,
         ServicesController as never,
         PanelsController as never,
         RecoveryController as never,

@@ -10972,6 +10972,42 @@ export const WEB_FA = {
   'web.aq_range_to': 'تا {b}',
   'web.aq_before': 'پیش از {d}',
   'web.aq_from': 'از {a}',
+
+  // --- «سوابق و تنظیمات میرزا»: the whole Mirza history archive, read only -------------------
+  'web.nav_legacy_records': 'سوابق و تنظیمات میرزا',
+  'web.lrec_title': 'سوابق و تنظیمات میرزا',
+  'web.lrec_intro':
+    'همهٔ رکوردهای بایگانی‌شدهٔ میرزا، از جمله تنظیمات و رکوردهای بدون مشتری. این صفحه فقط خواندنی است و هیچ‌چیز را تغییر نمی‌دهد.',
+  'web.lrec_pii_redacted':
+    'اطلاعات شخصی و متن‌های آزاد پنهان است؛ برای دیدن آن‌ها کلید «مشاهدهٔ اطلاعات شخصی بایگانی» لازم است.',
+  'web.lrec_types_title': 'انواع رکورد',
+  'web.lrec_filter_type': 'نوع رکورد',
+  'web.lrec_filter_linked': 'اتصال به مشتری',
+  'web.lrec_all': 'همه',
+  'web.lrec_linked_yes': 'متصل به مشتری',
+  'web.lrec_linked_no': 'بدون مشتری',
+  'web.lrec_total': 'مجموع رکوردها:',
+  'web.lrec_unlinked': 'بدون مشتری:',
+  'web.lrec_empty': 'رکوردی با این فیلتر وجود ندارد.',
+  'web.lrec_badge_linked': 'متصل به مشتری',
+  'web.lrec_badge_unlinked': 'بدون مشتری',
+  'web.lrec_panels_title': 'پنل‌های غیرفعال میرزا',
+  'web.lrec_panels_hint':
+    'پنل‌هایی که در ثبت‌نام پنل‌های میرزا فعال نبودند. فقط اطلاعات است و روی پنل‌های نکسا اثری ندارد.',
+  'web.lrec_panels_empty': 'همهٔ پنل‌های میرزا فعال بودند.',
+  'web.lrec_panel_code': 'کد پنل',
+  'web.lrec_panel_name': 'نام',
+  'web.lrec_panel_type': 'نوع',
+  'web.lrec_panel_status': 'وضعیت',
+  'web.lrec_status_disabled': 'غیرفعال',
+  'web.lrec_status_other': 'غیر از فعال',
+  'web.lrec_service_title': 'سوابق میرزا',
+  'web.lrec_service_hint':
+    'عملیات، درخواست‌های لغو و مالکیت‌های ثبت‌شده در میرزا برای فاکتوری که این سرویس از آن پذیرفته شده است. فقط خواندنی.',
+  'web.lrec_service_empty':
+    'این سرویس از فاکتور میرزا پذیرفته نشده یا سابقه‌ای برایش ثبت نشده است.',
+  'web.lrec_service_invoice': 'کلید فاکتور میرزا:',
+  'web.lrec_service_truncated': 'فقط جدیدترین رکوردها نمایش داده می‌شود؛ تعداد:',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;
