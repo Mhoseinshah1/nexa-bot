@@ -45,6 +45,9 @@ import {
   uploadBroadcastMedia,
 } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
+import { ListFilterBar } from '../ui/filter-bar';
+import { FilePicker } from '../ui/file-picker';
+import { DateField } from '../ui/date-field';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { useSubmissionKey } from '../submission-key';
@@ -55,6 +58,7 @@ import {
   Card,
   ConfirmDialog,
   CursorPager,
+  LIST_PAGE_SIZE,
   DataTable,
   Empty,
   Field,
@@ -249,7 +253,13 @@ export function BroadcastsPage({
   const cursor = route.query.get('cursor');
   const list = useQuery({
     queryKey: ['broadcasts', cursor],
-    queryFn: () => fetchBroadcasts(cursor === null ? {} : { cursor }),
+    queryFn: () => {
+      // The server takes `limit` (`broadcastListQuerySchema`); the client helper passes every
+      // field it is given through to the query string.
+      const query: { cursor?: string; limit: number } =
+        cursor === null ? { limit: LIST_PAGE_SIZE } : { cursor, limit: LIST_PAGE_SIZE };
+      return fetchBroadcasts(query);
+    },
     enabled: !denied,
   });
   const columns: readonly Column<BroadcastResponseItem>[] = [
@@ -829,14 +839,19 @@ function MediaCard({
       )}
       {blocked && <Banner tone="warn">{t('web.bc_media_save_first')}</Banner>}
       <div className="form-actions">
-        <input
-          type="file"
-          className="bc-file"
-          aria-label={t('web.bc_media_pick')}
+        <FilePicker
+          label={t('web.bc_media_pick')}
+          kind={
+            record.contentKind === 'PHOTO'
+              ? 'image'
+              : record.contentKind === 'VIDEO'
+                ? 'video'
+                : 'any'
+          }
           accept={accept}
           disabled={blocked || upload.isPending}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
+          onFiles={(files) => {
+            const file = files[0];
             if (file !== undefined) upload.mutate(file);
           }}
         />
@@ -1025,11 +1040,11 @@ function LaunchCard({
                 </Field>
                 {mode === 'SCHEDULE' && (
                   <Field label={t('web.bc_schedule_at')} htmlFor="bc-at">
-                    <input
+                    <DateField
                       id="bc-at"
-                      type="datetime-local"
+                      mode="datetime"
                       value={scheduledAt}
-                      onChange={(event) => setScheduledAt(event.target.value)}
+                      onChange={setScheduledAt}
                     />
                   </Field>
                 )}
@@ -1504,9 +1519,10 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
     queryKey: ['broadcast-recipients', id, state, cursor],
     queryFn: () =>
       fetchBroadcastRecipients(id, {
+        limit: LIST_PAGE_SIZE,
         ...(state === '' ? {} : { state }),
         ...(cursor === undefined ? {} : { cursor }),
-      }),
+      } as { state?: string; cursor?: string }),
     refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
   });
   const seenState = useRef(broadcastState);
@@ -1518,25 +1534,39 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
   }, [broadcastState, client, id]);
   return (
     <Card title={t('web.bc_recipients')}>
-      <div className="toolbar">
-        <Field label={t('web.bc_state')} htmlFor="bc-r-state" compact>
-          <select
-            id="bc-r-state"
-            value={state}
-            onChange={(event) => {
-              setState(event.target.value as BroadcastRecipientState | '');
+      <ListFilterBar
+        label={t('web.bc_recipients')}
+        filters={[
+          {
+            key: 'state',
+            label: t('web.bc_state'),
+            active: state === '' ? null : t(RECIPIENT_LABELS[state]),
+            onClear: () => {
+              setState('');
               setTrail([]);
-            }}
-          >
-            <option value="">{t('web.aud_any')}</option>
-            {BROADCAST_RECIPIENT_STATES.map((option) => (
-              <option key={option} value={option}>
-                {t(RECIPIENT_LABELS[option])}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
+            },
+            control: (
+              <select
+                id="bc-r-state"
+                className="input sm"
+                aria-label={t('web.bc_state')}
+                value={state}
+                onChange={(event) => {
+                  setState(event.target.value as BroadcastRecipientState | '');
+                  setTrail([]);
+                }}
+              >
+                <option value="">{t('web.aud_any')}</option>
+                {BROADCAST_RECIPIENT_STATES.map((option) => (
+                  <option key={option} value={option}>
+                    {t(RECIPIENT_LABELS[option])}
+                  </option>
+                ))}
+              </select>
+            ),
+          },
+        ]}
+      />
       <StateSwitch query={rows}>
         {rows.data === undefined ? null : (
           <>
@@ -1591,7 +1621,11 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
                       t(PIN_LABELS[row.pinState])
                     ) : (
                       <>
-                        {t(PIN_LABELS[row.pinState])} <code>{row.pinErrorCode}</code>
+                        {t(PIN_LABELS[row.pinState])}{' '}
+                        {/* The pin's reason in words; the transport code in its title. */}
+                        <span className="muted small" title={row.pinErrorCode}>
+                          {broadcastReasonLabel(row.pinErrorCode) ?? <Ltr>{row.pinErrorCode}</Ltr>}
+                        </span>
                       </>
                     ),
                 },
