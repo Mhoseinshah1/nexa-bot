@@ -10,6 +10,8 @@ import {
 } from '../../apps/web/src/pages/audience-builder';
 import { BroadcastDetailPage } from '../../apps/web/src/pages/broadcasts';
 import { renderPage, stubApi } from './harness';
+import { t } from '../../apps/web/src/i18n/web.fa';
+import { addAudienceCondition } from './ui-helpers';
 
 /**
  * Broadcast V2 in the Web Admin (program §19): the tag and active-service dimensions in the
@@ -106,22 +108,32 @@ describe('the audience builder, Broadcast V2', () => {
     stubApi([OPTIONS]);
     let last: AudienceDraft = EMPTY_AUDIENCE;
     renderPage(<Harness onDraft={(draft) => (last = draft)} />);
-    const vip = (await screen.findByLabelText('مشتری ویژه')) as HTMLSelectElement;
-    expect(screen.getByLabelText('قدیمی (بایگانی‌شده)')).toBeInTheDocument();
+    await screen.findByText(t('web.aud_status'));
+    const editor = await waitFor(() => addAudienceCondition(t('web.aud_tags')));
+    const vip = within(editor).getByRole('group', { name: 'مشتری ویژه' });
+    expect(within(editor).getByRole('group', { name: 'قدیمی (بایگانی‌شده)' })).toBeInTheDocument();
     expect(
       within(vip)
-        .getAllByRole('option')
+        .getAllByRole('button')
         .map((o) => o.textContent),
     ).toEqual(['فرقی نمی‌کند', 'دارد', 'ندارد']);
-    fireEvent.change(vip, { target: { value: 'ANY_OF' } });
-    fireEvent.change(screen.getByLabelText('پرریسک'), { target: { value: 'NONE_OF' } });
+    fireEvent.click(within(vip).getByRole('button', { name: 'دارد' }));
+    fireEvent.click(
+      within(within(editor).getByRole('group', { name: 'پرریسک' })).getByRole('button', {
+        name: 'ندارد',
+      }),
+    );
     expect(last.tags).toEqual({ anyOf: [VIP], noneOf: [RISK] });
     // Moving a tag to the other list never leaves it in both (the contract refuses that).
-    fireEvent.change(vip, { target: { value: 'NONE_OF' } });
+    fireEvent.click(within(vip).getByRole('button', { name: 'ندارد' }));
     expect(last.tags).toEqual({ anyOf: [], noneOf: [RISK, VIP] });
     // Back to "either" for both: no tag criterion at all, not an empty one.
-    fireEvent.change(screen.getByLabelText('مشتری ویژه'), { target: { value: 'IGNORE' } });
-    fireEvent.change(screen.getByLabelText('پرریسک'), { target: { value: 'IGNORE' } });
+    fireEvent.click(within(vip).getByRole('button', { name: 'فرقی نمی‌کند' }));
+    fireEvent.click(
+      within(within(editor).getByRole('group', { name: 'پرریسک' })).getByRole('button', {
+        name: 'فرقی نمی‌کند',
+      }),
+    );
     expect(last.tags).toBeNull();
   });
 
@@ -129,15 +141,24 @@ describe('the audience builder, Broadcast V2', () => {
     stubApi([OPTIONS]);
     let last: AudienceDraft = EMPTY_AUDIENCE;
     renderPage(<Harness onDraft={(draft) => (last = draft)} />);
-    fireEvent.change(await screen.findByLabelText('سرویس فعال'), { target: { value: 'NONE' } });
+    await screen.findByText(t('web.aud_status'));
+    const editor = addAudienceCondition(t('web.aud_active_service'));
+    fireEvent.click(within(editor).getByRole('button', { name: 'ندارد' }));
     expect(last.activeService).toBe('NONE');
   });
 
-  it('draws no tag section for a tenant with no tags', async () => {
-    stubApi([{ ...OPTIONS, body: { ...OPTIONS.body, tags: [] } }]);
+  it('draws no tag condition for a tenant with no tags', async () => {
+    const tier = { id: '019280ab-cdef-7012-8345-0000000000d1', name: 'نقره‌ای' };
+    stubApi([{ ...OPTIONS, body: { ...OPTIONS.body, tags: [], resellerTiers: [tier] } }]);
     renderPage(<Harness onDraft={() => undefined} />);
-    await screen.findByLabelText('سرویس فعال');
-    expect(screen.queryByText('برچسب‌ها')).toBeNull();
+    await screen.findByText(t('web.aud_status'));
+    // The options have answered: the tier they carry is offered.
+    const segment = addAudienceCondition(t('web.aq_segment'));
+    await within(segment).findByRole('button', { name: new RegExp(tier.name) });
+    fireEvent.click(screen.getByRole('button', { name: t('web.aq_add') }));
+    const menu = screen.getByRole('group', { name: t('web.aq_add') });
+    expect(within(menu).getByRole('button', { name: t('web.aud_purchase') })).toBeInTheDocument();
+    expect(within(menu).queryByRole('button', { name: t('web.aud_tags') })).toBeNull();
   });
 
   it('describes the new dimensions in the report’s sentences', () => {
