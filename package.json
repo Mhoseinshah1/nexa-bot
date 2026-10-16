@@ -21,6 +21,7 @@
     "web:shots": "node scripts/web-shots/shots.mjs",
     "web:responsive": "node scripts/web-shots/responsive.mjs",
     "web:no-scroll": "node scripts/web-shots/no-scroll.mjs",
+    "web:sweep": "node scripts/web-shots/sweep.mjs",
     "test": "vitest run --project unit",
     "test:web": "vitest run --project web",
     "test:integration": "vitest run --project integration",
