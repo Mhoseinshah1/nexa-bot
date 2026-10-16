@@ -32,6 +32,7 @@ import {
   Num,
   useToast,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { ListFilterBar } from '../ui/filter-bar';
 
@@ -235,6 +236,7 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
     queryKey: ['inbox', show, category, cursor ?? null],
     queryFn: () =>
       fetchInbox({
+        limit: LIST_PAGE_SIZE,
         unread: show === 'UNREAD',
         ...(category === '' ? {} : { category }),
         ...(cursor === undefined ? {} : { cursor }),

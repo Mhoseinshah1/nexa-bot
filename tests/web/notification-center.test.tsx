@@ -68,6 +68,22 @@ describe('the bell', () => {
 });
 
 describe('the inbox', () => {
+  it('asks the server for ten notifications a page (W1.8)', async () => {
+    const api = stubApi([
+      { url: '/notification-center', body: { notifications: [item()], nextCursor: null } },
+    ]);
+    renderPage(<NotificationCenterPage permissions={[...PERMISSION_KEYS]} />);
+    await waitFor(() =>
+      expect(
+        api.calls.some(
+          (call) =>
+            new URL(call.url, 'http://x').pathname.endsWith('/notification-center') &&
+            new URL(call.url, 'http://x').searchParams.get('limit') === '10',
+        ),
+      ).toBe(true),
+    );
+  });
+
   it('lists notifications with a Persian title, severity, category, count and a deep link', async () => {
     stubApi([
       {
