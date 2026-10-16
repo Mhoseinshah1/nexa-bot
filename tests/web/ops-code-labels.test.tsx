@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import * as contracts from '@nexa/contracts';
-import { DELIVERY_OUTCOMES } from '@nexa/contracts';
+import {
+  DELIVERY_OUTCOMES,
+  GATEWAY_INVOICE_CREATION_STATES,
+  LEGACY_IMPORT_REASON_CODES,
+  LEGACY_REVIEW_REASON_CODES,
+  OPERATION_STATES,
+  PROVIDER_FAILURE_KINDS,
+} from '@nexa/contracts';
+import { refundOutcomeLabel } from '../../apps/web/src/pages/service-refund-requests';
 import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import {
   DELIVERY_CODE_LABELS,
@@ -48,6 +56,19 @@ describe('operational-event code names', () => {
     }
     for (const outcome of DELIVERY_OUTCOMES) {
       expect(DELIVERY_OUTCOME_LABELS[outcome]).toBeDefined();
+    }
+  });
+
+  it('names every legacy reason, invoice creation state, failure kind and operation state', () => {
+    for (const code of [
+      ...LEGACY_IMPORT_REASON_CODES,
+      ...LEGACY_REVIEW_REASON_CODES,
+      ...GATEWAY_INVOICE_CREATION_STATES,
+    ]) {
+      expect(errorCodeLabel(code)).toMatch(PERSIAN);
+    }
+    for (const token of [...PROVIDER_FAILURE_KINDS, ...OPERATION_STATES, 'RESERVATION_RELEASED']) {
+      expect(refundOutcomeLabel(token)).toMatch(PERSIAN);
     }
   });
 

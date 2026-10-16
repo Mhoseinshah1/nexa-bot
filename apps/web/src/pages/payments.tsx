@@ -91,6 +91,7 @@ import {
   PAYMENT_STATE_LABELS as STATE_LABELS,
   PAYMENT_STATE_TONES as STATE_TONES,
 } from '../payment-labels';
+import { ErrorCodeLabel } from '../ui/technical-details';
 
 // Review N8: the vocabulary moved to `payment-labels.ts`; these names stay importable from
 // here under their old spelling, so a workstream that reads them from this page still builds.
@@ -690,11 +691,13 @@ function SignalCell({ row }: { row: PaymentSummaryResponse }) {
       {signal.creationState !== 'CREATED' && (
         <>
           <Badge tone={signal.creationState === 'CREATING' ? 'info' : 'warn'}>
-            {t('web.payment_ops_signal_create')}{' '}
-            <Ltr>
-              {signal.creationState}
-              {signal.creationErrorCode === null ? '' : ` · ${signal.creationErrorCode}`}
-            </Ltr>
+            {t('web.payment_ops_signal_create')} <ErrorCodeLabel code={signal.creationState} />
+            {signal.creationErrorCode === null ? null : (
+              <>
+                {' · '}
+                <ErrorCodeLabel code={signal.creationErrorCode} />
+              </>
+            )}
           </Badge>{' '}
         </>
       )}
@@ -703,7 +706,8 @@ function SignalCell({ row }: { row: PaymentSummaryResponse }) {
         <>
           {' '}
           <Badge tone="danger">
-            {t('web.payment_ops_signal_inquiry_error')} <Ltr>{signal.lastInquiryErrorCode}</Ltr>
+            {t('web.payment_ops_signal_inquiry_error')}{' '}
+            <ErrorCodeLabel code={signal.lastInquiryErrorCode} />
           </Badge>
         </>
       )}
@@ -2144,12 +2148,15 @@ export function PaymentDetailPage({
                                 ]),
                             [
                               t('web.payment_gateway_invoice_creation'),
-                              <Ltr key="cs">
-                                {row.gatewayInvoice.creationState}
-                                {row.gatewayInvoice.creationErrorCode === null
-                                  ? ''
-                                  : ` · ${row.gatewayInvoice.creationErrorCode}`}
-                              </Ltr>,
+                              <span key="cs">
+                                <ErrorCodeLabel code={row.gatewayInvoice.creationState} />
+                                {row.gatewayInvoice.creationErrorCode === null ? null : (
+                                  <>
+                                    {' · '}
+                                    <ErrorCodeLabel code={row.gatewayInvoice.creationErrorCode} />
+                                  </>
+                                )}
+                              </span>,
                             ],
                             [
                               t('web.payment_gateway_invoice_status'),
@@ -2170,7 +2177,9 @@ export function PaymentDetailPage({
                                   {row.gatewayInvoice.lastInquiryErrorCode === null ? null : (
                                     <>
                                       {' '}
-                                      <Ltr>{row.gatewayInvoice.lastInquiryErrorCode}</Ltr>
+                                      <ErrorCodeLabel
+                                        code={row.gatewayInvoice.lastInquiryErrorCode}
+                                      />
                                     </>
                                   )}
                                 </span>
@@ -2404,9 +2413,16 @@ function cardTransferFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][]
       change === null ? (
         <Dash key="cc" />
       ) : (
-        <Ltr key="cc">
-          {`${change.state}${change.errorCode === null ? '' : ` · ${change.errorCode}`} · ${formatTimestamp(change.requestedAt)}`}
-        </Ltr>
+        <span key="cc">
+          <Ltr>{change.state}</Ltr>
+          {change.errorCode === null ? null : (
+            <>
+              {' · '}
+              <ErrorCodeLabel code={change.errorCode} />
+            </>
+          )}
+          {` · ${formatTimestamp(change.requestedAt)}`}
+        </span>
       ),
     ],
     [
@@ -2417,9 +2433,20 @@ function cardTransferFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][]
         <span key="rs">
           {invoice.receiptSubmissions.map((one) => (
             <div key={one.id}>
-              <Ltr>
-                {`${one.state}${one.errorCode === null ? '' : ` · ${one.errorCode}`}${one.providerStatus === null ? '' : ` · ${one.providerStatus}`} · ${formatTimestamp(one.createdAt)}`}
-              </Ltr>
+              <Ltr>{one.state}</Ltr>
+              {one.errorCode === null ? null : (
+                <>
+                  {' · '}
+                  <ErrorCodeLabel code={one.errorCode} />
+                </>
+              )}
+              {one.providerStatus === null ? null : (
+                <>
+                  {' · '}
+                  <Ltr>{one.providerStatus}</Ltr>
+                </>
+              )}
+              {` · ${formatTimestamp(one.createdAt)}`}
               {one.openedReview ? (
                 <>
                   {' '}

@@ -35,6 +35,10 @@ import {
   type Tone,
 } from '../ui/kit';
 import { messageFor } from './settings';
+import { errorCodeLabel } from '../ops-code-labels';
+import { CodeLabel } from '../ui/technical-details';
+import { FAILURE_LABELS } from './panel-advanced';
+import { OPERATION_STATE_LABELS } from './services';
 
 /**
  * Customers' service refund requests in the Web Admin (WP19, brief §2.10): the smallest
@@ -141,13 +145,23 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
       key: 'operation',
       header: t('web.service_refund_operation'),
       // The frozen token, as the Telegram admin screen shows it: one word for one fact.
-      render: (row) => (row.operationState === null ? '—' : <Ltr>{row.operationState}</Ltr>),
+      render: (row) =>
+        row.operationState === null ? (
+          '—'
+        ) : (
+          <CodeLabel label={refundOutcomeLabel(row.operationState)} code={row.operationState} />
+        ),
     },
     {
       key: 'outcome',
       header: t('web.service_refund_outcome'),
       render: (row) =>
-        row.rejectionReason ?? (row.failureKind === null ? '—' : <Ltr>{row.failureKind}</Ltr>),
+        row.rejectionReason ??
+        (row.failureKind === null ? (
+          '—'
+        ) : (
+          <CodeLabel label={refundOutcomeLabel(row.failureKind)} code={row.failureKind} />
+        )),
     },
     {
       key: 'created',
@@ -381,4 +395,15 @@ function DecisionForm({
       {reject.error !== null && <Banner tone="danger">{messageFor(reject.error)}</Banner>}
     </div>
   );
+}
+
+/**
+ * A refund's operation state or failure kind, by name (W5/W6): a provider failure kind, an
+ * operation state, or a code `errorCodeLabel` knows; otherwise the raw token.
+ */
+export function refundOutcomeLabel(token: string): string {
+  const key =
+    (FAILURE_LABELS as Readonly<Record<string, WebKey>>)[token] ??
+    (OPERATION_STATE_LABELS as Readonly<Record<string, WebKey>>)[token];
+  return key === undefined ? errorCodeLabel(token) : t(key);
 }

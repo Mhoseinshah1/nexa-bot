@@ -7,6 +7,7 @@ import {
   type ErrorIssue,
 } from '../error-text';
 import { t, type WebKey } from '../i18n/web.fa';
+import { errorCodeLabel } from '../ops-code-labels';
 import { Banner, Disclosure } from './kit';
 
 /**
@@ -152,4 +153,9 @@ export function ProviderText({ summary, text }: { summary: WebKey; text: string 
       <TechnicalDetails lines={[text]} />
     </span>
   );
+}
+
+/** An error, provider or ops code by its Persian name, the code beside it (`CodeLabel`). */
+export function ErrorCodeLabel({ code }: { code: string }) {
+  return <CodeLabel label={errorCodeLabel(code)} code={code} />;
 }

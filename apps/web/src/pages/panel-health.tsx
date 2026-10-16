@@ -43,6 +43,8 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Modal } from '../ui/overlays';
+import { opsCodeLabel } from '../ops-code-labels';
+import { CodeLabel } from '../ui/technical-details';
 
 /**
  * Phase C2: the panel health dashboard.
@@ -443,7 +445,8 @@ function PanelConditions({ conditions }: { conditions: PanelHealthRow['condition
               <Badge tone={SEVERITY_TONES[condition.severity] ?? 'neutral'}>
                 {t(SEVERITY_LABELS[condition.severity])}
               </Badge>{' '}
-              <Ltr>{condition.code}</Ltr> <ConditionTimes condition={condition} />
+              <CodeLabel label={opsCodeLabel(condition.code)} code={condition.code} />{' '}
+              <ConditionTimes condition={condition} />
             </li>
           ))}
         </ul>
@@ -456,7 +459,8 @@ function PanelConditions({ conditions }: { conditions: PanelHealthRow['condition
             {history.map((condition) => (
               <li key={condition.code}>
                 <Badge tone="neutral">{t('web.ph_condition_historical')}</Badge>{' '}
-                <Ltr>{condition.code}</Ltr> <ConditionTimes condition={condition} />
+                <CodeLabel label={opsCodeLabel(condition.code)} code={condition.code} />{' '}
+                <ConditionTimes condition={condition} />
               </li>
             ))}
           </ul>

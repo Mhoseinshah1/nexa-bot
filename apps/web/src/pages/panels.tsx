@@ -226,12 +226,14 @@ export function hostOf(baseUrl: string): string {
 export function FailureBadge({ failure }: { failure: string | null }) {
   if (failure === null) return <span className="faint">—</span>;
   const retryable = PROVIDER_FAILURE_RETRYABLE[failure as keyof typeof PROVIDER_FAILURE_RETRYABLE];
+  const label = (FAILURE_LABELS as Readonly<Record<string, WebKey>>)[failure];
   return (
     <Badge
       tone={retryable === true ? 'warn' : 'danger'}
-      title={retryable === true ? t('web.failure_retryable') : t('web.failure_permanent')}
+      title={`${retryable === true ? t('web.failure_retryable') : t('web.failure_permanent')} (${failure})`}
     >
-      <Ltr>{failure}</Ltr>
+      {/* W5/W6: the kind's Persian name; an unknown kind keeps its code, never a blank. */}
+      {label === undefined ? <Ltr>{failure}</Ltr> : t(label)}
     </Badge>
   );
 }

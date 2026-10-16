@@ -81,6 +81,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { SaveBar, SectionNav } from './editor-layout';
+import { ErrorCodeLabel } from '../ui/technical-details';
 
 /**
  * Campaigns — «کمپین‌ها» (round N, C1; `docs/round-n-campaigns-audit.md`).
@@ -1637,7 +1638,7 @@ function ActionsCard({ campaign }: { campaign: CampaignDetail }) {
                 // The confirmed set moved before the hand-over: nothing was given to it.
                 <span className="small">{t('web.campaign_failure_audience_changed')}</span>
               ) : row.failureCode !== null ? (
-                <Ltr>{row.failureCode}</Ltr>
+                <ErrorCodeLabel code={row.failureCode} />
               ) : (
                 '—'
               ),

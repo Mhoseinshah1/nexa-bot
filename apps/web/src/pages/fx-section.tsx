@@ -19,6 +19,7 @@ import {
   Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorCodeLabel } from '../ui/technical-details';
 
 /**
  * The FX section of the payment routes page (package FX, brief "Web Admin").
@@ -100,7 +101,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             {row.lastFailureCode === null ? null : (
               <>
                 {' '}
-                <Ltr>{row.lastFailureCode}</Ltr>
+                <ErrorCodeLabel code={row.lastFailureCode} />
               </>
             )}
           </>
@@ -277,7 +278,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                   status.data.lastErrorCode === null ? (
                     '—'
                   ) : (
-                    <Ltr key="le">{status.data.lastErrorCode}</Ltr>
+                    <ErrorCodeLabel key="le" code={status.data.lastErrorCode} />
                   ),
                 ],
                 [
