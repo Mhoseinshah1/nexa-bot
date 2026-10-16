@@ -125,6 +125,22 @@ export const WEB_FA_UI = {
   'web.saved_views_no_default': 'بدون پیش‌فرض',
   'web.saved_views_deleted': '«{name}» حذف شد',
   'web.saved_views_undo': 'بازگرداندن',
+
+  // W1.7 — the permission catalogue
+  'web.pc_critical_only': 'فقط بحرانی‌ها',
+  'web.pc_expand_all': 'باز کردن همه',
+  'web.pc_collapse_all': 'بستن همه',
+  'web.pc_critical_count': '{n} بحرانی',
+  'web.pc_select_all': 'انتخاب همه',
+  'web.pc_select_none': 'هیچ‌کدام',
+  'web.pc_view_list': 'فهرست',
+  'web.pc_view_matrix': 'جدول مقایسه',
+  'web.pc_kind_view': 'دیدن',
+  'web.pc_kind_change': 'تغییر',
+  'web.pc_no_match': 'دسترسی‌ای با این جست‌وجو پیدا نشد.',
+  'web.pc_matrix_permission': 'دسترسی',
+  'web.pc_has': 'دارد',
+  'web.pc_lacks': 'ندارد',
 } as const;
 
 /**
