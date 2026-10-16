@@ -71,7 +71,6 @@ import {
   Num,
   PageHead,
   StateSwitch,
-  TwoColumn,
   type Column,
   type Tone,
 } from '../ui/kit';
