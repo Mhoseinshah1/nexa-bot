@@ -691,7 +691,7 @@ export interface ErrorIssue {
   readonly text: string;
   /** A `{token}` the issue is about, shown as typed (Latin, left-to-right). */
   readonly token?: string;
-  /** The server's own words (`path: message`), for «جزئیات فنی» only. */
+  /** The server's own words (`path: message`), for the technical-details disclosure only. */
   readonly raw: string | null;
 }
 

@@ -585,7 +585,7 @@ function PolicyCard({ advanced, mayEdit }: { advanced: PanelAdvancedResponse; ma
         </Field>
         {invalid.length > 0 && (
           <Banner tone="danger" title={t('web.policy_invalid')}>
-            {/* W6: each refused field by name; the schema's paths only under «جزئیات فنی». */}
+            {/* W6: each refused field by name; the schema's paths only under technical details. */}
             <ul>
               {[...new Set(invalid.map((path) => fieldText(path, POLICY_FIELD_LABELS)))].map(
                 (line) => (

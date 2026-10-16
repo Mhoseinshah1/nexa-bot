@@ -1686,7 +1686,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
                 />
                 {activationChanged && activationParse.kind === 'INVALID' && (
                   <Banner tone="danger" title={t('web.panel_activation_invalid')}>
-                    {/* W6: each refused field by name; the schema's paths only under «جزئیات فنی». */}
+                    {/* W6: each refused field by name; the schema's paths only under technical details. */}
                     <ul>
                       {[
                         ...new Set(
