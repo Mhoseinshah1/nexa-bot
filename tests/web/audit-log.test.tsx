@@ -151,7 +151,7 @@ describe('the audit log page', () => {
     ]);
     renderPage(<AuditLogPage route={route()} denied={false} mayExport={false} />);
     await screen.findByRole('link', { name: t('web.audit_link_order') });
-    fireEvent.click(screen.getByRole('button', { name: t('web.older') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() =>
       expect(api.calls.some((c) => c.url.includes('cursor=CURSOR-1'))).toBe(true),
     );

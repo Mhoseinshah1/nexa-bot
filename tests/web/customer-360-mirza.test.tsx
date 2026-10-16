@@ -174,7 +174,7 @@ describe('the customer’s Mirza invoices', () => {
       'href',
       '/legacy-invoices',
     );
-    fireEvent.click(screen.getByRole('button', { name: /قدیمی‌تر/ }));
+    fireEvent.click(screen.getByRole('button', { name: /بعدی/ }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('after=kaW52LWE0'))).toBe(true),
     );
