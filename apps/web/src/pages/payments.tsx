@@ -52,7 +52,7 @@ import { formatDecimalText, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, staleAfterError } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { setQuery, useLinkHandler, type Route } from '../router';
 import { ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import { messageFor } from './settings';
