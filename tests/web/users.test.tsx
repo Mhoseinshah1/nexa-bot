@@ -1063,8 +1063,8 @@ describe('the wallet card', () => {
           label === 'مسدود کردن' ||
           label === 'رفع مسدودی' ||
           // The shared pager's own two, which carry no wallet meaning.
-          label === 'قدیمی‌تر' ||
-          label === 'تازه‌تر' ||
+          label === 'بعدی' ||
+          label === 'قبلی' ||
           // A `Copyable` renders an unlabelled icon button; it copies a value and
           // changes nothing.
           label === '',
@@ -1290,7 +1290,7 @@ describe('the wallet card', () => {
     );
     await screen.findByText('تاریخچه تراکنش‌ها');
 
-    fireEvent.click(await screen.findByText('قدیمی‌تر'));
+    fireEvent.click(await screen.findByText('بعدی'));
 
     await waitFor(() => {
       expect(
@@ -1543,7 +1543,7 @@ describe("a customer's orders and services", () => {
     const card = screen.getByText('همهٔ سرویس‌های این مشتری').closest('section');
     expect(card).not.toBeNull();
 
-    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'بعدی' }));
 
     await waitFor(() => {
       expect(
