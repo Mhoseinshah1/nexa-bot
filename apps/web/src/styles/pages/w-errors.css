@@ -1,1 +1,29 @@
 /* w-errors — owned by one agent during the web-admin demo implementation. */
+
+/* The code and correlation id under a Persian error sentence: small, on their own line. */
+.err-ref {
+  margin: 0;
+  margin-block-start: calc(var(--gap) / 2);
+}
+
+/* «جزئیات فنی»: the raw lines stay left-to-right and wrap rather than widen the page. */
+.err-technical-lines {
+  margin: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+.err-technical-lines li {
+  overflow-wrap: anywhere;
+}
+
+/* A provider's summary with its disclosure under it. */
+.provider-text {
+  display: inline-flex;
+  flex-direction: column;
+  gap: calc(var(--gap) / 4);
+}
+
+/* A code beside its Persian name never pushes the name onto a line of its own. */
+.code-label bdi {
+  white-space: nowrap;
+}
