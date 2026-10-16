@@ -7,8 +7,10 @@ import {
   type KeyboardEvent,
   type MutableRefObject,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { t } from '../i18n/web.fa';
 import { Icon } from './icons';
+import { LayerContext, useLayer } from './layer';
 import { useFocusTrap } from './overlays';
 import {
   JALALI_MONTH_KEYS,
@@ -37,10 +39,10 @@ import {
  * `HH:MM` for `time`, and `''` for "no value". Only display and picking are Jalali.
  *
  * The trigger is a button («۲۴ مهر ۱۴۰۵», «۲۴ مهر ۱۴۰۵ — ۲۳:۳۴», or the placeholder) that a
- * `<label htmlFor={id}>` names. It opens a calendar popover that hangs off the field — not a
- * portal: under `style-src 'self'` nothing may be positioned by a computed coordinate, so it
- * is placed by CSS against its wrapper, as the kit's `Menu` is, and is a bottom sheet on a
- * phone. The popover is a focus trap (`useFocusTrap`): Escape closes it and focus returns to
+ * `<label htmlFor={id}>` names. It opens a calendar popover in a portal (so no Drawer, Modal or
+ * scrolling card clips it), placed under the trigger by CSS anchor positioning — under
+ * `style-src 'self'` nothing may be positioned by a computed coordinate — and centred on the
+ * screen where a browser has no anchor positioning; a bottom sheet on a phone. The popover is a focus trap (`useFocusTrap`): Escape closes it and focus returns to
  * the trigger. Days move with the arrow keys as they read in RTL (← is the next day), Enter
  * picks.
  *
@@ -134,20 +136,12 @@ export function DateField({
   size = 'md',
 }: DateFieldProps) {
   const [open, setOpen] = useState(false);
-  const wrap = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const valueId = useId();
   const popoverId = useId();
   const shown = formatDateFieldValue(mode, value);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDown = (event: MouseEvent) => {
-      if (wrap.current !== null && !wrap.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+  const layer = useLayer(open, () => setOpen(false));
 
   useEffect(() => {
     if (disabled) setOpen(false);
@@ -163,7 +157,7 @@ export function DateField({
 
   return (
     <span
-      ref={wrap}
+      ref={layer.inside}
       className={`date-field${size === 'sm' ? ' sm' : ''}${open ? ' open' : ''}`}
       data-date-field-wrap={mode}
     >
@@ -206,17 +200,23 @@ export function DateField({
           <Icon name="x" size={13} />
         </button>
       )}
-      {open && (
-        <DatePopover
-          id={popoverId}
-          mode={mode}
-          value={value}
-          min={min}
-          max={max}
-          onCommit={commit}
-          onClose={() => setOpen(false)}
-        />
-      )}
+      {open &&
+        createPortal(
+          <LayerContext.Provider value={layer.registry}>
+            <div ref={layer.inside} className="date-pop-layer">
+              <DatePopover
+                id={popoverId}
+                mode={mode}
+                value={value}
+                min={min}
+                max={max}
+                onCommit={commit}
+                onClose={() => setOpen(false)}
+              />
+            </div>
+          </LayerContext.Provider>,
+          document.body,
+        )}
     </span>
   );
 }
