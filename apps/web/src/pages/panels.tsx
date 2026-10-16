@@ -2883,7 +2883,7 @@ export function NewPanelPage({
         isEmpty={(providers.data?.providers.length ?? 0) === 0}
         empty={<Empty title={t('web.providers_none')} icon="panels" />}
       >
-        <form onSubmit={onSubmit}>
+        <form onSubmit={onSubmit} className="ops-equal-cols">
           <TwoColumn
             main={
               <Card tight>

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { ROLE_SEEDS } from '@nexa/contracts';
@@ -176,5 +178,20 @@ describe('diagnostics outbox types', () => {
     for (const [type, key] of Object.entries(OUTBOX_AGGREGATE_LABELS)) {
       expect(WEB_FA[key], type).toBeTruthy();
     }
+  });
+});
+
+describe('W4 layout rules on these pages', () => {
+  const css = readFileSync(join(__dirname, '../../apps/web/src/styles/pages/w-ops.css'), 'utf8');
+
+  it('keeps the shorter column of a conversation or list+detail page in view', () => {
+    const rule = /\.ops-sticky-cols > \* \{([^}]*)\}/u.exec(css)?.[1] ?? '';
+    expect(rule).toMatch(/position:\s*sticky/u);
+  });
+
+  it('gives side-by-side cards one height', () => {
+    expect(css).toMatch(
+      /\.two-col\.ops-equal-cols,\s*\.ops-equal-cols > \.two-col \{\s*align-items:\s*stretch/u,
+    );
   });
 });

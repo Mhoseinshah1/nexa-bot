@@ -58,3 +58,20 @@
   gap: 6px;
   align-items: center;
 }
+
+/*
+ * W4: side-by-side cards share one height (ops group's connection and topics cards, the
+ * new-panel form and its provider card): the row stretches, and the last card of each
+ * column grows to fill it.
+ */
+.two-col.ops-equal-cols,
+.ops-equal-cols > .two-col {
+  align-items: stretch;
+}
+.ops-equal-cols > .two-col > .stack {
+  display: flex;
+  flex-direction: column;
+}
+.ops-equal-cols > .two-col > .stack > :last-child {
+  flex: 1 1 auto;
+}
