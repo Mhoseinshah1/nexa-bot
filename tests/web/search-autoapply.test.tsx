@@ -505,6 +505,7 @@ describe('a draft with a problem is never applied by itself', () => {
     const calls = serve(spec);
     await open(spec, () => calls);
     const before = calls.length;
+    openFilterPanel();
     const action = byId('audit-action');
     fireEvent.change(action(), { target: { value: 'Payment Confirm' } });
     await advance(PAST * 2);

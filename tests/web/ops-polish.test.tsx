@@ -3,6 +3,11 @@ import { screen } from '@testing-library/react';
 import { ROLE_SEEDS } from '@nexa/contracts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { ROLE_KEY_LABELS, roleLabel } from '../../apps/web/src/rbac-labels';
+import {
+  AUDIT_SUBJECT_LABELS,
+  AUDIT_VERB_LABELS,
+  auditActionLabel,
+} from '../../apps/web/src/audit-action-labels';
 import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 
@@ -58,5 +63,27 @@ describe('admin role keys', () => {
     expect(badge).toHaveAttribute('title', 'receipt_reviewer');
     expect(screen.queryByText('receipt_reviewer')).toBeNull();
     expect(screen.getByText('night_shift')).toBeInTheDocument();
+  });
+});
+
+describe('audit action names', () => {
+  it('names every subject and verb it knows', () => {
+    for (const [code, key] of [
+      ...Object.entries(AUDIT_SUBJECT_LABELS),
+      ...Object.entries(AUDIT_VERB_LABELS),
+    ]) {
+      expect(WEB_FA[key], code).toBeTruthy();
+    }
+  });
+
+  it('composes subject and verb, across a middle segment, and falls back to null', () => {
+    expect(auditActionLabel('order.cancel')).toBe(
+      `${t('web.audit_subj_order')} — ${t('web.audit_verb_cancel')}`,
+    );
+    expect(auditActionLabel('support_ai.credential.test')).toBe(
+      `${t('web.audit_subj_support_ai')} — ${t('web.audit_verb_test')}`,
+    );
+    expect(auditActionLabel('order.brand_new_verb')).toBeNull();
+    expect(auditActionLabel('nothing')).toBeNull();
   });
 });

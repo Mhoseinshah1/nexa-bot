@@ -1263,20 +1263,6 @@ form.set-row > * + * {
 
 /* --- Phase D1 audit log -------------------------------------------------------- */
 
-/* The filter row: compact fields that wrap at 390px, the two buttons kept together. */
-.audit-filters {
-  align-items: flex-end;
-}
-.audit-filters .field {
-  min-width: 140px;
-  flex: 1 1 140px;
-}
-.audit-filter-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  flex-wrap: wrap;
-}
 .audit-code {
   font-size: var(--fs-ui);
 }
