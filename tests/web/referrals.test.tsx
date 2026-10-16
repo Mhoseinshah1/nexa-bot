@@ -126,19 +126,17 @@ describe('the attributions list', () => {
     const card = (await waitFor(attributionTable)).closest('section') as HTMLElement;
 
     // Newest first, so the NEXT page is older and there is no previous one yet.
-    expect(within(card).getByRole('button', { name: 'تازه‌تر' })).toBeDisabled();
-    fireEvent.click(within(card).getByRole('button', { name: 'قدیمی‌تر' }));
+    expect(within(card).getByRole('button', { name: 'قبلی' })).toBeDisabled();
+    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
     await waitFor(() => expect(gets(api, '/referrals?cursor=ref-cursor-2')).toHaveLength(1));
     // The commission list was not paged by the attribution pager.
     expect(gets(api, '/referral-commissions?cursor=')).toHaveLength(0);
 
     await waitFor(() =>
-      expect(within(card).getByRole('button', { name: 'تازه‌تر' })).not.toBeDisabled(),
+      expect(within(card).getByRole('button', { name: 'قبلی' })).not.toBeDisabled(),
     );
-    fireEvent.click(within(card).getByRole('button', { name: 'تازه‌تر' }));
-    await waitFor(() =>
-      expect(within(card).getByRole('button', { name: 'تازه‌تر' })).toBeDisabled(),
-    );
+    fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
+    await waitFor(() => expect(within(card).getByRole('button', { name: 'قبلی' })).toBeDisabled());
   });
 
   it('says there are none rather than drawing an empty table', async () => {
@@ -199,7 +197,7 @@ describe('the commission ledger', () => {
     render();
     const card = (await waitFor(commissionTable)).closest('section') as HTMLElement;
 
-    fireEvent.click(within(card).getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
     await waitFor(() =>
       expect(gets(api, '/referral-commissions?cursor=com-cursor-2')).toHaveLength(1),
     );
