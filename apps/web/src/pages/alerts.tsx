@@ -40,6 +40,8 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
+import { CodeLabel, TechnicalDetails } from '../ui/technical-details';
+import { DELIVERY_OUTCOME_LABELS, errorCodeLabel, opsCodeLabel } from '../ops-code-labels';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
@@ -166,7 +168,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       header: t('web.code'),
       render: (row) => (
         <span className="alerts-code">
-          <Ltr>{row.code}</Ltr>
+          <CodeLabel label={opsCodeLabel(row.code)} code={row.code} />
         </span>
       ),
     },
@@ -174,7 +176,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       key: 'message',
       header: t('web.message'),
       wrap: true,
-      render: (row) => <span className="plain">{row.message}</span>,
+      render: (row) => <TechnicalDetails lines={[row.message]} />,
     },
     // One row per condition with a counter, not one row per occurrence: the
     // legacy log posted the same TLS error sixty times in a day.
@@ -699,8 +701,11 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
                         key: 'outcome',
                         header: t('web.outcome'),
                         render: (row) => (
-                          <Badge tone={row.outcome === 'SUCCEEDED' ? 'ok' : 'danger'}>
-                            {row.outcome}
+                          <Badge
+                            tone={row.outcome === 'SUCCEEDED' ? 'ok' : 'danger'}
+                            title={row.outcome}
+                          >
+                            {t(DELIVERY_OUTCOME_LABELS[row.outcome])}
                           </Badge>
                         ),
                       },
@@ -708,12 +713,21 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
                         key: 'code',
                         header: t('web.error_code'),
                         render: (row) =>
-                          row.errorCode === null ? '—' : <Ltr>{row.errorCode}</Ltr>,
+                          row.errorCode === null ? (
+                            '—'
+                          ) : (
+                            <CodeLabel label={errorCodeLabel(row.errorCode)} code={row.errorCode} />
+                          ),
                       },
                       {
                         key: 'message',
                         header: t('web.message'),
-                        render: (row) => <span className="plain">{row.errorMessage ?? '—'}</span>,
+                        render: (row) =>
+                          row.errorMessage === null ? (
+                            '—'
+                          ) : (
+                            <TechnicalDetails lines={[row.errorMessage]} />
+                          ),
                       },
                       {
                         key: 'at',
@@ -750,7 +764,9 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
                         {
                           key: 'reason',
                           header: t('web.returned_reason'),
-                          render: (row) => <Ltr>{row.reason}</Ltr>,
+                          render: (row) => (
+                            <CodeLabel label={errorCodeLabel(row.reason)} code={row.reason} />
+                          ),
                         },
                         {
                           key: 'at',

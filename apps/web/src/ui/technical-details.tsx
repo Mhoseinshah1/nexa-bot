@@ -117,3 +117,39 @@ export function ApiErrorReport({
     </>
   );
 }
+
+/**
+ * A machine code under its Persian name (W5): the name is the text, the code follows small,
+ * muted and left-to-right, and is the `title` too. An unknown code (no name) is shown as the
+ * code itself — never a blank.
+ */
+export function CodeLabel({ label, code }: { label: string | null; code: string }) {
+  if (label === null || label === code) {
+    return (
+      <bdi dir="ltr" className="ltr mono">
+        {code}
+      </bdi>
+    );
+  }
+  return (
+    <span className="code-label" title={code}>
+      <span>{label}</span>{' '}
+      <bdi dir="ltr" className="ltr mono muted small">
+        {code}
+      </bdi>
+    </span>
+  );
+}
+
+/**
+ * A provider's or log's own words (`failureMessage`, `lastError`, `lastErrorMessage`, an
+ * operational event's message): a Persian summary, and the raw text only under «جزئیات فنی».
+ */
+export function ProviderText({ summary, text }: { summary: WebKey; text: string }) {
+  return (
+    <span className="provider-text">
+      <span>{t(summary)}</span>
+      <TechnicalDetails lines={[text]} />
+    </span>
+  );
+}

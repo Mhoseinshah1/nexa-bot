@@ -38,6 +38,7 @@ import {
   Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ProviderText } from '../ui/technical-details';
 
 /**
  * Bots — this installation's Telegram bot instances (WP13,
@@ -641,7 +642,12 @@ function DiagnosticView({ diagnostic }: { diagnostic: BotDiagnostic }) {
               ) : (
                 <>
                   {formatTimestamp(webhook.lastErrorAt)}{' '}
-                  {webhook.lastErrorMessage !== null && <Ltr>{webhook.lastErrorMessage}</Ltr>}
+                  {webhook.lastErrorMessage !== null && (
+                    <ProviderText
+                      summary="web.err_provider_webhook"
+                      text={webhook.lastErrorMessage}
+                    />
+                  )}
                 </>
               )}
             </li>

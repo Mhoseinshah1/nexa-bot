@@ -24,7 +24,6 @@ import {
   Disclosure,
   Empty,
   KV,
-  Ltr,
   PageHead,
   Pills,
   Select,
@@ -33,6 +32,8 @@ import {
   useToast,
   type Tone,
 } from '../ui/kit';
+import { opsCodeLabel } from '../ops-code-labels';
+import { CodeLabel, TechnicalDetails } from '../ui/technical-details';
 
 /*
  * Phase B3 — the Web Admin Notification Center (`docs/notification-center.md`).
@@ -390,13 +391,11 @@ function InboxItem({
                 ? t('web.nc_open_condition')
                 : formatTimestamp(row.resolvedAt),
             ],
-            [t('web.nc_code'), <Ltr key="c">{row.code}</Ltr>],
             [
-              t('web.nc_message'),
-              <Ltr key="m" mono={false}>
-                {row.message}
-              </Ltr>,
+              t('web.nc_code'),
+              <CodeLabel key="c" label={opsCodeLabel(row.code)} code={row.code} />,
             ],
+            [t('web.nc_message'), <TechnicalDetails key="m" lines={[row.message]} />],
           ]}
         />
       </Disclosure>

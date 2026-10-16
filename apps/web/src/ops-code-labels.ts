@@ -1,3 +1,4 @@
+import type { DeliveryOutcome } from '@nexa/contracts';
 import { ERROR_TEXT } from './error-text';
 import { t, type WebKey } from './i18n/web.fa';
 
@@ -151,11 +152,46 @@ export function hasOpsCodeLabel(code: string): boolean {
 }
 
 /**
- * A provider's (TonPays, TonPays-Telegram) or any contract error code, by name: the same
- * sentence `errorText` uses, so a code reads the same on a refusal and in a history row.
- * Unknown codes fall back to the raw code.
+ * Codes a notification delivery attempt or a released claim carries that are not contract
+ * error codes: the dispatcher's and the Telegram transport's own. `telegram.rejected.*`
+ * (`telegram.rejected.403`, `….getme_shape`) is named by its prefix.
+ */
+export const DELIVERY_CODE_LABELS: Readonly<Record<string, WebKey>> = {
+  'notification.render_failed': 'web.dlvcode_notification_render_failed',
+  'notification.transport_threw': 'web.dlvcode_notification_transport_threw',
+  'ops_group.not_connected': 'web.dlvcode_ops_group_not_connected',
+  'ops_group.resend_deferred': 'web.dlvcode_ops_group_resend_deferred',
+  'ops_group.route_failed': 'web.dlvcode_ops_group_route_failed',
+  'ops_group.topic_missing': 'web.dlvcode_ops_group_topic_missing',
+  'rate.window_full': 'web.dlvcode_rate_window_full',
+  'sweep.withdrawn': 'web.dlvcode_sweep_withdrawn',
+  'telegram.no_bot_configured': 'web.dlvcode_telegram_no_bot_configured',
+  'telegram.rate_limited': 'web.dlvcode_telegram_rate_limited',
+  'telegram.token_unavailable': 'web.dlvcode_telegram_token_unavailable',
+  'telegram.unreachable': 'web.dlvcode_telegram_unreachable',
+  'telegram.unreadable_response': 'web.dlvcode_telegram_unreadable_response',
+  'tenant.not_active': 'web.dlvcode_tenant_not_active',
+  'transport.mismatch': 'web.dlvcode_transport_mismatch',
+};
+
+/**
+ * A provider's (TonPays, TonPays-Telegram), a delivery's or any contract error code, by name:
+ * a contract code reads with the same sentence `errorText` uses, so a code says the same on a
+ * refusal and in a history row. Unknown codes fall back to the raw code.
  */
 export function errorCodeLabel(code: string): string {
-  const key = (ERROR_TEXT as Readonly<Record<string, WebKey>>)[code];
-  return key === undefined ? code : t(key);
+  const key =
+    (ERROR_TEXT as Readonly<Record<string, WebKey>>)[code] ??
+    DELIVERY_CODE_LABELS[code] ??
+    OPS_CODE_LABELS[code];
+  if (key !== undefined) return t(key);
+  if (code.startsWith('telegram.rejected.')) return t('web.dlvcode_telegram_rejected');
+  return code;
 }
+
+/** A delivery attempt's outcome, by name. */
+export const DELIVERY_OUTCOME_LABELS: Readonly<Record<DeliveryOutcome, WebKey>> = {
+  SUCCEEDED: 'web.dlv_outcome_succeeded',
+  FAILED_RETRYABLE: 'web.dlv_outcome_failed_retryable',
+  FAILED_PERMANENT: 'web.dlv_outcome_failed_permanent',
+};

@@ -19,6 +19,7 @@ import {
 } from '../ui/kit';
 import { pollUnlessFinal } from '../polling';
 import { OPERATION_STATE_LABELS, OPERATION_TYPE_LABELS } from './services';
+import { ProviderText } from '../ui/technical-details';
 
 /**
  * What is stuck, and where (WP16 D3, `docs/wp16-admin-ops-audit.md`).
@@ -140,7 +141,7 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
         row.lastError === null ? (
           <span className="faint">—</span>
         ) : (
-          <Ltr mono={false}>{row.lastError}</Ltr>
+          <ProviderText summary="web.err_provider_outbox" text={row.lastError} />
         ),
     },
   ];
