@@ -70,7 +70,7 @@ function converterFiles(users: readonly Record<string, unknown>[]): Record<strin
       debts.push({
         record_type: 'legacy_debt',
         idempotency_key: `legacy:debt:${tg}`,
-        telegram_user_id: tg,
+        legacy_user_id: tg,
         amount_minor: (-d.balanceMinor).toString(),
         currency: 'IRT',
       });

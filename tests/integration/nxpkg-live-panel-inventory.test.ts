@@ -211,7 +211,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
         debts.push({
           record_type: 'legacy_debt',
           idempotency_key: `legacy:debt:${tg}`,
-          telegram_user_id: tg,
+          legacy_user_id: tg,
           amount_minor: (-d.balanceMinor).toString(),
           currency: 'IRT',
         });
@@ -630,7 +630,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   }
   const isListPage = (offset: number) => (r: FakeRickpanelRequest) =>
     r.method === 'GET' &&
-    r.path === `/api/users?offset=${String(offset)}&limit=${String(PAGE_SIZE)}`;
+    r.path === `/api/users?offset=${String(offset)}&limit=${String(PAGE_SIZE)}&sort=created_at`;
 
   /** A manual account created on panel A by its operator before the first walk's 2nd page. */
   function manualAccountMidWalk(name = 'manual_op_1'): void {
