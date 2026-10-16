@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ProductCategoriesPage } from '../../apps/web/src/pages/product-categories';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { formatNumber } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -186,8 +187,11 @@ describe('deleting a category', () => {
      * already shows an 11 in the count column, and a looser matcher would pass against
      * that while the refusal said nothing useful at all.
      */
-    const banner = await screen.findByText(/این دسته هنوز محصول دارد/);
-    expect(banner.textContent).toContain('11');
+    // The Persian sentence for the code — never the server's own message — with the count.
+    const banner = await screen.findByText((text) =>
+      text.startsWith(t('web.err_commerce_category_not_empty')),
+    );
+    expect(banner.textContent).toContain(formatNumber(11));
     expect(api.calls.some((call) => call.method === 'DELETE')).toBe(true);
   });
 
