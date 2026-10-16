@@ -7,6 +7,7 @@ import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * What the commerce-A redesign ADDED, pinned where it can be reverted by accident.
@@ -280,8 +281,9 @@ describe('the service page', () => {
       <ServicesPage route={{ path: '/services', query: new URLSearchParams() }} denied={false} />,
     );
     await screen.findByText('nx-7f3a91');
+    const panel = openFilterPanel();
     for (const axis of [t('web.service_state'), t('web.service_delivery')]) {
-      const group = screen.getByRole('group', { name: axis });
+      const group = within(panel).getByRole('group', { name: axis });
       const all = within(group).getByRole('button', { name: t('web.services_filter_all') });
       expect(all).toHaveAttribute('aria-pressed', 'true');
     }

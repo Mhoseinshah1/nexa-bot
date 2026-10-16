@@ -97,7 +97,8 @@ describe('clearing every filter at once', () => {
     });
     stubApi([{ url: '/services', body: { services: [], nextCursor: null } }]);
     renderPage(<LiveServices />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.list_filters_clear') }));
+    // Two filters applied: the bar offers «پاک کردن همه», which takes the cursor with them.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.filters_clear_all') }));
     await waitFor(() => expect(window.location.search).toBe(''));
   });
 

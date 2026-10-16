@@ -28,21 +28,18 @@ import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
-import {
-  ClearFiltersButton,
-  ListFreshness,
-  ListSearchBox,
-  appliedListSearch,
-} from '../ui/list-search';
+import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
+import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
+import { SavedViewsMenu } from '../ui/saved-views-menu';
+import type { ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
-import { ChipGroup } from './commerce-parts';
+import { ChipGroup, clearUrlFilters, urlViewsRegistration } from './commerce-parts';
 import {
   Badge,
   Banner,
   Button,
   ButtonGroup,
   Card,
-  ChipDivider,
   CopyButton,
   Copyable,
   CursorPager,
@@ -67,10 +64,10 @@ import {
 } from './service-refund-requests';
 import {
   INPUT_ACTIONS,
-  ServiceFilterSelects,
   ServiceGrantMoveCard,
-  ServiceMassActionCard,
+  ServiceMassActionButton,
   serviceFiltersOf,
+  useServiceFilterRows,
   useRefreshOnOperationChange,
 } from './service-ops';
 
@@ -246,7 +243,7 @@ function Bytes({ bytes }: { bytes: bigint }) {
 // List
 // ---------------------------------------------------------------------------
 
-/** Every URL key the service list filters on, its search included (`ClearFiltersButton`). */
+/** Every URL key the service list filters on, its search included (clear-all, saved views). */
 const SERVICE_FILTER_KEYS = [
   'q',
   'state',
@@ -256,6 +253,30 @@ const SERVICE_FILTER_KEYS = [
   'locationKey',
   'expiring',
 ] as const;
+
+/** W1.8: ten services a page. */
+export const SERVICES_PAGE_SIZE = 10;
+
+/** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
+export const SERVICE_PRESETS: readonly ViewPreset[] = [
+  {
+    id: 'expiring-3d',
+    name: 'web.services_view_expiring_3d',
+    state: { state: 'ACTIVE', expiring: '72' },
+  },
+  {
+    id: 'expiring-24h',
+    name: 'web.services_view_expiring_24h',
+    state: { state: 'ACTIVE', expiring: '24' },
+  },
+  { id: 'unreconciled', name: 'web.services_view_unreconciled', state: { state: 'UNRECONCILED' } },
+  {
+    id: 'delivery-failed',
+    name: 'web.services_view_delivery_failed',
+    state: { deliveryState: 'FAILED' },
+  },
+  { id: 'suspended', name: 'web.services_view_suspended', state: { state: 'SUSPENDED' } },
+];
 
 export function ServicesPage({
   route,
@@ -306,6 +327,7 @@ export function ServicesPage({
     ],
     queryFn: () =>
       fetchServices({
+        limit: SERVICES_PAGE_SIZE,
         ...(cursor === null ? {} : { cursor }),
         ...(state === null ? {} : { state: state as ServiceState }),
         ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
@@ -398,71 +420,119 @@ export function ServicesPage({
   // a fresh request against a question the server has just refused.
   const toolbarHidden = !mayRequest(services, denied);
 
+  const setFilter = (key: string, value: string | null) =>
+    setQueries(route, [
+      [key, value],
+      ['cursor', null],
+    ]);
+  const knownState = SERVICE_STATES.find((one) => one === state);
+  const knownDelivery = SERVICE_DELIVERY_STATES.find((one) => one === delivery);
+  const extraRows = useServiceFilterRows({
+    route,
+    filters,
+    mayViewPanels,
+    mayViewCatalog,
+    enabled: !toolbarHidden,
+  });
+  const serviceFilters: ListFilter[] = [
+    {
+      key: 'state',
+      label: t('web.service_state'),
+      active:
+        state === null ? null : knownState === undefined ? state : t(STATE_LABELS[knownState]),
+      onClear: () => setFilter('state', null),
+      control: (
+        <ChipGroup
+          label={t('web.service_state')}
+          value={state ?? 'ALL'}
+          onChange={(next) => setFilter('state', next === 'ALL' ? null : next)}
+          items={[
+            { id: 'ALL', label: t('web.services_filter_all') },
+            ...SERVICE_STATES.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
+          ]}
+        />
+      ),
+    },
+    {
+      key: 'deliveryState',
+      label: t('web.service_delivery'),
+      active:
+        delivery === null
+          ? null
+          : knownDelivery === undefined
+            ? delivery
+            : t(DELIVERY_LABELS[knownDelivery]),
+      onClear: () => setFilter('deliveryState', null),
+      control: (
+        <ChipGroup
+          label={t('web.service_delivery')}
+          value={delivery ?? 'ALL'}
+          onChange={(next) => setFilter('deliveryState', next === 'ALL' ? null : next)}
+          items={[
+            { id: 'ALL', label: t('web.services_filter_all') },
+            ...SERVICE_DELIVERY_STATES.map((one) => ({
+              id: one,
+              label: t(DELIVERY_LABELS[one]),
+            })),
+          ]}
+        />
+      ),
+    },
+    ...extraRows,
+  ];
+
   return (
     <>
       <PageHead
         title={t('web.services_title')}
         subtitle={t('web.services_intro')}
-        actions={<ListFreshness query={services} hidden={toolbarHidden} />}
+        actions={
+          <>
+            <ListFreshness query={services} hidden={toolbarHidden} />
+            {/* Program §13 / W3: one mass action over exactly what the filters select. */}
+            {!denied && (
+              <ServiceMassActionButton
+                filters={filters}
+                mayStatus={mayMassStatus}
+                mayGrant={mayMassGrant}
+              />
+            )}
+          </>
+        }
       />
       {/* Its own permission, not the list's: `refunds.view` alone reaches the queue (WP19). */}
       {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
       <Card className="ca-list">
-        <ListSearchBox
-          route={route}
-          id="services-search"
-          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
-          autoApply
-          hint={t('web.services_search_hint')}
-          hidden={toolbarHidden}
-          // A new search starts at the first page: this list keeps its cursor in the URL.
-          resetKeys={['cursor']}
-        />
-
-        <div className="filter-row" hidden={toolbarHidden}>
-          <ChipGroup
-            label={t('web.service_state')}
-            value={state ?? 'ALL'}
-            onChange={(next) =>
-              setQueries(route, [
-                ['state', next === 'ALL' ? null : next],
-                ['cursor', null],
-              ])
+        <div hidden={toolbarHidden}>
+          <ListFilterBar
+            label={t('web.services_title')}
+            search={
+              <ListSearchBox
+                route={route}
+                id="services-search"
+                // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
+                autoApply
+                hint={t('web.services_search_hint')}
+                hidden={toolbarHidden}
+                // A new search starts at the first page: this list keeps its cursor in the URL.
+                resetKeys={['cursor']}
+              />
             }
-            items={[
-              { id: 'ALL', label: t('web.services_filter_all') },
-              ...SERVICE_STATES.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
-            ]}
-          />
-          <ChipDivider />
-          <ChipGroup
-            label={t('web.service_delivery')}
-            value={delivery ?? 'ALL'}
-            onChange={(next) =>
-              setQueries(route, [
-                ['deliveryState', next === 'ALL' ? null : next],
-                ['cursor', null],
-              ])
+            filters={serviceFilters}
+            onClearAll={() => clearUrlFilters(route, SERVICE_FILTER_KEYS)}
+            savedViews={
+              <SavedViewsMenu
+                registration={urlViewsRegistration(
+                  route,
+                  'services',
+                  SERVICE_FILTER_KEYS,
+                  SERVICE_PRESETS,
+                )}
+              />
             }
-            items={[
-              { id: 'ALL', label: t('web.services_filter_all') },
-              ...SERVICE_DELIVERY_STATES.map((one) => ({
-                id: one,
-                label: t(DELIVERY_LABELS[one]),
-              })),
-            ]}
           />
-          <ClearFiltersButton route={route} keys={SERVICE_FILTER_KEYS} />
         </div>
-        {!toolbarHidden && (
-          <ServiceFilterSelects
-            route={route}
-            filters={filters}
-            mayViewPanels={mayViewPanels}
-            mayViewCatalog={mayViewCatalog}
-          />
-        )}
 
         <StateSwitch query={services} denied={denied}>
           {services.data === undefined ? null : services.data.services.length === 0 ? (
@@ -496,28 +566,6 @@ export function ServicesPage({
             </>
           )}
         </StateSwitch>
-      </Card>
-
-      {/* Program §13: one mass action over exactly what the filters above select. */}
-      {!denied && (mayMassStatus || mayMassGrant) && (
-        <ServiceMassActionCard
-          filters={filters}
-          mayStatus={mayMassStatus}
-          mayGrant={mayMassGrant}
-        />
-      )}
-
-      {/* Owner revisions 12, 13 and 14, moved off the placeholder this route replaced.
-          Revision 13 is DELIVERED — the repository pages descending because of it — and
-          the other two are still absences. A decision recorded only on a screen nobody
-          can open is a decision nobody reads before breaking it. */}
-      <Card tone="muted" title={t('web.services_rules_title')}>
-        <ul className="ca-notes">
-          <li>{t('web.services_rule_no_protocol')}</li>
-          <li>{t('web.services_rule_ordering')}</li>
-          <li>{t('web.services_rule_plan_filter')}</li>
-          <li>{t('web.services_transfer_absent')}</li>
-        </ul>
       </Card>
     </>
   );

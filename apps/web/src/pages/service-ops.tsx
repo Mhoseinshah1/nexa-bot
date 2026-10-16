@@ -39,9 +39,12 @@ import {
   StatCard,
   useToast,
 } from '../ui/kit';
+import { Drawer } from '../ui/overlays';
+import { useConfirmedClose, useReportDirty } from '../ui/unsaved';
 import { bulkMessage } from './bulk-operations';
 import { messageFor } from './settings';
 import { ChipGroup } from './commerce-parts';
+import type { ListFilter } from '../ui/filter-bar';
 
 /**
  * The Service Operations Center (program §13): what the services list and a service's page
@@ -91,34 +94,40 @@ export function serviceFiltersOf(route: Route, search: string): ServiceFilters {
 }
 
 /**
- * The panel, product, location and expiry filters. Each list is read only when the session
- * may read it (`panels.view`, `catalog.view`); without it, that filter is simply not drawn.
+ * The panel, product, location and expiry filters, as `ListFilterBar` rows (W1.3). Each list
+ * is read only when the session may read it (`panels.view`, `catalog.view`); without it,
+ * that filter is simply not offered. A chip names the chosen panel, product or location by
+ * the name its list gives it, and falls back to the raw value while the list has not
+ * answered — never blank.
  */
-export function ServiceFilterSelects({
+export function useServiceFilterRows({
   route,
   filters,
   mayViewPanels,
   mayViewCatalog,
+  enabled = true,
 }: {
   route: Route;
   filters: ServiceFilters;
   mayViewPanels: boolean;
   mayViewCatalog: boolean;
-}) {
+  /** False while the list itself cannot answer: no filter list is asked for then. */
+  enabled?: boolean;
+}): ListFilter[] {
   const panels = useQuery({
     queryKey: ['soc-panels'],
     queryFn: () => fetchPanels({ limit: 100 }),
-    enabled: mayViewPanels,
+    enabled: mayViewPanels && enabled,
   });
   const products = useQuery({
     queryKey: ['soc-products'],
     queryFn: () => fetchProducts({ limit: 100 }),
-    enabled: mayViewCatalog,
+    enabled: mayViewCatalog && enabled,
   });
   const locations = useQuery({
     queryKey: ['soc-locations'],
     queryFn: () => fetchServiceLocations(),
-    enabled: mayViewCatalog,
+    enabled: mayViewCatalog && enabled,
   });
   // One option per location KEY: two panels may both call a location `de`.
   const locationKeys = new Map<string, string>();
@@ -130,70 +139,108 @@ export function ServiceFilterSelects({
       [key, value === '' ? null : value],
       ['cursor', null],
     ]);
-  return (
-    <div className="soc-filters">
-      {mayViewPanels && (
-        <Field label={t('web.soc_filter_panel')} htmlFor="soc-panel" compact>
-          <Select
-            id="soc-panel"
-            size="sm"
-            value={filters.panelId ?? ''}
-            onChange={(event) => set('panelId', event.currentTarget.value)}
-          >
-            <option value="">{t('web.services_filter_all')}</option>
-            {(panels.data?.panels ?? []).map((panel) => (
-              <option key={panel.id} value={panel.id}>
-                {panel.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      )}
-      {mayViewCatalog && (
-        <Field label={t('web.soc_filter_product')} htmlFor="soc-product" compact>
-          <Select
-            id="soc-product"
-            size="sm"
-            value={filters.productId ?? ''}
-            onChange={(event) => set('productId', event.currentTarget.value)}
-          >
-            <option value="">{t('web.services_filter_all')}</option>
-            {(products.data?.products ?? []).map((product) => (
-              <option key={product.id} value={product.id}>
-                {product.title}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      )}
-      {mayViewCatalog && locationKeys.size > 0 && (
-        <Field label={t('web.soc_filter_location')} htmlFor="soc-location" compact>
-          <Select
-            id="soc-location"
-            size="sm"
-            value={filters.locationKey ?? ''}
-            onChange={(event) => set('locationKey', event.currentTarget.value)}
-          >
-            <option value="">{t('web.services_filter_all')}</option>
-            {[...locationKeys].map(([keyName, label]) => (
-              <option key={keyName} value={keyName}>
-                {label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      )}
+  const rows: ListFilter[] = [];
+  // A value already in the URL keeps its chip even without the list, so it can be removed.
+  if (mayViewPanels || filters.panelId !== null) {
+    const chosen = (panels.data?.panels ?? []).find((panel) => panel.id === filters.panelId);
+    rows.push({
+      key: 'panelId',
+      label: t('web.soc_filter_panel'),
+      active: filters.panelId === null ? null : (chosen?.name ?? filters.panelId),
+      onClear: () => set('panelId', null),
+      control: (
+        <Select
+          id="soc-panel"
+          size="sm"
+          aria-label={t('web.soc_filter_panel')}
+          value={filters.panelId ?? ''}
+          onChange={(event) => set('panelId', event.currentTarget.value)}
+        >
+          <option value="">{t('web.services_filter_all')}</option>
+          {(panels.data?.panels ?? []).map((panel) => (
+            <option key={panel.id} value={panel.id}>
+              {panel.name}
+            </option>
+          ))}
+        </Select>
+      ),
+    });
+  }
+  if (mayViewCatalog || filters.productId !== null) {
+    const chosen = (products.data?.products ?? []).find(
+      (product) => product.id === filters.productId,
+    );
+    rows.push({
+      key: 'productId',
+      label: t('web.soc_filter_product'),
+      active: filters.productId === null ? null : (chosen?.title ?? filters.productId),
+      onClear: () => set('productId', null),
+      control: (
+        <Select
+          id="soc-product"
+          size="sm"
+          aria-label={t('web.soc_filter_product')}
+          value={filters.productId ?? ''}
+          onChange={(event) => set('productId', event.currentTarget.value)}
+        >
+          <option value="">{t('web.services_filter_all')}</option>
+          {(products.data?.products ?? []).map((product) => (
+            <option key={product.id} value={product.id}>
+              {product.title}
+            </option>
+          ))}
+        </Select>
+      ),
+    });
+  }
+  if ((mayViewCatalog && locationKeys.size > 0) || filters.locationKey !== null) {
+    rows.push({
+      key: 'locationKey',
+      label: t('web.soc_filter_location'),
+      active:
+        filters.locationKey === null
+          ? null
+          : (locationKeys.get(filters.locationKey) ?? filters.locationKey),
+      onClear: () => set('locationKey', null),
+      control: (
+        <Select
+          id="soc-location"
+          size="sm"
+          aria-label={t('web.soc_filter_location')}
+          value={filters.locationKey ?? ''}
+          onChange={(event) => set('locationKey', event.currentTarget.value)}
+        >
+          <option value="">{t('web.services_filter_all')}</option>
+          {[...locationKeys].map(([keyName, label]) => (
+            <option key={keyName} value={keyName}>
+              {label}
+            </option>
+          ))}
+        </Select>
+      ),
+    });
+  }
+  const expiring = EXPIRING_CHOICES.find((choice) => choice.hours === filters.expiringWithinHours);
+  rows.push({
+    key: 'expiring',
+    label: t('web.soc_filter_expiring'),
+    active:
+      filters.expiringWithinHours === null
+        ? null
+        : expiring === undefined
+          ? formatNumber(filters.expiringWithinHours)
+          : t(expiring.label),
+    onClear: () => set('expiring', null),
+    control: (
       <ChipGroup
         label={t('web.soc_filter_expiring')}
-        value={
-          EXPIRING_CHOICES.find((choice) => choice.hours === filters.expiringWithinHours)?.id ??
-          'ALL'
-        }
+        value={expiring?.id ?? 'ALL'}
         onChange={(next) => set('expiring', next === 'ALL' ? null : next)}
         items={EXPIRING_CHOICES.map((choice) => ({ id: choice.id, label: t(choice.label) }))}
       />
-    </div>
-  );
+    ),
+  });
+  return rows;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -257,12 +304,18 @@ export function ServiceMassActionCard({
   filters,
   mayStatus,
   mayGrant,
+  bare = false,
+  onDirtyChange,
 }: {
   filters: ServiceFilters;
   /** `services.mass.status` AND `services.edit`. */
   mayStatus: boolean;
   /** `services.mass.grant`. */
   mayGrant: boolean;
+  /** Drawn inside the list's drawer (W3): no card frame, the hint as a line. */
+  bare?: boolean;
+  /** Whether a typed value would be lost by closing the drawer. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const client = useQueryClient();
   const toast = useToast();
@@ -281,6 +334,7 @@ export function ServiceMassActionCard({
   const definition = massDefinitionOf(filters);
   const definitionKey = JSON.stringify(definition);
   const [previewedFor, setPreviewedFor] = useState<string | null>(null);
+  useReportDirty(traffic !== '' || days !== '' || note !== '' || typed !== '', onDirtyChange);
 
   const grant = (): BulkGrant | null => {
     if (kind === 'SERVICE_SUSPEND' || kind === 'SERVICE_RESUME') return { kind };
@@ -348,8 +402,8 @@ export function ServiceMassActionCard({
     typed.trim() === String(preview.count);
   const ready = preview !== null && !stale && preview.count > 0 && note.trim() !== '' && typedOk;
 
-  return (
-    <Card title={t('web.soc_mass_title')} hint={t('web.soc_mass_hint')}>
+  const body = (
+    <>
       {definition === null ? (
         <Banner tone="info">{t('web.soc_mass_unrepresentable')}</Banner>
       ) : (
@@ -517,7 +571,60 @@ export function ServiceMassActionCard({
           {execute.error !== null && <Banner tone="danger">{bulkMessage(execute.error)}</Banner>}
         </div>
       )}
+    </>
+  );
+  if (bare) {
+    return (
+      <div className="stack-sm">
+        <p className="muted small">{t('web.soc_mass_hint')}</p>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Card title={t('web.soc_mass_title')} hint={t('web.soc_mass_hint')}>
+      {body}
     </Card>
+  );
+}
+
+/**
+ * W3: the mass action is a button in the list's head that opens a wide drawer over the
+ * SAME steps; closing it with a typed reason, amount or count asks first.
+ */
+export function ServiceMassActionButton({
+  filters,
+  mayStatus,
+  mayGrant,
+}: {
+  filters: ServiceFilters;
+  mayStatus: boolean;
+  mayGrant: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const close = () => {
+    setOpen(false);
+    setDirty(false);
+  };
+  const { requestClose, dialog } = useConfirmedClose(dirty, close);
+  if (!mayStatus && !mayGrant) return null;
+  return (
+    <>
+      <Button size="sm" icon="zap" onClick={() => setOpen(true)}>
+        {t('web.soc_mass_title')}
+      </Button>
+      <Drawer open={open} onClose={requestClose} title={t('web.soc_mass_title')} wide>
+        <ServiceMassActionCard
+          filters={filters}
+          mayStatus={mayStatus}
+          mayGrant={mayGrant}
+          bare
+          onDirtyChange={setDirty}
+        />
+      </Drawer>
+      {dialog}
+    </>
   );
 }
 

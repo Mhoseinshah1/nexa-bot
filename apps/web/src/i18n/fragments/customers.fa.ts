@@ -10,6 +10,11 @@
 export const WEB_FA_CUSTOMERS = {
   // W1.4 saved-filter suggestions (the demo's presets).
   'web.users_view_blocked': 'کاربران مسدود',
+  'web.services_view_expiring_3d': 'تمام می‌شوند تا ۳ روز',
+  'web.services_view_expiring_24h': 'تمام می‌شوند تا ۲۴ ساعت',
+  'web.services_view_unreconciled': 'نامشخص روی پنل',
+  'web.services_view_delivery_failed': 'لینک به مشتری نرسید',
+  'web.services_view_suspended': 'موقتاً قطع',
 } as const;
 
 /**
@@ -20,4 +25,9 @@ export const WEB_FA_CUSTOMERS_RETIRED: readonly string[] = [
   // W5: «آنچه در این نسخه نیست» on /users.
   'web.users_scope_title',
   'web.users_scope_body',
+  // W5: «قاعده‌های این صفحه» on /services.
+  'web.services_rules_title',
+  'web.services_rule_no_protocol',
+  'web.services_rule_ordering',
+  'web.services_rule_plan_filter',
 ];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { USER_PRESETS, UsersPage } from '../../apps/web/src/pages/users';
+import { SERVICE_PRESETS, ServicesPage } from '../../apps/web/src/pages/services';
 import { urlViewsRegistration } from '../../apps/web/src/pages/commerce-parts';
 import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -125,5 +126,64 @@ describe('saved filters are the URL filter keys', () => {
     expect(USER_PRESETS.map((preset) => [t(preset.name), preset.state])).toEqual([
       [t('web.users_view_blocked'), { status: 'BLOCKED' }],
     ]);
+  });
+});
+
+describe('the service list (W1, W3)', () => {
+  function LiveServices({ mass = false }: { mass?: boolean }) {
+    const route = useRoute();
+    return <ServicesPage route={route} denied={false} mayMassStatus={mass} mayMassGrant={mass} />;
+  }
+  const empty = [{ url: '/services', body: { services: [], nextCursor: null } }];
+
+  it('asks the server for ten services a page', async () => {
+    navigate('/services', { replace: true, force: true });
+    const api = stubApi(empty);
+    renderPage(<LiveServices />);
+    await screen.findByText(t('web.services_empty'));
+    const read = api.calls.find((call) =>
+      new URL(call.url, 'http://x').pathname.endsWith('/services'),
+    );
+    expect(new URL(read!.url, 'http://x').searchParams.get('limit')).toBe('10');
+  });
+
+  it('suggests exactly the demo presets for /services, on the URL keys the page reads', () => {
+    expect(SERVICE_PRESETS.map((preset) => [t(preset.name), preset.state])).toEqual([
+      [t('web.services_view_expiring_3d'), { state: 'ACTIVE', expiring: '72' }],
+      [t('web.services_view_expiring_24h'), { state: 'ACTIVE', expiring: '24' }],
+      [t('web.services_view_unreconciled'), { state: 'UNRECONCILED' }],
+      [t('web.services_view_delivery_failed'), { deliveryState: 'FAILED' }],
+      [t('web.services_view_suspended'), { state: 'SUSPENDED' }],
+    ]);
+  });
+
+  it('opens the mass action in a drawer from the head, and asks before dropping a typed value', async () => {
+    navigate('/services', { replace: true, force: true });
+    stubApi(empty);
+    renderPage(<LiveServices mass />);
+    await screen.findByText(t('web.services_empty'));
+    // Not on the page until asked for.
+    expect(screen.queryByLabelText(t('web.bulk_kind'))).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.soc_mass_title') }));
+    const drawer = screen.getByRole('dialog', { name: t('web.soc_mass_title') });
+    fireEvent.change(within(drawer).getByLabelText(t('web.bulk_kind')), {
+      target: { value: 'SERVICE_TIME' },
+    });
+    fireEvent.change(within(drawer).getByLabelText(t('web.bulk_days_label')), {
+      target: { value: '3' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
+    const ask = await screen.findByRole('alertdialog');
+    expect(ask).toHaveTextContent(t('web.unsaved_title'));
+    fireEvent.click(within(ask).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(screen.getByLabelText(t('web.bulk_days_label'))).toHaveValue('3');
+  });
+
+  it('offers no mass action without either mass permission', async () => {
+    navigate('/services', { replace: true, force: true });
+    stubApi(empty);
+    renderPage(<LiveServices />);
+    await screen.findByText(t('web.services_empty'));
+    expect(screen.queryByRole('button', { name: t('web.soc_mass_title') })).toBeNull();
   });
 });

@@ -796,28 +796,22 @@ describe('the promotion of /services', () => {
     expect(PLANNED_SURFACES.map((surface) => surface.key)).not.toContain('services');
   });
 
-  /** Owner revision 12 — protocol is not a normal service field. */
-  it('records that protocol stays out of the normal services UI', () => {
+  /**
+   * Owner revision 12 — protocol is not a normal service field — and the W5 polish: the
+   * «قاعده‌های این صفحه» card that only restated decisions is gone; the rule it named
+   * stays true of the page itself.
+   */
+  it('draws no protocol field, and no longer the page-rules card', () => {
     const { container } = renderList();
-    const text = container.textContent ?? '';
-    const sentence = text.split('.').find((part) => part.includes('پروتکل'));
-    expect(sentence).toBeDefined();
-    expect(sentence).toContain('نمایش داده نمی‌شود');
-    expect(sentence).toContain('لینک اشتراک');
-    // And nothing on the page is a protocol FIELD: no label, no column, no control.
+    expect(container.textContent).not.toContain(t('web.services_rules_title'));
+    expect(container.textContent).not.toContain('created_at');
+    // Nothing on the page is a protocol FIELD: no label, no column, no control.
     expect(screen.queryByLabelText(/پروتکل/)).toBeNull();
   });
 
-  /** Owner revisions 13 and 14 — server ordering, and a plan filter that replaces location. */
-  it('records the ordering rule and the plan filter, and no location filter', () => {
-    const { container } = renderList();
-    const text = container.textContent ?? '';
-    expect(text).toContain('created_at');
-    expect(text).toContain('id');
-    expect(text).toContain('پلن');
-    expect(text).toContain('لوکیشن'); // only as the thing being removed
-    expect(text).toContain('وجود نخواهد داشت');
-    // The filter it says does not exist, does not exist.
+  /** Owner revision 14: the plan (product) filter — drawn only with `catalog.view`. */
+  it('offers no location filter to a session that cannot read the catalogue', () => {
+    renderList();
     expect(screen.queryByLabelText(/لوکیشن/)).toBeNull();
   });
 
