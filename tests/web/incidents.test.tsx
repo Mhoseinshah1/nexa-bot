@@ -14,6 +14,8 @@ import {
 } from '../../apps/web/src/pages/incidents';
 import { pathOf } from '../../apps/web/src/pages/notification-center';
 import { NAV, navPermitted } from '../../apps/web/src/nav';
+import { resolve } from '../../apps/web/src/app';
+import type { ReactElement } from 'react';
 import { panel, renderPage, stubApi } from './harness';
 
 /**
@@ -484,6 +486,22 @@ describe('the wiring', () => {
     expect(pathOf({ target: 'INCIDENT', id: ID })).toBe(`/incidents/${ID}`);
     expect(pathOf({ target: 'INCIDENTS', id: null })).toBe('/incidents');
     expect(pathOf({ target: 'COMPENSATIONS', id: null })).toBe('/compensations');
+  });
+
+  it('names panel targets on the detail with panels.view, and asks nothing without it', async () => {
+    const at = (permissions: string[]) =>
+      resolve({ path: `/incidents/${ID}`, query: new URLSearchParams() }, permissions as never)
+        .element as ReactElement;
+    const panels = { url: '/panels', body: { panels: [panel({ id: PANEL })], nextCursor: null } };
+    stubApi([detail(), panels]);
+    const view = renderPage(at(['incidents.view', 'panels.view']));
+    expect((await screen.findByTestId('incident-target-name')).textContent).toBe('Frankfurt A');
+    view.unmount();
+    const api = stubApi([detail(), panels]);
+    renderPage(at(['incidents.view']));
+    await screen.findByText(t('web.inc_scope'));
+    expect(screen.queryByTestId('incident-target-name')).toBeNull();
+    expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(false);
   });
 
   it('draws the nav entry for incidents.view alone', () => {

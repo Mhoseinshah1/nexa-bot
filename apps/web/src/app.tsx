@@ -1371,6 +1371,7 @@ export function resolve(
           denied={!may('incidents.view')}
           mayManage={may('incidents.manage')}
           mayNotify={may('incidents.notify')}
+          mayViewPanels={may('panels.view')}
         />
       ),
       crumbs: [{ label: t('web.nav_incidents'), href: '/incidents' }],
