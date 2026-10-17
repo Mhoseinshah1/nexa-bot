@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   FEATURE_FLAGS,
   featureFlagSchema,
@@ -11,6 +11,7 @@ import { FEATURE_PRESENTATION } from '../../apps/web/src/pages/features-catalogu
 import { ContentPage } from '../../apps/web/src/pages/content';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { formatNumber } from '../../apps/web/src/format';
 import { renderPage, setting, stubApi } from './harness';
 
 const NO_PERMISSION = t('web.no_permission');
@@ -967,6 +968,80 @@ describe('the notifications page', () => {
       expect(document.body.innerHTML).not.toBe(before);
     });
     gate.release();
+  });
+
+  /**
+   * The side column keeps its height while a notification's detail is read (390px: the
+   * hint card was swapped for a skeleton and then the attempts card, and the page scroll
+   * jumped back to the top). The hint card stays, only its line says «loading»; switching
+   * to another notification keeps the previous card mounted but HIDDEN — never drawn as the
+   * selected notification's attempts — under a loading line.
+   */
+  it('holds the side column while a selected notification is read, showing nothing stale', async () => {
+    const gates = new Map<string, () => void>();
+    const body = (value: unknown) =>
+      new Response(JSON.stringify(value), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    const rows = [
+      notification({ id: 'n1' }),
+      notification({ id: 'n2', templateKey: 'event.panel.degraded' }),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        const id = /\/notifications\/(n\d)/u.exec(url)?.[1];
+        if (id !== undefined) {
+          await new Promise<void>((resolve) => gates.set(id, resolve));
+          return body({
+            notification: rows.find((row) => row.id === id),
+            attempts: [
+              {
+                attemptNumber: id === 'n1' ? 1 : 2,
+                transport: 'TELEGRAM',
+                outcome: 'SUCCEEDED',
+                startedAt: '2026-09-06T08:00:00.000Z',
+                finishedAt: '2026-09-06T08:00:01.000Z',
+                errorCode: null,
+                errorMessage: null,
+                retryAfterMs: null,
+              },
+            ],
+            releasedClaims: [],
+          });
+        }
+        return body({ notifications: rows, nextCursor: null });
+      }),
+    );
+    const { container } = renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+    const side = container.querySelector('.notifications-side') as HTMLElement;
+    const hint = within(side).getByText(t('web.notifications_pick_hint')).closest('.card');
+
+    // The first selection: the SAME hint card stays, its line says loading, no skeleton.
+    fireEvent.click(screen.getByRole('button', { name: 'event.panel.unreachable' }));
+    expect(await within(side).findByRole('status')).toHaveTextContent(t('web.loading'));
+    expect(side.querySelector('.card')).toBe(hint);
+    expect(side.querySelector('.skeleton, [aria-busy="true"] .skeleton')).toBeNull();
+    await waitFor(() => expect(gates.has('n1')).toBe(true));
+    gates.get('n1')?.();
+    const first = (await within(side).findByText(formatNumber(1))).closest('.card') as HTMLElement;
+    expect(first).not.toHaveClass('notifications-holding');
+
+    // Another notification: the previous card is kept for its height, hidden, under a
+    // loading line; it is never shown as the new selection's attempts.
+    fireEvent.click(screen.getByRole('button', { name: 'event.panel.degraded' }));
+    expect(await within(side).findByRole('status')).toHaveTextContent(t('web.loading'));
+    expect(side.querySelector('.card')).toBe(first);
+    expect(first).toHaveClass('notifications-holding');
+    await waitFor(() => expect(gates.has('n2')).toBe(true));
+    gates.get('n2')?.();
+    await waitFor(() => expect(within(side).queryByRole('status')).toBeNull());
+    const second = within(side).getByText(formatNumber(2)).closest('.card') as HTMLElement;
+    expect(second).not.toHaveClass('notifications-holding');
+    expect(within(side).queryByText(formatNumber(1))).toBeNull();
   });
 
   /**

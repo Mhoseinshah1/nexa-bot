@@ -30,7 +30,6 @@ import {
   ErrorState,
   FilterChip,
   FilterChips,
-  LoadingState,
   Num,
   PageHead,
   StateSwitch,
@@ -516,12 +515,21 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     // arrived to replace the cached answer. Gated here and at every render
     // below, for the same reason the pager is.
     enabled: selected !== null && !denied,
+    /*
+     * The side column holds its height while another notification is read (390px: the
+     * column swapped its card for a skeleton and back, and the page scroll jumped). The
+     * previous answer is kept ONLY as a placeholder: it is drawn hidden, under a loading
+     * line, never as the selected notification's attempts (`holding` below).
+     */
+    placeholderData: (previous) => previous,
     // The open panel follows the same rule as the list above.
     refetchInterval: pollUnlessFinalWhile<NotificationDetailResponse>(
       3_000,
       (data) => data.notification.status === 'PENDING',
     ),
   });
+  /** The previous notification's answer, held while the selected one is read. */
+  const holding = detail.isPlaceholderData;
 
   const submission = useSubmissionKey();
 
@@ -708,9 +716,17 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
 
         {!denied && (
           <div className="stack notifications-side">
-            {selected === null && (
+            {(selected === null || detail.isPending) && (
+              // The hint card stays while the first detail is read; only its line changes,
+              // so the column keeps its height (no skeleton swapped in and out).
               <Card tone="muted" title={t('web.attempts')}>
-                <p className="muted small">{t('web.notifications_pick_hint')}</p>
+                {selected === null ? (
+                  <p className="muted small">{t('web.notifications_pick_hint')}</p>
+                ) : (
+                  <p className="muted small" role="status" aria-busy="true">
+                    {t('web.loading')}
+                  </p>
+                )}
               </Card>
             )}
             {/*
@@ -737,11 +753,10 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         
         `isPending` matched none of them, so selecting a notification left the
         DOM byte-identical until the request answered — a click that appears to
-        do nothing. Every `StateSwitch` view on the branch draws a skeleton
-        here; the comment claiming this site "follows the SAME rule as every
-        other query-driven view" was two thirds true.
+        do nothing. It is said now by the hint card's own line (above) and, on
+        a switch, by a line over the held previous card (below) — not by a
+        skeleton swapped in and out, which made the 390px page jump.
       */}
-            {!denied && selected !== null && detail.isPending && <LoadingState />}
             {!denied && detail.isError && staleAfterError(detail) && (
               <Banner tone="danger">
                 {messageFor(detail.error)}
@@ -759,8 +774,22 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
               // ternaries; both drifted. `ErrorState` is `errorCopy` and `retryOf`.
               <ErrorState query={detail} />
             )}
+            {!denied && holding && (
+              <p
+                className="muted small notifications-holding-status"
+                role="status"
+                aria-busy="true"
+              >
+                {t('web.loading')}
+              </p>
+            )}
             {!denied && queryState(detail) !== 'error' && detail.data && (
-              <Card title={t('web.attempts')}>
+              <Card
+                title={t('web.attempts')}
+                // Another notification's attempts, kept only to hold the height: hidden,
+                // inert and out of the accessibility tree until the selected one lands.
+                {...(holding ? { className: 'notifications-holding' } : {})}
+              >
                 {detail.data.attempts.length === 0 && <Empty title={t('web.empty')} />}
                 {detail.data.attempts.length > 0 && (
                   <DataTable
