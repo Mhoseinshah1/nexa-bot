@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { t } from '../i18n/web.fa';
 import { Num } from '../ui/kit';
+import { useSelectedTabInStrip } from '../ui/tab-strip';
 import { Icon } from '../ui/icons';
 import { useFocusTrap } from '../ui/overlays';
 import { formatDateFieldValue } from '../ui/date-field';
@@ -273,6 +274,8 @@ export function DotTabs<T extends string>({
   label?: string;
 }) {
   const buttons = useRef(new Map<T, HTMLButtonElement | null>());
+  const strip = useRef<HTMLDivElement | null>(null);
+  useSelectedTabInStrip(strip, () => buttons.current.get(value), value);
   const select = (next: T) => {
     onChange(next);
     queueMicrotask(() => buttons.current.get(next)?.focus());
@@ -285,6 +288,7 @@ export function DotTabs<T extends string>({
   };
   return (
     <div
+      ref={strip}
       className="tabs bx-tabs"
       role="tablist"
       {...(label === undefined ? {} : { 'aria-label': label })}

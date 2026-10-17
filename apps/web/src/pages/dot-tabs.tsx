@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import { t } from '../i18n/web.fa';
+import { useSelectedTabInStrip } from '../ui/tab-strip';
 
 /**
  * A tab strip whose tabs can carry a marker (W2): a warn dot when the tab's fields differ
@@ -26,6 +27,8 @@ export function DotTabs<T extends string>({
   label: string;
 }) {
   const buttons = useRef(new Map<T, HTMLButtonElement | null>());
+  const strip = useRef<HTMLDivElement | null>(null);
+  useSelectedTabInStrip(strip, () => buttons.current.get(value), value);
   const select = (next: T) => {
     onChange(next);
     queueMicrotask(() => buttons.current.get(next)?.focus({ preventScroll: true }));
@@ -37,6 +40,7 @@ export function DotTabs<T extends string>({
   };
   return (
     <div
+      ref={strip}
       className="tabs w-money-tabs"
       role="tablist"
       aria-label={label}

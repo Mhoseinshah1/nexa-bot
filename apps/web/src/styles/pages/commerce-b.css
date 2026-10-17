@@ -524,7 +524,7 @@
   font-family: var(--font-mono);
 }
 .referrals-foot {
-  align-items: start;
+  align-items: stretch;
 }
 
 /* --- /resellers ------------------------------------------------------------------- */

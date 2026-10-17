@@ -1352,7 +1352,15 @@ form.set-row > * + * {
   display: grid;
   gap: var(--gap);
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: start;
+  align-items: stretch;
+}
+/* The side column ends level with the summary: its last card takes the height left over. */
+.incident-side {
+  display: flex;
+  flex-direction: column;
+}
+.incident-side > :last-child {
+  flex: 1;
 }
 @media (max-width: 900px) {
   .incident-detail {

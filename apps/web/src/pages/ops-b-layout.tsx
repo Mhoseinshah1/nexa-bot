@@ -10,6 +10,7 @@ import {
 import { formatNumber } from '../format';
 import { t } from '../i18n/web.fa';
 import { Badge } from '../ui/kit';
+import { useSelectedTabInStrip } from '../ui/tab-strip';
 
 /**
  * Page structure shared by the OPS-B settings-like screens (settings, reminders, texts):
@@ -180,6 +181,8 @@ export function SectionTabs({
   panelId: string;
 }) {
   const buttons = useRef(new Map<string, HTMLButtonElement | null>());
+  const strip = useRef<HTMLDivElement | null>(null);
+  useSelectedTabInStrip(strip, () => buttons.current.get(value), value);
   const select = (next: string) => {
     onChange(next);
     queueMicrotask(() => buttons.current.get(next)?.focus({ preventScroll: true }));
@@ -191,6 +194,7 @@ export function SectionTabs({
   };
   return (
     <div
+      ref={strip}
       className="tabs ob-section-tabs"
       role="tablist"
       aria-label={label}
