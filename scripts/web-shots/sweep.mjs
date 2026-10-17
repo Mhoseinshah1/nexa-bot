@@ -48,7 +48,7 @@ export function isEnglishSentence(text) {
   return ENGLISH_SENTENCE.test(text);
 }
 
-const ENGLISH = `(() => {
+export const ENGLISH = `(() => {
   const found = [];
   const skip = (el) => el.closest('[dir=ltr], .ltr, code, .mono, kbd, pre, script, style, svg, input, textarea, select, [aria-hidden=true]');
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -61,7 +61,7 @@ const ENGLISH = `(() => {
   return [...new Set(found)];
 })()`;
 
-const OVERFLOW = `(() => {
+export const OVERFLOW = `(() => {
   const doc = document.documentElement.scrollWidth - innerWidth;
   const main = document.querySelector('#main');
   const inner = main ? main.scrollWidth - main.clientWidth : 0;

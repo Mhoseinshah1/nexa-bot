@@ -22,6 +22,7 @@
     "web:responsive": "node scripts/web-shots/responsive.mjs",
     "web:no-scroll": "node scripts/web-shots/no-scroll.mjs",
     "web:sweep": "node scripts/web-shots/sweep.mjs",
+    "web:pr-shots": "node scripts/web-shots/pr-shots.mjs",
     "verify:web-browser": "pnpm --filter @nexa/web... build && node scripts/web-shots/sweep.mjs --no-build && node scripts/web-shots/no-scroll.mjs --no-build",
     "test": "vitest run --project unit",
     "test:web": "vitest run --project web",
