@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   isConditionRecoveryCode,
   isOneShotManagementCode,
@@ -27,19 +28,21 @@ import {
   DataTable,
   Empty,
   ErrorState,
-  FilterBar,
   FilterChip,
   FilterChips,
-  LoadingState,
-  Ltr,
   Num,
   PageHead,
   StateSwitch,
   type Column,
   Quantity,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
+import { ListFilterBar } from '../ui/filter-bar';
+import { templateCopy } from '../template-copy';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
+import { CodeLabel, ErrorRef, TechnicalDetails } from '../ui/technical-details';
+import { DELIVERY_OUTCOME_LABELS, errorCodeLabel, opsCodeLabel } from '../ops-code-labels';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
@@ -84,7 +87,7 @@ export const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
  * server default. Whether ANOTHER page exists is a separate question and only
  * the server can answer it, which is why the response carries `nextCursor`.
  */
-const ALERTS_PAGE_SIZE = 25;
+const ALERTS_PAGE_SIZE = LIST_PAGE_SIZE;
 /**
  * The newest page of the feed re-reads itself. A management event — a denial,
  * a lockout, an administrator change, a condition — is recorded with no
@@ -119,27 +122,32 @@ export function AlertsPage({ denied }: { denied: boolean }) {
   const [trail, setTrail] = useState<readonly { at: string; id: string }[]>([]);
   const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
 
-  const events = useQuery({
-    queryKey: ['ops-log', 'management', severity, openOnly, cursor?.at, cursor?.id],
-    queryFn: () =>
-      fetchOpsLog({
-        limit: ALERTS_PAGE_SIZE,
-        // The scope FOLLOWS the filter. "Open" narrows to the conditions —
-        // the codes something can actually close — because a one-shot record
-        // has a permanently null `resolvedAt` by design, so asking the wide
-        // scope for `open=true` returned every denial and every administrator
-        // change ever recorded, framed as outstanding work. The badge already
-        // said "recorded" on those rows, which made the page contradict itself
-        // in that one state: half of the rule stated in `ports.ts` was
-        // implemented and half was not.
-        scope: openOnly ? 'MANAGEMENT_CONDITIONS' : 'MANAGEMENT',
-        ...(severity ? { severity } : {}),
-        ...(openOnly ? { open: true } : {}),
-        ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
-      }),
-    enabled: !denied,
-    refetchInterval: cursor === undefined ? pollUnlessFinal(ALERTS_REFRESH_MS) : false,
-  });
+  const events = useQuery(
+    keepPageWhileTurning(
+      {
+        queryKey: ['ops-log', 'management', severity, openOnly, cursor?.at, cursor?.id],
+        queryFn: () =>
+          fetchOpsLog({
+            limit: ALERTS_PAGE_SIZE,
+            // The scope FOLLOWS the filter. "Open" narrows to the conditions —
+            // the codes something can actually close — because a one-shot record
+            // has a permanently null `resolvedAt` by design, so asking the wide
+            // scope for `open=true` returned every denial and every administrator
+            // change ever recorded, framed as outstanding work. The badge already
+            // said "recorded" on those rows, which made the page contradict itself
+            // in that one state: half of the rule stated in `ports.ts` was
+            // implemented and half was not.
+            scope: openOnly ? 'MANAGEMENT_CONDITIONS' : 'MANAGEMENT',
+            ...(severity ? { severity } : {}),
+            ...(openOnly ? { open: true } : {}),
+            ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
+          }),
+        enabled: !denied,
+        refetchInterval: cursor === undefined ? pollUnlessFinal(ALERTS_REFRESH_MS) : false,
+      },
+      [-2, -1],
+    ),
+  );
 
   // A filter change starts again from the newest page: keeping the old cursor
   // would show the second page of a list the reader has never seen the first
@@ -166,7 +174,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       header: t('web.code'),
       render: (row) => (
         <span className="alerts-code">
-          <Ltr>{row.code}</Ltr>
+          <CodeLabel label={opsCodeLabel(row.code)} code={row.code} />
         </span>
       ),
     },
@@ -174,7 +182,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       key: 'message',
       header: t('web.message'),
       wrap: true,
-      render: (row) => <span className="plain">{row.message}</span>,
+      render: (row) => <TechnicalDetails lines={[row.message]} />,
     },
     // One row per condition with a counter, not one row per occurrence: the
     // legacy log posted the same TLS error sixty times in a day.
@@ -257,9 +265,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         }
       />
 
-      <Banner tone="info" title={t('web.alerts_scope_title')}>
-        {t('web.alerts_scope_body')}
-      </Banner>
+      <Banner tone="info">{t('web.alerts_scope_body')}</Banner>
 
       <Card>
         {/*
@@ -269,33 +275,59 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           gated. Each change was one more refused request and one more
           `access.permission_denied` event, two in production.
         */}
-        <FilterBar hidden={!mayRequest(events, denied)}>
-          <FilterChips label={t('web.status')}>
-            <FilterChip pressed={openOnly} onClick={() => filter(() => setOpenOnly(true))}>
-              {t('web.unresolved')}
-            </FilterChip>
-            <FilterChip pressed={!openOnly} onClick={() => filter(() => setOpenOnly(false))}>
-              {t('web.all')}
-            </FilterChip>
-          </FilterChips>
-          <span className="spacer" />
-          <label className="visually-hidden" htmlFor="alert-severity">
-            {t('web.severity')}
-          </label>
-          <select
-            id="alert-severity"
-            className="input sm alerts-severity"
-            value={severity}
-            onChange={(event) => filter(() => setSeverity(event.target.value))}
-          >
-            <option value="">{t('web.alerts_all_severities')}</option>
-            {SEVERITIES.map((value) => (
-              <option key={value} value={value}>
-                {t(SEVERITY_LABELS[value])}
-              </option>
-            ))}
-          </select>
-        </FilterBar>
+        {mayRequest(events, denied) && (
+          <ListFilterBar
+            label={t('web.alerts_title')}
+            filters={[
+              {
+                key: 'status',
+                label: t('web.status'),
+                active: openOnly ? t('web.unresolved') : null,
+                onClear: () => filter(() => setOpenOnly(false)),
+                control: (
+                  <FilterChips label={t('web.status')}>
+                    <FilterChip pressed={openOnly} onClick={() => filter(() => setOpenOnly(true))}>
+                      {t('web.unresolved')}
+                    </FilterChip>
+                    <FilterChip
+                      pressed={!openOnly}
+                      onClick={() => filter(() => setOpenOnly(false))}
+                    >
+                      {t('web.all')}
+                    </FilterChip>
+                  </FilterChips>
+                ),
+              },
+              {
+                key: 'severity',
+                label: t('web.severity'),
+                active:
+                  severity === ''
+                    ? null
+                    : SEVERITY_LABELS[severity as (typeof SEVERITIES)[number]] === undefined
+                      ? severity
+                      : t(SEVERITY_LABELS[severity as (typeof SEVERITIES)[number]]),
+                onClear: () => filter(() => setSeverity('')),
+                control: (
+                  <select
+                    id="alert-severity"
+                    className="input sm alerts-severity"
+                    aria-label={t('web.severity')}
+                    value={severity}
+                    onChange={(event) => filter(() => setSeverity(event.target.value))}
+                  >
+                    <option value="">{t('web.alerts_all_severities')}</option>
+                    {SEVERITIES.map((value) => (
+                      <option key={value} value={value}>
+                        {t(SEVERITY_LABELS[value])}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+            ]}
+          />
+        )}
 
         <StateSwitch
           query={events}
@@ -325,8 +357,8 @@ export function AlertsPage({ denied }: { denied: boolean }) {
               <Empty title={t('web.alerts_empty')} hint={t('web.alerts_empty_hint')} icon="check" />
             ) : (
               <Empty
-                title={t('web.alerts_empty_filtered')}
-                hint={t('web.alerts_empty_filtered_hint')}
+                title={t('web.alerts_empty_filter')}
+                hint={t('web.alerts_empty_filter_hint')}
                 icon="inbox"
               />
             )
@@ -372,6 +404,33 @@ export function AlertsPage({ denied }: { denied: boolean }) {
   );
 }
 
+/** W5: what kind of message a notification is, by its template's family. */
+export type NotificationCategory = 'FINANCE' | 'SUPPORT' | 'NOTICE';
+
+export const NOTIFICATION_CATEGORY_LABELS: Readonly<Record<NotificationCategory, WebKey>> = {
+  FINANCE: 'web.notif_cat_finance',
+  SUPPORT: 'web.notif_cat_support',
+  NOTICE: 'web.notif_cat_notice',
+};
+
+export function notificationCategoryOf(templateKey: string): NotificationCategory {
+  if (templateKey.startsWith('ops.financial.')) return 'FINANCE';
+  // A customer's money notifications (`bot.payment.rejected`, wallet, refund…) are finance too.
+  if (
+    /(^|\.)(financial|payment|payments|wallet|refund|invoice|cashback|commission|topup)(\.|_|$)/u.test(
+      templateKey,
+    )
+  )
+    return 'FINANCE';
+  if (/(^|\.)(support|ticket|tickets|business)(\.|_|$)/u.test(templateKey)) return 'SUPPORT';
+  return 'NOTICE';
+}
+
+/** The template's Persian name (the template catalogue's), or the raw key when it has none. */
+export function notificationTypeName(templateKey: string): string {
+  return templateCopy(templateKey, '').name;
+}
+
 const STATUS_KEYS: Record<string, WebKey> = {
   PENDING: 'web.status_pending',
   SENT: 'web.status_sent',
@@ -393,7 +452,7 @@ const STATUS_KEYS: Record<string, WebKey> = {
  * per intent with no grouping, and because a pager the operator never reaches
  * is a pager that might as well not exist.
  */
-const NOTIFICATION_PAGE_SIZE = 25;
+const NOTIFICATION_PAGE_SIZE = LIST_PAGE_SIZE;
 /** The discovery lane for a settled first page of notifications. See `pollUnlessFinalWhile`. */
 const NOTIFICATION_DISCOVERY_MS = 30_000;
 
@@ -413,33 +472,38 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
   const [trail, setTrail] = useState<readonly { at: string; id: string }[]>([]);
   const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
 
-  const notifications = useQuery({
-    queryKey: ['notifications', cursor?.at, cursor?.id],
-    queryFn: () =>
-      fetchNotifications({
-        limit: NOTIFICATION_PAGE_SIZE,
-        ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
-      }),
-    enabled: !denied,
-    // Delivery is ASYNCHRONOUS: the worker claims and sends on its own poll,
-    // so the list a test send refreshes almost always still says PENDING.
-    // Without this the page never learned the outcome — no interval, no
-    // refetch on focus — and an operator testing a destination sat looking at
-    // "pending" until they reloaded, which is indistinguishable from a
-    // destination that does not work.
-    //
-    // Fast only while something IS pending. A settled FIRST page still polls,
-    // slowly: an operational event queues a new intent with no operator
-    // action, `refetchOnWindowFocus` is off globally, and a tab opened on a
-    // settled list never saw a later delivery until navigation. The cursor
-    // pages behind it are history and do not poll once settled — a new row
-    // appears on the first page, never on an older one.
-    refetchInterval: pollUnlessFinalWhile<NotificationListResponse>(
-      3_000,
-      (data) => data.notifications.some((entry) => entry.status === 'PENDING'),
-      cursor === undefined ? NOTIFICATION_DISCOVERY_MS : undefined,
+  const notifications = useQuery(
+    keepPageWhileTurning(
+      {
+        queryKey: ['notifications', cursor?.at, cursor?.id],
+        queryFn: () =>
+          fetchNotifications({
+            limit: NOTIFICATION_PAGE_SIZE,
+            ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
+          }),
+        enabled: !denied,
+        // Delivery is ASYNCHRONOUS: the worker claims and sends on its own poll,
+        // so the list a test send refreshes almost always still says PENDING.
+        // Without this the page never learned the outcome — no interval, no
+        // refetch on focus — and an operator testing a destination sat looking at
+        // "pending" until they reloaded, which is indistinguishable from a
+        // destination that does not work.
+        //
+        // Fast only while something IS pending. A settled FIRST page still polls,
+        // slowly: an operational event queues a new intent with no operator
+        // action, `refetchOnWindowFocus` is off globally, and a tab opened on a
+        // settled list never saw a later delivery until navigation. The cursor
+        // pages behind it are history and do not poll once settled — a new row
+        // appears on the first page, never on an older one.
+        refetchInterval: pollUnlessFinalWhile<NotificationListResponse>(
+          3_000,
+          (data) => data.notifications.some((entry) => entry.status === 'PENDING'),
+          cursor === undefined ? NOTIFICATION_DISCOVERY_MS : undefined,
+        ),
+      },
+      [-2, -1],
     ),
-  });
+  );
 
   const detail = useQuery({
     queryKey: ['notification', selected],
@@ -451,12 +515,21 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     // arrived to replace the cached answer. Gated here and at every render
     // below, for the same reason the pager is.
     enabled: selected !== null && !denied,
+    /*
+     * The side column holds its height while another notification is read (390px: the
+     * column swapped its card for a skeleton and back, and the page scroll jumped). The
+     * previous answer is kept ONLY as a placeholder: it is drawn hidden, under a loading
+     * line, never as the selected notification's attempts (`holding` below).
+     */
+    placeholderData: (previous) => previous,
     // The open panel follows the same rule as the list above.
     refetchInterval: pollUnlessFinalWhile<NotificationDetailResponse>(
       3_000,
       (data) => data.notification.status === 'PENDING',
     ),
   });
+  /** The previous notification's answer, held while the selected one is read. */
+  const holding = detail.isPlaceholderData;
 
   const submission = useSubmissionKey();
 
@@ -508,16 +581,23 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     },
     {
       key: 'template',
-      header: t('web.key'),
+      header: t('web.notif_type'),
+      wrap: true,
       render: (row) => (
-        <button
-          type="button"
-          className="link notifications-key"
-          aria-pressed={row.id === selected}
-          onClick={() => setSelected(row.id)}
-        >
-          <Ltr>{row.templateKey}</Ltr>
-        </button>
+        <span className="notifications-type">
+          <button
+            type="button"
+            className="link notifications-key"
+            aria-pressed={row.id === selected}
+            title={row.templateKey}
+            onClick={() => setSelected(row.id)}
+          >
+            {notificationTypeName(row.templateKey)}
+          </button>
+          <Badge tone="neutral" outline>
+            {t(NOTIFICATION_CATEGORY_LABELS[notificationCategoryOf(row.templateKey)])}
+          </Badge>
+        </span>
       ),
     },
     {
@@ -589,7 +669,12 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           {test.data.created ? t('web.test_sent') : t('web.test_replayed')}
         </Banner>
       )}
-      {test.isError && <Banner tone="danger">{messageFor(test.error)}</Banner>}
+      {test.isError && (
+        <Banner tone="danger">
+          {messageFor(test.error)}
+          <ErrorRef error={test.error} />
+        </Banner>
+      )}
 
       <div className={denied ? undefined : 'notifications-layout'}>
         <Card title={t('web.notifications_title')} hint={t('web.notifications_list_hint')}>
@@ -631,9 +716,17 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
 
         {!denied && (
           <div className="stack notifications-side">
-            {selected === null && (
+            {(selected === null || detail.isPending) && (
+              // The hint card stays while the first detail is read; only its line changes,
+              // so the column keeps its height (no skeleton swapped in and out).
               <Card tone="muted" title={t('web.attempts')}>
-                <p className="muted small">{t('web.notifications_pick_hint')}</p>
+                {selected === null ? (
+                  <p className="muted small">{t('web.notifications_pick_hint')}</p>
+                ) : (
+                  <p className="muted small" role="status" aria-busy="true">
+                    {t('web.loading')}
+                  </p>
+                )}
               </Card>
             )}
             {/*
@@ -660,14 +753,14 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         
         `isPending` matched none of them, so selecting a notification left the
         DOM byte-identical until the request answered — a click that appears to
-        do nothing. Every `StateSwitch` view on the branch draws a skeleton
-        here; the comment claiming this site "follows the SAME rule as every
-        other query-driven view" was two thirds true.
+        do nothing. It is said now by the hint card's own line (above) and, on
+        a switch, by a line over the held previous card (below) — not by a
+        skeleton swapped in and out, which made the 390px page jump.
       */}
-            {!denied && selected !== null && detail.isPending && <LoadingState />}
             {!denied && detail.isError && staleAfterError(detail) && (
               <Banner tone="danger">
-                {messageFor(detail.error)}{' '}
+                {messageFor(detail.error)}
+                <ErrorRef error={detail.error} />{' '}
                 {retryOf(detail) !== undefined && (
                   <button type="button" className="btn ghost sm" onClick={retryOf(detail)}>
                     {t('web.retry')}
@@ -681,8 +774,22 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
               // ternaries; both drifted. `ErrorState` is `errorCopy` and `retryOf`.
               <ErrorState query={detail} />
             )}
+            {!denied && holding && (
+              <p
+                className="muted small notifications-holding-status"
+                role="status"
+                aria-busy="true"
+              >
+                {t('web.loading')}
+              </p>
+            )}
             {!denied && queryState(detail) !== 'error' && detail.data && (
-              <Card title={t('web.attempts')}>
+              <Card
+                title={t('web.attempts')}
+                // Another notification's attempts, kept only to hold the height: hidden,
+                // inert and out of the accessibility tree until the selected one lands.
+                {...(holding ? { className: 'notifications-holding' } : {})}
+              >
                 {detail.data.attempts.length === 0 && <Empty title={t('web.empty')} />}
                 {detail.data.attempts.length > 0 && (
                   <DataTable
@@ -699,8 +806,11 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
                         key: 'outcome',
                         header: t('web.outcome'),
                         render: (row) => (
-                          <Badge tone={row.outcome === 'SUCCEEDED' ? 'ok' : 'danger'}>
-                            {row.outcome}
+                          <Badge
+                            tone={row.outcome === 'SUCCEEDED' ? 'ok' : 'danger'}
+                            title={row.outcome}
+                          >
+                            {t(DELIVERY_OUTCOME_LABELS[row.outcome])}
                           </Badge>
                         ),
                       },
@@ -708,12 +818,21 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
                         key: 'code',
                         header: t('web.error_code'),
                         render: (row) =>
-                          row.errorCode === null ? '—' : <Ltr>{row.errorCode}</Ltr>,
+                          row.errorCode === null ? (
+                            '—'
+                          ) : (
+                            <CodeLabel label={errorCodeLabel(row.errorCode)} code={row.errorCode} />
+                          ),
                       },
                       {
                         key: 'message',
                         header: t('web.message'),
-                        render: (row) => <span className="plain">{row.errorMessage ?? '—'}</span>,
+                        render: (row) =>
+                          row.errorMessage === null ? (
+                            '—'
+                          ) : (
+                            <TechnicalDetails lines={[row.errorMessage]} />
+                          ),
                       },
                       {
                         key: 'at',
@@ -750,7 +869,9 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
                         {
                           key: 'reason',
                           header: t('web.returned_reason'),
-                          render: (row) => <Ltr>{row.reason}</Ltr>,
+                          render: (row) => (
+                            <CodeLabel label={errorCodeLabel(row.reason)} code={row.reason} />
+                          ),
                         },
                         {
                           key: 'at',

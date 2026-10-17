@@ -9,6 +9,7 @@ import {
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * TB8 — the knowledge page, the learning-candidate queue and «پیشنهاد به‌عنوان دانش». Fixtures go
@@ -136,6 +137,7 @@ describe('the knowledge page', () => {
   it('the filters reach the server', async () => {
     const api = page();
     await screen.findByText('چطور لینک را وارد کنم؟');
+    openFilterPanel();
     fireEvent.change(screen.getByLabelText(t('web.sk_col_source')), {
       target: { value: 'NEXA_BUILD' },
     });
@@ -145,6 +147,20 @@ describe('the knowledge page', () => {
     await waitFor(() =>
       expect(calls(api, 'GET', 'source=NEXA_BUILD&state=RETIRED')).toHaveLength(1),
     );
+  });
+
+  it('W1.8: draws the list ten at a time', async () => {
+    const many = Array.from({ length: 13 }, (_, index) =>
+      article({
+        id: `${ARTICLE_ID.slice(0, -2)}${String(10 + index)}`,
+        title: `مطلب ${String(index)}`,
+      }),
+    );
+    page(true, many);
+    const table = await screen.findByRole('table', { name: t('web.sk_title') });
+    expect(within(table).getAllByRole('row')).toHaveLength(11);
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(4));
   });
 
   it('an edit names the version it was opened from, and warns it is a new revision', async () => {

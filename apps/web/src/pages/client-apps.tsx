@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CLIENT_APP_DELIVERY_KINDS,
@@ -50,6 +50,8 @@ import { sortOrderOf } from './support';
 import { TelegramPhone } from './telegram-phone';
 import { TutorialVideoCard } from './client-app-video';
 import { Icon } from '../ui/icons';
+import { FilePicker } from '../ui/file-picker';
+import { useConfirmedClose } from '../ui/unsaved';
 import {
   Disclosure,
   Badge,
@@ -57,15 +59,18 @@ import {
   Card,
   ConfirmDialog,
   DataTable,
+  Drawer,
   Empty,
   Field,
   PageHead,
   RowActions,
   StateSwitch,
+  usePagedRows,
   useUnsavedChanges,
   useToast,
   type Column,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Apps & connection guides (WP-A10) — the client apps the bot recommends, per platform.
@@ -391,6 +396,8 @@ function ImageCard({
   const submission = useSubmissionKey();
   const writeBusy = useClientAppWriteBusy();
   const [picked, setPicked] = useState<PickedImage>({ kind: 'NONE' });
+  /** The file the picker shows: what was chosen, read or not, valid or not. */
+  const [chosen, setChosen] = useState<File | null>(null);
   /*
    * The latest selection. A read that completes after a newer file was picked is
    * discarded, so the preview and the payload are always the file the input shows.
@@ -425,6 +432,7 @@ function ImageCard({
       submission.settle();
       notify({ tone: 'ok', message: t('web.client_apps_image_uploaded') });
       setPicked({ kind: 'NONE' });
+      setChosen(null);
       onChanged(row);
     },
     onError: (error) => submission.settleOn(error),
@@ -454,12 +462,13 @@ function ImageCard({
     );
   }
 
-  const onPick = (event: ChangeEvent<HTMLInputElement>) => {
+  const onPick = (files: readonly File[]) => {
     selection.current += 1;
     const ticket = selection.current;
     // Nothing is uploadable while the new file is being read.
     setPicked({ kind: 'NONE' });
-    const file = event.target.files?.[0];
+    const file = files[0];
+    setChosen(file ?? null);
     if (file === undefined) return;
     void readPickedImage(file).then((result) => {
       if (selection.current === ticket) setPicked(result);
@@ -509,11 +518,13 @@ function ImageCard({
           htmlFor="app-image-file"
           {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
         >
-          <input
+          <FilePicker
             id="app-image-file"
-            type="file"
+            kind="image"
             accept={CLIENT_APP_IMAGE_MIME_TYPES.join(',')}
-            onChange={onPick}
+            onFiles={onPick}
+            selected={chosen}
+            onClear={() => onPick([])}
             disabled={busy}
           />
         </Field>
@@ -546,7 +557,12 @@ function ImageCard({
             </button>
           )}
         </div>
-        {failure != null && <Banner tone="danger">{imageFaultOf(failure)}</Banner>}
+        {failure != null && (
+          <Banner tone="danger">
+            {imageFaultOf(failure)}
+            <ErrorRef error={failure} />
+          </Banner>
+        )}
       </form>
     </Card>
   );
@@ -563,6 +579,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
     enabled: !denied,
   });
   const rows = apps.data?.items ?? [];
+  const { rows: pageRows, pager } = usePagedRows(rows);
 
   const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
   /** The entry the operator asked to delete, awaiting the dialog's answer. */
@@ -665,6 +682,12 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
     JSON.stringify(form) !==
       JSON.stringify(editor.kind === 'edit' ? formOf(editor.basis) : EMPTY_FORM);
   useUnsavedChanges(mayEdit && editorDirty);
+  // The drawer's ✕, Escape and backdrop ask before a typed draft goes; Cancel is the
+  // operator's own word and closes at once.
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(
+    mayEdit && editorDirty,
+    close,
+  );
   const changedElsewhere =
     editor.kind === 'edit' &&
     !save.isPending &&
@@ -804,23 +827,27 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
         >
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={pageRows}
             rowKey={(row) => row.id}
             caption={t('web.client_apps_title')}
             dense
           />
+          {pager}
         </Card>
       </StateSwitch>
 
-      {mayEdit && editor.kind !== 'closed' && (
-        <div className="two-col">
-          <Card
-            title={t(
-              editor.kind === 'create' ? 'web.client_apps_creating' : 'web.client_apps_editing',
-            )}
-            hint={t('web.client_apps_form_hint')}
-            tight
-          >
+      <Drawer
+        open={mayEdit && editor.kind !== 'closed'}
+        // Nothing closes the editor while a write is in flight: its answer lands here.
+        onClose={() => {
+          if (!busy) requestClose();
+        }}
+        wide
+        title={t(editor.kind === 'create' ? 'web.client_apps_creating' : 'web.client_apps_editing')}
+      >
+        <div className="bx-drawer-split">
+          <div className="stack-sm">
+            <p className="muted small">{t('web.client_apps_form_hint')}</p>
             <form onSubmit={submit} noValidate>
               <div className="form-section">
                 <h3>{t('web.client_apps_section_identity')}</h3>
@@ -1083,10 +1110,15 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                   </button>
                 </div>
 
-                {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
+                {save.error != null && (
+                  <Banner tone="danger">
+                    {faultOf(save.error)}
+                    <ErrorRef error={save.error} />
+                  </Banner>
+                )}
               </div>
             </form>
-          </Card>
+          </div>
           <div className="stack">
             <Card title={t('web.client_apps_preview')} hint={t('web.client_apps_preview_hint')}>
               <TelegramPhone title={t('web.client_apps_preview_chat')}>
@@ -1140,7 +1172,8 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
             />
           </div>
         </div>
-      )}
+      </Drawer>
+      {discardQuestion}
 
       {deleting !== null && (
         <ConfirmDialog
@@ -1158,8 +1191,18 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
         />
       )}
 
-      {toggle.error != null && <Banner tone="danger">{faultOf(toggle.error)}</Banner>}
-      {remove.error != null && <Banner tone="danger">{faultOf(remove.error)}</Banner>}
+      {toggle.error != null && (
+        <Banner tone="danger">
+          {faultOf(toggle.error)}
+          <ErrorRef error={toggle.error} />
+        </Banner>
+      )}
+      {remove.error != null && (
+        <Banner tone="danger">
+          {faultOf(remove.error)}
+          <ErrorRef error={remove.error} />
+        </Banner>
+      )}
     </>
   );
 }

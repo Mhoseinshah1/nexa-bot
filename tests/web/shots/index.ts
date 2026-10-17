@@ -6,6 +6,7 @@ import { COMMERCE_B } from './fixtures/commerce-b.ts';
 import { OPS_A } from './fixtures/ops-a.ts';
 import { OPS_B } from './fixtures/ops-b.ts';
 import { COVERAGE } from './fixtures/coverage.ts';
+import { COVERAGE_B } from './fixtures/coverage-b.ts';
 
 /** Every fixture the screenshot server answers from, one file per page family. */
 export const FIXTURES: readonly ShotFixture[] = [
@@ -16,6 +17,7 @@ export const FIXTURES: readonly ShotFixture[] = [
   ...OPS_A,
   ...OPS_B,
   ...COVERAGE,
+  ...COVERAGE_B,
 ];
 
 export { SHOT_NOW } from './fixture.ts';

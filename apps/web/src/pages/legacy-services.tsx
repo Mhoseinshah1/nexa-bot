@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   LEGACY_SERVICE_ADOPTABLE_OUTCOMES,
   LEGACY_SERVICE_OUTCOMES,
@@ -23,12 +24,22 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useLinkHandler, useRoute } from '../router';
+import { LegacyCode, NamedCode } from './code-name';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
+import { ListFilterBar } from '../ui/filter-bar';
+import { LEGACY_INVOICE_CLASS_LABELS } from './legacy-invoices';
+import {
+  LEGACY_IMPORT_MAP_STATUS_LABELS,
+  LEGACY_REVIEW_STATE_LABELS,
+  migrationCodeView,
+} from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
 import { everyPage } from './extra-devices';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -37,7 +48,6 @@ import {
   DataTable,
   Empty,
   Field,
-  FilterBar,
   Input,
   Ltr,
   Num,
@@ -49,7 +59,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
-import { Drawer } from '../ui/overlays';
+import { Drawer, Modal } from '../ui/overlays';
 
 /**
  * Mirza migration PR5 — legacy service candidates (Area D; owner decision 8, 2026-10-07).
@@ -267,12 +277,17 @@ export function LegacyServicesPage({
     // Verbatim: never trimmed.
     ...(invoiceId === '' ? {} : { invoiceId }),
     ...(after === undefined ? {} : { after }),
+    // W1.8: ten rows a page, on the same keyset.
+    limit: LIST_PAGE_SIZE,
   };
-  const list = useQuery({
-    queryKey: ['legacy-services', query],
-    queryFn: () => fetchLegacyServices(query),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      // The list without its cursor, then the cursor: a turn of the page keeps the rows shown.
+      queryKey: ['legacy-services', { ...query, after: null }, after ?? null],
+      queryFn: () => fetchLegacyServices(query),
+      enabled: !denied,
+    }),
+  );
   const summary = useQuery({
     queryKey: ['legacy-services', 'summary'],
     queryFn: fetchLegacyServiceSummary,
@@ -382,83 +397,134 @@ export function LegacyServicesPage({
           </dl>
         </Card>
       )}
-      <FilterBar>
-        <Field label={t('web.lsr_col_outcome')} htmlFor="lsr-outcome" compact>
-          <Select
-            id="lsr-outcome"
-            size="sm"
-            value={outcome}
-            onChange={(event) => {
-              setOutcome(event.target.value as OutcomeFilter);
+      <ListFilterBar
+        label={t('web.lsr_title')}
+        search={
+          <Field label={t('web.lsr_search_invoice')} htmlFor="lsr-invoice" compact>
+            <Input
+              id="lsr-invoice"
+              size="sm"
+              dir="ltr"
+              value={invoiceId}
+              maxLength={300}
+              onChange={(event) => {
+                setInvoiceId(event.target.value);
+                resetPaging();
+              }}
+            />
+          </Field>
+        }
+        filters={[
+          {
+            key: 'outcome',
+            label: t('web.lsr_col_outcome'),
+            active: outcome === 'ALL' ? null : t(LEGACY_SERVICE_OUTCOME_LABELS[outcome]),
+            onClear: () => {
+              setOutcome('ALL');
               resetPaging();
-            }}
-          >
-            <option value="ALL">{t('web.lsr_filter_all_outcomes')}</option>
-            {LEGACY_SERVICE_OUTCOMES.map((o) => (
-              <option key={o} value={o}>
-                {t(LEGACY_SERVICE_OUTCOME_LABELS[o])}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label={t('web.lsr_col_state')} htmlFor="lsr-state" compact>
-          <Select
-            id="lsr-state"
-            size="sm"
-            value={reviewState}
-            onChange={(event) => {
-              setReviewState(event.target.value as StateFilter);
+            },
+            control: (
+              <Select
+                id="lsr-outcome"
+                size="sm"
+                aria-label={t('web.lsr_col_outcome')}
+                value={outcome}
+                onChange={(event) => {
+                  setOutcome(event.target.value as OutcomeFilter);
+                  resetPaging();
+                }}
+              >
+                <option value="ALL">{t('web.lsr_filter_all_outcomes')}</option>
+                {LEGACY_SERVICE_OUTCOMES.map((o) => (
+                  <option key={o} value={o}>
+                    {t(LEGACY_SERVICE_OUTCOME_LABELS[o])}
+                  </option>
+                ))}
+              </Select>
+            ),
+          },
+          {
+            key: 'reviewState',
+            label: t('web.lsr_col_state'),
+            // "open" is the list's default, so it is no active filter.
+            active:
+              reviewState === 'OPEN'
+                ? null
+                : reviewState === 'ALL'
+                  ? t('web.lsr_filter_all_states')
+                  : t(LEGACY_SERVICE_STATE_LABELS[reviewState]),
+            onClear: () => {
+              setReviewState('OPEN');
               resetPaging();
-            }}
-          >
-            {LEGACY_SERVICE_REVIEW_STATES.map((s) => (
-              <option key={s} value={s}>
-                {t(LEGACY_SERVICE_STATE_LABELS[s])}
-              </option>
-            ))}
-            <option value="ALL">{t('web.lsr_filter_all_states')}</option>
-          </Select>
-        </Field>
-        <Field label={t('web.lsr_col_panel_code')} htmlFor="lsr-panel" compact>
-          <Input
-            id="lsr-panel"
-            size="sm"
-            dir="ltr"
-            value={panelCode}
-            maxLength={300}
-            onChange={(event) => {
-              setPanelCode(event.target.value);
+            },
+            control: (
+              <Select
+                id="lsr-state"
+                size="sm"
+                aria-label={t('web.lsr_col_state')}
+                value={reviewState}
+                onChange={(event) => {
+                  setReviewState(event.target.value as StateFilter);
+                  resetPaging();
+                }}
+              >
+                {LEGACY_SERVICE_REVIEW_STATES.map((one) => (
+                  <option key={one} value={one}>
+                    {t(LEGACY_SERVICE_STATE_LABELS[one])}
+                  </option>
+                ))}
+                <option value="ALL">{t('web.lsr_filter_all_states')}</option>
+              </Select>
+            ),
+          },
+          {
+            key: 'panelCode',
+            label: t('web.lsr_col_panel_code'),
+            active: panelCode.trim() === '' ? null : panelCode,
+            onClear: () => {
+              setPanelCode('');
               resetPaging();
-            }}
-          />
-        </Field>
-        <Field label={t('web.lsr_col_product_code')} htmlFor="lsr-product" compact>
-          <Input
-            id="lsr-product"
-            size="sm"
-            dir="ltr"
-            value={productCode}
-            maxLength={300}
-            onChange={(event) => {
-              setProductCode(event.target.value);
+            },
+            control: (
+              <Input
+                id="lsr-panel"
+                size="sm"
+                dir="ltr"
+                aria-label={t('web.lsr_col_panel_code')}
+                value={panelCode}
+                maxLength={300}
+                onChange={(event) => {
+                  setPanelCode(event.target.value);
+                  resetPaging();
+                }}
+              />
+            ),
+          },
+          {
+            key: 'productCode',
+            label: t('web.lsr_col_product_code'),
+            active: productCode.trim() === '' ? null : productCode,
+            onClear: () => {
+              setProductCode('');
               resetPaging();
-            }}
-          />
-        </Field>
-        <Field label={t('web.lsr_search_invoice')} htmlFor="lsr-invoice" compact>
-          <Input
-            id="lsr-invoice"
-            size="sm"
-            dir="ltr"
-            value={invoiceId}
-            maxLength={300}
-            onChange={(event) => {
-              setInvoiceId(event.target.value);
-              resetPaging();
-            }}
-          />
-        </Field>
-      </FilterBar>
+            },
+            control: (
+              <Input
+                id="lsr-product"
+                size="sm"
+                dir="ltr"
+                aria-label={t('web.lsr_col_product_code')}
+                value={productCode}
+                maxLength={300}
+                onChange={(event) => {
+                  setProductCode(event.target.value);
+                  resetPaging();
+                }}
+              />
+            ),
+          },
+        ]}
+      />
       <StateSwitch
         query={list}
         denied={denied}
@@ -521,6 +587,7 @@ export function CandidateDetail({
     return detail.error !== null ? (
       <Banner tone="danger" role="alert">
         {legacyServiceFault(detail.error)}
+        <ErrorRef error={detail.error} />
       </Banner>
     ) : (
       <p className="muted">{t('web.lsr_loading')}</p>
@@ -550,7 +617,10 @@ export function CandidateDetail({
             <>
               <dt>{t('web.lsr_blocker')}</dt>
               <dd>
-                <Ltr>{row.blocker}</Ltr>
+                <NamedCode
+                  name={migrationCodeView(row.blocker, LEGACY_SERVICE_OUTCOME_LABELS).label}
+                  raw={row.blocker}
+                />
               </dd>
             </>
           )}
@@ -564,11 +634,22 @@ export function CandidateDetail({
             <>
               <dt>{t('web.lsr_map_row')}</dt>
               <dd>
-                <Ltr>
-                  {[importOutcome.status, importOutcome.reasonCode, importOutcome.reviewState]
-                    .filter((x) => x !== null)
-                    .join(' · ')}
-                </Ltr>
+                <LegacyCode value={importOutcome.status} labels={LEGACY_IMPORT_MAP_STATUS_LABELS} />
+                {importOutcome.reasonCode !== null && (
+                  <>
+                    {' · '}
+                    <ErrorCodeLabel code={importOutcome.reasonCode} />
+                  </>
+                )}
+                {importOutcome.reviewState !== null && (
+                  <>
+                    {' · '}
+                    <LegacyCode
+                      value={importOutcome.reviewState}
+                      labels={LEGACY_REVIEW_STATE_LABELS}
+                    />
+                  </>
+                )}
               </dd>
             </>
           )}
@@ -649,7 +730,8 @@ export function CandidateDetail({
           <dl className="kv">
             <dt>{t('web.lsr_archive_revision')}</dt>
             <dd>
-              <Num value={archive.revision} /> · <Ltr>{archive.classification}</Ltr>
+              <Num value={archive.revision} /> ·{' '}
+              <LegacyCode value={archive.classification} labels={LEGACY_INVOICE_CLASS_LABELS} />
             </dd>
             <dt>{t('web.lsr_archive_status')}</dt>
             <dd>
@@ -759,6 +841,8 @@ export function DecisionRecord({
   );
 }
 
+type Asking = LegacyServiceReviewDecision | 'adopt' | 'reopen' | null;
+
 function Decisions({
   row,
   adoptPanels,
@@ -772,6 +856,8 @@ function Decisions({
   const notify = useToast();
   const submission = useSubmissionKey();
   const [reason, setReason] = useState('');
+  /** Which decision's dialog is open. */
+  const [asking, setAsking] = useState<Asking>(null);
   const needsPanel = row.evidence.mappedPanelId === null;
   const [panelId, setPanelId] = useState<string>(adoptPanels[0] ?? '');
 
@@ -805,6 +891,7 @@ function Decisions({
     },
     onSuccess: () => {
       submission.settle();
+      setAsking(null);
       notify({ tone: 'ok', message: t('web.lsr_saved') });
       void queries.invalidateQueries({ queryKey: ['legacy-services'] });
     },
@@ -828,91 +915,124 @@ function Decisions({
   if (!open && !acknowledged && !reopenable) {
     return <Banner tone="info">{t('web.lsr_no_decision')}</Banner>;
   }
+  const TITLES: Readonly<Record<Exclude<Asking, null>, WebKey>> = {
+    ACKNOWLEDGE: 'web.lsr_acknowledge',
+    KEEP_AS_HISTORY: 'web.lsr_keep',
+    adopt: 'web.lsr_adopt',
+    reopen: 'web.lsr_reopen',
+  };
+  const close = () => {
+    setAsking(null);
+    act.reset();
+  };
+  const fault =
+    act.error !== null ? (
+      <Banner tone="danger" role="alert">
+        {legacyServiceFault(act.error)}
+        <ErrorRef error={act.error} />
+      </Banner>
+    ) : null;
+  const send = (which: Exclude<Asking, null>) =>
+    act.mutate(
+      which === 'adopt'
+        ? { kind: 'adopt' }
+        : which === 'reopen'
+          ? { kind: 'reopen' }
+          : { kind: 'decide', decision: which },
+    );
+  const sendDisabled = (which: Exclude<Asking, null>) =>
+    busy || noReason || (which === 'adopt' && (adoptBlocked || (needsPanel && panelId === '')));
+
+  /*
+   * W3: the decide card is buttons (the approved-and-waiting banner stays on it); each
+   * decision opens its own dialog with the reason, the adopt banner and panel picker where
+   * they apply, the same disabled rules, and the refusal said inside it.
+   */
   return (
     <Card title={t('web.lsr_decide_title')}>
-      <div className="stack">
-        {row.reviewState === 'ADOPT_APPROVED' && (
-          <Banner tone="info">{t('web.lsr_approved_waiting')}</Banner>
+      {row.reviewState === 'ADOPT_APPROVED' && (
+        <Banner tone="info">{t('web.lsr_approved_waiting')}</Banner>
+      )}
+      <div className="form-actions">
+        {open && (
+          <button type="button" className="btn sm" onClick={() => setAsking('ACKNOWLEDGE')}>
+            {t('web.lsr_acknowledge')}
+          </button>
         )}
-        <Field label={t('web.lsr_reason')} htmlFor="lsr-reason" hint={t('web.lsr_reason_hint')}>
-          <Input
-            id="lsr-reason"
-            value={reason}
-            maxLength={500}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </Field>
+        {(open || acknowledged) && (
+          <button type="button" className="btn sm" onClick={() => setAsking('KEEP_AS_HISTORY')}>
+            {t('web.lsr_keep')}
+          </button>
+        )}
         {adoptable && (
-          <>
-            <Banner tone="warn">{t('web.lsr_adopt_explained')}</Banner>
-            {needsPanel &&
-              (adoptBlocked ? (
-                <Banner tone="info">{t('web.lsr_adopt_no_panel_available')}</Banner>
-              ) : (
-                <Field label={t('web.lsr_adopt_panel')} htmlFor="lsr-adopt-panel">
-                  <Select
-                    id="lsr-adopt-panel"
-                    value={panelId}
-                    onChange={(event) => setPanelId(event.target.value)}
-                  >
-                    {adoptPanels.map((p) => (
-                      <option key={p} value={p}>
-                        {panelName(p)}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-              ))}
-          </>
+          <button type="button" className="btn primary sm" onClick={() => setAsking('adopt')}>
+            {t('web.lsr_adopt')}
+          </button>
         )}
-        <div className="form-actions">
-          {open && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy || noReason}
-              onClick={() => act.mutate({ kind: 'decide', decision: 'ACKNOWLEDGE' })}
-            >
-              {t('web.lsr_acknowledge')}
-            </button>
-          )}
-          {(open || acknowledged) && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy || noReason}
-              onClick={() => act.mutate({ kind: 'decide', decision: 'KEEP_AS_HISTORY' })}
-            >
-              {t('web.lsr_keep')}
-            </button>
-          )}
-          {adoptable && (
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={busy || noReason || adoptBlocked || (needsPanel && panelId === '')}
-              onClick={() => act.mutate({ kind: 'adopt' })}
-            >
-              {t('web.lsr_adopt')}
-            </button>
-          )}
-          {reopenable && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy || noReason}
-              onClick={() => act.mutate({ kind: 'reopen' })}
-            >
-              {t('web.lsr_reopen')}
-            </button>
-          )}
-        </div>
-        {act.error !== null && (
-          <Banner tone="danger" role="alert">
-            {legacyServiceFault(act.error)}
-          </Banner>
+        {reopenable && (
+          <button type="button" className="btn sm" onClick={() => setAsking('reopen')}>
+            {t('web.lsr_reopen')}
+          </button>
         )}
       </div>
+      {asking === null && fault}
+      <Modal
+        open={asking !== null}
+        onClose={close}
+        title={asking === null ? '' : t(TITLES[asking])}
+        foot={
+          asking === null ? undefined : (
+            <>
+              <button type="button" className="btn sm" onClick={close}>
+                {t('web.money_cancel')}
+              </button>
+              <button
+                type="button"
+                className={asking === 'adopt' ? 'btn primary sm' : 'btn sm'}
+                disabled={sendDisabled(asking)}
+                onClick={() => send(asking)}
+              >
+                {t(TITLES[asking])}
+              </button>
+            </>
+          )
+        }
+      >
+        <div className="stack">
+          <Field label={t('web.lsr_reason')} htmlFor="lsr-reason" hint={t('web.lsr_reason_hint')}>
+            <Input
+              id="lsr-reason"
+              value={reason}
+              maxLength={500}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </Field>
+          {asking === 'adopt' && (
+            <>
+              <Banner tone="warn">{t('web.lsr_adopt_explained')}</Banner>
+              {needsPanel &&
+                (adoptBlocked ? (
+                  <Banner tone="info">{t('web.lsr_adopt_no_panel_available')}</Banner>
+                ) : (
+                  <Field label={t('web.lsr_adopt_panel')} htmlFor="lsr-adopt-panel">
+                    <Select
+                      id="lsr-adopt-panel"
+                      value={panelId}
+                      onChange={(event) => setPanelId(event.target.value)}
+                    >
+                      {adoptPanels.map((p) => (
+                        <option key={p} value={p}>
+                          {panelName(p)}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                ))}
+            </>
+          )}
+          {fault}
+        </div>
+      </Modal>
     </Card>
   );
 }

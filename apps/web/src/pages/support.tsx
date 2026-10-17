@@ -38,8 +38,10 @@ import {
   useToast,
   useUnsavedChanges,
   type Column,
+  usePagedRows,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Support — the FAQ the bot answers with, and a pointer at where support goes.
@@ -125,6 +127,7 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
     enabled: !denied,
   });
   const rows = faqs.data?.items ?? [];
+  const paging = usePagedRows(rows, '');
 
   const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -360,15 +363,21 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
         <Card title={t('web.support_title')} hint={t('web.support_faq_hint')}>
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.support_title')}
             dense
           />
+          {paging.pager}
         </Card>
       </StateSwitch>
 
-      {toggle.error != null && <Banner tone="danger">{faultOf(toggle.error)}</Banner>}
+      {toggle.error != null && (
+        <Banner tone="danger">
+          {faultOf(toggle.error)}
+          <ErrorRef error={toggle.error} />
+        </Banner>
+      )}
 
       <Drawer
         open={mayEdit && editor.kind !== 'closed'}
@@ -428,7 +437,12 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
             </Banner>
           )}
 
-          {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
+          {save.error != null && (
+            <Banner tone="danger">
+              {faultOf(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
 
           <div className="form-actions">
             <button

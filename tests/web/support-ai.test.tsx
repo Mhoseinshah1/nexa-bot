@@ -225,6 +225,28 @@ describe('the support AI settings page', () => {
     });
   });
 
+  /*
+   * W2 (`pnpm web:no-scroll`, 390): «افزودن پشتیبان» adds its row in place of the button, and
+   * the form is out of the browser's scroll anchoring (the class's rule:
+   * `stylesheet-contract.test.tsx`) — anchored, the page moved by a row and pushed the rows
+   * above off the screen.
+   */
+  it('adds a fallback where the button was, in a form that leaves scroll anchoring', async () => {
+    settings();
+    const add = await screen.findByRole('button', { name: t('web.sai_fallback_add') });
+    const form = add.closest('form') as HTMLFormElement;
+    expect(form).toHaveClass('no-scroll-anchor');
+    fireEvent.click(add);
+    const row = document.getElementById('sai-fallback-0-provider') as HTMLElement;
+    expect(row).not.toBeNull();
+    // The new row comes after the primary and before the button that added it.
+    const primary = document.getElementById('sai-primary-provider') as HTMLElement;
+    expect(primary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const again = screen.getByRole('button', { name: t('web.sai_fallback_add') });
+    expect(row.compareDocumentPosition(again) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(again.closest('form')).toBe(form);
+  });
+
   it('refuses to send an invalid configuration and says why', async () => {
     const { api } = settings();
     const settle = await screen.findByLabelText(t('web.sai_settle_delay_seconds'));
@@ -341,9 +363,18 @@ describe('the support AI settings page', () => {
   it('tests a connection against the chain’s model and shows the outcome', async () => {
     const { api } = settings();
     const openai = await providerBlock('OPENAI');
-    const model = openai.getByLabelText(new RegExp(t('web.sai_test_model'))) as HTMLInputElement;
-    expect(model.value).toBe('gpt-test-1');
+    // W3: the row's button opens the model box in a drawer, seeded with the chain's model.
+    expect(openai.queryByLabelText(new RegExp(t('web.sai_test_model')))).toBeNull();
     fireEvent.click(openai.getByRole('button', { name: t('web.sai_test') }));
+    const drawer = within(await screen.findByRole('dialog'));
+    const model = drawer.getByLabelText(new RegExp(t('web.sai_test_model'))) as HTMLInputElement;
+    expect(model.value).toBe('gpt-test-1');
+    fireEvent.change(model, { target: { value: ' ' } });
+    expect(
+      (drawer.getByRole('button', { name: t('web.sai_test') }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.change(model, { target: { value: 'gpt-test-1' } });
+    fireEvent.click(drawer.getByRole('button', { name: t('web.sai_test') }));
     await waitFor(() => expect(calls(api, 'POST', '/credentials/OPENAI/test')).toHaveLength(1));
     expect(calls(api, 'POST', '/credentials/OPENAI/test')[0]!.body).toEqual({
       model: 'gpt-test-1',

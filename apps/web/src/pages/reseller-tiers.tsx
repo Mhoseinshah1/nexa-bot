@@ -29,7 +29,7 @@ import {
   replaceResellerTierGrants,
   updateResellerTier,
 } from '../api/client';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
@@ -37,6 +37,7 @@ import { messageFor } from './settings';
 import { PURPOSE_LABELS } from './discounts';
 import { PricingText, TIER_PRICING_LABELS, percentOf } from './resellers';
 import {
+  usePagedRows,
   Badge,
   Banner,
   Card,
@@ -56,8 +57,10 @@ import {
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { SaveBar, revealField } from './editor-layout';
+import { SaveBar } from './editor-layout';
+import { Drawer } from '../ui/overlays';
 import { TierHistoryCard } from './reseller-standing';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Reseller tiers and what each one grants (WP9-B, `docs/wp9-reseller-audit.md` R2, R5).
@@ -352,11 +355,18 @@ export function ResellerTiersPage({
     enabled: !denied,
   });
   const rows = tiers.data?.tiers ?? [];
+  /** W1.8: the tiers, ten a page (the whole roster is one answer). */
+  const tierPage = usePagedRows(rows);
 
   /** Which tier's form, and which tier's grants, are open — by id, so a refetch shows. */
   const [editingId, setEditingId] = useState<string | null>(null);
   /** Opening another tier's edit drops the open form's draft: asked first. */
   const discard = useDiscardGuard();
+  /** The edit drawer's own guard: closing it over unsaved changes asks first. */
+  const editGuard = useDiscardGuard();
+  /** The drawers' submission keys, held while the drawers mount and unmount. */
+  const editKey = useSubmissionKey();
+  const grantsKey = useSubmissionKey();
   const [grantsId, setGrantsId] = useState<string | null>(null);
   const [historyId, setHistoryId] = useState<string | null>(null);
   const editing = rows.find((row) => row.id === editingId);
@@ -401,42 +411,14 @@ export function ResellerTiersPage({
       render: (row) => (
         <RowActions>
           {mayEdit && (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon="edit"
-              onClick={() => {
-                if (editingId === row.id) revealField('tier-edit-name');
-                else
-                  discard.confirmDiscard(() => {
-                    setEditingId(row.id);
-                    revealField('tier-edit-name');
-                  });
-              }}
-            >
+            <Button size="sm" variant="ghost" icon="edit" onClick={() => setEditingId(row.id)}>
               {t('web.rule_edit')}
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            icon="shield"
-            onClick={() => {
-              setGrantsId(row.id);
-              revealField('tier-grants');
-            }}
-          >
+          <Button size="sm" variant="ghost" icon="shield" onClick={() => setGrantsId(row.id)}>
             {t('web.reseller_grants_open')}
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            icon="clock"
-            onClick={() => {
-              setHistoryId(row.id);
-              revealField('tier-history');
-            }}
-          >
+          <Button size="sm" variant="ghost" icon="clock" onClick={() => setHistoryId(row.id)}>
             {t('web.history_open')}
           </Button>
         </RowActions>
@@ -479,47 +461,76 @@ export function ResellerTiersPage({
           <DataTable
             caption={t('web.reseller_tiers_list_title')}
             columns={columns}
-            rows={rows}
+            rows={tierPage.rows}
             rowKey={(row) => row.id}
             rowClassName={(row) =>
               row.id === grantsId || row.id === editingId ? 'selected' : undefined
             }
           />
+          {tierPage.pager}
         </StateSwitch>
       </Card>
 
-      <div id="tier-grants" className="tiers-anchor" tabIndex={-1} />
-      {granting !== undefined &&
-        (mayEdit ? (
-          // KEYED BY THE TIER: the editor's state is initialised from the tier now open.
-          <GrantsEditor
-            key={granting.id}
-            tier={granting}
-            options={options}
-            names={names}
-            onClose={() => setGrantsId(null)}
-          />
-        ) : (
-          <GrantsReadOnly tier={granting} names={names} onClose={() => setGrantsId(null)} />
-        ))}
+      {/*
+        W2: a tier's edit, grants and history each open in a side drawer — never revealed
+        further down the page. The create form stays on the page. Closing the edit drawer
+        over unsaved changes asks first; closing the grants drawer discards its draft, as
+        its own "close" always did.
+      */}
+      <Drawer
+        open={granting !== undefined}
+        onClose={() => setGrantsId(null)}
+        title={`${t('web.reseller_grants_open')} — ${granting?.name ?? ''}`}
+        wide
+      >
+        {granting !== undefined &&
+          (mayEdit ? (
+            // KEYED BY THE TIER: the editor's state is initialised from the tier now open.
+            <GrantsEditor
+              held={grantsKey}
+              key={granting.id}
+              tier={granting}
+              options={options}
+              names={names}
+              onClose={() => setGrantsId(null)}
+            />
+          ) : (
+            <GrantsReadOnly tier={granting} names={names} onClose={() => setGrantsId(null)} />
+          ))}
+      </Drawer>
 
-      <div id="tier-history" className="tiers-anchor" tabIndex={-1} />
-      {denied || historyId === null ? null : (
-        <TierHistoryCard key={historyId} tierId={historyId} mayViewAudit={mayViewAudit} />
-      )}
+      <Drawer
+        open={!denied && historyId !== null}
+        onClose={() => setHistoryId(null)}
+        title={`${t('web.history_open')} — ${rows.find((row) => row.id === historyId)?.name ?? ''}`}
+        wide
+      >
+        {historyId !== null && (
+          <TierHistoryCard key={historyId} tierId={historyId} mayViewAudit={mayViewAudit} />
+        )}
+      </Drawer>
+
+      <Drawer
+        open={mayEdit && editing !== undefined}
+        onClose={() => editGuard.confirmDiscard(() => setEditingId(null))}
+        title={`${t('web.reseller_tier_edit_title')} — ${editing?.name ?? ''}`}
+      >
+        {editing !== undefined && (
+          <TierForm
+            held={editKey}
+            key={editing.id}
+            tier={editing}
+            onDone={() => setEditingId(null)}
+            onDirtyChange={editGuard.onDirtyChange}
+          />
+        )}
+      </Drawer>
 
       <div className="grid-2 tiers-foot">
         {denied ? null : !mayEdit ? (
           <Card title={t('web.reseller_tier_new_title')}>
             <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
           </Card>
-        ) : editing !== undefined ? (
-          <TierForm
-            key={editing.id}
-            tier={editing}
-            onDone={() => setEditingId(null)}
-            onDirtyChange={discard.onDirtyChange}
-          />
         ) : (
           <TierForm onDone={() => undefined} onDirtyChange={discard.onDirtyChange} />
         )}
@@ -539,6 +550,7 @@ export function ResellerTiersPage({
         </Card>
       </div>
       {discard.dialog}
+      {editGuard.dialog}
     </>
   );
 }
@@ -617,6 +629,7 @@ function GrantsReadOnly({
 // ---------------------------------------------------------------------------
 
 export function GrantsEditor({
+  held,
   tier,
   options,
   names,
@@ -626,10 +639,16 @@ export function GrantsEditor({
   options: GrantOptions;
   names: ReadonlyMap<string, string>;
   onClose: () => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [state, setState] = useState<GrantsState>(() => grantsStateOf(tier.grants));
   const setKind = (kind: ResellerGrantKind, next: KindGrants) =>
     setState((current) => ({ ...current, [kind]: next }));
@@ -692,7 +711,12 @@ export function GrantsEditor({
         </Button>
       </div>
       <p className="muted small">{t('web.reseller_grants_replace_note')}</p>
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -871,6 +895,7 @@ export function tierBodyFrom(
 }
 
 function TierForm({
+  held,
   tier,
   onDone,
   onDirtyChange,
@@ -879,12 +904,18 @@ function TierForm({
   onDone: () => void;
   /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const mode = tier === undefined ? 'create' : 'edit';
   const prefix = `tier-${mode}`;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [state, setState] = useState<TierFormState>(
     tier === undefined ? BLANK_TIER : tierStateOf(tier),
   );
@@ -986,7 +1017,12 @@ function TierForm({
           {mode === 'create' ? t('web.reseller_tier_create') : t('web.rule_save')}
         </Button>
       </SaveBar>
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Card>
   );
 }

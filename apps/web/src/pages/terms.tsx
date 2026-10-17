@@ -39,11 +39,13 @@ import {
   StateSwitch,
   ToggleRow,
   useConfirmedClose,
+  usePagedRows,
   useToast,
   useUnsavedChanges,
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The terms and rules (program §6).
@@ -256,6 +258,7 @@ export function TermsPage({
   const { requestClose, dialog: discardQuestion } = useConfirmedClose(mayEdit && formDirty, close);
 
   const draft = data?.draft ?? null;
+  const { rows: historyPage, pager: historyPager } = usePagedRows(data?.history ?? []);
   const current = data?.current ?? null;
   // The draft moved under an open editor: a colleague saved, or it was published.
   const changedElsewhere =
@@ -328,7 +331,7 @@ export function TermsPage({
       <StateSwitch query={terms} denied={denied} isEmpty={false} empty={null}>
         {data !== undefined && (
           <div className="stack">
-            <Card title={t('web.terms_enforcement_title')}>
+            <Card className="bx-enf-card">
               <ToggleRow
                 title={t('web.terms_enforcement_label')}
                 description={t('web.terms_enforcement_hint')}
@@ -342,7 +345,12 @@ export function TermsPage({
               {data.enforcement.enabled && current === null && (
                 <Banner tone="warn">{t('web.terms_enforcement_nothing_published')}</Banner>
               )}
-              {toggle.error != null && <Banner tone="danger">{faultOf(toggle.error)}</Banner>}
+              {toggle.error != null && (
+                <Banner tone="danger">
+                  {faultOf(toggle.error)}
+                  <ErrorRef error={toggle.error} />
+                </Banner>
+              )}
             </Card>
 
             <div className="stat-grid">
@@ -368,81 +376,100 @@ export function TermsPage({
               />
             </div>
 
-            <Card
-              title={t('web.terms_current_title')}
-              {...(current === null ? {} : { hint: t('web.terms_current_hint') })}
-            >
-              {current === null ? (
-                <Empty
-                  title={t('web.terms_none_published')}
-                  hint={t('web.terms_none_published_hint')}
-                />
-              ) : (
-                <article className="terms-version">
-                  <p className="muted small">
-                    {t('web.terms_version')} <Num value={current.versionNumber ?? 0} /> ·{' '}
-                    {current.publishedAt === null ? '' : formatTimestamp(current.publishedAt)} ·{' '}
-                    {current.publishedBy ?? '—'}
-                  </p>
-                  <h3>{current.title}</h3>
-                  <p className="terms-body">{current.body}</p>
-                </article>
-              )}
-            </Card>
-
-            <Card
-              title={t('web.terms_draft_title')}
-              hint={t('web.terms_draft_hint')}
-              actions={
-                mayEdit && draft === null ? (
-                  <button
-                    type="button"
-                    className="btn primary sm"
-                    disabled={busy}
-                    onClick={openCreate}
-                  >
-                    <Icon name="plus" />
-                    {t('web.terms_new_draft')}
-                  </button>
-                ) : undefined
-              }
-            >
-              {draft === null ? (
-                <p className="muted">{t('web.terms_no_draft')}</p>
-              ) : (
-                <div className="stack">
-                  <p className="muted small">
-                    {t('web.terms_revision')} <Num value={draft.revision} /> ·{' '}
-                    {formatTimestamp(draft.updatedAt)} · {draft.createdBy ?? '—'}
-                  </p>
-                  <h3>{draft.title}</h3>
-                  <p className="terms-body">{draft.body}</p>
-                  <div className="form-actions">
-                    {mayEdit && (
+            {/* The text in force and the next one, side by side, each clipped to a few lines;
+                the whole text is one click away in the version view or the preview. */}
+            <div className="bx-pair">
+              <Card
+                title={t('web.terms_current_title')}
+                {...(current === null ? {} : { hint: t('web.terms_current_hint') })}
+              >
+                {current === null ? (
+                  <Empty
+                    title={t('web.terms_none_published')}
+                    hint={t('web.terms_none_published_hint')}
+                  />
+                ) : (
+                  <article className="terms-version stack-sm">
+                    <p className="muted small">
+                      {t('web.terms_version')} <Num value={current.versionNumber ?? 0} /> ·{' '}
+                      {current.publishedAt === null ? '' : formatTimestamp(current.publishedAt)} ·{' '}
+                      {current.publishedBy ?? '—'}
+                    </p>
+                    <h3>{current.title}</h3>
+                    <p className="terms-body bx-clip">{current.body}</p>
+                    <div className="form-actions">
                       <button
                         type="button"
-                        className="btn"
-                        disabled={busy}
-                        onClick={() => openEdit(draft)}
+                        className="btn ghost sm"
+                        onClick={() => setViewing(current)}
                       >
-                        <Icon name="edit" />
-                        {t('web.terms_edit_draft')}
+                        <Icon name="eye" />
+                        {t('web.terms_view')}
                       </button>
-                    )}
+                    </div>
+                  </article>
+                )}
+              </Card>
+
+              <Card
+                title={t('web.terms_draft_title')}
+                hint={t('web.terms_draft_hint')}
+                actions={
+                  mayEdit && draft === null ? (
                     <button
                       type="button"
-                      className="btn"
+                      className="btn primary sm"
                       disabled={busy}
-                      onClick={() => setPreview(draft)}
+                      onClick={openCreate}
                     >
-                      <Icon name="eye" />
-                      {t('web.terms_preview')}
+                      <Icon name="plus" />
+                      {t('web.terms_new_draft')}
                     </button>
+                  ) : undefined
+                }
+              >
+                {draft === null ? (
+                  <p className="muted">{t('web.terms_no_draft')}</p>
+                ) : (
+                  <div className="stack-sm">
+                    <p className="muted small">
+                      {t('web.terms_revision')} <Num value={draft.revision} /> ·{' '}
+                      {formatTimestamp(draft.updatedAt)} · {draft.createdBy ?? '—'}
+                    </p>
+                    <h3>{draft.title}</h3>
+                    <p className="terms-body bx-clip">{draft.body}</p>
+                    <div className="form-actions">
+                      {mayEdit && (
+                        <button
+                          type="button"
+                          className="btn primary sm"
+                          disabled={busy}
+                          onClick={() => openEdit(draft)}
+                        >
+                          <Icon name="edit" />
+                          {t('web.terms_edit_draft')}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn sm"
+                        disabled={busy}
+                        onClick={() => setPreview(draft)}
+                      >
+                        <Icon name="eye" />
+                        {t('web.terms_preview')}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
-              {publish.error != null && <Banner tone="danger">{faultOf(publish.error)}</Banner>}
-            </Card>
+                )}
+                {publish.error != null && (
+                  <Banner tone="danger">
+                    {faultOf(publish.error)}
+                    <ErrorRef error={publish.error} />
+                  </Banner>
+                )}
+              </Card>
+            </div>
 
             <Card title={t('web.terms_history_title')} hint={t('web.terms_history_hint')}>
               {queryState(terms) === 'ready' && data.history.length === 0 ? (
@@ -450,12 +477,13 @@ export function TermsPage({
               ) : (
                 <DataTable
                   columns={historyColumns}
-                  rows={data.history}
+                  rows={historyPage}
                   rowKey={(row) => row.id}
                   caption={t('web.terms_history_title')}
                   dense
                 />
               )}
+              {historyPager}
             </Card>
           </div>
         )}
@@ -508,7 +536,12 @@ export function TermsPage({
               )}
             </Banner>
           )}
-          {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
+          {save.error != null && (
+            <Banner tone="danger">
+              {faultOf(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
           <div className="form-actions">
             <button type="submit" className="btn primary" disabled={busy || textMissing}>
               {t('web.terms_save')}

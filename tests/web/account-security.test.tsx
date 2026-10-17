@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../apps/web/src/app';
 import { AccountPage } from '../../apps/web/src/pages/account';
@@ -97,16 +97,21 @@ describe('the account security section', () => {
     ]);
     renderPage(<AccountPage />);
 
-    const disable = await screen.findByRole('button', { name: t('web.totp_disable') });
+    // W3: the proof form opens in a dialog from «خاموش کردن».
+    fireEvent.click(await screen.findByRole('button', { name: t('web.totp_disable') }));
+    const dialog = screen.getByRole('dialog', { name: t('web.totp_disable_title') });
+    const disable = within(dialog).getByRole('button', { name: t('web.totp_disable') });
     expect(disable).toBeDisabled();
-    const passwords = screen.getAllByLabelText(t('web.security_password_confirm'));
-    fireEvent.change(passwords[1]!, { target: { value: 'the-owners-password' } });
+    fireEvent.change(within(dialog).getByLabelText(t('web.security_password_confirm')), {
+      target: { value: 'the-owners-password' },
+    });
     expect(disable).toBeDisabled();
 
     // Switch to a backup code in place of the device.
-    const toggles = screen.getAllByRole('button', { name: t('web.second_factor_use_backup') });
-    fireEvent.click(toggles[1]!);
-    fireEvent.change(screen.getAllByLabelText(t('web.second_factor_backup_label'))[0]!, {
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: t('web.second_factor_use_backup') }),
+    );
+    fireEvent.change(within(dialog).getByLabelText(t('web.second_factor_backup_label')), {
       target: { value: 'ABCD-EFGH-JKMN-PQ00' },
     });
     expect(disable).not.toBeDisabled();
@@ -115,8 +120,9 @@ describe('the account security section', () => {
     // A confirmation, and nothing sent until it is answered.
     expect(await screen.findByText(t('web.totp_disable_question'))).toBeInTheDocument();
     expect(api.calls.some((call) => call.url.includes('/totp/disable'))).toBe(false);
-    const confirmButtons = screen.getAllByRole('button', { name: t('web.totp_disable') });
-    fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: t('web.totp_disable') }),
+    );
 
     await waitFor(() => {
       const call = api.calls.find((one) => one.url.includes('/totp/disable'));
@@ -343,5 +349,32 @@ describe('the history shows the holder their own user agent (Codex 4172894358)',
     ]);
     renderPage(<AccountPage />);
     expect(await screen.findByText('Distinctive-Agent/9.9')).toBeInTheDocument();
+  });
+
+  it('regenerates backup codes from a dialog, sending the password and the code', async () => {
+    const codes = Array.from({ length: 10 }, (_, i) => `CODE-${String(i).padStart(4, '0')}`);
+    const api = stubApi([
+      ...baseRoutes('ACTIVE', 2),
+      { url: '/auth/security/backup-codes/regenerate', body: { backupCodes: codes } },
+    ]);
+    renderPage(<AccountPage />);
+    // W3: no proof form on the page until asked for.
+    expect(screen.queryByLabelText(t('web.second_factor_code_label'))).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: t('web.backup_codes_regenerate') }));
+    const dialog = screen.getByRole('dialog', { name: t('web.backup_codes_regenerate_title') });
+    const submit = within(dialog).getByRole('button', { name: t('web.backup_codes_regenerate') });
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(t('web.security_password_confirm')), {
+      target: { value: 'the-owners-password' },
+    });
+    fireEvent.change(within(dialog).getByLabelText(t('web.second_factor_code_label')), {
+      target: { value: '123 456' },
+    });
+    fireEvent.click(submit);
+    await waitFor(() => {
+      const call = api.calls.find((one) => one.url.includes('/backup-codes/regenerate'));
+      expect(call?.body).toEqual({ password: 'the-owners-password', code: '123456' });
+    });
+    expect(await screen.findByText('CODE-0000')).toBeInTheDocument();
   });
 });

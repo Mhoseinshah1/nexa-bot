@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   DIRECT_MESSAGE_CAPTION_MAX_LENGTH,
   DIRECT_MESSAGE_ERROR_CODES,
@@ -14,6 +15,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { readReplyFile, type PickedReplyFile } from './tickets';
+import { FilePicker } from '../ui/file-picker';
 import {
   Badge,
   Banner,
@@ -32,6 +34,7 @@ import {
   useUnsavedChanges,
   type Tone,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /*
  * Phase A2 — «ارسال پیام» from Customer 360 (`docs/direct-message-audit.md`).
@@ -120,6 +123,8 @@ export function DirectMessageComposeModal({
   const selection = useRef(0);
   // Re-keys the file input, so a cleared or discarded file is not still shown as chosen.
   const [fileInput, setFileInput] = useState(0);
+  // The file the picker shows (W1.2): its name and size, with «تغییر» and «حذف».
+  const [chosen, setChosen] = useState<File | null>(null);
 
   const hasFile = picked.kind === 'READY';
   const max = hasFile ? DIRECT_MESSAGE_CAPTION_MAX_LENGTH : DIRECT_MESSAGE_TEXT_MAX_LENGTH;
@@ -133,6 +138,7 @@ export function DirectMessageComposeModal({
   const clearFile = () => {
     selection.current += 1;
     setPicked({ kind: 'NONE' });
+    setChosen(null);
     setFileInput((value) => value + 1);
   };
 
@@ -187,6 +193,7 @@ export function DirectMessageComposeModal({
     selection.current += 1;
     const pick = selection.current;
     // The previous pick is gone the moment a new one is made, ready or not.
+    setChosen(file ?? null);
     if (file === undefined) {
       setPicked({ kind: 'NONE' });
       return;
@@ -274,21 +281,19 @@ export function DirectMessageComposeModal({
               htmlFor="dm-file"
               {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
             >
-              <input
+              <FilePicker
                 key={fileInput}
                 id="dm-file"
-                type="file"
+                kind="any"
+                extensions={['.jpg', '.png', '.pdf', '.txt']}
                 accept="image/jpeg,image/png,application/pdf,text/plain,.jpg,.jpeg,.png,.pdf,.txt"
-                onChange={(event) => choose(event.target.files?.[0])}
+                selected={chosen}
+                onFiles={(files) => choose(files[0])}
+                onClear={clearFile}
               />
             </Field>
             {picked.kind === 'READING' && (
               <span className="muted small">{t('web.dm_file_reading')}</span>
-            )}
-            {picked.kind !== 'NONE' && (
-              <Button size="sm" variant="ghost" onClick={clearFile}>
-                {t('web.ticket_reply_file_clear')}
-              </Button>
             )}
           </div>
         ) : (
@@ -312,7 +317,12 @@ export function DirectMessageComposeModal({
               <p className="strong">{t('web.dm_preview_heading')}</p>
               {text.trim() !== '' && <p className="dm-text">{text.trim()}</p>}
             </div>
-            {send.error !== null && <Banner tone="danger">{directMessageFault(send.error)}</Banner>}
+            {send.error !== null && (
+              <Banner tone="danger">
+                {directMessageFault(send.error)}
+                <ErrorRef error={send.error} />
+              </Banner>
+            )}
           </div>
         )}
       </Modal>
@@ -338,18 +348,20 @@ export function DirectMessagesCard({
 }) {
   const [cursors, setCursors] = useState<readonly { at: string; id: string }[]>([]);
   const cursor = cursors.at(-1);
-  const history = useQuery({
-    queryKey: ['customer-direct-messages', customerId, cursor ?? null],
-    queryFn: () => fetchDirectMessages(customerId, cursor),
-    enabled: mayView,
-    // While something is still on its way, look again; a settled page is left alone.
-    refetchInterval: (query) =>
-      (query.state.data?.messages ?? []).some(
-        (one) => one.delivery === 'QUEUED' || one.delivery === 'SENDING',
-      )
-        ? 15_000
-        : false,
-  });
+  const history = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['customer-direct-messages', customerId, cursor ?? null],
+      queryFn: () => fetchDirectMessages(customerId, cursor),
+      enabled: mayView,
+      // While something is still on its way, look again; a settled page is left alone.
+      refetchInterval: (query) =>
+        (query.state.data?.messages ?? []).some(
+          (one) => one.delivery === 'QUEUED' || one.delivery === 'SENDING',
+        )
+          ? 15_000
+          : false,
+    }),
+  );
 
   const actions = maySend ? (
     <Button size="sm" icon="plus" onClick={onCompose}>

@@ -41,9 +41,9 @@ const HEALTH_ROWS: readonly Json[] = PANELS.map((panel) => {
  * rather than as an error card. Each is the plainest TRUE state of its screen (no
  * enrolment yet, no balancing decision, no published terms), not an invented story.
  *
- * Still uncovered, stated rather than hidden: Customer 360's overview, financial summary,
- * messages, tags, notes and timeline; an incident's detail; the QR preview POST; the
- * support-AI and business-chat screens; and the legacy (Mirza) pages, which are on HOLD.
+ * The rest — Customer 360's overview and financial summary, an incident's detail, the QR
+ * and audience previews, the support-AI and business-chat screens and the legacy (Mirza)
+ * pages — is in `coverage-b.ts`; `pnpm web:sweep` fails on any request still unfixtured.
  */
 export const COVERAGE: readonly ShotFixture[] = [
   // /account: an administrator with no second factor yet, and no sign-in history to show.

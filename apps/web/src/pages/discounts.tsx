@@ -1,5 +1,10 @@
 import { useState, type ReactNode } from 'react';
+import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
+import { Drawer } from '../ui/overlays';
+import { DateField } from '../ui/date-field';
+import { chipFilter } from './money-filters';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   CASHBACK_PERCENT_MAX,
   CASHBACK_PERCENT_MIN,
@@ -46,12 +51,13 @@ import {
   type DiscountWriteInput,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -71,8 +77,6 @@ import {
   ButtonGroup,
   Button,
   CellMain,
-  ChipDivider,
-  FilterChip,
   useToast,
   useDiscardGuard,
   useReportDirty,
@@ -82,7 +86,8 @@ import {
   PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { CheckField, ChipGroup, FormSection, SaveBar, revealField } from './editor-layout';
+import { CheckField, FormSection, SaveBar } from './editor-layout';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Discounts, cashback rules and the price preview (WP8).
@@ -340,29 +345,19 @@ function StatusBadge({ value }: { value: DiscountStatus }) {
   );
 }
 
-/** The two filter chips a rule list offers for its status, as one labelled set. */
-function StatusChips({
-  value,
-  onChange,
-}: {
-  value: StatusFilter;
-  onChange: (next: StatusFilter) => void;
-}) {
-  return (
-    <ChipGroup label={t('web.status')}>
-      {(
-        [
-          ['ALL', 'web.rule_status_all'],
-          ['ACTIVE', 'web.rule_status_active'],
-          ['INACTIVE', 'web.rule_status_inactive'],
-        ] as const
-      ).map(([id, label]) => (
-        <FilterChip key={id} pressed={value === id} onClick={() => onChange(id)}>
-          {t(label)}
-        </FilterChip>
-      ))}
-    </ChipGroup>
-  );
+/** A rule list's status filter (W1.3), for its `ListFilterBar`. */
+function statusFilter(value: StatusFilter, onChange: (next: StatusFilter) => void): ListFilter {
+  return chipFilter({
+    key: 'status',
+    label: t('web.status'),
+    value: value === 'ALL' ? null : value,
+    allLabel: t('web.rule_status_all'),
+    onChange: (next) => onChange(next ?? 'ALL'),
+    items: [
+      { id: 'ACTIVE', label: t('web.rule_status_active') },
+      { id: 'INACTIVE', label: t('web.rule_status_inactive') },
+    ],
+  });
 }
 
 /** Edit, and the activate/deactivate command, for one rule row. */
@@ -446,22 +441,34 @@ function DiscountRules({
   const signature = `${kind}|${status}`;
   const trail = useTrail(signature);
 
-  const discounts = useQuery({
-    queryKey: ['discounts', signature, trail.cursor ?? null],
-    queryFn: () =>
-      fetchDiscounts({
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(kind === 'ALL' ? {} : { kind }),
-        ...(status === 'ALL' ? {} : { status }),
-      }),
-    enabled: !denied,
-  });
+  const discounts = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['discounts', signature, trail.cursor ?? null],
+      queryFn: () =>
+        fetchDiscounts({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(kind === 'ALL' ? {} : { kind }),
+          ...(status === 'ALL' ? {} : { status }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = discounts.data?.discounts ?? [];
   const nextCursor = discounts.data?.nextCursor ?? null;
   const filtered = kind !== 'ALL' || status !== 'ALL';
 
   /** The rule whose edit form is open, as the server last described it. */
   const [editing, setEditing] = useState<DiscountSummaryResponse | null>(null);
+  /** W3: whether the create/edit drawer is open. */
+  const [open, setOpen] = useState(false);
+  /*
+   * The drawer's submission keys, held while the drawer mounts and unmounts — one per form.
+   * A shared key would be settled by an edit that succeeded, and a create retried after a
+   * 5xx would then go out under a fresh key: a second rule.
+   */
+  const createKey = useSubmissionKey();
+  const editKey = useSubmissionKey();
   /** Opening another rule, or the create form, drops the open form's draft: asked first. */
   const discard = useDiscardGuard();
 
@@ -619,12 +626,11 @@ function DiscountRules({
             status={row.status}
             busy={transition.isPending}
             onEdit={() => {
-              if (editing?.id === row.id) revealField('discount-edit-label');
-              else
-                discard.confirmDiscard(() => {
-                  setEditing(row);
-                  revealField('discount-edit-label');
-                });
+              if (open && editing?.id === row.id) return;
+              discard.confirmDiscard(() => {
+                setEditing(row);
+                setOpen(true);
+              });
             }}
             onTransition={() =>
               transition.mutate({
@@ -650,12 +656,11 @@ function DiscountRules({
                   size="sm"
                   icon="plus"
                   onClick={() => {
-                    if (editing === null) revealField('discount-create-kind');
-                    else
-                      discard.confirmDiscard(() => {
-                        setEditing(null);
-                        revealField('discount-create-kind');
-                      });
+                    if (open && editing === null) return;
+                    discard.confirmDiscard(() => {
+                      setEditing(null);
+                      setOpen(true);
+                    });
                   }}
                 >
                   {t('web.cb_add')}
@@ -666,22 +671,24 @@ function DiscountRules({
       >
         {/* Hidden while the list cannot answer: a filter mints a request the server has
             just refused. */}
-        <div className="filter-row" hidden={!mayRequest(discounts, denied)}>
-          <ChipGroup label={t('web.discount_kind')}>
-            {(
-              [
-                ['ALL', 'web.discount_kind_all'],
-                ['CODE', 'web.discount_kind_code'],
-                ['AUTOMATIC', 'web.discount_kind_automatic'],
-              ] as const
-            ).map(([id, label]) => (
-              <FilterChip key={id} pressed={kind === id} onClick={() => setKind(id)}>
-                {t(label)}
-              </FilterChip>
-            ))}
-          </ChipGroup>
-          <ChipDivider />
-          <StatusChips value={status} onChange={setStatus} />
+        <div hidden={!mayRequest(discounts, denied)}>
+          <ListFilterBar
+            label={t('web.discounts_rules_title')}
+            filters={[
+              chipFilter({
+                key: 'kind',
+                label: t('web.discount_kind'),
+                value: kind === 'ALL' ? null : kind,
+                allLabel: t('web.discount_kind_all'),
+                onChange: (next) => setKind(next ?? 'ALL'),
+                items: [
+                  { id: 'CODE', label: t('web.discount_kind_code') },
+                  { id: 'AUTOMATIC', label: t('web.discount_kind_automatic') },
+                ],
+              }),
+              statusFilter(status, setStatus),
+            ]}
+          />
         </div>
 
         <StateSwitch
@@ -690,7 +697,7 @@ function DiscountRules({
           isEmpty={rows.length === 0 && trail.depth === 0}
           empty={
             filtered ? (
-              <Empty title={t('web.discounts_filter_empty')} icon="inbox" />
+              <Empty title={t('web.discounts_filter_none')} icon="inbox" />
             ) : (
               <Empty
                 title={t('web.discounts_empty')}
@@ -714,35 +721,61 @@ function DiscountRules({
             onPrevious={trail.pop}
             onNext={() => nextCursor !== null && trail.push(nextCursor)}
             // `GET /discounts` pages an ASCENDING keyset, so the next page is NEWER.
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         </StateSwitch>
 
-        {transition.error !== null && <Banner tone="danger">{messageFor(transition.error)}</Banner>}
+        {transition.error !== null && (
+          <Banner tone="danger">
+            {messageFor(transition.error)}
+            <ErrorRef error={transition.error} />
+          </Banner>
+        )}
       </Card>
 
-      {!mayEdit ? (
+      {!mayEdit && (
         <Card title={t('web.discount_new_title')}>
           <Banner tone="info">{t('web.discount_edit_denied')}</Banner>
         </Card>
-      ) : editing !== null ? (
-        // KEYED BY THE RULE: every `useState` initialiser must read the rule now open,
-        // not the one open before it.
-        <DiscountForm
-          key={editing.id}
-          rule={editing}
-          options={options}
-          onDone={() => setEditing(null)}
-          onDirtyChange={discard.onDirtyChange}
-        />
-      ) : (
-        <DiscountForm
-          options={options}
-          onDone={() => undefined}
-          onDirtyChange={discard.onDirtyChange}
-        />
       )}
+      {/*
+        W3: "Add" and a row's "Edit" open the form in a wide drawer — the same fields,
+        rules, inline problems and save bar. Closing it over a typed draft asks first; a
+        save closes it.
+      */}
+      <Drawer
+        open={mayEdit && open}
+        onClose={() =>
+          discard.confirmDiscard(() => {
+            setOpen(false);
+            setEditing(null);
+          })
+        }
+        title={t(editing === null ? 'web.discount_new_title' : 'web.discount_edit_title')}
+        wide
+      >
+        {editing !== null ? (
+          // KEYED BY THE RULE: every `useState` initialiser must read the rule now open,
+          // not the one open before it.
+          <DiscountForm
+            held={editKey}
+            key={editing.id}
+            rule={editing}
+            options={options}
+            onDone={() => {
+              setEditing(null);
+              setOpen(false);
+            }}
+            onDirtyChange={discard.onDirtyChange}
+          />
+        ) : (
+          <DiscountForm
+            held={createKey}
+            options={options}
+            onDone={() => setOpen(false)}
+            onDirtyChange={discard.onDirtyChange}
+          />
+        )}
+      </Drawer>
       {discard.dialog}
     </>
   );
@@ -787,7 +820,7 @@ interface ScopeState {
 }
 
 /**
- * An ISO instant as the value of a `datetime-local` input, in the browser's zone.
+ * An ISO instant as the value of a date-time field (`YYYY-MM-DDTHH:MM`), in the browser's zone.
  *
  * The input has no zone of its own, and the field's hint says whose clock it is.
  */
@@ -1046,19 +1079,19 @@ function WindowFields({
         hint={t('web.rule_window_hint')}
         htmlFor={`${prefix}-starts`}
       >
-        <input
+        <DateField
           id={`${prefix}-starts`}
-          type="datetime-local"
+          mode="datetime"
           value={state.startsAt}
-          onChange={(event) => set('startsAt', event.target.value)}
+          onChange={(next) => set('startsAt', next)}
         />
       </Field>
       <Field label={t('web.rule_ends_at')} htmlFor={`${prefix}-ends`}>
-        <input
+        <DateField
           id={`${prefix}-ends`}
-          type="datetime-local"
+          mode="datetime"
           value={state.endsAt}
-          onChange={(event) => set('endsAt', event.target.value)}
+          onChange={(next) => set('endsAt', next)}
         />
       </Field>
     </>
@@ -1232,6 +1265,7 @@ export function discountBodyFrom(
 }
 
 function DiscountForm({
+  held,
   rule,
   options,
   onDone,
@@ -1243,12 +1277,18 @@ function DiscountForm({
   onDone: () => void;
   /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `discount-${mode}`;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [state, setState] = useState<DiscountFormState>(
     rule === undefined ? BLANK_DISCOUNT : discountStateOf(rule),
   );
@@ -1297,7 +1337,6 @@ function DiscountForm({
   return (
     <Card
       className="cb-editor-card"
-      title={mode === 'create' ? t('web.discount_new_title') : t('web.discount_edit_title')}
       tight
       foot={
         <SaveBar dirty={dirty}>
@@ -1562,7 +1601,12 @@ function DiscountForm({
       {(problem !== null || save.error !== null) && (
         <div className="cb-form-error stack-sm">
           {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-          {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          {save.error !== null && (
+            <Banner tone="danger">
+              {messageFor(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
         </div>
       )}
     </Card>
@@ -1589,19 +1633,31 @@ function CashbackRules({
   const [status, setStatus] = useState<StatusFilter>('ALL');
   const trail = useTrail(status);
 
-  const rules = useQuery({
-    queryKey: ['cashback-rules', status, trail.cursor ?? null],
-    queryFn: () =>
-      fetchCashbackRules({
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(status === 'ALL' ? {} : { status }),
-      }),
-    enabled: !denied,
-  });
+  const rules = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['cashback-rules', status, trail.cursor ?? null],
+      queryFn: () =>
+        fetchCashbackRules({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(status === 'ALL' ? {} : { status }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = rules.data?.rules ?? [];
   const nextCursor = rules.data?.nextCursor ?? null;
 
   const [editing, setEditing] = useState<CashbackRuleSummaryResponse | null>(null);
+  /** W3: whether the create/edit drawer is open. */
+  const [open, setOpen] = useState(false);
+  /*
+   * The drawer's submission keys, held while the drawer mounts and unmounts — one per form.
+   * A shared key would be settled by an edit that succeeded, and a create retried after a
+   * 5xx would then go out under a fresh key: a second rule.
+   */
+  const createKey = useSubmissionKey();
+  const editKey = useSubmissionKey();
   /** Opening another rule, or the create form, drops the open form's draft: asked first. */
   const discard = useDiscardGuard();
 
@@ -1665,12 +1721,11 @@ function CashbackRules({
             status={row.status}
             busy={transition.isPending}
             onEdit={() => {
-              if (editing?.id === row.id) revealField('cashback-edit-label');
-              else
-                discard.confirmDiscard(() => {
-                  setEditing(row);
-                  revealField('cashback-edit-label');
-                });
+              if (open && editing?.id === row.id) return;
+              discard.confirmDiscard(() => {
+                setEditing(row);
+                setOpen(true);
+              });
             }}
             onTransition={() =>
               transition.mutate({
@@ -1696,12 +1751,11 @@ function CashbackRules({
                   size="sm"
                   icon="plus"
                   onClick={() => {
-                    if (editing === null) revealField('cashback-create-label');
-                    else
-                      discard.confirmDiscard(() => {
-                        setEditing(null);
-                        revealField('cashback-create-label');
-                      });
+                    if (open && editing === null) return;
+                    discard.confirmDiscard(() => {
+                      setEditing(null);
+                      setOpen(true);
+                    });
                   }}
                 >
                   {t('web.cb_add')}
@@ -1710,8 +1764,11 @@ function CashbackRules({
             }
           : {})}
       >
-        <div className="filter-row" hidden={!mayRequest(rules, denied)}>
-          <StatusChips value={status} onChange={setStatus} />
+        <div hidden={!mayRequest(rules, denied)}>
+          <ListFilterBar
+            label={t('web.cashback_rules_title')}
+            filters={[statusFilter(status, setStatus)]}
+          />
         </div>
 
         <StateSwitch
@@ -1720,7 +1777,7 @@ function CashbackRules({
           isEmpty={rows.length === 0 && trail.depth === 0}
           empty={
             status !== 'ALL' ? (
-              <Empty title={t('web.discounts_filter_empty')} icon="inbox" />
+              <Empty title={t('web.discounts_filter_none')} icon="inbox" />
             ) : (
               <Empty title={t('web.cashback_empty')} icon="discounts" />
             )
@@ -1739,33 +1796,61 @@ function CashbackRules({
             hasNext={nextCursor !== null}
             onPrevious={trail.pop}
             onNext={() => nextCursor !== null && trail.push(nextCursor)}
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         </StateSwitch>
 
-        {transition.error !== null && <Banner tone="danger">{messageFor(transition.error)}</Banner>}
+        {transition.error !== null && (
+          <Banner tone="danger">
+            {messageFor(transition.error)}
+            <ErrorRef error={transition.error} />
+          </Banner>
+        )}
       </Card>
 
-      {!mayEdit ? (
+      {!mayEdit && (
         <Card title={t('web.cashback_new_title')}>
           <Banner tone="info">{t('web.cashback_edit_denied')}</Banner>
         </Card>
-      ) : editing !== null ? (
-        <CashbackForm
-          key={editing.id}
-          rule={editing}
-          options={options}
-          onDone={() => setEditing(null)}
-          onDirtyChange={discard.onDirtyChange}
-        />
-      ) : (
-        <CashbackForm
-          options={options}
-          onDone={() => undefined}
-          onDirtyChange={discard.onDirtyChange}
-        />
       )}
+      {/*
+        W3: "Add" and a row's "Edit" open the form in a wide drawer — the same fields,
+        rules, inline problems and save bar. Closing it over a typed draft asks first; a
+        save closes it.
+      */}
+      <Drawer
+        open={mayEdit && open}
+        onClose={() =>
+          discard.confirmDiscard(() => {
+            setOpen(false);
+            setEditing(null);
+          })
+        }
+        title={t(editing === null ? 'web.cashback_new_title' : 'web.cashback_edit_title')}
+        wide
+      >
+        {editing !== null ? (
+          // KEYED BY THE RULE: every `useState` initialiser must read the rule now open,
+          // not the one open before it.
+          <CashbackForm
+            held={editKey}
+            key={editing.id}
+            rule={editing}
+            options={options}
+            onDone={() => {
+              setEditing(null);
+              setOpen(false);
+            }}
+            onDirtyChange={discard.onDirtyChange}
+          />
+        ) : (
+          <CashbackForm
+            held={createKey}
+            options={options}
+            onDone={() => setOpen(false)}
+            onDirtyChange={discard.onDirtyChange}
+          />
+        )}
+      </Drawer>
       {discard.dialog}
     </>
   );
@@ -1795,6 +1880,7 @@ export function cashbackBodyFrom(
 }
 
 function CashbackForm({
+  held,
   rule,
   options,
   onDone,
@@ -1805,12 +1891,18 @@ function CashbackForm({
   onDone: () => void;
   /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `cashback-${mode}`;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const loaded: CashbackFormState =
     rule === undefined
       ? BLANK_CASHBACK
@@ -1847,7 +1939,6 @@ function CashbackForm({
   return (
     <Card
       className="cb-editor-card"
-      title={mode === 'create' ? t('web.cashback_new_title') : t('web.cashback_edit_title')}
       tight
       foot={
         <SaveBar dirty={dirty}>
@@ -1919,7 +2010,12 @@ function CashbackForm({
       {(problem !== null || save.error !== null) && (
         <div className="cb-form-error stack-sm">
           {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-          {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          {save.error !== null && (
+            <Banner tone="danger">
+              {messageFor(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
         </div>
       )}
     </Card>

@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { FormDialog } from './form-dialog';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TOTP_PARAMETERS,
@@ -37,6 +38,7 @@ import {
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { useUnsavedChanges } from '../ui/unsaved';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The signed-in administrator's own account (Phase D2, program §17).
@@ -216,7 +218,12 @@ function EnrolForm({ onEnrolled }: { onEnrolled: (enrolment: TotpEnrolResponse) 
           {t('web.totp_enrol_start')}
         </button>
       </div>
-      {enrol.isError && <Banner tone="danger">{securityMessage(enrol.error)}</Banner>}
+      {enrol.isError && (
+        <Banner tone="danger">
+          {securityMessage(enrol.error)}
+          <ErrorRef error={enrol.error} />
+        </Banner>
+      )}
     </form>
   );
 }
@@ -306,7 +313,12 @@ function ActivateForm({
           {t('web.account_cancel')}
         </button>
       </div>
-      {activate.isError && <Banner tone="danger">{securityMessage(activate.error)}</Banner>}
+      {activate.isError && (
+        <Banner tone="danger">
+          {securityMessage(activate.error)}
+          <ErrorRef error={activate.error} />
+        </Banner>
+      )}
     </form>
   );
 }
@@ -442,11 +454,16 @@ function ActiveFactor({
   const regenerateForm = useProofForm();
   const disableForm = useProofForm();
   const [confirming, setConfirming] = useState(false);
+  // W3: both proof forms open in a dialog from a button.
+  const [open, setOpen] = useState<'regenerate' | 'disable' | null>(null);
 
   const regenerate = useMutation({
     retry: false,
     mutationFn: () => regenerateBackupCodes(regenerateForm.input()),
-    onSuccess: (result) => onCodes(result.backupCodes),
+    onSuccess: (result) => {
+      setOpen(null);
+      onCodes(result.backupCodes);
+    },
     onSettled: () => regenerateForm.clear(),
   });
   const disable = useMutation({
@@ -454,6 +471,7 @@ function ActiveFactor({
     mutationFn: () => disableTotp(disableForm.input()),
     onSuccess: () => {
       notify({ tone: 'ok', message: t('web.totp_disabled_done') });
+      setOpen(null);
       onDisabled();
     },
     onSettled: () => disableForm.clear(),
@@ -469,40 +487,74 @@ function ActiveFactor({
       />
       {remaining <= 3 && <Banner tone="warn">{t('web.backup_codes_low')}</Banner>}
 
-      <form
-        className="stack"
-        autoComplete="off"
-        onSubmit={(event) => {
-          event.preventDefault();
-          regenerate.mutate();
+      <div className="btn-group">
+        <button type="button" className="btn" onClick={() => setOpen('regenerate')}>
+          <Icon name="refresh" />
+          {t('web.backup_codes_regenerate')}
+        </button>
+        <button type="button" className="btn danger" onClick={() => setOpen('disable')}>
+          {t('web.totp_disable')}
+        </button>
+      </div>
+
+      <FormDialog
+        open={open === 'regenerate'}
+        title={t('web.backup_codes_regenerate_title')}
+        dirty={regenerateForm.password !== '' || regenerateForm.proof !== ''}
+        onClose={() => {
+          setOpen(null);
+          regenerateForm.clear();
+          regenerate.reset();
         }}
       >
-        <h3 className="card-subtitle">{t('web.backup_codes_regenerate_title')}</h3>
-        <p className="muted small">{t('web.backup_codes_regenerate_hint')}</p>
-        <ProofFields
-          idPrefix="regenerate"
-          password={regenerateForm.password}
-          onPassword={regenerateForm.setPassword}
-          proof={regenerateForm.proof}
-          onProof={regenerateForm.setProof}
-          useBackup={regenerateForm.useBackup}
-          onToggle={regenerateForm.toggle}
-        />
-        <div className="btn-group">
-          <button
-            type="submit"
-            className="btn"
-            disabled={!regenerateForm.ready || regenerate.isPending}
-          >
-            <Icon name="refresh" />
-            {t('web.backup_codes_regenerate')}
-          </button>
-        </div>
-        {regenerate.isError && <Banner tone="danger">{securityMessage(regenerate.error)}</Banner>}
-      </form>
+        <form
+          className="stack"
+          autoComplete="off"
+          onSubmit={(event) => {
+            event.preventDefault();
+            regenerate.mutate();
+          }}
+        >
+          <p className="muted small">{t('web.backup_codes_regenerate_hint')}</p>
+          <ProofFields
+            idPrefix="regenerate"
+            password={regenerateForm.password}
+            onPassword={regenerateForm.setPassword}
+            proof={regenerateForm.proof}
+            onProof={regenerateForm.setProof}
+            useBackup={regenerateForm.useBackup}
+            onToggle={regenerateForm.toggle}
+          />
+          <div className="btn-group">
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={!regenerateForm.ready || regenerate.isPending}
+            >
+              <Icon name="refresh" />
+              {t('web.backup_codes_regenerate')}
+            </button>
+          </div>
+          {regenerate.isError && (
+            <Banner tone="danger">
+              {securityMessage(regenerate.error)}
+              <ErrorRef error={regenerate.error} />
+            </Banner>
+          )}
+        </form>
+      </FormDialog>
 
-      <div className="inset danger-zone stack">
-        <h3 className="card-subtitle">{t('web.totp_disable_title')}</h3>
+      <FormDialog
+        open={open === 'disable'}
+        title={t('web.totp_disable_title')}
+        danger
+        dirty={disableForm.password !== '' || disableForm.proof !== ''}
+        onClose={() => {
+          setOpen(null);
+          disableForm.clear();
+          disable.reset();
+        }}
+      >
         <p className="muted small">{t('web.totp_disable_hint')}</p>
         <form
           className="stack"
@@ -530,9 +582,14 @@ function ActiveFactor({
               {t('web.totp_disable')}
             </button>
           </div>
-          {disable.isError && <Banner tone="danger">{securityMessage(disable.error)}</Banner>}
+          {disable.isError && (
+            <Banner tone="danger">
+              {securityMessage(disable.error)}
+              <ErrorRef error={disable.error} />
+            </Banner>
+          )}
         </form>
-      </div>
+      </FormDialog>
       {confirming && (
         <ConfirmDialog
           title={t('web.totp_disable_title')}
@@ -611,7 +668,12 @@ function PasswordCard() {
             {t('web.password_change')}
           </button>
         </div>
-        {change.isError && <Banner tone="danger">{securityMessage(change.error)}</Banner>}
+        {change.isError && (
+          <Banner tone="danger">
+            {securityMessage(change.error)}
+            <ErrorRef error={change.error} />
+          </Banner>
+        )}
       </form>
     </Card>
   );
@@ -702,7 +764,10 @@ function SessionsCard() {
         </ul>
       </StateSwitch>
       {(revokeOne.isError || revokeOthers.isError) && (
-        <Banner tone="danger">{securityMessage(revokeOne.error ?? revokeOthers.error)}</Banner>
+        <Banner tone="danger">
+          {securityMessage(revokeOne.error ?? revokeOthers.error)}
+          <ErrorRef error={revokeOne.error ?? revokeOthers.error} />
+        </Banner>
       )}
       {confirmOthers && (
         <ConfirmDialog

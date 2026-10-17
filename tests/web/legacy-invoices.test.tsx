@@ -4,6 +4,7 @@ import { LegacyInvoicesPage, NO_FILTERS, queryOf } from '../../apps/web/src/page
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Mirza PR3 — the legacy invoice archive page. Fixtures go through the real API client and
@@ -171,18 +172,21 @@ describe('the legacy invoice archive page', () => {
   it('sends every filter, and pages with the opaque cursor', async () => {
     const api = page();
     await screen.findByText('svc_archive');
+    // W1.3: the invoice id is the search; every other filter is in the «فیلترها» panel.
     const type = (label: Parameters<typeof t>[0], value: string) =>
-      fireEvent.change(screen.getByLabelText(t(label)), { target: { value } });
-    type('web.lia_filter_invoice', 'ab00');
+      fireEvent.change(within(openFilterPanel()).getByLabelText(t(label)), { target: { value } });
+    fireEvent.change(screen.getByLabelText(t('web.lia_filter_invoice')), {
+      target: { value: 'ab00' },
+    });
     type('web.lia_filter_owner', '100000001');
     type('web.lia_filter_username', 'svc');
     type('web.lia_filter_status', 'end_of_time');
     type('web.lia_filter_panel', 'rp1');
     type('web.lia_filter_product', 'p1');
-    fireEvent.change(screen.getByLabelText(t('web.lia_col_class')), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lia_col_class')), {
       target: { value: 'ORPHAN_OWNER' },
     });
-    fireEvent.change(screen.getByLabelText(t('web.lia_filter_test')), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lia_filter_test')), {
       target: { value: 'true' },
     });
     await waitFor(() =>
@@ -190,12 +194,32 @@ describe('the legacy invoice archive page', () => {
         calls(
           api,
           'GET',
-          'invoiceId=ab00&legacyUserId=100000001&username=svc&status=end_of_time&panelCode=rp1&productCode=p1&classification=ORPHAN_OWNER&test=true',
+          'invoiceId=ab00&legacyUserId=100000001&username=svc&status=end_of_time&panelCode=rp1&productCode=p1&classification=ORPHAN_OWNER&test=true&limit=10',
         ),
       ).toHaveLength(1),
     );
-    fireEvent.click(await screen.findByRole('button', { name: t('web.older') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(calls(api, 'GET', 'after=kYWIwMDAwMDE')).toHaveLength(1));
+  });
+
+  it('«پاک کردن همه» clears every filter, not only the last one (PR #285 review)', async () => {
+    const api = page();
+    await screen.findByText('svc_archive');
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lia_filter_status')), {
+      target: { value: 'end_of_time' },
+    });
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lia_filter_panel')), {
+      target: { value: 'rp1' },
+    });
+    await waitFor(() =>
+      expect(calls(api, 'GET', 'status=end_of_time&panelCode=rp1&limit=10')).toHaveLength(1),
+    );
+    fireEvent.click(screen.getAllByRole('button', { name: t('web.filters_clear_all') })[0]!);
+    await waitFor(() => {
+      const last = api.calls.filter((call) => call.method === 'GET').at(-1)!;
+      expect(last.url).not.toContain('status=');
+      expect(last.url).not.toContain('panelCode=');
+    });
   });
 
   it('sends a verbatim invoice id with its spaces, never trimmed', async () => {
@@ -212,9 +236,10 @@ describe('the legacy invoice archive page', () => {
     expect(await screen.findByText(t('web.lia_pii_banner'))).toBeInTheDocument();
     expect(screen.queryByText('svc_archive')).toBeNull();
     expect((await screen.findAllByText(t('web.lia_hidden'))).length).toBeGreaterThan(0);
-    expect(screen.getByLabelText(t('web.lia_filter_owner'))).toBeDisabled();
-    expect(screen.getByLabelText(t('web.lia_filter_username'))).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(t('web.lia_filter_status')), {
+    const panel = openFilterPanel();
+    expect(within(panel).getByLabelText(t('web.lia_filter_owner'))).toBeDisabled();
+    expect(within(panel).getByLabelText(t('web.lia_filter_username'))).toBeDisabled();
+    fireEvent.change(within(panel).getByLabelText(t('web.lia_filter_status')), {
       target: { value: 'active' },
     });
     await waitFor(() => expect(calls(api, 'GET', 'status=active')).toHaveLength(1));

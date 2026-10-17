@@ -42,6 +42,8 @@ import {
 } from '../ui/kit';
 import { messageFor } from './settings';
 import { pollUnlessFinal } from '../polling';
+import { fieldText } from '../error-text';
+import { TechnicalDetails } from '../ui/technical-details';
 
 /**
  * Advanced provider settings (WP-A8), as an operator reads them.
@@ -93,8 +95,8 @@ const REGISTRY_ROW_HINTS: Readonly<Record<CapabilityRegistryRow, WebKey>> = {
 const GAP_LABELS: Readonly<Record<CapabilityGap, WebKey>> = {
   NOT_DECLARED: 'web.cap_gap_not_declared',
   NOT_IMPLEMENTED: 'web.cap_gap_not_implemented',
-  NOT_SUPPORTED: 'web.cap_gap_not_supported',
-  NOT_IN_RELEASE: 'web.cap_gap_not_in_release',
+  NOT_SUPPORTED: 'web.cap_gap_unsupported',
+  NOT_IN_RELEASE: 'web.cap_gap_unavailable',
 };
 
 const BLOCKER_LABELS: Readonly<Record<CustomerAvailabilityBlocker, WebKey>> = {
@@ -117,6 +119,15 @@ export const CREDENTIAL_SHAPE_LABELS: Readonly<Record<CredentialShape, WebKey>> 
 };
 
 /** Activation field names, as a person reads them. Unknown names fall back to LTR. */
+/** The policy form's fields, by the last segment of a schema path (W6). */
+const POLICY_FIELD_LABELS: Readonly<Record<string, WebKey>> = {
+  maxTrafficGb: 'web.policy_max_traffic_gb',
+  maxDays: 'web.policy_max_days',
+  maxDeviceLimit: 'web.policy_max_device_limit',
+  delivery: 'web.policy_delivery',
+  mode: 'web.policy_delivery',
+};
+
 export const ACTIVATION_FIELD_LABELS: Readonly<Record<string, WebKey>> = {
   proxyProtocols: 'web.panel_proxy_protocols',
   inboundTags: 'web.panel_inbound_tags',
@@ -574,7 +585,15 @@ function PolicyCard({ advanced, mayEdit }: { advanced: PanelAdvancedResponse; ma
         </Field>
         {invalid.length > 0 && (
           <Banner tone="danger" title={t('web.policy_invalid')}>
-            <Ltr>{invalid.join(', ')}</Ltr>
+            {/* W6: each refused field by name; the schema's paths only under technical details. */}
+            <ul>
+              {[...new Set(invalid.map((path) => fieldText(path, POLICY_FIELD_LABELS)))].map(
+                (line) => (
+                  <li key={line}>{line}</li>
+                ),
+              )}
+            </ul>
+            <TechnicalDetails lines={invalid} />
           </Banner>
         )}
         <KV

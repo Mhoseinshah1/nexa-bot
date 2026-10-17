@@ -6,6 +6,8 @@ import { catalogueGap, ProductDetailPage, ProductsPage } from '../../apps/web/sr
 import { OrderDetailPage, OrdersPage } from '../../apps/web/src/pages/orders';
 import { resolve } from '../../apps/web/src/app';
 import { categoryListing, order, panel, product, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Products and Orders, rendered against the shapes the server actually returns.
@@ -44,6 +46,14 @@ const orderList = (orders: unknown[], nextCursor: string | null = null) => [
 // ---------------------------------------------------------------------------
 // The catalogue gap — the reason this page exists in this shape
 // ---------------------------------------------------------------------------
+
+/** W2: the edit form shows one section at a time; a test opens the one it needs. */
+const openTab = async (name: string) =>
+  fireEvent.click(await screen.findByRole('tab', { name: new RegExp(name) }));
+
+/** W3: the create form lives in a drawer opened by «محصول جدید». */
+const openCreate = async () =>
+  fireEvent.click(await screen.findByRole('button', { name: 'محصول جدید' }));
 
 describe('whether a customer can see a product', () => {
   /**
@@ -162,6 +172,30 @@ describe('whether the category lets a customer see a product', () => {
 // ---------------------------------------------------------------------------
 
 describe('the product list', () => {
+  /* PR #285 review, A1: one navigation for every filter, not one `setQuery` per chip. */
+  it('«پاک کردن همه» drops every URL filter and the title together', async () => {
+    stubApi(productList([product()]));
+    const query = new URLSearchParams({
+      status: 'ACTIVE',
+      audience: 'EVERYONE',
+      categoryId: 'none',
+      title: 'پلن',
+    });
+    window.history.replaceState(null, '', `/products?${query.toString()}`);
+    renderPage(<ProductsPage route={{ path: '/products', query }} mayEdit denied={false} />);
+    expect(await screen.findByText('پلن یک‌ماهه')).toBeInTheDocument();
+
+    const line = screen.getByRole('search', { name: t('web.products_title') });
+    fireEvent.click(within(line).getByRole('button', { name: t('web.filters_clear_all') }));
+
+    const applied = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe('/products');
+    expect(applied.get('status'), 'the status filter survived').toBeNull();
+    expect(applied.get('audience'), 'the audience filter survived').toBeNull();
+    expect(applied.get('categoryId'), 'the category filter survived').toBeNull();
+    expect(applied.get('title'), 'the title search survived').toBeNull();
+  });
+
   it('renders a sellable product and says it is in the catalogue', async () => {
     stubApi(productList([product()]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
@@ -192,10 +226,18 @@ describe('the product list', () => {
     expect(screen.getAllByText('گیگابایت')).toHaveLength(2);
   });
 
+  it('asks the server for ten products a page (W1.8)', async () => {
+    const api = stubApi(productList([product()]));
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('پلن یک‌ماهه');
+    expect(api.calls.find((call) => call.url.includes('/products?'))?.url).toContain('limit=10');
+  });
+
   it('takes a new product’s traffic in GB, and starts it unlimited, said by its own box', async () => {
     stubApi(productList([product()]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
     await screen.findByText('پلن یک‌ماهه');
+    await openCreate();
     const input = document.getElementById('product-traffic-create') as HTMLInputElement;
     // WP21: no byte field anywhere. Unlimited is a checkbox, not a zero in the box.
     expect(screen.queryByText('حجم (بایت)')).toBeNull();
@@ -269,6 +311,8 @@ describe('the product list', () => {
     stubApi(productList([product()]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit={false} denied={false} />);
     await screen.findByText('پلن یک‌ماهه');
+    // No «محصول جدید» either: the drawer's button is drawn only with catalog.edit.
+    expect(screen.queryByRole('button', { name: 'محصول جدید' })).toBeNull();
 
     // A sentence rather than a disabled form: both make the same claim and only one
     // says which permission to ask for.
@@ -276,17 +320,16 @@ describe('the product list', () => {
     expect(screen.queryByLabelText('مخاطب')).toBeNull();
   });
 
-  /** Owner revision 10, which used to be recorded on the planned products page. */
-  it('records that no least-loaded panel routing will exist', async () => {
+  /** W5: the «آنچه در این نسخه نیست» card is gone, by the owner's polish list. */
+  it('draws no «not in this version» note', async () => {
     stubApi(productList([product()]));
     const { container } = renderPage(
       <ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />,
     );
     await screen.findByText('پلن یک‌ماهه');
     const text = container.textContent ?? '';
-    expect(text).toContain('کم‌بارترین پنل');
-    expect(text).toContain('وجود نخواهد داشت');
-    expect(text).toContain('مشتری');
+    expect(text).not.toContain('آنچه در این نسخه نیست');
+    expect(text).not.toContain('کم‌بارترین پنل');
   });
 });
 
@@ -320,7 +363,7 @@ describe('the product form', () => {
 
   it('reopens a saved 10.25 GB as 10.25, and sends it back as GB, never bytes (WP21)', async () => {
     const api = formFor({ trafficBytes: '11005853696' });
-    await screen.findByLabelText('قیمت');
+    await openTab('حجم و مدت');
     const input = document.getElementById('product-traffic-edit') as HTMLInputElement;
     expect(input.value).toBe('10.25');
     fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
@@ -330,7 +373,7 @@ describe('the product form', () => {
 
   it('says unlimited with its own box, sends null for it, and never reads 0 as unlimited', async () => {
     const api = formFor({ trafficBytes: '0' });
-    await screen.findByLabelText('قیمت');
+    await openTab('حجم و مدت');
     const unlimited = screen.getAllByLabelText('بدون محدودیت حجم')[0] as HTMLInputElement;
     expect(unlimited.checked).toBe(true);
     fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
@@ -348,7 +391,7 @@ describe('the product form', () => {
 
   it('refuses a third decimal before anything is sent (WP21)', async () => {
     const api = formFor({ trafficBytes: '1073741824' });
-    await screen.findByLabelText('قیمت');
+    await openTab('حجم و مدت');
     const input = document.getElementById('product-traffic-edit') as HTMLInputElement;
     expect(input.value).toBe('1');
     fireEvent.change(input, { target: { value: '1.234' } });
@@ -359,6 +402,7 @@ describe('the product form', () => {
 
   it('sends the price PAIR together, and both halves absent when the box is empty', async () => {
     const api = formFor();
+    await openTab('قیمت‌گذاری');
     const price = (await screen.findByLabelText('قیمت')) as HTMLInputElement;
     fireEvent.change(price, { target: { value: '' } });
     fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
@@ -382,7 +426,7 @@ describe('the product form', () => {
      * product, so an edit must carry the category it already has.
      */
     const api = formFor();
-    await screen.findByLabelText('قیمت');
+    await screen.findByLabelText('عنوان');
     fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
 
     await waitFor(() => {
@@ -396,7 +440,7 @@ describe('the product form', () => {
 
   it('sends the category chosen, and null for none', async () => {
     const api = formFor();
-    await screen.findByLabelText('قیمت');
+    await openTab('پنل و دسته‌بندی');
     // By id: the detail page also carries the separate "move to category" control.
     const select = document.getElementById('product-category-edit') as HTMLSelectElement;
     expect(select.tagName, 'the category field is not a select').toBe('SELECT');
@@ -421,6 +465,7 @@ describe('the product form', () => {
 
   it('refuses a zero price in the browser, naming the field', async () => {
     formFor();
+    await openTab('قیمت‌گذاری');
     const price = (await screen.findByLabelText('قیمت')) as HTMLInputElement;
     fireEvent.change(price, { target: { value: '0' } });
 
@@ -448,7 +493,7 @@ describe('the product form', () => {
     renderPage(
       <ProductDetailPage id="019220ab-cdef-7012-8345-6789abcdef01" mayEdit denied={false} />,
     );
-    await screen.findByLabelText('قیمت');
+    await openTab('پنل و دسته‌بندی');
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(true);
     });
@@ -474,6 +519,7 @@ describe('the product form', () => {
     );
     // The complement of the case above, so the fallback cannot become the only shape
     // and go unnoticed.
+    await openTab('پنل و دسته‌بندی');
     await waitFor(() => {
       expect(screen.getByLabelText('پنل').tagName).toBe('SELECT');
     });
@@ -491,6 +537,7 @@ describe('the product form', () => {
      * unable to price anything.
      */
     formFor();
+    await openTab('قیمت‌گذاری');
     const select = (await screen.findByLabelText(/واحد پول/)) as HTMLSelectElement;
     expect([...select.options].map((option) => option.value)).toEqual([...SALES_CURRENCY_CODES]);
   });
@@ -505,6 +552,7 @@ describe('the product form', () => {
   it('says a new product is created INACTIVE, where the button is', async () => {
     stubApi(productList([]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await openCreate();
     // The one thing about this form that surprises: creating does not publish. Said
     // ONCE — two sentences making the same point is how a page stops being read.
     expect(await screen.findByText(/غیرفعال ساخته می‌شود تا یک دکمه نتواند/)).toBeInTheDocument();
@@ -556,6 +604,7 @@ describe('the order list', () => {
     stubApi(orderList([order()]));
     renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
     await screen.findByText('پلن یک‌ماهه');
+    openFilterPanel();
 
     // `PAID` and `REFUNDED` need a payment. The filter offers them because an operator
     // who filters for "paid" and sees nothing has been told something true, while a
@@ -666,14 +715,13 @@ describe('the order list', () => {
   });
 
   /** Owner revisions 3, 6 and 11, which used to be recorded on the planned orders page. */
-  it('records the needs-attention, history and shared-projection rules', async () => {
+  it('no longer draws the «two endings» and future-rules cards (W5)', async () => {
     stubApi(orderList([order()]));
     const { container } = renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
     await screen.findByText('پلن یک‌ماهه');
     const text = container.textContent ?? '';
-    expect(text).toContain('نیازمند توجه');
-    expect(text).toContain('تاریخچهٔ واقعی سفارش');
-    expect(text).toContain('پروجکشن مشترک');
+    expect(text).not.toContain(/* former web.orders_scope_title */ 'دو پایان ممکن برای یک سفارش');
+    expect(text).not.toContain('پروجکشن مشترک');
   });
 });
 
@@ -941,7 +989,7 @@ describe('the order detail', () => {
    * anyone's word for, and confirming a transfer happens on the payments page where the
    * evidence and the reviewer are recorded with it.
    */
-  it('says the order is waiting, and that this page has no mark-paid button', async () => {
+  it('says the order is waiting and where it is paid, and draws no mark-paid button', async () => {
     const { container } = detail({
       state: 'AWAITING_PAYMENT',
       confirmedAt: '2026-09-10T12:35:00.000Z',
@@ -949,8 +997,9 @@ describe('the order detail', () => {
     });
     expect(await screen.findByText('این سفارش منتظر پرداخت است')).toBeInTheDocument();
     const text = container.textContent ?? '';
-    expect(text).toContain('دکمهٔ «پرداخت شد» وجود ندارد');
     expect(text).toContain('صفحهٔ پرداخت‌ها');
+    // W5: the sentence no longer narrates the absent button.
+    expect(text).not.toContain('وجود ندارد');
     // And it does not, in fact, draw one.
     const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim());
     expect(labels).not.toContain('پرداخت شد');

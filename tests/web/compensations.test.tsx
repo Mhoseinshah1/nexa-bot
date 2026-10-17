@@ -66,10 +66,9 @@ describe('the compensation list', () => {
       .map((b) => b.textContent?.trim())
       .filter((label) => label !== '');
     for (const label of labels) {
-      expect(
-        ['قدیمی‌تر', 'تازه‌تر'],
-        `a control on the compensation list: ${label ?? ''}`,
-      ).toContain(label);
+      expect(['بعدی', 'قبلی'], `a control on the compensation list: ${label ?? ''}`).toContain(
+        label,
+      );
     }
   });
 
@@ -87,9 +86,10 @@ describe('the compensation list', () => {
       />,
     );
     await screen.findByRole('table');
-    expect(api.calls.some((call) => call.url.includes('/compensations?cursor=opaque-token'))).toBe(
-      true,
-    );
+    const list = api.calls.find((call) => call.url.includes('/compensations?'))?.url ?? '';
+    expect(list).toContain('cursor=opaque-token');
+    // W1.8: ten rows a page, on the same keyset.
+    expect(list).toContain('limit=10');
   });
 
   it('says there is nothing yet, rather than drawing an empty table', async () => {
@@ -131,7 +131,7 @@ describe('the compensation list', () => {
     ]);
     renderPage(<CompensationsPage route={ROUTE} denied={false} />);
     await screen.findByRole('table');
-    const next = screen.getByRole('button', { name: 'قدیمی‌تر' });
+    const next = screen.getByRole('button', { name: 'بعدی' });
     expect(next).toBeEnabled();
     fireEvent.click(next);
     await waitFor(() => {

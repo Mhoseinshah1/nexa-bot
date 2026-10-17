@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { Drawer } from '../ui/overlays';
+import { useConfirmedClose } from '../ui/unsaved';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   TRIAL_ADMIN_REASON_MAX_LENGTH,
-  TRIAL_OVERRIDE_PAGE_DEFAULT,
-  TRIAL_RESET_PAGE_DEFAULT,
   trafficInputOf,
   type PanelTrialOverviewRow,
   type TrialOverrideRowResponse,
@@ -37,11 +38,12 @@ import {
   Ltr,
   PageHead,
   StateSwitch,
-  TwoColumn,
   useToast,
   useUnsavedChanges,
   type Column,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Trials, for an operator (WP6-B, `docs/wp6-audit.md` §7, ADR-0015).
@@ -66,17 +68,11 @@ export function TrialsPage({
 }) {
   return (
     <>
-      <PageHead title={t('web.trials_title')} />
+      <PageHead title={t('web.trials_title')} actions={<ResetButton mayReset={mayReset} />} />
       <PanelTrialsCard mayView={mayViewPanels} />
-      <TwoColumn
-        main={
-          <>
-            <OverridesCard mayView={mayViewOverrides} />
-            <HistoryCard mayView={mayViewHistory} />
-          </>
-        }
-        side={<ResetCard mayReset={mayReset} />}
-      />
+      {/* W3: the reset is a head button opening a drawer; the two lists are full width. */}
+      <OverridesCard mayView={mayViewOverrides} />
+      <HistoryCard mayView={mayViewHistory} />
     </>
   );
 }
@@ -170,15 +166,17 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
   const onLink = useLinkHandler();
   const [trail, setTrail] = useState<string[]>([]);
   const cursor = trail[trail.length - 1] ?? null;
-  const overrides = useQuery({
-    queryKey: ['trial-overrides', cursor],
-    queryFn: () =>
-      fetchTrialOverrides({
-        limit: TRIAL_OVERRIDE_PAGE_DEFAULT,
-        ...(cursor === null ? {} : { cursor }),
-      }),
-    enabled: mayView,
-  });
+  const overrides = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['trial-overrides', cursor],
+      queryFn: () =>
+        fetchTrialOverrides({
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === null ? {} : { cursor }),
+        }),
+      enabled: mayView,
+    }),
+  );
 
   if (!mayView) {
     return (
@@ -250,8 +248,9 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
  * reset if it would stamp any other number — so the confirmation binds to what was
  * shown, not to the button.
  */
-function ResetCard({ mayReset }: { mayReset: boolean }) {
+function ResetButton({ mayReset }: { mayReset: boolean }) {
   const notify = useToast();
+  const [open, setOpen] = useState(false);
   const queries = useQueryClient();
   const submission = useSubmissionKey();
   const [preview, setPreview] = useState<TrialResetPreviewResponse['preview'] | null>(null);
@@ -283,6 +282,7 @@ function ResetCard({ mayReset }: { mayReset: boolean }) {
       setPreview(null);
       setTyped('');
       setReason('');
+      setOpen(false);
       void queries.invalidateQueries({ queryKey: ['trial-resets'] });
       void queries.invalidateQueries({ queryKey: ['trial-overrides'] });
       void queries.invalidateQueries({ queryKey: ['customer-trial'] });
@@ -292,14 +292,29 @@ function ResetCard({ mayReset }: { mayReset: boolean }) {
     onError: (error) => submission.settleOn(error),
   });
 
+  const dirty = typed.trim() !== '' || reason.trim() !== '';
   // A typed confirmation is lost by navigating away; the guard asks first.
-  useUnsavedChanges(mayReset && (typed.trim() !== '' || reason.trim() !== ''));
+  useUnsavedChanges(mayReset && dirty);
+  const { requestClose, dialog } = useConfirmedClose(dirty, () => {
+    setOpen(false);
+    setPreview(null);
+    setTyped('');
+    setReason('');
+    load.reset();
+    execute.reset();
+  });
 
   if (!mayReset) {
+    // Told, not hidden: the disabled button names the permission it needs.
     return (
-      <Card title={t('web.trials_reset_title')}>
-        <Banner tone="info">{t('web.trials_reset_denied')}</Banner>
-      </Card>
+      <>
+        <Button size="sm" variant="danger" disabled aria-describedby="trials-reset-denied">
+          {t('web.trials_reset_title')}
+        </Button>
+        <span id="trials-reset-denied" className="muted small">
+          {t('web.trials_reset_denied')}
+        </span>
+      </>
     );
   }
 
@@ -310,90 +325,110 @@ function ResetCard({ mayReset }: { mayReset: boolean }) {
     reason.trim() !== '';
 
   return (
-    <Card tone="danger" title={t('web.trials_reset_title')}>
-      <Banner tone="danger">{t('web.trials_reset_body')}</Banner>
-      <div className="form-actions">
-        <Button size="sm" icon="eye" disabled={load.isPending} onClick={() => load.mutate()}>
-          {t('web.trials_reset_preview')}
-        </Button>
-      </div>
-      {load.error !== null && <Banner tone="danger">{messageFor(load.error)}</Banner>}
+    <>
+      <Button size="sm" variant="danger" icon="refresh" onClick={() => setOpen(true)}>
+        {t('web.trials_reset_title')}
+      </Button>
+      <Drawer open={open} onClose={requestClose} title={t('web.trials_reset_title')} wide>
+        <div className="stack">
+          <Banner tone="danger">{t('web.trials_reset_body')}</Banner>
+          <div className="form-actions">
+            <Button size="sm" icon="eye" disabled={load.isPending} onClick={() => load.mutate()}>
+              {t('web.trials_reset_preview')}
+            </Button>
+          </div>
+          {load.error !== null && (
+            <Banner tone="danger">
+              {messageFor(load.error)}
+              <ErrorRef error={load.error} />
+            </Banner>
+          )}
 
-      {preview !== null &&
-        (preview.affectedGrants === 0 ? (
-          <Banner tone="info">{t('web.trials_reset_nothing')}</Banner>
-        ) : (
-          <>
-            <KV
-              items={[
-                [t('web.trials_reset_affected'), String(preview.affectedGrants)],
-                [t('web.trials_reset_customers'), String(preview.affectedCustomers)],
-              ]}
-            />
-            <h3 className="ca-subhead">{t('web.trials_reset_sample')}</h3>
-            <DataTable
-              caption={t('web.trials_reset_sample')}
-              columns={[
-                {
-                  key: 'customer',
-                  header: t('web.trials_customer'),
-                  render: (row) => <Ltr mono={false}>{customerName(row.customer)}</Ltr>,
-                },
-                {
-                  key: 'grants',
-                  header: t('web.trials_reset_grants'),
-                  render: (row) => String(row.grants),
-                },
-              ]}
-              rows={preview.sample}
-              rowKey={(row) => row.customer.id}
-              dense
-            />
-            <Field label={t('web.trials_reset_confirm_label')} htmlFor="trial-reset-count">
-              <Input
-                id="trial-reset-count"
-                size="sm"
-                dir="ltr"
-                inputMode="numeric"
-                value={typed}
-                onChange={(event) => setTyped(event.target.value)}
-              />
-            </Field>
-            <Field label={t('web.trials_reset_reason_label')} htmlFor="trial-reset-reason">
-              <Input
-                id="trial-reset-reason"
-                size="sm"
-                value={reason}
-                maxLength={TRIAL_ADMIN_REASON_MAX_LENGTH}
-                onChange={(event) => setReason(event.target.value)}
-              />
-            </Field>
-            <div className="form-actions">
-              <Button
-                variant="danger-solid"
-                size="sm"
-                disabled={!confirmed || execute.isPending}
-                onClick={() => execute.mutate()}
-              >
-                {t('web.trials_reset_execute')}
-              </Button>
-            </div>
-            {execute.error !== null && <Banner tone="danger">{messageFor(execute.error)}</Banner>}
-          </>
-        ))}
-    </Card>
+          {preview !== null &&
+            (preview.affectedGrants === 0 ? (
+              <Banner tone="info">{t('web.trials_reset_nothing')}</Banner>
+            ) : (
+              <>
+                <KV
+                  items={[
+                    [t('web.trials_reset_affected'), String(preview.affectedGrants)],
+                    [t('web.trials_reset_customers'), String(preview.affectedCustomers)],
+                  ]}
+                />
+                <h3 className="ca-subhead">{t('web.trials_reset_sample')}</h3>
+                <DataTable
+                  caption={t('web.trials_reset_sample')}
+                  columns={[
+                    {
+                      key: 'customer',
+                      header: t('web.trials_customer'),
+                      render: (row) => <Ltr mono={false}>{customerName(row.customer)}</Ltr>,
+                    },
+                    {
+                      key: 'grants',
+                      header: t('web.trials_reset_grants'),
+                      render: (row) => String(row.grants),
+                    },
+                  ]}
+                  rows={preview.sample}
+                  rowKey={(row) => row.customer.id}
+                  dense
+                />
+                <Field label={t('web.trials_reset_confirm_label')} htmlFor="trial-reset-count">
+                  <Input
+                    id="trial-reset-count"
+                    size="sm"
+                    dir="ltr"
+                    inputMode="numeric"
+                    value={typed}
+                    onChange={(event) => setTyped(event.target.value)}
+                  />
+                </Field>
+                <Field label={t('web.trials_reset_reason_label')} htmlFor="trial-reset-reason">
+                  <Input
+                    id="trial-reset-reason"
+                    size="sm"
+                    value={reason}
+                    maxLength={TRIAL_ADMIN_REASON_MAX_LENGTH}
+                    onChange={(event) => setReason(event.target.value)}
+                  />
+                </Field>
+                <div className="form-actions">
+                  <Button
+                    variant="danger-solid"
+                    size="sm"
+                    disabled={!confirmed || execute.isPending}
+                    onClick={() => execute.mutate()}
+                  >
+                    {t('web.trials_reset_execute')}
+                  </Button>
+                </div>
+                {execute.error !== null && (
+                  <Banner tone="danger">
+                    {messageFor(execute.error)}
+                    <ErrorRef error={execute.error} />
+                  </Banner>
+                )}
+              </>
+            ))}
+        </div>
+      </Drawer>
+      {dialog}
+    </>
   );
 }
 
 function HistoryCard({ mayView }: { mayView: boolean }) {
   const [trail, setTrail] = useState<string[]>([]);
   const cursor = trail[trail.length - 1] ?? null;
-  const resets = useQuery({
-    queryKey: ['trial-resets', cursor],
-    queryFn: () =>
-      fetchTrialResets({ limit: TRIAL_RESET_PAGE_DEFAULT, ...(cursor === null ? {} : { cursor }) }),
-    enabled: mayView,
-  });
+  const resets = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['trial-resets', cursor],
+      queryFn: () =>
+        fetchTrialResets({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
+      enabled: mayView,
+    }),
+  );
 
   if (!mayView) {
     return (

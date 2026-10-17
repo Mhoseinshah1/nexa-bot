@@ -9,6 +9,7 @@ import { Breadcrumbs, Menu, confirmDialogOpen, useFocusTrap, type Crumb } from '
 import { formatNumber } from './format';
 import { GROUP_ORDER, NAV_STANDALONE_GROUP, isCurrent, navGroupOf, type NavEntry } from './nav';
 import type { NavCounter, NavCounters } from './nav-counters';
+import { roleLabel } from './rbac-labels';
 
 /**
  * The pieces of the signed-in shell: the sidebar, the topbar and the command
@@ -346,7 +347,9 @@ export function Topbar({
   bell?: React.ReactNode;
 }) {
   const initial = Array.from(admin.displayName.trim())[0] ?? '·';
-  const roles = admin.roleKeys.join(t('web.list_separator')) || '—';
+  // C1: each role by its Persian name; an unknown key is shown as itself, never blank.
+  const roles = admin.roleKeys.map((key) => roleLabel(key)).join(t('web.list_separator')) || '—';
+  const roleKeys = admin.roleKeys.join(', ');
   return (
     <header className="topbar">
       <button
@@ -388,7 +391,10 @@ export function Topbar({
             </span>
             <span className="who-name">
               {admin.displayName}
-              <span className="faint"> · {roles}</span>
+              <span className="faint" title={roleKeys}>
+                {' · '}
+                {roles}
+              </span>
             </span>
             <Icon name="chevron" size={13} />
           </>

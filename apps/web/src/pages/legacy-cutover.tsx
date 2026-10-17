@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   LEGACY_CUTOVER_APPROVAL_KINDS,
   type LegacyCutoverApplyRunView,
@@ -16,8 +17,11 @@ import {
   revokeLegacyCutover,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { LegacyCode } from './code-name';
+import { Modal } from '../ui/overlays';
+import { LEGACY_IMPORT_RUN_STATUS_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
 import {
@@ -38,6 +42,7 @@ import {
   useToast,
   type Column,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Mirza migration PR6 — the owner's cutover approval (owner constraint 3).
@@ -93,11 +98,13 @@ type FieldName = (typeof FIELDS)[number][0];
 function usePaged<T>(key: string, fetch: (after?: string) => Promise<T>, enabled: boolean) {
   const [trail, setTrail] = useState<readonly string[]>([]);
   const after = trail[trail.length - 1];
-  const query = useQuery({
-    queryKey: ['legacy-cutover', key, after ?? null],
-    queryFn: () => fetch(after),
-    enabled,
-  });
+  const query = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['legacy-cutover', key, after ?? null],
+      queryFn: () => fetch(after),
+      enabled,
+    }),
+  );
   return { query, trail, setTrail };
 }
 
@@ -110,6 +117,10 @@ export function LegacyCutoverPage({
   /** `legacy.cutover.approve` (CRITICAL). */
   mayApprove: boolean;
 }) {
+  /** W3: the owner's approval form opens in a dialog from the page head. */
+  const [approving, setApproving] = useState(false);
+  /** The dialog's submission key, held while the dialog mounts and unmounts. */
+  const approveKey = useSubmissionKey();
   const approvals = usePaged('approvals', (after) => fetchLegacyCutoverApprovals(after), !denied);
   const readSets = usePaged('read-sets', (after) => fetchLegacyCutoverReadSets(after), !denied);
   const runs = usePaged('apply-runs', (after) => fetchLegacyCutoverApplyRuns(after), !denied);
@@ -192,7 +203,7 @@ export function LegacyCutoverPage({
       header: t('web.lco_col_run'),
       render: (row) => (
         <CellMain
-          primary={<Ltr>{row.status}</Ltr>}
+          primary={<LegacyCode value={row.status} labels={LEGACY_IMPORT_RUN_STATUS_LABELS} />}
           secondary={<span className="muted small">{formatTimestamp(row.startedAt)}</span>}
         />
       ),
@@ -206,7 +217,27 @@ export function LegacyCutoverPage({
 
   return (
     <>
-      <PageHead title={t('web.lco_title')} subtitle={t('web.lco_subtitle')} />
+      <PageHead
+        title={t('web.lco_title')}
+        subtitle={t('web.lco_subtitle')}
+        {...(mayApprove && !denied
+          ? {
+              actions: (
+                <button type="button" className="btn primary" onClick={() => setApproving(true)}>
+                  {t('web.lco_approve_title')}
+                </button>
+              ),
+            }
+          : {})}
+      />
+      <Modal
+        open={mayApprove && !denied && approving}
+        onClose={() => setApproving(false)}
+        title={t('web.lco_approve_title')}
+        size="lg"
+      >
+        <ApproveForm held={approveKey} onDone={() => setApproving(false)} />
+      </Modal>
       <Banner tone="warn" icon="info">
         {t('web.lco_banner')}
       </Banner>
@@ -265,7 +296,7 @@ export function LegacyCutoverPage({
               shown={runs.query.data?.runs.length ?? 0}
             />
           </Card>
-          {mayApprove ? <ApproveForm /> : <Banner tone="info">{t('web.lco_view_only')}</Banner>}
+          {!mayApprove && <Banner tone="info">{t('web.lco_view_only')}</Banner>}
         </>
       )}
     </>
@@ -292,11 +323,22 @@ function Pager({
   );
 }
 
-/** Record an approval. Every value exactly as the runbook printed it. */
-export function ApproveForm() {
+/**
+ * Record an approval. Every value exactly as the runbook printed it. W3: drawn inside the
+ * dialog the page head's "record owner approval" opens; a recorded approval closes it.
+ */
+export function ApproveForm({
+  onDone,
+  held,
+}: {
+  onDone?: () => void;
+  /** The key, held by the page so a retry after a 5xx survives closing the dialog. */
+  held?: SubmissionKey | undefined;
+} = {}) {
   const queries = useQueryClient();
   const notify = useToast();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [kind, setKind] = useState<LegacyCutoverApprovalKind>('CUTOVER');
   const [values, setValues] = useState<Readonly<Record<FieldName, string>>>({
     sourceFingerprint: '',
@@ -324,6 +366,7 @@ export function ApproveForm() {
       submission.settle();
       notify({ tone: 'ok', message: t('web.lco_saved') });
       void queries.invalidateQueries({ queryKey: ['legacy-cutover'] });
+      onDone?.();
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
@@ -336,73 +379,68 @@ export function ApproveForm() {
   const ready = allHex && reason.trim() !== '' && !approve.isPending;
 
   return (
-    <Card title={t('web.lco_approve_title')}>
-      <div className="stack">
-        <Banner tone="danger">{t('web.lco_approve_warning')}</Banner>
-        <Field label={t('web.lco_col_kind')} htmlFor="lco-kind">
-          <Select
-            id="lco-kind"
-            value={kind}
-            onChange={(event) => setKind(event.target.value as LegacyCutoverApprovalKind)}
-          >
-            {LEGACY_CUTOVER_APPROVAL_KINDS.map((k) => (
-              <option key={k} value={k}>
-                {t(KIND_LABELS[k])}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        {FIELDS.map(([name, label]) => (
-          <Field key={name} label={t(label)} htmlFor={`lco-${name}`} hint={t('web.lco_hex_hint')}>
-            <Input
-              id={`lco-${name}`}
-              dir="ltr"
-              value={values[name]}
-              maxLength={64}
-              onChange={(event) => setValues({ ...values, [name]: event.target.value })}
-            />
-          </Field>
-        ))}
-        {kind === 'RERUN_OVER_PRIOR_IMPORT' && (
-          <Field
-            label={t('web.lco_field_prior')}
-            htmlFor="lco-prior"
-            hint={t('web.lco_prior_hint')}
-          >
-            <Input
-              id="lco-prior"
-              dir="ltr"
-              value={prior}
-              maxLength={64}
-              onChange={(event) => setPrior(event.target.value)}
-            />
-          </Field>
-        )}
-        <Field label={t('web.lco_reason')} htmlFor="lco-reason">
+    <div className="stack">
+      <Banner tone="danger">{t('web.lco_approve_warning')}</Banner>
+      <Field label={t('web.lco_col_kind')} htmlFor="lco-kind">
+        <Select
+          id="lco-kind"
+          value={kind}
+          onChange={(event) => setKind(event.target.value as LegacyCutoverApprovalKind)}
+        >
+          {LEGACY_CUTOVER_APPROVAL_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {t(KIND_LABELS[k])}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {FIELDS.map(([name, label]) => (
+        <Field key={name} label={t(label)} htmlFor={`lco-${name}`} hint={t('web.lco_hex_hint')}>
           <Input
-            id="lco-reason"
-            value={reason}
-            maxLength={500}
-            onChange={(event) => setReason(event.target.value)}
+            id={`lco-${name}`}
+            dir="ltr"
+            value={values[name]}
+            maxLength={64}
+            onChange={(event) => setValues({ ...values, [name]: event.target.value })}
           />
         </Field>
-        <div className="form-actions">
-          <button
-            type="button"
-            className="btn primary sm"
-            disabled={!ready}
-            onClick={() => approve.mutate()}
-          >
-            {t('web.lco_approve')}
-          </button>
-        </div>
-        {approve.error !== null && (
-          <Banner tone="danger" role="alert">
-            {legacyCutoverFault(approve.error)}
-          </Banner>
-        )}
+      ))}
+      {kind === 'RERUN_OVER_PRIOR_IMPORT' && (
+        <Field label={t('web.lco_field_prior')} htmlFor="lco-prior" hint={t('web.lco_prior_hint')}>
+          <Input
+            id="lco-prior"
+            dir="ltr"
+            value={prior}
+            maxLength={64}
+            onChange={(event) => setPrior(event.target.value)}
+          />
+        </Field>
+      )}
+      <Field label={t('web.lco_reason')} htmlFor="lco-reason">
+        <Input
+          id="lco-reason"
+          value={reason}
+          maxLength={500}
+          onChange={(event) => setReason(event.target.value)}
+        />
+      </Field>
+      <div className="form-actions">
+        <button
+          type="button"
+          className="btn primary sm"
+          disabled={!ready}
+          onClick={() => approve.mutate()}
+        >
+          {t('web.lco_approve')}
+        </button>
       </div>
-    </Card>
+      {approve.error !== null && (
+        <Banner tone="danger" role="alert">
+          {legacyCutoverFault(approve.error)}
+          <ErrorRef error={approve.error} />
+        </Banner>
+      )}
+    </div>
   );
 }
 
@@ -411,6 +449,7 @@ function Revoke({ row }: { row: LegacyCutoverApprovalView }) {
   const notify = useToast();
   const submission = useSubmissionKey();
   const [reason, setReason] = useState('');
+  const [open, setOpen] = useState(false);
   const revoke = useMutation({
     mutationFn: () =>
       revokeLegacyCutover({
@@ -421,34 +460,68 @@ function Revoke({ row }: { row: LegacyCutoverApprovalView }) {
     onSuccess: () => {
       submission.settle();
       notify({ tone: 'ok', message: t('web.lco_revoked') });
+      setOpen(false);
       void queries.invalidateQueries({ queryKey: ['legacy-cutover'] });
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
     },
   });
+  /* W3: the row's "revoke" opens a dialog with the approval, the reason and the refusal. */
   return (
-    <span className="stack">
-      <Input
-        aria-label={t('web.lco_reason')}
-        size="sm"
-        value={reason}
-        maxLength={500}
-        onChange={(event) => setReason(event.target.value)}
-      />
-      <button
-        type="button"
-        className="btn ghost sm"
-        disabled={reason.trim() === '' || revoke.isPending}
-        onClick={() => revoke.mutate()}
-      >
+    <>
+      <button type="button" className="btn ghost sm" onClick={() => setOpen(true)}>
         {t('web.lco_revoke')}
       </button>
-      {revoke.error !== null && (
-        <span role="alert" className="small">
-          {legacyCutoverFault(revoke.error)}
-        </span>
-      )}
-    </span>
+      <Modal
+        open={open}
+        onClose={() => {
+          setOpen(false);
+          revoke.reset();
+        }}
+        title={t('web.lco_revoke')}
+        danger
+        foot={
+          <>
+            <button type="button" className="btn sm" onClick={() => setOpen(false)}>
+              {t('web.money_cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn danger sm"
+              disabled={reason.trim() === '' || revoke.isPending}
+              onClick={() => revoke.mutate()}
+            >
+              {t('web.lco_revoke')}
+            </button>
+          </>
+        }
+      >
+        <div className="stack">
+          <dl className="kv small">
+            <dt>{t('web.lco_col_kind')}</dt>
+            <dd>{t(KIND_LABELS[row.kind])}</dd>
+            <dt>{t('web.lco_field_source')}</dt>
+            <dd>
+              <Ltr>{row.sourceFingerprint}</Ltr>
+            </dd>
+          </dl>
+          <Field label={t('web.lco_reason')} htmlFor={`lco-revoke-${row.id}`}>
+            <Input
+              id={`lco-revoke-${row.id}`}
+              value={reason}
+              maxLength={500}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </Field>
+          {revoke.error !== null && (
+            <Banner tone="danger" role="alert">
+              {legacyCutoverFault(revoke.error)}
+              <ErrorRef error={revoke.error} />
+            </Banner>
+          )}
+        </div>
+      </Modal>
+    </>
   );
 }

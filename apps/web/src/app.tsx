@@ -1,3 +1,4 @@
+import { SavedViewsScope, type SavedViewsScopeValue } from './ui/saved-views-menu';
 import { useEffect, useMemo, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isPermissionKey, type PermissionKey, type SessionResponse } from '@nexa/contracts';
@@ -1370,6 +1371,7 @@ export function resolve(
           denied={!may('incidents.view')}
           mayManage={may('incidents.manage')}
           mayNotify={may('incidents.notify')}
+          mayViewPanels={may('panels.view')}
         />
       ),
       crumbs: [{ label: t('web.nav_incidents'), href: '/incidents' }],
@@ -1616,7 +1618,11 @@ export function App() {
   return (
     <ToastProvider>
       {view === 'signed-in' && session.data ? (
-        <SignedIn permissions={session.data.permissions} admin={session.data.admin} />
+        <SavedViewsScope.Provider
+          value={savedViewsScopeOf(session.data.admin.id, window.location.host)}
+        >
+          <SignedIn permissions={session.data.permissions} admin={session.data.admin} />
+        </SavedViewsScope.Provider>
       ) : (
         <SignIn />
       )}
@@ -2064,4 +2070,20 @@ function writeSidebarPreference(collapsed: boolean): void {
     // A remembered layout is a convenience; a browser that refuses to store it
     // still gets a working sidebar for this visit.
   }
+}
+
+/**
+ * The saved-filters scope (W1.4): one administrator on one installation. The
+ * session carries no tenant id, and one installation serves one primary tenant
+ * from one host, so the host is the installation's scope. Memoised by value so a
+ * session poll does not hand the menus a new object every minute.
+ */
+const savedViewsScopes = new Map<string, SavedViewsScopeValue>();
+function savedViewsScopeOf(adminId: string, scope: string): SavedViewsScopeValue {
+  const key = `${scope}\u0000${adminId}`;
+  const known = savedViewsScopes.get(key);
+  if (known !== undefined) return known;
+  const value = { scope, adminId };
+  savedViewsScopes.set(key, value);
+  return value;
 }

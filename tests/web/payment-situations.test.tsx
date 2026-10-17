@@ -4,6 +4,7 @@ import { PAYMENT_OPS_QUEUES, type PaymentAttentionResponse } from '@nexa/contrac
 import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/payments';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Roadmap E1/E2 — the situation guide on the Web Admin (`docs/payments-under-review-ux.md`).
@@ -137,7 +138,9 @@ describe('the payment situation guide', () => {
     const api = stubApi(listRoutes([row()]));
     renderPage(<PaymentsPage route={routeOf({ queue: 'NEEDS_ACTION' })} denied={false} />);
     await screen.findByText('sit-ref-0001');
-    const group = screen.getByRole('group', { name: t('web.payment_ops_queue') });
+    const group = within(openFilterPanel()).getByRole('group', {
+      name: t('web.payment_ops_queue'),
+    });
     const chips = within(group).getAllByRole('button');
     // "All" first, then the attention queue.
     expect(chips[1]?.textContent).toContain(t('web.payment_ops_queue_needs_action'));

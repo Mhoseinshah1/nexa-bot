@@ -4,7 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ServiceActionAvailability } from '@nexa/contracts';
 import { BulkOperationDetailPage } from '../../apps/web/src/pages/bulk-operations';
 import {
-  ServiceGrantMoveCard,
+  ServiceGrantButton,
+  grantMoveReasons,
+  ServiceMassActionButton,
   ServiceMassActionCard,
   massDefinitionOf,
   useRefreshOnOperationChange,
@@ -179,6 +181,74 @@ describe('the mass action over the filtered set', () => {
     });
   });
 
+  it('replays a lost mass action under the SAME key after the drawer is closed and reopened', async () => {
+    const api = stubApi([
+      {
+        url: '/bulk-operations/preview',
+        body: {
+          preview: {
+            kind: 'SERVICE_SUSPEND',
+            asOf: '2026-09-20T10:00:00.000Z',
+            definition: { version: 1 },
+            definitionHash: 'a'.repeat(64),
+            count: 4,
+            customers: 4,
+            fingerprint: 'b'.repeat(32),
+            totalLiability: null,
+            trafficBytesPerItem: null,
+            durationDaysPerItem: null,
+            sample: [],
+            ineligible: { selected: 4, notInState: 0, panelNotOperable: 0, other: 0, sample: [] },
+          },
+        },
+      },
+      {
+        url: '/bulk-operations',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: {
+            kind: 'INTERNAL',
+            code: 'internal.unhandled',
+            message: 'x',
+            correlationId: 'c',
+          },
+        },
+      },
+    ]);
+    renderPage(<ServiceMassActionButton filters={FILTERS} mayStatus mayGrant={false} />);
+    const runOnce = async () => {
+      fireEvent.click(screen.getByRole('button', { name: t('web.soc_mass_title') }));
+      fireEvent.click(await screen.findByRole('button', { name: t('web.bulk_preview_button') }));
+      const execute = await screen.findByRole('button', { name: t('web.bulk_execute') });
+      fireEvent.change(screen.getByLabelText(t('web.bulk_reason')), {
+        target: { value: 'panel maintenance' },
+      });
+      fireEvent.click(execute);
+      fireEvent.click(
+        within(screen.getByRole('alertdialog')).getByRole('button', {
+          name: t('web.cb_bulk_run_yes'),
+        }),
+      );
+    };
+    const posts = () =>
+      api.calls.filter((call) => call.method === 'POST' && call.url.endsWith('/bulk-operations'));
+    await runOnce();
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    // Close the drawer over the typed reason (agreeing to discard), then do it all again.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    const discard = screen.queryByRole('button', { name: t('web.discard') });
+    if (discard !== null) fireEvent.click(discard);
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: t('web.bulk_preview_button') })).toBeNull(),
+    );
+    await runOnce();
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    const [first, second] = posts();
+    const keyOf = (body: unknown) => (body as { idempotencyKey: string }).idempotencyKey;
+    expect(keyOf(second!.body)).toBe(keyOf(first!.body));
+  });
+
   it('offers no mass action for filters it cannot express', () => {
     stubApi([]);
     renderPage(<ServiceMassActionCard filters={{ ...FILTERS, q: 'x' }} mayStatus mayGrant />);
@@ -194,19 +264,19 @@ describe('an operator’s grant on one service', () => {
     );
 
   it('sends the typed GB and the reason, under a key, and says nothing is done yet', async () => {
-    const api = stubApi([
-      { url: `/services/${SERVICE}/location-targets`, body: { current: null, targets: [] } },
-    ]);
+    const api = stubApi([]);
     renderPage(
-      <ServiceGrantMoveCard
+      <ServiceGrantButton
         serviceId={SERVICE}
-        actions={actions()}
+        kind="ADD_TRAFFIC"
+        entry={actions()[0]}
         mayGrant
-        mayEdit={false}
-        blockerLabel={(blocker) => blocker}
         onActed={() => undefined}
       />,
     );
+    // W3: the form is a drawer the button opens.
+    expect(screen.queryByLabelText(t('web.soc_grant_gb'))).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.service_action_add_traffic') }));
     fireEvent.change(screen.getByLabelText(t('web.soc_grant_gb')), { target: { value: '5' } });
     const button = screen.getByRole('button', { name: t('web.soc_grant_traffic_button') });
     expect(button).toBeDisabled();
@@ -225,35 +295,105 @@ describe('an operator’s grant on one service', () => {
     });
   });
 
-  it('says why a grant is unavailable, and draws no form without services.grant', () => {
-    stubApi([]);
-    const { unmount } = renderPage(
-      <ServiceGrantMoveCard
-        serviceId={SERVICE}
-        actions={actions({
-          ADD_TRAFFIC: { action: 'ADD_TRAFFIC', available: false, blocker: 'UNLIMITED' },
-        })}
-        mayGrant
-        mayEdit={false}
-        blockerLabel={(blocker) => `blocked:${blocker}`}
-        onActed={() => undefined}
-      />,
-    );
-    expect(screen.getByText('blocked:UNLIMITED')).toBeInTheDocument();
-    expect(screen.queryByLabelText(t('web.soc_grant_gb'))).toBeNull();
-    unmount();
+  it('keeps the days to 1–365 and sends them with their own reason', async () => {
+    const api = stubApi([]);
     renderPage(
-      <ServiceGrantMoveCard
+      <ServiceGrantButton
         serviceId={SERVICE}
-        actions={actions()}
-        mayGrant={false}
-        mayEdit={false}
-        blockerLabel={(blocker) => blocker}
+        kind="ADD_TIME"
+        entry={actions()[1]}
+        mayGrant
         onActed={() => undefined}
       />,
     );
-    expect(screen.queryByLabelText(t('web.soc_grant_gb'))).toBeNull();
-    expect(screen.getAllByText(t('web.soc_grant_denied')).length).toBe(2);
+    fireEvent.click(screen.getByRole('button', { name: t('web.service_action_add_time') }));
+    fireEvent.change(screen.getByLabelText(t('web.soc_reason')), { target: { value: 'gift' } });
+    const button = screen.getByRole('button', { name: t('web.soc_grant_time_button') });
+    fireEvent.change(screen.getByLabelText(t('web.soc_grant_days')), { target: { value: '366' } });
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(t('web.soc_grant_days')), { target: { value: '7' } });
+    fireEvent.click(button);
+    await waitFor(() => expect(api.calls.some((call) => call.method === 'POST')).toBe(true));
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+      kind: 'ADD_TIME',
+      durationDays: 7,
+      reason: 'gift',
+    });
+  });
+
+  it('asks before closing the drawer over a typed amount', () => {
+    stubApi([]);
+    renderPage(
+      <ServiceGrantButton
+        serviceId={SERVICE}
+        kind="ADD_TRAFFIC"
+        entry={actions()[0]}
+        mayGrant
+        onActed={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.service_action_add_traffic') }));
+    fireEvent.change(screen.getByLabelText(t('web.soc_grant_gb')), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.close') }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(t('web.unsaved_title'));
+  });
+
+  it('says why a grant is unavailable, and opens no form without services.grant', () => {
+    stubApi([]);
+    const blocked = actions({
+      ADD_TRAFFIC: { action: 'ADD_TRAFFIC', available: false, blocker: 'UNLIMITED' },
+    });
+    const reasons = grantMoveReasons({
+      actions: blocked,
+      mayGrant: true,
+      mayEdit: true,
+      blockerLabel: (blocker) => `blocked:${blocker}`,
+    });
+    const { unmount } = renderPage(
+      <>
+        <ServiceGrantButton
+          serviceId={SERVICE}
+          kind="ADD_TRAFFIC"
+          entry={blocked[0]}
+          mayGrant
+          onActed={() => undefined}
+        />
+        <ul>
+          {reasons.map((reason, index) => (
+            <li key={index}>{reason}</li>
+          ))}
+        </ul>
+      </>,
+    );
+    const traffic = screen.getByRole('button', { name: t('web.service_action_add_traffic') });
+    expect(traffic).toBeDisabled();
+    expect(traffic).toHaveAccessibleDescription('blocked:UNLIMITED');
+    unmount();
+    const denied = grantMoveReasons({
+      actions: actions(),
+      mayGrant: false,
+      mayEdit: false,
+      blockerLabel: (blocker) => blocker,
+    });
+    renderPage(
+      <>
+        <ServiceGrantButton
+          serviceId={SERVICE}
+          kind="ADD_TIME"
+          entry={actions()[1]}
+          mayGrant={false}
+          onActed={() => undefined}
+        />
+        <ul>
+          {denied.map((reason, index) => (
+            <li key={index}>{reason}</li>
+          ))}
+        </ul>
+      </>,
+    );
+    expect(screen.getByRole('button', { name: t('web.service_action_add_time') })).toBeDisabled();
+    expect(screen.getByText(t('web.soc_grant_denied'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.soc_move_denied'))).toBeInTheDocument();
   });
 });
 
@@ -287,6 +427,8 @@ describe('retrying the FAILED items of a mass operation', () => {
         mayStatus
       />,
     );
+    // W3: the retry opens its dialog from the page head.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.bulk_retry_title') }));
     fireEvent.click(await screen.findByRole('button', { name: t('web.bulk_retry_preview') }));
     expect(await screen.findByText(t('web.bulk_retry_count'))).toBeInTheDocument();
     fireEvent.change(

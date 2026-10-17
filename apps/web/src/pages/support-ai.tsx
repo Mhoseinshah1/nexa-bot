@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { OpsActionDrawer } from './ops-drawer';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SUPPORT_AI_AUTO_MIN_CONFIDENCES,
@@ -62,6 +63,7 @@ import {
   TEST_RESULT_TONES,
   failureParticulars,
 } from './support-ai-failure';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * TB4 — the support AI's settings (ADR-0034 §8): the mode, the provider chain, the bounds,
@@ -520,8 +522,12 @@ function ConfigCard({
 
   return (
     <Card title={t('web.sai_config')} hint={t('web.sai_config_hint')}>
+      {/*
+        W2: out of scroll anchoring, so adding a fallback puts its row where the button was and
+        the page stays put; anchored, the rows above were pushed up off the screen (390).
+      */}
       <form
-        className="stack"
+        className="stack no-scroll-anchor"
         onSubmit={(event) => {
           event.preventDefault();
           if (parsed.success) save.mutate(parsed.data);
@@ -713,6 +719,7 @@ function ConfigCard({
         {save.error !== null && (
           <Banner tone="danger" role="alert">
             {supportAiFault(save.error)}
+            <ErrorRef error={save.error} />
           </Banner>
         )}
         <div className="form-actions">
@@ -869,6 +876,7 @@ function CredentialRow({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [model, setModel] = useState(defaultModel);
   const [lastTest, setLastTest] = useState<SupportAiTestResponse | null>(null);
+  const [testing, setTesting] = useState(false);
   // A settled test's next press is a NEW test (the fingerprint changes with the round).
   const [testRound, setTestRound] = useState(0);
   useUnsavedChanges(apiKey !== '');
@@ -1093,7 +1101,12 @@ function CredentialRow({
               </select>
             </Field>
           )}
-          {save.error !== null && <Banner tone="danger">{supportAiFault(save.error)}</Banner>}
+          {save.error !== null && (
+            <Banner tone="danger">
+              {supportAiFault(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
           <div className="btn-group">
             <button type="submit" className="btn primary sm" disabled={!keyValid || save.isPending}>
               {t('web.sai_key_save')}
@@ -1114,37 +1127,66 @@ function CredentialRow({
       )}
 
       {credential.configured && (
-        <form
-          className="row"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (model.trim() !== '') test.mutate(model.trim());
-          }}
-        >
-          <Field
-            label={`${t('web.sai_test_model')} — ${name}`}
-            htmlFor={`sai-test-${provider}`}
-            compact
-          >
-            <input
-              id={`sai-test-${provider}`}
-              className="input sm"
-              dir="ltr"
-              autoComplete="off"
-              maxLength={SUPPORT_AI_LIMITS.modelIdChars}
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-            />
-          </Field>
-          <button type="submit" className="btn sm" disabled={model.trim() === '' || test.isPending}>
+        // W3: the model box opens on the button, in a drawer; the outcome stays in the row.
+        <div className="ops-row-actions">
+          <button type="button" className="btn sm" onClick={() => setTesting(true)}>
             <Icon name="plug" />
             {t('web.sai_test')}
           </button>
-        </form>
+          {model.trim() !== '' && <Ltr>{model.trim()}</Ltr>}
+        </div>
       )}
-      {credential.configured && <p className="muted small">{t('web.sai_test_hint')}</p>}
+      {credential.configured && (
+        <OpsActionDrawer
+          open={testing}
+          title={`${t('web.sai_test')} — ${name}`}
+          dirty={false}
+          onClose={() => setTesting(false)}
+        >
+          <form
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (model.trim() !== '') {
+                test.mutate(model.trim(), { onSettled: () => setTesting(false) });
+              }
+            }}
+          >
+            <Field
+              label={`${t('web.sai_test_model')} — ${name}`}
+              htmlFor={`sai-test-${provider}`}
+              hint={t('web.sai_test_hint')}
+            >
+              <input
+                id={`sai-test-${provider}`}
+                className="input"
+                dir="ltr"
+                autoComplete="off"
+                maxLength={SUPPORT_AI_LIMITS.modelIdChars}
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+              />
+            </Field>
+            <div className="ops-row-actions">
+              <button
+                type="submit"
+                className="btn primary"
+                disabled={model.trim() === '' || test.isPending}
+              >
+                <Icon name="plug" />
+                {t('web.sai_test')}
+              </button>
+            </div>
+          </form>
+        </OpsActionDrawer>
+      )}
       {lastTest !== null && <TestResult result={lastTest} />}
-      {test.error !== null && <Banner tone="danger">{supportAiFault(test.error)}</Banner>}
+      {test.error !== null && (
+        <Banner tone="danger">
+          {supportAiFault(test.error)}
+          <ErrorRef error={test.error} />
+        </Banner>
+      )}
 
       {confirmingDelete && (
         <ConfirmDialog

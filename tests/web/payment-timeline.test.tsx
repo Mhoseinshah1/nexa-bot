@@ -559,6 +559,42 @@ describe('who resolved a payment', () => {
     expect(container.textContent).not.toContain(t('web.payment_timeline_by_customer'));
   });
 
+  /*
+   * W5: the history names its closed vocabularies in Persian — the evidence, the provider's
+   * status and whether the money arrived — and keeps the machine key in the title.
+   */
+  it('names evidence, provider status and the paid flag in Persian, raw key in the title', async () => {
+    stubApi(
+      timeline({
+        entries: [
+          timelineCreated,
+          {
+            kind: 'GATEWAY_INQUIRY',
+            at: '2026-09-10T12:50:00.000Z',
+            provider: 'TONPAYS',
+            providerStatus: 'completed',
+            providerPaid: true,
+            errorCode: null,
+          },
+          {
+            kind: 'PAYMENT_CONFIRMED',
+            at: '2026-09-10T13:00:00.000Z',
+            evidenceKind: 'GATEWAY_INQUIRY',
+            adminId: null,
+          },
+        ],
+      }),
+    );
+    const { container } = renderPage(
+      <PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="CONFIRMED" />,
+    );
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    expect(screen.getByTitle('completed')).toHaveTextContent('تکمیل‌شده');
+    expect(screen.getByTitle('paid=true')).toHaveTextContent('پول رسیده');
+    expect(screen.getByTitle('GATEWAY_INQUIRY')).toHaveTextContent('استعلام از درگاه');
+    expect(container.textContent).not.toContain('paid=true');
+  });
+
   it('still says the system expired a payment nobody resolved', async () => {
     stubApi(resolved('EXPIRED'));
     const { container } = renderPage(

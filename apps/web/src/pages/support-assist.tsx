@@ -37,6 +37,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * TB5 — Assist Mode on one business conversation (ADR-0034 §6).
@@ -202,6 +203,7 @@ export function AssistCard({
       {request.error !== null && (
         <Banner tone="danger" role="alert">
           {assistFault(request.error)}
+          <ErrorRef error={request.error} />
         </Banner>
       )}
       <StateSwitch
@@ -492,8 +494,18 @@ function DraftEditor({
           )}
         </div>
       </div>
-      {send.error !== null && <Banner tone="danger">{assistFault(send.error)}</Banner>}
-      {discard.error !== null && <Banner tone="danger">{assistFault(discard.error)}</Banner>}
+      {send.error !== null && (
+        <Banner tone="danger">
+          {assistFault(send.error)}
+          <ErrorRef error={send.error} />
+        </Banner>
+      )}
+      {discard.error !== null && (
+        <Banner tone="danger">
+          {assistFault(discard.error)}
+          <ErrorRef error={discard.error} />
+        </Banner>
+      )}
     </form>
   );
 }

@@ -206,17 +206,16 @@ describe('planned surfaces', () => {
    */
 
   /**
-   * Owner revision 25 — no general logs page.
-   *
-   * Recorded on the reports placeholder until WP12 built `/reports`; the decision moved
-   * onto the live page with it, so it is asserted there, through the route table.
+   * Owner revision 25 — no general logs page. The decision stands (there is no logs route);
+   * the sentence that said so under every reports tab was removed by the owner's polish list
+   * (item 4: no note that only says something does not exist).
    */
-  it('records that the operational stream goes to Telegram rather than a logs page', () => {
+  it('has no logs page, and the reports page no longer carries a note saying so', () => {
     stubApi([]);
     const resolved = resolve({ path: '/reports', query: new URLSearchParams() }, []);
     const { container } = renderPage(resolved.element as ReactElement);
     const text = container.textContent ?? '';
-    expect(text).toContain('لاگ');
-    expect(text).toContain('گروه گزارش تلگرام');
+    expect(text).not.toContain('لاگ عمومی');
+    expect(resolve({ path: '/logs', query: new URLSearchParams() }, []).title).not.toMatch(/لاگ/u);
   });
 });

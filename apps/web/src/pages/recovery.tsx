@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   RECOVERY_CONFIRMATION_PHRASE,
   isLegacyNxpkgTerminalStatus,
@@ -43,10 +44,19 @@ import {
   StatusDot,
   type Column,
 } from '../ui/kit';
+import { FilePicker } from '../ui/file-picker';
 import { Icon } from '../ui/icons';
 import { BackupScheduleCard } from './backup-schedule';
+import { CodeName } from './code-name';
 import { RecoveryKitSection } from './recovery-kit';
-import { recoveryErrorText, recoveryFailureText } from '../recovery-failure-labels';
+import {
+  BACKUP_RUN_STATE_LABELS,
+  RECOVERY_MIGRATION_VERDICT_LABELS,
+  RECOVERY_STAGE_LABELS,
+  RECOVERY_STATE_LABELS,
+  recoveryErrorText,
+  recoveryFailureText,
+} from '../recovery-failure-labels';
 import {
   MirzaHistory,
   MirzaRestoreFlow,
@@ -59,6 +69,7 @@ import {
   type MirzaAccess,
   type RestoreFileKind,
 } from './recovery-mirza';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Backup and disaster recovery.
@@ -108,13 +119,15 @@ export function RecoveryPage({
     enabled: mayView,
     refetchInterval: pollUnlessFinal(STATUS_REFRESH_MS),
   });
-  const history = useQuery({
-    queryKey: ['backup-history', cursor ?? null],
-    queryFn: () =>
-      fetchBackupHistory({ limit: HISTORY_PAGE, ...(cursor === undefined ? {} : { cursor }) }),
-    enabled: mayView,
-    refetchInterval: pollUnlessFinal(STATUS_REFRESH_MS),
-  });
+  const history = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['backup-history', cursor ?? null],
+      queryFn: () =>
+        fetchBackupHistory({ limit: HISTORY_PAGE, ...(cursor === undefined ? {} : { cursor }) }),
+      enabled: mayView,
+      refetchInterval: pollUnlessFinal(STATUS_REFRESH_MS),
+    }),
+  );
   const capabilities = useQuery({
     queryKey: ['recovery-capabilities'],
     queryFn: fetchRecoveryCapabilities,
@@ -380,7 +393,10 @@ function BackupStatus({
       {outcome === 'BUSY' && <Banner tone="warn">{t('web.recovery_run_busy')}</Banner>}
       {outcome === 'COMPLETED' && <Banner tone="ok">{t('web.recovery_run_done')}</Banner>}
       {error !== null && error !== undefined && (
-        <Banner tone="danger">{recoveryErrorText(error)}</Banner>
+        <Banner tone="danger">
+          {recoveryErrorText(error)}
+          <ErrorRef error={error} />
+        </Banner>
       )}
     </>
   );
@@ -626,16 +642,20 @@ function RecoveryOperations({
       )}
       <h3 className="card-subtitle">{t('web.recovery_upload_title')}</h3>
       <form onSubmit={onSubmit} className="stack">
-        <label className="field">
+        <div className="field">
           <span className="field-label">{t('web.recovery_upload_choose')}</span>
-          <input
-            type="file"
-            className="recovery-file"
+          <FilePicker
+            id="recovery-file"
+            label={t('web.recovery_upload_choose')}
+            describedBy="recovery-file-kind"
+            kind="backup"
             accept={!nexaAllowed ? '.nxpkg' : mirza.mayView ? '.nxb,.nxpkg' : '.nxb'}
-            aria-describedby="recovery-file-kind"
-            onChange={(event) => onChoose(event.currentTarget.files?.[0] ?? null)}
+            extensions={!nexaAllowed ? ['.nxpkg'] : mirza.mayView ? ['.nxb', '.nxpkg'] : ['.nxb']}
+            selected={file}
+            onFiles={(files) => onChoose(files[0] ?? null)}
+            onClear={() => onChoose(null)}
           />
-        </label>
+        </div>
         <p className="muted small" id="recovery-file-kind" aria-live="polite">
           {file === null
             ? t('web.recovery_file_hint')
@@ -668,9 +688,17 @@ function RecoveryOperations({
             {pending ? t('web.recovery_uploading') : t('web.recovery_upload_send')}
           </button>
         </div>
-        {upload.error !== null && <Banner tone="danger">{recoveryErrorText(upload.error)}</Banner>}
+        {upload.error !== null && (
+          <Banner tone="danger">
+            {recoveryErrorText(upload.error)}
+            <ErrorRef error={upload.error} />
+          </Banner>
+        )}
         {mirzaUpload.error !== null && (
-          <Banner tone="danger">{legacyMigrationFault(mirzaUpload.error)}</Banner>
+          <Banner tone="danger">
+            {legacyMigrationFault(mirzaUpload.error)}
+            <ErrorRef error={mirzaUpload.error} />
+          </Banner>
         )}
       </form>
 
@@ -692,11 +720,16 @@ function RecoveryOperations({
             items={[
               [
                 t('web.recovery_state'),
-                <Badge key="s" tone={stateTone(current.state)}>
-                  {current.state}
+                <Badge key="s" tone={stateTone(current.state)} title={current.state}>
+                  {t(RECOVERY_STATE_LABELS[current.state])}
                 </Badge>,
               ],
-              [t('web.recovery_stage'), <Ltr key="g">{current.stage}</Ltr>],
+              [
+                t('web.recovery_stage'),
+                <span key="g" title={current.stage}>
+                  {t(RECOVERY_STAGE_LABELS[current.stage])}
+                </span>,
+              ],
               ...(current.verification === null
                 ? []
                 : ([
@@ -719,20 +752,28 @@ function RecoveryOperations({
                     ],
                     [
                       t('web.recovery_migration_verdict'),
-                      <Ltr key="mv">{current.restoreTest.migrationVerdict}</Ltr>,
+                      <CodeName
+                        key="mv"
+                        value={current.restoreTest.migrationVerdict}
+                        labels={RECOVERY_MIGRATION_VERDICT_LABELS}
+                      />,
                     ],
                   ] as [React.ReactNode, React.ReactNode][])),
-              ...(current.failureCode === null
-                ? []
-                : ([[t('web.recovery_failure'), <Ltr key="f">{current.failureCode}</Ltr>]] as [
-                    React.ReactNode,
-                    React.ReactNode,
-                  ][])),
             ]}
           />
 
           {current.failureCode !== null && (
-            <Banner tone="danger">{recoveryFailureText(current.failureCode)}</Banner>
+            // C1: the failure in words, its code small and left-to-right beneath it (the row
+            // that showed the bare code as its value is folded into this banner).
+            <Banner tone="danger">
+              {recoveryFailureText(current.failureCode)}
+              <p className="err-ref muted small">
+                <span>{t('web.err_ref_code')}</span>{' '}
+                <bdi dir="ltr" className="ltr mono">
+                  {current.failureCode}
+                </bdi>
+              </p>
+            </Banner>
           )}
 
           {current.state === 'UPLOADED' && (
@@ -751,7 +792,10 @@ function RecoveryOperations({
             </>
           )}
           {verify.error !== null && (
-            <Banner tone="danger">{recoveryErrorText(verify.error)}</Banner>
+            <Banner tone="danger">
+              {recoveryErrorText(verify.error)}
+              <ErrorRef error={verify.error} />
+            </Banner>
           )}
 
           {current.state === 'RESTORE_TEST_PASSED' && (
@@ -927,7 +971,10 @@ function RestoreConfirmation({
         </button>
       </div>
       {error !== null && error !== undefined && (
-        <Banner tone="danger">{recoveryErrorText(error)}</Banner>
+        <Banner tone="danger">
+          {recoveryErrorText(error)}
+          <ErrorRef error={error} />
+        </Banner>
       )}
     </div>
   );
@@ -948,7 +995,11 @@ function historyColumns(mayDownload: boolean): readonly Column<BackupRunSummary>
     {
       key: 'state',
       header: t('web.recovery_state'),
-      render: (run) => <Badge tone={runTone(run)}>{run.state}</Badge>,
+      render: (run) => (
+        <Badge tone={runTone(run)} title={run.state}>
+          {t(BACKUP_RUN_STATE_LABELS[run.state])}
+        </Badge>
+      ),
     },
     {
       key: 'verified',
@@ -1004,12 +1055,16 @@ function recoveryColumns(): readonly Column<RecoveryRequestSummary>[] {
     {
       key: 'state',
       header: t('web.recovery_state'),
-      render: (row) => <Badge tone={stateTone(row.state)}>{row.state}</Badge>,
+      render: (row) => (
+        <Badge tone={stateTone(row.state)} title={row.state}>
+          {t(RECOVERY_STATE_LABELS[row.state])}
+        </Badge>
+      ),
     },
     {
       key: 'stage',
       header: t('web.recovery_stage'),
-      render: (row) => <Ltr>{row.stage}</Ltr>,
+      render: (row) => <span title={row.stage}>{t(RECOVERY_STAGE_LABELS[row.stage])}</span>,
     },
     {
       key: 'failure',

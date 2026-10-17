@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import {
@@ -14,7 +14,9 @@ import {
 } from '../../apps/web/src/pages/incidents';
 import { pathOf } from '../../apps/web/src/pages/notification-center';
 import { NAV, navPermitted } from '../../apps/web/src/nav';
-import { renderPage, stubApi } from './harness';
+import { resolve } from '../../apps/web/src/app';
+import type { ReactElement } from 'react';
+import { panel, renderPage, stubApi } from './harness';
 
 /**
  * Phase E3: the incidents page over the real client and its zod parsing. What is asserted
@@ -115,6 +117,16 @@ describe('the incident detail', () => {
     for (const label of ['web.inc_edit', 'web.inc_resolve', 'web.inc_apply_effects'] as const) {
       expect(screen.queryByRole('button', { name: t(label) })).toBeNull();
     }
+  });
+
+  it('W1.5: groups the actions under «رخداد» and «اقدام برای فروش و مشتریان»', async () => {
+    stubApi([detail()]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage mayNotify />);
+    const incident = await screen.findByRole('group', { name: t('web.inc_actions_incident') });
+    expect(within(incident).getByRole('button', { name: t('web.inc_resolve') })).toBeTruthy();
+    expect(within(incident).getByRole('button', { name: t('web.inc_edit') })).toBeTruthy();
+    const sales = screen.getByRole('group', { name: t('web.inc_actions_sales') });
+    expect(within(sales).getByRole('button', { name: t('web.inc_notice') })).toBeTruthy();
   });
 
   it('resolves with the version it read, and keeps the key across a lost answer', async () => {
@@ -307,6 +319,70 @@ describe('the incident detail', () => {
   });
 });
 
+describe("the incident's scope card", () => {
+  beforeEach(() => vi.unstubAllGlobals());
+
+  // The scope card's list of targets (the effects table beside it names subjects, not targets).
+  const scope = async () => {
+    await screen.findByText(t('web.inc_scope'));
+    const list = document.querySelector('.incident-targets');
+    expect(list).not.toBeNull();
+    return list as HTMLElement;
+  };
+
+  it('names a panel target by the panel name, its id kept as the title', async () => {
+    stubApi([
+      detail(),
+      {
+        url: '/panels',
+        body: { panels: [panel({ id: PANEL, name: 'Frankfurt A' })], nextCursor: null },
+      },
+    ]);
+    renderPage(
+      <IncidentDetailPage
+        id={ID}
+        denied={false}
+        mayManage={false}
+        mayNotify={false}
+        mayViewPanels
+      />,
+    );
+    const name = await screen.findByTestId('incident-target-name');
+    expect(name.textContent).toBe('Frankfurt A');
+    expect(name.getAttribute('title')).toBe(PANEL);
+    expect(within(await scope()).queryByText(PANEL)).toBeNull();
+  });
+
+  it('asks for no panel list without panels.view, and shows the id', async () => {
+    const api = stubApi([
+      detail(),
+      {
+        url: '/panels',
+        body: { panels: [panel({ id: PANEL, name: 'Frankfurt A' })], nextCursor: null },
+      },
+    ]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage={false} mayNotify={false} />);
+    expect(await within(await scope()).findByText(PANEL)).toBeInTheDocument();
+    expect(screen.queryByTestId('incident-target-name')).toBeNull();
+    expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(false);
+  });
+
+  it('keeps the id of a panel the list does not hold', async () => {
+    stubApi([detail(), { url: '/panels', body: { panels: [panel()], nextCursor: null } }]);
+    renderPage(
+      <IncidentDetailPage
+        id={ID}
+        denied={false}
+        mayManage={false}
+        mayNotify={false}
+        mayViewPanels
+      />,
+    );
+    expect(await within(await scope()).findByText(PANEL)).toBeInTheDocument();
+    expect(screen.queryByTestId('incident-target-name')).toBeNull();
+  });
+});
+
 describe('the admin banner', () => {
   beforeEach(() => vi.unstubAllGlobals());
 
@@ -376,7 +452,7 @@ describe('the list pages', () => {
     ]);
     renderPage(<IncidentsPage denied={false} mayManage={false} />);
     await screen.findByText('Frankfurt maintenance');
-    fireEvent.click(screen.getByRole('button', { name: t('web.older') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     expect(await screen.findByText('Older one')).toBeInTheDocument();
     expect(api.calls.some((c) => c.url.endsWith('/incidents?cursor=c-1'))).toBe(true);
   });
@@ -410,6 +486,22 @@ describe('the wiring', () => {
     expect(pathOf({ target: 'INCIDENT', id: ID })).toBe(`/incidents/${ID}`);
     expect(pathOf({ target: 'INCIDENTS', id: null })).toBe('/incidents');
     expect(pathOf({ target: 'COMPENSATIONS', id: null })).toBe('/compensations');
+  });
+
+  it('names panel targets on the detail with panels.view, and asks nothing without it', async () => {
+    const at = (permissions: string[]) =>
+      resolve({ path: `/incidents/${ID}`, query: new URLSearchParams() }, permissions as never)
+        .element as ReactElement;
+    const panels = { url: '/panels', body: { panels: [panel({ id: PANEL })], nextCursor: null } };
+    stubApi([detail(), panels]);
+    const view = renderPage(at(['incidents.view', 'panels.view']));
+    expect((await screen.findByTestId('incident-target-name')).textContent).toBe('Frankfurt A');
+    view.unmount();
+    const api = stubApi([detail(), panels]);
+    renderPage(at(['incidents.view']));
+    await screen.findByText(t('web.inc_scope'));
+    expect(screen.queryByTestId('incident-target-name')).toBeNull();
+    expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(false);
   });
 
   it('draws the nav entry for incidents.view alone', () => {

@@ -9,6 +9,7 @@ import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
 import { Badge, Card, Ltr, PageHead, StateSwitch, Switch } from '../ui/kit';
 import { featurePresentation } from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
+import { TechnicalDetails } from '../ui/technical-details';
 
 /**
  * The feature screen: a Persian control panel of on/off switches (WP-A2).
@@ -63,7 +64,10 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   // A flag this build has no Persian entry for can only come from a newer server; its
   // own description is then the best there is, and the key is its only name.
   const title = presentation === undefined ? flag.key : t(presentation.title);
-  const summary = presentation === undefined ? flag.description : t(presentation.summary);
+  // C1: an unknown flag's English description is never the summary; it is kept, for
+  // support, under «جزئیات فنی».
+  const summary =
+    presentation === undefined ? t('web.feature_unknown_summary') : t(presentation.summary);
   // A flag this build does not know takes the CONSERVATIVE path: nothing here can say its
   // switch-off is harmless, and the server no longer asks for any confirmation, so the
   // page asks, with a generic sentence, rather than switching it off on one click.
@@ -159,6 +163,7 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
         <div className="feature-row-text">
           <h3>{title}</h3>
           <p className="muted small">{summary}</p>
+          {presentation === undefined && <TechnicalDetails lines={[flag.description]} />}
           {flag.updatedAt !== null && (
             <p className="faint small">
               {t('web.feature_last_changed')}: {formatTimestamp(flag.updatedAt)}

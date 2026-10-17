@@ -11,6 +11,7 @@ import {
 } from '../../apps/web/src/pages/reseller-plans';
 import { grantsStateOf } from '../../apps/web/src/pages/reseller-tiers';
 import { renderPage, stubApi, type Api } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Round N, package D on the Web Admin: «تنظیمات نمایندگان / پلن‌ها و حداقل فروش».
@@ -232,7 +233,8 @@ describe('the reseller plans page', () => {
     await waitFor(() =>
       expect(gets(api, 'period=PREVIOUS_MONTH').length).toBeGreaterThanOrEqual(1),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'رسیده به حداقل' }));
+    // W1.3: the state filter is in the «فیلترها» panel; the period stays a range chip.
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'رسیده به حداقل' }));
     await waitFor(() => expect(gets(api, 'filter=ACHIEVED').length).toBeGreaterThanOrEqual(1));
   });
 
@@ -249,6 +251,8 @@ describe('the reseller plans page', () => {
     render();
     fireEvent.click(await screen.findByRole('button', { name: 'حداقل فروش' }));
     const amount = await screen.findByLabelText('مبلغ حداقل (واحد خرد)');
+    // W2: in a side drawer, not a card further down the page.
+    expect(screen.getByRole('dialog')).toContainElement(amount);
     fireEvent.change(amount, { target: { value: '2000000' } });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     await waitFor(() => expect(posts(api, '/monthly-minimum')).toHaveLength(1));
@@ -360,5 +364,76 @@ describe('the pure helpers', () => {
       'محصول: پلن طلایی',
     );
     expect(grantsInWords([], ['PANEL'], names)).toBe('هیچ');
+  });
+});
+
+describe('a plans write whose answer was lost keeps its key across close and reopen', () => {
+  /*
+   * Each form lives in a drawer that unmounts on close; a 503 may have committed, so the
+   * retry must carry the SAME idempotency key. The page holds the keys, not the forms.
+   */
+  const lost = (url: string) => ({
+    url,
+    method: 'POST',
+    status: 503,
+    body: { error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' } },
+  });
+  const keysOf = (api: Api, path: string) =>
+    posts(api, path).map((call) => (call.body as Record<string, unknown>)['idempotencyKey']);
+  const close = async () => {
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  };
+
+  it('tier grants', async () => {
+    const path = `/reseller-tiers/${TIER_ID}/grants`;
+    const api = stubApi([lost(path), ...routes()]);
+    render();
+    const send = async (n: number) => {
+      fireEvent.click(await screen.findByRole('button', { name: 'محصولات و مجوزها' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'ذخیرهٔ مجوزها' }));
+      await waitFor(() => expect(posts(api, path)).toHaveLength(n));
+    };
+    await send(1);
+    await close();
+    await send(2);
+    const [first, second] = keysOf(api, path);
+    expect(second).toBe(first);
+  });
+
+  it('tier minimum', async () => {
+    const path = `/reseller-tiers/${TIER_ID}/monthly-minimum`;
+    const api = stubApi([lost(path), ...routes()]);
+    render();
+    const send = async (n: number) => {
+      fireEvent.click(await screen.findByRole('button', { name: 'حداقل فروش' }));
+      fireEvent.change(await screen.findByLabelText('مبلغ حداقل (واحد خرد)'), {
+        target: { value: '2000000' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+      await waitFor(() => expect(posts(api, path)).toHaveLength(n));
+    };
+    await send(1);
+    await close();
+    await send(2);
+    const [first, second] = keysOf(api, path);
+    expect(second).toBe(first);
+  });
+
+  it('a reseller’s own grants, from the effective policy', async () => {
+    const path = `/resellers/${CUSTOMER_ID}/grants`;
+    const api = stubApi([lost(path), ...routes()]);
+    render();
+    const send = async (n: number) => {
+      fireEvent.click(await screen.findByRole('button', { name: 'سیاست مؤثر' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'ویرایش تنظیمات اختصاصی' }));
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ مجوزهای اختصاصی' }));
+      await waitFor(() => expect(posts(api, path)).toHaveLength(n));
+    };
+    await send(1);
+    await close();
+    await send(2);
+    const [first, second] = keysOf(api, path);
+    expect(second).toBe(first);
   });
 });

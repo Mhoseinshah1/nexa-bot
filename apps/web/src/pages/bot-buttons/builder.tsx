@@ -39,6 +39,7 @@ import {
 } from '../../ui/kit';
 import { Icon } from '../../ui/icons';
 import { ErrorReport } from '../settings';
+import { useReportDirty } from '../ops-b-layout';
 import { TelegramPhone } from '../telegram-phone';
 import {
   EditableKeyboard,
@@ -229,6 +230,8 @@ export function MenuBuilder({
   }, [serverMoved, dirty, view.draft]);
 
   useUnsavedChanges(mayEdit && dirty, t('web.bb_unsaved_leave'));
+  // The page's tab strip marks the builder's tab while the draft holds unsaved edits.
+  useReportDirty('builder', mayEdit && dirty);
 
   // While a write is in flight nothing is editable: its answer replaces the draft, and an
   // edit made meanwhile would be silently thrown away by it (Codex #134-1).

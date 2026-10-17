@@ -9,6 +9,9 @@ import {
 } from '../../apps/web/src/pages/customer-360-crm';
 import type { Tone } from '../../apps/web/src/ui/kit';
 import { customer, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
+import { openC360Tab } from './c360-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Customer notes and tags in the Web Admin (program §8), rendered against the shapes the
@@ -102,7 +105,13 @@ describe('the customer list tag filter', () => {
         denied={false}
       />,
     );
-    const select = (await screen.findByLabelText('برچسب')) as HTMLSelectElement;
+    await screen.findByText(customer().telegramUserId as string);
+    // The catalogue answers after the list; the tag filter joins the panel once it has.
+    await waitFor(() => {
+      openFilterPanel();
+      expect(screen.getByLabelText('برچسب')).toBeInTheDocument();
+    });
+    const select = screen.getByLabelText('برچسب') as HTMLSelectElement;
     const options = within(select)
       .getAllByRole('option')
       .map((option) => option.textContent);
@@ -212,7 +221,11 @@ describe('Customer 360 — notes and tags', () => {
       ]),
     );
     renderPage(<CustomerCrmSection customerId={ID} {...ALL} />);
-    const picker = (await screen.findByLabelText('افزودن برچسب')) as HTMLSelectElement;
+    // W3: the card header's button opens the assignment dialog.
+    fireEvent.click(await screen.findByRole('button', { name: 'افزودن برچسب' }));
+    const dialog = screen.getByRole('dialog', { name: 'افزودن برچسب' });
+    const picker = within(dialog).getByLabelText('افزودن برچسب') as HTMLSelectElement;
+    expect(within(dialog).getByRole('button', { name: 'افزودن' })).toBeDisabled();
     await waitFor(() =>
       expect(
         within(picker)
@@ -221,7 +234,7 @@ describe('Customer 360 — notes and tags', () => {
       ).toEqual(['یک برچسب انتخاب کنید', 'پرریسک']),
     );
     fireEvent.change(picker, { target: { value: RISK } });
-    fireEvent.click(screen.getByRole('button', { name: 'افزودن' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'افزودن' }));
     await waitFor(() =>
       expect(
         api.calls.some((call) => call.method === 'POST' && call.url.endsWith(`/users/${ID}/tags`)),
@@ -271,7 +284,11 @@ describe('Customer 360 — notes and tags', () => {
       ]),
     );
     renderPage(<CustomerCrmSection customerId={ID} {...ALL} />);
-    const field = (await screen.findByLabelText('یادداشت تازه')) as HTMLTextAreaElement;
+    // W3: the card header's button opens the note dialog.
+    fireEvent.click(await screen.findByRole('button', { name: 'یادداشت تازه' }));
+    const field = within(screen.getByRole('dialog')).getByLabelText(
+      'یادداشت تازه',
+    ) as HTMLTextAreaElement;
     const add = screen.getByRole('button', { name: 'ثبت یادداشت' });
     fireEvent.change(field, { target: { value: '   ' } });
     expect((add as HTMLButtonElement).disabled).toBe(true);
@@ -289,7 +306,7 @@ describe('Customer 360 — notes and tags', () => {
     expect(typeof post.body['idempotencyKey']).toBe('string');
   });
 
-  it('is part of the customer page, with its own entry in the section list', async () => {
+  it('is part of the customer page, in its own «یادداشت و برچسب» tab', async () => {
     stubApi([{ url: `/users/${ID}`, body: { customer: customer() } }, ...crmRoutes()]);
     const { container } = renderPage(
       <UserDetailPage
@@ -308,11 +325,120 @@ describe('Customer 360 — notes and tags', () => {
         denied={false}
       />,
     );
+    // Not drawn until its tab is chosen (W2): only the open tab is rendered.
+    await screen.findByRole('tablist');
+    expect(container.querySelector('#c360-crm')).toBeNull();
+    await openC360Tab('crm');
     await screen.findByText(/قول تمدید داد/);
-    expect(container.querySelector('a[href="#c360-crm"]')?.textContent).toBe(
-      'یادداشت‌ها و برچسب‌ها',
-    );
     expect(container.querySelector('#c360-crm')).not.toBeNull();
+  });
+});
+
+/*
+ * PR #285 review, A6: ten notes a page with «قبلی / بعدی» on the keyset cursor — no
+ * «یادداشت‌های قدیمی‌تر» growing one list.
+ */
+describe('the customer notes pager', () => {
+  const note = (n: number) => ({
+    id: `019210ab-cdef-7012-8345-${String(n).padStart(12, '0')}`,
+    body: `یادداشت ${n}`,
+    authorAdminId: null,
+    authorLabel: 'op-maryam',
+    createdAt: '2026-09-05T09:00:00.000Z',
+  });
+  const notes = (from: number, to: number) =>
+    Array.from({ length: from - to + 1 }, (_, index) => note(from - index));
+
+  it('shows ten a page and walks to older notes and back by cursor', async () => {
+    const api = stubApi(
+      crmRoutes([
+        {
+          url: `/users/${ID}/notes?limit=10`,
+          body: { notes: notes(25, 16), nextCursor: 'older-1' },
+        },
+        {
+          url: `/users/${ID}/notes?limit=10&cursor=older-1`,
+          body: { notes: notes(15, 6), nextCursor: null },
+        },
+      ]),
+    );
+    const { container } = renderPage(<CustomerCrmSection customerId={ID} {...ALL} />);
+    const bodies = () =>
+      Array.from(container.querySelectorAll('.crm-note-body'), (node) => node.textContent);
+    await waitFor(() => expect(bodies()).toEqual(notes(25, 16).map((one) => one.body)));
+    expect(screen.queryByRole('button', { name: 'یادداشت‌های قدیمی‌تر' })).toBeNull();
+    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    await waitFor(() => expect(bodies()).toEqual(notes(15, 6).map((one) => one.body)));
+    expect(screen.getByRole('button', { name: t('web.page_next') })).toBeDisabled();
+    const reads = api.calls.filter((call) => call.method === 'GET' && call.url.includes('/notes'));
+    expect(reads.map((call) => call.url)).toEqual([
+      expect.stringContaining(`/users/${ID}/notes?limit=10`),
+      expect.stringContaining(`/users/${ID}/notes?limit=10&cursor=older-1`),
+    ]);
+    expect(reads.some((call) => /offset|page=/.test(call.url))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
+    await waitFor(() => expect(bodies()).toEqual(notes(25, 16).map((one) => one.body)));
+  });
+});
+
+describe('a note whose answer was lost', () => {
+  it('is sent again under the SAME key after a tab switch and back', async () => {
+    const notesGet = crmRoutes().find((route) => route.url === `/users/${ID}/notes`)!;
+    const api = stubApi([
+      { url: `/users/${ID}`, body: { customer: customer() } },
+      ...crmRoutes().filter((route) => route !== notesGet),
+      { ...notesGet, method: 'GET' },
+      {
+        url: `/users/${ID}/notes`,
+        method: 'POST',
+        status: 503,
+        body: {
+          error: { kind: 'INTERNAL', code: 'internal.unhandled', message: 'x', correlationId: 'c' },
+        },
+      },
+    ]);
+    renderPage(
+      <UserDetailPage
+        id={ID}
+        mayBlock={false}
+        mayViewWallet={false}
+        mayCredit={false}
+        mayDebit={false}
+        mayViewOrders={false}
+        mayViewServices={false}
+        mayEditTrial={false}
+        mayViewReferrals={false}
+        mayViewReseller={false}
+        mayEditReseller={false}
+        mayViewNotes
+        mayWriteNotes
+        denied={false}
+      />,
+    );
+    const writeOnce = async () => {
+      await openC360Tab('crm');
+      fireEvent.click(await screen.findByRole('button', { name: 'یادداشت تازه' }));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('یادداشت تازه'), {
+        target: { value: 'پیگیری بازپرداخت' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ثبت یادداشت' }));
+    };
+    const posts = () =>
+      api.calls.filter((call) => call.method === 'POST' && call.url.endsWith('/notes'));
+    await writeOnce();
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    // Away to another tab (the CRM tab unmounts, its dialog with it), and back.
+    const discard = () => screen.queryByRole('button', { name: t('web.discard') });
+    await openC360Tab('timeline');
+    if (discard() !== null) fireEvent.click(discard()!);
+    await writeOnce();
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    const keyOf = (body: unknown) => (body as { idempotencyKey: string }).idempotencyKey;
+    expect(keyOf(posts()[1]!.body)).toBe(keyOf(posts()[0]!.body));
   });
 });
 

@@ -21,6 +21,7 @@ import { messageFor } from './settings';
 import { knowledgeFault } from './support-knowledge';
 import { Badge, Banner, Card, Empty, PageHead, StateSwitch, useToast, type Tone } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * TB9 — the one-click knowledge build from NEXA (ADR-0035 §5).
@@ -184,6 +185,7 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
       {error != null && (
         <Banner tone="danger" role="alert">
           {buildFault(error)}
+          <ErrorRef error={error} />
         </Banner>
       )}
       <StateSwitch

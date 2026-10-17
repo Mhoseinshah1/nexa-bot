@@ -29,10 +29,19 @@ const fixtures = (overrides: Record<string, unknown> = {}) => [
 const lastWrite = (api: ReturnType<typeof stubApi>) =>
   api.calls.find((call) => call.method === 'POST')?.body as Record<string, unknown> | undefined;
 
+/** W2: the edit form shows one section at a time; a test opens the one it needs. */
+const openTab = async (name: string) =>
+  fireEvent.click(await screen.findByRole('tab', { name: new RegExp(name) }));
+
+/** W3: the create form lives in a drawer opened by «محصول جدید». */
+const openCreate = async () =>
+  fireEvent.click(await screen.findByRole('button', { name: 'محصول جدید' }));
+
 describe('the product display editors', () => {
   it('sends the lists in the order they were edited, moves included', async () => {
     const api = stubApi(fixtures());
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await openCreate();
     await screen.findByLabelText('عنوان');
 
     fireEvent.change(screen.getByLabelText('عنوان'), { target: { value: 'پلن' } });
@@ -93,6 +102,7 @@ describe('the product display editors', () => {
   it('tells the operator the description is shown to the customer, and the lists are internal', async () => {
     stubApi(fixtures());
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await openCreate();
     await screen.findByLabelText('عنوان');
     expect(
       screen.getAllByText(/همین متن در پیش‌فاکتور به مشتری نشان داده می‌شود/u).length,
@@ -107,7 +117,7 @@ describe('the product display editors', () => {
   it('opens a product with no display data as empty editors and sends empty lists back', async () => {
     const api = stubApi(fixtures());
     renderPage(<ProductDetailPage id={ID} mayEdit denied={false} />);
-    await screen.findByLabelText('قیمت');
+    await openTab('نمایش در ربات');
 
     expect(screen.queryByLabelText('لوکیشن 1')).toBeNull();
     expect(screen.queryByLabelText('ویژگی 1')).toBeNull();
@@ -133,7 +143,7 @@ describe('the product display editors', () => {
       }),
     );
     renderPage(<ProductDetailPage id={ID} mayEdit denied={false} />);
-    await screen.findByLabelText('قیمت');
+    await openTab('نمایش در ربات');
 
     // The detail card shows them, numbered, in the stored order.
     const detail = screen.getAllByText('🇫🇮 Finland');
@@ -164,7 +174,7 @@ describe('the product display editors', () => {
   it('refuses a blank line and a label past the bound at the field, and will not send', async () => {
     const api = stubApi(fixtures());
     renderPage(<ProductDetailPage id={ID} mayEdit denied={false} />);
-    await screen.findByLabelText('قیمت');
+    await openTab('نمایش در ربات');
 
     fireEvent.click(screen.getByRole('button', { name: /افزودن لوکیشن/u }));
     // Added and left blank: reported, never silently dropped.
@@ -179,5 +189,46 @@ describe('the product display editors', () => {
     expect(label.maxLength).toBe(60);
 
     expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+});
+
+describe('a product create whose answer was lost', () => {
+  /*
+   * The create form lives in a drawer that unmounts on close. A 503 may have committed, so
+   * the retry must carry the SAME idempotency key after the drawer is closed and reopened:
+   * the page holds the key, not the form.
+   */
+  it('keeps its key across closing and reopening the drawer', async () => {
+    const api = stubApi([
+      {
+        url: '/products',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' },
+        },
+      },
+      ...fixtures(),
+    ]);
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    const posts = () => api.calls.filter((call) => call.method === 'POST');
+    const send = async (n: number) => {
+      await openCreate();
+      fireEvent.change(await screen.findByLabelText('عنوان'), { target: { value: 'پلن' } });
+      fireEvent.click(screen.getByRole('button', { name: 'ساخت محصول' }));
+      await waitFor(() => expect(posts()).toHaveLength(n));
+    };
+    await send(1);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    const asked = screen.queryByRole('alertdialog');
+    if (asked !== null) {
+      fireEvent.click(within(asked).getByRole('button', { name: 'دورانداختن تغییرات' }));
+    }
+    await waitFor(() => expect(screen.queryByLabelText('عنوان')).toBeNull());
+    await send(2);
+    const [first, second] = posts().map(
+      (call) => (call.body as Record<string, unknown>)['idempotencyKey'],
+    );
+    expect(second).toBe(first);
   });
 });

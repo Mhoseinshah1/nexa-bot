@@ -1,0 +1,44 @@
+/* w-money — owned by one agent during the web-admin demo implementation. */
+
+/*
+ * W4 — the payment detail's head row: the situation and facts beside the side cards, both
+ * columns the row's height, the side column's last card stretched to fill it. The cards
+ * after it run full width below (the page's own markup, not a script).
+ */
+.two-col.pay-balance {
+  align-items: stretch;
+}
+.pay-balance > .stack {
+  display: flex;
+  flex-direction: column;
+}
+.pay-balance > .stack > :last-child {
+  flex: 1 1 auto;
+}
+.pay-balance + .stack {
+  margin-top: var(--gap);
+}
+
+/* Hints that used to live in an action card, now under the page head (bulk operation). */
+.w-money-head-notes > * + * {
+  margin-top: 4px;
+}
+
+/* W2 — a tab's marker dot: warn for unsaved edits, danger for the form's current problem. */
+.w-money-tab-dot {
+  display: inline-block;
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 50%;
+  margin-inline-start: 6px;
+  vertical-align: middle;
+}
+.w-money-tab-dot.dirty {
+  background: var(--warn);
+}
+.w-money-tab-dot.problem {
+  background: var(--danger);
+}
+.w-money-tabs {
+  margin-block-end: var(--gap);
+}

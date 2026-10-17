@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import { AUTOMATIC_REFUND_REASON, type CompensationView, type RefundState } from '@nexa/contracts';
 import { fetchCompensations } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Card,
   CursorPager,
@@ -62,11 +64,18 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
 
-  const compensations = useQuery({
-    queryKey: ['compensations', cursor],
-    queryFn: () => fetchCompensations(cursor === null ? {} : { cursor }),
-    enabled: !denied,
-  });
+  const compensations = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['compensations', cursor],
+      // W1.8: ten rows a page, on the same keyset.
+      queryFn: () =>
+        fetchCompensations({
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === null ? {} : { cursor }),
+        }),
+      enabled: !denied,
+    }),
+  );
 
   const columns: readonly Column<CompensationView>[] = [
     {

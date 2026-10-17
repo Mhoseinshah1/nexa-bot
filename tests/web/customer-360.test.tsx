@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { COMMERCE_ERROR_CODES } from '@nexa/contracts';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
+import { TOGGLE_REFUSAL_LABELS } from '../../apps/web/src/pages/customer-360-sections';
 import { customer, product, renderPage, stubApi } from './harness';
+import { openC360Tab } from './c360-helpers';
+import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Customer 360 (spec §11) — the redesigned customer page, rendered against the shapes the
@@ -107,10 +111,9 @@ describe('Customer 360 — the customer page', () => {
     expect(within(head).getByText('5551234567')).toBeTruthy();
     // The internal uuid is never the operator's identity on the page head.
     expect(head.textContent ?? '').not.toContain(ID);
-    await screen.findByText(
-      'قوانین و پذیرش آن هنوز در این نسخه پیاده نشده است؛ داده‌ای برای نمایش وجود ندارد.',
-    );
-    expect(screen.getAllByText('+989121234567').length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('+989121234567')).length).toBeGreaterThan(0);
+    // W5: a server without the terms domain shows a dash, never a «not built» note.
+    expect(screen.queryByText(/در این نسخه پیاده نشده/)).toBeNull();
     // Exact aggregates only: the purchase count in the head, from the server's summary.
     await waitFor(() => expect(within(head).getByText('تعداد خرید')).toBeTruthy());
     expect(within(head).getByText('سرویس‌های فعال')).toBeTruthy();
@@ -119,11 +122,15 @@ describe('Customer 360 — the customer page', () => {
   it('draws no control and no dangerous operation without their permissions', async () => {
     const api = stubApi(routes());
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    await openC360Tab('controls');
     await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' });
     expect(screen.queryByRole('button', { name: 'معاف کردن' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'انتقال حساب کاربری' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'افزودن دستی سفارش' })).toBeNull();
-    expect(screen.getByText('برای دیدن تاریخچه مدیریتی مجوز audit.view لازم است.')).toBeTruthy();
+    await openC360Tab('timeline');
+    expect(
+      await screen.findByText('برای دیدن تاریخچه مدیریتی مجوز audit.view لازم است.'),
+    ).toBeTruthy();
     expect(api.calls.some((call) => call.url.includes('/timeline'))).toBe(false);
   });
 
@@ -140,6 +147,7 @@ describe('Customer 360 — the customer page', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayExemptChannel denied={false} />);
+    await openC360Tab('controls');
     fireEvent.click(await screen.findByRole('button', { name: 'معاف کردن' }));
     const confirm = screen.getByRole('button', { name: 'تأیید' });
     expect(confirm).toBeDisabled();
@@ -320,6 +328,7 @@ describe('Customer 360 — the customer page', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayViewAudit denied={false} />);
+    await openC360Tab('timeline');
     await screen.findByText('معافیت از عضویت کانال');
     expect(screen.getByText('owner — VIP')).toBeTruthy();
   });
@@ -343,7 +352,7 @@ describe('Customer 360 — the customer page', () => {
     const { unmount } = renderPage(
       <UserDetailPage id={ID} {...OFF} mayManualOrder denied={false} />,
     );
-    await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' });
+    await screen.findByRole('tablist');
     // orders.manual.create without users.wallet.debit: a guaranteed refusal, so no button.
     expect(screen.queryByRole('button', { name: 'افزودن دستی سفارش' })).toBeNull();
     unmount();
@@ -363,5 +372,123 @@ describe('Customer 360 — the customer page', () => {
     const link = await screen.findByRole('link', { name: 'مشاهده سفارش‌ها' });
     expect(link.getAttribute('href')).toBe(`/orders?q=${ID}`);
     expect(container).toBeTruthy();
+  });
+});
+
+/**
+ * The demo's Customer 360 (W1.5, W2, W3): one action panel with its four groups, nine
+ * real tabs drawing only the chosen one, another customer opening on «نمای کلی», and the
+ * trial override's writes as dialogs.
+ */
+describe('Customer 360 — tabs and the action panel', () => {
+  const OTHER = '019210ab-cdef-7012-8345-6789abcdef02';
+
+  it('draws only the chosen tab, and opens another customer on «نمای کلی»', async () => {
+    stubApi([
+      ...routes([{ url: `/users/${ID}/timeline`, body: { entries: [] } }]),
+      { url: `/users/${OTHER}`, body: { customer: customer({ id: OTHER }) } },
+      { url: `/users/${OTHER}/overview`, body: overview() },
+      { url: `/users/${OTHER}/financial-summary`, body: summary },
+      { url: `/users/${OTHER}/trial`, body: { trial: trialBody } },
+    ]);
+    const view = renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    const tabs = await screen.findAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      'نمای کلی',
+      'سرویس‌ها و سفارش‌ها',
+      'پشتیبانی',
+      'مالی',
+      'کنترل‌ها',
+      'نماینده و معرفی',
+      'یادداشت و برچسب',
+      'تاریخچه',
+    ]);
+    expect(screen.queryByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' })).toBeNull();
+    await openC360Tab('controls');
+    expect(
+      await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' }),
+    ).toBeInTheDocument();
+    view.rerender(<UserDetailPage id={OTHER} {...OFF} denied={false} />);
+    expect(
+      await screen.findByRole('tab', { name: 'نمای کلی', selected: true }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' })).toBeNull();
+  });
+
+  it('groups the actions under «عملیات روی این مشتری», the sensitive ones in their strip', async () => {
+    stubApi(routes());
+    renderPage(
+      <UserDetailPage
+        id={ID}
+        {...OFF}
+        mayBlock
+        mayViewWallet
+        mayCredit
+        mayDebit
+        mayManualOrder
+        mayMessage
+        mayTransfer
+        mayEditServices
+        mayViewServices
+        denied={false}
+      />,
+    );
+    const panel = await screen.findByRole('region', { name: 'عملیات روی این مشتری' });
+    const group = (name: string) => within(panel).getByRole('group', { name });
+    expect(within(group('کیف پول')).getByRole('button', { name: 'افزایش موجودی' })).toBeTruthy();
+    expect(within(group('کیف پول')).getByRole('button', { name: 'کسر موجودی' })).toBeTruthy();
+    expect(
+      within(group('سفارش‌ها')).getByRole('button', { name: 'افزودن دستی سفارش' }),
+    ).toBeTruthy();
+    expect(
+      within(group('ارتباط و دسترسی')).getByRole('button', { name: 'ارسال پیام' }),
+    ).toBeTruthy();
+    expect(
+      within(group('ارتباط و دسترسی')).getByRole('button', { name: 'مسدود کردن' }),
+    ).toBeTruthy();
+    expect(
+      within(group('عملیات حساس')).getByRole('button', { name: 'انتقال حساب کاربری' }),
+    ).toBeTruthy();
+    // «افزایش موجودی» opens the wallet dialog directly — no scroll, no tab change needed.
+    fireEvent.click(within(group('کیف پول')).getByRole('button', { name: 'افزایش موجودی' }));
+    expect(screen.getByRole('dialog', { name: 'واریز به کیف پول' })).toBeInTheDocument();
+  });
+
+  it('sets a trial override through a dialog, asking before a typed limit is dropped', async () => {
+    const api = stubApi(
+      routes([{ url: `/users/${ID}/trial/override`, body: { trial: trialBody } }]),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayEditTrial denied={false} />);
+    await openC360Tab('controls');
+    expect(screen.queryByLabelText('سقف اختصاصی')).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'ثبت سقف اختصاصی' }));
+    const dialog = screen.getByRole('dialog', { name: 'ثبت سقف اختصاصی' });
+    const limit = within(dialog).getAllByRole('textbox')[0] as HTMLInputElement;
+    fireEvent.change(limit, { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.close') }));
+    const ask = screen.getByRole('alertdialog');
+    fireEvent.click(within(ask).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(limit.value).toBe('3');
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.trial_override_set') }));
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.method !== 'GET' && call.url.includes('/trial'))).toBe(
+        true,
+      ),
+    );
+  });
+});
+
+describe('Customer 360 — machine keys read in Persian (W5)', () => {
+  it('names every refusal a suspend-all / resume-all item can carry', () => {
+    for (const code of [
+      COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+      COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+      COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+      COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+    ]) {
+      const label = TOGGLE_REFUSAL_LABELS[code];
+      expect(label, code).toBeDefined();
+      expect(t(label as WebKey), code).toMatch(/[؀-ۿ]/u);
+    }
   });
 });

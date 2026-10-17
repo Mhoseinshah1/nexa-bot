@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   QR_BACKGROUND_MAX_SIDE,
@@ -30,10 +30,12 @@ import {
   uploadTenantMedia,
 } from '../api/client';
 import { formatTimestamp, splitBytes } from '../format';
+import { FilePicker } from '../ui/file-picker';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
 import { Badge, Banner, Button, Card, Field, useToast, useUnsavedChanges } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Phase 2 item 4: «پس‌زمینهٔ QR» — the subscription QR drawn on the tenant's own image.
@@ -202,6 +204,8 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
   const current = media.data?.media ?? null;
 
   const [picked, setPicked] = useState<Picked>({ kind: 'NONE' });
+  /** The file the picker shows: what was chosen, read or not, valid or not. */
+  const [chosen, setChosen] = useState<File | null>(null);
   const [draft, setDraft] = useState<{
     readonly fields: Draft;
     readonly basis: number | null;
@@ -221,6 +225,15 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
     queryKey: ['delivery-qr-preview', previewOf, current?.version ?? 0],
     queryFn: () => previewDeliveryQr(previewOf),
     enabled: settings.data !== undefined && media.data !== undefined,
+    /*
+     * W2: «پیش‌نمایش» keeps the preview on screen (marked busy) while the next one is drawn.
+     * Without it the image gave way to a one-line «loading» for the length of a request, the
+     * card shrank, and the page under the operator's pointer jumped to the top. Only a new
+     * placement is kept over: a new BACKGROUND (another version) is a different picture with
+     * different dimensions, and the placement check reads them, so it starts from nothing.
+     */
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[2] === (current?.version ?? 0) ? previous : undefined,
   });
   const background = preview.data?.background ?? null;
 
@@ -278,6 +291,7 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
     onSuccess: async () => {
       uploadKey.settle();
       setPicked({ kind: 'NONE' });
+      setChosen(null);
       notify({ tone: 'ok', message: t('web.qrt_uploaded') });
       await refresh();
     },
@@ -343,8 +357,9 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
       basis: before === null ? (setting?.version ?? null) : before.basis,
     }));
 
-  const onPick = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const onPick = (files: readonly File[]) => {
+    const file = files[0];
+    setChosen(file ?? null);
     if (file === undefined) {
       setPicked({ kind: 'NONE' });
       return;
@@ -408,11 +423,13 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
                 htmlFor="qrt-file"
                 {...(picked.kind === 'INVALID' ? { error: picked.message } : {})}
               >
-                <input
+                <FilePicker
                   id="qrt-file"
-                  type="file"
+                  kind="image"
                   accept="image/png"
-                  onChange={onPick}
+                  onFiles={onPick}
+                  selected={chosen}
+                  onClear={() => onPick([])}
                   disabled={busy}
                 />
               </Field>
@@ -432,7 +449,12 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
                   {current === null ? t('web.qrt_upload') : t('web.qrt_replace')}
                 </Button>
               </div>
-              {upload.error != null && <Banner tone="danger">{uploadMessage(upload.error)}</Banner>}
+              {upload.error != null && (
+                <Banner tone="danger">
+                  {uploadMessage(upload.error)}
+                  <ErrorRef error={upload.error} />
+                </Banner>
+              )}
             </form>
           )}
         </section>
@@ -547,7 +569,12 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
               </Button>
             )}
           </div>
-          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+          {failure != null && (
+            <Banner tone="danger">
+              {messageFor(failure)}
+              <ErrorRef error={failure} />
+            </Banner>
+          )}
           {!mayEdit && <p className="muted">{t('web.qrt_read_only')}</p>}
         </section>
       </div>
@@ -557,7 +584,7 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
           {t('web.qrt_preview_title')}
         </h3>
         {preview.data !== undefined ? (
-          <figure className="qrt-preview">
+          <figure className="qrt-preview" aria-busy={preview.isPlaceholderData}>
             <img
               data-testid="qrt-preview"
               src={`data:image/png;base64,${preview.data.pngBase64}`}
@@ -577,7 +604,10 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
             </figcaption>
           </figure>
         ) : preview.isError ? (
-          <Banner tone="danger">{messageFor(preview.error)}</Banner>
+          <Banner tone="danger">
+            {messageFor(preview.error)}
+            <ErrorRef error={preview.error} />
+          </Banner>
         ) : (
           <p className="muted">{t('web.qrt_preview_loading')}</p>
         )}

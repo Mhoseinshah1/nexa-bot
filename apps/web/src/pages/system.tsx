@@ -33,12 +33,11 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQuery, type Route } from '../router';
+import { setQuery, useLinkHandler, type Route } from '../router';
 import {
   Badge,
   Banner,
   Card,
-  Copyable,
   DataTable,
   Drawer,
   Duration,
@@ -46,7 +45,6 @@ import {
   Ident,
   KV,
   Ltr,
-  MaturityBadge,
   Modal,
   Num,
   PageHead,
@@ -65,6 +63,10 @@ import { pollUnlessFinal } from '../polling';
 import { errorCopy, queryState, retryOf } from '../view-state';
 import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
+import { errorText } from '../error-text';
+import { roleLabel } from '../rbac-labels';
+import { dependencyLabel, readinessDetailText } from '../readiness-labels';
+import { CodeLabel, ProviderText } from '../ui/technical-details';
 
 /**
  * System and operations.
@@ -103,6 +105,7 @@ export function SystemPage({
 
   // The shell reads the same `['info']` once per session; this costs no request.
   const info = useQuery({ queryKey: ['info'], queryFn: fetchInfo });
+  const onLink = useLinkHandler();
 
   return (
     <>
@@ -115,9 +118,6 @@ export function SystemPage({
               <span className="system-build">
                 <span>
                   {t('web.version')} <Ltr>{info.data.version}</Ltr>
-                </span>
-                <span>
-                  {t('web.commit')} <Ltr>{info.data.commit.slice(0, 7)}</Ltr>
                 </span>
                 <span>
                   {t('web.environment')} <Ltr>{info.data.environment}</Ltr>
@@ -164,13 +164,21 @@ export function SystemPage({
         )}
       </TabPanel>
 
-      <Card title={t('web.system_logs_title')} tone="muted">
-        <Banner tone="info" title={t('web.system_logs_absent')}>
-          {t('web.system_logs_body')}
-        </Banner>
-        <p className="muted small">
-          <MaturityBadge value="now" /> {t('web.system_logs_destination')}
-        </p>
+      <Card
+        title={t('web.system_logs_title')}
+        tone="muted"
+        // The link only where it leads somewhere: `/ops-group` is a `settings.view` page.
+        {...(permissions.includes('settings.view')
+          ? {
+              actions: (
+                <a className="btn sm" href="/ops-group" onClick={onLink}>
+                  {t('web.nav_ops_group')}
+                </a>
+              ),
+            }
+          : {})}
+      >
+        <p className="muted small">{t('web.system_logs_destination')}</p>
       </Card>
     </>
   );
@@ -243,7 +251,7 @@ function StatusSection() {
                 {
                   key: 'name',
                   header: t('web.dependency'),
-                  render: (row) => <Ltr>{row.name}</Ltr>,
+                  render: (row) => <CodeLabel label={dependencyLabel(row.name)} code={row.name} />,
                 },
                 {
                   key: 'status',
@@ -271,7 +279,7 @@ function StatusSection() {
                   key: 'detail',
                   header: t('web.detail'),
                   wrap: true,
-                  render: (row) => <span className="plain muted">{row.detail ?? '—'}</span>,
+                  render: (row) => <ReadinessDetail detail={row.detail} />,
                 },
               ]}
             />
@@ -284,7 +292,6 @@ function StatusSection() {
               <KV
                 items={[
                   [t('web.version'), <Ltr key="v">{info.data.version}</Ltr>],
-                  [t('web.commit'), <Copyable key="c" value={info.data.commit} />],
                   [t('web.environment'), <Ltr key="e">{info.data.environment}</Ltr>],
                   [t('web.build_time'), formatTimestamp(info.data.buildTime)],
                   [t('web.node_version'), <Ltr key="n">{info.data.nodeVersion}</Ltr>],
@@ -409,30 +416,8 @@ function MonitorSection({ denied }: { denied: boolean }) {
         </Card>
       </div>
 
-      <Card title={t('web.monitor_separation')} hint={t('web.monitor_separation_hint')}>
-        <ul className="system-separation">
-          <li>
-            <div className="system-separation-head">
-              <span className="strong">{t('web.monitor_lightweight')}</span>
-              <MaturityBadge value="now" />
-            </div>
-            <p className="muted small">{t('web.monitor_lightweight_body')}</p>
-          </li>
-          <li>
-            <div className="system-separation-head">
-              <span className="strong">{t('web.monitor_heavy')}</span>
-              <MaturityBadge value="planned" />
-            </div>
-            <p className="muted small">{t('web.monitor_heavy_body')}</p>
-          </li>
-          <li>
-            <div className="system-separation-head">
-              <span className="strong">{t('web.monitor_user_sync')}</span>
-              <MaturityBadge value="planned" />
-            </div>
-            <p className="muted small">{t('web.monitor_user_sync_body')}</p>
-          </li>
-        </ul>
+      <Card title={t('web.monitor_lightweight')}>
+        <p className="muted small">{t('web.monitor_lightweight_body')}</p>
       </Card>
     </>
   );
@@ -555,8 +540,8 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
                 ) : (
                   <span className="system-roles">
                     {row.roleKeys.map((key) => (
-                      <Badge key={key} outline>
-                        {key}
+                      <Badge key={key} outline title={key}>
+                        {roleLabel(key)}
                       </Badge>
                     ))}
                   </span>
@@ -1520,7 +1505,7 @@ function refusalText(error: unknown, fallback: string | null): string {
       return fallback;
     }
   }
-  return error instanceof Error ? error.message : String(error);
+  return errorText(error);
 }
 
 /**
@@ -1584,7 +1569,7 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
       ) {
         setProblem(t('web.admin_telegram_id_taken'));
       } else {
-        setProblem(error instanceof Error ? error.message : String(error));
+        setProblem(errorText(error));
       }
     },
   });
@@ -1702,5 +1687,19 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
         </form>
       </Modal>
     </div>
+  );
+}
+
+/**
+ * A readiness detail (C1): the API's English word or numeric shape in Persian; a shape this
+ * build does not know is a Persian line, with what the probe wrote under «جزئیات فنی».
+ */
+function ReadinessDetail({ detail }: { detail: string | undefined }) {
+  if (detail === undefined || detail === '') return <span className="plain muted">—</span>;
+  const text = readinessDetailText(detail);
+  return (
+    <span className="plain muted" title={detail}>
+      {text ?? <ProviderText summary={'web.readiness_detail_other'} text={detail} />}
+    </span>
   );
 }

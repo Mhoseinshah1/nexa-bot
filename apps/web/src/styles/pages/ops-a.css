@@ -740,6 +740,10 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
 }
+/* The previous preview, kept on screen while the next one is drawn (W2): dimmed, not gone. */
+.qrt-preview[aria-busy='true'] img {
+  opacity: 0.6;
+}
 
 /* --- Payment routes and FX --------------------------------------------------------- */
 

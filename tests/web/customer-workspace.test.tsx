@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { resolve } from '../../apps/web/src/app';
 import {
@@ -12,6 +12,8 @@ import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { customerAttentionItems, workspaceWithheld } from '../../apps/web/src/attention-view';
 import { customerShortcuts } from '../../apps/web/src/pages/customer-360-workspace';
 import { customer, renderPage, stubApi } from './harness';
+import { openC360Tab } from './c360-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Roadmap B5 — Customer 360 as an operator's workspace: what waits for a person, the newest
@@ -273,6 +275,7 @@ describe('Customer 360 workspace — support', () => {
   it('asks the inbox for this customer’s newest tickets and links each one', async () => {
     const api = stubApi(routes(workspace(), [{ url: '/tickets', body: tickets }]));
     renderPage(<UserDetailPage id={ID} {...OFF} mayViewTickets denied={false} />);
+    await openC360Tab('support');
     const subject = await screen.findByText('اتصال قطع است');
     const card = subject.closest('section') as HTMLElement;
     expect(hrefOf(within(card).getByText('#42'))).toBe(`/tickets/${TICKET_ID}`);
@@ -289,6 +292,7 @@ describe('Customer 360 workspace — support', () => {
   it('names tickets.view and asks for nothing without it', async () => {
     const api = stubApi(routes(workspace(), [{ url: '/tickets', body: tickets }]));
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    await openC360Tab('support');
     await screen.findByText('برای دیدن تیکت‌های این مشتری دسترسی tickets.view لازم است.');
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('/workspace'))).toBe(true),
@@ -359,8 +363,10 @@ describe('Customer 360 workspace — the route', () => {
   it('asks for tickets and offers the payment and handoff shortcuts from their own keys', async () => {
     const api = stubApi(routes(workspace(), [{ url: '/tickets', body: tickets }]));
     renderPage(at(['users.view', 'tickets.view', 'payments.view', 'business_chats.view']));
+    await openC360Tab('support');
     await screen.findByText('اتصال قطع است');
     expect(api.calls.some((call) => call.url.includes('/tickets?'))).toBe(true);
+    await openC360Tab('overview');
     const card = (await screen.findByText('میان‌برهای اپراتور')).closest('section') as HTMLElement;
     expect(
       within(card)
@@ -377,7 +383,9 @@ describe('Customer 360 workspace — the route', () => {
   it('withholds them all from an actor holding only users.view', async () => {
     const api = stubApi(routes(workspace(), [{ url: '/tickets', body: tickets }]));
     renderPage(at(['users.view']));
+    await openC360Tab('support');
     await screen.findByText('برای دیدن تیکت‌های این مشتری دسترسی tickets.view لازم است.');
+    await openC360Tab('overview');
     const card = (await screen.findByText('میان‌برهای اپراتور')).closest('section') as HTMLElement;
     // `users.view` reads the wallet, and that is the only shortcut it opens.
     expect(
@@ -386,5 +394,52 @@ describe('Customer 360 workspace — the route', () => {
         .map((link) => link.getAttribute('href')),
     ).toEqual(['#c360-wallet']);
     expect(api.calls.some((call) => call.url.includes('/tickets'))).toBe(false);
+  });
+
+  it('switches to «مالی» from the wallet shortcut and flashes the card, never scrolling', async () => {
+    stubApi(routes(workspace(), [{ url: '/tickets', body: tickets }]));
+    renderPage(at(['users.view']));
+    const card = (await screen.findByText('میان‌برهای اپراتور')).closest('section') as HTMLElement;
+    const scrolled = vi.spyOn(window, 'scrollTo');
+    fireEvent.click(within(card).getByRole('link'));
+    expect(
+      await screen.findByRole('tab', { name: t('web.c360_tab_financial'), selected: true }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(document.getElementById('c360-wallet')).toHaveClass('wb-flash'));
+    expect(window.location.hash).toBe('');
+    expect(scrolled).not.toHaveBeenCalled();
+    scrolled.mockRestore();
+  });
+
+  /*
+   * W2 (`pnpm web:no-scroll`, 390): swapping «نمای کلی» for «مالی» under the shortcut let the
+   * browser's scroll anchoring shift the page by ~100px. The panel is out of anchoring for
+   * the switch (the class's rule: `stylesheet-contract.test.tsx`), then back in once the
+   * flash is over; nothing is scrolled into view or focused in a way that scrolls.
+   */
+  it('keeps the page still on the wallet shortcut: the panel leaves scroll anchoring', async () => {
+    stubApi(routes(workspace(), [{ url: '/tickets', body: tickets }]));
+    renderPage(at(['users.view']));
+    const card = (await screen.findByText('میان‌برهای اپراتور')).closest('section') as HTMLElement;
+    const panel = document.getElementById('c360-tab-panel') as HTMLElement;
+    expect(panel).not.toHaveClass('no-scroll-anchor');
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    const intoView = vi.fn();
+    Element.prototype.scrollIntoView = intoView;
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      fireEvent.click(within(card).getByRole('link'));
+      expect(panel).toHaveClass('no-scroll-anchor');
+      await waitFor(() => expect(document.getElementById('c360-wallet')).toHaveClass('wb-flash'));
+      expect(document.getElementById('c360-tab-panel')).toBe(panel);
+      expect(intoView).not.toHaveBeenCalled();
+      for (const [options] of focus.mock.calls)
+        expect(options).toMatchObject({ preventScroll: true });
+      await waitFor(() => expect(panel).not.toHaveClass('no-scroll-anchor'), { timeout: 3000 });
+    } finally {
+      focus.mockRestore();
+      if (original === undefined) delete (Element.prototype as Partial<Element>).scrollIntoView;
+      else Object.defineProperty(Element.prototype, 'scrollIntoView', original);
+    }
   });
 });

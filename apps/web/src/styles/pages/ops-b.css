@@ -6,85 +6,11 @@
  * Owned by the OPS-B agent. Page-scoped classes only.
  */
 
-/* --- Shared: the in-page section list (settings, reminders) ------------------- */
+/* --- Shared: the section tabs (settings, reminders) ----------------------------- */
 
-/*
- * A long settings-like page: the list of its sections at the start, sticky, and every
- * section rendered in the column beside it. Below 980px the list becomes a wrapping row
- * of chips above the sections.
- */
-.ob-sectioned {
-  display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-.ob-secnav {
-  position: sticky;
-  top: 16px;
-  border-inline-end: 1px solid var(--line);
-  padding-inline-end: 8px;
-}
-.ob-secnav ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.ob-secnav button {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  text-align: start;
-  background: none;
-  border: none;
-  border-radius: var(--radius-ctl);
-  padding: 8px 12px;
-  color: var(--fg-2);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.ob-secnav button:hover {
-  color: var(--fg);
-  background: var(--bg-3);
-}
-.ob-secnav button[aria-current='true'] {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
+/* The unsaved mark on a section tab (`SectionTabs`). */
 .ob-secnav-mark {
   display: inline-flex;
-}
-/* A section is a jump target: it is focused programmatically, never tabbed to. */
-.ob-sectioned [tabindex='-1']:focus {
-  outline: none;
-}
-@media (max-width: 980px) {
-  .ob-sectioned {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .ob-secnav {
-    position: static;
-    border-inline-end: none;
-    padding-inline-end: 0;
-  }
-  .ob-secnav ul {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .ob-secnav button {
-    width: auto;
-    border: 1px solid var(--line-2);
-    border-radius: var(--radius-pill);
-    padding: 4px 12px;
-    font-size: var(--fs-sm);
-  }
 }
 
 /* --- Settings (WP-A1) -------------------------------------------------------- */
@@ -326,18 +252,6 @@ form.set-row > * + * {
 
 /* --- WP-A7 tickets ------------------------------------------------------------- */
 
-/* The inbox's filter row: compact fields that wrap, the two buttons on the same line. */
-.tickets-filters {
-  align-items: flex-end;
-}
-.tickets-filters .field {
-  min-width: 140px;
-}
-.tickets-filter-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
 .tickets-number {
   font-size: var(--fs-ui);
 }
@@ -345,32 +259,13 @@ form.set-row > * + * {
 .tickets-row-closed td {
   color: var(--fg-3);
 }
-.tickets-inline-edit {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
 .tickets-order {
   width: 84px;
-}
-.tickets-category-form {
-  align-items: flex-end;
 }
 
 /* One ticket: the conversation and the reply in the main column, the rest beside it. */
 .ticket-transitions {
   flex-wrap: wrap;
-}
-.ticket-links {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-.ticket-links > .btn {
-  align-self: flex-start;
 }
 
 /*
@@ -494,13 +389,6 @@ form.set-row > * + * {
 /* TB10: the customer's wait — a figure and its unit, never split across lines. */
 .bchat-wait {
   font-variant-numeric: tabular-nums;
-}
-.bchat-more {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding-top: 12px;
 }
 .bchat-controls {
   margin-top: 12px;
@@ -986,8 +874,23 @@ form.set-row > * + * {
     grid-template-columns: minmax(0, 1fr);
   }
   .notifications-side {
-    position: static;
+    position: relative;
   }
+}
+/*
+ * While another notification's detail is read, the previous card keeps the column's height
+ * but is not shown (nor focusable, nor read out); the loading line sits over it, so neither
+ * appearing nor going changes the height and the page does not jump.
+ */
+.notifications-holding {
+  visibility: hidden;
+}
+.notifications-holding-status {
+  position: absolute;
+  inset-block-start: 16px;
+  inset-inline: 0;
+  margin: 0;
+  text-align: center;
 }
 
 /* --- System (status, diagnostics, monitor, administrators) ----------------------- */
@@ -1004,29 +907,6 @@ form.set-row > * + * {
 .system-stats,
 .diagnostics-stats {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-}
-.system-separation {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-.system-separation li {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
-  padding: 10px 12px;
-}
-.system-separation-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.system-separation p {
-  margin: 0;
 }
 .system-roles {
   display: inline-flex;
@@ -1048,9 +928,6 @@ form.set-row > * + * {
   background: var(--bg-1);
 }
 @media (max-width: 980px) {
-  .system-separation {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 /* --- Recovery (ADR-0025, ADR-0028) ------------------------------------------------ */
@@ -1301,20 +1178,6 @@ form.set-row > * + * {
 
 /* --- Phase D1 audit log -------------------------------------------------------- */
 
-/* The filter row: compact fields that wrap at 390px, the two buttons kept together. */
-.audit-filters {
-  align-items: flex-end;
-}
-.audit-filters .field {
-  min-width: 140px;
-  flex: 1 1 140px;
-}
-.audit-filter-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  flex-wrap: wrap;
-}
 .audit-code {
   font-size: var(--fs-ui);
 }
@@ -1422,17 +1285,28 @@ form.set-row > * + * {
   gap: 8px;
   margin-block-end: var(--gap);
 }
-.incident-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-block: 12px;
-}
-/* One column at 390px; the scope and timeline beside the summary on a desk. */
+/*
+ * W4: the summary on one side, the scope and the timeline stacked on the other; one
+ * column at 390px.
+ */
 .incident-detail {
   display: grid;
   gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+}
+/* The side column ends level with the summary: its last card takes the height left over. */
+.incident-side {
+  display: flex;
+  flex-direction: column;
+}
+.incident-side > :last-child {
+  flex: 1;
+}
+@media (max-width: 900px) {
+  .incident-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .incident-text {
   white-space: pre-wrap;
@@ -1459,9 +1333,8 @@ form.set-row > * + * {
   min-inline-size: 0;
 }
 
-/* Touch: the section navigation is a column of 44px targets (tokens.css). */
+/* Touch: the template catalogue's chips are 44px targets (tokens.css). */
 @media (pointer: coarse) and (hover: none) {
-  .ob-secnav button,
   .tcat-chip {
     min-height: var(--ctl-h);
   }

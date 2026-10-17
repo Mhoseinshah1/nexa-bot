@@ -9,6 +9,7 @@ import {
   percentOf,
   takesConversionRate,
 } from '../../apps/web/src/pages/payment-gateways';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -148,9 +149,9 @@ describe('the gateway form’s top-up gift', () => {
   };
 
   it('opens with the route’s gift, explains it, and saves the percentage as typed', async () => {
-    const { api, view, input } = await open();
+    const { api, input } = await open();
     expect(input.value).toBe('5');
-    expect(view.container.textContent).toContain('به‌عنوان هدیه به کیف پول مشتری واریز می‌شود');
+    expect(document.body.textContent).toContain('به‌عنوان هدیه به کیف پول مشتری واریز می‌شود');
 
     fireEvent.change(input, { target: { value: '۱۲' } });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
@@ -433,7 +434,9 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
     ]);
     renderPage(<PaymentGatewaysPage provider="NOWPAYMENTS" denied={false} mayEdit />);
     fireEvent.click(await screen.findByRole('button', { name: 'بررسی اتصال' }));
-    expect(await screen.findByText('the check could not be completed')).toBeInTheDocument();
+    // W6: an unmapped 5xx is said in Persian; the server's English never reaches the page.
+    expect(await screen.findByText(t('web.err_status_5xx'))).toBeInTheDocument();
+    expect(screen.queryByText('the check could not be completed')).toBeNull();
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'بررسی اتصال' })).not.toBeDisabled();
     });

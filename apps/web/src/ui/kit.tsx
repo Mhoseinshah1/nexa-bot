@@ -15,6 +15,7 @@ import {
 } from 'react';
 import type { MoneyWire } from '@nexa/contracts';
 import { Icon, type IconName } from './icons';
+import { useSelectedTabInStrip } from './tab-strip';
 import { errorCopy, queryState, retryOf, staleAfterError, type QueryView } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { formatMoney, formatMoneyText, formatNumber, splitDuration } from '../format';
@@ -55,7 +56,24 @@ function cx(...parts: readonly (string | false | null | undefined)[]): string {
  * comes out reordered. Isolation makes the span one neutral object.
  */
 export function Ltr({ children, mono = true }: { children: ReactNode; mono?: boolean }) {
+  if (isPersianText(children)) return <span className="fa-in-ltr">{children}</span>;
   return <span className={mono ? 'ltr mono' : 'ltr'}>{children}</span>;
+}
+
+/** Arabic-script letters: a value holding them is a Persian sentence, not a technical value. */
+const PERSIAN_LETTERS = /[\u0600-\u06FF]/;
+
+/**
+ * Whether a would-be technical value is actually Persian text (W5): a Persian
+ * error or label that reached an LTR / monospace box. Such text is drawn RTL in
+ * the UI font, still isolated — forcing it left-to-right in a code face reverses
+ * its punctuation and makes it hard to read. Only plain text is judged; a node
+ * tree is left as its author drew it.
+ */
+export function isPersianText(children: ReactNode): boolean {
+  const parts = Array.isArray(children) ? (children as readonly unknown[]) : [children];
+  if (!parts.every((part) => typeof part === 'string' || typeof part === 'number')) return false;
+  return PERSIAN_LETTERS.test(parts.join(''));
 }
 
 /**
@@ -273,7 +291,9 @@ export function CodeValue({
 }) {
   return (
     <span className="code-field">
-      <code className={cx('code', wrap && 'wrap')}>{value}</code>
+      <code className={cx('code', wrap && 'wrap', isPersianText(value) && 'fa-in-ltr')}>
+        {value}
+      </code>
       {copy && <CopyButton value={value} />}
     </span>
   );
@@ -506,7 +526,6 @@ export function Card({
   tone,
   tight = false,
   id,
-  focusable = false,
 }: {
   /** A node rather than a string, so a title can isolate a Latin run inside Persian. */
   title?: ReactNode;
@@ -518,11 +537,6 @@ export function Card({
   tone?: 'danger' | 'muted';
   tight?: boolean;
   id?: string;
-  /**
-   * A target a section list moves to: focusable by script (`tabIndex={-1}`), not a
-   * tab stop, so `revealField` lands a keyboard user in the section it scrolled to.
-   */
-  focusable?: boolean;
 }) {
   return (
     <section
@@ -533,7 +547,6 @@ export function Card({
         className,
       )}
       {...(id === undefined ? {} : { id })}
-      {...(focusable ? { tabIndex: -1 } : {})}
     >
       {(title !== undefined || actions !== undefined) && (
         <header className="card-head">
@@ -717,16 +730,6 @@ export function StatCard({
 /** A `StatCard` that needs attention. The same card, outlined red by default. */
 export function AlertStatCard(props: Parameters<typeof StatCard>[0]) {
   return <StatCard {...props} tone={props.tone ?? 'alert'} />;
-}
-
-/** A labelled figure, inline — a caption above a value. */
-export function Metric({ label, value }: { label: ReactNode; value: ReactNode }) {
-  return (
-    <span className="metric">
-      <span className="l">{label}</span>
-      <span className="v">{value}</span>
-    </span>
-  );
 }
 
 /**
@@ -986,6 +989,9 @@ export function Tabs<T extends string>({
    * exists for.
    */
   const buttons = useRef(new Map<T, HTMLButtonElement | null>());
+  // B6: the selected tab is scrolled into view inside the strip, never the page.
+  const strip = useRef<HTMLDivElement | null>(null);
+  useSelectedTabInStrip(strip, () => buttons.current.get(value), value);
 
   const select = (next: T) => {
     onChange(next);
@@ -1004,6 +1010,7 @@ export function Tabs<T extends string>({
 
   return (
     <div
+      ref={strip}
       className={vertical ? 'tabs vertical' : 'tabs'}
       role="tablist"
       {...(vertical ? { 'aria-orientation': 'vertical' as const } : {})}
@@ -1886,8 +1893,8 @@ export function CursorPager({
   hasPrevious,
   hasNext,
   shown,
-  nextLabel = 'web.older',
-  previousLabel = 'web.newer',
+  nextLabel = 'web.page_next',
+  previousLabel = 'web.page_previous',
   summary,
 }: {
   onPrevious: () => void;
@@ -1930,6 +1937,46 @@ export function CursorPager({
 }
 /** `CursorPager` by the name the kit inventory uses. The semantics are keyset. */
 export const Pagination = CursorPager;
+
+/**
+ * Rows per page on EVERY list the admin draws (W1.8). A keyset list asks the
+ * server for this many (`limit`); a list that already holds all its rows in
+ * memory shows them this many at a time (`usePagedRows`). One constant, so the
+ * owner's "ten per page" is one decision and one test.
+ */
+export const LIST_PAGE_SIZE = 10;
+
+/**
+ * Pages an in-memory list `LIST_PAGE_SIZE` rows at a time, with the same
+ * «قبلی / بعدی» pager. Goes back to the first page when `resetKey` changes (a
+ * new filter) or when the list shrinks below the page being shown. For rows the
+ * page ALREADY holds — never a reason to fetch everything and page it here; a
+ * server list pages by cursor.
+ */
+export function usePagedRows<T>(
+  rows: readonly T[],
+  resetKey: string = '',
+): { rows: readonly T[]; pager: ReactNode } {
+  const [state, setState] = useState({ key: resetKey, page: 0 });
+  const pages = Math.max(1, Math.ceil(rows.length / LIST_PAGE_SIZE));
+  const page = state.key === resetKey ? Math.min(state.page, pages - 1) : 0;
+  const shown = rows.slice(page * LIST_PAGE_SIZE, (page + 1) * LIST_PAGE_SIZE);
+  const pager =
+    rows.length > LIST_PAGE_SIZE ? (
+      <CursorPager
+        hasPrevious={page > 0}
+        hasNext={page < pages - 1}
+        onPrevious={() => setState({ key: resetKey, page: page - 1 })}
+        onNext={() => setState({ key: resetKey, page: page + 1 })}
+        summary={
+          <>
+            {t('web.page_of')} <Num value={page + 1} /> / <Num value={pages} />
+          </>
+        }
+      />
+    ) : null;
+  return { rows: shown, pager };
+}
 
 /* ---------------------------------------------------------------- toasts --- */
 

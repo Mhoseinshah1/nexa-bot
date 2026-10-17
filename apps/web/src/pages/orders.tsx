@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   ORDER_STATES,
   UNLIMITED_DURATION_DAYS,
@@ -26,13 +27,11 @@ import {
 import { currencyLabel, formatTimestamp, formatTrafficGbText } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQuery, useLinkHandler, type Route } from '../router';
-import {
-  ClearFiltersButton,
-  ListFreshness,
-  ListSearchBox,
-  appliedListSearch,
-} from '../ui/list-search';
+import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
+import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
+import { SavedViewsMenu } from '../ui/saved-views-menu';
+import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 /*
  * The SERVICES page's vocabularies, borrowed rather than copied — the same rule
@@ -53,7 +52,7 @@ import {
 import { PRICE_LAYER_LABELS, PRICE_LAYER_STEPS } from './resellers';
 import { CUSTOM_SERVICE_LEVEL_LABELS } from './custom-service';
 import { OrderPlacement } from './order-placement';
-import { ChipGroup } from './commerce-parts';
+import { BalancedColumns, ChipGroup, useListClearAll } from './commerce-parts';
 import {
   Badge,
   Banner,
@@ -63,15 +62,16 @@ import {
   DataTable,
   Empty,
   KV,
+  LIST_PAGE_SIZE,
   Ltr,
   Money,
   Num,
   PageHead,
   StateSwitch,
-  TwoColumn,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { ProviderText } from '../ui/technical-details';
 
 /**
  * Orders — what a customer asked to buy, and what they were quoted for it.
@@ -184,8 +184,14 @@ function Duration({ days }: { days: number }) {
 // List
 // ---------------------------------------------------------------------------
 
-/** Every URL key the order list filters on, its search included (`ClearFiltersButton`). */
+/** Every URL key the order list filters on, its search included (clear-all, saved views). */
 const ORDER_FILTER_KEYS = ['q', 'state'] as const;
+
+/** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
+export const ORDER_PRESETS: readonly ViewPreset[] = [
+  { id: 'awaiting', name: 'web.orders_view_awaiting', state: { state: 'AWAITING_PAYMENT' } },
+  { id: 'refunded', name: 'web.orders_view_refunded', state: { state: 'REFUNDED' } },
+];
 
 export function OrdersPage({ route, denied }: { route: Route; denied: boolean }) {
   const onLink = useLinkHandler();
@@ -219,16 +225,19 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
   const cursors = trail.signature === searchSignature ? trail.cursors : [];
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
 
-  const orders = useQuery({
-    queryKey: ['orders', searchSignature, cursor ?? null],
-    queryFn: () =>
-      fetchOrders({
-        ...(cursor === undefined ? {} : { cursor }),
-        ...(appliedState === null ? {} : { state: appliedState }),
-        ...(appliedSearch === '' ? {} : { q: appliedSearch }),
-      }),
-    enabled: !denied,
-  });
+  const orders = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['orders', searchSignature, cursor ?? null],
+      queryFn: () =>
+        fetchOrders({
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(appliedState === null ? {} : { state: appliedState }),
+          ...(appliedSearch === '' ? {} : { q: appliedSearch }),
+        }),
+      enabled: !denied,
+    }),
+  );
 
   const rows = orders.data?.orders ?? [];
   const nextCursor = orders.data?.nextCursor ?? null;
@@ -284,7 +293,28 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
 
   // Hidden while the list cannot answer: a control that mints a new query key is
   // a fresh request against a question the server has just refused.
+  const { searchKey, clearAll } = useListClearAll(route, ORDER_FILTER_KEYS);
   const toolbarHidden = !mayRequest(orders, denied);
+
+  const orderFilters: ListFilter[] = [
+    {
+      key: 'state',
+      label: t('web.status'),
+      active: appliedState === null ? null : t(STATE_LABELS[appliedState]),
+      onClear: () => setQueries(route, [['state', null]]),
+      control: (
+        <ChipGroup
+          label={t('web.status')}
+          value={appliedState ?? 'ALL'}
+          onChange={(next) => setQuery(route, 'state', next === 'ALL' ? null : next)}
+          items={[
+            { id: 'ALL' as const, label: t('web.users_filter_all') },
+            ...ORDER_STATES.map((state) => ({ id: state, label: t(STATE_LABELS[state]) })),
+          ]}
+        />
+      ),
+    },
+  ];
 
   return (
     <>
@@ -295,26 +325,34 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
       />
 
       <Card className="ca-list">
-        <ListSearchBox
-          route={route}
-          id="orders-search"
-          // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
-          autoApply
-          hint={t('web.orders_search_hint')}
-          hidden={toolbarHidden}
-        />
-
-        <div className="filter-row" hidden={toolbarHidden}>
-          <ChipGroup
-            label={t('web.status')}
-            value={appliedState ?? 'ALL'}
-            onChange={(next) => setQuery(route, 'state', next === 'ALL' ? null : next)}
-            items={[
-              { id: 'ALL' as const, label: t('web.users_filter_all') },
-              ...ORDER_STATES.map((state) => ({ id: state, label: t(STATE_LABELS[state]) })),
-            ]}
+        <div hidden={toolbarHidden}>
+          <ListFilterBar
+            label={t('web.orders_title')}
+            search={
+              <ListSearchBox
+                key={searchKey}
+                slim
+                route={route}
+                id="orders-search"
+                // Typing or pasting searches by itself, debounced, as on /users (roadmap B4).
+                autoApply
+                hint={t('web.orders_search_hint')}
+                hidden={toolbarHidden}
+              />
+            }
+            filters={orderFilters}
+            onClearAll={clearAll}
+            savedViews={
+              <SavedViewsMenu
+                registration={routeViewRegistration(
+                  route,
+                  'orders',
+                  ORDER_FILTER_KEYS,
+                  ORDER_PRESETS,
+                )}
+              />
+            }
           />
-          <ClearFiltersButton route={route} keys={ORDER_FILTER_KEYS} />
         </div>
 
         <StateSwitch
@@ -360,31 +398,9 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
               nextCursor !== null &&
               setTrail({ signature: searchSignature, cursors: [...cursors, nextCursor] })
             }
-            // `GET /orders` pages an ASCENDING keyset, so "next" is NEWER here.
-            nextLabel="web.newer"
-            previousLabel="web.older"
           />
         )}
       </Card>
-
-      <div className="grid-2">
-        <Card tone="muted" title={t('web.orders_scope_title')}>
-          <p className="muted small">{t('web.orders_scope_body')}</p>
-        </Card>
-
-        {/* Owner revisions 3, 6 and 11. They used to live on the planned page this route
-            replaced; revision 6 is DELIVERED here — every `line*` field is a snapshot —
-            and the other two describe the payment surface, which is still future. A
-            decision recorded only on a screen nobody can open is a decision nobody reads
-            before breaking it. */}
-        <Card tone="muted" title={t('web.orders_future_rules_title')}>
-          <ul className="ca-notes">
-            <li>{t('web.orders_rule_history')}</li>
-            <li>{t('web.orders_rule_attention')}</li>
-            <li>{t('web.orders_rule_shared_projection')}</li>
-          </ul>
-        </Card>
-      </div>
     </>
   );
 }
@@ -459,7 +475,7 @@ export function OrderDetailPage({
               </Banner>
             )}
 
-            <TwoColumn
+            <BalancedColumns
               main={
                 <>
                   {/*
@@ -538,15 +554,6 @@ export function OrderDetailPage({
                       </div>
                     </dl>
                   </Card>
-
-                  {row.purpose === 'CUSTOM_SERVICE' && <OrderCustomService orderId={row.id} />}
-
-                  {/* Phase C3: why the new account landed on its panel. */}
-                  {row.purpose === 'NEW_SERVICE' && <OrderPlacement orderId={row.id} />}
-
-                  <OrderPricing orderId={row.id} />
-
-                  <OrderService orderId={row.id} mayView={mayViewServices} />
                 </>
               }
               side={
@@ -623,10 +630,22 @@ export function OrderDetailPage({
                   </Card>
 
                   <OrderPayments orderId={row.id} mayView={mayViewPayments} />
+                </>
+              }
+              /*
+               * W4: the cards that made the main column run on alone are full-width rows
+               * under the two columns (the demo's order page).
+               */
+              tail={
+                <>
+                  {row.purpose === 'CUSTOM_SERVICE' && <OrderCustomService orderId={row.id} />}
 
-                  <Card tone="muted" title={t('web.orders_scope_title')}>
-                    <p className="muted small">{t('web.orders_scope_body')}</p>
-                  </Card>
+                  {/* Phase C3: why the new account landed on its panel. */}
+                  {row.purpose === 'NEW_SERVICE' && <OrderPlacement orderId={row.id} />}
+
+                  <OrderPricing orderId={row.id} />
+
+                  <OrderService orderId={row.id} mayView={mayViewServices} />
                 </>
               }
             />
@@ -846,7 +865,11 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
     // tells a panel refusing a duplicate apart from a panel nobody finished setting up.
     wrap: true,
     render: (op) =>
-      op.failureMessage === null ? <Dash /> : <Ltr mono={false}>{op.failureMessage}</Ltr>,
+      op.failureMessage === null ? (
+        <Dash />
+      ) : (
+        <ProviderText summary={'web.err_provider_operation'} text={op.failureMessage} />
+      ),
   },
 ];
 

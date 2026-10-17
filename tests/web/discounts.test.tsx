@@ -7,6 +7,7 @@ import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { order, renderPage, stubApi, type Api } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * WP8 on the Web Admin: discount rules, cashback rules, the price preview and an order's
@@ -115,6 +116,22 @@ const posts = (api: Api, suffix: string) =>
 const discountTable = () => screen.getByRole('table', { name: 'قاعده‌های تخفیف' });
 const cashbackTable = () => screen.getByRole('table', { name: 'قاعده‌های کش‌بک' });
 
+/** W3: a list's «افزودن» opens its create form in a drawer. */
+const addButton = (table: HTMLElement) =>
+  within(table.closest('section.card') as HTMLElement).queryByRole('button', {
+    name: t('web.cb_add'),
+  });
+const openAdd = (table: HTMLElement) => fireEvent.click(addButton(table)!);
+/** Closes the open drawer, discarding a typed draft when it asks. */
+const closeTop = async () => {
+  fireEvent.keyDown(document, { key: 'Escape' });
+  const asked = screen.queryByRole('alertdialog');
+  if (asked !== null) {
+    fireEvent.click(within(asked).getByRole('button', { name: t('web.discard') }));
+  }
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+};
+
 describe('the discount rules list', () => {
   it('renders the rows the server sent, with live redemptions against the limits', async () => {
     stubApi(lists());
@@ -149,14 +166,19 @@ describe('the discount rules list', () => {
 
     // The discount list's own pager: the cashback list has one too.
     const discountCard = discountTable().closest('section') as HTMLElement;
-    fireEvent.click(within(discountCard).getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(within(discountCard).getByRole('button', { name: 'بعدی' }));
     await waitFor(() =>
-      expect(api.calls.some((call) => call.url.includes('/discounts?cursor=cursor-2'))).toBe(true),
+      expect(
+        api.calls.some((call) => call.url.includes('/discounts?limit=10&cursor=cursor-2')),
+      ).toBe(true),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'خودکار' }));
+    // W1.3: the kind and status chips are in the list's «فیلترها» panel.
+    fireEvent.click(within(openFilterPanel(discountCard)).getByRole('button', { name: 'خودکار' }));
     await waitFor(() =>
-      expect(api.calls.some((call) => call.url.endsWith('/discounts?kind=AUTOMATIC'))).toBe(true),
+      expect(
+        api.calls.some((call) => call.url.endsWith('/discounts?limit=10&kind=AUTOMATIC')),
+      ).toBe(true),
     );
     // A new filter starts from the first page: a cursor minted under another filter
     // would strand every row before it.
@@ -164,11 +186,15 @@ describe('the discount rules list', () => {
     expect(last?.url).not.toContain('cursor=');
 
     fireEvent.click(
-      within(within(discountCard).getAllByRole('group')[1]!).getByRole('button', { name: 'فعال' }),
+      within(
+        within(openFilterPanel(discountCard)).getByRole('group', { name: t('web.status') }),
+      ).getByRole('button', { name: 'فعال' }),
     );
     await waitFor(() =>
       expect(
-        api.calls.some((call) => call.url.endsWith('/discounts?kind=AUTOMATIC&status=ACTIVE')),
+        api.calls.some((call) =>
+          call.url.endsWith('/discounts?limit=10&kind=AUTOMATIC&status=ACTIVE'),
+        ),
       ).toBe(true),
     );
   });
@@ -196,12 +222,17 @@ describe('writing a discount', () => {
     ]);
     render();
     await screen.findByText('Summer launch');
+    openAdd(discountTable());
 
     fireEvent.change(input('discount-create-code'), { target: { value: 'WELCOME10' } });
     fireEvent.change(input('discount-create-label'), { target: { value: 'Welcome' } });
     fireEvent.change(input('discount-create-value'), { target: { value: '10' } });
     fireEvent.change(input('discount-create-total-limit'), { target: { value: '500' } });
     fireEvent.change(input('discount-create-priority'), { target: { value: '10' } });
+
+    // Created INACTIVE by the server; the form says so where the button is.
+    const createCard = input('discount-create-label').closest('section') as HTMLElement;
+    expect(within(createCard).getByText(/غیرفعال ساخته می‌شود/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'ساخت قاعده' }));
     await waitFor(() => expect(posts(api, '/discounts')).toHaveLength(1));
@@ -230,14 +261,15 @@ describe('writing a discount', () => {
     });
     // Created INACTIVE by the server; the form never asks.
     expect(body).not.toHaveProperty('status');
-    const createCard = input('discount-create-label').closest('section') as HTMLElement;
-    expect(within(createCard).getByText(/غیرفعال ساخته می‌شود/)).toBeInTheDocument();
+    // A create closes the drawer.
+    await waitFor(() => expect(document.getElementById('discount-create-label')).toBeNull());
   });
 
   it('refuses a first-purchase rule that also applies to renewals, before sending', async () => {
     const api = stubApi(lists());
     render();
     await screen.findByText('Summer launch');
+    openAdd(discountTable());
     fireEvent.change(input('discount-create-code'), { target: { value: 'FIRST' } });
     fireEvent.change(input('discount-create-label'), { target: { value: 'First' } });
     fireEvent.change(input('discount-create-value'), { target: { value: '10' } });
@@ -263,7 +295,7 @@ describe('writing a discount', () => {
     const row = within(discountTable()).getByText('Summer launch').closest('tr') as HTMLElement;
     fireEvent.click(within(row).getByRole('button', { name: 'ویرایش' }));
 
-    expect(await screen.findByText('ویرایش قاعدهٔ تخفیف')).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'ویرایش قاعدهٔ تخفیف' })).toBeInTheDocument();
     // Neither is an input on the edit form, not even a disabled one.
     expect(document.getElementById('discount-edit-kind')).toBeNull();
     expect(document.getElementById('discount-edit-code')).toBeNull();
@@ -365,6 +397,11 @@ describe('cashback rules', () => {
     ]);
     render();
     await screen.findByText('هنوز قاعدهٔ کش‌بکی ثبت نشده است.');
+    fireEvent.click(
+      within(
+        screen.getByRole('heading', { name: t('web.cashback_rules_title') }).closest('section')!,
+      ).getByRole('button', { name: t('web.cb_add') }),
+    );
 
     fireEvent.change(input('cashback-create-label'), { target: { value: 'Loyalty' } });
     fireEvent.change(input('cashback-create-percent'), { target: { value: '7' } });
@@ -387,6 +424,101 @@ describe('cashback rules', () => {
   });
 });
 
+describe('a write whose answer was lost (W3 drawers)', () => {
+  /*
+   * The form lives in a drawer that unmounts on close. A 5xx may have committed, so the
+   * retry must carry the SAME idempotency key — even after the drawer was closed and
+   * reopened. The key is held by the always-mounted list, not by the form.
+   */
+  it('keeps the create key across closing, a successful edit, and reopening, after a 5xx', async () => {
+    const api = stubApi([
+      { url: '/discounts', body: { discounts: [discount()], nextCursor: null } },
+      { url: '/cashback-rules', body: { rules: [cashbackRule()], nextCursor: null } },
+      {
+        url: '/discounts',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' },
+        },
+      },
+      { url: `/discounts/${CODE_ID}`, body: { discount: discount({ label: 'Renamed' }) } },
+    ]);
+    render();
+    await screen.findByText('Summer launch');
+    const fill = () => {
+      fireEvent.change(input('discount-create-code'), { target: { value: 'WELCOME10' } });
+      fireEvent.change(input('discount-create-label'), { target: { value: 'Welcome' } });
+      fireEvent.change(input('discount-create-value'), { target: { value: '10' } });
+    };
+    openAdd(discountTable());
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'ساخت قاعده' }));
+    await waitFor(() => expect(posts(api, '/discounts')).toHaveLength(1));
+    await closeTop();
+
+    // An edit of another rule, answered: it must not settle the create's key.
+    const row = within(discountTable()).getByText('Summer launch').closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'ویرایش' }));
+    fireEvent.change(input('discount-edit-label'), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => expect(posts(api, `/discounts/${CODE_ID}`)).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    openAdd(discountTable());
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'ساخت قاعده' }));
+    await waitFor(() => expect(posts(api, '/discounts')).toHaveLength(2));
+    const [first, second] = posts(api, '/discounts');
+    expect((second?.body as Record<string, unknown>)['idempotencyKey']).toBe(
+      (first?.body as Record<string, unknown>)['idempotencyKey'],
+    );
+  });
+
+  it('keeps the cashback create key across a successful cashback edit, after a 5xx', async () => {
+    const api = stubApi([
+      { url: '/discounts', body: { discounts: [], nextCursor: null } },
+      { url: '/cashback-rules', body: { rules: [cashbackRule()], nextCursor: null } },
+      {
+        url: '/cashback-rules',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' },
+        },
+      },
+      { url: `/cashback-rules/${CASHBACK_ID}`, body: { rule: cashbackRule({ label: 'Renamed' }) } },
+    ]);
+    render();
+    await screen.findByText('Loyalty five');
+    const fill = () => {
+      fireEvent.change(input('cashback-create-label'), { target: { value: 'Loyalty' } });
+      fireEvent.change(input('cashback-create-percent'), { target: { value: '7' } });
+    };
+    openAdd(cashbackTable());
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'ساخت قاعدهٔ کش‌بک' }));
+    await waitFor(() => expect(posts(api, '/cashback-rules')).toHaveLength(1));
+    await closeTop();
+
+    const row = within(cashbackTable()).getByText('Loyalty five').closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'ویرایش' }));
+    fireEvent.change(input('cashback-edit-label'), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => expect(posts(api, `/cashback-rules/${CASHBACK_ID}`)).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    openAdd(cashbackTable());
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'ساخت قاعدهٔ کش‌بک' }));
+    await waitFor(() => expect(posts(api, '/cashback-rules')).toHaveLength(2));
+    const [first, second] = posts(api, '/cashback-rules');
+    expect((second?.body as Record<string, unknown>)['idempotencyKey']).toBe(
+      (first?.body as Record<string, unknown>)['idempotencyKey'],
+    );
+  });
+});
+
 describe('permissions', () => {
   it('draws no discount control without catalog.discounts.edit, and names the key', async () => {
     stubApi(lists());
@@ -394,11 +526,11 @@ describe('permissions', () => {
     await screen.findByText('Summer launch');
     const table = discountTable();
     expect(within(table).queryByRole('button')).toBeNull();
-    expect(document.getElementById('discount-create-label')).toBeNull();
+    expect(addButton(table)).toBeNull();
     expect(screen.getByText(/catalog\.discounts\.edit/)).toBeInTheDocument();
     // The other key is its own question: the cashback controls are still here.
     expect(within(cashbackTable()).getByRole('button', { name: 'ویرایش' })).toBeInTheDocument();
-    expect(document.getElementById('cashback-create-label')).not.toBeNull();
+    expect(addButton(cashbackTable())).not.toBeNull();
   });
 
   it('draws no cashback control without catalog.pricing.edit, and names the key', async () => {
@@ -406,7 +538,7 @@ describe('permissions', () => {
     render({ mayEditCashback: false });
     await screen.findByText('Loyalty five');
     expect(within(cashbackTable()).queryByRole('button')).toBeNull();
-    expect(document.getElementById('cashback-create-label')).toBeNull();
+    expect(addButton(cashbackTable())).toBeNull();
     expect(screen.getByText(/catalog\.pricing\.edit/)).toBeInTheDocument();
     expect(within(discountTable()).getAllByRole('button', { name: 'ویرایش' })).toHaveLength(2);
   });
@@ -685,8 +817,8 @@ describe('the promotion of /discounts', () => {
     ]);
     renderPage(resolved.element as ReactElement);
     await screen.findByText('Summer launch');
-    expect(document.getElementById('discount-create-label')).toBeNull();
-    expect(document.getElementById('cashback-create-label')).not.toBeNull();
+    expect(addButton(discountTable())).toBeNull();
+    expect(addButton(cashbackTable())).not.toBeNull();
   });
 
   it('is gone from PLANNED_SURFACES, so the placeholder cannot shadow it', () => {
@@ -719,7 +851,7 @@ describe('replacing a rule form that holds unsaved edits', () => {
     render();
     await screen.findByText('Summer launch');
     fireEvent.click(editIn(discountTable(), 'Summer launch'));
-    await screen.findByText('ویرایش قاعدهٔ تخفیف');
+    await screen.findByRole('dialog', { name: 'ویرایش قاعدهٔ تخفیف' });
     fireEvent.change(input('discount-edit-label'), { target: { value: 'Draft label' } });
 
     fireEvent.click(addIn(discountTable()));
@@ -751,7 +883,7 @@ describe('replacing a rule form that holds unsaved edits', () => {
     render();
     await screen.findByText('Loyalty five');
     fireEvent.click(editIn(cashbackTable(), 'Loyalty five'));
-    await screen.findByText('ویرایش قاعدهٔ کش‌بک');
+    await screen.findByRole('dialog', { name: 'ویرایش قاعدهٔ کش‌بک' });
     fireEvent.change(input('cashback-edit-label'), { target: { value: 'Draft label' } });
 
     fireEvent.click(addIn(cashbackTable()));

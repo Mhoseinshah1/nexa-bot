@@ -35,6 +35,7 @@ import {
   uploadLegacyMigrationDecisions,
 } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
+import { FilePicker } from '../ui/file-picker';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinalWhile } from '../polling';
 import { useLinkHandler } from '../router';
@@ -62,6 +63,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { InventoryDiagnostics } from './recovery-mirza-inventory-diagnostics';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Restore from Mirza — the second source of «بکاپ و بازیابی ← عملیات بازیابی»
@@ -554,7 +556,12 @@ function CancelButton({ row }: { row: LegacyMigrationImportView }) {
       <Button variant="danger" icon="x" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
         {t('web.mrz_cancel')}
       </Button>
-      {cancel.error !== null && <Banner tone="danger">{legacyMigrationFault(cancel.error)}</Banner>}
+      {cancel.error !== null && (
+        <Banner tone="danger">
+          {legacyMigrationFault(cancel.error)}
+          <ErrorRef error={cancel.error} />
+        </Banner>
+      )}
     </div>
   );
 }
@@ -646,11 +653,12 @@ function KeyForm({ row }: { row: LegacyMigrationImportView }) {
       {kind === 'KEY_FILE' ? (
         <>
           <Field label={t('web.lmg_key_file_choose')} htmlFor="lmg-key-file">
-            <input
+            <FilePicker
               id="lmg-key-file"
-              type="file"
               accept=".nxkey,text/plain"
-              onChange={(event) => onKeyFile(event.currentTarget.files?.[0] ?? null)}
+              kind="any"
+              extensions={['.nxkey', '.txt']}
+              onFiles={(files) => onKeyFile(files[0] ?? null)}
             />
           </Field>
           <Field label={t('web.lmg_key_file_text')} htmlFor="lmg-key-text">
@@ -686,7 +694,12 @@ function KeyForm({ row }: { row: LegacyMigrationImportView }) {
           {t('web.lmg_key_save')}
         </Button>
       </div>
-      {save.error !== null && <Banner tone="danger">{legacyMigrationFault(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {legacyMigrationFault(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </form>
   );
 }
@@ -813,7 +826,12 @@ function AdoptStep({ row, mayApply }: { row: LegacyMigrationImportView; mayApply
           </Button>
         </div>
       )}
-      {adopt.error !== null && <Banner tone="danger">{legacyMigrationFault(adopt.error)}</Banner>}
+      {adopt.error !== null && (
+        <Banner tone="danger">
+          {legacyMigrationFault(adopt.error)}
+          <ErrorRef error={adopt.error} />
+        </Banner>
+      )}
     </Step>
   );
 }
@@ -1020,7 +1038,12 @@ function PanelsStep({
           )}
         </div>
       )}
-      {save.error !== null && <Banner tone="danger">{legacyMigrationFault(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {legacyMigrationFault(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Step>
   );
 }
@@ -1063,11 +1086,14 @@ function DecisionsStep({
           }}
         >
           <Field label={t('web.lmg_decisions_choose')} htmlFor="lmg-decisions">
-            <input
+            <FilePicker
               id="lmg-decisions"
-              type="file"
               accept=".json,application/json"
-              onChange={(event) => setFile(event.currentTarget.files?.[0] ?? null)}
+              kind="any"
+              extensions={['.json']}
+              selected={file}
+              onClear={() => setFile(null)}
+              onFiles={(files) => setFile(files[0] ?? null)}
             />
           </Field>
           {tooLarge && <Banner tone="danger">{t('web.lmg_fault_too_large')}</Banner>}
@@ -1081,7 +1107,10 @@ function DecisionsStep({
             </Button>
           </div>
           {upload.error !== null && (
-            <Banner tone="danger">{legacyMigrationFault(upload.error)}</Banner>
+            <Banner tone="danger">
+              {legacyMigrationFault(upload.error)}
+              <ErrorRef error={upload.error} />
+            </Banner>
           )}
         </form>
       )}
@@ -1192,7 +1221,10 @@ function DryRunStep({
         </div>
       )}
       {error !== null && error !== undefined && (
-        <Banner tone="danger">{legacyMigrationFault(error)}</Banner>
+        <Banner tone="danger">
+          {legacyMigrationFault(error)}
+          <ErrorRef error={error} />
+        </Banner>
       )}
     </Step>
   );
@@ -1377,7 +1409,10 @@ function ConfirmStep({
             </Button>
           </div>
           {approve.error !== null && (
-            <Banner tone="danger">{legacyMigrationFault(approve.error)}</Banner>
+            <Banner tone="danger">
+              {legacyMigrationFault(approve.error)}
+              <ErrorRef error={approve.error} />
+            </Banner>
           )}
         </form>
       )}

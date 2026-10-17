@@ -13,6 +13,7 @@ import {
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
+import { formatNumber } from '../format';
 import { messageFor } from './settings';
 import { useLinkHandler } from '../router';
 import {
@@ -34,8 +35,10 @@ import {
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { SaveBar, revealField } from './editor-layout';
+import { SaveBar } from './editor-layout';
+import { Drawer } from '../ui/overlays';
 import { CategoryIconsSection } from './category-icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Product categories — the one place a tenant arranges what it sells.
@@ -93,7 +96,7 @@ function formOf(category: ProductCategoryListingResponse): FormState {
 function deleteMessage(error: unknown): string {
   if (error instanceof ApiError && error.code === 'commerce.category_not_empty') {
     const count = (error.details as { productCount?: unknown } | null)?.productCount;
-    if (typeof count === 'number') return `${error.message} (${count})`;
+    if (typeof count === 'number') return `${messageFor(error)} (${formatNumber(count)})`;
   }
   return messageFor(error);
 }
@@ -125,6 +128,8 @@ export function ProductCategoriesPage({
   const onLink = useLinkHandler();
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  /** W3: whether the create/edit drawer is open. */
+  const [formOpen, setFormOpen] = useState(false);
   /** The category whose deletion is being asked about, or null. */
   const [deleting, setDeleting] = useState<ProductCategoryListingResponse | null>(null);
 
@@ -175,6 +180,7 @@ export function ProductCategoriesPage({
       submission.settle();
       notify({ tone: 'ok', message: t('web.category_saved') });
       reset();
+      setFormOpen(false);
       refresh();
     },
     // A 5xx may have committed. A fresh key on the retry would be a second category.
@@ -222,7 +228,7 @@ export function ProductCategoriesPage({
   });
 
   const busy = save.isPending || transition.isPending || reorder.isPending || remove.isPending;
-  const failure = save.error ?? transition.error ?? reorder.error;
+  const failure = transition.error ?? reorder.error;
 
   /**
    * Swaps a row with its neighbour and sends the COMPLETE new order.
@@ -300,7 +306,7 @@ export function ProductCategoriesPage({
                 discard.confirmDiscard(() => {
                   setEditing(row.id);
                   setForm(formOf(row));
-                  revealField('cat-name');
+                  setFormOpen(true);
                 })
               }
             >
@@ -385,7 +391,7 @@ export function ProductCategoriesPage({
                 onClick={() =>
                   discard.confirmDiscard(() => {
                     reset();
-                    revealField('cat-name');
+                    setFormOpen(true);
                   })
                 }
               >
@@ -396,7 +402,23 @@ export function ProductCategoriesPage({
         }
       />
 
-      <div className={mayEdit ? 'cb-split' : undefined}>
+      {/*
+        A row action's refusal, and the delete refusal in its own banner — the one an
+        operator most needs to read the NUMBER out of — above the table they are about.
+      */}
+      {failure != null && (
+        <Banner tone="danger">
+          {messageFor(failure)}
+          <ErrorRef error={failure} />
+        </Banner>
+      )}
+      {remove.error != null && (
+        <Banner tone="danger">
+          {deleteMessage(remove.error)}
+          <ErrorRef error={remove.error} />
+        </Banner>
+      )}
+      <div>
         <div className="stack">
           <StateSwitch
             query={categories}
@@ -443,86 +465,96 @@ export function ProductCategoriesPage({
           form, and that is exactly the installation whose first product would otherwise
           be refused by a rule nothing offered a way to satisfy.
         */}
-        {mayEdit && (
-          <Card
-            className="cb-side-form cb-sticky"
-            title={t(editing === null ? 'web.category_new' : 'web.category_editing')}
-            hint={t('web.category_form_hint')}
-            foot={
-              <SaveBar dirty={dirty}>
-                {editing !== null && (
-                  <Button size="sm" disabled={busy} onClick={reset}>
-                    {t('web.category_cancel_edit')}
-                  </Button>
-                )}
+        <Drawer
+          open={mayEdit && formOpen}
+          onClose={() =>
+            discard.confirmDiscard(() => {
+              reset();
+              setFormOpen(false);
+            })
+          }
+          title={t(editing === null ? 'web.category_new' : 'web.category_editing')}
+          foot={
+            <SaveBar dirty={dirty}>
+              {editing !== null && (
                 <Button
-                  variant="primary"
                   size="sm"
-                  icon="check"
-                  disabled={busy || form.name.trim() === ''}
-                  onClick={() => save.mutate()}
+                  disabled={busy}
+                  onClick={() => {
+                    reset();
+                    setFormOpen(false);
+                  }}
                 >
-                  {t('web.category_save')}
+                  {t('web.category_cancel_edit')}
                 </Button>
-              </SaveBar>
-            }
-          >
-            <Field label={t('web.category_name')} htmlFor="cat-name">
-              <input
-                id="cat-name"
-                value={form.name}
-                maxLength={120}
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-              />
-            </Field>
-            <Field label={t('web.category_description')} htmlFor="cat-description">
-              <input
-                id="cat-description"
-                value={form.description}
-                maxLength={500}
-                onChange={(event) => setForm({ ...form, description: event.target.value })}
-              />
-            </Field>
-            <div className="form-grid">
-              <Field
-                label={t('web.category_emoji')}
-                htmlFor="cat-emoji"
-                hint={t('web.category_emoji_hint')}
+              )}
+              <Button
+                variant="primary"
+                size="sm"
+                icon="check"
+                disabled={busy || form.name.trim() === ''}
+                onClick={() => save.mutate()}
               >
-                <input
-                  id="cat-emoji"
-                  value={form.emoji}
-                  maxLength={40}
-                  onChange={(event) => setForm({ ...form, emoji: event.target.value })}
-                />
-              </Field>
-              {/*
+                {t('web.category_save')}
+              </Button>
+            </SaveBar>
+          }
+        >
+          <p className="muted small">{t('web.category_form_hint')}</p>
+          <Field label={t('web.category_name')} htmlFor="cat-name">
+            <input
+              id="cat-name"
+              value={form.name}
+              maxLength={120}
+              onChange={(event) => setForm({ ...form, name: event.target.value })}
+            />
+          </Field>
+          <Field label={t('web.category_description')} htmlFor="cat-description">
+            <input
+              id="cat-description"
+              value={form.description}
+              maxLength={500}
+              onChange={(event) => setForm({ ...form, description: event.target.value })}
+            />
+          </Field>
+          <div className="form-grid">
+            <Field
+              label={t('web.category_emoji')}
+              htmlFor="cat-emoji"
+              hint={t('web.category_emoji_hint')}
+            >
+              <input
+                id="cat-emoji"
+                value={form.emoji}
+                maxLength={40}
+                onChange={(event) => setForm({ ...form, emoji: event.target.value })}
+              />
+            </Field>
+            {/*
                 Only on create. An existing category is reordered with the up/down buttons,
                 which send the whole arrangement; a number typed here as well would be two
                 ways to express the same thing that can disagree.
               */}
-              {editing === null && (
-                <Field label={t('web.category_sort')} htmlFor="cat-sort">
-                  <input
-                    id="cat-sort"
-                    dir="ltr"
-                    value={form.sortOrder}
-                    inputMode="numeric"
-                    onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
-                  />
-                </Field>
-              )}
-            </div>
+            {editing === null && (
+              <Field label={t('web.category_sort')} htmlFor="cat-sort">
+                <input
+                  id="cat-sort"
+                  dir="ltr"
+                  value={form.sortOrder}
+                  inputMode="numeric"
+                  onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+                />
+              </Field>
+            )}
+          </div>
 
-            {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
-            {/*
-              The delete refusal has its own banner, because it is the one an operator
-              most needs to read the NUMBER out of — and a shared banner would have shown
-              whichever of the two mutations failed most recently.
-            */}
-            {remove.error != null && <Banner tone="danger">{deleteMessage(remove.error)}</Banner>}
-          </Card>
-        )}
+          {save.error != null && (
+            <Banner tone="danger">
+              {messageFor(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
+        </Drawer>
       </div>
 
       {deleting !== null && (

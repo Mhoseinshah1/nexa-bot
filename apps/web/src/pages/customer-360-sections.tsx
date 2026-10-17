@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  COMMERCE_ERROR_CODES,
   CUSTOMER_CONTROL_REASON_MAX_LENGTH,
   WALLET_REPORT_GROUP_OF,
   type CurrencyCode,
@@ -56,6 +57,7 @@ import {
   useToast,
   type Tone,
 } from '../ui/kit';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
  * Customer 360 — the sections the redesigned customer page adds (spec §11).
@@ -154,7 +156,6 @@ export function GeneralInfoCard({
           ],
         ]}
       />
-      <p className="muted small">{t('web.c360_points_absent')}</p>
     </Card>
   );
 }
@@ -166,7 +167,8 @@ export function GeneralInfoCard({
 function TermsStanding({ overview }: { overview: CustomerOverviewResponse | undefined }) {
   if (overview === undefined) return <Dash />;
   const terms = overview.terms;
-  if (!terms.available) return <span className="muted">{t('web.c360_terms_unavailable')}</span>;
+  // W5: a server without the terms domain shows a dash, not a «not built» note.
+  if (!terms.available) return <Dash />;
   if (terms.current === null) {
     return <span className="muted">{t('web.c360_terms_none_published')}</span>;
   }
@@ -478,7 +480,12 @@ export function CustomerControlsCard({
             onChange={(event) => setReason(event.target.value)}
           />
         </Field>
-        {write.error !== null && <Banner tone="danger">{c360Message(write.error)}</Banner>}
+        {write.error !== null && (
+          <Banner tone="danger">
+            {c360Message(write.error)}
+            <ErrorRef error={write.error} />
+          </Banner>
+        )}
       </Modal>
     </Card>
   );
@@ -704,7 +711,11 @@ export function TimelineCard({ customerId, mayView }: { customerId: string; mayV
                 at: formatTimestamp(entry.occurredAt),
                 title: (
                   <span>
-                    {label === undefined ? <Ltr>{entry.action}</Ltr> : t(label)}
+                    {label === undefined ? (
+                      <Ltr>{entry.action}</Ltr>
+                    ) : (
+                      <span title={entry.action}>{t(label)}</span>
+                    )}
                     {entry.result !== 'SUCCESS' && (
                       <>
                         {' '}
@@ -904,7 +915,12 @@ export function ManualOrderModal({
               onChange={(event) => setReason(event.target.value)}
             />
           </Field>
-          {place.error !== null && <Banner tone="danger">{c360Message(place.error)}</Banner>}
+          {place.error !== null && (
+            <Banner tone="danger">
+              {c360Message(place.error)}
+              <ErrorRef error={place.error} />
+            </Banner>
+          )}
         </>
       )}
     </Modal>
@@ -938,7 +954,13 @@ const WARNING_LABELS: Readonly<Record<CustomerTransferWarning, WebKey>> = {
   REFUNDS_CREDIT_SOURCE: 'web.c360_warning_refunds',
 };
 
-export function DangerZoneCard({
+/**
+ * W1.5: the customer's sensitive actions — suspend every service, resume every service, the
+ * account transfer — as buttons for the action panel's «عملیات حساس» strip, each under its
+ * own permission, each opening its confirmation (which now opens with the danger hint the
+ * old card showed above them). `modals` is drawn beside the panel.
+ */
+export function useCustomerDangerActions({
   customerId,
   mayTransfer,
   mayEditServices,
@@ -946,45 +968,64 @@ export function DangerZoneCard({
   customerId: string;
   mayTransfer: boolean;
   mayEditServices: boolean;
-}) {
+}): { readonly buttons: readonly ReactNode[]; readonly modals: ReactNode } {
   const [toggle, setToggle] = useState<'SUSPEND' | 'RESUME' | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
-  if (!mayTransfer && !mayEditServices) return null;
-  return (
-    <Card
-      tone="danger"
-      title={t('web.c360_danger_title')}
-      hint={t('web.c360_danger_hint')}
-      id="c360-danger"
-    >
-      <div className="form-actions">
-        {mayEditServices && (
-          <>
-            <Button size="sm" variant="danger" onClick={() => setToggle('SUSPEND')}>
-              {t('web.c360_services_disable')}
-            </Button>
-            <Button size="sm" onClick={() => setToggle('RESUME')}>
-              {t('web.c360_services_enable')}
-            </Button>
-          </>
-        )}
-        {mayTransfer && (
-          <Button size="sm" variant="danger-solid" onClick={() => setTransferOpen(true)}>
-            {t('web.c360_transfer')}
-          </Button>
-        )}
-      </div>
-      {toggle !== null && (
+  const buttons: ReactNode[] = [];
+  if (mayEditServices) {
+    buttons.push(
+      <Button key="suspend" variant="danger" onClick={() => setToggle('SUSPEND')}>
+        {t('web.c360_services_disable')}
+      </Button>,
+      <Button key="resume" onClick={() => setToggle('RESUME')}>
+        {t('web.c360_services_enable')}
+      </Button>,
+    );
+  }
+  if (mayTransfer) {
+    buttons.push(
+      <Button key="transfer" variant="danger-solid" onClick={() => setTransferOpen(true)}>
+        {t('web.c360_transfer')}
+      </Button>,
+    );
+  }
+  const modals = (
+    <>
+      {mayEditServices && toggle !== null && (
         <ServicesToggleModal
           customerId={customerId}
           action={toggle}
           onClose={() => setToggle(null)}
         />
       )}
-      {transferOpen && (
+      {mayTransfer && transferOpen && (
         <TransferModal customerId={customerId} onClose={() => setTransferOpen(false)} />
       )}
-    </Card>
+    </>
+  );
+  return { buttons, modals };
+}
+
+/**
+ * W5: why one service refused the suspend-all / resume-all, in Persian; the server's code
+ * stays in `title`. A code this map does not know is shown raw, never blank.
+ */
+export const TOGGLE_REFUSAL_LABELS: Readonly<Record<string, WebKey>> = {
+  [COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED]: 'web.c360_toggle_refused_not_allowed',
+  [COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS]: 'web.c360_toggle_refused_in_progress',
+  [COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE]: 'web.c360_toggle_refused_panel',
+  [COMMERCE_ERROR_CODES.ORDER_STATE_INVALID]: 'web.c360_toggle_refused_order_state',
+};
+
+function RefusalCode({ code }: { code: string | null }) {
+  if (code === null) return null;
+  const label = TOGGLE_REFUSAL_LABELS[code];
+  // W6: a code without a toggle-specific sentence is named by the shared catalogue
+  // (`ERROR_TEXT` and the ops/provider maps), the code small beside it; never bare.
+  return label === undefined ? (
+    <ErrorCodeLabel code={code} />
+  ) : (
+    <span title={code}>{t(label)}</span>
   );
 }
 
@@ -1047,6 +1088,7 @@ function ServicesToggleModal({
         )
       }
     >
+      {results === undefined && <p className="muted small">{t('web.c360_danger_hint')}</p>}
       {results === undefined ? (
         <Banner tone="warn">
           {action === 'SUSPEND'
@@ -1063,13 +1105,18 @@ function ServicesToggleModal({
               <Badge tone="ok">{t('web.c360_services_planned')}</Badge>
             ) : (
               <Badge tone="warn">
-                {t('web.c360_services_refused')} <Ltr>{result.code ?? ''}</Ltr>
+                {t('web.c360_services_refused')} <RefusalCode code={result.code} />
               </Badge>
             ),
           ])}
         />
       )}
-      {run.error !== null && <Banner tone="danger">{c360Message(run.error)}</Banner>}
+      {run.error !== null && (
+        <Banner tone="danger">
+          {c360Message(run.error)}
+          <ErrorRef error={run.error} />
+        </Banner>
+      )}
     </Modal>
   );
 }
@@ -1160,6 +1207,7 @@ function TransferModal({ customerId, onClose }: { customerId: string; onClose: (
         </Banner>
       ) : (
         <>
+          <p className="muted small">{t('web.c360_danger_hint')}</p>
           <Banner tone="warn">{t('web.c360_transfer_body')}</Banner>
           <div className="form-grid">
             <Field label={t('web.c360_transfer_destination')} htmlFor="c360-dest">
@@ -1184,7 +1232,12 @@ function TransferModal({ customerId, onClose }: { customerId: string; onClose: (
               {t('web.c360_transfer_preview')}
             </Button>
           </div>
-          {ask.error !== null && <Banner tone="danger">{c360Message(ask.error)}</Banner>}
+          {ask.error !== null && (
+            <Banner tone="danger">
+              {c360Message(ask.error)}
+              <ErrorRef error={ask.error} />
+            </Banner>
+          )}
           {preview !== null && <TransferPreview preview={preview} />}
           {preview !== null && preview.blockers.length === 0 && (
             <>
@@ -1210,7 +1263,12 @@ function TransferModal({ customerId, onClose }: { customerId: string; onClose: (
               </Field>
             </>
           )}
-          {run.error !== null && <Banner tone="danger">{c360Message(run.error)}</Banner>}
+          {run.error !== null && (
+            <Banner tone="danger">
+              {c360Message(run.error)}
+              <ErrorRef error={run.error} />
+            </Banner>
+          )}
         </>
       )}
     </Modal>

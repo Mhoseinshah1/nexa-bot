@@ -288,3 +288,19 @@ export type DeliveryQrPreviewResponse = z.infer<typeof deliveryQrPreviewSchema>;
 export const DELIVERY_QR_ROUTES = {
   preview: '/delivery-qr/preview',
 } as const;
+
+/**
+ * The refusals the QR encoder raises for a caller's input. Catalogued so the Web Admin can
+ * say each in Persian: until now they were string literals in the encoder, and a code no
+ * catalogue lists is a code no surface can translate.
+ */
+export const DELIVERY_QR_ERROR_CODES = {
+  /** A QR code was asked for with no text to encode. */
+  TEXT_EMPTY: 'qr.text_empty',
+  /** The module scale is not a positive integer. */
+  SCALE_INVALID: 'qr.scale_invalid',
+  /** The text is longer than a QR code can encode (characters, or bytes of UTF-8). */
+  TEXT_TOO_LONG: 'qr.text_too_long',
+  /** The quiet-zone margin is not a whole number of modules within the template's bound. */
+  MARGIN_INVALID: 'qr.margin_invalid',
+} as const;

@@ -1,5 +1,8 @@
 import {
   LEGACY_SERVICE_OUTCOMES,
+  type LegacyImportMapStatus,
+  type LegacyImportRunStatus,
+  type LegacyReviewState,
   type LedgerReason,
   type LegacyHistoryRecordType,
   type LegacyServiceOutcome,
@@ -227,3 +230,28 @@ export function migrationCodeView(code: string, outcomes: OutcomeLabels): Migrat
   const key = Object.hasOwn(CODE_LABELS, base) ? CODE_LABELS[base] : undefined;
   return { label: key === undefined ? null : t(key), href: null };
 }
+
+/*
+ * W5: the importer's own words for an invoice key, by name — the map row's status and its
+ * review state, and an apply run's status. Open on the wire (strings), so a value no map
+ * knows is drawn raw; the test pins every value the contracts name.
+ */
+export const LEGACY_IMPORT_MAP_STATUS_LABELS: Readonly<Record<LegacyImportMapStatus, WebKey>> = {
+  IMPORTED: 'web.mrz_map_status_imported',
+  SKIPPED: 'web.mrz_map_status_skipped',
+  MANUAL_REVIEW: 'web.mrz_map_status_manual_review',
+  FAILED: 'web.mrz_map_status_failed',
+};
+
+export const LEGACY_REVIEW_STATE_LABELS: Readonly<Record<LegacyReviewState, WebKey>> = {
+  OPEN: 'web.mrz_review_state_open',
+  RESOLVED: 'web.mrz_review_state_resolved',
+  DISMISSED: 'web.mrz_review_state_dismissed',
+};
+
+export const LEGACY_IMPORT_RUN_STATUS_LABELS: Readonly<Record<LegacyImportRunStatus, WebKey>> = {
+  RUNNING: 'web.mrz_run_status_running',
+  COMPLETED: 'web.mrz_run_status_completed',
+  FAILED: 'web.mrz_run_status_failed',
+  ABORTED: 'web.mrz_run_status_aborted',
+};

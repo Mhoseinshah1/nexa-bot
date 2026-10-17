@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState, type ReactElement } from 'react';
 import { PaymentsPage } from '../../apps/web/src/pages/payments';
 import { ProductsPage } from '../../apps/web/src/pages/products';
@@ -12,6 +12,7 @@ import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedApply } from '../../apps/web/src/u
 import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, product, renderPage } from './harness';
+import { openFilterPanel, setDateField } from './ui-helpers';
 
 /**
  * FIX-01 (2026-10-09): every data search in the Web Admin applies itself.
@@ -96,7 +97,7 @@ interface Spec {
   readonly terms: readonly [string, string];
   readonly paste: string;
   /** The pager's "next" button, and the request parameter its cursor travels in. */
-  readonly next: 'web.older' | 'web.newer';
+  readonly next: 'web.page_next';
   readonly cursorParam: string;
 }
 
@@ -211,7 +212,7 @@ const SPECS: readonly Spec[] = [
     body: (rows, next) => ({ payments: rowsOf(PAYMENT, rows), nextCursor: next ? 'C2' : null }),
     terms: ['ali', 'alireza'],
     paste: '  5551234567 \n',
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
   {
@@ -231,7 +232,7 @@ const SPECS: readonly Spec[] = [
       url.pathname.endsWith('/product-categories') ? { categories: [] } : undefined,
     terms: ['پلن', 'پلن یک'],
     paste: '  پلن یک‌ماهه \n',
-    next: 'web.newer',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
   {
@@ -264,7 +265,7 @@ const SPECS: readonly Spec[] = [
     extras: (url) => (url.pathname.endsWith('/reseller-tiers') ? { tiers: [] } : undefined),
     terms: ['رضا', 'رضا رس'],
     paste: '  5551234567 \n',
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
   {
@@ -287,7 +288,7 @@ const SPECS: readonly Spec[] = [
     extras: (url) => (url.pathname.endsWith('/ticket-categories') ? { categories: [] } : undefined),
     terms: ['mar', 'mary'],
     paste: '  951001 \n',
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'before',
   },
   {
@@ -302,7 +303,7 @@ const SPECS: readonly Spec[] = [
     body: (rows, next) => ({ entries: rowsOf(AUDIT_ENTRY, rows), nextCursor: next ? 'C2' : null }),
     terms: ['own', 'owner'],
     paste: '  owner \n',
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
   {
@@ -326,7 +327,7 @@ const SPECS: readonly Spec[] = [
     // Only a complete id is a referrer filter: both terms are ids.
     terms: [UUID_A, UUID_B],
     paste: `  ${UUID_A} \n`,
-    next: 'web.older',
+    next: 'web.page_next',
     cursorParam: 'cursor',
   },
 ];
@@ -504,6 +505,7 @@ describe('a draft with a problem is never applied by itself', () => {
     const calls = serve(spec);
     await open(spec, () => calls);
     const before = calls.length;
+    openFilterPanel();
     const action = byId('audit-action');
     fireEvent.change(action(), { target: { value: 'Payment Confirm' } });
     await advance(PAST * 2);
@@ -524,13 +526,14 @@ describe('a draft with a problem is never applied by itself', () => {
     const calls = serve(spec);
     await open(spec, () => calls);
     const before = calls.length;
-    fireEvent.change(byId('tickets-from')(), { target: { value: '2026-09-20' } });
-    fireEvent.change(byId('tickets-to')(), { target: { value: '2026-09-10' } });
+    openFilterPanel();
+    setDateField(byId('tickets-from')(), '2026-09-20');
+    setDateField(byId('tickets-to')(), '2026-09-10');
     type(spec, 'mary');
     await advance(PAST * 2);
     expect(listReads(calls.slice(before), spec)).toEqual([]);
     // Fixing the range applies everything typed, in one navigation.
-    fireEvent.change(byId('tickets-to')(), { target: { value: '2026-09-25' } });
+    setDateField(byId('tickets-to')(), '2026-09-25');
     await advance(PAST);
     await waitFor(() => expect(inUrl(spec)).toBe('mary'));
     expect(new URLSearchParams(window.location.search).get('from')).toBe('2026-09-20');
@@ -576,10 +579,15 @@ describe('a draft cancelled by another navigation is not revived by returning', 
     await open(spec(), () => calls);
     type(spec(), 'پلن');
     await advance(SHORT);
-    fireEvent.click(screen.getByRole('button', { name: t('web.product_status_active') }));
+    // W1.3: the status chips are in the «فیلترها» panel.
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.product_status_active') }),
+    );
     await waitFor(() => expect(status()).toBe('ACTIVE'));
     await advance(50);
-    fireEvent.click(screen.getAllByRole('button', { name: t('web.users_filter_all') })[0]!);
+    fireEvent.click(
+      within(openFilterPanel()).getAllByRole('button', { name: t('web.users_filter_all') })[0]!,
+    );
     await waitFor(() => expect(status()).toBeNull());
     const before = calls.length;
     await advance(PAST * 2);

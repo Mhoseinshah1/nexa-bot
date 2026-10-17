@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   BROADCAST_BODY_DEFINITION,
   BROADCAST_BUTTONS_MAX,
@@ -45,6 +46,10 @@ import {
   uploadBroadcastMedia,
 } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
+import { ListFilterBar } from '../ui/filter-bar';
+import { jalaliDatesIn } from './editor-layout';
+import { FilePicker } from '../ui/file-picker';
+import { DateField } from '../ui/date-field';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { useSubmissionKey } from '../submission-key';
@@ -55,6 +60,7 @@ import {
   Card,
   ConfirmDialog,
   CursorPager,
+  LIST_PAGE_SIZE,
   DataTable,
   Empty,
   Field,
@@ -84,6 +90,7 @@ import {
   wireAudience,
   type AudienceDraft,
 } from './audience-builder';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * «ارسال همگانی» — Broadcast (round N, B1).
@@ -247,11 +254,14 @@ export function BroadcastsPage({
 }) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
-  const list = useQuery({
-    queryKey: ['broadcasts', cursor],
-    queryFn: () => fetchBroadcasts(cursor === null ? {} : { cursor }),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['broadcasts', cursor],
+      queryFn: () =>
+        fetchBroadcasts({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
+      enabled: !denied,
+    }),
+  );
   const columns: readonly Column<BroadcastResponseItem>[] = [
     {
       key: 'title',
@@ -751,7 +761,10 @@ function Composer({
 
       {save.error !== null && (
         <div className="cb-form-error">
-          <Banner tone="danger">{broadcastMessage(save.error)}</Banner>
+          <Banner tone="danger">
+            {broadcastMessage(save.error)}
+            <ErrorRef error={save.error} />
+          </Banner>
         </div>
       )}
     </Card>
@@ -790,6 +803,12 @@ function MediaCard({
 }) {
   const client = useQueryClient();
   const [rejected, setRejected] = useState(false);
+  /*
+   * The picker is drawn afresh after every upload attempt (PR #285 review, A5), as on
+   * tickets: a refused file no longer reads as chosen, and the new native input has no
+   * value, so picking the SAME file again fires its change and is tried again.
+   */
+  const [attempt, setAttempt] = useState(0);
   const refresh = () => void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
   const upload = useMutation({
     mutationFn: async (file: File) => {
@@ -802,6 +821,7 @@ function MediaCard({
       return uploadBroadcastMedia(record.id, picked);
     },
     onSuccess: refresh,
+    onSettled: () => setAttempt((current) => current + 1),
   });
   const remove = useMutation({
     mutationFn: () => removeBroadcastMedia(record.id),
@@ -829,14 +849,20 @@ function MediaCard({
       )}
       {blocked && <Banner tone="warn">{t('web.bc_media_save_first')}</Banner>}
       <div className="form-actions">
-        <input
-          type="file"
-          className="bc-file"
-          aria-label={t('web.bc_media_pick')}
+        <FilePicker
+          key={attempt}
+          label={t('web.bc_media_pick')}
+          kind={
+            record.contentKind === 'PHOTO'
+              ? 'image'
+              : record.contentKind === 'VIDEO'
+                ? 'video'
+                : 'any'
+          }
           accept={accept}
           disabled={blocked || upload.isPending}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
+          onFiles={(files) => {
+            const file = files[0];
             if (file !== undefined) upload.mutate(file);
           }}
         />
@@ -853,7 +879,12 @@ function MediaCard({
         )}
       </div>
       {rejected && <Banner tone="danger">{t('web.bc_error_media_refused')}</Banner>}
-      {upload.error !== null && <Banner tone="danger">{broadcastMessage(upload.error)}</Banner>}
+      {upload.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(upload.error)}
+          <ErrorRef error={upload.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -977,8 +1008,18 @@ function LaunchCard({
           {t('web.bcx_test_last')}: {t(TEST_OUTCOME_LABELS[tested])}
         </p>
       )}
-      {test.error !== null && <Banner tone="danger">{broadcastMessage(test.error)}</Banner>}
-      {count.error !== null && <Banner tone="danger">{broadcastMessage(count.error)}</Banner>}
+      {test.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(test.error)}
+          <ErrorRef error={test.error} />
+        </Banner>
+      )}
+      {count.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(count.error)}
+          <ErrorRef error={count.error} />
+        </Banner>
+      )}
       {preview !== null && (
         <>
           <div className="stat-grid cb-stat-row">
@@ -1025,11 +1066,11 @@ function LaunchCard({
                 </Field>
                 {mode === 'SCHEDULE' && (
                   <Field label={t('web.bc_schedule_at')} htmlFor="bc-at">
-                    <input
+                    <DateField
                       id="bc-at"
-                      type="datetime-local"
+                      mode="datetime"
                       value={scheduledAt}
-                      onChange={(event) => setScheduledAt(event.target.value)}
+                      onChange={setScheduledAt}
                     />
                   </Field>
                 )}
@@ -1086,7 +1127,12 @@ function LaunchCard({
           )}
         </>
       )}
-      {launch.error !== null && <Banner tone="danger">{broadcastMessage(launch.error)}</Banner>}
+      {launch.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(launch.error)}
+          <ErrorRef error={launch.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -1236,7 +1282,12 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
           onCancel={() => setCancelAsked(false)}
         />
       )}
-      {steer.error !== null && <Banner tone="danger">{broadcastMessage(steer.error)}</Banner>}
+      {steer.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(steer.error)}
+          <ErrorRef error={steer.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -1500,15 +1551,18 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
   const client = useQueryClient();
   // Refreshed WITH the detail while sending, and once more when the broadcast leaves a
   // state, so the last page read is never the one from before it finished (Codex R6).
-  const rows = useQuery({
-    queryKey: ['broadcast-recipients', id, state, cursor],
-    queryFn: () =>
-      fetchBroadcastRecipients(id, {
-        ...(state === '' ? {} : { state }),
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
-  });
+  const rows = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['broadcast-recipients', id, state, cursor],
+      queryFn: () =>
+        fetchBroadcastRecipients(id, {
+          limit: LIST_PAGE_SIZE,
+          ...(state === '' ? {} : { state }),
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
+    }),
+  );
   const seenState = useRef(broadcastState);
   useEffect(() => {
     if (seenState.current !== broadcastState) {
@@ -1518,25 +1572,39 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
   }, [broadcastState, client, id]);
   return (
     <Card title={t('web.bc_recipients')}>
-      <div className="toolbar">
-        <Field label={t('web.bc_state')} htmlFor="bc-r-state" compact>
-          <select
-            id="bc-r-state"
-            value={state}
-            onChange={(event) => {
-              setState(event.target.value as BroadcastRecipientState | '');
+      <ListFilterBar
+        label={t('web.bc_recipients')}
+        filters={[
+          {
+            key: 'state',
+            label: t('web.bc_state'),
+            active: state === '' ? null : t(RECIPIENT_LABELS[state]),
+            onClear: () => {
+              setState('');
               setTrail([]);
-            }}
-          >
-            <option value="">{t('web.aud_any')}</option>
-            {BROADCAST_RECIPIENT_STATES.map((option) => (
-              <option key={option} value={option}>
-                {t(RECIPIENT_LABELS[option])}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
+            },
+            control: (
+              <select
+                id="bc-r-state"
+                className="input sm"
+                aria-label={t('web.bc_state')}
+                value={state}
+                onChange={(event) => {
+                  setState(event.target.value as BroadcastRecipientState | '');
+                  setTrail([]);
+                }}
+              >
+                <option value="">{t('web.aud_any')}</option>
+                {BROADCAST_RECIPIENT_STATES.map((option) => (
+                  <option key={option} value={option}>
+                    {t(RECIPIENT_LABELS[option])}
+                  </option>
+                ))}
+              </select>
+            ),
+          },
+        ]}
+      />
       <StateSwitch query={rows}>
         {rows.data === undefined ? null : (
           <>
@@ -1591,7 +1659,11 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
                       t(PIN_LABELS[row.pinState])
                     ) : (
                       <>
-                        {t(PIN_LABELS[row.pinState])} <code>{row.pinErrorCode}</code>
+                        {t(PIN_LABELS[row.pinState])}{' '}
+                        {/* The pin's reason in words; the transport code in its title. */}
+                        <span className="muted small" title={row.pinErrorCode}>
+                          {broadcastReasonLabel(row.pinErrorCode) ?? <Ltr>{row.pinErrorCode}</Ltr>}
+                        </span>
                       </>
                     ),
                 },
@@ -1670,7 +1742,7 @@ function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
       )}
       <ul className="small">
         {describeAudience(record.audience, botNames).map((line) => (
-          <li key={line}>{line}</li>
+          <li key={line}>{jalaliDatesIn(line)}</li>
         ))}
       </ul>
       {!isSourcedBroadcastKind(record.contentKind) && (

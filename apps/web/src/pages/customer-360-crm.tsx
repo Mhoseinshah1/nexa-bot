@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FormDialog } from './form-dialog';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_NOTE_MAX_LENGTH,
   CUSTOMER_TAG_COLORS,
@@ -21,7 +22,7 @@ import {
   updateCustomerTag,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { c360Message } from './customer-360-sections';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -30,18 +31,20 @@ import {
   Banner,
   Button,
   Card,
+  CursorPager,
   Empty,
   Field,
   IconButton,
   Input,
+  LIST_PAGE_SIZE,
   Modal,
   Select,
   StateSwitch,
   Textarea,
   useConfirmedClose,
   useToast,
-  useUnsavedChanges,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Customer 360 — notes and tags (program §8, `docs/customer-notes-tags.md`).
@@ -119,8 +122,11 @@ export function CustomerCrmSection({
   mayWriteNotes,
   mayAssignTags,
   mayManageTags,
+  noteSubmission,
 }: {
   customerId: string;
+  /** The new-note key, held by the page so it outlives this tab (see `UserDetailPage`). */
+  noteSubmission?: SubmissionKey;
   /** `users.notes.view` */
   mayViewNotes: boolean;
   /** `users.notes.write` */
@@ -137,7 +143,12 @@ export function CustomerCrmSection({
         mayAssign={mayAssignTags}
         mayManage={mayManageTags}
       />
-      <CustomerNotesCard customerId={customerId} mayView={mayViewNotes} mayWrite={mayWriteNotes} />
+      <CustomerNotesCard
+        customerId={customerId}
+        mayView={mayViewNotes}
+        mayWrite={mayWriteNotes}
+        {...(noteSubmission === undefined ? {} : { held: noteSubmission })}
+      />
     </div>
   );
 }
@@ -160,6 +171,8 @@ function CustomerTagsCard({
   const submission = useSubmissionKey();
   const [choice, setChoice] = useState('');
   const [managing, setManaging] = useState(false);
+  // W3: the assignment is a dialog opened from the card's header.
+  const [adding, setAdding] = useState(false);
   const tags = useQuery({
     queryKey: ['customer-tags', customerId],
     queryFn: () => fetchCustomerTags(customerId),
@@ -179,6 +192,7 @@ function CustomerTagsCard({
       if (!response.changed) notify({ tone: 'info', message: t('web.crm_unchanged') });
       queries.setQueryData(['customer-tags', customerId], { tags: response.tags });
       setChoice('');
+      setAdding(false);
       // A tag moves this customer in and out of the list's tag filter.
       void queries.invalidateQueries({ queryKey: ['customers'] });
       void queries.invalidateQueries({ queryKey: ['customer-timeline', customerId] });
@@ -198,10 +212,19 @@ function CustomerTagsCard({
       title={t('web.crm_tags_title')}
       hint={t('web.crm_tags_hint')}
       actions={
-        mayManage ? (
-          <Button size="sm" variant="ghost" icon="tag" onClick={() => setManaging(true)}>
-            {t('web.crm_tags_manage')}
-          </Button>
+        mayManage || (mayAssign && offered.length > 0) ? (
+          <>
+            {mayAssign && offered.length > 0 && (
+              <Button size="sm" icon="plus" onClick={() => setAdding(true)}>
+                {t('web.crm_tag_add_open')}
+              </Button>
+            )}
+            {mayManage && (
+              <Button size="sm" variant="ghost" icon="tag" onClick={() => setManaging(true)}>
+                {t('web.crm_tags_manage')}
+              </Button>
+            )}
+          </>
         ) : undefined
       }
     >
@@ -229,39 +252,61 @@ function CustomerTagsCard({
       </StateSwitch>
 
       {mayAssign ? (
-        catalogue.data === undefined ? null : offered.length === 0 ? (
+        catalogue.data !== undefined && offered.length === 0 ? (
           <p className="muted small">{t('web.crm_tags_none_assignable')}</p>
-        ) : (
-          <div className="crm-assign">
-            <Field label={t('web.crm_tag_add_label')} htmlFor={`crm-tag-${customerId}`} compact>
-              <Select
-                id={`crm-tag-${customerId}`}
-                size="sm"
-                value={choice}
-                onChange={(event) => setChoice(event.target.value)}
-              >
-                <option value="">{t('web.crm_tag_add_placeholder')}</option>
-                {offered.map((tag) => (
-                  <option key={tag.id} value={tag.id}>
-                    {tag.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Button
-              size="sm"
-              icon="plus"
-              disabled={choice === '' || write.isPending}
-              onClick={() => write.mutate({ op: 'assign', tagId: choice })}
-            >
-              {t('web.crm_tag_add')}
-            </Button>
-          </div>
-        )
+        ) : null
       ) : (
         <p className="muted small">{t('web.crm_tags_assign_denied')}</p>
       )}
-      {write.error !== null && <Banner tone="danger">{crmMessage(write.error)}</Banner>}
+      {!adding && write.error !== null && (
+        <Banner tone="danger">
+          {crmMessage(write.error)}
+          <ErrorRef error={write.error} />
+        </Banner>
+      )}
+
+      <FormDialog
+        open={mayAssign && adding}
+        title={t('web.crm_tag_add_open')}
+        dirty={choice !== ''}
+        onClose={() => {
+          setAdding(false);
+          setChoice('');
+          write.reset();
+        }}
+        foot={
+          <Button
+            size="sm"
+            variant="primary"
+            icon="plus"
+            disabled={choice === '' || write.isPending}
+            onClick={() => write.mutate({ op: 'assign', tagId: choice })}
+          >
+            {t('web.crm_tag_add')}
+          </Button>
+        }
+      >
+        <Field label={t('web.crm_tag_add_label')} htmlFor={`crm-tag-${customerId}`}>
+          <Select
+            id={`crm-tag-${customerId}`}
+            value={choice}
+            onChange={(event) => setChoice(event.target.value)}
+          >
+            <option value="">{t('web.crm_tag_add_placeholder')}</option>
+            {offered.map((tag) => (
+              <option key={tag.id} value={tag.id}>
+                {tag.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {write.error !== null && (
+          <Banner tone="danger">
+            {crmMessage(write.error)}
+            <ErrorRef error={write.error} />
+          </Banner>
+        )}
+      </FormDialog>
 
       <TagCatalogueModal open={mayManage && managing} onClose={() => setManaging(false)} />
     </Card>
@@ -276,25 +321,37 @@ function CustomerNotesCard({
   customerId,
   mayView,
   mayWrite,
+  held,
 }: {
   customerId: string;
   mayView: boolean;
   mayWrite: boolean;
+  held?: SubmissionKey;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [draft, setDraft] = useState('');
+  // W3: a new note is written in a dialog opened from the card's header.
+  const [writing, setWriting] = useState(false);
   const body = draft.trim();
   const tooLong = Array.from(body).length > CUSTOMER_NOTE_MAX_LENGTH;
-  // A note being typed is not lost to a sidebar click.
-  useUnsavedChanges(body !== '');
 
-  const notes = useInfiniteQuery({
-    queryKey: ['customer-notes', customerId],
-    queryFn: ({ pageParam }) => fetchCustomerNotes(customerId, pageParam),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (last) => last.nextCursor ?? undefined,
+  /*
+   * Ten notes a page with «قبلی / بعدی» (W1.8; PR #285 review, A6) on the server's keyset:
+   * «بعدی» reaches older notes through `nextCursor`, «قبلی» walks back through the cursors
+   * already seen. A note just added invalidates every page under the prefix and the trail
+   * returns to the first page, where the new note is.
+   */
+  const [trail, setTrail] = useState<readonly string[]>([]);
+  const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
+  const notes = useQuery({
+    queryKey: ['customer-notes', customerId, cursor ?? null],
+    queryFn: () => fetchCustomerNotes(customerId, cursor, LIST_PAGE_SIZE),
+    // The page on screen stays while the next loads — never another customer's notes.
+    placeholderData: (previous, query) =>
+      query?.queryKey[1] === customerId ? keepPreviousData(previous) : undefined,
     enabled: mayView,
   });
 
@@ -308,31 +365,40 @@ function CustomerNotesCard({
       submission.settle();
       notify({ tone: 'ok', message: t('web.crm_note_added') });
       setDraft('');
+      setWriting(false);
+      setTrail([]);
       void queries.invalidateQueries({ queryKey: ['customer-notes', customerId] });
       void queries.invalidateQueries({ queryKey: ['customer-timeline', customerId] });
     },
     onError: (error) => submission.settleOn(error),
   });
 
-  const all = notes.data?.pages.flatMap((page) => page.notes) ?? [];
+  const all = notes.data?.notes ?? [];
+  const nextCursor = notes.data?.nextCursor ?? null;
 
   return (
-    <Card title={t('web.crm_notes_title')} hint={t('web.crm_notes_hint')}>
-      {mayWrite && (
-        <div className="crm-note-form">
-          <Field
-            label={t('web.crm_note_label')}
-            htmlFor={`crm-note-${customerId}`}
-            {...(tooLong ? { error: t('web.crm_note_too_long') } : {})}
-          >
-            <Textarea
-              id={`crm-note-${customerId}`}
-              rows={3}
-              value={draft}
-              aria-invalid={tooLong}
-              onChange={(event) => setDraft(event.target.value)}
-            />
-          </Field>
+    <Card
+      title={t('web.crm_notes_title')}
+      hint={t('web.crm_notes_hint')}
+      actions={
+        mayWrite ? (
+          <Button size="sm" icon="plus" onClick={() => setWriting(true)}>
+            {t('web.crm_note_open')}
+          </Button>
+        ) : undefined
+      }
+    >
+      <FormDialog
+        open={mayWrite && writing}
+        title={t('web.crm_note_open')}
+        // A note being typed is not lost to a close or a sidebar click.
+        dirty={body !== ''}
+        onClose={() => {
+          setWriting(false);
+          setDraft('');
+          add.reset();
+        }}
+        foot={
           <Button
             size="sm"
             variant="primary"
@@ -341,9 +407,28 @@ function CustomerNotesCard({
           >
             {t('web.crm_note_add')}
           </Button>
-          {add.error !== null && <Banner tone="danger">{crmMessage(add.error)}</Banner>}
-        </div>
-      )}
+        }
+      >
+        <Field
+          label={t('web.crm_note_label')}
+          htmlFor={`crm-note-${customerId}`}
+          {...(tooLong ? { error: t('web.crm_note_too_long') } : {})}
+        >
+          <Textarea
+            id={`crm-note-${customerId}`}
+            rows={5}
+            value={draft}
+            aria-invalid={tooLong}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        </Field>
+        {add.error !== null && (
+          <Banner tone="danger">
+            {crmMessage(add.error)}
+            <ErrorRef error={add.error} />
+          </Banner>
+        )}
+      </FormDialog>
       {!mayView ? (
         <Banner tone="info">{t('web.crm_notes_denied')}</Banner>
       ) : (
@@ -362,15 +447,16 @@ function CustomerNotesCard({
               ))}
             </ol>
           )}
-          {notes.hasNextPage && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={notes.isFetchingNextPage}
-              onClick={() => void notes.fetchNextPage()}
-            >
-              {t('web.crm_notes_more')}
-            </Button>
+          {(trail.length > 0 || nextCursor !== null) && (
+            <CursorPager
+              shown={all.length}
+              hasPrevious={trail.length > 0}
+              hasNext={nextCursor !== null && !notes.isPlaceholderData}
+              onPrevious={() => setTrail(trail.slice(0, -1))}
+              onNext={() => {
+                if (nextCursor !== null) setTrail([...trail, nextCursor]);
+              }}
+            />
           )}
         </StateSwitch>
       )}
@@ -514,7 +600,12 @@ export function TagCatalogueModal({ open, onClose }: { open: boolean; onClose: (
             {t('web.crm_tag_create')}
           </Button>
         </div>
-        {write.error !== null && <Banner tone="danger">{crmMessage(write.error)}</Banner>}
+        {write.error !== null && (
+          <Banner tone="danger">
+            {crmMessage(write.error)}
+            <ErrorRef error={write.error} />
+          </Banner>
+        )}
 
         <StateSwitch query={catalogue}>
           {(catalogue.data?.tags.length ?? 0) === 0 ? (

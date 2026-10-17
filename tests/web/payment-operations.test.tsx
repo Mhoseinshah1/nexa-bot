@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { PAYMENT_OPS_QUEUES, type PaymentAttentionResponse } from '@nexa/contracts';
-import { PaymentsPage, queueCountsFor } from '../../apps/web/src/pages/payments';
+import { PaymentsPage, paymentsViews, queueCountsFor } from '../../apps/web/src/pages/payments';
 import { PaymentTimelineCard } from '../../apps/web/src/pages/payment-timeline';
 import { resolve } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { fetchPaymentAttention, fetchPayments } from '../../apps/web/src/api/client';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * The Payment Operations Center in the Web Admin (program §10). Fixtures go through the real
@@ -90,7 +91,9 @@ describe('the Payment Operations Center', () => {
     stubApi(routes([gatewayRow()]));
     renderPage(<PaymentsPage route={routeOf()} denied={false} />);
     await screen.findByText('np-ref-0001');
-    const group = screen.getByRole('group', { name: t('web.payment_ops_queue') });
+    const group = within(openFilterPanel()).getByRole('group', {
+      name: t('web.payment_ops_queue'),
+    });
     const unknown = await within(group).findByRole('button', {
       name: new RegExp(t('web.payment_ops_queue_unknown')),
     });
@@ -330,5 +333,38 @@ describe('the payment history’s operations entries', () => {
     expect(container.textContent).toContain(t('web.payment_timeline_withheld_audit'));
     const link = container.querySelector(`a[href="/orders/${ORDER_ID}"]`);
     expect(link).not.toBeNull();
+  });
+});
+
+/** W1.8 and W1.4: ten rows a page on the keyset, and the saved-filter presets the owner approved. */
+describe('the payments list paging and saved filters', () => {
+  it('asks the server for ten rows a page and keeps the cursor', async () => {
+    const api = stubApi(routes([gatewayRow()]));
+    renderPage(<PaymentsPage route={routeOf({ cursor: 'next-page' })} denied={false} />);
+    await screen.findByText('np-ref-0001');
+    const list = api.calls.find((call) => call.url.includes('/payments?'))?.url ?? '';
+    expect(list).toContain('limit=10');
+    expect(list).toContain('cursor=next-page');
+  });
+
+  it('registers the approved presets over the list’s own filter parameters', () => {
+    const views = paymentsViews(routeOf({ q: '5550001', state: 'PENDING', cursor: 'c' }));
+    expect(views.page).toBe('payments');
+    expect(views.presets.map((one) => [t(one.name), one.state])).toEqual([
+      ['نیاز به اقدام', { queue: 'NEEDS_ACTION' }],
+      ['کارت‌به‌کارت در انتظار', { method: 'MANUAL_TRANSFER', state: 'PENDING' }],
+      ['نتیجهٔ نامعلوم', { state: 'UNKNOWN' }],
+    ]);
+    // The search is part of a view; the cursor is not.
+    expect(views.get()).toMatchObject({ q: '5550001', state: 'PENDING', queue: '' });
+    expect(views.get()).not.toHaveProperty('cursor');
+    expect(views.count).toBeUndefined();
+  });
+
+  it('applies a view as one navigation that replaces every filter and starts at page one', () => {
+    window.history.replaceState(null, '', '/payments?state=FAILED&cursor=c&gateway=TONPAYS');
+    const views = paymentsViews(routeOf({ state: 'FAILED', cursor: 'c', gateway: 'TONPAYS' }));
+    views.set({ ...views.empty, queue: 'NEEDS_ACTION' });
+    expect(window.location.search).toBe('?queue=NEEDS_ACTION');
   });
 });

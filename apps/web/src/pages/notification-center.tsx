@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   NOTIFICATION_SUMMARY_REFRESH_MS,
   visibleNotificationCategories,
@@ -24,7 +25,6 @@ import {
   Disclosure,
   Empty,
   KV,
-  Ltr,
   PageHead,
   Pills,
   Select,
@@ -32,7 +32,11 @@ import {
   Num,
   useToast,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
+import { opsCodeLabel } from '../ops-code-labels';
+import { CodeLabel, ErrorRef, TechnicalDetails } from '../ui/technical-details';
+import { ListFilterBar } from '../ui/filter-bar';
 
 /*
  * Phase B3 — the Web Admin Notification Center (`docs/notification-center.md`).
@@ -230,16 +234,19 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
   const cursors = trail.signature === signature ? trail.cursors : [];
   const cursor = cursors.at(-1);
 
-  const inbox = useQuery({
-    queryKey: ['inbox', show, category, cursor ?? null],
-    queryFn: () =>
-      fetchInbox({
-        unread: show === 'UNREAD',
-        ...(category === '' ? {} : { category }),
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    refetchInterval: NOTIFICATION_SUMMARY_REFRESH_MS,
-  });
+  const inbox = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['inbox', show, category, cursor ?? null],
+      queryFn: () =>
+        fetchInbox({
+          limit: LIST_PAGE_SIZE,
+          unread: show === 'UNREAD',
+          ...(category === '' ? {} : { category }),
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      refetchInterval: NOTIFICATION_SUMMARY_REFRESH_MS,
+    }),
+  );
 
   const refresh = () => {
     void queries.invalidateQueries({ queryKey: ['inbox'] });
@@ -259,6 +266,16 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
 
   const rows = inbox.data?.notifications ?? [];
   const next = inbox.data?.nextCursor ?? null;
+  const showPills = (
+    <Pills<Show>
+      value={show}
+      onChange={setShow}
+      items={[
+        { id: 'UNREAD', label: t('web.nc_filter_unread') },
+        { id: 'ALL', label: t('web.nc_filter_all') },
+      ]}
+    />
+  );
 
   return (
     <>
@@ -278,33 +295,42 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
           ) : undefined
         }
       />
-      <div className="nc-filters">
-        <Pills<Show>
-          value={show}
-          onChange={setShow}
-          items={[
-            { id: 'UNREAD', label: t('web.nc_filter_unread') },
-            { id: 'ALL', label: t('web.nc_filter_all') },
+      {categories.length > 1 ? (
+        <ListFilterBar
+          label={t('web.nc_title')}
+          search={showPills}
+          filters={[
+            {
+              key: 'category',
+              label: t('web.nc_filter_category'),
+              active: category === '' ? null : t(CATEGORY_LABELS[category]),
+              onClear: () => setCategory(''),
+              control: (
+                <Select
+                  size="sm"
+                  aria-label={t('web.nc_filter_category')}
+                  value={category}
+                  onChange={(event) => setCategory(event.target.value as NotificationCategory | '')}
+                >
+                  <option value="">{t('web.nc_category_all')}</option>
+                  {categories.map((one) => (
+                    <option key={one} value={one}>
+                      {t(CATEGORY_LABELS[one])}
+                    </option>
+                  ))}
+                </Select>
+              ),
+            },
           ]}
         />
-        {categories.length > 1 && (
-          <Select
-            size="sm"
-            aria-label={t('web.nc_filter_category')}
-            value={category}
-            onChange={(event) => setCategory(event.target.value as NotificationCategory | '')}
-          >
-            <option value="">{t('web.nc_category_all')}</option>
-            {categories.map((one) => (
-              <option key={one} value={one}>
-                {t(CATEGORY_LABELS[one])}
-              </option>
-            ))}
-          </Select>
-        )}
-      </div>
+      ) : (
+        <div className="nc-filters">{showPills}</div>
+      )}
       {(mark.error !== null || markAll.error !== null) && (
-        <Banner tone="danger">{messageFor(mark.error ?? markAll.error)}</Banner>
+        <Banner tone="danger">
+          {messageFor(mark.error ?? markAll.error)}
+          <ErrorRef error={mark.error ?? markAll.error} />
+        </Banner>
       )}
       <Card tight>
         <StateSwitch query={inbox}>
@@ -390,13 +416,11 @@ function InboxItem({
                 ? t('web.nc_open_condition')
                 : formatTimestamp(row.resolvedAt),
             ],
-            [t('web.nc_code'), <Ltr key="c">{row.code}</Ltr>],
             [
-              t('web.nc_message'),
-              <Ltr key="m" mono={false}>
-                {row.message}
-              </Ltr>,
+              t('web.nc_code'),
+              <CodeLabel key="c" label={opsCodeLabel(row.code)} code={row.code} />,
             ],
+            [t('web.nc_message'), <TechnicalDetails key="m" lines={[row.message]} />],
           ]}
         />
       </Disclosure>

@@ -1,3 +1,4 @@
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { PaymentDetailPage } from '../../apps/web/src/pages/payments';
@@ -136,6 +137,7 @@ describe('the refund consequences', () => {
     renderPage(refundPage(true));
     await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
 
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت بازگشت وجه' }));
     fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
       target: { value: '100000' },
     });
@@ -179,15 +181,17 @@ describe('the refund consequences', () => {
     renderPage(refundPage(false));
     await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
 
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت بازگشت وجه' }));
     fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
       target: { value: '100000' },
     });
     fireEvent.change(screen.getByLabelText('دلیل'), { target: { value: 'مشتری منصرف شد' } });
     fireEvent.click(screen.getByRole('button', { name: 'ثبت درخواست' }));
 
-    expect(
-      await screen.findByText('This payment has refunds in another currency.'),
-    ).toBeInTheDocument();
+    // W6: the REASON's Persian sentence (the server names it as a detail), never the
+    // server's English message.
+    expect(await screen.findByText(t('web.refund_refusal_currency'))).toBeInTheDocument();
+    expect(screen.queryByText('This payment has refunds in another currency.')).toBeNull();
     expect(screen.queryByText(/تا وقتی ساخت سرویس این سفارش/u)).toBeNull();
   });
 

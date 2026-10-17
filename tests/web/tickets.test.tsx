@@ -11,7 +11,9 @@ import { ApiError } from '../../apps/web/src/api/client';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { HANDOFF_LABELS } from '../../apps/web/src/pages/handoff-labels';
+import { ticketViews } from '../../apps/web/src/pages/tickets';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * WP-A7 — the Web Admin's ticket inbox and conversation. Fixtures go through the real API
@@ -197,11 +199,45 @@ describe('the ticket inbox', () => {
     await screen.findByText(t('web.tickets_filter_empty'));
     const list = api.calls.find((call) => call.url.includes('/tickets?'));
     expect(new URL(list!.url, 'http://x').searchParams.get('awaiting')).toBe('support');
-    const chip = screen.getByRole('button', { name: t('web.ticket_filter_awaiting_support') });
+    // W1.8: ten rows a page.
+    expect(new URL(list!.url, 'http://x').searchParams.get('limit')).toBe('10');
+    const panel = openFilterPanel();
+    const chip = within(panel).getByRole('button', {
+      name: t('web.ticket_filter_awaiting_support'),
+    });
     expect(chip.getAttribute('aria-pressed')).toBe('true');
     expect(
-      screen.getByRole('button', { name: t('web.ticket_filter_all') }).getAttribute('aria-pressed'),
+      within(panel)
+        .getByRole('button', { name: t('web.ticket_filter_all') })
+        .getAttribute('aria-pressed'),
     ).toBe('false');
+  });
+
+  it('W1.4: registers saved views over its URL filters, with the demo presets', () => {
+    const views = ticketViews(route('assigned=me&awaiting=support&from=2026-09-01&page=2'));
+    expect(views.page).toBe('tickets');
+    expect(views.presets.map((one) => [t(one.name), one.state])).toEqual([
+      ['منتظر پاسخ ما', { awaiting: 'support' }],
+      ['تیکت‌های من', { assigned: 'me', awaiting: 'support' }],
+      ['بدون مسئول', { assigned: 'none' }],
+    ]);
+    expect(views.count).toBeUndefined();
+    // Only the filter parameters are a view; anything else in the URL is not.
+    expect(views.get()).toEqual({
+      status: '',
+      awaiting: 'support',
+      categoryId: '',
+      customer: '',
+      assigned: 'me',
+      from: '2026-09-01',
+      to: '',
+    });
+    window.history.replaceState(null, '', '/tickets?status=OPEN&customer=mary');
+    views.set({ ...views.empty, assigned: 'none' });
+    const applied = new URLSearchParams(window.location.search);
+    expect(applied.get('assigned')).toBe('none');
+    expect(applied.get('awaiting')).toBeNull();
+    expect(applied.get('from')).toBeNull();
   });
 
   it('draws the category editor only for the key that edits categories', async () => {
@@ -218,9 +254,22 @@ describe('the ticket inbox', () => {
 
     const api = stubApi([
       { url: '/tickets', body: { tickets: [], nextCursor: null } },
-      { url: '/ticket-categories', body: categories },
+      { url: '/ticket-categories', body: categories, method: 'GET' },
+      {
+        url: '/ticket-categories',
+        method: 'POST',
+        body: {
+          category: { ...categories.categories[0], title: 'نمایندگی', sortOrder: 60 },
+          changed: true,
+        },
+      },
     ]);
     renderPage(<TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories />);
+    // W3: the create form opens from the card's «افزودن دسته» button, in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.ticket_category_add') }));
+    const drawer = await screen.findByRole('dialog', { name: t('web.ticket_category_add') });
+    const add = within(drawer).getByRole('button', { name: t('web.ticket_category_add') });
+    expect((add as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(
       await screen.findByLabelText(t('web.ticket_category_title'), {
         selector: '#ticket-category-title',
@@ -235,11 +284,15 @@ describe('the ticket inbox', () => {
         target: { value: '۶۰' },
       },
     );
-    fireEvent.click(screen.getByRole('button', { name: t('web.ticket_category_add') }));
+    fireEvent.click(add);
     await waitFor(() =>
       expect(
         api.calls.some((call) => call.method === 'POST' && call.url.endsWith('/ticket-categories')),
       ).toBe(true),
+    );
+    // Success closes the drawer.
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: t('web.ticket_category_add') })).toBeNull(),
     );
     const posted = api.calls.find((call) => call.method === 'POST')!;
     expect(posted.body).toMatchObject({ title: 'نمایندگی', sortOrder: 60 });
@@ -257,8 +310,11 @@ describe('the ticket inbox', () => {
     ]);
     renderPage(<TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories />);
     const table = await screen.findByRole('table', { name: t('web.ticket_categories_title') });
-    const order = within(table).getByLabelText(t('web.ticket_category_order'));
-    const save = within(table).getByRole('button', { name: t('web.ticket_category_reorder') });
+    // W3: the row's «ذخیرهٔ ترتیب» opens the same input in a drawer.
+    fireEvent.click(within(table).getByRole('button', { name: t('web.ticket_category_reorder') }));
+    const drawer = await screen.findByRole('dialog');
+    const order = within(drawer).getByLabelText(t('web.ticket_category_order'));
+    const save = within(drawer).getByRole('button', { name: t('web.ticket_category_reorder') });
     expect((order as HTMLInputElement).value).toBe('10');
     // Unchanged, and then not a number: nothing to save either time.
     expect((save as HTMLButtonElement).disabled).toBe(true);
@@ -759,6 +815,9 @@ describe('one ticket', () => {
     expect(screen.getByRole('link', { name: 'مریم' }).getAttribute('href')).toBe(
       `/users/${CUSTOMER_ID}`,
     );
+    // W3: «مسئول پاسخ…» opens the select in a drawer; a choice still applies at once.
+    expect(screen.queryByLabelText(t('web.ticket_assignee'), { selector: 'select' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.ticket_assignee_change') }));
     const select = await screen.findByLabelText(t('web.ticket_assignee'), { selector: 'select' });
     await screen.findByRole('option', { name: 'پشتیبان (@support1)' });
     fireEvent.change(select, { target: { value: ADMIN_ID } });
@@ -766,6 +825,51 @@ describe('one ticket', () => {
       expect(api.calls.find((call) => call.url.endsWith('/assignee'))?.body).toEqual({
         adminId: ADMIN_ID,
       }),
+    );
+    // Applied: the drawer closes by itself.
+    await waitFor(() =>
+      expect(screen.queryByLabelText(t('web.ticket_assignee'), { selector: 'select' })).toBeNull(),
+    );
+  });
+
+  it('W3: edits the linked items in a drawer that asks before throwing a typed draft away', async () => {
+    const api = stubApi([
+      { url: `/tickets/${TICKET_ID}`, body: detail({}) },
+      { url: '/tickets/assignees', body: { admins: [] } },
+      { url: `/tickets/${TICKET_ID}/links`, body: { ticket: summary({}), changed: true } },
+    ]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply={false}
+        mayAssign
+        mayClose={false}
+      />,
+    );
+    const open = await screen.findByRole('button', { name: t('web.ticket_links_save') });
+    expect(screen.queryByLabelText(t('web.ticket_link_order'))).toBeNull();
+    fireEvent.click(open);
+    const drawer = await screen.findByRole('dialog', { name: t('web.ticket_links_save') });
+    fireEvent.change(within(drawer).getByLabelText(t('web.ticket_link_order')), {
+      target: { value: 'abc' },
+    });
+    fireEvent.keyDown(drawer, { key: 'Escape' });
+    // A typed draft asks first; staying keeps it.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.unsaved_stay') }));
+    expect(
+      (within(drawer).getByLabelText(t('web.ticket_link_order')) as HTMLInputElement).value,
+    ).toBe('abc');
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.ticket_links_save') }));
+    await waitFor(() =>
+      expect(api.calls.find((call) => call.url.endsWith('/links'))?.body).toEqual({
+        serviceId: null,
+        orderId: 'abc',
+        paymentId: null,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: t('web.ticket_links_save') })).toBeNull(),
     );
   });
 });

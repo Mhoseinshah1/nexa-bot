@@ -29,6 +29,7 @@ import {
   Tabs,
   type Tone,
 } from '../ui/kit';
+import { ErrorCodeLabel } from '../ui/technical-details';
 
 /**
  * Gateway Health (program §11, `docs/gateway-health.md`): a tab beside the payment routes'
@@ -182,7 +183,12 @@ function HealthCard({
               </span>
             ) : (
               <span key="k">
-                {formatTimestamp(view.check.lastAt)} · <Ltr>{view.check.lastResult ?? '—'}</Ltr>
+                {formatTimestamp(view.check.lastAt)} ·{' '}
+                {view.check.lastResult === null ? (
+                  '—'
+                ) : (
+                  <ErrorCodeLabel code={view.check.lastResult} />
+                )}
               </span>
             ),
           ],
@@ -194,7 +200,8 @@ function HealthCard({
               when(null)
             ) : (
               <span key="f">
-                {formatTimestamp(a.lastInquiryFailure.at)} · <Ltr>{a.lastInquiryFailure.code}</Ltr>
+                {formatTimestamp(a.lastInquiryFailure.at)} ·{' '}
+                <ErrorCodeLabel code={a.lastInquiryFailure.code} />
               </span>
             ),
           ],
@@ -205,7 +212,13 @@ function HealthCard({
             ) : (
               <span key="cf">
                 {formatTimestamp(a.lastCreateFailure.at)} ·{' '}
-                <Ltr>{`${a.lastCreateFailure.state}${a.lastCreateFailure.code === null ? '' : ` · ${a.lastCreateFailure.code}`}`}</Ltr>
+                <ErrorCodeLabel code={a.lastCreateFailure.state} />
+                {a.lastCreateFailure.code === null ? null : (
+                  <>
+                    {' · '}
+                    <ErrorCodeLabel code={a.lastCreateFailure.code} />
+                  </>
+                )}
               </span>
             ),
           ],
@@ -241,7 +254,8 @@ function HealthCard({
                     key={condition.code}
                     tone={condition.severity === 'INFO' ? 'info' : 'danger'}
                   >
-                    <Ltr>{`${condition.code} ×${String(condition.count)}`}</Ltr>
+                    <ErrorCodeLabel code={condition.code} />{' '}
+                    <Ltr>{`×${String(condition.count)}`}</Ltr>
                   </Badge>
                 ))}
               </span>
@@ -254,7 +268,7 @@ function HealthCard({
             ) : (
               <span key="r">
                 {formatTimestamp(view.lastReconciliation.at)} ·{' '}
-                <Ltr>{view.lastReconciliation.action}</Ltr>
+                <ErrorCodeLabel code={view.lastReconciliation.action} />
               </span>
             ),
           ],

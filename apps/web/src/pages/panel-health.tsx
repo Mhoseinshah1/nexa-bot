@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   PANEL_DRAIN_REASON_MAX_LENGTH,
   PANEL_DRAIN_REASON_MIN_LENGTH,
@@ -41,8 +42,11 @@ import {
   Textarea,
   useToast,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { Modal } from '../ui/overlays';
+import { opsCodeLabel } from '../ops-code-labels';
+import { CodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
  * Phase C2: the panel health dashboard.
@@ -105,12 +109,15 @@ export function PanelHealthPage({
 }) {
   const [cursors, setCursors] = useState<readonly string[]>([]);
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
-  const health = useQuery({
-    queryKey: ['panel-health', cursor ?? null],
-    queryFn: () => fetchPanelHealth(cursor === undefined ? {} : { cursor }),
-    enabled: !denied,
-    refetchInterval: pollUnlessFinal(PANEL_HEALTH_REFRESH_MS),
-  });
+  const health = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['panel-health', cursor ?? null],
+      queryFn: () =>
+        fetchPanelHealth({ limit: LIST_PAGE_SIZE, ...(cursor === undefined ? {} : { cursor }) }),
+      enabled: !denied,
+      refetchInterval: pollUnlessFinal(PANEL_HEALTH_REFRESH_MS),
+    }),
+  );
   const [draining, setDraining] = useState<PanelSummaryResponse | null>(null);
   const [grouping, setGrouping] = useState<PanelSummaryResponse | null>(null);
 
@@ -443,7 +450,8 @@ function PanelConditions({ conditions }: { conditions: PanelHealthRow['condition
               <Badge tone={SEVERITY_TONES[condition.severity] ?? 'neutral'}>
                 {t(SEVERITY_LABELS[condition.severity])}
               </Badge>{' '}
-              <Ltr>{condition.code}</Ltr> <ConditionTimes condition={condition} />
+              <CodeLabel label={opsCodeLabel(condition.code)} code={condition.code} />{' '}
+              <ConditionTimes condition={condition} />
             </li>
           ))}
         </ul>
@@ -456,7 +464,8 @@ function PanelConditions({ conditions }: { conditions: PanelHealthRow['condition
             {history.map((condition) => (
               <li key={condition.code}>
                 <Badge tone="neutral">{t('web.ph_condition_historical')}</Badge>{' '}
-                <Ltr>{condition.code}</Ltr> <ConditionTimes condition={condition} />
+                <CodeLabel label={opsCodeLabel(condition.code)} code={condition.code} />{' '}
+                <ConditionTimes condition={condition} />
               </li>
             ))}
           </ul>
@@ -556,6 +565,7 @@ function DrainModal({ panel, onClose }: { panel: PanelSummaryResponse; onClose: 
       {run.isError && (
         <Banner tone="danger" role="alert">
           {messageFor(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
       <Field label={t('web.ph_reason_label')} hint={t('web.ph_reason_hint')} htmlFor="ph-reason">
@@ -623,6 +633,7 @@ function GroupModal({ panel, onClose }: { panel: PanelSummaryResponse; onClose: 
       {run.isError && (
         <Banner tone="danger" role="alert">
           {messageFor(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
       <Field label={t('web.bal_group')} hint={t('web.bal_group_hint')} htmlFor="ph-group">

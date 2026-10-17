@@ -7,6 +7,7 @@ import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
 import { capabilityRegistry, event, panel, renderPage, stubApi } from './harness';
 import { formatNumber } from '../../apps/web/src/format';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Two defect classes the fifth review found, kept together because they are the
@@ -62,8 +63,9 @@ describe('the catalogue permission combinations', () => {
     expect(navPermitted(entry!, ['catalog.edit'])).toBe(true);
 
     open(['catalog.edit']);
-    // The capability they hold is offered...
-    expect(await screen.findByText(CREATE_FORM)).toBeInTheDocument();
+    // The capability they hold is offered: «محصول جدید» opens the create form (W3)...
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_product_new') }));
+    expect(await screen.findByRole('dialog', { name: CREATE_FORM })).toBeInTheDocument();
     // ...and the list they may not read says so rather than showing an empty table,
     // which would claim this tenant has no products.
     expect(await screen.findByText(DENIED)).toBeInTheDocument();
@@ -217,7 +219,10 @@ describe('pages that must not go stale', () => {
     ]);
 
     await vi.advanceTimersByTimeAsync(16_000);
-    expect(await screen.findByText('A setting stopped parsing.')).toBeInTheDocument();
+    // W6: the attention list names the condition by its code, in Persian.
+    expect(
+      await screen.findByText(t('web.opscode_settings_stored_value_invalid')),
+    ).toBeInTheDocument();
   });
 
   it('stops showing a condition once it has recovered', async () => {
@@ -236,7 +241,7 @@ describe('pages that must not go stale', () => {
       },
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
-    await screen.findByText('A setting stopped parsing.');
+    await screen.findByText(t('web.opscode_settings_stored_value_invalid'));
 
     stubApi([
       READINESS,
@@ -246,7 +251,7 @@ describe('pages that must not go stale', () => {
     await vi.advanceTimersByTimeAsync(16_000);
 
     expect(await screen.findByText('چیزی برای رسیدگی نیست.')).toBeInTheDocument();
-    expect(screen.queryByText('A setting stopped parsing.')).toBeNull();
+    expect(screen.queryByText(t('web.opscode_settings_stored_value_invalid'))).toBeNull();
   });
 
   it('re-reads the fleet on its own cadence, which is slower than the conditions', async () => {
@@ -470,7 +475,7 @@ describe('the archive filter and the cursor that belongs to it', () => {
 
     // Page forward inside the ARCHIVE, so a trail exists. Forward is NEWER on
     // the ascending panel keyset.
-    fireEvent.click(screen.getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('cursor=archived-cursor-1'))).toBe(true);
     });
@@ -545,7 +550,7 @@ describe('the archive filter and the cursor that belongs to it', () => {
       resolve(routeWith('archived=only'), ['panels.view']).element as ReactElement,
     );
     await screen.findByText('row 0');
-    fireEvent.click(screen.getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('cursor='))).toBe(true);
     });
@@ -556,7 +561,7 @@ describe('the archive filter and the cursor that belongs to it', () => {
     // to a position in a list they are no longer looking at. `CursorPager`
     // always renders both buttons and disables them, so the assertion is on
     // the disabled state, not on absence.
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled();
   });
 });
 
@@ -870,7 +875,10 @@ describe('polling that has started being refused, and polling that has merely st
       },
     ]);
     await vi.advanceTimersByTimeAsync(16_000);
-    expect(await screen.findByText('A setting stopped parsing.')).toBeInTheDocument();
+    // W6: the attention list names the condition by its code, in Persian.
+    expect(
+      await screen.findByText(t('web.opscode_settings_stored_value_invalid')),
+    ).toBeInTheDocument();
   });
 });
 
@@ -1214,7 +1222,7 @@ describe('bounds that were asserted only in comments', () => {
     ]);
     renderPage(<NotificationsPage mayTest denied={false} />);
     await screen.findByText('ops.settled');
-    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
     await waitFor(() => {
       expect(countOf(api.calls, 'before=')).toBeGreaterThan(0);
     });
@@ -1243,7 +1251,7 @@ describe('bounds that were asserted only in comments', () => {
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
 
-    await screen.findByText('condition 0');
+    await screen.findAllByText(t('web.opscode_settings_stored_value_invalid'));
     // Six drawn, and the card must account for the other three rather than
     // reading as "there are six".
     const more = await screen.findByText(/شرایط باز دیگر/);
@@ -1251,7 +1259,8 @@ describe('bounds that were asserted only in comments', () => {
     // resolves the locale to latin digits, so asserting `۳` would have been a
     // test about Intl data rather than about the count.
     expect(more.textContent ?? '').toContain(formatNumber(9 - 6));
-    expect(screen.queryByText('condition 8')).toBeNull();
+    // W6: each row is named by its code in Persian; six of the nine are drawn.
+    expect(screen.getAllByText(t('web.opscode_settings_stored_value_invalid'))).toHaveLength(6);
     // Nine open conditions fit on one page, so the count is exact and the
     // card must not hedge it.
     expect(screen.queryByText(/دست‌کم/)).toBeNull();
@@ -1281,7 +1290,7 @@ describe('bounds that were asserted only in comments', () => {
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
 
-    await screen.findByText('condition 0');
+    await screen.findAllByText(t('web.opscode_settings_stored_value_invalid'));
     const more = await screen.findByText(/دست‌کم/);
     // Fifty on the page, six drawn, and the cursor is the server proving at
     // least one more: forty-five, not forty-four. The first version of the

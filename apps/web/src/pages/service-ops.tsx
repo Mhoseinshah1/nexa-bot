@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BULK_LARGE_OPERATION,
@@ -26,7 +26,7 @@ import {
 import { formatNumber } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQueries, type Route } from '../router';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import {
   Banner,
   Button,
@@ -39,9 +39,13 @@ import {
   StatCard,
   useToast,
 } from '../ui/kit';
+import { Drawer } from '../ui/overlays';
+import { useConfirmedClose, useReportDirty } from '../ui/unsaved';
 import { bulkMessage } from './bulk-operations';
 import { messageFor } from './settings';
 import { ChipGroup } from './commerce-parts';
+import type { ListFilter } from '../ui/filter-bar';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The Service Operations Center (program §13): what the services list and a service's page
@@ -91,34 +95,40 @@ export function serviceFiltersOf(route: Route, search: string): ServiceFilters {
 }
 
 /**
- * The panel, product, location and expiry filters. Each list is read only when the session
- * may read it (`panels.view`, `catalog.view`); without it, that filter is simply not drawn.
+ * The panel, product, location and expiry filters, as `ListFilterBar` rows (W1.3). Each list
+ * is read only when the session may read it (`panels.view`, `catalog.view`); without it,
+ * that filter is simply not offered. A chip names the chosen panel, product or location by
+ * the name its list gives it, and falls back to the raw value while the list has not
+ * answered — never blank.
  */
-export function ServiceFilterSelects({
+export function useServiceFilterRows({
   route,
   filters,
   mayViewPanels,
   mayViewCatalog,
+  enabled = true,
 }: {
   route: Route;
   filters: ServiceFilters;
   mayViewPanels: boolean;
   mayViewCatalog: boolean;
-}) {
+  /** False while the list itself cannot answer: no filter list is asked for then. */
+  enabled?: boolean;
+}): ListFilter[] {
   const panels = useQuery({
     queryKey: ['soc-panels'],
     queryFn: () => fetchPanels({ limit: 100 }),
-    enabled: mayViewPanels,
+    enabled: mayViewPanels && enabled,
   });
   const products = useQuery({
     queryKey: ['soc-products'],
     queryFn: () => fetchProducts({ limit: 100 }),
-    enabled: mayViewCatalog,
+    enabled: mayViewCatalog && enabled,
   });
   const locations = useQuery({
     queryKey: ['soc-locations'],
     queryFn: () => fetchServiceLocations(),
-    enabled: mayViewCatalog,
+    enabled: mayViewCatalog && enabled,
   });
   // One option per location KEY: two panels may both call a location `de`.
   const locationKeys = new Map<string, string>();
@@ -130,70 +140,108 @@ export function ServiceFilterSelects({
       [key, value === '' ? null : value],
       ['cursor', null],
     ]);
-  return (
-    <div className="soc-filters">
-      {mayViewPanels && (
-        <Field label={t('web.soc_filter_panel')} htmlFor="soc-panel" compact>
-          <Select
-            id="soc-panel"
-            size="sm"
-            value={filters.panelId ?? ''}
-            onChange={(event) => set('panelId', event.currentTarget.value)}
-          >
-            <option value="">{t('web.services_filter_all')}</option>
-            {(panels.data?.panels ?? []).map((panel) => (
-              <option key={panel.id} value={panel.id}>
-                {panel.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      )}
-      {mayViewCatalog && (
-        <Field label={t('web.soc_filter_product')} htmlFor="soc-product" compact>
-          <Select
-            id="soc-product"
-            size="sm"
-            value={filters.productId ?? ''}
-            onChange={(event) => set('productId', event.currentTarget.value)}
-          >
-            <option value="">{t('web.services_filter_all')}</option>
-            {(products.data?.products ?? []).map((product) => (
-              <option key={product.id} value={product.id}>
-                {product.title}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      )}
-      {mayViewCatalog && locationKeys.size > 0 && (
-        <Field label={t('web.soc_filter_location')} htmlFor="soc-location" compact>
-          <Select
-            id="soc-location"
-            size="sm"
-            value={filters.locationKey ?? ''}
-            onChange={(event) => set('locationKey', event.currentTarget.value)}
-          >
-            <option value="">{t('web.services_filter_all')}</option>
-            {[...locationKeys].map(([keyName, label]) => (
-              <option key={keyName} value={keyName}>
-                {label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      )}
+  const rows: ListFilter[] = [];
+  // A value already in the URL keeps its chip even without the list, so it can be removed.
+  if (mayViewPanels || filters.panelId !== null) {
+    const chosen = (panels.data?.panels ?? []).find((panel) => panel.id === filters.panelId);
+    rows.push({
+      key: 'panelId',
+      label: t('web.soc_filter_panel'),
+      active: filters.panelId === null ? null : (chosen?.name ?? filters.panelId),
+      onClear: () => set('panelId', null),
+      control: (
+        <Select
+          id="soc-panel"
+          size="sm"
+          aria-label={t('web.soc_filter_panel')}
+          value={filters.panelId ?? ''}
+          onChange={(event) => set('panelId', event.currentTarget.value)}
+        >
+          <option value="">{t('web.services_filter_all')}</option>
+          {(panels.data?.panels ?? []).map((panel) => (
+            <option key={panel.id} value={panel.id}>
+              {panel.name}
+            </option>
+          ))}
+        </Select>
+      ),
+    });
+  }
+  if (mayViewCatalog || filters.productId !== null) {
+    const chosen = (products.data?.products ?? []).find(
+      (product) => product.id === filters.productId,
+    );
+    rows.push({
+      key: 'productId',
+      label: t('web.soc_filter_product'),
+      active: filters.productId === null ? null : (chosen?.title ?? filters.productId),
+      onClear: () => set('productId', null),
+      control: (
+        <Select
+          id="soc-product"
+          size="sm"
+          aria-label={t('web.soc_filter_product')}
+          value={filters.productId ?? ''}
+          onChange={(event) => set('productId', event.currentTarget.value)}
+        >
+          <option value="">{t('web.services_filter_all')}</option>
+          {(products.data?.products ?? []).map((product) => (
+            <option key={product.id} value={product.id}>
+              {product.title}
+            </option>
+          ))}
+        </Select>
+      ),
+    });
+  }
+  if ((mayViewCatalog && locationKeys.size > 0) || filters.locationKey !== null) {
+    rows.push({
+      key: 'locationKey',
+      label: t('web.soc_filter_location'),
+      active:
+        filters.locationKey === null
+          ? null
+          : (locationKeys.get(filters.locationKey) ?? filters.locationKey),
+      onClear: () => set('locationKey', null),
+      control: (
+        <Select
+          id="soc-location"
+          size="sm"
+          aria-label={t('web.soc_filter_location')}
+          value={filters.locationKey ?? ''}
+          onChange={(event) => set('locationKey', event.currentTarget.value)}
+        >
+          <option value="">{t('web.services_filter_all')}</option>
+          {[...locationKeys].map(([keyName, label]) => (
+            <option key={keyName} value={keyName}>
+              {label}
+            </option>
+          ))}
+        </Select>
+      ),
+    });
+  }
+  const expiring = EXPIRING_CHOICES.find((choice) => choice.hours === filters.expiringWithinHours);
+  rows.push({
+    key: 'expiring',
+    label: t('web.soc_filter_expiring'),
+    active:
+      filters.expiringWithinHours === null
+        ? null
+        : expiring === undefined
+          ? formatNumber(filters.expiringWithinHours)
+          : t(expiring.label),
+    onClear: () => set('expiring', null),
+    control: (
       <ChipGroup
         label={t('web.soc_filter_expiring')}
-        value={
-          EXPIRING_CHOICES.find((choice) => choice.hours === filters.expiringWithinHours)?.id ??
-          'ALL'
-        }
+        value={expiring?.id ?? 'ALL'}
         onChange={(next) => set('expiring', next === 'ALL' ? null : next)}
         items={EXPIRING_CHOICES.map((choice) => ({ id: choice.id, label: t(choice.label) }))}
       />
-    </div>
-  );
+    ),
+  });
+  return rows;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -257,16 +305,31 @@ export function ServiceMassActionCard({
   filters,
   mayStatus,
   mayGrant,
+  bare = false,
+  onDirtyChange,
+  submission: heldSubmission,
 }: {
   filters: ServiceFilters;
   /** `services.mass.status` AND `services.edit`. */
   mayStatus: boolean;
   /** `services.mass.grant`. */
   mayGrant: boolean;
+  /** Drawn inside the list's drawer (W3): no card frame, the hint as a line. */
+  bare?: boolean;
+  /** Whether a typed value would be lost by closing the drawer. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by a parent that outlives this card. Inside a drawer the card
+   * unmounts on close, and a key kept after an unanswered failure (a 5xx that may have
+   * committed) must survive a close and reopen — a fresh key there is a SECOND bulk
+   * operation over the same services.
+   */
+  submission?: SubmissionKey;
 }) {
   const client = useQueryClient();
   const toast = useToast();
-  const submission = useSubmissionKey();
+  const ownSubmission = useSubmissionKey();
+  const submission = heldSubmission ?? ownSubmission;
   const kinds: MassKind[] = [
     ...(mayStatus ? (['SERVICE_SUSPEND', 'SERVICE_RESUME'] as const) : []),
     ...(mayGrant ? (['SERVICE_TRAFFIC', 'SERVICE_TIME'] as const) : []),
@@ -281,6 +344,7 @@ export function ServiceMassActionCard({
   const definition = massDefinitionOf(filters);
   const definitionKey = JSON.stringify(definition);
   const [previewedFor, setPreviewedFor] = useState<string | null>(null);
+  useReportDirty(traffic !== '' || days !== '' || note !== '' || typed !== '', onDirtyChange);
 
   const grant = (): BulkGrant | null => {
     if (kind === 'SERVICE_SUSPEND' || kind === 'SERVICE_RESUME') return { kind };
@@ -348,8 +412,8 @@ export function ServiceMassActionCard({
     typed.trim() === String(preview.count);
   const ready = preview !== null && !stale && preview.count > 0 && note.trim() !== '' && typedOk;
 
-  return (
-    <Card title={t('web.soc_mass_title')} hint={t('web.soc_mass_hint')}>
+  const body = (
+    <>
       {definition === null ? (
         <Banner tone="info">{t('web.soc_mass_unrepresentable')}</Banner>
       ) : (
@@ -407,7 +471,12 @@ export function ServiceMassActionCard({
               {t('web.bulk_preview_button')}
             </Button>
           </div>
-          {load.error !== null && <Banner tone="danger">{bulkMessage(load.error)}</Banner>}
+          {load.error !== null && (
+            <Banner tone="danger">
+              {bulkMessage(load.error)}
+              <ErrorRef error={load.error} />
+            </Banner>
+          )}
           {stale && <Banner tone="warn">{t('web.soc_mass_stale')}</Banner>}
           {preview !== null && !stale && (
             <>
@@ -514,10 +583,71 @@ export function ServiceMassActionCard({
               )}
             </>
           )}
-          {execute.error !== null && <Banner tone="danger">{bulkMessage(execute.error)}</Banner>}
+          {execute.error !== null && (
+            <Banner tone="danger">
+              {bulkMessage(execute.error)}
+              <ErrorRef error={execute.error} />
+            </Banner>
+          )}
         </div>
       )}
+    </>
+  );
+  if (bare) {
+    return (
+      <div className="stack-sm">
+        <p className="muted small">{t('web.soc_mass_hint')}</p>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Card title={t('web.soc_mass_title')} hint={t('web.soc_mass_hint')}>
+      {body}
     </Card>
+  );
+}
+
+/**
+ * W3: the mass action is a button in the list's head that opens a wide drawer over the
+ * SAME steps; closing it with a typed reason, amount or count asks first.
+ */
+export function ServiceMassActionButton({
+  filters,
+  mayStatus,
+  mayGrant,
+}: {
+  filters: ServiceFilters;
+  mayStatus: boolean;
+  mayGrant: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  // Held here, not in the card: the drawer unmounts the card on close (see its prop).
+  const submission = useSubmissionKey();
+  const close = () => {
+    setOpen(false);
+    setDirty(false);
+  };
+  const { requestClose, dialog } = useConfirmedClose(dirty, close);
+  if (!mayStatus && !mayGrant) return null;
+  return (
+    <>
+      <Button size="sm" icon="zap" onClick={() => setOpen(true)}>
+        {t('web.soc_mass_title')}
+      </Button>
+      <Drawer open={open} onClose={requestClose} title={t('web.soc_mass_title')} wide>
+        <ServiceMassActionCard
+          filters={filters}
+          mayStatus={mayStatus}
+          mayGrant={mayGrant}
+          bare
+          onDirtyChange={setDirty}
+          submission={submission}
+        />
+      </Drawer>
+      {dialog}
+    </>
   );
 }
 
@@ -567,45 +697,105 @@ export const INPUT_ACTIONS: ReadonlySet<ServiceOperatorAction> = new Set<Service
 ]);
 
 /**
- * Free traffic or time (`services.grant`) and a move (`services.edit`), each drawn only when
- * the server says the action is available, each with a mandatory reason and an idempotency
- * key bound to its payload. The answer is the operation PLANNED, never "done": its outcome
- * appears in the history card, which the page refreshes.
+ * Why the grant and move buttons are unavailable, one sentence each, for the action panel's
+ * folded «چرا … غیرفعال است؟» (W1.5). A missing permission is said once per permission; a
+ * server verdict carries the id the button's `aria-describedby` names.
  */
-export function ServiceGrantMoveCard({
-  serviceId,
+export function grantMoveReasons({
   actions,
   mayGrant,
   mayEdit,
   blockerLabel,
-  onActed,
 }: {
-  serviceId: string;
   actions: readonly ServiceActionAvailability[];
   mayGrant: boolean;
   mayEdit: boolean;
   blockerLabel: (blocker: ServiceActionBlocker) => string;
+}): ReactNode[] {
+  const byAction = new Map(actions.map((entry) => [entry.action, entry]));
+  const reasons: ReactNode[] = [];
+  const verdict = (action: 'ADD_TRAFFIC' | 'ADD_TIME' | 'CHANGE_LOCATION', label: WebKey) => {
+    const entry = byAction.get(action);
+    if (entry?.available === true) return;
+    reasons.push(
+      <span key={action}>
+        <b>{t(label)}</b>{' '}
+        <span id={`service-blocker-${action}`}>
+          {entry?.blocker === null || entry?.blocker === undefined
+            ? t('web.soc_unavailable')
+            : blockerLabel(entry.blocker)}
+        </span>
+      </span>,
+    );
+  };
+  if (!mayGrant) {
+    reasons.push(
+      <span key="grant-denied" id="service-denied-grant">
+        {t('web.soc_grant_denied')}
+      </span>,
+    );
+  } else {
+    verdict('ADD_TRAFFIC', 'web.service_action_add_traffic');
+    verdict('ADD_TIME', 'web.service_action_add_time');
+  }
+  if (!mayEdit) {
+    reasons.push(
+      <span key="move-denied" id="service-denied-move">
+        {t('web.soc_move_denied')}
+      </span>,
+    );
+  } else {
+    verdict('CHANGE_LOCATION', 'web.service_action_change_location');
+  }
+  return reasons;
+}
+
+/** The id a disabled grant/move button is described by, or nothing when it is enabled. */
+function describedBy(
+  action: 'ADD_TRAFFIC' | 'ADD_TIME' | 'CHANGE_LOCATION',
+  may: boolean,
+  entry: ServiceActionAvailability | undefined,
+): { 'aria-describedby'?: string } {
+  if (!may) {
+    return {
+      'aria-describedby':
+        action === 'CHANGE_LOCATION' ? 'service-denied-move' : 'service-denied-grant',
+    };
+  }
+  return entry?.available === true ? {} : { 'aria-describedby': `service-blocker-${action}` };
+}
+
+/**
+ * Free traffic or time (`services.grant`), W3: a button in the action panel that opens a
+ * drawer with the amount and a mandatory reason, under an idempotency key bound to the
+ * payload. Enabled only when the server says the action is available. The answer is the
+ * operation PLANNED, never "done": its outcome appears in the history card, which the
+ * page refreshes. Closing the drawer over a typed value asks first.
+ */
+export function ServiceGrantButton({
+  serviceId,
+  kind,
+  entry,
+  mayGrant,
+  onActed,
+}: {
+  serviceId: string;
+  kind: 'ADD_TRAFFIC' | 'ADD_TIME';
+  entry: ServiceActionAvailability | undefined;
+  mayGrant: boolean;
   onActed: () => void;
 }) {
   const toast = useToast();
   const grantKey = useSubmissionKey();
-  const moveKey = useSubmissionKey();
-  const byAction = new Map(actions.map((entry) => [entry.action, entry]));
-  const traffic = byAction.get('ADD_TRAFFIC');
-  const time = byAction.get('ADD_TIME');
-  const move = byAction.get('CHANGE_LOCATION');
-  const [gb, setGb] = useState('');
-  const [days, setDays] = useState('');
-  const [grantReason, setGrantReason] = useState('');
-  const [target, setTarget] = useState('');
-  const [moveReason, setMoveReason] = useState('');
-
-  const targets = useQuery({
-    queryKey: ['service-location-targets', serviceId],
-    queryFn: () => fetchServiceLocationTargets(serviceId),
-    enabled: mayEdit && move?.available === true,
-  });
-
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const reset = () => {
+    setOpen(false);
+    setAmount('');
+    setReason('');
+  };
+  const { requestClose, dialog } = useConfirmedClose(amount !== '' || reason !== '', reset);
   const grant = useMutation({
     mutationFn: (
       body:
@@ -614,9 +804,7 @@ export function ServiceGrantMoveCard({
     ) => grantService(serviceId, { ...body, idempotencyKey: grantKey.current(body) }),
     onSuccess: () => {
       grantKey.settle();
-      setGb('');
-      setDays('');
-      setGrantReason('');
+      reset();
       toast({ tone: 'ok', message: t('web.service_action_planned') });
       onActed();
     },
@@ -625,13 +813,111 @@ export function ServiceGrantMoveCard({
       toast({ tone: 'danger', message: messageFor(error) });
     },
   });
+  const daysValue = Number(amount);
+  const amountOk =
+    kind === 'ADD_TRAFFIC'
+      ? TRAFFIC_GB_PATTERN.test(amount)
+      : Number.isInteger(daysValue) &&
+        daysValue >= 1 &&
+        daysValue <= SERVICE_GRANT_DURATION_MAX_DAYS;
+  const title = t(
+    kind === 'ADD_TRAFFIC' ? 'web.service_action_add_traffic' : 'web.service_action_add_time',
+  );
+  const fieldId = kind === 'ADD_TRAFFIC' ? 'soc-grant-gb' : 'soc-grant-days';
+  return (
+    <>
+      <Button
+        disabled={!mayGrant || entry?.available !== true}
+        {...describedBy(kind, mayGrant, entry)}
+        onClick={() => setOpen(true)}
+      >
+        {title}
+      </Button>
+      <Drawer open={open} onClose={requestClose} title={title}>
+        <div className="stack-sm">
+          <Field
+            label={t(kind === 'ADD_TRAFFIC' ? 'web.soc_grant_gb' : 'web.soc_grant_days')}
+            htmlFor={fieldId}
+          >
+            <Input
+              id={fieldId}
+              inputMode={kind === 'ADD_TRAFFIC' ? 'decimal' : 'numeric'}
+              value={amount}
+              onChange={(event) => setAmount(event.currentTarget.value.trim())}
+            />
+          </Field>
+          <Field label={t('web.soc_reason')} htmlFor="soc-grant-reason">
+            <Input
+              id="soc-grant-reason"
+              value={reason}
+              maxLength={SERVICE_OPERATOR_REASON_MAX_LENGTH}
+              onChange={(event) => setReason(event.currentTarget.value)}
+            />
+          </Field>
+          <div className="form-actions">
+            <Button
+              variant="primary"
+              disabled={!amountOk || reason.trim() === '' || grant.isPending}
+              onClick={() =>
+                grant.mutate(
+                  kind === 'ADD_TRAFFIC'
+                    ? { kind, trafficGb: amount, reason: reason.trim() }
+                    : { kind, durationDays: daysValue, reason: reason.trim() },
+                )
+              }
+            >
+              {t(
+                kind === 'ADD_TRAFFIC'
+                  ? 'web.soc_grant_traffic_button'
+                  : 'web.soc_grant_time_button',
+              )}
+            </Button>
+          </div>
+        </div>
+      </Drawer>
+      {dialog}
+    </>
+  );
+}
+
+/**
+ * A move (`services.edit`), W3: a button opening a drawer with the current location, the
+ * targets the server offers, a mandatory reason and the hint. The targets are read while the
+ * move is available, so an operation's end re-reads them (`useRefreshOnOperationChange`).
+ */
+export function ServiceMoveButton({
+  serviceId,
+  entry,
+  mayEdit,
+  onActed,
+}: {
+  serviceId: string;
+  entry: ServiceActionAvailability | undefined;
+  mayEdit: boolean;
+  onActed: () => void;
+}) {
+  const toast = useToast();
+  const moveKey = useSubmissionKey();
+  const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState('');
+  const [moveReason, setMoveReason] = useState('');
+  const targets = useQuery({
+    queryKey: ['service-location-targets', serviceId],
+    queryFn: () => fetchServiceLocationTargets(serviceId),
+    enabled: mayEdit && entry?.available === true,
+  });
+  const reset = () => {
+    setOpen(false);
+    setTarget('');
+    setMoveReason('');
+  };
+  const { requestClose, dialog } = useConfirmedClose(target !== '' || moveReason !== '', reset);
   const relocate = useMutation({
     mutationFn: (body: { locationId: string; reason: string }) =>
       changeServiceLocation(serviceId, { ...body, idempotencyKey: moveKey.current(body) }),
     onSuccess: () => {
       moveKey.settle();
-      setTarget('');
-      setMoveReason('');
+      reset();
       toast({ tone: 'ok', message: t('web.service_action_planned') });
       onActed();
     },
@@ -640,156 +926,57 @@ export function ServiceGrantMoveCard({
       toast({ tone: 'danger', message: messageFor(error) });
     },
   });
-
-  const unavailable = (entry: ServiceActionAvailability | undefined) =>
-    entry === undefined || !entry.available ? (
-      <p className="muted small">
-        {entry?.blocker === null || entry?.blocker === undefined
-          ? t('web.soc_unavailable')
-          : blockerLabel(entry.blocker)}
-      </p>
-    ) : null;
-  const daysValue = Number(days);
-  const daysOk =
-    Number.isInteger(daysValue) && daysValue >= 1 && daysValue <= SERVICE_GRANT_DURATION_MAX_DAYS;
-
   return (
-    <Card title={t('web.soc_grant_move_title')} hint={t('web.soc_grant_move_hint')}>
-      <div className="soc-grant-move">
-        <section className="stack-sm">
-          <h4>{t('web.service_action_add_traffic')}</h4>
-          {!mayGrant ? (
-            <p className="muted small">{t('web.soc_grant_denied')}</p>
-          ) : (
-            (unavailable(traffic) ?? (
-              <div className="form-grid">
-                <Field label={t('web.soc_grant_gb')} htmlFor="soc-grant-gb">
-                  <Input
-                    id="soc-grant-gb"
-                    inputMode="decimal"
-                    value={gb}
-                    onChange={(event) => setGb(event.currentTarget.value.trim())}
-                  />
-                </Field>
-              </div>
-            ))
+    <>
+      <Button
+        disabled={!mayEdit || entry?.available !== true}
+        {...describedBy('CHANGE_LOCATION', mayEdit, entry)}
+        onClick={() => setOpen(true)}
+      >
+        {t('web.service_action_change_location')}
+      </Button>
+      <Drawer open={open} onClose={requestClose} title={t('web.service_action_change_location')}>
+        <div className="stack-sm">
+          {targets.data?.current !== null && targets.data?.current !== undefined && (
+            <p className="muted small">
+              {t('web.soc_move_current')} {targets.data.current.label}
+            </p>
           )}
-        </section>
-        <section className="stack-sm">
-          <h4>{t('web.service_action_add_time')}</h4>
-          {!mayGrant ? (
-            <p className="muted small">{t('web.soc_grant_denied')}</p>
-          ) : (
-            (unavailable(time) ?? (
-              <div className="form-grid">
-                <Field label={t('web.soc_grant_days')} htmlFor="soc-grant-days">
-                  <Input
-                    id="soc-grant-days"
-                    inputMode="numeric"
-                    value={days}
-                    onChange={(event) => setDays(event.currentTarget.value.trim())}
-                  />
-                </Field>
-              </div>
-            ))
-          )}
-        </section>
-        {mayGrant && (traffic?.available === true || time?.available === true) && (
-          <div className="stack-sm">
-            <Field label={t('web.soc_reason')} htmlFor="soc-grant-reason">
-              <Input
-                id="soc-grant-reason"
-                value={grantReason}
-                maxLength={SERVICE_OPERATOR_REASON_MAX_LENGTH}
-                onChange={(event) => setGrantReason(event.currentTarget.value)}
-              />
-            </Field>
-            <div className="form-actions">
-              {traffic?.available === true && (
-                <Button
-                  disabled={
-                    !TRAFFIC_GB_PATTERN.test(gb) || grantReason.trim() === '' || grant.isPending
-                  }
-                  onClick={() =>
-                    grant.mutate({
-                      kind: 'ADD_TRAFFIC',
-                      trafficGb: gb,
-                      reason: grantReason.trim(),
-                    })
-                  }
-                >
-                  {t('web.soc_grant_traffic_button')}
-                </Button>
-              )}
-              {time?.available === true && (
-                <Button
-                  disabled={!daysOk || grantReason.trim() === '' || grant.isPending}
-                  onClick={() =>
-                    grant.mutate({
-                      kind: 'ADD_TIME',
-                      durationDays: daysValue,
-                      reason: grantReason.trim(),
-                    })
-                  }
-                >
-                  {t('web.soc_grant_time_button')}
-                </Button>
-              )}
-            </div>
+          <Field label={t('web.soc_move_target')} htmlFor="soc-move-target">
+            <Select
+              id="soc-move-target"
+              value={target}
+              onChange={(event) => setTarget(event.currentTarget.value)}
+            >
+              <option value="">{t('web.soc_move_choose')}</option>
+              {(targets.data?.targets ?? []).map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t('web.soc_reason')} htmlFor="soc-move-reason">
+            <Input
+              id="soc-move-reason"
+              value={moveReason}
+              maxLength={SERVICE_OPERATOR_REASON_MAX_LENGTH}
+              onChange={(event) => setMoveReason(event.currentTarget.value)}
+            />
+          </Field>
+          <p className="muted small">{t('web.soc_move_hint')}</p>
+          <div className="form-actions">
+            <Button
+              variant="primary"
+              disabled={target === '' || moveReason.trim() === '' || relocate.isPending}
+              onClick={() => relocate.mutate({ locationId: target, reason: moveReason.trim() })}
+            >
+              {t('web.soc_move_button')}
+            </Button>
           </div>
-        )}
-        <section className="stack-sm">
-          <h4>{t('web.service_action_change_location')}</h4>
-          {!mayEdit ? (
-            <p className="muted small">{t('web.soc_move_denied')}</p>
-          ) : (
-            (unavailable(move) ?? (
-              <>
-                {targets.data?.current !== null && targets.data?.current !== undefined && (
-                  <p className="muted small">
-                    {t('web.soc_move_current')} {targets.data.current.label}
-                  </p>
-                )}
-                <div className="form-grid">
-                  <Field label={t('web.soc_move_target')} htmlFor="soc-move-target">
-                    <Select
-                      id="soc-move-target"
-                      value={target}
-                      onChange={(event) => setTarget(event.currentTarget.value)}
-                    >
-                      <option value="">{t('web.soc_move_choose')}</option>
-                      {(targets.data?.targets ?? []).map((row) => (
-                        <option key={row.id} value={row.id}>
-                          {row.label}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <Field label={t('web.soc_reason')} htmlFor="soc-move-reason">
-                    <Input
-                      id="soc-move-reason"
-                      value={moveReason}
-                      maxLength={SERVICE_OPERATOR_REASON_MAX_LENGTH}
-                      onChange={(event) => setMoveReason(event.currentTarget.value)}
-                    />
-                  </Field>
-                </div>
-                <p className="muted small">{t('web.soc_move_hint')}</p>
-                <div className="form-actions">
-                  <Button
-                    disabled={target === '' || moveReason.trim() === '' || relocate.isPending}
-                    onClick={() =>
-                      relocate.mutate({ locationId: target, reason: moveReason.trim() })
-                    }
-                  >
-                    {t('web.soc_move_button')}
-                  </Button>
-                </div>
-              </>
-            ))
-          )}
-        </section>
-      </div>
-    </Card>
+        </div>
+      </Drawer>
+      {dialog}
+    </>
   );
 }

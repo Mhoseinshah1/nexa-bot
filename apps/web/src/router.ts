@@ -454,6 +454,61 @@ export function match(pattern: string, path: string): Record<string, string> | n
   return params;
 }
 
+/**
+ * Several query changes from code that cannot see each other, applied as ONE navigation.
+ *
+ * `setQueries` fixes the shape where one handler changes two keys. This is the shape where
+ * the changes come from separate closures — a `ListFilterBar`'s «پاک کردن همه» calling each
+ * filter's own `onClear`, every one of which captured the same `route.query` at render and
+ * would overwrite the one before it, so only the last removal survived (PR #285 review, A1).
+ *
+ * The batch starts from the CURRENT location. While `run` executes, `setQuery` and
+ * `setQueries` on that path build on the query the batch has accumulated instead of the
+ * stale prop, and navigate nothing; the
+ * batch then navigates once (`replace`, guarded if any change asked to be). A change for
+ * a different path, or a direct `navigate`, is not batched and happens at once.
+ */
+let batch: { path: string; query: URLSearchParams; guard: boolean; changed: boolean } | null = null;
+
+export function batchQueryChanges(run: () => void): void {
+  if (batch !== null) {
+    run();
+    return;
+  }
+  const current = getSnapshot();
+  const own = {
+    path: current.path,
+    query: new URLSearchParams(current.query),
+    guard: false,
+    changed: false,
+  };
+  batch = own;
+  try {
+    run();
+  } finally {
+    batch = null;
+  }
+  if (!own.changed) return;
+  const suffix = own.query.toString();
+  navigate(suffix ? `${own.path}?${suffix}` : own.path, {
+    replace: true,
+    ...(own.guard ? { guard: true } : {}),
+  });
+}
+
+function baseQuery(route: Route): URLSearchParams {
+  return batch !== null && batch.path === route.path ? batch.query : route.query;
+}
+
+/** Inside a batch on this path: records `next` and reports that nothing is to navigate yet. */
+function deferred(route: Route, next: URLSearchParams, guard: boolean): boolean {
+  if (batch === null || batch.path !== route.path) return false;
+  batch.query = next;
+  batch.changed = true;
+  batch.guard = batch.guard || guard;
+  return true;
+}
+
 /** Replaces one query parameter, keeping the rest and the current path. */
 export function setQuery(
   route: Route,
@@ -461,9 +516,10 @@ export function setQuery(
   value: string | null,
   options: { guard?: boolean } = {},
 ): void {
-  const next = new URLSearchParams(route.query);
+  const next = new URLSearchParams(baseQuery(route));
   if (value === null || value === '') next.delete(key);
   else next.set(key, value);
+  if (deferred(route, next, options.guard === true)) return;
   const suffix = next.toString();
   // `replace`, not push: a filter change is not a place an operator navigated
   // to, and stacking one history entry per keystroke makes Back unusable.
@@ -492,11 +548,12 @@ export function setQueries(
   route: Route,
   entries: ReadonlyArray<readonly [string, string | null]>,
 ): void {
-  const next = new URLSearchParams(route.query);
+  const next = new URLSearchParams(baseQuery(route));
   for (const [key, value] of entries) {
     if (value === null || value === '') next.delete(key);
     else next.set(key, value);
   }
+  if (deferred(route, next, false)) return;
   const suffix = next.toString();
   navigate(suffix ? `${route.path}?${suffix}` : route.path, { replace: true });
 }

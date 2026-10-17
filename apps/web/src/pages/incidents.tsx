@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   INCIDENT_CUSTOMER_MESSAGE_MAX_LENGTH,
   INCIDENT_DESCRIPTION_MAX_LENGTH,
@@ -39,7 +40,8 @@ import {
   updateIncident,
   type IncidentAction,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
+import { errorCodeLabel } from '../ops-code-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, useLinkHandler } from '../router';
 import { useSubmissionKey } from '../submission-key';
@@ -66,7 +68,10 @@ import {
   useToast,
   type Tone,
 } from '../ui/kit';
+import { ActionPanel } from '../ui/action-panel';
+import { DateField } from '../ui/date-field';
 import { Modal } from '../ui/overlays';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
  * Phase E3: incidents and maintenance windows (`docs/incidents.md`).
@@ -262,11 +267,13 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
   // A stack of cursors: the last is the page shown, popping it goes back one.
   const [cursors, setCursors] = useState<readonly string[]>([]);
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
-  const list = useQuery({
-    queryKey: ['incidents', cursor ?? null],
-    queryFn: () => fetchIncidents(cursor === undefined ? {} : { cursor }),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['incidents', cursor ?? null],
+      queryFn: () => fetchIncidents(cursor === undefined ? {} : { cursor }),
+      enabled: !denied,
+    }),
+  );
   const [creating, setCreating] = useState(false);
   const rows = list.data?.incidents ?? [];
   const nextCursor = list.data?.nextCursor ?? null;
@@ -387,6 +394,7 @@ export function IncidentDetailPage({
   denied,
   mayManage,
   mayNotify,
+  mayViewPanels = false,
 }: {
   id: string;
   denied: boolean;
@@ -394,12 +402,22 @@ export function IncidentDetailPage({
   mayManage: boolean;
   /** `incidents.notify`: the customer notice. */
   mayNotify: boolean;
+  /**
+   * `panels.view`: the scope card names a panel target by the panel's name. Without it no
+   * panel list is asked for and the target shows its id, as before.
+   */
+  mayViewPanels?: boolean;
 }) {
   const detail = useQuery({
     queryKey: ['incident', id],
     queryFn: () => fetchIncident(id),
     enabled: !denied,
   });
+  const panelNames = useTargetOptions(
+    'PANEL',
+    mayViewPanels &&
+      (detail.data?.incident.targets.some((target) => target.kind === 'PANEL') ?? false),
+  );
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState<IncidentAction | null>(null);
   const [noticing, setNoticing] = useState(false);
@@ -431,44 +449,81 @@ export function IncidentDetailPage({
           {apply.isError && (
             <Banner tone="danger" role="alert">
               {incidentMessageFor(apply.error)}
+              <ErrorRef error={apply.error} />
             </Banner>
           )}
           {live && (mayManage || mayNotify) && (
-            <div className="incident-actions">
-              {mayManage && (
-                <Button size="sm" onClick={() => setEditing(true)}>
-                  {t('web.inc_edit')}
-                </Button>
-              )}
-              {mayManage && incident.status === 'SCHEDULED' && (
-                <Button size="sm" variant="primary" onClick={() => setConfirming('start')}>
-                  {t('web.inc_start')}
-                </Button>
-              )}
-              {mayManage && incident.status === 'ACTIVE' && incident.stopSales && (
-                <Button size="sm" disabled={apply.isPending} onClick={() => apply.mutate()}>
-                  {apply.isPending ? t('web.working') : t('web.inc_apply_effects')}
-                </Button>
-              )}
-              {mayManage && incident.status === 'ACTIVE' && (
-                <Button size="sm" variant="primary" onClick={() => setConfirming('resolve')}>
-                  {t('web.inc_resolve')}
-                </Button>
-              )}
-              {mayManage && incident.status === 'SCHEDULED' && (
-                <Button size="sm" variant="danger" onClick={() => setConfirming('cancel')}>
-                  {t('web.inc_cancel')}
-                </Button>
-              )}
-              {mayNotify && incident.customerMessage !== null && (
-                <Button size="sm" onClick={() => setNoticing(true)}>
-                  {t('web.inc_notice')}
-                </Button>
-              )}
-            </div>
+            <ActionPanel
+              groups={[
+                {
+                  key: 'incident',
+                  title: t('web.inc_actions_incident'),
+                  actions: [
+                    mayManage && (
+                      <Button key="edit" size="sm" onClick={() => setEditing(true)}>
+                        {t('web.inc_edit')}
+                      </Button>
+                    ),
+                    mayManage && incident.status === 'SCHEDULED' && (
+                      <Button
+                        key="start"
+                        size="sm"
+                        variant="primary"
+                        onClick={() => setConfirming('start')}
+                      >
+                        {t('web.inc_start')}
+                      </Button>
+                    ),
+                    mayManage && incident.status === 'ACTIVE' && (
+                      <Button
+                        key="resolve"
+                        size="sm"
+                        variant="primary"
+                        onClick={() => setConfirming('resolve')}
+                      >
+                        {t('web.inc_resolve')}
+                      </Button>
+                    ),
+                  ],
+                },
+                {
+                  key: 'sales',
+                  title: t('web.inc_actions_sales'),
+                  actions: [
+                    mayManage && incident.status === 'ACTIVE' && incident.stopSales && (
+                      <Button
+                        key="apply"
+                        size="sm"
+                        disabled={apply.isPending}
+                        onClick={() => apply.mutate()}
+                      >
+                        {apply.isPending ? t('web.working') : t('web.inc_apply_effects')}
+                      </Button>
+                    ),
+                    mayNotify && incident.customerMessage !== null && (
+                      <Button key="notice" size="sm" onClick={() => setNoticing(true)}>
+                        {t('web.inc_notice')}
+                      </Button>
+                    ),
+                  ],
+                },
+              ]}
+              sensitive={[
+                mayManage && incident.status === 'SCHEDULED' && (
+                  <Button
+                    key="cancel"
+                    size="sm"
+                    variant="danger"
+                    onClick={() => setConfirming('cancel')}
+                  >
+                    {t('web.inc_cancel')}
+                  </Button>
+                ),
+              ]}
+            />
           )}
           <div className="incident-detail">
-            <Card title={t('web.inc_summary')}>
+            <Card title={t('web.inc_summary')} className="incident-summary">
               <KV
                 items={[
                   [t('web.inc_col_status'), <StatusBadge key="s" status={incident.status} />],
@@ -512,32 +567,47 @@ export function IncidentDetailPage({
                 <p className="incident-text">{incident.customerMessage}</p>
               )}
             </Card>
-            <Card title={t('web.inc_scope')}>
-              {incident.targets.length === 0 ? (
-                <p className="faint small">{t('web.inc_no_targets')}</p>
-              ) : (
-                <ul className="incident-targets">
-                  {incident.targets.map((target) => (
-                    <li key={`${target.kind}:${target.ref}`}>
-                      <Badge tone="neutral">{t(INCIDENT_TARGET_LABELS[target.kind])}</Badge>{' '}
-                      <Ltr>{target.ref}</Ltr>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <EffectsTable effects={incident.effects} />
-            </Card>
-            <Card title={t('web.inc_timeline')}>
-              <Timeline
-                items={(detail.data?.timeline ?? []).map((event) => ({
-                  key: event.id,
-                  at: formatTimestamp(event.occurredAt),
-                  title: t(INCIDENT_EVENT_LABELS[event.kind]),
-                  detail: eventDetail(event),
-                  ...(event.kind === 'EFFECTS_PENDING' ? { tone: 'warn' as const } : {}),
-                }))}
-              />
-            </Card>
+            <div className="stack incident-side">
+              <Card title={t('web.inc_scope')}>
+                {incident.targets.length === 0 ? (
+                  <p className="faint small">{t('web.inc_no_targets')}</p>
+                ) : (
+                  <ul className="incident-targets">
+                    {incident.targets.map((target) => {
+                      // A panel by its name when the list knows it; its id otherwise.
+                      const name =
+                        target.kind === 'PANEL'
+                          ? panelNames.data?.find((option) => option.ref === target.ref)?.label
+                          : undefined;
+                      return (
+                        <li key={`${target.kind}:${target.ref}`}>
+                          <Badge tone="neutral">{t(INCIDENT_TARGET_LABELS[target.kind])}</Badge>{' '}
+                          {name === undefined ? (
+                            <Ltr>{target.ref}</Ltr>
+                          ) : (
+                            <bdi title={target.ref} data-testid="incident-target-name">
+                              {name}
+                            </bdi>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                <EffectsTable effects={incident.effects} />
+              </Card>
+              <Card title={t('web.inc_timeline')}>
+                <Timeline
+                  items={(detail.data?.timeline ?? []).map((event) => ({
+                    key: event.id,
+                    at: formatTimestamp(event.occurredAt),
+                    title: t(INCIDENT_EVENT_LABELS[event.kind]),
+                    detail: eventDetail(event),
+                    ...(event.kind === 'EFFECTS_PENDING' ? { tone: 'warn' as const } : {}),
+                  }))}
+                />
+              </Card>
+            </div>
           </div>
           {editing && (
             <IncidentFormModal
@@ -571,11 +641,51 @@ function eventDetail(event: IncidentEventItem): string | undefined {
   const parts: string[] = [];
   if (event.actorLabel !== null) parts.push(event.actorLabel);
   const detail = event.detail ?? {};
-  for (const key of ['effect', 'subject', 'state', 'recipients', 'from', 'to'] as const) {
-    const value = detail[key];
-    if (typeof value === 'string' || typeof value === 'number') parts.push(`${key}: ${value}`);
+  for (const [key, value] of Object.entries(detail)) {
+    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    const label = INCIDENT_DETAIL_KEY_LABELS[key];
+    // A key this screen has no name for is a server-side fact it was not written for.
+    if (label === undefined) continue;
+    parts.push(`${t(label)}: ${incidentDetailValue(key, value)}`);
   }
   return parts.length === 0 ? undefined : parts.join(' · ');
+}
+
+/** The timeline detail's keys, by name (W6). Keys outside this list are not drawn. */
+export const INCIDENT_DETAIL_KEY_LABELS: Readonly<Record<string, WebKey>> = {
+  step: 'web.inc_detail_step',
+  kind: 'web.inc_detail_effect',
+  effect: 'web.inc_detail_effect',
+  subjectRef: 'web.inc_detail_subject',
+  subject: 'web.inc_detail_subject',
+  state: 'web.inc_detail_state',
+  errorCode: 'web.inc_detail_error',
+  recipients: 'web.inc_detail_recipients',
+  from: 'web.inc_detail_from',
+  to: 'web.inc_detail_to',
+};
+
+const INCIDENT_STEP_LABELS: Readonly<Record<string, WebKey>> = {
+  apply: 'web.inc_detail_step_apply',
+  adopt: 'web.inc_detail_step_adopt',
+  revert: 'web.inc_detail_step_revert',
+  on: 'web.inc_detail_step_on',
+};
+
+/** A detail value by name where it is a code; ids and counts as they are. */
+function incidentDetailValue(key: string, value: string | number): string {
+  if (typeof value === 'number') return formatNumber(value);
+  const named =
+    key === 'step'
+      ? INCIDENT_STEP_LABELS[value]
+      : key === 'kind' || key === 'effect'
+        ? (INCIDENT_EFFECT_LABELS as Readonly<Record<string, WebKey>>)[value]
+        : key === 'state'
+          ? (INCIDENT_EFFECT_STATE_LABELS as Readonly<Record<string, WebKey>>)[value]
+          : undefined;
+  if (named !== undefined) return t(named);
+  if (key === 'errorCode') return errorCodeLabel(value);
+  return value;
 }
 
 function EffectsTable({ effects }: { effects: readonly IncidentEffectItem[] }) {
@@ -608,7 +718,7 @@ function EffectsTable({ effects }: { effects: readonly IncidentEffectItem[] }) {
               {row.errorCode !== null && (
                 <>
                   {' '}
-                  <Ltr>{row.errorCode}</Ltr>
+                  <ErrorCodeLabel code={row.errorCode} />
                 </>
               )}
             </>
@@ -717,6 +827,7 @@ function ActionModal({
       {run.isError && (
         <Banner tone="danger" role="alert">
           {incidentMessageFor(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
     </Modal>
@@ -798,6 +909,7 @@ function NoticeModal({ incident, onClose }: { incident: IncidentItem; onClose: (
       {run.isError && (
         <Banner tone="danger" role="alert">
           {incidentMessageFor(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
     </Modal>
@@ -971,6 +1083,7 @@ function IncidentFormModal({
         save.isError && (
           <Banner tone="danger" role="alert">
             {incidentMessageFor(save.error)}
+            <ErrorRef error={save.error} />
           </Banner>
         )
       )}
@@ -1041,20 +1154,20 @@ function IncidentFormModal({
             hint={t('web.inc_scheduled_start_hint')}
             htmlFor="inc-start"
           >
-            <Input
+            <DateField
               id="inc-start"
-              type="datetime-local"
+              mode="datetime"
               value={form.scheduledStartAt}
-              onChange={(event) => set('scheduledStartAt', event.target.value)}
+              onChange={(value) => set('scheduledStartAt', value)}
             />
           </Field>
         )}
         <Field label={t('web.inc_scheduled_end')} htmlFor="inc-end">
-          <Input
+          <DateField
             id="inc-end"
-            type="datetime-local"
+            mode="datetime"
             value={form.scheduledEndAt}
-            onChange={(event) => set('scheduledEndAt', event.target.value)}
+            onChange={(value) => set('scheduledEndAt', value)}
           />
         </Field>
       </div>
@@ -1103,9 +1216,10 @@ export async function walkPages(
  * not list that module, the picker falls back to a typed reference, which the server
  * checks exactly as it checks a picked one.
  */
-function useTargetOptions(kind: IncidentTargetKind) {
+function useTargetOptions(kind: IncidentTargetKind, enabled = true) {
   return useQuery({
     queryKey: ['incident-target-options', kind],
+    enabled,
     queryFn: async (): Promise<readonly TargetOption[]> => {
       switch (kind) {
         case 'PANEL':

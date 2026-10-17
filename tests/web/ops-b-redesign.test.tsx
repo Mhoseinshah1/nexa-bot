@@ -52,9 +52,9 @@ describe('the settings page, as a product settings page', () => {
     expect(screen.getByText(unsavedCount(1))).toBeInTheDocument();
     const row = field.closest('article') as HTMLElement;
     expect(within(row).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
-    // The section list marks the section that holds it.
-    const nav = screen.getByRole('navigation', { name: t('web.ob_sections') });
-    expect(within(nav).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
+    // The tab strip marks the tab that holds it.
+    const tabs = screen.getByRole('tablist', { name: t('web.ob_sections') });
+    expect(within(tabs).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
 
     fireEvent.click(within(row).getByRole('button', { name: t('web.discard') }));
     expect(
@@ -162,14 +162,44 @@ describe('the settings page, as a product settings page', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
-  it('lists every group as a section and marks the one chosen', async () => {
-    stubApi([{ url: '/settings', body: { settings: rows } }]);
+  it('W2: shows one group at a time as tabs, and keeps a draft across a switch', async () => {
+    stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            ...rows,
+            setting({ key: 'support.accounts', value: [], version: 1, configures: null }),
+          ],
+        },
+      },
+    ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByLabelText(t('web.setting_payment_window_minutes'));
-    const nav = screen.getByRole('navigation', { name: t('web.ob_sections') });
-    const button = within(nav).getByRole('button', { name: t('web.settings_group_sales') });
-    fireEvent.click(button);
-    expect(button).toHaveAttribute('aria-current', 'true');
+    const field = (await screen.findByLabelText(
+      t('web.setting_payment_window_minutes'),
+    )) as HTMLInputElement;
+    const tabs = screen.getByRole('tablist', { name: t('web.ob_sections') });
+    const sales = within(tabs).getByRole('tab', {
+      name: new RegExp(t('web.settings_group_sales')),
+    });
+    expect(sales).toHaveAttribute('aria-selected', 'true');
+    fireEvent.change(field, { target: { value: '45' } });
+
+    const support = within(tabs).getByRole('tab', {
+      name: new RegExp(t('web.settings_group_support')),
+    });
+    const scrolled = window.scrollY;
+    fireEvent.click(support);
+    expect(support).toHaveAttribute('aria-selected', 'true');
+    // The sales group is hidden, not unmounted: its draft and its dot survive the switch.
+    expect(field.closest('[role="tabpanel"]')).toHaveAttribute('hidden');
+    expect(within(sales).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
+    expect(screen.getByText(unsavedCount(1))).toBeInTheDocument();
+    expect(window.scrollY).toBe(scrolled);
+    fireEvent.click(sales);
+    expect(
+      (screen.getByLabelText(t('web.setting_payment_window_minutes')) as HTMLInputElement).value,
+    ).toBe('45');
   });
 });
 
@@ -192,6 +222,12 @@ describe('the reminders page', () => {
     ]);
     renderPage(
       <RemindersPage mayEdit denied={false} mayViewTemplates={false} mayEditTemplates={false} />,
+    );
+    // The family's rows are in its «تنظیم» sheet.
+    fireEvent.click(
+      within(await screen.findByTestId('reminders-expiry')).getByRole('button', {
+        name: t('web.bx_rem_configure'),
+      }),
     );
     const field = await screen.findByLabelText(t('web.reminders_first_days'));
     const form = field.closest('form') as HTMLFormElement;

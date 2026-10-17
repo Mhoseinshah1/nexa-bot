@@ -1,0 +1,77 @@
+/* w-ops — owned by one agent during the web-admin demo implementation. */
+
+/* --- shared by the support, infra and system pages ------------------------------ */
+
+/* The slim search line inside a ListFilterBar: the box, «جست‌وجو», «پاک کردن». */
+.ops-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.ops-search > .input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+/* Buttons in a table row or at the foot of a drawer form. */
+.ops-row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+/* A from/to pair inside the filter panel. */
+.ops-date-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+.ops-date-range .field {
+  min-width: 150px;
+}
+
+/*
+ * W4: a conversation or list+detail page keeps its SHORTER column in view. Both columns
+ * are sticky and start-aligned: the taller one fills the grid row, so it has nowhere to
+ * stick and scrolls as before; the shorter one stays beside it. Desk widths only — the
+ * columns stack below 1200px.
+ */
+@media (min-width: 1201px) {
+  .ops-sticky-cols {
+    align-items: start;
+  }
+  .ops-sticky-cols > * {
+    position: sticky;
+    top: 16px;
+  }
+}
+
+/* Notifications: the message's Persian name and its family chip on one wrapping line. */
+.notifications-type {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+/*
+ * W4: side-by-side cards share one height (ops group's connection and topics cards, the
+ * new-panel form and its provider card): the row stretches, and the last card of each
+ * column grows to fill it.
+ */
+.two-col.ops-equal-cols,
+.ops-equal-cols > .two-col {
+  align-items: stretch;
+}
+.ops-equal-cols > .two-col > .stack {
+  display: flex;
+  flex-direction: column;
+}
+.ops-equal-cols > .two-col > .stack > :last-child {
+  flex: 1 1 auto;
+}

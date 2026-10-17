@@ -28,7 +28,7 @@ import {
   setResellerMinimum,
   setResellerTierMinimum,
 } from '../api/client';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
@@ -50,6 +50,7 @@ import {
   limitWire,
 } from './resellers';
 import {
+  usePagedRows,
   Badge,
   Banner,
   Card,
@@ -63,7 +64,6 @@ import {
   PageHead,
   StateSwitch,
   Button,
-  ChipDivider,
   FilterChip,
   Progress,
   RowActions,
@@ -73,7 +73,11 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { ChipGroup, revealField } from './editor-layout';
+import { ChipGroup } from './editor-layout';
+import { Drawer } from '../ui/overlays';
+import { ListFilterBar } from '../ui/filter-bar';
+import { chipFilter } from './money-filters';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * «تنظیمات نمایندگان / پلن‌ها و حداقل فروش» — round N, package D
@@ -262,6 +266,15 @@ export function ResellerPlansPage({
   const [grantsId, setGrantsId] = useState<string | null>(null);
   const [minimumId, setMinimumId] = useState<string | null>(null);
   const [policyId, setPolicyId] = useState<string | null>(null);
+  /*
+   * The drawers' submission keys, held here: a drawer unmounts on close, and a retry after
+   * a 5xx must carry the key its first attempt used.
+   */
+  const grantsKey = useSubmissionKey();
+  const minimumKey = useSubmissionKey();
+  const policyKeys = usePolicyKeys();
+  /** W1.8: the tiers, ten a page (the whole roster is one answer). */
+  const tierPage = usePagedRows(rows);
   const granting = rows.find((row) => row.id === grantsId);
   const minimumTier = rows.find((row) => row.id === minimumId);
 
@@ -314,27 +327,11 @@ export function ResellerPlansPage({
       align: 'end',
       render: (row) => (
         <RowActions>
-          <Button
-            size="sm"
-            variant="ghost"
-            icon="products"
-            onClick={() => {
-              setGrantsId(row.id);
-              revealField('plans-panels');
-            }}
-          >
+          <Button size="sm" variant="ghost" icon="products" onClick={() => setGrantsId(row.id)}>
             {t('web.reseller_plans_edit_products')}
           </Button>
           {mayEdit && (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon="target"
-              onClick={() => {
-                setMinimumId(row.id);
-                revealField('plans-panels');
-              }}
-            >
+            <Button size="sm" variant="ghost" icon="target" onClick={() => setMinimumId(row.id)}>
               {t('web.reseller_minimum_edit')}
             </Button>
           )}
@@ -378,58 +375,83 @@ export function ResellerPlansPage({
           <DataTable
             caption={t('web.reseller_plans_tiers_title')}
             columns={columns}
-            rows={rows}
+            rows={tierPage.rows}
             rowKey={(row) => row.id}
             rowClassName={(row) =>
               row.id === grantsId || row.id === minimumId ? 'selected' : undefined
             }
           />
+          {tierPage.pager}
         </StateSwitch>
-        <p className="muted small">{t('web.reseller_plans_pricing_rule')}</p>
+        <p className="muted small">{t('web.reseller_plans_pricing_note')}</p>
       </Card>
 
-      <div id="plans-panels" className="tiers-anchor" tabIndex={-1} />
+      {/*
+        W2: a tier's products and permissions, its minimum, and a reseller's effective
+        policy each open in a side drawer instead of a card further down the page.
+      */}
+      <Drawer
+        open={granting !== undefined}
+        onClose={() => setGrantsId(null)}
+        title={`${t('web.reseller_grants_title')} — ${granting?.name ?? ''}`}
+        wide
+      >
+        {granting !== undefined &&
+          (mayEdit ? (
+            <GrantsEditor
+              held={grantsKey}
+              key={granting.id}
+              tier={granting}
+              options={options}
+              names={names}
+              onClose={() => setGrantsId(null)}
+            />
+          ) : (
+            <>
+              <p>{grantsInWords(granting.grants, RESELLER_GRANT_KINDS, names)}</p>
+              <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
+              <Button size="sm" onClick={() => setGrantsId(null)}>
+                {t('web.reseller_grants_close')}
+              </Button>
+            </>
+          ))}
+      </Drawer>
 
-      {granting !== undefined &&
-        (mayEdit ? (
-          <GrantsEditor
-            key={granting.id}
-            tier={granting}
-            options={options}
-            names={names}
-            onClose={() => setGrantsId(null)}
+      <Drawer
+        open={minimumTier !== undefined && mayEdit}
+        onClose={() => setMinimumId(null)}
+        title={`${t('web.reseller_minimum_edit')} — ${minimumTier?.name ?? ''}`}
+      >
+        {minimumTier !== undefined && (
+          <TierMinimumForm
+            held={minimumKey}
+            key={minimumTier.id}
+            tier={minimumTier}
+            onDone={() => setMinimumId(null)}
           />
-        ) : (
-          <Card title={`${t('web.reseller_grants_title')} — ${granting.name}`}>
-            <p>{grantsInWords(granting.grants, RESELLER_GRANT_KINDS, names)}</p>
-            <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
-            <Button size="sm" onClick={() => setGrantsId(null)}>
-              {t('web.reseller_grants_close')}
-            </Button>
-          </Card>
-        ))}
-
-      {minimumTier !== undefined && mayEdit && (
-        <TierMinimumForm
-          key={minimumTier.id}
-          tier={minimumTier}
-          onDone={() => setMinimumId(null)}
-        />
-      )}
+        )}
+      </Drawer>
 
       {!denied && <MinimumProgressCard mayViewOrders={mayViewOrders} onOpenPolicy={setPolicyId} />}
 
-      <div id="plans-policy" className="tiers-anchor" tabIndex={-1} />
-      {!denied && policyId !== null && (
-        <ResellerPolicyCard
-          key={policyId}
-          customerId={policyId}
-          mayEdit={mayEdit}
-          mayViewCatalog={mayViewCatalog}
-          mayViewPanels={mayViewPanels}
-          onClose={() => setPolicyId(null)}
-        />
-      )}
+      <Drawer
+        open={!denied && policyId !== null}
+        onClose={() => setPolicyId(null)}
+        title={t('web.reseller_policy_open')}
+        wide
+      >
+        {policyId !== null && (
+          <ResellerPolicyCard
+            held={policyKeys}
+            key={policyId}
+            customerId={policyId}
+            mayEdit={mayEdit}
+            mayViewCatalog={mayViewCatalog}
+            mayViewPanels={mayViewPanels}
+            onClose={() => setPolicyId(null)}
+          />
+        )}
+      </Drawer>
 
       <Card title={t('web.reseller_minimum_rules_title')} tone="muted">
         <ul className="cb-notes">
@@ -510,15 +532,22 @@ function MinimumMoneyFields({
 }
 
 function TierMinimumForm({
+  held,
   tier,
   onDone,
 }: {
   tier: ResellerTierSummaryResponse;
   onDone: () => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [amount, setAmount] = useState(tier.monthlyMinimum?.amount ?? '0');
   const [currency, setCurrency] = useState<CurrencyCode>(
     tier.monthlyMinimum?.currency ?? SALES_CURRENCY_CODES[0],
@@ -571,7 +600,12 @@ function TierMinimumForm({
           {t('web.rule_save')}
         </Button>
       </div>
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -623,6 +657,8 @@ function MinimumProgressCard({
   });
   const data = report.data;
   const rows = data?.rows ?? [];
+  /** W1.8: the report's rows, ten a page; a new period or filter starts at page one. */
+  const progressPage = usePagedRows(rows, `${period}|${filter}`);
 
   const columns: readonly Column<ResellerMinimumRow>[] = [
     {
@@ -703,10 +739,7 @@ function MinimumProgressCard({
           size="sm"
           variant="ghost"
           icon="shield"
-          onClick={() => {
-            onOpenPolicy(row.customerId);
-            revealField('plans-policy');
-          }}
+          onClick={() => onOpenPolicy(row.customerId)}
         >
           {t('web.reseller_policy_open')}
         </Button>
@@ -723,6 +756,7 @@ function MinimumProgressCard({
         <Banner tone="info">{t('web.reseller_minimum_progress_denied')}</Banner>
       ) : (
         <>
+          {/* The period is the report's range, not a filter: it stays a chip group. */}
           <div className="filter-row">
             <ChipGroup label={t('web.reseller_minimum_period')}>
               {(['THIS_MONTH', 'PREVIOUS_MONTH'] as const).map((id) => (
@@ -731,15 +765,23 @@ function MinimumProgressCard({
                 </FilterChip>
               ))}
             </ChipGroup>
-            <ChipDivider />
-            <ChipGroup label={t('web.status')}>
-              {(['ALL', 'ACHIEVED', 'BELOW'] as const).map((id) => (
-                <FilterChip key={id} pressed={filter === id} onClick={() => setFilter(id)}>
-                  {t(FILTER_LABELS[id])}
-                </FilterChip>
-              ))}
-            </ChipGroup>
           </div>
+          <ListFilterBar
+            label={t('web.reseller_minimum_progress_title')}
+            filters={[
+              chipFilter({
+                key: 'state',
+                label: t('web.status'),
+                value: filter === 'ALL' ? null : filter,
+                allLabel: t(FILTER_LABELS.ALL),
+                onChange: (next) => setFilter(next ?? 'ALL'),
+                items: (['ACHIEVED', 'BELOW'] as const).map((id) => ({
+                  id,
+                  label: t(FILTER_LABELS[id]),
+                })),
+              }),
+            ]}
+          />
           {data !== undefined && (
             <>
               <KV
@@ -787,10 +829,11 @@ function MinimumProgressCard({
             <DataTable
               caption={t('web.reseller_minimum_progress_title')}
               columns={columns}
-              rows={rows}
+              rows={progressPage.rows}
               rowKey={(row) => row.customerId}
               dense
             />
+            {progressPage.pager}
           </StateSwitch>
         </>
       )}
@@ -805,6 +848,7 @@ function MinimumProgressCard({
 type MinimumChoice = 'INHERIT' | 'NONE' | 'OWN';
 
 export function ResellerPolicyCard({
+  held,
   customerId,
   mayEdit,
   mayViewCatalog,
@@ -816,6 +860,8 @@ export function ResellerPolicyCard({
   mayViewCatalog: boolean;
   mayViewPanels: boolean;
   onClose?: () => void;
+  /** The override editor's submission keys, held by the page that opens this card. */
+  held?: PolicyKeys | undefined;
 }) {
   const policy = useQuery({
     queryKey: ['reseller-policy', customerId],
@@ -1028,6 +1074,7 @@ export function ResellerPolicyCard({
             {mayEdit ? (
               editing ? (
                 <OverrideEditor
+                  held={held}
                   policy={data}
                   options={options}
                   names={names}
@@ -1050,7 +1097,19 @@ export function ResellerPolicyCard({
   );
 }
 
+/** The override editor's two commands' keys. */
+export interface PolicyKeys {
+  readonly grants: SubmissionKey;
+  readonly minimum: SubmissionKey;
+}
+
+/** Holds the override editor's keys in an always-mounted page. */
+export function usePolicyKeys(): PolicyKeys {
+  return { grants: useSubmissionKey(), minimum: useSubmissionKey() };
+}
+
 function OverrideEditor({
+  held,
   policy,
   options,
   names,
@@ -1060,11 +1119,15 @@ function OverrideEditor({
   options: ReturnType<typeof useGrantOptions>['options'];
   names: ReadonlyMap<string, string>;
   onDone: () => void;
+  /** The two submission keys, held by the always-mounted page (see `held` on the forms). */
+  held?: PolicyKeys | undefined;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const grantsSubmission = useSubmissionKey();
-  const minimumSubmission = useSubmissionKey();
+  const ownGrants = useSubmissionKey();
+  const ownMinimum = useSubmissionKey();
+  const grantsSubmission = held?.grants ?? ownGrants;
+  const minimumSubmission = held?.minimum ?? ownMinimum;
 
   // Each dimension starts from what applies now: the override when there is one, else the
   // tier's grants, so choosing "own" begins from the inherited value rather than from nothing.
@@ -1198,7 +1261,12 @@ function OverrideEditor({
           {t('web.reseller_policy_save')}
         </button>
       </div>
-      {saveGrants.error !== null && <Banner tone="danger">{messageFor(saveGrants.error)}</Banner>}
+      {saveGrants.error !== null && (
+        <Banner tone="danger">
+          {messageFor(saveGrants.error)}
+          <ErrorRef error={saveGrants.error} />
+        </Banner>
+      )}
 
       <fieldset className="field">
         <legend>{t('web.reseller_minimum')}</legend>
@@ -1243,7 +1311,12 @@ function OverrideEditor({
           {t('web.rule_cancel_edit')}
         </button>
       </div>
-      {saveMinimum.error !== null && <Banner tone="danger">{messageFor(saveMinimum.error)}</Banner>}
+      {saveMinimum.error !== null && (
+        <Banner tone="danger">
+          {messageFor(saveMinimum.error)}
+          <ErrorRef error={saveMinimum.error} />
+        </Banner>
+      )}
     </div>
   );
 }

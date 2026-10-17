@@ -26,6 +26,7 @@ import {
 } from '../ui/kit';
 import { Modal } from '../ui/overlays';
 import { messageFor } from './settings';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Item 11 — «حذف سرویس» as a modal with two options (`docs/ux1-delete-service-refund.md`).
@@ -273,7 +274,12 @@ function DeleteBody({
           checked={confirmed}
           onChange={setConfirmed}
         />
-        {refund.error !== null && <Banner tone="danger">{messageFor(refund.error)}</Banner>}
+        {refund.error !== null && (
+          <Banner tone="danger">
+            {messageFor(refund.error)}
+            <ErrorRef error={refund.error} />
+          </Banner>
+        )}
         <div className="form-actions">
           <Button
             disabled={refund.isPending}
@@ -300,6 +306,8 @@ function DeleteBody({
   const phraseMatches = phrase.trim() === SERVICE_TERMINATE_CONFIRMATION;
   return (
     <div className="ca-delete-modal">
+      {/* W3: the terminate card's danger sentence is the first thing the modal says. */}
+      <Banner tone="danger">{t('web.service_terminate_danger')}</Banner>
       <p className="muted small">{t('web.service_delete_choose')}</p>
       <div
         className="ca-delete-options"
@@ -376,7 +384,10 @@ function DeleteBody({
       ) : quote.isPending ? (
         <p className="muted small">{t('web.service_delete_refund_loading')}</p>
       ) : quote.error !== null ? (
-        <Banner tone="danger">{messageFor(quote.error)}</Banner>
+        <Banner tone="danger">
+          {messageFor(quote.error)}
+          <ErrorRef error={quote.error} />
+        </Banner>
       ) : data === undefined ? null : !data.eligible ||
         data.remainingMinor === null ||
         data.currency === null ? (

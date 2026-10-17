@@ -1,5 +1,6 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import { ReferralAnalytics } from './business';
 import {
   REFERRAL_COMMISSION_STATES,
@@ -30,12 +31,15 @@ import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
+import { ListFilterBar } from '../ui/filter-bar';
+import { FilePicker } from '../ui/file-picker';
 import {
   Badge,
   Banner,
   Card,
   ConfirmDialog,
   CursorPager,
+  LIST_PAGE_SIZE,
   DataTable,
   Empty,
   Field,
@@ -51,6 +55,7 @@ import {
   type Tone,
   Num,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Referrals — who brought whom, and what the tenant owes for it (WP9-A).
@@ -251,11 +256,11 @@ export function ReferralsPage({
               />
             </Field>
             <Button type="submit" size="sm" variant="primary" icon="filter">
-              {t('web.referrals_filter_apply')}
+              {t('web.bx_referrals_filter_apply')}
             </Button>
             {applied !== '' && (
               <a className="btn sm ghost" href="/referrals" onClick={onLink}>
-                {t('web.referrals_filter_clear')}
+                {t('web.bx_referrals_filter_clear')}
               </a>
             )}
           </form>
@@ -288,15 +293,18 @@ export function ReferralsPage({
 
 function Attributions({ denied, referrerId }: { denied: boolean; referrerId: string }) {
   const trail = useTrail(referrerId);
-  const referrals = useQuery({
-    queryKey: ['referrals', referrerId, trail.cursor ?? null],
-    queryFn: () =>
-      fetchReferrals({
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(referrerId === '' ? {} : { referrerId }),
-      }),
-    enabled: !denied,
-  });
+  const referrals = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['referrals', referrerId, trail.cursor ?? null],
+      queryFn: () =>
+        fetchReferrals({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(referrerId === '' ? {} : { referrerId }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = referrals.data?.referrals ?? [];
   const nextCursor = referrals.data?.nextCursor ?? null;
 
@@ -334,7 +342,7 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
             title={
               referrerId === ''
                 ? t('web.referrals_attributions_empty')
-                : t('web.referrals_filter_empty')
+                : t('web.bx_referrals_filter_empty')
             }
             icon="link"
           />
@@ -371,16 +379,19 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
   const [state, setState] = useState<StateFilter>('ALL');
   const trail = useTrail(`${referrerId}|${state}`);
 
-  const commissions = useQuery({
-    queryKey: ['referral-commissions', referrerId, state, trail.cursor ?? null],
-    queryFn: () =>
-      fetchReferralCommissions({
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(state === 'ALL' ? {} : { state }),
-        ...(referrerId === '' ? {} : { referrerId }),
-      }),
-    enabled: !denied,
-  });
+  const commissions = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['referral-commissions', referrerId, state, trail.cursor ?? null],
+      queryFn: () =>
+        fetchReferralCommissions({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(state === 'ALL' ? {} : { state }),
+          ...(referrerId === '' ? {} : { referrerId }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = commissions.data?.commissions ?? [];
   const nextCursor = commissions.data?.nextCursor ?? null;
   const anyUnrecovered = rows.some((row) => row.unrecoveredAmount !== '0');
@@ -487,21 +498,38 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
       {/* Hidden while the list cannot answer: a filter mints a request the server has
           just refused. */}
       <div className="cb-filters" hidden={!mayRequest(commissions, denied)}>
-        <FilterChips label={t('web.status')}>
-          {(
-            [
-              { id: 'ALL', label: t('web.referrals_state_all') },
-              ...REFERRAL_COMMISSION_STATES.map((one) => ({
-                id: one,
-                label: t(COMMISSION_STATE_LABELS[one]),
-              })),
-            ] as { id: StateFilter; label: string }[]
-          ).map((item) => (
-            <FilterChip key={item.id} pressed={state === item.id} onClick={() => setState(item.id)}>
-              {item.label}
-            </FilterChip>
-          ))}
-        </FilterChips>
+        <ListFilterBar
+          label={t('web.referrals_commissions_title')}
+          filters={[
+            {
+              key: 'state',
+              label: t('web.status'),
+              active: state === 'ALL' ? null : t(COMMISSION_STATE_LABELS[state]),
+              onClear: () => setState('ALL'),
+              control: (
+                <FilterChips label={t('web.status')}>
+                  {(
+                    [
+                      { id: 'ALL', label: t('web.referrals_state_all') },
+                      ...REFERRAL_COMMISSION_STATES.map((one) => ({
+                        id: one,
+                        label: t(COMMISSION_STATE_LABELS[one]),
+                      })),
+                    ] as { id: StateFilter; label: string }[]
+                  ).map((item) => (
+                    <FilterChip
+                      key={item.id}
+                      pressed={state === item.id}
+                      onClick={() => setState(item.id)}
+                    >
+                      {item.label}
+                    </FilterChip>
+                  ))}
+                </FilterChips>
+              ),
+            },
+          ]}
+        />
       </div>
 
       <StateSwitch
@@ -513,7 +541,7 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
             title={
               state === 'ALL' && referrerId === ''
                 ? t('web.referrals_commissions_empty')
-                : t('web.referrals_filter_empty')
+                : t('web.bx_referrals_filter_empty')
             }
             icon="inbox"
           />
@@ -638,6 +666,8 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
   const notify = useToast();
   const submission = useSubmissionKey();
   const [picked, setPicked] = useState<PickedFile>({ kind: 'NONE' });
+  /** The file the picker shows: what was chosen, read or not, valid or not. */
+  const [chosen, setChosen] = useState<File | null>(null);
 
   const media = useQuery({
     queryKey: ['tenant-media', 'REFERRAL_BANNER'],
@@ -671,6 +701,7 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
       submission.settle();
       notify({ tone: 'ok', message: t('web.referral_banner_uploaded') });
       setPicked({ kind: 'NONE' });
+      setChosen(null);
       refresh();
     },
     onError: (error) => submission.settleOn(error),
@@ -694,8 +725,9 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
     onError: (error) => clearKey.settleOn(error),
   });
 
-  const onPick = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const onPick = (files: readonly File[]) => {
+    const file = files[0];
+    setChosen(file ?? null);
     if (file === undefined) {
       setPicked({ kind: 'NONE' });
       return;
@@ -732,11 +764,13 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
             htmlFor="referral-banner-file"
             {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
           >
-            <input
+            <FilePicker
               id="referral-banner-file"
-              type="file"
+              kind="image"
               accept={TENANT_MEDIA_MIME_TYPES.join(',')}
-              onChange={onPick}
+              onFiles={onPick}
+              selected={chosen}
+              onClear={() => onPick([])}
               disabled={busy}
             />
           </Field>
@@ -777,7 +811,12 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
               />
             )}
           </div>
-          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+          {failure != null && (
+            <Banner tone="danger">
+              {messageFor(failure)}
+              <ErrorRef error={failure} />
+            </Banner>
+          )}
         </form>
       ) : (
         <p className="muted">{t('web.referral_banner_read_only')}</p>

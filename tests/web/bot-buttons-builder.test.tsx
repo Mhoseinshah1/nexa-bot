@@ -9,10 +9,11 @@ import {
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { BotButtonsPage } from '../../apps/web/src/pages/bot-buttons';
+import { HistoryDrawer } from '../../apps/web/src/pages/bot-buttons/history';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { navigate } from '../../apps/web/src/router';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
-import { renderPage, type Api } from './harness';
+import { renderPage, stubApi, type Api } from './harness';
 import {
   REVISION_1,
   REVISION_2,
@@ -829,13 +830,14 @@ describe('the button builder — banners and permissions', () => {
     expect(label.getByText(t('web.bot_buttons_label_duplicate'))).toBeTruthy();
     expect(label.getByText(t('web.bb_label_slash'))).toBeTruthy();
     expect(label.getByText(t('web.bb_label_note'))).toBeTruthy();
-    await waitFor(() =>
-      expect(document.querySelector('#bot-buttons-label-wallet details')).not.toBeNull(),
-    );
+    await waitFor(() => expect(document.querySelector('#bot-buttons-label-wallet')).not.toBeNull());
+    // «ویرایش متن» opens the label's own editor in a side sheet — no jump to another section.
+    const before = window.scrollY;
     fireEvent.click(label.getByRole('button', { name: t('web.bb_label_edit') }));
-    expect(
-      (document.querySelector('#bot-buttons-label-wallet details') as HTMLDetailsElement).open,
-    ).toBe(true);
+    const sheet = screen.getByRole('dialog', { name: '/x' });
+    expect(within(sheet).getByText(t('web.bot_buttons_label_duplicate'))).toBeTruthy();
+    expect(within(sheet).getAllByText('bot.menu.wallet').length).toBeGreaterThan(0);
+    expect(window.scrollY).toBe(before);
   });
 });
 
@@ -1271,5 +1273,94 @@ describe('the button builder — drag quality (owner, 2026-10-02)', () => {
     } finally {
       document.documentElement.dir = before;
     }
+  });
+});
+
+describe('the builder’s editor under the preview', () => {
+  it('draws the selected button’s editor in three titled columns: place, look, show and target', async () => {
+    builderApi(builderView());
+    renderPage(page());
+    await ready();
+    select('wallet');
+    const inspector = screen.getByTestId('bb-inspector');
+    const columns = within(inspector).getAllByRole('group', {
+      name: new RegExp(
+        `^(${t('web.bx_bb_col_place')}|${t('web.bx_bb_col_look')}|${t('web.bx_bb_col_show')})$`,
+      ),
+    });
+    expect(columns.map((one) => one.getAttribute('aria-labelledby') !== null)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    const [place, look, show] = columns as [HTMLElement, HTMLElement, HTMLElement];
+    expect(within(place).getByTestId('bb-where')).toBeInTheDocument();
+    expect(within(look).getByTestId('bb-icon')).toBeInTheDocument();
+    expect(within(look).getByText(t('web.bb_style_title'))).toBeInTheDocument();
+    expect(within(show).getByTestId('bb-label')).toBeInTheDocument();
+    expect(within(show).getByText(t('web.bot_buttons_target'))).toBeInTheDocument();
+    // Below the canvas in the document, not beside it.
+    const canvas = document.querySelector('.bb-canvas') as HTMLElement;
+    expect(
+      canvas.compareDocumentPosition(inspector) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
+/*
+ * PR #285 review, A6: the history drawer pages ten revisions at a time with «قبلی / بعدی» on
+ * the server's `before` keyset — no «نسخه‌های قدیمی‌تر» that grows one list without end.
+ */
+describe('the revision history pager', () => {
+  const rid = (n: number) => `01900000-0000-7000-8000-${String(n).padStart(12, '0')}`;
+  const span = (from: number, to: number) =>
+    Array.from({ length: from - to + 1 }, (_, index) =>
+      revision(rid(from - index), from - index, DEFAULT_EXPLICIT_MAIN_MENU),
+    );
+
+  it('shows ten a page and walks older and back by cursor, never by offset', async () => {
+    const api = stubApi([
+      {
+        url: '/bot-menu/builder/revisions?limit=10',
+        body: { revisions: span(25, 16), nextBefore: 16 },
+      },
+      {
+        url: '/bot-menu/builder/revisions?before=16&limit=10',
+        body: { revisions: span(15, 6), nextBefore: 6 },
+      },
+    ]);
+    renderPage(
+      <HistoryDrawer
+        open
+        onClose={() => undefined}
+        publishedRevision={25}
+        items={new Map()}
+        mayEdit={false}
+        onRestore={() => undefined}
+      />,
+    );
+    const history = await screen.findByTestId('bb-history');
+    const shown = () =>
+      Array.from(screen.getByTestId('bb-history').querySelectorAll('[data-revision]'), (node) =>
+        Number(node.getAttribute('data-revision')),
+      );
+    await waitFor(() => expect(shown()).toEqual(span(25, 16).map((one) => one.revision)));
+    expect(history).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'نسخه‌های قدیمی‌تر' })).toBeNull();
+    const next = screen.getByRole('button', { name: t('web.page_next') });
+    const previous = screen.getByRole('button', { name: t('web.page_previous') });
+    expect(previous).toBeDisabled();
+
+    fireEvent.click(next);
+    await waitFor(() => expect(shown()).toEqual(span(15, 6).map((one) => one.revision)));
+    const reads = api.calls.filter((call) => call.url.includes('/revisions'));
+    expect(reads.map((call) => call.url)).toEqual([
+      expect.stringContaining('/bot-menu/builder/revisions?limit=10'),
+      expect.stringContaining('/bot-menu/builder/revisions?before=16&limit=10'),
+    ]);
+    expect(reads.some((call) => /offset|page=/.test(call.url))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
+    await waitFor(() => expect(shown()).toEqual(span(25, 16).map((one) => one.revision)));
   });
 });

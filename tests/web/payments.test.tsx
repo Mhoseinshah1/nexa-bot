@@ -6,10 +6,15 @@ import { resolve } from '../../apps/web/src/app';
 import { formatTimestamp } from '../../apps/web/src/format';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 import { PAYMENT_ROUTES, type PermissionKey } from '@nexa/contracts';
 import * as client from '../../apps/web/src/api/client';
 import { leaveGuarded } from '../../apps/web/src/router';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
+
+/** The button of that name inside the open dialog (a row button of the same name opens it). */
+const inDialog = (name: string): HTMLElement =>
+  within(screen.getByRole('dialog')).getByRole('button', { name });
 
 /**
  * Payments, rendered against the shapes the server actually returns.
@@ -138,8 +143,9 @@ describe('the payment list', () => {
     expect(creditedRow?.textContent).not.toContain('رد شد');
     expect(rejectedRow?.textContent).toContain('رد شد');
     // The disposition is offered as a filter, over the frozen vocabulary.
+    const panel = openFilterPanel();
     expect(
-      screen.getAllByRole('button', { name: 'واریز به کیف پول' }).length,
+      within(panel).getAllByRole('button', { name: 'واریز به کیف پول' }).length,
     ).toBeGreaterThanOrEqual(1);
   });
 
@@ -154,8 +160,9 @@ describe('the payment list', () => {
 
   it('offers every FROZEN state and method as a filter', async () => {
     stubApi(list([payment()]));
-    const { container } = renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
+    renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718');
+    const container = openFilterPanel();
 
     // Including the ones nothing reaches yet: a state in the contract with no filter is
     // an option nobody notices is missing.
@@ -210,6 +217,34 @@ describe('the payment list', () => {
       expect(applied.get('customerId')).toBeNull();
       expect(applied.get('reference')).toBeNull();
     });
+  });
+
+  /*
+   * PR #285 review, A1: «پاک کردن همه» once called each chip's own `setQueries` against the
+   * same stale `route.query`, so only the LAST removal survived. The page's clear-all is
+   * one navigation that also drops the search and the cursor.
+   */
+  it('«پاک کردن همه» drops every URL filter, the search and the cursor in one go', async () => {
+    stubApi(list([payment()]));
+    const query = new URLSearchParams({
+      state: 'PENDING',
+      method: 'MANUAL_TRANSFER',
+      q: 'abc',
+      cursor: 'stale-page',
+    });
+    window.history.replaceState(null, '', `/payments?${query.toString()}`);
+    renderPage(<PaymentsPage route={{ path: '/payments', query }} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718');
+
+    const line = screen.getByRole('search', { name: t('web.payment_ops_title') });
+    fireEvent.click(within(line).getByRole('button', { name: t('web.filters_clear_all') }));
+
+    const applied = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe('/payments');
+    expect(applied.get('state'), 'the state filter survived «پاک کردن همه»').toBeNull();
+    expect(applied.get('method'), 'the method filter survived «پاک کردن همه»').toBeNull();
+    expect(applied.get('q'), 'the search survived «پاک کردن همه»').toBeNull();
+    expect(applied.get('cursor')).toBeNull();
   });
 
   it('sends the search as q, beside the non-text filters', async () => {
@@ -321,7 +356,8 @@ describe('the payment detail', () => {
 
     // `UNK-PR-010` records the legacy receipt review as storing NEITHER, which is why
     // "was this approved by a human" is unanswerable there.
-    expect(screen.getByText('OPERATOR_REVIEW')).toBeInTheDocument();
+    // W5: named in Persian, the machine key kept in the title.
+    expect(screen.getByText('بررسی مدیر')).toHaveAttribute('title', 'OPERATOR_REVIEW');
     expect(screen.getByText('تأییدکننده')).toBeInTheDocument();
     expect(screen.getByText('زمان تأیید')).toBeInTheDocument();
   });
@@ -971,6 +1007,7 @@ describe('the refund card', () => {
     // nothing. This label renders only once the ledger has arrived.
     await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
 
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت بازگشت وجه' }));
     fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
       target: { value: '100000' },
     });
@@ -995,6 +1032,7 @@ describe('the refund card', () => {
     // nothing. This label renders only once the ledger has arrived.
     await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
 
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت بازگشت وجه' }));
     fireEvent.click(screen.getByText('کل باقی‌ماندهٔ قابل بازگشت'));
     // Past 2^53. Copied as a string, because computing it would round it.
     expect(screen.getByLabelText<HTMLInputElement>('مبلغ (به کوچک‌ترین یکای پول)').value).toBe(
@@ -1064,9 +1102,9 @@ describe('the refund card', () => {
       api.calls.filter((call) => call.method === 'GET' && call.url.includes('/timeline')).length;
     await waitFor(() => expect(timelineReads()).toBe(1));
 
-    fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
-    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
     fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
+    fireEvent.click(inDialog('واریز انجام شد'));
 
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('/completion'))).toBe(true);
@@ -1125,9 +1163,9 @@ describe('the refund card', () => {
       await waitFor(() => expect(reads('/timeline')).toBe(1));
       const ledgerBefore = reads('/refunds');
 
-      fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
-      fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'پاسخ گم شد' } });
       fireEvent.click(screen.getByRole('button', { name: button }));
+      fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'پاسخ گم شد' } });
+      fireEvent.click(inDialog(button));
 
       await waitFor(() => expect(api.calls.some((call) => call.url.endsWith(url))).toBe(true));
       await waitFor(() => expect(reads('/timeline')).toBe(2));
@@ -1182,9 +1220,9 @@ describe('the refund card', () => {
       api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(part)).length;
     await waitFor(() => expect(reads('/timeline')).toBe(1));
 
-    fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
-    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'پاسخ گم شد' } });
     fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'پاسخ گم شد' } });
+    fireEvent.click(inDialog('واریز انجام شد'));
 
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.endsWith('/completion'))).toBe(true),
@@ -1255,6 +1293,7 @@ describe('the refund card', () => {
       api.calls.filter((call) => call.method === 'GET' && call.url.includes('/timeline')).length;
     await waitFor(() => expect(timelineReads()).toBe(1));
 
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت بازگشت وجه' }));
     fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
       target: { value: '1000' },
     });
@@ -1334,7 +1373,8 @@ describe('the refund leave guard', () => {
   it('releases the guard when a refusal re-reads the payment as not refundable', async () => {
     stubStaleRefusal(ledger([]), ledger([], { refundable: false }));
     renderGuarded();
-    fireEvent.change(await screen.findByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
+    fireEvent.click(await screen.findByRole('button', { name: 'ثبت بازگشت وجه' }));
+    fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
       target: { value: '1000' },
     });
     fireEvent.change(screen.getByLabelText('دلیل'), { target: { value: 'مشتری منصرف شد' } });
@@ -1356,13 +1396,11 @@ describe('the refund leave guard', () => {
       }),
     );
     renderGuarded();
-    fireEvent.change(await screen.findByLabelText('کدام بازگشت'), {
-      target: { value: REFUND_ID },
-    });
+    fireEvent.click((await screen.findAllByRole('button', { name: 'واریز انجام شد' }))[0]!);
     fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
     expect(leaveGuarded()).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+    fireEvent.click(inDialog('واریز انجام شد'));
     await waitFor(() => expect(screen.queryByLabelText('توضیح')).toBeNull());
     expect(leaveGuarded()).toBe(false);
   });
@@ -1376,15 +1414,14 @@ describe('the refund leave guard', () => {
       ledger([refundRow({ state: 'COMPLETED', completedByAdminId: ADMIN_ID }), other]),
     );
     renderGuarded();
-    fireEvent.change(await screen.findByLabelText('کدام بازگشت'), {
-      target: { value: REFUND_ID },
-    });
+    fireEvent.click((await screen.findAllByRole('button', { name: 'واریز انجام شد' }))[0]!);
     fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
     expect(leaveGuarded()).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+    fireEvent.click(inDialog('واریز انجام شد'));
     await waitFor(() => expect(screen.queryByLabelText('توضیح')).toBeNull());
-    expect(screen.getByLabelText('کدام بازگشت')).toBeInTheDocument();
+    // The other awaiting refund still carries its own answers.
+    expect(screen.getAllByRole('button', { name: 'واریز انجام شد' })).toHaveLength(1);
     expect(leaveGuarded()).toBe(false);
   });
 
@@ -1393,14 +1430,10 @@ describe('the refund leave guard', () => {
     // was typed into it are both still there, so leaving would still lose it.
     stubStaleRefusal(ledger([refundRow()]), ledger([refundRow()]));
     renderGuarded();
-    fireEvent.change(await screen.findByLabelText('کدام بازگشت'), {
-      target: { value: REFUND_ID },
-    });
+    fireEvent.click((await screen.findAllByRole('button', { name: 'واریز انجام شد' }))[0]!);
     fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
-    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'واریز انجام شد' })).toBeEnabled(),
-    );
+    fireEvent.click(inDialog('واریز انجام شد'));
+    await waitFor(() => expect(inDialog('واریز انجام شد')).toBeEnabled());
     expect(screen.getByLabelText('توضیح')).toHaveValue('واریز شد');
     expect(leaveGuarded()).toBe(true);
   });
@@ -1692,6 +1725,22 @@ describe('a TonPays Telegram payment on the detail', () => {
     expect(screen.getByText(t('web.payment_gateway_card_change_exhausted'))).toBeInTheDocument();
   });
 
+  it('names the card change, the receipt state and the provider status in Persian (C1)', async () => {
+    render({ state: 'PENDING' }, true);
+    expect(await screen.findByText(t('web.gw_card_change_applied'))).toHaveAttribute(
+      'title',
+      'APPLIED',
+    );
+    expect(screen.getByText(t('web.gw_receipt_accepted'))).toHaveAttribute('title', 'ACCEPTED');
+    expect(screen.getAllByText(t('web.pay_provider_processing'))[0]).toHaveAttribute(
+      'title',
+      'processing',
+    );
+    for (const raw of ['APPLIED', 'ACCEPTED', 'processing']) {
+      expect(screen.queryByText(raw)).toBeNull();
+    }
+  });
+
   it('UNKNOWN with payments.reconcile: the recorded answer, then confirm sends the evidence-bound command', async () => {
     const api = render({ state: 'UNKNOWN', ...REVIEW }, true, [
       {
@@ -1707,8 +1756,15 @@ describe('a TonPays Telegram payment on the detail', () => {
       },
     ]);
     expect(await screen.findByText(t('web.payment_reconcile_title'))).toBeInTheDocument();
-    expect(screen.getAllByText('completed · paid=true').length).toBeGreaterThan(0);
+    // The recorded answer in words: the provider's status, and whether money arrived.
+    expect(screen.getAllByTitle('completed')[0]).toHaveTextContent('تکمیل‌شده');
+    expect(screen.getAllByText('پول رسیده').length).toBeGreaterThan(0);
+    // W3: the decision opens a dialog with the rule and the evidence; nothing is sent yet.
     fireEvent.click(screen.getByText(t('web.payment_reconcile_confirm')));
+    expect(api.calls.some((call) => call.url.endsWith(PAYMENT_ROUTES.reconcile(ROW_ID)))).toBe(
+      false,
+    );
+    fireEvent.click(inDialog(t('web.payment_reconcile_confirm')));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.endsWith(PAYMENT_ROUTES.reconcile(ROW_ID)))).toBe(
         true,

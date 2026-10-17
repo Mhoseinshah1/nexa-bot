@@ -10,7 +10,8 @@ import {
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatMoneyText, formatNumber, formatTimestamp } from '../format';
-import { finalAnswer } from '../polling';
+import { errorIssues, errorText } from '../error-text';
+import { guardSentenceShown, settingDraftProblems } from '../setting-checks';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -44,12 +45,13 @@ import {
 } from '../ui/kit';
 import {
   DirtyScope,
-  SectionNav,
+  SectionTabs,
   UnsavedCount,
   sameValue,
   useDirtySet,
   useReportDirty,
 } from './ops-b-layout';
+import { ApiErrorReport, ErrorRef, TechnicalDetails } from '../ui/technical-details';
 
 /**
  * The settings registry's values, built in ONE place for this page and for the sidebar's
@@ -101,6 +103,11 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   // version it was read at); the page adds the sum of them and one leave guard.
   const { dirty, report } = useDirtySet();
   useUnsavedChanges(dirty.size > 0);
+  // W2: one group at a time, as tabs; every group stays mounted (hidden) so drafts survive.
+  const [tab, setTab] = useState<string>('');
+  const activeTab = sections.some((section) => section.group === tab)
+    ? tab
+    : (sections[0]?.group ?? '');
 
   return (
     <>
@@ -112,43 +119,44 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
       <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
         <DirtyScope report={report}>
-          <div className="ob-sectioned">
-            <SectionNav
-              label={t('web.ob_sections')}
-              items={sections.map(({ group, title, members }) => ({
-                id: `settings-${group}`,
-                label: t(title),
-                unsaved: members.some((member) => dirty.has(member.key)),
-              }))}
-            />
-            <div className="stack">
-              {sections.map(({ group, title, members }) => (
-                <section
-                  key={group}
-                  id={`settings-${group}`}
-                  tabIndex={-1}
-                  className="card settings-group"
-                  aria-labelledby={`settings-${group}-title`}
-                >
-                  <header className="card-head">
-                    <div className="titles">
-                      <h2 id={`settings-${group}-title`}>{t(title)}</h2>
-                    </div>
-                  </header>
-                  <div className="settings-rows">
-                    {members.map((setting) => (
-                      <SettingRow
-                        key={setting.key}
-                        setting={setting}
-                        mayEdit={mayEdit}
-                        salesCurrency={salesCurrency}
-                      />
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          </div>
+          <SectionTabs
+            label={t('web.ob_sections')}
+            panelId="settings"
+            value={activeTab}
+            onChange={setTab}
+            items={sections.map(({ group, title, members }) => ({
+              id: group,
+              label: t(title),
+              count: members.length,
+              unsaved: members.some((member) => dirty.has(member.key)),
+            }))}
+          />
+          {sections.map(({ group, title, members }) => (
+            <section
+              key={group}
+              id={`settings-${group}`}
+              role="tabpanel"
+              aria-labelledby={`settings-tab-${group}`}
+              hidden={group !== activeTab}
+              className="card settings-group"
+            >
+              <header className="card-head">
+                <div className="titles">
+                  <h2 id={`settings-${group}-title`}>{t(title)}</h2>
+                </div>
+              </header>
+              <div className="settings-rows">
+                {members.map((setting) => (
+                  <SettingRow
+                    key={setting.key}
+                    setting={setting}
+                    mayEdit={mayEdit}
+                    salesCurrency={salesCurrency}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
         </DirtyScope>
       </StateSwitch>
     </>
@@ -292,6 +300,8 @@ function SettingRow({
    */
   const [basis, setBasis] = useState<ResolvedSettingResponse>(setting);
   const [draft, setDraft] = useState<unknown>(setting.value);
+  // W6: what the registry's own schema refuses in the draft, said in Persian before sending.
+  const [draftProblems, setDraftProblems] = useState<readonly WebKey[]>([]);
   /** Bumped to remount the editor, whose half-typed text is its own state. */
   const [epoch, setEpoch] = useState(0);
   /** The selling-currency change waiting on its question. */
@@ -383,6 +393,9 @@ function SettingRow({
     event.preventDefault();
     // Snapshotted HERE, at the click, so the retry cannot see a later edit.
     const command = { value: draft, expectedVersion: basis.version };
+    const problems = settingDraftProblems(setting.key, presentation?.control ?? null, draft);
+    setDraftProblems(problems);
+    if (problems.length > 0) return;
     // The selling currency re-prices nothing, and every money setting and top-up preset
     // stored in the old one stops applying: asked once, in words, before it is sent.
     if (
@@ -414,7 +427,7 @@ function SettingRow({
               )}
             </div>
             <p className="muted small">
-              {presentation === null ? t('web.settings_unknown_desc') : t(presentation.description)}
+              {presentation === null ? t('web.settings_unknown_note') : t(presentation.description)}
             </p>
             {setting.configures !== null && (
               <p className="faint small">{t('web.settings_needs_feature')}</p>
@@ -479,7 +492,7 @@ function SettingRow({
             has no effect yet — the legacy pattern this whole registry exists to end is
             a screen that answers "saved" for a change with no observable effect. */}
         {setting.consumer === 'PLANNED' && (
-          <Banner tone="info">{t('web.setting_no_consumer')}</Banner>
+          <Banner tone="info">{t('web.setting_no_consumer_note')}</Banner>
         )}
 
         {/* A stored value the registry no longer accepts. The default is in
@@ -509,6 +522,15 @@ function SettingRow({
           </Banner>
         )}
 
+        {draftProblems.length > 0 && (
+          <Banner tone="danger">
+            <ul>
+              {draftProblems.map((problem) => (
+                <li key={problem}>{t(problem)}</li>
+              ))}
+            </ul>
+          </Banner>
+        )}
         {save.isError && <SaveError error={save.error} settingKey={setting.key} />}
         {/* A no-op says so. The legacy screens answer "✅ updated" either way,
             and one of them said it three times while nothing changed. */}
@@ -560,9 +582,6 @@ function SettingRow({
   );
 }
 
-/** Whether a string carries Persian or Arabic script. */
-const PERSIAN_SCRIPT = /[\u0600-\u06FF]/u;
-
 /**
  * A refused save, in Persian.
  *
@@ -571,7 +590,8 @@ const PERSIAN_SCRIPT = /[\u0600-\u06FF]/u;
  * told in Persian that the value was not accepted, and the issues are kept behind a
  * disclosure for whoever has to debug it. A change guard refuses a value that is valid
  * on its own but not in combination (the reminder thresholds) with a sentence written
- * for the operator — shown as it is when it is Persian. The store-currency guard speaks
+ * for the operator — shown as it is only for a key on `PERSIAN_GUARD_SETTING_KEYS` and only
+ * when it carries no Latin letter (`guardSentenceShown`). The store-currency guard speaks
  * English, so its one refusal has a Persian sentence of its own here.
  *
  * Every other refusal keeps the shared `ErrorReport`.
@@ -581,27 +601,25 @@ function SaveError({ error, settingKey }: { error: unknown; settingKey: string }
     return <ErrorReport error={error} />;
   }
   const guarded = error.status === 409;
-  if (guarded && PERSIAN_SCRIPT.test(error.message)) {
-    return <Banner tone="danger">{error.message}</Banner>;
+  if (guarded && guardSentenceShown(settingKey, error.message)) {
+    return (
+      <Banner tone="danger">
+        {error.message}
+        <ErrorRef error={error} />
+      </Banner>
+    );
   }
   const sentence =
     guarded && settingKey === 'sales.currency'
       ? t('web.setting_sales_currency_refused')
       : t('web.settings_invalid_value');
-  const issues = issuesFrom(error);
-  const detail = issues.length > 0 ? issues : [error.message];
   return (
     <>
-      <Banner tone="danger">{sentence}</Banner>
-      <Disclosure size="sm" summary={t('web.settings_technical_issues')}>
-        <ul className="danger">
-          {detail.map((issue, index) => (
-            <li key={`${index}:${issue}`}>
-              <Ltr mono={false}>{issue}</Ltr>
-            </li>
-          ))}
-        </ul>
-      </Disclosure>
+      <Banner tone="danger">
+        {sentence}
+        <ErrorRef error={error} />
+      </Banner>
+      <TechnicalDetails lines={errorIssues(error).map((issue) => issue.raw)} />
     </>
   );
 }
@@ -1429,32 +1447,11 @@ function asMoney(value: unknown): MoneyWire {
 }
 
 /**
- * A rejection, with its structured issues when it has any.
- *
- * The list is rendered only when it is non-empty. An always-present `<ul>` with
- * nothing in it still draws its error styling, which reads as "and something
- * else went wrong too" for every ordinary failure.
+ * A rejection, in Persian: the shared report (`ui/technical-details.tsx`). Kept under this
+ * name because every page imports it from here.
  */
 export function ErrorReport({ error }: { error: unknown }) {
-  const issues = issuesFrom(error);
-  return (
-    <>
-      <Banner tone="danger">{messageFor(error)}</Banner>
-      {issues.length > 0 && (
-        <ul className="danger">
-          {issues.map((issue, index) => (
-            // The index is part of the key: two schema issues can carry the
-            // same sentence, and React's own warning for a duplicate key says
-            // children "may be duplicated and/or omitted" — which is a good
-            // enough reason not to find out which.
-            <li key={`${index}:${issue}`}>
-              <Ltr mono={false}>{issue}</Ltr>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
-  );
+  return <ApiErrorReport error={error} />;
 }
 
 /**
@@ -1492,79 +1489,14 @@ function fromEditable(draft: string, previous: unknown): unknown {
 }
 
 /**
- * The structured issues behind a rejection, if there are any.
- *
- * A template body refused for an undeclared placeholder names the token; a
- * setting refused by its schema names the field. Both arrive in the error's
- * `details.issues`, and both are what the person editing needs to see.
+ * The shared Persian sentence for a refusal (`error-text.ts`), with this page's one
+ * sentence of its own: a referral banner refused as media. Never the server's message —
+ * what the server wrote is kept behind «جزئیات فنی» by `ErrorReport`.
  */
-export function issuesFrom(error: unknown): string[] {
-  if (!(error instanceof ApiError)) return [];
-  const issues = error.details?.issues;
-  if (!Array.isArray(issues)) return [];
-  // THREE shapes reach here, and only two were handled. `parseSettingValue`
-  // returns strings; template validation returns `{ kind, detail }`; and the
-  // global error filter returns `{ path, message }` for anything the REQUEST
-  // schema rejects. That third one fell through to `JSON.stringify`, so an
-  // operator saw `{"path":"value.0","message":"..."}` in their error list.
-  return issues.map((issue) => {
-    if (typeof issue === 'string') return issue;
-    const shaped = issue as { detail?: string; message?: string; path?: string };
-    if (shaped.detail !== undefined) return shaped.detail;
-    if (shaped.message !== undefined) {
-      return shaped.path ? `${shaped.path}: ${shaped.message}` : shaped.message;
-    }
-    return JSON.stringify(issue);
-  });
-}
-
-/**
- * The reseller refusals (WP9-B), said in the operator's language.
- *
- * The server's message for these is a sentence about the RULE, written for a log; what an
- * operator needs is which of their inputs to change — a tier that is gone, a customer
- * who already has a row. Two of the five (`NOT_ENTITLED`, `TERMS_CHANGED`) are order
- * refusals no Web Admin command produces today; they are mapped here anyway, because this
- * is the one place a code becomes a sentence and a refusal that reaches it later should
- * not arrive in English.
- */
-const RESELLER_MESSAGES: Readonly<Record<string, WebKey>> = {
-  [COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED]: 'web.error_reseller_not_entitled',
-  [COMMERCE_ERROR_CODES.RESELLER_TERMS_CHANGED]: 'web.error_reseller_terms_changed',
-  [COMMERCE_ERROR_CODES.RESELLER_NOT_FOUND]: 'web.error_reseller_not_found',
-  [COMMERCE_ERROR_CODES.RESELLER_ALREADY_REGISTERED]: 'web.error_reseller_already_registered',
-  [COMMERCE_ERROR_CODES.RESELLER_TIER_NOT_FOUND]: 'web.error_reseller_tier_not_found',
+const SETTINGS_OVERRIDES: Readonly<Partial<Record<string, WebKey>>> = {
+  [COMMERCE_ERROR_CODES.MEDIA_INVALID]: 'web.referral_banner_invalid',
 };
 
 export function messageFor(error: unknown): string {
-  if (error instanceof ApiError) {
-    const reseller = RESELLER_MESSAGES[error.code];
-    if (reseller !== undefined) return t(reseller);
-    if (error.code === 'control.version_conflict') return t('web.conflict');
-    if (error.code === 'control.destination_not_configured') return t('web.destination_missing');
-    if (error.code === 'commerce.referral_gift_terms_invalid')
-      return t('web.referral_gift_terms_invalid');
-    if (error.code === 'commerce.media_invalid') return t('web.referral_banner_invalid');
-    if (error.status === 403) return t('web.no_permission');
-    // The server's message names the offending field and is written for an
-    // operator. Replacing it with a generic sentence here would throw away the
-    // only part of the response that says what to change.
-    return error.message;
-  }
-  /*
-   * A THIRD copy of the same decision, and it had the same arm wrong.
-   *
-   * `post()` schema-parses a mutation's response, so a mutation can throw a
-   * `ZodError` — the deploy-skew case — and this returned "خطا در ارتباط با
-   * سرور" for it: the server answered, the transport was fine, and the
-   * sentence blamed the connection. `errorCopy` collapsed the two query-view
-   * sites into one rule and did not reach here, which is the same "fixed at
-   * the site the author was looking at" shape one layer down.
-   *
-   * The `ApiError` branch above stays as it is: for a mutation the server's
-   * own message names the offending field, and that is more use to an operator
-   * than any sentence written here. What is corrected is the fall-through,
-   * where there is no message and the old text asserted a cause.
-   */
-  return finalAnswer(error) ? t('web.rejected') : t('web.error');
+  return errorText(error, { overrides: SETTINGS_OVERRIDES });
 }

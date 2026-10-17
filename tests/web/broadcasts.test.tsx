@@ -8,6 +8,8 @@ import {
   renderBroadcastPreview,
 } from '../../apps/web/src/pages/broadcasts';
 import { renderPage, stubApi } from './harness';
+import { t } from '../../apps/web/src/i18n/web.fa';
+import { openFilterPanel, setDateField } from './ui-helpers';
 
 /**
  * «ارسال همگانی» in the Web Admin (round N, B1): the list, the confirmation that binds to the
@@ -259,6 +261,67 @@ describe('broadcast in the Web Admin', () => {
   });
 
   // Codex R6 on PR #117: the recipients are read again with the detail while sending.
+  it('asks for ten broadcasts a page', async () => {
+    const api = stubApi([{ url: '/broadcasts', body: { broadcasts: [], nextCursor: null } }]);
+    renderPage(
+      <BroadcastsPage
+        route={{ path: '/broadcasts', query: new URLSearchParams() }}
+        denied={false}
+        maySend
+      />,
+    );
+    await waitFor(() => expect(api.calls.length).toBeGreaterThan(0));
+    expect(new URL(api.calls[0]?.url ?? '', 'http://x').searchParams.get('limit')).toBe('10');
+  });
+
+  it('schedules through the date-time field, sending the moment it names', async () => {
+    const api = stubApi([
+      OPTIONS,
+      { url: `/broadcasts/${ID}`, body: { broadcast: broadcast() } },
+      { url: `/broadcasts/${ID}/preview`, body: preview(12) },
+      { url: `/broadcasts/${ID}/launch`, body: { broadcast: broadcast({ state: 'SCHEDULED' }) } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    fireEvent.click(await screen.findByRole('button', { name: 'شمارش دقیق گیرندگان' }));
+    fireEvent.change(await screen.findByLabelText(t('web.bc_mode')), {
+      target: { value: 'SCHEDULE' },
+    });
+    setDateField(screen.getByLabelText(t('web.bc_schedule_at')), '2030-03-21T10:30');
+    fireEvent.click(screen.getByLabelText(/ارسال را تأیید می‌کنم/u));
+    fireEvent.click(screen.getByRole('button', { name: t('web.bc_schedule') }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.cb_bc_schedule_yes') }));
+    await waitFor(() => expect(api.calls.some((call) => call.url.endsWith('/launch'))).toBe(true));
+    const launch = api.calls.find((call) => call.url.endsWith('/launch'));
+    expect(launch?.body).toMatchObject({
+      mode: 'SCHEDULE',
+      scheduledAt: new Date('2030-03-21T10:30').toISOString(),
+    });
+  });
+
+  it('filters the recipients by state from the filter panel, from the first page', async () => {
+    const api = stubApi([
+      { url: `/broadcasts/${ID}`, body: { broadcast: broadcast({ state: 'COMPLETED' }) } },
+      { url: `/broadcasts/${ID}/recipients`, body: { recipients: [], nextCursor: null } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.includes('/recipients'))).toBe(true),
+    );
+    const first = api.calls.find((call) => call.url.includes('/recipients'));
+    expect(new URL(first?.url ?? '', 'http://x').searchParams.get('limit')).toBe('10');
+    const card = screen.getByRole('heading', { name: t('web.bc_recipients') }).closest('section');
+    const panel = openFilterPanel(card as HTMLElement);
+    fireEvent.change(within(panel).getByRole('combobox', { name: t('web.bc_state') }), {
+      target: { value: 'FAILED' },
+    });
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.includes('/recipients?limit=10&state=FAILED'))).toBe(
+        true,
+      ),
+    );
+  });
+
   it('refreshes the recipients while the broadcast is sending', async () => {
     const api = stubApi([
       {
@@ -403,5 +466,72 @@ describe('a draft that moved on while it was being edited (PR #245, Codex CX2 an
     );
     await waitFor(() => expect(api.calls.some((call) => call.url.endsWith('/launch'))).toBe(true));
     await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+});
+
+/*
+ * PR #285 review, A5: the media picker passed neither `selected` nor `onClear`, so after a
+ * refused upload it still showed the file, and the native input still held it — picking
+ * the same file again fired no change and nothing was tried.
+ */
+describe('the media picker after a refused upload', () => {
+  const photo = () => broadcast({ contentKind: 'PHOTO' });
+  const file = () => new File(['x'], 'nowruz.jpg', { type: 'image/jpeg' });
+  const picker = () => screen.getByLabelText(t('web.bc_media_pick'));
+
+  it('no longer shows the refused file, and tries the same file again when re-picked', async () => {
+    const api = stubApi([
+      { url: `/broadcasts/${ID}`, body: { broadcast: photo() } },
+      OPTIONS,
+      { url: '/audience/preview', method: 'POST', body: preview(1) },
+      {
+        url: `/broadcasts/${ID}/media`,
+        method: 'POST',
+        status: 422,
+        body: {
+          error: {
+            kind: 'validation',
+            code: 'request.invalid',
+            message: 'refused',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const uploads = () =>
+      api.calls.filter((call) => call.method === 'POST' && call.url.endsWith('/media')).length;
+
+    const first = await screen.findByLabelText(t('web.bc_media_pick'));
+    fireEvent.change(first, { target: { files: [file()] } });
+    await waitFor(() => expect(uploads()).toBe(1));
+    await waitFor(() => expect(picker()).not.toBe(first));
+    const card = picker().closest('.file-picker') as HTMLElement;
+    expect(
+      within(card).queryByText('nowruz.jpg'),
+      'the refused file still reads as chosen',
+    ).toBeNull();
+    expect((picker() as HTMLInputElement).files?.length ?? 0).toBe(0);
+
+    fireEvent.change(picker(), { target: { files: [file()] } });
+    await waitFor(() => expect(uploads()).toBe(2));
+  });
+
+  it('clears a file the page itself refused before sending', async () => {
+    const api = stubApi([
+      { url: `/broadcasts/${ID}`, body: { broadcast: photo() } },
+      OPTIONS,
+      { url: '/audience/preview', method: 'POST', body: preview(1) },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const first = await screen.findByLabelText(t('web.bc_media_pick'));
+    fireEvent.change(first, {
+      target: { files: [new File(['x'], 'nowruz.gif', { type: 'image/gif' })] },
+    });
+    expect(await screen.findByText(t('web.bc_error_media_refused'))).toBeInTheDocument();
+    await waitFor(() => expect(picker()).not.toBe(first));
+    const card = picker().closest('.file-picker') as HTMLElement;
+    expect(within(card).queryByText('nowruz.gif')).toBeNull();
+    expect(api.calls.some((call) => call.url.endsWith('/media'))).toBe(false);
   });
 });

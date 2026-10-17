@@ -597,11 +597,13 @@ describe('the dashboard for an operator who is not the owner', () => {
       },
     ]);
     const { container } = renderPage(<DashboardPage permissions={[]} />);
-    await screen.findByText('migrations');
+    // C1: the dependency by its Persian name, the raw name muted in the foot line.
+    await screen.findByText(t('web.readiness_dep_migrations'));
     const text = container.textContent ?? '';
     expect(text.match(/ ms/g) ?? []).toHaveLength(1);
     expect(text).not.toMatch(/(undefined|NaN|null)/);
-    expect(screen.getByText('3 ms')).toBeInTheDocument();
+    expect(screen.getByText('postgres · 3 ms')).toBeInTheDocument();
+    expect(screen.getByText('migrations')).toHaveClass('foot');
   });
 });
 
@@ -700,12 +702,14 @@ describe('the attention card', () => {
           events: [
             event({
               id: 'newer-first-seen',
+              code: 'panel.health.unreachable',
               message: 'Newer condition',
               firstSeenAt: '2026-09-06T08:00:00.000Z',
               lastSeenAt: '2026-09-06T09:00:00.000Z',
             }),
             event({
               id: 'older-first-seen',
+              code: 'backup.run_failed',
               message: 'Older condition',
               firstSeenAt: '2026-09-05T08:00:00.000Z',
               lastSeenAt: '2026-09-06T23:00:00.000Z',
@@ -716,7 +720,13 @@ describe('the attention card', () => {
       },
     ]);
     renderPage(<DashboardPage permissions={['opslog.view']} />);
-    await screen.findByText('Older condition');
+    // W6: each condition by its code's Persian name; the log's English message, which names
+    // WHICH panel or payment it is, is kept only inside the closed «جزئیات فنی» disclosure.
+    await screen.findByText(t('web.opscode_backup_run_failed'));
+    expect(screen.getByText(t('web.opscode_panel_health_unreachable'))).toBeInTheDocument();
+    const message = screen.getByText('Older condition');
+    expect(message.closest('details')).not.toBeNull();
+    expect(message.closest('details')).not.toHaveAttribute('open');
     const shown = screen
       .getAllByTitle(t('web.first_seen'))
       .map((node) => node.textContent ?? '')

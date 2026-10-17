@@ -30,7 +30,7 @@ import {
   updateCustomServiceRule,
   type CustomServiceRuleWriteInput,
 } from '../api/client';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
@@ -53,14 +53,15 @@ import {
   StateSwitch,
   Switch,
   useToast,
-  useDiscardGuard,
-  useReportDirty,
   useUnsavedChanges,
   type Column,
   type Tone,
   Num,
 } from '../ui/kit';
-import { SaveBar, revealField } from './editor-layout';
+import { SaveBar } from './editor-layout';
+import { Drawer } from '../ui/overlays';
+import { useConfirmedClose } from '../ui/unsaved';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The custom service (سرویس دلخواه), Package D (`docs/package-d-custom-service-audit.md`).
@@ -321,10 +322,13 @@ function Locations({
   });
   const rows = locationRows(options.panels, locations.data?.locations ?? []);
 
-  /** The row being edited, or null for the blank form. */
-  const [editing, setEditing] = useState<LocationRow | null>(null);
-  /** Opening another panel's location drops the open form's draft: asked first. */
-  const discard = useDiscardGuard();
+  /**
+   * W3: the location form is a drawer — open on a row (`row`), on a blank form (`row: null`),
+   * or closed (`null`). It is modal, so no other row can replace a draft behind it.
+   */
+  const [editing, setEditing] = useState<{ row: LocationRow | null } | null>(null);
+  // The location form's key outlives its drawer, as the rule form's does.
+  const locationSubmission = useSubmissionKey();
   /** The row whose offer is being withdrawn, while the question is open. */
   const [deleting, setDeleting] = useState<LocationRow | null>(null);
 
@@ -337,7 +341,7 @@ function Locations({
     onSuccess: (_response, panelId) => {
       submission.settle();
       notify({ tone: 'ok', message: t('web.custom_service_location_deleted') });
-      if (editing?.panelId === panelId) setEditing(null);
+      if (editing?.row?.panelId === panelId) setEditing(null);
       void queries.invalidateQueries({ queryKey: ['custom-service-locations'] });
     },
     onError: (error) => submission.settleOn(error),
@@ -372,14 +376,7 @@ function Locations({
               variant="ghost"
               icon={row.location === null ? 'plus' : 'edit'}
               disabled={remove.isPending}
-              onClick={() => {
-                if (editing?.panelId === row.panelId) revealField('custom-location-label');
-                else
-                  discard.confirmDiscard(() => {
-                    setEditing(row);
-                    revealField('custom-location-label');
-                  });
-              }}
+              onClick={() => setEditing({ row })}
             >
               {row.location === null ? t('web.custom_service_location_offer') : t('web.rule_edit')}
             </Button>
@@ -400,10 +397,17 @@ function Locations({
   ];
 
   return (
-    <div className="cb-split">
+    <div className="stack">
       <Card
         title={t('web.custom_service_locations_title')}
         hint={t('web.custom_service_locations_hint')}
+        actions={
+          mayEdit ? (
+            <Button size="sm" icon="plus" onClick={() => setEditing({ row: null })}>
+              {t('web.custom_service_location_form_title')}
+            </Button>
+          ) : undefined
+        }
       >
         <StateSwitch
           query={locations}
@@ -426,7 +430,10 @@ function Locations({
           />
         </StateSwitch>
         {remove.error !== null && (
-          <Banner tone="danger">{customServiceMessage(remove.error)}</Banner>
+          <Banner tone="danger">
+            {customServiceMessage(remove.error)}
+            <ErrorRef error={remove.error} />
+          </Banner>
         )}
       </Card>
 
@@ -435,16 +442,17 @@ function Locations({
           <Banner tone="info">{t('web.custom_service_edit_denied')}</Banner>
         </Card>
       ) : (
-        <LocationForm
-          key={editing?.panelId ?? 'new'}
-          row={editing}
-          options={options}
-          onDone={() => setEditing(null)}
-          onDirtyChange={discard.onDirtyChange}
-        />
+        editing !== null && (
+          <LocationForm
+            key={editing.row?.panelId ?? 'new'}
+            row={editing.row}
+            options={options}
+            onDone={() => setEditing(null)}
+            submission={locationSubmission}
+          />
+        )
       )}
 
-      {discard.dialog}
       {deleting !== null && (
         <ConfirmDialog
           title={deleting.location?.label ?? deleting.panelName ?? deleting.panelId}
@@ -485,17 +493,17 @@ function LocationForm({
   row,
   options,
   onDone,
-  onDirtyChange,
+  submission,
 }: {
   row: LocationRow | null;
   options: PickerOptions;
+  /** Closes the drawer: after a save, or once a close over a draft was agreed to. */
   onDone: () => void;
-  /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
-  onDirtyChange?: (dirty: boolean) => void;
+  /** Held by the section, which outlives the drawer (see `RuleForm`). */
+  submission: SubmissionKey;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
   const blank: LocationFormState = { panelId: row?.panelId ?? '', label: '', enabled: true };
   const loaded: LocationFormState =
     row === null || row.location === null
@@ -504,7 +512,7 @@ function LocationForm({
   const [state, setState] = useState<LocationFormState>(loaded);
   const dirty = JSON.stringify(state) !== JSON.stringify(loaded);
   useUnsavedChanges(dirty);
-  useReportDirty(dirty, onDirtyChange);
+  const { requestClose, dialog } = useConfirmedClose(dirty, onDone);
 
   const checked = locationBodyFrom(state);
   const problem = 'problem' in checked ? checked.problem : null;
@@ -528,81 +536,90 @@ function LocationForm({
   });
 
   return (
-    <Card
-      className="cb-side-form"
-      title={t('web.custom_service_location_form_title')}
-      hint={t('web.custom_service_location_form_hint')}
-      foot={
-        <SaveBar dirty={dirty}>
-          {row !== null && (
-            <Button size="sm" disabled={save.isPending} onClick={onDone}>
-              {t('web.rule_cancel_edit')}
+    <>
+      <Drawer
+        open
+        onClose={requestClose}
+        title={t('web.custom_service_location_form_title')}
+        foot={
+          <SaveBar dirty={dirty}>
+            {row !== null && (
+              <Button size="sm" disabled={save.isPending} onClick={requestClose}>
+                {t('web.rule_cancel_edit')}
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="sm"
+              icon="check"
+              disabled={problem !== null || save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {t('web.rule_save')}
             </Button>
+          </SaveBar>
+        }
+      >
+        <p className="muted small">{t('web.custom_service_location_form_hint')}</p>
+        <Field
+          label={t('web.custom_service_panel')}
+          htmlFor="custom-location-panel"
+          {...(options.panels === null ? { hint: t('web.custom_service_panel_typed_hint') } : {})}
+        >
+          {row !== null ? (
+            <span id="custom-location-panel">
+              <Reference id={row.panelId} name={row.panelName} />
+            </span>
+          ) : options.panels === null ? (
+            <input
+              id="custom-location-panel"
+              dir="ltr"
+              value={state.panelId}
+              onChange={(event) => setState({ ...state, panelId: event.target.value.trim() })}
+            />
+          ) : (
+            <select
+              id="custom-location-panel"
+              value={state.panelId}
+              onChange={(event) => setState({ ...state, panelId: event.target.value })}
+            >
+              <option value="" />
+              {options.panels.map((panel) => (
+                <option key={panel.id} value={panel.id}>
+                  {panel.label}
+                </option>
+              ))}
+            </select>
           )}
-          <Button
-            variant="primary"
-            size="sm"
-            icon="check"
-            disabled={problem !== null || save.isPending}
-            onClick={() => save.mutate()}
-          >
-            {t('web.rule_save')}
-          </Button>
-        </SaveBar>
-      }
-    >
-      <Field
-        label={t('web.custom_service_panel')}
-        htmlFor="custom-location-panel"
-        {...(options.panels === null ? { hint: t('web.custom_service_panel_typed_hint') } : {})}
-      >
-        {row !== null ? (
-          <span id="custom-location-panel">
-            <Reference id={row.panelId} name={row.panelName} />
-          </span>
-        ) : options.panels === null ? (
+        </Field>
+        <Field
+          label={t('web.custom_service_location_label')}
+          hint={t('web.custom_service_location_label_hint')}
+          htmlFor="custom-location-label"
+        >
           <input
-            id="custom-location-panel"
-            dir="ltr"
-            value={state.panelId}
-            onChange={(event) => setState({ ...state, panelId: event.target.value.trim() })}
+            id="custom-location-label"
+            value={state.label}
+            maxLength={CUSTOM_SERVICE_LABEL_MAX_LENGTH}
+            onChange={(event) => setState({ ...state, label: event.target.value })}
           />
-        ) : (
-          <select
-            id="custom-location-panel"
-            value={state.panelId}
-            onChange={(event) => setState({ ...state, panelId: event.target.value })}
-          >
-            <option value="" />
-            {options.panels.map((panel) => (
-              <option key={panel.id} value={panel.id}>
-                {panel.label}
-              </option>
-            ))}
-          </select>
-        )}
-      </Field>
-      <Field
-        label={t('web.custom_service_location_label')}
-        hint={t('web.custom_service_location_label_hint')}
-        htmlFor="custom-location-label"
-      >
-        <input
-          id="custom-location-label"
-          value={state.label}
-          maxLength={CUSTOM_SERVICE_LABEL_MAX_LENGTH}
-          onChange={(event) => setState({ ...state, label: event.target.value })}
+        </Field>
+        <ToggleLine
+          label={t('web.custom_service_enabled')}
+          checked={state.enabled}
+          onChange={(enabled) => setState({ ...state, enabled })}
         />
-      </Field>
-      <ToggleLine
-        label={t('web.custom_service_enabled')}
-        checked={state.enabled}
-        onChange={(enabled) => setState({ ...state, enabled })}
-      />
 
-      {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-      {save.error !== null && <Banner tone="danger">{customServiceMessage(save.error)}</Banner>}
-    </Card>
+        {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
+        {save.error !== null && (
+          <Banner tone="danger">
+            {customServiceMessage(save.error)}
+            <ErrorRef error={save.error} />
+          </Banner>
+        )}
+      </Drawer>
+      {dialog}
+    </>
   );
 }
 
@@ -671,9 +688,10 @@ function Rules({
   });
   const rows = rules.data?.rules ?? [];
 
-  const [editing, setEditing] = useState<CustomServiceRuleSummaryResponse | null>(null);
-  /** Opening another rule drops the open form's draft: asked first. */
-  const discard = useDiscardGuard();
+  /** W3: the rule form is a drawer — a rule (`rule`), a new one (`{}`), or closed (`null`). */
+  const [editing, setEditing] = useState<{ rule?: CustomServiceRuleSummaryResponse } | null>(null);
+  // The rule form's key outlives its drawer (see `RuleForm`'s `submission`).
+  const ruleSubmission = useSubmissionKey();
   /** The rule whose deletion is being asked about. */
   const [deleting, setDeleting] = useState<CustomServiceRuleSummaryResponse | null>(null);
 
@@ -683,7 +701,7 @@ function Rules({
     onSuccess: (_response, id) => {
       submission.settle();
       notify({ tone: 'ok', message: t('web.custom_service_rule_deleted') });
-      if (editing?.id === id) setEditing(null);
+      if (editing?.rule?.id === id) setEditing(null);
       void queries.invalidateQueries({ queryKey: ['custom-service-rules'] });
     },
     onError: (error) => submission.settleOn(error),
@@ -762,14 +780,7 @@ function Rules({
               variant="ghost"
               icon="edit"
               disabled={remove.isPending}
-              onClick={() => {
-                if (editing?.id === row.id) revealField('custom-rule-edit-dimension');
-                else
-                  discard.confirmDiscard(() => {
-                    setEditing(row);
-                    revealField('custom-rule-edit-dimension');
-                  });
-              }}
+              onClick={() => setEditing({ rule: row })}
             >
               {t('web.rule_edit')}
             </Button>
@@ -789,7 +800,17 @@ function Rules({
 
   return (
     <div className="stack">
-      <Card title={t('web.custom_service_rules_title')} hint={t('web.custom_service_rules_hint')}>
+      <Card
+        title={t('web.custom_service_rules_title')}
+        hint={t('web.custom_service_rules_hint')}
+        actions={
+          mayEdit ? (
+            <Button size="sm" icon="plus" onClick={() => setEditing({})}>
+              {t('web.custom_service_rule_new_title')}
+            </Button>
+          ) : undefined
+        }
+      >
         <StateSwitch
           query={rules}
           denied={denied}
@@ -805,7 +826,10 @@ function Rules({
           />
         </StateSwitch>
         {remove.error !== null && (
-          <Banner tone="danger">{customServiceMessage(remove.error)}</Banner>
+          <Banner tone="danger">
+            {customServiceMessage(remove.error)}
+            <ErrorRef error={remove.error} />
+          </Banner>
         )}
       </Card>
 
@@ -813,23 +837,18 @@ function Rules({
         <Card title={t('web.custom_service_rule_new_title')}>
           <Banner tone="info">{t('web.custom_service_edit_denied')}</Banner>
         </Card>
-      ) : editing !== null ? (
+      ) : editing === null ? null : editing.rule !== undefined ? (
         <RuleForm
-          key={editing.id}
-          rule={editing}
+          key={editing.rule.id}
+          rule={editing.rule}
           options={options}
           onDone={() => setEditing(null)}
-          onDirtyChange={discard.onDirtyChange}
+          submission={ruleSubmission}
         />
       ) : (
-        <RuleForm
-          options={options}
-          onDone={() => undefined}
-          onDirtyChange={discard.onDirtyChange}
-        />
+        <RuleForm options={options} onDone={() => setEditing(null)} submission={ruleSubmission} />
       )}
 
-      {discard.dialog}
       {deleting !== null && (
         <ConfirmDialog
           title={deleting.label ?? t(DIMENSION_LABELS[deleting.dimension])}
@@ -968,26 +987,29 @@ function RuleForm({
   rule,
   options,
   onDone,
-  onDirtyChange,
+  submission,
 }: {
   rule?: CustomServiceRuleSummaryResponse;
   options: PickerOptions;
+  /** Closes the drawer: after a save, or once a close over a draft was agreed to. */
   onDone: () => void;
-  /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
-  onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Held by the section, which outlives the drawer: a key kept after an unanswered failure
+   * must survive closing and reopening it, or the retry creates a second rule.
+   */
+  submission: SubmissionKey;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `custom-rule-${mode}`;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
   const [state, setState] = useState<RuleFormState>(
     rule === undefined ? BLANK_RULE : ruleStateOf(rule),
   );
   const dirty =
     JSON.stringify(state) !== JSON.stringify(rule === undefined ? BLANK_RULE : ruleStateOf(rule));
   useUnsavedChanges(dirty);
-  useReportDirty(dirty, onDirtyChange);
+  const { requestClose, dialog } = useConfirmedClose(dirty, onDone);
   const set = <K extends keyof RuleFormState>(key: K, value: RuleFormState[K]) =>
     setState({ ...state, [key]: value });
 
@@ -1021,204 +1043,223 @@ function RuleForm({
   const volume = state.dimension === 'VOLUME';
 
   return (
-    <Card
-      title={
-        mode === 'create'
-          ? t('web.custom_service_rule_new_title')
-          : t('web.custom_service_rule_edit_title')
-      }
-      foot={
-        <SaveBar dirty={dirty}>
-          {mode === 'edit' && (
-            <Button size="sm" disabled={save.isPending} onClick={onDone}>
-              {t('web.rule_cancel_edit')}
+    <>
+      <Drawer
+        open
+        wide
+        onClose={requestClose}
+        title={
+          mode === 'create'
+            ? t('web.custom_service_rule_new_title')
+            : t('web.custom_service_rule_edit_title')
+        }
+        foot={
+          <SaveBar dirty={dirty}>
+            {mode === 'edit' && (
+              <Button size="sm" disabled={save.isPending} onClick={requestClose}>
+                {t('web.rule_cancel_edit')}
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="sm"
+              icon="check"
+              disabled={problem !== null || save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {mode === 'create' ? t('web.custom_service_rule_create') : t('web.rule_save')}
             </Button>
-          )}
-          <Button
-            variant="primary"
-            size="sm"
-            icon="check"
-            disabled={problem !== null || save.isPending}
-            onClick={() => save.mutate()}
-          >
-            {mode === 'create' ? t('web.custom_service_rule_create') : t('web.rule_save')}
-          </Button>
-        </SaveBar>
-      }
-    >
-      <div className="form-grid c3">
-        <Field label={t('web.custom_service_dimension')} htmlFor={`${prefix}-dimension`}>
-          <select
-            id={`${prefix}-dimension`}
-            value={state.dimension}
-            onChange={(event) => set('dimension', event.target.value as CustomServiceRuleDimension)}
-          >
-            {CUSTOM_SERVICE_RULE_DIMENSIONS.map((dimension) => (
-              <option key={dimension} value={dimension}>
-                {t(DIMENSION_LABELS[dimension])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field
-          label={t('web.rule_label')}
-          hint={t('web.custom_service_rule_label_hint')}
-          htmlFor={`${prefix}-label`}
-        >
-          <input
-            id={`${prefix}-label`}
-            value={state.label}
-            maxLength={CUSTOM_SERVICE_LABEL_MAX_LENGTH}
-            onChange={(event) => set('label', event.target.value)}
-          />
-        </Field>
-        <Field
-          label={volume ? t('web.custom_service_minimum_gb') : t('web.custom_service_minimum_days')}
-          hint={
-            volume ? t('web.custom_service_bound_gb_hint') : t('web.custom_service_bound_days_hint')
-          }
-          htmlFor={`${prefix}-minimum`}
-        >
-          <input
-            id={`${prefix}-minimum`}
-            dir="ltr"
-            inputMode={volume ? 'decimal' : 'numeric'}
-            value={state.minimum}
-            onChange={(event) => set('minimum', event.target.value.trim())}
-          />
-        </Field>
-        <Field
-          label={volume ? t('web.custom_service_maximum_gb') : t('web.custom_service_maximum_days')}
-          htmlFor={`${prefix}-maximum`}
-        >
-          <input
-            id={`${prefix}-maximum`}
-            dir="ltr"
-            inputMode={volume ? 'decimal' : 'numeric'}
-            value={state.maximum}
-            onChange={(event) => set('maximum', event.target.value.trim())}
-          />
-        </Field>
-        <Field
-          label={
-            volume ? t('web.custom_service_price_per_gb') : t('web.custom_service_price_per_day')
-          }
-          hint={t('web.custom_service_price_hint')}
-          htmlFor={`${prefix}-price`}
-        >
-          <input
-            id={`${prefix}-price`}
-            dir="ltr"
-            inputMode="numeric"
-            value={state.price}
-            onChange={(event) => set('price', event.target.value.trim())}
-          />
-        </Field>
-
-        <Field
-          label={t('web.custom_service_audience')}
-          hint={t('web.custom_service_audience_hint')}
-          htmlFor={`${prefix}-audience`}
-        >
-          <select
-            id={`${prefix}-audience`}
-            value={state.audience}
-            onChange={(event) => set('audience', event.target.value as AudienceKind)}
-          >
-            <option value="ORDINARY">{t('web.custom_service_audience_ordinary')}</option>
-            <option value="TIER">{t('web.custom_service_audience_tier')}</option>
-            <option value="CUSTOMER">{t('web.custom_service_audience_customer')}</option>
-          </select>
-        </Field>
-        {state.audience === 'TIER' && (
+          </SaveBar>
+        }
+      >
+        <div className="form-grid c3">
+          <Field label={t('web.custom_service_dimension')} htmlFor={`${prefix}-dimension`}>
+            <select
+              id={`${prefix}-dimension`}
+              value={state.dimension}
+              onChange={(event) =>
+                set('dimension', event.target.value as CustomServiceRuleDimension)
+              }
+            >
+              {CUSTOM_SERVICE_RULE_DIMENSIONS.map((dimension) => (
+                <option key={dimension} value={dimension}>
+                  {t(DIMENSION_LABELS[dimension])}
+                </option>
+              ))}
+            </select>
+          </Field>
           <Field
-            label={t('web.custom_service_audience_tier')}
-            htmlFor={`${prefix}-tier`}
-            {...(options.tiers === null ? { hint: t('web.custom_service_tier_typed_hint') } : {})}
+            label={t('web.rule_label')}
+            hint={t('web.custom_service_rule_label_hint')}
+            htmlFor={`${prefix}-label`}
           >
-            {options.tiers === null ? (
+            <input
+              id={`${prefix}-label`}
+              value={state.label}
+              maxLength={CUSTOM_SERVICE_LABEL_MAX_LENGTH}
+              onChange={(event) => set('label', event.target.value)}
+            />
+          </Field>
+          <Field
+            label={
+              volume ? t('web.custom_service_minimum_gb') : t('web.custom_service_minimum_days')
+            }
+            hint={
+              volume
+                ? t('web.custom_service_bound_gb_hint')
+                : t('web.custom_service_bound_days_hint')
+            }
+            htmlFor={`${prefix}-minimum`}
+          >
+            <input
+              id={`${prefix}-minimum`}
+              dir="ltr"
+              inputMode={volume ? 'decimal' : 'numeric'}
+              value={state.minimum}
+              onChange={(event) => set('minimum', event.target.value.trim())}
+            />
+          </Field>
+          <Field
+            label={
+              volume ? t('web.custom_service_maximum_gb') : t('web.custom_service_maximum_days')
+            }
+            htmlFor={`${prefix}-maximum`}
+          >
+            <input
+              id={`${prefix}-maximum`}
+              dir="ltr"
+              inputMode={volume ? 'decimal' : 'numeric'}
+              value={state.maximum}
+              onChange={(event) => set('maximum', event.target.value.trim())}
+            />
+          </Field>
+          <Field
+            label={
+              volume ? t('web.custom_service_price_per_gb') : t('web.custom_service_price_per_day')
+            }
+            hint={t('web.custom_service_price_hint')}
+            htmlFor={`${prefix}-price`}
+          >
+            <input
+              id={`${prefix}-price`}
+              dir="ltr"
+              inputMode="numeric"
+              value={state.price}
+              onChange={(event) => set('price', event.target.value.trim())}
+            />
+          </Field>
+
+          <Field
+            label={t('web.custom_service_audience')}
+            hint={t('web.custom_service_audience_hint')}
+            htmlFor={`${prefix}-audience`}
+          >
+            <select
+              id={`${prefix}-audience`}
+              value={state.audience}
+              onChange={(event) => set('audience', event.target.value as AudienceKind)}
+            >
+              <option value="ORDINARY">{t('web.custom_service_audience_ordinary')}</option>
+              <option value="TIER">{t('web.custom_service_audience_tier')}</option>
+              <option value="CUSTOMER">{t('web.custom_service_audience_customer')}</option>
+            </select>
+          </Field>
+          {state.audience === 'TIER' && (
+            <Field
+              label={t('web.custom_service_audience_tier')}
+              htmlFor={`${prefix}-tier`}
+              {...(options.tiers === null ? { hint: t('web.custom_service_tier_typed_hint') } : {})}
+            >
+              {options.tiers === null ? (
+                <input
+                  id={`${prefix}-tier`}
+                  dir="ltr"
+                  value={state.tierId}
+                  onChange={(event) => set('tierId', event.target.value.trim())}
+                />
+              ) : (
+                <select
+                  id={`${prefix}-tier`}
+                  value={state.tierId}
+                  onChange={(event) => set('tierId', event.target.value)}
+                >
+                  <option value="" />
+                  {options.tiers.map((tier) => (
+                    <option key={tier.id} value={tier.id}>
+                      {tier.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          )}
+          {state.audience === 'CUSTOMER' && (
+            <Field
+              label={t('web.custom_service_customer_id')}
+              hint={t('web.custom_service_customer_id_hint')}
+              htmlFor={`${prefix}-customer`}
+            >
               <input
-                id={`${prefix}-tier`}
+                id={`${prefix}-customer`}
                 dir="ltr"
-                value={state.tierId}
-                onChange={(event) => set('tierId', event.target.value.trim())}
+                value={state.customerId}
+                onChange={(event) => set('customerId', event.target.value.trim())}
+              />
+            </Field>
+          )}
+
+          <Field
+            label={t('web.custom_service_panel')}
+            htmlFor={`${prefix}-panel`}
+            hint={
+              options.panels === null
+                ? t('web.custom_service_rule_panel_typed_hint')
+                : t('web.custom_service_rule_panel_hint')
+            }
+          >
+            {options.panels === null ? (
+              <input
+                id={`${prefix}-panel`}
+                dir="ltr"
+                value={state.panelId}
+                onChange={(event) => set('panelId', event.target.value.trim())}
               />
             ) : (
               <select
-                id={`${prefix}-tier`}
-                value={state.tierId}
-                onChange={(event) => set('tierId', event.target.value)}
+                id={`${prefix}-panel`}
+                value={state.panelId}
+                onChange={(event) => set('panelId', event.target.value)}
               >
-                <option value="" />
-                {options.tiers.map((tier) => (
-                  <option key={tier.id} value={tier.id}>
-                    {tier.label}
+                <option value="">{t('web.custom_service_all_panels')}</option>
+                {options.panels.map((panel) => (
+                  <option key={panel.id} value={panel.id}>
+                    {panel.label}
                   </option>
                 ))}
+                {/* A rule may name a panel the list no longer returns; keep it choosable. */}
+                {state.panelId !== '' &&
+                  !options.panels.some((panel) => panel.id === state.panelId) && (
+                    <option value={state.panelId}>{state.panelId}</option>
+                  )}
               </select>
             )}
           </Field>
-        )}
-        {state.audience === 'CUSTOMER' && (
-          <Field
-            label={t('web.custom_service_customer_id')}
-            hint={t('web.custom_service_customer_id_hint')}
-            htmlFor={`${prefix}-customer`}
-          >
-            <input
-              id={`${prefix}-customer`}
-              dir="ltr"
-              value={state.customerId}
-              onChange={(event) => set('customerId', event.target.value.trim())}
-            />
-          </Field>
-        )}
+        </div>
+        <ToggleLine
+          label={t('web.custom_service_enabled')}
+          checked={state.enabled}
+          onChange={(enabled) => set('enabled', enabled)}
+        />
 
-        <Field
-          label={t('web.custom_service_panel')}
-          htmlFor={`${prefix}-panel`}
-          hint={
-            options.panels === null
-              ? t('web.custom_service_rule_panel_typed_hint')
-              : t('web.custom_service_rule_panel_hint')
-          }
-        >
-          {options.panels === null ? (
-            <input
-              id={`${prefix}-panel`}
-              dir="ltr"
-              value={state.panelId}
-              onChange={(event) => set('panelId', event.target.value.trim())}
-            />
-          ) : (
-            <select
-              id={`${prefix}-panel`}
-              value={state.panelId}
-              onChange={(event) => set('panelId', event.target.value)}
-            >
-              <option value="">{t('web.custom_service_all_panels')}</option>
-              {options.panels.map((panel) => (
-                <option key={panel.id} value={panel.id}>
-                  {panel.label}
-                </option>
-              ))}
-              {/* A rule may name a panel the list no longer returns; keep it choosable. */}
-              {state.panelId !== '' &&
-                !options.panels.some((panel) => panel.id === state.panelId) && (
-                  <option value={state.panelId}>{state.panelId}</option>
-                )}
-            </select>
-          )}
-        </Field>
-      </div>
-      <ToggleLine
-        label={t('web.custom_service_enabled')}
-        checked={state.enabled}
-        onChange={(enabled) => set('enabled', enabled)}
-      />
-
-      {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-      {save.error !== null && <Banner tone="danger">{customServiceMessage(save.error)}</Banner>}
-    </Card>
+        {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
+        {save.error !== null && (
+          <Banner tone="danger">
+            {customServiceMessage(save.error)}
+            <ErrorRef error={save.error} />
+          </Banner>
+        )}
+      </Drawer>
+      {dialog}
+    </>
   );
 }

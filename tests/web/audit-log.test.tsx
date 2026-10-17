@@ -81,6 +81,11 @@ describe('the audit log page', () => {
     ).toBe(`/users/${CUSTOMER_ID}`);
     // Exactly one order link: the unlinked row draws none, whatever its entity type says.
     expect(screen.getAllByRole('link', { name: t('web.audit_link_order') })).toHaveLength(1);
+    // W5: a known action reads as «subject — verb», the raw code in its tooltip; an unknown
+    // one (`wallet` is no subject the page names) stays raw.
+    const named = screen.getByText(`${t('web.audit_subj_order')} — ${t('web.audit_verb_confirm')}`);
+    expect(named).toHaveAttribute('title', 'order.confirm');
+    expect(screen.queryByText('order.confirm')).toBeNull();
     const refused = screen.getByText('wallet.debit').closest('tr') as HTMLElement;
     expect(within(refused).getByText(t('web.history_result_denied'))).toBeTruthy();
     expect(within(refused).getByText(t('web.audit_security_critical'))).toBeTruthy();
@@ -113,7 +118,7 @@ describe('the audit log page', () => {
     expect(params.get('security')).toBe('CRITICAL');
     expect(params.get('from')).toBe(dayStart('2026-09-01'));
     expect(params.get('to')).toBe(dayEnd('2026-09-10'));
-    expect(params.get('limit')).toBe('50');
+    expect(params.get('limit')).toBe('10');
 
     // The export is the SAME filter object: the file holds the rows these pages show.
     const exportLink = screen.getByRole('link', { name: t('web.audit_export_csv') });
@@ -151,7 +156,7 @@ describe('the audit log page', () => {
     ]);
     renderPage(<AuditLogPage route={route()} denied={false} mayExport={false} />);
     await screen.findByRole('link', { name: t('web.audit_link_order') });
-    fireEvent.click(screen.getByRole('button', { name: t('web.older') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() =>
       expect(api.calls.some((c) => c.url.includes('cursor=CURSOR-1'))).toBe(true),
     );

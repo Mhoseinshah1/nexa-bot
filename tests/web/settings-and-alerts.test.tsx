@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { AlertsPage } from '../../apps/web/src/pages/alerts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { event, renderPage, setting, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
+import { openSettingsGroupOf } from './settings-tabs';
 import { MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
@@ -29,6 +31,7 @@ describe('the settings screen', () => {
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
 
+    await openSettingsGroupOf('support.accounts');
     await screen.findByRole('heading', { name: t('web.setting_support_accounts') });
     // One label per row, distinguished by its position: three identically
     // labelled fields are indistinguishable to a screen reader.
@@ -175,6 +178,7 @@ describe('the settings screen', () => {
       ]),
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('wallet.topup.minimum');
     await screen.findByRole('heading', { name: t('web.setting_topup_minimum') });
 
     const select = screen.getByLabelText('واحد پول — کمینهٔ شارژ کیف پول') as HTMLSelectElement;
@@ -195,6 +199,7 @@ describe('the settings screen', () => {
       ]),
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('referral.minimum_order_amount');
     await screen.findByRole('heading', { name: t('web.setting_referral_minimum_order_amount') });
     const select = screen.getByLabelText(
       `${t('web.currency')} — ${t('web.setting_referral_minimum_order_amount')}`,
@@ -236,7 +241,7 @@ describe('the settings screen', () => {
     await screen.findByRole('heading', { name: t('web.setting_sales_currency') });
 
     // Exactly one of the two rows carries the warning.
-    expect(screen.getAllByText(/چیزی آن را نمی‌خواند/)).toHaveLength(1);
+    expect(screen.getAllByText(t('web.setting_no_consumer_note'))).toHaveLength(1);
   });
 
   it('offers no save control without the edit permission', async () => {
@@ -386,7 +391,7 @@ describe('management alerts', () => {
     ]);
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('Roles changed.');
-    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
     await waitFor(() => {
       expect(api.calls.filter((call) => call.url.includes('before=')).length).toBeGreaterThan(0);
     });
@@ -504,7 +509,7 @@ describe('management alerts', () => {
     expect(screen.queryByRole('button', { name: 'تازه‌سازی' })).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'حل‌نشده' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
     // Nothing on the page can have asked the server anything.
     expect(api.calls).toHaveLength(0);
   });
@@ -522,6 +527,7 @@ describe('management alerts', () => {
     const api = stubApi([route]);
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('Roles changed.');
+    openFilterPanel();
     expect(screen.getByRole('combobox')).toBeInTheDocument();
 
     route.status = 403;
@@ -641,8 +647,8 @@ describe('management alerts', () => {
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText(t('web.no_permission'));
 
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'قبلی' })).toBeNull();
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
@@ -663,7 +669,7 @@ describe('management alerts', () => {
     rerender(<AlertsPage denied />);
 
     expect(screen.queryByText('نمایش')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
   });
 
   it('draws no pager before the first page of alerts has arrived', () => {
@@ -679,9 +685,9 @@ describe('management alerts', () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
     // The page defaults to HISTORY, so this is the filtered emptiness.
-    await screen.findByText(t('web.alerts_empty_filtered'));
+    await screen.findByText(t('web.alerts_empty_filter'));
     expect(screen.getByText('نمایش')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'قبلی' })).toBeInTheDocument();
   });
 
   it('asks the server for the management scope', async () => {
@@ -722,12 +728,14 @@ describe('management alerts', () => {
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('first page');
 
-    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('beforeId='))).toBe(true);
     });
 
-    fireEvent.change(screen.getByLabelText('شدت'), { target: { value: 'ERROR' } });
+    fireEvent.change(within(openFilterPanel()).getByLabelText('شدت'), {
+      target: { value: 'ERROR' },
+    });
     await waitFor(() => {
       expect(api.calls.at(-1)?.url).toContain('severity=ERROR');
     });
@@ -740,22 +748,22 @@ describe('management alerts', () => {
     // The cursor is the server's, not a guess from the last row on screen. The
     // reader over-fetches one row and hands back the pair it actually stopped
     // at, so the browser never has to reconstruct it.
-    const full = Array.from({ length: 25 }, (_, index) =>
+    const full = Array.from({ length: 10 }, (_, index) =>
       event({ id: `e${index}`, lastSeenAt: `2026-09-06T08:00:0${index % 10}.000Z` }),
     );
     const api = stubApi([
       {
         url: '/ops-log',
-        body: { events: full, nextCursor: { at: '2026-09-06T08:00:04.000Z', id: 'e24' } },
+        body: { events: full, nextCursor: { at: '2026-09-06T08:00:04.000Z', id: 'e9' } },
       },
     ]);
     renderPage(<AlertsPage denied={false} />);
     await screen.findAllByText('Roles changed.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
     await waitFor(() => {
       const paged = api.calls.find((call) => call.url.includes('beforeId'));
-      expect(paged?.url).toContain('beforeId=e24');
+      expect(paged?.url).toContain('beforeId=e9');
       // Both halves of the cursor: `firstSeenAt` alone is not unique, and a
       // strict comparison on it skips the tail of a group that straddles a page.
       expect(paged?.url).toContain('before=2026-09-06T08%3A00%3A04.000Z');
@@ -776,17 +784,17 @@ describe('management alerts', () => {
    * the server, and a full-but-final page reports `nextCursor: null`.
    */
   it('offers no older page on a FULL page the server reports as the last one', async () => {
-    const full = Array.from({ length: 25 }, (_, index) =>
+    const full = Array.from({ length: 10 }, (_, index) =>
       event({ id: `e${index}`, lastSeenAt: `2026-09-06T08:00:0${index % 10}.000Z` }),
     );
     const api = stubApi([{ url: '/ops-log', body: { events: full, nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
     await screen.findAllByText('Roles changed.');
 
-    // A page-length comparison would have enabled this: 25 rows, limit 25.
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
+    // A page-length comparison would have enabled this: 10 rows, limit 10.
+    expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
     // And it asked for a bounded page, which is what makes the case reachable.
-    expect(api.calls[0]?.url).toContain('limit=25');
+    expect(api.calls[0]?.url).toContain('limit=10');
   });
 
   it('offers no older page when the page came back short', async () => {
@@ -794,8 +802,8 @@ describe('management alerts', () => {
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('Roles changed.');
 
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
-    expect(api.calls[0]?.url).toContain('limit=25');
+    expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
+    expect(api.calls[0]?.url).toContain('limit=10');
   });
 
   /**
@@ -910,8 +918,9 @@ describe('management alerts', () => {
   it('says plainly that it is not the operational history', async () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
-    expect(await screen.findByText('این صفحه تاریخچهٔ عملیاتی نیست')).toBeInTheDocument();
-    expect(screen.getByText(/گروه گزارش تلگرام/)).toBeInTheDocument();
+    expect(await screen.findByText(/گروه گزارش تلگرام/)).toBeInTheDocument();
+    // W5: the banner keeps its body and drops the meta title.
+    expect(screen.queryByText('این صفحه تاریخچهٔ عملیاتی نیست')).toBeNull();
   });
 
   /**
@@ -931,11 +940,11 @@ describe('management alerts', () => {
     // ask whether anything is open. This assertion used to name the open-alert
     // copy, which pinned the wrong string in place: the page said "there is no
     // open alert" over a view that had not asked the question.
-    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+    await screen.findByText(t('web.alerts_empty_filter'));
     expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
     expect(api.calls[0]?.url).not.toContain('open=');
 
-    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('open=true'))).toBe(true);
     });
@@ -951,12 +960,12 @@ describe('management alerts', () => {
   it('claims that nothing is open only from the unfiltered open view', async () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
-    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+    await screen.findByText(t('web.alerts_empty_filter'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     // Now it has asked, so now it may answer.
     await screen.findByText('هشدار بازی وجود ندارد.');
-    expect(screen.queryByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeNull();
+    expect(screen.queryByText(t('web.alerts_empty_filter'))).toBeNull();
   });
 
   /**
@@ -971,16 +980,18 @@ describe('management alerts', () => {
   it('does not deny that anything is open when a severity filter emptied the page', async () => {
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
-    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
-    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    await screen.findByText(t('web.alerts_empty_filter'));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     await screen.findByText('هشدار بازی وجود ندارد.');
 
-    fireEvent.change(screen.getByLabelText('شدت'), { target: { value: 'ERROR' } });
+    fireEvent.change(within(openFilterPanel()).getByLabelText('شدت'), {
+      target: { value: 'ERROR' },
+    });
 
     // `findBy`, not `getBy`: the filter change refetches, and asserting during
     // the skeleton would pass for any implementation — the strong copy is
     // absent while loading too.
-    expect(await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeInTheDocument();
+    expect(await screen.findByText(t('web.alerts_empty_filter'))).toBeInTheDocument();
     expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
   });
 
@@ -1006,14 +1017,15 @@ describe('management alerts', () => {
       },
     ]);
     renderPage(<AlertsPage denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'باز' }));
+    await screen.findByText('A budget filled up.');
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     await screen.findByText('A budget filled up.');
 
     // Page two, and by then the condition has been resolved elsewhere.
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
-    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
 
-    expect(await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeInTheDocument();
+    expect(await screen.findByText(t('web.alerts_empty_filter'))).toBeInTheDocument();
     expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
   });
 
@@ -1065,13 +1077,13 @@ describe('management alerts', () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
     // The default view is history, so this is the filtered empty state.
-    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+    await screen.findByText(t('web.alerts_empty_filter'));
 
     const scopeOf = (url: string) =>
       new URL(url, 'https://admin.example.test').searchParams.get('scope');
     expect(scopeOf(api.calls[0]?.url ?? '')).toBe('MANAGEMENT');
 
-    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'باز' }));
     await waitFor(() => {
       const open = api.calls.find((call) => call.url.includes('open=true'));
       expect(open, 'no open request was made').toBeDefined();
@@ -1082,7 +1094,7 @@ describe('management alerts', () => {
 
     // ...and going back to history restores the wide scope, so the narrowing
     // is a filter rather than a one-way door.
-    fireEvent.click(screen.getByRole('button', { name: 'همه' }));
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'همه' }));
     await waitFor(() => {
       const last = api.calls[api.calls.length - 1];
       expect(scopeOf(last?.url ?? '')).toBe('MANAGEMENT');
@@ -1191,8 +1203,7 @@ describe('system and operations', () => {
     vi.useRealTimers();
   });
 
-  /** Owner revision 25 — the general logs surface does not exist. */
-  it('has no logs page, and says its absence is a decision', async () => {
+  it('draws the ops-group link only for an administrator who may open that page', async () => {
     stubApi([
       { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
       {
@@ -1208,8 +1219,42 @@ describe('system and operations', () => {
       },
     ]);
     renderPage(<SystemPage route={route} permissions={['panels.view', 'admins.view']} />);
+    expect(await screen.findByText(t('web.system_logs_title'))).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: t('web.nav_ops_group') })).toBeNull();
+  });
 
-    expect(await screen.findByText('صفحهٔ لاگ عمومی وجود ندارد')).toBeInTheDocument();
+  /** Owner revision 25 — the general logs surface does not exist. */
+  it('has no logs page and no commit, and points the operational stream at the ops group', async () => {
+    stubApi([
+      { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
+      {
+        url: '/health/info',
+        body: {
+          name: 'nexa',
+          version: '1.0.0',
+          commit: 'abc123',
+          buildTime: '2026-09-06T00:00:00.000Z',
+          nodeVersion: 'v22.11.0',
+          environment: 'production',
+        },
+      },
+    ]);
+    renderPage(
+      <SystemPage route={route} permissions={['panels.view', 'admins.view', 'settings.view']} />,
+    );
+
+    expect(await screen.findByText(t('web.system_logs_title'))).toBeInTheDocument();
+    // W5: the meta note («… این یک تصمیم است») and the commit are gone; the build info keeps
+    // the version and the environment.
+    expect(
+      screen.queryByText(/* former web.system_logs_absent */ 'صفحهٔ لاگ عمومی وجود ندارد'),
+    ).toBeNull();
+    expect(screen.queryByText(/* former web.commit */ 'کامیت')).toBeNull();
+    expect(screen.queryByText(/abc123/)).toBeNull();
+    expect(screen.getByRole('link', { name: t('web.nav_ops_group') })).toHaveAttribute(
+      'href',
+      '/ops-group',
+    );
     // No tab leads to one, and nothing on the page is a log browser.
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
     // WP16's diagnostics tab is a queue of stuck work, not a log browser: it reads

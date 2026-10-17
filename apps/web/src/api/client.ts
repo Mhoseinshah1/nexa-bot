@@ -908,10 +908,21 @@ export class ApiError extends Error {
      * valid" and no way to see which of their placeholders was wrong.
      */
     readonly details?: Record<string, unknown>,
+    /**
+     * The server's error class (`VALIDATION`, `CONFLICT`, …) and the request's correlation
+     * id. Absent when the response did not carry an error body. The correlation id is shown
+     * small beside the Persian sentence, so support can find the log entry.
+     */
+    meta: { readonly kind?: string; readonly correlationId?: string } = {},
   ) {
     super(message);
     this.name = 'ApiError';
+    this.kind = meta.kind ?? null;
+    this.correlationId = meta.correlationId ?? null;
   }
+
+  readonly kind: string | null;
+  readonly correlationId: string | null;
 }
 
 function toApiError(status: number, payload: unknown): ApiError {
@@ -922,9 +933,12 @@ function toApiError(status: number, payload: unknown): ApiError {
       parsed.data.error.code,
       parsed.data.error.message,
       parsed.data.error.details,
+      { kind: parsed.data.error.kind, correlationId: parsed.data.error.correlationId },
     );
   }
-  return new ApiError(status, 'unknown', `Request failed with ${status}`);
+  // No error body to read. The message is for a log, never for an operator: `errorText`
+  // chooses the Persian sentence by this status.
+  return new ApiError(status, 'unknown', `HTTP ${status}`);
 }
 
 /**
@@ -2750,9 +2764,10 @@ export function testPanel(input: {
  * `panels.view`; the server computes every figure, this only carries them.
  */
 export function fetchPanelHealth(
-  query: { cursor?: string } = {},
+  query: { cursor?: string; limit?: number } = {},
 ): Promise<PanelHealthDashboardResponse> {
   const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   const suffix = params.toString();
   return authedGet(
@@ -3666,15 +3681,14 @@ export function fetchResellerCredit(customerId: string): Promise<ResellerCreditR
 
 export function fetchResellerPurchases(
   customerId: string,
-  query: { cursor?: string } = {},
+  query: { cursor?: string; limit?: number } = {},
 ): Promise<ResellerPurchasePage> {
   const path = RESELLER_ROUTES.purchases(customerId);
-  return authedGet(
-    query.cursor === undefined || query.cursor === ''
-      ? path
-      : `${path}?cursor=${encodeURIComponent(query.cursor)}`,
-    resellerPurchasePageSchema,
-  );
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(suffix ? `${path}?${suffix}` : path, resellerPurchasePageSchema);
 }
 
 export function fetchResellerHistory(customerId: string): Promise<ResellerHistoryResponse> {
@@ -4726,7 +4740,9 @@ function paged(base: string, query: Record<string, string | number | undefined>)
   return suffix ? `${base}?${suffix}` : base;
 }
 
-export function fetchBroadcasts(query: { cursor?: string } = {}): Promise<BroadcastListResponse> {
+export function fetchBroadcasts(
+  query: { cursor?: string; limit?: number } = {},
+): Promise<BroadcastListResponse> {
   return authedGet(paged(BROADCAST_ROUTES.list, query), broadcastListResponseSchema);
 }
 
@@ -4736,7 +4752,7 @@ export function fetchBroadcast(id: string): Promise<BroadcastResponse> {
 
 export function fetchBroadcastRecipients(
   id: string,
-  query: { state?: string; cursor?: string } = {},
+  query: { state?: string; cursor?: string; limit?: number } = {},
 ): Promise<BroadcastRecipientListResponse> {
   return authedGet(
     paged(BROADCAST_ROUTES.recipients(id), query),
@@ -4827,7 +4843,7 @@ export function steerBroadcast(
 }
 
 export function fetchBulkOperations(
-  query: { cursor?: string } = {},
+  query: { cursor?: string; limit?: number } = {},
 ): Promise<BulkOperationListResponse> {
   return authedGet(paged(BULK_OPERATION_ROUTES.list, query), bulkOperationListResponseSchema);
 }
@@ -4838,7 +4854,7 @@ export function fetchBulkOperation(id: string): Promise<BulkOperationResponse> {
 
 export function fetchBulkItems(
   id: string,
-  query: { state?: string; cursor?: string } = {},
+  query: { state?: string; cursor?: string; limit?: number } = {},
 ): Promise<BulkItemListResponse> {
   return authedGet(paged(BULK_OPERATION_ROUTES.items(id), query), bulkItemListResponseSchema);
 }
@@ -5050,8 +5066,10 @@ export function fetchInbox(filters: {
   unread?: boolean;
   category?: NotificationCategory;
   cursor?: { readonly at: string; readonly id: string };
+  limit?: number;
 }): Promise<InboxListResponse> {
   const params = new URLSearchParams();
+  if (filters.limit !== undefined) params.set('limit', String(filters.limit));
   if (filters.unread === true) params.set('unread', 'true');
   if (filters.category !== undefined) params.set('category', filters.category);
   if (filters.cursor !== undefined) {
@@ -5218,12 +5236,14 @@ export function removeCustomerTag(
 export function fetchCustomerNotes(
   customerId: string,
   cursor?: string,
+  limit?: number,
 ): Promise<CustomerNoteListResponse> {
   const path = CUSTOMER_CRM_ROUTES.customerNotes(customerId);
-  return authedGet(
-    cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
-    customerNoteListResponseSchema,
-  );
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set('limit', String(limit));
+  if (cursor !== undefined) params.set('cursor', cursor);
+  const search = params.toString();
+  return authedGet(search === '' ? path : `${path}?${search}`, customerNoteListResponseSchema);
 }
 
 export function addCustomerNote(
@@ -5310,9 +5330,11 @@ export function fetchLegacyProductReviews(
     readonly attention?: true;
     readonly q?: string;
     readonly after?: string;
+    readonly limit?: number;
   } = {},
 ): Promise<LegacyProductReviewListResponse> {
   const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.state !== undefined) params.set('state', query.state);
   if (query.attention === true) params.set('attention', 'true');
   if (query.q !== undefined && query.q.trim() !== '') params.set('q', query.q.trim());
@@ -5378,6 +5400,8 @@ export interface LegacyInvoiceArchiveQuery {
   readonly classification?: LegacyInvoiceArchiveClass;
   readonly test?: 'true' | 'false';
   readonly after?: string;
+  /** The page size (W1.8). */
+  readonly limit?: number;
 }
 
 /**
@@ -5393,6 +5417,8 @@ export function fetchLegacyInvoices(
   // compared as typed, spaces included (`queryOf` decides what is trimmed). Empty is no filter.
   for (const [name, value] of Object.entries(query)) {
     if (typeof value === 'string' && value !== '') params.set(name, value);
+    // The page size (W1.8), the one number the query carries.
+    if (typeof value === 'number') params.set(name, String(value));
   }
   const suffix = params.toString();
   return authedGet(
@@ -5429,9 +5455,11 @@ export function fetchLegacyDebts(
     readonly state?: LegacyWalletDebtState;
     readonly legacyUserId?: string;
     readonly after?: string;
+    readonly limit?: number;
   } = {},
 ): Promise<LegacyWalletDebtListResponse> {
   const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.state !== undefined) params.set('state', query.state);
   if (query.legacyUserId !== undefined && query.legacyUserId.trim() !== '') {
     params.set('legacyUserId', query.legacyUserId.trim());
@@ -5480,9 +5508,11 @@ export function fetchLegacyServices(
     readonly productCode?: string;
     readonly invoiceId?: string;
     readonly after?: string;
+    readonly limit?: number;
   } = {},
 ): Promise<LegacyServiceCandidateListResponse> {
   const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.outcome !== undefined) params.set('outcome', query.outcome);
   if (query.reviewState !== undefined) params.set('reviewState', query.reviewState);
   if (query.panelCode !== undefined && query.panelCode.trim() !== '') {

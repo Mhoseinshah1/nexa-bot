@@ -111,3 +111,10 @@ export function useSubmissionKey(
     },
   };
 }
+
+/**
+ * What `useSubmissionKey` returns, for a form that is drawn inside a drawer or dialog that
+ * unmounts it: the parent that outlives the form holds the key and passes it down, so a key
+ * kept after an unanswered failure survives a close and reopen.
+ */
+export type SubmissionKey = ReturnType<typeof useSubmissionKey>;

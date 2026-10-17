@@ -59,7 +59,7 @@ export function appliedListSearch(route: Route): string {
  */
 const draftResets = new Set<() => void>();
 
-function resetSearchDrafts(): void {
+export function resetSearchDrafts(): void {
   for (const reset of draftResets) reset();
 }
 
@@ -152,6 +152,7 @@ export function ListSearchBox({
   hidden = false,
   resetKeys = [],
   autoApply = false,
+  slim = false,
 }: {
   route: Route;
   /** The input's DOM id; one box per page, so a page-specific id. */
@@ -166,6 +167,12 @@ export function ListSearchBox({
   resetKeys?: readonly string[];
   /** Apply the draft by itself after `LIST_SEARCH_DEBOUNCE_MS` of stillness (see above). */
   autoApply?: boolean;
+  /**
+   * W1.3: one slim line for a `ListFilterBar`'s search slot. The label stays the input's
+   * accessible name but is not drawn, and the hint moves into the placeholder and `title`.
+   * Absent → the box is drawn exactly as before.
+   */
+  slim?: boolean;
 }) {
   const applied = appliedListSearch(route);
   /*
@@ -235,9 +242,9 @@ export function ListSearchBox({
     };
   }, []);
 
-  return (
-    <form className="toolbar ca-search" onSubmit={apply} hidden={hidden} role="search">
-      <Field compact label={t('web.list_search_label')} hint={hint} htmlFor={id}>
+  const searchField = (
+    <>
+      <Field compact label={t('web.list_search_label')} htmlFor={id} {...(slim ? {} : { hint })}>
         <Input
           id={id}
           size="sm"
@@ -250,6 +257,7 @@ export function ListSearchBox({
             setDraft({ applied, text: event.target.value });
             debounce.edited();
           }}
+          {...(slim ? { placeholder: hint, title: hint } : {})}
           {...debounce.composition}
         />
       </Field>
@@ -258,6 +266,17 @@ export function ListSearchBox({
           {t(KIND_LABELS[term.kind])}
         </span>
       )}
+    </>
+  );
+
+  return (
+    <form
+      className={slim ? 'toolbar ca-search slim' : 'toolbar ca-search'}
+      onSubmit={apply}
+      hidden={hidden}
+      role="search"
+    >
+      {slim ? <div className="ca-search-main">{searchField}</div> : searchField}
       <div className="ca-search-actions">
         <Button type="submit" variant="primary" size="sm" icon="search">
           {t('web.users_search_apply')}
@@ -267,44 +286,6 @@ export function ListSearchBox({
         </Button>
       </div>
     </form>
-  );
-}
-
-/**
- * «پاک کردن همهٔ فیلترها»: one press back to the unfiltered list (roadmap B4).
- *
- * Drawn only while one of `keys` is in the URL — a reset with nothing to reset is noise. A
- * list's filters live in the URL beside its search, so clearing is one navigation: every
- * key (and any `cursor` the page keeps there) goes in the same `setQueries`, never one
- * `setQuery` per key (`router.ts` says why). The page passes the keys it filters on,
- * the search's `q` included.
- */
-export function ClearFiltersButton({
-  route,
-  keys,
-  hidden = false,
-}: {
-  route: Route;
-  keys: readonly string[];
-  hidden?: boolean;
-}) {
-  const active = keys.some((key) => (route.query.get(key) ?? '') !== '');
-  if (!active || hidden) return null;
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      icon="x"
-      onClick={() => {
-        resetSearchDrafts();
-        setQueries(
-          route,
-          [...keys, 'cursor'].map((key) => [key, null] as const),
-        );
-      }}
-    >
-      {t('web.list_filters_clear')}
-    </Button>
   );
 }
 

@@ -87,6 +87,12 @@ describe('the split stylesheet', () => {
       './styles/pages/commerce-b.css',
       './styles/pages/ops-a.css',
       './styles/pages/ops-b.css',
+      './styles/ui.css',
+      './styles/pages/w-customers.css',
+      './styles/pages/w-money.css',
+      './styles/pages/w-marketing.css',
+      './styles/pages/w-ops.css',
+      './styles/pages/w-errors.css',
     ]);
     expect(CSS).not.toMatch(/@import/);
     // The token sets and the kit arrived: one rule from each end of the chain.
@@ -386,6 +392,22 @@ describe('selected state, at both ends of the seam', () => {
     renderPage(<Tabs value="a" onChange={() => {}} items={ITEMS} panelId="p" />);
     const other = screen.getByRole('tab', { name: 'دو' });
     expect(other.className.trim()).toBe('');
+  });
+});
+
+/**
+ * W2 (`pnpm web:no-scroll`): the two rules that keep a click from moving the page. Each is
+ * joined to the markup that relies on it in the page's own test — the panel detail's loading
+ * tab (`panels.test.tsx`), the support AI form (`support-ai.test.tsx`) and Customer 360's
+ * wallet shortcut (`customer-workspace.test.tsx`).
+ */
+describe('the no-scroll rules', () => {
+  it('holds a loading tab panel a screen tall, so a tab switch never clamps the page', () => {
+    expect(block("[role='tabpanel'] > .skel")).toMatch(/min-block-size:\s*100dvh/);
+  });
+
+  it('takes a region out of scroll anchoring with one class', () => {
+    expect(block('.no-scroll-anchor')).toMatch(/overflow-anchor:\s*none/);
   });
 });
 
