@@ -292,12 +292,14 @@ jobs:
       # Every shard reports, even when one fails: a failure in shard 1 says
       # nothing about the others, and cancelling them throws that away.
       fail-fast: false
-      # Eight, balanced by measured duration (tests/support/timed-sequencer.mts):
-      # four count-balanced shards finished between 16 and 33 minutes on one
-      # commit. Eight keeps the whole workflow under the 20 concurrent jobs a
-      # free public repository gets.
+      # Ten, balanced by measured duration (tests/support/timed-sequencer.mts).
+      # Measured, one run each (docs/ci.md): 6 shards 23.1 min, 8 16.6-17.3,
+      # 10 14.3, 12 12.5, 14 13.3, 16 13.8. Past ten the wall time is the
+      # update-and-rollback smoke (11-13.5 min), not a shard, and ten is the
+      # largest count whose run peaks at fewer than 20 concurrent jobs (19), the
+      # free plan's limit; twelve peaked at 21.
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     services:
       postgres:

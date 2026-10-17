@@ -40,7 +40,7 @@ changes ──────────┬─────────────
 static ───────────┼──────────────────── Typecheck, lint and boundaries
 build ──┬── unit ─┼─────────┐
         ├── web ──┼─────────┤
-        ├── integration 1..8┤ (skippable)
+        ├── integration 1..10 (skippable)
         ├── legacy-mysql ×2 ┤ (skippable)
         └── legacy-rehearsal┼────────── Unit and integration tests (aggregate)
 deploy-logic ─────┼─────────┤
@@ -53,7 +53,7 @@ audit ────────────────────────�
   `check:runtime` and the migration drift check, and uploads the four `dist`
   directories as the `dist` artifact. `unit`, `web` and every integration shard
   download it instead of building again, so every test job runs the same bytes.
-- **integration** is an 8-way matrix over `vitest --shard=i/8`. The shard a
+- **integration** is a 10-way matrix over `vitest --shard=i/10`. The shard a
   file lands in is decided by `tests/support/timed-sequencer.mts`, which the
   root vitest config installs: longest file first, each into the shard with the
   least measured work so far, weights from `tests/support/integration-timings.json`.
@@ -106,7 +106,7 @@ the script, and both halves have a test that fails when the rule is reverted.
 ### Refreshing the shard timings
 
 Every shard uploads `integration-timings-<n>` (vitest's JSON report). When the
-shards drift apart, download all eight from one or two green runs and run
+shards drift apart, download every shard's report from one or two green runs and run
 `node scripts/integration-timings.mjs <reports…>`; it averages per file and
 keeps every file it was not given. The table only moves files between shards —
 it never decides what runs.
@@ -190,10 +190,32 @@ deployment logic at 6.3–7.1 min (one botctl case waited out the 180 s default
 readiness timeout), the legacy rehearsal at 5.4, static at 4.5, web at 3.8 and
 unit at 3.0 min.
 
-Measured per file, the integration project is about 5 400 s of tests plus about
-2 s of setup per file. Balanced longest-first into eight shards, each carries
-about 12 min. The update-and-rollback smoke, now its own job, is the other long
-path at about 12–13 min.
+Measured per file, the integration project is about 5 100–5 400 s of tests plus
+about 2 s of setup per file, and the same file varies by up to 1.7× between
+runners — which no timing table can balance away, so the slowest shard is
+always 30–60% above the fastest.
+
+### Choosing the shard count
+
+Each count was run once (twice for 8) as a `workflow_dispatch` of this branch,
+one at a time so no run competed with another for runners. Minutes:
+
+| shards |     wall | slowest shard | update/rollback smoke | peak concurrent jobs | run         |
+| -----: | -------: | ------------: | --------------------: | -------------------: | ----------- |
+|      6 |     23.1 |          21.8 |                  12.9 |                   15 | 39044601290 |
+|      8 |     16.6 |          15.1 |                  11.7 |                   17 | 39039650728 |
+|      8 |     17.3 |          15.8 |                  13.0 |                   17 | 39041309854 |
+| **10** | **14.3** |          13.2 |                  13.1 |               **19** | 39042598450 |
+|     12 |     12.5 |          11.1 |                  11.3 |                   21 | 39043649200 |
+|     14 |     13.3 |          10.5 |                  13.0 |                   23 | 39046370143 |
+|     16 |     13.8 |           8.1 |                  13.5 |                   25 | 39047381046 |
+
+Past ten, the wall time is the update-and-rollback smoke (11–13.5 min, most of it
+readiness timeouts the smoke exists to wait out), and more shards only add
+jobs: 12's 12.5 min is a fast smoke run, not a faster suite. Ten is the knee,
+and the largest count whose run stays under the free plan's 20 concurrent jobs
+with nothing else running; twelve already peaks at 21, so a second pull
+request at the same moment would queue behind it.
 
 ## Where pnpm comes from
 
