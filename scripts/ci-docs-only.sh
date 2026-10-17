@@ -23,11 +23,15 @@ heavy() {
   exit 0
 }
 
-[ "$event" = "pull_request" ] || heavy true
-
+# Stdin is read before anything is decided, so a caller writing it never
+# meets a closed pipe (EPIPE) because the event alone settled the answer.
 if [ "$source" = "--stdin" ]; then
   paths="$(cat)"
-else
+fi
+
+[ "$event" = "pull_request" ] || heavy true
+
+if [ "$source" != "--stdin" ]; then
   # The merge commit against its first parent, the base it is tested on. Only a
   # real two-parent merge: against any other commit, HEAD^1 would be the PR's
   # previous commit and the diff would show only its last one.
