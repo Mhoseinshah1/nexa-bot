@@ -521,6 +521,22 @@ describe('the CI workflow', () => {
     }
   });
 
+  it('checks the repository out, unconditionally, before any step runs its code', () => {
+    // A checkout skipped on some events leaves the next `bash scripts/…` with
+    // no file to run: that job fails on exactly those events.
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      const first = job.steps.findIndex((s) => /\b(scripts\/|tests\/|pnpm )/u.test(s.run ?? ''));
+      if (first === -1) continue;
+      const checkout = job.steps.findIndex((s) => s.uses?.startsWith('actions/checkout@'));
+      expect(checkout, `${name} runs repository code without a checkout`).toBeGreaterThan(-1);
+      expect(checkout, `${name} checks out after running repository code`).toBeLessThan(first);
+      expect(
+        (job.steps[checkout] as { if?: string }).if,
+        `${name} checks out only on some events`,
+      ).toBeUndefined();
+    }
+  });
+
   it('pins every third-party action to an immutable commit', () => {
     for (const [name, job] of Object.entries(workflow.jobs)) {
       for (const step of job.steps) {
