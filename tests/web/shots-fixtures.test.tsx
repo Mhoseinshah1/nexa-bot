@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { API_PREFIX } from '@nexa/contracts';
+import { API_PREFIX, TEMPLATE_KEYS } from '@nexa/contracts';
 import { FIXTURES, findFixture } from './shots/index.ts';
 
 /**
@@ -46,6 +46,74 @@ describe('the screenshot fixtures', () => {
     expect(at('/panels', 'archived=only')?.query).toEqual({ archived: 'only' });
     // Nothing answers a path no fixture names — the harness reports it by name.
     expect(at('/definitely-not-fixtured')).toBeUndefined();
+  });
+
+  /*
+   * PR #285 review, D2: every request these routes make had no answer, so the sweep
+   * photographed an error card where the page should be. Each is answered now; `pnpm web:sweep`
+   * also fails on any request still unfixtured, by route.
+   */
+  const ID = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+  it.each([
+    ['POST', '/audience/preview', ''],
+    ['POST', '/delivery-qr/preview', ''],
+    ['GET', `/incidents/${ID}`, ''],
+    ['GET', `/users/${ID}/overview`, ''],
+    ['GET', `/users/${ID}/financial-summary`, ''],
+    ['GET', '/legacy-products', 'limit=10&attention=true'],
+    ['GET', '/legacy-invoices', 'limit=10'],
+    ['GET', '/legacy-invoices/summary', ''],
+    ['GET', '/legacy-debts', 'limit=10&state=PENDING_REVIEW'],
+    ['GET', '/legacy-debts/summary', ''],
+    ['GET', '/legacy-services', 'limit=10&reviewState=OPEN'],
+    ['GET', '/legacy-services/summary', ''],
+    ['GET', '/legacy-cutover/approvals', ''],
+    ['GET', '/legacy-cutover/read-sets', ''],
+    ['GET', '/legacy-cutover/apply-runs', ''],
+    ['GET', '/legacy-migration/capabilities', ''],
+    ['GET', '/legacy-migration/imports', ''],
+    ['GET', '/business-connections', ''],
+    ['GET', '/business-chats', ''],
+    ['GET', `/business-chats/${ID}`, ''],
+    ['GET', `/business-chats/${ID}/drafts`, ''],
+    ['GET', '/support-ai/config', ''],
+    ['GET', '/support-ai/usage', ''],
+    ['GET', '/support-ai/analytics', 'range=LAST_7_DAYS'],
+    ['GET', '/support-knowledge/articles', ''],
+    ['GET', '/support-knowledge/candidates', 'state=PENDING'],
+    ['GET', '/support-knowledge/builds/latest', ''],
+  ])('answers %s %s', (method, path, query) => {
+    const found = findFixture(
+      FIXTURES,
+      method,
+      `${API_PREFIX}${path}`,
+      new URLSearchParams(query),
+      API_PREFIX,
+    );
+    expect(found, `${method} ${path}?${query}`).toBeDefined();
+    expect(found?.status).toBe(200);
+  });
+
+  // The notifications screens name each row by its template; a key the server never sends
+  // shows as a raw key, which the sweep cannot tell from a missing translation.
+  it('names only template keys the server sends', () => {
+    const lists = FIXTURES.filter((f) => f.method === 'GET' && f.path === '/notifications');
+    expect(lists.length).toBeGreaterThan(0);
+    for (const list of lists) {
+      const rows = (list.body as { notifications: { templateKey: string }[] }).notifications;
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(TEMPLATE_KEYS).toContain(row.templateKey);
+    }
+  });
+
+  it('opens the incident and the conversation the sweep visits, by its id', () => {
+    const detail = (path: string) =>
+      FIXTURES.find((f) => f.method === 'GET' && f.path === path)?.body as Record<
+        string,
+        { id: string }
+      >;
+    expect(detail('/incidents/:id')['incident']?.id).toBe(ID);
+    expect(detail('/business-chats/:id')['conversation']?.id).toBe(ID);
   });
 
   /*

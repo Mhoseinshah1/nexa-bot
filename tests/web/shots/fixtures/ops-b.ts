@@ -409,19 +409,35 @@ function notification(
 }
 
 const NOTIFICATIONS = [
-  notification('01a05e35-c9ad-7e93-bef3-1ed9b5526f01', 'SENT', 'event.panel.unreachable', 4),
   notification(
-    '01a05e35-c9ad-7e93-bef3-1ed9b5526f02',
+    '01a05e35-c9ad-7e93-bef3-1ed9b5526f01',
     'SENT',
-    'ops.financial.payment_confirmed',
-    22,
+    'ops.notification.operational_event',
+    4,
   ),
-  notification('01a05e35-c9ad-7e93-bef3-1ed9b5526f03', 'FAILED', 'event.panel.degraded', 55, {
-    attemptCount: 5,
-  }),
-  notification('01a05e35-c9ad-7e93-bef3-1ed9b5526f04', 'SENT', 'event.admin.roles_changed', 45),
-  notification('01a05e35-c9ad-7e93-bef3-1ed9b5526f05', 'SENT', 'ops.financial.refund_issued', 130),
-  notification('01a05e35-c9ad-7e93-bef3-1ed9b5526f06', 'SENT', 'event.backup.succeeded', 60 * 6),
+  notification('01a05e35-c9ad-7e93-bef3-1ed9b5526f02', 'SENT', 'ops.financial.order_paid', 22),
+  notification(
+    '01a05e35-c9ad-7e93-bef3-1ed9b5526f03',
+    'FAILED',
+    'ops.notification.operational_event',
+    55,
+    {
+      attemptCount: 5,
+    },
+  ),
+  notification('01a05e35-c9ad-7e93-bef3-1ed9b5526f04', 'SENT', 'ops.support.ticket_opened', 45),
+  notification(
+    '01a05e35-c9ad-7e93-bef3-1ed9b5526f05',
+    'SENT',
+    'ops.financial.refund_completed',
+    130,
+  ),
+  notification(
+    '01a05e35-c9ad-7e93-bef3-1ed9b5526f06',
+    'SENT',
+    'ops.financial.topup_credited',
+    60 * 6,
+  ),
 ];
 
 // --- System -------------------------------------------------------------------
