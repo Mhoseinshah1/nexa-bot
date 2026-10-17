@@ -226,6 +226,69 @@ describe('the same definition, byte for byte', () => {
   });
 });
 
+/*
+ * PR #285 review, A2: a row shown only because its condition is ON (a stored definition, a
+ * quick start) vanished — editor, input and focus with it — the moment its value was
+ * cleared while being edited. «تغییر» now keeps the row for as long as it is being edited,
+ * and afterwards as a pending row that × removes.
+ */
+describe('a row being edited to empty', () => {
+  const lapseRow = () => document.querySelector('[data-condition="lapse"]');
+  const clearLapse = () => {
+    fireEvent.click(
+      screen.getByRole('button', { name: `${t('web.aq_change')} ${t('web.aq_lapse')}` }),
+    );
+    const input = screen.getByLabelText(t('web.aud_no_purchase_days'));
+    input.focus();
+    fireEvent.change(input, { target: { value: '' } });
+    return input;
+  };
+
+  it('keeps a stored noPurchaseForDays: 60 row, its editor and focus while cleared', async () => {
+    stubApi([OPTIONS, preview(1, 1)]);
+    let last: AudienceDraft = EMPTY_AUDIENCE;
+    const stored = draftOf({ version: 1, noPurchaseForDays: 60 });
+    renderPage(<Harness initial={stored} onDraft={(draft) => (last = draft)} />);
+    await screen.findByText(t('web.aud_status'));
+    expect(lapseRow()).not.toBeNull();
+    const input = clearLapse();
+    expect(last.noPurchaseForDays).toBeNull();
+    expect(lapseRow(), 'the row vanished while it was being edited').not.toBeNull();
+    expect(input).toBeInTheDocument();
+    expect(document.activeElement).toBe(input);
+    // Typing again restores the value in the same row.
+    fireEvent.change(input, { target: { value: '45' } });
+    expect(last.noPurchaseForDays).toBe(45);
+    // Cleared and closed, it stays as a pending row that × removes.
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.click(
+      screen.getByRole('button', { name: `${t('web.aq_close')} ${t('web.aq_lapse')}` }),
+    );
+    expect(lapseRow()).toHaveClass('pending');
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: t('web.aq_remove').replace('{label}', t('web.aq_lapse')),
+      }),
+    );
+    expect(lapseRow()).toBeNull();
+  });
+
+  it('keeps a quick-start row and its editor while cleared', async () => {
+    stubApi([OPTIONS, preview(1, 1)]);
+    let last: AudienceDraft = EMPTY_AUDIENCE;
+    renderPage(<Harness onDraft={(draft) => (last = draft)} />);
+    await screen.findByText(t('web.aud_status'));
+    const quick = screen.getByRole('group', { name: t('web.aq_quick') });
+    fireEvent.click(within(quick).getByRole('button', { name: t('web.aq_preset_lapsed') }));
+    expect(last.noPurchaseForDays).toBe(60);
+    const input = clearLapse();
+    expect(last.noPurchaseForDays).toBeNull();
+    expect(lapseRow(), 'the row vanished while it was being edited').not.toBeNull();
+    expect(input).toBeInTheDocument();
+    expect(document.activeElement).toBe(input);
+  });
+});
+
 describe('the count and the quick start', () => {
   it('counts once the draft is still, and shows the server’s figures', async () => {
     const api = stubApi([OPTIONS, preview(1234, 1200)]);

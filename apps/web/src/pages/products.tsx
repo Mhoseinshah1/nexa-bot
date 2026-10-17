@@ -73,6 +73,7 @@ import { DotTabs, type TabMark } from './dot-tabs';
 import { queryChipFilter } from './money-filters';
 import { ActionPanel } from '../ui/action-panel';
 import { ListFilterBar } from '../ui/filter-bar';
+import { useListClearAll } from './commerce-parts';
 import { Drawer } from '../ui/overlays';
 import { useDiscardGuard, useReportDirty } from '../ui/unsaved';
 
@@ -276,6 +277,9 @@ function Price({ row }: { row: ProductSummaryResponse }) {
 // List
 // ---------------------------------------------------------------------------
 
+/** The URL keys the products list filters by, and what the bar's clear-all removes. */
+const PRODUCT_FILTER_KEYS = ['status', 'audience', 'categoryId', 'title'] as const;
+
 export function ProductsPage({
   route,
   mayEdit,
@@ -316,6 +320,16 @@ export function ProductsPage({
     title: appliedTitle,
   });
   const draftTitle = draft.signature === appliedTitle ? draft.title : appliedTitle;
+  /*
+   * «پاک کردن همه»: the three filters and the title in ONE navigation (PR #285, A1) — one
+   * `setQuery` per filter each built on the same stale query and only the last survived.
+   * The title box is this page's own draft, so it is emptied here rather than by a key.
+   */
+  const listClear = useListClearAll(route, PRODUCT_FILTER_KEYS);
+  const clearAll = () => {
+    setDraft({ signature: '', title: '' });
+    listClear.clearAll();
+  };
 
   /*
    * The cursor trail, keyed by the SEARCH it was minted under.
@@ -600,6 +614,7 @@ export function ProductsPage({
                 ],
               }),
             ]}
+            onClearAll={clearAll}
           />
         </div>
 

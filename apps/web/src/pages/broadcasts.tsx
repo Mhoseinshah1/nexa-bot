@@ -796,6 +796,12 @@ function MediaCard({
 }) {
   const client = useQueryClient();
   const [rejected, setRejected] = useState(false);
+  /*
+   * The picker is drawn afresh after every upload attempt (PR #285 review, A5), as on
+   * tickets: a refused file no longer reads as chosen, and the new native input has no
+   * value, so picking the SAME file again fires its change and is tried again.
+   */
+  const [attempt, setAttempt] = useState(0);
   const refresh = () => void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
   const upload = useMutation({
     mutationFn: async (file: File) => {
@@ -808,6 +814,7 @@ function MediaCard({
       return uploadBroadcastMedia(record.id, picked);
     },
     onSuccess: refresh,
+    onSettled: () => setAttempt((current) => current + 1),
   });
   const remove = useMutation({
     mutationFn: () => removeBroadcastMedia(record.id),
@@ -836,6 +843,7 @@ function MediaCard({
       {blocked && <Banner tone="warn">{t('web.bc_media_save_first')}</Banner>}
       <div className="form-actions">
         <FilePicker
+          key={attempt}
           label={t('web.bc_media_pick')}
           kind={
             record.contentKind === 'PHOTO'

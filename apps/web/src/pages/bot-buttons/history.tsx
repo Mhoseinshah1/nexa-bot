@@ -1,4 +1,5 @@
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   type ExplicitMainMenu,
   type MainMenuBuilderItem,
@@ -8,12 +9,11 @@ import {
 import { fetchBotMenuRevisions } from '../../api/client';
 import { formatTimestamp } from '../../format';
 import { t } from '../../i18n/web.fa';
-import { Badge, Banner, Drawer, StateSwitch } from '../../ui/kit';
+import { Badge, Banner, CursorPager, Drawer, LIST_PAGE_SIZE, StateSwitch } from '../../ui/kit';
 import { fill, labelOf, PreviewKeyboard } from './canvas';
 import { configOf, lookOf } from './model';
 
 export const REVISIONS_QUERY_KEY = ['bot-menu-builder', 'revisions'] as const;
-const PAGE = 20;
 
 /** Every placed button of a revision, disabled ones marked — what that revision arranged. */
 function arrangedRows(
@@ -37,6 +37,10 @@ function arrangedRows(
 /**
  * The published revisions, newest first, a page at a time. Restoring one puts it INTO THE
  * DRAFT — never live; publishing it afterwards is a separate act that makes a new revision.
+ *
+ * Ten a page with «قبلی / بعدی» (W1.8; PR #285 review, A6), on the server's keyset: `before`
+ * is the oldest revision number of the page shown, «بعدی» walks to older revisions and
+ * «قبلی» back through the cursors already seen. Never an offset.
  */
 export function HistoryDrawer({
   open,
@@ -53,20 +57,28 @@ export function HistoryDrawer({
   mayEdit: boolean;
   onRestore: (revision: MainMenuRevisionView) => void;
 }) {
-  const revisions = useInfiniteQuery({
-    queryKey: REVISIONS_QUERY_KEY,
-    queryFn: ({ pageParam }) =>
+  const [trail, setTrail] = useState<readonly number[]>([]);
+  const before = trail.length > 0 ? trail[trail.length - 1] : undefined;
+  const revisions = useQuery({
+    // Under the shared prefix, so a publish or a restore's invalidation reaches every page.
+    queryKey: [...REVISIONS_QUERY_KEY, before ?? null],
+    queryFn: () =>
       fetchBotMenuRevisions(
-        pageParam === undefined ? { limit: PAGE } : { before: pageParam, limit: PAGE },
+        before === undefined ? { limit: LIST_PAGE_SIZE } : { before, limit: LIST_PAGE_SIZE },
       ),
-    initialPageParam: undefined as number | undefined,
-    getNextPageParam: (last) => last.nextBefore ?? undefined,
+    // The page on screen stays while the next one loads: «بعدی» never empties the drawer.
+    placeholderData: keepPreviousData,
     enabled: open,
   });
-  const all = revisions.data?.pages.flatMap((page) => page.revisions) ?? [];
+  const all = revisions.data?.revisions ?? [];
+  const nextBefore = revisions.data?.nextBefore ?? null;
+  const close = () => {
+    setTrail([]);
+    onClose();
+  };
 
   return (
-    <Drawer open={open} onClose={onClose} title={t('web.bb_history_title')} wide>
+    <Drawer open={open} onClose={close} title={t('web.bb_history_title')} wide>
       <p className="muted small">{t('web.bb_history_hint')}</p>
       <StateSwitch
         query={revisions}
@@ -122,15 +134,16 @@ export function HistoryDrawer({
           ))}
         </ol>
       </StateSwitch>
-      {revisions.hasNextPage && (
-        <button
-          type="button"
-          className="btn sm"
-          disabled={revisions.isFetchingNextPage}
-          onClick={() => void revisions.fetchNextPage()}
-        >
-          {revisions.isFetchingNextPage ? t('web.loading') : t('web.bb_history_older')}
-        </button>
+      {(trail.length > 0 || nextBefore !== null) && (
+        <CursorPager
+          shown={all.length}
+          hasPrevious={trail.length > 0}
+          hasNext={nextBefore !== null && !revisions.isPlaceholderData}
+          onPrevious={() => setTrail(trail.slice(0, -1))}
+          onNext={() => {
+            if (nextBefore !== null) setTrail([...trail, nextBefore]);
+          }}
+        />
       )}
     </Drawer>
   );

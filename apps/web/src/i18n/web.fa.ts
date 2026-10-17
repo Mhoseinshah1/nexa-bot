@@ -2185,6 +2185,7 @@ export const WEB_FA = {
   'web.payment_situation_safe_late_completion':
     'هیچ‌چیز خودکار تسویه نمی‌شود. در پنل درگاه بررسی کنید؛ اگر پرداخت هنوز «نامعلوم» است با تطبیق، وگرنه تنها با واریز دستی به کیف پول که سیاست آن هنوز تصمیم‌گیری نشده است.',
   // --- PR #285 review fixes, agent A: new keys go directly below this line ---
+  'web.action_panel_why_unavailable': 'چرا برخی عملیات در دسترس نیست؟',
   'web.payment_situation_safe_confirmed':
     'هر بازپرداخت از سقف همین پرداخت کم می‌شود؛ کارمزد درگاه بازپرداخت‌پذیر نیست.',
   'web.payment_situation_safe_refund_in_progress':
@@ -6964,7 +6965,6 @@ export const WEB_FA = {
   'web.bb_history_hint':
     'هر انتشار یک نسخه می‌سازد. بازگرداندن، نسخه را فقط به پیش‌نویس می‌برد؛ زنده شدنش انتشار جداگانه‌ای می‌خواهد.',
   'web.bb_history_empty': 'هنوز چیزی منتشر نشده است.',
-  'web.bb_history_older': 'نسخه‌های قدیمی‌تر',
   'web.bb_revision_n': 'نسخهٔ {n}',
   'web.bb_revision_current': 'منتشرشدهٔ فعلی',
   'web.bb_revision_restored_from': 'بازگردانده از نسخهٔ {n}',
@@ -7564,7 +7564,6 @@ export const WEB_FA = {
   'web.crm_note_add': 'ثبت یادداشت',
   'web.crm_note_added': 'یادداشت ثبت شد.',
   'web.crm_note_too_long': 'یادداشت حداکثر ۲۰۰۰ نویسه است.',
-  'web.crm_notes_more': 'یادداشت‌های قدیمی‌تر',
   'web.users_filter_tag': 'برچسب',
   'web.users_filter_tag_all': 'همهٔ برچسب‌ها',
   'web.users_filter_tag_archived': '{label} (بایگانی‌شده)',

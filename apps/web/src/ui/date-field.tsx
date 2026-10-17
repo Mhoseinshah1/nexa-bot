@@ -204,6 +204,15 @@ export function DateField({
         createPortal(
           <LayerContext.Provider value={layer.registry}>
             <div ref={layer.inside} className="date-pop-layer">
+              {/* A phone's bottom sheet dims the page behind it; a tap there closes the
+                  picker (PR #285 review, A3). On `click`, not `mousedown`: the backdrop is
+                  inside this layer and every layer around it, so a filter panel the field
+                  sits in stays open — the press lands on a node still in the DOM. */}
+              <div
+                className="date-pop-backdrop"
+                aria-hidden="true"
+                onClick={() => setOpen(false)}
+              />
               <DatePopover
                 id={popoverId}
                 mode={mode}
@@ -498,6 +507,21 @@ function DatePopover({
     </button>
   );
 
+  // The bottom sheet's × (phones only, `ui.css`); Escape and a tap outside close it too.
+  const sheetClose = (
+    <div className="date-pop-sheet">
+      <button
+        type="button"
+        className="btn ghost icon sm"
+        aria-label={t('web.close')}
+        title={t('web.close')}
+        onClick={onClose}
+      >
+        <Icon name="x" />
+      </button>
+    </div>
+  );
+
   if (mode === 'time') {
     return (
       <div
@@ -507,6 +531,7 @@ function DatePopover({
         role="dialog"
         aria-label={t('web.date_pick_time')}
       >
+        {sheetClose}
         <div className="date-pop-head">
           <b className="date-pop-only">{t('web.date_pick_time')}</b>
         </div>
@@ -537,6 +562,7 @@ function DatePopover({
       data-view-year={view.jy}
       data-view-month={view.jm}
     >
+      {sheetClose}
       <div className="date-pop-head">
         <button
           type="button"

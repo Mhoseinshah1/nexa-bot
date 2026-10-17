@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { FormDialog } from './form-dialog';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_NOTE_MAX_LENGTH,
   CUSTOMER_TAG_COLORS,
@@ -31,10 +31,12 @@ import {
   Banner,
   Button,
   Card,
+  CursorPager,
   Empty,
   Field,
   IconButton,
   Input,
+  LIST_PAGE_SIZE,
   Modal,
   Select,
   StateSwitch,
@@ -325,11 +327,20 @@ function CustomerNotesCard({
   const body = draft.trim();
   const tooLong = Array.from(body).length > CUSTOMER_NOTE_MAX_LENGTH;
 
-  const notes = useInfiniteQuery({
-    queryKey: ['customer-notes', customerId],
-    queryFn: ({ pageParam }) => fetchCustomerNotes(customerId, pageParam),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (last) => last.nextCursor ?? undefined,
+  /*
+   * Ten notes a page with «قبلی / بعدی» (W1.8; PR #285 review, A6) on the server's keyset:
+   * «بعدی» reaches older notes through `nextCursor`, «قبلی» walks back through the cursors
+   * already seen. A note just added invalidates every page under the prefix and the trail
+   * returns to the first page, where the new note is.
+   */
+  const [trail, setTrail] = useState<readonly string[]>([]);
+  const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
+  const notes = useQuery({
+    queryKey: ['customer-notes', customerId, cursor ?? null],
+    queryFn: () => fetchCustomerNotes(customerId, cursor, LIST_PAGE_SIZE),
+    // The page on screen stays while the next loads — never another customer's notes.
+    placeholderData: (previous, query) =>
+      query?.queryKey[1] === customerId ? keepPreviousData(previous) : undefined,
     enabled: mayView,
   });
 
@@ -344,13 +355,15 @@ function CustomerNotesCard({
       notify({ tone: 'ok', message: t('web.crm_note_added') });
       setDraft('');
       setWriting(false);
+      setTrail([]);
       void queries.invalidateQueries({ queryKey: ['customer-notes', customerId] });
       void queries.invalidateQueries({ queryKey: ['customer-timeline', customerId] });
     },
     onError: (error) => submission.settleOn(error),
   });
 
-  const all = notes.data?.pages.flatMap((page) => page.notes) ?? [];
+  const all = notes.data?.notes ?? [];
+  const nextCursor = notes.data?.nextCursor ?? null;
 
   return (
     <Card
@@ -418,15 +431,16 @@ function CustomerNotesCard({
               ))}
             </ol>
           )}
-          {notes.hasNextPage && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={notes.isFetchingNextPage}
-              onClick={() => void notes.fetchNextPage()}
-            >
-              {t('web.crm_notes_more')}
-            </Button>
+          {(trail.length > 0 || nextCursor !== null) && (
+            <CursorPager
+              shown={all.length}
+              hasPrevious={trail.length > 0}
+              hasNext={nextCursor !== null && !notes.isPlaceholderData}
+              onPrevious={() => setTrail(trail.slice(0, -1))}
+              onNext={() => {
+                if (nextCursor !== null) setTrail([...trail, nextCursor]);
+              }}
+            />
           )}
         </StateSwitch>
       )}

@@ -6,6 +6,7 @@ import { Icon } from './icons';
 import { LayerContext, useLayer } from './layer';
 import { useFocusTrap } from './overlays';
 import { tabbable } from './focusable';
+import { batchQueryChanges } from '../router';
 
 /**
  * One compact filter line per list (W1.3).
@@ -53,7 +54,10 @@ export interface ListFilterBarProps {
   search?: ReactNode;
   filters: readonly ListFilter[];
   /**
-   * «پاک کردن همه». Absent → each active filter's `onClear` in turn.
+   * «پاک کردن همه». Absent → each active filter's `onClear` in turn, inside ONE
+   * `batchQueryChanges`: filters that write the URL each build on the previous removal and
+   * the bar navigates once, so every removal survives (PR #285 review, A1). A page whose
+   * search box or cursor must go too still passes its own (`useListClearAll`).
    */
   onClearAll?: () => void;
   /** The saved-filters menu (`SavedViewsMenu`), drawn at the end of the line. */
@@ -73,7 +77,8 @@ export function ListFilterBar({
   const toggle = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const active = filters.filter((one) => one.active !== null);
-  const clearAll = onClearAll ?? (() => active.forEach((one) => one.onClear()));
+  const clearAll =
+    onClearAll ?? (() => batchQueryChanges(() => active.forEach((one) => one.onClear())));
   const hasSaved = savedViews !== undefined && savedViews !== null && savedViews !== false;
   const hasSearch = search !== undefined && search !== null && search !== false;
 

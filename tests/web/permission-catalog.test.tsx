@@ -71,6 +71,57 @@ describe('view mode', () => {
   });
 });
 
+/*
+ * PR #285 review, A6: under a search or «فقط بحرانی‌ها» every matching card was forced open
+ * and its header did nothing. It now folds and unfolds the card there too.
+ */
+describe('a card header while filtering', () => {
+  const usersHead = () => {
+    const title = document.querySelector('.perm-card [title="users.view"]');
+    const card = title?.closest('.perm-card');
+    const head = card?.querySelector<HTMLButtonElement>('.perm-card-head');
+    if (head === null || head === undefined) throw new Error('no users card');
+    return head;
+  };
+  const search = (value: string) =>
+    fireEvent.change(screen.getByRole('searchbox', { name: t('web.rbac_search') }), {
+      target: { value },
+    });
+
+  it('folds and unfolds a card under a search, and a new search shows every match again', () => {
+    render(<PermissionCatalog keys={PERMISSION_KEYS} mode="view" />);
+    search('users.view');
+    const head = usersHead();
+    expect(head).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(head);
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTitle('users.view')).toBeNull();
+    fireEvent.click(head);
+    expect(head).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTitle('users.view')).toBeInTheDocument();
+    fireEvent.click(head);
+    search('users.vie');
+    expect(screen.getByTitle('users.view')).toBeInTheDocument();
+  });
+
+  it('folds and unfolds a card under «فقط بحرانی‌ها», leaving the unfiltered choice alone', () => {
+    render(<PermissionCatalog keys={PERMISSION_KEYS} mode="view" />);
+    const critical = CRITICAL[0] as string;
+    fireEvent.click(screen.getByRole('button', { name: t('web.pc_critical_only') }));
+    const row = screen.getByTitle(critical);
+    const head = row.closest('.perm-card')?.querySelector('.perm-card-head') as HTMLElement;
+    expect(head).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(head);
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTitle(critical)).toBeNull();
+    fireEvent.click(head);
+    expect(screen.getByTitle(critical)).toBeInTheDocument();
+    // Collapsed above 24 permissions: switching the filter off returns to that.
+    fireEvent.click(screen.getByRole('button', { name: t('web.pc_critical_only') }));
+    expect(screen.queryByTitle(critical)).toBeNull();
+  });
+});
+
 function Editor({
   locked,
   onToggle,

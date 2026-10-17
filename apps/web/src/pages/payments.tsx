@@ -99,6 +99,7 @@ import {
   PAYMENT_STATE_TONES as STATE_TONES,
 } from '../payment-labels';
 import { ErrorCodeLabel } from '../ui/technical-details';
+import { useListClearAll } from './commerce-parts';
 
 // Review N8: the vocabulary moved to `payment-labels.ts`; these names stay importable from
 // here under their old spelling, so a workstream that reads them from this page still builds.
@@ -821,6 +822,8 @@ export function PaymentsPage({
   mayReconcile?: boolean;
 }) {
   const onLink = useLinkHandler();
+  // «پاک کردن همه»: every filter, the search and the cursor in one navigation (PR #285, A1).
+  const { searchKey, clearAll } = useListClearAll(route, PAYMENT_VIEW_KEYS);
   const cursor = route.query.get('cursor');
   const state = route.query.get('state');
   const method = route.query.get('method');
@@ -1026,6 +1029,7 @@ export function PaymentsPage({
             label={t('web.payment_ops_title')}
             search={
               <ListSearchBox
+                key={searchKey}
                 route={route}
                 id="payments-search"
                 slim
@@ -1097,6 +1101,7 @@ export function PaymentsPage({
                 })),
               }),
             ]}
+            onClearAll={clearAll}
             savedViews={<SavedViewsMenu registration={paymentsViews(route)} />}
           />
           {/* The counts' own failure, said under the bar rather than drawn over the list —

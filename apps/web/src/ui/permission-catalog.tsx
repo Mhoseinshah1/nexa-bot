@@ -155,7 +155,35 @@ export function PermissionCatalog({
   const sections = permissionSections(keys)
     .map((section) => ({ ...section, shown: section.keys.filter(matches) }))
     .filter((section) => section.shown.length > 0);
-  const isOpen = (domain: string) => filtering || openCards.has(domain);
+  /*
+   * A search or «فقط بحرانی‌ها» opens every matching card — but the header still folds one
+   * (PR #285 review, A6): what the operator folded under THIS filter is held apart from the
+   * unfiltered choice and forgotten when the filter changes, so a new search shows every
+   * match again and clearing it returns the cards to how they were.
+   */
+  const filterSignature = `${criticalOnly ? '1' : '0'}|${needle}`;
+  const [filterFolded, setFilterFolded] = useState<{
+    signature: string;
+    domains: ReadonlySet<string>;
+  }>({ signature: '', domains: new Set() });
+  const folded =
+    filterFolded.signature === filterSignature ? filterFolded.domains : new Set<string>();
+  const isOpen = (domain: string) => (filtering ? !folded.has(domain) : openCards.has(domain));
+  const toggleCard = (domain: string) => {
+    if (filtering) {
+      const next = new Set(folded);
+      if (next.has(domain)) next.delete(domain);
+      else next.add(domain);
+      setFilterFolded({ signature: filterSignature, domains: next });
+      return;
+    }
+    setOpenCards((current) => {
+      const next = new Set(current);
+      if (next.has(domain)) next.delete(domain);
+      else next.add(domain);
+      return next;
+    });
+  };
   const locked = (key: string) => isLocked?.(key) === true;
   const toolbarId = useId();
 
@@ -187,11 +215,24 @@ export function PermissionCatalog({
             <button
               type="button"
               className="btn sm ghost"
-              onClick={() => setOpenCards(new Set(keys.map(domainOf)))}
+              onClick={() => {
+                setOpenCards(new Set(keys.map(domainOf)));
+                setFilterFolded({ signature: filterSignature, domains: new Set() });
+              }}
             >
               {t('web.pc_expand_all')}
             </button>
-            <button type="button" className="btn sm ghost" onClick={() => setOpenCards(new Set())}>
+            <button
+              type="button"
+              className="btn sm ghost"
+              onClick={() => {
+                setOpenCards(new Set());
+                setFilterFolded({
+                  signature: filterSignature,
+                  domains: new Set(keys.map(domainOf)),
+                });
+              }}
+            >
               {t('web.pc_collapse_all')}
             </button>
           </>
@@ -240,14 +281,7 @@ export function PermissionCatalog({
                   className="perm-card-head"
                   aria-expanded={open}
                   aria-controls={bodyId}
-                  onClick={() =>
-                    setOpenCards((current) => {
-                      const next = new Set(current);
-                      if (next.has(section.domain)) next.delete(section.domain);
-                      else next.add(section.domain);
-                      return next;
-                    })
-                  }
+                  onClick={() => toggleCard(section.domain)}
                 >
                   <Icon name="chevron" size={12} className="perm-card-caret" />
                   <span className="perm-card-title">{domainLabel(section.domain)}</span>

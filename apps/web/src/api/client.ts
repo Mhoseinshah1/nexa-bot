@@ -5236,12 +5236,14 @@ export function removeCustomerTag(
 export function fetchCustomerNotes(
   customerId: string,
   cursor?: string,
+  limit?: number,
 ): Promise<CustomerNoteListResponse> {
   const path = CUSTOMER_CRM_ROUTES.customerNotes(customerId);
-  return authedGet(
-    cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
-    customerNoteListResponseSchema,
-  );
+  const params = new URLSearchParams();
+  if (limit !== undefined) params.set('limit', String(limit));
+  if (cursor !== undefined) params.set('cursor', cursor);
+  const search = params.toString();
+  return authedGet(search === '' ? path : `${path}?${search}`, customerNoteListResponseSchema);
 }
 
 export function addCustomerNote(
