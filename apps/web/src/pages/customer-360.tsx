@@ -51,6 +51,7 @@ import {
 import { PartyCell, TriggerBadge } from './referrals';
 import { OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
+import { SourceBadge } from '../ui/source-badge';
 import {
   CustomerControlsCard,
   FinancialSummaryCard,
@@ -850,6 +851,7 @@ function UserHead({
       badge={
         <>
           <StatusBadge status={row.status} />
+          <SourceBadge source={row.source} />
           {isReseller && <Badge tone="teal">{t('web.c360_badge_reseller')}</Badge>}
           {exempt && <Badge tone="violet">{t('web.c360_channel_exempt')}</Badge>}
         </>

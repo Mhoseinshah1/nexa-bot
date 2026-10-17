@@ -72,6 +72,8 @@ import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { FormSection, SaveBar } from './editor-layout';
 import { DotTabs, type TabMark } from './dot-tabs';
 import { queryChipFilter } from './money-filters';
+import { SourceBadge } from '../ui/source-badge';
+import { sourceFromQuery, sourceRouteFilter } from './record-source';
 import { ActionPanel } from '../ui/action-panel';
 import { ListFilterBar } from '../ui/filter-bar';
 import { useListClearAll } from './commerce-parts';
@@ -280,7 +282,7 @@ function Price({ row }: { row: ProductSummaryResponse }) {
 // ---------------------------------------------------------------------------
 
 /** The URL keys the products list filters by, and what the bar's clear-all removes. */
-const PRODUCT_FILTER_KEYS = ['status', 'audience', 'categoryId', 'title'] as const;
+const PRODUCT_FILTER_KEYS = ['status', 'audience', 'categoryId', 'title', 'source'] as const;
 
 export function ProductsPage({
   route,
@@ -301,6 +303,7 @@ export function ProductsPage({
   const appliedStatus = statusFromQuery(route.query.get('status'));
   const appliedAudience = audienceFromQuery(route.query.get('audience'));
   const appliedTitle = route.query.get('title') ?? '';
+  const appliedSource = sourceFromQuery(route.query.get('source'));
   /*
    * The category filter, and `'none'` is one of its values.
    *
@@ -346,6 +349,7 @@ export function ProductsPage({
     // Before the title, which must stay last: a category id cannot contain `|`, and the
     // title can contain anything.
     appliedCategory,
+    appliedSource ?? '',
     appliedTitle,
   ].join('|');
   const [trail, setTrail] = useState<{ signature: string; cursors: readonly string[] }>({
@@ -368,6 +372,7 @@ export function ProductsPage({
           ...(cursor === undefined ? {} : { cursor }),
           ...(appliedStatus === null ? {} : { status: appliedStatus }),
           ...(appliedAudience === null ? {} : { audience: appliedAudience }),
+          ...(appliedSource === null ? {} : { source: appliedSource }),
           ...(appliedTitle === '' ? {} : { title: appliedTitle }),
           ...(appliedCategory === '' ? {} : { categoryId: appliedCategory }),
         }),
@@ -438,13 +443,16 @@ export function ProductsPage({
         return (
           <CellMain
             primary={
-              <a
-                href={`/products/${encodeURIComponent(row.id)}`}
-                onClick={onLink}
-                className="strong"
-              >
-                {row.title}
-              </a>
+              <>
+                <a
+                  href={`/products/${encodeURIComponent(row.id)}`}
+                  onClick={onLink}
+                  className="strong"
+                >
+                  {row.title}
+                </a>
+                <SourceBadge source={row.source} />
+              </>
             }
             secondary={
               row.categoryId === null ? (
@@ -617,6 +625,7 @@ export function ProductsPage({
                   })),
                 ],
               }),
+              sourceRouteFilter(route, appliedSource),
             ]}
             onClearAll={clearAll}
           />

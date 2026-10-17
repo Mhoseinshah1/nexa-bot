@@ -159,8 +159,9 @@ describe('the cursor trail after a filter change', () => {
     );
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('state=PAID'));
     // The filter's own «همه» puts the list back to unfiltered (one filter: no «پاک کردن همه»).
+    // «همه» is also the «منبع» filter's reset chip; the status filter is the first row.
     fireEvent.click(
-      within(openFilterPanel()).getByRole('button', { name: t('web.users_filter_all') }),
+      within(openFilterPanel()).getAllByRole('button', { name: t('web.users_filter_all') })[0]!,
     );
     await waitFor(() => expect(window.location.search).toBe(''));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).not.toContain('state='));
@@ -199,8 +200,9 @@ describe('the cursor trail after a filter change', () => {
     );
     await waitFor(() => expect(lastRead(api.calls, '/users').url).toContain('status=BLOCKED'));
     // The filter's own «همه» puts the list back to unfiltered (one filter: no «پاک کردن همه»).
+    // «همه» is also the «منبع» filter's reset chip; the status filter is the first row.
     fireEvent.click(
-      within(openFilterPanel()).getByRole('button', { name: t('web.users_filter_all') }),
+      within(openFilterPanel()).getAllByRole('button', { name: t('web.users_filter_all') })[0]!,
     );
     await waitFor(() => expect(window.location.search).toBe(''));
     // The first page of the unfiltered list (served from cache here, so asked of the pager):

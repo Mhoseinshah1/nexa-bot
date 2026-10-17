@@ -254,6 +254,7 @@ import {
   type PaymentTimelineResponse,
   type PaymentResponse,
   type PaymentState,
+  type RecordSource,
   type ReceiptDisposition,
   type WalletEntryListResponse,
   type WalletEntryResponse,
@@ -1441,6 +1442,8 @@ export function fetchCustomers(
     q?: string;
     /** Program §8: a tag's id. A filter beside `status`, charged `users.view` alone. */
     tag?: string;
+    /** Only rows from this source (the source filter). */
+    source?: RecordSource;
   } = {},
 ): Promise<CustomerListResponse> {
   const params = new URLSearchParams();
@@ -1454,6 +1457,7 @@ export function fetchCustomers(
   /** The page's ONE free-text search (spec §10); the server decides what it is. */
   if (query.q !== undefined && query.q !== '') params.set('q', query.q);
   if (query.tag !== undefined && query.tag !== '') params.set('tag', query.tag);
+  if (query.source !== undefined) params.set('source', query.source);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CUSTOMER_ROUTES.list}?${suffix}` : CUSTOMER_ROUTES.list,
@@ -1503,6 +1507,8 @@ export function fetchProducts(
     panelId?: string;
     /** A category id, or the literal `'none'` for the products filed under nothing. */
     categoryId?: string;
+    /** Only rows from this source (the source filter). */
+    source?: RecordSource;
   } = {},
 ): Promise<ProductListResponse> {
   const params = new URLSearchParams();
@@ -1510,6 +1516,7 @@ export function fetchProducts(
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   if (query.status !== undefined) params.set('status', query.status);
   if (query.audience !== undefined) params.set('audience', query.audience);
+  if (query.source !== undefined) params.set('source', query.source);
   // Omitted when empty, so clearing the box is the unfiltered list rather than a
   // search for the empty string.
   if (query.title !== undefined && query.title !== '') params.set('title', query.title);
@@ -1696,12 +1703,15 @@ export function fetchOrders(
     customerId?: string;
     productId?: string;
     q?: string;
+    /** Only rows from this source (the source filter). */
+    source?: RecordSource;
   } = {},
 ): Promise<OrderListResponse> {
   const params = new URLSearchParams();
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   if (query.state !== undefined) params.set('state', query.state);
+  if (query.source !== undefined) params.set('source', query.source);
   if (query.customerId !== undefined && query.customerId !== '') {
     params.set('customerId', query.customerId);
   }
@@ -1801,6 +1811,8 @@ export function fetchPayments(
     /** Tenant-calendar dates; sent only with `range: 'CUSTOM'`, as `reportParams` does. */
     from?: string;
     to?: string;
+    /** Only rows from this source (the source filter). */
+    source?: RecordSource;
   } = {},
 ): Promise<PaymentListResponse> {
   const params = new URLSearchParams();
@@ -1808,6 +1820,7 @@ export function fetchPayments(
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   if (query.state !== undefined) params.set('state', query.state);
   if (query.method !== undefined) params.set('method', query.method);
+  if (query.source !== undefined) params.set('source', query.source);
   if (query.disposition !== undefined) params.set('disposition', query.disposition);
   if (query.customerId !== undefined && query.customerId !== '') {
     params.set('customerId', query.customerId);
@@ -1851,6 +1864,8 @@ export function fetchServices(
     productId?: string;
     locationKey?: string;
     expiringWithinHours?: number;
+    /** Only rows from this source (the source filter). */
+    source?: RecordSource;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
@@ -1858,6 +1873,7 @@ export function fetchServices(
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   if (query.state !== undefined) params.set('state', query.state);
   if (query.deliveryState !== undefined) params.set('deliveryState', query.deliveryState);
+  if (query.source !== undefined) params.set('source', query.source);
   if (query.customerId !== undefined && query.customerId !== '') {
     params.set('customerId', query.customerId);
   }
@@ -3225,13 +3241,21 @@ export function fetchTrialPanels(): Promise<PanelTrialOverviewResponse> {
  * rule is retired by deactivating it.
  */
 export function fetchDiscounts(
-  query: { limit?: number; cursor?: string; kind?: DiscountKind; status?: DiscountStatus } = {},
+  query: {
+    limit?: number;
+    cursor?: string;
+    kind?: DiscountKind;
+    status?: DiscountStatus;
+    /** Only rows from this source (the source filter). */
+    source?: RecordSource;
+  } = {},
 ): Promise<DiscountListResponse> {
   const params = new URLSearchParams();
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   if (query.kind !== undefined) params.set('kind', query.kind);
   if (query.status !== undefined) params.set('status', query.status);
+  if (query.source !== undefined) params.set('source', query.source);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${DISCOUNT_ROUTES.list}?${suffix}` : DISCOUNT_ROUTES.list,
@@ -3593,6 +3617,8 @@ export function fetchResellers(
     status?: ResellerStatus;
     tierId?: string;
     search?: string;
+    /** Only rows from this source (the source filter). */
+    source?: RecordSource;
   } = {},
 ): Promise<ResellerListResponse> {
   const params = new URLSearchParams();
@@ -3600,6 +3626,7 @@ export function fetchResellers(
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   if (query.status !== undefined) params.set('status', query.status);
   if (query.tierId !== undefined && query.tierId !== '') params.set('tierId', query.tierId);
+  if (query.source !== undefined) params.set('source', query.source);
   if (query.search !== undefined && query.search.trim() !== '') {
     params.set('search', query.search.trim());
   }
@@ -4128,6 +4155,8 @@ export interface TicketFilters {
   readonly status?: TicketStatus;
   /** Review N1: only the tickets whose next word is support's (OPEN, WAITING_FOR_SUPPORT). */
   readonly awaiting?: 'support';
+  /** Only rows from this source (the source filter). */
+  readonly source?: RecordSource;
   readonly categoryId?: string;
   /** A customer's id, numeric Telegram id or username — whatever the operator holds. */
   readonly customer?: string;
@@ -4145,6 +4174,7 @@ export function fetchTickets(filters: TicketFilters = {}): Promise<TicketListRes
   const params = new URLSearchParams();
   if (filters.status !== undefined) params.set('status', filters.status);
   if (filters.awaiting !== undefined) params.set('awaiting', filters.awaiting);
+  if (filters.source !== undefined) params.set('source', filters.source);
   if (filters.categoryId !== undefined) params.set('categoryId', filters.categoryId);
   if (filters.customer !== undefined) params.set('customer', filters.customer);
   if (filters.assigned !== undefined) params.set('assigned', filters.assigned);

@@ -16,6 +16,7 @@ import { resolve } from '../../apps/web/src/app';
 import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { renderPage, stubApi } from './harness';
 import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
+import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
 
 /**
  * Services, rendered against the shapes the server actually returns.
@@ -970,5 +971,43 @@ describe('the service action panel', () => {
     fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     expect(await screen.findByText('op-11')).toBeInTheDocument();
     expect(screen.queryByText('op-0')).toBeNull();
+  });
+});
+
+describe('rows imported from Mirza', () => {
+  const native = service({
+    id: '019250ab-cdef-7012-8345-6789abcdef0a',
+    providerUsername: 'nx-native1',
+  });
+  const imported = service({
+    id: '019250ab-cdef-7012-8345-6789abcdef0b',
+    providerUsername: 'nx-mirza01',
+    source: 'MIRZA',
+  });
+
+  it('marks only the imported service', async () => {
+    stubApi(list([native, imported]));
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('nx-mirza01');
+    expect(rowHasBadge('nx-mirza01')).toBe(true);
+    expect(rowHasBadge('nx-native1')).toBe(false);
+  });
+
+  it('puts the «منبع» filter in the URL and asks the API for it', async () => {
+    window.history.replaceState(null, '', '/services');
+    stubApi(list([native, imported]));
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('nx-native1');
+    pickMirzaSource();
+    expect(await sourceInUrl()).toBe('MIRZA');
+
+    const again = stubApi(list([imported]));
+    renderPage(
+      <ServicesPage
+        route={{ path: '/services', query: new URLSearchParams({ source: 'MIRZA' }) }}
+        denied={false}
+      />,
+    );
+    await waitFor(() => expect(requestsWithSource(again.calls, '/services', 'MIRZA')).toBe(1));
   });
 });

@@ -32,6 +32,8 @@ import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
+import { SourceBadge } from '../ui/source-badge';
+import { sourceRouteFilter } from './record-source';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import { BalancedColumns, ChipGroup, useListClearAll } from './commerce-parts';
@@ -257,6 +259,7 @@ const SERVICE_FILTER_KEYS = [
   'productId',
   'locationKey',
   'expiring',
+  'source',
 ] as const;
 
 /** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
@@ -328,6 +331,7 @@ export function ServicesPage({
           filters.productId,
           filters.locationKey,
           filters.expiringWithinHours,
+          filters.source ?? null,
         ],
         queryFn: () =>
           fetchServices({
@@ -336,6 +340,7 @@ export function ServicesPage({
             ...(state === null ? {} : { state: state as ServiceState }),
             ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
             ...(appliedSearch === '' ? {} : { q: appliedSearch }),
+            ...(filters.source == null ? {} : { source: filters.source }),
             ...(filters.panelId === null ? {} : { panelId: filters.panelId }),
             ...(filters.productId === null ? {} : { productId: filters.productId }),
             ...(filters.locationKey === null ? {} : { locationKey: filters.locationKey }),
@@ -358,6 +363,7 @@ export function ServicesPage({
           <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
             <Ltr>{row.providerUsername}</Ltr>
           </a>
+          <SourceBadge source={row.source} />
           {/* R1: a free trial, as the database marks it (`services.is_trial`). */}
           {row.isTrial && (
             <>
@@ -486,6 +492,7 @@ export function ServicesPage({
         />
       ),
     },
+    sourceRouteFilter(route, filters.source ?? null),
     ...extraRows,
   ];
 

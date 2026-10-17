@@ -3,6 +3,8 @@ import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { Drawer } from '../ui/overlays';
 import { DateField } from '../ui/date-field';
 import { chipFilter } from './money-filters';
+import { SourceBadge } from '../ui/source-badge';
+import { sourceStateFilter } from './record-source';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -34,6 +36,7 @@ import {
   type PricePreviewRuleOutcome,
   type ProductCategoryListingResponse,
   type ProductSummaryResponse,
+  type RecordSource,
 } from '@nexa/contracts';
 import {
   createCashbackRule,
@@ -438,7 +441,8 @@ function DiscountRules({
 
   const [kind, setKind] = useState<KindFilter>('ALL');
   const [status, setStatus] = useState<StatusFilter>('ALL');
-  const signature = `${kind}|${status}`;
+  const [source, setSource] = useState<RecordSource | null>(null);
+  const signature = `${kind}|${status}|${source ?? ''}`;
   const trail = useTrail(signature);
 
   const discounts = useQuery(
@@ -450,13 +454,14 @@ function DiscountRules({
           ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
           ...(kind === 'ALL' ? {} : { kind }),
           ...(status === 'ALL' ? {} : { status }),
+          ...(source === null ? {} : { source }),
         }),
       enabled: !denied,
     }),
   );
   const rows = discounts.data?.discounts ?? [];
   const nextCursor = discounts.data?.nextCursor ?? null;
-  const filtered = kind !== 'ALL' || status !== 'ALL';
+  const filtered = kind !== 'ALL' || status !== 'ALL' || source !== null;
 
   /** The rule whose edit form is open, as the server last described it. */
   const [editing, setEditing] = useState<DiscountSummaryResponse | null>(null);
@@ -494,7 +499,12 @@ function DiscountRules({
       header: t('web.rule_label'),
       render: (row) => (
         <CellMain
-          primary={<span className="strong">{row.label}</span>}
+          primary={
+            <>
+              <span className="strong">{row.label}</span>
+              <SourceBadge source={row.source} />
+            </>
+          }
           {...(row.code === null
             ? {}
             : {
@@ -687,6 +697,7 @@ function DiscountRules({
                 ],
               }),
               statusFilter(status, setStatus),
+              sourceStateFilter(source, setSource),
             ]}
           />
         </div>

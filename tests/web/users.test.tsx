@@ -6,6 +6,7 @@ import { resolve } from '../../apps/web/src/app';
 import { customer, order, renderPage, stubApi } from './harness';
 import { openC360Tab, openWalletDialog, submitWalletDialog } from './c360-helpers';
 import { openFilterPanel } from './ui-helpers';
+import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
 
 /**
  * The Users surface, rendered against the shapes the server actually returns.
@@ -1772,5 +1773,69 @@ describe("a customer's orders and services", () => {
     for (const anchor of Array.from(card.querySelectorAll('a'))) {
       expect(anchor.getAttribute('href') ?? '').not.toContain('http');
     }
+  });
+});
+
+describe('rows imported from Mirza', () => {
+  const native = customer({
+    id: '019210ab-cdef-7012-8345-6789abcdef02',
+    telegramUserId: '5550000002',
+  });
+  const imported = customer({
+    id: '019210ab-cdef-7012-8345-6789abcdef03',
+    telegramUserId: '5550000003',
+    source: 'MIRZA',
+  });
+
+  it('marks only the imported customer «از میرزا»', async () => {
+    stubApi(list([native, imported]));
+    renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await screen.findByText('5550000003');
+    expect(rowHasBadge('5550000003')).toBe(true);
+    expect(rowHasBadge('5550000002')).toBe(false);
+  });
+
+  it('puts the «منبع» filter in the URL and asks the API for it', async () => {
+    window.history.replaceState(null, '', '/users');
+    stubApi(list([native, imported]));
+    renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await screen.findByText('5550000002');
+    pickMirzaSource();
+    expect(await sourceInUrl()).toBe('MIRZA');
+
+    const again = stubApi(list([imported]));
+    renderPage(
+      <UsersPage
+        route={{ path: '/users', query: new URLSearchParams({ source: 'MIRZA' }) }}
+        maySearch
+        denied={false}
+      />,
+    );
+    await waitFor(() => expect(requestsWithSource(again.calls, '/users', 'MIRZA')).toBe(1));
+  });
+
+  it("marks the imported customer's own page, and not a native one", async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer({ source: 'MIRZA' }) } },
+      ...walletRoutes(),
+    ]);
+    const page = (
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />
+    );
+    const first = renderPage(page);
+    expect(await screen.findByText('از میرزا')).toBeInTheDocument();
+    first.unmount();
+
+    stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...walletRoutes()]);
+    renderPage(page);
+    await screen.findAllByText('5551234567');
+    expect(screen.queryByText('از میرزا')).toBeNull();
   });
 });
