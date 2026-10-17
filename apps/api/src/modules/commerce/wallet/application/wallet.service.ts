@@ -40,6 +40,7 @@ import type {
   WalletBalance,
   WalletCursor,
   WalletEntryPage,
+  WalletImportedPage,
   WalletEntryRecord,
   WalletRepository,
 } from './ports.js';
@@ -222,6 +223,27 @@ export class WalletService {
       limit,
       query.cursor ?? null,
     );
+  }
+
+  /**
+   * The customer's IMPORTED history, newest first: what the Mirza wallet logged before the
+   * one-time import, shown beside `history` and never inside it.
+   *
+   * Reading it is reading the customer (the same permission as `history`). It is not part of
+   * the balance and not part of `entryCount`; a client that sums `history` still gets the
+   * balance exactly.
+   */
+  async importedHistory(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: string,
+    query: WalletHistoryQuery,
+  ): Promise<WalletImportedPage> {
+    await this.deps.guard.check(scope, actor, WALLET_VIEW_PERMISSION);
+    const id = this.customerId(customerId);
+    await this.assertCustomerExists(scope, id);
+    const limit = Math.min(Math.max(query.limit ?? WALLET_PAGE_DEFAULT, 1), WALLET_PAGE_MAX);
+    return this.deps.repository.listImported(scope, id, limit, query.cursor ?? null);
   }
 
   /**

@@ -2,6 +2,7 @@ import type {
   CurrencyCode,
   CustomerStatus,
   Money,
+  RecordSource,
   ReferralCommissionScope,
   ReferralCommissionState,
   ReferralSignupGiftSide,
@@ -28,6 +29,8 @@ export interface ReferralRecord {
   readonly referrerId: string;
   readonly refereeId: string;
   readonly trigger: ReferralTrigger;
+  /** `MIRZA`: an attribution the one-time import carried. History; it pays nobody. */
+  readonly source: RecordSource;
   readonly createdAt: Date;
 }
 

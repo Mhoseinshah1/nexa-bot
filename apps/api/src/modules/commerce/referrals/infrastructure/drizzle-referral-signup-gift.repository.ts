@@ -49,6 +49,7 @@ function toReferral(row: typeof referrals.$inferSelect): ReferralRecord {
     referrerId: row.referrerId,
     refereeId: row.refereeId,
     trigger: row.trigger as ReferralRecord['trigger'],
+    source: row.source as ReferralRecord['source'],
     createdAt: row.createdAt,
   };
 }
@@ -89,6 +90,9 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
           or(eq(referrals.refereeId, customerId), eq(referrals.referrerId, customerId)),
           // The database forbids it; re-stated so a row that somehow carries it is never offered.
           sql`${referrals.referrerId} <> ${referrals.refereeId}`,
+          // An attribution the Mirza import carried is HISTORY: its gift was paid by Mirza
+          // (it is inside `user.Balance`) and nothing here may pay it again.
+          eq(referrals.source, 'NEXA'),
         ),
       )
       .orderBy(asc(referrals.id));
@@ -131,6 +135,8 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
         and(
           eq(referrals.tenantId, tenantId),
           or(eq(referrals.refereeId, customerId), eq(referrals.referrerId, customerId)),
+          // The claim pays what `openSides` offers and nothing else: never a MIRZA referral.
+          eq(referrals.source, 'NEXA'),
         ),
       )
       .orderBy(asc(referrals.id))

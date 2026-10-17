@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { money, type Money } from '@nexa/contracts';
 import type {
   CurrencyCode,
+  WalletHistoryImportOrigin,
   LedgerDirection,
   LedgerReason,
   OrderId,
@@ -15,7 +16,11 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { customers, walletEntries } from '../../../../infrastructure/persistence/schema.js';
+import {
+  customers,
+  walletEntries,
+  walletHistoryImports,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   WalletAppendResult,
   WalletBalance,
@@ -23,6 +28,7 @@ import type {
   WalletEntryDraft,
   WalletEntryPage,
   WalletEntryRecord,
+  WalletImportedPage,
   WalletRepository,
 } from '../application/ports.js';
 
@@ -397,6 +403,62 @@ export class DrizzleWalletRepository implements WalletRepository {
       nextCursor:
         rows.length > limit && last !== undefined
           ? { createdAt: last.createdAtText, id: last.id }
+          : null,
+    };
+  }
+
+  async listImported(
+    scope: TenantContext,
+    customerId: UserId,
+    limit: number,
+    cursor: WalletCursor | null,
+    tx?: unknown,
+  ): Promise<WalletImportedPage> {
+    const at = cursor === null ? null : sql`${cursor.createdAt}::timestamptz`;
+    const rows = await this.exec(tx)
+      .select({
+        row: walletHistoryImports,
+        // Microsecond text, for the cursor: see `columns()`.
+        occurredAtText: sql<string>`to_char(${walletHistoryImports.occurredAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
+      .from(walletHistoryImports)
+      .where(
+        and(
+          eq(walletHistoryImports.tenantId, requireTenantId(scope)),
+          eq(walletHistoryImports.customerId, customerId),
+          at === null || cursor === null
+            ? undefined
+            : or(
+                sql`${walletHistoryImports.occurredAt} < ${at}`,
+                and(
+                  sql`${walletHistoryImports.occurredAt} = ${at}`,
+                  sql`${walletHistoryImports.id} < ${cursor.id}`,
+                ),
+              ),
+        ),
+      )
+      .orderBy(desc(walletHistoryImports.occurredAt), desc(walletHistoryImports.id))
+      .limit(limit + 1);
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map(({ row }) => ({
+        id: row.id,
+        customerId: row.customerId as UserId,
+        source: 'MIRZA' as const,
+        origin: row.origin as WalletHistoryImportOrigin,
+        sourceRef: row.sourceRef,
+        direction: row.direction as LedgerDirection | null,
+        amountMinor: row.amountMinor,
+        signedAmountMinor: row.signedAmountMinor,
+        currency: row.currency as CurrencyCode,
+        rawKind: row.rawKind,
+        note: row.note,
+        occurredAt: row.occurredAt,
+      })),
+      nextCursor:
+        rows.length > limit && last !== undefined
+          ? { createdAt: last.occurredAtText, id: last.row.id }
           : null,
     };
   }

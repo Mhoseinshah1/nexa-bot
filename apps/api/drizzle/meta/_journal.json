@@ -1765,6 +1765,13 @@
       "when": 1792270492730,
       "tag": "0251_catalog_import_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 252,
+      "version": "7",
+      "when": 1792273591888,
+      "tag": "0252_wallet_history_imports",
+      "breakpoints": true
     }
   ]
 }
