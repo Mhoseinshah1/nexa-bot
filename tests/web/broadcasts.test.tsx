@@ -468,3 +468,70 @@ describe('a draft that moved on while it was being edited (PR #245, Codex CX2 an
     await waitFor(() => expect(reads()).toBeGreaterThan(before));
   });
 });
+
+/*
+ * PR #285 review, A5: the media picker passed neither `selected` nor `onClear`, so after a
+ * refused upload it still showed the file, and the native input still held it — picking
+ * the same file again fired no change and nothing was tried.
+ */
+describe('the media picker after a refused upload', () => {
+  const photo = () => broadcast({ contentKind: 'PHOTO' });
+  const file = () => new File(['x'], 'nowruz.jpg', { type: 'image/jpeg' });
+  const picker = () => screen.getByLabelText(t('web.bc_media_pick'));
+
+  it('no longer shows the refused file, and tries the same file again when re-picked', async () => {
+    const api = stubApi([
+      { url: `/broadcasts/${ID}`, body: { broadcast: photo() } },
+      OPTIONS,
+      { url: '/audience/preview', method: 'POST', body: preview(1) },
+      {
+        url: `/broadcasts/${ID}/media`,
+        method: 'POST',
+        status: 422,
+        body: {
+          error: {
+            kind: 'validation',
+            code: 'request.invalid',
+            message: 'refused',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const uploads = () =>
+      api.calls.filter((call) => call.method === 'POST' && call.url.endsWith('/media')).length;
+
+    const first = await screen.findByLabelText(t('web.bc_media_pick'));
+    fireEvent.change(first, { target: { files: [file()] } });
+    await waitFor(() => expect(uploads()).toBe(1));
+    await waitFor(() => expect(picker()).not.toBe(first));
+    const card = picker().closest('.file-picker') as HTMLElement;
+    expect(
+      within(card).queryByText('nowruz.jpg'),
+      'the refused file still reads as chosen',
+    ).toBeNull();
+    expect((picker() as HTMLInputElement).files?.length ?? 0).toBe(0);
+
+    fireEvent.change(picker(), { target: { files: [file()] } });
+    await waitFor(() => expect(uploads()).toBe(2));
+  });
+
+  it('clears a file the page itself refused before sending', async () => {
+    const api = stubApi([
+      { url: `/broadcasts/${ID}`, body: { broadcast: photo() } },
+      OPTIONS,
+      { url: '/audience/preview', method: 'POST', body: preview(1) },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const first = await screen.findByLabelText(t('web.bc_media_pick'));
+    fireEvent.change(first, {
+      target: { files: [new File(['x'], 'nowruz.gif', { type: 'image/gif' })] },
+    });
+    expect(await screen.findByText(t('web.bc_error_media_refused'))).toBeInTheDocument();
+    await waitFor(() => expect(picker()).not.toBe(first));
+    const card = picker().closest('.file-picker') as HTMLElement;
+    expect(within(card).queryByText('nowruz.gif')).toBeNull();
+    expect(api.calls.some((call) => call.url.endsWith('/media'))).toBe(false);
+  });
+});

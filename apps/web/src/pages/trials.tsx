@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   TRIAL_ADMIN_REASON_MAX_LENGTH,
   trafficInputOf,
@@ -165,15 +166,17 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
   const onLink = useLinkHandler();
   const [trail, setTrail] = useState<string[]>([]);
   const cursor = trail[trail.length - 1] ?? null;
-  const overrides = useQuery({
-    queryKey: ['trial-overrides', cursor],
-    queryFn: () =>
-      fetchTrialOverrides({
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === null ? {} : { cursor }),
-      }),
-    enabled: mayView,
-  });
+  const overrides = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['trial-overrides', cursor],
+      queryFn: () =>
+        fetchTrialOverrides({
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === null ? {} : { cursor }),
+        }),
+      enabled: mayView,
+    }),
+  );
 
   if (!mayView) {
     return (
@@ -418,12 +421,14 @@ function ResetButton({ mayReset }: { mayReset: boolean }) {
 function HistoryCard({ mayView }: { mayView: boolean }) {
   const [trail, setTrail] = useState<string[]>([]);
   const cursor = trail[trail.length - 1] ?? null;
-  const resets = useQuery({
-    queryKey: ['trial-resets', cursor],
-    queryFn: () =>
-      fetchTrialResets({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
-    enabled: mayView,
-  });
+  const resets = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['trial-resets', cursor],
+      queryFn: () =>
+        fetchTrialResets({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
+      enabled: mayView,
+    }),
+  );
 
   if (!mayView) {
     return (

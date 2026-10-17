@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   INCIDENT_CUSTOMER_MESSAGE_MAX_LENGTH,
   INCIDENT_DESCRIPTION_MAX_LENGTH,
@@ -266,11 +267,13 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
   // A stack of cursors: the last is the page shown, popping it goes back one.
   const [cursors, setCursors] = useState<readonly string[]>([]);
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
-  const list = useQuery({
-    queryKey: ['incidents', cursor ?? null],
-    queryFn: () => fetchIncidents(cursor === undefined ? {} : { cursor }),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['incidents', cursor ?? null],
+      queryFn: () => fetchIncidents(cursor === undefined ? {} : { cursor }),
+      enabled: !denied,
+    }),
+  );
   const [creating, setCreating] = useState(false);
   const rows = list.data?.incidents ?? [];
   const nextCursor = list.data?.nextCursor ?? null;

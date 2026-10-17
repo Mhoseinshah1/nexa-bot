@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   NOTIFICATION_SUMMARY_REFRESH_MS,
   visibleNotificationCategories,
@@ -233,17 +234,19 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
   const cursors = trail.signature === signature ? trail.cursors : [];
   const cursor = cursors.at(-1);
 
-  const inbox = useQuery({
-    queryKey: ['inbox', show, category, cursor ?? null],
-    queryFn: () =>
-      fetchInbox({
-        limit: LIST_PAGE_SIZE,
-        unread: show === 'UNREAD',
-        ...(category === '' ? {} : { category }),
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    refetchInterval: NOTIFICATION_SUMMARY_REFRESH_MS,
-  });
+  const inbox = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['inbox', show, category, cursor ?? null],
+      queryFn: () =>
+        fetchInbox({
+          limit: LIST_PAGE_SIZE,
+          unread: show === 'UNREAD',
+          ...(category === '' ? {} : { category }),
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      refetchInterval: NOTIFICATION_SUMMARY_REFRESH_MS,
+    }),
+  );
 
   const refresh = () => {
     void queries.invalidateQueries({ queryKey: ['inbox'] });

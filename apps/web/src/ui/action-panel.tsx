@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../i18n/web.fa';
 import { formatNumber } from '../format';
 
@@ -34,6 +34,9 @@ export interface ActionPanelProps {
   sensitive?: readonly ReactNode[];
   /**
    * Why buttons are disabled: one reason per entry, folded under «چرا N دکمه غیرفعال است؟».
+   * N is the number of disabled BUTTONS the panel draws, counted from what is drawn — one
+   * reason can cover several buttons (no edit permission) and a reason can name an action
+   * whose button is not drawn at all (PR #285 review, A4).
    */
   disabledReasons?: readonly ReactNode[];
 }
@@ -51,10 +54,23 @@ export function ActionPanel({ title, groups, sensitive, disabledReasons }: Actio
     .filter((group) => group.actions.length > 0);
   const danger = present(sensitive);
   const reasons = present(disabledReasons);
+  /*
+   * The buttons are the page's own components (a `Button` inside an `ActionButton`), so
+   * their `disabled` is not a prop the panel can read: it counts the disabled buttons it
+   * DREW, after every render and before paint. A drawer a button opens renders in a portal
+   * and is not inside the panel, so it is never counted.
+   */
+  const section = useRef<HTMLElement>(null);
+  const [disabledCount, setDisabledCount] = useState(0);
+  useLayoutEffect(() => {
+    const next =
+      section.current?.querySelectorAll('.action-group-buttons button:disabled').length ?? 0;
+    if (next !== disabledCount) setDisabledCount(next);
+  });
   if (drawn.length === 0 && danger.length === 0) return null;
   const heading = title ?? t('web.action_panel_title');
   return (
-    <section className="action-panel" aria-labelledby={titleId}>
+    <section ref={section} className="action-panel" aria-labelledby={titleId}>
       <h2 className="action-panel-title" id={titleId}>
         {heading}
       </h2>
@@ -75,7 +91,9 @@ export function ActionPanel({ title, groups, sensitive, disabledReasons }: Actio
       {reasons.length > 0 && (
         <details className="action-panel-why">
           <summary>
-            {t('web.action_panel_why').replace('{n}', formatNumber(reasons.length))}
+            {disabledCount > 0
+              ? t('web.action_panel_why').replace('{n}', formatNumber(disabledCount))
+              : t('web.action_panel_why_unavailable')}
           </summary>
           <ul>
             {reasons.map((reason, index) => (

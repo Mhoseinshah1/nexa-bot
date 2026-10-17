@@ -15,6 +15,7 @@ import {
 } from 'react';
 import type { MoneyWire } from '@nexa/contracts';
 import { Icon, type IconName } from './icons';
+import { useSelectedTabInStrip } from './tab-strip';
 import { errorCopy, queryState, retryOf, staleAfterError, type QueryView } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { formatMoney, formatMoneyText, formatNumber, splitDuration } from '../format';
@@ -1005,6 +1006,9 @@ export function Tabs<T extends string>({
    * exists for.
    */
   const buttons = useRef(new Map<T, HTMLButtonElement | null>());
+  // B6: the selected tab is scrolled into view inside the strip, never the page.
+  const strip = useRef<HTMLDivElement | null>(null);
+  useSelectedTabInStrip(strip, () => buttons.current.get(value), value);
 
   const select = (next: T) => {
     onChange(next);
@@ -1023,6 +1027,7 @@ export function Tabs<T extends string>({
 
   return (
     <div
+      ref={strip}
       className={vertical ? 'tabs vertical' : 'tabs'}
       role="tablist"
       {...(vertical ? { 'aria-orientation': 'vertical' as const } : {})}

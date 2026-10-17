@@ -10,6 +10,7 @@ import {
 import { formatNumber } from '../format';
 import { t } from '../i18n/web.fa';
 import { Badge } from '../ui/kit';
+import { useSelectedTabInStrip } from '../ui/tab-strip';
 
 /**
  * Page structure shared by the OPS-B settings-like screens (settings, reminders, texts):
@@ -88,75 +89,11 @@ function stableJson(value: unknown): string {
 }
 
 export interface SectionNavItem {
-  /** The id of the element the item jumps to. */
+  /** The section's id: its panel is `${panelId}-${id}`. */
   readonly id: string;
   readonly label: string;
   /** A section holding an unsaved edit is marked, so it can be found again. */
   readonly unsaved?: boolean;
-}
-
-/**
- * The list of a long page's sections, as buttons that bring one into view.
- *
- * Not a tablist and not a router: every section stays rendered — each holds forms with
- * drafts, and a section that unmounted when another was chosen would discard them. The
- * item last chosen, or the section nearest the top of the window, is `aria-current`.
- */
-export function SectionNav({ label, items }: { label: string; items: readonly SectionNavItem[] }) {
-  const [current, setCurrent] = useState(items[0]?.id ?? '');
-  const ids = items.map((item) => item.id).join('|');
-
-  useEffect(() => {
-    // jsdom and older engines have no observer; the list still works, only without
-    // following the scroll.
-    if (typeof IntersectionObserver === 'undefined') return undefined;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const top = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-        if (top !== undefined) setCurrent(top.target.id);
-      },
-      { rootMargin: '-64px 0px -60% 0px' },
-    );
-    for (const id of ids.split('|')) {
-      const element = document.getElementById(id);
-      if (element !== null) observer.observe(element);
-    }
-    return () => observer.disconnect();
-  }, [ids]);
-
-  return (
-    <nav className="ob-secnav" aria-label={label}>
-      <ul>
-        {items.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              aria-current={current === item.id ? 'true' : undefined}
-              onClick={() => {
-                setCurrent(item.id);
-                const target = document.getElementById(item.id);
-                if (target === null) return;
-                if (typeof target.scrollIntoView === 'function') {
-                  target.scrollIntoView({ block: 'start' });
-                }
-                target.focus({ preventScroll: true });
-              }}
-            >
-              <span>{item.label}</span>
-              {item.unsaved === true && (
-                <span className="ob-secnav-mark" title={t('web.ob_unsaved_row')}>
-                  <i className="dot warn" aria-hidden="true" />
-                  <span className="visually-hidden">{t('web.ob_unsaved_row')}</span>
-                </span>
-              )}
-            </button>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
 }
 
 /**
@@ -180,6 +117,8 @@ export function SectionTabs({
   panelId: string;
 }) {
   const buttons = useRef(new Map<string, HTMLButtonElement | null>());
+  const strip = useRef<HTMLDivElement | null>(null);
+  useSelectedTabInStrip(strip, () => buttons.current.get(value), value);
   const select = (next: string) => {
     onChange(next);
     queueMicrotask(() => buttons.current.get(next)?.focus({ preventScroll: true }));
@@ -191,6 +130,7 @@ export function SectionTabs({
   };
   return (
     <div
+      ref={strip}
       className="tabs ob-section-tabs"
       role="tablist"
       aria-label={label}

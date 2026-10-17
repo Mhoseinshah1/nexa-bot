@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   ORDER_STATES,
   UNLIMITED_DURATION_DAYS,
@@ -224,17 +225,19 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
   const cursors = trail.signature === searchSignature ? trail.cursors : [];
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
 
-  const orders = useQuery({
-    queryKey: ['orders', searchSignature, cursor ?? null],
-    queryFn: () =>
-      fetchOrders({
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === undefined ? {} : { cursor }),
-        ...(appliedState === null ? {} : { state: appliedState }),
-        ...(appliedSearch === '' ? {} : { q: appliedSearch }),
-      }),
-    enabled: !denied,
-  });
+  const orders = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['orders', searchSignature, cursor ?? null],
+      queryFn: () =>
+        fetchOrders({
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(appliedState === null ? {} : { state: appliedState }),
+          ...(appliedSearch === '' ? {} : { q: appliedSearch }),
+        }),
+      enabled: !denied,
+    }),
+  );
 
   const rows = orders.data?.orders ?? [];
   const nextCursor = orders.data?.nextCursor ?? null;

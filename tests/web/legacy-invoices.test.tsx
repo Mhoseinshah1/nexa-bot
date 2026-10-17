@@ -202,6 +202,26 @@ describe('the legacy invoice archive page', () => {
     await waitFor(() => expect(calls(api, 'GET', 'after=kYWIwMDAwMDE')).toHaveLength(1));
   });
 
+  it('«پاک کردن همه» clears every filter, not only the last one (PR #285 review)', async () => {
+    const api = page();
+    await screen.findByText('svc_archive');
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lia_filter_status')), {
+      target: { value: 'end_of_time' },
+    });
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lia_filter_panel')), {
+      target: { value: 'rp1' },
+    });
+    await waitFor(() =>
+      expect(calls(api, 'GET', 'status=end_of_time&panelCode=rp1&limit=10')).toHaveLength(1),
+    );
+    fireEvent.click(screen.getAllByRole('button', { name: t('web.filters_clear_all') })[0]!);
+    await waitFor(() => {
+      const last = api.calls.filter((call) => call.method === 'GET').at(-1)!;
+      expect(last.url).not.toContain('status=');
+      expect(last.url).not.toContain('panelCode=');
+    });
+  });
+
   it('sends a verbatim invoice id with its spaces, never trimmed', async () => {
     const api = page();
     await screen.findByText('svc_archive');

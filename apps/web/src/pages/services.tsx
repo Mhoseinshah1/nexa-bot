@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   SERVICE_DELIVERY_STATES,
   SERVICE_OPERATOR_ACTIONS,
@@ -314,34 +315,39 @@ export function ServicesPage({
   // Program §13: the workspace's further filters, also in the URL.
   const filters = serviceFiltersOf(route, appliedSearch);
 
-  const services = useQuery({
-    queryKey: [
-      'services',
-      cursor,
-      state,
-      delivery,
-      appliedSearch,
-      filters.panelId,
-      filters.productId,
-      filters.locationKey,
-      filters.expiringWithinHours,
-    ],
-    queryFn: () =>
-      fetchServices({
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === null ? {} : { cursor }),
-        ...(state === null ? {} : { state: state as ServiceState }),
-        ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
-        ...(appliedSearch === '' ? {} : { q: appliedSearch }),
-        ...(filters.panelId === null ? {} : { panelId: filters.panelId }),
-        ...(filters.productId === null ? {} : { productId: filters.productId }),
-        ...(filters.locationKey === null ? {} : { locationKey: filters.locationKey }),
-        ...(filters.expiringWithinHours === null
-          ? {}
-          : { expiringWithinHours: filters.expiringWithinHours }),
-      }),
-    enabled: !denied,
-  });
+  const services = useQuery(
+    keepPageWhileTurning(
+      {
+        queryKey: [
+          'services',
+          cursor,
+          state,
+          delivery,
+          appliedSearch,
+          filters.panelId,
+          filters.productId,
+          filters.locationKey,
+          filters.expiringWithinHours,
+        ],
+        queryFn: () =>
+          fetchServices({
+            limit: LIST_PAGE_SIZE,
+            ...(cursor === null ? {} : { cursor }),
+            ...(state === null ? {} : { state: state as ServiceState }),
+            ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
+            ...(appliedSearch === '' ? {} : { q: appliedSearch }),
+            ...(filters.panelId === null ? {} : { panelId: filters.panelId }),
+            ...(filters.productId === null ? {} : { productId: filters.productId }),
+            ...(filters.locationKey === null ? {} : { locationKey: filters.locationKey }),
+            ...(filters.expiringWithinHours === null
+              ? {}
+              : { expiringWithinHours: filters.expiringWithinHours }),
+          }),
+        enabled: !denied,
+      },
+      [1],
+    ),
+  );
 
   const columns: readonly Column<ServiceSummaryResponse>[] = [
     {

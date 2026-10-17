@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   LEGACY_PRODUCT_REVIEW_APPROVED_STATES,
   LEGACY_PRODUCT_REVIEW_DECIDABLE_STATES,
@@ -202,11 +203,14 @@ export function LegacyProductsPage({
     // W1.8: ten rows a page, on the same keyset.
     limit: LIST_PAGE_SIZE,
   };
-  const reviews = useQuery({
-    queryKey: ['legacy-products', query],
-    queryFn: () => fetchLegacyProductReviews(query),
-    enabled: !denied,
-  });
+  const reviews = useQuery(
+    keepPageWhileTurning({
+      // The list without its cursor, then the cursor: a turn of the page keeps the rows shown.
+      queryKey: ['legacy-products', { ...query, after: null }, after ?? null],
+      queryFn: () => fetchLegacyProductReviews(query),
+      enabled: !denied,
+    }),
+  );
   const rows = reviews.data?.reviews ?? [];
   const nextCursor = reviews.data?.nextCursor ?? null;
   const open = rows.find((row) => row.id === openId) ?? null;

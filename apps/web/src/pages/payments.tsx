@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   COMMERCE_ERROR_CODES,
   PAYMENT_GATEWAY_PROVIDERS,
@@ -101,6 +102,7 @@ import {
   PAYMENT_STATE_TONES as STATE_TONES,
 } from '../payment-labels';
 import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
+import { useListClearAll } from './commerce-parts';
 
 // Review N8: the vocabulary moved to `payment-labels.ts`; these names stay importable from
 // here under their old spelling, so a workstream that reads them from this page still builds.
@@ -823,6 +825,8 @@ export function PaymentsPage({
   mayReconcile?: boolean;
 }) {
   const onLink = useLinkHandler();
+  // «پاک کردن همه»: every filter, the search and the cursor in one navigation (PR #285, A1).
+  const { searchKey, clearAll } = useListClearAll(route, PAYMENT_VIEW_KEYS);
   const cursor = route.query.get('cursor');
   const state = route.query.get('state');
   const method = route.query.get('method');
@@ -837,33 +841,38 @@ export function PaymentsPage({
    */
   const appliedSearch = appliedListSearch(route);
 
-  const payments = useQuery({
-    queryKey: [
-      'payments',
-      cursor,
-      state,
-      method,
-      disposition,
-      appliedSearch,
-      queue,
-      gateway,
-      range,
-    ],
-    queryFn: () =>
-      fetchPayments({
-        // W1.8: ten rows a page; the keyset cursor is unchanged.
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === null ? {} : { cursor }),
-        ...(state === null ? {} : { state: state as PaymentState }),
-        ...(method === null ? {} : { method: method as PaymentMethod }),
-        ...(disposition === null ? {} : { disposition: disposition as ReceiptDisposition }),
-        ...(appliedSearch === '' ? {} : { q: appliedSearch }),
-        ...(queue === null ? {} : { queue }),
-        ...(gateway === null ? {} : { gateway }),
-        ...(range === null ? {} : { range }),
-      }),
-    enabled: !denied,
-  });
+  const payments = useQuery(
+    keepPageWhileTurning(
+      {
+        queryKey: [
+          'payments',
+          cursor,
+          state,
+          method,
+          disposition,
+          appliedSearch,
+          queue,
+          gateway,
+          range,
+        ],
+        queryFn: () =>
+          fetchPayments({
+            // W1.8: ten rows a page; the keyset cursor is unchanged.
+            limit: LIST_PAGE_SIZE,
+            ...(cursor === null ? {} : { cursor }),
+            ...(state === null ? {} : { state: state as PaymentState }),
+            ...(method === null ? {} : { method: method as PaymentMethod }),
+            ...(disposition === null ? {} : { disposition: disposition as ReceiptDisposition }),
+            ...(appliedSearch === '' ? {} : { q: appliedSearch }),
+            ...(queue === null ? {} : { queue }),
+            ...(gateway === null ? {} : { gateway }),
+            ...(range === null ? {} : { range }),
+          }),
+        enabled: !denied,
+      },
+      [1],
+    ),
+  );
   const attention = useQuery({
     queryKey: ['payment-attention', range],
     queryFn: () => fetchPaymentAttention(range === null ? {} : { range }),
@@ -1028,6 +1037,7 @@ export function PaymentsPage({
             label={t('web.payment_ops_title')}
             search={
               <ListSearchBox
+                key={searchKey}
                 route={route}
                 id="payments-search"
                 slim
@@ -1099,6 +1109,7 @@ export function PaymentsPage({
                 })),
               }),
             ]}
+            onClearAll={clearAll}
             savedViews={<SavedViewsMenu registration={paymentsViews(route)} />}
           />
           {/* The counts' own failure, said under the bar rather than drawn over the list —

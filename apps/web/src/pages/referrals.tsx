@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import { ReferralAnalytics } from './business';
 import {
   REFERRAL_COMMISSION_STATES,
@@ -292,16 +293,18 @@ export function ReferralsPage({
 
 function Attributions({ denied, referrerId }: { denied: boolean; referrerId: string }) {
   const trail = useTrail(referrerId);
-  const referrals = useQuery({
-    queryKey: ['referrals', referrerId, trail.cursor ?? null],
-    queryFn: () =>
-      fetchReferrals({
-        limit: LIST_PAGE_SIZE,
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(referrerId === '' ? {} : { referrerId }),
-      }),
-    enabled: !denied,
-  });
+  const referrals = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['referrals', referrerId, trail.cursor ?? null],
+      queryFn: () =>
+        fetchReferrals({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(referrerId === '' ? {} : { referrerId }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = referrals.data?.referrals ?? [];
   const nextCursor = referrals.data?.nextCursor ?? null;
 
@@ -376,17 +379,19 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
   const [state, setState] = useState<StateFilter>('ALL');
   const trail = useTrail(`${referrerId}|${state}`);
 
-  const commissions = useQuery({
-    queryKey: ['referral-commissions', referrerId, state, trail.cursor ?? null],
-    queryFn: () =>
-      fetchReferralCommissions({
-        limit: LIST_PAGE_SIZE,
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(state === 'ALL' ? {} : { state }),
-        ...(referrerId === '' ? {} : { referrerId }),
-      }),
-    enabled: !denied,
-  });
+  const commissions = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['referral-commissions', referrerId, state, trail.cursor ?? null],
+      queryFn: () =>
+        fetchReferralCommissions({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(state === 'ALL' ? {} : { state }),
+          ...(referrerId === '' ? {} : { referrerId }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = commissions.data?.commissions ?? [];
   const nextCursor = commissions.data?.nextCursor ?? null;
   const anyUnrecovered = rows.some((row) => row.unrecoveredAmount !== '0');

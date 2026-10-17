@@ -219,6 +219,34 @@ describe('the payment list', () => {
     });
   });
 
+  /*
+   * PR #285 review, A1: «پاک کردن همه» once called each chip's own `setQueries` against the
+   * same stale `route.query`, so only the LAST removal survived. The page's clear-all is
+   * one navigation that also drops the search and the cursor.
+   */
+  it('«پاک کردن همه» drops every URL filter, the search and the cursor in one go', async () => {
+    stubApi(list([payment()]));
+    const query = new URLSearchParams({
+      state: 'PENDING',
+      method: 'MANUAL_TRANSFER',
+      q: 'abc',
+      cursor: 'stale-page',
+    });
+    window.history.replaceState(null, '', `/payments?${query.toString()}`);
+    renderPage(<PaymentsPage route={{ path: '/payments', query }} denied={false} />);
+    await screen.findByText('a1b2c3d4e5f60718');
+
+    const line = screen.getByRole('search', { name: t('web.payment_ops_title') });
+    fireEvent.click(within(line).getByRole('button', { name: t('web.filters_clear_all') }));
+
+    const applied = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe('/payments');
+    expect(applied.get('state'), 'the state filter survived «پاک کردن همه»').toBeNull();
+    expect(applied.get('method'), 'the method filter survived «پاک کردن همه»').toBeNull();
+    expect(applied.get('q'), 'the search survived «پاک کردن همه»').toBeNull();
+    expect(applied.get('cursor')).toBeNull();
+  });
+
   it('sends the search as q, beside the non-text filters', async () => {
     const api = stubApi(list([payment()]));
     const route = {

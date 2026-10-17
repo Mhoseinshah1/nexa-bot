@@ -334,6 +334,56 @@ describe('Customer 360 — notes and tags', () => {
   });
 });
 
+/*
+ * PR #285 review, A6: ten notes a page with «قبلی / بعدی» on the keyset cursor — no
+ * «یادداشت‌های قدیمی‌تر» growing one list.
+ */
+describe('the customer notes pager', () => {
+  const note = (n: number) => ({
+    id: `019210ab-cdef-7012-8345-${String(n).padStart(12, '0')}`,
+    body: `یادداشت ${n}`,
+    authorAdminId: null,
+    authorLabel: 'op-maryam',
+    createdAt: '2026-09-05T09:00:00.000Z',
+  });
+  const notes = (from: number, to: number) =>
+    Array.from({ length: from - to + 1 }, (_, index) => note(from - index));
+
+  it('shows ten a page and walks to older notes and back by cursor', async () => {
+    const api = stubApi(
+      crmRoutes([
+        {
+          url: `/users/${ID}/notes?limit=10`,
+          body: { notes: notes(25, 16), nextCursor: 'older-1' },
+        },
+        {
+          url: `/users/${ID}/notes?limit=10&cursor=older-1`,
+          body: { notes: notes(15, 6), nextCursor: null },
+        },
+      ]),
+    );
+    const { container } = renderPage(<CustomerCrmSection customerId={ID} {...ALL} />);
+    const bodies = () =>
+      Array.from(container.querySelectorAll('.crm-note-body'), (node) => node.textContent);
+    await waitFor(() => expect(bodies()).toEqual(notes(25, 16).map((one) => one.body)));
+    expect(screen.queryByRole('button', { name: 'یادداشت‌های قدیمی‌تر' })).toBeNull();
+    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    await waitFor(() => expect(bodies()).toEqual(notes(15, 6).map((one) => one.body)));
+    expect(screen.getByRole('button', { name: t('web.page_next') })).toBeDisabled();
+    const reads = api.calls.filter((call) => call.method === 'GET' && call.url.includes('/notes'));
+    expect(reads.map((call) => call.url)).toEqual([
+      expect.stringContaining(`/users/${ID}/notes?limit=10`),
+      expect.stringContaining(`/users/${ID}/notes?limit=10&cursor=older-1`),
+    ]);
+    expect(reads.some((call) => /offset|page=/.test(call.url))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
+    await waitFor(() => expect(bodies()).toEqual(notes(25, 16).map((one) => one.body)));
+  });
+});
+
 describe('a note whose answer was lost', () => {
   it('is sent again under the SAME key after a tab switch and back', async () => {
     const notesGet = crmRoutes().find((route) => route.url === `/users/${ID}/notes`)!;

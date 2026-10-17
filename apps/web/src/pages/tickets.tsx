@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
   businessHandoffReasonOf,
@@ -387,16 +388,18 @@ export function TicketsPage({
   const cursors = trail.signature === searchSignature ? trail.cursors : [];
   const cursor = cursors[cursors.length - 1];
 
-  const tickets = useQuery({
-    queryKey: ['tickets', searchSignature, cursor ?? null],
-    queryFn: () =>
-      fetchTickets({
-        ...filters,
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    enabled: !denied,
-  });
+  const tickets = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['tickets', searchSignature, cursor ?? null],
+      queryFn: () =>
+        fetchTickets({
+          ...filters,
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const categories = useQuery({
     queryKey: ['ticket-categories'],
     queryFn: fetchTicketCategories,

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   BROADCAST_BODY_DEFINITION,
   BROADCAST_BUTTONS_MAX,
@@ -253,12 +254,14 @@ export function BroadcastsPage({
 }) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
-  const list = useQuery({
-    queryKey: ['broadcasts', cursor],
-    queryFn: () =>
-      fetchBroadcasts({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['broadcasts', cursor],
+      queryFn: () =>
+        fetchBroadcasts({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
+      enabled: !denied,
+    }),
+  );
   const columns: readonly Column<BroadcastResponseItem>[] = [
     {
       key: 'title',
@@ -800,6 +803,12 @@ function MediaCard({
 }) {
   const client = useQueryClient();
   const [rejected, setRejected] = useState(false);
+  /*
+   * The picker is drawn afresh after every upload attempt (PR #285 review, A5), as on
+   * tickets: a refused file no longer reads as chosen, and the new native input has no
+   * value, so picking the SAME file again fires its change and is tried again.
+   */
+  const [attempt, setAttempt] = useState(0);
   const refresh = () => void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
   const upload = useMutation({
     mutationFn: async (file: File) => {
@@ -812,6 +821,7 @@ function MediaCard({
       return uploadBroadcastMedia(record.id, picked);
     },
     onSuccess: refresh,
+    onSettled: () => setAttempt((current) => current + 1),
   });
   const remove = useMutation({
     mutationFn: () => removeBroadcastMedia(record.id),
@@ -840,6 +850,7 @@ function MediaCard({
       {blocked && <Banner tone="warn">{t('web.bc_media_save_first')}</Banner>}
       <div className="form-actions">
         <FilePicker
+          key={attempt}
           label={t('web.bc_media_pick')}
           kind={
             record.contentKind === 'PHOTO'
@@ -1540,16 +1551,18 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
   const client = useQueryClient();
   // Refreshed WITH the detail while sending, and once more when the broadcast leaves a
   // state, so the last page read is never the one from before it finished (Codex R6).
-  const rows = useQuery({
-    queryKey: ['broadcast-recipients', id, state, cursor],
-    queryFn: () =>
-      fetchBroadcastRecipients(id, {
-        limit: LIST_PAGE_SIZE,
-        ...(state === '' ? {} : { state }),
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
-  });
+  const rows = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['broadcast-recipients', id, state, cursor],
+      queryFn: () =>
+        fetchBroadcastRecipients(id, {
+          limit: LIST_PAGE_SIZE,
+          ...(state === '' ? {} : { state }),
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
+    }),
+  );
   const seenState = useRef(broadcastState);
   useEffect(() => {
     if (seenState.current !== broadcastState) {

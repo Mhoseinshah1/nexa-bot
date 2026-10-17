@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   OPERATION_STATES,
   PROVIDER_FAILURE_KINDS,
@@ -256,13 +257,15 @@ export function OpenServiceRefundRequestsCard() {
   const onLink = useLinkHandler();
   const [trail, setTrail] = useState<readonly AttentionCursor[]>([]);
   const cursor = trail[trail.length - 1];
-  const requests = useQuery({
-    queryKey: ['service-refund-requests', 'attention', cursor ?? null],
-    queryFn: () =>
-      fetchServiceRefundRequests(
-        cursor === undefined ? { attention: true } : { attention: true, cursor },
-      ),
-  });
+  const requests = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['service-refund-requests', 'attention', cursor ?? null],
+      queryFn: () =>
+        fetchServiceRefundRequests(
+          cursor === undefined ? { attention: true } : { attention: true, cursor },
+        ),
+    }),
+  );
   const rows = requests.data?.requests ?? [];
   const nextCursor = requests.data?.nextCursor ?? null;
   return (

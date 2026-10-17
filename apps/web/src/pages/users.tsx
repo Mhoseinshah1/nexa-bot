@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import { uuidV7Schema, type CustomerStatus, type CustomerSummaryResponse } from '@nexa/contracts';
 import { fetchCustomers } from '../api/client';
 import { formatTimestamp } from '../format';
@@ -191,10 +192,12 @@ export function UsersPage({
    */
   const searching = appliedSearch !== '' && maySearch;
 
-  const customers = useQuery({
-    ...customersQuery({ appliedSearch, appliedStatus, appliedTag, searching, cursor }),
-    enabled: !denied,
-  });
+  const customers = useQuery(
+    keepPageWhileTurning({
+      ...customersQuery({ appliedSearch, appliedStatus, appliedTag, searching, cursor }),
+      enabled: !denied,
+    }),
+  );
 
   const rows = customers.data?.customers ?? [];
   const nextCursor = customers.data?.nextCursor ?? null;

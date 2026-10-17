@@ -4,6 +4,7 @@ import { Drawer } from '../ui/overlays';
 import { DateField } from '../ui/date-field';
 import { chipFilter } from './money-filters';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   CASHBACK_PERCENT_MAX,
   CASHBACK_PERCENT_MIN,
@@ -440,17 +441,19 @@ function DiscountRules({
   const signature = `${kind}|${status}`;
   const trail = useTrail(signature);
 
-  const discounts = useQuery({
-    queryKey: ['discounts', signature, trail.cursor ?? null],
-    queryFn: () =>
-      fetchDiscounts({
-        limit: LIST_PAGE_SIZE,
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(kind === 'ALL' ? {} : { kind }),
-        ...(status === 'ALL' ? {} : { status }),
-      }),
-    enabled: !denied,
-  });
+  const discounts = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['discounts', signature, trail.cursor ?? null],
+      queryFn: () =>
+        fetchDiscounts({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(kind === 'ALL' ? {} : { kind }),
+          ...(status === 'ALL' ? {} : { status }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = discounts.data?.discounts ?? [];
   const nextCursor = discounts.data?.nextCursor ?? null;
   const filtered = kind !== 'ALL' || status !== 'ALL';
@@ -1630,16 +1633,18 @@ function CashbackRules({
   const [status, setStatus] = useState<StatusFilter>('ALL');
   const trail = useTrail(status);
 
-  const rules = useQuery({
-    queryKey: ['cashback-rules', status, trail.cursor ?? null],
-    queryFn: () =>
-      fetchCashbackRules({
-        limit: LIST_PAGE_SIZE,
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(status === 'ALL' ? {} : { status }),
-      }),
-    enabled: !denied,
-  });
+  const rules = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['cashback-rules', status, trail.cursor ?? null],
+      queryFn: () =>
+        fetchCashbackRules({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(status === 'ALL' ? {} : { status }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = rules.data?.rules ?? [];
   const nextCursor = rules.data?.nextCursor ?? null;
 

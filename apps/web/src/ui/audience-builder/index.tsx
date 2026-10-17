@@ -887,7 +887,17 @@ export function AudienceConditions({
                     aria-expanded={open}
                     aria-controls={open ? editorId : undefined}
                     aria-label={`${open ? t('web.aq_close') : t('web.aq_change')} ${condition.label}`}
-                    onClick={() => setEditing(open ? null : condition.id)}
+                    onClick={() => {
+                      // PR #285 review, A2: opening a row keeps it. A row shown only
+                      // because its condition is on (a stored definition, a quick start)
+                      // otherwise vanished — editor and focus too — once cleared.
+                      if (!open) {
+                        setAdded((current) =>
+                          current.includes(condition.id) ? current : [...current, condition.id],
+                        );
+                      }
+                      setEditing(open ? null : condition.id);
+                    }}
                   >
                     {open ? t('web.aq_close') : t('web.aq_change')}
                   </button>

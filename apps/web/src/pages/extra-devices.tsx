@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   DEVICE_ADDON_MAX_QUANTITY,
   PROVIDER_DESCRIPTORS,
@@ -153,16 +154,18 @@ export function ExtraDevicesPage({
    */
   const [trail, setTrail] = useState<readonly (string | null)[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const rates = useQuery({
-    queryKey: ['service-addons', 'ADD_DEVICES', cursor],
-    queryFn: () =>
-      fetchServiceAddons({
-        kind: 'ADD_DEVICES',
-        limit: RATE_PAGE_SIZE,
-        ...(cursor === null ? {} : { cursor }),
-      }),
-    enabled: !denied,
-  });
+  const rates = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['service-addons', 'ADD_DEVICES', cursor],
+      queryFn: () =>
+        fetchServiceAddons({
+          kind: 'ADD_DEVICES',
+          limit: RATE_PAGE_SIZE,
+          ...(cursor === null ? {} : { cursor }),
+        }),
+      enabled: !denied,
+    }),
+  );
   /*
    * The two scope pickers, and the NAMES a scoped rate is listed with. Each list is read
    * under the permission its own endpoint charges — `panels.view`, and the `catalog.view`

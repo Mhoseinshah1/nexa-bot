@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   RECOVERY_CONFIRMATION_PHRASE,
   isLegacyNxpkgTerminalStatus,
@@ -118,13 +119,15 @@ export function RecoveryPage({
     enabled: mayView,
     refetchInterval: pollUnlessFinal(STATUS_REFRESH_MS),
   });
-  const history = useQuery({
-    queryKey: ['backup-history', cursor ?? null],
-    queryFn: () =>
-      fetchBackupHistory({ limit: HISTORY_PAGE, ...(cursor === undefined ? {} : { cursor }) }),
-    enabled: mayView,
-    refetchInterval: pollUnlessFinal(STATUS_REFRESH_MS),
-  });
+  const history = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['backup-history', cursor ?? null],
+      queryFn: () =>
+        fetchBackupHistory({ limit: HISTORY_PAGE, ...(cursor === undefined ? {} : { cursor }) }),
+      enabled: mayView,
+      refetchInterval: pollUnlessFinal(STATUS_REFRESH_MS),
+    }),
+  );
   const capabilities = useQuery({
     queryKey: ['recovery-capabilities'],
     queryFn: fetchRecoveryCapabilities,
