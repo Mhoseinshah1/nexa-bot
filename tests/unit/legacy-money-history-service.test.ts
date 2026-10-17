@@ -15,7 +15,7 @@ import type { PermissionGuard } from '../../apps/api/src/modules/platform/access
 
 /**
  * Mirza `.nxpkg` importer — «سوابق مالی میرزا»: charged on `users.view`, then the customer,
- * then `legacy.history.view`, before anything is read; and structurally read-only (the
+ * then `legacy.history.view` and `legacy.debts.view`, before anything is read; and structurally read-only (the
  * reader runs in a READ ONLY transaction and names no write; the HTTP route is a GET).
  * SYNTHETIC values only.
  */
@@ -107,6 +107,21 @@ describe('the Mirza money history service', () => {
     expect(asked).toEqual(['check:users.view', 'customer', 'check:legacy.history.view']);
   });
 
+  it('refuses without legacy.debts.view: the response names the legacy debt', async () => {
+    // legacy.history.view alone is not enough: the history card withholds even the debt count
+    // without legacy.debts.view, and this response carries the debt's amount and state.
+    const { service, asked } = harness(['users.view', 'legacy.history.view']);
+    await expect(service.forCustomer(scope, actor, CUSTOMER)).rejects.toMatchObject({
+      code: 'platform.permission_denied',
+    });
+    expect(asked).toEqual([
+      'check:users.view',
+      'customer',
+      'check:legacy.history.view',
+      'check:legacy.debts.view',
+    ]);
+  });
+
   it('refuses without users.view before looking the customer up', async () => {
     const { service, asked } = harness(['legacy.history.view']);
     await expect(service.forCustomer(scope, actor, CUSTOMER)).rejects.toMatchObject({
@@ -116,7 +131,10 @@ describe('the Mirza money history service', () => {
   });
 
   it('answers 404 for a customer of no tenant, reading nothing', async () => {
-    const { service, asked } = harness(['users.view', 'legacy.history.view'], false);
+    const { service, asked } = harness(
+      ['users.view', 'legacy.history.view', 'legacy.debts.view'],
+      false,
+    );
     await expect(service.forCustomer(scope, actor, CUSTOMER)).rejects.toMatchObject({
       code: 'commerce.customer_not_found',
     });
@@ -124,7 +142,7 @@ describe('the Mirza money history service', () => {
   });
 
   it('returns a contract-valid, read-only view that never claims to be part of the balance', async () => {
-    const { service } = harness(['users.view', 'legacy.history.view']);
+    const { service } = harness(['users.view', 'legacy.history.view', 'legacy.debts.view']);
     const view = await service.forCustomer(scope, actor, CUSTOMER);
     expect(legacyMoneyHistoryResponseSchema.parse(view)).toEqual(view);
     expect(view.readOnly).toBe(true);

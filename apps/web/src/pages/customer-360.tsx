@@ -770,7 +770,11 @@ export function UserDetailPage({
                     mayViewPii={mayViewLegacyPii}
                   />
                   {/* The Mirza money history: evidence beside the money, never added to a balance. */}
-                  <CustomerLegacyMoneyCard customerId={id} mayView={mayViewLegacyHistory} />
+                  <CustomerLegacyMoneyCard
+                    customerId={id}
+                    // The response names the legacy debt: the server charges legacy.debts.view too.
+                    mayView={mayViewLegacyHistory && mayViewLegacyDebts}
+                  />
                 </div>
               )}
               {tab === 'controls' && (

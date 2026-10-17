@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { CustomerLegacyMoneyCard } from '../../apps/web/src/pages/customer-360-legacy-money';
-import { renderPage, stubApi } from './harness';
+import { UserDetailPage } from '../../apps/web/src/pages/users';
+import { openC360Tab } from './c360-helpers';
+import { customer, renderPage, stubApi } from './harness';
 
 /**
  * Mirza `.nxpkg` importer — «سوابق مالی میرزا» on Customer 360: not drawn (and nothing asked)
@@ -96,5 +98,45 @@ describe('the Mirza money history card', () => {
     expect(screen.getByText('در انتظار بررسی')).toBeTruthy();
     expect(screen.getByText(/تاریخچه‌ای برای مقایسه نبود/)).toBeTruthy();
     expect(screen.getByText(/تاریخچهٔ تراکنش کیف پول برای این مشتری نداشت/)).toBeTruthy();
+  });
+});
+
+/*
+ * The response names the legacy wallet debt (its amount and review state), which the history
+ * card withholds without `legacy.debts.view`. So Customer 360 draws the money card, and asks
+ * for it, only when the viewer holds BOTH keys; the server charges both as well.
+ */
+describe('«سوابق مالی میرزا» on Customer 360 needs legacy.debts.view too', () => {
+  const page = (mayViewLegacyDebts: boolean) => {
+    const api = stubApi([
+      { url: `/users/${ID}`, body: { customer: customer() } },
+      { url: `/users/${ID}/legacy-money-history`, body },
+    ]);
+    renderPage(
+      <UserDetailPage
+        id={ID}
+        denied={false}
+        mayViewLegacyHistory
+        mayViewLegacyDebts={mayViewLegacyDebts}
+      />,
+    );
+    return api;
+  };
+  const asked = (api: ReturnType<typeof stubApi>) =>
+    api.calls.some((c) => c.url.includes('/legacy-money-history'));
+
+  it('legacy.history.view alone: no card and no request', async () => {
+    const api = page(false);
+    await openC360Tab('financial');
+    await waitFor(() => expect(api.calls.some((c) => c.url.endsWith(`/users/${ID}`))).toBe(true));
+    expect(screen.queryByText('سوابق مالی میرزا')).toBeNull();
+    expect(asked(api)).toBe(false);
+  });
+
+  it('both keys: the card is drawn from the server', async () => {
+    const api = page(true);
+    await openC360Tab('financial');
+    expect(await screen.findByText('سوابق مالی میرزا')).toBeTruthy();
+    expect(asked(api)).toBe(true);
   });
 });

@@ -35,12 +35,16 @@ import {
  * READ ONLY. There is no write here and none behind it: the reader runs every statement in a
  * READ ONLY transaction. The opening figure is the snapshot `user.Balance`; the history is
  * evidence and is never added to a balance. Charged on `users.view`, the customer existing in
- * the tenant, then `legacy.history.view` — the same keys as the history card, whose records
- * already carry every amount summed here.
+ * the tenant, then `legacy.history.view` (the history card's key, whose records carry every
+ * amount summed here) AND `legacy.debts.view`: the response names the legacy wallet debt — its
+ * amount and review state, and the opening figure and balances it shapes — which the history
+ * card withholds without that key. Neither permission implies the other.
  */
 
 export const LEGACY_MONEY_HISTORY_PERMISSION = 'legacy.history.view' satisfies PermissionKey;
 const CUSTOMER_VIEW = 'users.view' satisfies PermissionKey;
+/** The legacy wallet debt in the response: the same key the history card's debt count needs. */
+export const LEGACY_MONEY_HISTORY_DEBTS_PERMISSION = 'legacy.debts.view' satisfies PermissionKey;
 
 /** One customer's grouped money facts, as the reader returns them. */
 export interface CustomerMoneyFacts {
@@ -92,6 +96,7 @@ export class LegacyMoneyHistoryService {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
     await this.deps.guard.check(scope, actor, LEGACY_MONEY_HISTORY_PERMISSION);
+    await this.deps.guard.check(scope, actor, LEGACY_MONEY_HISTORY_DEBTS_PERMISSION);
     const facts = await this.deps.reader.forCustomer(scope, {
       id: customer.id,
       telegramUserId: customer.telegramUserId,
