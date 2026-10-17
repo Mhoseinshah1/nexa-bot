@@ -1268,6 +1268,11 @@ const POSITIVE_WHOLE = /^0*[1-9][0-9]*$/u;
  * The service charges both itself — the missing button is a courtesy, never the
  * enforcement.
  */
+/** The "from Mirza" badge: a row the one-time import carried from Mirza. */
+function SourceBadgeMirza() {
+  return <Badge tone="info">{t('web.source_mirza')}</Badge>;
+}
+
 function WalletCard({
   customerId,
   mayView,
@@ -1283,6 +1288,7 @@ function WalletCard({
   onAdjust: (direction: LedgerDirection) => void;
 }) {
   const [cursor, setCursor] = useState<string | null>(null);
+  const [importedCursor, setImportedCursor] = useState<string | null>(null);
 
   const wallet = useQuery({
     queryKey: ['wallet', customerId],
@@ -1291,11 +1297,12 @@ function WalletCard({
   });
   const entries = useQuery(
     keepPageWhileTurning({
-      queryKey: ['wallet-entries', customerId, cursor],
+      queryKey: ['wallet-entries', customerId, cursor, importedCursor],
       queryFn: () =>
         fetchWalletEntries(customerId, {
           limit: LIST_PAGE_SIZE,
           ...(cursor === null ? {} : { cursor }),
+          ...(importedCursor === null ? {} : { importedCursor }),
         }),
       enabled: mayView,
     }),
@@ -1367,8 +1374,9 @@ function WalletCard({
 
   const balance = wallet.data?.wallet;
   /*
-   * BELOW ZERO is a real state now, and only for one reason: a reseller's purchase drawn
-   * on their credit line (`docs/wp9-reseller-audit.md` R8). The figure is drawn exactly
+   * BELOW ZERO is a real state, for two reasons: a reseller's legacy purchase drawn on the
+   * removed credit line (`docs/wp9-reseller-audit.md` R8), and a negative Mirza balance the
+   * one-time import carried over (owner decision 2026-10-17). The figure is drawn exactly
    * as derived — `Money` carries the sign — and said in words beside it, because a
    * negative balance read as a rendering glitch is a debt nobody follows up.
    */
@@ -1449,6 +1457,67 @@ function WalletCard({
         )}
       </StateSwitch>
       <p className="muted small">{t('web.wallet_immutable')}</p>
+
+      {/*
+        The one-time import's Mirza wallet history: shown beside the ledger, never part of
+        it. The balance above is the ledger's alone; Mirza's own balance was carried as ONE
+        opening entry, so these rows are what happened in Mirza, not money in NEXA.
+      */}
+      {entries.data !== undefined &&
+        ((entries.data.importedEntries ?? []).length > 0 || importedCursor !== null) && (
+          <>
+            <h3 className="ca-subhead">
+              {t('web.wallet_imported_title')} <SourceBadgeMirza />
+            </h3>
+            <p className="muted small">{t('web.wallet_imported_hint')}</p>
+            <DataTable
+              caption={t('web.wallet_imported_title')}
+              columns={[
+                {
+                  key: 'signedAmount',
+                  header: t('web.wallet_balance'),
+                  render: (row) => (
+                    <Money value={{ amountMinor: row.signedAmount, currency: row.currency }} />
+                  ),
+                },
+                {
+                  key: 'rawKind',
+                  header: t('web.wallet_reason'),
+                  render: (row) =>
+                    row.origin === 'WHEEL_SPIN' ? (
+                      t('web.wallet_imported_wheel')
+                    ) : row.rawKind === null ? (
+                      <Dash />
+                    ) : (
+                      <Ltr>{row.rawKind}</Ltr>
+                    ),
+                },
+                {
+                  key: 'note',
+                  header: t('web.wallet_note'),
+                  render: (row) => (row.note === null ? <Dash /> : row.note),
+                },
+                {
+                  key: 'occurredAt',
+                  header: t('web.wallet_created_at'),
+                  render: (row) => (
+                    <span className="nowrap">{formatTimestamp(row.occurredAt)}</span>
+                  ),
+                },
+              ]}
+              rows={entries.data.importedEntries ?? []}
+              rowKey={(row) => row.id}
+              dense
+            />
+            <CursorPager
+              shown={(entries.data.importedEntries ?? []).length}
+              hasPrevious={importedCursor !== null}
+              hasNext={(entries.data.importedNextCursor ?? null) !== null}
+              onPrevious={() => setImportedCursor(null)}
+              onNext={() => setImportedCursor(entries.data?.importedNextCursor ?? null)}
+            />
+          </>
+        )}
 
       {/*
         Named separately, because the two permissions are separate decisions with

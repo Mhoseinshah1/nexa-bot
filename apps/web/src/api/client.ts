@@ -1737,11 +1737,14 @@ export function fetchWallet(customerId: string): Promise<WalletResponse> {
 
 export function fetchWalletEntries(
   customerId: string,
-  query: { limit?: number; cursor?: string } = {},
+  query: { limit?: number; cursor?: string; importedCursor?: string } = {},
 ): Promise<WalletEntryListResponse> {
   const params = new URLSearchParams();
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.importedCursor !== undefined && query.importedCursor !== '') {
+    params.set('importedCursor', query.importedCursor);
+  }
   const suffix = params.toString();
   const base = WALLET_ROUTES.entries(customerId);
   return authedGet(suffix ? `${base}?${suffix}` : base, walletEntryListResponseSchema);

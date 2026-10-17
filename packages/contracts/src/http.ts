@@ -48,7 +48,6 @@ import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import { listSearchQuerySchema } from './list-search.js';
-import { RECORD_SOURCES } from './record-source.js';
 import {
   CASHBACK_PERCENT_MAX,
   CASHBACK_PERCENT_MIN,

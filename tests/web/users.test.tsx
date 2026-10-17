@@ -1322,6 +1322,80 @@ describe('the wallet card', () => {
   });
 });
 
+describe('the Mirza wallet history (one-time import)', () => {
+  const ALL_WALLET = { mayViewWallet: true, mayCredit: true, mayDebit: true } as const;
+  const imported = {
+    id: '019270ab-cdef-7012-8345-6789abcdef01',
+    customerId: ROW_ID,
+    source: 'MIRZA',
+    origin: 'WALLET_TRANSACTION',
+    sourceRef: 'wallet-tx:91',
+    direction: 'DEBIT',
+    amount: '45000',
+    signedAmount: '-45000',
+    currency: 'IRT',
+    rawKind: 'buy_service',
+    note: null,
+    occurredAt: '2025-06-01T10:00:00.000Z',
+  };
+
+  it('shows Mirza rows apart from the ledger, marked, and pages them by their own cursor', async () => {
+    const api = stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      {
+        url: `/users/${ROW_ID}/wallet/entries`,
+        body: {
+          entries: [walletEntry()],
+          nextCursor: null,
+          importedEntries: [imported],
+          importedNextCursor: 'mirza-next',
+        },
+      },
+      ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }),
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
+    await openC360Tab('financial');
+    expect((await screen.findAllByText('تاریخچهٔ کیف پول در میرزا')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('از میرزا').length).toBeGreaterThan(0);
+    expect(screen.getByText('buy_service')).toBeTruthy();
+    // Its own pager, its own cursor: the ledger's is untouched.
+    const nexts = await screen.findAllByText('بعدی');
+    fireEvent.click(nexts[nexts.length - 1]!);
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('importedCursor=mirza-next'))).toBe(true);
+    });
+  });
+
+  it('draws no Mirza section for a customer NEXA never imported', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes({ balanceAmount: '0', entryCount: 0 }),
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
+    await openC360Tab('financial');
+    await screen.findByText('تاریخچه تراکنش‌ها');
+    expect(screen.queryByText('تاریخچهٔ کیف پول در میرزا')).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // This customer's orders and services (WP2)
 // ---------------------------------------------------------------------------
