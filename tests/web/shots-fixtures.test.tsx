@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { API_PREFIX } from '@nexa/contracts';
+import { API_PREFIX, TEMPLATE_KEYS } from '@nexa/contracts';
 import { FIXTURES, findFixture } from './shots/index.ts';
 
 /**
@@ -92,6 +92,18 @@ describe('the screenshot fixtures', () => {
     );
     expect(found, `${method} ${path}?${query}`).toBeDefined();
     expect(found?.status).toBe(200);
+  });
+
+  // The notifications screens name each row by its template; a key the server never sends
+  // shows as a raw key, which the sweep cannot tell from a missing translation.
+  it('names only template keys the server sends', () => {
+    const lists = FIXTURES.filter((f) => f.method === 'GET' && f.path === '/notifications');
+    expect(lists.length).toBeGreaterThan(0);
+    for (const list of lists) {
+      const rows = (list.body as { notifications: { templateKey: string }[] }).notifications;
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(TEMPLATE_KEYS).toContain(row.templateKey);
+    }
   });
 
   it('opens the incident and the conversation the sweep visits, by its id', () => {
