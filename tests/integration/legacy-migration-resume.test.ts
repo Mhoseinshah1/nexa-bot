@@ -121,7 +121,8 @@ describe('legacy migration: interrupt, resume and rerun over a real package', ()
       payments: 0,
       provisioningOperations: 0,
       history: pkg.historyLines,
-      candidates: live,
+      // every invoice is a candidate, live or not (owner decision 2026-10-17)
+      candidates: generated.invoices.length,
       applyRuns: 1,
     });
   });
