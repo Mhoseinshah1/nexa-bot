@@ -163,6 +163,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        client_apps,
        -- WP-A9: the low-balance alerts, before the ledger entries they name.
        wallet_threshold_alerts,
+       wallet_history_imports,
        wallet_entries, discount_redemptions, referrals, trial_grants, trial_resets,
        -- Round N package D: the reseller overrides and monthly notices, before resellers.
        reseller_grant_overrides, reseller_entitlement_overrides, reseller_minimum_notices,

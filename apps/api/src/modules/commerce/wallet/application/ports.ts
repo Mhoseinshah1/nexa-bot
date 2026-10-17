@@ -7,6 +7,7 @@ import type {
   PaymentId,
   TenantContext,
   UserId,
+  WalletHistoryImportOrigin,
 } from '@nexa/contracts';
 
 /**
@@ -114,6 +115,33 @@ export interface WalletEntryPage {
   readonly nextCursor: WalletCursor | null;
 }
 
+/**
+ * One movement the Mirza wallet logged before the one-time import (`wallet_history_imports`).
+ *
+ * HISTORY, and not a ledger entry: it is never part of a balance (`balanceOf` does not read
+ * its table) and has no reason, reference or reversal. `direction` is null when Mirza's own
+ * arithmetic does not say which way the money moved.
+ */
+export interface WalletImportedRecord {
+  readonly id: string;
+  readonly customerId: UserId;
+  readonly source: 'MIRZA';
+  readonly origin: WalletHistoryImportOrigin;
+  readonly sourceRef: string;
+  readonly direction: LedgerDirection | null;
+  readonly amountMinor: bigint;
+  readonly signedAmountMinor: bigint;
+  readonly currency: CurrencyCode;
+  readonly rawKind: string | null;
+  readonly note: string | null;
+  readonly occurredAt: Date;
+}
+
+export interface WalletImportedPage {
+  readonly items: readonly WalletImportedRecord[];
+  readonly nextCursor: WalletCursor | null;
+}
+
 export interface WalletRepository {
   /**
    * Appends an entry, or returns the one already written under this reference.
@@ -184,4 +212,16 @@ export interface WalletRepository {
     reference: string,
     tx?: unknown,
   ): Promise<WalletEntryRecord | null>;
+
+  /**
+   * A page of the customer's IMPORTED history, newest first: what Mirza's wallet logged
+   * before the import. Beside `list`, never inside it, and never summed into `balanceOf`.
+   */
+  listImported(
+    scope: TenantContext,
+    customerId: UserId,
+    limit: number,
+    cursor: WalletCursor | null,
+    tx?: unknown,
+  ): Promise<WalletImportedPage>;
 }

@@ -281,6 +281,19 @@ import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy
 import { LegacyHistoryIngest } from './modules/platform/legacy-history/application/legacy-history-ingest.js';
 import { LegacyHistoryReadService } from './modules/platform/legacy-history/application/legacy-history-read.service.js';
 import { DrizzleLegacyHistoryRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-history.repository.js';
+// legacy-materialize: history steps
+import { DiscountUsageHistoryStep } from './modules/platform/legacy-materialize/application/discount-usage-history.step.js';
+import { PaymentHistoryStep } from './modules/platform/legacy-materialize/application/payment-history.step.js';
+import { ReferralHistoryStep } from './modules/platform/legacy-materialize/application/referral-history.step.js';
+import { TicketHistoryStep } from './modules/platform/legacy-materialize/application/ticket-history.step.js';
+import { WalletHistoryStep } from './modules/platform/legacy-materialize/application/wallet-history.step.js';
+import type { MaterializeStep } from './modules/platform/legacy-materialize/application/ports.js';
+import { DrizzleDiscountUsageHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-discount-usage-history.repository.js';
+import { DrizzleHistoryRecordReader } from './modules/platform/legacy-materialize/infrastructure/drizzle-history-record.reader.js';
+import { DrizzlePaymentHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-payment-history.repository.js';
+import { DrizzleReferralHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-referral-history.repository.js';
+import { DrizzleTicketHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-ticket-history.repository.js';
+import { DrizzleWalletHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-wallet-history.repository.js';
 import { LegacyRecordsReadService } from './modules/platform/legacy-history/application/legacy-records-read.service.js';
 import { DrizzleLegacyRecordsRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-records.repository.js';
 import { LegacyMoneyHistoryService } from './modules/platform/legacy-history/application/legacy-money-history.service.js';
@@ -1022,6 +1035,14 @@ export interface Container {
   readonly legacyHistoryIngest: LegacyHistoryIngest;
   readonly legacyHistoryRead: LegacyHistoryReadService;
   readonly legacyRecordsRead: LegacyRecordsReadService;
+  // legacy-materialize: history steps. Order: payments, wallet history, tickets, referrals, discount usage.
+  readonly legacyMaterializeHistory: {
+    readonly payments: MaterializeStep;
+    readonly walletHistory: MaterializeStep;
+    readonly tickets: MaterializeStep;
+    readonly referrals: MaterializeStep;
+    readonly discountUsage: MaterializeStep;
+  };
   /** Mirza money history beside the opening figure, and the tenant-wide report (read only). */
   readonly legacyMoneyHistory: LegacyMoneyHistoryService;
   /**
@@ -4491,6 +4512,36 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     audit,
   });
+  // legacy-materialize: history steps (payments, wallet history, tickets, referrals, discount usage)
+  const legacyMaterializeDeps = {
+    records: new DrizzleHistoryRecordReader(database.db),
+    uow,
+    scopeActivity: tenants,
+    ids,
+  };
+  const legacyMaterializeHistory = {
+    payments: new PaymentHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzlePaymentHistoryRepository(database.db, ids),
+    ),
+    walletHistory: new WalletHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzleWalletHistoryRepository(database.db, ids),
+    ),
+    tickets: new TicketHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzleTicketHistoryRepository(database.db, ids),
+    ),
+    referrals: new ReferralHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzleReferralHistoryRepository(database.db, ids),
+    ),
+    discountUsage: new DiscountUsageHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzleDiscountUsageHistoryRepository(database.db, ids),
+    ),
+  };
+  // End legacy-materialize: history steps
   const legacyRecordsRead = new LegacyRecordsReadService({
     repository: new DrizzleLegacyRecordsRepository(database.db),
     guard,
@@ -7147,6 +7198,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyHistoryIngest,
     legacyHistoryRead,
     legacyRecordsRead,
+    legacyMaterializeHistory,
     legacyMoneyHistory,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
