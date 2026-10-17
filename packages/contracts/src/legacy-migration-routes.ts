@@ -514,15 +514,24 @@ export function legacyMigrationDryRunInventoryIncomplete(
 export const legacyExactMatchGapSchema = z.object({
   reason: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/u),
   rows: count,
-  sumMinor: z.string().regex(/^-?\d+$/u).nullable(),
+  sumMinor: z
+    .string()
+    .regex(/^-?\d+$/u)
+    .nullable(),
 });
 export const legacyExactMatchRowSchema = z.object({
   mirzaTable: z.string().min(1).max(64),
   nexaTable: z.string().min(1).max(64),
   mirzaRows: count,
   nexaRows: count,
-  mirzaSumMinor: z.string().regex(/^-?\d+$/u).nullable(),
-  nexaSumMinor: z.string().regex(/^-?\d+$/u).nullable(),
+  mirzaSumMinor: z
+    .string()
+    .regex(/^-?\d+$/u)
+    .nullable(),
+  nexaSumMinor: z
+    .string()
+    .regex(/^-?\d+$/u)
+    .nullable(),
   explained: z.array(legacyExactMatchGapSchema),
   /** NEXA + explained = Mirza, in rows and in money. */
   holds: z.boolean(),

@@ -462,7 +462,7 @@ same dry-run approval, the same inventory hold and `refusedWrites = 0`:
   (`legacy-materialize/application/terminated-services.step.ts`) writes a `TERMINATED` service
   and a `LEGACY_HISTORY` order — never provisioned, no operation, no username hold, no provider
   call, never a sale, no money. See the step's header for the rules and
-  `ended-services.rules.ts` for the closed list of reasons an invoice is *not* carried.
+  `ended-services.rules.ts` for the closed list of reasons an invoice is _not_ carried.
 - A username is free once its service is `TERMINATED`: `services_panel_provider_username_key`
   is partial (`state <> 'TERMINATED'`), which is what the application already assumed
   (`usernameInUseOnPanel`) and what lets an ended row sit beside a live one.
