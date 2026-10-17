@@ -70,10 +70,14 @@ export class LegacyRecordsReadService {
   /** Every record type with its counts (global and customer-less ones included). */
   async summary(scope: TenantContext, actor: ActorContext): Promise<LegacyRecordsSummary> {
     await this.deps.guard.check(scope, actor, LEGACY_HISTORY_VIEW_PERMISSION);
-    const [counts, inactivePanels] = await Promise.all([
+    const [counts, panels, pii] = await Promise.all([
       this.deps.repository.countsByType(scope),
       this.deps.repository.inactivePanels(scope),
+      this.holdsPii(scope, actor),
     ]);
+    // A panel's name is free text, which the history projection withholds without
+    // legacy.invoices.pii.view; the code, type and status are codes and stay.
+    const inactivePanels = pii ? panels : panels.map((panel) => ({ ...panel, name: null }));
     const byId = new Map(counts.map((row) => [row.type, row]));
     // Known types in the contract's order; a type the contract does not know is not listed.
     const byType = LEGACY_HISTORY_RECORD_TYPES.filter((t) => (byId.get(t)?.records ?? 0) > 0).map(

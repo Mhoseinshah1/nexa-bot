@@ -8,6 +8,7 @@ import {
 } from '@nexa/contracts';
 import {
   LegacyMoneyHistoryService,
+  customerMoneyView,
   type CustomerMoneyFacts,
   type LegacyMoneyHistoryReader,
 } from '../../apps/api/src/modules/platform/legacy-history/application/legacy-money-history.service';
@@ -161,6 +162,36 @@ describe('the Mirza money history service', () => {
     expect(view.payments.excludedByOutcome.map((row) => row.outcome)).toEqual(['CANCELLED']);
     expect(view.opening.credit).toEqual({ amountMinor: '150000', currency: 'IRT' });
     expect(view.reconciliation.status).toBe('NO_WALLET_HISTORY');
+  });
+});
+
+describe('the money history shows converter codes the way the history card does', () => {
+  it('withholds a verdict, cause, certainty or status that is not a code as UNKNOWN', () => {
+    const view = customerMoneyView({
+      ...facts,
+      serviceOperations: [
+        { status: 'call 0912 345 6789', currency: 'IRT', count: 1, sumMinor: 1000n, unparsed: 0 },
+        { status: 'PAID', currency: 'IRT', count: 1, sumMinor: 2000n, unparsed: 0 },
+      ],
+      opening: {
+        ...facts.opening,
+        checks: [
+          {
+            verdict: 'my name is Ali',
+            snapshotMinor: '150000',
+            snapshotCurrency: 'IRT',
+            historyLastMinor: '150000',
+            historyLastCurrency: 'IRT',
+            deltaMinor: null,
+          },
+        ],
+        differences: [{ cause: 'free text here', certainty: '123456' }],
+      },
+    });
+    expect(view.reconciliation.historyVerdict).toBe('UNKNOWN');
+    expect(view.reconciliation.difference).toEqual({ cause: 'UNKNOWN', certainty: 'UNKNOWN' });
+    expect(view.serviceOperations.map((row) => row.status).sort()).toEqual(['PAID', 'UNKNOWN']);
+    expect(JSON.stringify(view)).not.toMatch(/Ali|0912|free text|123456/u);
   });
 });
 

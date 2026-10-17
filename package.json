@@ -56,6 +56,10 @@
     "legacy-import:dev": "pnpm --filter @nexa/api legacy-import:dev",
     "rickpanel-probe": "pnpm --filter @nexa/api rickpanel-probe",
     "rickpanel-probe:dev": "pnpm --filter @nexa/api rickpanel-probe:dev",
+    "legacy-money-report": "pnpm --filter @nexa/api legacy-money-report",
+    "legacy-money-report:dev": "pnpm --filter @nexa/api legacy-money-report:dev",
+    "customers-link-bot": "pnpm --filter @nexa/api customers-link-bot",
+    "customers-link-bot:dev": "pnpm --filter @nexa/api customers-link-bot:dev",
     "dev:services": "bash scripts/dev-services.sh",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:citations && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build"
   },

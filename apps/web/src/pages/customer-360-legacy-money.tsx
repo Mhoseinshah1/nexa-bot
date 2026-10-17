@@ -256,6 +256,8 @@ function MoneyBody({ data }: { data: LegacyMoneyHistoryResponse }) {
             [t('web.c360_money_wallet_in'), <Total key="in" total={w.moneyIn} />],
             [t('web.c360_money_wallet_out'), <Total key="out" total={w.moneyOut} />],
             [t('web.c360_money_wallet_zero'), <Num key="z" value={w.noChange} />],
+            // Rows whose amount could not be read: in neither total above, so said here.
+            [t('web.c360_money_wallet_unparsed'), <Num key="wu" value={w.unparsedAmounts} />],
             [t('web.c360_money_wheel_spins'), <Num key="ws" value={data.wheel.spins} />],
             [t('web.c360_money_wheel_won'), <Total key="ww" total={data.wheel.prizesWon} />],
             [t('web.c360_money_referee'), <Num key="re" value={data.referrals.asReferee} />],

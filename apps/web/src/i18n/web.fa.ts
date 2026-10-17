@@ -9196,6 +9196,7 @@ export const WEB_FA = {
   'web.c360_money_verdict': 'نتیجهٔ بررسی مبدل',
   'web.c360_money_no_check': 'میرزا تاریخچهٔ تراکنش کیف پول برای این مشتری نداشت',
   'web.c360_money_difference': 'تحلیل اختلاف (علت / اطمینان)',
+  'web.c360_money_wallet_unparsed': 'تراکنش کیف پول با مبلغ ناخوانا (در هیچ جمعی حساب نشده)',
   'web.c360_money_verdict_matches': 'تاریخچه به موجودی بکاپ می‌رسد',
   'web.c360_money_verdict_differs': 'تاریخچه به رقم دیگری می‌رسد',
   'web.c360_money_rule':

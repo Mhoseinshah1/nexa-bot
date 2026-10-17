@@ -104,6 +104,14 @@ describe('LegacyRecordsReadService', () => {
     expect(summary.records).toBe(151);
     expect(summary.unlinked).toBe(143);
     expect(summary.inactivePanels).toHaveLength(1);
+    // Free text: withheld without legacy.invoices.pii.view, shown with it.
+    expect(summary.inactivePanels[0]?.name).toBeNull();
+    expect(summary.inactivePanels[0]?.code).toBe('p999');
+    const withPii = await setup([
+      'legacy.history.view',
+      'legacy.invoices.pii.view',
+    ]).service.summary(scope, actor);
+    expect(withPii.inactivePanels[0]?.name).toBe('x');
   });
 
   it('pages by id: asks for one more row and returns the last shown id as the cursor', async () => {

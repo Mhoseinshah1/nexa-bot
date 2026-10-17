@@ -32,7 +32,7 @@ const body = {
     moneyIn: total(1, '100000'),
     moneyOut: total(1, '40000'),
     noChange: 0,
-    unparsedAmounts: 0,
+    unparsedAmounts: 3,
   },
   wheel: { spins: 4, prizesWon: total(1, '20000') },
   referrals: { asReferee: 1, asReferrer: 2, referrerGiftsPaid: 1 },
@@ -69,6 +69,8 @@ describe('the Mirza money history card', () => {
     expect(screen.getByText('DIFFERS_FROM_SNAPSHOT')).toBeTruthy();
     expect(screen.getByText('تاریخچه به رقم دیگری می‌رسد')).toBeTruthy();
     expect(screen.getByText(/کاربرد در بکاپ ثبت نشده/)).toBeTruthy();
+    // Unreadable wallet-transaction amounts are counted where the totals are drawn.
+    expect(screen.getByText(/مبلغ ناخوانا/)).toBeTruthy();
     expect(screen.getByText(/در جمع بالا حساب نشده/)).toBeTruthy();
     expect(screen.getByText('منقضی یا لغوشده')).toBeTruthy();
     expect(api.calls.map((call) => call.method)).toEqual(['GET']);

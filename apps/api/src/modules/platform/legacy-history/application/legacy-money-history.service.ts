@@ -9,6 +9,7 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import type { LegacyHistoryCustomerReader } from './legacy-history-read.service.js';
+import { fitsKind } from './redaction.js';
 import {
   amountWire,
   buildTenantMoneyReport,
@@ -113,6 +114,16 @@ export class LegacyMoneyHistoryService {
   }
 }
 
+/**
+ * A converter code as the history card would show it: a value that does not have a code's
+ * shape (free text, a six-digit number) is withheld as UNKNOWN, never passed through. The
+ * card applies the same rule (`redaction.ts`), and this response requires no PII permission.
+ */
+function publicCode(value: string | null): string | null {
+  if (value === null) return null;
+  return fitsKind('code', value) ? value : 'UNKNOWN';
+}
+
 /** The wire view of one customer's facts. Pure. */
 export function customerMoneyView(facts: CustomerMoneyFacts): LegacyMoneyHistoryResponse {
   const payments = summarisePayments(facts.payments);
@@ -147,7 +158,7 @@ export function customerMoneyView(facts: CustomerMoneyFacts): LegacyMoneyHistory
     referrals: { ...facts.referrals },
     discountsUsed: facts.discountsUsed,
     serviceOperations: summariseByStatus(facts.serviceOperations).map((row) => ({
-      status: row.status,
+      status: publicCode(row.status) ?? 'UNKNOWN',
       total: totalWire(row.total),
     })),
     opening: {
@@ -173,8 +184,14 @@ export function customerMoneyView(facts: CustomerMoneyFacts): LegacyMoneyHistory
         result.deltaSnapshotMinusHistory === null
           ? null
           : amountWire(result.deltaSnapshotMinusHistory),
-      historyVerdict: result.historyVerdict,
-      difference: result.difference === null ? null : { ...result.difference },
+      historyVerdict: publicCode(result.historyVerdict),
+      difference:
+        result.difference === null
+          ? null
+          : {
+              cause: publicCode(result.difference.cause),
+              certainty: publicCode(result.difference.certainty),
+            },
       openingEqualsSnapshot: result.openingEqualsSnapshot,
     },
   };
