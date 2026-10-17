@@ -6,7 +6,7 @@
  * check holds the rule in a real browser: for EVERY route the app serves (`ROUTE_PATTERNS`,
  * with the fixture ids the other drivers use), it opens the production build against the
  * fixture API, and for every enabled button inside the page content it scrolls the content
- * to the top, clicks the button, and measures the content's and the window's scroll offset.
+ * to the button (centred, as an operator scrolls to it), clicks it, and measures the content's and the window's scroll offset.
  * A click that moves either by more than a few pixels while the route stays the same is a
  * jump, and is reported by route and button text. A click that navigates (a link styled as a
  * button) is not a jump: the next route starts at its own top.
@@ -138,14 +138,16 @@ async function main() {
         await delay(100);
       };
       /*
-       * One attempt: from the top of the route, click button `index` and, when `item` is
+       * One attempt: with button `index` brought into view the way an operator reaches it
+       * (centred, from the top of the route), click it and, when `item` is
        * given, then item `item` of the menu that click opened (a «jump to section» menu is
        * the classic offender, so menu items are clicked too). Returns the label, or null
        * when the button or item is not there.
        */
       const attempt = async (index, item) => {
         await page.evaluate(
-          `(() => { const m = document.querySelector('#main'); if (m) m.scrollTop = 0; window.scrollTo(0, 0); })()`,
+          `(() => { const m = document.querySelector('#main'); if (m) m.scrollTop = 0; window.scrollTo(0, 0);
+            const b = ${BUTTONS}[${index}]; if (b) b.scrollIntoView({ block: 'center' }); })()`,
         );
         await delay(50);
         const before = await page.evaluate(POSITION);
