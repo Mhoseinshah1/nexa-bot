@@ -71,6 +71,7 @@ import {
   type PeriodPreset,
   type Tone,
   Quantity,
+  Ltr,
 } from '../ui/kit';
 import type { SeriesTone } from '../ui/charts';
 import type { QueryView } from '../view-state';
@@ -78,6 +79,8 @@ import { mayRequest, queryState, shownData } from '../view-state';
 import { formatInstantIn } from './business';
 import { AttentionQueueCard } from './dashboard-attention';
 import { opsCodeLabel } from '../ops-code-labels';
+import { TechnicalDetails } from '../ui/technical-details';
+import { SEVERITY_LABELS } from './alerts';
 
 /** How many open conditions the attention card draws before it counts the rest. */
 const ATTENTION_SHOWN = 6;
@@ -1158,10 +1161,23 @@ function AttentionCard({
         <ul className="side-list">
           {events.slice(0, ATTENTION_SHOWN).map((event) => (
             <li key={event.id}>
-              <Badge tone={severityTone(event.severity)}>{event.severity}</Badge>
-              {/* W6: the code's Persian name; the event's English message stays on the alerts page. */}
+              <Badge tone={severityTone(event.severity)}>
+                {/* Persian when the severity is known; an unknown one stays as sent. */}
+                {(SEVERITY_LABELS as Readonly<Record<string, WebKey | undefined>>)[
+                  event.severity
+                ] === undefined ? (
+                  <Ltr>{event.severity}</Ltr>
+                ) : (
+                  t((SEVERITY_LABELS as Readonly<Record<string, WebKey>>)[event.severity]!)
+                )}
+              </Badge>
+              {/*
+                W6: the code's Persian name. The event's own message names WHICH panel or
+                payment it is about, so it stays — under «جزئیات فنی», where English may be.
+              */}
               <span className="grow" title={event.code}>
                 {opsCodeLabel(event.code)}
+                <TechnicalDetails lines={[event.message]} />
               </span>
               {/* FIRST seen: the column the list is ordered by, labelled as such. */}
               <span className="faint small nowrap" title={t('web.first_seen')}>

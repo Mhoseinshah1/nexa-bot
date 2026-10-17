@@ -718,10 +718,13 @@ describe('the attention card', () => {
       },
     ]);
     renderPage(<DashboardPage permissions={['opslog.view']} />);
-    // W6: each condition by its code's Persian name; the log's English message is not shown.
+    // W6: each condition by its code's Persian name; the log's English message, which names
+    // WHICH panel or payment it is, is kept only inside the closed «جزئیات فنی» disclosure.
     await screen.findByText(t('web.opscode_backup_run_failed'));
     expect(screen.getByText(t('web.opscode_panel_health_unreachable'))).toBeInTheDocument();
-    expect(screen.queryByText('Older condition')).toBeNull();
+    const message = screen.getByText('Older condition');
+    expect(message.closest('details')).not.toBeNull();
+    expect(message.closest('details')).not.toHaveAttribute('open');
     const shown = screen
       .getAllByTitle(t('web.first_seen'))
       .map((node) => node.textContent ?? '')
