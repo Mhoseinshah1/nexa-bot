@@ -43,6 +43,8 @@ export interface FilePickerProps {
   onClear?: () => void;
   /** Accessible name when no `<label htmlFor>` points at `id`. */
   label?: string;
+  /** The id of a hint that describes the control (e.g. which kind of file is expected). */
+  describedBy?: string;
 }
 
 const SIZE_ONE = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 1 });
@@ -104,6 +106,7 @@ export function FilePicker({
   selected,
   onClear,
   label,
+  describedBy,
 }: FilePickerProps) {
   const input = useRef<HTMLInputElement>(null);
   const [own, setOwn] = useState<readonly File[]>([]);
@@ -163,6 +166,7 @@ export function FilePicker({
         multiple={multiple}
         disabled={disabled}
         {...(label === undefined ? {} : { 'aria-label': label })}
+        {...(describedBy === undefined ? {} : { 'aria-describedby': describedBy })}
         onChange={(event: ChangeEvent<HTMLInputElement>) =>
           hand(Array.from(event.target.files ?? []))
         }

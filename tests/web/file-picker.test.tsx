@@ -79,6 +79,21 @@ describe('the file picker', () => {
     expect(screen.getByText(t('web.file_drop'))).toBeInTheDocument();
   });
 
+  it('ties a page hint to the native input as its description', () => {
+    render(
+      <>
+        <FilePicker
+          label="backup"
+          kind="backup"
+          describedBy="kind-hint"
+          onFiles={() => undefined}
+        />
+        <p id="kind-hint">only .nxb</p>
+      </>,
+    );
+    expect(screen.getByLabelText('backup')).toHaveAccessibleDescription('only .nxb');
+  });
+
   it('writes sizes in Persian digits and units', () => {
     expect(formatFileSize(812)).toBe(t('web.file_bytes').replace('{n}', '۸۱۲'));
     expect(formatFileSize(249_856)).toBe(t('web.file_kb').replace('{n}', '۲۴۴'));

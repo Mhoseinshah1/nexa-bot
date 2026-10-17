@@ -638,6 +638,7 @@ function RecoveryOperations({
           <FilePicker
             id="recovery-file"
             label={t('web.recovery_upload_choose')}
+            describedBy="recovery-file-kind"
             kind="backup"
             accept={!nexaAllowed ? '.nxpkg' : mirza.mayView ? '.nxb,.nxpkg' : '.nxb'}
             extensions={!nexaAllowed ? ['.nxpkg'] : mirza.mayView ? ['.nxb', '.nxpkg'] : ['.nxb']}
