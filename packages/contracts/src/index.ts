@@ -181,3 +181,5 @@ export * from './support-knowledge.js';
 export * from './support-analytics.js';
 /** FIX-04/05: the one taxonomy of reportable operational events and their group presentation. */
 export * from './ops-error-events.js';
+/** The one-time Mirza import: which rows of the normal tables came from Mirza. */
+export * from './record-source.js';

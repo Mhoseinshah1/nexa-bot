@@ -113,6 +113,7 @@ export function orderOriginIsSale(origin: OrderOrigin): boolean {
     case 'STANDARD':
       return true;
     case 'LEGACY_ADOPTION':
+    case 'LEGACY_HISTORY':
       return false;
     default: {
       const unreachable: never = origin;
