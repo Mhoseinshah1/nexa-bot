@@ -7996,9 +7996,17 @@ export const discounts = pgTable(
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
+    /**
+     * What the one-time Mirza import knew about this code and NEXA has no column for: the
+     * original code text when it had to be normalised, the Mirza kind (a wallet "gift" code has
+     * no NEXA equivalent), the counters and the scope fields as Mirza stored them. Reversible
+     * evidence, read by nothing that prices or redeems. NULL unless `source = 'MIRZA'`.
+     */
+    sourceDetail: jsonb('source_detail'),
   },
   (table) => [
     ...recordSourceChecks('discounts', table),
+    check('discounts_source_detail_check', sql`source_detail IS NULL OR source = 'MIRZA'`),
     uniqueIndex('discounts_tenant_code_key').on(table.tenantId, table.code),
     index('discounts_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     /** The candidates the engine reads for every quote: live automatic rules. */
@@ -9306,9 +9314,35 @@ export const resellers = pgTable(
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
+    /**
+     * The purchase cap Mirza gave this agent (`maxbuyagent`), as the one-time import found it.
+     *
+     * A LIMIT, never money, and deliberately NOT named like a credit line: it is shown to the
+     * owner and applied nowhere. Nothing reads it to decide a purchase, a balance or a price —
+     * reseller credit was removed (owner decision, 2026-10-01) and `creditAllowanceOf` stays
+     * zero. NULL for every row that is not an import and for an agent Mirza gave no cap.
+     */
+    importedPurchaseCapMinor: bigint('imported_purchase_cap_minor', { mode: 'bigint' }),
+    importedPurchaseCapCurrency: text('imported_purchase_cap_currency'),
+    /**
+     * What the import knew and NEXA has no column for: the tier price levels and the
+     * per-user discount as Mirza stored them, and whether each was applied. NULL unless
+     * `source = 'MIRZA'`.
+     */
+    sourceDetail: jsonb('source_detail'),
   },
   (table) => [
     ...recordSourceChecks('resellers', table),
+    check('resellers_source_detail_check', sql`source_detail IS NULL OR source = 'MIRZA'`),
+    check(
+      'resellers_imported_cap_check',
+      sql`(imported_purchase_cap_minor IS NULL) = (imported_purchase_cap_currency IS NULL)
+        AND (imported_purchase_cap_minor IS NULL OR (source = 'MIRZA' AND imported_purchase_cap_minor >= 0))`,
+    ),
+    check(
+      'resellers_imported_cap_currency_check',
+      sql`imported_purchase_cap_currency IS NULL OR ${enumCheck('imported_purchase_cap_currency', CURRENCY_CODES)}`,
+    ),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
