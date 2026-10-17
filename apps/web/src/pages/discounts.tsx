@@ -458,8 +458,13 @@ function DiscountRules({
   const [editing, setEditing] = useState<DiscountSummaryResponse | null>(null);
   /** W3: whether the create/edit drawer is open. */
   const [open, setOpen] = useState(false);
-  /** The drawer's submission key, held while the drawer mounts and unmounts. */
-  const formKey = useSubmissionKey();
+  /*
+   * The drawer's submission keys, held while the drawer mounts and unmounts — one per form.
+   * A shared key would be settled by an edit that succeeded, and a create retried after a
+   * 5xx would then go out under a fresh key: a second rule.
+   */
+  const createKey = useSubmissionKey();
+  const editKey = useSubmissionKey();
   /** Opening another rule, or the create form, drops the open form's draft: asked first. */
   const discard = useDiscardGuard();
 
@@ -743,7 +748,7 @@ function DiscountRules({
           // KEYED BY THE RULE: every `useState` initialiser must read the rule now open,
           // not the one open before it.
           <DiscountForm
-            held={formKey}
+            held={editKey}
             key={editing.id}
             rule={editing}
             options={options}
@@ -755,7 +760,7 @@ function DiscountRules({
           />
         ) : (
           <DiscountForm
-            held={formKey}
+            held={createKey}
             options={options}
             onDone={() => setOpen(false)}
             onDirtyChange={discard.onDirtyChange}
@@ -1630,8 +1635,13 @@ function CashbackRules({
   const [editing, setEditing] = useState<CashbackRuleSummaryResponse | null>(null);
   /** W3: whether the create/edit drawer is open. */
   const [open, setOpen] = useState(false);
-  /** The drawer's submission key, held while the drawer mounts and unmounts. */
-  const formKey = useSubmissionKey();
+  /*
+   * The drawer's submission keys, held while the drawer mounts and unmounts — one per form.
+   * A shared key would be settled by an edit that succeeded, and a create retried after a
+   * 5xx would then go out under a fresh key: a second rule.
+   */
+  const createKey = useSubmissionKey();
+  const editKey = useSubmissionKey();
   /** Opening another rule, or the create form, drops the open form's draft: asked first. */
   const discard = useDiscardGuard();
 
@@ -1801,7 +1811,7 @@ function CashbackRules({
           // KEYED BY THE RULE: every `useState` initialiser must read the rule now open,
           // not the one open before it.
           <CashbackForm
-            held={formKey}
+            held={editKey}
             key={editing.id}
             rule={editing}
             options={options}
@@ -1813,7 +1823,7 @@ function CashbackRules({
           />
         ) : (
           <CashbackForm
-            held={formKey}
+            held={createKey}
             options={options}
             onDone={() => setOpen(false)}
             onDirtyChange={discard.onDirtyChange}

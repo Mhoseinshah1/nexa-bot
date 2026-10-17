@@ -155,6 +155,29 @@ const pickRow = async (text: string) => {
   fireEvent.click(within(row).getByRole('button', { name: t('web.customer_picker_choose') }));
 };
 
+/*
+ * A write whose answer was lost: a 503, which may have committed. The retry must carry the
+ * SAME idempotency key, even after the drawer or dialog holding the form was closed (and the
+ * form unmounted) and opened again — the key is held by the page, not by the form.
+ */
+const lost = (url: string) => ({
+  url,
+  method: 'POST',
+  status: 503,
+  body: { error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' } },
+});
+const keysOf = (api: Api, path: string) =>
+  posts(api, path).map((call) => (call.body as Record<string, unknown>)['idempotencyKey']);
+/** Closes the top drawer or dialog, discarding a typed draft when it asks. */
+const closeTop = async () => {
+  fireEvent.keyDown(document, { key: 'Escape' });
+  const asked = screen.queryByRole('alertdialog');
+  if (asked !== null) {
+    fireEvent.click(within(asked).getByRole('button', { name: t('web.discard') }));
+  }
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+};
+
 // ---------------------------------------------------------------------------
 // Gating
 // ---------------------------------------------------------------------------
@@ -1387,5 +1410,96 @@ describe('no catalogue string promises reseller credit', () => {
       .filter(([, text]) => ACTIVE_CREDIT.some((phrase) => text.includes(phrase)))
       .map(([key]) => key);
     expect(offending).toEqual([]);
+  });
+});
+
+describe('a reseller write whose answer was lost keeps its key across close and reopen', () => {
+  it('register', async () => {
+    const api = stubApi([lost('/resellers'), ...listRoutes()]);
+    renderList({ query: `register=${CUSTOMER_ID}` });
+    await screen.findByText('Reza Reseller');
+    const send = async (n: number) => {
+      const dialog = await screen.findByRole('dialog', { name: t('web.reseller_register_title') });
+      fireEvent.change(within(dialog).getByLabelText('سطح'), { target: { value: TIER_ID } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ثبت نماینده' }));
+      await waitFor(() => expect(posts(api, '/resellers')).toHaveLength(n));
+    };
+    await send(1);
+    await closeTop();
+    openRegister();
+    await send(2);
+    const [first, second] = keysOf(api, '/resellers');
+    expect(second).toBe(first);
+  });
+
+  it('edit', async () => {
+    const api = stubApi([lost(`/resellers/${CUSTOMER_ID}`), ...listRoutes()]);
+    renderList();
+    await screen.findByText('Reza Reseller');
+    const send = async (n: number) => {
+      fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
+      fireEvent.change(await screen.findByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+      await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(n));
+    };
+    await send(1);
+    await closeTop();
+    await send(2);
+    const [first, second] = keysOf(api, `/resellers/${CUSTOMER_ID}`);
+    expect(second).toBe(first);
+  });
+
+  const tiersPage = () =>
+    renderPage(
+      <ResellerTiersPage
+        denied={false}
+        mayEdit
+        mayViewCatalog={false}
+        mayViewPanels={false}
+        mayViewAudit={false}
+      />,
+    );
+
+  it('tier edit', async () => {
+    const api = stubApi([
+      lost(`/reseller-tiers/${TIER_ID}`),
+      { url: '/reseller-tiers', body: { tiers: [tier()] } },
+    ]);
+    tiersPage();
+    const table = await screen.findByRole('table', { name: 'سطوح' });
+    const send = async (n: number) => {
+      fireEvent.click(within(table).getByRole('button', { name: 'ویرایش' }));
+      fireEvent.change(await screen.findByDisplayValue('Gold'), { target: { value: 'Gold+' } });
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+      await waitFor(() => expect(posts(api, `/reseller-tiers/${TIER_ID}`)).toHaveLength(n));
+    };
+    await send(1);
+    await closeTop();
+    await send(2);
+    const [first, second] = keysOf(api, `/reseller-tiers/${TIER_ID}`);
+    expect(second).toBe(first);
+  });
+
+  it('tier grants', async () => {
+    const api = stubApi([
+      lost(`/reseller-tiers/${TIER_ID}/grants`),
+      { url: '/reseller-tiers', body: { tiers: [tier()] } },
+    ]);
+    tiersPage();
+    await screen.findByText('Gold');
+    const send = async (n: number) => {
+      fireEvent.click(screen.getByRole('button', { name: 'مجوزها' }));
+      const operation = (await screen.findAllByRole('group')).find((node) =>
+        node.querySelector('legend')?.textContent?.startsWith('نوع خرید'),
+      ) as HTMLElement;
+      fireEvent.click(within(operation).getByLabelText('همه'));
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ مجوزها' }));
+      await waitFor(() => expect(posts(api, '/grants')).toHaveLength(n));
+    };
+    await send(1);
+    await closeTop();
+    await send(2);
+    const [first, second] = keysOf(api, '/grants');
+    expect(second).toBe(first);
   });
 });

@@ -228,3 +228,48 @@ describe('the route and the nav entry', () => {
     expect(resolve(route, ['legacy.cutover.view']).title).toBe(t('web.lco_title'));
   });
 });
+
+describe('an approval whose answer was lost', () => {
+  /*
+   * The approval form lives in a dialog that unmounts on close. A 503 may have committed, so
+   * the retry must carry the SAME idempotency key after the dialog is closed and reopened.
+   */
+  it('keeps its key across closing and reopening the dialog', async () => {
+    const api = stubApi([
+      {
+        url: '/legacy-cutover/approvals',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' },
+        },
+      },
+      {
+        url: '/legacy-cutover/approvals',
+        method: 'GET',
+        body: { approvals: [approval()], nextCursor: null },
+      },
+      { url: '/legacy-cutover/read-sets', method: 'GET', body: { readSets: [], nextCursor: null } },
+      { url: '/legacy-cutover/apply-runs', method: 'GET', body: { runs: [], nextCursor: null } },
+    ]);
+    renderPage(<LegacyCutoverPage denied={false} mayApprove />);
+    const posts = () => api.calls.filter((call) => call.method === 'POST');
+    const send = async (n: number) => {
+      fireEvent.click(await screen.findByRole('button', { name: t('web.lco_approve_title') }));
+      for (const [label, value] of FIELDS) {
+        fireEvent.change(screen.getByLabelText(t(label as never)), { target: { value } });
+      }
+      fireEvent.change(screen.getByLabelText(t('web.lco_reason')), { target: { value: 'ok' } });
+      fireEvent.click(screen.getByRole('button', { name: t('web.lco_approve') }));
+      await waitFor(() => expect(posts()).toHaveLength(n));
+    };
+    await send(1);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await send(2);
+    const [first, second] = posts().map(
+      (call) => (call.body as Record<string, unknown>)['idempotencyKey'],
+    );
+    expect(second).toBe(first);
+  });
+});
