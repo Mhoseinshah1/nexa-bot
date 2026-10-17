@@ -191,3 +191,44 @@ describe('the product display editors', () => {
     expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
   });
 });
+
+describe('a product create whose answer was lost', () => {
+  /*
+   * The create form lives in a drawer that unmounts on close. A 503 may have committed, so
+   * the retry must carry the SAME idempotency key after the drawer is closed and reopened:
+   * the page holds the key, not the form.
+   */
+  it('keeps its key across closing and reopening the drawer', async () => {
+    const api = stubApi([
+      {
+        url: '/products',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' },
+        },
+      },
+      ...fixtures(),
+    ]);
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    const posts = () => api.calls.filter((call) => call.method === 'POST');
+    const send = async (n: number) => {
+      await openCreate();
+      fireEvent.change(await screen.findByLabelText('عنوان'), { target: { value: 'پلن' } });
+      fireEvent.click(screen.getByRole('button', { name: 'ساخت محصول' }));
+      await waitFor(() => expect(posts()).toHaveLength(n));
+    };
+    await send(1);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    const asked = screen.queryByRole('alertdialog');
+    if (asked !== null) {
+      fireEvent.click(within(asked).getByRole('button', { name: 'دورانداختن تغییرات' }));
+    }
+    await waitFor(() => expect(screen.queryByLabelText('عنوان')).toBeNull());
+    await send(2);
+    const [first, second] = posts().map(
+      (call) => (call.body as Record<string, unknown>)['idempotencyKey'],
+    );
+    expect(second).toBe(first);
+  });
+});
