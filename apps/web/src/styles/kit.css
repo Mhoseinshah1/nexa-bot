@@ -190,6 +190,22 @@
   line-height: 1;
   vertical-align: middle;
 }
+/*
+ * A badge never makes the page wider than the screen: one that would (a long Persian
+ * name for a code, on a phone) wraps inside the column instead of overflowing it.
+ */
+.badge {
+  max-width: 100%;
+}
+@media (max-width: 640px) {
+  .badge {
+    height: auto;
+    min-height: 20px;
+    white-space: normal;
+    line-height: 1.4;
+    padding-block: 2px;
+  }
+}
 .badge .dot {
   width: 6px;
   height: 6px;
