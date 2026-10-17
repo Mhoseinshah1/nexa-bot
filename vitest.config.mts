@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { defineConfig, type Plugin } from 'vitest/config';
+import TimedSequencer from './tests/support/timed-sequencer.mjs';
 
 /**
  * The source is ESM and uses explicit `.js` specifiers, as Node requires. Vite
@@ -41,6 +42,9 @@ const shared = {
 export default defineConfig({
   plugins: [tsExtensionResolver()],
   test: {
+    // `--shard=i/n` balanced by measured file duration rather than file count
+    // (CI's integration matrix). Every file still lands in exactly one shard.
+    sequence: { sequencer: TimedSequencer },
     projects: [
       {
         plugins: [tsExtensionResolver()],
