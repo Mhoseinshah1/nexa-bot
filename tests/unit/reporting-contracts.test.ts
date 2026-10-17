@@ -43,11 +43,12 @@ describe('reporting contracts', () => {
       expect(typeof orderPurposeIsSale(purpose)).toBe('boolean');
   });
 
-  it('counts only a STANDARD order as a sale, never a legacy adoption (Migration P3)', () => {
-    expect([...ORDER_ORIGINS]).toEqual(['STANDARD', 'LEGACY_ADOPTION']);
+  it('counts only a STANDARD order as a sale, never a legacy adoption or a Mirza history order (Migration P3)', () => {
+    expect([...ORDER_ORIGINS]).toEqual(['STANDARD', 'LEGACY_ADOPTION', 'LEGACY_HISTORY']);
     expect(DEFAULT_ORDER_ORIGIN).toBe('STANDARD');
     expect([...SALE_ORDER_ORIGINS]).toEqual(['STANDARD']);
     expect(orderOriginIsSale('LEGACY_ADOPTION')).toBe(false);
+    expect(orderOriginIsSale('LEGACY_HISTORY')).toBe(false);
     expect(orderOriginSchema.safeParse('MIGRATED').success).toBe(false);
   });
 

@@ -6832,12 +6832,21 @@ export const services = pgTable(
     deliverySendStartedAt: timestamptz('delivery_send_started_at'),
     provisionedAt: timestamptz('provisioned_at'),
     terminatedAt: timestamptz('terminated_at'),
+    /**
+     * A Mirza TEST invoice carried as an ended service (the one-time import, owner decision
+     * 2026-10-17): the account was a legacy trial. Only an imported row can be one
+     * (`services_is_test_source_check`); every NEXA service is `false`, and a trial of this
+     * installation is `is_trial`, a different fact. DEFAULT false keeps the migration
+     * expand-only for the release running beside this one.
+     */
+    isTest: boolean('is_test').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
   },
   (table) => [
     ...recordSourceChecks('services', table),
+    check('services_is_test_source_check', sql`NOT is_test OR source = 'MIRZA'`),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -6867,8 +6876,17 @@ export const services = pgTable(
      * they would collide on is derived from a service id, so a collision here means two
      * services claim one provider account — which is the duplicate that makes usage
      * figures meaningless.
+     *
+     * Partial: a TERMINATED service's account is gone (or, for a Mirza account that was never
+     * on the panel, never existed here), so its name is free again. The application already
+     * said so (`usernameInUseOnPanel` excludes TERMINATED); the index now agrees, which is
+     * also what lets the Mirza import record an ended service beside a live one that has
+     * since taken the name. No live state is ever left by TERMINATED, so a name cannot be
+     * un-freed.
      */
-    uniqueIndex('services_panel_provider_username_key').on(table.panelId, table.providerUsername),
+    uniqueIndex('services_panel_provider_username_key')
+      .on(table.panelId, table.providerUsername)
+      .where(sql`state <> 'TERMINATED'`),
     /**
      * And the subscription reference, for the same reason one step further along.
      *
