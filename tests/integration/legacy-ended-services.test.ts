@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isNexaError, systemJobActor, type CorrelationId } from '@nexa/contracts';
+import { serviceSecrets } from '../../apps/api/src/infrastructure/crypto/service-secrets';
+import { TerminatedServicesStep } from '../../apps/api/src/modules/platform/legacy-materialize/application/terminated-services.step';
+import { DrizzleEndedServicesRepository } from '../../apps/api/src/modules/platform/legacy-materialize/infrastructure/drizzle-ended-services.repository';
 import { exactMatchHolds } from '../../apps/api/src/modules/platform/legacy-materialize/application/ports';
 import type { MaterializeContext } from '../../apps/api/src/modules/platform/legacy-materialize/application/ports';
 import {
@@ -343,6 +346,22 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
       PRICE * BigInt(INVOICES - live - 1 - GAPS - 2) /* ended and priced */,
     );
   });
+
+  it('reads the archive page by page: a page of 7 gives the same report as the production page', async () => {
+    const small = new TerminatedServicesStep({
+      repository: new DrizzleEndedServicesRepository(db()),
+      guard: ctx.container.guard,
+      uow: ctx.container.uow,
+      audit: ctx.container.audit,
+      scopeActivity: ctx.container.tenants,
+      secrets: serviceSecrets,
+      clock: ctx.container.clock,
+      ids: ctx.container.ids,
+      pageSize: 7,
+    });
+    expect(await small.match(context())).toEqual(await step().match(context()));
+    expect(await small.apply(context())).toMatchObject({ written: 0, diverged: 0 });
+  }, 300_000);
 
   it('a rerun writes nothing: every count and sum is what it was', async () => {
     const before = {

@@ -41,24 +41,22 @@ export class DrizzleEndedServicesRepository implements EndedServicesRepository {
     limit: number,
   ): Promise<readonly ArchivedInvoiceRow[]> {
     const tenantId = requireTenantId(scope);
-    // The latest VISIBLE revision of each invoice (its run COMPLETED), then only those
-    // recorded under this source: a revision of another snapshot is another import's.
+    // The latest VISIBLE revision (its run COMPLETED) of each invoice recorded under this
+    // source: a revision of another snapshot is another import's. DISTINCT ON in key order
+    // with the LIMIT beside it, so a page costs a page, not the archive.
     const result = await this.exec().execute(sql`
-      SELECT * FROM (
-        SELECT DISTINCT ON (a.invoice_key)
-               a.invoice_key, a.key_shape_evidenced, a.status, a.is_test, a.legacy_user_id,
-               a.username, a.panel_code, a.product_name, a.price_minor, a.price_currency,
-               a.sold_at, a.source_fingerprint, a.raw_row
-          FROM legacy_invoice_archive a
-          JOIN legacy_invoice_archive_runs r
-            ON r.tenant_id = a.tenant_id AND r.id = a.run_id AND r.state = 'COMPLETED'
-         WHERE a.tenant_id = ${tenantId}
-           AND (${after}::text IS NULL OR a.invoice_key > ${after}::text)
-         ORDER BY a.invoice_key, a.revision DESC
-      ) latest
-      WHERE latest.source_fingerprint = ${sourceFingerprint}
-      ORDER BY latest.invoice_key
-      LIMIT ${limit}`);
+      SELECT DISTINCT ON (a.invoice_key)
+             a.invoice_key, a.key_shape_evidenced, a.status, a.is_test, a.legacy_user_id,
+             a.username, a.panel_code, a.product_name, a.price_minor, a.price_currency,
+             a.sold_at, a.raw_row
+        FROM legacy_invoice_archive a
+        JOIN legacy_invoice_archive_runs r
+          ON r.tenant_id = a.tenant_id AND r.id = a.run_id AND r.state = 'COMPLETED'
+       WHERE a.tenant_id = ${tenantId}
+         AND a.source_fingerprint = ${sourceFingerprint}
+         AND (${after}::text IS NULL OR a.invoice_key > ${after}::text)
+       ORDER BY a.invoice_key, a.revision DESC
+       LIMIT ${limit}`);
     return (
       result.rows as {
         invoice_key: string;

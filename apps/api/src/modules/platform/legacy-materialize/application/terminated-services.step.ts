@@ -77,6 +77,8 @@ export interface TerminatedServicesStepDeps {
   readonly secrets: ServiceSecretSource;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** Invoices read per page; the default is the production page. A test shrinks it. */
+  readonly pageSize?: number;
 }
 
 /** An ended invoice with everything the write needs resolved. */
@@ -215,7 +217,12 @@ export class TerminatedServicesStep implements MaterializeStep {
     const bindings = await repo.panelBindings(ctx.scope, ctx.packageImportId);
     let after: string | null = null;
     for (;;) {
-      const page = await repo.archivePage(ctx.scope, ctx.sourceFingerprint, after, PAGE_SIZE);
+      const page = await repo.archivePage(
+        ctx.scope,
+        ctx.sourceFingerprint,
+        after,
+        this.deps.pageSize ?? PAGE_SIZE,
+      );
       if (page.length === 0) return;
       const last = page[page.length - 1];
       after = last === undefined ? null : last.invoiceKey;
