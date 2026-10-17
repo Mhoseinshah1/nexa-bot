@@ -66,9 +66,14 @@ export function isJump(before, after, tolerance = JUMP_TOLERANCE_PX) {
   return content || windowMoved;
 }
 
-// The page's own buttons: inside the content, visible, enabled, not inside a dialog.
+/*
+ * The page's own buttons: inside the content, visible, enabled, not inside a dialog. The kit
+ * pager's «قبلی / بعدی» are left out: they REPLACE the list they sit under, and while the next
+ * page loads the list is briefly shorter, so the view lands at that list's start — the same
+ * list, not another section of the page.
+ */
 const BUTTONS = `[...document.querySelectorAll('#main button')].filter((b) =>
-  !b.disabled && !b.closest('[role=dialog], .modal-layer, .drawer-layer, [aria-modal=true], .menu') &&
+  !b.disabled && !b.closest('[role=dialog], .modal-layer, .drawer-layer, [aria-modal=true], .menu, .pager') &&
   b.getClientRects().length > 0)`;
 
 const POSITION = `(() => ({
