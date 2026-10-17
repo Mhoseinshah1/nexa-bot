@@ -299,4 +299,8 @@ export const DELIVERY_QR_ERROR_CODES = {
   TEXT_EMPTY: 'qr.text_empty',
   /** The module scale is not a positive integer. */
   SCALE_INVALID: 'qr.scale_invalid',
+  /** The text is longer than a QR code can encode (characters, or bytes of UTF-8). */
+  TEXT_TOO_LONG: 'qr.text_too_long',
+  /** The quiet-zone margin is not a whole number of modules within the template's bound. */
+  MARGIN_INVALID: 'qr.margin_invalid',
 } as const;
