@@ -2264,7 +2264,10 @@ test_case 'D2: a rollback that starts but is not ready puts the current release 
 # which is what an UPDATE's back-out has always done.
 fake_set "api_health_${DIGEST_A}" starting
 reset_docker_log
-run_botctl rollback
+# Six seconds, as every other not-ready case here: the library's 180-second
+# default is not what this case is about, and waiting it out was half of
+# this file's run time.
+NEXA_READY_TIMEOUT=6 run_botctl rollback
 assert_fails 'a rollback that never became ready reported success' test "$BOTCTL_STATUS" -eq 0
 assert_equals 'the failed rollback moved the current release' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
 assert_equals "the failed rollback left the previous release's botctl installed" 'B' "$(installed_label)"

@@ -34,7 +34,7 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["tests/**/*.ts"],
+  "include": ["tests/**/*.ts", "tests/**/*.mts"],
   // Two entries, and neither is a gap. Both are DOM code, both need `jsx` and
   // the DOM lib, and the other ~55 test files must NOT have those — a node test
   // that names `document` should not compile. Both are checked by

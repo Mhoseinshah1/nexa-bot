@@ -36,12 +36,16 @@ and fails if two main commits share a group or any main run can be cancelled.
 ## Jobs
 
 ```
-static ─────────────────────────────── Typecheck, lint and boundaries
-build ──┬── unit ───────────┐
-        ├── web ────────────┼────────── Unit and integration tests (aggregate)
-        └── integration 1..4┘
-deploy-logic ───────────────────────── Deployment logic
-deploy ─────────────────────────────── Deployment smoke
+changes ──────────┬──────────────────── Changed paths (docs-only pull request?)
+static ───────────┼──────────────────── Typecheck, lint and boundaries
+build ──┬── unit ─┼─────────┐
+        ├── web ──┼─────────┤
+        ├── integration 1..10 (skippable)
+        ├── legacy-mysql ×2 ┤ (skippable)
+        └── legacy-rehearsal┼────────── Unit and integration tests (aggregate)
+deploy-logic ─────┼─────────┤
+deploy ───────────┼─────────┤ (skippable) Deployment smoke + Mirza rehearsal smoke
+deploy-update ────┴─────────┘ (skippable) Deployment update and rollback smoke
 audit ──────────────────────────────── Dependency audit
 ```
 
@@ -49,22 +53,63 @@ audit ────────────────────────�
   `check:runtime` and the migration drift check, and uploads the four `dist`
   directories as the `dist` artifact. `unit`, `web` and every integration shard
   download it instead of building again, so every test job runs the same bytes.
-- **integration** is a 4-way matrix over `vitest --shard=i/4`. Vitest sorts the
-  integration files and slices the list, so every file runs in exactly one
-  shard. Each shard has its own PostgreSQL and Redis, so suites inside a shard
-  still run one file at a time against a database nothing else touches. Each
-  shard applies the compiled migrations without application secrets before its
-  tests — the same guard the single job had.
-- **Unit and integration tests** is the old job's name, kept as one result. It
-  runs `if: always()` and is green only when `unit`, `web` and every shard
-  succeeded; a failed shard makes it red, never skipped.
+- **integration** is a 10-way matrix over `vitest --shard=i/10`. The shard a
+  file lands in is decided by `tests/support/timed-sequencer.mts`, which the
+  root vitest config installs: longest file first, each into the shard with the
+  least measured work so far, weights from `tests/support/integration-timings.json`.
+  Every shard computes the same partition from the same file list, so every
+  file runs in exactly one shard — `timed-sequencer.test.ts` checks that for
+  every count from 1 to 16, and a file missing from the table (a new one) still
+  runs, weighted at the median. Each shard has its own PostgreSQL and Redis, so
+  suites inside a shard still run one file at a time against a database nothing
+  else touches. Each shard applies the compiled migrations without application
+  secrets before its tests — the same guard the single job had.
+- **Unit and integration tests** is the old job's name, kept as the one check
+  that ALWAYS reports. It runs `if: always()` and is green only when `changes`,
+  `unit`, `web`, `deploy-logic`, every shard, both legacy jobs and both
+  deployment smokes succeeded. The only other result it accepts is `skipped`
+  for a skippable job, and only when `changes` succeeded, said `heavy=false`,
+  and the event is `pull_request`.
 - **Deployment logic** (shellcheck, botctl against a fake docker, the shell
-  check's own test, the release gate against a fake `gh`) and **Deployment
-  smoke** (the real image, install, update, rollback) used to be one 20-minute
-  serial job. They are independent and now run side by side.
+  check's own test, the release gate against a fake `gh`), **Deployment smoke**
+  (the real image, install, serve, back up; then the Mirza rehearsal kit) and
+  **Deployment update and rollback smoke** (A → B, two releases that never
+  become ready, B → A) are independent and run side by side. The update smoke
+  is its own job because it is eleven minutes on its own, most of it the
+  readiness timeouts it exists to exercise.
 
 Coverage is unchanged: every command the workflow ran before the split is still
 run, and `ci-workflow.test.ts` lists them.
+
+### Docs-only pull requests
+
+`changes` runs `scripts/ci-docs-only.sh`, which prints `heavy=false` only when
+the event is `pull_request` AND every path the merge commit changes against its
+first parent (`--no-renames`, so a rename counts both sides) is Markdown under
+`docs/`, or `README.md`, `CLAUDE.md` or `PROGRESS.md` at the root — the three
+`.dockerignore` keeps out of the image. Anything else, an unreadable diff
+included, is `heavy=true`.
+
+On `heavy=false` the integration shards, both legacy jobs and both deployment
+smokes are skipped. Everything that READS Markdown still runs: `static`
+(prettier, `check:citations`, `check:boundaries`), `unit` (the legacy runbook
+tests), `web` (`docs/open-questions.md`) and `deploy-logic` (botctl's test greps
+`docs/deployment.md`). `ci-workflow.test.ts` scans what the skippable jobs run
+for a read of a Markdown file and fails if one appears; a JSON schema under
+`docs/` is not Markdown and makes a run heavy.
+
+**A push to main and a dispatched run never skip anything.** Those runs are what
+`release.yml` accepts as evidence, so a release can never rest on a skipped job.
+The aggregate refuses a skip on any event but `pull_request`, independently of
+the script, and both halves have a test that fails when the rule is reverted.
+
+### Refreshing the shard timings
+
+Every shard uploads `integration-timings-<n>` (vitest's JSON report). When the
+shards drift apart, download every shard's report from one or two green runs and run
+`node scripts/integration-timings.mjs <reports…>`; it averages per file and
+keeps every file it was not given. The table only moves files between shards —
+it never decides what runs.
 
 ### Timeouts and how to read a long run
 
@@ -131,6 +176,46 @@ rebalancing if one shard is consistently longest.
 
 The pnpm store was already cached (`setup-node` `cache: pnpm`); installs took
 under a second of wall time in every job.
+
+## The 2026-10 measurement and what changed
+
+Ten green runs before this change (`39035286900` … `38711220030`, seven pull-request
+heads and three main commits): wall time 27.6–35.0 min, median 33.
+The critical path was always `build` (1.2 min) → the slowest of four integration
+shards (median 31.2, max 33.6 min). The four shards' own medians were 24.9,
+26.2, 23.6 and 31.2 min, and one commit's shards finished between 16 and 33 min:
+equal file counts over files from 0.6 s to 207 s. Next were the deployment
+smoke at 14.8–17.6 min (its update-and-rollback step alone 11–12.8 min), the
+deployment logic at 6.3–7.1 min (one botctl case waited out the 180 s default
+readiness timeout), the legacy rehearsal at 5.4, static at 4.5, web at 3.8 and
+unit at 3.0 min.
+
+Measured per file, the integration project is about 5 100–5 400 s of tests plus
+about 2 s of setup per file, and the same file varies by up to 1.7× between
+runners — which no timing table can balance away, so the slowest shard is
+always 30–60% above the fastest.
+
+### Choosing the shard count
+
+Each count was run once (twice for 8) as a `workflow_dispatch` of this branch,
+one at a time so no run competed with another for runners. Minutes:
+
+| shards |     wall | slowest shard | update/rollback smoke | peak concurrent jobs | run         |
+| -----: | -------: | ------------: | --------------------: | -------------------: | ----------- |
+|      6 |     23.1 |          21.8 |                  12.9 |                   15 | 39044601290 |
+|      8 |     16.6 |          15.1 |                  11.7 |                   17 | 39039650728 |
+|      8 |     17.3 |          15.8 |                  13.0 |                   17 | 39041309854 |
+| **10** | **14.3** |          13.2 |                  13.1 |               **19** | 39042598450 |
+|     12 |     12.5 |          11.1 |                  11.3 |                   21 | 39043649200 |
+|     14 |     13.3 |          10.5 |                  13.0 |                   23 | 39046370143 |
+|     16 |     13.8 |           8.1 |                  13.5 |                   25 | 39047381046 |
+
+Past ten, the wall time is the update-and-rollback smoke (11–13.5 min, most of it
+readiness timeouts the smoke exists to wait out), and more shards only add
+jobs: 12's 12.5 min is a fast smoke run, not a faster suite. Ten is the knee,
+and the largest count whose run stays under the free plan's 20 concurrent jobs
+with nothing else running; twelve already peaks at 21, so a second pull
+request at the same moment would queue behind it.
 
 ## Where pnpm comes from
 
