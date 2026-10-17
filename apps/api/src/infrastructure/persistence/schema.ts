@@ -82,6 +82,8 @@ import {
   COMMERCIAL_ORDER_PURPOSES,
   ORDER_ORIGINS,
   RECORD_SOURCES,
+  WALLET_HISTORY_IMPORT_ORIGINS,
+  WALLET_HISTORY_IMPORT_TEXT_MAX_LENGTH,
   ORDER_PURPOSES,
   ORDER_SETTLED_STATES,
   ORDER_STATES,
@@ -6494,6 +6496,76 @@ export const walletEntries = pgTable(
       .on(table.tenantId, table.customerId)
       .where(sql`reason = 'MIGRATION_OPENING_BALANCE'`),
     unique('wallet_entries_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * Mirza wallet history carried by the one-time import (`docs/migration/mirza-import-plan-fa.md`
+ * §5-3): the movement log (`wallet_transaction`) and the wheel results.
+ *
+ * A SISTER of `wallet_entries`, never a part of it. The customer's balance is `user.Balance`,
+ * written once as the opening entry; these rows are what Mirza LOGGED on the way there, so
+ * summing them into the balance would count the same money twice, and writing them to the
+ * ledger would need a compensating row — touching money twice. Nothing derives a balance from
+ * this table, and `WalletRepository.balanceOf` does not read it. Append-only (migration
+ * triggers), keyed by `(tenant_id, source_ref)` so a rerun finds its row.
+ *
+ * `amount_minor` is the magnitude and `signed_amount_minor` the figure exactly as Mirza stored
+ * it; `direction` is null when Mirza's own arithmetic does not say which way the money moved.
+ */
+export const walletHistoryImports = pgTable(
+  'wallet_history_imports',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    source: text('source').notNull().default('MIRZA'),
+    /** `wallet-tx:<id>` or `wheel:<id>`: the Mirza id. Unique per tenant. */
+    sourceRef: text('source_ref').notNull(),
+    origin: text('origin').notNull(),
+    occurredAt: timestamptz('occurred_at').notNull(),
+    direction: text('direction'),
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+    signedAmountMinor: bigint('signed_amount_minor', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    rawKind: text('raw_kind'),
+    note: text('note'),
+    createdAt: timestamptz('created_at').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'wallet_history_imports_customer_fk',
+    }),
+    uniqueIndex('wallet_history_imports_tenant_source_ref_key').on(table.tenantId, table.sourceRef),
+    /** The customer's history page: newest first over the immutable `(occurred_at, id)`. */
+    index('wallet_history_imports_customer_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.occurredAt,
+      table.id,
+    ),
+    check('wallet_history_imports_source_check', sql`source = 'MIRZA'`),
+    check(
+      'wallet_history_imports_origin_check',
+      enumCheck('origin', WALLET_HISTORY_IMPORT_ORIGINS),
+    ),
+    check(
+      'wallet_history_imports_direction_check',
+      nullableEnumCheck('direction', LEDGER_DIRECTIONS),
+    ),
+    check('wallet_history_imports_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check(
+      'wallet_history_imports_amount_check',
+      sql`amount_minor >= 0 AND amount_minor = abs(signed_amount_minor)`,
+    ),
+    check(
+      'wallet_history_imports_text_check',
+      sql`length(source_ref) BETWEEN 1 AND 128 AND (raw_kind IS NULL OR length(raw_kind) <= ${sql.raw(String(WALLET_HISTORY_IMPORT_TEXT_MAX_LENGTH))}) AND (note IS NULL OR length(note) <= ${sql.raw(String(WALLET_HISTORY_IMPORT_TEXT_MAX_LENGTH))})`,
+    ),
   ],
 );
 
