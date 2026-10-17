@@ -2448,6 +2448,15 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.wallet.negative_balance',
+    description:
+      'Shown when a purchase is refused because the wallet balance is below zero (a balance ' +
+      'carried over from the previous bot). Asks the customer to top up first; a top-up ' +
+      'nets against the negative balance.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.wallet.topup_refused',
     description:
       'Shown when a chosen top-up amount cannot be used — it is no longer offered, or it ' +

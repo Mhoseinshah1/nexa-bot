@@ -888,6 +888,12 @@ export const COMMERCE_ERROR_CODES = {
    * exists anywhere to rescue an amount from the wrong one.
    */
   WALLET_CURRENCY_UNSUPPORTED: 'commerce.wallet_currency_unsupported',
+  /**
+   * The customer's wallet balance is below zero, so nothing may be bought until it is
+   * topped up (owner decision 2026-10-17). Only the Mirza import's DEBIT opening can take a
+   * wallet below zero; a top-up is never refused by it, and nets against it.
+   */
+  WALLET_NEGATIVE_TOP_UP_REQUIRED: 'commerce.wallet_negative_top_up_required',
 
   /**
    * A top-up amount this tenant does not offer.
