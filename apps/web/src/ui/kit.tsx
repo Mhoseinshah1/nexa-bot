@@ -526,7 +526,6 @@ export function Card({
   tone,
   tight = false,
   id,
-  focusable = false,
 }: {
   /** A node rather than a string, so a title can isolate a Latin run inside Persian. */
   title?: ReactNode;
@@ -538,11 +537,6 @@ export function Card({
   tone?: 'danger' | 'muted';
   tight?: boolean;
   id?: string;
-  /**
-   * A target a section list moves to: focusable by script (`tabIndex={-1}`), not a
-   * tab stop, so `revealField` lands a keyboard user in the section it scrolled to.
-   */
-  focusable?: boolean;
 }) {
   return (
     <section
@@ -553,7 +547,6 @@ export function Card({
         className,
       )}
       {...(id === undefined ? {} : { id })}
-      {...(focusable ? { tabIndex: -1 } : {})}
     >
       {(title !== undefined || actions !== undefined) && (
         <header className="card-head">
@@ -737,16 +730,6 @@ export function StatCard({
 /** A `StatCard` that needs attention. The same card, outlined red by default. */
 export function AlertStatCard(props: Parameters<typeof StatCard>[0]) {
   return <StatCard {...props} tone={props.tone ?? 'alert'} />;
-}
-
-/** A labelled figure, inline — a caption above a value. */
-export function Metric({ label, value }: { label: ReactNode; value: ReactNode }) {
-  return (
-    <span className="metric">
-      <span className="l">{label}</span>
-      <span className="v">{value}</span>
-    </span>
-  );
 }
 
 /**

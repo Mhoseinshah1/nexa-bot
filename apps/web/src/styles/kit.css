@@ -633,22 +633,6 @@
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
 }
 
-/* A labelled figure, inline: «۱۲ سرویس» with its caption above. */
-.metric {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.metric .l {
-  font-size: var(--fs-xs);
-  color: var(--fg-3);
-}
-.metric .v {
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
 /* --- Progress ------------------------------------------------------------------ */
 
 .progress {
