@@ -164,11 +164,16 @@ export function SystemPage({
       <Card
         title={t('web.system_logs_title')}
         tone="muted"
-        actions={
-          <a className="btn sm" href="/ops-group" onClick={onLink}>
-            {t('web.nav_ops_group')}
-          </a>
-        }
+        // The link only where it leads somewhere: `/ops-group` is a `settings.view` page.
+        {...(permissions.includes('settings.view')
+          ? {
+              actions: (
+                <a className="btn sm" href="/ops-group" onClick={onLink}>
+                  {t('web.nav_ops_group')}
+                </a>
+              ),
+            }
+          : {})}
       >
         <p className="muted small">{t('web.system_logs_destination')}</p>
       </Card>

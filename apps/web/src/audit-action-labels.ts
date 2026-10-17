@@ -220,12 +220,25 @@ export const AUDIT_VERB_LABELS: Readonly<Record<string, WebKey>> = {
   bind: 'web.audit_verb_bind',
 };
 
-/** «subject — verb» for a known code, or null (the page then draws the raw code). */
+/**
+ * «subject — … — verb» for a known code, or null (the page then draws the raw code).
+ *
+ * Every segment is named: a middle segment (`order.discount_code.submit`) is named from the
+ * subject or the verb map, and a code with a segment neither map knows falls back to the raw
+ * code. Naming only the first and last segments would draw `order.discount_code.submit` and
+ * `order.username.submit` as the same «سفارش — ثبت».
+ */
 export function auditActionLabel(code: string): string | null {
   const parts = code.split('.');
   if (parts.length < 2) return null;
   const subject = AUDIT_SUBJECT_LABELS[parts[0]!];
   const verb = AUDIT_VERB_LABELS[parts[parts.length - 1]!];
   if (subject === undefined || verb === undefined) return null;
-  return `${t(subject)} — ${t(verb)}`;
+  const middle: WebKey[] = [];
+  for (const part of parts.slice(1, -1)) {
+    const name = AUDIT_SUBJECT_LABELS[part] ?? AUDIT_VERB_LABELS[part];
+    if (name === undefined) return null;
+    middle.push(name);
+  }
+  return [subject, ...middle, verb].map((key) => t(key)).join(' — ');
 }

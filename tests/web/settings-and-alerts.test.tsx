@@ -1203,6 +1203,26 @@ describe('system and operations', () => {
     vi.useRealTimers();
   });
 
+  it('draws the ops-group link only for an administrator who may open that page', async () => {
+    stubApi([
+      { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
+      {
+        url: '/health/info',
+        body: {
+          name: 'nexa',
+          version: '1.0.0',
+          commit: 'abc123',
+          buildTime: '2026-09-06T00:00:00.000Z',
+          nodeVersion: 'v22.11.0',
+          environment: 'production',
+        },
+      },
+    ]);
+    renderPage(<SystemPage route={route} permissions={['panels.view', 'admins.view']} />);
+    expect(await screen.findByText(t('web.system_logs_title'))).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: t('web.nav_ops_group') })).toBeNull();
+  });
+
   /** Owner revision 25 — the general logs surface does not exist. */
   it('has no logs page and no commit, and points the operational stream at the ops group', async () => {
     stubApi([
@@ -1219,7 +1239,9 @@ describe('system and operations', () => {
         },
       },
     ]);
-    renderPage(<SystemPage route={route} permissions={['panels.view', 'admins.view']} />);
+    renderPage(
+      <SystemPage route={route} permissions={['panels.view', 'admins.view', 'settings.view']} />,
+    );
 
     expect(await screen.findByText(t('web.system_logs_title'))).toBeInTheDocument();
     // W5: the meta note («… این یک تصمیم است») and the commit are gone; the build info keeps

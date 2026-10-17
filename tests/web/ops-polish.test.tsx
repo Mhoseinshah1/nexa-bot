@@ -104,8 +104,15 @@ describe('audit action names', () => {
     expect(auditActionLabel('order.cancel')).toBe(
       `${t('web.audit_subj_order')} — ${t('web.audit_verb_cancel')}`,
     );
-    expect(auditActionLabel('support_ai.credential.test')).toBe(
-      `${t('web.audit_subj_support_ai')} — ${t('web.audit_verb_test')}`,
+    // Every segment is named, the middle one too…
+    expect(auditActionLabel('customer.trial.reset')).toBe(
+      `${t('web.audit_subj_customer')} — ${t('web.audit_subj_trial')} — ${t('web.audit_verb_reset')}`,
+    );
+    // …so two codes that differ only in the middle never read the same; a middle neither map
+    // knows falls back to the raw code rather than being dropped.
+    expect(auditActionLabel('support_ai.credential.test')).toBeNull();
+    expect(auditActionLabel('order.discount_code.submit')).not.toBe(
+      auditActionLabel('order.username.submit') ?? 'raw',
     );
     expect(auditActionLabel('order.brand_new_verb')).toBeNull();
     expect(auditActionLabel('nothing')).toBeNull();
@@ -125,6 +132,10 @@ describe('notification types', () => {
     expect(notificationCategoryOf('ops.financial.order_paid')).toBe('FINANCE');
     expect(notificationCategoryOf('ops.support.handoff_required')).toBe('SUPPORT');
     expect(notificationCategoryOf('ops.notification.test')).toBe('NOTICE');
+    // A customer's money messages are finance too, not notices.
+    expect(notificationCategoryOf('bot.payment.rejected')).toBe('FINANCE');
+    expect(notificationCategoryOf('bot.payment.expired')).toBe('FINANCE');
+    expect(notificationCategoryOf('bot.wallet.credited')).toBe('FINANCE');
   });
 
   it('draws «نوع اعلان» as the Persian name, the chip beside it, the key in the tooltip', async () => {

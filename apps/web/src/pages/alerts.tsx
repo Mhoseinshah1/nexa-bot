@@ -409,6 +409,13 @@ export const NOTIFICATION_CATEGORY_LABELS: Readonly<Record<NotificationCategory,
 
 export function notificationCategoryOf(templateKey: string): NotificationCategory {
   if (templateKey.startsWith('ops.financial.')) return 'FINANCE';
+  // A customer's money notifications (`bot.payment.rejected`, wallet, refund…) are finance too.
+  if (
+    /(^|\.)(financial|payment|payments|wallet|refund|invoice|cashback|commission|topup)(\.|_|$)/u.test(
+      templateKey,
+    )
+  )
+    return 'FINANCE';
   if (/(^|\.)(support|ticket|tickets|business)(\.|_|$)/u.test(templateKey)) return 'SUPPORT';
   return 'NOTICE';
 }
