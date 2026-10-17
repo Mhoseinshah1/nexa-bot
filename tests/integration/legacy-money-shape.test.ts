@@ -31,18 +31,18 @@ import { createTestContext, testConfig, type TestContext } from './harness';
  * The real Mirza package's MONEY SHAPE through the whole `.nxpkg` path (the operator's
  * service, the `migration` role's executor, the real importer, PostgreSQL, two fake
  * RickPanels): positive balances summing to exactly 2,986,130,847 IRT, exactly 38 legacy
- * debts summing to 130,634,742 IRT that stay review-only, mixed statuses, and rows the
+ * negative balances summing to 130,634,742 IRT (DEBIT openings), mixed statuses, and rows the
  * importer must hold (unreadable, out of range, an unknown status, a duplicated id) — a
  * smaller run of what `tests/unit/legacy-money-shape.test.ts` plans at 4,000 customers.
  *
- * - the import credits exactly the positives, records exactly the 38 debts with no ledger
- *   effect, and the report's usersWallets section (U1–U10) holds — per customer as well as in
+ * - the import credits exactly the positives and debits exactly the 38 negatives (each wallet
+ *   holds its Mirza balance, negative included; no legacy-debt row), and the report's usersWallets section (U1–U10) holds — per customer as well as in
  *   total; the converter's per-customer records agree; a wallet-history verdict that does not
  *   match the snapshot is a dry-run WARNING, and the snapshot balance is still the opening;
  * - a crash after the openings phase resumes to the same totals: no double credit;
  * - an APPLY that fails after the openings were written ends FAILED, and restoring the
- *   protective backup taken before its first write returns every table — the wallet ledger
- *   and the debts among them — to the pre-import state;
+ *   protective backup taken before its first write returns every table — the wallet ledger,
+ *   credits and debits — to the pre-import state;
  * - a converter whose reading of a snapshot balance differs from the importer's blocks the
  *   dry run (`DRY_RUN_MISMATCH`), with nothing written.
  *
@@ -227,25 +227,38 @@ describe('the real package money shape through the .nxpkg import (integration)',
 
   async function assertMoneyExact(): Promise<void> {
     const entries = await ledger();
-    expect(entries).toHaveLength(POSITIVES);
-    expect(entries.every((e) => e.direction === 'CREDIT')).toBe(true);
+    const credits = entries.filter((e) => e.direction === 'CREDIT');
+    const debits = entries.filter((e) => e.direction === 'DEBIT');
+    // One opening per customer who has a balance: the positives and the negatives, no more.
+    expect(entries).toHaveLength(POSITIVES + MONEY_SHAPE_DEBTS);
+    expect(credits).toHaveLength(POSITIVES);
+    expect(debits).toHaveLength(MONEY_SHAPE_DEBTS);
     expect(entries.every((e) => e.reason === 'MIGRATION_OPENING_BALANCE')).toBe(true);
-    expect(entries.reduce((a, e) => a + BigInt(e.amount), 0n)).toBe(MONEY_SHAPE_POSITIVE_SUM);
-    // Per customer: each positive customer holds exactly their legacy balance, once.
-    for (const e of entries) expect(BigInt(e.amount), e.tg).toBe(shape.positives.get(e.tg));
-    expect(new Set(entries.map((e) => e.tg)).size).toBe(POSITIVES);
-
-    const recorded = await debts();
-    expect(recorded).toHaveLength(MONEY_SHAPE_DEBTS);
-    expect(recorded.reduce((a, d) => a + BigInt(d.amount), 0n)).toBe(MONEY_SHAPE_DEBT_SUM);
-    for (const d of recorded) {
-      expect(BigInt(d.amount), d.tg).toBe(shape.debts.get(d.tg));
-      // Review-only: never collected, never decided by the import.
-      expect(d.state).toBe('PENDING_REVIEW');
+    expect(new Set(entries.map((e) => e.tg)).size).toBe(POSITIVES + MONEY_SHAPE_DEBTS);
+    expect(credits.reduce((a, e) => a + BigInt(e.amount), 0n)).toBe(MONEY_SHAPE_POSITIVE_SUM);
+    expect(debits.reduce((a, e) => a + BigInt(e.amount), 0n)).toBe(MONEY_SHAPE_DEBT_SUM);
+    // Per customer: each customer's wallet holds EXACTLY their Mirza balance, once — positive
+    // as a CREDIT of the balance, negative as a DEBIT of its magnitude (balance = -magnitude).
+    const balance = new Map<string, bigint>();
+    for (const e of entries) {
+      balance.set(
+        e.tg,
+        (balance.get(e.tg) ?? 0n) + (e.direction === 'CREDIT' ? 1n : -1n) * BigInt(e.amount),
+      );
     }
-    // No ledger effect for a debt: a debtor has no wallet entry at all.
-    expect(entries.some((e) => shape.debts.has(e.tg))).toBe(false);
-    // Held rows: no customer, no entry, no debt; one review row each.
+    for (const e of credits) expect(BigInt(e.amount), e.tg).toBe(shape.positives.get(e.tg));
+    for (const e of debits) expect(BigInt(e.amount), e.tg).toBe(shape.debts.get(e.tg));
+    for (const [tg, amount] of shape.positives) expect(balance.get(tg), tg).toBe(amount);
+    for (const [tg, amount] of shape.debts) expect(balance.get(tg), tg).toBe(-amount);
+    // Zero balances: a customer, no entry.
+    for (const tg of shape.zeros) expect(balance.has(tg), tg).toBe(false);
+    // The whole ledger is the Mirza total, signed.
+    expect([...balance.values()].reduce((a, v) => a + v, 0n)).toBe(
+      MONEY_SHAPE_POSITIVE_SUM - MONEY_SHAPE_DEBT_SUM,
+    );
+    // Owner decision 2026-10-17: nothing is a legacy debt row any more.
+    expect(await debts()).toEqual([]);
+    // Held rows: no customer, no entry; one review row each.
     for (const h of shape.held) {
       expect(await rig.count('customers', `telegram_user_id = '${h.id}'`), h.why).toBe(0);
     }
@@ -268,7 +281,7 @@ describe('the real package money shape through the .nxpkg import (integration)',
     return (await rig.detail(id)).status;
   }
 
-  it('imports exactly: 2,986,130,847 credited per customer, 38 debts review-only, held rows reported; a crash after the openings resumes with no double credit', async () => {
+  it('imports exactly: 2,986,130,847 credited per customer, 38 negative balances as DEBIT openings (no debt rows), held rows reported; a crash after the openings resumes with no double entry', async () => {
     await rig.freshTenant(generated.liveAccounts);
     let armed = false;
     let crashed = 0;
@@ -306,7 +319,7 @@ describe('the real package money shape through the .nxpkg import (integration)',
     const status = await tickUntilDone(id, executor);
     const done = await rig.detail(id);
     expect(['COMPLETED', 'COMPLETED_WITH_DISCREPANCY'], JSON.stringify(done)).toContain(status);
-    // The resume found every opening and debt already recorded: the same totals, no double.
+    // The resume found every opening (credit and debit) already posted: the same totals, no double.
     await assertMoneyExact();
     expect(await rig.count('legacy_import_runs', "mode = 'APPLY' AND status = 'COMPLETED'")).toBe(
       1,
@@ -377,7 +390,7 @@ describe('the real package money shape through the .nxpkg import (integration)',
       dump,
     ]);
     const after = await databaseFingerprint(db());
-    // Every table is exactly as the backup found it — the ledger and the debts among them.
+    // Every table is exactly as the backup found it — the ledger, credits and debits both.
     expect(changedTables(before ?? {}, after)).toEqual({});
     expect(await ledger()).toEqual([]);
     expect(await debts()).toEqual([]);

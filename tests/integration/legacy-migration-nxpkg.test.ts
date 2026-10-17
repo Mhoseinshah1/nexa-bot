@@ -29,6 +29,7 @@ import {
   targetAcknowledgement,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/production-guard';
 import {
+  SYNTHETIC_EXPECTED,
   SYNTHETIC_PANEL_ACCOUNTS,
   SYNTHETIC_PANEL_CODES,
   buildSyntheticLegacyDataset,
@@ -477,7 +478,7 @@ describe('legacy migration: the executor over a real package', () => {
       'customers:existing',
       'customers:invalid_identity',
       'wallet_openings',
-      'legacy_debts',
+      'wallet_debit_openings',
       'trials',
       'products',
       'invoice_archive',
@@ -487,8 +488,27 @@ describe('legacy migration: the executor over a real package', () => {
       expect(sections.has(name), name).toBe(true);
     }
     expect(sections.get('invoice_archive')?.source).toBeGreaterThan(0);
+    // Owner decision 2026-10-17: positives are CREDIT openings, the one negative a DEBIT
+    // opening; there is no `legacy_debts` section any more.
+    expect(sections.has('legacy_debts')).toBe(false);
+    expect(sections.get('wallet_openings')).toMatchObject({
+      source: SYNTHETIC_EXPECTED.users.opening.POSITIVE,
+      imported: SYNTHETIC_EXPECTED.users.opening.POSITIVE,
+      skipped: 0,
+      quarantined: 0,
+    });
+    expect(sections.get('wallet_debit_openings')).toMatchObject({
+      source: SYNTHETIC_EXPECTED.users.opening.NEGATIVE,
+      imported: SYNTHETIC_EXPECTED.users.opening.NEGATIVE,
+      skipped: 0,
+      quarantined: 0,
+    });
     expect(dry.dryRunReport?.wallets.currency).toBe('IRT');
-    expect(BigInt(dry.dryRunReport?.debts.totalMinor ?? '-1') >= 0n).toBe(true);
+    // The negative balances' magnitude (the converter's own figure): 20 000.
+    expect(dry.dryRunReport?.debts).toMatchObject({
+      count: SYNTHETIC_EXPECTED.users.opening.NEGATIVE,
+      totalMinor: SYNTHETIC_EXPECTED.users.debtSumMinor.toString(),
+    });
 
     await service.approve(tenantA, owner, id, {
       idempotencyKey: key(),
@@ -511,6 +531,31 @@ describe('legacy migration: the executor over a real package', () => {
     expect(done.backupRunId).not.toBeNull();
     expect(done.applyReport?.reconcileVerdict).toBe('RECONCILED');
     expect(await count('customers')).toBe(8);
+    // The money, from the ledger: six openings (five CREDITs, one DEBIT of 20 000), a wallet
+    // total equal to the Mirza balances' signed sum, and no legacy-debt row.
+    const ledger = (
+      await ctx.container.database.db.execute<{
+        tg: string;
+        direction: string;
+        reason: string;
+        reference: string;
+        amount: string;
+      }>(
+        sql`SELECT c.telegram_user_id AS tg, w.direction, w.reason, w.reference, w.amount::text AS amount
+              FROM wallet_entries w JOIN customers c ON c.id = w.customer_id
+             WHERE w.tenant_id = ${TENANT}`,
+      )
+    ).rows;
+    expect(ledger).toHaveLength(6);
+    expect(ledger.every((e) => e.reason === 'MIGRATION_OPENING_BALANCE')).toBe(true);
+    expect(ledger.every((e) => e.reference === `legacy:opening:${e.tg}`)).toBe(true);
+    expect(ledger.filter((e) => e.direction === 'DEBIT')).toEqual([
+      expect.objectContaining({ tg: '100000003', amount: '20000' }),
+    ]);
+    expect(
+      ledger.reduce((s, e) => s + (e.direction === 'CREDIT' ? 1n : -1n) * BigInt(e.amount), 0n),
+    ).toBe(SYNTHETIC_EXPECTED.users.legacyBalanceSumMinor);
+    expect(await count('legacy_wallet_debts')).toBe(0);
     const stored = await row(id);
     expect(stored?.['key_ciphertext']).toBeNull();
     expect(stored?.['key_key_id']).toBeNull();

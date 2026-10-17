@@ -249,6 +249,32 @@ describe('Migration P7: the legacy importer', () => {
     return BigInt(result.rows[0]?.t ?? '0');
   }
 
+  /** A customer's derived wallet balance, by Telegram id: the signed sum of its ledger. */
+  async function balanceOfTelegram(telegramUserId: string): Promise<bigint> {
+    const result = await ctx.container.database.db.execute<{ t: string }>(sql`
+      SELECT COALESCE(sum(CASE w.direction WHEN 'CREDIT' THEN w.amount ELSE -w.amount END), 0)::text AS t
+        FROM wallet_entries w JOIN customers c ON c.id = w.customer_id
+       WHERE w.tenant_id = ${tenantA.tenantId as unknown as string}
+         AND c.telegram_user_id = ${telegramUserId}
+    `);
+    return BigInt(result.rows[0]?.t ?? '0');
+  }
+
+  /** The ledger rows of the synthetic debtor (Mirza -20 000), by Telegram id. */
+  async function debtorLedger(): Promise<{ direction: string; reason: string; amount: string }[]> {
+    const result = await ctx.container.database.db.execute<{
+      direction: string;
+      reason: string;
+      amount: string;
+    }>(sql`
+      SELECT w.direction, w.reason, w.amount::text AS amount
+        FROM wallet_entries w JOIN customers c ON c.id = w.customer_id
+       WHERE w.tenant_id = ${tenantA.tenantId as unknown as string}
+         AND c.telegram_user_id = '100000003' ORDER BY w.created_at, w.id
+    `);
+    return result.rows;
+  }
+
   function expectOnlyReads(): void {
     for (const fake of [panelA, panelB]) {
       const writes = fake.requests.filter(
@@ -459,18 +485,21 @@ describe('Migration P7: the legacy importer', () => {
       manualReviewRecorded: 2,
       sourceChanged: 0,
     });
-    // Owner decision 6: the negative balance is a legacy debt, never a ledger entry.
+    // Owner decision 2026-10-17: the negative balance is ONE DEBIT opening, posted like a credit.
     expect(applied.openings).toMatchObject({
-      POSTED: 5,
+      POSTED: 6,
       ALREADY_POSTED: 0,
       ZERO_NO_ENTRY: 2,
       CONFLICT: 0,
-      DEBT_RECORDED: 1,
-      DEBT_ALREADY_RECORDED: 0,
-      PRIOR_DEBIT_OPENING: 0,
+      debitPosted: 1,
     });
-    expect(applied.openings.postedSumMinor).toBe(users.positiveBalanceSumMinor);
-    expect(applied.openings.debtRecordedSumMinor).toBe(users.debtSumMinor);
+    expect(applied.openings.postedSumMinor).toBe(users.legacyBalanceSumMinor);
+    expect(applied.openings.creditPostedSumMinor).toBe(users.positiveBalanceSumMinor);
+    expect(applied.openings.debitPostedSumMinor).toBe(users.debtSumMinor);
+    // The retired debt outcomes are gone from the report.
+    for (const gone of ['DEBT_RECORDED', 'DEBT_ALREADY_RECORDED', 'PRIOR_DEBIT_OPENING']) {
+      expect(applied.openings, gone).not.toHaveProperty(gone);
+    }
     expect(applied.trials.APPLIED).toBe(users.imported);
     expect(applied.trials.decisions).toMatchObject({
       INHERIT_NEXA_POLICY: 4,
@@ -485,10 +514,16 @@ describe('Migration P7: the legacy importer', () => {
 
     // NEXA now holds exactly that.
     expect(await count('customers')).toBe(1 + users.newCustomers);
-    expect(await count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'")).toBe(5);
-    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(0);
-    expect(await count('legacy_wallet_debts')).toBe(1);
-    expect(await walletTotal()).toBe(preTotal + users.positiveBalanceSumMinor);
+    expect(await count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'")).toBe(6);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    // The debtor (-20 000 in Mirza) holds exactly one DEBIT of 20 000: balance -20 000.
+    expect(await debtorLedger()).toEqual([
+      { direction: 'DEBIT', reason: 'MIGRATION_OPENING_BALANCE', amount: '20000' },
+    ]);
+    expect(await balanceOfTelegram('100000003')).toBe(-users.debtSumMinor);
+    expect(await balanceOfTelegram('100000001')).toBe(50_000n);
+    expect(await walletTotal()).toBe(preTotal + users.legacyBalanceSumMinor);
     expect(await count('legacy_import_map', "legacy_table = 'user' AND status = 'IMPORTED'")).toBe(
       users.imported,
     );
@@ -570,17 +605,21 @@ describe('Migration P7: the legacy importer', () => {
     expect(again.customers).toMatchObject({ created: 0, matchedExisting: users.imported });
     expect(again.openings).toMatchObject({
       POSTED: 0,
-      ALREADY_POSTED: 5,
-      DEBT_RECORDED: 0,
-      DEBT_ALREADY_RECORDED: 1,
+      ALREADY_POSTED: 6,
+      ZERO_NO_ENTRY: 2,
+      CONFLICT: 0,
+      debitPosted: 0,
+      postedSumMinor: 0n,
     });
     expect(again.trials).toMatchObject({ APPLIED: 0, REPLAYED: users.imported });
     expect(again.products).toMatchObject({ created: 0, existing: 6 });
     expect(again.services.map).toMatchObject({ INSERTED: 0, UNCHANGED: 15, REFUSED: 0 });
-    expect(await count('wallet_entries')).toBe(5);
-    expect(await count('legacy_wallet_debts')).toBe(1);
+    expect(await count('wallet_entries')).toBe(6);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    expect(await balanceOfTelegram('100000003')).toBe(-users.debtSumMinor);
     expect(await count('customers')).toBe(1 + users.newCustomers);
-    expect(await walletTotal()).toBe(preTotal + users.positiveBalanceSumMinor);
+    expect(await walletTotal()).toBe(preTotal + users.legacyBalanceSumMinor);
 
     const reconcile = await importer().reconcile(input('reconcile', snap));
     expect(reconcile.verdict).toBe('RECONCILED');
@@ -590,10 +629,34 @@ describe('Migration P7: the legacy importer', () => {
     }[];
     expect(checks.filter((c) => !c.ok)).toEqual([]);
     expect(checks.map((c) => c.id)).toContain('provider.writes');
+    // The wallet checks of the new rule: credits against the positives, debits against the
+    // negatives, and no debt side record; the debt-era checks no longer exist.
+    expect(checks.map((c) => c.id)).toEqual(
+      expect.arrayContaining([
+        'wallet.equation',
+        'wallet.credit_openings_sum',
+        'wallet.credit_openings_count',
+        'wallet.debit_openings_sum',
+        'wallet.debit_openings_count',
+        'wallet.no_legacy_debt',
+      ]),
+    );
+    for (const gone of [
+      'wallet.openings_sum',
+      'wallet.openings_count',
+      'wallet.no_debit_opening',
+      'wallet.debts_sum',
+      'wallet.debts_count',
+    ]) {
+      expect(
+        checks.map((c) => c.id),
+        gone,
+      ).not.toContain(gone);
+    }
     // Mirza PR4: the users-and-wallets section — every source row accounted for, the
-    // positives in the ledger, the negative as a debt, no DEBIT opening. Aggregates only.
+    // positives as CREDIT openings, the negative as ONE DEBIT opening, no debt row. Aggregates only.
     const uw = (reconcile.sections as Record<string, any>)['usersWallets'];
-    expect(uw.version).toBe('nexa-legacy-users-wallets/v1');
+    expect(uw.version).toBe('nexa-legacy-users-wallets/v2');
     expect(uw.holds).toBe(true);
     expect(uw.users.outcomes).toEqual({
       IMPORTED_NEW: users.newCustomers,
@@ -621,14 +684,27 @@ describe('Migration P7: the legacy importer', () => {
       openingEntries: users.opening.POSITIVE,
       openingSumMinor: String(users.positiveBalanceSumMinor),
     });
-    expect(uw.wallet.legacyDebts).toMatchObject({
+    expect(uw.wallet.negative).toMatchObject({
       users: 1,
       sumMinor: String(users.debtSumMinor),
-      recorded: 1,
-      recordedSumMinor: String(users.debtSumMinor),
-      byState: { PENDING_REVIEW: { count: 1, sumMinor: String(users.debtSumMinor) } },
+      openingEntries: 1,
+      openingSumMinor: String(users.debtSumMinor),
     });
-    expect(uw.wallet.ledgerDebitOpenings).toBe(0);
+    expect(uw.wallet.legacyDebtRows).toBe(0);
+    expect(uw.wallet.perUser).toEqual({
+      matching: users.opening.POSITIVE + users.opening.NEGATIVE + users.opening.ZERO,
+      missingOpening: 0,
+      conflicting: 0,
+    });
+    expect(uw.wallet.sourceMoney.debited).toEqual({
+      rows: 1,
+      sumMinor: String(users.debtSumMinor),
+    });
+    expect(uw.wallet.sourceMoney).not.toHaveProperty('debtRecorded');
+    // U6: no legacy-debt row; U8: the openings by sign add up to the opening total.
+    for (const id of ['U6', 'U8']) {
+      expect(uw.checks.find((c: { id: string }) => c.id === id)?.holds, id).toBe(true);
+    }
     expect(uw.users.agents.resellerGrants).toBe('NONE');
     for (const id of ['100000001', '100000005', '999999999']) {
       expect(JSON.stringify(uw)).not.toMatch(new RegExp(`(?<![0-9])${id}(?![0-9])`, 'u'));
@@ -662,10 +738,12 @@ describe('Migration P7: the legacy importer', () => {
     });
     expect(final['wallet']).toMatchObject({
       currency: 'IRT',
-      importedTotalMinor: String(users.positiveBalanceSumMinor),
+      // Every imported balance is one signed opening: the total is the Mirza sum, negative
+      // included, and the debtor's DEBIT is one of the six openings.
+      importedTotalMinor: String(users.legacyBalanceSumMinor),
       negative: { count: 1, sumMinor: String(-users.debtSumMinor) },
-      openingEntries: 5,
-      duplicatesPrevented: 5,
+      openingEntries: 6,
+      duplicatesPrevented: 6,
       expectedPostImportTotalMinor: final['wallet'].actualPostImportTotalMinor,
     });
     expect(final['services']).toMatchObject({
@@ -708,8 +786,10 @@ describe('Migration P7: the legacy importer', () => {
       }),
     ).rejects.toBeInstanceOf(LegacyImportInterrupted);
     expect(await count('legacy_import_runs', "status = 'RUNNING' AND mode = 'APPLY'")).toBe(1);
-    expect(await count('wallet_entries')).toBe(5);
-    expect(await count('legacy_wallet_debts')).toBe(1);
+    expect(await count('wallet_entries')).toBe(6);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    expect(await balanceOfTelegram('100000003')).toBe(-SYNTHETIC_EXPECTED.users.debtSumMinor);
     expect(await count('legacy_product_shapes')).toBe(0);
 
     // A fresh import is refused while that run is RUNNING; it says to resume.
@@ -752,14 +832,16 @@ describe('Migration P7: the legacy importer', () => {
     expect((resumed.sections as Record<string, any>)['run'].status).toBe('COMPLETED');
     expect(applied.openings).toMatchObject({
       POSTED: 0,
-      ALREADY_POSTED: 5,
-      DEBT_ALREADY_RECORDED: 1,
-      DEBT_RECORDED: 0,
+      ALREADY_POSTED: 6,
+      debitPosted: 0,
+      postedSumMinor: 0n,
     });
     expect(applied.customers.created).toBe(0);
     expect(applied.products.created).toBe(6);
-    expect(await count('wallet_entries')).toBe(5);
-    expect(await count('legacy_wallet_debts')).toBe(1);
+    expect(await count('wallet_entries')).toBe(6);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    expect(await balanceOfTelegram('100000003')).toBe(-SYNTHETIC_EXPECTED.users.debtSumMinor);
     expect(await count('customers')).toBe(1 + SYNTHETIC_EXPECTED.users.newCustomers);
     expect(await count('legacy_import_runs', "status = 'RUNNING'")).toBe(0);
     // One APPLY run per cycle: the resume finished the SAME run, and the report counts it.
@@ -1059,8 +1141,8 @@ describe('Migration P7: the legacy importer', () => {
     await credit('pre-import', 10_000n);
     const snap = await snapshot();
     await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
-    // NEXA balance + legacy balance for the existing customer, additive.
-    expect(await walletTotal()).toBe(10_000n + SYNTHETIC_EXPECTED.users.positiveBalanceSumMinor);
+    // NEXA balance + the signed Mirza balances (the negative one included), additive.
+    expect(await walletTotal()).toBe(10_000n + SYNTHETIC_EXPECTED.users.legacyBalanceSumMinor);
     // A balance that existed BEFORE the run is the pre-import figure, not movement.
     expect((await importer().reconcile(input('reconcile-clean', snap))).verdict).toBe('RECONCILED');
 
@@ -1082,8 +1164,8 @@ describe('Migration P7: the legacy importer', () => {
       preImportTotalMinor: 10_000n,
       nonOpeningMovementSinceRunMinor: 500n,
       // Never folded into the expected side.
-      expectedTotalMinor: 10_000n + SYNTHETIC_EXPECTED.users.positiveBalanceSumMinor,
-      actualTotalMinor: 10_500n + SYNTHETIC_EXPECTED.users.positiveBalanceSumMinor,
+      expectedTotalMinor: 10_000n + SYNTHETIC_EXPECTED.users.legacyBalanceSumMinor,
+      actualTotalMinor: 10_500n + SYNTHETIC_EXPECTED.users.legacyBalanceSumMinor,
       movementSinceRun: { nonOpeningWalletEntries: 1, nonOpeningWalletNetMinor: 500n, payments: 0 },
     });
 
@@ -1481,15 +1563,44 @@ describe('Migration P7: the legacy importer', () => {
       legacyBalanceMinor: 1_000n,
       currency: 'IRT',
     });
+    const failedChecks = async (name: string) =>
+      (
+        ((await importer().reconcile(input(name, snap))).sections as Record<string, any>)[
+          'checks'
+        ] as { id: string; ok: boolean }[]
+      )
+        .filter((c) => !c.ok)
+        .map((c) => c.id);
     const report = await importer().reconcile(input('reconcile', snap));
     expect(report.verdict).toBe('DISCREPANCY');
-    const failed = (
-      (report.sections as Record<string, any>)['checks'] as { id: string; ok: boolean }[]
-    )
-      .filter((c) => !c.ok)
-      .map((c) => c.id);
+    const failed = await failedChecks('reconcile-credit');
     expect(failed).toEqual(
-      expect.arrayContaining(['wallet.openings_sum', 'wallet.openings_count']),
+      expect.arrayContaining(['wallet.credit_openings_sum', 'wallet.credit_openings_count']),
+    );
+    // The stray CREDIT is not a DEBIT: the debit checks and the debt check still hold.
+    expect(failed).not.toContain('wallet.debit_openings_sum');
+    expect(failed).not.toContain('wallet.debit_openings_count');
+    expect(failed).not.toContain('wallet.no_legacy_debt');
+
+    // A stray DEBIT opening (a negative balance nobody imported) fails the DEBIT checks.
+    const strayDebtor = await ctx.container.customers.resolveFromUpdate(
+      tenantA,
+      importerActor('w3'),
+      {
+        idempotencyKey: 'stray-debtor',
+        telegramUserId: '777777778',
+        from: { id: 777777778, first_name: 'StrayDebtor' },
+        botInstanceId: BOT_A,
+      },
+    );
+    await ctx.container.migrationOpeningBalance.post(tenantA, importerActor('stray-debtor'), {
+      customerId: strayDebtor.customer.id,
+      telegramUserId: '777777778',
+      legacyBalanceMinor: -500n,
+      currency: 'IRT',
+    });
+    expect(await failedChecks('reconcile-debit')).toEqual(
+      expect.arrayContaining(['wallet.debit_openings_sum', 'wallet.debit_openings_count']),
     );
   });
 
@@ -2126,9 +2237,9 @@ describe('Migration P7: the legacy importer', () => {
   });
 
   // ---------------------------------------------------------------------------------------
-  // Mirza PR4 — users and wallets: negative balances held for review (owner decision 6),
-  // duplicate source ids, a ledger DEBIT left by the code before the decision, and a newer
-  // snapshot (owner constraint 4). Synthetic data only.
+  // Mirza PR4 — users and wallets: negative balances posted as DEBIT openings (owner decision
+  // 2026-10-17), duplicate source ids, a pre-existing opening, and a newer snapshot (owner
+  // constraint 4). Synthetic data only.
   // ---------------------------------------------------------------------------------------
 
   /** Snapshot B: the same legacy bot, later — balances and rows changed since A. */
@@ -2141,7 +2252,7 @@ describe('Migration P7: the legacy importer', () => {
         switch (u['id']) {
           case '100000001': // positive → negative: the owner's
             return { ...u, Balance: '-5000' };
-          case '100000003': // negative (a debt) → positive: the owner's
+          case '100000003': // negative (a DEBIT opening) → positive: the owner's
             return { ...u, Balance: '8000' };
           case '100000010': // a different positive figure
             return { ...u, Balance: '9000' };
@@ -2172,35 +2283,50 @@ describe('Migration P7: the legacy importer', () => {
     return result.rows;
   }
 
-  it('PR4: a negative legacy balance is a debt with provenance, never a ledger entry; the balance is 0', async () => {
+  it('2026-10-17: a negative legacy balance is ONE DEBIT opening, never a debt row; the wallet balance is exactly the Mirza balance', async () => {
     const snap = await snapshot();
     const report = await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
-    const run = (report.sections as Record<string, any>)['run'];
-    const debts = await debtRows();
-    expect(debts).toEqual([{ legacy_user_id: '100000003', amount: '20000', fp: snap.fingerprint }]);
-    const [debt] = (
+    expect((report.sections as Record<string, any>)['run'].status).toBe('COMPLETED');
+    // Nothing writes the retired side record.
+    expect(await debtRows()).toEqual([]);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    // The debtor (Mirza -20 000): exactly one ledger entry, a DEBIT of the magnitude under the
+    // opening reference, so the derived balance is exactly -20 000.
+    const debtorEntries = (
       await ctx.container.database.db.execute<{
-        run_id: string;
-        row_checksum: string;
-        state: string;
-      }>(sql`SELECT run_id, row_checksum, state, synthetic FROM legacy_wallet_debts`)
+        direction: string;
+        reason: string;
+        reference: string;
+        amount: string;
+        currency: string;
+      }>(sql`
+      SELECT w.direction, w.reason, w.reference, w.amount::text AS amount, w.currency
+        FROM wallet_entries w JOIN customers c ON c.id = w.customer_id
+       WHERE w.tenant_id = ${tenantA.tenantId as unknown as string}
+         AND c.telegram_user_id = '100000003'`)
     ).rows;
-    expect(debt).toEqual({
-      run_id: run.id,
-      row_checksum: snap.users.find((u) => u.id === '100000003')?.checksum,
-      state: 'PENDING_REVIEW',
-      // The fixture carries the synthetic marker, and the debt says so.
-      synthetic: true,
-    });
-    // No ledger entry of any kind for that customer: the NEXA balance is 0.
-    expect(
-      await count(
-        'wallet_entries',
-        `customer_id = (SELECT id FROM customers WHERE telegram_user_id = '100000003')`,
-      ),
-    ).toBe(0);
-    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(0);
-    // The map row keeps its warning reason; the debt is not a review-queue row.
+    expect(debtorEntries).toEqual([
+      {
+        direction: 'DEBIT',
+        reason: 'MIGRATION_OPENING_BALANCE',
+        reference: 'legacy:opening:100000003',
+        amount: '20000',
+        currency: 'IRT',
+      },
+    ]);
+    expect(await balanceOfTelegram('100000003')).toBe(-20_000n);
+    // It is the only DEBIT in the ledger; every other customer is exactly their Mirza figure.
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await balanceOfTelegram('100000001')).toBe(50_000n);
+    expect(await balanceOfTelegram('100000002')).toBe(0n);
+    // A rerun is ALREADY_POSTED for the debtor: no second DEBIT, the balance unchanged.
+    const rerun = await importer().apply({ ...input('rerun', snap), mode: 'IMPORT' });
+    const again = (rerun.sections as Record<string, any>)['applied'].openings;
+    expect(again).toMatchObject({ POSTED: 0, ALREADY_POSTED: 6, debitPosted: 0 });
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await balanceOfTelegram('100000003')).toBe(-20_000n);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    // The map row keeps its warning reason; the negative balance is not a review-queue row.
     expect(
       await count(
         'legacy_import_map',
@@ -2218,14 +2344,16 @@ describe('Migration P7: the legacy importer', () => {
         "legacy_table = 'user' AND legacy_id IN ('100000007', '100000009') AND entity_type = 'CUSTOMER'",
       ),
     ).toBe(2);
-    // The debt's audit row names no Telegram id.
-    expect(await count('audit_logs', "action = 'legacy.wallet_debt.recorded'")).toBe(1);
+    // The opening's audit row (one per posted opening, the DEBIT among them) names no Telegram
+    // id, and the retired debt action is never audited.
+    expect(await count('audit_logs', "action = 'wallet.migration_opening_balance'")).toBe(6);
     expect(
       await count(
         'audit_logs',
-        "action = 'legacy.wallet_debt.recorded' AND after::text LIKE '%100000003%'",
+        "action = 'wallet.migration_opening_balance' AND after::text LIKE '%100000003%'",
       ),
     ).toBe(0);
+    expect(await count('audit_logs', "action = 'legacy.wallet_debt.recorded'")).toBe(0);
   });
 
   it('PR4: duplicate source user ids create no customer, no opening and no debt — one review row', async () => {
@@ -2301,7 +2429,7 @@ describe('Migration P7: the legacy importer', () => {
   it('OQ-LWD-07: a user blocked in MirzaBot is imported BLOCKED with their money recorded exactly; an existing customer is never changed; an unknown status is reviewed', async () => {
     const dataset = withStatuses({
       '100000001': 'block', // new, positive balance
-      '100000003': 'block', // new, legacy debt
+      '100000003': 'block', // new, negative balance (a DEBIT opening)
       [SYNTHETIC_EXISTING_CUSTOMER]: 'block', // an EXISTING NEXA customer: left ACTIVE
       '100000010': 'Blocked', // not a MirzaBot spelling: UNKNOWN
     });
@@ -2337,7 +2465,8 @@ describe('Migration P7: the legacy importer', () => {
     expect((await customerStatus('100000002'))?.status).toBe('ACTIVE');
     // Never changed: the existing NEXA customer keeps its own status.
     expect((await customerStatus(SYNTHETIC_EXISTING_CUSTOMER))?.status).toBe('ACTIVE');
-    // The money is recorded exactly as for anybody: a CREDIT opening, a legacy debt.
+    // The money is recorded exactly as for anybody: a CREDIT opening, and a DEBIT opening for
+    // the negative balance (the blocked debtor's wallet is exactly -20 000), no debt row.
     expect(
       await count(
         'wallet_entries',
@@ -2345,8 +2474,14 @@ describe('Migration P7: the legacy importer', () => {
       ),
     ).toBe(1);
     expect(
-      await count('legacy_wallet_debts', "legacy_user_id = '100000003' AND amount_minor = 20000"),
+      await count(
+        'wallet_entries',
+        "reference = 'legacy:opening:100000003' AND direction = 'DEBIT' AND amount = 20000 AND reason = 'MIGRATION_OPENING_BALANCE'",
+      ),
     ).toBe(1);
+    expect(await balanceOfTelegram('100000001')).toBe(50_000n);
+    expect(await balanceOfTelegram('100000003')).toBe(-20_000n);
+    expect(await count('legacy_wallet_debts')).toBe(0);
     // UNKNOWN: no customer, no money, one review row.
     expect(await customerStatus('100000010')).toBeNull();
     expect(await count('wallet_entries', "reference = 'legacy:opening:100000010'")).toBe(0);
@@ -2412,29 +2547,29 @@ describe('Migration P7: the legacy importer', () => {
     });
   });
 
-  it('PR4: a ledger DEBIT opening left by the code before owner decision 6 is never rewritten nor doubled', async () => {
-    // The rehearsal state the old code could leave: customer 100000003 with a DEBIT opening.
+  /** Customer 100000003 with an opening already posted by the one writer, as a rehearsal or a crash leaves it. */
+  async function preOpening(legacyBalanceMinor: bigint): Promise<void> {
     const resolved = await ctx.container.customers.resolveFromUpdate(
       tenantA,
       importerActor('webhook-3'),
       {
-        idempotencyKey: 'legacy-prior-debit',
+        idempotencyKey: 'legacy-prior-opening',
         telegramUserId: '100000003',
         from: { id: 100000003, first_name: 'Prior' },
         botInstanceId: BOT_A,
       },
     );
-    const { DrizzleWalletRepository } =
-      await import('../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository');
-    await new DrizzleWalletRepository(ctx.container.database.db).append(tenantA, {
-      id: ctx.container.ids.uuid(),
+    await ctx.container.migrationOpeningBalance.post(tenantA, importerActor('prior-opening'), {
       customerId: resolved.customer.id,
-      direction: 'DEBIT',
-      reason: 'MIGRATION_OPENING_BALANCE',
-      amount: money(20_000n, 'IRT'),
-      reference: 'legacy:opening:100000003',
-      now: ctx.container.clock.now(),
+      telegramUserId: '100000003',
+      legacyBalanceMinor,
+      currency: 'IRT',
     });
+  }
+
+  it('2026-10-17: a DEBIT opening already in the ledger for the right figure is ALREADY_POSTED — never rewritten, never doubled', async () => {
+    await preOpening(-20_000n);
+    expect(await balanceOfTelegram('100000003')).toBe(-20_000n);
     const before = await walletTotal();
     const snap = await snapshot();
     const plan = (
@@ -2443,29 +2578,76 @@ describe('Migration P7: the legacy importer', () => {
         evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
       })
     ).sections as Record<string, any>;
-    expect(plan['plan'].wallet.openings.PRIOR_DEBIT_OPENING).toBe(1);
+    // The plan says it before APPLY does: the negative balance is a DEBIT already posted.
+    expect(plan['plan'].wallet.openings).toMatchObject({ ALREADY_POSTED: 1, POST: 5, CONFLICT: 0 });
+    expect(plan['plan'].wallet.debitOpenings).toMatchObject({
+      ALREADY_POSTED: 1,
+      POST: 0,
+      CONFLICT: 0,
+    });
 
     const report = await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
-    expect(report.verdict).toBe('COMPLETED_WITH_FAILURES');
+    expect(report.verdict).toBe('COMPLETED_ADOPTION_PENDING_P6');
     const sections = report.sections as Record<string, any>;
-    expect(sections['applied'].openings.PRIOR_DEBIT_OPENING).toBe(1);
-    expect(sections['attention'].priorDebitOpening).toBe(1);
-    // Nothing rewritten and nothing added for that customer: the DEBIT stays, no debt beside it.
+    expect(sections['applied'].openings).toMatchObject({
+      POSTED: 5,
+      ALREADY_POSTED: 1,
+      CONFLICT: 0,
+      debitPosted: 0,
+      debitPostedSumMinor: 0n,
+    });
+    // Nothing rewritten and nothing added for that customer: one DEBIT, balance -20 000.
     expect(
       await count(
         'wallet_entries',
         "reference = 'legacy:opening:100000003' AND direction = 'DEBIT'",
       ),
     ).toBe(1);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await balanceOfTelegram('100000003')).toBe(-20_000n);
     expect(await count('legacy_wallet_debts')).toBe(0);
+    // The wallet moved only by what THIS run posted: the five positives.
     expect(await walletTotal()).toBe(before + SYNTHETIC_EXPECTED.users.positiveBalanceSumMinor);
 
+    // A rerun posts nothing either.
+    const rerun = await importer().apply({ ...input('rerun', snap), mode: 'IMPORT' });
+    expect((rerun.sections as Record<string, any>)['applied'].openings).toMatchObject({
+      POSTED: 0,
+      ALREADY_POSTED: 6,
+      debitPosted: 0,
+    });
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await balanceOfTelegram('100000003')).toBe(-20_000n);
+  });
+
+  it('2026-10-17: an opening already in the ledger for ANOTHER figure or sign is a CONFLICT in the plan and in APPLY — never rewritten, never completed', async () => {
+    // The ledger holds a CREDIT of 20 000 for the customer whose Mirza balance is -20 000.
+    await preOpening(20_000n);
+    const snap = await snapshot();
+    const plan = (
+      await importer().audit({
+        ...input('audit', snap),
+        evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
+      })
+    ).sections as Record<string, any>;
+    expect(plan['plan'].wallet.openings.CONFLICT).toBe(1);
+    expect(plan['plan'].wallet.debitOpenings).toMatchObject({ CONFLICT: 1, POST: 0 });
+
+    const report = await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
+    const sections = report.sections as Record<string, any>;
+    expect(sections['applied'].openings.CONFLICT).toBe(plan['plan'].wallet.openings.CONFLICT);
+    expect(sections['attention'].openingConflict).toBe(1);
+    expect(report.verdict).toBe('COMPLETED_WITH_FAILURES');
+    // The conflicting entry is exactly as it was: not flipped to a DEBIT, not doubled.
+    expect(await count('wallet_entries', "reference = 'legacy:opening:100000003'")).toBe(1);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(0);
+    expect(await balanceOfTelegram('100000003')).toBe(20_000n);
+    expect(await count('legacy_wallet_debts')).toBe(0);
     const reconcile = await importer().reconcile(input('reconcile', snap));
     expect(reconcile.verdict).toBe('DISCREPANCY');
     const uw = (reconcile.sections as Record<string, any>)['usersWallets'];
-    expect(uw.wallet.ledgerDebitOpenings).toBe(1);
-    expect(uw.wallet.perUser.priorDebitOpening).toBe(1);
-    expect(uw.checks.find((c: { id: string }) => c.id === 'U6').holds).toBe(false);
+    expect(uw.wallet.perUser.conflicting).toBe(1);
+    expect(uw.holds).toBe(false);
   });
 
   it('PR4: a newer snapshot reports changed users and sign flips, applies none, and duplicates nothing', async () => {
@@ -2473,7 +2655,13 @@ describe('Migration P7: the legacy importer', () => {
     await importer().apply({ ...input('import-a', snapA), mode: 'IMPORT' });
     const totalAfterA = await walletTotal();
     const openingsAfterA = await count('wallet_entries');
-    const debtAfterA = await debtRows();
+    const balancesAfterA = {
+      '100000001': await balanceOfTelegram('100000001'),
+      '100000003': await balanceOfTelegram('100000003'),
+      '100000010': await balanceOfTelegram('100000010'),
+    };
+    expect(balancesAfterA['100000001']).toBe(50_000n);
+    expect(balancesAfterA['100000003']).toBe(-20_000n);
 
     const snapB = await snapshot(snapshotB());
     expect(snapB.fingerprint).not.toBe(snapA.fingerprint);
@@ -2484,22 +2672,34 @@ describe('Migration P7: the legacy importer', () => {
       })
     ).sections as Record<string, any>;
     // The plan already says a changed figure is a CONFLICT, never a second opening.
-    expect(audit['plan'].wallet.openings).toMatchObject({ CONFLICT: 3, RECORD_DEBT: 1 });
+    // B's new negative user is a DEBIT to POST; A's flipped user (+50 000 → −5 000) is a negative
+    // balance against a CREDIT: a CONFLICT among the DEBIT openings.
+    expect(audit['plan'].wallet.openings).toMatchObject({ CONFLICT: 3, POST: 1 });
+    expect(audit['plan'].wallet.debitOpenings).toMatchObject({ CONFLICT: 1, POST: 1 });
 
     const report = await importer().apply({ ...input('import-b', snapB), mode: 'IMPORT' });
     expect(report.verdict).toBe('COMPLETED_WITH_FAILURES');
     const applied = (report.sections as Record<string, any>)['applied'];
     expect(applied.customers.sourceChanged).toBe(4);
-    expect(applied.openings).toMatchObject({ POSTED: 0, DEBT_RECORDED: 1, CONFLICT: 0 });
+    // Only the new user's DEBIT of 700 is posted; no changed figure is applied.
+    expect(applied.openings).toMatchObject({
+      POSTED: 1,
+      debitPosted: 1,
+      debitPostedSumMinor: 700n,
+      postedSumMinor: -700n,
+      CONFLICT: 0,
+    });
 
-    // Nothing applied: the ledger is exactly A's, A's debt is exactly A's, and the one new
-    // negative user has its own debt bound to B.
-    expect(await walletTotal()).toBe(totalAfterA);
-    expect(await count('wallet_entries')).toBe(openingsAfterA);
-    expect(await debtRows()).toEqual([
-      ...debtAfterA,
-      { legacy_user_id: '100000012', amount: '700', fp: snapB.fingerprint },
-    ]);
+    // Nothing applied: every A entry is exactly A's — the two sign flips included, the
+    // customers keep +50 000 and −20 000 — and the one new negative user has its own DEBIT.
+    expect(await count('wallet_entries')).toBe(openingsAfterA + 1);
+    expect(await walletTotal()).toBe(totalAfterA - 700n);
+    expect(await balanceOfTelegram('100000001')).toBe(balancesAfterA['100000001']);
+    expect(await balanceOfTelegram('100000003')).toBe(balancesAfterA['100000003']);
+    expect(await balanceOfTelegram('100000010')).toBe(balancesAfterA['100000010']);
+    expect(await balanceOfTelegram('100000012')).toBe(-700n);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(2);
+    expect(await count('legacy_wallet_debts')).toBe(0);
 
     const reconcile = await importer().reconcile(input('reconcile-b', snapB));
     const sections = reconcile.sections as Record<string, any>;
@@ -2536,12 +2736,17 @@ describe('Migration P7: the legacy importer', () => {
       POSITIVE_TO_NEGATIVE: [await refOf('100000001')],
       NEGATIVE_TO_POSITIVE: [await refOf('100000003')],
     });
-    expect(uw.wallet.carried.absentOpenings).toEqual({ count: 1, sumMinor: '1000' });
-    expect(uw.wallet.legacyDebts).toMatchObject({
+    expect(uw.wallet.carried.absentCredits).toEqual({ count: 1, sumMinor: '1000' });
+    expect(uw.wallet.carried.absentDebits).toEqual({ count: 0, sumMinor: '0' });
+    // A's debtor, whose figure B flips, is a carried DEBIT — not applied, not hidden.
+    expect(uw.wallet.carried.changedDebits).toEqual({ count: 1, sumMinor: '20000' });
+    expect(uw.wallet.negative).toMatchObject({
       users: 1,
-      recorded: 2,
-      recordedSumMinor: '20700',
+      sumMinor: '700',
+      openingEntries: 2,
+      openingSumMinor: '20700',
     });
+    expect(uw.wallet.legacyDebtRows).toBe(0);
     // Aggregates and opaque refs only.
     for (const id of ['100000001', '100000003', '100000012']) {
       expect(JSON.stringify(uw)).not.toMatch(new RegExp(`(?<![0-9])${id}(?![0-9])`, 'u'));
@@ -2551,18 +2756,24 @@ describe('Migration P7: the legacy importer', () => {
     const rerun = await importer().apply({ ...input('rerun-b', snapB), mode: 'IMPORT' });
     expect((rerun.sections as Record<string, any>)['applied'].openings).toMatchObject({
       POSTED: 0,
-      DEBT_RECORDED: 0,
-      DEBT_ALREADY_RECORDED: 1,
+      debitPosted: 0,
+      CONFLICT: 0,
     });
-    expect(await count('legacy_wallet_debts')).toBe(2);
-    expect(await walletTotal()).toBe(totalAfterA);
+    expect(
+      (rerun.sections as Record<string, any>)['applied'].openings.ALREADY_POSTED,
+    ).toBeGreaterThan(0);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(2);
+    expect(await count('wallet_entries')).toBe(openingsAfterA + 1);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    expect(await balanceOfTelegram('100000012')).toBe(-700n);
+    expect(await walletTotal()).toBe(totalAfterA - 700n);
   });
 
-  it('PR4 (Codex on #233): a leftover synthetic debt is a CONFLICT in the plan and in APPLY, and the report is never COMPLETED', async () => {
-    // A synthetic import leaves a synthetic debt (100000003, −20 000). The same rows then
-    // arrive as a REAL snapshot — modelled by clearing the snapshot's synthetic flag (the
-    // fixture connector refuses an unmarked dataset by design). The invalid id is dropped
-    // so C3 holds and only the users-and-wallets section can decide the verdict.
+  it('2026-10-17: a leftover legacy-debt row (the retired side record) fails U6 and wallet.no_legacy_debt, and the report is never COMPLETED', async () => {
+    // Nothing writes `legacy_wallet_debts` any more, so a row there is money held OUTSIDE the
+    // wallet: from an older release's rehearsal, or by hand. The import must not call that
+    // reconciled. The invalid id is dropped so C3 holds and only the users-and-wallets
+    // section can decide the verdict.
     const base = buildSyntheticLegacyDataset();
     const dataset = {
       ...base,
@@ -2571,42 +2782,64 @@ describe('Migration P7: the legacy importer', () => {
         user: base.tables.user.filter((u) => u['id'] !== 'not-a-telegram-id'),
       },
     };
-    const synthetic = await snapshot(dataset);
-    await importer().apply({ ...input('import-synthetic', synthetic), mode: 'IMPORT' });
-    expect(await count('legacy_wallet_debts', 'synthetic')).toBe(1);
+    const snap = await snapshot(dataset);
+    await importer().apply({ ...input('import', snap), mode: 'IMPORT' });
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    // The clean import: every U check holds and the money sections of the report hold. (The
+    // report as a whole is not COMPLETED on this fixture — it has no inventory or archive
+    // evidence — which is why the assertions below name the money sections.)
+    const clean = await importer().finalReport({
+      ...input('report-clean', snap),
+      evidenceClass: 'synthetic',
+    });
+    const cleanV2 = clean.finalV2 as Record<string, any>;
+    expect((clean.usersWallets as Record<string, any>).holds).toBe(true);
+    expect(cleanV2['verdict'].failedSections).not.toContain('usersWallets');
+    expect(cleanV2['verdict'].failedInvariants).not.toContain('WALLETS_RECONCILED');
+    expect((await importer().reconcile(input('reconcile-clean', snap))).verdict).toBe('RECONCILED');
 
-    const real = { ...synthetic, synthetic: false };
-    const audit = (
-      await importer().audit({
-        ...input('audit-real', real),
-        evidence: { available: false, reason: 'SOURCE_ENGINE_NOT_SQL' },
-      })
-    ).sections as Record<string, any>;
-    const applied = (
-      (await importer().apply({ ...input('import-real', real), mode: 'IMPORT' }))
-        .sections as Record<string, any>
-    )['applied'];
-    // The plan says what APPLY does: the debt of the other evidence class is a CONFLICT.
-    expect(audit['plan'].wallet.openings.CONFLICT).toBe(1);
-    expect(audit['plan'].wallet.openings.DEBT_ALREADY_RECORDED).toBe(0);
-    expect(applied.openings.CONFLICT).toBe(audit['plan'].wallet.openings.CONFLICT);
-    expect(applied.openings.DEBT_ALREADY_RECORDED).toBe(0);
-    expect(await count('legacy_wallet_debts')).toBe(1);
+    // A debt row for the debtor appears, beside (not instead of) the DEBIT opening.
+    const debtor = (
+      await ctx.container.database.db.execute<{ id: string; run_id: string }>(sql`
+        SELECT c.id, (SELECT id FROM legacy_import_runs WHERE tenant_id = c.tenant_id AND mode = 'APPLY' LIMIT 1) AS run_id
+          FROM customers c WHERE c.tenant_id = ${tenantA.tenantId as unknown as string}
+           AND c.telegram_user_id = '100000003'`)
+    ).rows[0];
+    if (debtor === undefined) throw new Error('no debtor customer');
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO legacy_wallet_debts (id, tenant_id, customer_id, legacy_user_id, amount_minor,
+        currency, source_fingerprint, row_checksum, run_id, synthetic, state, recorded_at, updated_at)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId as unknown as string}, ${debtor.id},
+        '100000003', 20000, 'IRT', ${snap.fingerprint}, ${'a'.repeat(64)}, ${debtor.run_id}, true,
+        'PENDING_REVIEW', now(), now())`);
+    // The debtor's wallet is untouched by it: still exactly the one DEBIT, balance -20 000.
+    expect(await balanceOfTelegram('100000003')).toBe(-20_000n);
 
+    const reconcile = await importer().reconcile(input('reconcile-debt', snap));
+    expect(reconcile.verdict).toBe('DISCREPANCY');
+    const failedChecks = (
+      (reconcile.sections as Record<string, any>)['checks'] as { id: string; ok: boolean }[]
+    )
+      .filter((c) => !c.ok)
+      .map((c) => c.id);
+    expect(failedChecks.sort()).toEqual(['users_wallets.section', 'wallet.no_legacy_debt']);
     const report = await importer().finalReport({
-      ...input('report-real', real),
-      evidenceClass: 'staging',
+      ...input('report-debt', snap),
+      evidenceClass: 'synthetic',
     });
     const final = report.final as Record<string, any>;
-    // Every v1 equation holds; only U8 does not — and that alone keeps it from COMPLETED.
+    // Every v1 equation holds; only U6 does not — and that alone keeps it from COMPLETED.
     expect((final['reconciliation'] as { holds: boolean }[]).every((r) => r.holds)).toBe(true);
     const uw = report.usersWallets as Record<string, any>;
     expect(
       uw.checks.filter((c: { holds: boolean }) => !c.holds).map((c: { id: string }) => c.id),
-    ).toEqual(['U8']);
+    ).toEqual(['U6']);
+    expect(uw.wallet.legacyDebtRows).toBe(1);
     expect(report.verdict).toBe('COMPLETED_WITH_DISCREPANCY');
     expect(exitCodeFor(report)).toBe(3);
-    const reconcile = await importer().reconcile(input('reconcile-real', real));
-    expect(reconcile.verdict).toBe('DISCREPANCY');
+    // The money sections of the v2 report now fail where they held on the clean import.
+    const v2 = report.finalV2 as Record<string, any>;
+    expect(v2['verdict'].failedSections).toContain('usersWallets');
+    expect(v2['verdict'].failedInvariants).toContain('WALLETS_RECONCILED');
   });
 });
