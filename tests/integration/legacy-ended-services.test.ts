@@ -37,6 +37,8 @@ const USERS = 40;
 const INVOICES = 40;
 const PRICE = 150_000n;
 const SOLD_AT_BASE = 1_700_000_000;
+/** Invoices not carried: unpaid, unmapped panel, no panel, unmappable shape, test with no panel. */
+const GAPS = 5;
 
 describe('ended services: every Mirza invoice is a live, ended or counted service', () => {
   let ctx: TestContext;
@@ -137,8 +139,11 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     mark(6, 'noprice', { price_product: 'free' });
     // a status that is neither live nor a never-paid one, account gone
     mark(7, 'warned', { Status: 'end_of_time' });
-    // sold as a NAMED Mirza product, account gone: it still points at its shape's hidden product
-    mark(8, 'named', { code_product: 'p1' });
+    // sold as a NAMED Mirza product with a shape of its own (77 GB), account gone: it still points
+    // at its shape's hidden product — which exists only because EVERY candidate gets a shape
+    mark(8, 'named', { code_product: 'p1', Volume: '77' });
+    // a Mirza TEST invoice that names no panel: ended needs a panel, so it is a counted gap
+    mark(9, 'testnopanel', { is_test: '1', code_panel: null, price_product: '0' });
     return names;
   }
 
@@ -212,7 +217,7 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     // 40 invoices: 16 live + 1 on-panel are adopted; the unpaid, no-panel, unmapped and
     // unmappable-shape ones are counted gaps; everything else is ended.
     const live = generated.invoices.filter((i) => i.live).length;
-    const gaps = 4; // unpaid, unmapped, nopanel, shape
+    const gaps = GAPS; // unpaid, unmapped, nopanel, shape, and a test invoice with no panel
     const ended = INVOICES - live - 1 - gaps;
     expect(outcome).toMatchObject({
       step: 'ended-services',
@@ -224,7 +229,7 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
       ADOPTED_BY_IMPORTER: live + 1,
       NEVER_PAID: 1,
       PANEL_NOT_MAPPED: 1,
-      NO_PANEL: 1,
+      NO_PANEL: 2,
       SHAPE_UNMAPPABLE: 1,
     });
 
@@ -315,11 +320,11 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     const services = rows.find((r) => r.nexaTable === 'services');
     const orders = rows.find((r) => r.nexaTable === 'orders');
     expect(services?.mirzaRows).toBe(INVOICES);
-    expect(services?.nexaRows).toBe(INVOICES - 4);
+    expect(services?.nexaRows).toBe(INVOICES - GAPS);
     expect(Object.fromEntries((services?.explained ?? []).map((g) => [g.reason, g.rows]))).toEqual({
       NEVER_PAID: 1,
       PANEL_NOT_MAPPED: 1,
-      NO_PANEL: 1,
+      NO_PANEL: 2,
       SHAPE_UNMAPPABLE: 1,
     });
     // The orders table carries the money: the adopted services' free orders are the gap.
@@ -328,9 +333,10 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     );
     expect(adopted?.rows).toBe(live + 1);
     expect(adopted?.sumMinor).toBe(PRICE * BigInt(live + 1));
-    expect(orders?.mirzaSumMinor).toBe(PRICE * BigInt(INVOICES - 2)); // test is 0, noprice is 0
+    // the test invoice, the unreadable price and the no-panel test invoice are 0
+    expect(orders?.mirzaSumMinor).toBe(PRICE * BigInt(INVOICES - 3));
     expect(orders?.nexaSumMinor).toBe(
-      PRICE * BigInt(INVOICES - live - 1 - 4 - 2) /* ended and priced */,
+      PRICE * BigInt(INVOICES - live - 1 - GAPS - 2) /* ended and priced */,
     );
   });
 
@@ -345,7 +351,7 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     expect(outcome.written).toBe(0);
     expect(outcome.diverged).toBe(0);
     expect(outcome.alreadyPresent).toBe(
-      INVOICES - generated.invoices.filter((i) => i.live).length - 1 - 4,
+      INVOICES - generated.invoices.filter((i) => i.live).length - 1 - GAPS,
     );
     expect({
       ...(await untouched()),
