@@ -24,7 +24,7 @@ one fixed request shape:
 | method                                 | request                                                                      |
 | -------------------------------------- | ---------------------------------------------------------------------------- |
 | `exchangeToken(form)`                  | `POST api/admin/token` (form; `effect: READ` — a session, no account change) |
-| `listUsersPage(bearer, offset, limit)` | `GET api/users?offset=&limit=`                                               |
+| `listUsersPage(bearer, offset, limit)` | `GET api/users?offset=&limit=&sort=created_at`                               |
 | `readUser(bearer, username)`           | `GET api/user/{username}`                                                    |
 
 No caller-supplied method, path or body can make any of them a write.
@@ -108,16 +108,21 @@ surface — the reader itself, and so every rule above, is unchanged:
     before its next request and end every wait.
 
 The page size is `limit` on the one list route there is; no batch endpoint is assumed. The
-reader's own bound is 200; the Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (default 100)
-because a page larger than `PANEL_HTTP_MAX_RESPONSE_BYTES` (512 KiB) fails the read and
-RickPanel's row size is unmeasured. A panel that caps pages lower loses nothing.
+reader's own bound is 2000 (`INVENTORY_MAX_PAGE_SIZE`; the probe CLI's `--page-size` takes the
+same bound); the Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (default 100, at most 2000).
+A page larger than `PANEL_HTTP_MAX_RESPONSE_BYTES` (512 KiB by default) fails the read,
+closed, and every page shares `PANEL_HTTP_TIMEOUT_MS` (10 s by default): the G6 probe measured
+about 1.5 KB a row, so a page of more than about 340 rows needs the response cap raised (a
+2000-row page is about 3 MB), and a large page on a slow panel may need the timeout raised
+too — measure on the panel before raising the page size. A panel that caps pages lower loses
+nothing. Every list request asks `sort=created_at` (§Per-name resolution).
 
 Each read reports `diagnostics.load`: requests, logins, token reuses, token refreshes,
 retries, time waited, time queued for the gate, duration, page size and the largest page in
 bytes. Counts and milliseconds only — never a token, a credential, a name or a row.
 
 What it costs a panel of N accounts at page size P and interval I (the defaults, P = 100,
-I = 1 s): 1 login + 2 × ⌈N / P⌉ pages, one at a time, so ≈ (1 + 2⌈N/P⌉) × I per complete read
+I = 1 s; a larger P divides the page count, and each page costs the panel a sorted read): 1 login + 2 × ⌈N / P⌉ pages, one at a time, so ≈ (1 + 2⌈N/P⌉) × I per complete read
 — 10 000 accounts: 201 requests, ≈ 3.4 min; 30 000: 601, ≈ 10 min; 50 000: 1 001, ≈ 17 min —
 longer when the panel answers slower than I. The Web Admin's read is TARGETED (§Per-name
 resolution): its pages step by `limit − overlap` (≈ 11% more pages at the defaults), it sends NO
@@ -201,10 +206,12 @@ pages — each page starts `INVENTORY_WALK_OVERLAP` (10; at most a quarter of th
 learned cap) rows before the previous one ended — and calls a walk **gap-free** only when ALL of
 these hold, each checked on the rows themselves:
 
-- **One order, verified.** Every row carries `created_at`, and the rows come oldest first: the
-  list is the panel's insertion order, which no offset or limit changes. Marzban's list has no
-  `ORDER BY`; its natural order is insertion order on SQLite and MySQL/InnoDB — but here it is
-  not assumed: a row without `created_at`, or out of order, voids the walk's proof. (Reviewer
+- **One order, verified.** Every row carries `created_at`, and the rows come oldest first.
+  Every list request asks `sort=created_at` (`USERS_LIST_ORDER`, Marzban's `sort` query): a
+  real RickPanel answered `api/users` WITHOUT a sort in an order that was neither creation
+  order nor its reverse, so every walk failed `CREATED_AT_OUT_OF_ORDER`. The order is still
+  not assumed: a row without `created_at`, or out of order — a panel that ignores the
+  parameter — voids the walk's proof, and the read decides nothing, as before. (Reviewer
   F1: a deterministic order that differs by offset defeated every check short of this.)
 - **Every boundary chained.** The next page shares at least one row — the same name AND the same
   creation time, so a row deleted and created again is not mistaken for the one seen — with the

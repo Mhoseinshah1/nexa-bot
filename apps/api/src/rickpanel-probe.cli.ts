@@ -12,6 +12,7 @@ import {
   type G6ProbeReport,
 } from './modules/platform/legacy-importer/infrastructure/rickpanel-g6-probe.js';
 import { walkOverlap } from './modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source.js';
+import { INVENTORY_MAX_PAGE_SIZE } from './modules/platform/providers/infrastructure/rickpanel-inventory.js';
 
 /**
  * `pnpm rickpanel-probe` — gate G6: a BOUNDED, READ-ONLY probe of one RickPanel's account list
@@ -104,7 +105,9 @@ export function parseProbeArgs(argv: readonly string[]): ProbeArgs {
   return {
     panelId,
     tenantSlug: values.get('--tenant') ?? null,
-    pageSize: pageSize === undefined ? null : count('--page-size', pageSize, 1, 200),
+    // The reader's own bound, so the probe can ask for any page the configured walk may use.
+    pageSize:
+      pageSize === undefined ? null : count('--page-size', pageSize, 1, INVENTORY_MAX_PAGE_SIZE),
     walks: walks === undefined ? G6_PROBE_DEFAULT_WALKS : count('--walks', walks, 2, 3),
     maxPages:
       maxPages === undefined

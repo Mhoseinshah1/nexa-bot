@@ -1703,13 +1703,6 @@ export class LegacyImporterService {
   }
 
   /**
-   * The lane's read-only preparation: the mapping checked against the tenant as an APPLY
-   * checks it (the product map against the approved product review included), the approvals
-   * and their gates, the customers the import made (a user's map row IMPORTED as THIS
-   * customer, from THIS row's checksum — what the lane may hand P6), and the hidden shapes as
-   * the import left them. Nothing is written; no panel is read.
-   */
-  /**
    * The adopt-approved lane's map: the import's own map, its `products` extended by the
    * owner's APPROVED legacy product review — exactly the entries `products-export` writes
    * (`isExportable` under this source's CURRENT products read), for codes the import's map
@@ -1748,6 +1741,13 @@ export class LegacyImporterService {
     );
   }
 
+  /**
+   * The lane's read-only preparation: the mapping checked against the tenant as an APPLY
+   * checks it (the product map against the approved product review included), the approvals
+   * and their gates, the customers the import made (a user's map row IMPORTED as THIS
+   * customer, from THIS row's checksum — what the lane may hand P6), and the hidden shapes as
+   * the import left them. Nothing is written; no panel is read.
+   */
   private async prepareLane(
     scope: TenantContext,
     snapshot: LegacySnapshot,
