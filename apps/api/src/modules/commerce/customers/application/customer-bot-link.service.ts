@@ -53,6 +53,8 @@ export interface CustomerBotLinkRepository {
   ): Promise<readonly string[]>;
   /** Imported customers with a NULL link. */
   countEligible(scope: TenantContext, tx?: unknown): Promise<number>;
+  /** The tenant's ACTIVE bots, oldest first. */
+  activeBots(scope: TenantContext): Promise<readonly BotInstanceId[]>;
   /**
    * Links up to `limit` eligible customers to the bot (`WHERE first_bot_instance_id IS NULL`
    * in the UPDATE itself, so a concurrent writer's value is never replaced) and returns how
@@ -190,6 +192,42 @@ export class CustomerBotLinkService {
       batches += 1;
     }
     return { mode: 'APPLY', botInstanceId, eligible, linked, batches };
+  }
+
+  /**
+   * The one-time import's BOT_LINK step (owner decision 2026-10-17): the imported customers
+   * get the tenant's ACTIVE bot as their first bot, through `apply` and every rule it keeps.
+   * Only when there is exactly one: with none there is nothing to link to, and with several
+   * which one a customer used is not known — nothing is guessed, and the owner links them
+   * with `customers-link-bot --bot`.
+   */
+  async autoLinkImported(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<{
+    readonly outcome: 'LINKED' | 'NO_ACTIVE_BOT' | 'SEVERAL_ACTIVE_BOTS';
+    readonly botInstanceId: BotInstanceId | null;
+    readonly eligible: number;
+    readonly linked: number;
+  }> {
+    await this.deps.guard.check(scope, actor, CUSTOMER_BOT_LINK_PERMISSION);
+    const bots = await this.deps.repository.activeBots(scope);
+    const [only] = bots;
+    if (bots.length !== 1 || only === undefined) {
+      return {
+        outcome: bots.length === 0 ? 'NO_ACTIVE_BOT' : 'SEVERAL_ACTIVE_BOTS',
+        botInstanceId: null,
+        eligible: await this.deps.repository.countEligible(scope),
+        linked: 0,
+      };
+    }
+    const report = await this.apply(scope, actor, only);
+    return {
+      outcome: 'LINKED',
+      botInstanceId: only,
+      eligible: report.eligible,
+      linked: report.linked,
+    };
   }
 
   private async requireBot(scope: TenantContext, botInstanceId: BotInstanceId): Promise<void> {

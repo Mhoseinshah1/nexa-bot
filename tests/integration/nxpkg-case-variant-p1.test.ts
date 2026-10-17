@@ -527,6 +527,8 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
+      materialize: ctx.container.legacyMaterializePort,
+      botLink: ctx.container.legacyBotLinkPort,
       backup: new PipelineBackupPort(container.backup, container.recoveryQuiesced),
       recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
       latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),

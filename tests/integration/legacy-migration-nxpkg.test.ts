@@ -704,6 +704,8 @@ describe('legacy migration: the executor over a real package', () => {
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
+      materialize: ctx.container.legacyMaterializePort,
+      botLink: ctx.container.legacyBotLinkPort,
       backup: {
         runBeforeImport: async () => {
           backupsBefore += 1;
@@ -870,6 +872,8 @@ describe('legacy migration: the executor over a real package', () => {
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
+      materialize: ctx.container.legacyMaterializePort,
+      botLink: ctx.container.legacyBotLinkPort,
       backup: {
         runBeforeImport: async () => {
           atBackup.push({
@@ -1137,6 +1141,8 @@ describe('legacy migration: the executor over a real package', () => {
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
+      materialize: ctx.container.legacyMaterializePort,
+      botLink: ctx.container.legacyBotLinkPort,
       backup: new PipelineBackupPort(container.backup, container.recoveryQuiesced),
       recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
       latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
@@ -1308,6 +1314,8 @@ describe('legacy migration: the executor over a real package', () => {
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
+      materialize: ctx.container.legacyMaterializePort,
+      botLink: ctx.container.legacyBotLinkPort,
       backup: {
         runBeforeImport: async () => ({ outcome: 'TAKEN', runId: PRE_IMPORT_BACKUP_RUN }),
         runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }),

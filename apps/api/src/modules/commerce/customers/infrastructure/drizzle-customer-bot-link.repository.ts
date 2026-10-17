@@ -53,6 +53,14 @@ export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkReposito
     return r.rows.map((row) => String((row as { entity_id: string }).entity_id));
   }
 
+  async activeBots(scope: TenantContext): Promise<readonly BotInstanceId[]> {
+    const tenantId = requireTenantId(scope);
+    const r = await this.db.execute(sql`
+      SELECT id FROM bot_instances WHERE tenant_id = ${tenantId} AND status = 'ACTIVE'
+       ORDER BY created_at, id`);
+    return (r.rows as { id: string }[]).map((row) => row.id as BotInstanceId);
+  }
+
   async countEligible(scope: TenantContext, tx?: unknown): Promise<number> {
     const tenantId = requireTenantId(scope);
     const r = await this.exec(tx).execute(sql`

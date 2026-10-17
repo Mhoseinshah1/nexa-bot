@@ -206,6 +206,8 @@ describe('Mirza restore through the restore page, at scale', () => {
         runner: adapters,
         freshTarget: adapters,
         history: adapters,
+        materialize: container.legacyMaterializePort,
+        botLink: container.legacyBotLinkPort,
         backup: {
           runBeforeImport: async () => {
             atBackup.push({

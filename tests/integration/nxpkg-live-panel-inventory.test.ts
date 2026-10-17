@@ -508,6 +508,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
+      materialize: ctx.container.legacyMaterializePort,
+      botLink: ctx.container.legacyBotLinkPort,
       backup: new PipelineBackupPort(container.backup, container.recoveryQuiesced),
       recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
       latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),

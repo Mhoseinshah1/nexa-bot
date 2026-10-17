@@ -804,6 +804,9 @@ interface ExecutorHarness {
   readonly writerDepth: number;
   /** The import ids the apply ran as the writer of. */
   readonly writers: string[];
+  /** The one-time import's MATERIALIZE / BOT_LINK / match calls, in order. */
+  readonly phases: string[];
+  exactMatchHolds: boolean;
 }
 
 const PRE_BACKUP_RUN = '019600ab-cdef-7012-8345-6789abcdaaaa';
@@ -827,6 +830,10 @@ function executorHarness(
       runId: string | null;
     }> => ({ outcome: 'TAKEN', runId: PRE_BACKUP_RUN }),
     backupSawKey: null as boolean | null,
+    /** The one-time import's phases, in the order they ran. */
+    phases: [] as string[],
+    /** What the fake exact-match row says. */
+    exactMatchHolds: true,
     now: new Date('2026-10-10T10:00:00.000Z'),
     runner: {
       precheck: async () => undefined,
@@ -891,6 +898,13 @@ function executorHarness(
     workspaces,
     calls,
     logs,
+    phases: state.phases,
+    get exactMatchHolds() {
+      return state.exactMatchHolds;
+    },
+    set exactMatchHolds(value) {
+      state.exactMatchHolds = value;
+    },
     get runner() {
       return state.runner;
     },
@@ -973,6 +987,33 @@ function executorHarness(
         return { counts: [{ code: 'payment', count: 7 }] };
       },
     },
+    materialize: {
+      apply: async () => {
+        state.phases.push('materialize');
+        return [{ step: 'customers', written: 2, alreadyPresent: 0, diverged: 0, skipped: [] }];
+      },
+      match: async () => {
+        state.phases.push('match');
+        return [
+          {
+            mirzaTable: 'payments',
+            nexaTable: 'payments',
+            mirzaRows: 3,
+            nexaRows: state.exactMatchHolds ? 3 : 2,
+            mirzaSumMinor: '300',
+            nexaSumMinor: state.exactMatchHolds ? '300' : '200',
+            explained: [],
+            holds: state.exactMatchHolds,
+          },
+        ];
+      },
+    },
+    botLink: {
+      link: async () => {
+        state.phases.push('botLink');
+        return { outcome: 'LINKED' as const, botInstanceId: 'bot-1', eligible: 2, linked: 2 };
+      },
+    },
     backup: {
       runBeforeImport: async () => {
         calls.push('backup:before');
@@ -1029,6 +1070,47 @@ function seed(h: ExecutorHarness, overrides: Record<string, unknown> = {}): stri
 const status = (h: ExecutorHarness, id: string) => h.repository.rows.get(id)?.status;
 
 describe('LegacyMigrationExecutor', () => {
+  /** An approved import of `h`, run to its end. */
+  async function approvedAndRun(h: ExecutorHarness): Promise<string> {
+    const id = seed(h);
+    await h.executor.tick();
+    h.repository.put({ ...h.repository.rows.get(id)!, status: 'DRY_RUN_REQUESTED' });
+    await h.executor.tick();
+    const done = h.repository.rows.get(id)!;
+    h.repository.put({
+      ...done,
+      status: 'APPROVED',
+      approvedDryRunSha256: done.dryRunSha256,
+      approvedByAdminId: ADMIN,
+      approvedAt: h.now,
+    });
+    await h.executor.tick();
+    return id;
+  }
+
+  it('one-time import: materializes after the history, links the bot, then reports the exact match', async () => {
+    const h = executorHarness();
+    const id = await approvedAndRun(h);
+    const finished = h.repository.rows.get(id)!;
+    expect(finished.status).toBe('COMPLETED');
+    expect(h.phases).toEqual(['materialize', 'botLink', 'match']);
+    expect(finished.progress.materialize).toEqual([
+      { step: 'customers', written: 2, alreadyPresent: 0, diverged: 0, skipped: [] },
+    ]);
+    expect(finished.applyReport?.botLink).toMatchObject({ outcome: 'LINKED', linked: 2 });
+    expect(finished.applyReport?.exactMatch).toMatchObject({ holds: true, unexplained: 0 });
+  });
+
+  it('one-time import: an unexplained difference keeps it COMPLETED_WITH_DISCREPANCY', async () => {
+    // MUTATION: dropping the exactMatch rule from completedStatusOf fails this.
+    const h = executorHarness();
+    h.exactMatchHolds = false;
+    const id = await approvedAndRun(h);
+    const finished = h.repository.rows.get(id)!;
+    expect(finished.status).toBe('COMPLETED_WITH_DISCREPANCY');
+    expect(finished.applyReport?.exactMatch).toMatchObject({ holds: false, unexplained: 1 });
+  });
+
   it('drives an import through every state to COMPLETED, erasing the key at the end', async () => {
     const h = executorHarness();
     const id = seed(h);
@@ -1820,6 +1902,7 @@ describe('LegacyMigrationExecutor', () => {
         failedSections: [],
         sections: [],
         history: [],
+        exactMatch: { rows: [], unexplained: 0, holds: true },
       },
       progress: {
         ...emptyRow().progress,
@@ -2226,7 +2309,7 @@ describe('the pure rules of the migration role', () => {
     expect(errorKind('text')).toEqual({ type: 'string', code: null });
   });
 
-  it('is COMPLETED only when all three hold', () => {
+  it('is COMPLETED only when all four hold (the exact match is the fourth)', () => {
     const report = {
       importerVerdict: 'COMPLETED',
       reconcileVerdict: 'RECONCILED' as const,
@@ -2235,6 +2318,7 @@ describe('the pure rules of the migration role', () => {
       failedSections: [],
       sections: [],
       history: [],
+      exactMatch: { rows: [], unexplained: 0, holds: true },
     };
     const progress = {
       ...emptyRow().progress,
@@ -2258,6 +2342,17 @@ describe('the pure rules of the migration role', () => {
       'COMPLETED_WITH_DISCREPANCY',
     );
     expect(completedStatusOf({ progress, applyReport: null })).toBe('COMPLETED_WITH_DISCREPANCY');
+    // The one-time import: an unexplained difference, or no exact-match report at all.
+    expect(
+      completedStatusOf({
+        progress,
+        applyReport: { ...report, exactMatch: { rows: [], unexplained: 1, holds: false } },
+      }),
+    ).toBe('COMPLETED_WITH_DISCREPANCY');
+    const { exactMatch: _none, ...withoutExactMatch } = report;
+    expect(completedStatusOf({ progress, applyReport: withoutExactMatch })).toBe(
+      'COMPLETED_WITH_DISCREPANCY',
+    );
   });
 });
 

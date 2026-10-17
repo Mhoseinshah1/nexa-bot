@@ -754,6 +754,8 @@ export function rigExecutor(
     runner,
     freshTarget: adapters,
     history,
+    materialize: container.legacyMaterializePort,
+    botLink: container.legacyBotLinkPort,
     backup: {
       runBeforeImport: async () => ({ outcome: 'TAKEN', runId: RIG_PRE_IMPORT_BACKUP_RUN }),
       runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }),

@@ -1,3 +1,8 @@
+import {
+  exactMatchCoreRows,
+  exactMatchReport,
+} from '../../legacy-materialize/application/exact-match.js';
+import type { UsersWalletsSection } from '../../legacy-importer/application/users-wallets-reconciliation.js';
 import { readFile } from 'node:fs/promises';
 import {
   isNexaError,
@@ -637,6 +642,8 @@ export class NxpkgMigrationAdapters
             verdict?: { holds?: unknown; failedSections?: unknown; failedInvariants?: unknown };
           }
         | undefined;
+      const usersWallets = (v2 as { sections?: { usersWallets?: UsersWalletsSection } } | undefined)
+        ?.sections?.usersWallets;
       const strings = (value: unknown): string[] =>
         Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
       const holds =
@@ -658,6 +665,11 @@ export class NxpkgMigrationAdapters
           quarantined: 0,
         })),
         history: [...input.history],
+        // The exact-match report's core rows (every Mirza user, every unit of Balance), from
+        // the importer's own users-and-wallets section; the executor adds the history steps'.
+        ...(usersWallets === undefined
+          ? {}
+          : { exactMatch: exactMatchReport(exactMatchCoreRows(usersWallets)) }),
       };
     });
   }

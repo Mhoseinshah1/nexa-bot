@@ -1,4 +1,11 @@
 import { CustomerDirectMessageService } from './modules/commerce/direct-messages/application/customer-direct-message.service.js';
+import { LegacyMaterializeService } from './modules/platform/legacy-materialize/application/materialize.service.js';
+import { CustomerSourceStep } from './modules/platform/legacy-materialize/application/customers-source.step.js';
+import { DrizzleCustomerSourceMarker } from './modules/platform/legacy-materialize/infrastructure/drizzle-customer-source-marker.js';
+import {
+  LegacyBotLinkPort,
+  LegacyMaterializePort,
+} from './modules/platform/legacy-materialize/infrastructure/materialize-ports.js';
 import { DrizzleDirectMessageRepository } from './modules/commerce/direct-messages/infrastructure/drizzle-direct-message.repository.js';
 import { fileURLToPath } from 'node:url';
 import {
@@ -1132,6 +1139,9 @@ export interface Container {
   readonly legacyReviewQueue: LegacyReviewQueueService;
   /** OI-1: the cutover command that links imported customers to a bot (`customers-link-bot.cli.ts`). */
   readonly customerBotLink: CustomerBotLinkService;
+  /** The one-time Mirza import's MATERIALIZE and BOT_LINK phases, as the executor uses them. */
+  readonly legacyMaterializePort: LegacyMaterializePort;
+  readonly legacyBotLinkPort: LegacyBotLinkPort;
   /**
    * Migration P6: legacy service adoption. Migration-only — no surface reaches it; the P7
    * importer is its one caller (`docs/migration-p6-service-adoption.md`). Holds no provider
@@ -6820,7 +6830,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     }),
     logger,
   });
+  // The one-time Mirza import's MATERIALIZE phase: its steps run in this order.
+  const legacyMaterialize = new LegacyMaterializeService([
+    new CustomerSourceStep({
+      marker: new DrizzleCustomerSourceMarker(),
+      uow,
+      scopeActivity: tenants,
+    }),
+  ]);
+  const legacyMaterializePort = new LegacyMaterializePort(legacyMaterialize, () => clock.now());
+  const legacyBotLinkPort = new LegacyBotLinkPort(customerBotLink);
   const migrationExecutor = new LegacyMigrationExecutor({
+    materialize: legacyMaterializePort,
+    botLink: legacyBotLinkPort,
     repository: legacyNxpkgImports,
     workspaces: migrationWorkspaces,
     cipher,
@@ -7195,6 +7217,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyCutover,
     legacyReviewQueue,
     customerBotLink,
+    legacyMaterializePort,
+    legacyBotLinkPort,
     legacyAdoption,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
