@@ -5,50 +5,13 @@ import { Num } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { useFocusTrap } from '../ui/overlays';
 import { formatDateFieldValue } from '../ui/date-field';
+import { useSelectedTabInStrip } from '../ui/tab-strip';
 
 /**
  * Editor layout pieces shared by the commerce pages (products, discounts,
- * campaigns, broadcasts): the section sub-nav, one titled form section, and the
+ * campaigns, broadcasts): the section tabs, one titled form section, and the
  * save bar. Presentation only — no page state lives here.
- *
- * The sub-nav is a list of BUTTONS, not `#fragment` links: a fragment link is a
- * history entry, and the router treats a history move on a dirty page as a
- * navigation it has to ask about. Scrolling to a section is not leaving the page.
  */
-
-export interface SectionLink {
-  readonly id: string;
-  readonly label: string;
-}
-
-/**
- * Scrolls an element (a section, or a form's first field) into view and moves focus
- * to it, so a keyboard user lands there too.
- */
-export function revealField(id: string): void {
-  // After the render the click caused: the form or panel being revealed may be the one
-  // the same click opened, and it is not in the document until then.
-  window.setTimeout(() => {
-    const target = document.getElementById(id);
-    if (target === null) return;
-    // Not in jsdom; in a browser, the reduced-motion preference is honoured by CSS.
-    if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
-    target.focus({ preventScroll: true });
-  }, 0);
-}
-
-/** The sticky list of an editor's sections, beside the form. */
-export function SectionNav({ items }: { items: readonly SectionLink[] }) {
-  return (
-    <nav className="cb-section-nav" aria-label={t('web.cb_sections')}>
-      {items.map((item) => (
-        <button key={item.id} type="button" onClick={() => revealField(item.id)}>
-          {item.label}
-        </button>
-      ))}
-    </nav>
-  );
-}
 
 /**
  * One section of a sectioned form card: a heading, an optional sentence, and
@@ -273,6 +236,8 @@ export function DotTabs<T extends string>({
   label?: string;
 }) {
   const buttons = useRef(new Map<T, HTMLButtonElement | null>());
+  const strip = useRef<HTMLDivElement | null>(null);
+  useSelectedTabInStrip(strip, () => buttons.current.get(value), value);
   const select = (next: T) => {
     onChange(next);
     queueMicrotask(() => buttons.current.get(next)?.focus());
@@ -285,6 +250,7 @@ export function DotTabs<T extends string>({
   };
   return (
     <div
+      ref={strip}
       className="tabs bx-tabs"
       role="tablist"
       {...(label === undefined ? {} : { 'aria-label': label })}

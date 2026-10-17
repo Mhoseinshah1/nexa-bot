@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   DIRECT_MESSAGE_CAPTION_MAX_LENGTH,
   DIRECT_MESSAGE_ERROR_CODES,
@@ -341,18 +342,20 @@ export function DirectMessagesCard({
 }) {
   const [cursors, setCursors] = useState<readonly { at: string; id: string }[]>([]);
   const cursor = cursors.at(-1);
-  const history = useQuery({
-    queryKey: ['customer-direct-messages', customerId, cursor ?? null],
-    queryFn: () => fetchDirectMessages(customerId, cursor),
-    enabled: mayView,
-    // While something is still on its way, look again; a settled page is left alone.
-    refetchInterval: (query) =>
-      (query.state.data?.messages ?? []).some(
-        (one) => one.delivery === 'QUEUED' || one.delivery === 'SENDING',
-      )
-        ? 15_000
-        : false,
-  });
+  const history = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['customer-direct-messages', customerId, cursor ?? null],
+      queryFn: () => fetchDirectMessages(customerId, cursor),
+      enabled: mayView,
+      // While something is still on its way, look again; a settled page is left alone.
+      refetchInterval: (query) =>
+        (query.state.data?.messages ?? []).some(
+          (one) => one.delivery === 'QUEUED' || one.delivery === 'SENDING',
+        )
+          ? 15_000
+          : false,
+    }),
+  );
 
   const actions = maySend ? (
     <Button size="sm" icon="plus" onClick={onCompose}>

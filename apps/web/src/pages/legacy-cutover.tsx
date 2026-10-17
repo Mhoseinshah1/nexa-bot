@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   LEGACY_CUTOVER_APPROVAL_KINDS,
   type LegacyCutoverApplyRunView,
@@ -96,11 +97,13 @@ type FieldName = (typeof FIELDS)[number][0];
 function usePaged<T>(key: string, fetch: (after?: string) => Promise<T>, enabled: boolean) {
   const [trail, setTrail] = useState<readonly string[]>([]);
   const after = trail[trail.length - 1];
-  const query = useQuery({
-    queryKey: ['legacy-cutover', key, after ?? null],
-    queryFn: () => fetch(after),
-    enabled,
-  });
+  const query = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['legacy-cutover', key, after ?? null],
+      queryFn: () => fetch(after),
+      enabled,
+    }),
+  );
   return { query, trail, setTrail };
 }
 

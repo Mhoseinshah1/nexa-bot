@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Modal } from '../ui/overlays';
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   BULK_ITEM_STATES,
   BULK_LARGE_OPERATION,
@@ -195,13 +196,15 @@ export function BulkOperationsPage({
 }) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
-  const list = useQuery({
-    queryKey: ['bulk-operations', cursor],
-    // W1.8: ten rows a page, on the same keyset.
-    queryFn: () =>
-      fetchBulkOperations({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['bulk-operations', cursor],
+      // W1.8: ten rows a page, on the same keyset.
+      queryFn: () =>
+        fetchBulkOperations({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
+      enabled: !denied,
+    }),
+  );
   const columns: readonly Column<BulkOperationResponseItem>[] = [
     {
       key: 'kind',
@@ -656,14 +659,16 @@ export function BulkOperationDetailPage({
   const [state, setState] = useState<BulkItemState | ''>('');
   const [trail, setTrail] = useState<string[]>([]);
   const cursor = trail[trail.length - 1];
-  const items = useQuery({
-    queryKey: ['bulk-items', id, state, cursor],
-    queryFn: () => fetchBulkItems(id, bulkItemsQuery(state, cursor)),
-    enabled: !denied,
-    // Refreshed WITH the detail while running, and once more when the operation leaves a
-    // state, so the item page never stays at what it was before it finished (Codex R7).
-    refetchInterval: operationState === 'RUNNING' ? BULK_LIVE_REFRESH_MS : false,
-  });
+  const items = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['bulk-items', id, state, cursor],
+      queryFn: () => fetchBulkItems(id, bulkItemsQuery(state, cursor)),
+      enabled: !denied,
+      // Refreshed WITH the detail while running, and once more when the operation leaves a
+      // state, so the item page never stays at what it was before it finished (Codex R7).
+      refetchInterval: operationState === 'RUNNING' ? BULK_LIVE_REFRESH_MS : false,
+    }),
+  );
   const seenState = useRef(operationState);
   useEffect(() => {
     if (seenState.current !== undefined && seenState.current !== operationState) {

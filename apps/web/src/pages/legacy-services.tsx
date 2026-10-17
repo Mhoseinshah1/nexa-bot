@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   LEGACY_SERVICE_ADOPTABLE_OUTCOMES,
   LEGACY_SERVICE_OUTCOMES,
@@ -278,11 +279,14 @@ export function LegacyServicesPage({
     // W1.8: ten rows a page, on the same keyset.
     limit: LIST_PAGE_SIZE,
   };
-  const list = useQuery({
-    queryKey: ['legacy-services', query],
-    queryFn: () => fetchLegacyServices(query),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      // The list without its cursor, then the cursor: a turn of the page keeps the rows shown.
+      queryKey: ['legacy-services', { ...query, after: null }, after ?? null],
+      queryFn: () => fetchLegacyServices(query),
+      enabled: !denied,
+    }),
+  );
   const summary = useQuery({
     queryKey: ['legacy-services', 'summary'],
     queryFn: fetchLegacyServiceSummary,

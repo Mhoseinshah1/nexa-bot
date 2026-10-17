@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   PANEL_DRAIN_REASON_MAX_LENGTH,
   PANEL_DRAIN_REASON_MIN_LENGTH,
@@ -108,13 +109,15 @@ export function PanelHealthPage({
 }) {
   const [cursors, setCursors] = useState<readonly string[]>([]);
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
-  const health = useQuery({
-    queryKey: ['panel-health', cursor ?? null],
-    queryFn: () =>
-      fetchPanelHealth({ limit: LIST_PAGE_SIZE, ...(cursor === undefined ? {} : { cursor }) }),
-    enabled: !denied,
-    refetchInterval: pollUnlessFinal(PANEL_HEALTH_REFRESH_MS),
-  });
+  const health = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['panel-health', cursor ?? null],
+      queryFn: () =>
+        fetchPanelHealth({ limit: LIST_PAGE_SIZE, ...(cursor === undefined ? {} : { cursor }) }),
+      enabled: !denied,
+      refetchInterval: pollUnlessFinal(PANEL_HEALTH_REFRESH_MS),
+    }),
+  );
   const [draining, setDraining] = useState<PanelSummaryResponse | null>(null);
   const [grouping, setGrouping] = useState<PanelSummaryResponse | null>(null);
 

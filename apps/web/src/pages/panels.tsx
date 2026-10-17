@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   PANEL_HEALTH_FRESH_FOR_MS,
   PROVIDER_FAILURE_RETRYABLE,
@@ -355,20 +356,22 @@ export function PanelsPage({
   const pushCursor = (next: string) => setTrail({ mode, cursors: [...cursors, next] });
   const popCursor = () => setTrail({ mode, cursors: cursors.slice(0, -1) });
 
-  const panels = useQuery({
-    // The mode is part of the key. Sharing one key across both lists would
-    // serve the live page's rows under the archived heading for a frame, which
-    // is the sort of thing an operator acts on before it corrects itself.
-    queryKey: ['panels', archived ? 'archived' : 'live', cursor ?? null],
-    queryFn: () =>
-      fetchPanels({
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === undefined ? {} : { cursor }),
-        ...(archived ? { archived: 'only' as const } : {}),
-      }),
-    enabled: !denied,
-    refetchInterval: pollUnlessFinal(PANEL_LIST_REFRESH_MS),
-  });
+  const panels = useQuery(
+    keepPageWhileTurning({
+      // The mode is part of the key. Sharing one key across both lists would
+      // serve the live page's rows under the archived heading for a frame, which
+      // is the sort of thing an operator acts on before it corrects itself.
+      queryKey: ['panels', archived ? 'archived' : 'live', cursor ?? null],
+      queryFn: () =>
+        fetchPanels({
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(archived ? { archived: 'only' as const } : {}),
+        }),
+      enabled: !denied,
+      refetchInterval: pollUnlessFinal(PANEL_LIST_REFRESH_MS),
+    }),
+  );
 
   const rows = panels.data?.panels ?? [];
   const nextCursor = panels.data?.nextCursor ?? null;

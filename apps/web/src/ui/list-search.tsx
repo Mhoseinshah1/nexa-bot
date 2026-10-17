@@ -289,44 +289,6 @@ export function ListSearchBox({
   );
 }
 
-/**
- * «پاک کردن همهٔ فیلترها»: one press back to the unfiltered list (roadmap B4).
- *
- * Drawn only while one of `keys` is in the URL — a reset with nothing to reset is noise. A
- * list's filters live in the URL beside its search, so clearing is one navigation: every
- * key (and any `cursor` the page keeps there) goes in the same `setQueries`, never one
- * `setQuery` per key (`router.ts` says why). The page passes the keys it filters on,
- * the search's `q` included.
- */
-export function ClearFiltersButton({
-  route,
-  keys,
-  hidden = false,
-}: {
-  route: Route;
-  keys: readonly string[];
-  hidden?: boolean;
-}) {
-  const active = keys.some((key) => (route.query.get(key) ?? '') !== '');
-  if (!active || hidden) return null;
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      icon="x"
-      onClick={() => {
-        resetSearchDrafts();
-        setQueries(
-          route,
-          [...keys, 'cursor'].map((key) => [key, null] as const),
-        );
-      }}
-    >
-      {t('web.list_filters_clear')}
-    </Button>
-  );
-}
-
 /** Time with seconds: a refresh within the same minute must still visibly change. */
 const READ_AT = new Intl.DateTimeFormat('fa-IR', {
   dateStyle: 'medium',

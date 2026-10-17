@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
   TRIAL_ADMIN_REASON_MAX_LENGTH,
@@ -998,16 +999,18 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
   const onLink = useLinkHandler();
   const pages = useCursorTrail();
 
-  const orders = useQuery({
-    queryKey: ['customer-orders', customerId, pages.cursor ?? null],
-    queryFn: () =>
-      fetchOrders({
-        customerId,
-        limit: EMBEDDED_PAGE,
-        ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
-      }),
-    enabled: mayView,
-  });
+  const orders = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['customer-orders', customerId, pages.cursor ?? null],
+      queryFn: () =>
+        fetchOrders({
+          customerId,
+          limit: EMBEDDED_PAGE,
+          ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
+        }),
+      enabled: mayView,
+    }),
+  );
 
   if (!mayView) {
     return (
@@ -1118,16 +1121,18 @@ function CustomerServicesCard({
   const onLink = useLinkHandler();
   const pages = useCursorTrail();
 
-  const services = useQuery({
-    queryKey: ['customer-services', customerId, pages.cursor ?? null],
-    queryFn: () =>
-      fetchServices({
-        customerId,
-        limit: EMBEDDED_PAGE,
-        ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
-      }),
-    enabled: mayView,
-  });
+  const services = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['customer-services', customerId, pages.cursor ?? null],
+      queryFn: () =>
+        fetchServices({
+          customerId,
+          limit: EMBEDDED_PAGE,
+          ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
+        }),
+      enabled: mayView,
+    }),
+  );
   // Which services on THIS page were adopted from Mirza — asked of the server for exactly
   // the ids shown, never inferred from a name or a date.
   const shownIds = (services.data?.services ?? []).map((row) => row.id);
@@ -1296,15 +1301,17 @@ function WalletCard({
     queryFn: () => fetchWallet(customerId),
     enabled: mayView,
   });
-  const entries = useQuery({
-    queryKey: ['wallet-entries', customerId, cursor],
-    queryFn: () =>
-      fetchWalletEntries(customerId, {
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === null ? {} : { cursor }),
-      }),
-    enabled: mayView,
-  });
+  const entries = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['wallet-entries', customerId, cursor],
+      queryFn: () =>
+        fetchWalletEntries(customerId, {
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === null ? {} : { cursor }),
+        }),
+      enabled: mayView,
+    }),
+  );
 
   if (!mayView) {
     return (

@@ -68,12 +68,11 @@ export function isJump(before, after, tolerance = JUMP_TOLERANCE_PX) {
 
 /*
  * The page's own buttons: inside the content, visible, enabled, not inside a dialog. The kit
- * pager's «قبلی / بعدی» are left out: they REPLACE the list they sit under, and while the next
- * page loads the list is briefly shorter, so the view lands at that list's start — the same
- * list, not another section of the page.
+ * pager's «قبلی / بعدی» are included: a paged list keeps its rows on screen while the next
+ * page is read (`ui/paging.ts`), so turning a page moves nothing.
  */
 const BUTTONS = `[...document.querySelectorAll('#main button')].filter((b) =>
-  !b.disabled && !b.closest('[role=dialog], .modal-layer, .drawer-layer, [aria-modal=true], .menu, .pager') &&
+  !b.disabled && !b.closest('[role=dialog], .modal-layer, .drawer-layer, [aria-modal=true], .menu') &&
   b.getClientRects().length > 0)`;
 
 const POSITION = `(() => ({

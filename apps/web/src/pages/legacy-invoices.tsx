@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   LEGACY_INVOICE_ARCHIVE_CLASSES,
   LEGACY_INVOICE_ARCHIVE_SEARCH_MAX,
@@ -255,12 +256,15 @@ export function LegacyInvoicesPage({
   const [openId, setOpenId] = useState<string | null>(null);
   const after = trail[trail.length - 1];
   const query = queryOf(filters, mayViewPii, after);
-  const invoices = useQuery({
-    queryKey: ['legacy-invoices', query],
-    // W1.8: ten rows a page, on the same keyset.
-    queryFn: () => fetchLegacyInvoices({ ...query, limit: LIST_PAGE_SIZE }),
-    enabled: !denied,
-  });
+  const invoices = useQuery(
+    keepPageWhileTurning({
+      // The list without its cursor, then the cursor: a turn of the page keeps the rows shown.
+      queryKey: ['legacy-invoices', { ...query, after: null }, after ?? null],
+      // W1.8: ten rows a page, on the same keyset.
+      queryFn: () => fetchLegacyInvoices({ ...query, limit: LIST_PAGE_SIZE }),
+      enabled: !denied,
+    }),
+  );
   const summary = useQuery({
     queryKey: ['legacy-invoices-summary'],
     queryFn: fetchLegacyInvoiceSummary,

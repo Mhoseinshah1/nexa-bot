@@ -769,9 +769,18 @@
   font-weight: 700;
 }
 .action-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
+}
+/*
+ * Each group is at least 260px and grows to share its row, so a row never holds an empty
+ * cell: one group fills the panel, and a group left alone on the last row (three groups at
+ * a two-wide width) takes that whole row. A grid of fixed or auto-fit tracks leaves the
+ * cell beside a lone last group empty.
+ */
+.action-grid > .action-group {
+  flex: 1 1 260px;
 }
 .action-group {
   display: flex;
@@ -870,9 +879,9 @@
   color: var(--fg-2);
   font-size: var(--fs-sm);
 }
-@media (max-width: 640px) {
-  .action-grid {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 760px) {
+  .action-grid > .action-group {
+    flex-basis: 100%;
   }
   .action-group.danger {
     flex-direction: column;
