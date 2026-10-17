@@ -394,6 +394,7 @@ export function IncidentDetailPage({
   denied,
   mayManage,
   mayNotify,
+  mayViewPanels = false,
 }: {
   id: string;
   denied: boolean;
@@ -401,12 +402,22 @@ export function IncidentDetailPage({
   mayManage: boolean;
   /** `incidents.notify`: the customer notice. */
   mayNotify: boolean;
+  /**
+   * `panels.view`: the scope card names a panel target by the panel's name. Without it no
+   * panel list is asked for and the target shows its id, as before.
+   */
+  mayViewPanels?: boolean;
 }) {
   const detail = useQuery({
     queryKey: ['incident', id],
     queryFn: () => fetchIncident(id),
     enabled: !denied,
   });
+  const panelNames = useTargetOptions(
+    'PANEL',
+    mayViewPanels &&
+      (detail.data?.incident.targets.some((target) => target.kind === 'PANEL') ?? false),
+  );
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState<IncidentAction | null>(null);
   const [noticing, setNoticing] = useState(false);
@@ -562,12 +573,25 @@ export function IncidentDetailPage({
                   <p className="faint small">{t('web.inc_no_targets')}</p>
                 ) : (
                   <ul className="incident-targets">
-                    {incident.targets.map((target) => (
-                      <li key={`${target.kind}:${target.ref}`}>
-                        <Badge tone="neutral">{t(INCIDENT_TARGET_LABELS[target.kind])}</Badge>{' '}
-                        <Ltr>{target.ref}</Ltr>
-                      </li>
-                    ))}
+                    {incident.targets.map((target) => {
+                      // A panel by its name when the list knows it; its id otherwise.
+                      const name =
+                        target.kind === 'PANEL'
+                          ? panelNames.data?.find((option) => option.ref === target.ref)?.label
+                          : undefined;
+                      return (
+                        <li key={`${target.kind}:${target.ref}`}>
+                          <Badge tone="neutral">{t(INCIDENT_TARGET_LABELS[target.kind])}</Badge>{' '}
+                          {name === undefined ? (
+                            <Ltr>{target.ref}</Ltr>
+                          ) : (
+                            <bdi title={target.ref} data-testid="incident-target-name">
+                              {name}
+                            </bdi>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
                 <EffectsTable effects={incident.effects} />
@@ -1192,9 +1216,10 @@ export async function walkPages(
  * not list that module, the picker falls back to a typed reference, which the server
  * checks exactly as it checks a picked one.
  */
-function useTargetOptions(kind: IncidentTargetKind) {
+function useTargetOptions(kind: IncidentTargetKind, enabled = true) {
   return useQuery({
     queryKey: ['incident-target-options', kind],
+    enabled,
     queryFn: async (): Promise<readonly TargetOption[]> => {
       switch (kind) {
         case 'PANEL':

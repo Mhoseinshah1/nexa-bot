@@ -225,6 +225,15 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
     queryKey: ['delivery-qr-preview', previewOf, current?.version ?? 0],
     queryFn: () => previewDeliveryQr(previewOf),
     enabled: settings.data !== undefined && media.data !== undefined,
+    /*
+     * W2: «پیش‌نمایش» keeps the preview on screen (marked busy) while the next one is drawn.
+     * Without it the image gave way to a one-line «loading» for the length of a request, the
+     * card shrank, and the page under the operator's pointer jumped to the top. Only a new
+     * placement is kept over: a new BACKGROUND (another version) is a different picture with
+     * different dimensions, and the placement check reads them, so it starts from nothing.
+     */
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[2] === (current?.version ?? 0) ? previous : undefined,
   });
   const background = preview.data?.background ?? null;
 
@@ -575,7 +584,7 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
           {t('web.qrt_preview_title')}
         </h3>
         {preview.data !== undefined ? (
-          <figure className="qrt-preview">
+          <figure className="qrt-preview" aria-busy={preview.isPlaceholderData}>
             <img
               data-testid="qrt-preview"
               src={`data:image/png;base64,${preview.data.pngBase64}`}

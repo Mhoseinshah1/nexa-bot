@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { QrTemplateSection } from '../../apps/web/src/pages/qr-template';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -309,5 +309,33 @@ describe('«پس‌زمینهٔ QR اشتراک»', () => {
     expect(document.getElementById('qrt-file')).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.qrt_save') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.qrt_revert') })).toBeNull();
+  });
+  /*
+   * W2 (`pnpm web:no-scroll`, 1440): «پیش‌نمایش» replaced the image with a one-line «loading»
+   * for the length of the request, the card shrank and the page jumped to the top. The
+   * previous preview stays on screen, marked busy, until the new one lands.
+   */
+  it('keeps the previous preview on screen while «پیش‌نمایش» draws the next one', async () => {
+    api({ template: TEMPLATE, version: 4, media: MEDIA });
+    renderPage(<QrTemplateSection mayEdit />);
+    await waitFor(() =>
+      expect(screen.getByTestId('qrt-background').textContent).toContain('800 × 700'),
+    );
+    const first = await screen.findByTestId('qrt-preview');
+    // From here the preview never answers: the request is in flight for the rest of the test.
+    const answered = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) =>
+        String(input).includes('/delivery-qr/preview')
+          ? new Promise<Response>(() => undefined)
+          : answered(input as RequestInfo, init),
+      ),
+    );
+    fireEvent.change(input('qrt-x'), { target: { value: '160' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.qrt_preview_draft') }));
+    await waitFor(() => expect(first.closest('figure')?.getAttribute('aria-busy')).toBe('true'));
+    expect(screen.getByTestId('qrt-preview')).toBe(first);
+    expect(screen.queryByText(t('web.qrt_preview_loading'))).toBeNull();
   });
 });

@@ -410,4 +410,36 @@ describe('Customer 360 workspace — the route', () => {
     expect(scrolled).not.toHaveBeenCalled();
     scrolled.mockRestore();
   });
+
+  /*
+   * W2 (`pnpm web:no-scroll`, 390): swapping «نمای کلی» for «مالی» under the shortcut let the
+   * browser's scroll anchoring shift the page by ~100px. The panel is out of anchoring for
+   * the switch (the class's rule: `stylesheet-contract.test.tsx`), then back in once the
+   * flash is over; nothing is scrolled into view or focused in a way that scrolls.
+   */
+  it('keeps the page still on the wallet shortcut: the panel leaves scroll anchoring', async () => {
+    stubApi(routes(workspace(), [{ url: '/tickets', body: tickets }]));
+    renderPage(at(['users.view']));
+    const card = (await screen.findByText('میان‌برهای اپراتور')).closest('section') as HTMLElement;
+    const panel = document.getElementById('c360-tab-panel') as HTMLElement;
+    expect(panel).not.toHaveClass('no-scroll-anchor');
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    const intoView = vi.fn();
+    Element.prototype.scrollIntoView = intoView;
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      fireEvent.click(within(card).getByRole('link'));
+      expect(panel).toHaveClass('no-scroll-anchor');
+      await waitFor(() => expect(document.getElementById('c360-wallet')).toHaveClass('wb-flash'));
+      expect(document.getElementById('c360-tab-panel')).toBe(panel);
+      expect(intoView).not.toHaveBeenCalled();
+      for (const [options] of focus.mock.calls)
+        expect(options).toMatchObject({ preventScroll: true });
+      await waitFor(() => expect(panel).not.toHaveClass('no-scroll-anchor'), { timeout: 3000 });
+    } finally {
+      focus.mockRestore();
+      if (original === undefined) delete (Element.prototype as Partial<Element>).scrollIntoView;
+      else Object.defineProperty(Element.prototype, 'scrollIntoView', original);
+    }
+  });
 });

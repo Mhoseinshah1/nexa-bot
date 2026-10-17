@@ -396,6 +396,22 @@ describe('selected state, at both ends of the seam', () => {
 });
 
 /**
+ * W2 (`pnpm web:no-scroll`): the two rules that keep a click from moving the page. Each is
+ * joined to the markup that relies on it in the page's own test — the panel detail's loading
+ * tab (`panels.test.tsx`), the support AI form (`support-ai.test.tsx`) and Customer 360's
+ * wallet shortcut (`customer-workspace.test.tsx`).
+ */
+describe('the no-scroll rules', () => {
+  it('holds a loading tab panel a screen tall, so a tab switch never clamps the page', () => {
+    expect(block("[role='tabpanel'] > .skel")).toMatch(/min-block-size:\s*100dvh/);
+  });
+
+  it('takes a region out of scroll anchoring with one class', () => {
+    expect(block('.no-scroll-anchor')).toMatch(/overflow-anchor:\s*none/);
+  });
+});
+
+/**
  * T24 — activating a tab from the keyboard MOVES FOCUS.
  *
  * The strip advertises a roving tabindex: only the selected tab is in the tab

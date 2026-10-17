@@ -522,8 +522,12 @@ function ConfigCard({
 
   return (
     <Card title={t('web.sai_config')} hint={t('web.sai_config_hint')}>
+      {/*
+        W2: out of scroll anchoring, so adding a fallback puts its row where the button was and
+        the page stays put; anchored, the rows above were pushed up off the screen (390).
+      */}
       <form
-        className="stack"
+        className="stack no-scroll-anchor"
         onSubmit={(event) => {
           event.preventDefault();
           if (parsed.success) save.mutate(parsed.data);

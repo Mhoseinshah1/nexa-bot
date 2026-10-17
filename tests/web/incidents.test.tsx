@@ -14,7 +14,7 @@ import {
 } from '../../apps/web/src/pages/incidents';
 import { pathOf } from '../../apps/web/src/pages/notification-center';
 import { NAV, navPermitted } from '../../apps/web/src/nav';
-import { renderPage, stubApi } from './harness';
+import { panel, renderPage, stubApi } from './harness';
 
 /**
  * Phase E3: the incidents page over the real client and its zod parsing. What is asserted
@@ -314,6 +314,70 @@ describe('the incident detail', () => {
     expect(await screen.findByText(t('web.inc_status_resolved'))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: t('web.inc_edit') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.inc_notice') })).toBeNull();
+  });
+});
+
+describe("the incident's scope card", () => {
+  beforeEach(() => vi.unstubAllGlobals());
+
+  // The scope card's list of targets (the effects table beside it names subjects, not targets).
+  const scope = async () => {
+    await screen.findByText(t('web.inc_scope'));
+    const list = document.querySelector('.incident-targets');
+    expect(list).not.toBeNull();
+    return list as HTMLElement;
+  };
+
+  it('names a panel target by the panel name, its id kept as the title', async () => {
+    stubApi([
+      detail(),
+      {
+        url: '/panels',
+        body: { panels: [panel({ id: PANEL, name: 'Frankfurt A' })], nextCursor: null },
+      },
+    ]);
+    renderPage(
+      <IncidentDetailPage
+        id={ID}
+        denied={false}
+        mayManage={false}
+        mayNotify={false}
+        mayViewPanels
+      />,
+    );
+    const name = await screen.findByTestId('incident-target-name');
+    expect(name.textContent).toBe('Frankfurt A');
+    expect(name.getAttribute('title')).toBe(PANEL);
+    expect(within(await scope()).queryByText(PANEL)).toBeNull();
+  });
+
+  it('asks for no panel list without panels.view, and shows the id', async () => {
+    const api = stubApi([
+      detail(),
+      {
+        url: '/panels',
+        body: { panels: [panel({ id: PANEL, name: 'Frankfurt A' })], nextCursor: null },
+      },
+    ]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage={false} mayNotify={false} />);
+    expect(await within(await scope()).findByText(PANEL)).toBeInTheDocument();
+    expect(screen.queryByTestId('incident-target-name')).toBeNull();
+    expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(false);
+  });
+
+  it('keeps the id of a panel the list does not hold', async () => {
+    stubApi([detail(), { url: '/panels', body: { panels: [panel()], nextCursor: null } }]);
+    renderPage(
+      <IncidentDetailPage
+        id={ID}
+        denied={false}
+        mayManage={false}
+        mayNotify={false}
+        mayViewPanels
+      />,
+    );
+    expect(await within(await scope()).findByText(PANEL)).toBeInTheDocument();
+    expect(screen.queryByTestId('incident-target-name')).toBeNull();
   });
 });
 

@@ -1475,6 +1475,26 @@ textarea.input,
 [role='tabpanel']:focus-visible {
   outline-offset: 4px;
 }
+/*
+ * W2 (`pnpm web:no-scroll`): a tab whose panel is still being read holds at least a screen's
+ * height. Its placeholder used to be a few skeleton rows, so a switch from a tab the operator
+ * had scrolled into left the page shorter than the screen for the length of a request, the
+ * browser clamped the scroll to the top, and the new tab opened somewhere else. The tab strip
+ * is on screen whenever a tab is pressed, so a panel a screen tall always has room for the
+ * offset the page had; when the answer is shorter the page ends where it ends.
+ */
+[role='tabpanel'] > .skel {
+  min-block-size: 100dvh;
+}
+/*
+ * W2: a region whose rows are added or swapped under the operator's pointer opts out of the
+ * browser's scroll anchoring, so what it inserts grows DOWNWARD from where they pressed. With
+ * anchoring the browser kept some later element still and moved the page instead: the rows
+ * above shot up, and the one just added landed where the operator was not looking.
+ */
+.no-scroll-anchor {
+  overflow-anchor: none;
+}
 .pills {
   display: inline-flex;
   flex-wrap: wrap;
