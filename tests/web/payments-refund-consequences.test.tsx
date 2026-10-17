@@ -188,8 +188,9 @@ describe('the refund consequences', () => {
     fireEvent.change(screen.getByLabelText('دلیل'), { target: { value: 'مشتری منصرف شد' } });
     fireEvent.click(screen.getByRole('button', { name: 'ثبت درخواست' }));
 
-    // W6: the code's Persian sentence, never the server's English message.
-    expect(await screen.findByText(t('web.err_commerce_refund_not_permitted'))).toBeInTheDocument();
+    // W6: the REASON's Persian sentence (the server names it as a detail), never the
+    // server's English message.
+    expect(await screen.findByText(t('web.refund_refusal_currency'))).toBeInTheDocument();
     expect(screen.queryByText('This payment has refunds in another currency.')).toBeNull();
     expect(screen.queryByText(/تا وقتی ساخت سرویس این سفارش/u)).toBeNull();
   });

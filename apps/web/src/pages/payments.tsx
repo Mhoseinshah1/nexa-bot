@@ -187,6 +187,16 @@ function refundMessageFor(error: unknown): string {
   ) {
     return t('web.refund_delivery_in_progress');
   }
+  /*
+   * Every other refusal names its reason as a detail too; the server's English sentence is
+   * never shown (W6), so the reason's own Persian sentence says what is wrong.
+   */
+  if (error instanceof ApiError && error.code === COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED) {
+    const reason = error.details?.['reason'];
+    if (typeof reason === 'string' && reason in REFUND_REFUSAL_TEXT) {
+      return t(REFUND_REFUSAL_TEXT[reason as RefundRefusalReason]);
+    }
+  }
   return messageFor(error);
 }
 
