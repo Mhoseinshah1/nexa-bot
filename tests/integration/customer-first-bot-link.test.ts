@@ -190,6 +190,22 @@ describe('customer first-bot link (OI-1)', () => {
       expect(text).not.toContain(c.telegramUserId);
     });
 
+    it('links no one on an installation that has stopped accepting work', async () => {
+      const c = await customer({ imported: true });
+      await db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`);
+      try {
+        await expect(service().apply(tenantA, ACTOR, BOT1 as never)).rejects.toThrow(
+          /stopped accepting work/u,
+        );
+        expect(await botOf(c.id)).toBeNull();
+        expect(await countAudit()).toBe(0);
+      } finally {
+        await db().execute(
+          sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${tenantA.tenantId}`,
+        );
+      }
+    });
+
     it('refuses a bot that does not exist in the tenant', async () => {
       await expect(service().dryRun(tenantA, ACTOR, randomUUID() as never)).rejects.toThrow();
     });

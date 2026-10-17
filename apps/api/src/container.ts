@@ -2481,6 +2481,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     sessions,
     clock,
+    scopeActivity: tenants,
   });
 
   // ---------------------------------------------------------------------------

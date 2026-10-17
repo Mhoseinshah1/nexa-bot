@@ -1,4 +1,5 @@
 import {
+  COMMERCE_ERROR_CODES,
   errors,
   type ActorContext,
   type AuditWriter,
@@ -12,6 +13,7 @@ import {
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
+import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
@@ -58,6 +60,8 @@ export interface CustomerBotLinkDeps {
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
   readonly clock: Clock;
+  /** Read inside each batch's transaction: a stopped installation links no one. */
+  readonly scopeActivity: ScopeActivityReader;
 }
 
 export interface CustomerBotLinkReport {
@@ -117,6 +121,15 @@ export class CustomerBotLinkService {
         CUSTOMER_BOT_LINK_PERMISSION,
         { action: CUSTOMER_BOT_LINK_AUDIT_ACTION, entityType: 'Bot', entityId: botInstanceId },
         async (tx) => {
+          // Inside the transaction, as every write path: linking turns reminders and notices on
+          // for every customer it touches, so an installation that has stopped accepting work
+          // links no one, and a stop that commits between two batches stops the next one.
+          if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+              'This installation has stopped accepting work.',
+            );
+          }
           const count = await this.deps.repository.linkBatch(
             scope,
             { botInstanceId, limit: batchSize, now: this.deps.clock.now() },
