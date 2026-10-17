@@ -57,6 +57,7 @@ import {
   useToast,
   type Tone,
 } from '../ui/kit';
+import { ErrorCodeLabel } from '../ui/technical-details';
 
 /**
  * Customer 360 — the sections the redesigned customer page adds (spec §11).
@@ -1009,7 +1010,13 @@ export const TOGGLE_REFUSAL_LABELS: Readonly<Record<string, WebKey>> = {
 function RefusalCode({ code }: { code: string | null }) {
   if (code === null) return null;
   const label = TOGGLE_REFUSAL_LABELS[code];
-  return label === undefined ? <Ltr>{code}</Ltr> : <span title={code}>{t(label)}</span>;
+  // W6: a code without a toggle-specific sentence is named by the shared catalogue
+  // (`ERROR_TEXT` and the ops/provider maps), the code small beside it; never bare.
+  return label === undefined ? (
+    <ErrorCodeLabel code={code} />
+  ) : (
+    <span title={code}>{t(label)}</span>
+  );
 }
 
 function ServicesToggleModal({

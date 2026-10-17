@@ -77,6 +77,7 @@ import type { QueryView } from '../view-state';
 import { mayRequest, queryState, shownData } from '../view-state';
 import { formatInstantIn } from './business';
 import { AttentionQueueCard } from './dashboard-attention';
+import { opsCodeLabel } from '../ops-code-labels';
 
 /** How many open conditions the attention card draws before it counts the rest. */
 const ATTENTION_SHOWN = 6;
@@ -1158,8 +1159,9 @@ function AttentionCard({
           {events.slice(0, ATTENTION_SHOWN).map((event) => (
             <li key={event.id}>
               <Badge tone={severityTone(event.severity)}>{event.severity}</Badge>
-              <span className="grow" dir="auto">
-                {event.message}
+              {/* W6: the code's Persian name; the event's English message stays on the alerts page. */}
+              <span className="grow" title={event.code}>
+                {opsCodeLabel(event.code)}
               </span>
               {/* FIRST seen: the column the list is ordered by, labelled as such. */}
               <span className="faint small nowrap" title={t('web.first_seen')}>

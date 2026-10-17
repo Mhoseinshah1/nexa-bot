@@ -218,7 +218,10 @@ describe('pages that must not go stale', () => {
     ]);
 
     await vi.advanceTimersByTimeAsync(16_000);
-    expect(await screen.findByText('A setting stopped parsing.')).toBeInTheDocument();
+    // W6: the attention list names the condition by its code, in Persian.
+    expect(
+      await screen.findByText(t('web.opscode_settings_stored_value_invalid')),
+    ).toBeInTheDocument();
   });
 
   it('stops showing a condition once it has recovered', async () => {
@@ -237,7 +240,7 @@ describe('pages that must not go stale', () => {
       },
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
-    await screen.findByText('A setting stopped parsing.');
+    await screen.findByText(t('web.opscode_settings_stored_value_invalid'));
 
     stubApi([
       READINESS,
@@ -247,7 +250,7 @@ describe('pages that must not go stale', () => {
     await vi.advanceTimersByTimeAsync(16_000);
 
     expect(await screen.findByText('چیزی برای رسیدگی نیست.')).toBeInTheDocument();
-    expect(screen.queryByText('A setting stopped parsing.')).toBeNull();
+    expect(screen.queryByText(t('web.opscode_settings_stored_value_invalid'))).toBeNull();
   });
 
   it('re-reads the fleet on its own cadence, which is slower than the conditions', async () => {
@@ -871,7 +874,10 @@ describe('polling that has started being refused, and polling that has merely st
       },
     ]);
     await vi.advanceTimersByTimeAsync(16_000);
-    expect(await screen.findByText('A setting stopped parsing.')).toBeInTheDocument();
+    // W6: the attention list names the condition by its code, in Persian.
+    expect(
+      await screen.findByText(t('web.opscode_settings_stored_value_invalid')),
+    ).toBeInTheDocument();
   });
 });
 
@@ -1244,7 +1250,7 @@ describe('bounds that were asserted only in comments', () => {
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
 
-    await screen.findByText('condition 0');
+    await screen.findAllByText(t('web.opscode_settings_stored_value_invalid'));
     // Six drawn, and the card must account for the other three rather than
     // reading as "there are six".
     const more = await screen.findByText(/شرایط باز دیگر/);
@@ -1252,7 +1258,8 @@ describe('bounds that were asserted only in comments', () => {
     // resolves the locale to latin digits, so asserting `۳` would have been a
     // test about Intl data rather than about the count.
     expect(more.textContent ?? '').toContain(formatNumber(9 - 6));
-    expect(screen.queryByText('condition 8')).toBeNull();
+    // W6: each row is named by its code in Persian; six of the nine are drawn.
+    expect(screen.getAllByText(t('web.opscode_settings_stored_value_invalid'))).toHaveLength(6);
     // Nine open conditions fit on one page, so the count is exact and the
     // card must not hedge it.
     expect(screen.queryByText(/دست‌کم/)).toBeNull();
@@ -1282,7 +1289,7 @@ describe('bounds that were asserted only in comments', () => {
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
 
-    await screen.findByText('condition 0');
+    await screen.findAllByText(t('web.opscode_settings_stored_value_invalid'));
     const more = await screen.findByText(/دست‌کم/);
     // Fifty on the page, six drawn, and the cursor is the server proving at
     // least one more: forty-five, not forty-four. The first version of the

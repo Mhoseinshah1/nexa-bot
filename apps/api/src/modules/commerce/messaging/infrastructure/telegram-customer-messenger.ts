@@ -21,6 +21,7 @@ import {
   categoryIconOf,
   inlineButtonIconOf,
   inlineButtonStyleOf,
+  MESSAGING_ERROR_CODES,
   type AppearanceTestErrorCode,
   type CategoryColors,
   type CategoryIcons,
@@ -354,7 +355,10 @@ function validatedButtonUrl(url: string): string {
   try {
     parsed = new URL(url);
   } catch {
-    throw errors.validation('messaging.button_url_invalid', 'A URL button needs a valid URL.');
+    throw errors.validation(
+      MESSAGING_ERROR_CODES.BUTTON_URL_INVALID,
+      'A URL button needs a valid URL.',
+    );
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'tg:') {
     throw errors.validation(

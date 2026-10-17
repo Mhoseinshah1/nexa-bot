@@ -73,6 +73,7 @@ import {
   useServiceFilterRows,
   useRefreshOnOperationChange,
 } from './service-ops';
+import { ProviderText } from '../ui/technical-details';
 
 /**
  * Services — what the customer bought, and what was done to produce it.
@@ -1309,7 +1310,11 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
     // The adapter's own words, verbatim: the one place an operator learns what the
     // panel actually said.
     render: (op) =>
-      op.failureMessage === null ? <Dash /> : <Ltr mono={false}>{op.failureMessage}</Ltr>,
+      op.failureMessage === null ? (
+        <Dash />
+      ) : (
+        <ProviderText summary="web.err_provider_operation" text={op.failureMessage} />
+      ),
   },
 ];
 

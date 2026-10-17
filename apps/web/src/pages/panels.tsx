@@ -111,6 +111,8 @@ import { createPortal } from 'react-dom';
 import { Modal } from '../ui/overlays';
 import { OpsActionDrawer } from './ops-drawer';
 import { pollUnlessFinal } from '../polling';
+import { fieldText } from '../error-text';
+import { TechnicalDetails } from '../ui/technical-details';
 
 /**
  * How often an open panel detail re-reads its own row.
@@ -230,12 +232,14 @@ export function hostOf(baseUrl: string): string {
 export function FailureBadge({ failure }: { failure: string | null }) {
   if (failure === null) return <span className="faint">—</span>;
   const retryable = PROVIDER_FAILURE_RETRYABLE[failure as keyof typeof PROVIDER_FAILURE_RETRYABLE];
+  const label = (FAILURE_LABELS as Readonly<Record<string, WebKey>>)[failure];
   return (
     <Badge
       tone={retryable === true ? 'warn' : 'danger'}
-      title={retryable === true ? t('web.failure_retryable') : t('web.failure_permanent')}
+      title={`${retryable === true ? t('web.failure_retryable') : t('web.failure_permanent')} (${failure})`}
     >
-      <Ltr>{failure}</Ltr>
+      {/* W5/W6: the kind's Persian name; an unknown kind keeps its code, never a blank. */}
+      {label === undefined ? <Ltr>{failure}</Ltr> : t(label)}
     </Badge>
   );
 }
@@ -1590,7 +1594,11 @@ function OverviewTab({
     if (activationChanged && activationParse.kind === 'INVALID') {
       toast({
         tone: 'danger',
-        message: `${t('web.panel_activation_invalid')} ${activationParse.fields.join(', ')}`,
+        message: `${t('web.panel_activation_invalid')} ${[
+          ...new Set(
+            activationParse.fields.map((field) => fieldText(field, ACTIVATION_FIELD_LABELS)),
+          ),
+        ].join(' ')}`,
       });
       return;
     }
@@ -1697,7 +1705,19 @@ function OverviewTab({
                 />
                 {activationChanged && activationParse.kind === 'INVALID' && (
                   <Banner tone="danger" title={t('web.panel_activation_invalid')}>
-                    <Ltr>{activationParse.fields.join(', ')}</Ltr>
+                    {/* W6: each refused field by name; the schema's paths only under technical details. */}
+                    <ul>
+                      {[
+                        ...new Set(
+                          activationParse.fields.map((field) =>
+                            fieldText(field, ACTIVATION_FIELD_LABELS),
+                          ),
+                        ),
+                      ].map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                    <TechnicalDetails lines={activationParse.fields} />
                   </Banner>
                 )}
               </div>

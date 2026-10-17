@@ -70,6 +70,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import { ProviderText } from '../ui/technical-details';
 
 /**
  * Orders — what a customer asked to buy, and what they were quoted for it.
@@ -861,7 +862,11 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
     // tells a panel refusing a duplicate apart from a panel nobody finished setting up.
     wrap: true,
     render: (op) =>
-      op.failureMessage === null ? <Dash /> : <Ltr mono={false}>{op.failureMessage}</Ltr>,
+      op.failureMessage === null ? (
+        <Dash />
+      ) : (
+        <ProviderText summary="web.err_provider_operation" text={op.failureMessage} />
+      ),
   },
 ];
 

@@ -39,7 +39,8 @@ import {
   updateIncident,
   type IncidentAction,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
+import { errorCodeLabel } from '../ops-code-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, useLinkHandler } from '../router';
 import { useSubmissionKey } from '../submission-key';
@@ -69,6 +70,7 @@ import {
 import { ActionPanel } from '../ui/action-panel';
 import { DateField } from '../ui/date-field';
 import { Modal } from '../ui/overlays';
+import { ErrorCodeLabel } from '../ui/technical-details';
 
 /**
  * Phase E3: incidents and maintenance windows (`docs/incidents.md`).
@@ -611,11 +613,51 @@ function eventDetail(event: IncidentEventItem): string | undefined {
   const parts: string[] = [];
   if (event.actorLabel !== null) parts.push(event.actorLabel);
   const detail = event.detail ?? {};
-  for (const key of ['effect', 'subject', 'state', 'recipients', 'from', 'to'] as const) {
-    const value = detail[key];
-    if (typeof value === 'string' || typeof value === 'number') parts.push(`${key}: ${value}`);
+  for (const [key, value] of Object.entries(detail)) {
+    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    const label = INCIDENT_DETAIL_KEY_LABELS[key];
+    // A key this screen has no name for is a server-side fact it was not written for.
+    if (label === undefined) continue;
+    parts.push(`${t(label)}: ${incidentDetailValue(key, value)}`);
   }
   return parts.length === 0 ? undefined : parts.join(' · ');
+}
+
+/** The timeline detail's keys, by name (W6). Keys outside this list are not drawn. */
+export const INCIDENT_DETAIL_KEY_LABELS: Readonly<Record<string, WebKey>> = {
+  step: 'web.inc_detail_step',
+  kind: 'web.inc_detail_effect',
+  effect: 'web.inc_detail_effect',
+  subjectRef: 'web.inc_detail_subject',
+  subject: 'web.inc_detail_subject',
+  state: 'web.inc_detail_state',
+  errorCode: 'web.inc_detail_error',
+  recipients: 'web.inc_detail_recipients',
+  from: 'web.inc_detail_from',
+  to: 'web.inc_detail_to',
+};
+
+const INCIDENT_STEP_LABELS: Readonly<Record<string, WebKey>> = {
+  apply: 'web.inc_detail_step_apply',
+  adopt: 'web.inc_detail_step_adopt',
+  revert: 'web.inc_detail_step_revert',
+  on: 'web.inc_detail_step_on',
+};
+
+/** A detail value by name where it is a code; ids and counts as they are. */
+function incidentDetailValue(key: string, value: string | number): string {
+  if (typeof value === 'number') return formatNumber(value);
+  const named =
+    key === 'step'
+      ? INCIDENT_STEP_LABELS[value]
+      : key === 'kind' || key === 'effect'
+        ? (INCIDENT_EFFECT_LABELS as Readonly<Record<string, WebKey>>)[value]
+        : key === 'state'
+          ? (INCIDENT_EFFECT_STATE_LABELS as Readonly<Record<string, WebKey>>)[value]
+          : undefined;
+  if (named !== undefined) return t(named);
+  if (key === 'errorCode') return errorCodeLabel(value);
+  return value;
 }
 
 function EffectsTable({ effects }: { effects: readonly IncidentEffectItem[] }) {
@@ -648,7 +690,7 @@ function EffectsTable({ effects }: { effects: readonly IncidentEffectItem[] }) {
               {row.errorCode !== null && (
                 <>
                   {' '}
-                  <Ltr>{row.errorCode}</Ltr>
+                  <ErrorCodeLabel code={row.errorCode} />
                 </>
               )}
             </>

@@ -33,6 +33,7 @@ import { Badge, Banner, Card, Drawer, Field, Ltr, Modal, StateSwitch, useToast }
 import { useConfirmedClose } from '../ui/unsaved';
 import { PermissionCatalog } from '../ui/permission-catalog';
 import { Icon } from '../ui/icons';
+import { errorText } from '../error-text';
 
 /**
  * System → Roles (Phase D3, program §18): the permission-management UI over the
@@ -91,9 +92,9 @@ function roleMessage(error: unknown): string {
       [IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION]: 'web.admin_privilege_escalation',
     };
     const key = known[error.code];
-    return key === undefined ? error.message : t(key);
+    return key === undefined ? errorText(error) : t(key);
   }
-  return t('web.error');
+  return errorText(error);
 }
 
 type Editing =

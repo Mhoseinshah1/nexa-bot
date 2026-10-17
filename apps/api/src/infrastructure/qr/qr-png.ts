@@ -1,5 +1,5 @@
 import { deflateSync, crc32 } from 'node:zlib';
-import { errors, QR_TEMPLATE_QUIET_ZONE_MAX } from '@nexa/contracts';
+import { DELIVERY_QR_ERROR_CODES, errors, QR_TEMPLATE_QUIET_ZONE_MAX } from '@nexa/contracts';
 import qrcode from 'qrcode-generator';
 import type { QrCodeEncoder } from '../../modules/commerce/provisioning/application/ports.js';
 
@@ -82,7 +82,7 @@ export interface QrPngOptions {
  */
 export function qrModules(text: string): boolean[][] {
   if (text.length === 0) {
-    throw errors.validation('qr.text_empty', 'A QR code needs text to encode.');
+    throw errors.validation(DELIVERY_QR_ERROR_CODES.TEXT_EMPTY, 'A QR code needs text to encode.');
   }
   if (text.length > QR_TEXT_MAX_LENGTH) {
     throw errors.validation(
@@ -181,7 +181,11 @@ export function encodeQrModulesPng(
   const scale = options.scale ?? DEFAULT_SCALE;
   const margin = options.margin ?? DEFAULT_MARGIN;
   if (!Number.isInteger(scale) || scale < 1) {
-    throw errors.validation('qr.scale_invalid', 'A QR scale is a positive integer.', { scale });
+    throw errors.validation(
+      DELIVERY_QR_ERROR_CODES.SCALE_INVALID,
+      'A QR scale is a positive integer.',
+      { scale },
+    );
   }
   if (!Number.isInteger(margin) || margin < 0 || margin > QR_TEMPLATE_QUIET_ZONE_MAX) {
     throw errors.validation(

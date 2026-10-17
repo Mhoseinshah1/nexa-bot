@@ -63,7 +63,8 @@ class InlineSaveError extends Error {
     override readonly cause: unknown,
     readonly stylesSaved: boolean,
   ) {
-    super(cause instanceof Error ? cause.message : 'icons not saved');
+    // A label for a log; the operator is told by `stylesSaved`, never by this text.
+    super('icons not saved');
   }
 }
 export const INLINE_BUTTON_ICONS_SETTING = 'bot.inline_button_icons';

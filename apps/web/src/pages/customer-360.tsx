@@ -107,6 +107,7 @@ import {
   type Tone,
   LIST_PAGE_SIZE,
 } from '../ui/kit';
+import { ApiErrorReport } from '../ui/technical-details';
 
 // ---------------------------------------------------------------------------
 // Customer 360 (spec §11)
@@ -1240,6 +1241,9 @@ const DIRECTION_TONES: Readonly<Record<LedgerDirection, Tone>> = {
   DEBIT: 'warn',
 };
 
+/** A positive whole number of minor units: ASCII digits, not all zeros. */
+const POSITIVE_WHOLE = /^0*[1-9][0-9]*$/u;
+
 /**
  * A customer's wallet: the derived balance, the ledger, and one way to move it.
  *
@@ -1479,6 +1483,8 @@ function WalletAdjustDialog({
   const queries = useQueryClient();
   const submission = useSubmissionKey();
   const [amount, setAmount] = useState('');
+  // W6: said in Persian before anything is sent — whole minor units, digits only, above zero.
+  const amountInvalid = amount.trim() !== '' && !POSITIVE_WHOLE.test(amount.trim());
   const [note, setNote] = useState('');
   const wallet = useQuery({
     queryKey: ['wallet', customerId],
@@ -1581,7 +1587,7 @@ function WalletAdjustDialog({
           variant={credit ? 'primary' : 'danger'}
           size="sm"
           {...(credit ? { icon: 'plus' as const } : {})}
-          disabled={!walletReady || adjust.isPending || amount.trim() === ''}
+          disabled={!walletReady || adjust.isPending || amount.trim() === '' || amountInvalid}
           onClick={() => direction !== null && adjust.mutate({ direction })}
         >
           {t(credit ? 'web.wallet_credit' : 'web.wallet_debit')}
@@ -1590,7 +1596,11 @@ function WalletAdjustDialog({
     >
       <p className="muted small">{t('web.wallet_adjust_hint')}</p>
       <div className="form-grid">
-        <Field label={t('web.wallet_adjust_amount')} htmlFor="wallet-amount">
+        <Field
+          label={t('web.wallet_adjust_amount')}
+          htmlFor="wallet-amount"
+          {...(amountInvalid ? { error: t('web.err_rule_amount_positive') } : {})}
+        >
           <Input
             id="wallet-amount"
             inputMode="numeric"
@@ -1608,7 +1618,7 @@ function WalletAdjustDialog({
           />
         </Field>
       </div>
-      {adjust.error !== null && <Banner tone="danger">{messageFor(adjust.error)}</Banner>}
+      {adjust.error !== null && <ApiErrorReport error={adjust.error} />}
     </FormDialog>
   );
 }

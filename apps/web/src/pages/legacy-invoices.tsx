@@ -44,6 +44,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Drawer } from '../ui/overlays';
+import { ErrorCodeLabel } from '../ui/technical-details';
 
 /**
  * Mirza migration PR3 — the legacy invoice archive, READ-ONLY.
@@ -664,7 +665,7 @@ export function InvoiceDetail({ id }: { id: string }) {
               {importOutcome.reasonCode === null ? (
                 <Muted />
               ) : (
-                <Ltr>{importOutcome.reasonCode}</Ltr>
+                <ErrorCodeLabel code={importOutcome.reasonCode} />
               )}
             </dd>
             <dt>{t('web.lia_import_review')}</dt>
