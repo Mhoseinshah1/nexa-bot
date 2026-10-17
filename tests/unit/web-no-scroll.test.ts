@@ -22,6 +22,14 @@ describe('a click that scrolls the page', () => {
     expect(isJump(at(0), at(JUMP_TOLERANCE_PX + 1))).toBe(true);
   });
 
+  it('is not a jump when the page got shorter and the browser clamped to its new end', () => {
+    // A shorter tab: the content can now scroll to 208 at most, and that is where it is.
+    expect(isJump(at(284), { ...at(208), contentMax: 208 })).toBe(false);
+    // …but moving up to somewhere that is NOT the end is a jump, and so is any move down.
+    expect(isJump(at(284), { ...at(100), contentMax: 208 })).toBe(true);
+    expect(isJump(at(0), { ...at(640), contentMax: 640 })).toBe(true);
+  });
+
   it('is not a jump when the click navigated: the next route starts at its own top', () => {
     expect(isJump(at(0, 0, '/users/x'), at(500, 0, '/services/y'))).toBe(false);
   });

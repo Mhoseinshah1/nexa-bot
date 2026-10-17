@@ -51,10 +51,19 @@ export function allRoutes() {
  */
 export function isJump(before, after, tolerance = JUMP_TOLERANCE_PX) {
   if (before.route !== after.route) return false;
-  return (
-    Math.abs(after.content - before.content) > tolerance ||
-    Math.abs(after.window - before.window) > tolerance
-  );
+  /*
+   * A click that made the page SHORTER (a shorter tab, a removed row, a last page with fewer
+   * rows) leaves the browser no choice but to clamp the offset to the new end: an upward move
+   * that lands exactly on the new maximum is that clamp, not a jump to another section.
+   */
+  const clamped = (was, now, max) => max !== undefined && now < was && now >= max - tolerance;
+  const content =
+    Math.abs(after.content - before.content) > tolerance &&
+    !clamped(before.content, after.content, after.contentMax);
+  const windowMoved =
+    Math.abs(after.window - before.window) > tolerance &&
+    !clamped(before.window, after.window, after.windowMax);
+  return content || windowMoved;
 }
 
 // The page's own buttons: inside the content, visible, enabled, not inside a dialog.
@@ -65,7 +74,9 @@ const BUTTONS = `[...document.querySelectorAll('#main button')].filter((b) =>
 const POSITION = `(() => ({
   route: location.pathname + location.search + location.hash,
   content: document.querySelector('#main')?.scrollTop ?? 0,
+  contentMax: (() => { const m = document.querySelector('#main'); return m ? m.scrollHeight - m.clientHeight : 0; })(),
   window: window.scrollY,
+  windowMax: document.documentElement.scrollHeight - window.innerHeight,
 }))()`;
 
 // The items of a menu a button opened (the kit's `Menu`), inside the page content.
