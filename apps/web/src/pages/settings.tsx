@@ -11,7 +11,7 @@ import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/con
 import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatMoneyText, formatNumber, formatTimestamp } from '../format';
 import { errorIssues, errorText } from '../error-text';
-import { settingDraftProblems } from '../setting-checks';
+import { guardSentenceShown, settingDraftProblems } from '../setting-checks';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -582,9 +582,6 @@ function SettingRow({
   );
 }
 
-/** Whether a string carries Persian or Arabic script. */
-const PERSIAN_SCRIPT = /[\u0600-\u06FF]/u;
-
 /**
  * A refused save, in Persian.
  *
@@ -593,7 +590,8 @@ const PERSIAN_SCRIPT = /[\u0600-\u06FF]/u;
  * told in Persian that the value was not accepted, and the issues are kept behind a
  * disclosure for whoever has to debug it. A change guard refuses a value that is valid
  * on its own but not in combination (the reminder thresholds) with a sentence written
- * for the operator — shown as it is when it is Persian. The store-currency guard speaks
+ * for the operator — shown as it is only for a key on `PERSIAN_GUARD_SETTING_KEYS` and only
+ * when it carries no Latin letter (`guardSentenceShown`). The store-currency guard speaks
  * English, so its one refusal has a Persian sentence of its own here.
  *
  * Every other refusal keeps the shared `ErrorReport`.
@@ -603,8 +601,13 @@ function SaveError({ error, settingKey }: { error: unknown; settingKey: string }
     return <ErrorReport error={error} />;
   }
   const guarded = error.status === 409;
-  if (guarded && PERSIAN_SCRIPT.test(error.message)) {
-    return <Banner tone="danger">{error.message}</Banner>;
+  if (guarded && guardSentenceShown(settingKey, error.message)) {
+    return (
+      <Banner tone="danger">
+        {error.message}
+        <ErrorRef error={error} />
+      </Banner>
+    );
   }
   const sentence =
     guarded && settingKey === 'sales.currency'

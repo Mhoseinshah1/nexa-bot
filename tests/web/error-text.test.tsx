@@ -214,8 +214,8 @@ describe('no page renders an error message', () => {
    * sentence written in Persian for the operator; it is shown only when it IS Persian.
    */
   const ALLOWED = new Set([
-    'apps/web/src/pages/settings.tsx:  if (guarded && PERSIAN_SCRIPT.test(error.message)) {',
-    'apps/web/src/pages/settings.tsx:    return <Banner tone="danger">{error.message}</Banner>;',
+    'apps/web/src/pages/settings.tsx:  if (guarded && guardSentenceShown(settingKey, error.message)) {',
+    'apps/web/src/pages/settings.tsx:        {error.message}',
   ]);
 
   function walk(dir: string, out: string[] = []): string[] {
