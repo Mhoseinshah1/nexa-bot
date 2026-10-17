@@ -200,6 +200,10 @@ export class ServiceRefundRequestService {
     if (order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE') {
       return { eligible: false, reason: 'NO_PAID_SOURCE' };
     }
+    // Only a sale of this installation has money to give back. An adopted or imported Mirza
+    // service was paid elsewhere: its order is history (or free), and a refund computed from
+    // it would credit a wallet for money this installation never took.
+    if (order.origin !== 'STANDARD') return { eligible: false, reason: 'NO_PAID_SOURCE' };
     const payment = await this.deps.payments.findConfirmedForOrder(scope, order.id, tx);
     if (payment === null) {
       // A trial or a zero-total order has no payment; anything else here is unresolved.
