@@ -48,7 +48,9 @@ import {
   useUnsavedChanges,
   type Column,
 } from '../ui/kit';
-import { CheckField, FormSection, SaveBar, revealField } from './editor-layout';
+import { CheckField, FormSection, SaveBar } from './editor-layout';
+import { Drawer } from '../ui/overlays';
+import { useConfirmedClose } from '../ui/unsaved';
 
 /**
  * Service location change (WP-A6) — a panel's locations, the one its new accounts start
@@ -193,6 +195,8 @@ export function ServiceLocationsPage({
 
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  // W2: the editor is a drawer the head's «افزودن» and a row's «ویرایش» open — no scroll.
+  const [open, setOpen] = useState(false);
   /** The location whose deletion is being asked about, or null (D3: it had no question). */
   const [deleting, setDeleting] = useState<ServiceLocationSummaryResponse | null>(null);
   const rows = locations.data?.locations ?? [];
@@ -213,6 +217,11 @@ export function ServiceLocationsPage({
   const reset = () => {
     setEditing(null);
     setForm(EMPTY_FORM);
+  };
+  const close = () => {
+    reset();
+    setOpen(false);
+    save.reset();
   };
   const refresh = () => {
     void queries.invalidateQueries({ queryKey: ['service-locations'] });
@@ -269,6 +278,7 @@ export function ServiceLocationsPage({
         ),
       });
       reset();
+      setOpen(false);
       refresh();
     },
     onError: (error) => submission.settleOn(error),
@@ -286,7 +296,7 @@ export function ServiceLocationsPage({
   });
 
   const busy = save.isPending || remove.isPending;
-  const failure = save.error ?? remove.error;
+  const { requestClose, dialog: closeDialog } = useConfirmedClose(dirty, close);
 
   const limitsText = (row: ServiceLocationSummaryResponse): string => {
     const parts: string[] = [];
@@ -385,7 +395,7 @@ export function ServiceLocationsPage({
                 discard.confirmDiscard(() => {
                   setEditing(row.id);
                   setForm(formOf(row));
-                  revealField('sl-panel');
+                  setOpen(true);
                 })
               }
             >
@@ -419,7 +429,7 @@ export function ServiceLocationsPage({
                   onClick={() =>
                     discard.confirmDiscard(() => {
                       reset();
-                      revealField('sl-panel');
+                      setOpen(true);
                     })
                   }
                 >
@@ -430,9 +440,8 @@ export function ServiceLocationsPage({
           : {})}
       />
 
-      {CAPABLE_PROVIDERS.length === 0 ? (
-        <Banner tone="warn">{t('web.service_locations_no_capable_panel')}</Banner>
-      ) : (
+      {/* W5: no «none supports it in this version» note; the panel select says it per panel. */}
+      {CAPABLE_PROVIDERS.length > 0 && (
         <Banner tone="info">
           {t('web.service_locations_capable_panels').replace(
             '{providers}',
@@ -440,6 +449,8 @@ export function ServiceLocationsPage({
           )}
         </Banner>
       )}
+      {/* A refused delete (in use) is said above the list, never by scrolling to a form. */}
+      {remove.error !== null && <Banner tone="danger">{failureText(remove.error)}</Banner>}
 
       <div className="stack">
         <StateSwitch
@@ -468,16 +479,17 @@ export function ServiceLocationsPage({
         </StateSwitch>
 
         {mayEdit && (
-          <Card
+          <Drawer
+            open={open}
+            onClose={requestClose}
+            wide
             title={t(
               editing === null ? 'web.service_locations_new' : 'web.service_locations_editing',
             )}
-            hint={t('web.service_locations_form_hint')}
-            tight
             foot={
               <SaveBar dirty={dirty}>
                 {editing !== null && (
-                  <Button size="sm" disabled={busy} onClick={reset}>
+                  <Button size="sm" disabled={busy} onClick={requestClose}>
                     {t('web.service_locations_cancel_edit')}
                   </Button>
                 )}
@@ -493,6 +505,7 @@ export function ServiceLocationsPage({
               </SaveBar>
             }
           >
+            <p className="muted small">{t('web.service_locations_form_hint')}</p>
             <FormSection id="sl-section-where" title={t('web.cb_section_where')}>
               <Field
                 label={t('web.service_locations_panel')}
@@ -695,15 +708,15 @@ export function ServiceLocationsPage({
               </Field>
             </FormSection>
 
-            {(panels.isError || products.isError || failure != null) && (
+            {(panels.isError || products.isError || save.error !== null) && (
               <div className="cb-form-error stack-sm">
                 {(panels.isError || products.isError) && (
                   <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
                 )}
-                {failure != null && <Banner tone="danger">{failureText(failure)}</Banner>}
+                {save.error !== null && <Banner tone="danger">{failureText(save.error)}</Banner>}
               </div>
             )}
-          </Card>
+          </Drawer>
         )}
       </div>
 
@@ -722,6 +735,7 @@ export function ServiceLocationsPage({
         />
       )}
       {discard.dialog}
+      {closeDialog}
     </>
   );
 }

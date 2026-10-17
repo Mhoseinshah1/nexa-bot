@@ -2750,9 +2750,10 @@ export function testPanel(input: {
  * `panels.view`; the server computes every figure, this only carries them.
  */
 export function fetchPanelHealth(
-  query: { cursor?: string } = {},
+  query: { cursor?: string; limit?: number } = {},
 ): Promise<PanelHealthDashboardResponse> {
   const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
   const suffix = params.toString();
   return authedGet(
@@ -5049,8 +5050,10 @@ export function fetchInbox(filters: {
   unread?: boolean;
   category?: NotificationCategory;
   cursor?: { readonly at: string; readonly id: string };
+  limit?: number;
 }): Promise<InboxListResponse> {
   const params = new URLSearchParams();
+  if (filters.limit !== undefined) params.set('limit', String(filters.limit));
   if (filters.unread === true) params.set('unread', 'true');
   if (filters.category !== undefined) params.set('category', filters.category);
   if (filters.cursor !== undefined) {

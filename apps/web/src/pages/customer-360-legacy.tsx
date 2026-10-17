@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
-  LEGACY_CUSTOMER_INVOICES_PAGE_DEFAULT,
-  LEGACY_HISTORY_PAGE_DEFAULT,
   type LegacyCustomerInvoice,
   type LegacyHistoryItem,
   type LegacyHistoryRecordType,
@@ -32,6 +30,7 @@ import {
   StateSwitch,
   type Column,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { LEGACY_DEBT_STATE_LABELS } from './legacy-debts';
 import { LEGACY_INVOICE_CLASS_LABELS } from './legacy-invoices';
@@ -86,7 +85,7 @@ export function CustomerLegacyHistoryCard({
   const onLink = useLinkHandler();
   const [type, setType] = useState<LegacyHistoryRecordType | undefined>(undefined);
   const [offset, setOffset] = useState(0);
-  const limit = LEGACY_HISTORY_PAGE_DEFAULT;
+  const limit = LIST_PAGE_SIZE;
   const history = useQuery({
     queryKey: ['customer-legacy-history', customerId, type ?? null, offset],
     queryFn: () =>
@@ -372,7 +371,7 @@ export function CustomerLegacyInvoicesCard({
     queryKey: ['customer-legacy-invoices', customerId, after ?? null],
     queryFn: () =>
       fetchCustomerLegacyInvoices(customerId, {
-        limit: LEGACY_CUSTOMER_INVOICES_PAGE_DEFAULT,
+        limit: LIST_PAGE_SIZE,
         ...(after === undefined ? {} : { after }),
       }),
     enabled: mayView,

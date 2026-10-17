@@ -3,6 +3,8 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   OpenServiceRefundRequestsCard,
   ServiceRefundRequestsCard,
+  REFUND_FAILURE_LABELS,
+  refundFailureLabel,
 } from '../../apps/web/src/pages/service-refund-requests';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
@@ -104,7 +106,8 @@ describe('the requests that still want an operator', () => {
     expect(within(table).queryByText('دلیل چهارم')).toBeNull();
     expect(within(table).queryByText('دلیل پنجم')).toBeNull();
     // An ambiguous deletion is shown as what it is, never as progress.
-    expect(within(table).getByText('UNKNOWN')).toBeInTheDocument();
+    // W5: by its Persian name, the frozen token kept in `title`.
+    expect(within(table).getByTitle('UNKNOWN')).toHaveTextContent(t('web.operation_state_unknown'));
     // The server filters before it limits, never the newest page of all; and as ONE stream,
     // never a scan per state that could miss a request moving between two of them (Codex
     // review of #83, round 6).
@@ -197,6 +200,12 @@ describe('one service’s requests', () => {
     body: { requests: rows, nextCursor: null },
   });
 
+  /** W3: the OPEN row's button opens the decision's drawer; returns the drawer. */
+  const openDecision = (key: 'web.service_refund_approve' | 'web.service_refund_reject') => {
+    fireEvent.click(screen.getByRole('button', { name: t(key) }));
+    return screen.getByRole('dialog', { name: t(key) });
+  };
+
   it('approves only after the destructive confirmation is ticked, with the amount as minor units', async () => {
     const api = stubApi([
       forService([request()]),
@@ -208,7 +217,8 @@ describe('one service’s requests', () => {
     renderPage(<ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />);
     await screen.findByRole('table');
 
-    const approve = screen.getByRole('button', { name: t('web.service_refund_approve') });
+    const drawer = openDecision('web.service_refund_approve');
+    const approve = within(drawer).getByRole('button', { name: t('web.service_refund_approve') });
     fireEvent.change(screen.getByLabelText(t('web.service_refund_amount')), {
       target: { value: '120000' },
     });
@@ -240,11 +250,14 @@ describe('one service’s requests', () => {
         <ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />,
       );
       await screen.findByRole('table');
+      const drawer = openDecision('web.service_refund_approve');
       fireEvent.change(screen.getByLabelText(t('web.service_refund_amount')), {
         target: { value: '120000' },
       });
       fireEvent.click(screen.getByRole('checkbox'));
-      fireEvent.click(screen.getByRole('button', { name: t('web.service_refund_approve') }));
+      fireEvent.click(
+        within(drawer).getByRole('button', { name: t('web.service_refund_approve') }),
+      );
       expect(await screen.findByText(t(key)), state).toBeInTheDocument();
       if (state !== 'EXECUTING') {
         expect(screen.queryByText(t('web.service_refund_approved_toast')), state).toBeNull();
@@ -265,10 +278,11 @@ describe('one service’s requests', () => {
     ]);
     renderPage(<ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />);
     await screen.findByRole('table');
+    const drawer = openDecision('web.service_refund_reject');
     fireEvent.change(screen.getByLabelText(t('web.service_refund_reject_reason')), {
       target: { value: reason },
     });
-    const reject = screen.getByRole('button', { name: t('web.service_refund_reject') });
+    const reject = within(drawer).getByRole('button', { name: t('web.service_refund_reject') });
     expect(reject).toBeEnabled();
     fireEvent.click(reject);
     await waitFor(() => {
@@ -287,7 +301,8 @@ describe('one service’s requests', () => {
     ]);
     renderPage(<ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />);
     await screen.findByRole('table');
-    const reject = screen.getByRole('button', { name: t('web.service_refund_reject') });
+    const drawer = openDecision('web.service_refund_reject');
+    const reject = within(drawer).getByRole('button', { name: t('web.service_refund_reject') });
     expect(reject, 'not without a reason').toBeDisabled();
     fireEvent.change(screen.getByLabelText(t('web.service_refund_reject_reason')), {
       target: { value: 'خارج از بازه' },
@@ -297,6 +312,66 @@ describe('one service’s requests', () => {
       const call = api.calls.find((one) => one.url.endsWith('/reject'));
       expect(call?.body).toMatchObject({ reason: 'خارج از بازه' });
     });
+  });
+
+  it('replays a lost approval under the SAME key after the drawer is closed and reopened', async () => {
+    const api = stubApi([
+      forService([request()]),
+      {
+        url: `/service-refund-requests/${REQUEST_ID}/approve`,
+        status: 503,
+        body: {
+          error: { kind: 'INTERNAL', code: 'internal.unhandled', message: 'x', correlationId: 'c' },
+        },
+      },
+    ]);
+    renderPage(<ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />);
+    await screen.findByRole('table');
+    const approveOnce = async () => {
+      const drawer = openDecision('web.service_refund_approve');
+      fireEvent.change(within(drawer).getByLabelText(t('web.service_refund_amount')), {
+        target: { value: '120000' },
+      });
+      fireEvent.click(within(drawer).getByRole('checkbox'));
+      fireEvent.click(
+        within(drawer).getByRole('button', { name: t('web.service_refund_approve') }),
+      );
+      return drawer;
+    };
+    const approvals = () => api.calls.filter((one) => one.url.endsWith('/approve'));
+    const drawer = await approveOnce();
+    await waitFor(() => expect(approvals()).toHaveLength(1));
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
+    const discard = screen.queryByRole('button', { name: t('web.discard') });
+    if (discard !== null) fireEvent.click(discard);
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: t('web.service_refund_approve') })).toBeNull(),
+    );
+    await approveOnce();
+    await waitFor(() => expect(approvals()).toHaveLength(2));
+    const keyOf = (body: unknown) => (body as { idempotencyKey: string }).idempotencyKey;
+    expect(keyOf(approvals()[1]!.body)).toBe(keyOf(approvals()[0]!.body));
+  });
+
+  it('asks before closing a decision drawer over a typed amount', async () => {
+    stubApi([forService([request()])]);
+    renderPage(<ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />);
+    await screen.findByRole('table');
+    const drawer = openDecision('web.service_refund_approve');
+    fireEvent.change(within(drawer).getByLabelText(t('web.service_refund_amount')), {
+      target: { value: '5' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(t('web.unsaved_title'));
+  });
+
+  it('names a failure kind in Persian, keeping the raw key; an unknown one stays raw', () => {
+    for (const kind of Object.keys(REFUND_FAILURE_LABELS)) {
+      expect(refundFailureLabel(kind), kind).toBeTruthy();
+      expect(refundFailureLabel(kind), kind).not.toBe(kind);
+    }
+    expect(refundFailureLabel('ABANDONED')).toBe(t('web.operation_state_abandoned'));
+    expect(refundFailureLabel('SOMETHING_NEW')).toBeNull();
   });
 
   it('tells an operator without both decision keys so, and draws no form', async () => {

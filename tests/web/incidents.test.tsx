@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import {
@@ -115,6 +115,16 @@ describe('the incident detail', () => {
     for (const label of ['web.inc_edit', 'web.inc_resolve', 'web.inc_apply_effects'] as const) {
       expect(screen.queryByRole('button', { name: t(label) })).toBeNull();
     }
+  });
+
+  it('W1.5: groups the actions under «رخداد» and «اقدام برای فروش و مشتریان»', async () => {
+    stubApi([detail()]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage mayNotify />);
+    const incident = await screen.findByRole('group', { name: t('web.inc_actions_incident') });
+    expect(within(incident).getByRole('button', { name: t('web.inc_resolve') })).toBeTruthy();
+    expect(within(incident).getByRole('button', { name: t('web.inc_edit') })).toBeTruthy();
+    const sales = screen.getByRole('group', { name: t('web.inc_actions_sales') });
+    expect(within(sales).getByRole('button', { name: t('web.inc_notice') })).toBeTruthy();
   });
 
   it('resolves with the version it read, and keeps the key across a lost answer', async () => {

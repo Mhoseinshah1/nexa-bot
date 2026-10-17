@@ -1,5 +1,10 @@
-import type { ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { t } from '../i18n/web.fa';
+import { Num } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { useFocusTrap } from '../ui/overlays';
+import { formatDateFieldValue } from '../ui/date-field';
 
 /**
  * Editor layout pieces shared by the commerce pages (products, discounts,
@@ -143,5 +148,205 @@ export function ChipGroup({ label, children }: { label: string; children: ReactN
     <div className="cb-chip-group" role="group" aria-label={label}>
       {children}
     </div>
+  );
+}
+
+/**
+ * Whether the window is at most `maxWidth` px wide, following resizes. The same media query
+ * the CSS uses, so a layout decision made in a script and one made in a stylesheet agree.
+ */
+export function useNarrowScreen(maxWidth = 980): boolean {
+  const query = `(max-width: ${maxWidth}px)`;
+  const [narrow, setNarrow] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    setNarrow(list.matches);
+    const onChange = (event: MediaQueryListEvent) => setNarrow(event.matches);
+    list.addEventListener('change', onChange);
+    return () => list.removeEventListener('change', onChange);
+  }, [query]);
+  return narrow;
+}
+
+/** One figure of the page's summary line: a count and what it counts. */
+export function SummaryPill({
+  value,
+  label,
+  tone,
+}: {
+  value: number;
+  label: string;
+  tone?: 'ok' | 'warn' | 'info';
+}) {
+  return (
+    <span className={tone === undefined ? 'bx-pill' : `bx-pill ${tone}`}>
+      <b>
+        <Num value={value} />
+      </b>
+      {label}
+    </span>
+  );
+}
+
+/**
+ * A side sheet whose contents stay MOUNTED while it is closed.
+ *
+ * The kit's `Drawer` unmounts its body on close, which is right for a form whose draft lives
+ * in its caller. A sheet holding rows that keep their OWN drafts (a setting row, a template
+ * card) must not: closing it would discard what was typed without a word, and the page's
+ * unsaved count, fed by those rows, would forget it too. This one is hidden instead — same
+ * look, focus trap, Escape, backdrop and ✕ as the drawer.
+ */
+export function KeptSheet({
+  open,
+  onClose,
+  title,
+  hint,
+  wide = false,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: ReactNode;
+  hint?: ReactNode;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  const titleId = useId();
+  const ref = useRef<HTMLElement>(null);
+  useFocusTrap(ref, open, onClose);
+  return createPortal(
+    <>
+      {open && <div className="drawer-layer" onMouseDown={onClose} />}
+      <aside
+        ref={ref}
+        className={wide ? 'drawer wide bx-kept' : 'drawer bx-kept'}
+        hidden={!open}
+        aria-labelledby={titleId}
+        {...(open ? { role: 'dialog', 'aria-modal': true } : {})}
+      >
+        <div className="drawer-head">
+          <h2 id={titleId}>{title}</h2>
+          <button
+            type="button"
+            className="btn ghost icon sm"
+            aria-label={t('web.close')}
+            onClick={onClose}
+          >
+            <Icon name="x" />
+          </button>
+        </div>
+        <div className="drawer-body stack">
+          {hint !== undefined && <p className="muted small">{hint}</p>}
+          {children}
+        </div>
+      </aside>
+    </>,
+    document.body,
+  );
+}
+
+/** One tab of a `DotTabs` strip. */
+export interface DotTab<T extends string> {
+  readonly id: T;
+  readonly label: string;
+  /** A small mark after the label: `warn` for unsaved edits, `danger` for a problem. */
+  readonly dot?: 'warn' | 'danger' | null;
+}
+
+/**
+ * The kit's tab strip, with a dot on a tab that holds unsaved edits (or the form's current
+ * problem), so a section switched away from can be found again. Same roles, roving tabindex
+ * and keyboard (RTL arrows, Home, End) as `Tabs`; `panelId` ties it to its `TabPanel`.
+ */
+export function DotTabs<T extends string>({
+  value,
+  onChange,
+  items,
+  panelId,
+  label,
+}: {
+  value: T;
+  onChange: (next: T) => void;
+  items: readonly DotTab<T>[];
+  panelId: string;
+  label?: string;
+}) {
+  const buttons = useRef(new Map<T, HTMLButtonElement | null>());
+  const select = (next: T) => {
+    onChange(next);
+    queueMicrotask(() => buttons.current.get(next)?.focus());
+  };
+  const move = (delta: number) => {
+    const at = items.findIndex((item) => item.id === value);
+    if (at < 0) return;
+    const next = items[(at + delta + items.length) % items.length];
+    if (next) select(next.id);
+  };
+  return (
+    <div
+      className="tabs bx-tabs"
+      role="tablist"
+      {...(label === undefined ? {} : { 'aria-label': label })}
+      onKeyDown={(event) => {
+        // RTL: the strip runs right-to-left, so ArrowLeft advances.
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          move(1);
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          move(-1);
+        } else if (event.key === 'Home') {
+          event.preventDefault();
+          if (items[0]) select(items[0].id);
+        } else if (event.key === 'End') {
+          event.preventDefault();
+          const last = items[items.length - 1];
+          if (last) select(last.id);
+        }
+      }}
+    >
+      {items.map((item) => (
+        <button
+          key={item.id}
+          ref={(node) => {
+            buttons.current.set(item.id, node);
+          }}
+          type="button"
+          role="tab"
+          id={`${panelId}-tab-${item.id}`}
+          aria-selected={item.id === value}
+          aria-controls={panelId}
+          tabIndex={item.id === value ? 0 : -1}
+          className={item.id === value ? 'on' : undefined}
+          onClick={() => onChange(item.id)}
+        >
+          {item.label}
+          {item.dot != null && (
+            <span
+              className={`bx-tdot ${item.dot}`}
+              data-testid={`tab-dot-${item.id}`}
+              title={t(item.dot === 'warn' ? 'web.ob_unsaved_row' : 'web.bx_tab_problem')}
+            >
+              <span className="visually-hidden">
+                {t(item.dot === 'warn' ? 'web.ob_unsaved_row' : 'web.bx_tab_problem')}
+              </span>
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * An audience summary line as the operator reads it: every Gregorian day (`YYYY-MM-DD`) the
+ * shared summary prints is shown as the Jalali day the date field shows. Presentation only —
+ * `describeAudience` and the definition it reads are unchanged.
+ */
+export function jalaliDatesIn(line: string): string {
+  return line.replace(
+    /\b(\d{4}-\d{2}-\d{2})\b/gu,
+    (day: string) => formatDateFieldValue('date', day) ?? day,
   );
 }

@@ -93,8 +93,8 @@ const REGISTRY_ROW_HINTS: Readonly<Record<CapabilityRegistryRow, WebKey>> = {
 const GAP_LABELS: Readonly<Record<CapabilityGap, WebKey>> = {
   NOT_DECLARED: 'web.cap_gap_not_declared',
   NOT_IMPLEMENTED: 'web.cap_gap_not_implemented',
-  NOT_SUPPORTED: 'web.cap_gap_not_supported',
-  NOT_IN_RELEASE: 'web.cap_gap_not_in_release',
+  NOT_SUPPORTED: 'web.cap_gap_unsupported',
+  NOT_IN_RELEASE: 'web.cap_gap_unavailable',
 };
 
 const BLOCKER_LABELS: Readonly<Record<CustomerAvailabilityBlocker, WebKey>> = {

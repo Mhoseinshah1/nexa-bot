@@ -56,7 +56,7 @@ const routes = (locations: unknown[] = [INITIAL, TARGET]) => [
 ];
 
 describe('the service location screen', () => {
-  it('lists the locations, the initial one, free and the limits, and says no panel can move one', async () => {
+  it('lists the locations, the initial one, free and the limits, with no «not in this version» note', async () => {
     stubApi(routes());
     const { container } = renderPage(<ServiceLocationsPage denied={false} mayEdit={false} />);
     await screen.findByText('هلند');
@@ -67,7 +67,8 @@ describe('the service location screen', () => {
     expect(container.textContent).toContain('24 ساعت فاصله');
     expect(container.textContent).toContain('2 تغییر در 30 روز');
     // Derived from the adapters' declared capabilities: none declares it.
-    expect(container.textContent).toContain('هیچ‌یک از انواع پنل پشتیبانی‌شده');
+    // W5: the meta note is gone; the panel select still marks each unsupported panel.
+    expect(container.textContent).not.toContain('هیچ‌یک از انواع پنل پشتیبانی‌شده');
     // A view-only role is given no write control at all.
     expect(container.textContent).not.toContain('لوکیشن جدید');
     expect(container.textContent).not.toContain('ویرایش');
@@ -77,6 +78,8 @@ describe('the service location screen', () => {
   it('writes a priced target, and never an enabled one without a price', async () => {
     const api = stubApi(routes([]));
     renderPage(<ServiceLocationsPage denied={false} mayEdit />);
+    // W2: «افزودن» opens the editor in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText('لوکیشن جدید');
     // The panel list marks a panel whose adapter cannot move an account.
     await screen.findByText(/این پنل تغییر لوکیشن را پشتیبانی نمی‌کند/u);
@@ -119,6 +122,8 @@ describe('the service location screen', () => {
   it('takes a rolling limit only as a number of changes AND a period', async () => {
     stubApi(routes([]));
     renderPage(<ServiceLocationsPage denied={false} mayEdit />);
+    // W2: «افزودن» opens the editor in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText('لوکیشن جدید');
     await screen.findByText(/این پنل تغییر لوکیشن را پشتیبانی نمی‌کند/u);
     fireEvent.change(screen.getByLabelText('پنل'), { target: { value: String(panel()['id']) } });
@@ -143,6 +148,8 @@ describe('the service location screen', () => {
       { url: '/products', body: { products: [product(), elsewhere], nextCursor: null } },
     ]);
     renderPage(<ServiceLocationsPage denied={false} mayEdit />);
+    // W2: «افزودن» opens the editor in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText(/این پنل تغییر لوکیشن را پشتیبانی نمی‌کند/u);
     fireEvent.change(screen.getByLabelText('پنل'), { target: { value: String(panel()['id']) } });
     await screen.findByText('پلن یک‌ماهه');
@@ -154,6 +161,8 @@ describe('the service location screen', () => {
     // Codex review #2 on PR #101: `catalog.edit` without `catalog.view` saw an empty picker.
     const api = stubApi(routes());
     renderPage(<ServiceLocationsPage denied mayEdit mayReadPanels />);
+    // W2: «افزودن» opens the editor in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText('لوکیشن جدید');
     // `panels.view` is held, so the panel list is read and offered.
     await screen.findByText(/Frankfurt A/u);
@@ -166,6 +175,8 @@ describe('the service location screen', () => {
   it('takes a typed panel id from a role that may not list panels, and never asks', async () => {
     const api = stubApi(routes());
     renderPage(<ServiceLocationsPage denied mayEdit mayReadPanels={false} />);
+    // W2: «افزودن» opens the editor in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText('لوکیشن جدید');
     expect(screen.getByLabelText('پنل').tagName).toBe('INPUT');
     expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(false);
@@ -179,18 +190,22 @@ describe('the service location screen', () => {
 });
 
 describe('replacing unsaved input in the location form', () => {
-  it('asks before Edit or Add replaces what was typed, and not when nothing was', async () => {
+  it('opens a row in the drawer, asks before closing over a draft, and opens «افزودن» empty', async () => {
     stubApi(routes());
     renderPage(<ServiceLocationsPage denied={false} mayEdit />);
     const cell = await screen.findByText('هلند', { selector: 'td *, td' });
-    const edit = () =>
+    expect(document.getElementById('sl-label')).toBeNull();
+    fireEvent.click(
       within(cell.closest('tr') as HTMLElement).getByRole('button', {
         name: t('web.service_locations_edit'),
-      });
+      }),
+    );
+    const drawer = screen.getByRole('dialog', { name: t('web.service_locations_editing') });
     const label = () => document.getElementById('sl-label') as HTMLInputElement;
+    expect(label().value).toBe('هلند');
     fireEvent.change(label(), { target: { value: 'فرانسه' } });
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.cb_add') }));
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
     fireEvent.click(
       within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
         'button',
@@ -199,17 +214,17 @@ describe('replacing unsaved input in the location form', () => {
     );
     expect(label().value).toBe('فرانسه');
 
-    fireEvent.click(edit());
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
     fireEvent.click(
       within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
         'button',
         { name: t('web.discard') },
       ),
     );
-    await waitFor(() => expect(label().value).toBe('هلند'));
+    await waitFor(() => expect(document.getElementById('sl-label')).toBeNull());
 
     fireEvent.click(screen.getByRole('button', { name: t('web.cb_add') }));
     expect(screen.queryByRole('alertdialog')).toBeNull();
-    await waitFor(() => expect(label().value).toBe(''));
+    expect(label().value).toBe('');
   });
 });

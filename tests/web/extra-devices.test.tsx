@@ -40,15 +40,15 @@ const routes = (rates: unknown[] = [RATE]) => [
 ];
 
 describe('the extra users / devices screen', () => {
-  it('lists the per-user rate, and says no panel type can apply it in this release', async () => {
+  it('lists the per-user rate, and no longer narrates which panel types lack it (W5)', async () => {
     stubApi(routes());
     const { container } = renderPage(<ExtraDevicesPage denied={false} mayEdit={false} />);
     await screen.findByText('کاربر اضافه');
 
     expect(container.textContent).toContain('قیمت هر کاربر');
     expect(container.textContent).toContain('حداکثر قابل خرید');
-    // Derived from the adapters' declared capabilities: none declares it.
-    expect(container.textContent).toContain('هیچ‌یک از انواع پنل پشتیبانی‌شده');
+    // W5: the «none supports it in this version» note is gone; the panel select says it.
+    expect(container.textContent).not.toContain('هیچ‌یک از انواع پنل پشتیبانی‌شده');
     // A view-only role is given no write control at all.
     expect(container.textContent).not.toContain('تعرفهٔ جدید');
     expect(container.textContent).not.toContain('ویرایش');
@@ -78,6 +78,8 @@ describe('the extra users / devices screen', () => {
   it('writes an ADD_DEVICES rate with a per-user price, a maximum and a scope', async () => {
     const api = stubApi(routes([]));
     renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
+    // W2: «افزودن» opens the editor in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText('تعرفهٔ جدید');
     // The panel list marks a panel whose adapter cannot raise a limit.
     await screen.findByText(/این پنل افزایش کاربر را پشتیبانی نمی‌کند/u);
@@ -113,6 +115,8 @@ describe('the extra users / devices screen', () => {
   it('refuses to save a maximum outside what one service may be sold', async () => {
     stubApi(routes([]));
     renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
+    // W2: «افزودن» opens the editor in a drawer.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText('تعرفهٔ جدید');
     fireEvent.change(screen.getByLabelText('عنوان'), { target: { value: 'x' } });
     fireEvent.change(screen.getByLabelText('قیمت هر کاربر'), { target: { value: '1000' } });
@@ -132,8 +136,8 @@ describe('the extra users / devices screen', () => {
      */
     const later = { ...RATE, id: '019250ab-cdef-7012-8345-6789abcdef78', title: 'تعرفهٔ دوم' };
     const api = stubApi([
-      { url: '/service-addons?limit=50&kind', body: { addons: [RATE], nextCursor: 'c-2' } },
-      { url: '/service-addons?limit=50&cursor=c-2', body: { addons: [later], nextCursor: null } },
+      { url: '/service-addons?limit=10&kind', body: { addons: [RATE], nextCursor: 'c-2' } },
+      { url: '/service-addons?limit=10&cursor=c-2', body: { addons: [later], nextCursor: null } },
       { url: '/panels', body: { panels: [panel()], nextCursor: null } },
       { url: '/products', body: { products: [product()], nextCursor: null } },
     ]);
@@ -141,13 +145,13 @@ describe('the extra users / devices screen', () => {
     await screen.findByText('کاربر اضافه');
     expect(screen.queryByText('تعرفهٔ دوم')).toBeNull();
 
-    fireEvent.click(screen.getByText('تازه‌تر'));
+    fireEvent.click(screen.getByText('بعدی'));
     await screen.findByText('تعرفهٔ دوم');
     expect(api.calls.some((call) => call.url.includes('cursor=c-2'))).toBe(true);
     expect(screen.queryByText('کاربر اضافه')).toBeNull();
 
     // And back, to exactly the page it came from.
-    fireEvent.click(screen.getByText('قدیمی‌تر'));
+    fireEvent.click(screen.getByText('قبلی'));
     await screen.findByText('کاربر اضافه');
     cleanup();
   });
@@ -161,6 +165,7 @@ describe('the extra users / devices screen', () => {
       { url: '/products', body: { products: [product()], nextCursor: null } },
     ]);
     renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText(/Tehran Z/u);
     cleanup();
   });
@@ -189,6 +194,7 @@ describe('the extra users / devices screen', () => {
       { url: '/products', body: { products: [product()], nextCursor: null } },
     ]);
     renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_add') }));
     await screen.findByText(/فهرست کامل پنل‌ها یا محصولات خوانده نشد/u);
     cleanup();
   });
@@ -200,19 +206,23 @@ describe('the extra users / devices screen', () => {
   });
 });
 
-describe('replacing unsaved input in the rate form', () => {
-  it('asks before Edit or Add replaces what was typed, and not when nothing was', async () => {
+describe('the rate editor drawer (W2)', () => {
+  it('opens a row in the drawer, asks before closing over a draft, and opens «افزودن» empty', async () => {
     stubApi(routes());
     renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
     const cell = await screen.findByText('کاربر اضافه', { selector: 'td *, td' });
-    const edit = () =>
+    expect(document.getElementById('xd-title')).toBeNull();
+    fireEvent.click(
       within(cell.closest('tr') as HTMLElement).getByRole('button', {
         name: t('web.extra_devices_edit'),
-      });
+      }),
+    );
+    const drawer = screen.getByRole('dialog', { name: t('web.extra_devices_editing') });
     const title = () => document.getElementById('xd-title') as HTMLInputElement;
+    expect(title().value).toBe('کاربر اضافه');
     fireEvent.change(title(), { target: { value: 'پیش‌نویس' } });
 
-    fireEvent.click(edit());
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
     fireEvent.click(
       within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
         'button',
@@ -221,17 +231,18 @@ describe('replacing unsaved input in the rate form', () => {
     );
     expect(title().value).toBe('پیش‌نویس');
 
-    fireEvent.click(edit());
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
     fireEvent.click(
       within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
         'button',
         { name: t('web.discard') },
       ),
     );
-    await waitFor(() => expect(title().value).toBe('کاربر اضافه'));
+    await waitFor(() => expect(document.getElementById('xd-title')).toBeNull());
 
     fireEvent.click(screen.getByRole('button', { name: t('web.cb_add') }));
     expect(screen.queryByRole('alertdialog')).toBeNull();
-    await waitFor(() => expect(title().value).toBe(''));
+    expect(screen.getByRole('dialog', { name: t('web.extra_devices_new') })).toBeInTheDocument();
+    expect(title().value).toBe('');
   });
 });

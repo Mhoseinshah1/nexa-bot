@@ -300,6 +300,8 @@ function DeleteBody({
   const phraseMatches = phrase.trim() === SERVICE_TERMINATE_CONFIRMATION;
   return (
     <div className="ca-delete-modal">
+      {/* W3: the terminate card's danger sentence is the first thing the modal says. */}
+      <Banner tone="danger">{t('web.service_terminate_danger')}</Banner>
       <p className="muted small">{t('web.service_delete_choose')}</p>
       <div
         className="ca-delete-options"

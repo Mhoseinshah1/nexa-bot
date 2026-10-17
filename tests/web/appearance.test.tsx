@@ -43,12 +43,21 @@ describe('the appearance page', () => {
     stubApi([route()]);
     const { container } = renderPage(<AppearancePage denied={false} mayEdit={false} />);
     await screen.findByText(t('web.appearance_slot_payment'));
-    const text = container.textContent ?? '';
+    // Ten slots a page; walking the pager shows every one of them, once.
+    let text = '';
+    let rows = 0;
+    for (;;) {
+      text += container.textContent ?? '';
+      rows += container.querySelectorAll('tbody tr').length;
+      const next = screen.queryByRole('button', { name: t('web.page_next') });
+      if (next === null || (next as HTMLButtonElement).disabled) break;
+      fireEvent.click(next);
+    }
     for (const name of APPEARANCE_SLOTS) {
       expect(text).toContain(APPEARANCE_SLOT_FALLBACKS[name]);
       expect(text).toContain(`{icon:${name}}`);
     }
-    expect(container.querySelectorAll('tbody tr')).toHaveLength(APPEARANCE_SLOTS.length);
+    expect(rows).toBe(APPEARANCE_SLOTS.length);
     expect(screen.queryByRole('button', { name: t('web.save') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.appearance_test_send') })).toBeNull();
     // Nothing decorated until a bot is tested: the page says so, in Persian.
@@ -71,7 +80,9 @@ describe('the appearance page', () => {
       { url: '/appearance/slots/wallet/reset', body: { slot: slot('wallet'), changed: true } },
     ]);
     renderPage(<AppearancePage denied={false} mayEdit />);
-    const payment = (await screen.findByText(t('web.appearance_slot_payment'))).closest('tr')!;
+    // One compact row per slot; the editor is its sheet.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.appearance_slot_payment') }));
+    const payment = screen.getByRole('dialog', { name: t('web.appearance_slot_payment') });
     const input = within(payment).getByRole('textbox');
     fireEvent.change(input, { target: { value: 'abc' } });
     expect(within(payment).getByRole('alert').textContent).toBe(
@@ -80,6 +91,8 @@ describe('the appearance page', () => {
     expect(within(payment).getByRole('button', { name: t('web.save') })).toBeDisabled();
     fireEvent.change(input, { target: { value: ID } });
     expect(within(payment).getByText(t('web.appearance_preview_custom'))).toBeInTheDocument();
+    // Only a stored slot can be reset; the catalogue's own default has nothing to reset.
+    expect(within(payment).queryByRole('button', { name: t('web.appearance_reset') })).toBeNull();
     fireEvent.click(within(payment).getByRole('button', { name: t('web.save') }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.endsWith('/appearance/slots/payment'))).toBe(true),
@@ -87,10 +100,11 @@ describe('the appearance page', () => {
     const saved = api.calls.find((call) => call.url.endsWith('/appearance/slots/payment'));
     expect(saved?.body).toMatchObject({ customEmojiId: ID, enabled: true, expectedVersion: null });
     expect(typeof (saved?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
+    // A save that went through closes the sheet.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
-    // Only a stored slot can be reset; the catalogue's own default has nothing to reset.
-    expect(within(payment).queryByRole('button', { name: t('web.appearance_reset') })).toBeNull();
-    const wallet = screen.getByText(t('web.appearance_slot_wallet')).closest('tr')!;
+    fireEvent.click(screen.getByRole('button', { name: t('web.appearance_slot_wallet') }));
+    const wallet = screen.getByRole('dialog', { name: t('web.appearance_slot_wallet') });
     fireEvent.click(within(wallet).getByRole('button', { name: t('web.appearance_reset') }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.endsWith('/appearance/slots/wallet/reset'))).toBe(
@@ -100,6 +114,42 @@ describe('the appearance page', () => {
     // The reset names the version it was read at, so a stale one is a conflict server-side.
     const resetCall = api.calls.find((call) => call.url.endsWith('/appearance/slots/wallet/reset'));
     expect(resetCall?.body).toMatchObject({ expectedVersion: 3 });
+  });
+
+  it('keeps a slot’s unsaved edit when its sheet closes, marks the row and guards the page', async () => {
+    const api = stubApi([route()]);
+    renderPage(<AppearancePage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.appearance_slot_payment') }));
+    const sheet = screen.getByRole('dialog', { name: t('web.appearance_slot_payment') });
+    fireEvent.change(within(sheet).getByRole('textbox'), { target: { value: ID } });
+    fireEvent.click(within(sheet).getByRole('button', { name: t('web.close') }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    const row = document.querySelector('tr[data-slot="payment"]') as HTMLElement;
+    expect(within(row).getByText(t('web.ob_unsaved_row'))).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('button', { name: t('web.appearance_slot_payment') }));
+    expect(
+      within(screen.getByRole('dialog', { name: t('web.appearance_slot_payment') })).getByRole(
+        'textbox',
+      ),
+    ).toHaveValue(ID);
+    // Typing saved nothing.
+    expect(api.calls.filter((call) => call.method !== 'GET')).toHaveLength(0);
+  });
+
+  it('keeps the category colours and the QR background in their own tabs, mounted', async () => {
+    stubApi([route()]);
+    renderPage(<AppearancePage denied={false} mayEdit />);
+    await screen.findByRole('button', { name: t('web.appearance_slot_payment') });
+    const tab = (label: string) => screen.getByRole('tab', { name: label });
+    expect(tab(t('web.appearance_slots_title'))).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(tab(t('web.qrt_title')));
+    expect(tab(t('web.qrt_title'))).toHaveAttribute('aria-selected', 'true');
+    // The slots are hidden, not unmounted: their drafts survive the switch.
+    const slots = document.querySelector('tr[data-slot="payment"]') as HTMLElement;
+    expect(slots.closest('[hidden]')).not.toBeNull();
+    fireEvent.click(tab(t('web.cc_title')));
+    expect(tab(t('web.cc_title'))).toHaveAttribute('aria-selected', 'true');
   });
 
   it('tells the operator what Telegram answered — a refused test is not "sent"', async () => {

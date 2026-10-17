@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { OrdersPage } from '../../apps/web/src/pages/orders';
 import { ServicesPage } from '../../apps/web/src/pages/services';
 import { LIST_SEARCH_DEBOUNCE_MS, ListFreshness } from '../../apps/web/src/ui/list-search';
@@ -7,6 +7,7 @@ import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, order, renderPage, stubApi } from './harness';
 import { UsersPage } from '../../apps/web/src/pages/users';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Roadmap B1/B4: the list polish on /orders and /services (and, through the same
@@ -32,6 +33,8 @@ function LiveServices() {
   return <ServicesPage route={route} denied={false} />;
 }
 
+const TAG = '019210ab-cdef-7012-8345-00000000a001';
+
 const ordersList = [{ url: '/orders', body: { orders: [], nextCursor: null } }];
 const orderReads = (calls: readonly { url: string; method: string }[]) =>
   calls.filter(
@@ -52,8 +55,8 @@ describe('how fresh a list is', () => {
     const before = orderReads(api.calls).length;
     fireEvent.click(screen.getByRole('button', { name: t('web.list_refresh') }));
     await waitFor(() => expect(orderReads(api.calls).length).toBe(before + 1));
-    // Same filters: the refresh re-reads THIS list, not a fresh one.
-    expect(new URL(orderReads(api.calls).at(-1)!.url, 'http://x').search).toBe('');
+    // Same filters: the refresh re-reads THIS list, not a fresh one (ten a page, W1.8).
+    expect(new URL(orderReads(api.calls).at(-1)!.url, 'http://x').search).toBe('?limit=10');
   });
 
   it('draws nothing before the first answer, and is withdrawn once the list is refused', async () => {
@@ -79,14 +82,17 @@ describe('how fresh a list is', () => {
 });
 
 describe('clearing every filter at once', () => {
-  it('is offered only while a filter is applied, and clears all of them in one navigation', async () => {
-    navigate('/orders?state=PAID&q=ali', { replace: true, force: true });
-    stubApi(ordersList);
-    renderPage(<LiveOrders />);
-    const clear = await screen.findByRole('button', { name: t('web.list_filters_clear') });
+  it('is offered once two filters are applied, and clears them and the search in one navigation', async () => {
+    navigate(`/users?status=BLOCKED&tag=${TAG}&q=ali`, { replace: true, force: true });
+    stubApi([
+      { url: '/users', body: { customers: [], nextCursor: null } },
+      { url: '/customer-tags', body: { tags: [] } },
+    ]);
+    renderPage(<LiveUsers />);
+    const clear = await screen.findByRole('button', { name: t('web.filters_clear_all') });
     fireEvent.click(clear);
     await waitFor(() => expect(window.location.search).toBe(''));
-    expect(screen.queryByRole('button', { name: t('web.list_filters_clear') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.filters_clear_all') })).toBeNull();
   });
 
   it('clears the service list filters and its cursor together', async () => {
@@ -96,7 +102,8 @@ describe('clearing every filter at once', () => {
     });
     stubApi([{ url: '/services', body: { services: [], nextCursor: null } }]);
     renderPage(<LiveServices />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.list_filters_clear') }));
+    // Two filters applied: the bar offers «پاک کردن همه», which takes the cursor with them.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.filters_clear_all') }));
     await waitFor(() => expect(window.location.search).toBe(''));
   });
 
@@ -105,7 +112,7 @@ describe('clearing every filter at once', () => {
     stubApi(ordersList);
     renderPage(<LiveOrders />);
     await screen.findByText(/^خوانده‌شده در /);
-    expect(screen.queryByRole('button', { name: t('web.list_filters_clear') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.filters_clear_all') })).toBeNull();
   });
 });
 
@@ -140,16 +147,21 @@ describe('the cursor trail after a filter change', () => {
       .filter((c) => c.method === 'GET' && new URL(c.url, 'http://x').pathname.endsWith(path))
       .at(-1)!;
 
-  // `GET /orders` pages ascending, so its "next" button is «تازه‌تر».
+  // Every list's pager reads «قبلی / بعدی» (W1.8).
   it('starts the orders list again from its first page when every filter is cleared', async () => {
     navigate('/orders', { replace: true, force: true });
     const api = stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: 'C2' } }]);
     renderPage(<LiveOrders />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.newer') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('cursor=C2'));
-    fireEvent.click(screen.getByRole('button', { name: t('web.order_state_paid') }));
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.order_state_paid') }),
+    );
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('state=PAID'));
-    fireEvent.click(await screen.findByRole('button', { name: t('web.list_filters_clear') }));
+    // The filter's own «همه» puts the list back to unfiltered (one filter: no «پاک کردن همه»).
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.users_filter_all') }),
+    );
     await waitFor(() => expect(window.location.search).toBe(''));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).not.toContain('state='));
     expect(lastRead(api.calls, '/orders').url).not.toContain('cursor=');
@@ -160,7 +172,7 @@ describe('the cursor trail after a filter change', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: 'C2' } }]);
     renderPage(<LiveOrders />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.newer') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('cursor=C2'));
     const box = screen.getByLabelText(t('web.list_search_label'));
     fireEvent.change(box, { target: { value: 'alir' } });
@@ -180,16 +192,21 @@ describe('the cursor trail after a filter change', () => {
       { url: '/customer-tags', body: { tags: [] } },
     ]);
     renderPage(<LiveUsers />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.newer') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() => expect(lastRead(api.calls, '/users').url).toContain('cursor=C2'));
-    fireEvent.click(screen.getByRole('button', { name: t('web.user_status_blocked') }));
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.user_status_blocked') }),
+    );
     await waitFor(() => expect(lastRead(api.calls, '/users').url).toContain('status=BLOCKED'));
-    fireEvent.click(await screen.findByRole('button', { name: t('web.list_filters_clear') }));
+    // The filter's own «همه» puts the list back to unfiltered (one filter: no «پاک کردن همه»).
+    fireEvent.click(
+      within(openFilterPanel()).getByRole('button', { name: t('web.users_filter_all') }),
+    );
     await waitFor(() => expect(window.location.search).toBe(''));
     // The first page of the unfiltered list (served from cache here, so asked of the pager):
     // no trail behind it, so nothing to go back to.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: t('web.older') })).toBeDisabled(),
+      expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled(),
     );
     expect(lastRead(api.calls, '/users').url).not.toContain('cursor=');
   });
@@ -245,16 +262,16 @@ describe('the freshness line', () => {
 
 describe('clearing filters while a search is still being typed (N5)', () => {
   it('empties the box too, so no unapplied text suggests a search', async () => {
-    navigate('/orders?state=PAID', { replace: true, force: true });
+    navigate('/services?state=ACTIVE&deliveryState=FAILED', { replace: true, force: true });
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubApi(ordersList);
-    renderPage(<LiveOrders />);
+    stubApi([{ url: '/services', body: { services: [], nextCursor: null } }]);
+    renderPage(<LiveServices />);
     const box = (await screen.findByLabelText(t('web.list_search_label'))) as HTMLInputElement;
     fireEvent.change(box, { target: { value: 'ab' } });
-    fireEvent.click(screen.getByRole('button', { name: t('web.list_filters_clear') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.filters_clear_all') }));
     await waitFor(() => expect(window.location.search).toBe(''));
     await act(() => vi.advanceTimersByTimeAsync(LIST_SEARCH_DEBOUNCE_MS + 250));
-    expect(box.value).toBe('');
+    expect((screen.getByLabelText(t('web.list_search_label')) as HTMLInputElement).value).toBe('');
     expect(window.location.search).toBe('');
   });
 });

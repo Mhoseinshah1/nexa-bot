@@ -8,6 +8,7 @@ import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
 import { capabilityRegistry, event, panel, renderPage, stubApi } from './harness';
 import { formatNumber } from '../../apps/web/src/format';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Two defect classes the fifth review found, kept together because they are the
@@ -472,7 +473,7 @@ describe('the archive filter and the cursor that belongs to it', () => {
 
     // Page forward inside the ARCHIVE, so a trail exists. Forward is NEWER on
     // the ascending panel keyset.
-    fireEvent.click(screen.getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('cursor=archived-cursor-1'))).toBe(true);
     });
@@ -547,7 +548,7 @@ describe('the archive filter and the cursor that belongs to it', () => {
       resolve(routeWith('archived=only'), ['panels.view']).element as ReactElement,
     );
     await screen.findByText('row 0');
-    fireEvent.click(screen.getByRole('button', { name: 'تازه‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('cursor='))).toBe(true);
     });
@@ -558,7 +559,7 @@ describe('the archive filter and the cursor that belongs to it', () => {
     // to a position in a list they are no longer looking at. `CursorPager`
     // always renders both buttons and disables them, so the assertion is on
     // the disabled state, not on absence.
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled();
   });
 });
 

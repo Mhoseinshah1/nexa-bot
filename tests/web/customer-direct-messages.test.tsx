@@ -4,6 +4,8 @@ import type * as TicketsModule from '../../apps/web/src/pages/tickets';
 import type { PickedReplyFile } from '../../apps/web/src/pages/tickets';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { customer, renderPage, stubApi } from './harness';
+import { openC360Tab } from './c360-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /*
  * The file read, held open by the test: each pick's `readReplyFile` resolves only when the
@@ -110,8 +112,10 @@ describe('Phase A2 — direct message on Customer 360', () => {
   it('draws neither the button nor the history without their permissions, and asks nothing', async () => {
     const api = stubApi(routes());
     renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
-    await screen.findByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' });
+    await screen.findByRole('tablist');
     expect(screen.queryByRole('button', { name: 'ارسال پیام' })).toBeNull();
+    // No «پیام‌ها» tab at all without either permission.
+    expect(screen.queryByRole('tab', { name: t('web.c360_tab_messages') })).toBeNull();
     expect(screen.queryByText('پیام‌های مستقیم')).toBeNull();
     expect(api.calls.some((call) => call.url.includes('/direct-messages'))).toBe(false);
   });
@@ -144,6 +148,7 @@ describe('Phase A2 — direct message on Customer 360', () => {
       ]),
     );
     renderPage(<UserDetailPage id={ID} {...OFF} mayViewMessages denied={false} />);
+    await openC360Tab('messages');
     const card = (await screen.findByText('پیام‌های مستقیم', { selector: 'h2' })).closest(
       '.card',
     ) as HTMLElement;
@@ -291,10 +296,10 @@ describe('Phase A2 — direct message on Customer 360', () => {
     fireEvent.change(within(dialog).getByLabelText('متن پیام'), { target: { value: 'سلام' } });
     pick(dialog, 'old-invoice.pdf');
     await within(dialog).findByText('در حال خواندن فایل…');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'حذف پیوست' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.file_remove_label') }));
     // The removed file's read lands now; it must not bring the file back.
     await finishRead('old-invoice.pdf', readyFile('old-invoice.pdf'));
-    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: t('web.file_remove_label') })).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'پیش‌نمایش' }));
     expect(within(dialog).queryByText('old-invoice.pdf')).toBeNull();
     fireEvent.click(await within(dialog).findByRole('button', { name: 'تأیید و ارسال' }));
@@ -353,7 +358,7 @@ describe('Phase A2 — direct message on Customer 360', () => {
     );
     dialog = await openComposer();
     expect((within(dialog).getByLabelText('متن پیام') as HTMLTextAreaElement).value).toBe('');
-    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: t('web.file_remove_label') })).toBeNull();
   });
 
   it('discards a draft with a file when Escape closes the composer and the discard is confirmed', async () => {
@@ -362,7 +367,7 @@ describe('Phase A2 — direct message on Customer 360', () => {
     let dialog = await openComposer();
     fireEvent.change(within(dialog).getByLabelText('متن پیام'), { target: { value: 'پیوست' } });
     pick(dialog, 'receipt.pdf');
-    await within(dialog).findByRole('button', { name: 'حذف پیوست' });
+    await within(dialog).findByRole('button', { name: t('web.file_remove_label') });
     fireEvent.keyDown(dialog, { key: 'Escape' });
     fireEvent.click(await screen.findByRole('button', { name: 'دورانداختن تغییرات' }));
     await waitFor(() =>
@@ -370,6 +375,6 @@ describe('Phase A2 — direct message on Customer 360', () => {
     );
     dialog = await openComposer();
     expect((within(dialog).getByLabelText('متن پیام') as HTMLTextAreaElement).value).toBe('');
-    expect(within(dialog).queryByRole('button', { name: 'حذف پیوست' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: t('web.file_remove_label') })).toBeNull();
   });
 });

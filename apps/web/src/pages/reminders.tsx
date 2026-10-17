@@ -29,7 +29,7 @@ import {
   Disclosure,
   Badge,
   Banner,
-  Card,
+  Ltr,
   Num,
   PageHead,
   StateSwitch,
@@ -37,7 +37,11 @@ import {
   useToast,
   useUnsavedChanges,
 } from '../ui/kit';
-import { DirtyScope, SectionNav, UnsavedCount, useDirtySet, useReportDirty } from './ops-b-layout';
+import { DirtyScope, UnsavedCount, useDirtySet, useReportDirty } from './ops-b-layout';
+import { KeptSheet } from './editor-layout';
+import { fill } from './bot-buttons/canvas';
+import { Icon } from '../ui/icons';
+import { DateField } from '../ui/date-field';
 import { ErrorReport } from './settings';
 import { TemplateCard } from './content';
 import { featurePresentation } from './features-catalogue';
@@ -118,17 +122,212 @@ export function RemindersPage({
     early.value <= first.value;
   const selling = (settingOf('sales.currency')?.value ?? 'IRT') as SalesCurrencyCode;
 
-  const templateBlock = (keys: readonly string[]) => (
-    <TemplateBlock
-      templates={templatesOf(keys)}
-      mayView={mayViewTemplates}
-      mayEdit={mayEditTemplates}
-    />
-  );
-
   const { dirty, report } = useDirtySet();
   useUnsavedChanges(dirty.size > 0);
   const unsavedIn = (keys: readonly string[]) => keys.some((key) => dirty.has(key));
+
+  /** Which section's sheet is open, and whether it is the settings or the messages. */
+  const [sheet, setSheet] = useState<{ id: ReminderSection; part: 'config' | 'texts' } | null>(
+    null,
+  );
+  const closeSheet = useCallback(() => setSheet(null), []);
+
+  const value = (key: string) => settingOf(key)?.value;
+  const days = (key: string) => {
+    const shown = value(key);
+    return typeof shown === 'number' ? formatNumber(shown) : '—';
+  };
+  const remaining = (key: string) => {
+    const used = value(key);
+    return typeof used === 'number' ? formatNumber(usageRemainingPercent(used)) : '—';
+  };
+  const time = (key: string) => {
+    const shown = value(key);
+    return typeof shown === 'string' ? shown : '—';
+  };
+  const threshold = asMoney(value('wallet.low_balance.threshold'));
+
+  const sections: readonly ReminderSectionView[] = [
+    {
+      id: 'expiry',
+      title: t('web.reminders_expiry_title'),
+      hint: t('web.reminders_expiry_hint'),
+      main: { key: 'service_expiry_reminders', label: t('web.reminders_flag_expiry') },
+      flags: ['service_expiry_reminders', 'service_expiry_day_reminder', 'service_expired_notice'],
+      keys: [
+        'reminders.expiry_early_days',
+        'reminders.expiry_first_days',
+        'reminders.expiry_second_days',
+      ],
+      templates: EXPIRY_TEMPLATES,
+      summary: (
+        <>
+          <Ltr mono={false}>
+            {[
+              days('reminders.expiry_early_days'),
+              days('reminders.expiry_first_days'),
+              days('reminders.expiry_second_days'),
+            ].join(' · ')}
+          </Ltr>{' '}
+          {t('web.reminders_unit_days')}
+        </>
+      ),
+      body: (
+        <>
+          <FlagRow
+            flag={flagOf('service_expiry_day_reminder')}
+            label={t('web.reminders_flag_expiry_day')}
+            hint={t('web.reminders_day_hint')}
+            mayEdit={mayEdit}
+          />
+          <FlagRow
+            flag={flagOf('service_expired_notice')}
+            label={t('web.reminders_flag_expired')}
+            mayEdit={mayEdit}
+          />
+          <NumberRow
+            setting={early}
+            label={t('web.reminders_early_days')}
+            hint={t('web.reminders_early_days_hint')}
+            unit={t('web.reminders_unit_days')}
+            min={0}
+            max={30}
+            mayEdit={mayEdit}
+          />
+          {earlyInert && (
+            <div className="rem-note">
+              <Banner tone="warn">{t('web.reminders_early_inert')}</Banner>
+            </div>
+          )}
+          <NumberRow
+            setting={first}
+            label={t('web.reminders_first_days')}
+            hint={t('web.reminders_days_hint')}
+            unit={t('web.reminders_unit_days')}
+            min={1}
+            max={30}
+            mayEdit={mayEdit}
+          />
+          <NumberRow
+            setting={settingOf('reminders.expiry_second_days')}
+            label={t('web.reminders_second_days')}
+            hint={t('web.reminders_days_hint')}
+            unit={t('web.reminders_unit_days')}
+            min={1}
+            max={30}
+            mayEdit={mayEdit}
+          />
+        </>
+      ),
+    },
+    {
+      id: 'usage',
+      title: t('web.reminders_usage_title'),
+      hint: t('web.reminders_usage_hint'),
+      main: { key: 'service_usage_reminders', label: t('web.reminders_flag_usage') },
+      flags: ['service_usage_reminders'],
+      keys: USAGE_SETTINGS,
+      templates: USAGE_TEMPLATES,
+      summary: (
+        <>
+          <Ltr mono={false}>{USAGE_SETTINGS.map(remaining).join(' · ')}</Ltr>{' '}
+          {t('web.reminders_unit_percent')}
+        </>
+      ),
+      body: (
+        <>
+          {USAGE_ROWS.map(([settingKey, label]) => (
+            <NumberRow
+              key={settingKey}
+              setting={settingOf(settingKey)}
+              label={t(label)}
+              hint={t('web.reminders_usage_values_hint')}
+              unit={t('web.reminders_unit_percent')}
+              min={0}
+              max={USAGE_REMINDER_PERCENT_MAX - 1}
+              // Stored as percent USED; shown and typed as percent REMAINING.
+              toShown={usageRemainingPercent}
+              toStored={usageRemainingPercent}
+              mayEdit={mayEdit}
+            />
+          ))}
+        </>
+      ),
+    },
+    {
+      id: 'wallet',
+      title: t('web.reminders_wallet_title'),
+      hint: t('web.reminders_wallet_hint'),
+      main: { key: 'wallet_low_balance_reminders', label: t('web.reminders_flag_wallet') },
+      flags: ['wallet_low_balance_reminders'],
+      keys: ['wallet.low_balance.threshold'],
+      templates: WALLET_TEMPLATES,
+      summary:
+        value('wallet.low_balance.threshold') === undefined ? '—' : formatMoneyText(threshold),
+      body: (
+        <MoneyRow
+          setting={settingOf('wallet.low_balance.threshold')}
+          selling={selling}
+          mayEdit={mayEdit}
+        />
+      ),
+    },
+    {
+      id: 'pending',
+      title: t('web.reminders_pending_title'),
+      hint: t('web.reminders_pending_hint'),
+      main: { key: 'payment_pending_reminders', label: t('web.reminders_flag_pending') },
+      flags: ['payment_pending_reminders'],
+      keys: ['reminders.payment_pending_minutes'],
+      templates: PENDING_TEMPLATES,
+      summary: (
+        <>
+          {days('reminders.payment_pending_minutes')} {t('web.unit_minutes')}
+        </>
+      ),
+      body: (
+        <NumberRow
+          setting={settingOf('reminders.payment_pending_minutes')}
+          label={t('web.reminders_pending_minutes')}
+          hint={t('web.reminders_pending_minutes_hint')}
+          unit={t('web.unit_minutes')}
+          min={PENDING_PAYMENT_REMINDER_MINUTES_MIN}
+          max={PENDING_PAYMENT_REMINDER_MINUTES_MAX}
+          mayEdit={mayEdit}
+        />
+      ),
+    },
+    {
+      id: 'quiet',
+      title: t('web.reminders_quiet_title'),
+      hint: t('web.reminders_quiet_hint'),
+      main: { key: 'reminder_quiet_hours', label: t('web.reminders_flag_quiet') },
+      flags: ['reminder_quiet_hours'],
+      keys: ['reminders.quiet_hours_start', 'reminders.quiet_hours_end'],
+      templates: [],
+      summary: (
+        <Ltr>{`${time('reminders.quiet_hours_start')} ← ${time('reminders.quiet_hours_end')}`}</Ltr>
+      ),
+      body: (
+        <>
+          <TimeRow
+            setting={settingOf('reminders.quiet_hours_start')}
+            label={t('web.reminders_quiet_start')}
+            mayEdit={mayEdit}
+          />
+          <TimeRow
+            setting={settingOf('reminders.quiet_hours_end')}
+            label={t('web.reminders_quiet_end')}
+            mayEdit={mayEdit}
+          />
+          <QuietWindowNote
+            start={settingOf('reminders.quiet_hours_start')?.value}
+            end={settingOf('reminders.quiet_hours_end')?.value}
+          />
+        </>
+      ),
+    },
+  ];
 
   return (
     <>
@@ -140,207 +339,136 @@ export function RemindersPage({
       <StateSwitch query={settings} denied={denied} isEmpty={false}>
         {ready && (
           <DirtyScope report={report}>
-            <div className="ob-sectioned">
-              <SectionNav
-                label={t('web.ob_sections')}
-                items={[
-                  {
-                    id: 'reminders-expiry',
-                    label: t('web.reminders_expiry_title'),
-                    unsaved: unsavedIn([
-                      'reminders.expiry_early_days',
-                      'reminders.expiry_first_days',
-                      'reminders.expiry_second_days',
-                      ...EXPIRY_TEMPLATES,
-                    ]),
-                  },
-                  {
-                    id: 'reminders-usage',
-                    label: t('web.reminders_usage_title'),
-                    unsaved: unsavedIn([...USAGE_SETTINGS, ...USAGE_TEMPLATES]),
-                  },
-                  {
-                    id: 'reminders-wallet',
-                    label: t('web.reminders_wallet_title'),
-                    unsaved: unsavedIn(['wallet.low_balance.threshold', ...WALLET_TEMPLATES]),
-                  },
-                  {
-                    id: 'reminders-pending',
-                    label: t('web.reminders_pending_title'),
-                    unsaved: unsavedIn(['reminders.payment_pending_minutes', ...PENDING_TEMPLATES]),
-                  },
-                  {
-                    id: 'reminders-quiet',
-                    label: t('web.reminders_quiet_title'),
-                    unsaved: unsavedIn([
-                      'reminders.quiet_hours_start',
-                      'reminders.quiet_hours_end',
-                    ]),
-                  },
-                ]}
-              />
-              <div className="stack">
-                <Card
-                  id="reminders-expiry"
-                  title={t('web.reminders_expiry_title')}
-                  hint={t('web.reminders_expiry_hint')}
-                  tight
-                >
-                  <FlagRow
-                    flag={flagOf('service_expiry_reminders')}
-                    label={t('web.reminders_flag_expiry')}
-                    mayEdit={mayEdit}
-                  />
-                  <FlagRow
-                    flag={flagOf('service_expiry_day_reminder')}
-                    label={t('web.reminders_flag_expiry_day')}
-                    hint={t('web.reminders_day_hint')}
-                    mayEdit={mayEdit}
-                  />
-                  <FlagRow
-                    flag={flagOf('service_expired_notice')}
-                    label={t('web.reminders_flag_expired')}
-                    mayEdit={mayEdit}
-                  />
-                  <NumberRow
-                    setting={early}
-                    label={t('web.reminders_early_days')}
-                    hint={t('web.reminders_early_days_hint')}
-                    unit={t('web.reminders_unit_days')}
-                    min={0}
-                    max={30}
-                    mayEdit={mayEdit}
-                  />
-                  {earlyInert && (
-                    <div className="rem-note">
-                      <Banner tone="warn">{t('web.reminders_early_inert')}</Banner>
+            <div className="bx-remgrid">
+              {sections.map((section) => {
+                const main = flagOf(section.main.key);
+                const on = section.flags.filter((key) => flagOf(key)?.enabled === true).length;
+                const invalid = section.keys.some(
+                  (key) => settingOf(key)?.storedValueInvalid === true,
+                );
+                return (
+                  <section
+                    key={section.id}
+                    className={main?.enabled === false ? 'card bx-rem off' : 'card bx-rem'}
+                    aria-labelledby={`reminders-${section.id}-title`}
+                    data-testid={`reminders-${section.id}`}
+                  >
+                    <div className="card-body">
+                      <div className="bx-rem-h">
+                        <div>
+                          <h2 id={`reminders-${section.id}-title`}>
+                            {section.title}
+                            {unsavedIn([...section.keys, ...section.templates]) && (
+                              <Badge tone="warn" dot>
+                                {t('web.ob_unsaved_row')}
+                              </Badge>
+                            )}
+                          </h2>
+                          <p className="muted small">{section.hint}</p>
+                        </div>
+                      </div>
+                      <FlagRow flag={main} label={section.main.label} mayEdit={mayEdit} />
+                      <div className="bx-rem-s">
+                        <span className="bx-big">{section.summary}</span>
+                        {section.flags.length > 1 && (
+                          <span className="muted small">
+                            {fill(t('web.bx_rem_flags_on'), {
+                              n: formatNumber(on),
+                              m: formatNumber(section.flags.length),
+                            })}
+                          </span>
+                        )}
+                      </div>
+                      {invalid && <Banner tone="danger">{t('web.stored_value_invalid')}</Banner>}
+                      <div className="bx-acts">
+                        <button
+                          type="button"
+                          className="btn sm"
+                          aria-haspopup="dialog"
+                          onClick={() => setSheet({ id: section.id, part: 'config' })}
+                        >
+                          <Icon name="sliders" />
+                          {t('web.bx_rem_configure')}
+                        </button>
+                        {section.templates.length > 0 && (
+                          <button
+                            type="button"
+                            className="btn sm ghost"
+                            aria-haspopup="dialog"
+                            onClick={() => setSheet({ id: section.id, part: 'texts' })}
+                          >
+                            <Icon name="content" />
+                            {t('web.reminders_templates')}
+                            {mayViewTemplates && (
+                              <span className="cnt num">
+                                {formatNumber(templatesOf(section.templates).length)}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  )}
-                  <NumberRow
-                    setting={first}
-                    label={t('web.reminders_first_days')}
-                    hint={t('web.reminders_days_hint')}
-                    unit={t('web.reminders_unit_days')}
-                    min={1}
-                    max={30}
-                    mayEdit={mayEdit}
-                  />
-                  <NumberRow
-                    setting={settingOf('reminders.expiry_second_days')}
-                    label={t('web.reminders_second_days')}
-                    hint={t('web.reminders_days_hint')}
-                    unit={t('web.reminders_unit_days')}
-                    min={1}
-                    max={30}
-                    mayEdit={mayEdit}
-                  />
-                  {templateBlock(EXPIRY_TEMPLATES)}
-                </Card>
-
-                <Card
-                  id="reminders-usage"
-                  title={t('web.reminders_usage_title')}
-                  hint={t('web.reminders_usage_hint')}
-                  tight
-                >
-                  <FlagRow
-                    flag={flagOf('service_usage_reminders')}
-                    label={t('web.reminders_flag_usage')}
-                    mayEdit={mayEdit}
-                  />
-                  {USAGE_ROWS.map(([settingKey, label]) => (
-                    <NumberRow
-                      key={settingKey}
-                      setting={settingOf(settingKey)}
-                      label={t(label)}
-                      hint={t('web.reminders_usage_values_hint')}
-                      unit={t('web.reminders_unit_percent')}
-                      min={0}
-                      max={USAGE_REMINDER_PERCENT_MAX - 1}
-                      // Stored as percent USED; shown and typed as percent REMAINING.
-                      toShown={usageRemainingPercent}
-                      toStored={usageRemainingPercent}
-                      mayEdit={mayEdit}
-                    />
-                  ))}
-                  {templateBlock(USAGE_TEMPLATES)}
-                </Card>
-
-                <Card
-                  id="reminders-wallet"
-                  title={t('web.reminders_wallet_title')}
-                  hint={t('web.reminders_wallet_hint')}
-                  tight
-                >
-                  <FlagRow
-                    flag={flagOf('wallet_low_balance_reminders')}
-                    label={t('web.reminders_flag_wallet')}
-                    mayEdit={mayEdit}
-                  />
-                  <MoneyRow
-                    setting={settingOf('wallet.low_balance.threshold')}
-                    selling={selling}
-                    mayEdit={mayEdit}
-                  />
-                  {templateBlock(WALLET_TEMPLATES)}
-                </Card>
-
-                <Card
-                  id="reminders-pending"
-                  title={t('web.reminders_pending_title')}
-                  hint={t('web.reminders_pending_hint')}
-                  tight
-                >
-                  <FlagRow
-                    flag={flagOf('payment_pending_reminders')}
-                    label={t('web.reminders_flag_pending')}
-                    mayEdit={mayEdit}
-                  />
-                  <NumberRow
-                    setting={settingOf('reminders.payment_pending_minutes')}
-                    label={t('web.reminders_pending_minutes')}
-                    hint={t('web.reminders_pending_minutes_hint')}
-                    unit={t('web.unit_minutes')}
-                    min={PENDING_PAYMENT_REMINDER_MINUTES_MIN}
-                    max={PENDING_PAYMENT_REMINDER_MINUTES_MAX}
-                    mayEdit={mayEdit}
-                  />
-                  {templateBlock(PENDING_TEMPLATES)}
-                </Card>
-
-                <Card
-                  id="reminders-quiet"
-                  title={t('web.reminders_quiet_title')}
-                  hint={t('web.reminders_quiet_hint')}
-                  tight
-                >
-                  <FlagRow
-                    flag={flagOf('reminder_quiet_hours')}
-                    label={t('web.reminders_flag_quiet')}
-                    mayEdit={mayEdit}
-                  />
-                  <TimeRow
-                    setting={settingOf('reminders.quiet_hours_start')}
-                    label={t('web.reminders_quiet_start')}
-                    mayEdit={mayEdit}
-                  />
-                  <TimeRow
-                    setting={settingOf('reminders.quiet_hours_end')}
-                    label={t('web.reminders_quiet_end')}
-                    mayEdit={mayEdit}
-                  />
-                  <QuietWindowNote
-                    start={settingOf('reminders.quiet_hours_start')?.value}
-                    end={settingOf('reminders.quiet_hours_end')?.value}
-                  />
-                </Card>
-              </div>
+                  </section>
+                );
+              })}
             </div>
+            {/*
+             * Each section's rows and its messages live in sheets that are hidden, never
+             * unmounted: every row and template card keeps its own draft, and the page's
+             * unsaved count is fed by them.
+             */}
+            {sections.map((section) => (
+              <KeptSheet
+                key={`config-${section.id}`}
+                open={sheet?.id === section.id && sheet.part === 'config'}
+                onClose={closeSheet}
+                title={section.title}
+                hint={section.hint}
+              >
+                {section.body}
+              </KeptSheet>
+            ))}
+            {sections
+              .filter((section) => section.templates.length > 0)
+              .map((section) => (
+                <KeptSheet
+                  key={`texts-${section.id}`}
+                  open={sheet?.id === section.id && sheet.part === 'texts'}
+                  onClose={closeSheet}
+                  title={`${section.title} — ${t('web.reminders_templates')}`}
+                  wide
+                >
+                  <TemplateBlock
+                    templates={templatesOf(section.templates)}
+                    mayView={mayViewTemplates}
+                    mayEdit={mayEditTemplates}
+                  />
+                </KeptSheet>
+              ))}
           </DirtyScope>
         )}
       </StateSwitch>
     </>
   );
+}
+
+type ReminderSection = 'expiry' | 'usage' | 'wallet' | 'pending' | 'quiet';
+
+/** One reminder family: its card on the page and what its sheets hold. */
+interface ReminderSectionView {
+  readonly id: ReminderSection;
+  readonly title: string;
+  readonly hint: string;
+  /** The family's own switch, drawn on its card. */
+  readonly main: { readonly key: string; readonly label: string };
+  /** Every switch of the family, the main one first — for «n of m on». */
+  readonly flags: readonly string[];
+  readonly keys: readonly string[];
+  readonly templates: readonly string[];
+  /** The values in force, in words. */
+  readonly summary: ReactNode;
+  /** The sheet: the family's other switches and every value row with its own save. */
+  readonly body: ReactNode;
 }
 
 /** Invalidates everything this screen reads, so the other screens agree with it too. */
@@ -816,15 +944,7 @@ function TimeRow({
       saving={save.isPending}
       onSubmit={onSubmit}
       field={
-        <input
-          id={id}
-          className="input ltr mono rem-time"
-          type="time"
-          step={60}
-          value={draft}
-          disabled={!mayEdit}
-          onChange={(event) => setDraft(event.target.value)}
-        />
+        <DateField id={id} mode="time" value={draft} disabled={!mayEdit} onChange={setDraft} />
       }
     >
       {setting.storedValueInvalid && <Banner tone="danger">{t('web.stored_value_invalid')}</Banner>}

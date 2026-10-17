@@ -86,7 +86,17 @@ describe('the diagnostics tab', () => {
     expect(within(stuck).getByRole('link').getAttribute('href')).toBe(`/services/${SERVICE_ID}`);
 
     const outbox = screen.getByRole('table', { name: t('web.diagnostics_outbox_title') });
+    // An event type the contract does not name stays raw; a known one reads in Persian with
+    // the raw type in its tooltip (W5).
     expect(outbox.textContent).toContain('PaymentSettled');
+    expect(within(outbox).getByText(t('web.outbox_event_refund_completed'))).toHaveAttribute(
+      'title',
+      'RefundCompleted',
+    );
+    expect(within(outbox).getByText(t('web.outbox_aggregate_payment'))).toHaveAttribute(
+      'title',
+      'Payment',
+    );
     expect(outbox.textContent).toContain('[url]');
     expect(screen.getByText(t('web.diagnostics_outbox_failing_banner'))).toBeInTheDocument();
   });

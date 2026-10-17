@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  OPERATION_STATES,
+  PROVIDER_FAILURE_KINDS,
   isServiceRefundRejectionReason,
+  type OperationState,
+  type ProviderFailureKind,
   type ServiceRefundRequestState,
   type ServiceRefundRequestView,
 } from '@nexa/contracts';
@@ -14,7 +18,7 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import {
   Badge,
   Banner,
@@ -35,6 +39,9 @@ import {
   type Tone,
 } from '../ui/kit';
 import { messageFor } from './settings';
+import { Drawer } from '../ui/overlays';
+import { useConfirmedClose } from '../ui/unsaved';
+import { OPERATION_STATE_LABELS, OPERATION_STATE_TONES } from './services';
 
 /**
  * Customers' service refund requests in the Web Admin (WP19, brief §2.10): the smallest
@@ -63,21 +70,71 @@ const STATE_TONES: Readonly<Record<ServiceRefundRequestState, Tone>> = {
   FAILED: 'danger',
 };
 
+/**
+ * W5: what a FAILED request's `failureKind` means, in Persian. The server writes the
+ * deletion operation's provider failure kind, its terminal state when it carried none, or
+ * `RESERVATION_RELEASED` (the deletion succeeded but the refund's reservation had already
+ * been released). A value this map does not know is shown as the raw key, never blank.
+ */
+export const REFUND_FAILURE_LABELS: Readonly<
+  Record<ProviderFailureKind | 'RESERVATION_RELEASED', WebKey>
+> = {
+  AUTHENTICATION_FAILED: 'web.rr_fk_authentication_failed',
+  AUTHENTICATION_REQUIRES_INTERACTION: 'web.rr_fk_authentication_requires_interaction',
+  UNREACHABLE: 'web.rr_fk_unreachable',
+  TIMEOUT: 'web.rr_fk_timeout',
+  TLS_FAILED: 'web.rr_fk_tls_failed',
+  BLOCKED_TARGET: 'web.rr_fk_blocked_target',
+  RATE_LIMITED: 'web.rr_fk_rate_limited',
+  MALFORMED_RESPONSE: 'web.rr_fk_malformed_response',
+  PROVIDER_ERROR: 'web.rr_fk_provider_error',
+  PROVIDER_REFUSED: 'web.rr_fk_provider_refused',
+  UNSUPPORTED_CAPABILITY: 'web.rr_fk_unsupported_capability',
+  RESERVATION_RELEASED: 'web.rr_fk_reservation_released',
+};
+
+/** The Persian name of a failure kind (or of an operation state), or `null` when unknown. */
+export function refundFailureLabel(kind: string): string | null {
+  if (
+    (PROVIDER_FAILURE_KINDS as readonly string[]).includes(kind) ||
+    kind === 'RESERVATION_RELEASED'
+  ) {
+    return t(REFUND_FAILURE_LABELS[kind as ProviderFailureKind | 'RESERVATION_RELEASED']);
+  }
+  if ((OPERATION_STATES as readonly string[]).includes(kind)) {
+    return t(OPERATION_STATE_LABELS[kind as OperationState]);
+  }
+  return null;
+}
+
+/** A raw machine key as Persian text, the key kept in `title`; unknown → the raw key. */
+function Named({ raw, name }: { raw: string; name: string | null }) {
+  return name === null ? <Ltr>{raw}</Ltr> : <span title={raw}>{name}</span>;
+}
+
 /** Digits only, as a decimal STRING of minor units — never a float. */
 function digitsOf(value: string): string {
   const trimmed = value.trim();
   return /^[0-9]{1,19}$/u.test(trimmed) ? trimmed.replace(/^0+(?=[0-9])/u, '') : '0';
 }
 
-function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean) {
+function columns(
+  onLink: ReturnType<typeof useLinkHandler>,
+  withService: boolean,
+  decide?: (row: ServiceRefundRequestView) => ReactNode,
+) {
   const all: Column<ServiceRefundRequestView>[] = [
     {
       key: 'state',
       header: t('web.refund_state'),
       render: (row) => (
-        <Badge tone={STATE_TONES[row.state]} dot>
-          {t(STATE_LABELS[row.state])}
-        </Badge>
+        <>
+          <Badge tone={STATE_TONES[row.state]} dot>
+            {t(STATE_LABELS[row.state])}
+          </Badge>
+          {/* W3: the OPEN request's two decisions, under its state badge. */}
+          {row.state === 'OPEN' && decide !== undefined && decide(row)}
+        </>
       ),
     },
     {
@@ -140,14 +197,31 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
     {
       key: 'operation',
       header: t('web.service_refund_operation'),
-      // The frozen token, as the Telegram admin screen shows it: one word for one fact.
-      render: (row) => (row.operationState === null ? '—' : <Ltr>{row.operationState}</Ltr>),
+      // W5: the operation state's Persian chip; the frozen token stays in `title`.
+      render: (row) => {
+        if (row.operationState === null) return '—';
+        const known = (OPERATION_STATES as readonly string[]).includes(row.operationState)
+          ? (row.operationState as OperationState)
+          : null;
+        return known === null ? (
+          <Ltr>{row.operationState}</Ltr>
+        ) : (
+          <span title={row.operationState}>
+            <Badge tone={OPERATION_STATE_TONES[known]}>{t(OPERATION_STATE_LABELS[known])}</Badge>
+          </span>
+        );
+      },
     },
     {
       key: 'outcome',
       header: t('web.service_refund_outcome'),
       render: (row) =>
-        row.rejectionReason ?? (row.failureKind === null ? '—' : <Ltr>{row.failureKind}</Ltr>),
+        row.rejectionReason ??
+        (row.failureKind === null ? (
+          '—'
+        ) : (
+          <Named raw={row.failureKind} name={refundFailureLabel(row.failureKind)} />
+        )),
     },
     {
       key: 'created',
@@ -242,34 +316,87 @@ export function ServiceRefundRequestsCard({
         ) : (
           <DataTable
             caption={t('web.service_refunds')}
-            columns={columns(onLink, false)}
+            columns={columns(
+              onLink,
+              false,
+              mayDecide
+                ? (row) => <DecisionButtons key={row.id} request={row} serviceId={serviceId} />
+                : undefined,
+            )}
             rows={rows}
             rowKey={(row) => row.id}
             dense
           />
         )}
-        {open !== undefined &&
-          (mayDecide ? (
-            <DecisionForm key={open.id} request={open} serviceId={serviceId} />
-          ) : (
-            <Banner tone="info">{t('web.service_refund_denied')}</Banner>
-          ))}
+        {open !== undefined && !mayDecide && (
+          <Banner tone="info">{t('web.service_refund_denied')}</Banner>
+        )}
       </StateSwitch>
     </Card>
   );
 }
 
-function DecisionForm({
+/**
+ * W3: «تأیید و حذف سرویس» and «رد درخواست» as two small buttons in the OPEN row, each opening
+ * a drawer with the same fields, the same disabled-until-valid rule, the same toasts and the
+ * same error banner. The draft lives here, so a closed drawer keeps nothing it did not ask
+ * about: closing over a typed amount, a ticked box or a reason asks first; leaving the page
+ * asks too (`useUnsavedChanges`).
+ */
+function DecisionButtons({
   request,
   serviceId,
 }: {
   request: ServiceRefundRequestView;
   serviceId: string;
 }) {
-  const notify = useToast();
-  const queries = useQueryClient();
+  const [drawer, setDrawer] = useState<'approve' | 'reject' | null>(null);
+  /*
+   * The keys live HERE, in the row that outlives the drawer: a key kept after an unanswered
+   * failure (a 5xx that may have committed) must survive closing and reopening the drawer,
+   * or the retry is a second decision rather than the replay of the first.
+   */
   const approval = useSubmissionKey();
   const rejection = useSubmissionKey();
+  return (
+    <span className="wb-row-actions" role="group" aria-label={t('web.service_refund_decide')}>
+      <Button size="sm" variant="danger" onClick={() => setDrawer('approve')}>
+        {t('web.service_refund_approve')}
+      </Button>
+      <Button size="sm" onClick={() => setDrawer('reject')}>
+        {t('web.service_refund_reject')}
+      </Button>
+      {drawer !== null && (
+        <DecisionForm
+          request={request}
+          serviceId={serviceId}
+          part={drawer}
+          approval={approval}
+          rejection={rejection}
+          onClose={() => setDrawer(null)}
+        />
+      )}
+    </span>
+  );
+}
+
+function DecisionForm({
+  request,
+  serviceId,
+  part,
+  approval,
+  rejection,
+  onClose,
+}: {
+  request: ServiceRefundRequestView;
+  serviceId: string;
+  part: 'approve' | 'reject';
+  approval: SubmissionKey;
+  rejection: SubmissionKey;
+  onClose: () => void;
+}) {
+  const notify = useToast();
+  const queries = useQueryClient();
   const [amount, setAmount] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [reason, setReason] = useState('');
@@ -292,6 +419,7 @@ function DecisionForm({
     // round 7): say "deletion started" only while it is, never over a deletion that ended.
     onSuccess: ({ request: decided }) => {
       approval.settle();
+      onClose();
       if (decided.state === 'COMPLETED') {
         notify({ tone: 'ok', message: t('web.service_refund_completed_toast') });
       } else if (decided.state === 'FAILED') {
@@ -317,6 +445,7 @@ function DecisionForm({
       }),
     onSuccess: () => {
       rejection.settle();
+      onClose();
       notify({ tone: 'ok', message: t('web.service_refund_rejected_toast') });
       refresh();
     },
@@ -327,58 +456,66 @@ function DecisionForm({
   });
 
   const busy = approve.isPending || reject.isPending;
+  const dirty = amount.trim() !== '' || reason.trim() !== '' || confirmed;
   // A typed amount or reason is lost by navigating away; the guard asks first.
-  useUnsavedChanges(amount.trim() !== '' || reason.trim() !== '' || confirmed);
+  useUnsavedChanges(dirty);
+  const { requestClose, dialog } = useConfirmedClose(dirty, onClose);
   return (
-    <div className="ca-decision">
-      <div className="ca-decision-part ca-decision-approve">
-        <Field label={t('web.service_refund_amount')} htmlFor="service-refund-amount">
-          <Input
-            id="service-refund-amount"
-            size="sm"
-            value={amount}
-            inputMode="numeric"
-            maxLength={19}
-            onChange={(event) => setAmount(event.target.value)}
-          />
-        </Field>
-        <Checkbox
-          label={t('web.service_refund_confirm')}
-          checked={confirmed}
-          onChange={setConfirmed}
-        />
-        <div className="form-actions">
-          <Button
-            variant="danger"
-            size="sm"
-            disabled={busy || !confirmed || digitsOf(amount) === '0'}
-            onClick={() => approve.mutate()}
-          >
-            {t('web.service_refund_approve')}
-          </Button>
-        </div>
-      </div>
-      <div className="ca-decision-part">
-        <Field label={t('web.service_refund_reject_reason')} htmlFor="service-refund-reject">
-          <Input
-            id="service-refund-reject"
-            size="sm"
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </Field>
-        <div className="form-actions">
-          <Button
-            size="sm"
-            disabled={busy || !isServiceRefundRejectionReason(reason)}
-            onClick={() => reject.mutate()}
-          >
-            {t('web.service_refund_reject')}
-          </Button>
-        </div>
-      </div>
-      {approve.error !== null && <Banner tone="danger">{messageFor(approve.error)}</Banner>}
-      {reject.error !== null && <Banner tone="danger">{messageFor(reject.error)}</Banner>}
-    </div>
+    <>
+      <Drawer
+        open
+        onClose={requestClose}
+        title={t(part === 'approve' ? 'web.service_refund_approve' : 'web.service_refund_reject')}
+      >
+        {part === 'approve' ? (
+          <div className="stack-sm">
+            <Field label={t('web.service_refund_amount')} htmlFor="service-refund-amount">
+              <Input
+                id="service-refund-amount"
+                value={amount}
+                inputMode="numeric"
+                maxLength={19}
+                onChange={(event) => setAmount(event.target.value)}
+              />
+            </Field>
+            <Checkbox
+              label={t('web.service_refund_confirm')}
+              checked={confirmed}
+              onChange={setConfirmed}
+            />
+            {approve.error !== null && <Banner tone="danger">{messageFor(approve.error)}</Banner>}
+            <div className="form-actions">
+              <Button
+                variant="danger"
+                disabled={busy || !confirmed || digitsOf(amount) === '0'}
+                onClick={() => approve.mutate()}
+              >
+                {t('web.service_refund_approve')}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="stack-sm">
+            <Field label={t('web.service_refund_reject_reason')} htmlFor="service-refund-reject">
+              <Input
+                id="service-refund-reject"
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            </Field>
+            {reject.error !== null && <Banner tone="danger">{messageFor(reject.error)}</Banner>}
+            <div className="form-actions">
+              <Button
+                disabled={busy || !isServiceRefundRejectionReason(reason)}
+                onClick={() => reject.mutate()}
+              >
+                {t('web.service_refund_reject')}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Drawer>
+      {dialog}
+    </>
   );
 }

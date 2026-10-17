@@ -9,6 +9,7 @@ import {
   reportReferralsResponseSchema,
   reportSummaryResponseSchema,
   reportTrendResponseSchema,
+  PROVIDER_FAILURE_KINDS,
 } from '@nexa/contracts';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
@@ -22,6 +23,7 @@ import {
   formatRate,
   isSuperAdmin,
   rangeFromRoute,
+  failureKindKey,
 } from '../../apps/web/src/report-view';
 import { reportExportUrl } from '../../apps/web/src/api/client';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -343,7 +345,7 @@ describe('report exports and paging (WP12 review)', () => {
     const page = renderPage(
       <ReportsPage route={reportsRoute('range=THIS_MONTH')} denied={false} />,
     );
-    fireEvent.click(await screen.findByRole('button', { name: t('web.report_page_next') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     await waitFor(() =>
       expect(api.calls.some((c) => c.url.includes('cursor=CURSOR-FROM-THIS-MONTH'))).toBe(true),
     );
@@ -457,10 +459,10 @@ describe('referral analytics', () => {
         />,
       );
       const card = (await screen.findByText('تحلیل معرفی')).closest('section') as HTMLElement;
-      const next = await within(card).findByRole('button', { name: t('web.report_page_next') });
+      const next = await within(card).findByRole('button', { name: t('web.page_next') });
       await waitFor(() => expect(card.textContent).toContain('145,000'));
       expect((next as HTMLButtonElement).disabled, `${totalRows} rows`).toBe(!nextOffered);
-      const previous = within(card).getByRole('button', { name: t('web.report_page_previous') });
+      const previous = within(card).getByRole('button', { name: t('web.page_previous') });
       expect((previous as HTMLButtonElement).disabled, 'page 1 has no previous').toBe(true);
       page.unmount();
     }
@@ -479,5 +481,32 @@ describe('referral analytics', () => {
     await waitFor(() => expect(api.calls.some((c) => c.url.includes('/referrals'))).toBe(true));
     expect(screen.queryByText('تحلیل معرفی')).toBeNull();
     expect(api.calls.some((c) => c.url.includes('/reports/referrals'))).toBe(false);
+  });
+});
+
+describe('report failure kinds in Persian', () => {
+  const reportsRoute = (query: string) => ({ path: '/reports', query: new URLSearchParams(query) });
+
+  it('names every provider failure kind, all different, and never blanks an unknown one', () => {
+    const names = PROVIDER_FAILURE_KINDS.map((kind) => {
+      const key = failureKindKey(kind);
+      expect(key).not.toBeNull();
+      return t(key as Parameters<typeof t>[0]);
+    });
+    expect(names.every((name) => name.length > 0 && !/[A-Z_]{4,}/u.test(name))).toBe(true);
+    expect(new Set(names).size).toBe(names.length);
+    expect(failureKindKey(null)).toBe('web.report_fk_none');
+    // A kind this build does not know: the caller shows the raw key.
+    expect(failureKindKey('SOMETHING_NEW')).toBeNull();
+  });
+
+  it('shows the «خطاها» tab’s kinds by their Persian name, with the raw key as the title', async () => {
+    stubApi(BUSINESS_ROUTES);
+    renderPage(
+      <ReportsPage route={reportsRoute('tab=failures&range=THIS_MONTH')} denied={false} />,
+    );
+    const name = await screen.findByText(t('web.report_fk_provider_error'));
+    expect(name.closest('li')).toHaveAttribute('title', 'PROVIDER_ERROR');
+    expect(screen.queryByText('PROVIDER_ERROR')).toBeNull();
   });
 });

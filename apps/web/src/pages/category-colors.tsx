@@ -14,7 +14,16 @@ import {
 import { fetchProductCategories, fetchSettings, saveSetting } from '../api/client';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
-import { Badge, Banner, Button, Card, StateSwitch, useToast, useUnsavedChanges } from '../ui/kit';
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  StateSwitch,
+  usePagedRows,
+  useToast,
+  useUnsavedChanges,
+} from '../ui/kit';
 import { ErrorReport } from './settings';
 import { fill } from './bot-buttons/canvas';
 import { INLINE_BUTTONS_SETTING } from './bot-buttons/inline-buttons';
@@ -127,6 +136,7 @@ export function CategoryColorsSection({
     () => orderedCategories(categories.data?.categories ?? []),
     [categories.data],
   );
+  const { rows: pageRows, pager } = usePagedRows(rows);
   const coloured = rows.filter((row) => Object.prototype.hasOwnProperty.call(current, row.id));
 
   const save = useMutation({
@@ -175,7 +185,7 @@ export function CategoryColorsSection({
               {fill(t('web.cc_changed_count'), { n: coloured.length })}
             </p>
             <ul className="ib-list" data-testid="cc-list">
-              {rows.map((category) => {
+              {pageRows.map((category) => {
                 const own = Object.prototype.hasOwnProperty.call(current, category.id)
                   ? current[category.id]
                   : undefined;
@@ -226,6 +236,7 @@ export function CategoryColorsSection({
                 );
               })}
             </ul>
+            {pager}
           </StateSwitch>
         )}
         {save.isError && <ErrorReport error={save.error} />}

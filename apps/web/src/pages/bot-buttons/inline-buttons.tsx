@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOM_EMOJI_ID_PATTERN,
@@ -24,12 +24,15 @@ import {
   Banner,
   Button,
   Card,
-  Disclosure,
+  Drawer,
+  Ltr,
   StateSwitch,
   useToast,
+  usePagedRows,
   useUnsavedChanges,
 } from '../../ui/kit';
 import { TemplateCard } from '../content';
+import { useReportDirty } from '../ops-b-layout';
 import { ErrorReport } from '../settings';
 import { fill } from './canvas';
 
@@ -299,6 +302,9 @@ export function InlineButtonsSection({
     readonly iconsBasisVersion: number | null;
   } | null>(null);
   const [filter, setFilter] = useState('');
+  const [group, setGroup] = useState<InlineButtonGroup | ''>('');
+  /** The button whose sheet is open. */
+  const [open, setOpen] = useState<InlineButtonKey | null>(null);
   const current = draft?.styles ?? stored;
   const currentIcons = draft?.icons ?? storedIcons;
   const badIcons = invalidIcons(currentIcons);
@@ -337,6 +343,8 @@ export function InlineButtonsSection({
   };
   // Codex 4170910519: a leave (sidebar, back, reload, close) asks before dropping an edit.
   useUnsavedChanges(mayEdit && unsaved);
+  // The page's tab strip marks this tab while the draft holds unsaved edits.
+  useReportDirty('inline', mayEdit && unsaved);
 
   /*
    * Two settings, two writes, each with its OWN version and its OWN idempotency key. Only
@@ -408,10 +416,60 @@ export function InlineButtonsSection({
     key === null ? undefined : templates?.find((one) => one.key === key);
   const needle = filter.trim();
   const matches = (entry: (typeof INLINE_BUTTONS)[number]) => {
+    if (group !== '' && entry.group !== group) return false;
     if (needle === '') return true;
     const label = templateOf(entry.label)?.body ?? '';
     return t(INLINE_BUTTON_NAME[entry.key]).includes(needle) || label.includes(needle);
   };
+  const matching = INLINE_BUTTONS.filter(matches);
+  const { rows: shown, pager } = usePagedRows(matching, `${group}|${needle}`);
+  const openEntry = open === null ? undefined : INLINE_BUTTONS.find((entry) => entry.key === open);
+
+  const saveNow = () => {
+    // Snapshotted at the click, so a retry cannot carry a later edit; each version is the
+    // one the DRAFT was edited from, never a later read's.
+    const styles =
+      stylesUnsaved || invalid
+        ? {
+            value: canonicalStyles(current),
+            expectedVersion: draft === null ? basisVersion : draft.basisVersion,
+          }
+        : null;
+    const icons =
+      iconsUnsaved || iconsInvalid
+        ? {
+            value: canonicalIcons(currentIcons),
+            expectedVersion: draft === null ? iconsBasisVersion : draft.iconsBasisVersion,
+          }
+        : null;
+    save.mutate({
+      styles: styles === null ? null : { ...styles, idempotencyKey: submission.current(styles) },
+      icons: icons === null ? null : { ...icons, idempotencyKey: iconSubmission.current(icons) },
+    });
+  };
+  const saveDisabled =
+    !(unsaved || invalid || iconsInvalid) ||
+    badIcons.length > 0 ||
+    save.isPending ||
+    setting === undefined;
+  const resetDisabled =
+    save.isPending || (overridden === 0 && iconCount === 0 && !invalid && !iconsInvalid);
+  /*
+   * Save and reset are drawn ONCE: in the open sheet's foot while a button is being edited,
+   * and in the sticky bar under the table otherwise. Both act on the whole draft.
+   */
+  const saveControls = (
+    <>
+      {unsaved && <span className="muted small">{t('web.ib_unsaved')}</span>}
+      <span className="spacer" />
+      <Button variant="ghost" size="sm" disabled={resetDisabled} onClick={() => editBoth({}, {})}>
+        {t('web.ib_reset')}
+      </Button>
+      <Button variant="primary" size="sm" disabled={saveDisabled} onClick={saveNow}>
+        {t('web.ib_save')}
+      </Button>
+    </>
+  );
 
   return (
     <Card title={t('web.ib_title')} hint={t('web.ib_hint')} id="inline-buttons">
@@ -437,21 +495,44 @@ export function InlineButtonsSection({
               onChange={(event) => setFilter(event.target.value)}
             />
           </label>
-          <span className="muted small" data-testid="ib-overridden">
+          <select
+            className="input sm"
+            value={group}
+            aria-label={t('web.bx_ib_group')}
+            onChange={(event) => setGroup(event.target.value as InlineButtonGroup | '')}
+          >
+            <option value="">{t('web.bx_ib_group_all')}</option>
+            {INLINE_BUTTON_GROUPS.map((one) => (
+              <option key={one} value={one}>
+                {t(GROUP_TITLE[one])}
+              </option>
+            ))}
+          </select>
+          <span className="spacer" />
+          <span className="bx-pill" data-testid="ib-overridden">
             {fill(t('web.ib_changed_count'), { n: overridden })}
           </span>
-          <span className="muted small" data-testid="ib-icon-count">
+          <span className="bx-pill" data-testid="ib-icon-count">
             {fill(t('web.ib_icon_count'), { n: iconCount })}
           </span>
         </div>
-        {INLINE_BUTTON_GROUPS.map((group) => {
-          const entries = INLINE_BUTTONS.filter((entry) => entry.group === group && matches(entry));
-          if (entries.length === 0) return null;
-          return (
-            <section key={group} className="ib-group" aria-label={t(GROUP_TITLE[group])}>
-              <h3 className="small">{t(GROUP_TITLE[group])}</h3>
-              <ul className="ib-list">
-                {entries.map((entry) => {
+        {matching.length === 0 ? (
+          <p className="muted">{t('web.ib_none_found')}</p>
+        ) : (
+          <div className="tbl-wrap">
+            <table className="tbl dense bx-rows">
+              <caption className="visually-hidden">{t('web.ib_title')}</caption>
+              <thead>
+                <tr>
+                  <th>{t('web.bx_ib_button')}</th>
+                  <th>{t('web.bx_ib_group')}</th>
+                  <th>{t('web.appearance_col_preview')}</th>
+                  <th>{t('web.ib_style')}</th>
+                  <th>{t('web.ib_icon')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((entry) => {
                   const style = inlineButtonStyleOf(entry.key, current);
                   const typedIcon = currentIcons[entry.key] ?? '';
                   const icon = inlineButtonIconOf(entry.key, canonicalIcons(currentIcons));
@@ -459,14 +540,24 @@ export function InlineButtonsSection({
                   const template = templateOf(entry.label);
                   const name = t(INLINE_BUTTON_NAME[entry.key]);
                   return (
-                    <li key={entry.key} className="ib-row" data-inline-button={entry.key}>
-                      <div className="ib-head">
-                        <span className="ib-name">{name}</span>
+                    <tr key={entry.key} data-inline-button={entry.key} data-style={style}>
+                      <td>
+                        <button
+                          type="button"
+                          className="bx-rowlink"
+                          aria-haspopup="dialog"
+                          onClick={() => setOpen(entry.key)}
+                        >
+                          <span className="ib-name">{name}</span>
+                        </button>{' '}
                         {entry.action !== 'CALLBACK' && (
                           <Badge tone="neutral">
                             {t(entry.action === 'URL' ? 'web.ib_link' : 'web.ib_copy')}
                           </Badge>
                         )}
+                      </td>
+                      <td className="muted small">{t(GROUP_TITLE[entry.group])}</td>
+                      <td>
                         <span
                           className={`menu-preview-key ib-preview bb-style-${style}`}
                           data-testid="ib-preview"
@@ -483,91 +574,33 @@ export function InlineButtonsSection({
                           )}
                           {template?.body ?? name}
                         </span>
-                      </div>
-                      <label className="ib-style">
-                        <span className="muted small">{t('web.ib_style')}</span>
-                        <select
-                          className="input sm"
-                          value={style}
-                          disabled={!mayEdit || save.isPending}
-                          aria-label={`${t('web.ib_style')} — ${name}`}
-                          onChange={(event) =>
-                            edit({
-                              ...current,
-                              [entry.key]: event.target.value as InlineButtonStyle,
-                            })
-                          }
-                        >
-                          {INLINE_BUTTON_STYLES.map((option) => (
-                            <option key={option} value={option}>
-                              {t(STYLE_NAME[option])}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <div className="ib-icon" data-testid="ib-icon">
-                        <label className="muted small" htmlFor={`ib-icon-${entry.key}`}>
-                          {t('web.ib_icon')}{' '}
-                          <span className="muted small">{t('web.bb_optional')}</span>
-                        </label>
-                        <input
-                          id={`ib-icon-${entry.key}`}
-                          type="text"
-                          inputMode="numeric"
-                          dir="ltr"
-                          autoComplete="off"
-                          spellCheck={false}
-                          maxLength={64}
-                          className="input sm mono"
-                          value={typedIcon}
-                          placeholder={t('web.ib_icon_placeholder')}
-                          disabled={!mayEdit || save.isPending}
-                          aria-invalid={iconBad}
-                          aria-label={`${t('web.ib_icon')} — ${name}`}
-                          onChange={(event) => editIcon(entry.key, event.target.value)}
-                        />
-                        {typedIcon !== '' && mayEdit && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={save.isPending}
-                            aria-label={`${t('web.ib_icon_remove')} — ${name}`}
-                            onClick={() => editIcon(entry.key, '')}
-                          >
-                            {t('web.ib_icon_remove')}
-                          </Button>
-                        )}
-                        {typedIcon === '' && (
+                      </td>
+                      <td>
+                        <span className={`bx-dot bb-style-${style}`} aria-hidden="true" />
+                        {t(STYLE_NAME[style])}
+                      </td>
+                      <td data-testid="ib-icon">
+                        {typedIcon === '' ? (
                           <span className="muted small">{t('web.ib_icon_none')}</span>
+                        ) : (
+                          <>
+                            <Ltr>{typedIcon}</Ltr>
+                            {iconBad && (
+                              <>
+                                {' '}
+                                <Badge tone="danger">{t('web.ib_icon_invalid')}</Badge>
+                              </>
+                            )}
+                          </>
                         )}
-                        {iconBad && (
-                          <span className="small ib-icon-error" role="alert">
-                            {t('web.ib_icon_invalid')}
-                          </span>
-                        )}
-                      </div>
-                      {entry.label === null ? (
-                        <p className="muted small ib-note">{t('web.ib_data_label')}</p>
-                      ) : (
-                        mayViewTemplates &&
-                        template !== undefined && (
-                          <LabelEditor
-                            template={template}
-                            shared={entry.label.startsWith('bot.menu.')}
-                            mayEdit={mayEditTemplates}
-                            onChanged={onLabelChanged}
-                          />
-                        )
-                      )}
-                    </li>
+                      </td>
+                    </tr>
                   );
                 })}
-              </ul>
-            </section>
-          );
-        })}
-        {INLINE_BUTTONS.every((entry) => !matches(entry)) && (
-          <p className="muted">{t('web.ib_none_found')}</p>
+              </tbody>
+            </table>
+            {pager}
+          </div>
         )}
         {save.isError && <ErrorReport error={save.error} />}
         {mayEdit && changedElsewhere && (
@@ -578,61 +611,31 @@ export function InlineButtonsSection({
             </Button>
           </Banner>
         )}
-        {mayEdit && (
-          <div className="ib-actions">
-            {unsaved && <span className="muted small">{t('web.ib_unsaved')}</span>}
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={
-                save.isPending || (overridden === 0 && iconCount === 0 && !invalid && !iconsInvalid)
-              }
-              onClick={() => editBoth({}, {})}
-            >
-              {t('web.ib_reset')}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={
-                !(unsaved || invalid || iconsInvalid) ||
-                badIcons.length > 0 ||
-                save.isPending ||
-                setting === undefined
-              }
-              onClick={() => {
-                // Snapshotted at the click, so a retry cannot carry a later edit; each version
-                // is the one the DRAFT was edited from, never a later read's.
-                const styles =
-                  stylesUnsaved || invalid
-                    ? {
-                        value: canonicalStyles(current),
-                        expectedVersion: draft === null ? basisVersion : draft.basisVersion,
-                      }
-                    : null;
-                const icons =
-                  iconsUnsaved || iconsInvalid
-                    ? {
-                        value: canonicalIcons(currentIcons),
-                        expectedVersion:
-                          draft === null ? iconsBasisVersion : draft.iconsBasisVersion,
-                      }
-                    : null;
-                save.mutate({
-                  styles:
-                    styles === null
-                      ? null
-                      : { ...styles, idempotencyKey: submission.current(styles) },
-                  icons:
-                    icons === null
-                      ? null
-                      : { ...icons, idempotencyKey: iconSubmission.current(icons) },
-                });
-              }}
-            >
-              {t('web.ib_save')}
-            </Button>
+        {mayEdit && openEntry === undefined && (
+          <div className={unsaved || invalid || iconsInvalid ? 'bx-save on' : 'bx-save'}>
+            {saveControls}
           </div>
+        )}
+
+        {openEntry !== undefined && (
+          <InlineButtonSheet
+            entry={openEntry}
+            name={t(INLINE_BUTTON_NAME[openEntry.key])}
+            look={inlineButtonStyleOf(openEntry.key, current)}
+            typedIcon={currentIcons[openEntry.key] ?? ''}
+            icon={inlineButtonIconOf(openEntry.key, canonicalIcons(currentIcons))}
+            iconBad={badIcons.includes(openEntry.key)}
+            template={templateOf(openEntry.label)}
+            mayEdit={mayEdit}
+            mayViewTemplates={mayViewTemplates}
+            mayEditTemplates={mayEditTemplates}
+            busy={save.isPending}
+            onLook={(look) => edit({ ...current, [openEntry.key]: look })}
+            onIcon={(icon) => editIcon(openEntry.key, icon)}
+            onLabelChanged={onLabelChanged}
+            foot={mayEdit ? saveControls : undefined}
+            onClose={() => setOpen(null)}
+          />
         )}
       </StateSwitch>
     </Card>
@@ -640,30 +643,151 @@ export function InlineButtonsSection({
 }
 
 /**
- * One button's label card, mounted only once its disclosure is opened: a hundred template
- * cards (each with its own form state) on one screen would make the whole page slow for a
- * change somebody makes to one label at a time.
+ * One inline button's sheet: its preview, the four-colour choice, the optional premium icon
+ * and its label's own template card. Every edit goes to the section's one draft, so closing
+ * the sheet keeps it and the sticky bar still saves it.
  */
-function LabelEditor({
+function InlineButtonSheet({
+  entry,
+  name,
+  look,
+  typedIcon,
+  icon,
+  iconBad,
   template,
-  shared,
   mayEdit,
-  onChanged,
+  mayViewTemplates,
+  mayEditTemplates,
+  busy,
+  onLook,
+  onIcon,
+  onLabelChanged,
+  foot,
+  onClose,
 }: {
-  template: TemplateViewResponse;
-  shared: boolean;
+  entry: (typeof INLINE_BUTTONS)[number];
+  name: string;
+  look: InlineButtonStyle;
+  typedIcon: string;
+  icon: string | null;
+  iconBad: boolean;
+  template: TemplateViewResponse | undefined;
   mayEdit: boolean;
-  onChanged: () => Promise<unknown> | void;
+  mayViewTemplates: boolean;
+  mayEditTemplates: boolean;
+  busy: boolean;
+  onLook: (look: InlineButtonStyle) => void;
+  onIcon: (icon: string) => void;
+  onLabelChanged: () => Promise<unknown> | void;
+  foot: ReactNode;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   return (
-    <Disclosure summary={t('web.ib_edit_label')} size="sm" onToggle={setOpen}>
-      {open && (
-        <>
-          {shared && <Banner tone="warn">{t('web.ib_shared_label')}</Banner>}
-          <TemplateCard template={template} mayEdit={mayEdit} onChanged={onChanged} />
-        </>
-      )}
-    </Disclosure>
+    <Drawer
+      open
+      onClose={onClose}
+      title={name}
+      {...(foot === undefined ? {} : { foot: <div className="bx-foot">{foot}</div> })}
+    >
+      <div className="stack">
+        <div className="bx-prev">
+          <span
+            className={`menu-preview-key ib-preview bx-bigkey bb-style-${look}`}
+            data-testid="ib-sheet-preview"
+          >
+            {icon !== null && !iconBad && (
+              <span className="bb-icon-mark" title={t('web.ib_icon_mark_title')} aria-hidden="true">
+                ✦
+              </span>
+            )}
+            {template?.body ?? name}
+          </span>
+          {entry.action !== 'CALLBACK' && (
+            <Badge tone="neutral">
+              {t(entry.action === 'URL' ? 'web.ib_link' : 'web.ib_copy')}
+            </Badge>
+          )}
+        </div>
+
+        <fieldset className="bx-fieldset">
+          <legend>{t('web.ib_style')}</legend>
+          <div className="bx-sty" role="radiogroup" aria-label={`${t('web.ib_style')} — ${name}`}>
+            {INLINE_BUTTON_STYLES.map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                aria-checked={option === look}
+                className={`bx-stopt bb-style-${option}`}
+                disabled={!mayEdit || busy}
+                onClick={() => onLook(option)}
+              >
+                <i aria-hidden="true" />
+                {t(STYLE_NAME[option])}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <div className="ib-icon">
+          <label className="small" htmlFor={`ib-icon-${entry.key}`}>
+            {t('web.ib_icon')} <span className="muted small">{t('web.bb_optional')}</span>
+          </label>
+          <input
+            id={`ib-icon-${entry.key}`}
+            type="text"
+            inputMode="numeric"
+            dir="ltr"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={64}
+            className="input sm mono"
+            value={typedIcon}
+            placeholder={t('web.ib_icon_placeholder')}
+            disabled={!mayEdit || busy}
+            aria-invalid={iconBad}
+            aria-label={`${t('web.ib_icon')} — ${name}`}
+            onChange={(event) => onIcon(event.target.value)}
+          />
+          {typedIcon !== '' && mayEdit && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              aria-label={`${t('web.ib_icon_remove')} — ${name}`}
+              onClick={() => onIcon('')}
+            >
+              {t('web.ib_icon_remove')}
+            </Button>
+          )}
+          {typedIcon === '' && <span className="muted small">{t('web.ib_icon_none')}</span>}
+          {iconBad && (
+            <span className="small ib-icon-error" role="alert">
+              {t('web.ib_icon_invalid')}
+            </span>
+          )}
+        </div>
+
+        <h3 className="bx-h3">{t('web.ib_edit_label')}</h3>
+        {entry.label === null ? (
+          <p className="muted small ib-note">{t('web.ib_data_label')}</p>
+        ) : !mayViewTemplates ? (
+          <p className="muted small">{t('web.ib_labels_denied')}</p>
+        ) : (
+          template !== undefined && (
+            <>
+              {entry.label.startsWith('bot.menu.') && (
+                <Banner tone="warn">{t('web.ib_shared_label')}</Banner>
+              )}
+              <TemplateCard
+                template={template}
+                mayEdit={mayEditTemplates}
+                onChanged={onLabelChanged}
+              />
+            </>
+          )
+        )}
+      </div>
+    </Drawer>
   );
 }

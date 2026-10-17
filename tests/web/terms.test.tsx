@@ -109,6 +109,24 @@ describe('the terms page', () => {
     expect(within(dialog).queryByRole('button', { name: t('web.terms_edit_draft') })).toBeNull();
   });
 
+  it('puts the version in force beside the draft, and opens its whole text from its own card', async () => {
+    stubApi([{ url: '/terms', body: overview() }]);
+    renderPage(<TermsPage {...ALL} />);
+    const current = (
+      await screen.findByRole('heading', { name: t('web.terms_current_title') })
+    ).closest('section') as HTMLElement;
+    const draft = screen
+      .getByRole('heading', { name: t('web.terms_draft_title') })
+      .closest('section') as HTMLElement;
+    // One row: both cards are children of the same pair.
+    expect(current.parentElement).toBe(draft.parentElement);
+    expect(current.parentElement).toHaveClass('bx-pair');
+    fireEvent.click(within(current).getByRole('button', { name: t('web.terms_view') }));
+    const dialog = await screen.findByRole('dialog', { name: 'قوانین ربات' });
+    expect(within(dialog).getByText(/بند یک/u)).toBeInTheDocument();
+    expect(within(dialog).getByText(t('web.terms_read_only'))).toBeInTheDocument();
+  });
+
   it('draws no write for a view-only role', async () => {
     stubApi([{ url: '/terms', body: overview() }]);
     renderPage(<TermsPage denied={false} mayEdit={false} mayPublish={false} mayToggle={false} />);
@@ -277,7 +295,7 @@ describe('Customer 360’s terms line', () => {
     expect(document.body.textContent).toContain(t('web.c360_terms_last'));
   });
 
-  it('says accepted, and keeps "unavailable" for a server without the domain', () => {
+  it('says accepted, and shows a dash (never "not accepted") for a server without the domain', () => {
     const { unmount } = renderPage(
       <GeneralInfoCard
         row={row}
@@ -313,6 +331,8 @@ describe('Customer 360’s terms line', () => {
         overview={{ ...base, terms: { available: false } }}
       />,
     );
-    expect(screen.getByText(t('web.c360_terms_unavailable'))).toBeInTheDocument();
+    // W5: no «not built» note; a dash, and certainly not «not accepted».
+    expect(screen.queryByText(t('web.c360_terms_not_accepted'))).toBeNull();
+    expect(screen.getByText(t('web.c360_terms')).closest('div')?.textContent).toContain('—');
   });
 });

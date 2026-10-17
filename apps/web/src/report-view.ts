@@ -2,6 +2,7 @@ import {
   OWNER_ROLE_KEY,
   REPORT_RANGES,
   REPORT_REFRESH_INTERVAL_MS,
+  type ProviderFailureKind,
   type ReportRange,
   type PermissionKey,
 } from '@nexa/contracts';
@@ -119,4 +120,31 @@ export function formatRate(basisPoints: number | null): string {
 /** The series values a chart plots, `null` for a bucket that has not begun. */
 export function seriesValues(buckets: readonly { value: string | null }[]): (number | null)[] {
   return buckets.map((bucket) => (bucket.value === null ? null : Number(bucket.value)));
+}
+
+/**
+ * The «خطاها» tab's failure kinds in Persian (owner polish: no raw machine key as primary
+ * text). An operation's failure kind is one of the provider failure kinds (the column's CHECK
+ * constraint); a kind this build does not know falls back to its raw key, never to nothing.
+ */
+export const REPORT_FAILURE_KIND_LABEL: Readonly<Record<ProviderFailureKind, WebKey>> = {
+  AUTHENTICATION_FAILED: 'web.report_fk_authentication_failed',
+  AUTHENTICATION_REQUIRES_INTERACTION: 'web.report_fk_authentication_requires_interaction',
+  UNREACHABLE: 'web.report_fk_unreachable',
+  TIMEOUT: 'web.report_fk_timeout',
+  TLS_FAILED: 'web.report_fk_tls_failed',
+  BLOCKED_TARGET: 'web.report_fk_blocked_target',
+  RATE_LIMITED: 'web.report_fk_rate_limited',
+  MALFORMED_RESPONSE: 'web.report_fk_malformed_response',
+  PROVIDER_ERROR: 'web.report_fk_provider_error',
+  PROVIDER_REFUSED: 'web.report_fk_provider_refused',
+  UNSUPPORTED_CAPABILITY: 'web.report_fk_unsupported_capability',
+};
+
+/** The catalogue key naming a failure kind; `null` (no kind recorded) has its own words. */
+export function failureKindKey(kind: string | null): WebKey | null {
+  if (kind === null) return 'web.report_fk_none';
+  return Object.prototype.hasOwnProperty.call(REPORT_FAILURE_KIND_LABEL, kind)
+    ? REPORT_FAILURE_KIND_LABEL[kind as ProviderFailureKind]
+    : null;
 }
