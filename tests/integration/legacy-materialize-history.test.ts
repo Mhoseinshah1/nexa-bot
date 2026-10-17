@@ -1,3 +1,4 @@
+import { discountSourceRef as catalogDiscountSourceRef } from '../../apps/api/src/modules/platform/legacy-materialize/application/catalog-records';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -886,7 +887,8 @@ describe('Mirza import: history into the normal tables', () => {
         INSERT INTO discounts (id, tenant_id, kind, code, label, type, status, value, currency,
                                applies_to, total_redemptions_limit, source, source_ref)
         VALUES (${discountId}, ${tenantA.tenantId}, 'CODE', 'MZ77', 'Mirza 77', 'PERCENTAGE',
-                'INACTIVE', 10, NULL, ARRAY['NEW_SERVICE'], 1, 'MIRZA', 'discount:77')`);
+                'INACTIVE', 10, NULL, ARRAY['NEW_SERVICE'], 1, 'MIRZA',
+                ${catalogDiscountSourceRef('legacy:discount:77')})`);
       await record(
         'discount',
         'legacy:discount:77',

@@ -107,14 +107,16 @@ describe('legacy migration: interrupt, resume and rerun over a real package', ()
     expect(keyAtBackup).toBeNull();
   });
 
-  it('the reference run imports every user, opening, debt, live service and history line once', () => {
+  it('the reference run imports every user, opening (CREDIT or DEBIT), live service and history line once', () => {
     const money = moneyOfSnapshot(pkg.parts);
     const live = generated.invoices.filter((i) => i.live).length;
     expect(reference).toMatchObject({
       customers: USERS,
-      walletEntries: money.positive.count,
-      ledgerSum: money.positive.sum.toString(),
-      debts: money.negative.count,
+      // Owner decision 2026-10-17: one signed opening per non-zero balance, a DEBIT for a
+      // negative one, and no legacy-debt side record at all.
+      walletEntries: money.positive.count + money.negative.count,
+      ledgerSum: (money.positive.sum - money.negative.sum).toString(),
+      debts: 0,
       services: live,
       orders: live,
       ordersNonLegacy: 0,
