@@ -2184,6 +2184,7 @@ export const WEB_FA = {
     'سامانه پرداخت ناقص را تسویه نمی‌کند. در پنل درگاه بررسی کنید؛ اگر پرداخت دیگر «نامعلوم» نیست، واریز دستی به کیف پول تنها راه موجود است و سیاست آن هنوز تصمیم‌گیری نشده است.',
   'web.payment_situation_safe_late_completion':
     'هیچ‌چیز خودکار تسویه نمی‌شود. در پنل درگاه بررسی کنید؛ اگر پرداخت هنوز «نامعلوم» است با تطبیق، وگرنه تنها با واریز دستی به کیف پول که سیاست آن هنوز تصمیم‌گیری نشده است.',
+  // --- PR #285 review fixes, agent A: new keys go directly below this line ---
   'web.payment_situation_safe_confirmed':
     'هر بازپرداخت از سقف همین پرداخت کم می‌شود؛ کارمزد درگاه بازپرداخت‌پذیر نیست.',
   'web.payment_situation_safe_refund_in_progress':
@@ -4371,6 +4372,7 @@ export const WEB_FA = {
   'web.panel_connection_validated_no': 'برای پیکربندی فعلی انجام نشده',
   'web.panel_activation_missing': 'فیلدهای ناقص',
   'web.panel_activation': 'پیکربندی ارائه‌دهنده',
+  // --- PR #285 review fixes, agent B: new keys go directly below this line ---
   'web.panel_activation_invalid': 'این مقادیر با طرح ارائه‌دهنده سازگار نیستند:',
   'web.panel_proxy_protocols': 'پروتکل‌ها',
   'web.panel_proxy_protocols_hint':
@@ -6557,6 +6559,7 @@ export const WEB_FA = {
   'web.bc_source_chat': 'شناسهٔ چت مبدأ',
   'web.bc_source_message': 'شمارهٔ پیام مبدأ',
   'web.bc_source_verified': 'اعتبارسنجی مبدأ',
+  // --- PR #285 review fixes, agent C: new keys go directly below this line ---
   'web.bc_source_verified_yes': 'پیش‌نمایش با موفقیت از این مبدأ به شما رسید',
   'web.bc_source_verified_no':
     'هنوز تأیید نشده — با «ارسال آزمایشی به خودم» ربات همین پیام را برای شما کپی/فوروارد می‌کند؛ بدون آن ارسال شروع نمی‌شود.',
@@ -8744,6 +8747,7 @@ export const WEB_FA = {
   'web.lsr_why_adopted': 'این فاکتور در همین اجرا به سرویس سامانه منتقل شد.',
   'web.lsr_why_already_adopted':
     'این فاکتور پیش‌تر منتقل شده است و هرگز برگردانده نمی‌شود؛ اگر کد دلیل دارد، اجرای تازه چیز دیگری دیده است و باید بررسی شود.',
+  // --- PR #285 review fixes, agent D: new keys go directly below this line ---
   'web.lsr_why_eligible':
     'همه بررسی‌ها درست است اما منتقل نشد: یا مرحله انتقال در این اجرا نبود، یا کسی آن را به‌عنوان سابقه نگه داشته است.',
   'web.lsr_why_key_invalid':
