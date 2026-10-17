@@ -22,6 +22,8 @@ export class LegacyMaterializePort implements MaterializePort {
   ) {}
 
   private context(step: MigrationStepContext): MaterializeContext {
+    // Verification records both; before it there is no archive. The archive is keyed by THIS
+    // import's row (`legacy_nxpkg_imports.id`), never by the package's own manifest id.
     if (step.packageImportId === null || step.sourceFingerprint === null) {
       // Unreachable after a verified package: verification records both.
       throw new LegacyMigrationStepFailure(
@@ -32,7 +34,7 @@ export class LegacyMaterializePort implements MaterializePort {
     return {
       scope: step.scope,
       actor: step.actor,
-      packageImportId: step.packageImportId,
+      packageImportId: step.importId,
       sourceFingerprint: step.sourceFingerprint,
       now: this.now(),
     };

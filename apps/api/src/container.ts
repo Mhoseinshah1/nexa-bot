@@ -6935,6 +6935,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyMaterializeHistory.walletHistory,
     legacyMaterializeHistory.tickets,
     legacyMaterializeHistory.referrals,
+    // Every invoice the importer did not adopt: an ended (TERMINATED) service and its order.
+    legacyEndedServices,
     // After the discounts and the invoice orders it links to.
     legacyMaterializeHistory.discountUsage,
   ]);
