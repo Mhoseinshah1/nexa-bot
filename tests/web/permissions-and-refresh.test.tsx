@@ -2,7 +2,6 @@ import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PermissionKey } from '@nexa/contracts';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
