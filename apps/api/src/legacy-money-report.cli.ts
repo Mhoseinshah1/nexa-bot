@@ -79,6 +79,11 @@ function money(total: MoneyTotal): string {
 }
 
 /** The plain-text report: one line per figure, aggregates only. */
+/** YES only when proven; UNKNOWN when nothing contradicts it but some opening was not compared. */
+function statementWord(value: boolean | null): 'YES' | 'NO' | 'UNKNOWN' {
+  return value === null ? 'UNKNOWN' : value ? 'YES' : 'NO';
+}
+
 export function reportText(report: TenantMoneyReport): string {
   const lines: string[] = [];
   const o = report.opening;
@@ -93,7 +98,7 @@ export function reportText(report: TenantMoneyReport): string {
   lines.push(`debts equal the import's stated total: ${String(o.debtsMatchImportStatement)}`);
   const c = report.snapshotCheck;
   lines.push(
-    `wallet-history checks: ${String(c.checked)} customers; opening = snapshot for ${String(c.openingEqualsSnapshot)}, not proven equal for ${String(c.notProvenEqual)}; unlinked checks ${String(c.unlinkedChecks)}`,
+    `wallet-history checks: ${String(c.checked)} customers; opening = snapshot for ${String(c.openingEqualsSnapshot)}, not proven equal for ${String(c.notProvenEqual)}; openings with no check ${String(c.openingsWithoutCheck)}; unlinked checks ${String(c.unlinkedChecks)}`,
   );
   for (const v of report.byVerdict) lines.push(`  verdict ${v.verdict}: ${String(v.customers)}`);
   for (const s of report.byStatus) lines.push(`  status ${s.status}: ${String(s.customers)}`);
@@ -122,7 +127,7 @@ export function reportText(report: TenantMoneyReport): string {
     `ledger entries by reason: ${report.ledgerReasons.map((r) => `${r.reason}=${String(r.count)}`).join(', ') || 'none'}`,
   );
   lines.push(
-    `STATEMENT: every opening credit equals the snapshot Balance: ${report.statement.everyOpeningEqualsSnapshot ? 'YES' : 'NO'} (basis ${report.statement.basis})`,
+    `STATEMENT: every opening credit equals the snapshot Balance: ${statementWord(report.statement.everyOpeningEqualsSnapshot)} (basis ${report.statement.basis})`,
   );
   return `${lines.join('\n')}\n`;
 }
@@ -139,7 +144,7 @@ async function main(): Promise<void> {
     const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
     const report = await container.legacyMoneyHistory.tenantReport(scope, args.timeoutMs);
     process.stdout.write(args.json ? `${reportJson(report)}\n` : reportText(report));
-    if (!report.statement.everyOpeningEqualsSnapshot) process.exitCode = 2;
+    if (report.statement.everyOpeningEqualsSnapshot !== true) process.exitCode = 2;
   } finally {
     await container.shutdown();
   }

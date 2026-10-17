@@ -376,8 +376,20 @@ export function reconcile(evidence: CustomerOpeningEvidence): Reconciliation {
   const equal =
     opening.currency === snapshot.currency && opening.amountMinor === snapshot.amountMinor;
   if (!equal) return out('OPENING_DIFFERS_FROM_SNAPSHOT', false);
-  if (check.verdict === VERDICT_MATCHES) return out('RECONCILED', true);
-  if (check.verdict === VERDICT_DIFFERS) return out('HISTORY_DIFFERS_SNAPSHOT_KEPT', true);
+  // The verdict string is the converter's claim; the closing evidence must say the same thing
+  // before it is believed. The closing balance must parse in the snapshot's currency: equal to
+  // the snapshot for MATCHES_SNAPSHOT, different for DIFFERS_FROM_SNAPSHOT. The converter states
+  // a delta only when the history differs; when stated, it must be snapshot − closing (a stated
+  // delta on a MATCHES verdict must be zero).
+  const closingReadable = closing !== null && closing.currency === snapshot.currency;
+  const gap = closingReadable ? snapshot.amountMinor - closing.amountMinor : null;
+  const deltaAgrees = deltaMinor === null || deltaMinor === gap;
+  if (check.verdict === VERDICT_MATCHES && gap === 0n && deltaAgrees) {
+    return out('RECONCILED', true);
+  }
+  if (check.verdict === VERDICT_DIFFERS && gap !== null && gap !== 0n && deltaAgrees) {
+    return out('HISTORY_DIFFERS_SNAPSHOT_KEPT', true);
+  }
   return out('UNREADABLE_EVIDENCE', true);
 }
 
@@ -433,6 +445,8 @@ export interface TenantMoneyReport {
     readonly checked: number;
     readonly openingEqualsSnapshot: number;
     readonly notProvenEqual: number;
+    /** Openings with no wallet-history check: compared with nothing, so never proven equal. */
+    readonly openingsWithoutCheck: number;
     readonly unlinkedChecks: number;
   };
   readonly payments: PaymentSummary;
@@ -442,9 +456,13 @@ export interface TenantMoneyReport {
   readonly referrals: { readonly records: number; readonly referrerGiftsPaid: number };
   readonly discountsUsed: number;
   readonly ledgerReasons: readonly { readonly reason: string; readonly count: number }[];
-  /** The one-line answer: every opening credit is the snapshot balance, as far as evidenced. */
+  /**
+   * The one-line answer: every opening credit is the snapshot balance, as far as evidenced.
+   * `null` (UNKNOWN) when nothing contradicts it but some opening had no wallet-history check
+   * to compare with: a claim about openings nobody compared is never stated as true.
+   */
   readonly statement: {
-    readonly everyOpeningEqualsSnapshot: boolean;
+    readonly everyOpeningEqualsSnapshot: boolean | null;
     readonly basis: 'PER_CUSTOMER_CHECK_AND_IMPORT_TOTALS' | 'PER_CUSTOMER_CHECK_ONLY';
   };
 }
@@ -487,6 +505,8 @@ export function buildTenantMoneyReport(input: TenantMoneyInput): TenantMoneyRepo
   let checked = 0;
   let equal = 0;
   let differs = 0;
+  /** Customers with an opening (credit or debt) and no wallet-history check to compare it with. */
+  let uncompared = 0;
   for (const customer of input.customers) {
     const result = reconcile(customer);
     statuses.set(result.status, (statuses.get(result.status) ?? 0) + 1);
@@ -515,6 +535,8 @@ export function buildTenantMoneyReport(input: TenantMoneyInput): TenantMoneyRepo
       }
       if (result.openingEqualsSnapshot === true) equal += 1;
       else differs += 1;
+    } else if (customer.openingCredits.length > 0 || customer.debt !== null) {
+      uncompared += 1;
     }
   }
   const credits = totalOf(creditGroups);
@@ -558,6 +580,7 @@ export function buildTenantMoneyReport(input: TenantMoneyInput): TenantMoneyRepo
       checked,
       openingEqualsSnapshot: equal,
       notProvenEqual: differs,
+      openingsWithoutCheck: uncompared,
       unlinkedChecks: input.unlinkedChecks,
     },
     payments: summarisePayments(input.payments),
@@ -568,7 +591,11 @@ export function buildTenantMoneyReport(input: TenantMoneyInput): TenantMoneyRepo
     discountsUsed: input.discountsUsed,
     ledgerReasons: [...input.ledgerReasons].sort((a, b) => a.reason.localeCompare(b.reason)),
     statement: {
-      everyOpeningEqualsSnapshot: perCustomerClean && matches !== false && debtsMatch !== false,
+      everyOpeningEqualsSnapshot: !(perCustomerClean && matches !== false && debtsMatch !== false)
+        ? false
+        : uncompared > 0
+          ? null
+          : true,
       basis:
         matches === null || debtsMatch === null
           ? 'PER_CUSTOMER_CHECK_ONLY'

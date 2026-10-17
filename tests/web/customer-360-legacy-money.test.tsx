@@ -106,6 +106,20 @@ describe('the Mirza money history card', () => {
  * card withholds without `legacy.debts.view`. So Customer 360 draws the money card, and asks
  * for it, only when the viewer holds BOTH keys; the server charges both as well.
  */
+/** Every required capability off: only the two legacy keys under test vary. */
+const OFF = {
+  mayBlock: false,
+  mayViewWallet: false,
+  mayCredit: false,
+  mayDebit: false,
+  mayViewOrders: false,
+  mayViewServices: false,
+  mayEditTrial: false,
+  mayViewReferrals: false,
+  mayViewReseller: false,
+  mayEditReseller: false,
+} as const;
+
 describe('«سوابق مالی میرزا» on Customer 360 needs legacy.debts.view too', () => {
   const page = (mayViewLegacyDebts: boolean) => {
     const api = stubApi([
@@ -115,6 +129,7 @@ describe('«سوابق مالی میرزا» on Customer 360 needs legacy.debts.
     renderPage(
       <UserDetailPage
         id={ID}
+        {...OFF}
         denied={false}
         mayViewLegacyHistory
         mayViewLegacyDebts={mayViewLegacyDebts}
