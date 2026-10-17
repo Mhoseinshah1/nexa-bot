@@ -277,7 +277,7 @@ function Price({ row }: { row: ProductSummaryResponse }) {
 // List
 // ---------------------------------------------------------------------------
 
-/** The URL keys the products list filters by, and what «پاک کردن همه» clears. */
+/** The URL keys the products list filters by, and what the bar's clear-all removes. */
 const PRODUCT_FILTER_KEYS = ['status', 'audience', 'categoryId', 'title'] as const;
 
 export function ProductsPage({

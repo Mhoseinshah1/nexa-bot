@@ -146,7 +146,7 @@ describe('the date picker sheet', () => {
   });
 });
 
-const EMPTY: ViewState = { status: null };
+const EMPTY: ViewState = { status: '' };
 function SavedHarness() {
   const [state, setState] = useState<ViewState>(EMPTY);
   const registration: SavedViewsRegistration = {
