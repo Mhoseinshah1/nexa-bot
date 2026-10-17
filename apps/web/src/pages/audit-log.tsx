@@ -27,7 +27,6 @@ import {
   Disclosure,
   Empty,
   Field,
-  FilterBar,
   FilterChip,
   FilterChips,
   Ltr,
@@ -35,7 +34,12 @@ import {
   StateSwitch,
   type Column,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
+import { DateField } from '../ui/date-field';
+import { ListFilterBar } from '../ui/filter-bar';
+import { dayRangeLabel } from '../ops-list-filters';
+import { auditActionLabel } from '../audit-action-labels';
 
 /**
  * The audit log (Phase D1, program §16, `docs/audit-log.md`).
@@ -51,8 +55,6 @@ import {
  * `/alerts` gives. The export is the same filter object, so the file holds exactly the rows
  * these pages show.
  */
-
-const PAGE_SIZE = 50;
 
 const SECURITY_LABELS: Readonly<Record<AuditSecurityFilter, WebKey>> = {
   DENIED: 'web.audit_security_denied',
@@ -160,7 +162,7 @@ export function auditLogQuery(
     queryKey: ['audit-log', JSON.stringify(filters), cursor ?? null],
     queryFn: () =>
       fetchAuditLog(filters, {
-        limit: PAGE_SIZE,
+        limit: LIST_PAGE_SIZE,
         ...(cursor === undefined ? {} : { cursor }),
       }),
     staleTime: NAV_PREFETCH_FRESH_MS,
@@ -325,9 +327,7 @@ export function AuditLogPage({
             title={t('web.audit_filter_by_action')}
             onClick={() => setQuery(route, 'action', row.action)}
           >
-            <span className="clamp-2 audit-action" dir="ltr" title={row.action}>
-              <Ltr>{row.action}</Ltr>
-            </span>
+            <AuditActionName code={row.action} />
           </button>
           {row.reason !== null && row.reason !== '' && (
             <span className="muted small audit-reason">
@@ -389,170 +389,280 @@ export function AuditLogPage({
       />
 
       <Card>
-        <FilterBar hidden={!requestable}>
-          <FilterChips label={t('web.audit_security_label')}>
-            <FilterChip
-              pressed={filters.security === undefined}
-              onClick={() => setQuery(route, 'security', null)}
-            >
-              {t('web.audit_security_all')}
-            </FilterChip>
-            <ChipDivider />
-            {AUDIT_SECURITY_FILTERS.map((slice) => (
-              <FilterChip
-                key={slice}
-                pressed={filters.security === slice}
-                onClick={() => setQuery(route, 'security', slice)}
-              >
-                {t(SECURITY_LABELS[slice])}
-              </FilterChip>
-            ))}
-          </FilterChips>
-        </FilterBar>
-
-        <form className="toolbar audit-filters" onSubmit={apply} hidden={!requestable}>
-          <Field
-            label={t('web.audit_filter_actor')}
-            hint={t('web.audit_filter_actor_hint')}
-            htmlFor="audit-actor"
-            compact
-          >
-            <input
-              id="audit-actor"
-              className="input sm"
-              dir="ltr"
-              value={draft.actor}
-              onChange={(event) => editField({ actor: event.target.value })}
-              {...debounce.composition}
-            />
-          </Field>
-          <Field label={t('web.audit_filter_actor_type')} htmlFor="audit-actor-type" compact>
-            <select
-              id="audit-actor-type"
-              className="input sm"
-              value={filters.actorType ?? ''}
-              onChange={(event) => setQuery(route, 'actorType', event.target.value || null)}
-            >
-              <option value="">{t('web.audit_filter_all')}</option>
-              {ACTOR_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {t(ACTOR_LABELS[type])}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label={t('web.audit_filter_action')}
-            hint={t('web.audit_filter_action_hint')}
-            htmlFor="audit-action"
-            compact
-            {...(problems.action ? { error: t('web.audit_filter_action_invalid') } : {})}
-          >
-            <input
-              id="audit-action"
-              className="input sm"
-              dir="ltr"
-              value={draft.action}
-              onChange={(event) => editField({ action: event.target.value })}
-              {...debounce.composition}
-            />
-          </Field>
-          <Field label={t('web.audit_filter_entity_type')} htmlFor="audit-entity-type" compact>
-            <select
-              id="audit-entity-type"
-              className="input sm"
-              value={entityType}
-              onChange={(event) => setQuery(route, 'entityType', event.target.value || null)}
-            >
-              <option value="">{t('web.audit_filter_all')}</option>
-              {/* A type reached from a row's own link stays selectable even if unlisted. */}
-              {entityType !== '' && ENTITY_LABELS[entityType] === undefined && (
-                <option value={entityType}>{entityType}</option>
-              )}
-              {Object.entries(ENTITY_LABELS).map(([type, label]) => (
-                <option key={type} value={type}>
-                  {t(label)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label={t('web.audit_filter_entity_id')}
-            htmlFor="audit-entity-id"
-            compact
-            {...(problems.entity ? { error: t('web.audit_filter_entity_id_needs_type') } : {})}
-          >
-            <input
-              id="audit-entity-id"
-              className="input sm"
-              dir="ltr"
-              value={draft.entityId}
-              onChange={(event) => editField({ entityId: event.target.value })}
-              {...debounce.composition}
-            />
-          </Field>
-          <Field
-            label={t('web.audit_filter_customer')}
-            htmlFor="audit-customer"
-            compact
-            {...(problems.customer ? { error: t('web.audit_filter_customer_invalid') } : {})}
-          >
-            <input
-              id="audit-customer"
-              className="input sm"
-              dir="ltr"
-              value={draft.customerId}
-              onChange={(event) => editField({ customerId: event.target.value })}
-              {...debounce.composition}
-            />
-          </Field>
-          <Field label={t('web.audit_filter_result')} htmlFor="audit-result" compact>
-            <select
-              id="audit-result"
-              className="input sm"
-              value={filters.result ?? ''}
-              onChange={(event) => setQuery(route, 'result', event.target.value || null)}
-            >
-              <option value="">{t('web.audit_filter_all')}</option>
-              {AUDIT_RESULTS.map((result) => (
-                <option key={result} value={result}>
-                  {t(RESULT_LABELS[result])}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t('web.audit_filter_from')} htmlFor="audit-from" compact>
-            <input
-              id="audit-from"
-              className="input sm"
-              type="date"
-              value={draft.fromDay}
-              onChange={(event) => editField({ fromDay: event.target.value })}
-            />
-          </Field>
-          <Field
-            label={t('web.audit_filter_to')}
-            htmlFor="audit-to"
-            compact
-            {...(problems.dates ? { error: t('web.audit_filter_dates_invalid') } : {})}
-          >
-            <input
-              id="audit-to"
-              className="input sm"
-              type="date"
-              value={draft.toDay}
-              onChange={(event) => editField({ toDay: event.target.value })}
-            />
-          </Field>
-          <div className="audit-filter-actions">
-            <button type="submit" className="btn primary sm" disabled={blocked}>
-              {t('web.audit_apply')}
-            </button>
-            <button type="button" className="btn ghost sm" disabled={!filtering} onClick={clear}>
-              {t('web.audit_clear')}
-            </button>
-          </div>
-        </form>
+        {requestable && (
+          <ListFilterBar
+            label={t('web.audit_title')}
+            search={
+              <form className="ops-search" onSubmit={apply}>
+                <input
+                  id="audit-actor"
+                  className="input sm"
+                  dir="ltr"
+                  aria-label={t('web.audit_filter_actor')}
+                  placeholder={t('web.audit_filter_actor_hint')}
+                  title={t('web.audit_filter_actor_hint')}
+                  value={draft.actor}
+                  onChange={(event) => editField({ actor: event.target.value })}
+                  {...debounce.composition}
+                />
+                <button type="submit" className="btn primary sm" disabled={blocked}>
+                  {t('web.users_search_apply')}
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  disabled={!filtering}
+                  onClick={clear}
+                >
+                  {t('web.users_search_clear')}
+                </button>
+              </form>
+            }
+            onClearAll={clear}
+            filters={[
+              {
+                key: 'security',
+                label: t('web.audit_security_label'),
+                active:
+                  filters.security === undefined
+                    ? null
+                    : t(SECURITY_LABELS[filters.security as AuditSecurityFilter]),
+                onClear: () => setQuery(route, 'security', null),
+                control: (
+                  <FilterChips label={t('web.audit_security_label')}>
+                    <FilterChip
+                      pressed={filters.security === undefined}
+                      onClick={() => setQuery(route, 'security', null)}
+                    >
+                      {t('web.audit_security_all')}
+                    </FilterChip>
+                    <ChipDivider />
+                    {AUDIT_SECURITY_FILTERS.map((slice) => (
+                      <FilterChip
+                        key={slice}
+                        pressed={filters.security === slice}
+                        onClick={() => setQuery(route, 'security', slice)}
+                      >
+                        {t(SECURITY_LABELS[slice])}
+                      </FilterChip>
+                    ))}
+                  </FilterChips>
+                ),
+              },
+              {
+                key: 'actorType',
+                label: t('web.audit_filter_actor_type'),
+                active:
+                  filters.actorType === undefined
+                    ? null
+                    : t(ACTOR_LABELS[filters.actorType as ActorType]),
+                onClear: () => setQuery(route, 'actorType', null),
+                control: (
+                  <select
+                    id="audit-actor-type"
+                    className="input sm"
+                    aria-label={t('web.audit_filter_actor_type')}
+                    value={filters.actorType ?? ''}
+                    onChange={(event) => setQuery(route, 'actorType', event.target.value || null)}
+                  >
+                    <option value="">{t('web.audit_filter_all')}</option>
+                    {ACTOR_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {t(ACTOR_LABELS[type])}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+              {
+                key: 'action',
+                label: t('web.audit_filter_action'),
+                active:
+                  applied.action === ''
+                    ? null
+                    : (auditActionLabel(applied.action) ?? applied.action),
+                onClear: () => {
+                  edit({ action: '' });
+                  setQuery(route, 'action', null);
+                },
+                control: (
+                  <form onSubmit={apply}>
+                    <Field
+                      label={t('web.audit_filter_action')}
+                      hint={t('web.audit_filter_action_hint')}
+                      htmlFor="audit-action"
+                      compact
+                      {...(problems.action ? { error: t('web.audit_filter_action_invalid') } : {})}
+                    >
+                      <input
+                        id="audit-action"
+                        className="input sm"
+                        dir="ltr"
+                        value={draft.action}
+                        onChange={(event) => editField({ action: event.target.value })}
+                        {...debounce.composition}
+                      />
+                    </Field>
+                  </form>
+                ),
+              },
+              {
+                key: 'entity',
+                label: t('web.audit_col_entity'),
+                active:
+                  entityType === ''
+                    ? null
+                    : `${ENTITY_LABELS[entityType] === undefined ? entityType : t(ENTITY_LABELS[entityType])}${applied.entityId === '' ? '' : ` ${applied.entityId.slice(0, 8)}`}`,
+                onClear: () => {
+                  edit({ entityId: '' });
+                  setQueries(route, [
+                    ['entityType', null],
+                    ['entityId', null],
+                  ]);
+                },
+                control: (
+                  <form className="ops-date-range" onSubmit={apply}>
+                    <Field
+                      label={t('web.audit_filter_entity_type')}
+                      htmlFor="audit-entity-type"
+                      compact
+                    >
+                      <select
+                        id="audit-entity-type"
+                        className="input sm"
+                        value={entityType}
+                        onChange={(event) =>
+                          setQuery(route, 'entityType', event.target.value || null)
+                        }
+                      >
+                        <option value="">{t('web.audit_filter_all')}</option>
+                        {/* A type reached from a row's own link stays selectable even if unlisted. */}
+                        {entityType !== '' && ENTITY_LABELS[entityType] === undefined && (
+                          <option value={entityType}>{entityType}</option>
+                        )}
+                        {Object.entries(ENTITY_LABELS).map(([type, label]) => (
+                          <option key={type} value={type}>
+                            {t(label)}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field
+                      label={t('web.audit_filter_entity_id')}
+                      htmlFor="audit-entity-id"
+                      compact
+                      {...(problems.entity
+                        ? { error: t('web.audit_filter_entity_id_needs_type') }
+                        : {})}
+                    >
+                      <input
+                        id="audit-entity-id"
+                        className="input sm"
+                        dir="ltr"
+                        value={draft.entityId}
+                        onChange={(event) => editField({ entityId: event.target.value })}
+                        {...debounce.composition}
+                      />
+                    </Field>
+                  </form>
+                ),
+              },
+              {
+                key: 'customer',
+                label: t('web.audit_filter_customer'),
+                active: applied.customerId === '' ? null : applied.customerId.slice(0, 8),
+                onClear: () => {
+                  edit({ customerId: '' });
+                  setQuery(route, 'customerId', null);
+                },
+                control: (
+                  <form onSubmit={apply}>
+                    <Field
+                      label={t('web.audit_filter_customer')}
+                      htmlFor="audit-customer"
+                      compact
+                      {...(problems.customer
+                        ? { error: t('web.audit_filter_customer_invalid') }
+                        : {})}
+                    >
+                      <input
+                        id="audit-customer"
+                        className="input sm"
+                        dir="ltr"
+                        value={draft.customerId}
+                        onChange={(event) => editField({ customerId: event.target.value })}
+                        {...debounce.composition}
+                      />
+                    </Field>
+                  </form>
+                ),
+              },
+              {
+                key: 'result',
+                label: t('web.audit_filter_result'),
+                active:
+                  filters.result === undefined
+                    ? null
+                    : t(RESULT_LABELS[filters.result as AuditResult]),
+                onClear: () => setQuery(route, 'result', null),
+                control: (
+                  <select
+                    id="audit-result"
+                    className="input sm"
+                    aria-label={t('web.audit_filter_result')}
+                    value={filters.result ?? ''}
+                    onChange={(event) => setQuery(route, 'result', event.target.value || null)}
+                  >
+                    <option value="">{t('web.audit_filter_all')}</option>
+                    {AUDIT_RESULTS.map((result) => (
+                      <option key={result} value={result}>
+                        {t(RESULT_LABELS[result])}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+              {
+                key: 'dates',
+                label: t('web.ops_filter_dates'),
+                active: dayRangeLabel(applied.fromDay, applied.toDay),
+                onClear: () => {
+                  edit({ fromDay: '', toDay: '' });
+                  setQueries(route, [
+                    ['from', null],
+                    ['to', null],
+                  ]);
+                },
+                control: (
+                  <div className="ops-date-range">
+                    <Field label={t('web.audit_filter_from')} htmlFor="audit-from" compact>
+                      <DateField
+                        id="audit-from"
+                        size="sm"
+                        value={draft.fromDay}
+                        onChange={(value) => editField({ fromDay: value })}
+                      />
+                    </Field>
+                    <Field
+                      label={t('web.audit_filter_to')}
+                      htmlFor="audit-to"
+                      compact
+                      {...(problems.dates ? { error: t('web.audit_filter_dates_invalid') } : {})}
+                    >
+                      <DateField
+                        id="audit-to"
+                        size="sm"
+                        value={draft.toDay}
+                        onChange={(value) => editField({ toDay: value })}
+                        invalid={problems.dates}
+                      />
+                    </Field>
+                  </div>
+                ),
+              },
+            ]}
+          />
+        )}
         {requestable && <p className="muted small">{t('web.audit_no_secrets')}</p>}
 
         <StateSwitch
@@ -587,6 +697,20 @@ export function AuditLogPage({
         </StateSwitch>
       </Card>
     </>
+  );
+}
+
+/** W5: an action as its Persian name, the raw code in the tooltip; unknown codes stay raw. */
+function AuditActionName({ code }: { code: string }) {
+  const label = auditActionLabel(code);
+  return label === null ? (
+    <span className="clamp-2 audit-action" dir="ltr" title={code}>
+      <Ltr>{code}</Ltr>
+    </span>
+  ) : (
+    <span className="clamp-2 audit-action-name" title={code}>
+      {label}
+    </span>
   );
 }
 

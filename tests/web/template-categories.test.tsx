@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { fireEvent, screen, within } from '@testing-library/react';
 import {
   TEMPLATE_CATEGORIES,
@@ -178,5 +178,41 @@ describe('«متن‌ها» by category', () => {
     fireEvent.click(chip('other'));
     expect(hidden('brand.new_key')).toBe(false);
     expect(hidden(BALANCE)).toBe(true);
+  });
+});
+
+describe('«متن‌ها» on a narrow screen', () => {
+  const wide = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = wide;
+  });
+
+  it('opens the chosen text in a side sheet that keeps its draft when it closes', async () => {
+    window.matchMedia = (query: string) =>
+      ({
+        ...wide(query),
+        matches: /max-width:\s*980px/.test(query),
+      }) as MediaQueryList;
+    await render();
+    // Nothing is open over the page until a text is picked.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(nameOf(RECEIPT)) }));
+    const sheet = screen.getByRole('dialog', { name: nameOf(RECEIPT) });
+    const body = within(sheet).getAllByRole('textbox')[0] as HTMLTextAreaElement;
+    fireEvent.change(body, { target: { value: 'متن تازه' } });
+
+    fireEvent.click(within(sheet).getByRole('button', { name: t('web.close') }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // The card was never unmounted: opening the same text again finds the draft.
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(nameOf(RECEIPT)) }));
+    const again = screen.getByRole('dialog', { name: nameOf(RECEIPT) });
+    expect(within(again).getAllByRole('textbox')[0]).toHaveValue('متن تازه');
+  });
+
+  it('keeps the list and the editor side by side on a wide screen, with no sheet', async () => {
+    await render();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(nameOf(RECEIPT)) }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('.content-editor')).not.toHaveClass('bx-sheet');
   });
 });

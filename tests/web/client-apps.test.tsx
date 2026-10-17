@@ -686,3 +686,34 @@ describe('an entry’s picture', () => {
     expect(keyOf(2)).not.toBe(keyOf(0));
   });
 });
+
+describe('the apps editor in its drawer', () => {
+  it('opens beside the list, and asks before a typed draft is closed away', async () => {
+    stubApi([listAndRow([app()], app())]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+    const drawer = screen.getByRole('dialog', { name: t('web.client_apps_editing') });
+    // The whole editor is in the drawer: form, preview and the picture.
+    expect(within(drawer).getByLabelText(t('web.client_apps_name'))).toBeInTheDocument();
+    expect(within(drawer).getByTestId('client-app-preview')).toBeInTheDocument();
+    expect(within(drawer).getByLabelText(t('web.client_apps_image_file'))).toBeInTheDocument();
+
+    fill(t('web.client_apps_name'), 'نام تازه');
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
+    // Asked, not closed.
+    const question = await screen.findByRole('alertdialog');
+    expect(screen.getByRole('dialog', { name: t('web.client_apps_editing') })).toBeInTheDocument();
+    fireEvent.click(within(question).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(screen.getByLabelText(t('web.client_apps_name'))).toHaveValue('نام تازه');
+
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', {
+        name: t('web.discard'),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: t('web.client_apps_editing') })).toBeNull(),
+    );
+  });
+});

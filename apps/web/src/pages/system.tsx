@@ -33,12 +33,11 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQuery, type Route } from '../router';
+import { setQuery, useLinkHandler, type Route } from '../router';
 import {
   Badge,
   Banner,
   Card,
-  Copyable,
   DataTable,
   Drawer,
   Duration,
@@ -46,7 +45,6 @@ import {
   Ident,
   KV,
   Ltr,
-  MaturityBadge,
   Modal,
   Num,
   PageHead,
@@ -66,6 +64,7 @@ import { errorCopy, queryState, retryOf } from '../view-state';
 import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
 import { errorText } from '../error-text';
+import { roleLabel } from '../rbac-labels';
 
 /**
  * System and operations.
@@ -104,6 +103,7 @@ export function SystemPage({
 
   // The shell reads the same `['info']` once per session; this costs no request.
   const info = useQuery({ queryKey: ['info'], queryFn: fetchInfo });
+  const onLink = useLinkHandler();
 
   return (
     <>
@@ -116,9 +116,6 @@ export function SystemPage({
               <span className="system-build">
                 <span>
                   {t('web.version')} <Ltr>{info.data.version}</Ltr>
-                </span>
-                <span>
-                  {t('web.commit')} <Ltr>{info.data.commit.slice(0, 7)}</Ltr>
                 </span>
                 <span>
                   {t('web.environment')} <Ltr>{info.data.environment}</Ltr>
@@ -165,13 +162,16 @@ export function SystemPage({
         )}
       </TabPanel>
 
-      <Card title={t('web.system_logs_title')} tone="muted">
-        <Banner tone="info" title={t('web.system_logs_absent')}>
-          {t('web.system_logs_body')}
-        </Banner>
-        <p className="muted small">
-          <MaturityBadge value="now" /> {t('web.system_logs_destination')}
-        </p>
+      <Card
+        title={t('web.system_logs_title')}
+        tone="muted"
+        actions={
+          <a className="btn sm" href="/ops-group" onClick={onLink}>
+            {t('web.nav_ops_group')}
+          </a>
+        }
+      >
+        <p className="muted small">{t('web.system_logs_destination')}</p>
       </Card>
     </>
   );
@@ -285,7 +285,6 @@ function StatusSection() {
               <KV
                 items={[
                   [t('web.version'), <Ltr key="v">{info.data.version}</Ltr>],
-                  [t('web.commit'), <Copyable key="c" value={info.data.commit} />],
                   [t('web.environment'), <Ltr key="e">{info.data.environment}</Ltr>],
                   [t('web.build_time'), formatTimestamp(info.data.buildTime)],
                   [t('web.node_version'), <Ltr key="n">{info.data.nodeVersion}</Ltr>],
@@ -410,30 +409,8 @@ function MonitorSection({ denied }: { denied: boolean }) {
         </Card>
       </div>
 
-      <Card title={t('web.monitor_separation')} hint={t('web.monitor_separation_hint')}>
-        <ul className="system-separation">
-          <li>
-            <div className="system-separation-head">
-              <span className="strong">{t('web.monitor_lightweight')}</span>
-              <MaturityBadge value="now" />
-            </div>
-            <p className="muted small">{t('web.monitor_lightweight_body')}</p>
-          </li>
-          <li>
-            <div className="system-separation-head">
-              <span className="strong">{t('web.monitor_heavy')}</span>
-              <MaturityBadge value="planned" />
-            </div>
-            <p className="muted small">{t('web.monitor_heavy_body')}</p>
-          </li>
-          <li>
-            <div className="system-separation-head">
-              <span className="strong">{t('web.monitor_user_sync')}</span>
-              <MaturityBadge value="planned" />
-            </div>
-            <p className="muted small">{t('web.monitor_user_sync_body')}</p>
-          </li>
-        </ul>
+      <Card title={t('web.monitor_lightweight')}>
+        <p className="muted small">{t('web.monitor_lightweight_body')}</p>
       </Card>
     </>
   );
@@ -556,8 +533,8 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
                 ) : (
                   <span className="system-roles">
                     {row.roleKeys.map((key) => (
-                      <Badge key={key} outline>
-                        {key}
+                      <Badge key={key} outline title={key}>
+                        {roleLabel(key)}
                       </Badge>
                     ))}
                   </span>

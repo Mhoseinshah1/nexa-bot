@@ -314,6 +314,45 @@ describe('one service’s requests', () => {
     });
   });
 
+  it('replays a lost approval under the SAME key after the drawer is closed and reopened', async () => {
+    const api = stubApi([
+      forService([request()]),
+      {
+        url: `/service-refund-requests/${REQUEST_ID}/approve`,
+        status: 503,
+        body: {
+          error: { kind: 'INTERNAL', code: 'internal.unhandled', message: 'x', correlationId: 'c' },
+        },
+      },
+    ]);
+    renderPage(<ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />);
+    await screen.findByRole('table');
+    const approveOnce = async () => {
+      const drawer = openDecision('web.service_refund_approve');
+      fireEvent.change(within(drawer).getByLabelText(t('web.service_refund_amount')), {
+        target: { value: '120000' },
+      });
+      fireEvent.click(within(drawer).getByRole('checkbox'));
+      fireEvent.click(
+        within(drawer).getByRole('button', { name: t('web.service_refund_approve') }),
+      );
+      return drawer;
+    };
+    const approvals = () => api.calls.filter((one) => one.url.endsWith('/approve'));
+    const drawer = await approveOnce();
+    await waitFor(() => expect(approvals()).toHaveLength(1));
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.close') }));
+    const discard = screen.queryByRole('button', { name: t('web.discard') });
+    if (discard !== null) fireEvent.click(discard);
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: t('web.service_refund_approve') })).toBeNull(),
+    );
+    await approveOnce();
+    await waitFor(() => expect(approvals()).toHaveLength(2));
+    const keyOf = (body: unknown) => (body as { idempotencyKey: string }).idempotencyKey;
+    expect(keyOf(approvals()[1]!.body)).toBe(keyOf(approvals()[0]!.body));
+  });
+
   it('asks before closing a decision drawer over a typed amount', async () => {
     stubApi([forService([request()])]);
     renderPage(<ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />);

@@ -104,8 +104,12 @@ import {
   type Tone,
   PermissionDeniedState,
   Quantity,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { createPortal } from 'react-dom';
+import { Modal } from '../ui/overlays';
+import { OpsActionDrawer } from './ops-drawer';
 import { pollUnlessFinal } from '../polling';
 import { fieldText } from '../error-text';
 import { TechnicalDetails } from '../ui/technical-details';
@@ -358,6 +362,7 @@ export function PanelsPage({
     queryKey: ['panels', archived ? 'archived' : 'live', cursor ?? null],
     queryFn: () =>
       fetchPanels({
+        limit: LIST_PAGE_SIZE,
         ...(cursor === undefined ? {} : { cursor }),
         ...(archived ? { archived: 'only' as const } : {}),
       }),
@@ -533,12 +538,8 @@ export function PanelsPage({
             hasNext={nextCursor !== null}
             onPrevious={popCursor}
             onNext={() => nextCursor !== null && pushCursor(nextCursor)}
-            // `GET /panels` pages an ASCENDING keyset — oldest panel first,
-            // `nextCursor` toward newer ones — so the next page is NEWER here.
-            // The default labels are the descending lists', and read backwards
-            // on this one.
-            nextLabel="web.newer"
-            previousLabel="web.older"
+            // `GET /panels` pages an ASCENDING keyset; the neutral previous/next
+            // labels read correctly in either direction.
           />
         )}
       </Card>
@@ -730,6 +731,7 @@ export function PanelDetailPage({
    * by the Overview form itself.
    */
   const route = useRoute();
+  const [lifecycleSlot, setLifecycleSlot] = useState<HTMLElement | null>(null);
   const rawTab = route.query.get('tab');
   const tab: DetailTab =
     rawTab !== null && (DETAIL_TABS as readonly string[]).includes(rawTab)
@@ -777,7 +779,15 @@ export function PanelDetailPage({
         // The page's name while nothing may be shown: no badge, no button.
         <PageHead title={t('web.panel_detail')} />
       ) : (
-        <PanelHead panel={data} actions={testButton} />
+        <PanelHead
+          panel={data}
+          actions={
+            <>
+              {testButton}
+              <span ref={setLifecycleSlot} className="ops-row-actions panel-lifecycle-slot" />
+            </>
+          }
+        />
       )}
 
       {data !== undefined && <PanelHeadBanners panel={data} onHealth={() => setTab('health')} />}
@@ -830,7 +840,7 @@ export function PanelDetailPage({
                 is that "state" here is not only what the operator can see.
               */}
               <div hidden={tab !== 'overview'}>
-                <OverviewTab panel={data} mayEdit={mayEdit} />
+                <OverviewTab panel={data} mayEdit={mayEdit} lifecycleSlot={lifecycleSlot} />
               </div>
               {tab === 'workload' && <WorkloadTab panel={data} />}
               {tab === 'health' && <HealthTab panel={data} />}
@@ -1040,7 +1050,16 @@ function capFromInput(raw: string): number | null | typeof INVALID_CAP {
   return Number.isInteger(value) && value >= 1 ? value : INVALID_CAP;
 }
 
-function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit: boolean }) {
+function OverviewTab({
+  panel,
+  mayEdit,
+  lifecycleSlot,
+}: {
+  panel: PanelSummaryResponse;
+  mayEdit: boolean;
+  /** Where the lifecycle buttons are drawn: the page head's action row. */
+  lifecycleSlot: HTMLElement | null;
+}) {
   const client = useQueryClient();
   const toast = useToast();
   /**
@@ -2064,13 +2083,21 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
         releases its name and takes it out of lists and probes — nor restore
         one archived through another client.
       */}
-      {mayEdit && (
-        <Card title={t('web.panel_lifecycle')} hint={t('web.panel_lifecycle_hint')} tone="danger">
-          <div className="btn-group">
+      {/*
+        W3: the lifecycle card is gone. Its buttons are drawn in the page head's action row
+        (through a portal into the slot `PanelDetailPage` gives, so they show on every tab
+        while their state stays here, beside the drafts a restore's rename folds into); the
+        archive confirmation is a dialog and the rename after «name taken» is a drawer.
+      */}
+      {mayEdit &&
+        lifecycleSlot !== null &&
+        createPortal(
+          <>
             {panel.status === 'ACTIVE' && (
               <button
                 type="button"
                 className="btn"
+                title={t('web.panel_lifecycle_hint')}
                 disabled={status.isPending}
                 onClick={() => {
                   const command = { status: 'DISABLED' as PanelStatus };
@@ -2099,7 +2126,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
                 {t('web.panel_enable')}
               </button>
             )}
-            {panel.status !== 'ARCHIVED' && !archiveAsked && (
+            {panel.status !== 'ARCHIVED' && (
               <button
                 type="button"
                 className="btn ghost danger"
@@ -2113,15 +2140,9 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               <button
                 type="button"
                 className="btn"
-                disabled={status.isPending || renameOnRestore === ''}
+                disabled={status.isPending}
                 onClick={() => {
-                  const command = {
-                    status: 'DISABLED' as PanelStatus,
-                    // Sent only once the server has said the old name is gone.
-                    // A rename on every restore would be a change nobody asked
-                    // for, and the API refuses one outside this transition.
-                    ...(renameOnRestore === null ? {} : { name: renameOnRestore }),
-                  };
+                  const command = { status: 'DISABLED' as PanelStatus };
                   status.mutate({
                     ...command,
                     idempotencyKey: statusSubmission.current(command),
@@ -2131,84 +2152,99 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
                 {t('web.panel_restore')}
               </button>
             )}
-          </div>
+          </>,
+          lifecycleSlot,
+        )}
 
-          {/*
-            The second press, and what it is told before it.
-
-            Archiving was ONE click, and it is the click that takes a panel out
-            of the catalogue, out of the monitor's schedule and out of every
-            list — while leaving every account already on it exactly where it
-            is. The two facts an operator needs are how many services the panel
-            still carries and that nothing about them changes, and they were
-            nowhere on the screen.
-
-            Deliberately NOT a typed phrase. A phrase is the weight `TERMINATE`
-            carries because that one deletes somebody's account on a provider;
-            archiving is reversible by the Restore button three lines up, and
-            pricing the two the same would teach an operator to type past both.
-
-            The count comes from the capacity projection the Overview card
-            already renders — the same number, from the same response, so the
-            two cannot disagree.
-          */}
-          {archiveAsked && panel.status !== 'ARCHIVED' && (
-            <div className="stack">
-              <Banner tone="danger" title={t('web.panel_archive_confirm_title')}>
-                {t('web.panel_archive_confirm_body')}
-              </Banner>
-              <KV
-                items={[
-                  [
-                    t('web.panel_capacity_services'),
-                    <Num key="s" value={panel.capacity.services} />,
-                  ],
-                ]}
-              />
-              <div className="btn-group">
-                <button
-                  type="button"
-                  className="btn danger"
-                  disabled={status.isPending}
-                  onClick={() => {
-                    const command = { status: 'ARCHIVED' as PanelStatus };
-                    status.mutate({
-                      ...command,
-                      idempotencyKey: statusSubmission.current(command),
-                    });
-                  }}
-                >
-                  {t('web.panel_archive_confirm')}
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  disabled={status.isPending}
-                  onClick={() => setArchiveAsked(false)}
-                >
-                  {t('web.panel_archive_cancel')}
-                </button>
-              </div>
+      {/*
+        The second press, and what it is told before it: how many services the panel
+        still carries and that nothing about them changes. Deliberately NOT a typed
+        phrase — archiving is reversible by Restore. The count is the capacity
+        projection the Overview card renders, so the two cannot disagree.
+      */}
+      {mayEdit && archiveAsked && panel.status !== 'ARCHIVED' && (
+        <Modal
+          open
+          danger
+          onClose={() => setArchiveAsked(false)}
+          title={t('web.panel_archive_confirm_title')}
+          foot={
+            <div className="btn-group">
+              <button
+                type="button"
+                className="btn danger"
+                disabled={status.isPending}
+                onClick={() => {
+                  const command = { status: 'ARCHIVED' as PanelStatus };
+                  status.mutate({
+                    ...command,
+                    idempotencyKey: statusSubmission.current(command),
+                  });
+                }}
+              >
+                {t('web.panel_archive_confirm')}
+              </button>
+              <button
+                type="button"
+                className="btn ghost"
+                disabled={status.isPending}
+                onClick={() => setArchiveAsked(false)}
+              >
+                {t('web.panel_archive_cancel')}
+              </button>
             </div>
-          )}
+          }
+        >
+          <div className="stack">
+            <Banner tone="danger">{t('web.panel_archive_confirm_body')}</Banner>
+            <KV
+              items={[
+                [t('web.panel_capacity_services'), <Num key="s" value={panel.capacity.services} />],
+              ]}
+            />
+            <p className="faint small">{t('web.panel_lifecycle_hint')}</p>
+            <p className="faint small">{t('web.panel_archive_hint')}</p>
+          </div>
+        </Modal>
+      )}
 
-          {/* Only after the refusal, because until then there is nothing to
-              resolve and an always-present rename field would invite one. */}
-          {renameOnRestore !== null && (
-            <>
-              <Banner tone="warn">{t('web.panel_restore_name_taken')}</Banner>
-              <Field label={t('web.panel_restore_new_name')} htmlFor={`restore-name-${panel.id}`}>
-                <input
-                  id={`restore-name-${panel.id}`}
-                  className="input"
-                  value={renameOnRestore}
-                  onChange={(event) => setRenameOnRestore(event.target.value)}
-                />
-              </Field>
-            </>
-          )}
-          <p className="faint small">{t('web.panel_archive_hint')}</p>
-        </Card>
+      {/* Only after the refusal: until then there is nothing to resolve. */}
+      {mayEdit && renameOnRestore !== null && panel.status === 'ARCHIVED' && (
+        <OpsActionDrawer
+          open
+          title={t('web.panel_restore')}
+          dirty={false}
+          onClose={() => setRenameOnRestore(null)}
+        >
+          <div className="stack">
+            <Banner tone="warn">{t('web.panel_restore_name_taken')}</Banner>
+            <Field label={t('web.panel_restore_new_name')} htmlFor={`restore-name-${panel.id}`}>
+              <input
+                id={`restore-name-${panel.id}`}
+                className="input"
+                value={renameOnRestore}
+                onChange={(event) => setRenameOnRestore(event.target.value)}
+              />
+            </Field>
+            <div className="ops-row-actions">
+              <button
+                type="button"
+                className="btn primary"
+                disabled={status.isPending || renameOnRestore === ''}
+                onClick={() => {
+                  // Sent only once the server has said the old name is gone.
+                  const command = { status: 'DISABLED' as PanelStatus, name: renameOnRestore };
+                  status.mutate({
+                    ...command,
+                    idempotencyKey: statusSubmission.current(command),
+                  });
+                }}
+              >
+                {t('web.panel_restore')}
+              </button>
+            </div>
+          </div>
+        </OpsActionDrawer>
       )}
     </>
   );
@@ -2218,10 +2254,6 @@ function HealthTab({ panel }: { panel: PanelSummaryResponse }) {
   const fresh = splitDuration(PANEL_HEALTH_FRESH_FOR_MS);
   return (
     <>
-      <Banner tone="info" title={t('web.panel_health_latest_title')}>
-        {t('web.panel_health_latest_body')}
-      </Banner>
-
       {/*
         Said, not merely not-offered. Removing the test button from a panel
         whose credentials cannot authenticate stops the screen making a false
@@ -2335,6 +2367,14 @@ function CredentialsTab({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [apiToken, setApiToken] = useState('');
+  const [replacing, setReplacing] = useState(false);
+  // Closing throws the typed secrets away (after asking, when something was typed).
+  const closeReplace = () => {
+    setUsername('');
+    setPassword('');
+    setApiToken('');
+    setReplacing(false);
+  };
 
   /**
    * Which credential fields this panel's provider can actually USE.
@@ -2399,6 +2439,7 @@ function CredentialsTab({
       setUsername('');
       setPassword('');
       setApiToken('');
+      setReplacing(false);
       toast({ tone: 'ok', message: t('web.saved') });
       await onDone();
     },
@@ -2465,8 +2506,24 @@ function CredentialsTab({
         <p className="faint small">{t('web.credential_stored_unusable')}</p>
       )}
 
-      <div className="grid-2">
-        <Card title={t('web.panel_tab_credentials')} hint={t('web.credentials_presence_hint')}>
+      <div className="stack">
+        <Card
+          title={t('web.panel_tab_credentials')}
+          hint={t('web.credentials_presence_hint')}
+          {...(mayWrite
+            ? {
+                actions: (
+                  <button
+                    type="button"
+                    className="btn sm primary"
+                    onClick={() => setReplacing(true)}
+                  >
+                    {t('web.credentials_replace')}
+                  </button>
+                ),
+              }
+            : {})}
+        >
           <div className="list-editor">
             {shows('username') && (
               <Secret
@@ -2501,9 +2558,16 @@ function CredentialsTab({
           </div>
         </Card>
 
+        {/* W3: the replace form opens on the presence card's button, in a drawer. */}
         {mayWrite && (
-          <Card title={t('web.credentials_replace')} hint={t('web.credentials_replace_hint')}>
+          <OpsActionDrawer
+            open={replacing}
+            title={t('web.credentials_replace')}
+            dirty={username !== '' || password !== '' || apiToken !== ''}
+            onClose={closeReplace}
+          >
             <form onSubmit={onSubmit} className="stack">
+              <p className="muted small">{t('web.credentials_replace_hint')}</p>
               {accepts('username') && (
                 <Field label={t('web.username')} htmlFor={`cu-${panel.id}`}>
                   <input
@@ -2549,7 +2613,7 @@ function CredentialsTab({
                 </button>
               </div>
             </form>
-          </Card>
+          </OpsActionDrawer>
         )}
       </div>
     </>
@@ -2839,7 +2903,7 @@ export function NewPanelPage({
         isEmpty={(providers.data?.providers.length ?? 0) === 0}
         empty={<Empty title={t('web.providers_none')} icon="panels" />}
       >
-        <form onSubmit={onSubmit}>
+        <form onSubmit={onSubmit} className="ops-equal-cols">
           <TwoColumn
             main={
               <Card tight>

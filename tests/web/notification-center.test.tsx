@@ -10,6 +10,7 @@ import {
   CATEGORY_LABELS,
 } from '../../apps/web/src/pages/notification-center';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Phase B3 — the Notification Center and its bell, against the shapes the server returns
@@ -67,6 +68,22 @@ describe('the bell', () => {
 });
 
 describe('the inbox', () => {
+  it('asks the server for ten notifications a page (W1.8)', async () => {
+    const api = stubApi([
+      { url: '/notification-center', body: { notifications: [item()], nextCursor: null } },
+    ]);
+    renderPage(<NotificationCenterPage permissions={[...PERMISSION_KEYS]} />);
+    await waitFor(() =>
+      expect(
+        api.calls.some(
+          (call) =>
+            new URL(call.url, 'http://x').pathname.endsWith('/notification-center') &&
+            new URL(call.url, 'http://x').searchParams.get('limit') === '10',
+        ),
+      ).toBe(true),
+    );
+  });
+
   it('lists notifications with a Persian title, severity, category, count and a deep link', async () => {
     stubApi([
       {
@@ -136,7 +153,8 @@ describe('the inbox', () => {
     ]);
     renderPage(<NotificationCenterPage permissions={['payments.view', 'panels.view']} />);
     await screen.findByText('همهٔ اعلان‌ها خوانده شده‌اند.');
-    const select = screen.getByRole('combobox', { name: 'دسته' });
+    // W1.3: the category select lives in the filter panel.
+    const select = within(openFilterPanel()).getByRole('combobox', { name: 'دسته' });
     const options = within(select)
       .getAllByRole('option')
       .map((option) => option.textContent);

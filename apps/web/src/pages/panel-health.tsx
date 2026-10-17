@@ -41,6 +41,7 @@ import {
   Textarea,
   useToast,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { Modal } from '../ui/overlays';
 import { opsCodeLabel } from '../ops-code-labels';
@@ -109,7 +110,8 @@ export function PanelHealthPage({
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
   const health = useQuery({
     queryKey: ['panel-health', cursor ?? null],
-    queryFn: () => fetchPanelHealth(cursor === undefined ? {} : { cursor }),
+    queryFn: () =>
+      fetchPanelHealth({ limit: LIST_PAGE_SIZE, ...(cursor === undefined ? {} : { cursor }) }),
     enabled: !denied,
     refetchInterval: pollUnlessFinal(PANEL_HEALTH_REFRESH_MS),
   });

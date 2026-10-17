@@ -275,3 +275,20 @@ describe('clearing filters while a search is still being typed (N5)', () => {
     expect(window.location.search).toBe('');
   });
 });
+
+describe('the service search applies itself (N3)', () => {
+  it('debounces into q and drops the cursor the old search held', async () => {
+    navigate('/services?cursor=c9', { replace: true, force: true });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([{ url: '/services', body: { services: [], nextCursor: null } }]);
+    renderPage(<LiveServices />);
+    const box = await screen.findByLabelText(t('web.list_search_label'));
+    const before = api.calls.length;
+    fireEvent.change(box, { target: { value: 'ali' } });
+    await act(() => vi.advanceTimersByTimeAsync(LIST_SEARCH_DEBOUNCE_MS - 250));
+    expect(api.calls.length).toBe(before);
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('q')).toBe('ali'));
+    expect(window.location.search).not.toContain('cursor=');
+  });
+});

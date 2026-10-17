@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { formatNumber } from '../format';
 import { t } from '../i18n/web.fa';
 import { Badge } from '../ui/kit';
@@ -148,5 +156,86 @@ export function SectionNav({ label, items }: { label: string; items: readonly Se
         ))}
       </ul>
     </nav>
+  );
+}
+
+/**
+ * W2: a long page's sections as TABS rather than a list that scrolls the page. Nothing is
+ * scrolled: the chosen section is shown and the others are `hidden` — still mounted, so a
+ * section's drafts survive a switch, and the page's leave guard and unsaved count still see
+ * every one. A section holding an unsaved edit carries a dot on its tab.
+ */
+export function SectionTabs({
+  label,
+  items,
+  value,
+  onChange,
+  panelId,
+}: {
+  label: string;
+  items: readonly (SectionNavItem & { readonly count?: number })[];
+  value: string;
+  onChange: (id: string) => void;
+  /** Prefix of the panels' ids; each panel is `${panelId}-${item.id}`. */
+  panelId: string;
+}) {
+  const buttons = useRef(new Map<string, HTMLButtonElement | null>());
+  const select = (next: string) => {
+    onChange(next);
+    queueMicrotask(() => buttons.current.get(next)?.focus({ preventScroll: true }));
+  };
+  const move = (delta: number) => {
+    const at = items.findIndex((item) => item.id === value);
+    const next = items[(Math.max(at, 0) + delta + items.length) % items.length];
+    if (next !== undefined) select(next.id);
+  };
+  return (
+    <div
+      className="tabs ob-section-tabs"
+      role="tablist"
+      aria-label={label}
+      onKeyDown={(event) => {
+        // RTL: the strip runs right-to-left, so ArrowLeft advances.
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          move(1);
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          move(-1);
+        } else if (event.key === 'Home' && items[0] !== undefined) {
+          event.preventDefault();
+          select(items[0].id);
+        } else if (event.key === 'End' && items.length > 0) {
+          event.preventDefault();
+          select(items[items.length - 1]!.id);
+        }
+      }}
+    >
+      {items.map((item) => (
+        <button
+          key={item.id}
+          ref={(node) => {
+            buttons.current.set(item.id, node);
+          }}
+          type="button"
+          role="tab"
+          id={`${panelId}-tab-${item.id}`}
+          aria-selected={item.id === value}
+          aria-controls={`${panelId}-${item.id}`}
+          tabIndex={item.id === value ? 0 : -1}
+          className={item.id === value ? 'on' : undefined}
+          onClick={() => onChange(item.id)}
+        >
+          {item.label}
+          {item.count !== undefined && <span className="cnt">{formatNumber(item.count)}</span>}
+          {item.unsaved === true && (
+            <span className="ob-secnav-mark" title={t('web.ob_unsaved_row')}>
+              <i className="dot warn" aria-hidden="true" />
+              <span className="visually-hidden">{t('web.ob_unsaved_row')}</span>
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
   );
 }

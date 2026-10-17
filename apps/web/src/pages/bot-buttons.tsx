@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BOT_COMMANDS,
@@ -9,6 +9,7 @@ import {
   type BotCommandSyncView,
   type BotMenuConfigResponse,
   type MainMenuButtonId,
+  type TemplateViewResponse,
 } from '@nexa/contracts';
 import {
   checkBotMenu,
@@ -20,7 +21,19 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
-import { Disclosure, Badge, Banner, Card, Ltr, PageHead, StateSwitch, type Tone } from '../ui/kit';
+import {
+  Badge,
+  Banner,
+  Card,
+  Ltr,
+  PageHead,
+  StateSwitch,
+  TabPanel,
+  useUnsavedChanges,
+  type Tone,
+} from '../ui/kit';
+import { DirtyScope, useDirtySet } from './ops-b-layout';
+import { DotTabs, KeptSheet } from './editor-layout';
 import { TemplateCard } from './content';
 import { ErrorReport } from './settings';
 import { BUILDER_QUERY_KEY, MenuBuilder } from './bot-buttons/builder';
@@ -78,6 +91,8 @@ export function syncErrorHint(code: string): WebKey {
  * is declared for, and the schema refuses anything else, so two buttons cannot do one
  * thing and no button can carry an arbitrary payload.
  */
+type BotButtonsTab = 'layout' | 'inline' | 'labels' | 'commands';
+
 export function BotButtonsPage({
   mayEdit,
   denied,
@@ -116,100 +131,240 @@ export function BotButtonsPage({
   );
   const items = builder.data?.items ?? [];
 
-  /** The Inspector's «edit the label»: open that button's text card below and go to it. */
-  const editLabel = (id: MainMenuButtonId) => {
-    const host = document.getElementById(`bot-buttons-label-${id}`);
-    const details = host?.querySelector('details');
-    if (details === null || details === undefined) return;
-    details.open = true;
-    details.scrollIntoView?.({ block: 'start' });
-    details.querySelector('summary')?.focus();
-  };
+  const [tab, setTab] = useState<BotButtonsTab>('layout');
+  /** The text whose editor sheet is open: a main-menu button's label, or a command's. */
+  const [openText, setOpenText] = useState<string | null>(null);
+  const closeText = useCallback(() => setOpenText(null), []);
+  const { dirty, report } = useDirtySet();
+  /*
+   * The builder and the glass buttons guard their own drafts with their own question; the
+   * text cards report here, and leaving the page with one of them unsaved asks too.
+   */
+  const textKeys = [...dirty].filter((key) => key !== 'builder' && key !== 'inline');
+  useUnsavedChanges(mayEditTemplates && textKeys.length > 0);
+
+  /**
+   * The Inspector's «edit the label»: that button's text opens in a side sheet over the
+   * builder — no jump to another section, and the builder's selection stays as it was.
+   */
+  const editLabel = (id: MainMenuButtonId) => setOpenText(mainMenuButton(id).label);
+
+  const labelRows = items.flatMap((item) => {
+    const button = mainMenuButton(item.id);
+    const template = menuTemplates.find((one) => one.key === button.label);
+    return template === undefined ? [] : [{ item, button, template }];
+  });
+  const commandRows = BOT_COMMANDS.flatMap((entry) => {
+    const template = commandTemplates.find((one) => one.key === entry.description);
+    return template === undefined ? [] : [{ entry, template }];
+  });
+  const sourceBadge = (template: TemplateViewResponse) => (
+    <>
+      <Badge tone={template.source === 'DEFAULT' ? 'neutral' : 'info'}>
+        {t(template.source === 'DEFAULT' ? 'web.source_default' : 'web.template_customised')}
+      </Badge>
+      {dirty.has(template.key) && (
+        <Badge tone="warn" dot>
+          {t('web.ob_unsaved_row')}
+        </Badge>
+      )}
+    </>
+  );
 
   return (
-    <>
+    <DirtyScope report={report}>
       <PageHead title={t('web.bot_buttons_title')} subtitle={t('web.bot_buttons_intro')} />
-      <StateSwitch query={builder} denied={denied} isEmpty={false}>
-        {builder.data !== undefined && (
-          <MenuBuilder
-            view={builder.data}
-            mayEdit={mayEdit}
-            mayViewTemplates={mayViewTemplates}
-            onEditLabel={editLabel}
-            refetch={() => builder.refetch()}
-          />
-        )}
-      </StateSwitch>
-      <StateSwitch query={menu} denied={denied} isEmpty={false}>
-        {menu.data !== undefined && (
-          <div className="grid-2">
-            <CommandsCard config={menu.data} />
-            <SyncCard bots={menu.data.bots} mayEdit={mayEdit} />
-          </div>
-        )}
-      </StateSwitch>
-      {/* Owner spec §6: the inline (glass) buttons, between the command menu and the texts. */}
-      <InlineButtonsSection
-        mayEdit={mayEdit}
-        denied={denied}
-        mayViewTemplates={mayViewTemplates}
-        mayEditTemplates={mayEditTemplates}
-        templates={templates.data?.templates}
-        // Codex 4170910525: a glass label can be a main-menu template (`bot.menu.services`),
-        // so a label save re-reads both menu read models, as the texts cards do.
-        onLabelChanged={refreshMenu}
+      <DotTabs
+        value={tab}
+        onChange={setTab}
+        panelId="bot-buttons-panel"
+        items={[
+          {
+            id: 'layout',
+            label: t('web.bx_bb_tab_layout'),
+            dot: dirty.has('builder') ? 'warn' : null,
+          },
+          { id: 'inline', label: t('web.ib_title'), dot: dirty.has('inline') ? 'warn' : null },
+          {
+            id: 'labels',
+            label: t('web.bot_buttons_labels_title'),
+            dot: textKeys.length > 0 ? 'warn' : null,
+          },
+          { id: 'commands', label: t('web.bot_buttons_commands_title') },
+        ]}
       />
-      <Card title={t('web.bot_buttons_labels_title')} hint={t('web.bot_buttons_labels_hint')}>
-        {!mayViewTemplates ? (
-          <Banner tone="info">{t('web.bot_buttons_labels_denied')}</Banner>
-        ) : (
-          <StateSwitch query={templates}>
-            {items.map((item) => {
-              const button = mainMenuButton(item.id);
-              const template = menuTemplates.find((one) => one.key === button.label);
-              if (template === undefined) return null;
-              return (
-                <div key={button.id} id={`bot-buttons-label-${button.id}`}>
-                  <Disclosure summary={labelOf(item.id, item)}>
-                    {item.duplicateLabel && (
-                      <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
-                    )}
-                    {item.slashLabel && <Banner tone="warn">{t('web.bb_label_slash')}</Banner>}
-                    <TemplateCard
-                      template={template}
-                      mayEdit={mayEditTemplates}
-                      onChanged={refreshMenu}
-                    />
-                  </Disclosure>
-                </div>
-              );
-            })}
-            <h3 className="small">{t('web.bot_buttons_command_texts_title')}</h3>
-            <p className="muted small">{t('web.bot_buttons_command_texts_hint')}</p>
-            {BOT_COMMANDS.map((entry) => {
-              const template = commandTemplates.find((one) => one.key === entry.description);
-              if (template === undefined) return null;
-              return (
-                <Disclosure
-                  key={entry.command}
-                  summary={
-                    <span>
-                      <Ltr>/{entry.command}</Ltr> — {template.body}
-                    </span>
-                  }
-                >
-                  <TemplateCard
-                    template={template}
-                    mayEdit={mayEditTemplates}
-                    onChanged={refreshMenu}
-                  />
-                </Disclosure>
-              );
-            })}
+      {/*
+       * Every tab stays MOUNTED and only the chosen one is shown: the builder and the glass
+       * buttons each hold a draft, and a tab switch must not drop it.
+       */}
+      <TabPanel id="bot-buttons-panel" labelledBy={`bot-buttons-panel-tab-${tab}`}>
+        <div hidden={tab !== 'layout'}>
+          <StateSwitch query={builder} denied={denied} isEmpty={false}>
+            {builder.data !== undefined && (
+              <MenuBuilder
+                view={builder.data}
+                mayEdit={mayEdit}
+                mayViewTemplates={mayViewTemplates}
+                onEditLabel={editLabel}
+                refetch={() => builder.refetch()}
+              />
+            )}
           </StateSwitch>
-        )}
-      </Card>
-    </>
+        </div>
+        <div hidden={tab !== 'inline'}>
+          <InlineButtonsSection
+            mayEdit={mayEdit}
+            denied={denied}
+            mayViewTemplates={mayViewTemplates}
+            mayEditTemplates={mayEditTemplates}
+            templates={templates.data?.templates}
+            // Codex 4170910525: a glass label can be a main-menu template (`bot.menu.services`),
+            // so a label save re-reads both menu read models, as the texts cards do.
+            onLabelChanged={refreshMenu}
+          />
+        </div>
+        <div hidden={tab !== 'labels'}>
+          {!mayViewTemplates ? (
+            <Banner tone="info">{t('web.bot_buttons_labels_denied')}</Banner>
+          ) : (
+            <StateSwitch query={templates}>
+              <div className="bx-pair">
+                <Card
+                  title={t('web.bot_buttons_labels_title')}
+                  hint={t('web.bot_buttons_labels_hint')}
+                >
+                  <div className="tbl-wrap">
+                    <table className="tbl dense bx-rows" data-testid="bot-buttons-labels">
+                      <caption className="visually-hidden">
+                        {t('web.bot_buttons_labels_title')}
+                      </caption>
+                      <tbody>
+                        {labelRows.map(({ item, button, template }) => (
+                          <tr key={button.id} id={`bot-buttons-label-${button.id}`}>
+                            <td>
+                              <button
+                                type="button"
+                                className="bx-rowlink"
+                                aria-haspopup="dialog"
+                                onClick={() => setOpenText(template.key)}
+                              >
+                                <span className="menu-preview-key">{labelOf(item.id, item)}</span>
+                              </button>
+                            </td>
+                            <td>
+                              <Ltr>{template.key}</Ltr>
+                            </td>
+                            <td>
+                              <span className="bx-badges">
+                                {sourceBadge(template)}
+                                {item.duplicateLabel && (
+                                  <Badge tone="warn">{t('web.bx_bb_duplicate')}</Badge>
+                                )}
+                                {item.slashLabel && <Badge tone="warn">/</Badge>}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+                <Card
+                  title={t('web.bot_buttons_command_texts_title')}
+                  hint={t('web.bot_buttons_command_texts_hint')}
+                >
+                  <div className="tbl-wrap">
+                    <table className="tbl dense bx-rows" data-testid="bot-buttons-command-texts">
+                      <caption className="visually-hidden">
+                        {t('web.bot_buttons_command_texts_title')}
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th>{t('web.bot_buttons_command')}</th>
+                          <th>{t('web.bot_buttons_command_description')}</th>
+                          <th />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {commandRows.map(({ entry, template }) => (
+                          <tr key={entry.command}>
+                            <td>
+                              <button
+                                type="button"
+                                className="bx-rowlink"
+                                aria-haspopup="dialog"
+                                aria-label={`/${entry.command}`}
+                                onClick={() => setOpenText(template.key)}
+                              >
+                                <Ltr>/{entry.command}</Ltr>
+                              </button>
+                            </td>
+                            <td className="wrap">{template.body}</td>
+                            <td>
+                              <span className="bx-badges">{sourceBadge(template)}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </div>
+            </StateSwitch>
+          )}
+        </div>
+        <div hidden={tab !== 'commands'}>
+          <StateSwitch query={menu} denied={denied} isEmpty={false}>
+            {menu.data !== undefined && (
+              <div className="grid-2">
+                <CommandsCard config={menu.data} />
+                <SyncCard bots={menu.data.bots} mayEdit={mayEdit} />
+              </div>
+            )}
+          </StateSwitch>
+        </div>
+      </TabPanel>
+
+      {/*
+       * Each text's editor is a sheet that is hidden, never unmounted: a template card keeps
+       * its own draft, which closing the sheet must not discard.
+       */}
+      {mayViewTemplates &&
+        labelRows.map(({ item, button, template }) => (
+          <KeptSheet
+            key={template.key}
+            open={openText === template.key}
+            onClose={closeText}
+            title={labelOf(item.id, item)}
+            hint={<Ltr>{template.key}</Ltr>}
+            wide
+          >
+            {item.duplicateLabel && (
+              <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
+            )}
+            {item.slashLabel && <Banner tone="warn">{t('web.bb_label_slash')}</Banner>}
+            <TemplateCard
+              key={button.id}
+              template={template}
+              mayEdit={mayEditTemplates}
+              onChanged={refreshMenu}
+            />
+          </KeptSheet>
+        ))}
+      {mayViewTemplates &&
+        commandRows.map(({ entry, template }) => (
+          <KeptSheet
+            key={template.key}
+            open={openText === template.key}
+            onClose={closeText}
+            title={<Ltr>/{entry.command}</Ltr>}
+            hint={template.body}
+            wide
+          >
+            <TemplateCard template={template} mayEdit={mayEditTemplates} onChanged={refreshMenu} />
+          </KeptSheet>
+        ))}
+    </DirtyScope>
   );
 }
 

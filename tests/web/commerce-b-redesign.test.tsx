@@ -200,10 +200,15 @@ describe('the campaign form', () => {
     const name = await screen.findByLabelText(t('web.campaign_name'));
     expect(name.id).toBe('campaign-name');
     expect(screen.getByLabelText(t('web.campaign_description')).tagName).toBe('TEXTAREA');
+    // The form is a tab per section (no-scroll pass): the window, then the discount.
+    fireEvent.click(screen.getByRole('tab', { name: new RegExp(t('web.campaign_window')) }));
     expect(screen.getByLabelText(t('web.campaign_start')).getAttribute('placeholder')).toBe(
       '1405-07-10',
     );
     // Each action's own fields, once it is switched on.
+    fireEvent.click(
+      screen.getByRole('tab', { name: new RegExp(t('web.campaign_action_discount')) }),
+    );
     const discount = screen
       .getByRole('heading', { name: t('web.campaign_action_discount') })
       .closest('section') as HTMLElement;

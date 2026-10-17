@@ -341,9 +341,18 @@ describe('the support AI settings page', () => {
   it('tests a connection against the chain’s model and shows the outcome', async () => {
     const { api } = settings();
     const openai = await providerBlock('OPENAI');
-    const model = openai.getByLabelText(new RegExp(t('web.sai_test_model'))) as HTMLInputElement;
-    expect(model.value).toBe('gpt-test-1');
+    // W3: the row's button opens the model box in a drawer, seeded with the chain's model.
+    expect(openai.queryByLabelText(new RegExp(t('web.sai_test_model')))).toBeNull();
     fireEvent.click(openai.getByRole('button', { name: t('web.sai_test') }));
+    const drawer = within(await screen.findByRole('dialog'));
+    const model = drawer.getByLabelText(new RegExp(t('web.sai_test_model'))) as HTMLInputElement;
+    expect(model.value).toBe('gpt-test-1');
+    fireEvent.change(model, { target: { value: ' ' } });
+    expect(
+      (drawer.getByRole('button', { name: t('web.sai_test') }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.change(model, { target: { value: 'gpt-test-1' } });
+    fireEvent.click(drawer.getByRole('button', { name: t('web.sai_test') }));
     await waitFor(() => expect(calls(api, 'POST', '/credentials/OPENAI/test')).toHaveLength(1));
     expect(calls(api, 'POST', '/credentials/OPENAI/test')[0]!.body).toEqual({
       model: 'gpt-test-1',

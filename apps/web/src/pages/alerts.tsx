@@ -27,7 +27,6 @@ import {
   DataTable,
   Empty,
   ErrorState,
-  FilterBar,
   FilterChip,
   FilterChips,
   LoadingState,
@@ -37,7 +36,10 @@ import {
   StateSwitch,
   type Column,
   Quantity,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
+import { ListFilterBar } from '../ui/filter-bar';
+import { templateCopy } from '../template-copy';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
 import { CodeLabel, TechnicalDetails } from '../ui/technical-details';
@@ -86,7 +88,7 @@ export const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
  * server default. Whether ANOTHER page exists is a separate question and only
  * the server can answer it, which is why the response carries `nextCursor`.
  */
-const ALERTS_PAGE_SIZE = 25;
+const ALERTS_PAGE_SIZE = LIST_PAGE_SIZE;
 /**
  * The newest page of the feed re-reads itself. A management event — a denial,
  * a lockout, an administrator change, a condition — is recorded with no
@@ -259,9 +261,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         }
       />
 
-      <Banner tone="info" title={t('web.alerts_scope_title')}>
-        {t('web.alerts_scope_body')}
-      </Banner>
+      <Banner tone="info">{t('web.alerts_scope_body')}</Banner>
 
       <Card>
         {/*
@@ -271,33 +271,59 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           gated. Each change was one more refused request and one more
           `access.permission_denied` event, two in production.
         */}
-        <FilterBar hidden={!mayRequest(events, denied)}>
-          <FilterChips label={t('web.status')}>
-            <FilterChip pressed={openOnly} onClick={() => filter(() => setOpenOnly(true))}>
-              {t('web.unresolved')}
-            </FilterChip>
-            <FilterChip pressed={!openOnly} onClick={() => filter(() => setOpenOnly(false))}>
-              {t('web.all')}
-            </FilterChip>
-          </FilterChips>
-          <span className="spacer" />
-          <label className="visually-hidden" htmlFor="alert-severity">
-            {t('web.severity')}
-          </label>
-          <select
-            id="alert-severity"
-            className="input sm alerts-severity"
-            value={severity}
-            onChange={(event) => filter(() => setSeverity(event.target.value))}
-          >
-            <option value="">{t('web.alerts_all_severities')}</option>
-            {SEVERITIES.map((value) => (
-              <option key={value} value={value}>
-                {t(SEVERITY_LABELS[value])}
-              </option>
-            ))}
-          </select>
-        </FilterBar>
+        {mayRequest(events, denied) && (
+          <ListFilterBar
+            label={t('web.alerts_title')}
+            filters={[
+              {
+                key: 'status',
+                label: t('web.status'),
+                active: openOnly ? t('web.unresolved') : null,
+                onClear: () => filter(() => setOpenOnly(false)),
+                control: (
+                  <FilterChips label={t('web.status')}>
+                    <FilterChip pressed={openOnly} onClick={() => filter(() => setOpenOnly(true))}>
+                      {t('web.unresolved')}
+                    </FilterChip>
+                    <FilterChip
+                      pressed={!openOnly}
+                      onClick={() => filter(() => setOpenOnly(false))}
+                    >
+                      {t('web.all')}
+                    </FilterChip>
+                  </FilterChips>
+                ),
+              },
+              {
+                key: 'severity',
+                label: t('web.severity'),
+                active:
+                  severity === ''
+                    ? null
+                    : SEVERITY_LABELS[severity as (typeof SEVERITIES)[number]] === undefined
+                      ? severity
+                      : t(SEVERITY_LABELS[severity as (typeof SEVERITIES)[number]]),
+                onClear: () => filter(() => setSeverity('')),
+                control: (
+                  <select
+                    id="alert-severity"
+                    className="input sm alerts-severity"
+                    aria-label={t('web.severity')}
+                    value={severity}
+                    onChange={(event) => filter(() => setSeverity(event.target.value))}
+                  >
+                    <option value="">{t('web.alerts_all_severities')}</option>
+                    {SEVERITIES.map((value) => (
+                      <option key={value} value={value}>
+                        {t(SEVERITY_LABELS[value])}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+            ]}
+          />
+        )}
 
         <StateSwitch
           query={events}
@@ -327,8 +353,8 @@ export function AlertsPage({ denied }: { denied: boolean }) {
               <Empty title={t('web.alerts_empty')} hint={t('web.alerts_empty_hint')} icon="check" />
             ) : (
               <Empty
-                title={t('web.alerts_empty_filtered')}
-                hint={t('web.alerts_empty_filtered_hint')}
+                title={t('web.alerts_empty_filter')}
+                hint={t('web.alerts_empty_filter_hint')}
                 icon="inbox"
               />
             )
@@ -374,6 +400,26 @@ export function AlertsPage({ denied }: { denied: boolean }) {
   );
 }
 
+/** W5: what kind of message a notification is, by its template's family. */
+export type NotificationCategory = 'FINANCE' | 'SUPPORT' | 'NOTICE';
+
+export const NOTIFICATION_CATEGORY_LABELS: Readonly<Record<NotificationCategory, WebKey>> = {
+  FINANCE: 'web.notif_cat_finance',
+  SUPPORT: 'web.notif_cat_support',
+  NOTICE: 'web.notif_cat_notice',
+};
+
+export function notificationCategoryOf(templateKey: string): NotificationCategory {
+  if (templateKey.startsWith('ops.financial.')) return 'FINANCE';
+  if (/(^|\.)(support|ticket|tickets|business)(\.|_|$)/u.test(templateKey)) return 'SUPPORT';
+  return 'NOTICE';
+}
+
+/** The template's Persian name (the template catalogue's), or the raw key when it has none. */
+export function notificationTypeName(templateKey: string): string {
+  return templateCopy(templateKey, '').name;
+}
+
 const STATUS_KEYS: Record<string, WebKey> = {
   PENDING: 'web.status_pending',
   SENT: 'web.status_sent',
@@ -395,7 +441,7 @@ const STATUS_KEYS: Record<string, WebKey> = {
  * per intent with no grouping, and because a pager the operator never reaches
  * is a pager that might as well not exist.
  */
-const NOTIFICATION_PAGE_SIZE = 25;
+const NOTIFICATION_PAGE_SIZE = LIST_PAGE_SIZE;
 /** The discovery lane for a settled first page of notifications. See `pollUnlessFinalWhile`. */
 const NOTIFICATION_DISCOVERY_MS = 30_000;
 
@@ -510,16 +556,23 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     },
     {
       key: 'template',
-      header: t('web.key'),
+      header: t('web.notif_type'),
+      wrap: true,
       render: (row) => (
-        <button
-          type="button"
-          className="link notifications-key"
-          aria-pressed={row.id === selected}
-          onClick={() => setSelected(row.id)}
-        >
-          <Ltr>{row.templateKey}</Ltr>
-        </button>
+        <span className="notifications-type">
+          <button
+            type="button"
+            className="link notifications-key"
+            aria-pressed={row.id === selected}
+            title={row.templateKey}
+            onClick={() => setSelected(row.id)}
+          >
+            {notificationTypeName(row.templateKey)}
+          </button>
+          <Badge tone="neutral" outline>
+            {t(NOTIFICATION_CATEGORY_LABELS[notificationCategoryOf(row.templateKey)])}
+          </Badge>
+        </span>
       ),
     },
     {

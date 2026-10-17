@@ -58,13 +58,29 @@ function routes(extra: { url: string; body: unknown; status?: number }[] = []) {
 
 const label = (key: keyof typeof PERMISSION_LABELS) => t(PERMISSION_LABELS[key]);
 
+/** A role's row in the roles list (the catalogue beside it shares words like «پشتیبانی»). */
+async function roleRow(name: string): Promise<HTMLElement> {
+  const rows = await screen.findAllByText(name);
+  const row = rows.map((node) => node.closest('li.rbac-role')).find((one) => one !== null);
+  if (row === undefined || row === null) throw new Error(`no role row ${name}`);
+  return row as HTMLElement;
+}
+
+/** The open role editor, every catalogue card expanded (they start collapsed past 24). */
+async function editorDrawer(): Promise<HTMLElement> {
+  const drawer = await screen.findByRole('dialog');
+  const expand = within(drawer).queryByRole('button', { name: t('web.pc_expand_all') });
+  if (expand !== null) fireEvent.click(expand);
+  return drawer;
+}
+
 describe('the roles section', () => {
   it('lists roles with holders, and offers no edit or delete for the owner role', async () => {
     stubApi(routes());
     renderPage(
       <SystemPage route={route} permissions={['admins.view', 'admins.permissions.edit']} />,
     );
-    const ownerRow = (await screen.findByText('Owner')).closest('li')!;
+    const ownerRow = await roleRow(t('web.role_key_owner'));
     expect(within(ownerRow).getByText(t('web.rbac_immutable'))).toBeInTheDocument();
     expect(within(ownerRow).getByText(/Owner One/)).toBeInTheDocument();
     expect(
@@ -74,7 +90,7 @@ describe('the roles section', () => {
       within(ownerRow).queryByRole('button', { name: new RegExp(t('web.rbac_delete')) }),
     ).toBeNull();
     // A system role: editable, never deletable.
-    const supportRow = screen.getByText('Support').closest('li')!;
+    const supportRow = await roleRow(t('web.role_key_support'));
     expect(
       within(supportRow).getByRole('button', { name: new RegExp(t('web.rbac_edit')) }),
     ).toBeInTheDocument();
@@ -86,7 +102,7 @@ describe('the roles section', () => {
   it('draws no write controls for a viewer', async () => {
     stubApi(routes());
     renderPage(<SystemPage route={route} permissions={['admins.view']} />);
-    await screen.findByText('Support');
+    await roleRow(t('web.role_key_support'));
     expect(screen.queryByRole('button', { name: new RegExp(t('web.rbac_new_role')) })).toBeNull();
     expect(screen.queryByRole('button', { name: new RegExp(t('web.rbac_edit')) })).toBeNull();
   });
@@ -99,6 +115,7 @@ describe('the roles section', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: new RegExp(t('web.rbac_new_role')) }),
     );
+    await editorDrawer();
     const box = (key: string) =>
       document.getElementById(`rbac-perm-${key.replace(/\./g, '-')}`) as HTMLInputElement;
     fireEvent.click(box('receipts.review'));
@@ -130,11 +147,16 @@ describe('the roles section', () => {
     renderPage(
       <SystemPage route={route} permissions={['admins.view', 'admins.permissions.edit']} />,
     );
-    const supportRow = (await screen.findByText('Support')).closest('li')!;
+    const supportRow = await roleRow(t('web.role_key_support'));
     fireEvent.click(
       within(supportRow).getByRole('button', { name: new RegExp(t('web.rbac_edit')) }),
     );
 
+    const editor = await screen.findByRole('dialog');
+    // The catalogue's search opens the card that holds it.
+    fireEvent.change(within(editor).getByRole('searchbox', { name: t('web.rbac_search') }), {
+      target: { value: 'refunds.issue' },
+    });
     fireEvent.click(document.getElementById('rbac-perm-refunds-issue')!);
     fireEvent.change(screen.getByLabelText(t('web.admin_reason_label')), {
       target: { value: 'refunds desk' },
@@ -160,6 +182,50 @@ describe('the roles section', () => {
     });
   });
 
+  it('W1.7: compares the roles in a table, one column per role', async () => {
+    stubApi(routes());
+    renderPage(<SystemPage route={route} permissions={['admins.view']} />);
+    const card = (
+      await screen.findByRole('heading', { name: t('web.rbac_catalog_title') })
+    ).closest('section') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: t('web.pc_view_matrix') }));
+    const table = within(card).getByRole('table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((one) => one.textContent);
+    expect(headers).toEqual(
+      expect.arrayContaining([t('web.role_key_owner'), t('web.role_key_support'), 'Night shift']),
+    );
+  });
+
+  it('«انتخاب همه» in a card keeps the editor rules: the reads the actions need come too', async () => {
+    stubApi(routes());
+    renderPage(
+      <SystemPage route={route} permissions={['admins.view', 'admins.permissions.edit']} />,
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(t('web.rbac_new_role')) }),
+    );
+    const drawer = await screen.findByRole('dialog');
+    fireEvent.change(within(drawer).getByRole('searchbox', { name: t('web.rbac_search') }), {
+      target: { value: 'receipts.review' },
+    });
+    fireEvent.click(within(drawer).getByRole('button', { name: t('web.pc_select_all') }));
+    const box = (key: string) =>
+      document.getElementById(`rbac-perm-${key.replace(/\./g, '-')}`) as HTMLInputElement;
+    expect(box('receipts.review').checked).toBe(true);
+    // `payments.view` is not in the filtered card, but the rule pulled it in and said so.
+    fireEvent.change(within(drawer).getByRole('searchbox', { name: t('web.rbac_search') }), {
+      target: { value: 'payments.view' },
+    });
+    expect(box('payments.view').checked).toBe(true);
+    expect(
+      within(drawer).getByText(new RegExp(label('payments.view')), {
+        selector: '.banner *, .banner',
+      }),
+    ).toBeTruthy();
+  });
+
   it('searches the matrix', async () => {
     stubApi(routes());
     renderPage(
@@ -168,11 +234,12 @@ describe('the roles section', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: new RegExp(t('web.rbac_new_role')) }),
     );
-    fireEvent.change(screen.getByLabelText(t('web.rbac_search')), {
+    const drawer = await editorDrawer();
+    fireEvent.change(within(drawer).getByRole('searchbox', { name: t('web.rbac_search') }), {
       target: { value: 'refunds.issue' },
     });
-    expect(screen.getByLabelText(new RegExp(label('refunds.issue')))).toBeInTheDocument();
-    expect(screen.queryByLabelText(new RegExp(label('users.view')))).toBeNull();
+    expect(within(drawer).getByLabelText(new RegExp(label('refunds.issue')))).toBeInTheDocument();
+    expect(within(drawer).queryByLabelText(new RegExp(label('users.view')))).toBeNull();
   });
 
   it('explains a missing permission in the effective preview', async () => {
@@ -255,6 +322,7 @@ describe('the label table', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: new RegExp(t('web.rbac_new_role')) }),
     );
+    await editorDrawer();
     for (const permission of PERMISSIONS) {
       const id = `rbac-perm-${permission.key.replace(/\./g, '-')}`;
       const box = document.getElementById(id);
@@ -322,7 +390,8 @@ describe('Codex review of #161 (web)', () => {
     api.calls.filter((call) => call.url.includes(fragment)).length;
 
   async function openSupportEditor() {
-    const supportRow = (await screen.findByText('Support')).closest('li')!;
+    // The seeded name reads in Persian, and the tickets domain shares the word: pick the row.
+    const supportRow = await roleRow(t('web.role_key_support'));
     fireEvent.click(
       within(supportRow).getByRole('button', { name: new RegExp(t('web.rbac_edit')) }),
     );

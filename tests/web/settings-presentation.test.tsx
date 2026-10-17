@@ -17,6 +17,7 @@ import {
 } from '../../apps/web/src/settings-presentation';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, setting, stubApi } from './harness';
+import { openSettingsGroupOf, settingsTabs } from './settings-tabs';
 
 /**
  * WP-A1: the Settings page is an operator's page.
@@ -135,6 +136,7 @@ describe('the settings page', () => {
   it('shows the operator header and no developer metadata', async () => {
     stubApi(ROUTES);
     const { container } = renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('ops.notifications.max_per_minute');
     await screen.findByRole('heading', { name: t('web.setting_ops_max_per_minute') });
 
     expect(screen.getByText('تنظیمات موردنظر را تغییر دهید و ذخیره کنید.')).toBeInTheDocument();
@@ -156,20 +158,33 @@ describe('the settings page', () => {
   it('draws every setting with its Persian title, description, value in force and save button', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByRole('heading', { name: t('web.setting_ops_max_per_minute') });
+    await screen.findByRole('tablist', { name: t('web.ob_sections') });
 
-    for (const key of VISIBLE_KEYS) {
+    let group: string | null = null;
+    const byGroup = [...VISIBLE_KEYS].sort((a, b) =>
+      SETTING_PRESENTATION[a].group.localeCompare(SETTING_PRESENTATION[b].group),
+    );
+    for (const key of byGroup) {
       const presentation = SETTING_PRESENTATION[key];
-      const heading = screen.getByRole('heading', { name: t(presentation.title) });
-      const card = heading.closest('article') as HTMLElement;
+      if (presentation.group !== group) {
+        group = presentation.group;
+        await openSettingsGroupOf(key);
+      }
+      // By text inside its row: a role query over the whole page per key is slow.
+      const heading = screen
+        .getAllByText(t(presentation.title))
+        .find((node) => /^H[1-6]$/u.test(node.tagName) && node.closest('article') !== null);
+      expect(heading, key).toBeDefined();
+      const card = heading!.closest('article') as HTMLElement;
+      expect(card.closest('[hidden]'), key).toBeNull();
       expect(within(card).getByText(t(presentation.description))).toBeInTheDocument();
       expect(
         within(card).getByText(`${t('web.settings_current_value')}:`, { exact: false }),
       ).toBeInTheDocument();
       expect(within(card).getByRole('button', { name: t('web.save') })).toBeInTheDocument();
     }
-    // One save button per setting: each is saved on its own.
-    expect(screen.getAllByRole('button', { name: t('web.save') })).toHaveLength(
+    // Hidden tabs included: every group stays mounted.
+    expect(screen.getAllByRole('button', { name: t('web.save'), hidden: true })).toHaveLength(
       VISIBLE_KEYS.length,
     );
     // WP-A4: the keys the ops group panel owns are not drawn here at all; nor, since R1,
@@ -181,7 +196,7 @@ describe('the settings page', () => {
       ...SETTINGS_RETIRED,
     ]) {
       expect(
-        screen.queryByRole('heading', { name: t(SETTING_PRESENTATION[key].title) }),
+        screen.queryByRole('heading', { name: t(SETTING_PRESENTATION[key].title), hidden: true }),
         key,
       ).toBeNull();
     }
@@ -190,6 +205,7 @@ describe('the settings page', () => {
   it('keeps the machine key in a closed technical disclosure', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('ops.notifications.max_per_minute');
     const heading = await screen.findByRole('heading', {
       name: t('web.setting_ops_max_per_minute'),
     });
@@ -203,8 +219,12 @@ describe('the settings page', () => {
   it('groups the settings under Persian headings', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByRole('heading', { name: t('web.setting_ops_max_per_minute') });
+    // One tab per group, each opening its Persian heading.
+    const tabs = await settingsTabs();
     for (const title of Object.values(SETTING_GROUP_TITLES)) {
+      const tab = tabs.find((one) => (one.textContent ?? '').startsWith(t(title)));
+      expect(tab, t(title)).toBeDefined();
+      fireEvent.click(tab!);
       expect(screen.getByRole('heading', { name: t(title) })).toBeInTheDocument();
     }
   });
@@ -383,6 +403,7 @@ describe('the settings page', () => {
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('wallet.topup.maximum');
     const amount = await screen.findByLabelText(
       `${t('web.amount_minor')} — ${t('web.setting_topup_maximum')}`,
     );
@@ -505,14 +526,17 @@ describe('the settings page', () => {
     }
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
+    await openSettingsGroupOf('trial.limit_per_customer');
     const heading = await screen.findByRole('heading', {
       name: t('web.setting_trial_limit_per_customer'),
     });
-    expect(screen.queryByRole('heading', { name: t('web.setting_trial_product_id') })).toBeNull();
+    expect(
+      screen.queryByRole('heading', { name: t('web.setting_trial_product_id'), hidden: true }),
+    ).toBeNull();
     const card = heading.closest('article') as HTMLElement;
     expect(within(card).queryByText(t('web.settings_needs_feature'))).toBeNull();
     // No row on the page is a control nothing reads.
-    expect(screen.queryByText(t('web.setting_no_consumer'))).toBeNull();
+    expect(screen.queryByText(t('web.setting_no_consumer_note'))).toBeNull();
   });
 
   it('says a refused value in Persian and keeps the English detail out of sight', async () => {

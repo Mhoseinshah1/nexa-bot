@@ -81,6 +81,14 @@ describe('the panel health dashboard', () => {
     expect(inCard.getByText(t('web.ph_sellable_yes'))).toBeInTheDocument();
   });
 
+  it('asks the server for ten panels a page (W1.8)', async () => {
+    const api = stubApi(dashboard([row()]));
+    renderPage(<PanelHealthPage denied={false} mayProbe mayDrain mayViewServices />);
+    await screen.findByRole('heading', { name: /Frankfurt A/u });
+    const read = api.calls.find((call) => call.url.includes('/panel-health'));
+    expect(new URL(read!.url, 'http://x').searchParams.get('limit')).toBe('10');
+  });
+
   it('draws the probe, the services link and drain only for their permissions', async () => {
     stubApi(dashboard([row()]));
     renderPage(

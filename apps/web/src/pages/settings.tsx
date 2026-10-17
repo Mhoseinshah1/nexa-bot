@@ -45,7 +45,7 @@ import {
 } from '../ui/kit';
 import {
   DirtyScope,
-  SectionNav,
+  SectionTabs,
   UnsavedCount,
   sameValue,
   useDirtySet,
@@ -103,6 +103,11 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   // version it was read at); the page adds the sum of them and one leave guard.
   const { dirty, report } = useDirtySet();
   useUnsavedChanges(dirty.size > 0);
+  // W2: one group at a time, as tabs; every group stays mounted (hidden) so drafts survive.
+  const [tab, setTab] = useState<string>('');
+  const activeTab = sections.some((section) => section.group === tab)
+    ? tab
+    : (sections[0]?.group ?? '');
 
   return (
     <>
@@ -114,43 +119,44 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
       <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
         <DirtyScope report={report}>
-          <div className="ob-sectioned">
-            <SectionNav
-              label={t('web.ob_sections')}
-              items={sections.map(({ group, title, members }) => ({
-                id: `settings-${group}`,
-                label: t(title),
-                unsaved: members.some((member) => dirty.has(member.key)),
-              }))}
-            />
-            <div className="stack">
-              {sections.map(({ group, title, members }) => (
-                <section
-                  key={group}
-                  id={`settings-${group}`}
-                  tabIndex={-1}
-                  className="card settings-group"
-                  aria-labelledby={`settings-${group}-title`}
-                >
-                  <header className="card-head">
-                    <div className="titles">
-                      <h2 id={`settings-${group}-title`}>{t(title)}</h2>
-                    </div>
-                  </header>
-                  <div className="settings-rows">
-                    {members.map((setting) => (
-                      <SettingRow
-                        key={setting.key}
-                        setting={setting}
-                        mayEdit={mayEdit}
-                        salesCurrency={salesCurrency}
-                      />
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          </div>
+          <SectionTabs
+            label={t('web.ob_sections')}
+            panelId="settings"
+            value={activeTab}
+            onChange={setTab}
+            items={sections.map(({ group, title, members }) => ({
+              id: group,
+              label: t(title),
+              count: members.length,
+              unsaved: members.some((member) => dirty.has(member.key)),
+            }))}
+          />
+          {sections.map(({ group, title, members }) => (
+            <section
+              key={group}
+              id={`settings-${group}`}
+              role="tabpanel"
+              aria-labelledby={`settings-tab-${group}`}
+              hidden={group !== activeTab}
+              className="card settings-group"
+            >
+              <header className="card-head">
+                <div className="titles">
+                  <h2 id={`settings-${group}-title`}>{t(title)}</h2>
+                </div>
+              </header>
+              <div className="settings-rows">
+                {members.map((setting) => (
+                  <SettingRow
+                    key={setting.key}
+                    setting={setting}
+                    mayEdit={mayEdit}
+                    salesCurrency={salesCurrency}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
         </DirtyScope>
       </StateSwitch>
     </>
@@ -421,7 +427,7 @@ function SettingRow({
               )}
             </div>
             <p className="muted small">
-              {presentation === null ? t('web.settings_unknown_desc') : t(presentation.description)}
+              {presentation === null ? t('web.settings_unknown_note') : t(presentation.description)}
             </p>
             {setting.configures !== null && (
               <p className="faint small">{t('web.settings_needs_feature')}</p>
@@ -486,7 +492,7 @@ function SettingRow({
             has no effect yet — the legacy pattern this whole registry exists to end is
             a screen that answers "saved" for a change with no observable effect. */}
         {setting.consumer === 'PLANNED' && (
-          <Banner tone="info">{t('web.setting_no_consumer')}</Banner>
+          <Banner tone="info">{t('web.setting_no_consumer_note')}</Banner>
         )}
 
         {/* A stored value the registry no longer accepts. The default is in

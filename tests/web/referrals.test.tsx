@@ -6,6 +6,7 @@ import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { customer, renderPage, stubApi, type Api } from './harness';
 import { openC360Tab } from './c360-helpers';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * WP9-A on the Web Admin: the Referrals page and the referral card on a customer.
@@ -129,9 +130,11 @@ describe('the attributions list', () => {
     // Newest first, so the NEXT page is older and there is no previous one yet.
     expect(within(card).getByRole('button', { name: 'قبلی' })).toBeDisabled();
     fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
-    await waitFor(() => expect(gets(api, '/referrals?cursor=ref-cursor-2')).toHaveLength(1));
+    await waitFor(() =>
+      expect(gets(api, '/referrals?limit=10&cursor=ref-cursor-2')).toHaveLength(1),
+    );
     // The commission list was not paged by the attribution pager.
-    expect(gets(api, '/referral-commissions?cursor=')).toHaveLength(0);
+    expect(gets(api, '/referral-commissions?limit=10&cursor=')).toHaveLength(0);
 
     await waitFor(() =>
       expect(within(card).getByRole('button', { name: 'قبلی' })).not.toBeDisabled(),
@@ -200,12 +203,15 @@ describe('the commission ledger', () => {
 
     fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
     await waitFor(() =>
-      expect(gets(api, '/referral-commissions?cursor=com-cursor-2')).toHaveLength(1),
+      expect(gets(api, '/referral-commissions?limit=10&cursor=com-cursor-2')).toHaveLength(1),
     );
 
-    fireEvent.click(within(card).getByRole('button', { name: 'باطل شده' }));
+    // The state chips live in the filter panel.
+    fireEvent.click(within(openFilterPanel(card)).getByRole('button', { name: 'باطل شده' }));
     await waitFor(() =>
-      expect(api.calls.at(-1)?.url.endsWith('/referral-commissions?state=VOID')).toBe(true),
+      expect(api.calls.at(-1)?.url.endsWith('/referral-commissions?limit=10&state=VOID')).toBe(
+        true,
+      ),
     );
   });
 });
@@ -215,8 +221,8 @@ describe('the referrer filter', () => {
     const api = stubApi(lists());
     render(`referrerId=${REFERRER_ID}`);
     await waitFor(commissionTable);
-    expect(gets(api, `/referrals?referrerId=${REFERRER_ID}`)).toHaveLength(1);
-    expect(gets(api, `/referral-commissions?referrerId=${REFERRER_ID}`)).toHaveLength(1);
+    expect(gets(api, `/referrals?limit=10&referrerId=${REFERRER_ID}`)).toHaveLength(1);
+    expect(gets(api, `/referral-commissions?limit=10&referrerId=${REFERRER_ID}`)).toHaveLength(1);
   });
 
   it('refuses to apply something that is not a customer id', async () => {

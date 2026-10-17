@@ -44,7 +44,6 @@ import {
   DataTable,
   Empty,
   Field,
-  FilterBar,
   FilterChip,
   FilterChips,
   IdentityCell,
@@ -62,6 +61,8 @@ import { Icon, type IconName } from '../ui/icons';
 import { AssistCard } from './support-assist';
 import { ProposeKnowledgeButton } from './support-knowledge';
 import { FailureDiagnosticView } from './support-ai-failure';
+import { ListFilterBar } from '../ui/filter-bar';
+import { ClientPager, useClientPaging } from './ops-paging';
 /**
  * TB2 — Telegram Business conversations (ADR-0033): the inbox, the connections it arrives
  * through, and one conversation with the operator's three controls (take over, hand back,
@@ -263,6 +264,51 @@ function WaitAge({ since }: { since: string | null }) {
   );
 }
 
+/**
+ * W5: an outbound message's failure code as a Persian name. The codes are the lane's own
+ * (`business-outbound.service.ts`) and the Telegram transport's (`telegram.rejected.<n>`,
+ * `telegram.server_error.<n>`); an exact code is looked up first, then its family.
+ */
+export const BUSINESS_FAILURE_LABELS: Readonly<Record<string, WebKey>> = {
+  'support_ai.reply_stale': 'web.bchat_fc_reply_stale',
+  'support_ai.notice_stale': 'web.bchat_fc_notice_stale',
+  'support_ai.mode_off': 'web.bchat_fc_mode_off',
+  'scope.inactive': 'web.bchat_fc_scope_inactive',
+  'conversation.moved_on': 'web.bchat_fc_moved_on',
+  'business.notice_template': 'web.bchat_fc_notice_template',
+  'business.invalid_text': 'web.bchat_fc_invalid_text',
+  'business.connection_not_found': 'web.bchat_fc_connection_not_found',
+  'business.connection_unusable': 'web.bchat_fc_connection_unusable',
+  'business.bot_unavailable': 'web.bchat_fc_bot_unavailable',
+  'business.telegram_rejected': 'web.bchat_fc_telegram_rejected',
+  'bot.not_active': 'web.bchat_fc_bot_unavailable',
+  'telegram.rate_limited': 'web.bchat_fc_rate_limited',
+  'telegram.unreachable': 'web.bchat_fc_unreachable',
+  'telegram.unreadable_response': 'web.bchat_fc_unreadable',
+  'telegram.unreadable_connection': 'web.bchat_fc_connection_mismatch',
+  'telegram.connection_id_mismatch': 'web.bchat_fc_connection_mismatch',
+  'telegram.rejected.403': 'web.bchat_fc_blocked',
+};
+
+const BUSINESS_FAILURE_FAMILIES: readonly (readonly [string, WebKey])[] = [
+  ['telegram.rejected.', 'web.bchat_fc_telegram_rejected'],
+  ['telegram.server_error.', 'web.bchat_fc_server_error'],
+];
+
+/** The Persian name of a failure code, or null when this page does not know it. */
+export function businessFailureLabel(code: string): string | null {
+  const exact = BUSINESS_FAILURE_LABELS[code];
+  if (exact !== undefined) return t(exact);
+  const family = BUSINESS_FAILURE_FAMILIES.find(([prefix]) => code.startsWith(prefix));
+  return family === undefined ? null : t(family[1]);
+}
+
+/** The Persian name with the raw code in its tooltip; an unknown code is drawn as itself. */
+function FailureCode({ code }: { code: string }) {
+  const label = businessFailureLabel(code);
+  return label === null ? <Ltr>{code}</Ltr> : <span title={code}>{label}</span>;
+}
+
 function ticketPath(id: string): string {
   return `/tickets/${encodeURIComponent(id)}`;
 }
@@ -315,6 +361,8 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
     enabled: !denied,
   });
   const rows = inboxRows(chats.data?.pages ?? []);
+  // W1.8: ten a page over the conversations read so far; «next» past them reads another.
+  const paging = useClientPaging(rows, state ?? '');
   const requestable = mayRequest(chats, denied);
   const onLink = useLinkHandler();
 
@@ -388,23 +436,39 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
       <PageHead title={t('web.bchats_title')} subtitle={t('web.bchats_intro')} />
 
       <Card>
-        <FilterBar hidden={!requestable}>
-          <FilterChips label={t('web.status')}>
-            <FilterChip pressed={state === null} onClick={() => setQuery(route, 'state', null)}>
-              {t('web.bchat_filter_all')}
-            </FilterChip>
-            <ChipDivider />
-            {BUSINESS_CONVERSATION_STATES.map((value) => (
-              <FilterChip
-                key={value}
-                pressed={state === value}
-                onClick={() => setQuery(route, 'state', value)}
-              >
-                {t(BUSINESS_STATE_LABELS[value])}
-              </FilterChip>
-            ))}
-          </FilterChips>
-        </FilterBar>
+        {requestable && (
+          <ListFilterBar
+            label={t('web.bchats_title')}
+            filters={[
+              {
+                key: 'state',
+                label: t('web.status'),
+                active: state === null ? null : t(BUSINESS_STATE_LABELS[state]),
+                onClear: () => setQuery(route, 'state', null),
+                control: (
+                  <FilterChips label={t('web.status')}>
+                    <FilterChip
+                      pressed={state === null}
+                      onClick={() => setQuery(route, 'state', null)}
+                    >
+                      {t('web.bchat_filter_all')}
+                    </FilterChip>
+                    <ChipDivider />
+                    {BUSINESS_CONVERSATION_STATES.map((value) => (
+                      <FilterChip
+                        key={value}
+                        pressed={state === value}
+                        onClick={() => setQuery(route, 'state', value)}
+                      >
+                        {t(BUSINESS_STATE_LABELS[value])}
+                      </FilterChip>
+                    ))}
+                  </FilterChips>
+                ),
+              },
+            ]}
+          />
+        )}
 
         <StateSwitch
           query={chats}
@@ -421,25 +485,24 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
           <DataTable
             caption={t('web.bchats_title')}
             columns={columns}
-            rows={rows}
+            rows={paging.rows}
             rowKey={(row) => row.id}
             dense
           />
-          {chats.hasNextPage && (
-            <div className="bchat-more">
-              <span className="muted small">
-                {t('web.showing')} <Num value={rows.length} />
-              </span>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={chats.isFetchingNextPage}
-                onClick={() => void chats.fetchNextPage()}
-              >
-                {t('web.bchat_load_more')}
-              </button>
-            </div>
-          )}
+          <ClientPager
+            shown={paging.rows.length}
+            hasPrevious={paging.hasPrevious}
+            hasNext={paging.hasNextLoaded || chats.hasNextPage}
+            onPrevious={() => paging.go(paging.page - 1)}
+            onNext={() => {
+              if (paging.hasNextLoaded) {
+                paging.go(paging.page + 1);
+                return;
+              }
+              if (chats.isFetchingNextPage) return;
+              void chats.fetchNextPage().then(() => paging.go(paging.page + 1));
+            }}
+          />
         </StateSwitch>
       </Card>
 
@@ -540,7 +603,7 @@ export function BusinessChatDetailPage({
       />
       <StateSwitch query={chat} denied={denied}>
         {data !== undefined && (
-          <div className="two-col bchat-layout">
+          <div className="two-col bchat-layout ops-sticky-cols">
             <div className="stack">
               <TranscriptCard detail={data} mayPropose={mayPropose} />
               {mayAssist && (
@@ -872,7 +935,7 @@ function OutboundCard({
                 )}
                 {row.failureCode !== null && (
                   <span className="small muted">
-                    {t('web.bchat_outbound_failure')} <Ltr>{row.failureCode}</Ltr>
+                    {t('web.bchat_outbound_failure')} <FailureCode code={row.failureCode} />
                   </span>
                 )}
                 {mayPropose &&

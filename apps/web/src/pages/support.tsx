@@ -38,6 +38,7 @@ import {
   useToast,
   useUnsavedChanges,
   type Column,
+  usePagedRows,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 
@@ -125,6 +126,7 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
     enabled: !denied,
   });
   const rows = faqs.data?.items ?? [];
+  const paging = usePagedRows(rows, '');
 
   const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -360,11 +362,12 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
         <Card title={t('web.support_title')} hint={t('web.support_faq_hint')}>
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.support_title')}
             dense
           />
+          {paging.pager}
         </Card>
       </StateSwitch>
 

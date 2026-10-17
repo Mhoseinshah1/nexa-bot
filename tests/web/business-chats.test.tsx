@@ -4,13 +4,16 @@ import { type PERMISSION_KEYS } from '@nexa/contracts';
 import {
   BUSINESS_CHAT_REFRESH_MS,
   BusinessChatDetailPage,
+  BUSINESS_FAILURE_LABELS,
   BusinessChatsPage,
+  businessFailureLabel,
   businessChatFault,
 } from '../../apps/web/src/pages/business-chats';
 import { ApiError } from '../../apps/web/src/api/client';
-import { t } from '../../apps/web/src/i18n/web.fa';
+import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * TB2 — the Web Admin's Telegram Business inbox and one conversation. Fixtures go through
@@ -191,9 +194,10 @@ describe('the business inbox', () => {
     expect(params.get('cursor')).toBeNull();
     expect(await screen.findByText(t('web.bchat_connections_empty'))).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.bchat_state_paused') }));
+    const panel = openFilterPanel();
+    fireEvent.click(within(panel).getByRole('button', { name: t('web.bchat_state_paused') }));
     expect(new URLSearchParams(window.location.search).get('state')).toBe('PAUSED');
-    fireEvent.click(screen.getByRole('button', { name: t('web.bchat_filter_all') }));
+    fireEvent.click(within(panel).getByRole('button', { name: t('web.bchat_filter_all') }));
     expect(new URLSearchParams(window.location.search).get('state')).toBeNull();
   });
 
@@ -213,7 +217,8 @@ describe('the business inbox', () => {
       { url: '/business-connections', body: { connections: [] } },
     ]);
     renderPage(<BusinessChatsPage route={route()} denied={false} />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.bchat_load_more') }));
+    // W1.8: «بعدی» past the rows read so far reads the server's next page.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
     expect(await screen.findByText('دومی')).toBeTruthy();
     expect(screen.getByText('سرویس وصل نمی‌شود')).toBeTruthy();
     const second = listCall(api)[1]!;
@@ -221,7 +226,7 @@ describe('the business inbox', () => {
       '2026-10-01T10:00:00.000Z|abc',
     );
     // The last page draws no further control.
-    expect(screen.queryByRole('button', { name: t('web.bchat_load_more') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_next') })).toBeNull();
   });
 
   it('says «no permission» and asks the server nothing without the view key', () => {
@@ -535,5 +540,58 @@ describe('one business conversation', () => {
     expect(businessChatFault(refusal('business_chats.not_in_state'))).toBe(
       t('web.bchat_fault_not_in_state'),
     );
+  });
+});
+
+describe('W1.8 and W5 on the inbox and the conversation', () => {
+  it('pages the inbox ten at a time over the conversations already read', async () => {
+    const many = Array.from({ length: 12 }, (_, index) =>
+      summary({
+        id: `019400ab-cdef-7012-8345-6789abcde${String(100 + index)}`,
+        peerTelegramUserId: String(960000 + index),
+        customer: null,
+      }),
+    );
+    const api = stubApi([
+      { url: '/business-chats', body: { conversations: many, nextCursor: null } },
+      { url: '/business-connections', body: { connections: [] } },
+    ]);
+    renderPage(<BusinessChatsPage route={route()} denied={false} />);
+    const table = await screen.findByRole('table', { name: t('web.bchats_title') });
+    expect(within(table).getAllByRole('row')).toHaveLength(11);
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(3));
+    // Nothing more was asked of the server: the second page was already in memory.
+    expect(listCall(api)).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(11));
+  });
+
+  it('names every known outbound failure code in Persian, and keeps an unknown one raw', () => {
+    for (const [code, key] of Object.entries(BUSINESS_FAILURE_LABELS)) {
+      expect(WEB_FA[key], code).toBeTruthy();
+      expect(businessFailureLabel(code)).toBe(t(key));
+    }
+    expect(businessFailureLabel('telegram.rejected.400')).toBe(t('web.bchat_fc_telegram_rejected'));
+    expect(businessFailureLabel('telegram.server_error.502')).toBe(t('web.bchat_fc_server_error'));
+    expect(businessFailureLabel('something.new')).toBeNull();
+  });
+
+  it('draws an outbound failure in Persian with the raw code in its tooltip', async () => {
+    const body = detail();
+    body.outbound = [
+      { ...body.outbound[0]!, state: 'FAILED', failureCode: 'telegram.rejected.403' },
+      { ...body.outbound[1]!, state: 'FAILED', failureCode: 'lane.brand_new' },
+    ] as never;
+    stubApi([
+      { url: `/business-chats/${CHAT_ID}`, body },
+      { url: '/business-connections', body: { connections: [] } },
+    ]);
+    renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply={false} />);
+    const named = await screen.findByText(t('web.bchat_fc_blocked'));
+    expect(named).toHaveAttribute('title', 'telegram.rejected.403');
+    expect(screen.queryByText('telegram.rejected.403')).toBeNull();
+    // Unknown: the raw code, never a blank.
+    expect(screen.getByText('lane.brand_new')).toBeTruthy();
   });
 });

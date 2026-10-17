@@ -26,7 +26,7 @@ import {
 import { formatNumber } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQueries, type Route } from '../router';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import {
   Banner,
   Button,
@@ -306,6 +306,7 @@ export function ServiceMassActionCard({
   mayGrant,
   bare = false,
   onDirtyChange,
+  submission: heldSubmission,
 }: {
   filters: ServiceFilters;
   /** `services.mass.status` AND `services.edit`. */
@@ -316,10 +317,18 @@ export function ServiceMassActionCard({
   bare?: boolean;
   /** Whether a typed value would be lost by closing the drawer. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by a parent that outlives this card. Inside a drawer the card
+   * unmounts on close, and a key kept after an unanswered failure (a 5xx that may have
+   * committed) must survive a close and reopen — a fresh key there is a SECOND bulk
+   * operation over the same services.
+   */
+  submission?: SubmissionKey;
 }) {
   const client = useQueryClient();
   const toast = useToast();
-  const submission = useSubmissionKey();
+  const ownSubmission = useSubmissionKey();
+  const submission = heldSubmission ?? ownSubmission;
   const kinds: MassKind[] = [
     ...(mayStatus ? (['SERVICE_SUSPEND', 'SERVICE_RESUME'] as const) : []),
     ...(mayGrant ? (['SERVICE_TRAFFIC', 'SERVICE_TIME'] as const) : []),
@@ -603,6 +612,8 @@ export function ServiceMassActionButton({
 }) {
   const [open, setOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
+  // Held here, not in the card: the drawer unmounts the card on close (see its prop).
+  const submission = useSubmissionKey();
   const close = () => {
     setOpen(false);
     setDirty(false);
@@ -621,6 +632,7 @@ export function ServiceMassActionButton({
           mayGrant={mayGrant}
           bare
           onDirtyChange={setDirty}
+          submission={submission}
         />
       </Drawer>
       {dialog}

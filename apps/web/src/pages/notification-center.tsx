@@ -31,9 +31,11 @@ import {
   Num,
   useToast,
   type Tone,
+  LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { opsCodeLabel } from '../ops-code-labels';
 import { CodeLabel, TechnicalDetails } from '../ui/technical-details';
+import { ListFilterBar } from '../ui/filter-bar';
 
 /*
  * Phase B3 — the Web Admin Notification Center (`docs/notification-center.md`).
@@ -235,6 +237,7 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
     queryKey: ['inbox', show, category, cursor ?? null],
     queryFn: () =>
       fetchInbox({
+        limit: LIST_PAGE_SIZE,
         unread: show === 'UNREAD',
         ...(category === '' ? {} : { category }),
         ...(cursor === undefined ? {} : { cursor }),
@@ -260,6 +263,16 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
 
   const rows = inbox.data?.notifications ?? [];
   const next = inbox.data?.nextCursor ?? null;
+  const showPills = (
+    <Pills<Show>
+      value={show}
+      onChange={setShow}
+      items={[
+        { id: 'UNREAD', label: t('web.nc_filter_unread') },
+        { id: 'ALL', label: t('web.nc_filter_all') },
+      ]}
+    />
+  );
 
   return (
     <>
@@ -279,31 +292,37 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
           ) : undefined
         }
       />
-      <div className="nc-filters">
-        <Pills<Show>
-          value={show}
-          onChange={setShow}
-          items={[
-            { id: 'UNREAD', label: t('web.nc_filter_unread') },
-            { id: 'ALL', label: t('web.nc_filter_all') },
+      {categories.length > 1 ? (
+        <ListFilterBar
+          label={t('web.nc_title')}
+          search={showPills}
+          filters={[
+            {
+              key: 'category',
+              label: t('web.nc_filter_category'),
+              active: category === '' ? null : t(CATEGORY_LABELS[category]),
+              onClear: () => setCategory(''),
+              control: (
+                <Select
+                  size="sm"
+                  aria-label={t('web.nc_filter_category')}
+                  value={category}
+                  onChange={(event) => setCategory(event.target.value as NotificationCategory | '')}
+                >
+                  <option value="">{t('web.nc_category_all')}</option>
+                  {categories.map((one) => (
+                    <option key={one} value={one}>
+                      {t(CATEGORY_LABELS[one])}
+                    </option>
+                  ))}
+                </Select>
+              ),
+            },
           ]}
         />
-        {categories.length > 1 && (
-          <Select
-            size="sm"
-            aria-label={t('web.nc_filter_category')}
-            value={category}
-            onChange={(event) => setCategory(event.target.value as NotificationCategory | '')}
-          >
-            <option value="">{t('web.nc_category_all')}</option>
-            {categories.map((one) => (
-              <option key={one} value={one}>
-                {t(CATEGORY_LABELS[one])}
-              </option>
-            ))}
-          </Select>
-        )}
-      </div>
+      ) : (
+        <div className="nc-filters">{showPills}</div>
+      )}
       {(mark.error !== null || markAll.error !== null) && (
         <Banner tone="danger">{messageFor(mark.error ?? markAll.error)}</Banner>
       )}

@@ -168,6 +168,8 @@ describe('navigating between two panel details', () => {
 
     // On A: open the credentials tab and half-type a username.
     fireEvent.click(screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }));
+    // W3: the replace form opens on the presence card's button.
+    fireEvent.click(await screen.findByRole('button', { name: 'جایگزینی اعتبارنامه' }));
     const username = await screen.findByLabelText('نام کاربری');
     fireEvent.change(username, { target: { value: 'half-typed-secret' } });
 

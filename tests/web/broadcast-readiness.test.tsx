@@ -342,6 +342,18 @@ describe('failures and retries', () => {
               pinErrorCode: null,
               nextAttemptAt: '2026-09-20T10:05:00.000Z',
             },
+            {
+              customerId: '019280ab-cdef-7012-8345-00000000d002',
+              firstName: 'Reza',
+              username: null,
+              state: 'SENT',
+              attempts: 1,
+              errorCode: null,
+              resolvedAt: '2026-09-20T10:01:00.000Z',
+              pinState: 'FAILED',
+              pinErrorCode: 'telegram.rate_limited',
+              nextAttemptAt: null,
+            },
           ],
           nextCursor: null,
         },
@@ -358,7 +370,13 @@ describe('failures and retries', () => {
     // A deferred recipient says when it is due again.
     const recipients = await screen.findByRole('table', { name: 'گیرندگان' });
     expect(await within(recipients).findByText(/تلاش بعدی:/)).toBeInTheDocument();
-    expect(within(recipients).getByText(/محدودیت سرعت تلگرام/)).toBeInTheDocument();
+    expect(within(recipients).getAllByText(/محدودیت سرعت تلگرام/).length).toBeGreaterThan(0);
+    // A pin's failure reads as words; its transport code is the title, not the text.
+    const reza = within(recipients).getByText('Reza').closest('tr') as HTMLElement;
+    expect(reza.textContent).not.toContain('telegram.rate_limited');
+    expect(reza.querySelector('[title="telegram.rate_limited"]')?.textContent).toMatch(
+      /محدودیت سرعت تلگرام/,
+    );
   });
 
   it('asks before a re-queue, says what is never re-sent, and a cancelled question sends nothing', async () => {

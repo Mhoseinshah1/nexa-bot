@@ -6,13 +6,12 @@ import {
   holdsCriticalPermission,
   IDENTITY_ERROR_CODES,
   isPermissionKey,
-  PERMISSION_DOMAINS,
   PERMISSIONS,
+  PERMISSION_KEYS,
   prerequisiteOf,
   roleKeySchema,
   withPrerequisites,
   type EffectivePermissionsResponse,
-  type PermissionDomain,
   type PermissionKey,
   type RiskLevel,
   type RoleView,
@@ -28,10 +27,11 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { PERMISSION_DOMAIN_LABELS, PERMISSION_LABELS } from '../rbac-labels';
+import { PERMISSION_LABELS, roleLabel } from '../rbac-labels';
 import { useSubmissionKey } from '../submission-key';
 import { Badge, Banner, Card, Drawer, Field, Ltr, Modal, StateSwitch, useToast } from '../ui/kit';
 import { useConfirmedClose } from '../ui/unsaved';
+import { PermissionCatalog } from '../ui/permission-catalog';
 import { Icon } from '../ui/icons';
 import { errorText } from '../error-text';
 
@@ -49,19 +49,6 @@ import { errorText } from '../error-text';
  * same resolver the guard uses — never recomputed here.
  */
 
-const RISK_TONE: Record<RiskLevel, 'neutral' | 'info' | 'warn' | 'danger'> = {
-  LOW: 'neutral',
-  MEDIUM: 'info',
-  HIGH: 'warn',
-  CRITICAL: 'danger',
-};
-const RISK_LABEL: Record<RiskLevel, WebKey> = {
-  LOW: 'web.rbac_risk_low',
-  MEDIUM: 'web.rbac_risk_medium',
-  HIGH: 'web.rbac_risk_high',
-  CRITICAL: 'web.rbac_risk_critical',
-};
-
 const RISK_OF = new Map<string, RiskLevel>(PERMISSIONS.map((one) => [one.key, one.riskLevel]));
 
 function riskOf(key: string): RiskLevel {
@@ -76,10 +63,6 @@ function riskOf(key: string): RiskLevel {
  */
 function labelOf(key: string): string {
   return isPermissionKey(key) ? t(PERMISSION_LABELS[key]) : key;
-}
-
-function domainLabel(domain: PermissionDomain): string {
-  return t(PERMISSION_DOMAIN_LABELS[domain]);
 }
 
 /** The server's refusal, in this page's words. */
@@ -163,6 +146,22 @@ export function RolesSection({ denied, mayEdit }: { denied: boolean; mayEdit: bo
         </StateSwitch>
       </Card>
 
+      {!denied && list.length > 0 && (
+        // W1.7: the whole catalogue, and «جدول مقایسه» with one column per role.
+        <Card title={t('web.rbac_catalog_title')} hint={t('web.rbac_catalog_hint')}>
+          <PermissionCatalog
+            keys={PERMISSION_KEYS}
+            mode="view"
+            idPrefix="rbac-catalog"
+            matrix={list.map((role) => ({
+              key: role.key,
+              label: roleLabel(role.key, role.name),
+              has: (permission: string) => role.permissions.includes(permission),
+            }))}
+          />
+        </Card>
+      )}
+
       {!denied && <EffectivePreview />}
 
       {editing !== null && (
@@ -190,7 +189,7 @@ function RoleRow({
   return (
     <li className="rbac-role">
       <div className="row-inline">
-        <strong>{role.name}</strong>
+        <strong>{roleLabel(role.key, role.name)}</strong>
         <Ltr>{role.key}</Ltr>
         {role.immutable ? (
           <Badge tone="violet">{t('web.rbac_immutable')}</Badge>
@@ -261,99 +260,48 @@ function PermissionMatrix({
   onChange: (next: PermissionKey[]) => void;
   onNotice: (notice: string | null) => void;
 }) {
-  const [search, setSearch] = useState('');
-  const needle = search.trim().toLowerCase();
-  const visible = PERMISSIONS.filter(
-    (one) =>
-      needle === '' ||
-      one.key.toLowerCase().includes(needle) ||
-      labelOf(one.key).toLowerCase().includes(needle) ||
-      domainLabel(one.resource).toLowerCase().includes(needle),
-  );
-
-  const toggle = (key: PermissionKey, on: boolean) => {
+  /*
+   * The page's rules, unchanged; the catalogue only draws. Selecting an action pulls in
+   * the read it needs; removing a read removes the actions that need it; both are said.
+   */
+  const toggleMany = (keys: readonly PermissionKey[], on: boolean) => {
+    const named = keys.map(labelOf).join(t('web.list_separator'));
     if (on) {
-      const next = withPrerequisites([...selected, key]);
-      const pulled = next.filter((one) => !selected.includes(one) && one !== key);
+      const next = withPrerequisites([...selected, ...keys]);
+      const pulled = next.filter((one) => !selected.includes(one) && !keys.includes(one));
       onNotice(
         pulled.length === 0
           ? null
           : t('web.rbac_pulled_prerequisite')
-              .replace('{permission}', labelOf(key))
+              .replace('{permission}', named)
               .replace('{requires}', pulled.map(labelOf).join(t('web.list_separator'))),
       );
       onChange(next);
       return;
     }
-    const dependents = dependentsOf(key).filter((one) => selected.includes(one));
+    const dependents = [...new Set(keys.flatMap((key) => dependentsOf(key)))].filter(
+      (one) => selected.includes(one) && !keys.includes(one),
+    );
     onNotice(
       dependents.length === 0
         ? null
         : t('web.rbac_removed_dependents')
-            .replace('{permission}', labelOf(key))
+            .replace('{permission}', named)
             .replace('{dependents}', dependents.map(labelOf).join(t('web.list_separator'))),
     );
-    onChange(selected.filter((one) => one !== key && !dependents.includes(one)));
+    onChange(selected.filter((one) => !keys.includes(one) && !dependents.includes(one)));
   };
 
   return (
-    <div className="stack">
-      <Field label={t('web.rbac_search')} htmlFor="rbac-search">
-        <input
-          id="rbac-search"
-          className="input"
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-      </Field>
-      {PERMISSION_DOMAINS.map((domain) => {
-        const rows = visible.filter((one) => one.resource === domain);
-        if (rows.length === 0) return null;
-        const held = rows.filter((one) => selected.includes(one.key)).length;
-        return (
-          <fieldset key={domain} className="rbac-domain">
-            <legend>
-              {domainLabel(domain)}{' '}
-              <span className="faint small">
-                {held}/{rows.length}
-              </span>
-            </legend>
-            {rows.map((one) => {
-              const key = one.key;
-              const id = `rbac-perm-${key.replace(/\./g, '-')}`;
-              const requires = prerequisiteOf(key);
-              return (
-                <label
-                  key={key}
-                  htmlFor={id}
-                  className={`checkbox rbac-perm risk-${one.riskLevel.toLowerCase()}`}
-                >
-                  <input
-                    id={id}
-                    type="checkbox"
-                    checked={selected.includes(key)}
-                    onChange={(event) => toggle(key, event.target.checked)}
-                  />
-                  <span className="rbac-perm-text">
-                    <span>{labelOf(key)}</span>
-                    <Ltr>{key}</Ltr>
-                    {requires !== null && (
-                      <span className="faint small">
-                        {t('web.rbac_requires').replace('{requires}', labelOf(requires))}
-                      </span>
-                    )}
-                  </span>
-                  {one.riskLevel !== 'LOW' && (
-                    <Badge tone={RISK_TONE[one.riskLevel]}>{t(RISK_LABEL[one.riskLevel])}</Badge>
-                  )}
-                </label>
-              );
-            })}
-          </fieldset>
-        );
-      })}
-    </div>
+    <PermissionCatalog
+      keys={PERMISSION_KEYS}
+      mode="edit"
+      selected={new Set(selected)}
+      onToggle={(key, on) => {
+        if (isPermissionKey(key)) toggleMany([key], on);
+      }}
+      onToggleMany={(keys, on) => toggleMany(keys.filter(isPermissionKey), on)}
+    />
   );
 }
 
@@ -711,32 +659,21 @@ function EffectiveList({ data }: { data: EffectivePermissionsResponse }) {
       {!data.active && <Banner tone="warn">{t('web.rbac_preview_disabled')}</Banner>}
       <div className="muted small">
         {t('web.rbac_preview_roles')}:{' '}
-        {data.roles.map((role) => role.name).join(t('web.list_separator')) || '—'}
+        {data.roles.map((role) => roleLabel(role.key, role.name)).join(t('web.list_separator')) ||
+          '—'}
         {' · '}
         {t('web.rbac_permission_count').replace('{count}', String(data.effective.length))}
       </div>
-      {PERMISSION_DOMAINS.map((domain) => {
-        const rows = data.effective.filter((key) => key.split('.')[0] === domain);
-        if (rows.length === 0) return null;
-        return (
-          <div key={domain} className="rbac-effective-domain">
-            <strong>{domainLabel(domain)}</strong>
-            <ul className="small">
-              {rows.map((key) => (
-                <li key={key}>
-                  {labelOf(key)}
-                  {granted.has(key) && !data.rolePermissions.includes(key) && (
-                    <Badge tone="teal">{t('web.rbac_via_grant')}</Badge>
-                  )}
-                  {riskOf(key) === 'CRITICAL' && (
-                    <Badge tone="danger">{t('web.rbac_risk_critical')}</Badge>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        );
-      })}
+      <PermissionCatalog
+        keys={data.effective}
+        mode="view"
+        idPrefix="rbac-effective"
+        badgeFor={(key) =>
+          granted.has(key) && !data.rolePermissions.includes(key) ? (
+            <Badge tone="teal">{t('web.rbac_via_grant')}</Badge>
+          ) : null
+        }
+      />
       {data.overrides.length > 0 && (
         <div className="inset stack">
           {/* Every override the server returned, as returned (Codex 4173474768): an

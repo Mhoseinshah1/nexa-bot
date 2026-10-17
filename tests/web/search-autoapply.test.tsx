@@ -12,6 +12,7 @@ import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedApply } from '../../apps/web/src/u
 import { navigate, useRoute } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { customer, product, renderPage } from './harness';
+import { openFilterPanel, setDateField } from './ui-helpers';
 
 /**
  * FIX-01 (2026-10-09): every data search in the Web Admin applies itself.
@@ -504,6 +505,7 @@ describe('a draft with a problem is never applied by itself', () => {
     const calls = serve(spec);
     await open(spec, () => calls);
     const before = calls.length;
+    openFilterPanel();
     const action = byId('audit-action');
     fireEvent.change(action(), { target: { value: 'Payment Confirm' } });
     await advance(PAST * 2);
@@ -524,13 +526,14 @@ describe('a draft with a problem is never applied by itself', () => {
     const calls = serve(spec);
     await open(spec, () => calls);
     const before = calls.length;
-    fireEvent.change(byId('tickets-from')(), { target: { value: '2026-09-20' } });
-    fireEvent.change(byId('tickets-to')(), { target: { value: '2026-09-10' } });
+    openFilterPanel();
+    setDateField(byId('tickets-from')(), '2026-09-20');
+    setDateField(byId('tickets-to')(), '2026-09-10');
     type(spec, 'mary');
     await advance(PAST * 2);
     expect(listReads(calls.slice(before), spec)).toEqual([]);
     // Fixing the range applies everything typed, in one navigation.
-    fireEvent.change(byId('tickets-to')(), { target: { value: '2026-09-25' } });
+    setDateField(byId('tickets-to')(), '2026-09-25');
     await advance(PAST);
     await waitFor(() => expect(inUrl(spec)).toBe('mary'));
     expect(new URLSearchParams(window.location.search).get('from')).toBe('2026-09-20');

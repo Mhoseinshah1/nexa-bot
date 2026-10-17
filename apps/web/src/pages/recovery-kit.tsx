@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PLATFORM_ERROR_CODES,
@@ -30,6 +30,9 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { errorText } from '../error-text';
+import { FilePicker } from '../ui/file-picker';
+import { Modal } from '../ui/overlays';
+import { useConfirmedClose } from '../ui/unsaved';
 
 /**
  * The Recovery Kit section of the backup and recovery page (ADR-0032).
@@ -61,6 +64,12 @@ export function RecoveryKitSection({ permissions }: { permissions: readonly Perm
     enabled: mayView,
   });
   const refresh = () => void client.invalidateQueries({ queryKey: ['installation-keys'] });
+  const [open, setOpen] = useState<'export' | 'import' | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const close = () => {
+    setOpen(null);
+    setDirty(false);
+  };
 
   return (
     <Card title={t('web.kit_title')} hint={t('web.kit_intro')} className="recovery-kit">
@@ -68,24 +77,34 @@ export function RecoveryKitSection({ permissions }: { permissions: readonly Perm
         {t('web.kit_warning_body')}
       </Banner>
 
-      <div className="stack">
-        <h3 className="card-subtitle">{t('web.kit_export_title')}</h3>
-        {mayExport ? (
-          <ExportForm />
-        ) : (
-          <Banner tone="neutral">{t('web.kit_no_permission_export')}</Banner>
+      {/* W3: the two always-open forms open on these buttons, in dialogs. */}
+      <div className="ops-row-actions">
+        {mayExport && (
+          <button type="button" className="btn primary sm" onClick={() => setOpen('export')}>
+            <Icon name="key" />
+            {t('web.kit_export_button')}
+          </button>
+        )}
+        {mayImport && (
+          <button type="button" className="btn sm" onClick={() => setOpen('import')}>
+            <Icon name="upload" />
+            {t('web.kit_import_button')}
+          </button>
         )}
       </div>
-
-      <div className="stack">
-        <h3 className="card-subtitle">{t('web.kit_import_title')}</h3>
-        <p className="muted small">{t('web.kit_import_hint')}</p>
-        {mayImport ? (
-          <ImportForm onImported={refresh} />
-        ) : (
-          <Banner tone="neutral">{t('web.kit_no_permission_import')}</Banner>
-        )}
-      </div>
+      {!mayExport && <Banner tone="neutral">{t('web.kit_no_permission_export')}</Banner>}
+      {!mayImport && <Banner tone="neutral">{t('web.kit_no_permission_import')}</Banner>}
+      {mayExport && open === 'export' && (
+        <KitDialog title={t('web.kit_export_title')} dirty={dirty} onClose={close}>
+          <ExportForm onDirty={setDirty} />
+        </KitDialog>
+      )}
+      {mayImport && open === 'import' && (
+        <KitDialog title={t('web.kit_import_title')} dirty={dirty} onClose={close}>
+          <p className="muted small">{t('web.kit_import_hint')}</p>
+          <ImportForm onImported={refresh} onDirty={setDirty} />
+        </KitDialog>
+      )}
 
       <div className="stack">
         <h3 className="card-subtitle">{t('web.kit_keys_title')}</h3>
@@ -101,6 +120,29 @@ export function RecoveryKitSection({ permissions }: { permissions: readonly Perm
   );
 }
 
+/** A kit form in a dialog; typed secrets ask before the dialog closes. */
+function KitDialog({
+  title,
+  dirty,
+  onClose,
+  children,
+}: {
+  title: string;
+  dirty: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const { requestClose, dialog } = useConfirmedClose(dirty, onClose);
+  return (
+    <>
+      <Modal open onClose={requestClose} title={title}>
+        {children}
+      </Modal>
+      {dialog}
+    </>
+  );
+}
+
 /** Whether a passphrase meets the rule the server applies. The server still decides. */
 function passphraseAcceptable(value: string): boolean {
   return (
@@ -109,12 +151,14 @@ function passphraseAcceptable(value: string): boolean {
   );
 }
 
-function ExportForm() {
+function ExportForm({ onDirty }: { onDirty: (dirty: boolean) => void }) {
   const [accountPassword, setAccountPassword] = useState('');
   const [code, setCode] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [again, setAgain] = useState('');
   const [done, setDone] = useState(false);
+  const typed = accountPassword !== '' || code !== '' || passphrase !== '' || again !== '';
+  useEffect(() => onDirty(typed), [typed, onDirty]);
 
   const exporter = useMutation({
     mutationFn: exportRecoveryKit,
@@ -205,11 +249,19 @@ function ExportForm() {
   );
 }
 
-function ImportForm({ onImported }: { onImported: () => void }) {
+function ImportForm({
+  onImported,
+  onDirty,
+}: {
+  onImported: () => void;
+  onDirty: (dirty: boolean) => void;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [passphrase, setPassphrase] = useState('');
   const [accountPassword, setAccountPassword] = useState('');
   const [code, setCode] = useState('');
+  const typed = file !== null || passphrase !== '' || accountPassword !== '' || code !== '';
+  useEffect(() => onDirty(typed), [typed, onDirty]);
   const [result, setResult] = useState<ImportRecoveryKitResponse | null>(null);
 
   /*
@@ -269,14 +321,20 @@ function ImportForm({ onImported }: { onImported: () => void }) {
 
   return (
     <form onSubmit={onSubmit} className="stack" autoComplete="off">
-      <label className="field">
-        <span className="field-label">{t('web.kit_import_choose')}</span>
-        <input
-          type="file"
-          className="recovery-kit-file"
-          onChange={(event) => setFile(event.currentTarget.files?.[0] ?? null)}
+      <div className="field">
+        <span className="field-label" id="kit-import-file-label">
+          {t('web.kit_import_choose')}
+        </span>
+        <FilePicker
+          id="kit-import-file"
+          label={t('web.kit_import_choose')}
+          kind="any"
+          extensions={['.nxkit']}
+          selected={file}
+          onFiles={(files) => setFile(files[0] ?? null)}
+          onClear={() => setFile(null)}
         />
-      </label>
+      </div>
       <label className="field">
         <span className="field-label">{t('web.kit_import_passphrase')}</span>
         <input
@@ -460,38 +518,40 @@ function RemoveKey({
     onError: (error) => removeKey.settleOn(error),
   });
   return (
-    <div className="stack inset danger-zone">
-      <Banner tone="danger" title={t('web.kit_remove_title')}>
-        {t('web.kit_remove_danger')}
-      </Banner>
-      <label className="field">
-        <span className="field-label">{t('web.kit_remove_confirm_label')}</span>
-        <Ltr>{keyId}</Ltr>
-        <input
-          type="text"
-          className="input"
-          dir="ltr"
-          autoComplete="off"
-          spellCheck={false}
-          value={typed}
-          onChange={(event) => setTyped(event.currentTarget.value)}
-        />
-      </label>
-      <div className="btn-group">
-        <button
-          type="button"
-          className="btn danger solid"
-          disabled={typed.trim() !== keyId || remover.isPending}
-          onClick={() => remover.mutate()}
-        >
-          {t('web.kit_remove_button')}
-        </button>
-        <button type="button" className="btn" onClick={onCancel}>
-          {t('web.kit_remove_cancel')}
-        </button>
+    <Modal open danger onClose={onCancel} title={t('web.kit_remove_title')}>
+      <div className="stack">
+        <Banner tone="danger" title={t('web.kit_remove_title')}>
+          {t('web.kit_remove_danger')}
+        </Banner>
+        <label className="field">
+          <span className="field-label">{t('web.kit_remove_confirm_label')}</span>
+          <Ltr>{keyId}</Ltr>
+          <input
+            type="text"
+            className="input"
+            dir="ltr"
+            autoComplete="off"
+            spellCheck={false}
+            value={typed}
+            onChange={(event) => setTyped(event.currentTarget.value)}
+          />
+        </label>
+        <div className="btn-group">
+          <button
+            type="button"
+            className="btn danger solid"
+            disabled={typed.trim() !== keyId || remover.isPending}
+            onClick={() => remover.mutate()}
+          >
+            {t('web.kit_remove_button')}
+          </button>
+          <button type="button" className="btn" onClick={onCancel}>
+            {t('web.kit_remove_cancel')}
+          </button>
+        </div>
+        {remover.error !== null && <Banner tone="danger">{kitMessage(remover.error)}</Banner>}
       </div>
-      {remover.error !== null && <Banner tone="danger">{kitMessage(remover.error)}</Banner>}
-    </div>
+    </Modal>
   );
 }
 
