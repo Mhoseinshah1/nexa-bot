@@ -26,8 +26,10 @@ import {
   PageHead,
   StateSwitch,
   type Column,
+  usePagedRows,
 } from '../ui/kit';
 import { keepPageWhileTurning } from '../ui/paging';
+import { CodeLabel } from '../ui/technical-details';
 import { LegacyHistoryRow } from './customer-360-legacy';
 import { LEGACY_HISTORY_TYPE_LABELS } from './mirza-labels';
 
@@ -47,7 +49,10 @@ const LINKED_LABELS: Readonly<Record<LegacyRecordsLinkedFilter, WebKey>> = {
   no: 'web.lrec_linked_no',
 };
 
-/** A normalised Mirza panel status, named; any other value is shown raw beside a generic label. */
+/**
+ * A normalised Mirza panel status, named; any other value gets a generic label. The status code
+ * itself is always drawn beside it (`CodeLabel`), so an unknown one is shown, never guessed.
+ */
 export function inactivePanelStatusLabel(status: string): string {
   return status === 'DISABLED' ? t('web.lrec_status_disabled') : t('web.lrec_status_other');
 }
@@ -66,7 +71,7 @@ const PANEL_COLUMNS: readonly Column<LegacyInactivePanel>[] = [
     render: (p) => (
       <span data-status={p.status}>
         <Badge tone="warn" dot>
-          {inactivePanelStatusLabel(p.status)}
+          <CodeLabel label={inactivePanelStatusLabel(p.status)} code={p.status} />
         </Badge>
       </span>
     ),
@@ -189,31 +194,36 @@ export function LegacyRecordsPage({ denied }: { denied: boolean }) {
         )}
       </StateSwitch>
 
-      <Card title={type === undefined ? t('web.lrec_title') : t(LEGACY_HISTORY_TYPE_LABELS[type])}>
-        <StateSwitch query={records} denied={denied}>
-          {data === undefined ? null : (
-            <div className="stack">
-              {data.piiRedacted && <Banner tone="info">{t('web.lrec_pii_redacted')}</Banner>}
-              {data.items.length === 0 ? (
-                <Empty variant="compact" title={t('web.lrec_empty')} />
-              ) : (
-                <ul className="plain stack">
-                  {data.items.map((item) => (
-                    <RecordRow key={item.id} item={item} />
-                  ))}
-                </ul>
-              )}
-              <CursorPager
-                hasPrevious={trail.length > 0}
-                hasNext={nextCursor !== null}
-                onPrevious={() => setTrail(trail.slice(0, -1))}
-                onNext={() => nextCursor !== null && setTrail([...trail, nextCursor])}
-                shown={data.items.length}
-              />
-            </div>
-          )}
-        </StateSwitch>
-      </Card>
+      {/* A viewer without the permission is told so once, by the summary's StateSwitch above. */}
+      {!denied && (
+        <Card
+          title={type === undefined ? t('web.lrec_title') : t(LEGACY_HISTORY_TYPE_LABELS[type])}
+        >
+          <StateSwitch query={records}>
+            {data === undefined ? null : (
+              <div className="stack">
+                {data.piiRedacted && <Banner tone="info">{t('web.lrec_pii_redacted')}</Banner>}
+                {data.items.length === 0 ? (
+                  <Empty variant="compact" title={t('web.lrec_empty')} />
+                ) : (
+                  <ul className="plain stack">
+                    {data.items.map((item) => (
+                      <RecordRow key={item.id} item={item} />
+                    ))}
+                  </ul>
+                )}
+                <CursorPager
+                  hasPrevious={trail.length > 0}
+                  hasNext={nextCursor !== null}
+                  onPrevious={() => setTrail(trail.slice(0, -1))}
+                  onNext={() => nextCursor !== null && setTrail([...trail, nextCursor])}
+                  shown={data.items.length}
+                />
+              </div>
+            )}
+          </StateSwitch>
+        </Card>
+      )}
     </>
   );
 }
@@ -252,6 +262,9 @@ export function ServiceLegacyHistoryCard({
     queryFn: () => fetchServiceLegacyHistory(serviceId),
     enabled: mayView,
   });
+  // Up to LEGACY_SERVICE_RECORDS_MAX records arrive at once; they are shown ten at a time, as
+  // every list is. Called before the early return: a hook runs on every render.
+  const { rows: shownItems, pager } = usePagedRows(history.data?.items ?? [], serviceId);
   if (!mayView) return null;
   const data = history.data;
   return (
@@ -270,11 +283,14 @@ export function ServiceLegacyHistoryCard({
             {data.items.length === 0 ? (
               <Empty variant="compact" title={t('web.lrec_service_empty')} />
             ) : (
-              <ul className="plain stack">
-                {data.items.map((item) => (
-                  <RecordRow key={item.id} item={item} />
-                ))}
-              </ul>
+              <>
+                <ul className="plain stack">
+                  {shownItems.map((item) => (
+                    <RecordRow key={item.id} item={item} />
+                  ))}
+                </ul>
+                {pager}
+              </>
             )}
             {data.truncated && (
               <p className="muted small">

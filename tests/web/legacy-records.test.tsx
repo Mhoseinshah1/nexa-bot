@@ -105,9 +105,35 @@ describe('the Mirza records page', () => {
     expect(calls(api, '/legacy-records?').every((c) => c.url.includes('limit=10'))).toBe(true);
   });
 
-  it('a reader without the permission sends no request', () => {
+  it('a reader without the permission sends no request, and is told so once', () => {
     const api = page(true);
     expect(api.calls).toEqual([]);
+    expect(screen.getAllByText(t('web.no_permission'))).toHaveLength(1);
+  });
+
+  it('draws an undocumented panel status as its code beside the generic label', async () => {
+    stubApi([
+      {
+        url: '/legacy-records/summary',
+        method: 'GET',
+        body: {
+          ...summary,
+          inactivePanels: [
+            { code: 'p998', name: 'Panel Y', panelType: null, status: 'PENDING_REVIEW_X' },
+          ],
+        },
+      },
+      {
+        url: '/legacy-records',
+        method: 'GET',
+        body: { items: [], nextCursor: null, piiRedacted: false },
+      },
+    ]);
+    renderPage(<LegacyRecordsPage denied={false} />);
+    expect(await screen.findByText('Panel Y')).toBeInTheDocument();
+    expect(screen.getByText(t('web.lrec_status_other'))).toBeInTheDocument();
+    // Shown, never guessed: the code itself is on screen.
+    expect(screen.getByText('PENDING_REVIEW_X')).toBeInTheDocument();
   });
 });
 
@@ -141,6 +167,31 @@ describe('the service page section', () => {
     ]);
     renderPage(<ServiceLegacyHistoryCard serviceId={SERVICE} mayView />);
     expect(await screen.findByText(t('web.lrec_service_empty'))).toBeInTheDocument();
+  });
+
+  it('shows the records ten at a time', async () => {
+    const ids = Array.from(
+      { length: 23 },
+      (_, i) => `019600ab-cdef-7012-8345-6789abcd${String(1000 + i).padStart(4, '0')}`,
+    );
+    stubApi([
+      {
+        url: `/services/${SERVICE}/legacy-history`,
+        method: 'GET',
+        body: {
+          invoiceKeys: ['ab000001'],
+          items: ids.map((id) => item(id, 'service_operation', true)),
+          truncated: false,
+          piiRedacted: true,
+        },
+      },
+    ]);
+    renderPage(<ServiceLegacyHistoryCard serviceId={SERVICE} mayView />);
+    expect(await screen.findByText('ab000001')).toBeInTheDocument();
+    expect(screen.getAllByText(t('web.c360_legacy_details'))).toHaveLength(10);
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    await waitFor(() => expect(screen.getAllByText(t('web.c360_legacy_details'))).toHaveLength(3));
   });
 
   it('is not drawn and sends no request when legacy.history.view is not held', () => {
