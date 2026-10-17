@@ -7,6 +7,7 @@ import { OrderDetailPage, OrdersPage } from '../../apps/web/src/pages/orders';
 import { resolve } from '../../apps/web/src/app';
 import { categoryListing, order, panel, product, renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Products and Orders, rendered against the shapes the server actually returns.
@@ -171,6 +172,30 @@ describe('whether the category lets a customer see a product', () => {
 // ---------------------------------------------------------------------------
 
 describe('the product list', () => {
+  /* PR #285 review, A1: one navigation for every filter, not one `setQuery` per chip. */
+  it('«پاک کردن همه» drops every URL filter and the title together', async () => {
+    stubApi(productList([product()]));
+    const query = new URLSearchParams({
+      status: 'ACTIVE',
+      audience: 'EVERYONE',
+      categoryId: 'none',
+      title: 'پلن',
+    });
+    window.history.replaceState(null, '', `/products?${query.toString()}`);
+    renderPage(<ProductsPage route={{ path: '/products', query }} mayEdit denied={false} />);
+    expect(await screen.findByText('پلن یک‌ماهه')).toBeInTheDocument();
+
+    const line = screen.getByRole('search', { name: t('web.products_title') });
+    fireEvent.click(within(line).getByRole('button', { name: t('web.filters_clear_all') }));
+
+    const applied = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toBe('/products');
+    expect(applied.get('status'), 'the status filter survived').toBeNull();
+    expect(applied.get('audience'), 'the audience filter survived').toBeNull();
+    expect(applied.get('categoryId'), 'the category filter survived').toBeNull();
+    expect(applied.get('title'), 'the title search survived').toBeNull();
+  });
+
   it('renders a sellable product and says it is in the catalogue', async () => {
     stubApi(productList([product()]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);

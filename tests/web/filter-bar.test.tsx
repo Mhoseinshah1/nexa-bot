@@ -6,6 +6,7 @@ import { ListSearchBox } from '../../apps/web/src/ui/list-search';
 import { FilterChip, FilterChips } from '../../apps/web/src/ui/kit';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { FILTERS_TOGGLE, openFilterPanel } from './ui-helpers';
+import { navigate, setQuery, useRoute } from '../../apps/web/src/router';
 
 /** W1.3 — one filter line, a panel of filters, chips for what is on. */
 
@@ -141,6 +142,35 @@ describe('the filter line', () => {
     });
     fireEvent.click(within(panel).getByRole('button', { name: t('web.filters_clear_all') }));
     expect(cleared).toBe(1);
+  });
+
+  /*
+   * PR #285 review, A1. Without the page's own «پاک کردن همه», the bar calls each filter's
+   * `onClear` — and each URL filter's `setQuery` builds on the `route.query` captured at
+   * render. Called in turn they overwrote one another and only the LAST removal survived.
+   */
+  it('without onClearAll, clears every URL-backed filter in one navigation', () => {
+    navigate('/things?a=1&b=2&keep=yes', { replace: true });
+    function UrlPage() {
+      const route = useRoute();
+      const filters: ListFilter[] = ['a', 'b'].map((key) => ({
+        key,
+        label: key === 'a' ? 'الف' : 'ب',
+        active: route.query.get(key),
+        onClear: () => setQuery(route, key, null),
+        control: <span />,
+      }));
+      return <ListFilterBar filters={filters} />;
+    }
+    render(<UrlPage />);
+    fireEvent.click(screen.getByRole('button', { name: t('web.filters_clear_all') }));
+    const query = new URLSearchParams(window.location.search);
+    expect(query.get('a'), 'the first removal was overwritten by the second').toBeNull();
+    expect(query.get('b')).toBeNull();
+    // Only the filters: an unrelated parameter is kept.
+    expect(query.get('keep')).toBe('yes');
+    expect(window.location.pathname).toBe('/things');
+    expect(screen.getByText(t('web.filters_none'))).toBeInTheDocument();
   });
 
   it('draws the saved-filters slot at the end', () => {
