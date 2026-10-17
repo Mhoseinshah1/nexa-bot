@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -285,5 +285,20 @@ describe('B6: the selected tab is brought into view inside its strip', () => {
     ).toHaveBeenCalledWith({
       left: -162,
     });
+  });
+});
+
+describe('B7: nothing in the admin scrolls the page to a section', () => {
+  /*
+   * W2 moved every "jump to section" control to a tab or a drawer. The section lists that
+   * scrolled (`SectionNav` twice, `revealField`) were left behind unused; a dead call is one
+   * import away from coming back, so the source holds none.
+   */
+  it('calls scrollIntoView nowhere in apps/web/src', () => {
+    const root = join(REPO_ROOT, 'apps/web/src');
+    const offenders = readdirSync(root, { recursive: true, encoding: 'utf8' })
+      .filter((file) => /\.(ts|tsx)$/.test(file))
+      .filter((file) => /\.scrollIntoView\s*\(/.test(readFileSync(join(root, file), 'utf8')));
+    expect(offenders).toEqual([]);
   });
 });

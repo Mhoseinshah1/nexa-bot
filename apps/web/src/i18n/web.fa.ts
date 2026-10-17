@@ -8237,7 +8237,6 @@ export const WEB_FA = {
   // --- roadmap web-route-polish (Agent 2a) ---
   'web.inc_form_reloaded':
     'رخداد در این فاصله تغییر کرده بود. فرم با مقادیر کنونی دوباره پر شد و تغییرهای شما ذخیره نشد؛ بررسی کنید و دوباره ذخیره کنید.',
-  'web.list_filters_clear': 'پاک کردن همهٔ فیلترها',
   'web.list_read_at': 'خوانده‌شده در {time}',
   'web.list_refresh': 'خواندن دوباره',
   'web.list_refreshing': 'در حال خواندن…',
