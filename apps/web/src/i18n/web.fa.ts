@@ -9609,6 +9609,8 @@ export const WEB_FA = {
   'web.err_incident_effect_contended': 'هم‌زمان کار دیگری روی همین مورد انجام می‌شد.',
   'web.err_incident_effect_failed': 'اعمال این اثر انجام نشد.',
   'web.err_refund_reservation_released': 'رزرو بازپرداخت جای دیگری آزاد شده بود.',
+  'web.err_customers_bot_link_invalid':
+    'پیوند مشتریان واردشده به ربات انجام نشد: ربات در این نصب نیست یا اندازهٔ دسته خارج از بازهٔ مجاز است.',
   'web.dlvcode_notification_render_failed': 'متن اعلان ساخته نشد',
   'web.dlvcode_notification_transport_threw': 'ارسال اعلان با خطای داخلی متوقف شد',
   'web.dlvcode_ops_group_not_connected': 'گروه عملیات وصل نیست',
