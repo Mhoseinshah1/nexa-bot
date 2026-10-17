@@ -37,6 +37,10 @@ const USERS = 40;
 const INVOICES = 40;
 const PRICE = 150_000n;
 const SOLD_AT_BASE = 1_700_000_000;
+/** The database's own refusal: drizzle wraps it, the trigger's message is the cause's. */
+const refusedBy = (text: RegExp) => (e: unknown) =>
+  text.test(String((e as { cause?: { message?: string } }).cause?.message ?? ''));
+
 /** Invoices not carried: unpaid, unmapped panel, no panel, unmappable shape, test with no panel. */
 const GAPS = 5;
 
@@ -426,11 +430,24 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     const row = ended.rows[0];
     if (row === undefined) throw new Error('no ended service');
     // A TERMINATED service is never resumed, however it is asked.
-    for (const state of ['ACTIVE', 'SUSPENDED', 'EXPIRED', 'PENDING_PROVISION']) {
+    // Written as a CONSISTENT resume (no end time, a provisioning time where the state needs
+    // one), so only the trigger can stop it, not a CHECK.
+    for (const state of ['ACTIVE', 'SUSPENDED', 'EXPIRED']) {
       await expect(
-        db().execute(sql.raw(`UPDATE services SET state = '${state}' WHERE id = '${row.id}'`)),
-      ).rejects.toThrow();
+        db().execute(
+          sql.raw(
+            `UPDATE services SET state = '${state}', terminated_at = NULL, provisioned_at = now() WHERE id = '${row.id}'`,
+          ),
+        ),
+      ).rejects.toSatisfy(refusedBy(/is TERMINATED and stays so/));
     }
+    await expect(
+      db().execute(
+        sql.raw(
+          `UPDATE services SET state = 'PENDING_PROVISION', terminated_at = NULL WHERE id = '${row.id}'`,
+        ),
+      ),
+    ).rejects.toSatisfy(refusedBy(/is TERMINATED and stays so/));
     // A history order is never cancelled, refunded, re-priced or re-settled.
     for (const set of [
       "state = 'REFUNDED', refunded_at = now()",
@@ -441,7 +458,7 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     ]) {
       await expect(
         db().execute(sql.raw(`UPDATE orders SET ${set} WHERE id = '${row.order_id}'`)),
-      ).rejects.toThrow();
+      ).rejects.toSatisfy(refusedBy(/LEGACY_HISTORY order/));
     }
     // …while a customer's account transfer may still move the order to another customer.
     expect(

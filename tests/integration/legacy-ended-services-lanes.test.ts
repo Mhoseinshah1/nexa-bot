@@ -13,6 +13,10 @@ import {
   type TestContext,
 } from './harness';
 
+/** The database's own refusal: drizzle wraps it, the trigger's message is the cause's. */
+const refusedBy = (text: RegExp) => (e: unknown) =>
+  text.test(String((e as { cause?: { message?: string } }).cause?.message ?? ''));
+
 /**
  * An ENDED Mirza service and its LEGACY_HISTORY order run through every lane that could act
  * on a service or an order (owner decision 2026-10-17): none of them picks the rows up, none
@@ -270,9 +274,14 @@ describe('ended Mirza services: no lane acts on them', () => {
   });
 
   it('the database refuses to resume the service or to cancel, refund or re-price the order', async () => {
+    // A fully consistent resume (state, no end time, a provisioning time): only the trigger
+    // stands in the way, not a CHECK.
     await expect(
-      db().execute(sql`UPDATE services SET state = 'ACTIVE' WHERE id = ${serviceId}`),
-    ).rejects.toThrow();
+      db().execute(
+        sql`UPDATE services SET state = 'ACTIVE', terminated_at = NULL, provisioned_at = now()
+             WHERE id = ${serviceId}`,
+      ),
+    ).rejects.toSatisfy(refusedBy(/is TERMINATED and stays so/));
     for (const set of [
       sql`state = 'REFUNDED', refunded_at = now()`,
       sql`state = 'CANCELLED', cancelled_at = now()`,
@@ -280,7 +289,7 @@ describe('ended Mirza services: no lane acts on them', () => {
     ]) {
       await expect(
         db().execute(sql`UPDATE orders SET ${set} WHERE id = ${orderId}`),
-      ).rejects.toThrow();
+      ).rejects.toSatisfy(refusedBy(/LEGACY_HISTORY order/));
     }
   });
 });
