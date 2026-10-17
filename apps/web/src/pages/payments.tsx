@@ -93,6 +93,8 @@ import {
   PAYMENT_GATEWAY_LABELS,
   PROVIDER_STATUS_LABELS,
   GATEWAY_CREATION_STATE_LABELS,
+  GATEWAY_CARD_CHANGE_STATE_LABELS,
+  GATEWAY_RECEIPT_SUBMISSION_STATE_LABELS,
   providerPaidKey,
   PAYMENT_METHOD_LABELS as METHOD_LABELS,
   PAYMENT_STATE_LABELS as STATE_LABELS,
@@ -2523,7 +2525,7 @@ function cardTransferFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][]
         <Dash key="cc" />
       ) : (
         <span key="cc">
-          <Ltr>{change.state}</Ltr>
+          <CodeName value={change.state} labels={GATEWAY_CARD_CHANGE_STATE_LABELS} />
           {change.errorCode === null ? null : (
             <>
               {' · '}
@@ -2542,7 +2544,7 @@ function cardTransferFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][]
         <span key="rs">
           {invoice.receiptSubmissions.map((one) => (
             <div key={one.id}>
-              <Ltr>{one.state}</Ltr>
+              <CodeName value={one.state} labels={GATEWAY_RECEIPT_SUBMISSION_STATE_LABELS} />
               {one.errorCode === null ? null : (
                 <>
                   {' · '}
@@ -2552,7 +2554,7 @@ function cardTransferFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][]
               {one.providerStatus === null ? null : (
                 <>
                   {' · '}
-                  <Ltr>{one.providerStatus}</Ltr>
+                  <CodeName value={one.providerStatus} labels={PROVIDER_STATUS_LABELS} />
                 </>
               )}
               {` · ${formatTimestamp(one.createdAt)}`}

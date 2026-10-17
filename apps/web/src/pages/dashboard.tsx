@@ -79,6 +79,7 @@ import { mayRequest, queryState, shownData } from '../view-state';
 import { formatInstantIn } from './business';
 import { AttentionQueueCard } from './dashboard-attention';
 import { opsCodeLabel } from '../ops-code-labels';
+import { dependencyLabel } from '../readiness-labels';
 import { TechnicalDetails } from '../ui/technical-details';
 import { SEVERITY_LABELS } from './alerts';
 
@@ -295,15 +296,18 @@ export function DashboardPage({
               {(readiness.data?.dependencies ?? []).map((dependency) => (
                 <Stat
                   key={dependency.name}
-                  label={dependency.name}
+                  // C1: the Persian name; the raw name stays, muted, in the foot line.
+                  label={dependencyLabel(dependency.name)}
                   value={dependency.status === 'up' ? t('web.up') : t('web.down')}
                   tone={dependency.status === 'up' ? 'ok' : 'danger'}
                   // `latencyMs` is OPTIONAL on the wire, not nullable: a dependency
                   // that reports no timing omits it, and guarding on `null` once
                   // rendered the literal text "undefined ms".
-                  {...(dependency.latencyMs === undefined
-                    ? {}
-                    : { hint: `${formatNumber(dependency.latencyMs)} ms` })}
+                  hint={
+                    dependency.latencyMs === undefined
+                      ? dependency.name
+                      : `${dependency.name} · ${formatNumber(dependency.latencyMs)} ms`
+                  }
                 />
               ))}
             </div>

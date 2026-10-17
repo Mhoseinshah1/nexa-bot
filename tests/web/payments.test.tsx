@@ -1697,6 +1697,22 @@ describe('a TonPays Telegram payment on the detail', () => {
     expect(screen.getByText(t('web.payment_gateway_card_change_exhausted'))).toBeInTheDocument();
   });
 
+  it('names the card change, the receipt state and the provider status in Persian (C1)', async () => {
+    render({ state: 'PENDING' }, true);
+    expect(await screen.findByText(t('web.gw_card_change_applied'))).toHaveAttribute(
+      'title',
+      'APPLIED',
+    );
+    expect(screen.getByText(t('web.gw_receipt_accepted'))).toHaveAttribute('title', 'ACCEPTED');
+    expect(screen.getAllByText(t('web.pay_provider_processing'))[0]).toHaveAttribute(
+      'title',
+      'processing',
+    );
+    for (const raw of ['APPLIED', 'ACCEPTED', 'processing']) {
+      expect(screen.queryByText(raw)).toBeNull();
+    }
+  });
+
   it('UNKNOWN with payments.reconcile: the recorded answer, then confirm sends the evidence-bound command', async () => {
     const api = render({ state: 'UNKNOWN', ...REVIEW }, true, [
       {

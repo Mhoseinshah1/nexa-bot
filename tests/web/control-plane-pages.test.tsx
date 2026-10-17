@@ -235,6 +235,19 @@ describe('the feature flags page', () => {
    * its switch-off is harmless, and the server no longer asks for a confirmation, so the
    * page asks, with the generic sentence.
    */
+  it('summarises a flag this build does not know in Persian, its English only in the details (C1)', async () => {
+    stubApi([
+      {
+        url: '/features',
+        body: { flags: [flag({ key: 'future_flag', enabled: true, version: 1 })] },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    expect(await screen.findByText(t('web.feature_unknown_summary'))).toBeInTheDocument();
+    const english = screen.getByText('Project operational events to the operations destination.');
+    expect(english.closest('details')).not.toBeNull();
+  });
+
   it('asks before switching off a flag this build does not know', async () => {
     const api = stubApi([
       {

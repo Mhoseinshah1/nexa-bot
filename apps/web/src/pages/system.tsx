@@ -65,6 +65,8 @@ import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
 import { errorText } from '../error-text';
 import { roleLabel } from '../rbac-labels';
+import { dependencyLabel, readinessDetailText } from '../readiness-labels';
+import { CodeLabel, ProviderText } from '../ui/technical-details';
 
 /**
  * System and operations.
@@ -249,7 +251,7 @@ function StatusSection() {
                 {
                   key: 'name',
                   header: t('web.dependency'),
-                  render: (row) => <Ltr>{row.name}</Ltr>,
+                  render: (row) => <CodeLabel label={dependencyLabel(row.name)} code={row.name} />,
                 },
                 {
                   key: 'status',
@@ -277,7 +279,7 @@ function StatusSection() {
                   key: 'detail',
                   header: t('web.detail'),
                   wrap: true,
-                  render: (row) => <span className="plain muted">{row.detail ?? '—'}</span>,
+                  render: (row) => <ReadinessDetail detail={row.detail} />,
                 },
               ]}
             />
@@ -1685,5 +1687,19 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
         </form>
       </Modal>
     </div>
+  );
+}
+
+/**
+ * A readiness detail (C1): the API's English word or numeric shape in Persian; a shape this
+ * build does not know is a Persian line, with what the probe wrote under «جزئیات فنی».
+ */
+function ReadinessDetail({ detail }: { detail: string | undefined }) {
+  if (detail === undefined || detail === '') return <span className="plain muted">—</span>;
+  const text = readinessDetailText(detail);
+  return (
+    <span className="plain muted" title={detail}>
+      {text ?? <ProviderText summary={'web.readiness_detail_other'} text={detail} />}
+    </span>
   );
 }

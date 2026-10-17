@@ -59,6 +59,8 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { CheckField } from './editor-layout';
+import { CodeName } from './code-name';
+import { REPORT_FAILURE_KIND_LABEL } from '../report-view';
 import { messageFor } from './settings';
 import {
   AudienceBuilder,
@@ -913,7 +915,7 @@ export function BulkOperationDetailPage({
                           row.skipReason !== null ? (
                             t(SKIP_LABELS[row.skipReason])
                           ) : row.failureKind !== null ? (
-                            <code>{row.failureKind}</code>
+                            <CodeName value={row.failureKind} labels={REPORT_FAILURE_KIND_LABEL} />
                           ) : (
                             '—'
                           ),

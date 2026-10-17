@@ -24,6 +24,7 @@ import {
 import { formatTimestamp } from '../format';
 import { useLinkHandler, useRoute } from '../router';
 import { LegacyCode, NamedCode } from './code-name';
+import { ErrorCodeLabel } from '../ui/technical-details';
 import { ListFilterBar } from '../ui/filter-bar';
 import { LEGACY_INVOICE_CLASS_LABELS } from './legacy-invoices';
 import {
@@ -632,7 +633,7 @@ export function CandidateDetail({
                 {importOutcome.reasonCode !== null && (
                   <>
                     {' · '}
-                    <Ltr>{importOutcome.reasonCode}</Ltr>
+                    <ErrorCodeLabel code={importOutcome.reasonCode} />
                   </>
                 )}
                 {importOutcome.reviewState !== null && (

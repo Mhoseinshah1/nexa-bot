@@ -46,9 +46,11 @@ import {
 import { FilePicker } from '../ui/file-picker';
 import { Icon } from '../ui/icons';
 import { BackupScheduleCard } from './backup-schedule';
+import { CodeName } from './code-name';
 import { RecoveryKitSection } from './recovery-kit';
 import {
   BACKUP_RUN_STATE_LABELS,
+  RECOVERY_MIGRATION_VERDICT_LABELS,
   RECOVERY_STAGE_LABELS,
   RECOVERY_STATE_LABELS,
   recoveryErrorText,
@@ -735,20 +737,28 @@ function RecoveryOperations({
                     ],
                     [
                       t('web.recovery_migration_verdict'),
-                      <Ltr key="mv">{current.restoreTest.migrationVerdict}</Ltr>,
+                      <CodeName
+                        key="mv"
+                        value={current.restoreTest.migrationVerdict}
+                        labels={RECOVERY_MIGRATION_VERDICT_LABELS}
+                      />,
                     ],
                   ] as [React.ReactNode, React.ReactNode][])),
-              ...(current.failureCode === null
-                ? []
-                : ([[t('web.recovery_failure'), <Ltr key="f">{current.failureCode}</Ltr>]] as [
-                    React.ReactNode,
-                    React.ReactNode,
-                  ][])),
             ]}
           />
 
           {current.failureCode !== null && (
-            <Banner tone="danger">{recoveryFailureText(current.failureCode)}</Banner>
+            // C1: the failure in words, its code small and left-to-right beneath it (the row
+            // that showed the bare code as its value is folded into this banner).
+            <Banner tone="danger">
+              {recoveryFailureText(current.failureCode)}
+              <p className="err-ref muted small">
+                <span>{t('web.err_ref_code')}</span>{' '}
+                <bdi dir="ltr" className="ltr mono">
+                  {current.failureCode}
+                </bdi>
+              </p>
+            </Banner>
           )}
 
           {current.state === 'UPLOADED' && (
