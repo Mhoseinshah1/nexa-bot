@@ -6858,6 +6858,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       uow,
       scopeActivity: tenants,
     }),
+    legacyMaterializeCatalog.products,
+    legacyMaterializeCatalog.resellers,
+    legacyMaterializeCatalog.discounts,
   ]);
   const legacyMaterializePort = new LegacyMaterializePort(legacyMaterialize, () => clock.now());
   const legacyBotLinkPort = new LegacyBotLinkPort(customerBotLink);
