@@ -363,6 +363,41 @@ describe('one campaign', () => {
     });
   });
 
+  it('confirms again under the SAME key after a lost answer and a close and reopen of the drawer', async () => {
+    const api = stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/preview`, body: preview },
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/schedule`,
+        status: 503,
+        body: {
+          error: { kind: 'INTERNAL', code: 'internal.unhandled', message: 'x', correlationId: 'c' },
+        },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    const confirmOnce = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'پیش‌نمایش و تأیید' }));
+      await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
+      fireEvent.change(screen.getByLabelText('برای تأیید، تعداد را تایپ کنید'), {
+        target: { value: '3' },
+      });
+      fireEvent.click(screen.getByLabelText(/پیش‌نمایش را بررسی کردم/));
+      fireEvent.click(screen.getByRole('button', { name: 'تأیید و زمان‌بندی' }));
+    };
+    await confirmOnce();
+    await waitFor(() => expect(posts(api, '/schedule')).toHaveLength(1));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'پیش‌نمایش و تأیید' })).toBeNull(),
+    );
+    await confirmOnce();
+    await waitFor(() => expect(posts(api, '/schedule')).toHaveLength(2));
+    const keyOf = (body: unknown) => (body as { idempotencyKey: string }).idempotencyKey;
+    const [first, second] = posts(api, '/schedule');
+    expect(keyOf(second!.body)).toBe(keyOf(first!.body));
+  });
+
   it('will not confirm a wallet gift whose total the preview could not state — no 0 stands in (FIX-12)', async () => {
     const api = stubApi([
       {

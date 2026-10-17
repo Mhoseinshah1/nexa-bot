@@ -18,7 +18,7 @@ import {
   testAppearance,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { APPEARANCE_SLOT_LABEL as SLOT_LABEL } from '../appearance-labels';
 import { messageFor } from './settings';
@@ -142,6 +142,13 @@ export function AppearancePage({
   const view = appearance.data;
   const [tab, setTab] = useState<AppearanceTab>('slots');
   const [drafts, setDrafts] = useState<Readonly<Record<string, SlotDraft>>>({});
+  /*
+   * The slot sheet's key lives here, with the drafts, because the sheet unmounts on close: a
+   * key kept after an unanswered save or reset (a 5xx that may have committed) must survive a
+   * close and reopen, or the retry is a new command answered with a version conflict. The
+   * slot is part of every key's payload, so one key never stands for two slots.
+   */
+  const slotSubmission = useSubmissionKey();
   const [open, setOpen] = useState<AppearanceSlot | null>(null);
 
   const slots = view?.slots ?? [];
@@ -267,6 +274,7 @@ export function AppearancePage({
           slot={opened}
           draft={draftOf(opened, drafts)}
           mayEdit={mayEdit}
+          submission={slotSubmission}
           onDraft={(next) => setDrafts((all) => ({ ...all, [draftKey(opened)]: next }))}
           onSettled={() => {
             setDrafts((all) => {
@@ -340,6 +348,7 @@ function SlotSheet({
   slot,
   draft,
   mayEdit,
+  submission,
   onDraft,
   onSettled,
   onClose,
@@ -347,6 +356,8 @@ function SlotSheet({
   slot: AppearanceSlotView;
   draft: SlotDraft;
   mayEdit: boolean;
+  /** Held by the page (see `slotSubmission`). */
+  submission: SubmissionKey;
   onDraft: (next: SlotDraft) => void;
   /** A save or reset went through: the draft is spent and the sheet closes. */
   onSettled: () => void;
@@ -354,7 +365,6 @@ function SlotSheet({
 }) {
   const client = useQueryClient();
   const notify = useToast();
-  const submission = useSubmissionKey();
   const label = t(SLOT_LABEL[slot.slot]);
   const { trimmed, valid, dirty, previewCustom } = draftState(slot, draft);
 

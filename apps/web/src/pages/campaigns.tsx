@@ -39,7 +39,7 @@ import {
   scheduleCampaign,
   updateCampaign,
 } from '../api/client';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, useLinkHandler, type Route } from '../router';
 import { PURPOSE_LABELS } from './discounts';
@@ -1670,6 +1670,8 @@ function CampaignDetailBody({
   confirmOpen: boolean;
   setConfirmOpen: (next: boolean) => void;
 }) {
+  // The schedule's key outlives the drawer that unmounts its card (see `ConfirmCard`).
+  const confirmSubmission = useSubmissionKey();
   const commands = useCampaignCommands(campaign);
   const draftConfirm = mayManage && campaign.state === 'DRAFT';
   return (
@@ -1737,7 +1739,12 @@ function CampaignDetailBody({
         title={t('web.campaign_section_preview')}
         wide
       >
-        <ConfirmCard campaign={campaign} bare onScheduled={() => setConfirmOpen(false)} />
+        <ConfirmCard
+          campaign={campaign}
+          bare
+          onScheduled={() => setConfirmOpen(false)}
+          submission={confirmSubmission}
+        />
       </Drawer>
     </>
   );
@@ -1940,15 +1947,22 @@ function ConfirmCard({
   campaign,
   bare = false,
   onScheduled,
+  submission: heldSubmission,
 }: {
   campaign: CampaignDetail;
   /** Drawn inside a drawer that carries the title: no card around it. */
   bare?: boolean;
   onScheduled?: () => void;
+  /**
+   * Held by the page, which outlives the drawer: a key kept after an unanswered failure (a
+   * 5xx that may have scheduled the campaign) must survive closing and reopening it.
+   */
+  submission?: SubmissionKey;
 }) {
   const client = useQueryClient();
   const notify = useToast();
-  const submission = useSubmissionKey();
+  const ownSubmission = useSubmissionKey();
+  const submission = heldSubmission ?? ownSubmission;
   const preview = useQuery({
     queryKey: [CAMPAIGNS_KEY, 'preview', campaign.id, campaign.updatedAt],
     queryFn: () => fetchCampaignPreview(campaign.id),

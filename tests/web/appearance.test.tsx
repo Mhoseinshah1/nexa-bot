@@ -116,6 +116,42 @@ describe('the appearance page', () => {
     expect(resetCall?.body).toMatchObject({ expectedVersion: 3 });
   });
 
+  it('saves again under the SAME key after a lost answer and a close and reopen of the sheet', async () => {
+    const api = stubApi([
+      route(),
+      {
+        url: '/appearance/slots/payment',
+        method: 'POST',
+        status: 503,
+        body: {
+          error: { kind: 'INTERNAL', code: 'internal.unhandled', message: 'x', correlationId: 'c' },
+        },
+      },
+    ]);
+    renderPage(<AppearancePage denied={false} mayEdit />);
+    const saveOnce = async () => {
+      fireEvent.click(
+        await screen.findByRole('button', { name: t('web.appearance_slot_payment') }),
+      );
+      const sheet = screen.getByRole('dialog', { name: t('web.appearance_slot_payment') });
+      fireEvent.change(within(sheet).getByRole('textbox'), { target: { value: ID } });
+      fireEvent.click(within(sheet).getByRole('button', { name: t('web.save') }));
+      return sheet;
+    };
+    const saves = () => api.calls.filter((call) => call.url.endsWith('/appearance/slots/payment'));
+    const sheet = await saveOnce();
+    await waitFor(() => expect(saves()).toHaveLength(1));
+    await waitFor(() =>
+      expect(within(sheet).getByRole('button', { name: t('web.close') })).not.toBeDisabled(),
+    );
+    fireEvent.click(within(sheet).getByRole('button', { name: t('web.close') }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await saveOnce();
+    await waitFor(() => expect(saves()).toHaveLength(2));
+    const keyOf = (body: unknown) => (body as { idempotencyKey: string }).idempotencyKey;
+    expect(keyOf(saves()[1]!.body)).toBe(keyOf(saves()[0]!.body));
+  });
+
   it('keeps a slot’s unsaved edit when its sheet closes, marks the row and guards the page', async () => {
     const api = stubApi([route()]);
     renderPage(<AppearancePage denied={false} mayEdit />);
