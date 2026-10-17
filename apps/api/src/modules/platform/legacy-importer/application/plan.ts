@@ -34,6 +34,8 @@ import type {
   LegacyInventoryResolution,
 } from './ports.js';
 import {
+  isLiveInvoiceStatus,
+  serviceCandidateInvoices,
   sha256Hex,
   type LegacyInvoiceRow,
   type LegacySnapshot,
@@ -374,7 +376,7 @@ export function decideAllServices(
   const decided: PlannedService[] = [];
   const undecidable = new Set<string>();
   const inventoryHold = review.inventoryHold ?? new Set<string>();
-  for (const invoice of snapshot.liveInvoices) {
+  for (const invoice of serviceCandidateInvoices(snapshot)) {
     const panelId = review.operatorPanels?.get(invoice.idInvoice);
     const fresh = decideServiceCandidate(
       invoice,
@@ -425,7 +427,17 @@ export function withOwnershipRule(
   services: readonly PlannedService[],
   keptAsHistory: ReadonlySet<string>,
 ): readonly PlannedService[] {
-  const owners = new Map<string, Set<string>>();
+  /*
+   * Two tiers (owner decision 2026-10-17: every invoice is matched, not only the live ones).
+   * A LIVE invoice's claim on an account is the stronger one: it is the service the customer
+   * is using. An ended (non-live) invoice naming the same account never makes a live claimant
+   * ambiguous — an old removed invoice must not take a live adoption away — but it is held
+   * when its owner differs from the live claimant's, since which customer holds the account is
+   * still a guess. Among the ended invoices alone the original rule applies unchanged.
+   */
+  const liveOwners = new Map<string, Set<string>>();
+  const endedOwners = new Map<string, Set<string>>();
+  const live = (s: PlannedService): boolean => isLiveInvoiceStatus(s.invoice.status);
   const accountOf = (s: PlannedService): string | null =>
     s.decision.category === 'ADOPTION_ELIGIBLE' && !keptAsHistory.has(s.invoice.idInvoice)
       ? JSON.stringify([s.decision.panelId, s.decision.providerUsername.toLowerCase()])
@@ -433,13 +445,22 @@ export function withOwnershipRule(
   for (const s of services) {
     const account = accountOf(s);
     if (account === null || s.decision.category !== 'ADOPTION_ELIGIBLE') continue;
-    const set = owners.get(account) ?? new Set<string>();
+    const tier = live(s) ? liveOwners : endedOwners;
+    const set = tier.get(account) ?? new Set<string>();
     set.add(s.decision.telegramUserId);
-    owners.set(account, set);
+    tier.set(account, set);
   }
   return services.map((s) => {
     const account = accountOf(s);
-    if (account === null || (owners.get(account)?.size ?? 0) < 2) return s;
+    if (account === null || s.decision.category !== 'ADOPTION_ELIGIBLE') return s;
+    const liveSet = liveOwners.get(account);
+    const endedSet = endedOwners.get(account);
+    const ambiguous = live(s)
+      ? (liveSet?.size ?? 0) >= 2
+      : liveSet !== undefined
+        ? !liveSet.has(s.decision.telegramUserId) || liveSet.size >= 2
+        : (endedSet?.size ?? 0) >= 2;
+    if (!ambiguous) return s;
     return {
       invoice: s.invoice,
       decision: { category: 'AMBIGUOUS_OWNERSHIP', map: INVOICE_MAP_DECISIONS.AMBIGUOUS_OWNERSHIP },
@@ -590,9 +611,16 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
   const unmappable: Partial<Record<LegacyShapeUnmappableReason, number>> = {};
   const q1bKeys = new Set<string>();
   let hiddenShapeInvoices = 0;
-  for (const invoice of snapshot.liveInvoices) {
-    if (!needsHiddenShape(invoice, snapshot.productCodes)) continue;
-    hiddenShapeInvoices += 1;
+  for (const invoice of serviceCandidateInvoices(snapshot)) {
+    /*
+     * Every candidate gets its shape, not only the ones whose ADOPTION needs a hidden product:
+     * an invoice whose account is not on the panel becomes an ENDED service, and the ended
+     * service's order must name a product. A named-product invoice has none of its own to
+     * point at here, so it points at its shape's hidden product like any other. The counters
+     * below keep their old meaning: they count the invoices whose adoption needs one.
+     */
+    const adoptionNeeds = needsHiddenShape(invoice, snapshot.productCodes);
+    if (adoptionNeeds) hiddenShapeInvoices += 1;
     const shapeInput: LegacyShapeInput = {
       codePanel: invoice.codePanel,
       volume: invoice.volume,
@@ -602,7 +630,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     };
     const keyed = legacyShapeKey(shapeInput);
     if (!keyed.ok) {
-      unmappable[keyed.reason] = (unmappable[keyed.reason] ?? 0) + 1;
+      if (adoptionNeeds) unmappable[keyed.reason] = (unmappable[keyed.reason] ?? 0) + 1;
       continue;
     }
     if (isQ1bPopulation(invoice)) q1bKeys.add(keyed.key);
@@ -729,7 +757,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
         namedProductCandidates,
       },
       services: {
-        candidates: snapshot.liveInvoices.length,
+        candidates: serviceCandidateInvoices(snapshot).length,
         categories,
         unmappedCodePanels: Object.fromEntries(
           unmappedCodePanels(

@@ -25,7 +25,11 @@ import { isAdoptedOutcome } from '../../legacy-service-review/domain/candidate-r
 import { legacyCodePanel, type ServiceCandidateDecision } from './decisions.js';
 import type { PanelMapping } from './panel-mapping.js';
 import type { LegacyAdoptionOutcome, LegacyInventoryRead } from './ports.js';
-import type { LegacyInvoiceRow, LegacySnapshot } from './source-snapshot.js';
+import {
+  serviceCandidateInvoices,
+  type LegacyInvoiceRow,
+  type LegacySnapshot,
+} from './source-snapshot.js';
 
 /**
  * Mirza migration PR5 — every live legacy invoice's ONE outcome, the evidence behind it, the
@@ -399,7 +403,10 @@ export interface ServiceOutcomesSection {
  * `missing`, never assumed.
  */
 export function buildServiceOutcomesSection(input: {
-  readonly snapshot: Pick<LegacySnapshot, 'fingerprint' | 'synthetic' | 'liveInvoices'>;
+  readonly snapshot: Pick<
+    LegacySnapshot,
+    'fingerprint' | 'synthetic' | 'liveInvoices' | 'otherInvoices'
+  >;
   readonly runId: string;
   readonly rows: ReadonlyMap<string, LegacyServiceCandidateRecord>;
 }): ServiceOutcomesSection {
@@ -420,7 +427,8 @@ export function buildServiceOutcomesSection(input: {
   let adopted = 0;
   let notAdopted = 0;
   let linked = 0;
-  for (const invoice of input.snapshot.liveInvoices) {
+  const candidatesList = serviceCandidateInvoices(input.snapshot);
+  for (const invoice of candidatesList) {
     if (!recordableKey(invoice.idInvoice)) {
       unrecordable += 1;
       continue;
@@ -442,7 +450,7 @@ export function buildServiceOutcomesSection(input: {
       if (row.archiveId !== null) linked += 1;
     }
   }
-  const candidates = input.snapshot.liveInvoices.length;
+  const candidates = candidatesList.length;
   const sum = Object.values(outcomes).reduce((a, b) => a + b, 0);
   return {
     version: LEGACY_SERVICE_OUTCOMES_SECTION_VERSION,

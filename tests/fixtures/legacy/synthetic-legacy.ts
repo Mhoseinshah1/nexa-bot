@@ -447,10 +447,11 @@ export const SYNTHETIC_EXPECTED = {
     },
   },
   services: {
-    candidates: 19,
+    candidates: 21,
     categories: {
       INVOICE_KEY_INVALID: 1,
-      TEST_INVOICE_SKIPPED: 1,
+      /** The live test invoice AND the removed one (owner decision 2026-10-17: every invoice). */
+      TEST_INVOICE_SKIPPED: 2,
       TEST_PANEL_SKIPPED: 1,
       INVALID_SOURCE_ROW: 1,
       ORPHAN: 1,
@@ -463,7 +464,8 @@ export const SYNTHETIC_EXPECTED = {
        * AMBIGUOUS_PANEL, one PROVIDER_MISSING. Changed deliberately; the dataset is not.
        */
       NO_PANEL: 3,
-      PROVIDER_MISSING: 1,
+      /** `svc_missing` (live) and the removed `svc_old`, whose account is not on the panel. */
+      PROVIDER_MISSING: 2,
       AMBIGUOUS_PANEL: 0,
       PANEL_UNMAPPED: 1,
       USERNAME_CASE_COLLISION: 1,
@@ -570,9 +572,10 @@ export function buildSyntheticLegacyDataset(
     invoice({ idUser: '100000001', username: '', codePanel: C.mappedA }),
     // a key outside the evidenced shape: it cannot be recorded, so it is manual review
     invoice({ id: 'LEGACY-X1', idUser: '100000001', username: 'svc_a1', codePanel: C.mappedA }),
-    // not live: not a candidate at all
+    // not live, but matched against the panel all the same (every invoice is): its account
+    // is not there, so it is PROVIDER_MISSING
     invoice({ idUser: '100000003', username: 'svc_old', codePanel: C.mappedA, status: 'removed' }),
-    // a removed TEST invoice: user 10 consumed a trial
+    // a removed TEST invoice: user 10 consumed a trial; a test invoice either way
     invoice({
       idUser: '100000010',
       username: 'svc_oldtest',

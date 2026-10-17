@@ -440,6 +440,7 @@ describe('the evidence and the section', () => {
       fingerprint: H('f'),
       synthetic: true,
       liveInvoices: [row(), row({ idInvoice: 'a0000002' })],
+      otherInvoices: [],
     };
     const rec = (key: string, over: Record<string, unknown> = {}) =>
       [

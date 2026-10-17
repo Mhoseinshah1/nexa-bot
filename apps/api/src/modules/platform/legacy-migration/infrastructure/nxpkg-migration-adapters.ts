@@ -802,6 +802,7 @@ export class NxpkgMigrationAdapters
             records: facts,
             decisions,
             liveInvoices: snapshot.liveInvoices,
+            otherInvoices: snapshot.otherInvoices,
           });
           return Promise.resolve(hold.hold);
         },

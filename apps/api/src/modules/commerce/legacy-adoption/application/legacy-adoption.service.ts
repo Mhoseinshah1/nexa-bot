@@ -90,20 +90,46 @@ export interface LegacyAdoptionDeps {
   readonly ids: IdGenerator;
 }
 
-/** The NEXA state an adoptable RickPanel state becomes (§5); null = not representable. */
+/**
+ * The NEXA state a RickPanel account state becomes (`docs/migration/mirza-import-plan-fa.md`
+ * §6). Every state is representable: an account on the panel is never dropped for what it
+ * says about itself.
+ *
+ * - `active` and `limited` are ACTIVE (a limited account still works until it is topped up);
+ * - `disabled` is SUSPENDED, `expired` is EXPIRED;
+ * - `on_hold` and an unrecognised state are ACTIVE and FLAGGED (`adoptionReviewFlag`): an
+ *   on-hold account has not started its clock, and a state the inventory could not fold is
+ *   not knowledge. Losing the service would be worse than a flag a person looks at.
+ */
 export function adoptedServiceState(
   state: AdoptionRuntimeFacts['state'],
-): 'ACTIVE' | 'SUSPENDED' | 'EXPIRED' | null {
+): 'ACTIVE' | 'SUSPENDED' | 'EXPIRED' {
   switch (state) {
     case 'active':
     case 'limited':
+    case 'on_hold':
+    case 'UNKNOWN':
       return 'ACTIVE';
     case 'disabled':
       return 'SUSPENDED';
     case 'expired':
       return 'EXPIRED';
+  }
+}
+
+/**
+ * Why an adopted service should be looked at by a person, or null. Recorded on the adoption's
+ * audit row and counted by the importer — never a state of its own.
+ */
+export function adoptionReviewFlag(
+  state: AdoptionRuntimeFacts['state'],
+): 'PANEL_STATE_ON_HOLD' | 'PANEL_STATE_UNKNOWN' | null {
+  switch (state) {
     case 'on_hold':
+      return 'PANEL_STATE_ON_HOLD';
     case 'UNKNOWN':
+      return 'PANEL_STATE_UNKNOWN';
+    default:
       return null;
   }
 }
@@ -427,7 +453,7 @@ export class LegacyAdoptionService {
     const runtime = command.runtime;
     if (runtime === null) return READ_FAILED;
     const state = adoptedServiceState(runtime.state);
-    if (state === null) return review('UNSUPPORTED_SHAPE');
+    const reviewFlag = adoptionReviewFlag(runtime.state);
     const usage = runtime.usage;
     if (
       usage === null ||
@@ -450,6 +476,11 @@ export class LegacyAdoptionService {
       return review('CONFLICTING_EXISTING_ENTITY');
     }
 
+    // The invoice is already a row of ours (an ended service recorded it): never a second one.
+    if (await this.deps.store.invoiceCarried(scope, `invoice:${command.legacyInvoiceKey}`, tx)) {
+      return review('CONFLICTING_EXISTING_ENTITY');
+    }
+
     if (command.productId === null) return review('PRODUCT_MAPPING_UNRESOLVED');
     const product = await this.deps.products.findById(scope, command.productId as ProductId, tx);
     if (product === null) return review('PRODUCT_MAPPING_UNRESOLVED');
@@ -469,7 +500,12 @@ export class LegacyAdoptionService {
       return review('PRODUCT_MAPPING_UNRESOLVED');
     }
     // A renewal must be shape-compatible (quoteRenewal): otherwise it is adopted unrenewable.
-    if ((usage.expiresAt !== null) !== product.specification.durationDays > 0) {
+    // A FLAGGED account is exempt: an on-hold account has no expiry yet whatever its plan, and
+    // it is adopted for a person to look at rather than lost.
+    if (
+      reviewFlag === null &&
+      (usage.expiresAt !== null) !== product.specification.durationDays > 0
+    ) {
       return review('PRODUCT_MAPPING_UNRESOLVED');
     }
 
@@ -500,6 +536,7 @@ export class LegacyAdoptionService {
         deviceLimit: product.specification.deviceLimit,
       },
       state,
+      reviewFlag,
       providerUsername: exact,
       canonical: match.username,
       namespaceKey,
@@ -553,6 +590,7 @@ export class LegacyAdoptionService {
           usageSyncedAt,
         },
         reservation: { namespaceKey: plan.namespaceKey, username: plan.canonical },
+        sourceRef: `invoice:${command.legacyInvoiceKey}`,
         now,
       },
       tx,
@@ -596,6 +634,7 @@ export class LegacyAdoptionService {
           mapRef,
           // Whether a link was stored, never the link: it is a bearer capability.
           hasLink: plan.subscriptionUrl !== null,
+          reviewFlag: plan.reviewFlag,
           remindersSeeded: seed.passed.length,
           capacity,
         },
@@ -622,6 +661,7 @@ export class LegacyAdoptionService {
       customerId: plan.customerId,
       panelId: plan.panelId,
       state: plan.state,
+      reviewFlag: plan.reviewFlag,
       capacity,
       remindersSeeded: seed.passed,
     };
@@ -707,6 +747,7 @@ interface Plan {
     readonly deviceLimit: number | null;
   };
   readonly state: 'ACTIVE' | 'SUSPENDED' | 'EXPIRED';
+  readonly reviewFlag: 'PANEL_STATE_ON_HOLD' | 'PANEL_STATE_UNKNOWN' | null;
   readonly providerUsername: string;
   readonly canonical: string;
   readonly namespaceKey: string;

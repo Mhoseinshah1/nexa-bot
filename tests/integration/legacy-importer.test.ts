@@ -1219,8 +1219,10 @@ describe('Migration P7: the legacy importer', () => {
       );
     await run(['counts']);
     // Mirza PR5: 15, not 14 — the NULL-code invoice the search used to adopt is a review row
-    // now (MANUAL_REVIEW / PANEL_UNMAPPED; its candidate outcome is NO_PANEL).
-    expect(lines[0]).toMatch(/^review rows 15 {2}open 15 /u);
+    // now (MANUAL_REVIEW / PANEL_UNMAPPED; its candidate outcome is NO_PANEL). 16 since every
+    // invoice is matched against the panel (owner decision 2026-10-17): the removed `svc_old`
+    // is not there either (MANUAL_REVIEW / PROVIDER_MISSING).
+    expect(lines[0]).toMatch(/^review rows 16 {2}open 16 /u);
     lines.length = 0;
     await run(['list', '--limit', '5']);
     expect(lines[0]).toBe('table\tlegacy_id\treason\tstate\tresolution\tattempts\tupdated_at');
@@ -1230,7 +1232,7 @@ describe('Migration P7: the legacy importer', () => {
     lines.length = 0;
     await run(['list', '--limit', '500', '--after', next]);
     expect(lines.at(-1)).toBe('(last page)');
-    expect(lines).toHaveLength(1 + 10 + 1);
+    expect(lines).toHaveLength(1 + 11 + 1);
     lines.length = 0;
     await run([
       'resolve',

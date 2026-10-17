@@ -636,17 +636,24 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
   }
 
   /**
-   * The names the backup needs on panel A (live, real, importable owner, rp1): svc_a1
+   * The names the backup needs on panel A (real, importable owner, rp1): svc_a1
    * (eligible), svc_a2 (product unresolved), svc_a4 (unsupported shape), case_x (Case_X and
-   * case_x on the panel: a collision whatever the walks prove), svc_missing (no account).
-   * Without a gap-free walk every one but the collision is UNRESOLVED — four invoices
+   * case_x on the panel: a collision whatever the walks prove), svc_missing (no account) and,
+   * since every invoice is matched against the panel (owner decision 2026-10-17), svc_old —
+   * the removed invoice, whose account is not there either.
+   * Without a gap-free walk every one but the collision is UNRESOLVED — five invoices
    * `INVENTORY_INCOMPLETE`, and, among the names, also the three panel-less invoices' (asked of
    * every production panel so their holders can be offered for an ADOPT; their outcome stays
    * `NO_PANEL`).
    */
-  const UNRESOLVED_WITHOUT_GAP_FREE = 4;
+  const UNRESOLVED_WITHOUT_GAP_FREE = 5;
   const PANEL_LESS_NAMES = 3;
   const NAMES_UNRESOLVED_WITHOUT_GAP_FREE = UNRESOLVED_WITHOUT_GAP_FREE + PANEL_LESS_NAMES;
+  /**
+   * The accounts a gap-free read finds absent: `svc_missing` (live) and `svc_old` (a removed
+   * invoice, which is matched against the panel like any other — owner decision 2026-10-17).
+   */
+  const PROVIDER_MISSING_INVOICES = 2;
 
   /** The one eligible candidate of the synthetic backup, on its own account and owner. */
   const BASELINE = { 'A:svc_a1': '100000001' } as const;
@@ -743,7 +750,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBeUndefined();
     // case_x as before, and svc_a2 now: two spellings fold to one name.
     expect(w['USERNAME_CASE_COLLISION']).toBe(2);
-    expect(w['PROVIDER_MISSING']).toBe(1);
+    expect(w['PROVIDER_MISSING']).toBe(PROVIDER_MISSING_INVOICES);
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
 
@@ -878,7 +885,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(aw['PROVIDER_INVENTORY_CHURN']).toBe(1);
     expect(aw['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
     expect(aw['INVENTORY_INCOMPLETE']).toBeUndefined();
-    expect(aw['PROVIDER_MISSING']).toBe(1);
+    expect(aw['PROVIDER_MISSING']).toBe(PROVIDER_MISSING_INVOICES);
     expect((await page.approve(id)).status).toBe('APPROVED');
     await page.executor.tick();
     const done = await detail(id);
@@ -923,7 +930,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     panelA.beforeListPage = null;
     const sw = codes(seen.dryRunReport?.warnings);
     expect(sw['PROVIDER_INVENTORY_CHURN']).toBe(1);
-    expect(sw['PROVIDER_MISSING']).toBe(1);
+    expect(sw['PROVIDER_MISSING']).toBe(PROVIDER_MISSING_INVOICES);
     expect(sw['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
     expect(lookupsOf(panelA, before)).toEqual([]);
 
@@ -1062,7 +1069,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(cw['PROVIDER_INVENTORY_CHURN']).toBe(1);
     expect(cw['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
     expect(cw['INVENTORY_INCOMPLETE']).toBeUndefined();
-    expect(cw['PROVIDER_MISSING']).toBe(1);
+    expect(cw['PROVIDER_MISSING']).toBe(PROVIDER_MISSING_INVOICES);
     // The case-folding route is never consulted: the walks decide.
     expect(lookupsOf(panelA, before)).toEqual([]);
 
@@ -1164,7 +1171,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     expect(w['PROVIDER_INVENTORY_CHURN']).toBe(1);
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
-    expect(w['PROVIDER_MISSING']).toBe(1);
+    expect(w['PROVIDER_MISSING']).toBe(PROVIDER_MISSING_INVOICES);
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect(await businessCounts()).toEqual(NOTHING_WRITTEN);
@@ -1222,7 +1229,7 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
     const w = codes(dry.dryRunReport?.warnings);
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:COUNT_MISMATCH']).toBeUndefined();
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
-    expect(w['PROVIDER_MISSING']).toBe(1);
+    expect(w['PROVIDER_MISSING']).toBe(PROVIDER_MISSING_INVOICES);
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect((await page.approve(id)).status).toBe('APPROVED');
     await page.executor.tick();

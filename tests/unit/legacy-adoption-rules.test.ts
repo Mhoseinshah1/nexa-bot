@@ -1,19 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import {
   adoptedServiceState,
+  adoptionReviewFlag,
   adoptionRequestHash,
 } from '../../apps/api/src/modules/commerce/legacy-adoption/application/legacy-adoption.service';
 import type { LegacyAdoptionCommand } from '../../apps/api/src/modules/commerce/legacy-adoption/application/legacy-adoption-ports';
 
 /** Migration P6 — the two pure rules of the adoption (`docs/migration-p6-service-adoption.md` §5, §7). */
 describe('adoptedServiceState', () => {
-  it('maps every RickPanel state, and refuses the two it cannot represent', () => {
+  it('maps every RickPanel state; on_hold and an unrecognised one are ACTIVE and flagged', () => {
     expect(adoptedServiceState('active')).toBe('ACTIVE');
     expect(adoptedServiceState('limited')).toBe('ACTIVE');
     expect(adoptedServiceState('disabled')).toBe('SUSPENDED');
     expect(adoptedServiceState('expired')).toBe('EXPIRED');
-    expect(adoptedServiceState('on_hold')).toBeNull();
-    expect(adoptedServiceState('UNKNOWN')).toBeNull();
+    expect(adoptedServiceState('on_hold')).toBe('ACTIVE');
+    expect(adoptedServiceState('UNKNOWN')).toBe('ACTIVE');
+  });
+
+  it('flags exactly the two states it could not read as knowledge, and nothing else', () => {
+    expect(adoptionReviewFlag('on_hold')).toBe('PANEL_STATE_ON_HOLD');
+    expect(adoptionReviewFlag('UNKNOWN')).toBe('PANEL_STATE_UNKNOWN');
+    for (const state of ['active', 'limited', 'disabled', 'expired'] as const) {
+      expect(adoptionReviewFlag(state)).toBeNull();
+    }
   });
 });
 

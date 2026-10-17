@@ -1069,6 +1069,7 @@ export async function nxpkgOwnershipEvidence(
           records: facts,
           decisions: verified,
           liveInvoices: snapshot.liveInvoices,
+          otherInvoices: snapshot.otherInvoices,
         }).hold,
       ),
     decisionsDigest: verified?.entriesDigest ?? null,
