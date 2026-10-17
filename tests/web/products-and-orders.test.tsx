@@ -7,7 +7,6 @@ import { OrderDetailPage, OrdersPage } from '../../apps/web/src/pages/orders';
 import { resolve } from '../../apps/web/src/app';
 import { categoryListing, order, panel, product, renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
-import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Products and Orders, rendered against the shapes the server actually returns.
