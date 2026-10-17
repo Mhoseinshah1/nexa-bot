@@ -1270,11 +1270,6 @@ const POSITIVE_WHOLE = /^0*[1-9][0-9]*$/u;
  * The service charges both itself — the missing button is a courtesy, never the
  * enforcement.
  */
-/** The "from Mirza" badge: a row the one-time import carried from Mirza. */
-function SourceBadgeMirza() {
-  return <Badge tone="info">{t('web.source_mirza')}</Badge>;
-}
-
 function WalletCard({
   customerId,
   mayView,
@@ -1469,7 +1464,7 @@ function WalletCard({
         ((entries.data.importedEntries ?? []).length > 0 || importedCursor !== null) && (
           <>
             <h3 className="ca-subhead">
-              {t('web.wallet_imported_title')} <SourceBadgeMirza />
+              {t('web.wallet_imported_title')} <SourceBadge source="MIRZA" />
             </h3>
             <p className="muted small">{t('web.wallet_imported_hint')}</p>
             <DataTable

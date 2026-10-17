@@ -3362,8 +3362,6 @@ export const resellerSummarySchema = z.object({
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
   /** The stored own limit, else the tier's. Grants nothing; kept so stored rows read. */
   effectiveCreditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
-  /** `MIRZA` for a reseller the one-time Mirza import created. */
-  source: z.enum(RECORD_SOURCES),
   /**
    * The purchase cap Mirza gave this agent (`maxbuyagent`), shown to the owner and applied
    * NOWHERE: it is a limit, not money, and never a balance or a credit line (reseller credit

@@ -11,7 +11,6 @@ import type {
   ResellerOverrideMode,
   ResellerPriceLayer,
   ResellerPricingMode,
-  RecordSource,
   ResellerStatus,
   TenantContext,
 } from '@nexa/contracts';
@@ -62,8 +61,6 @@ export interface ResellerRecord {
    * is an explicit "no minimum for this reseller".
    */
   readonly monthlyMinimum: Money | null;
-  /** `MIRZA` for a reseller the one-time import created. */
-  readonly source: RecordSource;
   /**
    * The purchase cap Mirza gave this agent: shown, applied nowhere. A limit, never money —
    * no decision reads it (reseller credit stays removed).
