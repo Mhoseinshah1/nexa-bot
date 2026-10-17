@@ -30,7 +30,6 @@ import {
   FilterChip,
   FilterChips,
   LoadingState,
-  Ltr,
   Num,
   PageHead,
   StateSwitch,
