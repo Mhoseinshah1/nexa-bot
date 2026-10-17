@@ -41,6 +41,7 @@ import {
   useToast,
   type Column,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Mirza migration PR6 — the owner's cutover approval (owner constraint 3).
@@ -433,6 +434,7 @@ export function ApproveForm({
       {approve.error !== null && (
         <Banner tone="danger" role="alert">
           {legacyCutoverFault(approve.error)}
+          <ErrorRef error={approve.error} />
         </Banner>
       )}
     </div>
@@ -512,6 +514,7 @@ function Revoke({ row }: { row: LegacyCutoverApprovalView }) {
           {revoke.error !== null && (
             <Banner tone="danger" role="alert">
               {legacyCutoverFault(revoke.error)}
+              <ErrorRef error={revoke.error} />
             </Banner>
           )}
         </div>

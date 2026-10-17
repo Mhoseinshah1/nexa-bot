@@ -45,6 +45,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * «گروه گزارش‌های مدیریتی» (WP-A4): the Telegram group Nexa posts its operations log to.
@@ -403,7 +404,12 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
                   </ul>
                 )}
 
-                {failure != null && <Banner tone="danger">{opsMessageFor(failure)}</Banner>}
+                {failure != null && (
+                  <Banner tone="danger">
+                    {opsMessageFor(failure)}
+                    <ErrorRef error={failure} />
+                  </Banner>
+                )}
               </Card>
 
               <div className="stack">
@@ -672,7 +678,12 @@ function ManualRow({
       >
         {t('web.save')}
       </button>
-      {save.error != null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+      {save.error != null && (
+        <Banner tone="danger">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </div>
   );
 }

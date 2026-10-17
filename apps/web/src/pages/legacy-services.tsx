@@ -24,7 +24,7 @@ import {
 import { formatTimestamp } from '../format';
 import { useLinkHandler, useRoute } from '../router';
 import { LegacyCode, NamedCode } from './code-name';
-import { ErrorCodeLabel } from '../ui/technical-details';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 import { ListFilterBar } from '../ui/filter-bar';
 import { LEGACY_INVOICE_CLASS_LABELS } from './legacy-invoices';
 import {
@@ -583,6 +583,7 @@ export function CandidateDetail({
     return detail.error !== null ? (
       <Banner tone="danger" role="alert">
         {legacyServiceFault(detail.error)}
+        <ErrorRef error={detail.error} />
       </Banner>
     ) : (
       <p className="muted">{t('web.lsr_loading')}</p>
@@ -924,6 +925,7 @@ function Decisions({
     act.error !== null ? (
       <Banner tone="danger" role="alert">
         {legacyServiceFault(act.error)}
+        <ErrorRef error={act.error} />
       </Banner>
     ) : null;
   const send = (which: Exclude<Asking, null>) =>

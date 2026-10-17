@@ -60,6 +60,7 @@ import { Icon } from '../ui/icons';
 import { SaveBar } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { TierHistoryCard } from './reseller-standing';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Reseller tiers and what each one grants (WP9-B, `docs/wp9-reseller-audit.md` R2, R5).
@@ -710,7 +711,12 @@ export function GrantsEditor({
         </Button>
       </div>
       <p className="muted small">{t('web.reseller_grants_replace_note')}</p>
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -1011,7 +1017,12 @@ function TierForm({
           {mode === 'create' ? t('web.reseller_tier_create') : t('web.rule_save')}
         </Button>
       </SaveBar>
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Card>
   );
 }

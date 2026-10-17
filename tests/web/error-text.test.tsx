@@ -373,6 +373,109 @@ describe('ApiErrorReport', () => {
 });
 
 /**
+ * C3 (W6 §4): a refusal said in a `Banner` carries its code and correlation id.
+ *
+ * "Says an error" is found, not listed: every `function name(x: unknown, …): string` in
+ * `apps/web/src` whose body reads `ApiError` or calls another such function (to a fixpoint,
+ * from `errorText` and `messageFor`) is an error-sentence function — `kitMessage`,
+ * `ticketFault`, `bulkMessage`, … — so a page's new helper is covered the day it is written.
+ * Every `<Banner …>…</Banner>` in a page or kit component that calls one must also hold an
+ * `ErrorRef` (or be an `ApiErrorReport`, which draws one).
+ */
+describe('every error banner carries the reference', () => {
+  const repo = join(import.meta.dirname, '../..');
+  const ROOTS = ['apps/web/src/pages', 'apps/web/src/ui'];
+  const BANNER = /<Banner\b[\s\S]*?<\/Banner>/gu;
+  const REFERENCED = /\b(?:ErrorRef|ApiErrorReport)\b/u;
+
+  function walkSource(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) walkSource(path, out);
+      else if (/\.tsx?$/u.test(path)) out.push(path);
+    }
+    return out;
+  }
+
+  const sources = walkSource(join(repo, 'apps/web/src')).map((path) => ({
+    path,
+    text: readFileSync(path, 'utf8'),
+  }));
+
+  /** The error-sentence functions, by name. */
+  function sentenceFunctions(): Set<string> {
+    const FUNCTION =
+      /^(?:export )?function ([a-z]\w*)\(\w+: unknown[^)]*\):\s*string\b[^{]*\{\n([\s\S]*?)^\}/gmu;
+    const bodies = new Map<string, string[]>();
+    for (const { text } of sources) {
+      for (const match of text.matchAll(FUNCTION)) {
+        const name = match[1] ?? '';
+        bodies.set(name, [...(bodies.get(name) ?? []), match[2] ?? '']);
+      }
+    }
+    const names = new Set(['errorText', 'messageFor']);
+    for (let grew = true; grew;) {
+      grew = false;
+      const calls = new RegExp(`\\bApiError\\b|\\b(?:${[...names].join('|')})\\(`, 'u');
+      for (const [name, found] of bodies) {
+        if (!names.has(name) && found.some((body) => calls.test(body))) {
+          names.add(name);
+          grew = true;
+        }
+      }
+    }
+    return names;
+  }
+
+  const names = sentenceFunctions();
+  const SAYS_ERROR = new RegExp(`\\b(?:${[...names].join('|')})\\(`, 'u');
+
+  /** The error banners in one source text that draw no reference, by line. */
+  function unreferenced(text: string): number[] {
+    const lines: number[] = [];
+    for (const match of text.matchAll(BANNER)) {
+      if (SAYS_ERROR.test(match[0]) && !REFERENCED.test(match[0])) {
+        lines.push(text.slice(0, match.index).split('\n').length);
+      }
+    }
+    return lines;
+  }
+
+  it('finds the pages’ own error-sentence helpers', () => {
+    for (const name of ['kitMessage', 'ticketFault', 'bulkMessage', 'recoveryErrorText']) {
+      expect(names.has(name), name).toBe(true);
+    }
+    expect(names.size).toBeGreaterThan(30);
+  });
+
+  it('finds no error banner without its code and correlation id', () => {
+    const offenders: string[] = [];
+    let banners = 0;
+    for (const { path, text } of sources) {
+      const file = relative(repo, path);
+      if (!ROOTS.some((root) => file.startsWith(root))) continue;
+      banners += [...text.matchAll(BANNER)].filter((match) => SAYS_ERROR.test(match[0])).length;
+      for (const line of unreferenced(text)) offenders.push(`${file}:${line}`);
+    }
+    // A guard against a broken walk making the scan vacuous.
+    expect(banners).toBeGreaterThan(140);
+    expect(offenders).toEqual([]);
+  });
+
+  it('the scan sees a planted banner without a reference, and one with it', () => {
+    const planted = [
+      '{save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}',
+      '<Banner tone="danger">',
+      '  {kitMessage(exporter.error)}',
+      '</Banner>',
+      '<Banner tone="danger">{messageFor(x)}<ErrorRef error={x} /></Banner>',
+      '<Banner tone="ok">{t(\'web.saved\')}</Banner>',
+    ].join('\n');
+    expect(unreferenced(planted)).toEqual([1, 2]);
+  });
+});
+
+/**
  * No page or kit component shows `.message` of an `Error` / `ApiError`.
  *
  * The server's message is English for a log; a page reaches a Persian sentence through

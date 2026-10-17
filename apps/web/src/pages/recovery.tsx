@@ -68,6 +68,7 @@ import {
   type MirzaAccess,
   type RestoreFileKind,
 } from './recovery-mirza';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Backup and disaster recovery.
@@ -389,7 +390,10 @@ function BackupStatus({
       {outcome === 'BUSY' && <Banner tone="warn">{t('web.recovery_run_busy')}</Banner>}
       {outcome === 'COMPLETED' && <Banner tone="ok">{t('web.recovery_run_done')}</Banner>}
       {error !== null && error !== undefined && (
-        <Banner tone="danger">{recoveryErrorText(error)}</Banner>
+        <Banner tone="danger">
+          {recoveryErrorText(error)}
+          <ErrorRef error={error} />
+        </Banner>
       )}
     </>
   );
@@ -681,9 +685,17 @@ function RecoveryOperations({
             {pending ? t('web.recovery_uploading') : t('web.recovery_upload_send')}
           </button>
         </div>
-        {upload.error !== null && <Banner tone="danger">{recoveryErrorText(upload.error)}</Banner>}
+        {upload.error !== null && (
+          <Banner tone="danger">
+            {recoveryErrorText(upload.error)}
+            <ErrorRef error={upload.error} />
+          </Banner>
+        )}
         {mirzaUpload.error !== null && (
-          <Banner tone="danger">{legacyMigrationFault(mirzaUpload.error)}</Banner>
+          <Banner tone="danger">
+            {legacyMigrationFault(mirzaUpload.error)}
+            <ErrorRef error={mirzaUpload.error} />
+          </Banner>
         )}
       </form>
 
@@ -777,7 +789,10 @@ function RecoveryOperations({
             </>
           )}
           {verify.error !== null && (
-            <Banner tone="danger">{recoveryErrorText(verify.error)}</Banner>
+            <Banner tone="danger">
+              {recoveryErrorText(verify.error)}
+              <ErrorRef error={verify.error} />
+            </Banner>
           )}
 
           {current.state === 'RESTORE_TEST_PASSED' && (
@@ -953,7 +968,10 @@ function RestoreConfirmation({
         </button>
       </div>
       {error !== null && error !== undefined && (
-        <Banner tone="danger">{recoveryErrorText(error)}</Banner>
+        <Banner tone="danger">
+          {recoveryErrorText(error)}
+          <ErrorRef error={error} />
+        </Banner>
       )}
     </div>
   );

@@ -41,7 +41,7 @@ import { ListFilterBar } from '../ui/filter-bar';
 import { templateCopy } from '../template-copy';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
-import { CodeLabel, TechnicalDetails } from '../ui/technical-details';
+import { CodeLabel, ErrorRef, TechnicalDetails } from '../ui/technical-details';
 import { DELIVERY_OUTCOME_LABELS, errorCodeLabel, opsCodeLabel } from '../ops-code-labels';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
@@ -650,7 +650,12 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           {test.data.created ? t('web.test_sent') : t('web.test_replayed')}
         </Banner>
       )}
-      {test.isError && <Banner tone="danger">{messageFor(test.error)}</Banner>}
+      {test.isError && (
+        <Banner tone="danger">
+          {messageFor(test.error)}
+          <ErrorRef error={test.error} />
+        </Banner>
+      )}
 
       <div className={denied ? undefined : 'notifications-layout'}>
         <Card title={t('web.notifications_title')} hint={t('web.notifications_list_hint')}>
@@ -728,7 +733,8 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
             {!denied && selected !== null && detail.isPending && <LoadingState />}
             {!denied && detail.isError && staleAfterError(detail) && (
               <Banner tone="danger">
-                {messageFor(detail.error)}{' '}
+                {messageFor(detail.error)}
+                <ErrorRef error={detail.error} />{' '}
                 {retryOf(detail) !== undefined && (
                   <button type="button" className="btn ghost sm" onClick={retryOf(detail)}>
                     {t('web.retry')}

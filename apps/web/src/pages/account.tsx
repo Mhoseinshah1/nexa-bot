@@ -38,6 +38,7 @@ import {
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { useUnsavedChanges } from '../ui/unsaved';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The signed-in administrator's own account (Phase D2, program §17).
@@ -217,7 +218,12 @@ function EnrolForm({ onEnrolled }: { onEnrolled: (enrolment: TotpEnrolResponse) 
           {t('web.totp_enrol_start')}
         </button>
       </div>
-      {enrol.isError && <Banner tone="danger">{securityMessage(enrol.error)}</Banner>}
+      {enrol.isError && (
+        <Banner tone="danger">
+          {securityMessage(enrol.error)}
+          <ErrorRef error={enrol.error} />
+        </Banner>
+      )}
     </form>
   );
 }
@@ -307,7 +313,12 @@ function ActivateForm({
           {t('web.account_cancel')}
         </button>
       </div>
-      {activate.isError && <Banner tone="danger">{securityMessage(activate.error)}</Banner>}
+      {activate.isError && (
+        <Banner tone="danger">
+          {securityMessage(activate.error)}
+          <ErrorRef error={activate.error} />
+        </Banner>
+      )}
     </form>
   );
 }
@@ -524,7 +535,12 @@ function ActiveFactor({
               {t('web.backup_codes_regenerate')}
             </button>
           </div>
-          {regenerate.isError && <Banner tone="danger">{securityMessage(regenerate.error)}</Banner>}
+          {regenerate.isError && (
+            <Banner tone="danger">
+              {securityMessage(regenerate.error)}
+              <ErrorRef error={regenerate.error} />
+            </Banner>
+          )}
         </form>
       </FormDialog>
 
@@ -566,7 +582,12 @@ function ActiveFactor({
               {t('web.totp_disable')}
             </button>
           </div>
-          {disable.isError && <Banner tone="danger">{securityMessage(disable.error)}</Banner>}
+          {disable.isError && (
+            <Banner tone="danger">
+              {securityMessage(disable.error)}
+              <ErrorRef error={disable.error} />
+            </Banner>
+          )}
         </form>
       </FormDialog>
       {confirming && (
@@ -647,7 +668,12 @@ function PasswordCard() {
             {t('web.password_change')}
           </button>
         </div>
-        {change.isError && <Banner tone="danger">{securityMessage(change.error)}</Banner>}
+        {change.isError && (
+          <Banner tone="danger">
+            {securityMessage(change.error)}
+            <ErrorRef error={change.error} />
+          </Banner>
+        )}
       </form>
     </Card>
   );
@@ -738,7 +764,10 @@ function SessionsCard() {
         </ul>
       </StateSwitch>
       {(revokeOne.isError || revokeOthers.isError) && (
-        <Banner tone="danger">{securityMessage(revokeOne.error ?? revokeOthers.error)}</Banner>
+        <Banner tone="danger">
+          {securityMessage(revokeOne.error ?? revokeOthers.error)}
+          <ErrorRef error={revokeOne.error ?? revokeOthers.error} />
+        </Banner>
       )}
       {confirmOthers && (
         <ConfirmDialog

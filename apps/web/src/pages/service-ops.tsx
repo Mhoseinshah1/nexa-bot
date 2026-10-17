@@ -45,6 +45,7 @@ import { bulkMessage } from './bulk-operations';
 import { messageFor } from './settings';
 import { ChipGroup } from './commerce-parts';
 import type { ListFilter } from '../ui/filter-bar';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The Service Operations Center (program §13): what the services list and a service's page
@@ -470,7 +471,12 @@ export function ServiceMassActionCard({
               {t('web.bulk_preview_button')}
             </Button>
           </div>
-          {load.error !== null && <Banner tone="danger">{bulkMessage(load.error)}</Banner>}
+          {load.error !== null && (
+            <Banner tone="danger">
+              {bulkMessage(load.error)}
+              <ErrorRef error={load.error} />
+            </Banner>
+          )}
           {stale && <Banner tone="warn">{t('web.soc_mass_stale')}</Banner>}
           {preview !== null && !stale && (
             <>
@@ -577,7 +583,12 @@ export function ServiceMassActionCard({
               )}
             </>
           )}
-          {execute.error !== null && <Banner tone="danger">{bulkMessage(execute.error)}</Banner>}
+          {execute.error !== null && (
+            <Banner tone="danger">
+              {bulkMessage(execute.error)}
+              <ErrorRef error={execute.error} />
+            </Banner>
+          )}
         </div>
       )}
     </>

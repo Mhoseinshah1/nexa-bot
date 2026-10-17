@@ -63,6 +63,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { InventoryDiagnostics } from './recovery-mirza-inventory-diagnostics';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Restore from Mirza — the second source of «بکاپ و بازیابی ← عملیات بازیابی»
@@ -555,7 +556,12 @@ function CancelButton({ row }: { row: LegacyMigrationImportView }) {
       <Button variant="danger" icon="x" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
         {t('web.mrz_cancel')}
       </Button>
-      {cancel.error !== null && <Banner tone="danger">{legacyMigrationFault(cancel.error)}</Banner>}
+      {cancel.error !== null && (
+        <Banner tone="danger">
+          {legacyMigrationFault(cancel.error)}
+          <ErrorRef error={cancel.error} />
+        </Banner>
+      )}
     </div>
   );
 }
@@ -688,7 +694,12 @@ function KeyForm({ row }: { row: LegacyMigrationImportView }) {
           {t('web.lmg_key_save')}
         </Button>
       </div>
-      {save.error !== null && <Banner tone="danger">{legacyMigrationFault(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {legacyMigrationFault(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </form>
   );
 }
@@ -815,7 +826,12 @@ function AdoptStep({ row, mayApply }: { row: LegacyMigrationImportView; mayApply
           </Button>
         </div>
       )}
-      {adopt.error !== null && <Banner tone="danger">{legacyMigrationFault(adopt.error)}</Banner>}
+      {adopt.error !== null && (
+        <Banner tone="danger">
+          {legacyMigrationFault(adopt.error)}
+          <ErrorRef error={adopt.error} />
+        </Banner>
+      )}
     </Step>
   );
 }
@@ -1022,7 +1038,12 @@ function PanelsStep({
           )}
         </div>
       )}
-      {save.error !== null && <Banner tone="danger">{legacyMigrationFault(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {legacyMigrationFault(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Step>
   );
 }
@@ -1086,7 +1107,10 @@ function DecisionsStep({
             </Button>
           </div>
           {upload.error !== null && (
-            <Banner tone="danger">{legacyMigrationFault(upload.error)}</Banner>
+            <Banner tone="danger">
+              {legacyMigrationFault(upload.error)}
+              <ErrorRef error={upload.error} />
+            </Banner>
           )}
         </form>
       )}
@@ -1197,7 +1221,10 @@ function DryRunStep({
         </div>
       )}
       {error !== null && error !== undefined && (
-        <Banner tone="danger">{legacyMigrationFault(error)}</Banner>
+        <Banner tone="danger">
+          {legacyMigrationFault(error)}
+          <ErrorRef error={error} />
+        </Banner>
       )}
     </Step>
   );
@@ -1382,7 +1409,10 @@ function ConfirmStep({
             </Button>
           </div>
           {approve.error !== null && (
-            <Banner tone="danger">{legacyMigrationFault(approve.error)}</Banner>
+            <Banner tone="danger">
+              {legacyMigrationFault(approve.error)}
+              <ErrorRef error={approve.error} />
+            </Banner>
           )}
         </form>
       )}

@@ -42,6 +42,7 @@ import {
   useConfirmedClose,
   useToast,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Customer 360 — notes and tags (program §8, `docs/customer-notes-tags.md`).
@@ -255,7 +256,12 @@ function CustomerTagsCard({
       ) : (
         <p className="muted small">{t('web.crm_tags_assign_denied')}</p>
       )}
-      {!adding && write.error !== null && <Banner tone="danger">{crmMessage(write.error)}</Banner>}
+      {!adding && write.error !== null && (
+        <Banner tone="danger">
+          {crmMessage(write.error)}
+          <ErrorRef error={write.error} />
+        </Banner>
+      )}
 
       <FormDialog
         open={mayAssign && adding}
@@ -292,7 +298,12 @@ function CustomerTagsCard({
             ))}
           </Select>
         </Field>
-        {write.error !== null && <Banner tone="danger">{crmMessage(write.error)}</Banner>}
+        {write.error !== null && (
+          <Banner tone="danger">
+            {crmMessage(write.error)}
+            <ErrorRef error={write.error} />
+          </Banner>
+        )}
       </FormDialog>
 
       <TagCatalogueModal open={mayManage && managing} onClose={() => setManaging(false)} />
@@ -398,7 +409,12 @@ function CustomerNotesCard({
             onChange={(event) => setDraft(event.target.value)}
           />
         </Field>
-        {add.error !== null && <Banner tone="danger">{crmMessage(add.error)}</Banner>}
+        {add.error !== null && (
+          <Banner tone="danger">
+            {crmMessage(add.error)}
+            <ErrorRef error={add.error} />
+          </Banner>
+        )}
       </FormDialog>
       {!mayView ? (
         <Banner tone="info">{t('web.crm_notes_denied')}</Banner>
@@ -570,7 +586,12 @@ export function TagCatalogueModal({ open, onClose }: { open: boolean; onClose: (
             {t('web.crm_tag_create')}
           </Button>
         </div>
-        {write.error !== null && <Banner tone="danger">{crmMessage(write.error)}</Banner>}
+        {write.error !== null && (
+          <Banner tone="danger">
+            {crmMessage(write.error)}
+            <ErrorRef error={write.error} />
+          </Banner>
+        )}
 
         <StateSwitch query={catalogue}>
           {(catalogue.data?.tags.length ?? 0) === 0 ? (

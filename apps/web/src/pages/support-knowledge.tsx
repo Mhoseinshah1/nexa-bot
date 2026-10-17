@@ -54,6 +54,7 @@ import {
   usePagedRows,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * TB8 — support knowledge (ADR-0035): the one home of what the support agent may answer from,
@@ -562,6 +563,7 @@ export function SupportKnowledgePage({
       {control.error != null && (
         <Banner tone="danger" role="alert">
           {knowledgeFault(control.error)}
+          <ErrorRef error={control.error} />
         </Banner>
       )}
       <StateSwitch
@@ -605,6 +607,7 @@ export function SupportKnowledgePage({
           {save.error != null && (
             <Banner tone="danger" role="alert">
               {knowledgeFault(save.error)}
+              <ErrorRef error={save.error} />
             </Banner>
           )}
           <div className="form-actions">
@@ -850,6 +853,7 @@ export function LearningCandidatesPage({
       {decide.error != null && editing === null && (
         <Banner tone="danger" role="alert">
           {knowledgeFault(decide.error)}
+          <ErrorRef error={decide.error} />
         </Banner>
       )}
       <StateSwitch
@@ -887,6 +891,7 @@ export function LearningCandidatesPage({
           {decide.error != null && (
             <Banner tone="danger" role="alert">
               {knowledgeFault(decide.error)}
+              <ErrorRef error={decide.error} />
             </Banner>
           )}
           <div className="form-actions">
@@ -969,6 +974,7 @@ export function ProposeKnowledgeButton({
       {propose.error != null && (
         <span className="small danger" role="alert">
           {fault === undefined ? messageFor(propose.error) : t(fault)}
+          <ErrorRef error={propose.error} />
         </span>
       )}
     </span>

@@ -18,6 +18,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { Badge, Banner, Card } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * UX Batch 01 item 6 — «افزودن ویدیو از تلگرام».
@@ -231,7 +232,12 @@ function TutorialVideoSection({ appId, mayEdit }: { appId: string; mayEdit: bool
         </Banner>
       )}
 
-      {failure != null && <Banner tone="danger">{videoFault(failure)}</Banner>}
+      {failure != null && (
+        <Banner tone="danger">
+          {videoFault(failure)}
+          <ErrorRef error={failure} />
+        </Banner>
+      )}
     </Card>
   );
 }

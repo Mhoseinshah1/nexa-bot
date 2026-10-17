@@ -38,6 +38,7 @@ import { Icon } from '../ui/icons';
 import { SaveBar } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { CategoryIconsSection } from './category-icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Product categories — the one place a tenant arranges what it sells.
@@ -405,8 +406,18 @@ export function ProductCategoriesPage({
         A row action's refusal, and the delete refusal in its own banner — the one an
         operator most needs to read the NUMBER out of — above the table they are about.
       */}
-      {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
-      {remove.error != null && <Banner tone="danger">{deleteMessage(remove.error)}</Banner>}
+      {failure != null && (
+        <Banner tone="danger">
+          {messageFor(failure)}
+          <ErrorRef error={failure} />
+        </Banner>
+      )}
+      {remove.error != null && (
+        <Banner tone="danger">
+          {deleteMessage(remove.error)}
+          <ErrorRef error={remove.error} />
+        </Banner>
+      )}
       <div>
         <div className="stack">
           <StateSwitch
@@ -537,7 +548,12 @@ export function ProductCategoriesPage({
             )}
           </div>
 
-          {save.error != null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          {save.error != null && (
+            <Banner tone="danger">
+              {messageFor(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
         </Drawer>
       </div>
 

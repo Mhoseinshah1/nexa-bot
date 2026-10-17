@@ -42,6 +42,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { SummaryPill } from './editor-layout';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * «🎨 ظاهر ربات» (Premium UI, `docs/premium-ui-audit.md`).
@@ -495,7 +496,10 @@ function SlotSheet({
           onChange={(enabled) => onDraft({ ...draft, enabled })}
         />
         {failure !== null && failure !== undefined && (
-          <Banner tone="danger">{appearanceMessageFor(failure)}</Banner>
+          <Banner tone="danger">
+            {appearanceMessageFor(failure)}
+            <ErrorRef error={failure} />
+          </Banner>
         )}
       </div>
     </Drawer>
@@ -607,7 +611,12 @@ function TestCard({
               </div>
             </>
           )}
-          {test.isError && <Banner tone="danger">{appearanceMessageFor(test.error)}</Banner>}
+          {test.isError && (
+            <Banner tone="danger">
+              {appearanceMessageFor(test.error)}
+              <ErrorRef error={test.error} />
+            </Banner>
+          )}
         </>
       )}
     </Card>

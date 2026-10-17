@@ -89,6 +89,7 @@ import {
   wireAudience,
   type AudienceDraft,
 } from './audience-builder';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * «ارسال همگانی» — Broadcast (round N, B1).
@@ -757,7 +758,10 @@ function Composer({
 
       {save.error !== null && (
         <div className="cb-form-error">
-          <Banner tone="danger">{broadcastMessage(save.error)}</Banner>
+          <Banner tone="danger">
+            {broadcastMessage(save.error)}
+            <ErrorRef error={save.error} />
+          </Banner>
         </div>
       )}
     </Card>
@@ -864,7 +868,12 @@ function MediaCard({
         )}
       </div>
       {rejected && <Banner tone="danger">{t('web.bc_error_media_refused')}</Banner>}
-      {upload.error !== null && <Banner tone="danger">{broadcastMessage(upload.error)}</Banner>}
+      {upload.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(upload.error)}
+          <ErrorRef error={upload.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -988,8 +997,18 @@ function LaunchCard({
           {t('web.bcx_test_last')}: {t(TEST_OUTCOME_LABELS[tested])}
         </p>
       )}
-      {test.error !== null && <Banner tone="danger">{broadcastMessage(test.error)}</Banner>}
-      {count.error !== null && <Banner tone="danger">{broadcastMessage(count.error)}</Banner>}
+      {test.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(test.error)}
+          <ErrorRef error={test.error} />
+        </Banner>
+      )}
+      {count.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(count.error)}
+          <ErrorRef error={count.error} />
+        </Banner>
+      )}
       {preview !== null && (
         <>
           <div className="stat-grid cb-stat-row">
@@ -1097,7 +1116,12 @@ function LaunchCard({
           )}
         </>
       )}
-      {launch.error !== null && <Banner tone="danger">{broadcastMessage(launch.error)}</Banner>}
+      {launch.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(launch.error)}
+          <ErrorRef error={launch.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -1247,7 +1271,12 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
           onCancel={() => setCancelAsked(false)}
         />
       )}
-      {steer.error !== null && <Banner tone="danger">{broadcastMessage(steer.error)}</Banner>}
+      {steer.error !== null && (
+        <Banner tone="danger">
+          {broadcastMessage(steer.error)}
+          <ErrorRef error={steer.error} />
+        </Banner>
+      )}
     </Card>
   );
 }

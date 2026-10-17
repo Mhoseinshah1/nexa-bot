@@ -7,6 +7,7 @@ import { Banner, Button, Field, Ltr } from '../ui/kit';
 import { messageFor } from './settings';
 import { useDebouncedApply } from '../ui/list-search';
 import { displayName, StatusBadge } from './customer-parts';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Picking ONE customer by what an operator actually has (UX batch 01, item 9).
@@ -112,7 +113,10 @@ export function CustomerPicker({
       {applied === '' ? null : results.isPending ? (
         <p className="muted small">{t('web.loading')}</p>
       ) : results.isError ? (
-        <Banner tone="danger">{messageFor(results.error)}</Banner>
+        <Banner tone="danger">
+          {messageFor(results.error)}
+          <ErrorRef error={results.error} />
+        </Banner>
       ) : rows.length === 0 ? (
         <Banner tone="warn">{t('web.customer_picker_none')}</Banner>
       ) : (

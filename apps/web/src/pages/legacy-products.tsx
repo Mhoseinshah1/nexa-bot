@@ -53,6 +53,7 @@ import {
 } from '../ui/kit';
 import { Drawer, Modal } from '../ui/overlays';
 import { ListFilterBar } from '../ui/filter-bar';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Mirza migration PR2 — the legacy product review (`docs/legacy-product-review-design.md` §8).
@@ -668,6 +669,7 @@ function Decisions({
     decide.error !== null ? (
       <Banner tone="danger" role="alert">
         {legacyProductFault(decide.error)}
+        <ErrorRef error={decide.error} />
       </Banner>
     ) : null;
   const close = () => {

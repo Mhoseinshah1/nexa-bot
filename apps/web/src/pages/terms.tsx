@@ -45,6 +45,7 @@ import {
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The terms and rules (program §6).
@@ -344,7 +345,12 @@ export function TermsPage({
               {data.enforcement.enabled && current === null && (
                 <Banner tone="warn">{t('web.terms_enforcement_nothing_published')}</Banner>
               )}
-              {toggle.error != null && <Banner tone="danger">{faultOf(toggle.error)}</Banner>}
+              {toggle.error != null && (
+                <Banner tone="danger">
+                  {faultOf(toggle.error)}
+                  <ErrorRef error={toggle.error} />
+                </Banner>
+              )}
             </Card>
 
             <div className="stat-grid">
@@ -456,7 +462,12 @@ export function TermsPage({
                     </div>
                   </div>
                 )}
-                {publish.error != null && <Banner tone="danger">{faultOf(publish.error)}</Banner>}
+                {publish.error != null && (
+                  <Banner tone="danger">
+                    {faultOf(publish.error)}
+                    <ErrorRef error={publish.error} />
+                  </Banner>
+                )}
               </Card>
             </div>
 
@@ -525,7 +536,12 @@ export function TermsPage({
               )}
             </Banner>
           )}
-          {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
+          {save.error != null && (
+            <Banner tone="danger">
+              {faultOf(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
           <div className="form-actions">
             <button type="submit" className="btn primary" disabled={busy || textMissing}>
               {t('web.terms_save')}

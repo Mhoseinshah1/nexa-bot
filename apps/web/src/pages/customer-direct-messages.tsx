@@ -33,6 +33,7 @@ import {
   useUnsavedChanges,
   type Tone,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /*
  * Phase A2 — «ارسال پیام» from Customer 360 (`docs/direct-message-audit.md`).
@@ -315,7 +316,12 @@ export function DirectMessageComposeModal({
               <p className="strong">{t('web.dm_preview_heading')}</p>
               {text.trim() !== '' && <p className="dm-text">{text.trim()}</p>}
             </div>
-            {send.error !== null && <Banner tone="danger">{directMessageFault(send.error)}</Banner>}
+            {send.error !== null && (
+              <Banner tone="danger">
+                {directMessageFault(send.error)}
+                <ErrorRef error={send.error} />
+              </Banner>
+            )}
           </div>
         )}
       </Modal>

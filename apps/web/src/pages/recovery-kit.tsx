@@ -33,6 +33,7 @@ import { errorText } from '../error-text';
 import { FilePicker } from '../ui/file-picker';
 import { Modal } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The Recovery Kit section of the backup and recovery page (ADR-0032).
@@ -244,7 +245,12 @@ function ExportForm({ onDirty }: { onDirty: (dirty: boolean) => void }) {
         </button>
       </div>
       {done && <Banner tone="ok">{t('web.kit_exported')}</Banner>}
-      {exporter.error !== null && <Banner tone="danger">{kitMessage(exporter.error)}</Banner>}
+      {exporter.error !== null && (
+        <Banner tone="danger">
+          {kitMessage(exporter.error)}
+          <ErrorRef error={exporter.error} />
+        </Banner>
+      )}
     </form>
   );
 }
@@ -379,7 +385,12 @@ function ImportForm({
           )}
         </Banner>
       )}
-      {importer.error !== null && <Banner tone="danger">{kitMessage(importer.error)}</Banner>}
+      {importer.error !== null && (
+        <Banner tone="danger">
+          {kitMessage(importer.error)}
+          <ErrorRef error={importer.error} />
+        </Banner>
+      )}
     </form>
   );
 }
@@ -549,7 +560,12 @@ function RemoveKey({
             {t('web.kit_remove_cancel')}
           </button>
         </div>
-        {remover.error !== null && <Banner tone="danger">{kitMessage(remover.error)}</Banner>}
+        {remover.error !== null && (
+          <Banner tone="danger">
+            {kitMessage(remover.error)}
+            <ErrorRef error={remover.error} />
+          </Banner>
+        )}
       </div>
     </Modal>
   );

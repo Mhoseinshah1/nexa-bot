@@ -57,7 +57,7 @@ import {
   useToast,
   type Tone,
 } from '../ui/kit';
-import { ErrorCodeLabel } from '../ui/technical-details';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
  * Customer 360 — the sections the redesigned customer page adds (spec §11).
@@ -480,7 +480,12 @@ export function CustomerControlsCard({
             onChange={(event) => setReason(event.target.value)}
           />
         </Field>
-        {write.error !== null && <Banner tone="danger">{c360Message(write.error)}</Banner>}
+        {write.error !== null && (
+          <Banner tone="danger">
+            {c360Message(write.error)}
+            <ErrorRef error={write.error} />
+          </Banner>
+        )}
       </Modal>
     </Card>
   );
@@ -910,7 +915,12 @@ export function ManualOrderModal({
               onChange={(event) => setReason(event.target.value)}
             />
           </Field>
-          {place.error !== null && <Banner tone="danger">{c360Message(place.error)}</Banner>}
+          {place.error !== null && (
+            <Banner tone="danger">
+              {c360Message(place.error)}
+              <ErrorRef error={place.error} />
+            </Banner>
+          )}
         </>
       )}
     </Modal>
@@ -1101,7 +1111,12 @@ function ServicesToggleModal({
           ])}
         />
       )}
-      {run.error !== null && <Banner tone="danger">{c360Message(run.error)}</Banner>}
+      {run.error !== null && (
+        <Banner tone="danger">
+          {c360Message(run.error)}
+          <ErrorRef error={run.error} />
+        </Banner>
+      )}
     </Modal>
   );
 }
@@ -1217,7 +1232,12 @@ function TransferModal({ customerId, onClose }: { customerId: string; onClose: (
               {t('web.c360_transfer_preview')}
             </Button>
           </div>
-          {ask.error !== null && <Banner tone="danger">{c360Message(ask.error)}</Banner>}
+          {ask.error !== null && (
+            <Banner tone="danger">
+              {c360Message(ask.error)}
+              <ErrorRef error={ask.error} />
+            </Banner>
+          )}
           {preview !== null && <TransferPreview preview={preview} />}
           {preview !== null && preview.blockers.length === 0 && (
             <>
@@ -1243,7 +1263,12 @@ function TransferModal({ customerId, onClose }: { customerId: string; onClose: (
               </Field>
             </>
           )}
-          {run.error !== null && <Banner tone="danger">{c360Message(run.error)}</Banner>}
+          {run.error !== null && (
+            <Banner tone="danger">
+              {c360Message(run.error)}
+              <ErrorRef error={run.error} />
+            </Banner>
+          )}
         </>
       )}
     </Modal>

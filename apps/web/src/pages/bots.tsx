@@ -37,7 +37,7 @@ import {
   Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { ProviderText } from '../ui/technical-details';
+import { ErrorRef, ProviderText } from '../ui/technical-details';
 import { SummaryPill } from './editor-layout';
 
 /**
@@ -473,6 +473,7 @@ function BotSection({
         {failure != null && (
           <Banner tone="danger">
             <p>{botMessageFor(failure)}</p>
+            <ErrorRef error={failure} />
             <ReplacementFailureView details={replacementFailureOf(failure)} />
           </Banner>
         )}

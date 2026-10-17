@@ -45,7 +45,7 @@ import {
 } from '../ui/kit';
 import { Modal } from '../ui/overlays';
 import { opsCodeLabel } from '../ops-code-labels';
-import { CodeLabel } from '../ui/technical-details';
+import { CodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
  * Phase C2: the panel health dashboard.
@@ -562,6 +562,7 @@ function DrainModal({ panel, onClose }: { panel: PanelSummaryResponse; onClose: 
       {run.isError && (
         <Banner tone="danger" role="alert">
           {messageFor(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
       <Field label={t('web.ph_reason_label')} hint={t('web.ph_reason_hint')} htmlFor="ph-reason">
@@ -629,6 +630,7 @@ function GroupModal({ panel, onClose }: { panel: PanelSummaryResponse; onClose: 
       {run.isError && (
         <Banner tone="danger" role="alert">
           {messageFor(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
       <Field label={t('web.bal_group')} hint={t('web.bal_group_hint')} htmlFor="ph-group">

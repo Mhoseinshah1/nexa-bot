@@ -100,7 +100,7 @@ import {
   PAYMENT_STATE_LABELS as STATE_LABELS,
   PAYMENT_STATE_TONES as STATE_TONES,
 } from '../payment-labels';
-import { ErrorCodeLabel } from '../ui/technical-details';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 
 // Review N8: the vocabulary moved to `payment-labels.ts`; these names stay importable from
 // here under their old spelling, so a workstream that reads them from this page still builds.
@@ -1690,7 +1690,10 @@ function RefundsCard({
               card keeps the one sentence that said why.
             */}
             {issue.error !== null && !(issueOpen && issueFormShown) && (
-              <Banner tone="danger">{refundMessageFor(issue.error)}</Banner>
+              <Banner tone="danger">
+                {refundMessageFor(issue.error)}
+                <ErrorRef error={issue.error} />
+              </Banner>
             )}
 
             <Modal
@@ -1754,7 +1757,10 @@ function RefundsCard({
                 </Field>
               </div>
               {issue.error !== null && (
-                <Banner tone="danger">{refundMessageFor(issue.error)}</Banner>
+                <Banner tone="danger">
+                  {refundMessageFor(issue.error)}
+                  <ErrorRef error={issue.error} />
+                </Banner>
               )}
             </Modal>
 
@@ -1851,9 +1857,17 @@ function RefundsCard({
                 )}
               </div>
               {complete.error !== null && (
-                <Banner tone="danger">{refundMessageFor(complete.error)}</Banner>
+                <Banner tone="danger">
+                  {refundMessageFor(complete.error)}
+                  <ErrorRef error={complete.error} />
+                </Banner>
               )}
-              {abandon.error !== null && <Banner tone="danger">{messageFor(abandon.error)}</Banner>}
+              {abandon.error !== null && (
+                <Banner tone="danger">
+                  {messageFor(abandon.error)}
+                  <ErrorRef error={abandon.error} />
+                </Banner>
+              )}
             </Modal>
           </>
         )}
@@ -2706,9 +2720,17 @@ function ReconcileCard({
             </Button>
           </div>
           {reconcile.error !== null && deciding === null && (
-            <Banner tone="danger">{messageFor(reconcile.error)}</Banner>
+            <Banner tone="danger">
+              {messageFor(reconcile.error)}
+              <ErrorRef error={reconcile.error} />
+            </Banner>
           )}
-          {reinquire.error !== null && <Banner tone="danger">{messageFor(reinquire.error)}</Banner>}
+          {reinquire.error !== null && (
+            <Banner tone="danger">
+              {messageFor(reinquire.error)}
+              <ErrorRef error={reinquire.error} />
+            </Banner>
+          )}
           <Modal
             open={deciding !== null}
             onClose={() => setDeciding(null)}
@@ -2751,7 +2773,10 @@ function ReconcileCard({
               />
             </Field>
             {reconcile.error !== null && (
-              <Banner tone="danger">{messageFor(reconcile.error)}</Banner>
+              <Banner tone="danger">
+                {messageFor(reconcile.error)}
+                <ErrorRef error={reconcile.error} />
+              </Banner>
             )}
           </Modal>
         </>

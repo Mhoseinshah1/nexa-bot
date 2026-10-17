@@ -86,6 +86,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { CheckField, FormSection, SaveBar } from './editor-layout';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Discounts, cashback rules and the price preview (WP8).
@@ -720,7 +721,12 @@ function DiscountRules({
           />
         </StateSwitch>
 
-        {transition.error !== null && <Banner tone="danger">{messageFor(transition.error)}</Banner>}
+        {transition.error !== null && (
+          <Banner tone="danger">
+            {messageFor(transition.error)}
+            <ErrorRef error={transition.error} />
+          </Banner>
+        )}
       </Card>
 
       {!mayEdit && (
@@ -1592,7 +1598,12 @@ function DiscountForm({
       {(problem !== null || save.error !== null) && (
         <div className="cb-form-error stack-sm">
           {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-          {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          {save.error !== null && (
+            <Banner tone="danger">
+              {messageFor(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
         </div>
       )}
     </Card>
@@ -1783,7 +1794,12 @@ function CashbackRules({
           />
         </StateSwitch>
 
-        {transition.error !== null && <Banner tone="danger">{messageFor(transition.error)}</Banner>}
+        {transition.error !== null && (
+          <Banner tone="danger">
+            {messageFor(transition.error)}
+            <ErrorRef error={transition.error} />
+          </Banner>
+        )}
       </Card>
 
       {!mayEdit && (
@@ -1989,7 +2005,12 @@ function CashbackForm({
       {(problem !== null || save.error !== null) && (
         <div className="cb-form-error stack-sm">
           {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-          {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          {save.error !== null && (
+            <Banner tone="danger">
+              {messageFor(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
         </div>
       )}
     </Card>

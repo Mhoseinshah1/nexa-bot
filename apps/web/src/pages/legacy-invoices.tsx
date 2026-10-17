@@ -47,7 +47,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Drawer } from '../ui/overlays';
-import { ErrorCodeLabel } from '../ui/technical-details';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
  * Mirza migration PR3 — the legacy invoice archive, READ-ONLY.
@@ -560,7 +560,12 @@ export function InvoiceDetail({ id }: { id: string }) {
     queryFn: () => fetchLegacyInvoice(id),
   });
   if (detail.error !== null)
-    return <Banner tone="danger">{legacyInvoiceFault(detail.error)}</Banner>;
+    return (
+      <Banner tone="danger">
+        {legacyInvoiceFault(detail.error)}
+        <ErrorRef error={detail.error} />
+      </Banner>
+    );
   if (detail.data === undefined) return <p className="muted">{t('web.lia_loading')}</p>;
   const { row, raw, redactedColumns, revisions, importOutcome } = detail.data;
   const redacted = new Set(redactedColumns);

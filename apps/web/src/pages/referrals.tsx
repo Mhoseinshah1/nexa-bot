@@ -54,6 +54,7 @@ import {
   type Tone,
   Num,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Referrals — who brought whom, and what the tenant owes for it (WP9-A).
@@ -805,7 +806,12 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
               />
             )}
           </div>
-          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+          {failure != null && (
+            <Banner tone="danger">
+              {messageFor(failure)}
+              <ErrorRef error={failure} />
+            </Banner>
+          )}
         </form>
       ) : (
         <p className="muted">{t('web.referral_banner_read_only')}</p>

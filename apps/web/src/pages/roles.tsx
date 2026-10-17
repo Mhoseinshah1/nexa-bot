@@ -34,6 +34,7 @@ import { useConfirmedClose } from '../ui/unsaved';
 import { PermissionCatalog } from '../ui/permission-catalog';
 import { Icon } from '../ui/icons';
 import { errorText } from '../error-text';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * System → Roles (Phase D3, program §18): the permission-management UI over the
@@ -480,7 +481,12 @@ function RoleEditor({
               onChange={(event) => setReason(event.target.value)}
             />
           </Field>
-          {save.isError && <Banner tone="danger">{roleMessage(save.error)}</Banner>}
+          {save.isError && (
+            <Banner tone="danger">
+              {roleMessage(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
           <div className="btn-group">
             <button
               type="submit"
@@ -573,7 +579,12 @@ function DeleteRoleDialog({ role, onClose }: { role: RoleView; onClose: () => vo
             onChange={(event) => setReason(event.target.value)}
           />
         </Field>
-        {remove.isError && <Banner tone="danger">{roleMessage(remove.error)}</Banner>}
+        {remove.isError && (
+          <Banner tone="danger">
+            {roleMessage(remove.error)}
+            <ErrorRef error={remove.error} />
+          </Banner>
+        )}
         <div className="btn-group">
           <button
             type="button"

@@ -63,6 +63,7 @@ import { ProposeKnowledgeButton } from './support-knowledge';
 import { FailureDiagnosticView } from './support-ai-failure';
 import { ListFilterBar } from '../ui/filter-bar';
 import { ClientPager, useClientPaging } from './ops-paging';
+import { ErrorRef } from '../ui/technical-details';
 /**
  * TB2 — Telegram Business conversations (ADR-0033): the inbox, the connections it arrives
  * through, and one conversation with the operator's three controls (take over, hand back,
@@ -1023,7 +1024,12 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
           </button>
         </div>
       </form>
-      {send.error !== null && <Banner tone="danger">{businessChatFault(send.error)}</Banner>}
+      {send.error !== null && (
+        <Banner tone="danger">
+          {businessChatFault(send.error)}
+          <ErrorRef error={send.error} />
+        </Banner>
+      )}
     </Card>
   );
 }

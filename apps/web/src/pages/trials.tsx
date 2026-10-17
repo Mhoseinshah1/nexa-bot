@@ -42,6 +42,7 @@ import {
   type Column,
   LIST_PAGE_SIZE,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Trials, for an operator (WP6-B, `docs/wp6-audit.md` §7, ADR-0015).
@@ -333,7 +334,12 @@ function ResetButton({ mayReset }: { mayReset: boolean }) {
               {t('web.trials_reset_preview')}
             </Button>
           </div>
-          {load.error !== null && <Banner tone="danger">{messageFor(load.error)}</Banner>}
+          {load.error !== null && (
+            <Banner tone="danger">
+              {messageFor(load.error)}
+              <ErrorRef error={load.error} />
+            </Banner>
+          )}
 
           {preview !== null &&
             (preview.affectedGrants === 0 ? (
@@ -395,7 +401,10 @@ function ResetButton({ mayReset }: { mayReset: boolean }) {
                   </Button>
                 </div>
                 {execute.error !== null && (
-                  <Banner tone="danger">{messageFor(execute.error)}</Banner>
+                  <Banner tone="danger">
+                    {messageFor(execute.error)}
+                    <ErrorRef error={execute.error} />
+                  </Banner>
                 )}
               </>
             ))}

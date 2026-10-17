@@ -107,7 +107,7 @@ import {
   type Tone,
   LIST_PAGE_SIZE,
 } from '../ui/kit';
-import { ApiErrorReport } from '../ui/technical-details';
+import { ApiErrorReport, ErrorRef } from '../ui/technical-details';
 
 // ---------------------------------------------------------------------------
 // Customer 360 (spec §11)
@@ -600,7 +600,12 @@ export function UserDetailPage({
               ) : (
                 <Banner tone="warn">{t('web.user_unblock_confirm_body')}</Banner>
               )}
-              {mutate.error !== null && <Banner tone="danger">{messageFor(mutate.error)}</Banner>}
+              {mutate.error !== null && (
+                <Banner tone="danger">
+                  {messageFor(mutate.error)}
+                  <ErrorRef error={mutate.error} />
+                </Banner>
+              )}
             </Modal>
 
             <ManualOrderModal
@@ -1777,7 +1782,12 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
                     {reasonField}
                   </div>
                   <p className="muted small">{t('web.trial_zero_hint')}</p>
-                  {write.error !== null && <Banner tone="danger">{messageFor(write.error)}</Banner>}
+                  {write.error !== null && (
+                    <Banner tone="danger">
+                      {messageFor(write.error)}
+                      <ErrorRef error={write.error} />
+                    </Banner>
+                  )}
                 </FormDialog>
                 <FormDialog
                   open={dialog === 'remove' && row.override !== null}
@@ -1795,7 +1805,12 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
                   }
                 >
                   {reasonField}
-                  {write.error !== null && <Banner tone="danger">{messageFor(write.error)}</Banner>}
+                  {write.error !== null && (
+                    <Banner tone="danger">
+                      {messageFor(write.error)}
+                      <ErrorRef error={write.error} />
+                    </Banner>
+                  )}
                 </FormDialog>
               </>
             ) : (
