@@ -15,6 +15,7 @@ import {
   uuid,
   doublePrecision,
   customType,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql, type SQL } from 'drizzle-orm';
 import {
@@ -80,6 +81,7 @@ import {
   SERVICE_ADDON_STATUSES,
   COMMERCIAL_ORDER_PURPOSES,
   ORDER_ORIGINS,
+  RECORD_SOURCES,
   ORDER_PURPOSES,
   ORDER_SETTLED_STATES,
   ORDER_STATES,
@@ -373,6 +375,39 @@ import {
  * which `tests/unit/schema-ddl-guards.test.ts` asserts one character at a time.
  */
 const ENUM_LITERAL = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * The one-time Mirza import's provenance (owner decision 2026-10-17,
+ * `docs/migration/mirza-import-plan-fa.md` §2), on every NORMAL table it writes rows into.
+ *
+ * `source` is `NEXA` by default, so every existing writer is untouched and the migration is
+ * expand-only; `MIRZA` marks a row the import wrote, and `source_ref` is that row's id in
+ * Mirza. The pair is pinned by a CHECK (NEXA exactly when there is no ref) and the ref is
+ * unique per tenant, which is what makes a rerun of the import find its row instead of
+ * writing a second one.
+ */
+function recordSourceColumns() {
+  return {
+    source: text('source').notNull().default('NEXA'),
+    sourceRef: text('source_ref'),
+  };
+}
+
+function recordSourceChecks(
+  name: string,
+  table: { readonly tenantId: AnyPgColumn; readonly sourceRef: AnyPgColumn },
+) {
+  return [
+    check(`${name}_source_check`, enumCheck('source', RECORD_SOURCES)),
+    check(
+      `${name}_source_ref_check`,
+      sql`(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)`,
+    ),
+    uniqueIndex(`${name}_tenant_source_ref_key`)
+      .on(table.tenantId, table.sourceRef)
+      .where(sql`source_ref IS NOT NULL`),
+  ];
+}
 
 export function enumCheck(column: string, values: readonly string[]): SQL {
   // This is the only sql.raw in the codebase. Every argument today is a
@@ -3478,8 +3513,10 @@ export const customers = pgTable(
     phoneVerifiedAt: timestamptz('phone_verified_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('customers', table),
     /** The identity. Per tenant, so the same human may be a customer of two. */
     uniqueIndex('customers_tenant_telegram_key').on(table.tenantId, table.telegramUserId),
     /** The list's deterministic keyset: created_at then id, never a mutable column. */
@@ -3707,8 +3744,10 @@ export const products = pgTable(
     serviceLocationLabel: text('service_location_label'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('products', table),
     index('products_tenant_status_idx').on(table.tenantId, table.status),
     /** The catalogue's order, and the list's keyset: sort, then created, then id. */
     index('products_tenant_sort_idx').on(
@@ -4047,8 +4086,10 @@ export const orders = pgTable(
     refundedAt: timestamptz('refunded_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('orders', table),
     /** A child row may not name a customer of another tenant. */
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -4087,6 +4128,16 @@ export const orders = pgTable(
       sql`origin <> 'LEGACY_ADOPTION' OR (purpose = 'NEW_SERVICE' AND state = 'PAID'
           AND subtotal_amount = 0 AND discount_amount = 0 AND total_amount = 0
           AND discount_code IS NULL)`,
+    ),
+    /**
+     * A Mirza invoice carried as history (owner decision 2026-10-17) is a Mirza row, with no
+     * NEXA code, and ended (PAID, CANCELLED, EXPIRED or REFUNDED), so no lane ever settles,
+     * expires or refunds it.
+     */
+    check(
+      'orders_legacy_history_shape_check',
+      sql`origin <> 'LEGACY_HISTORY' OR (source = 'MIRZA' AND discount_code IS NULL
+          AND state IN ('PAID', 'CANCELLED', 'EXPIRED', 'REFUNDED'))`,
     ),
     /**
      * What the line snapshot MEANS, per purpose, as a constraint rather than a comment.
@@ -4356,8 +4407,10 @@ export const payments = pgTable(
     providerReviewUntil: timestamptz('provider_review_until'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('payments', table),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -4442,6 +4495,12 @@ export const payments = pgTable(
     check(
       'payments_evidence_kind_check',
       nullableEnumCheck('evidence_kind', PAYMENT_EVIDENCE_KINDS),
+    ),
+    // A LEGACY_IMPORT confirmation is history carried from Mirza, and only the import writes
+    // one: the kind can never be claimed by a NEXA payment.
+    check(
+      'payments_legacy_import_source_check',
+      sql`evidence_kind IS DISTINCT FROM 'LEGACY_IMPORT' OR source = 'MIRZA'`,
     ),
     check('payments_amount_check', sql`amount > 0`),
     /**
@@ -6775,8 +6834,10 @@ export const services = pgTable(
     terminatedAt: timestamptz('terminated_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('services', table),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -7934,8 +7995,10 @@ export const discounts = pgTable(
     redemptionCount: integer('redemption_count').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('discounts', table),
     uniqueIndex('discounts_tenant_code_key').on(table.tenantId, table.code),
     index('discounts_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     /** The candidates the engine reads for every quote: live automatic rules. */
@@ -8568,8 +8631,10 @@ export const referrals = pgTable(
     rewardEntryId: uuid('reward_entry_id'),
     rewardedAt: timestamptz('rewarded_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('referrals', table),
     foreignKey({
       columns: [table.tenantId, table.referrerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -9240,8 +9305,10 @@ export const resellers = pgTable(
     monthlyMinimumCurrency: text('monthly_minimum_currency'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('resellers', table),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -11009,8 +11076,10 @@ export const tickets = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     lastMessageAt: timestamptz('last_message_at').notNull().defaultNow(),
     closedAt: timestamptz('closed_at'),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('tickets', table),
     unique('tickets_tenant_id_key').on(table.tenantId, table.id),
     unique('tickets_opening_key').on(table.tenantId, table.openingKey),
     /** The inbox: newest first, under a keyset on the immutable `(created_at, id)`. */
@@ -11110,8 +11179,10 @@ export const ticketMessages = pgTable(
     /** What the key was first used for, so the same key with different words is refused. */
     requestHash: text('request_hash'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('ticket_messages', table),
     unique('ticket_messages_tenant_id_key').on(table.tenantId, table.id),
     unique('ticket_messages_key').on(table.tenantId, table.idempotencyKey),
     index('ticket_messages_ticket_idx').on(table.tenantId, table.ticketId, table.seq),

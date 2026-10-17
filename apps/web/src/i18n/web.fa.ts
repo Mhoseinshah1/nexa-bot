@@ -10129,6 +10129,7 @@ export const WEB_FA = {
   'web.pay_evidence_gateway_callback': 'پیام تأییدشدهٔ درگاه',
   'web.pay_evidence_reconciliation': 'تطبیق با پاسخ درگاه',
   'web.pay_evidence_gateway_inquiry': 'استعلام از درگاه',
+  'web.pay_evidence_legacy_import': 'واردشده از میرزا',
   'web.pay_receipt_kind_photo': 'عکس',
   'web.pay_receipt_kind_document': 'فایل',
   'web.pay_ledger_credit': 'واریز',

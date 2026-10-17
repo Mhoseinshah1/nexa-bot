@@ -271,8 +271,6 @@ import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastr
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
 import { LegacyProductReviewService } from './modules/commerce/legacy-product-review/application/legacy-product-review.service.js';
-import { LegacyWalletDebtService } from './modules/commerce/legacy-wallet-debts/application/legacy-wallet-debt.service.js';
-import { DrizzleLegacyWalletDebtRepository } from './modules/commerce/legacy-wallet-debts/infrastructure/drizzle-legacy-wallet-debt.repository.js';
 import { LegacyServiceReviewService } from './modules/platform/legacy-service-review/application/legacy-service-review.service.js';
 import { DrizzleLegacyServiceCandidateRepository } from './modules/platform/legacy-service-review/infrastructure/drizzle-legacy-service-candidate.repository.js';
 import { LegacyCutoverService } from './modules/platform/legacy-cutover/application/legacy-cutover.service.js';
@@ -1026,13 +1024,6 @@ export interface Container {
   readonly legacyRecordsRead: LegacyRecordsReadService;
   /** Mirza money history beside the opening figure, and the tenant-wide report (read only). */
   readonly legacyMoneyHistory: LegacyMoneyHistoryService;
-  /**
-   * Mirza PR4 (owner decision 6): the owner's review of legacy wallet debts — negative legacy
-   * balances held beside the ledger. Reads under `legacy.debts.view`, decisions under
-   * `legacy.debts.decide`; it moves no money. The importer RECORDS debts through
-   * `migrationOpeningBalance`, never through this.
-   */
-  readonly legacyWalletDebts: LegacyWalletDebtService;
   /**
    * Mirza PR5 (Area D; owner decision 8): the operator's review of legacy service candidates —
    * one outcome per live legacy invoice. Reads under `legacy.services.view`, decisions and ADOPT
@@ -2409,18 +2400,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     operationId: (key) => operationIdFor('payment', key),
-  });
-  const legacyWalletDebtRepository = new DrizzleLegacyWalletDebtRepository(database.db);
-  const legacyWalletDebts = new LegacyWalletDebtService({
-    repository: legacyWalletDebtRepository,
-    guard,
-    uow,
-    audit,
-    opsLog,
-    sessions,
-    idempotency,
-    scopeActivity: tenants,
-    clock,
   });
   const legacyServiceCandidateRepository = new DrizzleLegacyServiceCandidateRepository(database.db);
   const legacyServiceReview = new LegacyServiceReviewService({
@@ -7212,7 +7191,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     bulkOperationLoop,
     wallet: walletService,
     migrationOpeningBalance,
-    legacyWalletDebts,
     legacyServiceReview,
     legacyCutover,
     legacyReviewQueue,

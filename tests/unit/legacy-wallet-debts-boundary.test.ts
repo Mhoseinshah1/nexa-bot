@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -30,10 +30,6 @@ const ALLOWED = new Set([
   // The table's definition and the composition root.
   'apps/api/src/infrastructure/persistence/schema.ts',
   'apps/api/src/container.ts',
-  // The debt module itself: the owner's review, which moves no money.
-  'apps/api/src/modules/commerce/legacy-wallet-debts/application/legacy-wallet-debt.service.ts',
-  'apps/api/src/modules/commerce/legacy-wallet-debts/application/ports.ts',
-  'apps/api/src/modules/commerce/legacy-wallet-debts/infrastructure/drizzle-legacy-wallet-debt.repository.ts',
   // The importer's read-only plan and reconciliation aggregates.
   'apps/api/src/modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.ts',
   // Mirza PR6: the final report v2's duplicate counter (the most debts one customer holds),
@@ -63,13 +59,9 @@ describe('the legacy wallet debt boundary (never collected)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the debt module imports no wallet, ledger, payment, order, pricing, refund or provider code', () => {
-    const files = sources('apps/api/src/modules/commerce/legacy-wallet-debts');
-    expect(files.length).toBeGreaterThanOrEqual(3);
-    const money =
-      /from '[^']*(?:\/wallet\/|\/payments\/|\/orders\/|\/pricing\/|\/refunds?\/|\/commercial\/|\/provisioning\/|\/providers\/|\/resellers\/|\/referrals\/)/u;
-    const offenders = files.filter((file) => money.test(readFileSync(file, 'utf8')));
-    expect(offenders).toEqual([]);
+  it('the owner’s separate debt review is gone (owner decision 2026-10-17)', () => {
+    expect(existsSync('apps/api/src/modules/commerce/legacy-wallet-debts')).toBe(false);
+    expect(existsSync('apps/api/src/surfaces/web/legacy-debts.controller.ts')).toBe(false);
   });
 
   it('the wallet balance and every ordinary wallet movement never mention a debt', () => {

@@ -78,6 +78,7 @@ export const PAYMENT_EVIDENCE_KIND_LABELS: Readonly<Record<PaymentEvidenceKind, 
   GATEWAY_CALLBACK: 'web.pay_evidence_gateway_callback',
   RECONCILIATION: 'web.pay_evidence_reconciliation',
   GATEWAY_INQUIRY: 'web.pay_evidence_gateway_inquiry',
+  LEGACY_IMPORT: 'web.pay_evidence_legacy_import',
 };
 
 export const PAYMENT_RECEIPT_KIND_LABELS: Readonly<Record<PaymentReceiptKind, WebKey>> = {
