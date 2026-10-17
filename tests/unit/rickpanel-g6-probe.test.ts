@@ -414,6 +414,10 @@ describe('rickpanel-probe CLI arguments', () => {
     });
   });
 
+  it('accepts any page size the reader itself accepts (up to 2000)', () => {
+    expect(parseProbeArgs(['--panel', PANEL_ID, '--page-size', '2000']).pageSize).toBe(2000);
+  });
+
   it.each([
     [[]],
     [['--panel']],
@@ -421,6 +425,7 @@ describe('rickpanel-probe CLI arguments', () => {
     [['--panel', PANEL_ID, '--max-pages', '5001']],
     [['--panel', PANEL_ID, '--max-minutes', '91']],
     [['--panel', PANEL_ID, '--page-size', '0']],
+    [['--panel', PANEL_ID, '--page-size', '2001']],
     [['--panel', PANEL_ID, '--write']],
     [['--panel', 'https://x', '--walks', '2']],
     [['--panel', PANEL_ID, '--panel', PANEL_ID]],

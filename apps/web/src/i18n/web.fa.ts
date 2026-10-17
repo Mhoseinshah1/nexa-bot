@@ -9177,6 +9177,67 @@ export const WEB_FA = {
   'web.qrt_quiet_low':
     'حاشیهٔ سفید کمتر از {recommended} خانه است. بعضی دوربین‌ها و برنامه‌ها QR بدون حاشیه یا با حاشیهٔ کم را سخت‌تر می‌خوانند؛ پیش از ذخیره پیش‌نمایش را با گوشی امتحان کنید. انتخاب این مقدار مجاز است.',
   // --- end FIX-06 (qr) ------------------------------------------------------------------
+  // --- Mirza .nxpkg importer: «سوابق مالی میرزا» on Customer 360 (read only) ----------------
+  'web.c360_money_title': 'سوابق مالی میرزا',
+  'web.c360_money_hint':
+    'خلاصهٔ پول‌هایی که ربات میرزا برای این مشتری ثبت کرده بود، کنار موجودی منتقل‌شده. موجودی اولیه همان موجودی لحظهٔ بکاپ (Balance) است؛ این سوابق فقط شاهد آن‌اند.',
+  'web.c360_money_read_only': 'فقط برای مشاهده — به موجودی اضافه نمی‌شود',
+  'web.c360_money_none': 'ندارد',
+  'web.c360_money_records': 'رکورد',
+  'web.c360_money_not_summed': 'مبلغ نامعتبر، جمع زده نشد:',
+  'web.c360_money_opening': 'موجودی منتقل‌شده از میرزا',
+  'web.c360_money_opening_credit': 'اعتبار اولیه (ثبت در دفتر کیف پول)',
+  'web.c360_money_opening_debt': 'بدهی قدیمی (برای بررسی، هرگز وصول نمی‌شود)',
+  'web.c360_money_reconciliation': 'تطبیق با تاریخچه',
+  'web.c360_money_opening_figure': 'رقم اولیه (اعتبار منهای بدهی)',
+  'web.c360_money_snapshot': 'موجودی لحظهٔ بکاپ',
+  'web.c360_money_history_closing': 'ماندهٔ پایانی تاریخچهٔ کیف پول',
+  'web.c360_money_delta': 'اختلاف (بکاپ منهای تاریخچه)',
+  'web.c360_money_verdict': 'نتیجهٔ بررسی مبدل',
+  'web.c360_money_no_check': 'میرزا تاریخچهٔ تراکنش کیف پول برای این مشتری نداشت',
+  'web.c360_money_difference': 'تحلیل اختلاف (علت / اطمینان)',
+  'web.c360_money_wallet_unparsed': 'تراکنش کیف پول با مبلغ ناخوانا (در هیچ جمعی حساب نشده)',
+  'web.c360_money_verdict_matches': 'تاریخچه به موجودی بکاپ می‌رسد',
+  'web.c360_money_verdict_differs': 'تاریخچه به رقم دیگری می‌رسد',
+  'web.c360_money_rule':
+    'ملاک، موجودی لحظهٔ بکاپ است و همان یک بار به‌عنوان موجودی اولیه ثبت شده است. تاریخچه فقط شاهد است و هیچ رقمی از آن به موجودی اضافه یا از آن کم نمی‌شود.',
+  'web.c360_money_payments_ok': 'پرداخت‌های موفق، به تفکیک کاربرد',
+  'web.c360_money_payments_excluded':
+    'پرداخت‌های ناموفق، منقضی یا در انتظار (در جمع بالا حساب نشده)',
+  'web.c360_money_purpose_top_up': 'افزایش موجودی',
+  'web.c360_money_purpose_purchase': 'خرید یا تمدید سرویس',
+  'web.c360_money_purpose_admin_credit': 'افزایش موجودی توسط مدیر',
+  'web.c360_money_purpose_admin_debit': 'کاهش موجودی توسط مدیر',
+  'web.c360_money_purpose_not_in_source': 'کاربرد در بکاپ ثبت نشده (افزایش موجودی یا خرید)',
+  'web.c360_money_purpose_other': 'کاربرد ناشناخته',
+  'web.c360_money_outcome_succeeded': 'موفق',
+  'web.c360_money_outcome_failed': 'رد شده',
+  'web.c360_money_outcome_pending': 'در انتظار',
+  'web.c360_money_outcome_cancelled': 'منقضی یا لغوشده',
+  'web.c360_money_outcome_unknown': 'وضعیت ناشناخته',
+  'web.c360_money_other': 'سایر سوابق مالی',
+  'web.c360_money_wallet_in': 'تراکنش‌های کیف پول — ورودی',
+  'web.c360_money_wallet_out': 'تراکنش‌های کیف پول — خروجی',
+  'web.c360_money_wallet_zero': 'تراکنش‌های بدون تغییر موجودی',
+  'web.c360_money_wheel_spins': 'گردونهٔ شانس — تعداد چرخش',
+  'web.c360_money_wheel_won': 'گردونهٔ شانس — جایزه‌های برده‌شده',
+  'web.c360_money_referee': 'معرفی‌شده توسط دیگری',
+  'web.c360_money_referrer': 'معرفی‌های این مشتری',
+  'web.c360_money_referrer_gifts': 'هدیهٔ معرف پرداخت‌شده (بدون مبلغ ثبت‌شده)',
+  'web.c360_money_discounts': 'استفاده از کد تخفیف یا هدیه',
+  'web.c360_money_service_ops': 'عملیات سرویس با وضعیت',
+  'web.c360_money_amounts_note':
+    'مبلغ عملیات سرویس و کد تخفیف در منبع معنای اثبات‌شده ندارد؛ فقط برای مشاهده است.',
+  'web.c360_money_st_reconciled': 'تطبیق دارد: رقم اولیه برابر بکاپ است و تاریخچه به همان می‌رسد',
+  'web.c360_money_st_history_differs':
+    'رقم اولیه برابر بکاپ است؛ تاریخچه به رقم دیگری می‌رسد و بکاپ ملاک ماند',
+  'web.c360_money_st_no_history': 'رقم اولیه از بکاپ؛ تاریخچه‌ای برای مقایسه نبود',
+  'web.c360_money_st_no_opening': 'موجودی میرزا صفر بود یا موجودی منتقل نشد',
+  'web.c360_money_st_opening_differs': 'رقم اولیه با بکاپ برابر نیست — بررسی لازم است',
+  'web.c360_money_st_opening_invalid': 'ثبت موجودی اولیه ناهنجار است — بررسی لازم است',
+  'web.c360_money_st_ambiguous': 'بیش از یک بررسی تاریخچه برای این مشتری',
+  'web.c360_money_st_unreadable': 'شواهد تاریخچه خوانا نیست',
+  // --- end «سوابق مالی میرزا» ---------------------------------------------------------------
   // --- Mirza .nxpkg importer: «سوابق میرزا» on Customer 360 ---------------------------------
   'web.c360_legacy_title': 'سوابق میرزا',
   'web.c360_legacy_hint':
@@ -9549,6 +9610,8 @@ export const WEB_FA = {
   'web.err_incident_effect_contended': 'هم‌زمان کار دیگری روی همین مورد انجام می‌شد.',
   'web.err_incident_effect_failed': 'اعمال این اثر انجام نشد.',
   'web.err_refund_reservation_released': 'رزرو بازپرداخت جای دیگری آزاد شده بود.',
+  'web.err_customers_bot_link_invalid':
+    'پیوند مشتریان واردشده به ربات انجام نشد: ربات در این نصب نیست یا اندازهٔ دسته خارج از بازهٔ مجاز است.',
   'web.dlvcode_notification_render_failed': 'متن اعلان ساخته نشد',
   'web.dlvcode_notification_transport_threw': 'ارسال اعلان با خطای داخلی متوقف شد',
   'web.dlvcode_ops_group_not_connected': 'گروه عملیات وصل نیست',
@@ -10972,6 +11035,42 @@ export const WEB_FA = {
   'web.aq_range_to': 'تا {b}',
   'web.aq_before': 'پیش از {d}',
   'web.aq_from': 'از {a}',
+
+  // --- «سوابق و تنظیمات میرزا»: the whole Mirza history archive, read only -------------------
+  'web.nav_legacy_records': 'سوابق و تنظیمات میرزا',
+  'web.lrec_title': 'سوابق و تنظیمات میرزا',
+  'web.lrec_intro':
+    'همهٔ رکوردهای بایگانی‌شدهٔ میرزا، از جمله تنظیمات و رکوردهای بدون مشتری. این صفحه فقط خواندنی است و هیچ‌چیز را تغییر نمی‌دهد.',
+  'web.lrec_pii_redacted':
+    'اطلاعات شخصی و متن‌های آزاد پنهان است؛ برای دیدن آن‌ها کلید «مشاهدهٔ اطلاعات شخصی بایگانی» لازم است.',
+  'web.lrec_types_title': 'انواع رکورد',
+  'web.lrec_filter_type': 'نوع رکورد',
+  'web.lrec_filter_linked': 'اتصال به مشتری',
+  'web.lrec_all': 'همه',
+  'web.lrec_linked_yes': 'متصل به مشتری',
+  'web.lrec_linked_no': 'بدون مشتری',
+  'web.lrec_total': 'مجموع رکوردها:',
+  'web.lrec_unlinked': 'بدون مشتری:',
+  'web.lrec_empty': 'رکوردی با این فیلتر وجود ندارد.',
+  'web.lrec_badge_linked': 'متصل به مشتری',
+  'web.lrec_badge_unlinked': 'بدون مشتری',
+  'web.lrec_panels_title': 'پنل‌های غیرفعال میرزا',
+  'web.lrec_panels_hint':
+    'پنل‌هایی که در ثبت‌نام پنل‌های میرزا فعال نبودند. فقط اطلاعات است و روی پنل‌های نکسا اثری ندارد.',
+  'web.lrec_panels_empty': 'همهٔ پنل‌های میرزا فعال بودند.',
+  'web.lrec_panel_code': 'کد پنل',
+  'web.lrec_panel_name': 'نام',
+  'web.lrec_panel_type': 'نوع',
+  'web.lrec_panel_status': 'وضعیت',
+  'web.lrec_status_disabled': 'غیرفعال',
+  'web.lrec_status_other': 'غیر از فعال',
+  'web.lrec_service_title': 'سوابق میرزا',
+  'web.lrec_service_hint':
+    'عملیات، درخواست‌های لغو و مالکیت‌های ثبت‌شده در میرزا برای فاکتوری که این سرویس از آن پذیرفته شده است. فقط خواندنی.',
+  'web.lrec_service_empty':
+    'این سرویس از فاکتور میرزا پذیرفته نشده یا سابقه‌ای برایش ثبت نشده است.',
+  'web.lrec_service_invoice': 'کلید فاکتور میرزا:',
+  'web.lrec_service_truncated': 'فقط جدیدترین رکوردها نمایش داده می‌شود؛ تعداد:',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

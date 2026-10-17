@@ -283,6 +283,10 @@ import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy
 import { LegacyHistoryIngest } from './modules/platform/legacy-history/application/legacy-history-ingest.js';
 import { LegacyHistoryReadService } from './modules/platform/legacy-history/application/legacy-history-read.service.js';
 import { DrizzleLegacyHistoryRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-history.repository.js';
+import { LegacyRecordsReadService } from './modules/platform/legacy-history/application/legacy-records-read.service.js';
+import { DrizzleLegacyRecordsRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-records.repository.js';
+import { LegacyMoneyHistoryService } from './modules/platform/legacy-history/application/legacy-money-history.service.js';
+import { DrizzleLegacyMoneyHistoryReader } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-money-history.reader.js';
 import { LegacyTrialEligibilityService } from './modules/commerce/trials/application/legacy-trial-eligibility.service.js';
 import { DrizzleLegacyTrialEligibilityRepository } from './modules/commerce/trials/infrastructure/drizzle-legacy-trial-eligibility.repository.js';
 import { DrizzleLegacyProductShapeRepository } from './modules/commerce/catalog/infrastructure/drizzle-legacy-product-shape.repository.js';
@@ -339,6 +343,8 @@ import {
 import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet.repository.js';
 import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
 import { MigrationOpeningBalanceService } from './modules/commerce/wallet/application/migration-opening-balance.service.js';
+import { CustomerBotLinkService } from './modules/commerce/customers/application/customer-bot-link.service.js';
+import { DrizzleCustomerBotLinkRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-bot-link.repository.js';
 import { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
 import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
 import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store.js';
@@ -1017,6 +1023,9 @@ export interface Container {
    */
   readonly legacyHistoryIngest: LegacyHistoryIngest;
   readonly legacyHistoryRead: LegacyHistoryReadService;
+  readonly legacyRecordsRead: LegacyRecordsReadService;
+  /** Mirza money history beside the opening figure, and the tenant-wide report (read only). */
+  readonly legacyMoneyHistory: LegacyMoneyHistoryService;
   /**
    * Mirza PR4 (owner decision 6): the owner's review of legacy wallet debts — negative legacy
    * balances held beside the ledger. Reads under `legacy.debts.view`, decisions under
@@ -1130,6 +1139,8 @@ export interface Container {
    * reaches it; the P7 CLI is its caller (`docs/legacy-import-metadata.md`).
    */
   readonly legacyReviewQueue: LegacyReviewQueueService;
+  /** OI-1: the cutover command that links imported customers to a bot (`customers-link-bot.cli.ts`). */
+  readonly customerBotLink: CustomerBotLinkService;
   /**
    * Migration P6: legacy service adoption. Migration-only — no surface reaches it; the P7
    * importer is its one caller (`docs/migration-p6-service-adoption.md`). Holds no provider
@@ -1996,7 +2007,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * their own idempotency view, and a replay handled by one would not be seen by the
    * other.
    */
-  const customerRepository = new DrizzleCustomerRepository(database.db);
+  const customerRepository = new DrizzleCustomerRepository(database.db, {
+    fillFirstBotOnContact: config.CUSTOMER_FIRST_BOT_FILL_ON_CONTACT,
+  });
   const productRepository = new DrizzleProductRepository(database.db);
   /*
    * A reseller's standing (WP9-B), built here because the catalogue asks it too: whose
@@ -2459,6 +2472,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     idempotency,
     clock,
+  });
+  const customerBotLink = new CustomerBotLinkService({
+    repository: new DrizzleCustomerBotLinkRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    clock,
+    scopeActivity: tenants,
   });
 
   // ---------------------------------------------------------------------------
@@ -4487,6 +4510,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customers: customerRepository,
     guard,
     audit,
+  });
+  const legacyRecordsRead = new LegacyRecordsReadService({
+    repository: new DrizzleLegacyRecordsRepository(database.db),
+    guard,
+    audit,
+  });
+  const legacyMoneyHistory = new LegacyMoneyHistoryService({
+    reader: new DrizzleLegacyMoneyHistoryReader(database.db),
+    customers: customerRepository,
+    guard,
   });
   const customerAccountTransferService = new CustomerAccountTransferService({
     repository: new DrizzleCustomerAccountTransferRepository(database.db),
@@ -7133,6 +7166,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyInvoiceArchive: legacyInvoiceArchiveService,
     legacyHistoryIngest,
     legacyHistoryRead,
+    legacyRecordsRead,
+    legacyMoneyHistory,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,
@@ -7180,6 +7215,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyServiceReview,
     legacyCutover,
     legacyReviewQueue,
+    customerBotLink,
     legacyAdoption,
     payments: paymentService,
     paymentAccounts: paymentAccountService,

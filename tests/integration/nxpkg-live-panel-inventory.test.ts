@@ -211,7 +211,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
         debts.push({
           record_type: 'legacy_debt',
           idempotency_key: `legacy:debt:${tg}`,
-          telegram_user_id: tg,
+          legacy_user_id: tg,
           amount_minor: (-d.balanceMinor).toString(),
           currency: 'IRT',
         });
@@ -630,7 +630,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   }
   const isListPage = (offset: number) => (r: FakeRickpanelRequest) =>
     r.method === 'GET' &&
-    r.path === `/api/users?offset=${String(offset)}&limit=${String(PAGE_SIZE)}`;
+    r.path === `/api/users?offset=${String(offset)}&limit=${String(PAGE_SIZE)}&sort=created_at`;
 
   /** A manual account created on panel A by its operator before the first walk's 2nd page. */
   function manualAccountMidWalk(name = 'manual_op_1'): void {
@@ -1459,6 +1459,87 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     });
     const fresh = await ctx.container.legacyImporter().freshTarget(tenantA, null);
     expect(fresh.fresh).toBe(false);
+  }, 900_000);
+
+  // A real Mirza package (2026-10-16): ~N of ~M candidates on the real panel's code
+  // name a legacy product. The review rows are written by the import's own products read, so
+  // the import's map never carries a product, and the lane — bound to that map — refused every
+  // such invoice PRODUCT_UNRESOLVED whatever the owner decided on /legacy-products. The lane now
+  // decides under the import's map plus the APPROVED review (exactly what products-export
+  // writes), held to the review again by prepareLane.
+  it('§4b: a NAMED legacy product the owner approves on /legacy-products after the import is the product the lane adopts the invoice as — refused PRODUCT_UNRESOLVED before the decision; only it adopted, GETs only, no customer or money touched', async () => {
+    const { page, pkg } = await importHoldingSvcA3();
+    // a000000f: svc_a2 (user 100000001), legacy product p1, 30 GB / 30 d, on panel A.
+    expect((await candidates())['a000000f']?.outcome).toBe('PRODUCT_UNRESOLVED');
+    const money = await moneyState();
+
+    // 1. The ADOPT approved, the product not decided: refused, back to OPEN, no service.
+    await approveCandidate('a000000f');
+    const first = await detail(await runLane(page, pkg));
+    expect(first.status, JSON.stringify([first.errorCode, first.progress])).toBe('ADOPT_DONE');
+    expect(first.adoptReport).toMatchObject({ adopted: 0, providerWrites: 0 });
+    expect((await candidateRows())['a000000f']).toMatchObject({
+      review_state: 'OPEN',
+      last_approval_refusal: 'PRODUCT_UNRESOLVED',
+      service_id: null,
+    });
+    expect(await services()).toEqual(BASELINE_SERVICES);
+
+    // 2. The owner maps p1 to the current 30 GB / 30 d product, then approves the ADOPT again.
+    const plan = (
+      await ctx.container.database.db.execute<{ id: string }>(
+        sql`SELECT id FROM products WHERE tenant_id = ${TENANT} AND title = 'پلن ۳۰'`,
+      )
+    ).rows[0]?.id;
+    const review = (
+      await ctx.container.database.db.execute<{
+        id: string;
+        version: number;
+        facts_checksum: string;
+      }>(
+        sql`SELECT id, version, facts_checksum FROM legacy_product_reviews
+             WHERE tenant_id = ${TENANT} AND code_product = 'p1'`,
+      )
+    ).rows[0];
+    expect(plan).toBeDefined();
+    expect(review).toBeDefined();
+    await ctx.container.legacyProductReviews.approveExisting(tenantA, owner, String(review?.id), {
+      idempotencyKey: key(),
+      expectedFactsChecksum: review?.facts_checksum,
+      expectedVersion: Number(review?.version),
+      productId: plan,
+      reason: 'همان پلن ۳۰ فعلی',
+    });
+    await approveCandidate('a000000f');
+    const before = await candidateRows();
+    const second = await detail(await runLane(page, pkg));
+    expect(second.adoptReport).toMatchObject({
+      verdict: 'COMPLETED',
+      approvals: 1,
+      adopted: 1,
+      refused: [],
+      providerWrites: 0,
+    });
+    expect(await services()).toEqual([
+      ...BASELINE_SERVICES,
+      { panel: 'A', username: 'svc_a2', owner: '100000001' },
+    ]);
+    const adopted = (
+      await ctx.container.database.db.execute<{ product_id: string }>(
+        sql`SELECT product_id FROM services
+             WHERE tenant_id = ${TENANT} AND provider_username = 'svc_a2'`,
+      )
+    ).rows;
+    expect(adopted).toEqual([{ product_id: plan }]);
+    const after = await candidateRows();
+    expect(after['a000000f']).toMatchObject({ outcome: 'ADOPTED', review_state: 'ADOPTED' });
+    for (const [invoiceKey, row] of Object.entries(before)) {
+      if (invoiceKey === 'a000000f') continue;
+      expect(after[invoiceKey], invoiceKey).toEqual(row);
+    }
+    expect(await moneyState()).toEqual(money);
+    expectReadsOnly(panelA);
+    expectReadsOnly(panelB);
   }, 900_000);
 
   it('§4b: an approved name the targeted read still cannot decide is settled back to OPEN with INVENTORY_INCOMPLETE — nothing adopted, nothing else touched', async () => {

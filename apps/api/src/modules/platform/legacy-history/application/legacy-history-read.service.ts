@@ -69,6 +69,8 @@ export interface LegacyHistoryReadItem {
   readonly payload: Readonly<Record<string, unknown>>;
   readonly redacted: readonly string[];
   readonly legacyUserId: string | null;
+  /** A ticket message: the id of its ticket record (this archive's own id); else absent. */
+  readonly ticketRecordId?: string | null;
 }
 
 export interface LegacyHistoryReadPage {
@@ -275,7 +277,7 @@ export class LegacyHistoryReadService {
   }
 }
 
-function itemOf(row: LegacyHistoryRecordRow, pii: boolean): LegacyHistoryReadItem {
+export function itemOf(row: LegacyHistoryRecordRow, pii: boolean): LegacyHistoryReadItem {
   // Without the PII key the summary is read from the allowlisted projection, never the
   // packaged record: a summary field the allowlist does not carry is not shown either.
   const view = pii
@@ -290,5 +292,6 @@ function itemOf(row: LegacyHistoryRecordRow, pii: boolean): LegacyHistoryReadIte
     payload: view.payload,
     redacted: view.redacted,
     legacyUserId: pii ? row.legacyUserId : null,
+    ...(row.ticketRecordId === undefined ? {} : { ticketRecordId: row.ticketRecordId }),
   };
 }

@@ -52,12 +52,12 @@ const BASE = [
   'map.json',
 ];
 
-describe('§3 --inventory-page-size: CLI default is the reader maximum', () => {
-  it('omitted: 200, the reader maximum, recorded as the CLI default', () => {
+describe('§3 --inventory-page-size: CLI default 200, the bound the reader maximum', () => {
+  it('omitted: 200 (under the default response cap), recorded as the CLI default', () => {
     const args = parseArgs(BASE);
     expect(args.inventoryPageSize).toBe(200);
-    expect(args.inventoryPageSize).toBe(INVENTORY_MAX_PAGE_SIZE);
-    expect(LEGACY_IMPORT_DEFAULT_INVENTORY_PAGE_SIZE).toBe(INVENTORY_MAX_PAGE_SIZE);
+    expect(INVENTORY_MAX_PAGE_SIZE).toBe(2000);
+    expect(LEGACY_IMPORT_DEFAULT_INVENTORY_PAGE_SIZE).toBe(200);
     expect(args.inventoryPageSizeSource).toBe('CLI_DEFAULT');
     // The CLI always hands the container an explicit size: never the library default.
     expect(importerOptions(args)).toEqual({ inventoryPageSize: 200 });
@@ -66,12 +66,13 @@ describe('§3 --inventory-page-size: CLI default is the reader maximum', () => {
   it('the library default is unchanged for every other caller', () => {
     expect(INVENTORY_DEFAULT_PAGE_SIZE).toBe(50);
     expect(effectiveInventoryPageSize()).toBe(50);
-    expect(effectiveInventoryPageSize(500)).toBe(INVENTORY_MAX_PAGE_SIZE);
+    expect(effectiveInventoryPageSize(500)).toBe(500);
+    expect(effectiveInventoryPageSize(5000)).toBe(INVENTORY_MAX_PAGE_SIZE);
     expect(effectiveInventoryPageSize(0)).toBe(1);
   });
 
   it('an explicit value overrides, including a smaller one, and is recorded as the operator’s', () => {
-    for (const size of [1, 3, 50, 199, 200]) {
+    for (const size of [1, 3, 50, 199, 200, 2000]) {
       const args = parseArgs([...BASE, '--inventory-page-size', String(size)]);
       expect(args.inventoryPageSize).toBe(size);
       expect(args.inventoryPageSizeSource).toBe('OPERATOR');
@@ -81,7 +82,7 @@ describe('§3 --inventory-page-size: CLI default is the reader maximum', () => {
 
   for (const bad of [
     '0',
-    '201',
+    '2001',
     '-1',
     'abc',
     '50abc',

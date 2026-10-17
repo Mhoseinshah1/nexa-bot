@@ -167,6 +167,8 @@ export * from './legacy-migration-routes.js';
 export * from './legacy-inventory-diagnostics.js';
 /** Mirza `.nxpkg` importer: the archived history read on Customer 360. */
 export * from './legacy-history.js';
+/** Mirza `.nxpkg` importer: a customer's Mirza money history beside the opening figure (read only). */
+export * from './legacy-money-history.js';
 /** TB1: Telegram Business connections and business-message classification (ADR-0033). */
 export * from './business-chats.js';
 /** TB3: the support context, the allowlisted payload the support agent reads (ADR-0034 §4). */

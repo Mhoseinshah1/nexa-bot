@@ -572,6 +572,20 @@ export const configSchema = z
      * a settings table is exactly what is unavailable then.
      */
     /**
+     * Whether a returning customer with NO bot link gets one on contact (OI-1).
+     *
+     * Imported (Mirza) customers have `customers.first_bot_instance_id = NULL`, and every
+     * customer notification, broadcast and reminder drops a NULL. When true, the customer
+     * upsert's ON CONFLICT branch sets it to the bot the customer just wrote to, ONCE
+     * (`COALESCE(existing, excluded)` — an existing link is never overwritten).
+     *
+     * OFF by default, and it must stay off wherever no message may reach an imported
+     * customer (a test server, or before the owner's go-live decision): turning it on makes
+     * each imported customer who contacts the bot start receiving reminders and notices.
+     * Off, the upsert is exactly what it was.
+     */
+    CUSTOMER_FIRST_BOT_FILL_ON_CONTACT: booleanish.default(false),
+    /**
      * The DEFAULT for whether the worker takes automatic backups.
      *
      * Since spec §13.2 the Web Admin's backup page stores the schedule in the settings
@@ -839,13 +853,13 @@ export const configSchema = z
       .default(1_000),
     /**
      * Rows per list page the Web Admin's Mirza importer asks a RickPanel for. 100, not the
-     * reader's 200 maximum: the panel client keeps at most PANEL_HTTP_MAX_RESPONSE_BYTES
+     * reader's 2000 maximum: the panel client keeps at most PANEL_HTTP_MAX_RESPONSE_BYTES
      * (512 KiB by default) and a page past it fails the read, and RickPanel's row size is
      * unmeasured. Each read reports its largest page in bytes (`load.maxPageBytes`); raise
      * this from that evidence. A panel that caps its pages lower loses nothing — the walk
      * advances by the rows it received.
      */
-    RICKPANEL_INVENTORY_PAGE_SIZE: z.coerce.number().int().min(1).max(200).default(100),
+    RICKPANEL_INVENTORY_PAGE_SIZE: z.coerce.number().int().min(1).max(2000).default(100),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()

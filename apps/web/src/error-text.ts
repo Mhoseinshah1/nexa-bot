@@ -562,7 +562,8 @@ export const ERROR_TEXT = {
  * The codes the API raises from catalogues that live in `apps/api` rather than in
  * `@nexa/contracts` — the business-chat conversation (`BUSINESS_CHAT_ERROR_CODES`), the
  * support assistant (`SUPPORT_ASSIST_ERROR_CODES`) and its configuration
- * (`SUPPORT_AI_ERROR_CODES`). The Web Admin cannot import them, so they are keyed by their
+ * (`SUPPORT_AI_ERROR_CODES`), and the cutover link of imported customers to the production
+ * bot (`customers.bot_link_invalid`, raised by the operator CLI). The Web Admin cannot import them, so they are keyed by their
  * strings here; `tests/web/error-text.test.tsx` walks the API's own raise sites, so a code
  * raised there and missing from both tables fails the suite.
  */
@@ -571,6 +572,7 @@ export const API_LOCAL_ERROR_TEXT = {
   'business_chats.idempotency_payload_mismatch': 'web.bchat_fault_retry',
   'business_chats.not_found': 'web.bchat_fault_not_found',
   'business_chats.not_in_state': 'web.bchat_fault_not_in_state',
+  'customers.bot_link_invalid': 'web.err_customers_bot_link_invalid',
   'support_ai.credential_missing': 'web.sai_fault_credential_missing',
   'support_ai.draft_not_found': 'web.assist_fault_not_found',
   'support_ai.draft_not_ready': 'web.assist_fault_not_ready',

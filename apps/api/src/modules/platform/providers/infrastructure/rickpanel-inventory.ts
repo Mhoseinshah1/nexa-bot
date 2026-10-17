@@ -66,9 +66,29 @@ import {
 
 export const USERS_LIST_PATH = 'api/users';
 
+/**
+ * Ask for the list oldest first. A real RickPanel (2026-10-16, ~N accounts, read through a
+ * read-only gate) answers `api/users` WITHOUT a sort in an order that is not creation order
+ * (neither ascending nor descending), so every per-name walk failed `CREATED_AT_OUT_OF_ORDER`
+ * and decided nothing; with `sort=created_at` it answers strictly oldest first (Marzban's
+ * `sort` query: a column name, `-` prefix for descending). The proof does not trust the
+ * parameter: the walk still verifies the order on the rows themselves
+ * (`docs/rickpanel-inventory.md` §Per-name resolution), so a panel that ignores it fails
+ * closed exactly as before. A complete double walk is order-independent and unaffected.
+ */
+export const USERS_LIST_ORDER = 'sort=created_at';
+
 /** The page size requested. Small enough to stay under the client's response cap. */
 export const INVENTORY_DEFAULT_PAGE_SIZE = 50;
-export const INVENTORY_MAX_PAGE_SIZE = 200;
+/**
+ * The largest page a walk asks for. 2000 (was 200): a real RickPanel of ~N accounts is
+ * then read in 7 list requests a walk instead of 124, the load the owner asked for
+ * (2026-10-16), and its pages answer ~1.5 KB a row, ~3 MB a page — under
+ * PANEL_HTTP_MAX_RESPONSE_BYTES only when that is raised with it (a page past the cap fails
+ * the read, closed). The walk's proof does not depend on the size: the 10-row overlap, the
+ * chaining and the learned cap are unchanged.
+ */
+export const INVENTORY_MAX_PAGE_SIZE = 2000;
 /**
  * The page size a walk actually asks for: the requested one clamped to
  * `[1, INVENTORY_MAX_PAGE_SIZE]`, or the library default when none is requested. Exported
@@ -114,7 +134,7 @@ export function readOnlyRickpanelHttp(http: ProviderHttpClient): RickpanelReadOn
       send({
         method: 'GET',
         effect: 'READ',
-        path: `${USERS_LIST_PATH}?offset=${String(safeCount(offset))}&limit=${String(safeCount(limit))}`,
+        path: `${USERS_LIST_PATH}?offset=${String(safeCount(offset))}&limit=${String(safeCount(limit))}&${USERS_LIST_ORDER}`,
         headers: { authorization: `Bearer ${bearer}` },
       }),
     readUser: (bearer: string, username: string) =>

@@ -188,6 +188,18 @@ describe('legacy user and time', () => {
     expect(legacyUserIdOf('service_ownership', { final_owner_telegram_user_id: '42' })).toBe('42');
   });
 
+  it('links a per-customer archive row to its customer, but never a configuration row', () => {
+    expect(
+      legacyUserIdOf('archive_row', { class: 'x', customer: { telegram_user_id: '7000000071' } }),
+    ).toBe('7000000071');
+    expect(
+      legacyUserIdOf('archive_row', { class: 'x', customer: { telegram_user_id: null } }),
+    ).toBeNull();
+    expect(
+      legacyUserIdOf('configuration_row', { customer: { telegram_user_id: '7000000071' } }),
+    ).toBeNull();
+  });
+
   it('leaves a malformed or absent id null, and types without a person null', () => {
     expect(legacyUserIdOf('payment', { customer: { telegram_user_id: null } })).toBeNull();
     expect(legacyUserIdOf('payment', { customer: { telegram_user_id: '0123' } })).toBeNull();

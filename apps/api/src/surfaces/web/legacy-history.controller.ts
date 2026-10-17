@@ -9,6 +9,7 @@ import {
   type LegacyCustomerAdoptionsResponse,
   type LegacyCustomerInvoicesResponse,
   type LegacyHistoryResponse,
+  type LegacyMoneyHistoryResponse,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -45,6 +46,7 @@ export class LegacyHistoryController {
         payload: { ...item.payload },
         redacted: [...item.redacted],
         legacyUserId: item.legacyUserId,
+        ...(item.ticketRecordId === undefined ? {} : { ticketRecordId: item.ticketRecordId }),
       })),
       matching: page.matching,
       offset: page.offset,
@@ -119,6 +121,19 @@ export class LegacyHistoryController {
       input,
     );
     return { adoptions: adoptions.map((row) => ({ ...row })) };
+  }
+
+  /**
+   * The customer's Mirza money history beside the migrated opening figure (read-only, never
+   * added to a balance). The service charges `users.view`, then `legacy.history.view`.
+   */
+  @Get('users/:id/legacy-money-history')
+  async moneyHistory(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<LegacyMoneyHistoryResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return this.container.legacyMoneyHistory.forCustomer(scope, actor, id);
   }
 
   private async authenticate(

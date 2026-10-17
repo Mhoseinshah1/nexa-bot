@@ -390,7 +390,8 @@ function converterRecords(
   return [...expected].map(([tg, amount]) => ({
     record_type: kind === 'opening' ? 'wallet_opening_balance' : 'legacy_debt',
     idempotency_key: `legacy:${kind}:${tg}`,
-    telegram_user_id: tg,
+    // The converter's own field per file (`mirza2nexa/convert.py`).
+    [kind === 'opening' ? 'telegram_user_id' : 'legacy_user_id']: tg,
     amount_minor: amount.toString(),
     currency: 'IRT',
   }));
@@ -469,6 +470,51 @@ describe("the converter's money records, customer by customer", () => {
       unidentified: 1,
       unexpected: 1,
     });
+  });
+
+  // A real converter's package (Mirza2Nexa 0.7.0, contract 1.4.0, 38 debts) was refused
+  // DRY_RUN_MISMATCH `per_customer:legacy_debts:{unidentified,missing}` = 38 each: its
+  // `legacy_debt` records name the customer in `legacy_user_id`, and the check read
+  // `telegram_user_id`. These are that package's exact record keys, values synthetic.
+  it("a debt is identified by the converter's legacy_user_id, never by telegram_user_id", async () => {
+    const e = walletExpectation((await snapshotOf(shape)).users);
+    const converterShape = [...e.debts].map(([tg, amount]) => ({
+      amount_minor: amount.toString(),
+      auto_settle: false,
+      currency: 'IRT',
+      idempotency_key: `legacy:debt:${tg}`,
+      legacy_user_id: tg,
+      provenance: { table: 'user', key: tg },
+      record_type: 'legacy_debt',
+      schema: 'legacy_debt/1',
+      source_amount_raw: `-${amount.toString()}`,
+      state: 'PENDING_REVIEW',
+    }));
+    expect(
+      await crossCheckConverterMoney(e.debts, records(converterShape), 'legacy:debt:'),
+    ).toEqual({
+      matched: 38,
+      missing: 0,
+      unexpected: 0,
+      amountDiffers: 0,
+      duplicate: 0,
+      unidentified: 0,
+    });
+    // The opening file's field on a debt is not a stand-in for the debt's own: fail closed.
+    const misnamed = converterShape.map(({ legacy_user_id, ...rest }) => ({
+      ...rest,
+      telegram_user_id: legacy_user_id,
+    }));
+    expect(
+      await crossCheckConverterMoney(e.debts, records(misnamed), 'legacy:debt:'),
+    ).toMatchObject({ matched: 0, unidentified: 38, missing: 38 });
+    // And the other way round: an opening is never identified by `legacy_user_id`.
+    const openings = converterRecords(e.openings, 'opening').map(
+      ({ telegram_user_id, ...rest }) => ({ ...rest, legacy_user_id: telegram_user_id }),
+    );
+    expect(
+      await crossCheckConverterMoney(e.openings, records(openings), 'legacy:opening:'),
+    ).toMatchObject({ matched: 0, unidentified: 500, missing: 500 });
   });
 });
 

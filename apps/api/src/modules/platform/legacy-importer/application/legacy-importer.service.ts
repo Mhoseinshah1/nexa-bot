@@ -66,12 +66,14 @@ import { crossCheckEvidence, type LegacyEvidence } from './evidence-runner.js';
 import {
   PanelMappingRefused,
   panelMappingCompleteness,
+  parsePanelMapping,
   type PanelMappingCompleteness,
   validatePanelMappingAgainstTenant,
   validateProductMappingAgainstTenant,
   type PanelFacts,
   type PanelMapping,
 } from './panel-mapping.js';
+import { isExportable } from '../../../commerce/legacy-product-review/domain/review-transitions.js';
 import {
   decideAllServices,
   importableLegacyUserIds,
@@ -1403,7 +1405,7 @@ export class LegacyImporterService {
     input: LegacyAdoptApprovedInput,
     lease: LegacyImportProcessLease,
   ): Promise<LegacyImportReport> {
-    const { scope, actor, snapshot, mapping } = input;
+    const { scope, actor, snapshot, mapping: importMapping } = input;
     const startedAt = this.deps.clock.now();
     const refuse = (why: string) =>
       new NxpkgImportRefused('ADOPT_REFUSED', [`${why} Nothing was read from a panel or written.`]);
@@ -1419,7 +1421,7 @@ export class LegacyImporterService {
     // here it would be UNDECIDABLE — not a claim — and the approved invoice adopted beside it.
     // A `.nxpkg` map never declares a missing panel; a map that does is refused, not trusted
     // (adopt-lane review P2-1).
-    if (mapping.policy.missingPanels.size > 0) {
+    if (importMapping.policy.missingPanels.size > 0) {
       throw refuse('The adopt-approved lane needs a panel map that declares no missing panel.');
     }
     // Never beside another run. A lane run of THIS source left RUNNING by a crash is resumed:
@@ -1445,7 +1447,7 @@ export class LegacyImporterService {
       made = await this.runMadeFrom(
         scope,
         snapshot,
-        mapping,
+        importMapping,
         'adopt-approved',
         holdDigest,
         input.inventoryHold?.digest ?? null,
@@ -1464,6 +1466,9 @@ export class LegacyImporterService {
         `The tenant's latest import run is ${importRun.id}, not the one this lane was asked for.`,
       );
     }
+    // Bound to the import's own map above; decided under it plus the owner's approved legacy
+    // product review (`withReviewedProducts`), which `prepareLane` holds to the review again.
+    const mapping = await this.withReviewedProducts(scope, snapshot, importMapping);
     const inventoryHold = await this.inventoryHoldKeys(scope, input);
     const lane = await this.prepareLane(
       scope,
@@ -1694,6 +1699,45 @@ export class LegacyImporterService {
         attention,
       },
       attention.total > 0 ? 'COMPLETED_WITH_FAILURES' : 'COMPLETED',
+    );
+  }
+
+  /**
+   * The adopt-approved lane's map: the import's own map, its `products` extended by the
+   * owner's APPROVED legacy product review — exactly the entries `products-export` writes
+   * (`isExportable` under this source's CURRENT products read), for codes the import's map
+   * does not name. An entry the import's map names is never replaced; if the review no longer
+   * exports it, `prepareLane`'s review check refuses the lane, as it always did.
+   *
+   * Why (test server, real Mirza package, 2026-10-16): on the restore page the review rows are
+   * written by the import's own products read, at the apply's start, so an import's map can
+   * never carry them, and the lane — bound to that map's fingerprint — could never adopt a
+   * service of a NAMED legacy product (~N of ~M candidates on the real panel's code),
+   * whatever the owner decided on `/legacy-products`. The binding to the import's map is
+   * unchanged (`runMadeFrom`); a product the review does not approve is never used.
+   */
+  private async withReviewedProducts(
+    scope: TenantContext,
+    snapshot: LegacySnapshot,
+    mapping: PanelMapping,
+  ): Promise<PanelMapping> {
+    const { destination } = this.deps;
+    const readFingerprint = await destination.latestProductsReadFingerprint(
+      scope,
+      snapshot.fingerprint,
+    );
+    if (readFingerprint === null) return mapping;
+    const added = (await destination.productReviewRows(scope)).flatMap((row) =>
+      !mapping.products.has(row.codeProduct) &&
+      row.approvedProductId !== null &&
+      isExportable(row, readFingerprint)
+        ? [{ codeProduct: row.codeProduct, productId: row.approvedProductId }]
+        : [],
+    );
+    if (added.length === 0) return mapping;
+    return parsePanelMapping(
+      JSON.stringify({ ...mapping.file, products: [...mapping.file.products, ...added] }),
+      scope.tenantId,
     );
   }
 

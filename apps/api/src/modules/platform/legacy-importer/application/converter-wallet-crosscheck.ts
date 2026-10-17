@@ -85,7 +85,8 @@ export interface PerCustomerTally {
   /** A second record for one customer. */
   duplicate: number;
   /**
-   * A record whose `telegram_user_id` is not a Telegram id, or whose `idempotency_key` names
+   * A record whose customer field (`telegram_user_id` for an opening, `legacy_user_id` for a
+   * debt) is not a Telegram id, or whose `idempotency_key` names
    * another customer, or whose amount is not minor units: it cannot be matched to anybody.
    */
   unidentified: number;
@@ -106,9 +107,22 @@ export function perCustomerMismatches(t: PerCustomerTally): number {
 const AMOUNT = /^(0|[1-9][0-9]*)$/u;
 
 /**
+ * The field that names the customer, per money file, as the converter writes it
+ * (`mirza2nexa/convert.py`, contract 1.x): a `wallet_opening_balance` carries
+ * `telegram_user_id`, a `legacy_debt` carries `legacy_user_id` — the name of the debt table's
+ * own column it lands in (`docs/MAPPING.md` of the converter). Both hold the Mirza
+ * `user.id`, which is the Telegram id. A record without its own file's field is unidentified;
+ * the other file's field is never read in its place.
+ */
+const CUSTOMER_FIELD = {
+  'legacy:opening:': 'telegram_user_id',
+  'legacy:debt:': 'legacy_user_id',
+} as const;
+
+/**
  * Streams one converter money file (`wallet_opening_balances.jsonl` with `legacy:opening:`,
  * `legacy_debts.jsonl` with `legacy:debt:`) against the importer's expectation for it. A
- * customer is identified by the record's `telegram_user_id`; its `idempotency_key`, when
+ * customer is identified by the record's `CUSTOMER_FIELD`; its `idempotency_key`, when
  * present, must name the same customer.
  */
 export async function crossCheckConverterMoney(
@@ -116,6 +130,7 @@ export async function crossCheckConverterMoney(
   records: AsyncIterable<Readonly<Record<string, unknown>>>,
   keyPrefix: 'legacy:opening:' | 'legacy:debt:',
 ): Promise<PerCustomerTally> {
+  const customerField = CUSTOMER_FIELD[keyPrefix];
   const tally: PerCustomerTally = {
     matched: 0,
     missing: 0,
@@ -126,7 +141,7 @@ export async function crossCheckConverterMoney(
   };
   const seen = new Set<string>();
   for await (const record of records) {
-    const raw = record['telegram_user_id'];
+    const raw = record[customerField];
     const tg = typeof raw === 'string' ? legacyTelegramId(raw) : null;
     const key = record['idempotency_key'];
     const amount = record['amount_minor'];
