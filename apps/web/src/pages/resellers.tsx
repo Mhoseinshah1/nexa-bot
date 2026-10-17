@@ -3,6 +3,7 @@ import { ListFilterBar } from '../ui/filter-bar';
 import { Drawer, Modal } from '../ui/overlays';
 import { chipFilter } from './money-filters';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   RESELLER_OVERRIDE_MODES,
   RESELLER_STATUSES,
@@ -296,18 +297,20 @@ export function ResellersPage({
   });
   const tierRows = tiers.data?.tiers ?? null;
 
-  const resellers = useQuery({
-    queryKey: ['resellers', signature, trail.cursor ?? null],
-    queryFn: () =>
-      fetchResellers({
-        limit: LIST_PAGE_SIZE,
-        ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
-        ...(status === 'ALL' ? {} : { status }),
-        ...(tierId === '' ? {} : { tierId }),
-        ...(applied === '' ? {} : { search: applied }),
-      }),
-    enabled: !denied,
-  });
+  const resellers = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['resellers', signature, trail.cursor ?? null],
+      queryFn: () =>
+        fetchResellers({
+          limit: LIST_PAGE_SIZE,
+          ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
+          ...(status === 'ALL' ? {} : { status }),
+          ...(tierId === '' ? {} : { tierId }),
+          ...(applied === '' ? {} : { search: applied }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = resellers.data?.resellers ?? [];
   const nextCursor = resellers.data?.nextCursor ?? null;
   const filtered = applied !== '' || status !== 'ALL' || tierId !== '';

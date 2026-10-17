@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   ACTOR_TYPES,
   AUDIT_RESULTS,
@@ -231,7 +232,9 @@ export function AuditLogPage({
   const cursors = trail.signature === signature ? trail.cursors : [];
   const cursor = cursors[cursors.length - 1];
 
-  const log = useQuery({ ...auditLogQuery(filters, cursor), enabled: !denied });
+  const log = useQuery(
+    keepPageWhileTurning({ ...auditLogQuery(filters, cursor), enabled: !denied }),
+  );
   const rows = log.data?.entries ?? [];
   const nextCursor = log.data?.nextCursor ?? null;
   const filtering = signature !== '{}';

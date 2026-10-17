@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, type FormEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   FINANCIAL_GRANULARITIES,
   REPORT_PRODUCT_RANKINGS,
@@ -158,13 +159,23 @@ function bytesText(bytes: bigint): string {
 /** Every query here shares this prefix, so one refresh re-reads them all. */
 const REPORTS_KEY = 'reports';
 
-function useReport<T>(key: readonly unknown[], fetcher: () => Promise<T>, enabled = true) {
-  return useQuery({
+/**
+ * `pageAt`: for a paged report, where its page or cursor sits in `key` (counted from the
+ * end), so the page on screen stays while the next one is read.
+ */
+function useReport<T>(
+  key: readonly unknown[],
+  fetcher: () => Promise<T>,
+  enabled = true,
+  pageAt?: readonly number[],
+) {
+  const options = {
     queryKey: [REPORTS_KEY, ...key],
     queryFn: fetcher,
     enabled,
     refetchInterval: pollUnlessFinal(BUSINESS_REFRESH_MS),
-  });
+  };
+  return useQuery(pageAt === undefined ? options : keepPageWhileTurning(options, pageAt));
 }
 
 // --- Period ---------------------------------------------------------------------
@@ -640,6 +651,7 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
     ['products', selection, by, page, limit],
     () => fetchReportProducts(selection, { by, limit, page }),
     rangeIsComplete(selection),
+    [-2],
   );
   const data = products.data;
   const columns: Column<NonNullable<typeof data>['rows'][number]>[] = [
@@ -901,6 +913,7 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
         ...(cursor === undefined ? {} : { cursor }),
       }),
     rangeIsComplete(selection),
+    [-1],
   );
   const onLink = useLinkHandler();
   const data = orders.data;
@@ -1547,6 +1560,7 @@ export function ReferralAnalytics({
     ['referrals', selection, by, page],
     () => fetchReportReferrals(selection, { by, limit, page }),
     rangeIsComplete(selection),
+    [-1],
   );
   const onLink = useLinkHandler();
   const data = referrals.data;

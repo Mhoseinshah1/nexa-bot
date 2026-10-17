@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   COMMERCE_ERROR_CODES,
   PAYMENT_GATEWAY_PROVIDERS,
@@ -835,33 +836,38 @@ export function PaymentsPage({
    */
   const appliedSearch = appliedListSearch(route);
 
-  const payments = useQuery({
-    queryKey: [
-      'payments',
-      cursor,
-      state,
-      method,
-      disposition,
-      appliedSearch,
-      queue,
-      gateway,
-      range,
-    ],
-    queryFn: () =>
-      fetchPayments({
-        // W1.8: ten rows a page; the keyset cursor is unchanged.
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === null ? {} : { cursor }),
-        ...(state === null ? {} : { state: state as PaymentState }),
-        ...(method === null ? {} : { method: method as PaymentMethod }),
-        ...(disposition === null ? {} : { disposition: disposition as ReceiptDisposition }),
-        ...(appliedSearch === '' ? {} : { q: appliedSearch }),
-        ...(queue === null ? {} : { queue }),
-        ...(gateway === null ? {} : { gateway }),
-        ...(range === null ? {} : { range }),
-      }),
-    enabled: !denied,
-  });
+  const payments = useQuery(
+    keepPageWhileTurning(
+      {
+        queryKey: [
+          'payments',
+          cursor,
+          state,
+          method,
+          disposition,
+          appliedSearch,
+          queue,
+          gateway,
+          range,
+        ],
+        queryFn: () =>
+          fetchPayments({
+            // W1.8: ten rows a page; the keyset cursor is unchanged.
+            limit: LIST_PAGE_SIZE,
+            ...(cursor === null ? {} : { cursor }),
+            ...(state === null ? {} : { state: state as PaymentState }),
+            ...(method === null ? {} : { method: method as PaymentMethod }),
+            ...(disposition === null ? {} : { disposition: disposition as ReceiptDisposition }),
+            ...(appliedSearch === '' ? {} : { q: appliedSearch }),
+            ...(queue === null ? {} : { queue }),
+            ...(gateway === null ? {} : { gateway }),
+            ...(range === null ? {} : { range }),
+          }),
+        enabled: !denied,
+      },
+      [1],
+    ),
+  );
   const attention = useQuery({
     queryKey: ['payment-attention', range],
     queryFn: () => fetchPaymentAttention(range === null ? {} : { range }),

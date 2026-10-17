@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   BROADCAST_BUTTONS_MAX,
   CAMPAIGN_DESCRIPTION_MAX_LENGTH,
@@ -243,16 +244,18 @@ export function CampaignsPage({
   });
   const trail = cursors.filter === filter ? cursors.trail : [];
   const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
-  const list = useQuery({
-    queryKey: [CAMPAIGNS_KEY, 'list', filter, cursor ?? ''],
-    queryFn: () =>
-      fetchCampaigns({
-        limit: LIST_PAGE_SIZE,
-        ...(filter === 'ALL' ? {} : { state: filter }),
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      queryKey: [CAMPAIGNS_KEY, 'list', filter, cursor ?? ''],
+      queryFn: () =>
+        fetchCampaigns({
+          limit: LIST_PAGE_SIZE,
+          ...(filter === 'ALL' ? {} : { state: filter }),
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      enabled: !denied,
+    }),
+  );
   const rows = list.data?.campaigns ?? [];
 
   const columns: Column<CampaignSummary>[] = [

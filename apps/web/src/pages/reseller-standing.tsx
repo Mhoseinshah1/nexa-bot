@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import type {
   ActorType,
   AuditResult,
@@ -181,16 +182,18 @@ export function ResellerPurchasesCard({
 }) {
   const [trail, setTrail] = useState<readonly string[]>([]);
   const cursor = trail[trail.length - 1];
-  const purchases = useQuery({
-    queryKey: ['reseller-purchases', customerId, cursor ?? null],
-    // W1.8: ten rows a page, on the same keyset.
-    queryFn: () =>
-      fetchResellerPurchases(customerId, {
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
-    enabled: mayViewOrders,
-  });
+  const purchases = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['reseller-purchases', customerId, cursor ?? null],
+      // W1.8: ten rows a page, on the same keyset.
+      queryFn: () =>
+        fetchResellerPurchases(customerId, {
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      enabled: mayViewOrders,
+    }),
+  );
   const rows = purchases.data?.purchases ?? [];
   const next = purchases.data?.nextCursor ?? null;
 

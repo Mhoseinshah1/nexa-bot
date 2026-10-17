@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   PANEL_PAGE_MAX,
   SALES_CURRENCY_CODES,
@@ -342,20 +343,22 @@ export function ProductsPage({
     setTrail({ signature: searchSignature, cursors: [...cursors, next] });
   const popCursor = () => setTrail({ signature: searchSignature, cursors: cursors.slice(0, -1) });
 
-  const products = useQuery({
-    queryKey: ['products', searchSignature, cursor ?? null],
-    queryFn: () =>
-      fetchProducts({
-        // W1.8: ten rows a page on the keyset.
-        limit: LIST_PAGE_SIZE,
-        ...(cursor === undefined ? {} : { cursor }),
-        ...(appliedStatus === null ? {} : { status: appliedStatus }),
-        ...(appliedAudience === null ? {} : { audience: appliedAudience }),
-        ...(appliedTitle === '' ? {} : { title: appliedTitle }),
-        ...(appliedCategory === '' ? {} : { categoryId: appliedCategory }),
-      }),
-    enabled: !denied,
-  });
+  const products = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['products', searchSignature, cursor ?? null],
+      queryFn: () =>
+        fetchProducts({
+          // W1.8: ten rows a page on the keyset.
+          limit: LIST_PAGE_SIZE,
+          ...(cursor === undefined ? {} : { cursor }),
+          ...(appliedStatus === null ? {} : { status: appliedStatus }),
+          ...(appliedAudience === null ? {} : { audience: appliedAudience }),
+          ...(appliedTitle === '' ? {} : { title: appliedTitle }),
+          ...(appliedCategory === '' ? {} : { categoryId: appliedCategory }),
+        }),
+      enabled: !denied,
+    }),
+  );
 
   /*
    * The categories, loaded for NAMES and for the filter.

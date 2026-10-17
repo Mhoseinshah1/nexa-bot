@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   isConditionRecoveryCode,
   isOneShotManagementCode,
@@ -122,27 +123,32 @@ export function AlertsPage({ denied }: { denied: boolean }) {
   const [trail, setTrail] = useState<readonly { at: string; id: string }[]>([]);
   const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
 
-  const events = useQuery({
-    queryKey: ['ops-log', 'management', severity, openOnly, cursor?.at, cursor?.id],
-    queryFn: () =>
-      fetchOpsLog({
-        limit: ALERTS_PAGE_SIZE,
-        // The scope FOLLOWS the filter. "Open" narrows to the conditions —
-        // the codes something can actually close — because a one-shot record
-        // has a permanently null `resolvedAt` by design, so asking the wide
-        // scope for `open=true` returned every denial and every administrator
-        // change ever recorded, framed as outstanding work. The badge already
-        // said "recorded" on those rows, which made the page contradict itself
-        // in that one state: half of the rule stated in `ports.ts` was
-        // implemented and half was not.
-        scope: openOnly ? 'MANAGEMENT_CONDITIONS' : 'MANAGEMENT',
-        ...(severity ? { severity } : {}),
-        ...(openOnly ? { open: true } : {}),
-        ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
-      }),
-    enabled: !denied,
-    refetchInterval: cursor === undefined ? pollUnlessFinal(ALERTS_REFRESH_MS) : false,
-  });
+  const events = useQuery(
+    keepPageWhileTurning(
+      {
+        queryKey: ['ops-log', 'management', severity, openOnly, cursor?.at, cursor?.id],
+        queryFn: () =>
+          fetchOpsLog({
+            limit: ALERTS_PAGE_SIZE,
+            // The scope FOLLOWS the filter. "Open" narrows to the conditions —
+            // the codes something can actually close — because a one-shot record
+            // has a permanently null `resolvedAt` by design, so asking the wide
+            // scope for `open=true` returned every denial and every administrator
+            // change ever recorded, framed as outstanding work. The badge already
+            // said "recorded" on those rows, which made the page contradict itself
+            // in that one state: half of the rule stated in `ports.ts` was
+            // implemented and half was not.
+            scope: openOnly ? 'MANAGEMENT_CONDITIONS' : 'MANAGEMENT',
+            ...(severity ? { severity } : {}),
+            ...(openOnly ? { open: true } : {}),
+            ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
+          }),
+        enabled: !denied,
+        refetchInterval: cursor === undefined ? pollUnlessFinal(ALERTS_REFRESH_MS) : false,
+      },
+      [-2, -1],
+    ),
+  );
 
   // A filter change starts again from the newest page: keeping the old cursor
   // would show the second page of a list the reader has never seen the first
@@ -467,33 +473,38 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
   const [trail, setTrail] = useState<readonly { at: string; id: string }[]>([]);
   const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
 
-  const notifications = useQuery({
-    queryKey: ['notifications', cursor?.at, cursor?.id],
-    queryFn: () =>
-      fetchNotifications({
-        limit: NOTIFICATION_PAGE_SIZE,
-        ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
-      }),
-    enabled: !denied,
-    // Delivery is ASYNCHRONOUS: the worker claims and sends on its own poll,
-    // so the list a test send refreshes almost always still says PENDING.
-    // Without this the page never learned the outcome — no interval, no
-    // refetch on focus — and an operator testing a destination sat looking at
-    // "pending" until they reloaded, which is indistinguishable from a
-    // destination that does not work.
-    //
-    // Fast only while something IS pending. A settled FIRST page still polls,
-    // slowly: an operational event queues a new intent with no operator
-    // action, `refetchOnWindowFocus` is off globally, and a tab opened on a
-    // settled list never saw a later delivery until navigation. The cursor
-    // pages behind it are history and do not poll once settled — a new row
-    // appears on the first page, never on an older one.
-    refetchInterval: pollUnlessFinalWhile<NotificationListResponse>(
-      3_000,
-      (data) => data.notifications.some((entry) => entry.status === 'PENDING'),
-      cursor === undefined ? NOTIFICATION_DISCOVERY_MS : undefined,
+  const notifications = useQuery(
+    keepPageWhileTurning(
+      {
+        queryKey: ['notifications', cursor?.at, cursor?.id],
+        queryFn: () =>
+          fetchNotifications({
+            limit: NOTIFICATION_PAGE_SIZE,
+            ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
+          }),
+        enabled: !denied,
+        // Delivery is ASYNCHRONOUS: the worker claims and sends on its own poll,
+        // so the list a test send refreshes almost always still says PENDING.
+        // Without this the page never learned the outcome — no interval, no
+        // refetch on focus — and an operator testing a destination sat looking at
+        // "pending" until they reloaded, which is indistinguishable from a
+        // destination that does not work.
+        //
+        // Fast only while something IS pending. A settled FIRST page still polls,
+        // slowly: an operational event queues a new intent with no operator
+        // action, `refetchOnWindowFocus` is off globally, and a tab opened on a
+        // settled list never saw a later delivery until navigation. The cursor
+        // pages behind it are history and do not poll once settled — a new row
+        // appears on the first page, never on an older one.
+        refetchInterval: pollUnlessFinalWhile<NotificationListResponse>(
+          3_000,
+          (data) => data.notifications.some((entry) => entry.status === 'PENDING'),
+          cursor === undefined ? NOTIFICATION_DISCOVERY_MS : undefined,
+        ),
+      },
+      [-2, -1],
     ),
-  });
+  );
 
   const detail = useQuery({
     queryKey: ['notification', selected],

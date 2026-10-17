@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   LEGACY_WALLET_DEBT_STATES,
   type LegacyWalletDebtDecision,
@@ -133,11 +134,14 @@ export function LegacyDebtsPage({
     // W1.8: ten rows a page, on the same keyset.
     limit: LIST_PAGE_SIZE,
   };
-  const debts = useQuery({
-    queryKey: ['legacy-debts', query],
-    queryFn: () => fetchLegacyDebts(query),
-    enabled: !denied,
-  });
+  const debts = useQuery(
+    keepPageWhileTurning({
+      // The list without its cursor, then the cursor: a turn of the page keeps the rows shown.
+      queryKey: ['legacy-debts', { ...query, after: null }, after ?? null],
+      queryFn: () => fetchLegacyDebts(query),
+      enabled: !denied,
+    }),
+  );
   const summary = useQuery({
     queryKey: ['legacy-debts', 'summary'],
     queryFn: fetchLegacyDebtSummary,

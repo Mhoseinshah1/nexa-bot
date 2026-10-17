@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   type LegacyCustomerInvoice,
   type LegacyHistoryItem,
@@ -86,18 +87,20 @@ export function CustomerLegacyHistoryCard({
   const [type, setType] = useState<LegacyHistoryRecordType | undefined>(undefined);
   const [offset, setOffset] = useState(0);
   const limit = LIST_PAGE_SIZE;
-  const history = useQuery({
-    queryKey: ['customer-legacy-history', customerId, type ?? null, offset],
-    queryFn: () =>
-      fetchCustomerLegacyHistory(customerId, {
-        ...(type === undefined ? {} : { type }),
-        offset,
-        limit,
-      }),
-    enabled: mayView,
-    // The filter and the pager stay put while the next page loads.
-    placeholderData: keepPreviousData,
-  });
+  const history = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['customer-legacy-history', customerId, type ?? null, offset],
+      queryFn: () =>
+        fetchCustomerLegacyHistory(customerId, {
+          ...(type === undefined ? {} : { type }),
+          offset,
+          limit,
+        }),
+      enabled: mayView,
+      // The pager stays put while the next page loads; a new type filter is a new list and
+      // never shows the old filter's rows as its answer.
+    }),
+  );
   if (!mayView) return null;
 
   const choose = (next: LegacyHistoryRecordType | undefined) => {
