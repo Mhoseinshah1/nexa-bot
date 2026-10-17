@@ -124,6 +124,7 @@ import {
   SERVICE_STATES,
 } from './provisioning.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
+import { RECORD_SOURCES, WALLET_HISTORY_IMPORT_ORIGINS } from './record-source.js';
 import {
   PAYMENT_AMOUNT_MAX_MINOR,
   PAYMENT_EVIDENCE_KINDS,
@@ -4185,15 +4186,47 @@ export type WalletResponse = z.infer<typeof walletResponseSchema>;
 export const walletEntryResponseSchema = z.object({ entry: walletEntrySummarySchema });
 export type WalletEntryResponse = z.infer<typeof walletEntryResponseSchema>;
 
+/**
+ * One movement the Mirza wallet logged before the one-time import (plan §5-3), shown BESIDE
+ * the ledger rows and marked `source: 'MIRZA'`.
+ *
+ * It is history and nothing more: it is never part of `balanceAmount` or `entryCount`, and it
+ * is returned in its own array so a client that sums `entries` still gets the balance.
+ * `direction` is null when Mirza's own arithmetic does not say which way the money moved;
+ * `amount` is the magnitude, and `signedAmount` the figure exactly as Mirza stored it.
+ */
+export const walletImportedEntrySchema = z.object({
+  id: z.string(),
+  customerId: z.string(),
+  source: z.enum(RECORD_SOURCES),
+  origin: z.enum(WALLET_HISTORY_IMPORT_ORIGINS),
+  /** The Mirza id, as `source_ref`: `wallet-tx:<id>` or `wheel:<id>`. */
+  sourceRef: z.string(),
+  direction: z.enum(LEDGER_DIRECTIONS).nullable(),
+  amount: z.string(),
+  signedAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  /** Mirza's own `type` for the movement, verbatim and bounded. */
+  rawKind: z.string().nullable(),
+  note: z.string().nullable(),
+  occurredAt: z.iso.datetime(),
+});
+export type WalletImportedEntryResponse = z.infer<typeof walletImportedEntrySchema>;
+
 export const walletEntryListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(WALLET_PAGE_MAX).optional(),
   cursor: z.string().min(1).max(255).optional(),
+  /** The cursor of the imported-history array (`importedNextCursor`). */
+  importedCursor: z.string().min(1).max(255).optional(),
 });
 export type WalletEntryListQuery = z.infer<typeof walletEntryListQuerySchema>;
 
 export const walletEntryListResponseSchema = z.object({
   entries: z.array(walletEntrySummarySchema),
   nextCursor: z.string().nullable(),
+  /** Mirza history, newest first, never summed into the balance. Empty for a NEXA-only customer. */
+  importedEntries: z.array(walletImportedEntrySchema).optional(),
+  importedNextCursor: z.string().nullable().optional(),
 });
 export type WalletEntryListResponse = z.infer<typeof walletEntryListResponseSchema>;
 
