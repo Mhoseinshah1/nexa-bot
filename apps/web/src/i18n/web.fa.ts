@@ -6965,7 +6965,6 @@ export const WEB_FA = {
   'web.bb_history_hint':
     'هر انتشار یک نسخه می‌سازد. بازگرداندن، نسخه را فقط به پیش‌نویس می‌برد؛ زنده شدنش انتشار جداگانه‌ای می‌خواهد.',
   'web.bb_history_empty': 'هنوز چیزی منتشر نشده است.',
-  'web.bb_history_older': 'نسخه‌های قدیمی‌تر',
   'web.bb_revision_n': 'نسخهٔ {n}',
   'web.bb_revision_current': 'منتشرشدهٔ فعلی',
   'web.bb_revision_restored_from': 'بازگردانده از نسخهٔ {n}',
@@ -7565,7 +7564,6 @@ export const WEB_FA = {
   'web.crm_note_add': 'ثبت یادداشت',
   'web.crm_note_added': 'یادداشت ثبت شد.',
   'web.crm_note_too_long': 'یادداشت حداکثر ۲۰۰۰ نویسه است.',
-  'web.crm_notes_more': 'یادداشت‌های قدیمی‌تر',
   'web.users_filter_tag': 'برچسب',
   'web.users_filter_tag_all': 'همهٔ برچسب‌ها',
   'web.users_filter_tag_archived': '{label} (بایگانی‌شده)',
