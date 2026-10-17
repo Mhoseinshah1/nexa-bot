@@ -5,6 +5,7 @@ import {
   CUSTOM_EMOJI_ID_PATTERN,
   appearanceMarker,
   type AppearanceBotView,
+  type AppearanceSlot,
   type AppearanceSlotView,
   type AppearanceTestErrorCode,
   type AppearanceTestOutcome,
@@ -27,16 +28,20 @@ import {
   Badge,
   Banner,
   Card,
+  Drawer,
   Field,
   Ltr,
   PageHead,
-  RowActions,
   StateSwitch,
-  Switch,
+  TabPanel,
+  Tabs,
+  ToggleRow,
+  usePagedRows,
   useToast,
   useUnsavedChanges,
   type Tone,
 } from '../ui/kit';
+import { SummaryPill } from './editor-layout';
 
 /**
  * «🎨 ظاهر ربات» (Premium UI, `docs/premium-ui-audit.md`).
@@ -94,6 +99,31 @@ function appearanceMessageFor(error: unknown): string {
   return messageFor(error);
 }
 
+/** What the operator typed for one slot and has not saved yet. */
+interface SlotDraft {
+  readonly customEmojiId: string;
+  readonly enabled: boolean;
+}
+
+/**
+ * A draft belongs to the stored row it was typed against: keyed by slot AND version, so a
+ * row the server has moved on (a save, a reset, a colleague) starts again from what it holds.
+ */
+const draftKey = (slot: AppearanceSlotView) => `${slot.slot}:${String(slot.version ?? 0)}`;
+
+const draftOf = (slot: AppearanceSlotView, drafts: Readonly<Record<string, SlotDraft>>) =>
+  drafts[draftKey(slot)] ?? { customEmojiId: slot.customEmojiId ?? '', enabled: slot.enabled };
+
+function draftState(slot: AppearanceSlotView, draft: SlotDraft) {
+  const trimmed = draft.customEmojiId.trim();
+  const valid = trimmed === '' || CUSTOM_EMOJI_ID_PATTERN.test(trimmed);
+  const dirty =
+    (trimmed === '' ? null : trimmed) !== slot.customEmojiId || draft.enabled !== slot.enabled;
+  return { trimmed, valid, dirty, previewCustom: draft.enabled && trimmed !== '' && valid };
+}
+
+type AppearanceTab = 'slots' | 'colors' | 'qr';
+
 export function AppearancePage({
   denied,
   mayEdit,
@@ -110,81 +140,227 @@ export function AppearancePage({
     enabled: !denied,
   });
   const view = appearance.data;
+  const [tab, setTab] = useState<AppearanceTab>('slots');
+  const [drafts, setDrafts] = useState<Readonly<Record<string, SlotDraft>>>({});
+  const [open, setOpen] = useState<AppearanceSlot | null>(null);
+
+  const slots = view?.slots ?? [];
+  const { rows: pageSlots, pager: slotPager } = usePagedRows(slots);
+  const unsaved = slots.filter((slot) => draftState(slot, draftOf(slot, drafts)).dirty);
+  // A slot edited and not saved: leaving the page asks first, whether its sheet is open or not.
+  useUnsavedChanges(mayEdit && unsaved.length > 0);
+  const opened = open === null ? undefined : slots.find((slot) => slot.slot === open);
+  const stored = slots.filter((slot) => slot.customEmojiId !== null).length;
+  const custom = slots.filter((slot) => slot.enabled && slot.customEmojiId !== null).length;
+
+  if (denied) {
+    return (
+      <>
+        <PageHead title={t('web.appearance_title')} subtitle={t('web.appearance_intro')} />
+        <StateSwitch query={appearance} denied isEmpty={false}>
+          {null}
+        </StateSwitch>
+      </>
+    );
+  }
 
   return (
     <>
       <PageHead title={t('web.appearance_title')} subtitle={t('web.appearance_intro')} />
-      <StateSwitch query={appearance} denied={denied} isEmpty={false}>
-        {view !== undefined && (
-          <>
-            <Card title={t('web.appearance_slots_title')} hint={t('web.appearance_slots_hint')}>
-              <div className="tbl-wrap">
-                <table className="tbl dense">
-                  <caption className="visually-hidden">{t('web.appearance_slots_title')}</caption>
-                  <thead>
-                    <tr>
-                      <th>{t('web.appearance_col_slot')}</th>
-                      <th>{t('web.appearance_col_fallback')}</th>
-                      <th>{t('web.appearance_col_custom')}</th>
-                      <th>{t('web.appearance_col_enabled')}</th>
-                      <th>{t('web.appearance_col_preview')}</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {view.slots.map((slot) => (
-                      // Re-seeded from the server whenever the stored row moves on.
-                      <SlotRow
-                        key={`${slot.slot}:${String(slot.version ?? 0)}`}
-                        slot={slot}
-                        mayEdit={mayEdit}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="muted small">{t('web.appearance_custom_id_hint')}</p>
-            </Card>
-            <TestCard
-              bots={view.bots}
-              operatorTelegramBound={view.operatorTelegramBound}
-              configured={view.slots.some((slot) => slot.enabled && slot.customEmojiId !== null)}
-              mayEdit={mayEdit}
-            />
-          </>
-        )}
-      </StateSwitch>
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        panelId="appearance-panel"
+        items={[
+          { id: 'slots', label: t('web.appearance_slots_title') },
+          { id: 'colors', label: t('web.cc_title') },
+          { id: 'qr', label: t('web.qrt_title') },
+        ]}
+      />
       {/*
-       * UX Batch 01, item 2: its own reads, so an appearance failure does not hide it. Not
-       * drawn without settings.view: the page already says so once.
+       * Every tab stays MOUNTED and only the chosen one is shown: each section holds its
+       * operator's unsaved edits in its own state, and a tab switch must not drop them.
        */}
-      {!denied && (
-        <CategoryColorsSection
-          denied={denied}
+      <TabPanel id="appearance-panel" labelledBy={`appearance-panel-tab-${tab}`}>
+        <div hidden={tab !== 'slots'}>
+          <StateSwitch query={appearance} denied={false} isEmpty={false}>
+            {view !== undefined && (
+              <div className="bx-side-split">
+                <Card
+                  title={t('web.appearance_slots_title')}
+                  hint={t('web.appearance_slots_hint')}
+                  actions={
+                    <span className="bx-sum">
+                      <SummaryPill
+                        value={custom}
+                        label={t('web.appearance_preview_custom')}
+                        tone="ok"
+                      />
+                      <SummaryPill value={stored} label={t('web.bx_appearance_stored')} />
+                      {unsaved.length > 0 && (
+                        <SummaryPill
+                          value={unsaved.length}
+                          label={t('web.ob_unsaved_row')}
+                          tone="warn"
+                        />
+                      )}
+                    </span>
+                  }
+                >
+                  <div className="tbl-wrap">
+                    <table className="tbl dense bx-rows">
+                      <caption className="visually-hidden">
+                        {t('web.appearance_slots_title')}
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th>{t('web.appearance_col_fallback')}</th>
+                          <th>{t('web.appearance_col_slot')}</th>
+                          <th>{t('web.appearance_col_custom')}</th>
+                          <th>{t('web.appearance_col_preview')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pageSlots.map((slot) => (
+                          <SlotRow
+                            key={slot.slot}
+                            slot={slot}
+                            draft={draftOf(slot, drafts)}
+                            onOpen={() => setOpen(slot.slot)}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                    {slotPager}
+                  </div>
+                  <p className="muted small">{t('web.appearance_custom_id_hint')}</p>
+                </Card>
+                <TestCard
+                  bots={view.bots}
+                  operatorTelegramBound={view.operatorTelegramBound}
+                  configured={view.slots.some(
+                    (slot) => slot.enabled && slot.customEmojiId !== null,
+                  )}
+                  mayEdit={mayEdit}
+                />
+              </div>
+            )}
+          </StateSwitch>
+        </div>
+        {/* UX Batch 01, item 2: its own reads, so an appearance failure does not hide it. */}
+        <div hidden={tab !== 'colors'}>
+          <CategoryColorsSection
+            denied={denied}
+            mayEdit={mayEdit}
+            mayViewCategories={mayViewCategories}
+          />
+        </div>
+        {/* Phase 2 item 4: the subscription QR on the tenant's own background. */}
+        <div hidden={tab !== 'qr'}>
+          <QrTemplateSection mayEdit={mayEdit} />
+        </div>
+      </TabPanel>
+
+      {opened !== undefined && (
+        <SlotSheet
+          key={draftKey(opened)}
+          slot={opened}
+          draft={draftOf(opened, drafts)}
           mayEdit={mayEdit}
-          mayViewCategories={mayViewCategories}
+          onDraft={(next) => setDrafts((all) => ({ ...all, [draftKey(opened)]: next }))}
+          onSettled={() => {
+            setDrafts((all) => {
+              const { [draftKey(opened)]: _gone, ...rest } = all;
+              return rest;
+            });
+            setOpen(null);
+          }}
+          onClose={() => setOpen(null)}
         />
       )}
-      {/* Phase 2 item 4: the subscription QR on the tenant's own background. */}
-      {!denied && <QrTemplateSection mayEdit={mayEdit} />}
     </>
   );
 }
 
-function SlotRow({ slot, mayEdit }: { slot: AppearanceSlotView; mayEdit: boolean }) {
+/** One slot as a compact row: what the customer sees now, and a way into its sheet. */
+function SlotRow({
+  slot,
+  draft,
+  onOpen,
+}: {
+  slot: AppearanceSlotView;
+  draft: SlotDraft;
+  onOpen: () => void;
+}) {
+  const label = t(SLOT_LABEL[slot.slot]);
+  const { dirty } = draftState(slot, draft);
+  const showsCustom = slot.enabled && slot.customEmojiId !== null;
+  return (
+    <tr data-slot={slot.slot}>
+      <td>
+        <span className="appearance-glyph" aria-label={t('web.appearance_col_fallback')}>
+          {slot.fallback}
+        </span>
+      </td>
+      <td>
+        <button type="button" className="bx-rowlink" aria-haspopup="dialog" onClick={onOpen}>
+          <span className="strong">{label}</span>
+        </button>
+        <p className="muted small">
+          {t('web.appearance_marker')} <Ltr>{appearanceMarker(slot.slot)}</Ltr>
+        </p>
+      </td>
+      <td>{slot.customEmojiId === null ? '—' : <Ltr>{slot.customEmojiId}</Ltr>}</td>
+      <td>
+        <span className="bx-badges">
+          <Badge tone={showsCustom ? 'ok' : 'neutral'} dot>
+            {showsCustom
+              ? t('web.appearance_preview_custom')
+              : t('web.appearance_preview_fallback')}
+          </Badge>
+          {slot.customEmojiId !== null && !slot.enabled && (
+            <Badge tone="warn">{t('web.disabled')}</Badge>
+          )}
+          {dirty && (
+            <Badge tone="warn" dot>
+              {t('web.ob_unsaved_row')}
+            </Badge>
+          )}
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * One slot's editor, in a side sheet: the custom emoji id, its switch, what the customer will
+ * see, and save / reset. The draft lives in the page, so closing the sheet keeps it.
+ */
+function SlotSheet({
+  slot,
+  draft,
+  mayEdit,
+  onDraft,
+  onSettled,
+  onClose,
+}: {
+  slot: AppearanceSlotView;
+  draft: SlotDraft;
+  mayEdit: boolean;
+  onDraft: (next: SlotDraft) => void;
+  /** A save or reset went through: the draft is spent and the sheet closes. */
+  onSettled: () => void;
+  onClose: () => void;
+}) {
   const client = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
-  const [customEmojiId, setCustomEmojiId] = useState(slot.customEmojiId ?? '');
-  const [enabled, setEnabled] = useState(slot.enabled);
   const label = t(SLOT_LABEL[slot.slot]);
-  const trimmed = customEmojiId.trim();
-  const valid = trimmed === '' || CUSTOM_EMOJI_ID_PATTERN.test(trimmed);
-  const dirty =
-    (trimmed === '' ? null : trimmed) !== slot.customEmojiId || enabled !== slot.enabled;
+  const { trimmed, valid, dirty, previewCustom } = draftState(slot, draft);
 
   const settle = async () => {
     submission.settle();
+    onSettled();
     await client.invalidateQueries({ queryKey: ['appearance'] });
   };
   const save = useMutation({
@@ -220,95 +396,99 @@ function SlotRow({ slot, mayEdit }: { slot: AppearanceSlotView; mayEdit: boolean
   });
   const busy = save.isPending || reset.isPending;
   const failure = save.error ?? reset.error;
-  const previewCustom = enabled && trimmed !== '' && valid;
-  // A slot edited and not saved: leaving the page asks first.
-  useUnsavedChanges(mayEdit && dirty);
 
   return (
-    <tr data-slot={slot.slot}>
-      <td>
-        <span className="strong">{label}</span>
-        <p className="muted small">
-          {t('web.appearance_marker')} <Ltr>{appearanceMarker(slot.slot)}</Ltr>
-        </p>
-      </td>
-      <td>
-        <span className="appearance-glyph" aria-label={t('web.appearance_col_fallback')}>
-          {slot.fallback}
-        </span>
-      </td>
-      <td>
-        {/* The label is the input's name; the shared hint sits once under the table. */}
-        <label className="visually-hidden" htmlFor={`appearance-${slot.slot}`}>
-          {`${t('web.appearance_col_custom')}: ${label}`}
-        </label>
-        <input
-          id={`appearance-${slot.slot}`}
-          className="input sm ltr mono appearance-id"
-          dir="ltr"
-          inputMode="numeric"
-          value={customEmojiId}
-          disabled={!mayEdit || busy}
-          onChange={(event) => setCustomEmojiId(event.target.value)}
-          {...(valid ? {} : { 'aria-invalid': true })}
-        />
-        {!valid && (
-          <span className="danger small appearance-error" role="alert">
-            {t('web.appearance_custom_id_invalid')}
-          </span>
-        )}
-      </td>
-      <td>
-        <Switch
-          checked={enabled}
-          label={`${t('web.appearance_col_enabled')}: ${label}`}
-          disabled={!mayEdit || busy}
-          onChange={setEnabled}
-        />
-      </td>
-      <td>
-        <span className="strong">{slot.fallback}</span>{' '}
-        <Badge tone={previewCustom ? 'ok' : 'neutral'}>
-          {previewCustom
-            ? t('web.appearance_preview_custom')
-            : t('web.appearance_preview_fallback')}
-        </Badge>
-        {previewCustom && (
-          <p className="muted small">
-            <Ltr>{trimmed}</Ltr>
-          </p>
-        )}
-      </td>
-      <td>
-        {mayEdit && (
-          <RowActions>
+    <Drawer
+      open
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+      title={label}
+      foot={
+        mayEdit ? (
+          <>
             <button
               type="button"
-              className="btn primary sm"
+              className="btn primary"
               disabled={busy || !valid || !dirty}
               onClick={() =>
-                save.mutate({ customEmojiId: trimmed === '' ? null : trimmed, enabled })
+                save.mutate({
+                  customEmojiId: trimmed === '' ? null : trimmed,
+                  enabled: draft.enabled,
+                })
               }
             >
               {save.isPending ? t('web.saving') : t('web.save')}
             </button>
             {slot.version !== null && (
-              <button
-                type="button"
-                className="btn sm"
-                disabled={busy}
-                onClick={() => reset.mutate()}
-              >
+              <button type="button" className="btn" disabled={busy} onClick={() => reset.mutate()}>
                 {t('web.appearance_reset')}
               </button>
             )}
-          </RowActions>
+          </>
+        ) : undefined
+      }
+    >
+      <div className="stack">
+        <div className="bx-prev" data-testid="appearance-preview">
+          <span className="bx-glyph" aria-hidden="true">
+            {slot.fallback}
+          </span>
+          <div>
+            <Badge tone={previewCustom ? 'ok' : 'neutral'}>
+              {previewCustom
+                ? t('web.appearance_preview_custom')
+                : t('web.appearance_preview_fallback')}
+            </Badge>
+            {previewCustom && (
+              <p className="muted small">
+                <Ltr>{trimmed}</Ltr>
+              </p>
+            )}
+          </div>
+        </div>
+        <dl className="kv">
+          <dt>{t('web.appearance_col_fallback')}</dt>
+          <dd>
+            <span className="appearance-glyph">{slot.fallback}</span>
+          </dd>
+          <dt>{t('web.appearance_marker')}</dt>
+          <dd>
+            <Ltr>{appearanceMarker(slot.slot)}</Ltr>
+          </dd>
+        </dl>
+        <Field
+          label={t('web.appearance_col_custom')}
+          htmlFor={`appearance-${slot.slot}`}
+          hint={t('web.appearance_custom_id_hint')}
+        >
+          <input
+            id={`appearance-${slot.slot}`}
+            className="input ltr mono appearance-id"
+            dir="ltr"
+            inputMode="numeric"
+            value={draft.customEmojiId}
+            disabled={!mayEdit || busy}
+            onChange={(event) => onDraft({ ...draft, customEmojiId: event.target.value })}
+            {...(valid ? {} : { 'aria-invalid': true })}
+          />
+        </Field>
+        {!valid && (
+          <span className="danger small appearance-error" role="alert">
+            {t('web.appearance_custom_id_invalid')}
+          </span>
         )}
+        <ToggleRow
+          title={t('web.appearance_col_enabled')}
+          checked={draft.enabled}
+          disabled={!mayEdit || busy}
+          onChange={(enabled) => onDraft({ ...draft, enabled })}
+        />
         {failure !== null && failure !== undefined && (
           <Banner tone="danger">{appearanceMessageFor(failure)}</Banner>
         )}
-      </td>
-    </tr>
+      </div>
+    </Drawer>
   );
 }
 

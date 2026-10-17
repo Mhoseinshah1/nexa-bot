@@ -135,17 +135,16 @@ const REPORT = reportFinancialResponseSchema.parse({
 const route = (query: string) => ({ path: '/reports', query: new URLSearchParams(query) });
 
 describe('the financial statement tab', () => {
-  it('shows the definitions, the three sections per currency and the two honest absences', async () => {
+  it('shows the definitions, the three sections per currency, and no meta notes', async () => {
     stubApi([{ url: '/reports/financial', body: REPORT }]);
     renderPage(<ReportsPage route={route('tab=finance&range=THIS_MONTH')} denied={false} />);
     expect(await screen.findByText(t('web.finance_def_topup'))).toBeTruthy();
     expect(screen.getByText(t('web.finance_def_sales'))).toBeTruthy();
-    expect((await screen.findByTestId('finance-provider-fee')).textContent).toBe(
-      t('web.finance_provider_fee_not_recorded'),
-    );
-    expect(screen.getByTestId('finance-no-profit').textContent).toBe(t('web.finance_no_profit'));
     // Currencies are columns side by side, never one summed column.
-    const sales = screen.getByRole('table', { name: t('web.finance_section_sales') });
+    const sales = await screen.findByRole('table', { name: t('web.finance_section_sales') });
+    // Owner polish: no note that only says what the statement does not hold.
+    expect(screen.queryByTestId('finance-provider-fee')).toBeNull();
+    expect(screen.queryByTestId('finance-no-profit')).toBeNull();
     expect(within(sales).getByRole('columnheader', { name: 'IRT' })).toBeTruthy();
     expect(within(sales).getByRole('columnheader', { name: 'USD' })).toBeTruthy();
     // A bucket that has not begun draws no row.

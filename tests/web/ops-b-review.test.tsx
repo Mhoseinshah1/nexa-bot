@@ -342,10 +342,22 @@ describe('a reminder row after the shared settings query refetches', () => {
     renderPage(
       <RemindersPage mayEdit denied={false} mayViewTemplates={false} mayEditTemplates={false} />,
     );
-  const saveIn = (field: HTMLElement) =>
+  /** The rows live in each family's «تنظیم» sheet: open the one holding this field. */
+  const reveal = (field: HTMLElement) => {
+    const sheet = field.closest('aside');
+    if (sheet === null || !sheet.hidden) return;
+    const title = document.getElementById(sheet.getAttribute('aria-labelledby') ?? '')?.textContent;
+    const card = screen
+      .getByRole('heading', { name: new RegExp(`^${title ?? ''}`) })
+      .closest('section') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: t('web.bx_rem_configure') }));
+  };
+  const saveIn = (field: HTMLElement) => {
+    reveal(field);
     fireEvent.click(
       within(field.closest('form') as HTMLElement).getByRole('button', { name: t('web.save') }),
     );
+  };
 
   it('follows a newer live value on an untouched row instead of calling it unsaved', async () => {
     stubApi([

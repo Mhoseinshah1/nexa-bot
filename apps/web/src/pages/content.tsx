@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { memo, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CONTROL_ERROR_CODES,
@@ -46,6 +46,8 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { fill } from './bot-buttons/canvas';
+import { useNarrowScreen } from './editor-layout';
+import { useFocusTrap } from '../ui/overlays';
 
 /**
  * What a sample value has to look like in a text field, per declared type.
@@ -261,6 +263,19 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
   const { dirty, report } = useDirtySet();
   useUnsavedChanges(dirty.size > 0);
 
+  /*
+   * On a narrow screen the editor is a side sheet that picking a text opens, rather than a
+   * column below the list the page would have to scroll to. It is the SAME element, only
+   * drawn over the page: every card stays mounted either way, so a draft survives the
+   * sheet closing exactly as it survives the filters hiding it.
+   */
+  const narrow = useNarrowScreen(980);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const sheet = narrow && sheetOpen;
+  const editorRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(editorRef, sheet, () => setSheetOpen(false));
+  const selectedTitle = rows.find((row) => row.key === selected);
+
   return (
     <>
       <PageHead
@@ -378,7 +393,10 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                             template={template}
                             current={template.key === selected}
                             unsaved={dirty.has(template.key)}
-                            onSelect={() => setChosen(template.key)}
+                            onSelect={() => {
+                              setChosen(template.key);
+                              setSheetOpen(true);
+                            }}
                           />
                         </li>
                       ))}
@@ -388,7 +406,41 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
               </div>
             </aside>
 
-            <div className="content-editor">
+            {sheet && (
+              <div
+                className="bx-sheet-layer"
+                data-testid="content-sheet-backdrop"
+                onMouseDown={() => setSheetOpen(false)}
+              />
+            )}
+            <div
+              ref={editorRef}
+              className={
+                narrow ? `content-editor bx-sheet${sheet ? ' open' : ''}` : 'content-editor'
+              }
+              {...(sheet
+                ? {
+                    role: 'dialog',
+                    'aria-modal': true,
+                    'aria-label':
+                      selectedTitle === undefined
+                        ? t('web.templates_title')
+                        : templateCopy(selectedTitle.key, selectedTitle.description).name,
+                  }
+                : {})}
+            >
+              {sheet && (
+                <div className="bx-sheet-head">
+                  <button
+                    type="button"
+                    className="btn ghost icon sm"
+                    aria-label={t('web.close')}
+                    onClick={() => setSheetOpen(false)}
+                  >
+                    <Icon name="x" />
+                  </button>
+                </div>
+              )}
               {ordered.map((template) => (
                 <div key={template.key} hidden={template.key !== selected}>
                   <TemplateCard template={template} mayEdit={mayEdit} />

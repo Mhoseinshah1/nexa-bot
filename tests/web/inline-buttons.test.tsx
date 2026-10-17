@@ -87,37 +87,88 @@ const section = (props: { mayEdit?: boolean; mayViewTemplates?: boolean } = {}) 
 const row = (key: string) =>
   document.querySelector(`[data-inline-button="${key}"]`) as HTMLElement | null;
 
+type Key = keyof typeof INLINE_BUTTON_NAME;
+const nameOf = (key: string) => t(INLINE_BUTTON_NAME[key as Key]);
+const STYLE_LABEL: Record<string, string> = {
+  default: t('web.bb_style_default'),
+  primary: t('web.bb_style_primary'),
+  success: t('web.bb_style_success'),
+  danger: t('web.bb_style_danger'),
+};
+
+/** The section has drawn its table. */
+const loaded = () =>
+  waitFor(() => expect(document.querySelector('[data-inline-button]')).not.toBeNull());
+
+/** The list pages ten at a time: filter it to one button's name, and return its row. */
+const show = (key: string) => {
+  if (row(key) === null) {
+    fireEvent.change(screen.getByLabelText(t('web.ib_filter')), {
+      target: { value: nameOf(key) },
+    });
+  }
+  const found = row(key);
+  if (found === null) throw new Error(`no row ${key}`);
+  return found;
+};
+
+/** Opens one button's sheet (closing another one first) and returns it. */
+const sheet = (key: string) => {
+  const open = screen.queryByRole('dialog');
+  if (open !== null && open.getAttribute('aria-labelledby') !== null) {
+    const title = document.getElementById(open.getAttribute('aria-labelledby') as string);
+    if (title?.textContent === nameOf(key)) return open;
+    fireEvent.click(within(open).getByRole('button', { name: t('web.close') }));
+  }
+  fireEvent.click(within(show(key)).getByRole('button', { name: nameOf(key) }));
+  return screen.getByRole('dialog', { name: nameOf(key) });
+};
+
+const chooseStyle = (key: string, style: string) =>
+  fireEvent.click(within(sheet(key)).getByRole('radio', { name: STYLE_LABEL[style] ?? style }));
+
+/** The style a row shows now. */
+const styleOf = (key: string) => show(key).getAttribute('data-style');
+
 describe('«دکمه‌های شیشه‌ای ربات»', () => {
   it('lists every registry button once, with its label and a style choice of exactly four', async () => {
     api();
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
-    expect(document.querySelectorAll('[data-inline-button]').length).toBe(INLINE_BUTTONS.length);
-    const sent = row('payment.sent') as HTMLElement;
+    await loaded();
+    // Ten rows a page, and the pager walks the rest of the registry.
+    expect(document.querySelectorAll('[data-inline-button]').length).toBe(10);
+    const keys = new Set<string>();
+    for (;;) {
+      document
+        .querySelectorAll('[data-inline-button]')
+        .forEach((one) => keys.add(one.getAttribute('data-inline-button') as string));
+      const next = screen.queryByRole('button', { name: t('web.page_next') });
+      if (next === null || (next as HTMLButtonElement).disabled) break;
+      fireEvent.click(next);
+    }
+    expect(keys.size).toBe(INLINE_BUTTONS.length);
+    const sent = show('payment.sent');
     expect(within(sent).getByText(t(INLINE_BUTTON_NAME['payment.sent']))).toBeInTheDocument();
     expect(within(sent).getByTestId('ib-preview').textContent).toBe(
       CATALOGUE_FA['bot.payment.sent_button'],
     );
-    const select = within(sent).getByRole('combobox') as HTMLSelectElement;
-    expect([...select.options].map((option) => option.value)).toEqual([
-      'default',
-      'primary',
-      'success',
-      'danger',
+    const radios = within(sheet('payment.sent')).getAllByRole('radio');
+    expect(radios.map((radio) => radio.textContent)).toEqual([
+      STYLE_LABEL['default'],
+      STYLE_LABEL['primary'],
+      STYLE_LABEL['success'],
+      STYLE_LABEL['danger'],
     ]);
     // A data-labelled button offers its style and says why its text is not here.
-    expect(
-      within(row('catalog.product') as HTMLElement).getByText(t('web.ib_data_label')),
-    ).toBeInTheDocument();
+    expect(within(sheet('catalog.product')).getByText(t('web.ib_data_label'))).toBeInTheDocument();
   });
 
   it('saves the changed styles as ONE settings write, with the version it read', async () => {
     const calls = api({ main_menu: 'primary' }, 4);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
-    const select = within(row('payment.sent') as HTMLElement).getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'success' } });
-    expect(within(row('payment.sent') as HTMLElement).getByTestId('ib-preview').className).toMatch(
+    await loaded();
+    chooseStyle('payment.sent', 'success');
+    expect(within(show('payment.sent')).getByTestId('ib-preview').className).toMatch(
       /bb-style-success/,
     );
     fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
@@ -137,10 +188,13 @@ describe('«دکمه‌های شیشه‌ای ربات»', () => {
   it('offers no style change without settings.edit, and no label editor without templates.view', async () => {
     api();
     renderPage(section({ mayEdit: false, mayViewTemplates: false }));
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
-    expect(within(row('payment.sent') as HTMLElement).getByRole('combobox')).toBeDisabled();
+    await loaded();
+    for (const radio of within(sheet('payment.sent')).getAllByRole('radio')) {
+      expect(radio).toBeDisabled();
+    }
     expect(screen.queryByRole('button', { name: t('web.ib_save') })).toBeNull();
-    expect(screen.queryByText(t('web.ib_edit_label'))).toBeNull();
+    expect(within(sheet('payment.sent')).queryByRole('textbox', { name: /متن|body/u })).toBeNull();
+    expect(within(sheet('payment.sent')).getByText(t('web.ib_labels_denied'))).toBeInTheDocument();
     expect(screen.getByText(t('web.ib_denied_edit'))).toBeInTheDocument();
   });
 
@@ -164,14 +218,11 @@ describe('«دکمه‌های شیشه‌ای ربات»', () => {
       },
     ]);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
-    const sent = row('payment.sent') as HTMLElement;
-    const details = sent.querySelector('details') as HTMLDetailsElement;
-    details.open = true;
-    fireEvent(details, new Event('toggle'));
-    // The template card's body (the row also holds the icon's own text field, Item 3).
+    await loaded();
+    // The template card's body, in the button's own sheet.
+    const sent = sheet('payment.sent');
     const body = await waitFor(() => {
-      const found = details.querySelector('textarea');
+      const found = sent.querySelector('textarea');
       if (found === null) throw new Error('no template body yet');
       return found;
     });
@@ -190,7 +241,7 @@ describe('«دکمه‌های شیشه‌ای ربات»', () => {
   it('filters by name or label', async () => {
     api();
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     fireEvent.change(screen.getByLabelText(t('web.ib_filter')), {
       target: { value: t(INLINE_BUTTON_NAME['service.renew']) },
     });
@@ -233,10 +284,8 @@ describe('«دکمه‌های شیشه‌ای ربات» — Codex review of #14
       },
     ]);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
-    fireEvent.change(within(row('payment.sent') as HTMLElement).getByRole('combobox'), {
-      target: { value: 'success' },
-    });
+    await loaded();
+    chooseStyle('payment.sent', 'success');
     // Another administrator saves meanwhile; this page re-reads version 5.
     listing.settings = [
       setting({
@@ -267,14 +316,8 @@ describe('«دکمه‌های شیشه‌ای ربات» — Codex review of #14
     expect(write?.body).toMatchObject({ expectedVersion: 4, value: { 'payment.sent': 'success' } });
     // Adopting the fresh value is explicit.
     fireEvent.click(screen.getByRole('button', { name: t('web.ib_reload') }));
-    await waitFor(() =>
-      expect(
-        (within(row('main_menu') as HTMLElement).getByRole('combobox') as HTMLSelectElement).value,
-      ).toBe('danger'),
-    );
-    expect(
-      (within(row('payment.sent') as HTMLElement).getByRole('combobox') as HTMLSelectElement).value,
-    ).toBe('default');
+    await waitFor(() => expect(styleOf('main_menu')).toBe('danger'));
+    expect(styleOf('payment.sent')).toBe('default');
   });
 
   it('4170910519: an unsaved style edit holds an in-app navigation', async () => {
@@ -285,10 +328,8 @@ describe('«دکمه‌های شیشه‌ای ربات» — Codex review of #14
         <LeaveGuardHost />
       </>,
     );
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
-    fireEvent.change(within(row('payment.sent') as HTMLElement).getByRole('combobox'), {
-      target: { value: 'danger' },
-    });
+    await loaded();
+    chooseStyle('payment.sent', 'danger');
     act(() => navigate('/elsewhere'));
     expect(await screen.findByText(t('web.unsaved_question'))).toBeInTheDocument();
   });
@@ -321,7 +362,7 @@ describe('«دکمه‌های شیشه‌ای ربات» — Codex review of #14
       },
     ]);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     expect(screen.getByText(t('web.ib_stored_invalid'))).toBeInTheDocument();
     expect(screen.getByRole('button', { name: t('web.ib_reset') })).toBeEnabled();
     const save = screen.getByRole('button', { name: t('web.ib_save') });
@@ -396,7 +437,7 @@ describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item
     ]);
   }
   const iconInput = (key: string) =>
-    within(row(key) as HTMLElement).getByRole('textbox', {
+    within(sheet(key)).getByRole('textbox', {
       name: `${t('web.ib_icon')} — ${t(INLINE_BUTTON_NAME[key as 'payment.sent'])}`,
     }) as HTMLInputElement;
   const writes = (api: ReturnType<typeof stubApi>, key: string) =>
@@ -405,24 +446,25 @@ describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item
   it('shows every button’s icon as optional and empty by default, with Telegram’s limits stated', async () => {
     iconApi();
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     expect(iconInput('payment.sent').value).toBe('');
-    expect(
-      within(row('payment.sent') as HTMLElement).getByText(t('web.ib_icon_none')),
-    ).toBeTruthy();
-    expect(within(row('payment.sent') as HTMLElement).getByText(t('web.bb_optional'))).toBeTruthy();
+    expect(within(show('payment.sent')).getByText(t('web.ib_icon_none'))).toBeTruthy();
+    expect(within(sheet('payment.sent')).getByText(t('web.bb_optional'))).toBeTruthy();
     expect(screen.getByTestId('ib-icon-limits').textContent).toBe(t('web.ib_icon_limits'));
-    expect(document.querySelectorAll('[data-testid="ib-icon"]').length).toBe(INLINE_BUTTONS.length);
+    // Every row on the page states its icon.
+    expect(document.querySelectorAll('[data-testid="ib-icon"]').length).toBe(
+      document.querySelectorAll('[data-inline-button]').length,
+    );
     expect(document.querySelector('[data-testid="ib-icon-mark"]')).toBeNull();
   });
 
   it('saves an icon as ONE write of bot.inline_button_icons with ITS version, and no style write', async () => {
     const api = iconApi({ main_menu: '1' }, 7);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     fireEvent.change(iconInput('payment.sent'), { target: { value: ICON } });
     // The preview marks the icon before the label (never a fake of the custom emoji).
-    const preview = within(row('payment.sent') as HTMLElement).getByTestId('ib-preview');
+    const preview = within(show('payment.sent')).getByTestId('ib-preview');
     expect(preview.querySelector('[data-testid="ib-icon-mark"]')).not.toBeNull();
     expect(preview.textContent).toBe(`✦${CATALOGUE_FA['bot.payment.sent_button']}`);
     fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
@@ -437,11 +479,11 @@ describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item
   it('refuses to save an id that is not digits, says why, and saves once it is fixed', async () => {
     const api = iconApi();
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     for (const bad of ['abc', '12a', '💰', '-1', '1'.repeat(33)]) {
       fireEvent.change(iconInput('payment.sent'), { target: { value: bad } });
       expect(iconInput('payment.sent').getAttribute('aria-invalid')).toBe('true');
-      expect(within(row('payment.sent') as HTMLElement).getByRole('alert').textContent).toBe(
+      expect(within(sheet('payment.sent')).getByRole('alert').textContent).toBe(
         t('web.ib_icon_invalid'),
       );
       expect(
@@ -449,7 +491,7 @@ describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item
       ).toBe(true);
     }
     fireEvent.change(iconInput('payment.sent'), { target: { value: ` ${ICON} ` } });
-    expect(within(row('payment.sent') as HTMLElement).queryByRole('alert')).toBeNull();
+    expect(within(sheet('payment.sent')).queryByRole('alert')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
     await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
     // Trimmed, never stored with the spaces.
@@ -461,10 +503,10 @@ describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item
   it('removes an icon: the button returns to «بدون آیکون» and the write drops its key', async () => {
     const api = iconApi({ 'payment.sent': ICON, main_menu: '1' }, 3);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     expect(iconInput('payment.sent').value).toBe(ICON);
     fireEvent.click(
-      within(row('payment.sent') as HTMLElement).getByRole('button', {
+      within(sheet('payment.sent')).getByRole('button', {
         name: `${t('web.ib_icon_remove')} — ${t(INLINE_BUTTON_NAME['payment.sent'])}`,
       }),
     );
@@ -480,10 +522,8 @@ describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item
   it('a style and an icon edited together are two writes, each with its own version and key', async () => {
     const api = iconApi({}, null);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
-    fireEvent.change(within(row('payment.sent') as HTMLElement).getByRole('combobox'), {
-      target: { value: 'success' },
-    });
+    await loaded();
+    chooseStyle('payment.sent', 'success');
     fireEvent.change(iconInput('main_menu'), { target: { value: ICON } });
     fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
     await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
@@ -497,10 +537,10 @@ describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item
   it('offers no icon edit without settings.edit', async () => {
     iconApi({ 'payment.sent': ICON }, 1);
     renderPage(section({ mayEdit: false }));
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     expect(iconInput('payment.sent').disabled).toBe(true);
     expect(
-      within(row('payment.sent') as HTMLElement).queryByRole('button', {
+      within(sheet('payment.sent')).queryByRole('button', {
         name: new RegExp(t('web.ib_icon_remove')),
       }),
     ).toBeNull();
@@ -509,7 +549,7 @@ describe('«دکمه‌های شیشه‌ای ربات» — premium icons (Item
   it('an unreadable stored icon value is said, and can be repaired by a save', async () => {
     const api = iconApi({ 'no.such.button': 'x' }, 4, { storedValueInvalid: true });
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     expect(screen.getByText(t('web.ib_icons_stored_invalid'))).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
     await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
@@ -525,7 +565,7 @@ describe('«دکمه‌های شیشه‌ای ربات» — review of #215 (N1,
   const writes = (api: ReturnType<typeof stubApi>, key: string) =>
     api.calls.filter((call) => call.method === 'POST' && call.url.endsWith(`/settings/${key}`));
   const iconInput = (key: 'payment.sent' | 'main_menu') =>
-    within(row(key) as HTMLElement).getByRole('textbox', {
+    within(sheet(key)).getByRole('textbox', {
       name: `${t('web.ib_icon')} — ${t(INLINE_BUTTON_NAME[key])}`,
     }) as HTMLInputElement;
 
@@ -576,10 +616,8 @@ describe('«دکمه‌های شیشه‌ای ربات» — review of #215 (N1,
       },
     ]);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
-    fireEvent.change(within(row('payment.sent') as HTMLElement).getByRole('combobox'), {
-      target: { value: 'success' },
-    });
+    await loaded();
+    chooseStyle('payment.sent', 'success');
     fireEvent.change(iconInput('main_menu'), { target: { value: ICON } });
     fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
     expect(await screen.findByText(t('web.ib_icons_failed_styles_saved'))).toBeTruthy();
@@ -622,11 +660,11 @@ describe('«دکمه‌های شیشه‌ای ربات» — review of #215 (N1,
       },
     ]);
     renderPage(section());
-    await waitFor(() => expect(row('payment.sent')).not.toBeNull());
+    await loaded();
     fireEvent.change(iconInput('payment.sent'), { target: { value: '۵۳۶۸۳۲۴۱۷۰۶۷۱۲۰۲۲۸۶' } });
     expect(iconInput('payment.sent').value).toBe(ICON);
     fireEvent.change(iconInput('main_menu'), { target: { value: '٥٣٦٨' } });
-    expect(within(row('main_menu') as HTMLElement).queryByRole('alert')).toBeNull();
+    expect(within(sheet('main_menu')).queryByRole('alert')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: t('web.ib_save') }));
     await waitFor(() => expect(writes(api, 'bot.inline_button_icons')).toHaveLength(1));
     expect(writes(api, 'bot.inline_button_icons')[0]?.body).toMatchObject({
