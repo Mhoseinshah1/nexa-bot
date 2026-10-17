@@ -28,7 +28,11 @@ heavy() {
 if [ "$source" = "--stdin" ]; then
   paths="$(cat)"
 else
-  # The merge commit against its first parent, the base it is tested on.
+  # The merge commit against its first parent, the base it is tested on. Only a
+  # real two-parent merge: against any other commit, HEAD^1 would be the PR's
+  # previous commit and the diff would show only its last one.
+  parents="$(git rev-list --parents -n 1 HEAD 2>/dev/null | wc -w)" || heavy true
+  [ "$parents" -eq 3 ] || heavy true
   # --no-renames lists both sides of a rename, so `x.ts -> x.md` counts as x.ts.
   paths="$(git diff --name-only --no-renames HEAD^1 HEAD 2>/dev/null)" || heavy true
 fi

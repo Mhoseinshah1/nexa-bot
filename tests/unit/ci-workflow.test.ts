@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -371,6 +372,43 @@ describe('the CI workflow', () => {
       '',
     ]) {
       expect(decide('pull_request', paths), JSON.stringify(paths)).toBe('heavy=true');
+    }
+  });
+
+  it('reads the paths from a two-parent merge commit, and from nothing else', () => {
+    const script = join(__dirname, '../../scripts/ci-docs-only.sh');
+    const dir = mkdtempSync(join(tmpdir(), 'ci-docs-only-'));
+    const git = (...args: string[]) =>
+      execFileSync('git', ['-c', 'user.name=ci', '-c', 'user.email=ci@example.invalid', ...args], {
+        cwd: dir,
+        stdio: 'pipe',
+      });
+    const decide = () =>
+      execFileSync('bash', [script, 'pull_request'], { cwd: dir }).toString().trim();
+    try {
+      git('init', '-q', '-b', 'main');
+      git('commit', '-q', '--allow-empty', '-m', 'base');
+      git('checkout', '-q', '-b', 'docs');
+      mkdirSync(join(dir, 'docs'));
+      writeFileSync(join(dir, 'docs/a.md'), 'x\n');
+      git('add', '.');
+      git('commit', '-q', '-m', 'docs');
+      // Not a merge: HEAD^1 is the PR's own previous commit, not its base.
+      expect(decide()).toBe('heavy=true');
+      git('checkout', '-q', 'main');
+      git('merge', '-q', '--no-ff', 'docs', '-m', 'merge');
+      expect(decide()).toBe('heavy=false');
+      // A pull request that changes code is heavy.
+      git('checkout', '-q', '-b', 'code', 'main~1');
+      writeFileSync(join(dir, 'main.ts'), 'x\n');
+      git('add', '.');
+      git('commit', '-q', '-m', 'code');
+      git('checkout', '-q', 'main~1');
+      git('checkout', '-q', '-b', 'base2');
+      git('merge', '-q', '--no-ff', 'code', '-m', 'merge');
+      expect(decide()).toBe('heavy=true');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
