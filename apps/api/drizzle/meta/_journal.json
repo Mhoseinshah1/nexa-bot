@@ -1758,6 +1758,13 @@
       "when": 1792270025687,
       "tag": "0250_record_source",
       "breakpoints": true
+    },
+    {
+      "idx": 251,
+      "version": "7",
+      "when": 1792270492730,
+      "tag": "0251_catalog_import_columns",
+      "breakpoints": true
     }
   ]
 }

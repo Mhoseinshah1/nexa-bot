@@ -5169,6 +5169,9 @@ export const WEB_FA = {
   'web.reseller_status_all': 'همه',
   'web.reseller_status_active': 'فعال',
   'web.reseller_status_suspended': 'معلق',
+  'web.reseller_imported_cap': 'سقف خرید در میرزا (اعمال نمی‌شود)',
+  'web.reseller_imported_cap_hint':
+    'این عدد فقط سقفی است که میرزا برای این نماینده گذاشته بود. نه موجودی کیف پول است و نه اعتبار: هیچ‌جا اعمال نمی‌شود و خرید را محدود یا آزاد نمی‌کند.',
   'web.reseller_status_hint': 'نمایندهٔ معلق با قیمت فهرست خرید می‌کند، درست مانند مشتری عادی.',
   'web.reseller_pricing': 'قیمت‌گذاری',
   'web.reseller_pricing_hint':
