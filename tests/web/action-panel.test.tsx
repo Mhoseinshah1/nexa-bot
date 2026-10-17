@@ -93,10 +93,50 @@ describe('the action panel', () => {
     const details = container.querySelector('details');
     expect(details).not.toBeNull();
     expect(details).not.toHaveAttribute('open');
+    // N is the one disabled BUTTON, not the two reasons (PR #285 review, A4).
     expect(
-      within(details as HTMLElement).getByText(t('web.action_panel_why').replace('{n}', '2')),
+      within(details as HTMLElement).getByText(t('web.action_panel_why').replace('{n}', '1')),
     ).toBeInTheDocument();
     expect(within(details as HTMLElement).getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  /* PR #285 review, A4. */
+  it('counts the disabled buttons it draws, inside the page’s own components and the strip', () => {
+    // A page's button component: the panel sees the wrapper, not the `disabled` prop.
+    const Wrapped = ({ off, label }: { off: boolean; label: string }) => (
+      <Button disabled={off}>{label}</Button>
+    );
+    const { container, rerender } = render(
+      <ActionPanel
+        groups={[
+          {
+            key: 'a',
+            title: 'الف',
+            actions: [
+              <Wrapped key="1" off label="یک" />,
+              <Wrapped key="2" off label="دو" />,
+              <Wrapped key="3" off={false} label="سه" />,
+            ],
+          },
+        ]}
+        sensitive={[
+          <Button key="d" variant="danger" disabled>
+            حذف
+          </Button>,
+        ]}
+        disabledReasons={['به دسترسی ویرایش نیاز دارید']}
+      />,
+    );
+    const summary = () => container.querySelector('details summary');
+    expect(summary()).toHaveTextContent(t('web.action_panel_why').replace('{n}', '3'));
+    // A reason about an action whose button is not drawn at all: no number to give.
+    rerender(
+      <ActionPanel
+        groups={[{ key: 'a', title: 'الف', actions: [<Wrapped key="3" off={false} label="سه" />] }]}
+        disabledReasons={['پایان دادن به سرویس دسترسی جداگانه‌ای دارد']}
+      />,
+    );
+    expect(summary()).toHaveTextContent(t('web.action_panel_why_unavailable'));
   });
 
   it('draws no fold when nothing is disabled', () => {

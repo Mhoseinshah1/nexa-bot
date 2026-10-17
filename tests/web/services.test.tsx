@@ -610,6 +610,28 @@ describe('the service detail', () => {
     expect(api.calls.map((call) => call.method)).toEqual(['GET', 'GET']);
   });
 
+  /* PR #285 review, A4: «چرا N دکمه غیرفعال است؟» counts the disabled BUTTONS, not reasons. */
+  it('counts the disabled buttons in «چرا N دکمه غیرفعال است؟», not the reasons', async () => {
+    // Every action available to the SERVICE; the session lacks services.edit.
+    const everything = Object.fromEntries(
+      SERVICE_OPERATOR_ACTIONS.map((action) => [action, 'AVAILABLE' as const]),
+    );
+    stubApi(detail({ state: 'ACTIVE', actions: actionsWith(everything) }));
+    renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
+    );
+    await screen.findByText('nx-7f3a91');
+    const panel = screen.getByRole('region', { name: t('web.service_action_panel_title') });
+    const disabled = panel.querySelectorAll('.action-group-buttons button:disabled').length;
+    const why = panel.querySelector('details.action-panel-why') as HTMLElement;
+    const reasons = within(why).getAllByRole('listitem').length;
+    // One «no edit permission» sentence covers every ordinary button: the two differ.
+    expect(disabled).toBeGreaterThan(reasons);
+    expect(why.querySelector('summary')).toHaveTextContent(
+      t('web.action_panel_why').replace('{n}', formatNumber(disabled)),
+    );
+  });
+
   it('separates the terminate permission from the other six', async () => {
     /*
      * `services.terminate` is its own HIGH-risk key held by `owner` alone in the frozen

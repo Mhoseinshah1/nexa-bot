@@ -2185,6 +2185,7 @@ export const WEB_FA = {
   'web.payment_situation_safe_late_completion':
     'هیچ‌چیز خودکار تسویه نمی‌شود. در پنل درگاه بررسی کنید؛ اگر پرداخت هنوز «نامعلوم» است با تطبیق، وگرنه تنها با واریز دستی به کیف پول که سیاست آن هنوز تصمیم‌گیری نشده است.',
   // --- PR #285 review fixes, agent A: new keys go directly below this line ---
+  'web.action_panel_why_unavailable': 'چرا برخی عملیات در دسترس نیست؟',
   'web.payment_situation_safe_confirmed':
     'هر بازپرداخت از سقف همین پرداخت کم می‌شود؛ کارمزد درگاه بازپرداخت‌پذیر نیست.',
   'web.payment_situation_safe_refund_in_progress':
