@@ -6560,6 +6560,12 @@ export const WEB_FA = {
   'web.bc_source_message': 'شمارهٔ پیام مبدأ',
   'web.bc_source_verified': 'اعتبارسنجی مبدأ',
   // --- PR #285 review fixes, agent C: new keys go directly below this line ---
+  'web.err_messaging_button_url_scheme':
+    'دکمهٔ لینک فقط نشانی‌هایی را باز می‌کند که با https:// یا tg:// شروع می‌شوند.',
+  'web.err_messaging_split_bound_invalid':
+    'سقف طول پیام برای تقسیم آن به چند بخش معتبر نیست؛ این خطای داخلی است و باید به پشتیبانی گزارش شود.',
+  'web.err_qr_text_too_long': 'متن برای ساخت کد QR بیش از حد طولانی است؛ آن را کوتاه‌تر کنید.',
+  'web.err_qr_margin_invalid': 'حاشیهٔ کد QR باید عدد صحیحی در بازهٔ مجاز باشد.',
   'web.bc_source_verified_yes': 'پیش‌نمایش با موفقیت از این مبدأ به شما رسید',
   'web.bc_source_verified_no':
     'هنوز تأیید نشده — با «ارسال آزمایشی به خودم» ربات همین پیام را برای شما کپی/فوروارد می‌کند؛ بدون آن ارسال شروع نمی‌شود.',

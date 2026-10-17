@@ -4,7 +4,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import * as contracts from '@nexa/contracts';
 import { ApiError } from '../../apps/web/src/api/client';
-import { ERROR_TEXT, errorIssues, errorText, fieldText } from '../../apps/web/src/error-text';
+import {
+  API_LOCAL_ERROR_TEXT,
+  ERROR_TEXT,
+  errorIssues,
+  errorText,
+  fieldText,
+  hasErrorText,
+} from '../../apps/web/src/error-text';
 import { WEB_FA, t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 import { messageFor } from '../../apps/web/src/pages/settings';
 import { ApiErrorReport } from '../../apps/web/src/ui/technical-details';
@@ -62,6 +69,172 @@ describe('ERROR_TEXT covers every contract error code', () => {
       ENGLISH_SENTENCE.test(t(key).replace(/https?:\/\/\S*|BotFather|API|HTTPS|QR/gu, '')),
     );
     expect(english).toEqual([]);
+  });
+});
+
+/**
+ * C2: every code the API RAISES as a refusal (4xx) has a Persian sentence — not only the codes a
+ * contracts catalogue declares. The API is read as text (the Web Admin may not import it):
+ *
+ * - every `errors.validation|notFound|conflict|permissionDenied|unauthenticated|
+ *   preconditionFailed(<code>, …)` call, and every `new NexaError({ … code: <code> … })` whose
+ *   `kind` is a 4xx kind (or is not a literal);
+ * - `<code>` is resolved: a string literal is the code; each `NAME.PROP` inside it (a ternary
+ *   names two) is looked up in `@nexa/contracts`, else in an object literal `const NAME = { PROP:
+ *   '…' }` declared in the API (a local catalogue such as `SUPPORT_AI_ERROR_CODES`), following
+ *   one `const NAME = OTHER_ERROR_CODES` alias;
+ * - an argument that resolves to nothing must be on `DYNAMIC_RAISES`, each reviewed: a new
+ *   unresolvable raise fails until somebody looks at what it can carry.
+ *
+ * Each resolved code must then have a sentence (`hasErrorText`).
+ */
+describe('every refusal code the API raises has Persian', () => {
+  const repo = join(import.meta.dirname, '../..');
+  const apiRoot = join(repo, 'apps/api/src');
+  const RAISE =
+    /errors\.(?:validation|notFound|conflict|permissionDenied|unauthenticated|preconditionFailed)\(\s*([^,]+?)\s*,/gu;
+  const NEXA_ERROR = /new NexaError\(\{([^}]*)\}/gu;
+  const REFUSAL_KINDS = new Set([
+    'VALIDATION',
+    'NOT_FOUND',
+    'CONFLICT',
+    'PERMISSION_DENIED',
+    'UNAUTHENTICATED',
+    'PRECONDITION_FAILED',
+    'RATE_LIMITED',
+  ]);
+  /**
+   * Raise sites whose code is a variable. Each was read: the variable is typed or assigned
+   * from catalogued constants only, and those constants are walked by the catalogue test above.
+   */
+  const DYNAMIC_RAISES = new Set([
+    // `stateRefusal` is typed as ORDER_STATE_INVALID | SERVICE_ACTION_NOT_ALLOWED.
+    'apps/api/src/modules/commerce/provisioning/application/provisioning.service.ts: stateRefusal',
+    // `refuse(code, …)`: every caller passes a COMMERCE_ERROR_CODES constant.
+    'apps/api/src/modules/commerce/provisioning/application/provisioning.service.ts: code',
+    // `code` is PANEL_TARGET_BLOCKED or PANEL_URL_INVALID, two lines above.
+    'apps/api/src/modules/platform/panels/application/panel.service.ts: code',
+  ]);
+
+  function walk(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) walk(path, out);
+      else if (/\.ts$/u.test(path) && !/\.test\.ts$/u.test(path)) out.push(path);
+    }
+    return out;
+  }
+
+  /** Source with its comments removed: a raise inside prose is not a raise. */
+  const uncommented = (text: string) =>
+    text.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/^\s*\/\/.*$/gmu, '');
+  const sources = new Map(
+    walk(apiRoot).map((path) => [path, uncommented(readFileSync(path, 'utf8'))]),
+  );
+  const catalogues = contracts as unknown as Readonly<Record<string, unknown>>;
+
+  function contractValue(name: string, prop: string): string | null {
+    const table = catalogues[name];
+    if (typeof table !== 'object' || table === null) return null;
+    const value = (table as Record<string, unknown>)[prop];
+    return typeof value === 'string' ? value : null;
+  }
+
+  function localValue(name: string, prop: string): string | null {
+    for (const text of sources.values()) {
+      const alias = new RegExp(`const ${name}\\s*(?::[^=]+)?=\\s*([A-Z_]+)\\s*;`, 'u').exec(text);
+      if (alias?.[1] !== undefined) {
+        const value = contractValue(alias[1], prop);
+        if (value !== null) return value;
+      }
+      const object = new RegExp(`const ${name}\\s*=\\s*\\{([^}]*)\\}`, 'u').exec(text);
+      if (object?.[1] === undefined) continue;
+      const entry = new RegExp(`\\b${prop}:\\s*'([^']+)'`, 'u').exec(object[1]);
+      if (entry?.[1] !== undefined) return entry[1];
+    }
+    return null;
+  }
+
+  /** The codes one raise argument can carry, or `null` when it names none. */
+  function resolve(argument: string): string[] | null {
+    const code = argument.trim();
+    const literal = /^'([^']+)'$/u.exec(code);
+    if (literal?.[1] !== undefined) return [literal[1]];
+    const references = [...code.matchAll(/\b([A-Z][A-Z0-9_]*)\.([A-Z][A-Z0-9_]*)\b/gu)];
+    if (references.length === 0) return null;
+    const found: string[] = [];
+    for (const [, name, prop] of references) {
+      const value = contractValue(name ?? '', prop ?? '') ?? localValue(name ?? '', prop ?? '');
+      if (value === null) return null;
+      found.push(value);
+    }
+    return found;
+  }
+
+  function raised(): { codes: Map<string, string>; unresolved: string[] } {
+    const codes = new Map<string, string>();
+    const unresolved: string[] = [];
+    for (const [path, text] of sources) {
+      const file = relative(repo, path);
+      const argumentsOf = [...text.matchAll(RAISE)].map((match) => match[1] ?? '');
+      for (const match of text.matchAll(NEXA_ERROR)) {
+        const body = match[1] ?? '';
+        const kind = /kind:\s*'([A-Z_]+)'/u.exec(body)?.[1];
+        if (kind !== undefined && !REFUSAL_KINDS.has(kind)) continue;
+        const code = /code:\s*([^,\n]+)/u.exec(body)?.[1];
+        if (code !== undefined) argumentsOf.push(code);
+      }
+      for (const argument of argumentsOf) {
+        const resolved = resolve(argument);
+        if (resolved === null) {
+          const entry = `${file}: ${argument.trim()}`;
+          if (!DYNAMIC_RAISES.has(entry)) unresolved.push(entry);
+          continue;
+        }
+        for (const code of resolved) codes.set(code, file);
+      }
+    }
+    return { codes, unresolved };
+  }
+
+  const { codes, unresolved } = raised();
+
+  it('walks a real set of raise sites, local catalogues included', () => {
+    expect(codes.size).toBeGreaterThan(300);
+    // Literals, contract constants and the API-local catalogues are all seen.
+    expect(codes.has('platform.permission_denied')).toBe(true);
+    expect(codes.has('commerce.order_not_found')).toBe(true);
+    expect(codes.has('support_ai.version_conflict')).toBe(true);
+    expect(codes.has('business_chats.not_in_state')).toBe(true);
+    expect(codes.has('qr.margin_invalid')).toBe(true);
+  });
+
+  it('resolves every raise argument, or knows why it cannot', () => {
+    expect(unresolved).toEqual([]);
+  });
+
+  it('has a Persian sentence for every raised code', () => {
+    const missing = [...codes].filter(([code]) => !hasErrorText(code));
+    expect(missing).toEqual([]);
+  });
+
+  it('says every API-local code in Persian, never English', () => {
+    const catalogue = WEB_FA as Readonly<Record<string, string>>;
+    for (const [code, key] of Object.entries(API_LOCAL_ERROR_TEXT)) {
+      expect(codes.has(code), code).toBe(true);
+      expect(catalogue[key] ?? '', code).toMatch(PERSIAN);
+      expect(t(key), code).not.toMatch(ENGLISH_SENTENCE);
+    }
+  });
+
+  it('the scan sees a planted raise of an untranslated code', () => {
+    const planted = "throw errors.conflict('planted.nothing_says_this', 'English.');";
+    const [match] = [...planted.matchAll(RAISE)];
+    const resolved = resolve(match?.[1] ?? '');
+    expect(resolved).toEqual(['planted.nothing_says_this']);
+    expect(hasErrorText('planted.nothing_says_this')).toBe(false);
+    expect(resolve('SUPPORT_AI_ERROR_CODES.TEST_TOO_SOON')).toEqual(['support_ai.test_too_soon']);
+    expect(resolve('someVariable')).toBeNull();
   });
 });
 

@@ -408,6 +408,8 @@ export const ERROR_TEXT = {
   'legacy_wallet_debt.scope_stopped': 'web.err_legacy_wallet_debt_scope_stopped',
   'legacy_wallet_debt.version_conflict': 'web.err_legacy_wallet_debt_version_conflict',
   'messaging.button_url_invalid': 'web.err_messaging_button_url_invalid',
+  'messaging.button_url_scheme': 'web.err_messaging_button_url_scheme',
+  'messaging.split_bound_invalid': 'web.err_messaging_split_bound_invalid',
   'notification_center.not_found': 'web.err_notification_center_not_found',
   'ops_group.bot_not_available': 'web.err_ops_group_bot_not_available',
   'ops_group.not_connected': 'web.err_ops_group_not_connected',
@@ -443,8 +445,10 @@ export const ERROR_TEXT = {
   'platform.tenant_context_missing': 'web.err_platform_tenant_context_missing',
   'platform.tenant_not_found': 'web.err_platform_tenant_not_found',
   'platform.unknown_event_type': 'web.err_platform_unknown_event_type',
+  'qr.margin_invalid': 'web.err_qr_margin_invalid',
   'qr.scale_invalid': 'web.err_qr_scale_invalid',
   'qr.text_empty': 'web.err_qr_text_empty',
+  'qr.text_too_long': 'web.err_qr_text_too_long',
   'recovery.already_active': 'web.err_recovery_already_active',
   'recovery.confirmation_invalid': 'web.err_recovery_confirmation_invalid',
   'recovery.legacy_migration_active': 'web.err_recovery_legacy_migration_active',
@@ -554,7 +558,33 @@ export const ERROR_TEXT = {
   WRONG_API_KEY_KIND: 'web.err_tonpays_wrong_api_key_kind',
 } as const satisfies Record<ContractErrorCode, WebKey>;
 
-const ERROR_TEXT_LOOKUP: Readonly<Record<string, WebKey>> = ERROR_TEXT;
+/**
+ * The codes the API raises from catalogues that live in `apps/api` rather than in
+ * `@nexa/contracts` — the business-chat conversation (`BUSINESS_CHAT_ERROR_CODES`), the
+ * support assistant (`SUPPORT_ASSIST_ERROR_CODES`) and its configuration
+ * (`SUPPORT_AI_ERROR_CODES`). The Web Admin cannot import them, so they are keyed by their
+ * strings here; `tests/web/error-text.test.tsx` walks the API's own raise sites, so a code
+ * raised there and missing from both tables fails the suite.
+ */
+export const API_LOCAL_ERROR_TEXT = {
+  'business_chats.connection_unusable': 'web.bchat_fault_connection',
+  'business_chats.idempotency_payload_mismatch': 'web.bchat_fault_retry',
+  'business_chats.not_found': 'web.bchat_fault_not_found',
+  'business_chats.not_in_state': 'web.bchat_fault_not_in_state',
+  'support_ai.credential_missing': 'web.sai_fault_credential_missing',
+  'support_ai.draft_not_found': 'web.assist_fault_not_found',
+  'support_ai.draft_not_ready': 'web.assist_fault_not_ready',
+  'support_ai.off': 'web.assist_fault_off',
+  'support_ai.region_not_applicable': 'web.sai_fault_region',
+  'support_ai.test_too_soon': 'web.sai_fault_test_too_soon',
+  'support_ai.unknown_provider': 'web.sai_fault_unknown_provider',
+  'support_ai.version_conflict': 'web.sai_fault_conflict',
+} as const satisfies Readonly<Record<string, WebKey>>;
+
+const ERROR_TEXT_LOOKUP: Readonly<Record<string, WebKey>> = {
+  ...ERROR_TEXT,
+  ...API_LOCAL_ERROR_TEXT,
+};
 
 /**
  * Codes that say nothing about WHAT was refused. The HTTP status says more, so it is asked
