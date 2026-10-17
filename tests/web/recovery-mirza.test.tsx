@@ -1028,13 +1028,9 @@ describe('the report in Persian', () => {
       'href',
       '/legacy-services?reviewState=ALL',
     );
-    expect(
-      screen.getByRole('link', { name: t('web.mrz_section_invoice_archive') }),
-    ).toHaveAttribute('href', '/legacy-invoices');
-    expect(screen.getByRole('link', { name: t('web.mrz_section_legacy_debts') })).toHaveAttribute(
-      'href',
-      '/legacy-debts?state=ALL',
-    );
+    // The archive-only pages are gone: those sections are named, and link nowhere.
+    expect(screen.queryByRole('link', { name: t('web.mrz_section_invoice_archive') })).toBeNull();
+    expect(screen.queryByRole('link', { name: t('web.mrz_section_legacy_debts') })).toBeNull();
     // A service outcome links to the candidates holding it.
     expect(screen.getByRole('link', { name: t('web.lsr_outcome_no_panel') })).toHaveAttribute(
       'href',

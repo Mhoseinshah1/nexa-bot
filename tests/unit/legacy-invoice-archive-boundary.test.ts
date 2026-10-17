@@ -25,7 +25,6 @@ const ARCHIVE_FILES = [
   'apps/api/src/modules/platform/legacy-importer/application/invoice-archive-read-set.ts',
   'apps/api/src/modules/platform/legacy-importer/application/invoice-archive-ingest.ts',
   'apps/api/src/legacy-import-invoices.ts',
-  'apps/api/src/surfaces/web/legacy-invoices.controller.ts',
 ];
 
 /** Modules whose code turns a fact into money, a service or a figure on a report. */
@@ -90,17 +89,6 @@ describe('the legacy invoice archive is history, not business', () => {
       ),
     );
     expect(offenders).toEqual([]);
-  });
-
-  it('the HTTP surface is read-only: no write route reaches the archive', () => {
-    const controller = readFileSync(
-      'apps/api/src/surfaces/web/legacy-invoices.controller.ts',
-      'utf8',
-    );
-    expect(controller).toMatch(/@Get\(/u);
-    expect(controller).not.toMatch(/@(Post|Put|Patch|Delete)\(/u);
-    // ... and it reaches neither the importer nor its review queue nor the adoption.
-    expect(controller).not.toMatch(/legacy-importer|legacy-adoption|legacyImporter\(/u);
   });
 
   it('the historical price stays metadata: nothing in the archive sums or prices it', () => {

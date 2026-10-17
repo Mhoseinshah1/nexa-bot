@@ -52,13 +52,10 @@ import { AuditLogController } from './surfaces/web/audit-log.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServiceRefundRequestsController } from './surfaces/web/service-refund-requests.controller.js';
 import { LegacyProductsController } from './surfaces/web/legacy-products.controller.js';
-import { LegacyDebtsController } from './surfaces/web/legacy-debts.controller.js';
 import { LegacyServicesController } from './surfaces/web/legacy-services.controller.js';
 import { LegacyCutoverController } from './surfaces/web/legacy-cutover.controller.js';
 import { LegacyMigrationController } from './surfaces/web/legacy-migration.controller.js';
-import { LegacyInvoicesController } from './surfaces/web/legacy-invoices.controller.js';
 import { LegacyHistoryController } from './surfaces/web/legacy-history.controller.js';
-import { LegacyRecordsController } from './surfaces/web/legacy-records.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
 import { RecoveryController } from './surfaces/web/recovery.controller.js';
@@ -163,13 +160,10 @@ export class AppModule implements NestModule {
         RefundsController as never,
         ServiceRefundRequestsController as never,
         LegacyProductsController as never,
-        LegacyDebtsController as never,
         LegacyServicesController as never,
         LegacyCutoverController as never,
         LegacyMigrationController as never,
-        LegacyInvoicesController as never,
         LegacyHistoryController as never,
-        LegacyRecordsController as never,
         ServicesController as never,
         PanelsController as never,
         RecoveryController as never,

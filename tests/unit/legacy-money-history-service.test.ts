@@ -220,13 +220,4 @@ describe('the money history is read-only by construction', () => {
       );
     }
   });
-
-  it('the HTTP route is a GET', () => {
-    const controller = readFileSync(
-      'apps/api/src/surfaces/web/legacy-history.controller.ts',
-      'utf8',
-    );
-    expect(controller).toMatch(/@Get\('users\/:id\/legacy-money-history'\)/u);
-    expect(controller).not.toMatch(/@(Post|Put|Patch|Delete)\(/u);
-  });
 });

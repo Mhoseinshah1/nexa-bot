@@ -66,13 +66,6 @@ import { ActionPanel } from '../ui/action-panel';
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
 import { CustomerCrmSection } from './customer-360-crm';
-// Mirza `.nxpkg` importer: the archived legacy history card (read only).
-import {
-  CustomerLegacyDebtCard,
-  CustomerLegacyHistoryCard,
-  CustomerLegacyInvoicesCard,
-} from './customer-360-legacy';
-import { CustomerLegacyMoneyCard } from './customer-360-legacy-money';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 // Roadmap B5: the workspace — attention, the newest rows, support, shortcuts.
 import {
@@ -203,11 +196,7 @@ export function UserDetailPage({
   mayViewPayments = false,
   mayViewTickets = false,
   mayViewBusinessChats = false,
-  mayViewLegacyHistory = false,
-  mayViewLegacyInvoices = false,
-  mayViewLegacyPii = false,
   mayViewLegacyServices = false,
-  mayViewLegacyDebts = false,
   denied,
 }: {
   id: string;
@@ -279,16 +268,8 @@ export function UserDetailPage({
   mayViewTickets?: boolean;
   /** `business_chats.view` — the handoff inbox shortcut. */
   mayViewBusinessChats?: boolean;
-  /** `legacy.history.view` — the archived Mirza history card; not drawn without it. */
-  mayViewLegacyHistory?: boolean;
-  /** `legacy.invoices.view` — the customer's Mirza invoices card; not drawn without it. */
-  mayViewLegacyInvoices?: boolean;
-  /** `legacy.invoices.pii.view` — the legacy owner filter on the archive link. */
-  mayViewLegacyPii?: boolean;
   /** `legacy.services.view` — the «migrated from Mirza» mark on the services card. */
   mayViewLegacyServices?: boolean;
-  /** `legacy.debts.view` — the customer's legacy debt beside the wallet. */
-  mayViewLegacyDebts?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -757,24 +738,8 @@ export function UserDetailPage({
                       mayDebit={mayDebit}
                       onAdjust={setWalletDialog}
                     />
-                    <CustomerLegacyDebtCard
-                      telegramUserId={row.telegramUserId}
-                      mayView={mayViewLegacyDebts}
-                    />
                   </div>
                   <FinancialSummaryCard customerId={id} />
-                  <CustomerLegacyInvoicesCard
-                    customerId={id}
-                    telegramUserId={row.telegramUserId}
-                    mayView={mayViewLegacyInvoices}
-                    mayViewPii={mayViewLegacyPii}
-                  />
-                  {/* The Mirza money history: evidence beside the money, never added to a balance. */}
-                  <CustomerLegacyMoneyCard
-                    customerId={id}
-                    // The response names the legacy debt: the server charges legacy.debts.view too.
-                    mayView={mayViewLegacyHistory && mayViewLegacyDebts}
-                  />
                 </div>
               )}
               {tab === 'controls' && (
@@ -822,7 +787,6 @@ export function UserDetailPage({
               {tab === 'timeline' && (
                 <div className="stack">
                   <TimelineCard customerId={id} mayView={mayViewAudit} />
-                  <CustomerLegacyHistoryCard customerId={id} mayView={mayViewLegacyHistory} />
                 </div>
               )}
             </TabPanel>

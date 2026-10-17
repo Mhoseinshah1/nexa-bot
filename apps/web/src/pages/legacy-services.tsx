@@ -6,6 +6,7 @@ import {
   LEGACY_SERVICE_OUTCOMES,
   LEGACY_SERVICE_REOPENABLE_STATES,
   LEGACY_SERVICE_REVIEW_STATES,
+  type LegacyInvoiceArchiveClass,
   type LegacyServiceCandidateDetailResponse,
   type LegacyServiceCandidateView,
   type LegacyServiceOutcome,
@@ -27,7 +28,6 @@ import { useLinkHandler, useRoute } from '../router';
 import { LegacyCode, NamedCode } from './code-name';
 import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 import { ListFilterBar } from '../ui/filter-bar';
-import { LEGACY_INVOICE_CLASS_LABELS } from './legacy-invoices';
 import {
   LEGACY_IMPORT_MAP_STATUS_LABELS,
   LEGACY_REVIEW_STATE_LABELS,
@@ -60,6 +60,17 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Drawer, Modal } from '../ui/overlays';
+
+/** The archived invoice's class, in words (the card shows what the importer kept of it). */
+const LEGACY_INVOICE_CLASS_LABELS: Readonly<Record<LegacyInvoiceArchiveClass, WebKey>> = {
+  KEY_SHAPE_UNRECOGNISED: 'web.lia_class_key_shape',
+  TEST: 'web.lia_class_test',
+  TEST_FLAG_INVALID: 'web.lia_class_test_flag_invalid',
+  ORPHAN_OWNER: 'web.lia_class_orphan',
+  NOT_LIVE: 'web.lia_class_not_live',
+  NO_PANEL: 'web.lia_class_no_panel',
+  LIVE_CANDIDATE: 'web.lia_class_live_candidate',
+};
 
 /**
  * Mirza migration PR5 — legacy service candidates (Area D; owner decision 8, 2026-10-07).

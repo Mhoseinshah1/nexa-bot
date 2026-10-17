@@ -3,7 +3,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   SESSION_COOKIE_NAME,
   legacyCustomerAdoptionsResponseSchema,
-  legacyCustomerInvoicesResponseSchema,
   type CorrelationId,
 } from '@nexa/contracts';
 import { LegacyHistoryController } from '../../apps/api/src/surfaces/web/legacy-history.controller';
@@ -29,7 +28,7 @@ const TG_A = '7000000101';
 const TG_B = '7000000102';
 const HASH = 'a'.repeat(64);
 
-type WebRequest = Parameters<LegacyHistoryController['invoices']>[0];
+type WebRequest = Parameters<LegacyHistoryController['adoptions']>[0];
 
 describe('Customer 360: legacy invoices and adoptions', () => {
   let ctx: TestContext;
@@ -41,10 +40,6 @@ describe('Customer 360: legacy invoices and adoptions', () => {
   let serviceB: string;
   const db = () => ctx.container.database.db;
   const id = () => ctx.container.ids.uuid();
-
-  async function q<T extends Record<string, unknown>>(query: ReturnType<typeof sql>) {
-    return (await db().execute<T>(query)).rows;
-  }
 
   async function archiveRun(tenantId: string, state: 'COMPLETED' | 'STAGING'): Promise<string> {
     const run = id();
@@ -150,15 +145,6 @@ describe('Customer 360: legacy invoices and adoptions', () => {
         VALUES (${tenantA.tenantId}, ${admin.id}, ${key}, 'GRANT', 'test')`);
     }
   }
-
-  const piiViews = async () =>
-    Number(
-      (
-        await q<{ n: string }>(
-          sql`SELECT count(*)::text AS n FROM audit_logs WHERE action = 'legacy.invoice_archive.pii_view'`,
-        )
-      )[0]?.n,
-    );
 
   beforeAll(async () => {
     ctx = await createTestContext();
@@ -274,98 +260,6 @@ describe('Customer 360: legacy invoices and adoptions', () => {
       live: true,
       user: TG_A,
     });
-  });
-
-  it('joins each latest visible invoice to its outcome: adopted, held for review, history', async () => {
-    const controller = new LegacyHistoryController(ctx.container);
-    const page = legacyCustomerInvoicesResponseSchema.parse(
-      await controller.invoices(await requestAs(owner), customerA, {}),
-    );
-    expect(page.invoices.map((row) => [row.invoiceKey, row.revision, row.status])).toEqual([
-      ['inv-a1', 1, 'active'],
-      ['inv-a2', 1, 'disablebyadmin'],
-      ['inv-a3', 2, 'removebyuser'],
-      ['inv-a4', 1, 'end_of_time'],
-    ]);
-    const [a1, a2, a3, a4] = page.invoices;
-    expect(a1?.candidate).toMatchObject({
-      outcome: 'ADOPTED',
-      reviewState: 'ADOPTED',
-      serviceId: serviceA,
-    });
-    expect(a2?.candidate).toMatchObject({
-      outcome: 'INVENTORY_INCOMPLETE',
-      blocker: 'TOTAL_CHANGED',
-      reviewState: 'OPEN',
-      serviceId: null,
-    });
-    expect(a3).toMatchObject({ classification: 'NOT_LIVE', live: false, candidate: null });
-    expect(a4).toMatchObject({ classification: 'NOT_LIVE', candidate: null });
-    expect(a1).toMatchObject({ priceMinor: '150000', priceCurrency: 'IRT', username: 'syn_a1' });
-    expect(page).toMatchObject({ piiRedacted: false, candidatesVisible: true, nextCursor: null });
-    // The owner's unredacted page is a reveal, audited once (ids and a count, no value).
-    expect(await piiViews()).toBe(1);
-    const audit = await q<{ after: Record<string, unknown> }>(
-      sql`SELECT after FROM audit_logs WHERE action = 'legacy.invoice_archive.pii_view'`,
-    );
-    expect(audit[0]?.after).toMatchObject({ customerId: customerA, count: 4 });
-    expect(JSON.stringify(audit[0]?.after)).not.toContain(TG_A);
-    expect(JSON.stringify(audit[0]?.after)).not.toContain('syn_a1');
-  });
-
-  it('pages by keyset and refuses a forged cursor or an oversized page', async () => {
-    const controller = new LegacyHistoryController(ctx.container);
-    const request = await requestAs(owner);
-    const first = legacyCustomerInvoicesResponseSchema.parse(
-      await controller.invoices(request, customerA, { limit: '3' }),
-    );
-    expect(first.invoices.map((row) => row.invoiceKey)).toEqual(['inv-a1', 'inv-a2', 'inv-a3']);
-    expect(first.nextCursor).not.toBeNull();
-    const second = legacyCustomerInvoicesResponseSchema.parse(
-      await controller.invoices(request, customerA, { limit: '3', after: first.nextCursor }),
-    );
-    expect(second.invoices.map((row) => row.invoiceKey)).toEqual(['inv-a4']);
-    expect(second.nextCursor).toBeNull();
-    await expect(
-      controller.invoices(request, customerA, { after: 'not-a-cursor' }),
-    ).rejects.toMatchObject({ kind: 'VALIDATION' });
-    await expect(controller.invoices(request, customerA, { limit: '51' })).rejects.toThrow();
-    await expect(controller.invoices(request, customerA, { other: '1' })).rejects.toThrow();
-  });
-
-  it('is charged on users.view and legacy.invoices.view; redacts the username and hides the outcomes without their keys', async () => {
-    const controller = new LegacyHistoryController(ctx.container);
-    // Without users.view the customer page itself is refused.
-    const stranger = await createAdmin(ctx.container, tenantA, { username: 'stranger-lci' });
-    await grant(stranger, 'legacy.invoices.view');
-    await expect(
-      controller.invoices(await requestAs(stranger), customerA, {}),
-    ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
-    const viewer = await createAdmin(ctx.container, tenantA, { username: 'viewer-lci' });
-    const request = await requestAs(viewer);
-    await grant(viewer, 'users.view');
-    await expect(controller.invoices(request, customerA, {})).rejects.toMatchObject({
-      kind: 'PERMISSION_DENIED',
-    });
-    await grant(viewer, 'legacy.invoices.view');
-    const redacted = legacyCustomerInvoicesResponseSchema.parse(
-      await controller.invoices(request, customerA, {}),
-    );
-    expect(redacted).toMatchObject({ piiRedacted: true, candidatesVisible: false });
-    expect(redacted.invoices).toHaveLength(4);
-    for (const row of redacted.invoices) {
-      expect(row.username).toBeNull();
-      expect(row.candidate).toBeNull();
-    }
-    expect(await piiViews()).toBe(0);
-    await grant(viewer, 'legacy.services.view');
-    const withOutcomes = legacyCustomerInvoicesResponseSchema.parse(
-      await controller.invoices(request, customerA, {}),
-    );
-    expect(withOutcomes.candidatesVisible).toBe(true);
-    expect(withOutcomes.invoices[0]?.candidate?.serviceId).toBe(serviceA);
-    expect(withOutcomes.invoices[0]?.username).toBeNull();
-    expect(await piiViews()).toBe(0);
   });
 
   it('is tenant-scoped: another tenant neither sees the customer nor lends its invoices', async () => {

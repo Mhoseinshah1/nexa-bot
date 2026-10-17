@@ -4,8 +4,6 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  SESSION_COOKIE_NAME,
-  legacyHistoryResponseSchema,
   systemJobActor,
   type ActorContext,
   type BotInstanceId,
@@ -19,7 +17,6 @@ import {
   HISTORY_FILES,
   LegacyHistoryIngestRefused,
 } from '../../apps/api/src/modules/platform/legacy-history/application/record-map';
-import { LegacyHistoryController } from '../../apps/api/src/surfaces/web/legacy-history.controller';
 import {
   SEED_IDS,
   adminActorFor,
@@ -467,72 +464,6 @@ describe('Mirza .nxpkg importer: the history archive', () => {
   }, 120_000);
 
   describe('the Customer 360 read', () => {
-    type WebRequest = Parameters<LegacyHistoryController['list']>[0];
-
-    async function requestAs(admin: SeededAdmin): Promise<WebRequest> {
-      const { token } = await ctx.container.auth.login(
-        tenantA,
-        {
-          type: 'API',
-          id: null,
-          label: null,
-          surface: 'WEB',
-          correlationId: 'hana-web' as CorrelationId,
-        },
-        { username: admin.username, password: admin.password },
-        { ip: '203.0.113.10', userAgent: 'vitest' },
-      );
-      return {
-        method: 'GET',
-        headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
-        ip: '203.0.113.10',
-      } as unknown as WebRequest;
-    }
-
-    async function grant(admin: SeededAdmin, ...keys: string[]) {
-      for (const key of keys) {
-        await db().execute(sql`
-          INSERT INTO admin_permission_overrides (tenant_id, admin_id, permission_key, effect, reason)
-          VALUES (${tenantA.tenantId}, ${admin.id}, ${key}, 'GRANT', 'test')`);
-      }
-    }
-
-    it('the owner reads the history, grouped counts and pages; unredacted and audited', async () => {
-      await run(standard());
-      const controller = new LegacyHistoryController(ctx.container);
-      const request = await requestAs(owner);
-      const page = legacyHistoryResponseSchema.parse(
-        await controller.list(request, customerA, { limit: '2' }),
-      );
-      // A: two payments, one service operation (the archive row's id_user is not a link).
-      expect(page.matching).toBe(3);
-      expect(page.byType).toEqual([
-        { recordType: 'payment', count: 2 },
-        { recordType: 'service_operation', count: 1 },
-      ]);
-      expect(page.items).toHaveLength(2);
-      expect(page.piiRedacted).toBe(false);
-      expect(page.items[0]?.legacyUserId).toBe(TG_A);
-      expect(page.invoiceArchive).toEqual({ invoices: 0 });
-      expect(page.walletDebts).toEqual({ debts: 0 });
-      const next = legacyHistoryResponseSchema.parse(
-        await controller.list(request, customerA, { limit: '2', offset: '2' }),
-      );
-      expect(next.items).toHaveLength(1);
-      const onlyOps = legacyHistoryResponseSchema.parse(
-        await controller.list(request, customerA, { type: 'service_operation' }),
-      );
-      expect(onlyOps.matching).toBe(1);
-      expect(onlyOps.items[0]?.summary).toMatchObject({ operation: 'RENEWAL', status: 'PAID' });
-      const reveals = await q<{ n: string }>(
-        sql`SELECT count(*)::text AS n FROM audit_logs WHERE action = 'legacy.history.pii_view'`,
-      );
-      expect(Number(reveals[0]?.n)).toBe(3);
-      // Bounded: a page above the maximum is refused.
-      await expect(controller.list(request, customerA, { limit: '101' })).rejects.toThrow();
-      await expect(controller.list(request, customerA, { type: 'nope' })).rejects.toThrow();
-    });
-
     // Live data (2026-10-16): 47 ticket messages were listed for their ticket's customer, but
     // every `ticketRecordId` was NULL — the select field's outer columns were rendered
     // unqualified and resolved inside the sub-select. Shaped like the real records: the ticket
@@ -591,75 +522,6 @@ describe('Mirza .nxpkg importer: the history archive', () => {
       );
       expect(page.matching).toBe(2);
       expect(page.items.every((item) => item.legacyUserId === TG_B)).toBe(true);
-    });
-
-    it('redacts personal fields without the PII key, and refuses without legacy.history.view', async () => {
-      await run(standard());
-      const viewer = await createAdmin(ctx.container, tenantA, { username: 'viewer-hana' });
-      await grant(viewer, 'users.view');
-      const controller = new LegacyHistoryController(ctx.container);
-      const request = await requestAs(viewer);
-      await expect(controller.list(request, customerA, {})).rejects.toMatchObject({
-        kind: 'PERMISSION_DENIED',
-      });
-      await grant(viewer, 'legacy.history.view');
-      const page = legacyHistoryResponseSchema.parse(await controller.list(request, customerA, {}));
-      expect(page.piiRedacted).toBe(true);
-      expect(page.invoiceArchive).toBeNull();
-      expect(page.walletDebts).toBeNull();
-      expect(page.matching).toBe(3);
-      for (const item of page.items) {
-        expect(item.legacyUserId).toBeNull();
-        expect(JSON.stringify(item.payload)).not.toContain(TG_A);
-      }
-      // An allowlist per type: only codes, amounts, counts, flags and times survive.
-      const op = page.items.find((item) => item.recordType === 'service_operation');
-      expect(op?.redacted).toEqual([
-        'operation_type.raw',
-        'owner.raw',
-        'owner.telegram_user_id',
-        'panel_account_username',
-        'status.raw',
-      ]);
-      expect(op?.payload).toEqual({
-        record_type: 'legacy_service_operation',
-        schema: 'mirza.service_other.v1',
-        idempotency_key: 'legacy:service-op:1',
-        owner: { role: 'OWNER' },
-        operation_type: { normalized: 'RENEWAL' },
-        status: { normalized: 'PAID' },
-        amount: { amount_minor: '20000', currency: 'IRT', applied: false },
-        provision: false,
-        affects_wallet: false,
-        applies_to_live_state: false,
-        creates_payment: false,
-      });
-      expect(op?.summary).toMatchObject({ operation: 'RENEWAL', status: 'PAID' });
-      const archive = page.items.find((item) => item.recordType === 'archive_row');
-      if (archive !== undefined) {
-        expect(archive.payload).not.toHaveProperty('fields');
-        expect(archive.redacted).toContain('fields');
-      }
-      const reveals = await q<{ n: string }>(
-        sql`SELECT count(*)::text AS n FROM audit_logs WHERE action = 'legacy.history.pii_view'`,
-      );
-      expect(Number(reveals[0]?.n)).toBe(0);
-
-      // Without users.view the customer page itself is refused.
-      const stranger = await createAdmin(ctx.container, tenantA, { username: 'stranger-hana' });
-      await grant(stranger, 'legacy.history.view');
-      await expect(controller.list(await requestAs(stranger), customerA, {})).rejects.toMatchObject(
-        { kind: 'PERMISSION_DENIED' },
-      );
-      // An unknown customer is not found, not empty.
-      await expect(
-        ctx.container.legacyHistoryRead.forCustomer(
-          tenantA,
-          ownerActor,
-          ctx.container.ids.uuid(),
-          {},
-        ),
-      ).rejects.toMatchObject({ kind: 'NOT_FOUND' });
     });
   });
 });

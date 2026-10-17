@@ -57,10 +57,7 @@ import { SupportAiPage } from './pages/support-ai';
 import { SupportAnalyticsPage } from './pages/support-analytics';
 import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
 import { LegacyProductsPage } from './pages/legacy-products';
-import { LegacyInvoicesPage } from './pages/legacy-invoices';
-import { LegacyDebtsPage } from './pages/legacy-debts';
 import { LegacyServicesPage } from './pages/legacy-services';
-import { LegacyRecordsPage } from './pages/legacy-records';
 import { LegacyCutoverPage } from './pages/legacy-cutover';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
@@ -193,14 +190,8 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/product-categories',
   // Mirza PR2: the legacy product review.
   '/legacy-products',
-  // Mirza PR3: the legacy invoice archive (read-only).
-  '/legacy-invoices',
-  // Mirza PR4: legacy wallet debts held for the owner's review.
-  '/legacy-debts',
   // Mirza PR5: legacy service candidates — one outcome each — and their review.
   '/legacy-services',
-  // The whole Mirza history archive, read only (global records included).
-  '/legacy-records',
   // Mirza PR6: the owner's cutover approval of one legacy snapshot.
   '/legacy-cutover',
   // Phase 7: the Mirza restore moved into «بکاپ و بازیابی»; served as a redirect so old links land.
@@ -378,11 +369,7 @@ export function resolve(
           mayViewPayments={may('payments.view')}
           mayViewTickets={may('tickets.view')}
           mayViewBusinessChats={may('business_chats.view')}
-          mayViewLegacyHistory={may('legacy.history.view')}
-          mayViewLegacyInvoices={may('legacy.invoices.view')}
-          mayViewLegacyPii={may('legacy.invoices.pii.view')}
           mayViewLegacyServices={may('legacy.services.view')}
-          mayViewLegacyDebts={may('legacy.debts.view')}
           denied={!may('users.view')}
         />
       ),
@@ -458,40 +445,6 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.lpr_title') }],
       title: t('web.lpr_title'),
-    };
-  }
-  // «سوابق و تنظیمات میرزا»: the whole history archive, read only.
-  if (route.path === '/legacy-records') {
-    return {
-      element: <LegacyRecordsPage denied={!may('legacy.history.view')} />,
-      crumbs: [{ label: t('web.lrec_title') }],
-      title: t('web.lrec_title'),
-    };
-  }
-  // Mirza PR3: the legacy invoice archive (read-only; personal data behind its own key).
-  if (route.path === '/legacy-invoices') {
-    return {
-      element: (
-        <LegacyInvoicesPage
-          denied={!may('legacy.invoices.view')}
-          mayViewPii={may('legacy.invoices.pii.view')}
-        />
-      ),
-      crumbs: [{ label: t('web.lia_title') }],
-      title: t('web.lia_title'),
-    };
-  }
-  // Mirza PR4: legacy wallet debts (a decision is a label; it moves no money).
-  if (route.path === '/legacy-debts') {
-    return {
-      element: (
-        <LegacyDebtsPage
-          denied={!may('legacy.debts.view')}
-          mayDecide={may('legacy.debts.decide')}
-        />
-      ),
-      crumbs: [{ label: t('web.lwd_title') }],
-      title: t('web.lwd_title'),
     };
   }
   // Mirza PR5: legacy service candidates (an ADOPT here is an approval; a run executes it).
@@ -616,7 +569,6 @@ export function resolve(
           mayDecideRefundRequests={may('refunds.issue') && may('services.terminate')}
           /* Program §13: an operator's free traffic or time. */
           mayGrant={may('services.grant')}
-          mayViewLegacyHistory={may('legacy.history.view')}
         />
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],
