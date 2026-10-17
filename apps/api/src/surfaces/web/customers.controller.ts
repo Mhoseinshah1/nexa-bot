@@ -71,6 +71,7 @@ export class CustomersController {
       ...(query.status === undefined ? {} : { status: query.status }),
       ...(query.q === undefined ? {} : { q: query.q }),
       ...(query.tag === undefined ? {} : { tag: query.tag }),
+      ...(query.source === undefined ? {} : { source: query.source }),
     });
     const text = page.q === undefined ? null : classifyListSearch(page.q);
     const result = await this.container.customers.list(scope, actor, {
@@ -82,6 +83,7 @@ export class CustomersController {
         ...(page.telegramUserId === undefined ? {} : { telegramUserId: page.telegramUserId }),
         ...(page.username === undefined ? {} : { usernamePrefix: page.username }),
         ...(page.status === undefined ? {} : { status: page.status }),
+        ...(page.source === undefined ? {} : { source: page.source }),
         ...(text === null ? {} : { text }),
         // Program §8: a filter beside `status`, by the tag's id. `users.view` alone.
         ...(page.tag === undefined ? {} : { tagId: page.tag.toLowerCase() }),
@@ -183,6 +185,7 @@ function toSummary(record: CustomerRecord): CustomerSummaryResponse {
     lastName: record.lastName,
     languageCode: record.languageCode,
     status: record.status,
+    source: record.source,
     firstSeenAt: record.firstSeenAt.toISOString(),
     lastSeenAt: record.lastSeenAt.toISOString(),
     blockedAt: record.blockedAt === null ? null : record.blockedAt.toISOString(),

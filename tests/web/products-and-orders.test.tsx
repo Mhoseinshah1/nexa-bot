@@ -8,6 +8,7 @@ import { resolve } from '../../apps/web/src/app';
 import { categoryListing, order, panel, product, renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
 
 /**
  * Products and Orders, rendered against the shapes the server actually returns.
@@ -1079,5 +1080,76 @@ describe('the two routes', () => {
     await waitFor(() => {
       expect(within(view.container).queryByText('پلن یک‌ماهه')).toBeNull();
     });
+  });
+});
+
+describe('rows imported from Mirza', () => {
+  const NATIVE_PRODUCT = product({ id: '019220ab-cdef-7012-8345-6789abcdef0a', title: 'پلن بومی' });
+  const IMPORTED_PRODUCT = product({
+    id: '019220ab-cdef-7012-8345-6789abcdef0b',
+    title: 'پلن میرزا',
+    source: 'MIRZA',
+  });
+  const NATIVE_ORDER = order({
+    id: '019230ab-cdef-7012-8345-6789abcdef0a',
+    lineTitle: 'سفارش بومی',
+  });
+  const IMPORTED_ORDER = order({
+    id: '019230ab-cdef-7012-8345-6789abcdef0b',
+    lineTitle: 'سفارش میرزا',
+    source: 'MIRZA',
+  });
+
+  it('marks only the imported product', async () => {
+    stubApi(productList([NATIVE_PRODUCT, IMPORTED_PRODUCT]));
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('پلن میرزا');
+    expect(rowHasBadge('پلن میرزا')).toBe(true);
+    expect(rowHasBadge('پلن بومی')).toBe(false);
+  });
+
+  it('marks only the imported order', async () => {
+    stubApi(orderList([NATIVE_ORDER, IMPORTED_ORDER]));
+    renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
+    await screen.findByText('سفارش میرزا');
+    expect(rowHasBadge('سفارش میرزا')).toBe(true);
+    expect(rowHasBadge('سفارش بومی')).toBe(false);
+  });
+
+  it('sends the products «منبع» filter', async () => {
+    window.history.replaceState(null, '', '/products');
+    stubApi(productList([NATIVE_PRODUCT, IMPORTED_PRODUCT]));
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('پلن بومی');
+    pickMirzaSource();
+    expect(await sourceInUrl()).toBe('MIRZA');
+
+    const again = stubApi(productList([IMPORTED_PRODUCT]));
+    renderPage(
+      <ProductsPage
+        route={{ path: '/products', query: new URLSearchParams({ source: 'MIRZA' }) }}
+        mayEdit
+        denied={false}
+      />,
+    );
+    await waitFor(() => expect(requestsWithSource(again.calls, '/products', 'MIRZA')).toBe(1));
+  });
+
+  it('sends the orders «منبع» filter', async () => {
+    window.history.replaceState(null, '', '/orders');
+    stubApi(orderList([NATIVE_ORDER, IMPORTED_ORDER]));
+    renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
+    await screen.findByText('سفارش بومی');
+    pickMirzaSource();
+    expect(await sourceInUrl()).toBe('MIRZA');
+
+    const again = stubApi(orderList([IMPORTED_ORDER]));
+    renderPage(
+      <OrdersPage
+        route={{ path: '/orders', query: new URLSearchParams({ source: 'MIRZA' }) }}
+        denied={false}
+      />,
+    );
+    await waitFor(() => expect(requestsWithSource(again.calls, '/orders', 'MIRZA')).toBe(1));
   });
 });

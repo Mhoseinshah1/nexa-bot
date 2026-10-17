@@ -48,6 +48,7 @@ import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import { listSearchQuerySchema } from './list-search.js';
+import { DEFAULT_RECORD_SOURCE, recordSourceSchema } from './record-source.js';
 import {
   CASHBACK_PERCENT_MAX,
   CASHBACK_PERCENT_MIN,
@@ -2062,6 +2063,12 @@ export const CUSTOMER_BLOCK_REASON_MAX_LENGTH = 500;
  */
 export const customerSummarySchema = z.object({
   id: z.string(),
+  /**
+   * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
+   * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
+   * parsing; the API always sends it.
+   */
+  source: recordSourceSchema.default(DEFAULT_RECORD_SOURCE),
   telegramUserId: z.string(),
   username: z.string().nullable(),
   firstName: z.string().nullable(),
@@ -2107,6 +2114,8 @@ export type CustomerSummaryResponse = z.infer<typeof customerSummarySchema>;
 export const customerListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(CUSTOMER_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
+  /** Only rows from this source (the «منبع» filter). */
+  source: recordSourceSchema.optional(),
   /*
    * The CONTRACT's own Telegram-id schema, not "any short string".
    *
@@ -2215,6 +2224,12 @@ export const PRODUCT_PAGE_MAX = 100;
 export const productSummarySchema = z
   .object({
     id: z.string(),
+    /**
+     * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
+     * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
+     * parsing; the API always sends it.
+     */
+    source: recordSourceSchema.default(DEFAULT_RECORD_SOURCE),
     title: z.string(),
     description: z.string().nullable(),
     status: z.enum(PRODUCT_STATUSES),
@@ -2361,6 +2376,8 @@ export type ProductWriteRequest = z.infer<typeof productWriteSchema>;
 export const productListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(PRODUCT_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
+  /** Only rows from this source (the «منبع» filter). */
+  source: recordSourceSchema.optional(),
   status: z.enum(PRODUCT_STATUSES).optional(),
   audience: z.enum(PRODUCT_AUDIENCES).optional(),
   title: z.string().max(PRODUCT_TITLE_MAX_LENGTH).optional(),
@@ -2719,6 +2736,12 @@ const minorAmountSchema = z.string().regex(/^\d{1,19}$/u);
  */
 export const discountSummarySchema = z.object({
   id: z.string(),
+  /**
+   * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
+   * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
+   * parsing; the API always sends it.
+   */
+  source: recordSourceSchema.default(DEFAULT_RECORD_SOURCE),
   kind: z.enum(DISCOUNT_KINDS),
   code: z.string().nullable(),
   label: z.string(),
@@ -2837,6 +2860,8 @@ export type DiscountWriteRequest = z.infer<typeof discountWriteSchema>;
 export const discountListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(DISCOUNT_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
+  /** Only rows from this source (the «منبع» filter). */
+  source: recordSourceSchema.optional(),
   kind: z.enum(DISCOUNT_KINDS).optional(),
   status: z.enum(DISCOUNT_STATUSES).optional(),
 });
@@ -3317,6 +3342,12 @@ export type ResellerTierResponse = z.infer<typeof resellerTierResponseSchema>;
 
 export const resellerSummarySchema = z.object({
   customerId: z.string(),
+  /**
+   * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
+   * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
+   * parsing; the API always sends it.
+   */
+  source: recordSourceSchema.default(DEFAULT_RECORD_SOURCE),
   telegramUserId: z.string(),
   displayName: z.string().nullable(),
   tier: z.object({ id: z.string(), name: z.string() }),
@@ -3349,6 +3380,8 @@ export type ResellerSummaryResponse = z.infer<typeof resellerSummarySchema>;
 export const resellerListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(RESELLER_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
+  /** Only rows from this source (the «منبع» filter). */
+  source: recordSourceSchema.optional(),
   status: z.enum(RESELLER_STATUSES).optional(),
   tierId: uuidV7Schema.optional(),
   /** A Telegram user id (digits) or part of a display name. */
@@ -3786,6 +3819,12 @@ export const ORDER_PAGE_MAX = 100;
  */
 export const orderSummarySchema = z.object({
   id: z.string(),
+  /**
+   * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
+   * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
+   * parsing; the API always sends it.
+   */
+  source: recordSourceSchema.default(DEFAULT_RECORD_SOURCE),
   customerId: z.string(),
   state: z.enum(ORDER_STATES),
   /**
@@ -3850,6 +3889,8 @@ export type OrderSummaryResponse = z.infer<typeof orderSummarySchema>;
 export const orderListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(ORDER_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
+  /** Only rows from this source (the «منبع» filter). */
+  source: recordSourceSchema.optional(),
   state: z.enum(ORDER_STATES).optional(),
   /*
    * Checked as IDS, not as bounded strings.
@@ -4345,6 +4386,12 @@ export type PaymentGatewaySignal = z.infer<typeof paymentGatewaySignalSchema>;
  */
 export const paymentSummarySchema = z.object({
   id: z.string(),
+  /**
+   * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
+   * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
+   * parsing; the API always sends it.
+   */
+  source: recordSourceSchema.default(DEFAULT_RECORD_SOURCE),
   customerId: z.string(),
   orderId: z.string().nullable(),
   state: z.enum(PAYMENT_STATES),
@@ -4542,6 +4589,8 @@ export const paymentListQuerySchema = z
   .object({
     limit: z.coerce.number().int().positive().max(PAYMENT_PAGE_MAX).optional(),
     cursor: z.string().min(1).max(255).optional(),
+    /** Only rows from this source (the «منبع» filter). */
+    source: recordSourceSchema.optional(),
     state: z.enum(PAYMENT_STATES).optional(),
     /** Only payments whose receipt left review this way (WP10 follow-up §5). */
     disposition: z.enum(RECEIPT_DISPOSITIONS).optional(),
@@ -5713,6 +5762,12 @@ export const SERVICE_PAGE_MAX = 100;
  */
 export const serviceSummarySchema = z.object({
   id: z.string(),
+  /**
+   * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
+   * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
+   * parsing; the API always sends it.
+   */
+  source: recordSourceSchema.default(DEFAULT_RECORD_SOURCE),
   customerId: z.string(),
   orderId: z.string(),
   panelId: z.string(),
@@ -5869,6 +5924,8 @@ export type ServiceDetailResponse = z.infer<typeof serviceDetailSchema>;
 export const serviceListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(SERVICE_PAGE_MAX).optional(),
   cursor: z.string().min(1).max(255).optional(),
+  /** Only rows from this source (the «منبع» filter). */
+  source: recordSourceSchema.optional(),
   state: z.enum(SERVICE_STATES).optional(),
   deliveryState: z.enum(SERVICE_DELIVERY_STATES).optional(),
   /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */

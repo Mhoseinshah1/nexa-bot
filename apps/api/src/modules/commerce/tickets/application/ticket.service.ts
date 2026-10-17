@@ -43,6 +43,7 @@ import {
   type TicketPriority,
   type TicketReplyAttachment,
   type TicketReplyFileMimeType,
+  type RecordSource,
   type TicketStatus,
   type TicketSystemEvent,
   type UnitOfWork,
@@ -737,6 +738,7 @@ export class TicketService {
     actor: ActorContext,
     query: {
       readonly status?: TicketStatus;
+      readonly source?: RecordSource;
       /** Roadmap B5/B6 (review N1): only tickets whose next word is support's. */
       readonly awaitingSupport?: boolean;
       readonly categoryId?: string;
@@ -759,6 +761,7 @@ export class TicketService {
             : (query.assigned as AdminId);
     return this.deps.tickets.list(scope, {
       ...(query.status === undefined ? {} : { status: query.status }),
+      ...(query.source === undefined ? {} : { source: query.source }),
       ...(query.awaitingSupport === true ? { statuses: TICKET_AWAITING_SUPPORT_STATUSES } : {}),
       ...(query.categoryId === undefined
         ? {}

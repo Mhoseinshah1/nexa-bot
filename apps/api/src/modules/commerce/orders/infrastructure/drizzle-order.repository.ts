@@ -11,7 +11,13 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
-import { money, priceQuoteWireSchema, type ListSearchTerm, type PriceQuote } from '@nexa/contracts';
+import {
+  money,
+  priceQuoteWireSchema,
+  type ListSearchTerm,
+  type PriceQuote,
+  type RecordSource,
+} from '@nexa/contracts';
 import { priceQuoteToWire } from '../application/order-pricing.js';
 import type {
   CurrencyCode,
@@ -224,6 +230,7 @@ export class DrizzleOrderRepository implements OrderRepository {
     if (search.state !== undefined) conditions.push(eq(orders.state, search.state));
     if (search.customerId !== undefined) conditions.push(eq(orders.customerId, search.customerId));
     if (search.productId !== undefined) conditions.push(eq(orders.productId, search.productId));
+    if (search.source !== undefined) conditions.push(eq(orders.source, search.source));
     if (search.text !== undefined) {
       conditions.push(orderTextCondition(tenantId, search.text, productIds));
     }
@@ -491,6 +498,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     id: row.id as OrderId,
     customerId: row.customerId as UserId,
     state: row.state as OrderState,
+    source: row.source as RecordSource,
     purpose: row.purpose as OrderPurpose,
     origin: row.origin as OrderOrigin,
     line: {

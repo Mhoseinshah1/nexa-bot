@@ -2,6 +2,7 @@ import type {
   CustomerProfileFacts,
   ListSearchTerm,
   CustomerStatus,
+  RecordSource,
   ScopeContext,
   TenantContext,
   UserId,
@@ -22,6 +23,8 @@ export interface CustomerRecord {
   readonly lastName: string | null;
   readonly languageCode: string | null;
   readonly status: CustomerStatus;
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   readonly firstBotInstanceId: BotInstanceId | null;
   readonly firstSeenAt: Date;
   readonly lastSeenAt: Date;
@@ -121,6 +124,8 @@ export interface CustomerSearch {
    */
   readonly username?: string;
   readonly status?: CustomerStatus;
+  /** Only rows from this source (the source filter). */
+  readonly source?: RecordSource;
   /**
    * The list's ONE free-text search (spec §10), already classified. A Telegram id and a
    * uuid match EXACTLY; `@name` is a username prefix; other text is a prefix of the

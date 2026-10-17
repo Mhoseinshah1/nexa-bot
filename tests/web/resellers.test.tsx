@@ -29,6 +29,7 @@ import {
 } from './harness';
 import { openFilterPanel } from './ui-helpers';
 import { openC360Tab } from './c360-helpers';
+import { pickMirzaSource, requestsWithSource, rowHasBadge } from './source-helpers';
 
 /**
  * WP9-B on the Web Admin: the Resellers page, the Tiers page and its grants editor, the
@@ -1526,5 +1527,33 @@ describe('a reseller write whose answer was lost keeps its key across close and 
     await send(2);
     const [first, second] = keysOf(api, '/grants');
     expect(second).toBe(first);
+  });
+});
+
+describe('rows imported from Mirza', () => {
+  const native = reseller({
+    customerId: '019210ab-cdef-7012-8345-6789abcdef0a',
+    displayName: 'Native Reseller',
+  });
+  const imported = reseller({
+    customerId: '019210ab-cdef-7012-8345-6789abcdef0b',
+    displayName: 'Imported Reseller',
+    source: 'MIRZA',
+  });
+
+  it('marks only the imported reseller', async () => {
+    stubApi(listRoutes([native, imported]));
+    renderList();
+    await screen.findByText('Imported Reseller');
+    expect(rowHasBadge('Imported Reseller')).toBe(true);
+    expect(rowHasBadge('Native Reseller')).toBe(false);
+  });
+
+  it('sends the «منبع» filter to the API', async () => {
+    const api = stubApi(listRoutes([native, imported]));
+    renderList();
+    await screen.findByText('Native Reseller');
+    pickMirzaSource();
+    await waitFor(() => expect(requestsWithSource(api.calls, '/resellers', 'MIRZA')).toBe(1));
   });
 });

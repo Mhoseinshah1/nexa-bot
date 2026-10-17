@@ -1,5 +1,5 @@
 import { and, asc, eq, getTableColumns, or, sql, type SQL } from 'drizzle-orm';
-import type { CustomerStatus, ListSearchTerm, UserId } from '@nexa/contracts';
+import type { CustomerStatus, ListSearchTerm, RecordSource, UserId } from '@nexa/contracts';
 import type { BotInstanceId, ScopeContext, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -264,6 +264,7 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     if (search.status !== undefined) {
       conditions.push(eq(customers.status, search.status));
     }
+    if (search.source !== undefined) conditions.push(eq(customers.source, search.source));
     if (search.text !== undefined) conditions.push(customerTextCondition(search.text));
     if (search.tagId !== undefined) conditions.push(customerTagCondition(tenantId, search.tagId));
     if (cursor !== null) {
@@ -409,6 +410,7 @@ function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
     lastName: row.lastName,
     languageCode: row.languageCode,
     status: row.status as CustomerStatus,
+    source: row.source as RecordSource,
     firstBotInstanceId: row.firstBotInstanceId as BotInstanceId | null,
     firstSeenAt: row.firstSeenAt,
     lastSeenAt: row.lastSeenAt,

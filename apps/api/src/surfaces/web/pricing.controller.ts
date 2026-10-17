@@ -68,6 +68,7 @@ export class PricingController {
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.kind === undefined ? {} : { kind: query.kind }),
       ...(query.status === undefined ? {} : { status: query.status }),
+      ...(query.source === undefined ? {} : { source: query.source }),
     });
     const result = await this.container.discounts.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
@@ -75,6 +76,7 @@ export class PricingController {
       search: {
         ...(page.kind === undefined ? {} : { kind: page.kind }),
         ...(page.status === undefined ? {} : { status: page.status }),
+        ...(page.source === undefined ? {} : { source: page.source }),
       },
     });
     return {
@@ -370,6 +372,7 @@ function toDiscountSummary(listing: DiscountListing): DiscountSummaryResponse {
   const rule = listing.rule;
   return {
     id: rule.id,
+    source: rule.source,
     kind: rule.kind,
     code: rule.code,
     label: rule.label,

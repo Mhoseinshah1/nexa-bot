@@ -60,6 +60,7 @@ export class TicketsController {
     // One row past the page, so "there is another page" is read, never guessed.
     const items = await this.container.tickets.list(scope, actor, {
       ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.source === undefined ? {} : { source: input.source }),
       ...(input.awaiting === 'support' ? { awaitingSupport: true } : {}),
       ...(input.categoryId === undefined ? {} : { categoryId: input.categoryId }),
       ...(input.customer === undefined ? {} : { customer: input.customer }),
@@ -329,6 +330,7 @@ function toSummary(item: TicketListItem): TicketSummary {
   const { ticket } = item;
   return {
     id: ticket.id,
+    source: ticket.source,
     number: ticket.number,
     status: ticket.status,
     priority: ticket.priority,

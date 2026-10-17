@@ -44,6 +44,7 @@ const PAYMENT_ID = '01a0fa00-0000-7000-8000-000000000001' as PaymentId;
 function payment(kind: 'ORDER' | 'TOPUP', overrides: Partial<PaymentRecord> = {}): PaymentRecord {
   return {
     id: PAYMENT_ID,
+    source: 'NEXA',
     customerId: '01a0fa00-0000-7000-8000-0000000000c1' as UserId,
     orderId: kind === 'ORDER' ? ('01a0fa00-0000-7000-8000-0000000000d1' as never) : null,
     state: 'PENDING',

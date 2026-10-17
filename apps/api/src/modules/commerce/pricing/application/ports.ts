@@ -1,4 +1,5 @@
 import type {
+  RecordSource,
   CashbackState,
   CurrencyCode,
   DiscountCodeCaptureCloseReason,
@@ -23,6 +24,8 @@ import type { CashbackRule, DiscountRule, DiscountUsage } from '../domain/pricin
  */
 
 export interface DiscountRuleRecord extends DiscountRule {
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -62,6 +65,8 @@ export interface DiscountRulePage {
 
 export interface DiscountRuleSearch {
   readonly kind?: DiscountKind;
+  /** Only rows from this source (the source filter). */
+  readonly source?: RecordSource;
   readonly status?: DiscountStatus;
 }
 

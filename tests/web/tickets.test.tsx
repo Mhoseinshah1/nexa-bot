@@ -14,6 +14,7 @@ import { HANDOFF_LABELS } from '../../apps/web/src/pages/handoff-labels';
 import { ticketViews } from '../../apps/web/src/pages/tickets';
 import { renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
+import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
 
 /**
  * WP-A7 — the Web Admin's ticket inbox and conversation. Fixtures go through the real API
@@ -206,9 +207,10 @@ describe('the ticket inbox', () => {
       name: t('web.ticket_filter_awaiting_support'),
     });
     expect(chip.getAttribute('aria-pressed')).toBe('true');
+    // «همه» is also the «منبع» filter's reset chip; the status filter is the first row.
     expect(
       within(panel)
-        .getByRole('button', { name: t('web.ticket_filter_all') })
+        .getAllByRole('button', { name: t('web.ticket_filter_all') })[0]!
         .getAttribute('aria-pressed'),
     ).toBe('false');
   });
@@ -231,6 +233,7 @@ describe('the ticket inbox', () => {
       assigned: 'me',
       from: '2026-09-01',
       to: '',
+      source: '',
     });
     window.history.replaceState(null, '', '/tickets?status=OPEN&customer=mary');
     views.set({ ...views.empty, assigned: 'none' });
@@ -871,5 +874,42 @@ describe('one ticket', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: t('web.ticket_links_save') })).toBeNull(),
     );
+  });
+});
+
+describe('rows imported from Mirza', () => {
+  const native = summary({ id: '019300ab-cdef-7012-8345-6789abcdef0a', number: 51 });
+  const imported = summary({
+    id: '019300ab-cdef-7012-8345-6789abcdef0b',
+    number: 52,
+    source: 'MIRZA',
+  });
+  const routes = (tickets: unknown[]) => [
+    { url: '/tickets', body: { tickets, nextCursor: null } },
+    { url: '/ticket-categories', body: categories },
+  ];
+  const page = (query = '') => (
+    <TicketsPage route={route(query)} denied={false} mayAssign={false} mayEditCategories={false} />
+  );
+
+  it('marks only the imported ticket', async () => {
+    stubApi(routes([native, imported]));
+    renderPage(page());
+    await screen.findByText('#52');
+    expect(rowHasBadge('#52')).toBe(true);
+    expect(rowHasBadge('#51')).toBe(false);
+  });
+
+  it('puts the «منبع» filter in the URL and asks the API for it', async () => {
+    window.history.replaceState(null, '', '/tickets');
+    stubApi(routes([native, imported]));
+    renderPage(page());
+    await screen.findByText('#51');
+    pickMirzaSource();
+    expect(await sourceInUrl()).toBe('MIRZA');
+
+    const again = stubApi(routes([imported]));
+    renderPage(page('source=MIRZA'));
+    await waitFor(() => expect(requestsWithSource(again.calls, '/tickets', 'MIRZA')).toBe(1));
   });
 });

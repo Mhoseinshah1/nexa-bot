@@ -1671,6 +1671,12 @@ export const WEB_FA = {
   'web.users_search_denied':
     'برای جست‌وجو به دسترسی users.search نیاز است. فهرست بدون جست‌وجو در دسترس شماست.',
   'web.users_filter_all': 'همه',
+  // The Mirza import's provenance (owner decision 2026-10-17): the row badge and the «منبع» filter.
+  'web.source_badge_mirza': 'از میرزا',
+  'web.source_filter': 'منبع',
+  'web.source_filter_all': 'همه',
+  'web.source_nexa': 'NEXA',
+  'web.source_mirza': 'میرزا',
   'web.user_telegram_id': 'شناسهٔ تلگرام',
   'web.user_username': 'نام کاربری',
   'web.user_name': 'نام',

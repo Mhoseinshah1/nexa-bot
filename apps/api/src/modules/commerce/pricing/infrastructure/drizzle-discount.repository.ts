@@ -7,6 +7,7 @@ import type {
   DiscountType,
   DiscountablePurpose,
   Money,
+  RecordSource,
   TenantContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -185,6 +186,7 @@ export class DrizzleDiscountRepository implements DiscountRepository {
     const conditions: SQL[] = [eq(discounts.tenantId, tenantId)];
     if (search.kind !== undefined) conditions.push(eq(discounts.kind, search.kind));
     if (search.status !== undefined) conditions.push(eq(discounts.status, search.status));
+    if (search.source !== undefined) conditions.push(eq(discounts.source, search.source));
     if (cursor !== null) {
       conditions.push(
         sql`(${discounts.createdAt}, ${discounts.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
@@ -394,6 +396,7 @@ function columnsOf(write: DiscountRuleWrite) {
 function toRecord(row: typeof discounts.$inferSelect): DiscountRuleRecord {
   return {
     id: row.id,
+    source: row.source as RecordSource,
     kind: row.kind as DiscountKind,
     code: row.code,
     label: row.label,

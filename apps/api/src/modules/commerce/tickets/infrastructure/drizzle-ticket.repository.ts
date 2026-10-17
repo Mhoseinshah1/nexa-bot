@@ -13,6 +13,7 @@ import {
   type TicketMessageSender,
   type TicketPriority,
   type TicketReplyFileMimeType,
+  type RecordSource,
   type TicketStatus,
   type TicketSystemEvent,
   type TicketOrigin,
@@ -109,6 +110,7 @@ type MessageRow = typeof ticketMessages.$inferSelect;
 function toTicket(row: TicketRow): TicketRecord {
   return {
     id: row.id as TicketId,
+    source: row.source as RecordSource,
     // An identity bounded far below 2^53 in any installation's lifetime.
     number: Number(row.number),
     customerId: row.customerId as UserId,
@@ -455,6 +457,7 @@ export class DrizzleTicketRepository implements TicketRepository {
         and(
           eq(tickets.tenantId, tenantId),
           filter.status === undefined ? undefined : eq(tickets.status, filter.status),
+          filter.source === undefined ? undefined : eq(tickets.source, filter.source),
           filter.statuses === undefined ? undefined : inArray(tickets.status, [...filter.statuses]),
           filter.categoryId === undefined ? undefined : eq(tickets.categoryId, filter.categoryId),
           filter.customerId === undefined ? undefined : eq(tickets.customerId, filter.customerId),
