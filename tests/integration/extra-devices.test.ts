@@ -472,6 +472,38 @@ describe('extra users / devices on an existing service (WP-A5)', () => {
     beforeAll(() => installDevicePanel());
     afterAll(() => uninstallDevicePanel());
 
+    it('refuses to confirm an action while the wallet is below zero, until it is topped up', async () => {
+      // Owner decision 2026-10-17: a negative Mirza balance (a DEBIT opening) blocks every
+      // purchase until a top-up, whatever rail would pay for it.
+      // MUTATION: removing the gate from CommercialActionService.confirm fails this.
+      const service = await activeService('negative');
+      const rate = await offeredRate('negative', 3);
+      const { order } = await draftDevices(service.id, rate, 1, 'negative');
+      const held = await balance();
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
+                                    currency, reference)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, 'DEBIT',
+                'MIGRATION_OPENING_BALANCE', ${(held + 10_000n).toString()}, 'IRT',
+                'legacy:opening:920920')`);
+      expect(await balance()).toBe(-10_000n);
+      await expect(confirmDevices(order.id, 'negative')).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.WALLET_NEGATIVE_TOP_UP_REQUIRED,
+      });
+      expect(await orderState(order.id)).toBe('DRAFT');
+
+      await ctx.container.wallet.adjust(tenantA, owner, customerA, {
+        idempotencyKey: 'dev-negative-topup',
+        direction: 'CREDIT',
+        amountMinor: 10_000n,
+        currency: 'IRT',
+        note: 'top-up',
+      });
+      expect(await balance()).toBe(0n);
+      await confirmDevices(order.id, 'negative-again');
+      expect(await orderState(order.id)).toBe('AWAITING_PAYMENT');
+    });
+
     it('offers it on the card, quotes the chosen count, snapshots it, and applies it once paid', async () => {
       const service = await activeService('happy');
       const rate = await offeredRate('happy', 3);

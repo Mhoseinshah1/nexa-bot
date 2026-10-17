@@ -707,6 +707,24 @@ describe('WP-A9 reminders', () => {
     expect(await count('wallet_threshold_alerts')).toBe(0);
   });
 
+  it('never tells a wallet taken low by the Mirza import’s DEBIT opening', async () => {
+    // Owner decision 2026-10-17: a negative Mirza balance is a DEBIT opening. The one-time
+    // import sends nobody a message, including an existing customer it takes below the line.
+    // MUTATION: dropping MIGRATION_OPENING_BALANCE from the crossing filter fails this.
+    await setFlag('wallet_low_balance_reminders', true);
+    expect(
+      await setSetting('wallet.low_balance.threshold', { amountMinor: '50000', currency: 'IRT' }),
+    ).toBeNull();
+    await ledger(customerA, 'CREDIT', 100_000n);
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
+                                  currency, reference)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, 'DEBIT',
+              'MIGRATION_OPENING_BALANCE', 130000, 'IRT', ${`legacy:opening:${key()}`})`);
+    expect(await walletPass()).toEqual({ alerts: 0 });
+    expect(await count('wallet_threshold_alerts')).toBe(0);
+  });
+
   it('never tells a wallet that never held the threshold', async () => {
     await setFlag('wallet_low_balance_reminders', true);
     expect(

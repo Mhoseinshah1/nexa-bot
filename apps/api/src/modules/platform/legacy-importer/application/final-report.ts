@@ -121,7 +121,8 @@ export function buildFinalReport(input: FinalReportInput) {
   let legacyTotal = 0n;
   for (const u of input.snapshot.users) legacyTotal += parseLegacyBalance(u.balance) ?? 0n;
   // Owner decision 6: only positive balances are ledger openings.
-  const imported = plan.wallet.positive.sumMinor;
+  // Owner decision 2026-10-17: every imported balance is one signed opening.
+  const imported = plan.wallet.positive.sumMinor + plan.wallet.negative.sumMinor;
   const expected = input.nativeTotalMinor + imported;
 
   // services
@@ -199,8 +200,8 @@ export function buildFinalReport(input: FinalReportInput) {
     userReview +
     userErrors +
     duplicateExtraRows;
-  // One opening per POSITIVE imported balance: a negative one is a debt, never an entry.
-  const nonZero = plan.wallet.positive.count;
+  // One opening per NON-ZERO imported balance: a CREDIT, or a DEBIT for a negative one.
+  const nonZero = plan.wallet.positive.count + plan.wallet.negative.count;
 
   return {
     schemaVersion: FINAL_REPORT_SCHEMA_VERSION,

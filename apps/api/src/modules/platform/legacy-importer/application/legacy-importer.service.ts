@@ -105,7 +105,6 @@ import type {
   LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
-  RecordedDebt,
 } from './ports.js';
 import { buildFinalReport } from './final-report.js';
 import { buildFinalReportV2 } from './final-report-v2.js';
@@ -339,9 +338,8 @@ interface Prepared {
   readonly review: PreparedReview;
   readonly inventories: ReadonlyMap<string, LegacyInventoryRead>;
   readonly salesCurrency: string;
-  /** What NEXA had recorded when the plan was made: signed openings, debt magnitudes. */
+  /** What NEXA had recorded when the plan was made: signed openings. */
   readonly existingOpenings: ReadonlyMap<string, bigint>;
-  readonly existingDebts: ReadonlyMap<string, RecordedDebt>;
 }
 
 export interface ApplyTallies {
@@ -360,14 +358,14 @@ export interface ApplyTallies {
     ALREADY_POSTED: number;
     ZERO_NO_ENTRY: number;
     CONFLICT: number;
+    /** Σ signed amount THIS run posted: credits minus debits. */
     postedSumMinor: bigint;
-    /** Mirza PR4 (owner decision 6): negative balances recorded as legacy debts, no entry. */
-    DEBT_RECORDED: number;
-    DEBT_ALREADY_RECORDED: number;
-    /** Σ magnitude of the debts THIS run recorded. */
-    debtRecordedSumMinor: bigint;
-    /** A ledger DEBIT opening from before owner decision 6: left as it is, never doubled. */
-    PRIOR_DEBIT_OPENING: number;
+    /** Σ of the CREDIT openings THIS run posted (positive Mirza balances). */
+    creditPostedSumMinor: bigint;
+    /** Σ magnitude of the DEBIT openings THIS run posted (negative Mirza balances). */
+    debitPostedSumMinor: bigint;
+    /** How many of `POSTED` were DEBITs (negative Mirza balances). */
+    debitPosted: number;
     /**
      * Importable users whose customer the customers phase did NOT write this run (its map row
      * refused it: a closed review, a changed source, another entity). No opening and no debt
@@ -465,9 +463,6 @@ export function applyAttention(tallies: ApplyTallies) {
     customerSourceChanged: tallies.customers.sourceChanged,
     customerEntityMismatch: tallies.customers.entityMismatch,
     openingConflict: tallies.openings.CONFLICT,
-    // A rehearsal target that ran the code before owner decision 6 holds a ledger DEBIT the
-    // decision forbids. Never rewritten here — and never reported as success either.
-    priorDebitOpening: tallies.openings.PRIOR_DEBIT_OPENING,
     trialConflict: tallies.trials.CONFLICT,
     invoiceMapRefused: tallies.services.map.REFUSED,
     adoptionFailed: tallies.services.adoption.FAILED,
@@ -627,14 +622,12 @@ export class LegacyImporterService {
       .filter((id) => /^[1-9][0-9]{0,18}$/u.test(id));
     const existingCustomers = await destination.customersByTelegramIds(scope, telegramIds);
     const existingIds = [...existingCustomers.values()];
-    const [existingOpenings, existingDebts, trialOverrides, trialDecided, tariffCandidates] =
-      await Promise.all([
-        destination.openingsByTelegramId(scope),
-        destination.debtsByTelegramId(scope),
-        destination.trialOverrides(scope, existingIds),
-        destination.trialDecided(scope, existingIds),
-        destination.tariffCandidates(scope),
-      ]);
+    const [existingOpenings, trialOverrides, trialDecided, tariffCandidates] = await Promise.all([
+      destination.openingsByTelegramId(scope),
+      destination.trialOverrides(scope, existingIds),
+      destination.trialDecided(scope, existingIds),
+      destination.tariffCandidates(scope),
+    ]);
 
     // The review first (it reads no panel): an operator's ADOPT approval names a panel the
     // matcher will ask, so its name is one the panel read must be able to decide.
@@ -674,7 +667,6 @@ export class LegacyImporterService {
       salesCurrency,
       existingCustomers,
       existingOpenings,
-      existingDebts,
       trialOverrides,
       trialDecided,
       existingShapes: new Map(),
@@ -692,7 +684,6 @@ export class LegacyImporterService {
       salesCurrency,
       existingCustomers,
       existingOpenings,
-      existingDebts,
       trialOverrides,
       trialDecided,
       existingShapes,
@@ -700,7 +691,7 @@ export class LegacyImporterService {
       inventories,
       review: review.inputs,
     });
-    return { plan, review, inventories, salesCurrency, existingOpenings, existingDebts };
+    return { plan, review, inventories, salesCurrency, existingOpenings };
   }
 
   /**
@@ -1215,10 +1206,9 @@ export class LegacyImporterService {
         ZERO_NO_ENTRY: 0,
         CONFLICT: 0,
         postedSumMinor: 0n,
-        DEBT_RECORDED: 0,
-        DEBT_ALREADY_RECORDED: 0,
-        debtRecordedSumMinor: 0n,
-        PRIOR_DEBIT_OPENING: 0,
+        creditPostedSumMinor: 0n,
+        debitPostedSumMinor: 0n,
+        debitPosted: 0,
         CUSTOMER_NOT_IMPORTED: 0,
         customerNotImportedPositiveSumMinor: 0n,
         customerNotImportedNegativeSumMinor: 0n,
@@ -2183,18 +2173,17 @@ export class LegacyImporterService {
           telegramUserId: who.telegramUserId,
           legacyBalanceMinor: planned.decision.balanceMinor,
           currency: prepared.salesCurrency as CurrencyCode,
-          // A negative balance is recorded as a legacy debt, with the snapshot it came from.
-          provenance: {
-            runId,
-            sourceFingerprint: snapshot.fingerprint,
-            rowChecksum: planned.row.checksum,
-            synthetic: snapshot.synthetic,
-          },
         });
         tallies.openings[outcome.kind] += 1;
-        if (outcome.kind === 'POSTED') tallies.openings.postedSumMinor += outcome.signedAmountMinor;
-        if (outcome.kind === 'DEBT_RECORDED') {
-          tallies.openings.debtRecordedSumMinor += outcome.amountMinor;
+        if (outcome.kind === 'POSTED') {
+          // A negative Mirza balance is a DEBIT of its magnitude (owner decision 2026-10-17).
+          tallies.openings.postedSumMinor += outcome.signedAmountMinor;
+          if (outcome.signedAmountMinor < 0n) {
+            tallies.openings.debitPosted += 1;
+            tallies.openings.debitPostedSumMinor += -outcome.signedAmountMinor;
+          } else {
+            tallies.openings.creditPostedSumMinor += outcome.signedAmountMinor;
+          }
         }
       } catch (error) {
         if (
@@ -2991,9 +2980,12 @@ export class LegacyImporterService {
       scope,
       importable.map((u) => (u.decision.kind === 'IMPORT' ? u.decision.telegramUserId : '')),
     );
-    // Owner decision 6: only POSITIVE legacy balances reach the ledger; a negative one is a
-    // legacy debt beside it. So the wallet moves by Σ positive, and Σ |negative| is debts.
-    const expectedWallet = inputs.preImportWalletTotalMinor + tallies.wallet.positive.sumMinor;
+    // Owner decision 2026-10-17: every legacy balance reaches the ledger as ONE signed opening
+    // (a CREDIT, or a DEBIT for a negative one), so the wallet moves by the signed Σ.
+    const expectedWallet =
+      inputs.preImportWalletTotalMinor +
+      tallies.wallet.positive.sumMinor +
+      tallies.wallet.negative.sumMinor;
     const categorySum = Object.values(tallies.services.categories).reduce((a, b) => a + b, 0);
     const [debts, usersWallets] = await Promise.all([
       destination.debtAggregates(scope),
@@ -3034,33 +3026,33 @@ export class LegacyImporterService {
         since.payments,
       ),
       check(
-        'wallet.openings_sum',
-        'Σ migration openings = Σ positive legacy Balance of imported users',
+        'wallet.credit_openings_sum',
+        'Σ CREDIT migration openings = Σ positive legacy Balance of imported users',
         tallies.wallet.positive.sumMinor,
-        openings.sumMinor,
+        openings.creditSumMinor,
       ),
       check(
-        'wallet.openings_count',
-        'one opening per positive imported balance',
+        'wallet.credit_openings_count',
+        'one CREDIT opening per positive imported balance',
         tallies.wallet.positive.count,
-        openings.count,
+        openings.positive,
       ),
       check(
-        'wallet.no_debit_opening',
-        'no ledger DEBIT opening: a negative legacy balance is never a ledger entry',
-        0,
+        'wallet.debit_openings_sum',
+        'Σ DEBIT migration openings = Σ |negative legacy Balance| of imported users',
+        -tallies.wallet.negative.sumMinor,
+        openings.debitSumMinor,
+      ),
+      check(
+        'wallet.debit_openings_count',
+        'one DEBIT opening per negative imported balance',
+        tallies.wallet.negative.count,
         openings.negative,
       ),
       check(
-        'wallet.debts_sum',
-        'Σ legacy debts = Σ |negative legacy Balance| of imported users',
-        -tallies.wallet.negative.sumMinor,
-        debts.sumMinor,
-      ),
-      check(
-        'wallet.debts_count',
-        'one legacy debt per negative imported balance',
-        tallies.wallet.negative.count,
+        'wallet.no_legacy_debt',
+        'no legacy debt side record: a negative balance is the wallet balance itself',
+        0,
         debts.count,
       ),
       check(
@@ -3147,7 +3139,7 @@ export class LegacyImporterService {
           legacyDebts: debts,
           note:
             'An opening balance is not revenue: it is filed as OPENING_BALANCE and read by no sales figure. ' +
-            'A negative legacy balance is a legacy debt held for the owner, never a ledger entry and never collected.',
+            'A negative legacy balance is a DEBIT opening: the wallet is negative and blocks purchase until topped up.',
         },
         usersWallets,
         trials,
@@ -3344,9 +3336,8 @@ export class LegacyImporterService {
       users: prepared.plan.users,
       mapRows,
       openings: prepared.existingOpenings,
-      debts: new Map([...prepared.existingDebts].map(([id, d]) => [id, d.amountMinor])),
       openingTotals,
-      debtTotals,
+      legacyDebtRows: debtTotals.count,
     });
   }
 

@@ -10082,6 +10082,8 @@ export const WEB_FA = {
   'web.err_commerce_trial_reset_stale':
     'وضعیت تست رایگان این مشتری تغییر کرده است. صفحه را تازه کنید.',
   'web.err_commerce_wallet_currency_unsupported': 'این واحد پول برای کیف پول پشتیبانی نمی‌شود.',
+  'web.err_commerce_wallet_negative_top_up_required':
+    'موجودی کیف پول این مشتری منفی است؛ تا شارژ نشود خرید ممکن نیست.',
   'web.err_commerce_wallet_insufficient_funds': 'موجودی کیف پول کافی نیست.',
   'web.err_control_client_app_limit': 'به سقف تعداد برنامه‌های اتصال رسیده‌اید.',
   'web.err_control_client_app_not_found': 'برنامهٔ اتصال پیدا نشد.',

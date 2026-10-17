@@ -485,7 +485,7 @@
           ],
           "properties": {
             "version": {
-              "const": "nexa-legacy-users-wallets/v1"
+              "const": "nexa-legacy-users-wallets/v2"
             },
             "sourceFingerprint": {
               "$ref": "#/$defs/sha256"
@@ -607,9 +607,9 @@
               "required": [
                 "currency",
                 "positive",
+                "negative",
                 "zero",
-                "legacyDebts",
-                "ledgerDebitOpenings",
+                "legacyDebtRows",
                 "perUser",
                 "carried",
                 "sourceMoney"
@@ -638,6 +638,26 @@
                     }
                   }
                 },
+                "negative": {
+                  "description": "Owner decision 2026-10-17: a negative balance is a DEBIT opening of its magnitude. Magnitudes.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["users", "sumMinor", "openingEntries", "openingSumMinor"],
+                  "properties": {
+                    "users": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "sumMinor": {
+                      "$ref": "#/$defs/minor"
+                    },
+                    "openingEntries": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "openingSumMinor": {
+                      "$ref": "#/$defs/minor"
+                    }
+                  }
+                },
                 "zero": {
                   "type": "object",
                   "additionalProperties": false,
@@ -648,68 +668,18 @@
                     }
                   }
                 },
-                "legacyDebts": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "users",
-                    "sumMinor",
-                    "recorded",
-                    "recordedSumMinor",
-                    "byState",
-                    "synthetic"
-                  ],
-                  "properties": {
-                    "users": {
-                      "$ref": "#/$defs/count"
-                    },
-                    "sumMinor": {
-                      "$ref": "#/$defs/minor"
-                    },
-                    "recorded": {
-                      "$ref": "#/$defs/count"
-                    },
-                    "recordedSumMinor": {
-                      "$ref": "#/$defs/minor"
-                    },
-                    "byState": {
-                      "type": "object",
-                      "propertyNames": {
-                        "pattern": "^(PENDING_REVIEW|ACKNOWLEDGED|WAIVED)$"
-                      },
-                      "additionalProperties": {
-                        "$ref": "#/$defs/countAndSum"
-                      }
-                    },
-                    "synthetic": {
-                      "$ref": "#/$defs/count"
-                    }
-                  }
-                },
-                "ledgerDebitOpenings": {
+                "legacyDebtRows": {
                   "$ref": "#/$defs/count"
                 },
                 "perUser": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": [
-                    "matching",
-                    "missingOpening",
-                    "missingDebt",
-                    "priorDebitOpening",
-                    "conflicting"
-                  ],
+                  "required": ["matching", "missingOpening", "conflicting"],
                   "properties": {
                     "matching": {
                       "$ref": "#/$defs/count"
                     },
                     "missingOpening": {
-                      "$ref": "#/$defs/count"
-                    },
-                    "missingDebt": {
-                      "$ref": "#/$defs/count"
-                    },
-                    "priorDebitOpening": {
                       "$ref": "#/$defs/count"
                     },
                     "conflicting": {
@@ -720,24 +690,24 @@
                 "carried": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["changedOpenings", "changedDebts", "absentOpenings", "absentDebts"],
+                  "required": ["changedCredits", "changedDebits", "absentCredits", "absentDebits"],
                   "properties": {
-                    "changedOpenings": {
+                    "changedCredits": {
                       "$ref": "#/$defs/countAndSum"
                     },
-                    "changedDebts": {
+                    "changedDebits": {
                       "$ref": "#/$defs/countAndSum"
                     },
-                    "absentOpenings": {
+                    "absentCredits": {
                       "$ref": "#/$defs/countAndSum"
                     },
-                    "absentDebts": {
+                    "absentDebits": {
                       "$ref": "#/$defs/countAndSum"
                     }
                   }
                 },
                 "sourceMoney": {
-                  "description": "Every source row's balance in exactly one bucket (U9), summed exactly by sign (U10): credited, recorded as a legacy debt, zero, held with the outcome that says why this snapshot's figure is not applied, unreadable (counted by rows, never summed), or unaccounted (never expected). Aggregates only.",
+                  "description": "Every source row's balance in exactly one bucket (U9), summed exactly by sign (U10): credited, debited, zero, held with the outcome that says why this snapshot's figure is not applied, unreadable (counted by rows, never summed), or unaccounted (never expected). Aggregates only.",
                   "type": "object",
                   "additionalProperties": false,
                   "required": [
@@ -745,7 +715,7 @@
                     "readable",
                     "unreadable",
                     "credited",
-                    "debtRecorded",
+                    "debited",
                     "zero",
                     "held",
                     "unaccounted"
@@ -816,7 +786,7 @@
                         }
                       }
                     },
-                    "debtRecorded": {
+                    "debited": {
                       "type": "object",
                       "additionalProperties": false,
                       "required": ["rows", "sumMinor"],

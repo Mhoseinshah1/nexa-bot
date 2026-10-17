@@ -1137,6 +1137,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.taken',
       'bot.username.unavailable',
       'bot.wallet.insufficient',
+      'bot.wallet.negative_balance',
       // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.
       'bot.wallet.open_button',
       'bot.wallet.topup_above_maximum',

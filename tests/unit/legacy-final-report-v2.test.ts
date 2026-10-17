@@ -48,7 +48,7 @@ function holdingInput(): Mutable<FinalReportV2Input> {
       checks: ['U1', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9', 'U10'].map(check),
       holds: true,
       wallet: {
-        legacyDebts: { users: 1, recorded: 1, recordedSumMinor: '20000' },
+        negative: { users: 1, openingEntries: 1, openingSumMinor: '20000' },
         perUser: { conflicting: 0 },
         sourceMoney: { held: { rows: 0 }, unreadable: { rows: 0 }, unaccounted: { rows: 0 } },
       },
@@ -209,7 +209,7 @@ describe('final report v2: the verdict is the AND of every section and every inv
     ],
     [
       'WALLETS_RECONCILED',
-      'a debt check U4',
+      'a DEBIT-opening check U4',
       (i) => {
         (i.usersWallets as any).checks[3].holds = false;
       },
@@ -251,9 +251,9 @@ describe('final report v2: the verdict is the AND of every section and every inv
     ],
     [
       'UNRESOLVED_RETAINED',
-      'a negative user without a recorded debt',
+      'a negative user without a posted DEBIT opening',
       (i) => {
-        (i.usersWallets as any).wallet.legacyDebts.recorded = 0;
+        (i.usersWallets as any).wallet.negative.openingEntries = 0;
       },
     ],
     [

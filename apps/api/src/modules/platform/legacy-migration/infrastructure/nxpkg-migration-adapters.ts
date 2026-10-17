@@ -1429,6 +1429,7 @@ interface PlanShape {
     readonly positive?: { readonly count?: number; readonly sumMinor?: bigint | string | number };
     readonly negative?: { readonly count?: number; readonly sumMinor?: bigint | string | number };
     readonly openings?: Readonly<Record<string, number>>;
+    readonly debitOpenings?: Readonly<Record<string, number>>;
   };
   readonly trials?: Readonly<Record<string, number>>;
   readonly products?: {
@@ -1736,7 +1737,7 @@ export function mismatchCounts(
     ],
     ['customers:new', section('customers')?.imported],
     ['wallet:positive', section('wallet_openings')?.source],
-    ['wallet:negative', section('legacy_debts')?.source],
+    ['wallet:negative', section('wallet_debit_openings')?.source],
     ['products:distinct_shapes', section('products')?.source],
     [
       'panels:inventory_incomplete',
@@ -1810,6 +1811,8 @@ export function dryRunReportOf(
     extra.holdChangedCategory ??
     Math.min(hold?.hold.size ?? 0, n(categories['AMBIGUOUS_OWNERSHIP']));
   const openings = plan.wallet?.openings ?? {};
+  const debits = plan.wallet?.debitOpenings ?? {};
+  const credit = (k: string) => n(openings[k]) - n(debits[k]);
   const trials = plan.trials ?? {};
   const products = plan.products ?? {};
   const historyTotal = history.reduce((a, h) => a + h.count, 0);
@@ -1843,18 +1846,19 @@ export function dryRunReportOf(
     {
       section: 'wallet_openings',
       source: n(plan.wallet?.positive?.count),
-      imported: n(openings['POST']),
+      imported: credit('POST'),
       archived: 0,
-      skipped: n(openings['ALREADY_POSTED']),
-      quarantined: n(openings['CONFLICT']) + n(openings['PRIOR_DEBIT_OPENING']),
+      skipped: credit('ALREADY_POSTED'),
+      quarantined: credit('CONFLICT'),
     },
+    // Owner decision 2026-10-17: a negative balance is a DEBIT opening, not a legacy debt.
     {
-      section: 'legacy_debts',
+      section: 'wallet_debit_openings',
       source: n(plan.wallet?.negative?.count),
-      imported: n(openings['RECORD_DEBT']),
+      imported: n(debits['POST']),
       archived: 0,
-      skipped: n(openings['DEBT_ALREADY_RECORDED']),
-      quarantined: 0,
+      skipped: n(debits['ALREADY_POSTED']),
+      quarantined: n(debits['CONFLICT']),
     },
     {
       section: 'trials',

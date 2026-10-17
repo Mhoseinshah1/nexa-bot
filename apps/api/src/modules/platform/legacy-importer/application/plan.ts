@@ -32,7 +32,6 @@ import type {
   LegacyInventoryDiagnostics,
   LegacyInventoryRead,
   LegacyInventoryResolution,
-  RecordedDebt,
 } from './ports.js';
 import {
   sha256Hex,
@@ -51,26 +50,16 @@ import {
  */
 
 /**
- * What the openings phase will do for an importable user. Since owner decision 6 a negative
- * balance is `RECORD_DEBT` (a legacy debt, no ledger entry), and an existing ledger DEBIT
- * opening from the code before it is `PRIOR_DEBIT_OPENING` (never rewritten, never doubled).
+ * What the openings phase will do for an importable user. Since owner decision 2026-10-17 a
+ * negative balance is posted like a positive one, as a ledger DEBIT opening: the wallet holds
+ * exactly the Mirza balance, and a negative one blocks purchase until it is topped up.
  */
-export type OpeningPlan =
-  | 'POST'
-  | 'ALREADY_POSTED'
-  | 'ZERO_NO_ENTRY'
-  | 'CONFLICT'
-  | 'RECORD_DEBT'
-  | 'DEBT_ALREADY_RECORDED'
-  | 'PRIOR_DEBIT_OPENING';
+export type OpeningPlan = 'POST' | 'ALREADY_POSTED' | 'ZERO_NO_ENTRY' | 'CONFLICT';
 export const OPENING_PLANS: readonly OpeningPlan[] = [
   'POST',
   'ALREADY_POSTED',
   'ZERO_NO_ENTRY',
   'CONFLICT',
-  'RECORD_DEBT',
-  'DEBT_ALREADY_RECORDED',
-  'PRIOR_DEBIT_OPENING',
 ];
 export type TrialPlan = LegacyTrialDecision | 'ALREADY_DECIDED';
 
@@ -218,6 +207,8 @@ export interface PlanTallies {
     readonly zero: number;
     readonly negative: { readonly count: number; readonly sumMinor: bigint };
     readonly openings: Readonly<Record<OpeningPlan, number>>;
+    /** The part of `openings` for NEGATIVE balances (a DEBIT opening each). */
+    readonly debitOpenings: Readonly<Record<OpeningPlan, number>>;
   };
   readonly trials: Readonly<Record<TrialPlan, number>>;
   readonly products: {
@@ -245,8 +236,6 @@ export interface PlanInput {
   readonly salesCurrency: string;
   readonly existingCustomers: ReadonlyMap<string, string>;
   readonly existingOpenings: ReadonlyMap<string, bigint>;
-  /** Mirza PR4: Telegram id → the legacy debt already recorded (magnitude, evidence class). */
-  readonly existingDebts?: ReadonlyMap<string, RecordedDebt>;
   readonly trialOverrides: ReadonlyMap<string, number>;
   readonly trialDecided: ReadonlySet<string>;
   readonly existingShapes: ReadonlyMap<
@@ -273,28 +262,10 @@ function zeroes<K extends string>(keys: readonly K[]): Record<K, number> {
 }
 
 /**
- * `existing` is the SIGNED ledger opening already posted; `existingDebt` the legacy debt
- * already recorded. A figure that differs from what is recorded — in amount, in kind, or in
- * evidence class (a synthetic debt met by a real snapshot, or the reverse) — is a CONFLICT,
- * never re-applied: exactly the opening service's own "same debt" (Codex on #233).
+ * `existing` is the SIGNED ledger opening already posted. A figure that differs from it — in
+ * amount or in sign — is a CONFLICT, never re-applied: exactly the opening service's own rule.
  */
-export function openingPlanFor(
-  balanceMinor: bigint,
-  existing: bigint | undefined,
-  existingDebt?: RecordedDebt,
-  synthetic = false,
-): OpeningPlan {
-  if (balanceMinor < 0n) {
-    if (existing !== undefined)
-      return existing === balanceMinor ? 'PRIOR_DEBIT_OPENING' : 'CONFLICT';
-    if (existingDebt !== undefined) {
-      return existingDebt.amountMinor === -balanceMinor && existingDebt.synthetic === synthetic
-        ? 'DEBT_ALREADY_RECORDED'
-        : 'CONFLICT';
-    }
-    return 'RECORD_DEBT';
-  }
-  if (existingDebt !== undefined) return 'CONFLICT';
+export function openingPlanFor(balanceMinor: bigint, existing: bigint | undefined): OpeningPlan {
   if (existing === undefined) return balanceMinor === 0n ? 'ZERO_NO_ENTRY' : 'POST';
   return existing === balanceMinor ? 'ALREADY_POSTED' : 'CONFLICT';
 }
@@ -541,6 +512,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     zero: 0,
     negative: { count: 0, sumMinor: 0n },
     openings: zeroes<OpeningPlan>(OPENING_PLANS),
+    debitOpenings: zeroes<OpeningPlan>(OPENING_PLANS),
   };
   const trials = zeroes<TrialPlan>(TRIAL_PLANS);
   const importedUsers = new Map<string, string>();
@@ -594,10 +566,9 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     const opening = openingPlanFor(
       decision.balanceMinor,
       input.existingOpenings.get(decision.telegramUserId),
-      input.existingDebts?.get(decision.telegramUserId),
-      snapshot.synthetic,
     );
     wallet.openings[opening] += 1;
+    if (decision.balanceMinor < 0n) wallet.debitOpenings[opening] += 1;
 
     let trial: TrialPlan;
     if (existingCustomerId !== null && input.trialDecided.has(existingCustomerId)) {

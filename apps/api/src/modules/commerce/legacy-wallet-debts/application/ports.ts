@@ -27,21 +27,6 @@ export interface LegacyWalletDebtRecord {
   readonly updatedAt: Date;
 }
 
-/** What the importer records: the facts, never a decision. */
-export type LegacyWalletDebtFacts = Pick<
-  LegacyWalletDebtRecord,
-  | 'id'
-  | 'customerId'
-  | 'legacyUserId'
-  | 'amountMinor'
-  | 'currency'
-  | 'sourceFingerprint'
-  | 'rowChecksum'
-  | 'runId'
-  | 'synthetic'
-  | 'recordedAt'
->;
-
 /** The decision columns — the only ones an UPDATE may set (0227 refuses the rest). */
 export interface LegacyWalletDebtDecisionChange {
   readonly state: LegacyWalletDebtState;
@@ -49,30 +34,6 @@ export interface LegacyWalletDebtDecisionChange {
   readonly decidedByAdminId: string;
   readonly decidedAt: Date;
   readonly updatedAt: Date;
-}
-
-/**
- * The write side the opening-balance path uses (migration-only). Insert-or-nothing on the
- * tenant and the customer (and the legacy user id): a rerun, a resume and two racing
- * importers land on ONE debt.
- */
-export interface LegacyWalletDebtRecorder {
-  findByCustomer(
-    scope: TenantContext,
-    customerId: string,
-    tx: TransactionScope,
-  ): Promise<LegacyWalletDebtRecord | null>;
-  findByLegacyUserId(
-    scope: TenantContext,
-    legacyUserId: string,
-    tx: TransactionScope,
-  ): Promise<LegacyWalletDebtRecord | null>;
-  /** The stored row and whether THIS call wrote it. */
-  insertIfAbsent(
-    scope: TenantContext,
-    facts: LegacyWalletDebtFacts,
-    tx: TransactionScope,
-  ): Promise<{ readonly debt: LegacyWalletDebtRecord; readonly inserted: boolean }>;
 }
 
 export interface LegacyWalletDebtListFilter {
@@ -88,7 +49,7 @@ export interface LegacyWalletDebtAggregate {
   readonly sumMinor: bigint;
 }
 
-export interface LegacyWalletDebtRepository extends LegacyWalletDebtRecorder {
+export interface LegacyWalletDebtRepository {
   findById(
     scope: TenantContext,
     id: string,

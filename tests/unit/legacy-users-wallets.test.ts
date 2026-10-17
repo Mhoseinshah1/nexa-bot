@@ -78,6 +78,21 @@ function mapRow(
   } as LegacyImportMapRecord;
 }
 
+/** The tenant-wide aggregate of exactly these signed openings (what the repository reads). */
+function totalsOf(openings: ReadonlyMap<string, bigint>) {
+  const values = [...openings.values()];
+  const credits = values.filter((v) => v > 0n);
+  const debits = values.filter((v) => v < 0n);
+  return {
+    count: values.length,
+    sumMinor: values.reduce((a, b) => a + b, 0n),
+    positive: credits.length,
+    negative: debits.length,
+    creditSumMinor: credits.reduce((a, b) => a + b, 0n),
+    debitSumMinor: -debits.reduce((a, b) => a + b, 0n),
+  };
+}
+
 describe('the users-and-wallets section', () => {
   it('classes a changed balance by how it moved; a sign flip is never a plain change', () => {
     expect(classifyBalanceChange(100n, 100n)).toBe('PROFILE_ONLY');
@@ -116,25 +131,21 @@ describe('the users-and-wallets section', () => {
         }),
       ],
     ]);
+    const blockedOpenings = new Map([
+      ['301', 500n],
+      ['302', -300n],
+      ['303', 200n],
+      ['304', 100n],
+    ]);
     const section = buildUsersWalletsSection({
       sourceFingerprint: C(42),
       synthetic: false,
       currency: 'IRT',
       users,
       mapRows: maps,
-      openings: new Map([
-        ['301', 500n],
-        ['303', 200n],
-        ['304', 100n],
-      ]),
-      debts: new Map([['302', 300n]]),
-      openingTotals: { count: 3, sumMinor: 800n, negative: 0 },
-      debtTotals: {
-        count: 1,
-        sumMinor: 300n,
-        byState: { PENDING_REVIEW: { count: 1, sumMinor: 300n } },
-        synthetic: 0,
-      },
+      openings: blockedOpenings,
+      openingTotals: totalsOf(blockedOpenings),
+      legacyDebtRows: 0,
     });
     expect(section.users.legacyStatus).toEqual({ ACTIVE: 1, BLOCKED: 3, UNKNOWN: 1 });
     expect(section.users.blocked).toEqual({
@@ -145,7 +156,12 @@ describe('the users-and-wallets section', () => {
     });
     expect(section.users.outcomes.SKIPPED_STATUS_UNKNOWN).toBe(1);
     expect(section.wallet.positive).toMatchObject({ users: 3, sumMinor: '800' });
-    expect(section.wallet.legacyDebts).toMatchObject({ users: 1, sumMinor: '300' });
+    expect(section.wallet.negative).toMatchObject({
+      users: 1,
+      sumMinor: '300',
+      openingEntries: 1,
+      openingSumMinor: '300',
+    });
     expect(section.holds).toBe(true);
   });
 
@@ -207,29 +223,23 @@ describe('the users-and-wallets section', () => {
         .filter((u) => u.row.id !== 'not-an-id')
         .map((u) => [u.row.id, mapRow(u.row.id, u.row.id === '204' ? C(1) : u.row.checksum)]),
     );
+    const openings = new Map([
+      ['201', 500n],
+      ['202', -300n],
+      ['204', -100n],
+      ['205', -50n],
+      ['999', 40n],
+    ]);
     const section = buildUsersWalletsSection({
       sourceFingerprint: C(42),
       synthetic: false,
       currency: 'IRT',
       users,
       mapRows: maps,
-      // 204 changed since: it was recorded as -100 (a debt), it is +700 now.
-      openings: new Map([
-        ['201', 500n],
-        ['999', 40n],
-      ]),
-      debts: new Map([
-        ['202', 300n],
-        ['204', 100n],
-        ['205', 50n],
-      ]),
-      openingTotals: { count: 2, sumMinor: 540n, negative: 0 },
-      debtTotals: {
-        count: 3,
-        sumMinor: 450n,
-        byState: { PENDING_REVIEW: { count: 3, sumMinor: 450n } },
-        synthetic: 0,
-      },
+      // 204 changed since: it was recorded as -100 (a DEBIT), it is +700 now.
+      openings,
+      openingTotals: totalsOf(openings),
+      legacyDebtRows: 0,
     });
     expect(section.version).toBe(LEGACY_USERS_WALLETS_SECTION_VERSION);
     expect(Object.keys(section.users.outcomes)).toEqual([...LEGACY_USER_OUTCOMES]);
@@ -243,19 +253,14 @@ describe('the users-and-wallets section', () => {
       importedAsCustomers: 0,
       resellerGrants: 'NONE',
     });
-    expect(section.wallet.perUser).toEqual({
-      matching: 4,
-      missingOpening: 0,
-      missingDebt: 0,
-      priorDebitOpening: 0,
-      conflicting: 0,
-    });
+    expect(section.wallet.perUser).toEqual({ matching: 4, missingOpening: 0, conflicting: 0 });
     expect(section.wallet.carried).toEqual({
-      changedOpenings: { count: 0, sumMinor: '0' },
-      changedDebts: { count: 1, sumMinor: '100' },
-      absentOpenings: { count: 1, sumMinor: '40' },
-      absentDebts: { count: 0, sumMinor: '0' },
+      changedCredits: { count: 0, sumMinor: '0' },
+      changedDebits: { count: 1, sumMinor: '100' },
+      absentCredits: { count: 1, sumMinor: '40' },
+      absentDebits: { count: 0, sumMinor: '0' },
     });
+    expect(section.wallet.sourceMoney.debited).toEqual({ rows: 2, sumMinor: '350' });
     expect(section.sourceChanged.byClass.NEGATIVE_TO_POSITIVE).toEqual({
       count: 1,
       recordedSumMinor: '-100',
@@ -274,24 +279,24 @@ describe('the users-and-wallets section', () => {
     }
   });
 
-  it('fails U6 and U7 on a ledger DEBIT opening, and U4 on a missing debt', () => {
+  it('fails U4, U5, U7, U9 and U10 on a missing DEBIT opening and a wrong-sign one', () => {
     const users = [planned('301', '-300'), planned('302', '-20')];
     const maps = new Map(users.map((u) => [u.row.id, mapRow(u.row.id, u.row.checksum)]));
+    // 301 holds a CREDIT of the magnitude (the wrong sign); 302 holds nothing.
+    const openings = new Map([['301', 300n]]);
     const section = buildUsersWalletsSection({
       sourceFingerprint: C(1),
       synthetic: false,
       currency: 'IRT',
       users,
       mapRows: maps,
-      openings: new Map([['301', -300n]]),
-      debts: new Map(),
-      openingTotals: { count: 1, sumMinor: -300n, negative: 1 },
-      debtTotals: { count: 0, sumMinor: 0n, byState: {}, synthetic: 0 },
+      openings,
+      openingTotals: totalsOf(openings),
+      legacyDebtRows: 0,
     });
     const failed = section.checks.filter((c) => !c.holds).map((c) => c.id);
-    // U9/U10: neither balance is in a bucket that accounts for it (a DEBIT opening, nothing).
-    expect(failed).toEqual(['U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U9', 'U10']);
-    expect(section.wallet.perUser).toMatchObject({ priorDebitOpening: 1, missingDebt: 1 });
+    expect(failed).toEqual(['U2', 'U3', 'U4', 'U5', 'U7', 'U9', 'U10']);
+    expect(section.wallet.perUser).toMatchObject({ conflicting: 1, missingOpening: 1 });
     expect(section.wallet.sourceMoney.unaccounted).toEqual({
       rows: 2,
       positive: { rows: 0, sumMinor: '0' },
@@ -299,31 +304,43 @@ describe('the users-and-wallets section', () => {
     });
   });
 
-  it('U8: a real snapshot never reconciles while a debt from a synthetic source is recorded', () => {
+  it('U6: never reconciles while a legacy-debt side record exists (money outside the wallet)', () => {
     const users = [planned('401', '-10')];
     const maps = new Map(users.map((u) => [u.row.id, mapRow(u.row.id, u.row.checksum)]));
-    const build = (synthetic: boolean) =>
+    const openings = new Map([['401', -10n]]);
+    const build = (legacyDebtRows: number) =>
       buildUsersWalletsSection({
         sourceFingerprint: C(2),
-        synthetic,
+        synthetic: false,
         currency: 'IRT',
         users,
         mapRows: maps,
-        openings: new Map(),
-        debts: new Map([['401', 10n]]),
-        openingTotals: { count: 0, sumMinor: 0n, negative: 0 },
-        debtTotals: {
-          count: 1,
-          sumMinor: 10n,
-          byState: { PENDING_REVIEW: { count: 1, sumMinor: 10n } },
-          synthetic: 1,
-        },
+        openings,
+        openingTotals: totalsOf(openings),
+        legacyDebtRows,
       });
     expect(
-      build(false)
+      build(1)
         .checks.filter((c) => !c.holds)
         .map((c) => c.id),
-    ).toEqual(['U8']);
-    expect(build(true).holds).toBe(true);
+    ).toEqual(['U6']);
+    expect(build(0).holds).toBe(true);
+  });
+
+  it('U8: an opening total that its two signs do not add up to fails', () => {
+    const users = [planned('501', '10')];
+    const maps = new Map(users.map((u) => [u.row.id, mapRow(u.row.id, u.row.checksum)]));
+    const openings = new Map([['501', 10n]]);
+    const section = buildUsersWalletsSection({
+      sourceFingerprint: C(3),
+      synthetic: false,
+      currency: 'IRT',
+      users,
+      mapRows: maps,
+      openings,
+      openingTotals: { ...totalsOf(openings), count: 2, sumMinor: 7n },
+      legacyDebtRows: 0,
+    });
+    expect(section.checks.filter((c) => !c.holds).map((c) => c.id)).toEqual(['U8']);
   });
 });

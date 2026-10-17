@@ -1,7 +1,5 @@
 import {
   COMMERCE_ERROR_CODES,
-  LEGACY_WALLET_DEBT_AUDIT_ACTIONS,
-  LEGACY_WALLET_DEBT_CURRENCY,
   PAYMENT_AMOUNT_MAX_MINOR,
   PLATFORM_ERROR_CODES,
   errors,
@@ -34,10 +32,6 @@ import type { OutboxWriter } from '../../../platform/eventing/infrastructure/out
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletEntryRecord, WalletRepository } from './ports.js';
-import type {
-  LegacyWalletDebtRecord,
-  LegacyWalletDebtRecorder,
-} from '../../legacy-wallet-debts/application/ports.js';
 
 /**
  * What the migration posts under. `SYSTEM_JOB` holds `SYSTEM_JOB_PERMISSIONS`, which is
@@ -53,8 +47,6 @@ const AUDIT_ACTION = 'wallet.migration_opening_balance';
 export interface MigrationOpeningBalanceDeps {
   readonly repository: Pick<WalletRepository, 'append' | 'lockCustomer' | 'findByReference'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
-  /** Mirza PR4: where a NEGATIVE legacy balance is recorded instead of the ledger. */
-  readonly debts: LegacyWalletDebtRecorder;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -83,30 +75,14 @@ export interface MigrationOpeningBalanceCommand {
   readonly telegramUserId: string;
   readonly legacyBalanceMinor: bigint;
   readonly currency: CurrencyCode;
-  /**
-   * Where the figure was read from. REQUIRED for a negative balance (the debt records it);
-   * a positive or zero opening does not store it (the ledger row's reference is its key).
-   */
-  readonly provenance?: MigrationOpeningProvenance;
-}
-
-/** The snapshot a legacy figure was read from, and the import run that read it. */
-export interface MigrationOpeningProvenance {
-  readonly runId: string;
-  /** The v1 source fingerprint of the snapshot. */
-  readonly sourceFingerprint: string;
-  /** The legacy user row's `user:v1` checksum in that snapshot. */
-  readonly rowChecksum: string;
-  /** The snapshot carried the synthetic-fixture marker. */
-  readonly synthetic: boolean;
 }
 
 /**
  * What happened, never a bare success.
  *
  * - `POSTED` — this call wrote the opening entry. `signedAmountMinor` is what the opening
- *   moved the wallet by — a fact of this entry alone. Always positive since owner decision
- *   6: a negative legacy balance is a legacy debt (`DEBT_RECORDED`), never an entry.
+ *   moved the wallet by — a fact of this entry alone: positive for a CREDIT (a positive
+ *   legacy balance), negative for a DEBIT (a negative one, owner decision 2026-10-17).
  *
  *   Deliberately NO after-balance. Ordinary credits do not take the customer lock (only
  *   debits do), so a credit committing while this transaction runs is invisible to any
@@ -126,25 +102,7 @@ export type MigrationOpeningBalanceOutcome =
       readonly signedAmountMinor: bigint;
     }
   | { readonly kind: 'ALREADY_POSTED'; readonly entry: WalletEntryRecord }
-  | { readonly kind: 'ZERO_NO_ENTRY' }
-  /**
-   * Mirza PR4 (owner decision 6): a NEGATIVE legacy balance was recorded as a legacy debt —
-   * NO ledger entry, the NEXA balance untouched. `amountMinor` is the magnitude owed.
-   */
-  | {
-      readonly kind: 'DEBT_RECORDED';
-      readonly debt: LegacyWalletDebtRecord;
-      readonly amountMinor: bigint;
-    }
-  /** The SAME debt was already recorded (a rerun, a resume, a racing importer). Nothing written. */
-  | { readonly kind: 'DEBT_ALREADY_RECORDED'; readonly debt: LegacyWalletDebtRecord }
-  /**
-   * The ledger already holds this customer's opening as a DEBIT of exactly this magnitude,
-   * written by the code before owner decision 6 (a non-production rehearsal). Nothing is
-   * written: the ledger is never rewritten, and recording a debt beside that DEBIT would
-   * count the debt twice. The importer counts it as attention (`docs/migration-opening-balance.md`).
-   */
-  | { readonly kind: 'PRIOR_DEBIT_OPENING'; readonly entry: WalletEntryRecord };
+  | { readonly kind: 'ZERO_NO_ENTRY' };
 
 /**
  * Migration P2 — carries a legacy wallet balance into the ledger, once.
@@ -153,16 +111,14 @@ export type MigrationOpeningBalanceOutcome =
  * already has, so a customer new to NEXA ends at the legacy balance and one who already
  * used NEXA ends at their NEXA balance plus the legacy one. There is no other mode.
  *
- * NEGATIVE balances (owner decision 6, 2026-10-07 — Mirza PR4): HELD FOR REVIEW. A
- * negative legacy balance writes NO ledger entry. It is recorded as a legacy wallet debt
- * (`legacy_wallet_debts`: exact magnitude, currency, legacy user id, source fingerprint, row
- * checksum, run), the customer's NEXA balance is left exactly as it is (0 for a new
- * customer), and the debt is NEVER collected — no top-up, purchase or ledger path reads it.
- * The owner decides per customer (ACKNOWLEDGED / WAIVED), and no decision moves money. The
- * code before this decision wrote a DEBIT without `canCover`; it no longer can. The debt is
- * keyed like the opening — one per customer and per legacy user id — so a rerun records no
- * second debt, and a figure that differs from the recorded one is refused like any changed
- * opening.
+ * NEGATIVE balances (owner decision 2026-10-17, superseding decision 6's held-for-review
+ * debt): a DEBIT of the exact magnitude, so the customer's NEXA balance IS the Mirza balance,
+ * negative included. It is the one writer that may take a wallet below zero
+ * (`LEDGER_REASONS`: MIGRATION_OPENING_BALANCE), and it writes without `canCover` by design:
+ * the figure is a fact of the source, not a purchase. A negative balance then blocks every
+ * purchase until the customer tops up (the checkout's negative-balance gate); a top-up nets
+ * against it, which is the owner's chosen way of settling it. Nothing else reads or collects
+ * it.
  *
  * IDEMPOTENT at the database: the reference is `legacy:opening:<telegram_user_id>`,
  * unique per tenant (`wallet_entries_tenant_reference_key`), backed by one opening per
@@ -172,8 +128,7 @@ export type MigrationOpeningBalanceOutcome =
  * never silently answered with the first.
  *
  * Migration-only: no controller, no Telegram handler and no web page constructs or calls
- * this. The P7 importer is its only caller. (The Web Admin's debt list is a different
- * service, `LegacyWalletDebtService`, which records nothing and moves no money.)
+ * this. The P7 importer is its only caller.
  */
 export class MigrationOpeningBalanceService {
   constructor(private readonly deps: MigrationOpeningBalanceDeps) {}
@@ -195,12 +150,6 @@ export class MigrationOpeningBalanceService {
       );
     }
     const direction: LedgerDirection = command.legacyBalanceMinor < 0n ? 'DEBIT' : 'CREDIT';
-    if (command.legacyBalanceMinor < 0n && !validProvenance(command.provenance)) {
-      throw errors.validation(
-        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-        'A negative legacy balance is recorded with the run and snapshot it was read from.',
-      );
-    }
     const denial = { action: AUDIT_ACTION, entityType: 'Wallet', entityId: customerId as string };
 
     // Charged before anything is read, and audited when refused.
@@ -254,33 +203,15 @@ export class MigrationOpeningBalanceService {
         }
 
         /*
-         * The wallet lock, as every movement takes it. A negative opening decides nothing
-         * from the balance, but an ordinary debit racing it must see it: under this lock
-         * the debit's sufficiency read comes after the opening commits.
+         * The wallet lock, as every movement takes it. A DEBIT opening decides nothing from
+         * the balance, but an ordinary debit racing it must see it: under this lock the
+         * debit's sufficiency read comes after the opening commits.
          */
         if (!(await this.deps.repository.lockCustomer(scope, customerId, tx))) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
         }
 
         const existing = await this.deps.repository.findByReference(scope, reference, tx);
-        const debt =
-          (await this.deps.debts.findByCustomer(scope, customerId, tx)) ??
-          (await this.deps.debts.findByLegacyUserId(scope, telegramUserId, tx));
-
-        if (command.legacyBalanceMinor < 0n) {
-          return this.holdNegative(scope, actor, tx, {
-            customerId,
-            telegramUserId,
-            magnitude,
-            currency: command.currency,
-            provenance: command.provenance,
-            existing,
-            debt,
-          });
-        }
-        // A debt was recorded for this customer: a non-negative figure now is a changed one.
-        if (debt !== null) throw payloadMismatch();
-
         if (existing !== null) {
           return {
             kind: 'ALREADY_POSTED',
@@ -352,105 +283,6 @@ export class MigrationOpeningBalanceService {
   }
 
   /**
-   * Owner decision 6: a negative legacy balance becomes a legacy debt, never a ledger entry.
-   * Runs inside `post`'s transaction, under the wallet lock, after the customer checks.
-   */
-  private async holdNegative(
-    scope: TenantContext,
-    actor: ActorContext,
-    tx: TransactionScope,
-    input: {
-      readonly customerId: UserId;
-      readonly telegramUserId: string;
-      readonly magnitude: bigint;
-      readonly currency: CurrencyCode;
-      readonly provenance: MigrationOpeningProvenance | undefined;
-      readonly existing: WalletEntryRecord | null;
-      readonly debt: LegacyWalletDebtRecord | null;
-    },
-  ): Promise<MigrationOpeningBalanceOutcome> {
-    // The code before owner decision 6 wrote this opening as a DEBIT. The ledger is never
-    // rewritten, and a debt beside that DEBIT would count it twice: nothing is written.
-    if (input.existing !== null) {
-      return {
-        kind: 'PRIOR_DEBIT_OPENING',
-        entry: this.sameOpening(
-          input.existing,
-          input.customerId,
-          'DEBIT',
-          input.magnitude,
-          input.currency,
-        ),
-      };
-    }
-    if (input.debt !== null) {
-      return {
-        kind: 'DEBT_ALREADY_RECORDED',
-        debt: sameDebt(
-          input.debt,
-          input.customerId,
-          input.telegramUserId,
-          input.magnitude,
-          input.provenance,
-        ),
-      };
-    }
-    const provenance = input.provenance;
-    if (provenance === undefined || input.currency !== LEGACY_WALLET_DEBT_CURRENCY) {
-      // Unreachable from `post` (validated, and the selling currency checked), kept total.
-      throw errors.validation(
-        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-        'A legacy debt is recorded in IRT with its provenance.',
-      );
-    }
-    const { debt, inserted } = await this.deps.debts.insertIfAbsent(
-      scope,
-      {
-        id: this.deps.ids.uuid(),
-        customerId: input.customerId,
-        legacyUserId: input.telegramUserId,
-        amountMinor: input.magnitude,
-        currency: LEGACY_WALLET_DEBT_CURRENCY,
-        sourceFingerprint: provenance.sourceFingerprint,
-        rowChecksum: provenance.rowChecksum,
-        runId: provenance.runId,
-        synthetic: provenance.synthetic,
-        recordedAt: this.deps.clock.now(),
-      },
-      tx,
-    );
-    if (!inserted) {
-      return {
-        kind: 'DEBT_ALREADY_RECORDED',
-        debt: sameDebt(debt, input.customerId, input.telegramUserId, input.magnitude, provenance),
-      };
-    }
-    await this.deps.audit.record(
-      scope,
-      actor,
-      {
-        action: LEGACY_WALLET_DEBT_AUDIT_ACTIONS.recorded,
-        entityType: 'LegacyWalletDebt',
-        entityId: debt.id,
-        before: null,
-        after: {
-          customerId: debt.customerId,
-          state: debt.state,
-          amountMinor: debt.amountMinor.toString(),
-          currency: debt.currency,
-          sourceFingerprint: debt.sourceFingerprint,
-          runId: debt.runId,
-          synthetic: debt.synthetic,
-          ledgerEntry: null,
-        },
-        result: 'SUCCESS',
-      },
-      tx,
-    );
-    return { kind: 'DEBT_RECORDED', debt, amountMinor: debt.amountMinor };
-  }
-
-  /**
    * The entry already under this reference, if it is the SAME opening; otherwise a
    * refusal. A different figure on a rerun means the source changed or the importer is
    * wrong, and answering with the first figure would hide it.
@@ -511,42 +343,5 @@ function payloadMismatch(): Error {
   return errors.conflict(
     PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
     'This customer’s opening balance was already posted with a different figure.',
-  );
-}
-
-/**
- * The debt already recorded, if it is the SAME one; otherwise a refusal. "Same" includes
- * the evidence class (PR3's review lesson on #232): a debt recorded from a SYNTHETIC source
- * is test data and is never taken for the real one — nor a real one for a fixture's — so a
- * mismatch is refused (counted CONFLICT by the importer) and nothing is written.
- */
-function sameDebt(
-  debt: LegacyWalletDebtRecord,
-  customerId: UserId,
-  telegramUserId: string,
-  magnitude: bigint,
-  provenance: MigrationOpeningProvenance | undefined,
-): LegacyWalletDebtRecord {
-  const same =
-    debt.customerId === customerId &&
-    debt.legacyUserId === telegramUserId &&
-    debt.amountMinor === magnitude &&
-    debt.currency === LEGACY_WALLET_DEBT_CURRENCY &&
-    provenance !== undefined &&
-    debt.synthetic === provenance.synthetic;
-  if (!same) throw payloadMismatch();
-  return debt;
-}
-
-const SHA256 = /^[0-9a-f]{64}$/u;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-
-function validProvenance(p: MigrationOpeningProvenance | undefined): boolean {
-  return (
-    p !== undefined &&
-    UUID.test(p.runId) &&
-    SHA256.test(p.sourceFingerprint) &&
-    SHA256.test(p.rowChecksum) &&
-    typeof p.synthetic === 'boolean'
   );
 }

@@ -2449,7 +2449,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const migrationOpeningBalance = new MigrationOpeningBalanceService({
     repository: walletRepository,
     customers: customerRepository,
-    debts: legacyWalletDebtRepository,
     guard,
     audit,
     opsLog,
@@ -2671,6 +2670,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
   const orderService = new OrderService({
+    wallet: walletRepository,
     customService: { pricer: customServicePricer, terms: orderCustomServiceTermsRepository },
     placement: panelPlacement,
     placements: orderPlacementRepository,
@@ -2850,6 +2850,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * `AWAITING_PAYMENT` order and wallet settlement works on it without knowing it is one.
    */
   const commercialActionService = new CommercialActionService({
+    wallet: walletRepository,
     resellers: resellerService,
     pricing: pricingService,
     services: serviceRepository,

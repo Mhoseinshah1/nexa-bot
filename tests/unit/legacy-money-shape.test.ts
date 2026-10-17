@@ -6,7 +6,6 @@ import {
   type LegacyPlan,
   type PlannedUser,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/plan';
-import type { RecordedDebt } from '../../apps/api/src/modules/platform/legacy-importer/application/ports';
 import {
   readFromSession,
   type LegacySnapshot,
@@ -39,7 +38,8 @@ import {
  * summing to exactly 2,986,130,847 IRT across 4,000 customers, exactly 38 legacy debts summing
  * to 130,634,742 IRT, mixed statuses, zeros, and the rows the importer must hold for review.
  * The plan is the importer's own (`planLegacyImport`); the import's outcome is what the
- * openings phase records for it (one CREDIT per positive, one debt per negative), and every
+ * openings phase records for it (one CREDIT per positive, one DEBIT per negative — owner
+ * decision 2026-10-17: the wallet IS the Mirza balance), and every
  * equation of the `usersWallets` section — aggregate AND per customer, and the source-money
  * accounting U9/U10 — is asserted over it. SYNTHETIC data only; NOT EVIDENCE.
  */
@@ -60,7 +60,6 @@ async function snapshotOf(shape: MoneyShape): Promise<LegacySnapshot> {
 function plan(
   snapshot: LegacySnapshot,
   existingOpenings: ReadonlyMap<string, bigint> = new Map(),
-  existingDebts: ReadonlyMap<string, RecordedDebt> = new Map(),
 ): LegacyPlan {
   return planLegacyImport({
     snapshot,
@@ -68,7 +67,6 @@ function plan(
     salesCurrency: 'IRT',
     existingCustomers: new Map(),
     existingOpenings,
-    existingDebts,
     trialOverrides: new Map(),
     trialDecided: new Set(),
     existingShapes: new Map(),
@@ -115,13 +113,12 @@ function mapRow(u: PlannedUser, over: Partial<LegacyImportMapRecord> = {}): Lega
 
 /**
  * What an APPLY of `planned` records: every importable user's map row, one opening CREDIT per
- * positive, one debt per negative, one review row per held user — or, with `upTo`, only the
+ * positive, one DEBIT per negative, one review row per held user — or, with `upTo`, only the
  * first `upTo` importable users (a run that crashed part way).
  */
 function applied(planned: LegacyPlan, upTo = Number.POSITIVE_INFINITY) {
   const mapRows = new Map<string, LegacyImportMapRecord>();
   const openings = new Map<string, bigint>();
-  const debts = new Map<string, bigint>();
   let done = 0;
   for (const u of planned.users) {
     if (u.decision.kind === 'INVALID_IDENTITY') continue;
@@ -141,10 +138,9 @@ function applied(planned: LegacyPlan, upTo = Number.POSITIVE_INFINITY) {
     if (done >= upTo) continue;
     done += 1;
     mapRows.set(u.row.id, mapRow(u));
-    if (u.decision.balanceMinor > 0n) openings.set(u.row.id, u.decision.balanceMinor);
-    if (u.decision.balanceMinor < 0n) debts.set(u.row.id, -u.decision.balanceMinor);
+    if (u.decision.balanceMinor !== 0n) openings.set(u.row.id, u.decision.balanceMinor);
   }
-  return { mapRows, openings, debts };
+  return { mapRows, openings };
 }
 
 function section(
@@ -152,7 +148,10 @@ function section(
   planned: LegacyPlan,
   state: ReturnType<typeof applied>,
 ): UsersWalletsSection {
-  const sum = (m: ReadonlyMap<string, bigint>) => [...m.values()].reduce((a, b) => a + b, 0n);
+  const values = [...state.openings.values()];
+  const credits = values.filter((v) => v > 0n);
+  const debits = values.filter((v) => v < 0n);
+  const sum = (v: readonly bigint[]) => v.reduce((a, b) => a + b, 0n);
   return buildUsersWalletsSection({
     sourceFingerprint: snapshot.fingerprint,
     synthetic: snapshot.synthetic,
@@ -160,18 +159,15 @@ function section(
     users: planned.users,
     mapRows: state.mapRows,
     openings: state.openings,
-    debts: state.debts,
     openingTotals: {
-      count: state.openings.size,
-      sumMinor: sum(state.openings),
-      negative: [...state.openings.values()].filter((v) => v < 0n).length,
+      count: values.length,
+      sumMinor: sum(values),
+      positive: credits.length,
+      negative: debits.length,
+      creditSumMinor: sum(credits),
+      debitSumMinor: -sum(debits),
     },
-    debtTotals: {
-      count: state.debts.size,
-      sumMinor: sum(state.debts),
-      byState: { PENDING_REVIEW: { count: state.debts.size, sumMinor: sum(state.debts) } },
-      synthetic: snapshot.synthetic ? state.debts.size : 0,
-    },
+    legacyDebtRows: 0,
   });
 }
 
@@ -195,7 +191,7 @@ describe('the real package money shape, planned and accounted (unit)', () => {
     expect(spread(10n, 10, 3)).toEqual(Array.from({ length: 10 }, () => 1n));
   });
 
-  it('the plan credits exactly the positives, records exactly the 38 debts, and holds the rest for review', async () => {
+  it('the plan credits exactly the positives, debits exactly the 38 negatives, and holds the rest for review', async () => {
     const snapshot = await snapshotOf(shape);
     const planned = plan(snapshot);
     const t = planned.tallies;
@@ -205,13 +201,13 @@ describe('the real package money shape, planned and accounted (unit)', () => {
       sumMinor: -MONEY_SHAPE_DEBT_SUM,
     });
     expect(t.wallet.zero).toBe(ZEROS);
-    expect(t.wallet.openings).toMatchObject({
-      POST: POSITIVES,
-      RECORD_DEBT: MONEY_SHAPE_DEBTS,
+    expect(t.wallet.openings).toEqual({
+      POST: POSITIVES + MONEY_SHAPE_DEBTS,
       ZERO_NO_ENTRY: ZEROS,
       CONFLICT: 0,
       ALREADY_POSTED: 0,
     });
+    expect(t.wallet.debitOpenings).toMatchObject({ POST: MONEY_SHAPE_DEBTS });
     expect(t.customers.manualReview).toEqual({
       BALANCE_UNREADABLE: 2,
       BALANCE_OUT_OF_RANGE: 2,
@@ -244,23 +240,21 @@ describe('the real package money shape, planned and accounted (unit)', () => {
       openingEntries: POSITIVES,
       openingSumMinor: '2986130847',
     });
-    expect(s.wallet.legacyDebts).toMatchObject({
+    expect(s.wallet.negative).toEqual({
       users: 38,
       sumMinor: '130634742',
-      recorded: 38,
-      recordedSumMinor: '130634742',
+      openingEntries: 38,
+      openingSumMinor: '130634742',
     });
-    expect(s.wallet.ledgerDebitOpenings).toBe(0);
+    expect(s.wallet.legacyDebtRows).toBe(0);
     expect(s.wallet.perUser).toEqual({
       matching: POSITIVES + MONEY_SHAPE_DEBTS + ZEROS,
       missingOpening: 0,
-      missingDebt: 0,
-      priorDebitOpening: 0,
       conflicting: 0,
     });
     const m = s.wallet.sourceMoney;
     expect(m.credited).toEqual({ rows: POSITIVES, sumMinor: '2986130847' });
-    expect(m.debtRecorded).toEqual({ rows: 38, sumMinor: '130634742' });
+    expect(m.debited).toEqual({ rows: 38, sumMinor: '130634742' });
     expect(m.zero).toEqual({ rows: ZEROS });
     expect(m.unaccounted.rows).toBe(0);
     // Unreadable balances are counted by rows, never summed as 0.
@@ -318,17 +312,17 @@ describe('the real package money shape, planned and accounted (unit)', () => {
     expect(s.wallet.sourceMoney.unaccounted).toMatchObject({ rows: 2 });
   });
 
-  it('a missing opening, a doubled debt and money on a held row each fail', async () => {
+  it('a missing opening, a doubled DEBIT and money on a held row each fail', async () => {
     const snapshot = await snapshotOf(shape);
     const planned = plan(snapshot);
     const missing = applied(planned);
     missing.openings.delete([...shape.positives.keys()][5] ?? '');
     expect(failing(section(snapshot, planned, missing))).toEqual(['U2', 'U3', 'U7', 'U9', 'U10']);
 
-    const wrongDebt = applied(planned);
+    const wrongDebit = applied(planned);
     const debtor = [...shape.debts.keys()][0] ?? '';
-    wrongDebt.debts.set(debtor, (wrongDebt.debts.get(debtor) ?? 0n) * 2n);
-    expect(failing(section(snapshot, planned, wrongDebt))).toEqual(['U4', 'U7', 'U9', 'U10']);
+    wrongDebit.openings.set(debtor, (wrongDebit.openings.get(debtor) ?? 0n) * 2n);
+    expect(failing(section(snapshot, planned, wrongDebit))).toEqual(['U4', 'U7', 'U9', 'U10']);
 
     // A held (STATUS_UNKNOWN) user given an opening anyway: never an equation that holds.
     const leak = applied(planned);
@@ -337,19 +331,14 @@ describe('the real package money shape, planned and accounted (unit)', () => {
     expect(failing(section(snapshot, planned, leak))).toContain('U2');
   });
 
-  it('a rerun over what the import recorded plans no second credit and no second debt', async () => {
+  it('a rerun over what the import recorded plans no second credit and no second debit', async () => {
     const snapshot = await snapshotOf(shape);
     const first = plan(snapshot);
     const state = applied(first);
-    const debts = new Map(
-      [...state.debts].map(([id, amountMinor]) => [id, { amountMinor, synthetic: true }]),
-    );
-    const again = plan(snapshot, state.openings, debts);
-    expect(again.tallies.wallet.openings).toMatchObject({
+    const again = plan(snapshot, state.openings);
+    expect(again.tallies.wallet.openings).toEqual({
       POST: 0,
-      RECORD_DEBT: 0,
-      ALREADY_POSTED: POSITIVES,
-      DEBT_ALREADY_RECORDED: MONEY_SHAPE_DEBTS,
+      ALREADY_POSTED: POSITIVES + MONEY_SHAPE_DEBTS,
       ZERO_NO_ENTRY: ZEROS,
       CONFLICT: 0,
     });
@@ -368,7 +357,7 @@ describe('the real package money shape, planned and accounted (unit)', () => {
     expect(BigInt(pm.credited.sumMinor) + BigInt(pending.positive.sumMinor)).toBe(
       MONEY_SHAPE_POSITIVE_SUM,
     );
-    expect(BigInt(pm.debtRecorded.sumMinor) + BigInt(pending.negative.sumMinor)).toBe(
+    expect(BigInt(pm.debited.sumMinor) + BigInt(pending.negative.sumMinor)).toBe(
       MONEY_SHAPE_DEBT_SUM,
     );
     const done = section(snapshot, planned, applied(planned)).wallet.sourceMoney;

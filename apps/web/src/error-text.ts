@@ -312,6 +312,7 @@ export const ERROR_TEXT = {
   'commerce.trial_reset_nothing': 'web.err_commerce_trial_reset_nothing',
   'commerce.trial_reset_stale': 'web.err_commerce_trial_reset_stale',
   'commerce.wallet_currency_unsupported': 'web.err_commerce_wallet_currency_unsupported',
+  'commerce.wallet_negative_top_up_required': 'web.err_commerce_wallet_negative_top_up_required',
   'commerce.wallet_insufficient_funds': 'web.err_commerce_wallet_insufficient_funds',
   'control.client_app_limit': 'web.err_control_client_app_limit',
   'control.client_app_not_found': 'web.err_control_client_app_not_found',

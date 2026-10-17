@@ -9,7 +9,6 @@ import { legacyWalletDebts } from '../../../../infrastructure/persistence/schema
 import type {
   LegacyWalletDebtAggregate,
   LegacyWalletDebtDecisionChange,
-  LegacyWalletDebtFacts,
   LegacyWalletDebtListFilter,
   LegacyWalletDebtRecord,
   LegacyWalletDebtRepository,
@@ -73,53 +72,6 @@ export class DrizzleLegacyWalletDebtRepository implements LegacyWalletDebtReposi
     options: { readonly forUpdate?: boolean } = {},
   ): Promise<LegacyWalletDebtRecord | null> {
     return this.findOne(scope, eq(legacyWalletDebts.id, id), tx, options.forUpdate === true);
-  }
-
-  findByCustomer(
-    scope: TenantContext,
-    customerId: string,
-    tx: TransactionScope,
-  ): Promise<LegacyWalletDebtRecord | null> {
-    return this.findOne(scope, eq(legacyWalletDebts.customerId, customerId), tx);
-  }
-
-  findByLegacyUserId(
-    scope: TenantContext,
-    legacyUserId: string,
-    tx: TransactionScope,
-  ): Promise<LegacyWalletDebtRecord | null> {
-    return this.findOne(scope, eq(legacyWalletDebts.legacyUserId, legacyUserId), tx);
-  }
-
-  async insertIfAbsent(
-    scope: TenantContext,
-    facts: LegacyWalletDebtFacts,
-    tx: TransactionScope,
-  ): Promise<{ readonly debt: LegacyWalletDebtRecord; readonly inserted: boolean }> {
-    const tenantId = requireTenantId(scope);
-    const inserted = await this.exec(tx)
-      .insert(legacyWalletDebts)
-      .values({
-        ...facts,
-        tenantId,
-        state: 'PENDING_REVIEW',
-        decisionReason: null,
-        decidedByAdminId: null,
-        decidedAt: null,
-        version: 1,
-        updatedAt: facts.recordedAt,
-      })
-      // Either key: one debt per customer, one per legacy user id.
-      .onConflictDoNothing()
-      .returning();
-    if (inserted[0] !== undefined) return { debt: toRecord(inserted[0]), inserted: true };
-    const existing =
-      (await this.findByCustomer(scope, facts.customerId, tx)) ??
-      (await this.findByLegacyUserId(scope, facts.legacyUserId, tx));
-    if (existing === null) {
-      throw new Error('legacy wallet debt insert conflicted, yet no row holds either key');
-    }
-    return { debt: existing, inserted: false };
   }
 
   async decide(
