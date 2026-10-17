@@ -143,4 +143,9 @@ export const WEB_FA_MONEY_RETIRED: readonly string[] = [
   'web.reseller_plans_pricing_rule',
   // W5: replaced by `web.lwd_decision_no_money` (no «در این نسخه وجود ندارد»).
   'web.lwd_decision_moves_no_money',
+  // «صافی» wording; /resellers was their last renderer (it now reads «جست‌وجو / پاک کردن /
+  // این فیلتر» from `users_search_*` and `resellers_filter_empty`).
+  'web.referrals_filter_apply',
+  'web.referrals_filter_clear',
+  'web.referrals_filter_empty',
 ];
