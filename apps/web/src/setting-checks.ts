@@ -19,7 +19,21 @@ export function settingDraftProblems(
   draft: unknown,
 ): WebKey[] {
   if (!isSettingKey(key)) return [];
-  const parsed = settingDefinition(key).schema.safeParse(draft);
+  let parsed: ReturnType<ReturnType<typeof settingDefinition>['schema']['safeParse']>;
+  try {
+    parsed = settingDefinition(key).schema.safeParse(draft);
+  } catch {
+    /*
+     * Some money schemas refine with `BigInt(amountMinor)`, and Zod still runs a refine after
+     * the digits regex failed — so letters in an amount THROW out of `safeParse` rather than
+     * failing it. That is a refused draft, never a crash of the submit handler.
+     */
+    return [
+      control?.kind === 'money' || control?.kind === 'money_list'
+        ? 'web.err_setting_money'
+        : 'web.settings_invalid_value',
+    ];
+  }
   if (parsed.success) return [];
   const problems = parsed.error.issues.map((issue) =>
     problemFor(control, issue.path.map(String), draft),

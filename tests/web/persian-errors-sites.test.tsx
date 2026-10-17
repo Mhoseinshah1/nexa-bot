@@ -183,6 +183,15 @@ describe('a setting refused before it is sent', () => {
     expect(problems('ops.notifications.max_per_minute', 100000)).toEqual(['web.err_setting_range']);
   });
 
+  it('refuses letters in an amount with the money sentence, never by throwing', () => {
+    // These schemas refine with BigInt(amountMinor); a non-digit amount makes safeParse throw.
+    for (const key of ['wallet.topup.minimum', 'referral.minimum_order_amount']) {
+      expect(problems(key, { amountMinor: '12a', currency: 'IRT' }), key).toEqual([
+        'web.err_setting_money',
+      ]);
+    }
+  });
+
   it('shows the Persian sentence and sends nothing', async () => {
     const api = stubApi([
       {
