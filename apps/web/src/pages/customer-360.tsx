@@ -290,6 +290,13 @@ export function UserDetailPage({
   const queries = useQueryClient();
   const onLink = useLinkHandler();
   const submission = useSubmissionKey();
+  /*
+   * The CRM tab's note key lives on the page: only the chosen tab is drawn, so a key kept
+   * after an unanswered note (a 5xx that may have saved it) must survive a tab switch, or
+   * the retyped note goes out under a new key as a second note. The customer is part of the
+   * key's payload, so one key never stands for two customers.
+   */
+  const noteSubmission = useSubmissionKey();
   const [reason, setReason] = useState('');
   const [manualOrderOpen, setManualOrderOpen] = useState(false);
   const [messageOpen, setMessageOpen] = useState(false);
@@ -784,6 +791,7 @@ export function UserDetailPage({
                   mayWriteNotes={mayWriteNotes}
                   mayAssignTags={mayAssignTags}
                   mayManageTags={mayManageTags}
+                  noteSubmission={noteSubmission}
                 />
               )}
               {tab === 'timeline' && (

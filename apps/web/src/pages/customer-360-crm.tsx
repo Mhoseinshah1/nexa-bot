@@ -22,7 +22,7 @@ import {
   updateCustomerTag,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { c360Message } from './customer-360-sections';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
@@ -119,8 +119,11 @@ export function CustomerCrmSection({
   mayWriteNotes,
   mayAssignTags,
   mayManageTags,
+  noteSubmission,
 }: {
   customerId: string;
+  /** The new-note key, held by the page so it outlives this tab (see `UserDetailPage`). */
+  noteSubmission?: SubmissionKey;
   /** `users.notes.view` */
   mayViewNotes: boolean;
   /** `users.notes.write` */
@@ -137,7 +140,12 @@ export function CustomerCrmSection({
         mayAssign={mayAssignTags}
         mayManage={mayManageTags}
       />
-      <CustomerNotesCard customerId={customerId} mayView={mayViewNotes} mayWrite={mayWriteNotes} />
+      <CustomerNotesCard
+        customerId={customerId}
+        mayView={mayViewNotes}
+        mayWrite={mayWriteNotes}
+        {...(noteSubmission === undefined ? {} : { held: noteSubmission })}
+      />
     </div>
   );
 }
@@ -300,14 +308,17 @@ function CustomerNotesCard({
   customerId,
   mayView,
   mayWrite,
+  held,
 }: {
   customerId: string;
   mayView: boolean;
   mayWrite: boolean;
+  held?: SubmissionKey;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [draft, setDraft] = useState('');
   // W3: a new note is written in a dialog opened from the card's header.
   const [writing, setWriting] = useState(false);
