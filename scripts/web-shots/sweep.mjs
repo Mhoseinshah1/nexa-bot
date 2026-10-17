@@ -132,6 +132,7 @@ export function sweepProblems(entry, allowed = ALLOWED_DANGER_BANNERS) {
 }
 
 function parseArgs(argv) {
+  /** @type {{ routes: string[]; build: boolean; shots: boolean; views: string[] }} */
   const options = { routes: [], build: true, shots: false, views: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
