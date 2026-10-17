@@ -206,6 +206,46 @@ describe('customer first-bot link (OI-1)', () => {
       }
     });
 
+    it('refuses a bot that is not ACTIVE, before linking anyone', async () => {
+      const c = await customer({ imported: true });
+      await db().execute(sql`UPDATE bot_instances SET status = 'STOPPED' WHERE id = ${BOT1}`);
+      try {
+        await expect(service().apply(tenantA, ACTOR, BOT1 as never)).rejects.toThrow(/not active/u);
+        await expect(service().dryRun(tenantA, ACTOR, BOT1 as never)).rejects.toThrow(
+          /not active/u,
+        );
+        expect(await botOf(c.id)).toBeNull();
+      } finally {
+        await db().execute(sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${BOT1}`);
+      }
+    });
+
+    it('never splits the imported audience between two bots', async () => {
+      // A first run links to BOT1; a later run (a resume, a second operator) naming BOT2 is
+      // refused, because a link is never overwritten and the split could not be repaired.
+      const first = await customer({ imported: true });
+      await service().apply(tenantA, ACTOR, BOT1 as never);
+      expect(await botOf(first.id)).toBe(BOT1);
+      const late = await customer({ imported: true });
+      const before = await db().execute(sql`SELECT status FROM bot_instances WHERE id = ${BOT2}`);
+      const statusBefore = (before.rows[0] as { status: string }).status;
+      // BOT2 active too, so only the split rule can refuse it.
+      await db().execute(sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${BOT2}`);
+      try {
+        await expect(service().apply(tenantA, ACTOR, BOT2 as never)).rejects.toThrow(
+          /another bot/u,
+        );
+      } finally {
+        await db().execute(
+          sql`UPDATE bot_instances SET status = ${statusBefore} WHERE id = ${BOT2}`,
+        );
+      }
+      expect(await botOf(late.id)).toBeNull();
+      // The same bot again finishes the job.
+      expect((await service().apply(tenantA, ACTOR, BOT1 as never)).linked).toBe(1);
+      expect(await botOf(late.id)).toBe(BOT1);
+    });
+
     it('refuses a bot that does not exist in the tenant', async () => {
       await expect(service().dryRun(tenantA, ACTOR, randomUUID() as never)).rejects.toThrow();
     });

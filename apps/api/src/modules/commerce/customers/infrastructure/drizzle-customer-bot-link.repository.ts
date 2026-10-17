@@ -18,16 +18,39 @@ export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkReposito
     return (tx as TransactionScope | undefined)?.tx ?? this.db;
   }
 
-  async botExists(
+  async botStatus(
     scope: TenantContext,
     botInstanceId: BotInstanceId,
     tx?: unknown,
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     const tenantId = requireTenantId(scope);
+    // Inside a batch the bot row is held FOR SHARE: a concurrent stop or disable waits for the
+    // batch, and the next batch sees it.
     const r = await this.exec(tx).execute(
-      sql`SELECT 1 AS one FROM bot_instances WHERE tenant_id = ${tenantId} AND id = ${botInstanceId}`,
+      tx === undefined
+        ? sql`SELECT status FROM bot_instances WHERE tenant_id = ${tenantId} AND id = ${botInstanceId}`
+        : sql`SELECT status FROM bot_instances WHERE tenant_id = ${tenantId} AND id = ${botInstanceId} FOR SHARE`,
     );
-    return r.rows.length > 0;
+    return (r.rows[0] as { status: string } | undefined)?.status ?? null;
+  }
+
+  async serialiseAndPriorTargets(
+    scope: TenantContext,
+    auditAction: string,
+    tx: unknown,
+  ): Promise<readonly string[]> {
+    const tenantId = requireTenantId(scope);
+    const db = this.exec(tx);
+    // One link at a time per tenant: two runs never interleave their batches.
+    await db.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`customers-link-bot:${tenantId}`}, 0))`,
+    );
+    // The bots earlier runs linked customers to (their audit rows name the bot, nothing else).
+    const r = await db.execute(sql`
+      SELECT DISTINCT entity_id FROM audit_logs
+       WHERE tenant_id = ${tenantId} AND action = ${auditAction} AND result = 'SUCCESS'
+         AND entity_id IS NOT NULL`);
+    return r.rows.map((row) => String((row as { entity_id: string }).entity_id));
   }
 
   async countEligible(scope: TenantContext, tx?: unknown): Promise<number> {

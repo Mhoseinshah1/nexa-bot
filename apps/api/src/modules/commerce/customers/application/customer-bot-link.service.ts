@@ -36,8 +36,21 @@ export const CUSTOMER_BOT_LINK_BATCH_DEFAULT = 500;
 export const CUSTOMER_BOT_LINK_BATCH_MAX = 5_000;
 
 export interface CustomerBotLinkRepository {
-  /** Whether the bot instance exists in this tenant. */
-  botExists(scope: TenantContext, botInstanceId: BotInstanceId, tx?: unknown): Promise<boolean>;
+  /** The bot instance's status in this tenant, or null when there is none. */
+  botStatus(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    tx?: unknown,
+  ): Promise<string | null>;
+  /**
+   * Inside a batch's transaction: takes the tenant's link lock (one run's batch at a time) and
+   * returns the bots earlier runs linked customers to, from their audit rows.
+   */
+  serialiseAndPriorTargets(
+    scope: TenantContext,
+    auditAction: string,
+    tx: unknown,
+  ): Promise<readonly string[]>;
   /** Imported customers with a NULL link. */
   countEligible(scope: TenantContext, tx?: unknown): Promise<number>;
   /**
@@ -130,6 +143,24 @@ export class CustomerBotLinkService {
               'This installation has stopped accepting work.',
             );
           }
+          // A link is never overwritten, so a wrong one cannot be repaired by running again:
+          // every batch re-checks, under the tenant's link lock, that the bot is still ACTIVE
+          // and that no earlier run linked customers to another bot. Two concurrent runs, or a
+          // resume with another --bot, would otherwise split the imported audience.
+          const prior = await this.deps.repository.serialiseAndPriorTargets(
+            scope,
+            CUSTOMER_BOT_LINK_AUDIT_ACTION,
+            tx,
+          );
+          if (prior.some((bot) => bot !== botInstanceId)) {
+            throw errors.conflict(
+              'customers.bot_link_invalid',
+              'An earlier link run linked customers to another bot.',
+            );
+          }
+          if ((await this.deps.repository.botStatus(scope, botInstanceId, tx)) !== 'ACTIVE') {
+            throw errors.conflict('customers.bot_link_invalid', 'The bot is not active.');
+          }
           const count = await this.deps.repository.linkBatch(
             scope,
             { botInstanceId, limit: batchSize, now: this.deps.clock.now() },
@@ -162,8 +193,14 @@ export class CustomerBotLinkService {
   }
 
   private async requireBot(scope: TenantContext, botInstanceId: BotInstanceId): Promise<void> {
-    if (!(await this.deps.repository.botExists(scope, botInstanceId))) {
+    const status = await this.deps.repository.botStatus(scope, botInstanceId);
+    if (status === null) {
       throw errors.notFound('customers.bot_link_invalid', 'No such bot in this tenant.');
+    }
+    // Outbound messaging needs an ACTIVE bot: linking to a stopped one would make the whole
+    // imported audience unreachable, permanently.
+    if (status !== 'ACTIVE') {
+      throw errors.conflict('customers.bot_link_invalid', 'The bot is not active.');
     }
   }
 }
