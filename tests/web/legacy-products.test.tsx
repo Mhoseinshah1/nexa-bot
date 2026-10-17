@@ -4,6 +4,7 @@ import { LegacyProductsPage } from '../../apps/web/src/pages/legacy-products';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Mirza PR2 — the legacy product review page. Fixtures go through the real API client and
@@ -101,14 +102,21 @@ function page(options: { mayDecide?: boolean; mayCreateProduct?: boolean; rows?:
   return api;
 }
 
+/** The decision's own button inside its dialog (the drawer's opener has the same name). */
+const submit = (name: string): HTMLElement =>
+  within(screen.getByRole('dialog', { name })).getByRole('button', { name });
+
 describe('the legacy product review page', () => {
   it('lists the rows that want a decision, with the price labelled as history', async () => {
     const api = page();
     expect(await screen.findByText('synthetic 30GB')).toBeInTheDocument();
     expect(screen.getByText(t('web.lpr_banner'))).toBeInTheDocument();
     expect(screen.getAllByText(t('web.lpr_col_historical_price')).length).toBeGreaterThan(0);
-    expect(calls(api, 'GET', '/legacy-products?attention=true')).toHaveLength(1);
-    fireEvent.change(screen.getByLabelText(t('web.lpr_col_state')), {
+    expect(calls(api, 'GET', '/legacy-products?limit=10&attention=true')).toHaveLength(1);
+    // W1.8: ten a page.
+    expect(calls(api, 'GET', 'limit=10')).toHaveLength(1);
+    // W1.3: the state select is in the «فیلترها» panel.
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lpr_col_state')), {
       target: { value: 'REJECTED' },
     });
     await waitFor(() => expect(calls(api, 'GET', 'state=REJECTED')).toHaveLength(1));
@@ -119,9 +127,12 @@ describe('the legacy product review page', () => {
     await screen.findByText('synthetic 30GB');
     fireEvent.click(screen.getByRole('button', { name: t('web.lpr_open') }));
     expect(await screen.findByText('{"rp1":"rp1"}')).toBeInTheDocument();
+    // W3: the decision opens its own dialog.
+    expect(screen.queryByLabelText(t('web.lpr_draft_traffic'))).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.lpr_approve_new') }));
     expect(screen.getByText(t('web.lpr_draft_explained'))).toBeInTheDocument();
     expect(screen.getByLabelText(t('web.lpr_draft_traffic'))).toHaveValue('30');
-    fireEvent.click(screen.getByRole('button', { name: t('web.lpr_approve_new') }));
+    fireEvent.click(submit(t('web.lpr_approve_new')));
     await waitFor(() => expect(calls(api, 'POST', '/approve-new')).toHaveLength(1));
     const body = calls(api, 'POST', '/approve-new')[0]!.body as Record<string, unknown>;
     expect(body).toMatchObject({
@@ -144,7 +155,8 @@ describe('the legacy product review page', () => {
     });
     await screen.findByText('synthetic 30GB');
     fireEvent.click(screen.getAllByRole('button', { name: t('web.lpr_open') })[0]!);
-    const reject = await screen.findByRole('button', { name: t('web.lpr_reject') });
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lpr_reject') }));
+    const reject = submit(t('web.lpr_reject'));
     expect(reject).toBeDisabled();
     fireEvent.change(screen.getByLabelText(t('web.lpr_reason')), { target: { value: 'نه' } });
     fireEvent.click(reject);
@@ -181,10 +193,11 @@ describe('the legacy product review page', () => {
     renderPage(<LegacyProductsPage denied={false} mayDecide mayCreateProduct mayPickProduct />);
     await screen.findByText('synthetic 30GB');
     fireEvent.click(screen.getByRole('button', { name: t('web.lpr_open') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lpr_reopen') }));
     fireEvent.change(await screen.findByLabelText(t('web.lpr_reason')), {
       target: { value: 'دوباره' },
     });
-    fireEvent.click(screen.getByRole('button', { name: t('web.lpr_reopen') }));
+    fireEvent.click(submit(t('web.lpr_reopen')));
     await waitFor(() => expect(calls(api, 'POST', '/reopen')).toHaveLength(1));
     expect(calls(api, 'POST', '/reopen')[0]!.body).toMatchObject({
       expectedVersion: 4,
@@ -205,6 +218,7 @@ describe('the legacy product review page', () => {
     page({ mayCreateProduct: false });
     await screen.findByText('synthetic 30GB');
     fireEvent.click(screen.getByRole('button', { name: t('web.lpr_open') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lpr_approve_new') }));
     expect(await screen.findByText(t('web.lpr_no_catalog_edit'))).toBeInTheDocument();
     expect(screen.queryByLabelText(t('web.lpr_draft_title'))).toBeNull();
   });
@@ -264,6 +278,7 @@ describe('the approve-existing product picker', () => {
     renderPage(<LegacyProductsPage denied={false} mayDecide mayCreateProduct mayPickProduct />);
     await screen.findByText('synthetic 30GB');
     fireEvent.click(screen.getByRole('button', { name: t('web.lpr_open') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lpr_approve_existing') }));
     const picker = await screen.findByLabelText(t('web.lpr_pick_product'));
     await waitFor(() =>
       expect(within(picker).getByRole('option', { name: 'plan 105' })).toBeInTheDocument(),

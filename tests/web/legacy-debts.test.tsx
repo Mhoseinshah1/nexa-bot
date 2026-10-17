@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { LegacyDebtsPage } from '../../apps/web/src/pages/legacy-debts';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
@@ -77,20 +77,27 @@ describe('the legacy wallet debts page', () => {
         api.calls.some((c) => c.method === 'GET' && c.url.includes('state=PENDING_REVIEW')),
       ).toBe(true),
     );
+    // W1.8: ten a page.
+    expect(api.calls.some((c) => c.url.includes('/legacy-debts?limit=10'))).toBe(true);
     expect(api.calls.filter((c) => c.method !== 'GET')).toEqual([]);
   });
 
   it('a decision sends the strict body bound to the version shown — never an amount', async () => {
     const api = page();
     fireEvent.click(await screen.findByRole('button', { name: t('web.lwd_open') }));
-    expect(await screen.findByText(t('web.lwd_decision_moves_no_money'))).toBeInTheDocument();
-    expect(screen.getByText(t('web.lwd_never_collected'))).toBeInTheDocument();
-    const waive = screen.getByRole('button', { name: t('web.lwd_waive') });
+    expect(await screen.findByText(t('web.lwd_never_collected'))).toBeInTheDocument();
+    // W3: the decision opens its own dialog, with the banner and the reason.
+    fireEvent.click(screen.getByRole('button', { name: t('web.lwd_waive') }));
+    const dialog = screen.getByRole('dialog', { name: t('web.lwd_waive') });
+    expect(within(dialog).getByText(t('web.lwd_decision_no_money'))).toBeInTheDocument();
+    // W5: no «در این نسخه وجود ندارد» meta note.
+    expect(dialog.textContent).not.toContain('وجود ندارد');
+    const waive = within(dialog).getByRole('button', { name: t('web.lwd_waive') });
     expect(waive).toBeDisabled();
     fireEvent.change(screen.getByLabelText(t('web.lwd_reason')), {
       target: { value: 'بخشیده شد' },
     });
-    fireEvent.click(screen.getByRole('button', { name: t('web.lwd_waive') }));
+    fireEvent.click(waive);
     await waitFor(() =>
       expect(
         api.calls.filter((c) => c.method === 'POST' && c.url.includes('/decide')),

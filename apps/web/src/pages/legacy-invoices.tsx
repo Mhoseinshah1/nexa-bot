@@ -19,10 +19,14 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useRoute } from '../router';
+import { LegacyCode } from './code-name';
+import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
+import { LEGACY_IMPORT_MAP_STATUS_LABELS, LEGACY_REVIEW_STATE_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -31,7 +35,6 @@ import {
   DataTable,
   Empty,
   Field,
-  FilterBar,
   Input,
   Ltr,
   Money,
@@ -254,7 +257,8 @@ export function LegacyInvoicesPage({
   const query = queryOf(filters, mayViewPii, after);
   const invoices = useQuery({
     queryKey: ['legacy-invoices', query],
-    queryFn: () => fetchLegacyInvoices(query),
+    // W1.8: ten rows a page, on the same keyset.
+    queryFn: () => fetchLegacyInvoices({ ...query, limit: LIST_PAGE_SIZE }),
     enabled: !denied,
   });
   const summary = useQuery({
@@ -356,23 +360,31 @@ export function LegacyInvoicesPage({
     },
   ];
 
-  const textFilter = (name: keyof Filters, label: WebKey, disabled = false) => (
-    <Field
-      label={t(label)}
-      htmlFor={`lia-${name}`}
-      compact
-      {...(disabled ? { hint: t('web.lia_pii_needed') } : {})}
-    >
-      <Input
-        id={`lia-${name}`}
-        size="sm"
-        value={filters[name] as string}
-        maxLength={LEGACY_INVOICE_ARCHIVE_SEARCH_MAX}
-        disabled={disabled}
-        onChange={(event) => set(name, event.target.value as never)}
-      />
-    </Field>
+  const textInput = (name: keyof Filters, label: WebKey, disabled = false) => (
+    <Input
+      id={`lia-${name}`}
+      size="sm"
+      aria-label={t(label)}
+      value={filters[name] as string}
+      maxLength={LEGACY_INVOICE_ARCHIVE_SEARCH_MAX}
+      disabled={disabled}
+      {...(disabled ? { title: t('web.lia_pii_needed') } : {})}
+      onChange={(event) => set(name, event.target.value as never)}
+    />
   );
+  /** A typed filter in the "Filters" panel: active while it holds text. */
+  const textFilter = (name: keyof Filters, label: WebKey, disabled = false): ListFilter => ({
+    key: name,
+    label: t(label),
+    active: disabled || (filters[name] as string) === '' ? null : (filters[name] as string),
+    onClear: () => set(name, '' as never),
+    control: (
+      <>
+        {textInput(name, label, disabled)}
+        {disabled && <span className="muted small">{t('web.lia_pii_needed')}</span>}
+      </>
+    ),
+  });
 
   return (
     <>
@@ -382,43 +394,70 @@ export function LegacyInvoicesPage({
       </Banner>
       {!mayViewPii && <Banner tone="neutral">{t('web.lia_pii_banner')}</Banner>}
       {summary.data !== undefined && <ArchiveSummary data={summary.data} />}
-      <FilterBar>
-        {textFilter('invoiceId', 'web.lia_filter_invoice')}
-        {textFilter('legacyUserId', 'web.lia_filter_owner', !mayViewPii)}
-        {textFilter('username', 'web.lia_filter_username', !mayViewPii)}
-        {textFilter('status', 'web.lia_filter_status')}
-        {textFilter('panelCode', 'web.lia_filter_panel')}
-        {textFilter('productCode', 'web.lia_filter_product')}
-        <Field label={t('web.lia_col_class')} htmlFor="lia-class" compact>
-          <Select
-            id="lia-class"
-            size="sm"
-            value={filters.classification}
-            onChange={(event) =>
-              set('classification', event.target.value as Filters['classification'])
-            }
-          >
-            <option value="ALL">{t('web.lia_filter_all')}</option>
-            {LEGACY_INVOICE_ARCHIVE_CLASSES.map((value) => (
-              <option key={value} value={value}>
-                {t(LEGACY_INVOICE_CLASS_LABELS[value])}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label={t('web.lia_filter_test')} htmlFor="lia-test" compact>
-          <Select
-            id="lia-test"
-            size="sm"
-            value={filters.test}
-            onChange={(event) => set('test', event.target.value as TestFilter)}
-          >
-            <option value="ALL">{t('web.lia_filter_all')}</option>
-            <option value="true">{t('web.lia_test_yes')}</option>
-            <option value="false">{t('web.lia_test_no')}</option>
-          </Select>
-        </Field>
-      </FilterBar>
+      <ListFilterBar
+        label={t('web.lia_title')}
+        search={
+          <Field label={t('web.lia_filter_invoice')} htmlFor="lia-invoiceId" compact>
+            {textInput('invoiceId', 'web.lia_filter_invoice')}
+          </Field>
+        }
+        filters={[
+          textFilter('legacyUserId', 'web.lia_filter_owner', !mayViewPii),
+          textFilter('username', 'web.lia_filter_username', !mayViewPii),
+          textFilter('status', 'web.lia_filter_status'),
+          textFilter('panelCode', 'web.lia_filter_panel'),
+          textFilter('productCode', 'web.lia_filter_product'),
+          {
+            key: 'classification',
+            label: t('web.lia_col_class'),
+            active:
+              filters.classification === 'ALL'
+                ? null
+                : t(LEGACY_INVOICE_CLASS_LABELS[filters.classification]),
+            onClear: () => set('classification', 'ALL'),
+            control: (
+              <Select
+                id="lia-class"
+                size="sm"
+                aria-label={t('web.lia_col_class')}
+                value={filters.classification}
+                onChange={(event) =>
+                  set('classification', event.target.value as Filters['classification'])
+                }
+              >
+                <option value="ALL">{t('web.lia_filter_all')}</option>
+                {LEGACY_INVOICE_ARCHIVE_CLASSES.map((value) => (
+                  <option key={value} value={value}>
+                    {t(LEGACY_INVOICE_CLASS_LABELS[value])}
+                  </option>
+                ))}
+              </Select>
+            ),
+          },
+          {
+            key: 'test',
+            label: t('web.lia_filter_test'),
+            active:
+              filters.test === 'ALL'
+                ? null
+                : t(filters.test === 'true' ? 'web.lia_test_yes' : 'web.lia_test_no'),
+            onClear: () => set('test', 'ALL'),
+            control: (
+              <Select
+                id="lia-test"
+                size="sm"
+                aria-label={t('web.lia_filter_test')}
+                value={filters.test}
+                onChange={(event) => set('test', event.target.value as TestFilter)}
+              >
+                <option value="ALL">{t('web.lia_filter_all')}</option>
+                <option value="true">{t('web.lia_test_yes')}</option>
+                <option value="false">{t('web.lia_test_no')}</option>
+              </Select>
+            ),
+          },
+        ]}
+      />
       <StateSwitch
         query={invoices}
         denied={denied}
@@ -658,7 +697,7 @@ export function InvoiceDetail({ id }: { id: string }) {
           <dl className="kv small">
             <dt>{t('web.lia_import_status')}</dt>
             <dd>
-              <Ltr>{importOutcome.status}</Ltr>
+              <LegacyCode value={importOutcome.status} labels={LEGACY_IMPORT_MAP_STATUS_LABELS} />
             </dd>
             <dt>{t('web.lia_import_reason')}</dt>
             <dd>
@@ -673,7 +712,7 @@ export function InvoiceDetail({ id }: { id: string }) {
               {importOutcome.reviewState === null ? (
                 <Muted />
               ) : (
-                <Ltr>{importOutcome.reviewState}</Ltr>
+                <LegacyCode value={importOutcome.reviewState} labels={LEGACY_REVIEW_STATE_LABELS} />
               )}
             </dd>
           </dl>

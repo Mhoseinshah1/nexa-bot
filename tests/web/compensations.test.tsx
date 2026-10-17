@@ -86,9 +86,10 @@ describe('the compensation list', () => {
       />,
     );
     await screen.findByRole('table');
-    expect(api.calls.some((call) => call.url.includes('/compensations?cursor=opaque-token'))).toBe(
-      true,
-    );
+    const list = api.calls.find((call) => call.url.includes('/compensations?'))?.url ?? '';
+    expect(list).toContain('cursor=opaque-token');
+    // W1.8: ten rows a page, on the same keyset.
+    expect(list).toContain('limit=10');
   });
 
   it('says there is nothing yet, rather than drawing an empty table', async () => {

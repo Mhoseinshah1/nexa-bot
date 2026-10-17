@@ -145,7 +145,9 @@ describe('the category list', () => {
     renderPage(<ProductCategoriesPage denied={false} mayEdit />);
 
     await screen.findByText('هنوز دسته‌ای ساخته نشده است');
-    expect(screen.getByRole('button', { name: 'ذخیره' })).toBeTruthy();
+    // W3: «دسته تازه» in the head opens the form in a drawer, empty state or not.
+    fireEvent.click(screen.getByRole('button', { name: t('web.category_new') }));
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'ذخیره' })).toBeTruthy();
   });
 });
 
@@ -260,35 +262,39 @@ describe('reordering', () => {
 });
 
 describe('replacing unsaved input in the category form', () => {
-  it('asks before Edit or New replaces what was typed, and not when nothing was', async () => {
+  it('asks before closing the drawer over what was typed, and not when nothing was', async () => {
     stubApi(list([category()]));
     renderPage(<ProductCategoriesPage denied={false} mayEdit />);
     await screen.findByText('عمومی');
-    const name = () => document.getElementById('cat-name') as HTMLInputElement;
-    const edit = () =>
-      within(rowFor('عمومی')).getByRole('button', { name: t('web.category_edit') });
-    fireEvent.change(name(), { target: { value: 'ویژه' } });
+    const name = () => document.getElementById('cat-name') as HTMLInputElement | null;
+    fireEvent.click(screen.getByRole('button', { name: t('web.category_new') }));
+    fireEvent.change(name()!, { target: { value: 'ویژه' } });
 
-    fireEvent.click(edit());
+    // Esc over a typed draft asks; «ماندن» keeps the draft and the drawer.
+    fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.click(
       within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
         'button',
         { name: t('web.unsaved_stay') },
       ),
     );
-    expect(name().value).toBe('ویژه');
+    expect(name()!.value).toBe('ویژه');
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.category_new') }));
+    // Discarding closes it.
+    fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.click(
       within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
         'button',
         { name: t('web.discard') },
       ),
     );
-    await waitFor(() => expect(name().value).toBe(''));
+    await waitFor(() => expect(name()).toBeNull());
 
-    fireEvent.click(edit());
+    // A row's «ویرایش» opens the drawer with that row, and closing it untouched asks nothing.
+    fireEvent.click(within(rowFor('عمومی')).getByRole('button', { name: t('web.category_edit') }));
+    await waitFor(() => expect(name()!.value).toBe('عمومی'));
+    fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('alertdialog')).toBeNull();
-    await waitFor(() => expect(name().value).toBe('عمومی'));
+    await waitFor(() => expect(name()).toBeNull());
   });
 });

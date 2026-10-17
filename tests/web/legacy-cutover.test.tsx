@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { LegacyCutoverPage } from '../../apps/web/src/pages/legacy-cutover';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
@@ -109,7 +109,9 @@ describe('the legacy cutover approval page', () => {
 
   it('approve stays disabled until every value is an exact SHA-256; the body is the strict request, verbatim', async () => {
     const api = page();
-    await screen.findByText(t('web.lco_approve_title'));
+    // W3: the approval form opens in a dialog from the page head.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lco_approve_title') }));
+    expect(screen.getByRole('dialog', { name: t('web.lco_approve_title') })).toBeInTheDocument();
     const button = screen.getByRole('button', { name: t('web.lco_approve') });
     for (const [label, value] of FIELDS) {
       fireEvent.change(screen.getByLabelText(t(label as never)), { target: { value } });
@@ -157,7 +159,7 @@ describe('the legacy cutover approval page', () => {
 
   it('a re-run acknowledgement needs a prior source other than this one', async () => {
     page();
-    await screen.findByText(t('web.lco_approve_title'));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lco_approve_title') }));
     fireEvent.change(screen.getByLabelText(t('web.lco_col_kind')), {
       target: { value: 'RERUN_OVER_PRIOR_IMPORT' },
     });
@@ -188,10 +190,29 @@ describe('the legacy cutover approval page', () => {
     );
   });
 
+  it('revokes from a row through a dialog that needs a reason', async () => {
+    const api = page();
+    fireEvent.click((await screen.findAllByRole('button', { name: t('web.lco_revoke') }))[0]!);
+    const dialog = screen.getByRole('dialog', { name: t('web.lco_revoke') });
+    const send = within(dialog).getByRole('button', { name: t('web.lco_revoke') });
+    expect(send).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(t('web.lco_reason')), {
+      target: { value: 'اشتباه' },
+    });
+    expect(send).toBeEnabled();
+    fireEvent.click(send);
+    await waitFor(() =>
+      expect(
+        api.calls.filter((c) => c.method === 'POST' && c.url.includes('/revoke')),
+      ).toHaveLength(1),
+    );
+  });
+
   it('without legacy.cutover.approve nothing on the page writes', async () => {
     const api = page({ mayApprove: false });
     expect(await screen.findByText(t('web.lco_view_only'))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: t('web.lco_approve') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.lco_approve_title') })).toBeNull();
     expect(screen.queryByRole('button', { name: t('web.lco_revoke') })).toBeNull();
     expect(api.calls.filter((c) => c.method !== 'GET')).toEqual([]);
   });

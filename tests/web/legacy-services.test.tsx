@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { LEGACY_SERVICE_OUTCOMES, LEGACY_SERVICE_REVIEW_STATES } from '@nexa/contracts';
 import { LegacyServicesPage } from '../../apps/web/src/pages/legacy-services';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { formatNumber } from '../../apps/web/src/format';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { panel as panelFixture, renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 
 /**
  * Mirza PR5 — the legacy service candidates page (owner decision 8). Fixtures go through the
@@ -135,6 +136,10 @@ function page(
   return api;
 }
 
+/** The decision's own button inside its dialog (the drawer's opener has the same name). */
+const submit = (name: string): HTMLElement =>
+  within(screen.getByRole('dialog', { name })).getByRole('button', { name });
+
 describe('the legacy service candidates page', () => {
   it('lists the open candidates with their outcome; filters reach the server, the invoice id verbatim', async () => {
     const api = page();
@@ -145,13 +150,13 @@ describe('the legacy service candidates page', () => {
         true,
       ),
     );
-    fireEvent.change(screen.getByLabelText(t('web.lsr_col_outcome')), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_outcome')), {
       target: { value: 'NO_PANEL' },
     });
-    fireEvent.change(screen.getByLabelText(t('web.lsr_col_panel_code')), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_panel_code')), {
       target: { value: 'rp2' },
     });
-    fireEvent.change(screen.getByLabelText(t('web.lsr_col_product_code')), {
+    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_product_code')), {
       target: { value: 'p1' },
     });
     fireEvent.change(screen.getByLabelText(t('web.lsr_search_invoice')), {
@@ -164,7 +169,9 @@ describe('the legacy service candidates page', () => {
             c.url.includes('outcome=NO_PANEL') &&
             c.url.includes('panelCode=rp2') &&
             c.url.includes('productCode=p1') &&
-            c.url.includes('invoiceId=+a0+'),
+            c.url.includes('invoiceId=+a0+') &&
+            // W1.8: ten a page.
+            c.url.includes('limit=10'),
         ),
       ).toBe(true),
     );
@@ -175,15 +182,17 @@ describe('the legacy service candidates page', () => {
     const api = page();
     fireEvent.click(await screen.findByRole('button', { name: t('web.lsr_open') }));
     expect(await screen.findByText(t('web.lsr_why_no_panel'))).toBeInTheDocument();
+    // W3: ADOPT opens its own dialog with the banner, the panel picker and the reason.
+    fireEvent.click(screen.getByRole('button', { name: t('web.lsr_adopt') }));
     expect(screen.getByText(t('web.lsr_adopt_explained'))).toBeInTheDocument();
     // The holder's name came from the SECOND page of panels.
     expect((await screen.findAllByText(/Panel B \(page 2\)/u)).length).toBeGreaterThan(0);
-    const adopt = screen.getByRole('button', { name: t('web.lsr_adopt') });
+    const adopt = submit(t('web.lsr_adopt'));
     expect(adopt).toBeDisabled();
     fireEvent.change(screen.getByLabelText(t('web.lsr_reason')), {
       target: { value: 'حساب در پنل B' },
     });
-    fireEvent.click(screen.getByRole('button', { name: t('web.lsr_adopt') }));
+    fireEvent.click(adopt);
     await waitFor(() =>
       expect(api.calls.filter((c) => c.method === 'POST' && c.url.includes('/adopt'))).toHaveLength(
         1,
@@ -202,9 +211,10 @@ describe('the legacy service candidates page', () => {
   it('with no mapped holder the ADOPT cannot be sent, and the page says why', async () => {
     const api = page({ adoptPanels: [] });
     fireEvent.click(await screen.findByRole('button', { name: t('web.lsr_open') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lsr_adopt') }));
     expect(await screen.findByText(t('web.lsr_adopt_no_panel_available'))).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(t('web.lsr_reason')), { target: { value: 'x' } });
-    expect(screen.getByRole('button', { name: t('web.lsr_adopt') })).toBeDisabled();
+    expect(submit(t('web.lsr_adopt'))).toBeDisabled();
     expect(api.calls.filter((c) => c.method !== 'GET')).toEqual([]);
   });
 
@@ -227,9 +237,10 @@ describe('the legacy service candidates page', () => {
     });
     fireEvent.click(await screen.findByRole('button', { name: t('web.lsr_open') }));
     expect(await screen.findByText(t('web.lsr_why_product_unresolved'))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: t('web.lsr_adopt') }));
     expect(screen.queryByLabelText(t('web.lsr_adopt_panel'))).toBeNull();
     fireEvent.change(screen.getByLabelText(t('web.lsr_reason')), { target: { value: 'نگاشت شد' } });
-    fireEvent.click(screen.getByRole('button', { name: t('web.lsr_adopt') }));
+    fireEvent.click(submit(t('web.lsr_adopt')));
     await waitFor(() => expect(api.calls.some((c) => c.method === 'POST')).toBe(true));
     const sent = api.calls.find((c) => c.method === 'POST')?.body as Record<string, unknown>;
     expect(sent).not.toHaveProperty('panelId');

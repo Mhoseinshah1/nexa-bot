@@ -17,6 +17,8 @@ import {
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import {
+  LIST_PAGE_SIZE,
+  usePagedRows,
   Badge,
   Banner,
   Card,
@@ -62,7 +64,7 @@ const PURCHASE_PURPOSE_LABELS: Readonly<Record<OrderPurpose, WebKey>> = {
   CUSTOM_SERVICE: 'web.purpose_custom_service',
 };
 
-const ACTOR_TYPE_LABELS: Readonly<Record<ActorType, WebKey>> = {
+export const ACTOR_TYPE_LABELS: Readonly<Record<ActorType, WebKey>> = {
   CUSTOMER: 'web.history_actor_customer',
   TELEGRAM_ADMIN: 'web.history_actor_telegram_admin',
   WEB_ADMIN: 'web.history_actor_web_admin',
@@ -71,7 +73,7 @@ const ACTOR_TYPE_LABELS: Readonly<Record<ActorType, WebKey>> = {
   PROVIDER_SYNC: 'web.history_actor_provider',
 };
 
-const RESULT_LABELS: Readonly<Record<AuditResult, WebKey>> = {
+export const AUDIT_RESULT_LABELS: Readonly<Record<AuditResult, WebKey>> = {
   SUCCESS: 'web.history_result_success',
   DENIED: 'web.history_result_denied',
   FAILED: 'web.history_result_failed',
@@ -181,7 +183,12 @@ export function ResellerPurchasesCard({
   const cursor = trail[trail.length - 1];
   const purchases = useQuery({
     queryKey: ['reseller-purchases', customerId, cursor ?? null],
-    queryFn: () => fetchResellerPurchases(customerId, cursor === undefined ? {} : { cursor }),
+    // W1.8: ten rows a page, on the same keyset.
+    queryFn: () =>
+      fetchResellerPurchases(customerId, {
+        limit: LIST_PAGE_SIZE,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
     enabled: mayViewOrders,
   });
   const rows = purchases.data?.purchases ?? [];
@@ -339,6 +346,8 @@ function HistoryCard({
   entries: readonly ResellerHistoryEntry[];
   mayViewAudit: boolean;
 }) {
+  /** W1.8: the history is one answer, drawn ten entries a page. */
+  const paged = usePagedRows(entries);
   const columns: readonly Column<ResellerHistoryEntry>[] = [
     {
       key: 'when',
@@ -372,7 +381,7 @@ function HistoryCard({
       key: 'result',
       header: t('web.history_result'),
       render: (row) => (
-        <Badge tone={RESULT_TONES[row.result]}>{t(RESULT_LABELS[row.result])}</Badge>
+        <Badge tone={RESULT_TONES[row.result]}>{t(AUDIT_RESULT_LABELS[row.result])}</Badge>
       ),
     },
     {
@@ -395,9 +404,10 @@ function HistoryCard({
             dense
             caption={t('web.history_title')}
             columns={columns}
-            rows={entries}
+            rows={paged.rows}
             rowKey={(row) => row.id}
           />
+          {paged.pager}
         </StateSwitch>
       )}
     </Card>

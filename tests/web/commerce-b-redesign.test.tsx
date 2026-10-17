@@ -68,13 +68,38 @@ describe('the product editor', () => {
     expect(window.location.pathname).toBe('/orders');
   });
 
-  it('offers a section list that moves to each section', async () => {
+  /*
+   * W2: no section list that scrolls the page — a real tab strip, one section drawn at a
+   * time, values kept across tabs, a warn dot on a tab whose fields changed and a danger
+   * dot where the current problem is.
+   */
+  it('shows one section per tab, keeps values across tabs, and marks changed and failing tabs', async () => {
     stubApi(routes);
     renderPage(<ProductDetailPage id={PRODUCT_ID} mayEdit denied={false} />);
-    await screen.findByLabelText('عنوان');
-    const nav = screen.getByRole('navigation', { name: t('web.cb_sections') });
-    fireEvent.click(within(nav).getByRole('button', { name: t('web.cb_section_pricing') }));
-    await waitFor(() => expect(document.activeElement?.id).toBe('product-edit-pricing'));
+    const title = (await screen.findByLabelText('عنوان')) as HTMLInputElement;
+    expect(screen.queryByRole('navigation', { name: t('web.cb_sections') })).toBeNull();
+    const tabs = screen.getByRole('tablist', { name: t('web.cb_sections') });
+    expect(within(tabs).getAllByRole('tab')).toHaveLength(5);
+    expect(screen.queryByLabelText('قیمت')).toBeNull();
+
+    fireEvent.change(title, { target: { value: 'پلن تازه' } });
+    const basic = within(tabs).getByRole('tab', { name: new RegExp(t('web.cb_section_basic')) });
+    expect(basic).toHaveTextContent(t('web.money_tab_unsaved'));
+
+    const pricing = within(tabs).getByRole('tab', {
+      name: new RegExp(t('web.cb_section_pricing')),
+    });
+    fireEvent.click(pricing);
+    expect(pricing).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByLabelText('عنوان')).toBeNull();
+    fireEvent.change(screen.getByLabelText('قیمت'), { target: { value: '0' } });
+    expect(pricing).toHaveTextContent(t('web.money_tab_problem'));
+    expect(basic).not.toHaveTextContent(t('web.money_tab_problem'));
+
+    // Back on the first tab, what was typed is still there; the save bar is on every tab.
+    fireEvent.click(basic);
+    expect((screen.getByLabelText('عنوان') as HTMLInputElement).value).toBe('پلن تازه');
+    expect(screen.getByText(t('web.unsaved_changes'))).toBeInTheDocument();
   });
 
   it('says nothing wrong on a pristine new form, then names the problem at its field', async () => {
@@ -86,6 +111,7 @@ describe('the product editor', () => {
         denied={false}
       />,
     );
+    fireEvent.click(await screen.findByRole('button', { name: t('web.cb_product_new') }));
     const title = (await screen.findByLabelText('عنوان')) as HTMLInputElement;
     // Empty is where a new product starts, not an error — but it cannot be sent either.
     expect(screen.queryByText(t('web.product_problem_title'))).toBeNull();

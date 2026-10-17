@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Modal } from '../ui/overlays';
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -33,6 +34,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import {
+  LIST_PAGE_SIZE,
   Badge,
   Banner,
   Card,
@@ -121,6 +123,18 @@ const ITEM_LABELS: Readonly<Record<BulkItemState, WebKey>> = {
 /** How often a RUNNING operation's detail and its items are read again. */
 export const BULK_LIVE_REFRESH_MS = 5_000;
 
+/** The items page's query: its state filter, its cursor and the page size. */
+function bulkItemsQuery(
+  state: BulkItemState | '',
+  cursor: string | undefined,
+): { state?: string; cursor?: string; limit?: number } {
+  return {
+    limit: LIST_PAGE_SIZE,
+    ...(state === '' ? {} : { state }),
+    ...(cursor === undefined ? {} : { cursor }),
+  };
+}
+
 const NOTICE_LABELS: Readonly<Record<CustomerNotificationState, WebKey>> = {
   PENDING: 'web.bulk_notice_pending',
   DELIVERED: 'web.bulk_notice_delivered',
@@ -183,7 +197,9 @@ export function BulkOperationsPage({
   const cursor = route.query.get('cursor');
   const list = useQuery({
     queryKey: ['bulk-operations', cursor],
-    queryFn: () => fetchBulkOperations(cursor === null ? {} : { cursor }),
+    // W1.8: ten rows a page, on the same keyset.
+    queryFn: () =>
+      fetchBulkOperations({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
     enabled: !denied,
   });
   const columns: readonly Column<BulkOperationResponseItem>[] = [
@@ -642,11 +658,7 @@ export function BulkOperationDetailPage({
   const cursor = trail[trail.length - 1];
   const items = useQuery({
     queryKey: ['bulk-items', id, state, cursor],
-    queryFn: () =>
-      fetchBulkItems(id, {
-        ...(state === '' ? {} : { state }),
-        ...(cursor === undefined ? {} : { cursor }),
-      }),
+    queryFn: () => fetchBulkItems(id, bulkItemsQuery(state, cursor)),
     enabled: !denied,
     // Refreshed WITH the detail while running, and once more when the operation leaves a
     // state, so the item page never stays at what it was before it finished (Codex R7).
@@ -668,6 +680,11 @@ export function BulkOperationDetailPage({
     <StateSwitch query={detail} denied={denied}>
       {op === undefined ? null : (
         <>
+          {/*
+            W3: steering and the retry are buttons in the page head — pause and resume act at
+            once, cancel keeps its confirmation, the retry opens its dialog. The two notes
+            are hints under the head; a refusal is said there too.
+          */}
           <PageHead
             title={t(KIND_LABELS[op.kind])}
             badge={<BulkStateBadge value={op.state} />}
@@ -677,7 +694,47 @@ export function BulkOperationDetailPage({
                 <span>{formatTimestamp(op.createdAt)}</span>
               </span>
             }
+            actions={
+              mayCancel ? (
+                <>
+                  {op.kind !== 'WALLET_CREDIT' && op.counts.failed > 0 && (
+                    <BulkRetryAction operation={op} />
+                  )}
+                  {op.state === 'RUNNING' && (
+                    <Button
+                      size="sm"
+                      icon="pause"
+                      disabled={steer.isPending}
+                      onClick={() => steer.mutate('pause')}
+                    >
+                      {t('web.bulk_pause')}
+                    </Button>
+                  )}
+                  {op.state === 'PAUSED' && (
+                    <Button
+                      size="sm"
+                      icon="play"
+                      disabled={steer.isPending}
+                      onClick={() => steer.mutate('resume')}
+                    >
+                      {t('web.bulk_resume')}
+                    </Button>
+                  )}
+                  {(op.state === 'RUNNING' || op.state === 'PAUSED') && (
+                    <Button size="sm" variant="danger" onClick={() => setCancelAsked(true)}>
+                      {t('web.bulk_cancel')}
+                    </Button>
+                  )}
+                </>
+              ) : undefined
+            }
           />
+          <div className="muted small w-money-head-notes">
+            <p>{t('web.bulk_cancel_note')}</p>
+            <p>{t('web.bulk_pause_note')}</p>
+          </div>
+          {cancel.error !== null && <Banner tone="danger">{bulkMessage(cancel.error)}</Banner>}
+          {steer.error !== null && <Banner tone="danger">{bulkMessage(steer.error)}</Banner>}
           <div className="stat-grid cb-stat-row">
             <StatCard label={t('web.bulk_items')} value={formatNumber(op.itemCount)} />
             <StatCard
@@ -787,46 +844,6 @@ export function BulkOperationDetailPage({
                       <li key={line}>{line}</li>
                     ))}
                   </ul>
-                </Card>
-                {mayCancel && op.kind !== 'WALLET_CREDIT' && op.counts.failed > 0 && (
-                  <BulkRetryCard operation={op} />
-                )}
-                <Card title={t('web.cb_steering')} tone="danger">
-                  <p className="muted small">{t('web.bulk_cancel_note')}</p>
-                  <p className="muted small">{t('web.bulk_pause_note')}</p>
-                  {mayCancel && (op.state === 'RUNNING' || op.state === 'PAUSED') && (
-                    <div className="form-actions">
-                      {op.state === 'RUNNING' && (
-                        <Button
-                          size="sm"
-                          icon="pause"
-                          disabled={steer.isPending}
-                          onClick={() => steer.mutate('pause')}
-                        >
-                          {t('web.bulk_pause')}
-                        </Button>
-                      )}
-                      {op.state === 'PAUSED' && (
-                        <Button
-                          size="sm"
-                          icon="play"
-                          disabled={steer.isPending}
-                          onClick={() => steer.mutate('resume')}
-                        >
-                          {t('web.bulk_resume')}
-                        </Button>
-                      )}
-                      <Button size="sm" variant="danger" onClick={() => setCancelAsked(true)}>
-                        {t('web.bulk_cancel')}
-                      </Button>
-                    </div>
-                  )}
-                  {cancel.error !== null && (
-                    <Banner tone="danger">{bulkMessage(cancel.error)}</Banner>
-                  )}
-                  {steer.error !== null && (
-                    <Banner tone="danger">{bulkMessage(steer.error)}</Banner>
-                  )}
                 </Card>
               </>
             }
@@ -943,7 +960,8 @@ export function BulkOperationDetailPage({
  * against that count (typed back from `BULK_LARGE_OPERATION`), then a NEW operation, whose
  * own page shows its progress.
  */
-function BulkRetryCard({ operation }: { operation: BulkOperationResponseItem }) {
+function BulkRetryAction({ operation }: { operation: BulkOperationResponseItem }) {
+  const [open, setOpen] = useState(false);
   const client = useQueryClient();
   const toast = useToast();
   const submission = useSubmissionKey();
@@ -979,76 +997,81 @@ function BulkRetryCard({ operation }: { operation: BulkOperationResponseItem }) 
     counted.count < BULK_LARGE_OPERATION ||
     typed.trim() === String(counted.count);
   return (
-    <Card title={t('web.bulk_retry_title')}>
-      <p className="muted small">{t('web.bulk_retry_hint')}</p>
-      {counted === undefined ? (
-        <div className="form-actions">
-          <Button
-            size="sm"
-            icon="refresh"
-            disabled={preview.isPending}
-            onClick={() => preview.mutate()}
-          >
-            {t('web.bulk_retry_preview')}
-          </Button>
-        </div>
-      ) : counted.count === 0 ? (
-        <Banner tone="info">{t('web.bulk_error_retry_nothing')}</Banner>
-      ) : (
-        <div className="stack-sm">
-          <p>
-            {t('web.bulk_retry_count')} <strong>{formatNumber(counted.count)}</strong>
-          </p>
-          <Field label={t('web.bulk_reason')} htmlFor="bulk-retry-note">
-            <input
-              id="bulk-retry-note"
-              value={note}
-              maxLength={BULK_NOTE_MAX_LENGTH}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          </Field>
-          {counted.count >= BULK_LARGE_OPERATION && (
-            <Field label={t('web.bulk_typed')} htmlFor="bulk-retry-typed">
-              <input
-                id="bulk-retry-typed"
-                inputMode="numeric"
-                value={typed}
-                onChange={(event) => setTyped(event.target.value)}
-              />
-            </Field>
-          )}
+    <>
+      <Button size="sm" icon="refresh" onClick={() => setOpen(true)}>
+        {t('web.bulk_retry_title')}
+      </Button>
+      <Modal open={open} onClose={() => setOpen(false)} title={t('web.bulk_retry_title')}>
+        <p className="muted small">{t('web.bulk_retry_hint')}</p>
+        {counted === undefined ? (
           <div className="form-actions">
             <Button
               size="sm"
-              variant="danger-solid"
               icon="refresh"
-              disabled={note.trim() === '' || !typedOk || retry.isPending}
-              onClick={() => setAsking(true)}
+              disabled={preview.isPending}
+              onClick={() => preview.mutate()}
             >
-              {t('web.bulk_retry_button')}
+              {t('web.bulk_retry_preview')}
             </Button>
           </div>
-          {asking && (
-            <ConfirmDialog
-              title={t('web.bulk_retry_title')}
-              question={t('web.cb_bulk_run_question').replace(
-                '{count}',
-                formatNumber(counted.count),
-              )}
-              detail={t('web.bulk_retry_hint')}
-              confirmLabel={t('web.bulk_retry_button')}
-              cancelLabel={t('web.cb_cancel')}
-              onConfirm={() => {
-                setAsking(false);
-                retry.mutate();
-              }}
-              onCancel={() => setAsking(false)}
-            />
-          )}
-        </div>
-      )}
-      {preview.error !== null && <Banner tone="danger">{bulkMessage(preview.error)}</Banner>}
-      {retry.error !== null && <Banner tone="danger">{bulkMessage(retry.error)}</Banner>}
-    </Card>
+        ) : counted.count === 0 ? (
+          <Banner tone="info">{t('web.bulk_error_retry_nothing')}</Banner>
+        ) : (
+          <div className="stack-sm">
+            <p>
+              {t('web.bulk_retry_count')} <strong>{formatNumber(counted.count)}</strong>
+            </p>
+            <Field label={t('web.bulk_reason')} htmlFor="bulk-retry-note">
+              <input
+                id="bulk-retry-note"
+                value={note}
+                maxLength={BULK_NOTE_MAX_LENGTH}
+                onChange={(event) => setNote(event.target.value)}
+              />
+            </Field>
+            {counted.count >= BULK_LARGE_OPERATION && (
+              <Field label={t('web.bulk_typed')} htmlFor="bulk-retry-typed">
+                <input
+                  id="bulk-retry-typed"
+                  inputMode="numeric"
+                  value={typed}
+                  onChange={(event) => setTyped(event.target.value)}
+                />
+              </Field>
+            )}
+            <div className="form-actions">
+              <Button
+                size="sm"
+                variant="danger-solid"
+                icon="refresh"
+                disabled={note.trim() === '' || !typedOk || retry.isPending}
+                onClick={() => setAsking(true)}
+              >
+                {t('web.bulk_retry_button')}
+              </Button>
+            </div>
+            {asking && (
+              <ConfirmDialog
+                title={t('web.bulk_retry_title')}
+                question={t('web.cb_bulk_run_question').replace(
+                  '{count}',
+                  formatNumber(counted.count),
+                )}
+                detail={t('web.bulk_retry_hint')}
+                confirmLabel={t('web.bulk_retry_button')}
+                cancelLabel={t('web.cb_cancel')}
+                onConfirm={() => {
+                  setAsking(false);
+                  retry.mutate();
+                }}
+                onCancel={() => setAsking(false)}
+              />
+            )}
+          </div>
+        )}
+        {preview.error !== null && <Banner tone="danger">{bulkMessage(preview.error)}</Banner>}
+        {retry.error !== null && <Banner tone="danger">{bulkMessage(retry.error)}</Banner>}
+      </Modal>
+    </>
   );
 }

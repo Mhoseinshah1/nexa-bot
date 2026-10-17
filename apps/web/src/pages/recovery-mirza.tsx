@@ -35,6 +35,7 @@ import {
   uploadLegacyMigrationDecisions,
 } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
+import { FilePicker } from '../ui/file-picker';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinalWhile } from '../polling';
 import { useLinkHandler } from '../router';
@@ -646,11 +647,12 @@ function KeyForm({ row }: { row: LegacyMigrationImportView }) {
       {kind === 'KEY_FILE' ? (
         <>
           <Field label={t('web.lmg_key_file_choose')} htmlFor="lmg-key-file">
-            <input
+            <FilePicker
               id="lmg-key-file"
-              type="file"
               accept=".nxkey,text/plain"
-              onChange={(event) => onKeyFile(event.currentTarget.files?.[0] ?? null)}
+              kind="any"
+              extensions={['.nxkey', '.txt']}
+              onFiles={(files) => onKeyFile(files[0] ?? null)}
             />
           </Field>
           <Field label={t('web.lmg_key_file_text')} htmlFor="lmg-key-text">
@@ -1063,11 +1065,14 @@ function DecisionsStep({
           }}
         >
           <Field label={t('web.lmg_decisions_choose')} htmlFor="lmg-decisions">
-            <input
+            <FilePicker
               id="lmg-decisions"
-              type="file"
               accept=".json,application/json"
-              onChange={(event) => setFile(event.currentTarget.files?.[0] ?? null)}
+              kind="any"
+              extensions={['.json']}
+              selected={file}
+              onClear={() => setFile(null)}
+              onFiles={(files) => setFile(files[0] ?? null)}
             />
           </Field>
           {tooLarge && <Banner tone="danger">{t('web.lmg_fault_too_large')}</Banner>}

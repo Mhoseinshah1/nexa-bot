@@ -29,6 +29,22 @@ import {
 import { pollUnlessFinalWhile } from '../polling';
 import { useLinkHandler } from '../router';
 import { retryOf } from '../view-state';
+import {
+  CUSTOMER_NOTIFICATION_KIND_NAMES,
+  GATEWAY_CREATION_STATE_LABELS,
+  GATEWAY_OUTCOME_LABELS,
+  LEDGER_DIRECTION_NAMES,
+  OUTCOME_UNKNOWN_REASON_LABELS,
+  PAYMENT_EVIDENCE_KIND_LABELS,
+  PAYMENT_GATEWAY_LABELS,
+  PAYMENT_RECEIPT_KIND_LABELS,
+  PROVIDER_STATUS_LABELS,
+  providerPaidKey,
+} from '../payment-labels';
+import { CodeName } from './code-name';
+import { LEDGER_REASON_LABELS } from './mirza-labels';
+import { OPERATION_STATE_LABELS, OPERATION_TYPE_LABELS } from './services';
+import { ACTOR_TYPE_LABELS, AUDIT_RESULT_LABELS } from './reseller-standing';
 
 /**
  * How often the history is read again while a notice it shows is still PENDING — the one
@@ -143,7 +159,7 @@ function OrderLink({ orderId }: { orderId: string }) {
   );
 }
 
-/** A provider's own status or code, as recorded: left-to-right, or a dash. */
+/** A provider's own code (an error code), as recorded: left-to-right, or a dash. */
 function code(value: string | null): ReactNode {
   return <Ltr>{value ?? '—'}</Ltr>;
 }
@@ -183,7 +199,10 @@ function actor(adminId: string | null): ReactNode {
   );
 }
 
-/** The one detail each kind carries. Codes stay codes, left-to-right, as on the detail. */
+/**
+ * The one detail each kind carries. A closed vocabulary is named in Persian with the raw key
+ * in its `title` (W5); a provider's error code stays a code, left-to-right.
+ */
 function detail(entry: PaymentTimelineEntry): ReactNode {
   switch (entry.kind) {
     case 'PAYMENT_CREATED':
@@ -196,11 +215,11 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
     case 'CUSTOMER_SIGNALLED':
       return null;
     case 'RECEIPT_SUBMITTED':
-      return <Ltr>{entry.receiptKind}</Ltr>;
+      return <CodeName value={entry.receiptKind} labels={PAYMENT_RECEIPT_KIND_LABELS} />;
     case 'PAYMENT_CONFIRMED':
       return (
         <>
-          <Ltr>{entry.evidenceKind}</Ltr> ·{' '}
+          <CodeName value={entry.evidenceKind} labels={PAYMENT_EVIDENCE_KIND_LABELS} /> ·{' '}
           {/*
             A WALLET_DEBIT confirmation is the customer paying from their own balance
             (`settleFromWallet`), recorded with no administrator; it is said as the
@@ -241,7 +260,8 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
     case 'WALLET_ENTRY':
       return (
         <>
-          <Ltr>{`${entry.direction} ${entry.reason}`}</Ltr> ·{' '}
+          <CodeName value={entry.direction} labels={LEDGER_DIRECTION_NAMES} />{' '}
+          <CodeName value={entry.reason} labels={LEDGER_REASON_LABELS} /> ·{' '}
           <Money value={{ amountMinor: entry.amountMinor, currency: entry.currency }} />
         </>
       );
@@ -265,21 +285,23 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
     case 'CUSTOMER_NOTIFIED':
       return (
         <>
-          <Ltr>{entry.notificationKind}</Ltr> · {t(DELIVERY_LABELS[entry.deliveryState])}
+          <CodeName value={entry.notificationKind} labels={CUSTOMER_NOTIFICATION_KIND_NAMES} /> ·{' '}
+          {t(DELIVERY_LABELS[entry.deliveryState])}
           {entry.resolvedAt === null ? null : ` · ${formatTimestamp(entry.resolvedAt)}`}
         </>
       );
     case 'GATEWAY_INVOICE_REQUESTED':
       return (
         <>
-          <Ltr>{entry.provider}</Ltr> · {code(entry.creationState)}
+          <CodeName value={entry.provider} labels={PAYMENT_GATEWAY_LABELS} /> ·{' '}
+          <CodeName value={entry.creationState} labels={GATEWAY_CREATION_STATE_LABELS} />
           {entry.errorCode === null ? null : <> · {code(entry.errorCode)}</>}
         </>
       );
     case 'GATEWAY_INVOICE_CREATED':
       return (
         <>
-          <Ltr>{entry.provider}</Ltr>
+          <CodeName value={entry.provider} labels={PAYMENT_GATEWAY_LABELS} />
           {entry.providerInvoiceId === null ? null : (
             <>
               {' · '}
@@ -291,18 +313,20 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
     case 'GATEWAY_WEBHOOK_HINT':
       return (
         <>
-          {code(entry.statusHint)} · {t('web.payment_timeline_webhook_count')}{' '}
-          <Ltr>{String(entry.webhookCount)}</Ltr>
+          <CodeName value={entry.statusHint} labels={PROVIDER_STATUS_LABELS} /> ·{' '}
+          {t('web.payment_timeline_webhook_count')} <Ltr>{String(entry.webhookCount)}</Ltr>
         </>
       );
     case 'GATEWAY_INQUIRY':
       return (
         <>
-          {code(entry.providerStatus)}
+          <CodeName value={entry.providerStatus} labels={PROVIDER_STATUS_LABELS} />
           {entry.providerPaid === null ? null : (
             <>
               {' · '}
-              <Ltr>{`paid=${String(entry.providerPaid)}`}</Ltr>
+              <span title={`paid=${String(entry.providerPaid)}`}>
+                {t(providerPaidKey(entry.providerPaid))}
+              </span>
             </>
           )}
           {entry.errorCode === null ? null : <> · {code(entry.errorCode)}</>}
@@ -321,12 +345,18 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
         <span className="muted small">{t('web.payment_timeline_review_lapsed')}</span>
       ) : (
         <>
-          {t('web.payment_timeline_mismatch_reason')}: {code(entry.reason)}
-          {entry.providerStatus === null ? null : <> · {code(entry.providerStatus)}</>}
+          {t('web.payment_timeline_mismatch_reason')}:{' '}
+          <CodeName value={entry.reason} labels={OUTCOME_UNKNOWN_REASON_LABELS} />
+          {entry.providerStatus === null ? null : (
+            <>
+              {' · '}
+              <CodeName value={entry.providerStatus} labels={PROVIDER_STATUS_LABELS} />
+            </>
+          )}
         </>
       );
     case 'GATEWAY_OUTCOME':
-      return code(entry.outcome);
+      return <CodeName value={entry.outcome} labels={GATEWAY_OUTCOME_LABELS} />;
     case 'GATEWAY_LATE_COMPLETION':
       return null;
     case 'ORDER_SETTLED':
@@ -335,15 +365,20 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
     case 'ORDER_FULFILMENT':
       return (
         <>
-          <OrderLink orderId={entry.orderId} /> · {code(entry.operationType)} ·{' '}
-          {code(entry.operationState)}
+          <OrderLink orderId={entry.orderId} /> ·{' '}
+          <CodeName value={entry.operationType} labels={OPERATION_TYPE_LABELS} /> ·{' '}
+          <CodeName value={entry.operationState} labels={OPERATION_STATE_LABELS} />
         </>
       );
     case 'AUDIT_RECORDED':
       return (
         <>
-          {code(entry.action)} · {code(entry.result)} ·{' '}
-          {entry.adminId === null ? code(entry.actorType) : actor(entry.adminId)}
+          {code(entry.action)} · <CodeName value={entry.result} labels={AUDIT_RESULT_LABELS} /> ·{' '}
+          {entry.adminId === null ? (
+            <CodeName value={entry.actorType} labels={ACTOR_TYPE_LABELS} />
+          ) : (
+            actor(entry.adminId)
+          )}
         </>
       );
   }
