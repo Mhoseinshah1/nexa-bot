@@ -5,10 +5,6 @@ import {
   COMMERCE_ERROR_CODES,
   LEGACY_WALLET_DEBT_ERROR_CODES,
   PLATFORM_ERROR_CODES,
-  SESSION_COOKIE_NAME,
-  legacyWalletDebtListResponseSchema,
-  legacyWalletDebtResponseSchema,
-  legacyWalletDebtSummaryResponseSchema,
   systemJobActor,
   type ActorContext,
   type BotInstanceId,
@@ -18,7 +14,6 @@ import {
 } from '@nexa/contracts';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
 import { DrizzleLegacyImportRepository } from '../../apps/api/src/modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository';
-import { LegacyDebtsController } from '../../apps/api/src/surfaces/web/legacy-debts.controller';
 import { changedTables, databaseFingerprint } from '../support/database-fingerprint';
 import {
   SEED_IDS,
@@ -486,49 +481,5 @@ describe('Mirza PR4: legacy wallet debts', () => {
       'owner:legacy.debts.decide',
       'owner:legacy.debts.view',
     ]);
-  });
-
-  // --- the HTTP surface ------------------------------------------------------------------
-
-  it('the Web Admin surface: the wire shape parses, a decision goes through the service', async () => {
-    const { debt } = await debtFor(tenantA, '801000');
-    const { token } = await ctx.container.auth.login(
-      tenantA,
-      {
-        type: 'API',
-        id: null,
-        label: null,
-        surface: 'WEB',
-        correlationId: 'debts-web' as CorrelationId,
-      },
-      { username: 'owner-debts', password: 'a-perfectly-fine-password' },
-      { ip: '203.0.113.10', userAgent: 'vitest' },
-    );
-    type WebRequest = Parameters<LegacyDebtsController['list']>[0];
-    const request = (method: string) =>
-      ({
-        method,
-        headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
-        ip: '203.0.113.10',
-      }) as unknown as WebRequest;
-    const controller = new LegacyDebtsController(ctx.container);
-    const listed = legacyWalletDebtListResponseSchema.parse(
-      await controller.list(request('GET'), { state: 'PENDING_REVIEW' }),
-    );
-    expect(listed.debts.map((d) => d.id)).toEqual([debt.id]);
-    expect(listed.debts[0]).toMatchObject({ amountMinor: '45000', currency: 'IRT' });
-    const summary = legacyWalletDebtSummaryResponseSchema.parse(
-      await controller.summary(request('GET')),
-    );
-    expect(summary.total).toEqual({ count: 1, sumMinor: '45000' });
-    const decided = legacyWalletDebtResponseSchema.parse(
-      await controller.decide(request('POST'), debt.id, {
-        idempotencyKey: key(),
-        expectedVersion: 1,
-        decision: 'WAIVED',
-        reason: 'از طریق وب',
-      }),
-    );
-    expect(decided.debt).toMatchObject({ state: 'WAIVED', decisionReason: 'از طریق وب' });
   });
 });

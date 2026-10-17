@@ -644,23 +644,8 @@ import {
   customerOverviewResponseSchema,
   customerServicesToggleResponseSchema,
   customerTimelineResponseSchema,
-  legacyHistoryResponseSchema,
-  LEGACY_RECORDS_ROUTES,
-  legacyRecordsListResponseSchema,
-  legacyRecordsSummaryResponseSchema,
-  legacyServiceHistoryResponseSchema,
-  type LegacyRecordsLinkedFilter,
-  type LegacyRecordsListResponse,
-  type LegacyRecordsSummaryResponse,
-  type LegacyServiceHistoryResponse,
-  legacyMoneyHistoryResponseSchema,
   legacyCustomerAdoptionsResponseSchema,
-  legacyCustomerInvoicesResponseSchema,
   type LegacyCustomerAdoptionsResponse,
-  type LegacyCustomerInvoicesResponse,
-  type LegacyHistoryRecordType,
-  type LegacyHistoryResponse,
-  type LegacyMoneyHistoryResponse,
   customerTransferPreviewResponseSchema,
   customerTransferResponseSchema,
   type CustomerChannelExemptionRequest,
@@ -707,29 +692,9 @@ import {
   type LegacyProductReviewState,
 } from '@nexa/contracts';
 // Mirza PR3: the legacy invoice archive.
-import {
-  LEGACY_INVOICE_ARCHIVE_ROUTES,
-  legacyInvoiceArchiveDetailResponseSchema,
-  legacyInvoiceArchiveListResponseSchema,
-  legacyInvoiceArchiveSummaryResponseSchema,
-  type LegacyInvoiceArchiveClass,
-  type LegacyInvoiceArchiveDetailResponse,
-  type LegacyInvoiceArchiveListResponse,
-  type LegacyInvoiceArchiveSummaryResponse,
-} from '@nexa/contracts';
+import {} from '@nexa/contracts';
 // Mirza PR4: legacy wallet debts (negative legacy balances held for review).
-import {
-  LEGACY_WALLET_DEBT_ROUTES,
-  legacyWalletDebtListResponseSchema,
-  legacyWalletDebtResponseSchema,
-  legacyWalletDebtSummaryResponseSchema,
-  type LegacyWalletDebtDecideRequest,
-  type LegacyWalletDebtListResponse,
-  type LegacyWalletDebtReopenRequest,
-  type LegacyWalletDebtResponse,
-  type LegacyWalletDebtState,
-  type LegacyWalletDebtSummaryResponse,
-} from '@nexa/contracts';
+import {} from '@nexa/contracts';
 // Mirza `.nxpkg` importer: the «مهاجرت از میرزا» page.
 import {
   LEGACY_MIGRATION_ROUTES,
@@ -5013,74 +4978,6 @@ export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineRespo
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
 }
 
-/**
- * Mirza `.nxpkg` importer: the customer's archived Mirza history, one page, optionally one
- * record type. `users.view` + `legacy.history.view`; personal fields arrive null unless the
- * viewer holds `legacy.invoices.pii.view`.
- */
-export function fetchCustomerLegacyHistory(
-  id: string,
-  query: { type?: LegacyHistoryRecordType; offset?: number; limit?: number } = {},
-): Promise<LegacyHistoryResponse> {
-  const params = new URLSearchParams();
-  if (query.type !== undefined) params.set('type', query.type);
-  if (query.offset !== undefined) params.set('offset', String(query.offset));
-  if (query.limit !== undefined) params.set('limit', String(query.limit));
-  const suffix = params.toString();
-  const path = CUSTOMER_360_ROUTES.legacyHistory(id);
-  return authedGet(suffix ? `${path}?${suffix}` : path, legacyHistoryResponseSchema);
-}
-
-/** The Mirza records page: every record type with its counts and the inactive Mirza panels. */
-export function fetchLegacyRecordsSummary(): Promise<LegacyRecordsSummaryResponse> {
-  return authedGet(LEGACY_RECORDS_ROUTES.summary, legacyRecordsSummaryResponseSchema);
-}
-
-/** One page of the Mirza history archive (by record id), optionally filtered. */
-export function fetchLegacyRecords(
-  query: {
-    type?: LegacyHistoryRecordType;
-    linked?: LegacyRecordsLinkedFilter;
-    after?: string;
-    limit?: number;
-  } = {},
-): Promise<LegacyRecordsListResponse> {
-  const params = new URLSearchParams();
-  if (query.type !== undefined) params.set('type', query.type);
-  if (query.linked !== undefined) params.set('linked', query.linked);
-  if (query.after !== undefined) params.set('after', query.after);
-  if (query.limit !== undefined) params.set('limit', String(query.limit));
-  const suffix = params.toString();
-  const path = LEGACY_RECORDS_ROUTES.list;
-  return authedGet(suffix ? `${path}?${suffix}` : path, legacyRecordsListResponseSchema);
-}
-
-/** A service's Mirza records (`services.view` + `legacy.history.view`). */
-export function fetchServiceLegacyHistory(id: string): Promise<LegacyServiceHistoryResponse> {
-  return authedGet(LEGACY_RECORDS_ROUTES.service(id), legacyServiceHistoryResponseSchema);
-}
-
-/**
- * The customer's Mirza money history beside the migrated opening figure. Read only: nothing
- * here is part of the balance. `users.view` + `legacy.history.view`.
- */
-export function fetchCustomerLegacyMoneyHistory(id: string): Promise<LegacyMoneyHistoryResponse> {
-  return authedGet(CUSTOMER_360_ROUTES.legacyMoneyHistory(id), legacyMoneyHistoryResponseSchema);
-}
-
-/** The customer's Mirza invoices beside the import's outcome for each (history, read-only). */
-export function fetchCustomerLegacyInvoices(
-  id: string,
-  query: { after?: string; limit?: number } = {},
-): Promise<LegacyCustomerInvoicesResponse> {
-  const params = new URLSearchParams();
-  if (query.after !== undefined) params.set('after', query.after);
-  if (query.limit !== undefined) params.set('limit', String(query.limit));
-  const suffix = params.toString();
-  const path = CUSTOMER_360_ROUTES.legacyInvoices(id);
-  return authedGet(suffix ? `${path}?${suffix}` : path, legacyCustomerInvoicesResponseSchema);
-}
-
 /** Which of these services of the customer were adopted from a Mirza invoice. */
 export function fetchCustomerLegacyAdoptedServices(
   id: string,
@@ -5432,112 +5329,6 @@ export function reopenLegacyProduct(
 ): Promise<LegacyProductReviewResponse> {
   const { id, ...body } = input;
   return post(LEGACY_PRODUCT_REVIEW_ROUTES.reopen(id), body, legacyProductReviewResponseSchema);
-}
-
-// --- Mirza PR3: the legacy invoice archive (read-only) ------------------------------------
-
-/** The archive's filters; every one optional. `legacyUserId`/`username` need PII. */
-export interface LegacyInvoiceArchiveQuery {
-  readonly invoiceId?: string;
-  readonly legacyUserId?: string;
-  readonly username?: string;
-  readonly status?: string;
-  readonly panelCode?: string;
-  readonly productCode?: string;
-  readonly classification?: LegacyInvoiceArchiveClass;
-  readonly test?: 'true' | 'false';
-  readonly after?: string;
-  /** The page size (W1.8). */
-  readonly limit?: number;
-}
-
-/**
- * One page of archived legacy invoices — the latest visible revision of each
- * (`legacy.invoices.view`). Personal cells come back null unless the reader holds
- * `legacy.invoices.pii.view`; `after` is the opaque cursor of the page before.
- */
-export function fetchLegacyInvoices(
-  query: LegacyInvoiceArchiveQuery = {},
-): Promise<LegacyInvoiceArchiveListResponse> {
-  const params = new URLSearchParams();
-  // Sent exactly as given: the verbatim fields (invoice id, owner id, username, status) are
-  // compared as typed, spaces included (`queryOf` decides what is trimmed). Empty is no filter.
-  for (const [name, value] of Object.entries(query)) {
-    if (typeof value === 'string' && value !== '') params.set(name, value);
-    // The page size (W1.8), the one number the query carries.
-    if (typeof value === 'number') params.set(name, String(value));
-  }
-  const suffix = params.toString();
-  return authedGet(
-    suffix ? `${LEGACY_INVOICE_ARCHIVE_ROUTES.list}?${suffix}` : LEGACY_INVOICE_ARCHIVE_ROUTES.list,
-    legacyInvoiceArchiveListResponseSchema,
-  );
-}
-
-/** Aggregates only: counts by class and the recent ingest runs. */
-export function fetchLegacyInvoiceSummary(): Promise<LegacyInvoiceArchiveSummaryResponse> {
-  return authedGet(
-    LEGACY_INVOICE_ARCHIVE_ROUTES.summary,
-    legacyInvoiceArchiveSummaryResponseSchema,
-  );
-}
-
-/** One archived revision with its raw cells, its revisions and the importer's outcome. */
-export function fetchLegacyInvoice(id: string): Promise<LegacyInvoiceArchiveDetailResponse> {
-  return authedGet(
-    LEGACY_INVOICE_ARCHIVE_ROUTES.detail(id),
-    legacyInvoiceArchiveDetailResponseSchema,
-  );
-}
-
-// --- Mirza PR4: legacy wallet debts (owner decision 6) -------------------------------------
-
-/**
- * One page of legacy wallet debts (`legacy.debts.view`): negative legacy balances held for
- * the owner's review, never a ledger entry and never collected. `after` is the last id of
- * the page before.
- */
-export function fetchLegacyDebts(
-  query: {
-    readonly state?: LegacyWalletDebtState;
-    readonly legacyUserId?: string;
-    readonly after?: string;
-    readonly limit?: number;
-  } = {},
-): Promise<LegacyWalletDebtListResponse> {
-  const params = new URLSearchParams();
-  if (query.limit !== undefined) params.set('limit', String(query.limit));
-  if (query.state !== undefined) params.set('state', query.state);
-  if (query.legacyUserId !== undefined && query.legacyUserId.trim() !== '') {
-    params.set('legacyUserId', query.legacyUserId.trim());
-  }
-  if (query.after !== undefined) params.set('after', query.after);
-  const suffix = params.toString();
-  return authedGet(
-    suffix ? `${LEGACY_WALLET_DEBT_ROUTES.list}?${suffix}` : LEGACY_WALLET_DEBT_ROUTES.list,
-    legacyWalletDebtListResponseSchema,
-  );
-}
-
-/** Count and Σ owed per state. Aggregates only. */
-export function fetchLegacyDebtSummary(): Promise<LegacyWalletDebtSummaryResponse> {
-  return authedGet(LEGACY_WALLET_DEBT_ROUTES.summary, legacyWalletDebtSummaryResponseSchema);
-}
-
-/** ACKNOWLEDGED or WAIVED (`legacy.debts.decide`). A label: it moves no money. */
-export function decideLegacyDebt(
-  input: LegacyWalletDebtDecideRequest & { readonly id: string },
-): Promise<LegacyWalletDebtResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_WALLET_DEBT_ROUTES.decide(id), body, legacyWalletDebtResponseSchema);
-}
-
-/** A decided debt back to PENDING_REVIEW (`legacy.debts.decide`). */
-export function reopenLegacyDebt(
-  input: LegacyWalletDebtReopenRequest & { readonly id: string },
-): Promise<LegacyWalletDebtResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_WALLET_DEBT_ROUTES.reopen(id), body, legacyWalletDebtResponseSchema);
 }
 
 // --- Mirza PR5: legacy service candidates and their review (owner decision 8) ---------------

@@ -2,11 +2,7 @@ import { readFileSync } from 'node:fs';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  SESSION_COOKIE_NAME,
-  legacyInvoiceArchiveDetailResponseSchema,
   legacyInvoiceArchiveListQuerySchema,
-  legacyInvoiceArchiveListResponseSchema,
-  legacyInvoiceArchiveSummaryResponseSchema,
   systemJobActor,
   type ActorContext,
   type CorrelationId,
@@ -24,7 +20,6 @@ import type {
 } from '../../apps/api/src/modules/platform/legacy-importer/application/source-port';
 import { readImportV1Identity } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import { FixtureLegacySourceConnector } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/fixture-legacy-source';
-import { LegacyInvoicesController } from '../../apps/api/src/surfaces/web/legacy-invoices.controller';
 import {
   SYNTHETIC_ARCHIVE_SECRETS,
   buildSyntheticLegacyDataset,
@@ -940,50 +935,5 @@ describe('Mirza PR3: the legacy invoice archive', () => {
     expect((await archiveRows(tenantB)).length).toBe((await archiveRows(tenantA)).length);
     // Tenant B's read added nothing to tenant A.
     expect((await runs(tenantA)).length).toBe(1);
-  });
-
-  it('the Web Admin surface: the wire shapes parse; the summary carries no personal data', async () => {
-    await readSnapshot('A');
-    const { token } = await ctx.container.auth.login(
-      tenantA,
-      {
-        type: 'API',
-        id: null,
-        label: null,
-        surface: 'WEB',
-        correlationId: 'lia-web' as CorrelationId,
-      },
-      { username: 'owner-lia', password: 'a-perfectly-fine-password' },
-      { ip: '203.0.113.10', userAgent: 'vitest' },
-    );
-    type WebRequest = Parameters<LegacyInvoicesController['list']>[0];
-    const request = {
-      method: 'GET',
-      headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
-      ip: '203.0.113.10',
-    } as unknown as WebRequest;
-    const controller = new LegacyInvoicesController(ctx.container);
-    const listed = legacyInvoiceArchiveListResponseSchema.parse(
-      await controller.list(request, { limit: '3' }),
-    );
-    expect(listed.rows).toHaveLength(3);
-    expect(listed.nextCursor).not.toBeNull();
-    const next = legacyInvoiceArchiveListResponseSchema.parse(
-      await controller.list(request, { limit: '3', after: listed.nextCursor }),
-    );
-    expect(next.rows.map((r) => r.id)).not.toContain(listed.rows[0]?.id);
-    const detail = legacyInvoiceArchiveDetailResponseSchema.parse(
-      await controller.detail(request, listed.rows[0]?.id ?? ''),
-    );
-    expect(detail.revisions).toHaveLength(1);
-    expect(detail.revisions[0]?.visible).toBe(true);
-    const summary = legacyInvoiceArchiveSummaryResponseSchema.parse(
-      await controller.summary(request),
-    );
-    expect(summary.invoices).toBe(datasetOf('A').tables.invoice.length);
-    expect(Object.values(summary.classes).reduce((a, b) => a + b, 0)).toBe(summary.invoices);
-    const text = JSON.stringify(summary);
-    for (const id of ['ab000001', '100000001', 'svc_archive']) expect(text).not.toContain(id);
-    await expect(controller.list(request, { after: 'not a cursor!' })).rejects.toThrow();
   });
 });

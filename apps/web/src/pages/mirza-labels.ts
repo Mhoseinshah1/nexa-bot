@@ -14,8 +14,7 @@ import { t, type WebKey } from '../i18n/web.fa';
  * `Status`, the migration report's section names and its warning, quarantine and history
  * codes, and the ledger's reasons. Labels only — nothing here decides anything.
  *
- * A value this file does not know is never guessed: the caller shows it raw (and, for an
- * invoice status, as unknown: `web.mrz_status_unknown`).
+ * A value this file does not know is never guessed: the caller shows it raw.
  */
 
 /**
@@ -160,9 +159,7 @@ const SECTION_LABELS: Readonly<Record<string, WebKey>> = {
 };
 
 const SECTION_LINKS: Readonly<Record<string, string>> = {
-  legacy_debts: '/legacy-debts?state=ALL',
   products: '/legacy-products',
-  invoice_archive: '/legacy-invoices',
   services: '/legacy-services?reviewState=ALL',
 };
 
