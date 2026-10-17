@@ -29,7 +29,7 @@ import {
   replaceResellerTierGrants,
   updateResellerTier,
 } from '../api/client';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
@@ -363,6 +363,9 @@ export function ResellerTiersPage({
   const discard = useDiscardGuard();
   /** The edit drawer's own guard: closing it over unsaved changes asks first. */
   const editGuard = useDiscardGuard();
+  /** The drawers' submission keys, held while the drawers mount and unmount. */
+  const editKey = useSubmissionKey();
+  const grantsKey = useSubmissionKey();
   const [grantsId, setGrantsId] = useState<string | null>(null);
   const [historyId, setHistoryId] = useState<string | null>(null);
   const editing = rows.find((row) => row.id === editingId);
@@ -483,6 +486,7 @@ export function ResellerTiersPage({
           (mayEdit ? (
             // KEYED BY THE TIER: the editor's state is initialised from the tier now open.
             <GrantsEditor
+              held={grantsKey}
               key={granting.id}
               tier={granting}
               options={options}
@@ -512,6 +516,7 @@ export function ResellerTiersPage({
       >
         {editing !== undefined && (
           <TierForm
+            held={editKey}
             key={editing.id}
             tier={editing}
             onDone={() => setEditingId(null)}
@@ -623,6 +628,7 @@ function GrantsReadOnly({
 // ---------------------------------------------------------------------------
 
 export function GrantsEditor({
+  held,
   tier,
   options,
   names,
@@ -632,10 +638,16 @@ export function GrantsEditor({
   options: GrantOptions;
   names: ReadonlyMap<string, string>;
   onClose: () => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [state, setState] = useState<GrantsState>(() => grantsStateOf(tier.grants));
   const setKind = (kind: ResellerGrantKind, next: KindGrants) =>
     setState((current) => ({ ...current, [kind]: next }));
@@ -877,6 +889,7 @@ export function tierBodyFrom(
 }
 
 function TierForm({
+  held,
   tier,
   onDone,
   onDirtyChange,
@@ -885,12 +898,18 @@ function TierForm({
   onDone: () => void;
   /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const mode = tier === undefined ? 'create' : 'edit';
   const prefix = `tier-${mode}`;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [state, setState] = useState<TierFormState>(
     tier === undefined ? BLANK_TIER : tierStateOf(tier),
   );

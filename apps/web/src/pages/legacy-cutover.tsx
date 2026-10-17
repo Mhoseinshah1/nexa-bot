@@ -20,7 +20,7 @@ import { LegacyCode } from './code-name';
 import { Modal } from '../ui/overlays';
 import { LEGACY_IMPORT_RUN_STATUS_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
 import {
@@ -115,6 +115,8 @@ export function LegacyCutoverPage({
 }) {
   /** W3: the owner's approval form opens in a dialog from the page head. */
   const [approving, setApproving] = useState(false);
+  /** The dialog's submission key, held while the dialog mounts and unmounts. */
+  const approveKey = useSubmissionKey();
   const approvals = usePaged('approvals', (after) => fetchLegacyCutoverApprovals(after), !denied);
   const readSets = usePaged('read-sets', (after) => fetchLegacyCutoverReadSets(after), !denied);
   const runs = usePaged('apply-runs', (after) => fetchLegacyCutoverApplyRuns(after), !denied);
@@ -230,7 +232,7 @@ export function LegacyCutoverPage({
         title={t('web.lco_approve_title')}
         size="lg"
       >
-        <ApproveForm onDone={() => setApproving(false)} />
+        <ApproveForm held={approveKey} onDone={() => setApproving(false)} />
       </Modal>
       <Banner tone="warn" icon="info">
         {t('web.lco_banner')}
@@ -321,10 +323,18 @@ function Pager({
  * Record an approval. Every value exactly as the runbook printed it. W3: drawn inside the
  * dialog the page head's "record owner approval" opens; a recorded approval closes it.
  */
-export function ApproveForm({ onDone }: { onDone?: () => void } = {}) {
+export function ApproveForm({
+  onDone,
+  held,
+}: {
+  onDone?: () => void;
+  /** The key, held by the page so a retry after a 5xx survives closing the dialog. */
+  held?: SubmissionKey | undefined;
+} = {}) {
   const queries = useQueryClient();
   const notify = useToast();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [kind, setKind] = useState<LegacyCutoverApprovalKind>('CUTOVER');
   const [values, setValues] = useState<Readonly<Record<FieldName, string>>>({
     sourceFingerprint: '',

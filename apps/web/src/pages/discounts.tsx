@@ -50,7 +50,7 @@ import {
   type DiscountWriteInput,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
@@ -458,6 +458,8 @@ function DiscountRules({
   const [editing, setEditing] = useState<DiscountSummaryResponse | null>(null);
   /** W3: whether the create/edit drawer is open. */
   const [open, setOpen] = useState(false);
+  /** The drawer's submission key, held while the drawer mounts and unmounts. */
+  const formKey = useSubmissionKey();
   /** Opening another rule, or the create form, drops the open form's draft: asked first. */
   const discard = useDiscardGuard();
 
@@ -741,6 +743,7 @@ function DiscountRules({
           // KEYED BY THE RULE: every `useState` initialiser must read the rule now open,
           // not the one open before it.
           <DiscountForm
+            held={formKey}
             key={editing.id}
             rule={editing}
             options={options}
@@ -752,6 +755,7 @@ function DiscountRules({
           />
         ) : (
           <DiscountForm
+            held={formKey}
             options={options}
             onDone={() => setOpen(false)}
             onDirtyChange={discard.onDirtyChange}
@@ -1247,6 +1251,7 @@ export function discountBodyFrom(
 }
 
 function DiscountForm({
+  held,
   rule,
   options,
   onDone,
@@ -1258,12 +1263,18 @@ function DiscountForm({
   onDone: () => void;
   /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `discount-${mode}`;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [state, setState] = useState<DiscountFormState>(
     rule === undefined ? BLANK_DISCOUNT : discountStateOf(rule),
   );
@@ -1619,6 +1630,8 @@ function CashbackRules({
   const [editing, setEditing] = useState<CashbackRuleSummaryResponse | null>(null);
   /** W3: whether the create/edit drawer is open. */
   const [open, setOpen] = useState(false);
+  /** The drawer's submission key, held while the drawer mounts and unmounts. */
+  const formKey = useSubmissionKey();
   /** Opening another rule, or the create form, drops the open form's draft: asked first. */
   const discard = useDiscardGuard();
 
@@ -1788,6 +1801,7 @@ function CashbackRules({
           // KEYED BY THE RULE: every `useState` initialiser must read the rule now open,
           // not the one open before it.
           <CashbackForm
+            held={formKey}
             key={editing.id}
             rule={editing}
             options={options}
@@ -1799,6 +1813,7 @@ function CashbackRules({
           />
         ) : (
           <CashbackForm
+            held={formKey}
             options={options}
             onDone={() => setOpen(false)}
             onDirtyChange={discard.onDirtyChange}
@@ -1834,6 +1849,7 @@ export function cashbackBodyFrom(
 }
 
 function CashbackForm({
+  held,
   rule,
   options,
   onDone,
@@ -1844,12 +1860,18 @@ function CashbackForm({
   onDone: () => void;
   /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `cashback-${mode}`;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const loaded: CashbackFormState =
     rule === undefined
       ? BLANK_CASHBACK

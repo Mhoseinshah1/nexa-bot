@@ -37,7 +37,7 @@ import {
   type ProductWriteInput,
 } from '../api/client';
 import { formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
@@ -289,6 +289,8 @@ export function ProductsPage({
   const onLink = useLinkHandler();
   const [creating, setCreating] = useState(false);
   const createGuard = useDiscardGuard();
+  /** The create drawer's submission key, held while the drawer mounts and unmounts. */
+  const createKey = useSubmissionKey();
 
   const appliedStatus = statusFromQuery(route.query.get('status'));
   const appliedAudience = audienceFromQuery(route.query.get('audience'));
@@ -665,6 +667,7 @@ export function ProductsPage({
         wide
       >
         <ProductForm
+          held={createKey}
           mode="create"
           onCreated={() => setCreating(false)}
           onDirtyChange={createGuard.onDirtyChange}
@@ -955,6 +958,7 @@ export function productTabMarks(
 }
 
 function ProductForm({
+  held,
   mode,
   product,
   tabbed = false,
@@ -972,12 +976,18 @@ function ProductForm({
   onCreated?: () => void;
   /** Reports unsaved edits to the drawer that holds the form (`useDiscardGuard`). */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const [tab, setTab] = useState<ProductTab>('basic');
   const shows = (one: ProductTab) => !tabbed || tab === one;
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [state, setState] = useState<FormState>(product === undefined ? BLANK : stateOf(product));
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((current) => ({ ...current, [key]: value }));

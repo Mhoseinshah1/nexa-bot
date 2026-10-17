@@ -415,6 +415,55 @@ describe('cashback rules', () => {
   });
 });
 
+describe('a write whose answer was lost (W3 drawers)', () => {
+  /*
+   * The form lives in a drawer that unmounts on close. A 5xx may have committed, so the
+   * retry must carry the SAME idempotency key — even after the drawer was closed and
+   * reopened. The key is held by the always-mounted list, not by the form.
+   */
+  it('keeps the key across closing and reopening the drawer after a 5xx', async () => {
+    const api = stubApi([
+      { url: '/discounts', body: { discounts: [discount()], nextCursor: null } },
+      { url: '/cashback-rules', body: { rules: [], nextCursor: null } },
+      {
+        url: '/discounts',
+        method: 'POST',
+        status: 500,
+        body: {
+          error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' },
+        },
+      },
+    ]);
+    render();
+    await screen.findByText('Summer launch');
+    const fill = () => {
+      fireEvent.change(input('discount-create-code'), { target: { value: 'WELCOME10' } });
+      fireEvent.change(input('discount-create-label'), { target: { value: 'Welcome' } });
+      fireEvent.change(input('discount-create-value'), { target: { value: '10' } });
+    };
+    openAdd(discountTable());
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'ساخت قاعده' }));
+    await waitFor(() => expect(posts(api, '/discounts')).toHaveLength(1));
+
+    // Close (discarding the draft), reopen, type the same rule, send again.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    const asked = screen.queryByRole('alertdialog');
+    if (asked !== null) {
+      fireEvent.click(within(asked).getByRole('button', { name: t('web.discard') }));
+    }
+    await waitFor(() => expect(document.getElementById('discount-create-code')).toBeNull());
+    openAdd(discountTable());
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'ساخت قاعده' }));
+    await waitFor(() => expect(posts(api, '/discounts')).toHaveLength(2));
+    const [first, second] = posts(api, '/discounts');
+    expect((second?.body as Record<string, unknown>)['idempotencyKey']).toBe(
+      (first?.body as Record<string, unknown>)['idempotencyKey'],
+    );
+  });
+});
+
 describe('permissions', () => {
   it('draws no discount control without catalog.discounts.edit, and names the key', async () => {
     stubApi(lists());

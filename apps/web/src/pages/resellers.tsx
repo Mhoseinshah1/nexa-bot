@@ -28,7 +28,7 @@ import {
   updateReseller,
 } from '../api/client';
 import { CustomerIdentity, CustomerPicker } from './customer-picker';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, useLinkHandler, type Route } from '../router';
@@ -65,7 +65,7 @@ import {
   ResellerHistoryCard,
   ResellerPurchasesCard,
 } from './reseller-standing';
-import { ResellerPolicyCard } from './reseller-plans';
+import { ResellerPolicyCard, usePolicyKeys } from './reseller-plans';
 
 /**
  * Resellers — who buys at a reseller's price, and on which tier
@@ -322,6 +322,13 @@ export function ResellersPage({
   const discard = useDiscardGuard();
   /** The reseller whose standing (credit, purchases, history) is open — a READ. */
   const [viewing, setViewing] = useState<string | null>(null);
+  /*
+   * The dialog's and the drawer's submission keys, held here: both unmount on close, and a
+   * retry after a 5xx must carry the key its first attempt used.
+   */
+  const registerKey = useSubmissionKey();
+  const editKey = useSubmissionKey();
+  const policyKeys = usePolicyKeys();
   /** W3: the register dialog; a handed-over customer opens it. */
   const [registerOpen, setRegisterOpen] = useState(registering !== '');
   const [handedOver, setHandedOver] = useState(registering);
@@ -622,6 +629,7 @@ export function ResellersPage({
                 // KEYED BY THE CUSTOMER: every `useState` initialiser must read the
                 // reseller now open, not the one open before it.
                 <ResellerForm
+                  held={editKey}
                   key={`edit-${editing.customerId}`}
                   reseller={editing}
                   tiers={tierRows}
@@ -631,6 +639,7 @@ export function ResellersPage({
               )}
               {/* Round N: what this reseller may sell, inherited or their own, and the minimum. */}
               <ResellerPolicyCard
+                held={policyKeys}
                 customerId={viewing}
                 mayEdit={mayEdit}
                 mayViewCatalog={mayViewCatalog}
@@ -664,6 +673,7 @@ export function ResellersPage({
         {/* Keyed by the handed-over customer, so following a second "register" link
             re-reads it rather than keeping the first one's draft. */}
         <ResellerForm
+          held={registerKey}
           key={`register-${registering}`}
           initialCustomerId={registering}
           maySearchCustomers={maySearchCustomers}
@@ -841,6 +851,7 @@ export function resellerBodyFrom(
 }
 
 function ResellerForm({
+  held,
   reseller,
   initialCustomerId = '',
   maySearchCustomers = false,
@@ -861,13 +872,19 @@ function ResellerForm({
   onDone: () => void;
   /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const mode = reseller === undefined ? 'register' : 'update';
   const prefix = `reseller-${mode}`;
   const onLink = useLinkHandler();
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [state, setState] = useState<ResellerFormState>(
     reseller === undefined ? blankState(initialCustomerId) : stateOf(reseller),
   );

@@ -28,7 +28,7 @@ import {
   setResellerMinimum,
   setResellerTierMinimum,
 } from '../api/client';
-import { useSubmissionKey } from '../submission-key';
+import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
@@ -265,6 +265,13 @@ export function ResellerPlansPage({
   const [grantsId, setGrantsId] = useState<string | null>(null);
   const [minimumId, setMinimumId] = useState<string | null>(null);
   const [policyId, setPolicyId] = useState<string | null>(null);
+  /*
+   * The drawers' submission keys, held here: a drawer unmounts on close, and a retry after
+   * a 5xx must carry the key its first attempt used.
+   */
+  const grantsKey = useSubmissionKey();
+  const minimumKey = useSubmissionKey();
+  const policyKeys = usePolicyKeys();
   /** W1.8: the tiers, ten a page (the whole roster is one answer). */
   const tierPage = usePagedRows(rows);
   const granting = rows.find((row) => row.id === grantsId);
@@ -391,6 +398,7 @@ export function ResellerPlansPage({
         {granting !== undefined &&
           (mayEdit ? (
             <GrantsEditor
+              held={grantsKey}
               key={granting.id}
               tier={granting}
               options={options}
@@ -415,6 +423,7 @@ export function ResellerPlansPage({
       >
         {minimumTier !== undefined && (
           <TierMinimumForm
+            held={minimumKey}
             key={minimumTier.id}
             tier={minimumTier}
             onDone={() => setMinimumId(null)}
@@ -432,6 +441,7 @@ export function ResellerPlansPage({
       >
         {policyId !== null && (
           <ResellerPolicyCard
+            held={policyKeys}
             key={policyId}
             customerId={policyId}
             mayEdit={mayEdit}
@@ -521,15 +531,22 @@ function MinimumMoneyFields({
 }
 
 function TierMinimumForm({
+  held,
   tier,
   onDone,
 }: {
   tier: ResellerTierSummaryResponse;
   onDone: () => void;
+  /**
+   * The submission key, held by the always-mounted parent: this form lives in a dialog or
+   * drawer that unmounts on close, and a retry after a 5xx must keep its key.
+   */
+  held?: SubmissionKey | undefined;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const submission = useSubmissionKey();
+  const own = useSubmissionKey();
+  const submission = held ?? own;
   const [amount, setAmount] = useState(tier.monthlyMinimum?.amount ?? '0');
   const [currency, setCurrency] = useState<CurrencyCode>(
     tier.monthlyMinimum?.currency ?? SALES_CURRENCY_CODES[0],
@@ -825,6 +842,7 @@ function MinimumProgressCard({
 type MinimumChoice = 'INHERIT' | 'NONE' | 'OWN';
 
 export function ResellerPolicyCard({
+  held,
   customerId,
   mayEdit,
   mayViewCatalog,
@@ -836,6 +854,8 @@ export function ResellerPolicyCard({
   mayViewCatalog: boolean;
   mayViewPanels: boolean;
   onClose?: () => void;
+  /** The override editor's submission keys, held by the page that opens this card. */
+  held?: PolicyKeys | undefined;
 }) {
   const policy = useQuery({
     queryKey: ['reseller-policy', customerId],
@@ -1048,6 +1068,7 @@ export function ResellerPolicyCard({
             {mayEdit ? (
               editing ? (
                 <OverrideEditor
+                  held={held}
                   policy={data}
                   options={options}
                   names={names}
@@ -1070,7 +1091,19 @@ export function ResellerPolicyCard({
   );
 }
 
+/** The override editor's two commands' keys. */
+export interface PolicyKeys {
+  readonly grants: SubmissionKey;
+  readonly minimum: SubmissionKey;
+}
+
+/** Holds the override editor's keys in an always-mounted page. */
+export function usePolicyKeys(): PolicyKeys {
+  return { grants: useSubmissionKey(), minimum: useSubmissionKey() };
+}
+
 function OverrideEditor({
+  held,
   policy,
   options,
   names,
@@ -1080,11 +1113,15 @@ function OverrideEditor({
   options: ReturnType<typeof useGrantOptions>['options'];
   names: ReadonlyMap<string, string>;
   onDone: () => void;
+  /** The two submission keys, held by the always-mounted page (see `held` on the forms). */
+  held?: PolicyKeys | undefined;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
-  const grantsSubmission = useSubmissionKey();
-  const minimumSubmission = useSubmissionKey();
+  const ownGrants = useSubmissionKey();
+  const ownMinimum = useSubmissionKey();
+  const grantsSubmission = held?.grants ?? ownGrants;
+  const minimumSubmission = held?.minimum ?? ownMinimum;
 
   // Each dimension starts from what applies now: the override when there is one, else the
   // tier's grants, so choosing "own" begins from the inherited value rather than from nothing.
