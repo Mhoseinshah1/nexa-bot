@@ -270,7 +270,9 @@ export function LegacyInvoicesPage({
   const nextCursor = invoices.data?.nextCursor ?? null;
 
   const set = <K extends keyof Filters>(name: K, value: Filters[K]) => {
-    setFilters({ ...filters, [name]: value });
+    // Functional: «پاک کردن همه» calls this once per filter in one turn, and each call must
+    // build on the one before it, not on the filters this render captured.
+    setFilters((current) => ({ ...current, [name]: value }));
     setTrail([]);
   };
 
