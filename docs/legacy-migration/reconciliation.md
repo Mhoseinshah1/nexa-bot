@@ -84,36 +84,33 @@ the customer row and the opening agree.
 The legacy wallet source is `user.Balance` and nothing else; `wallet_transaction` and the
 payment history are **never replayed** (PROGRAM §2, §22). Each imported user with a
 POSITIVE balance becomes exactly one `MIGRATION_OPENING_BALANCE` `CREDIT`, additive onto
-whatever the customer already held. A NEGATIVE balance is **not** a ledger entry (owner
-decision 6, 2026-10-07): it is one legacy debt in `legacy_wallet_debts`, held for the
-owner's review and never collected (`docs/migration-opening-balance.md` §Negative balances).
-Before that decision a negative balance was a `DEBIT`; the equations below are the ones
-after it.
+whatever the customer already held. A NEGATIVE balance is exactly one `DEBIT` of its
+magnitude (owner decision 2026-10-17, superseding decision 6's held-for-review legacy debt):
+the wallet IS the Mirza balance, and a negative one blocks purchase until it is topped up.
+Nothing writes `legacy_wallet_debts` any more.
 
 The program's equation:
 
 ```
-Σ(pre-import NEXA balances) + Σ(POSITIVE legacy Balance of imported users) = Σ(post-import NEXA balances)
-Σ(|NEGATIVE legacy Balance| of imported users) = Σ(legacy_wallet_debts.amount_minor)
+Σ(pre-import NEXA balances) + Σ(legacy Balance of imported users, signed) = Σ(post-import NEXA balances)
+Σ(|NEGATIVE legacy Balance| of imported users) = Σ(DEBIT openings)
 ```
 
 in snapshot terms:
 
 - **W1** `PRE[wallet_signed_total_minor] + legacy_imported_balance_sum = POST[wallet_signed_total_minor]`
-  — exact; `legacy_imported_balance_sum` is over POSITIVE balances only (a negative one
-  moves no wallet).
+  — exact; `legacy_imported_balance_sum` is the signed sum of every non-zero balance.
 - **W2** `delta(wallet_signed_total_minor) = delta(opening_signed_total_minor)` — nothing but
   openings moved the wallet during the import window.
 - **W3** `delta(wallet_entries_total) = delta(opening_entries_total)`.
 - **W4** `delta(opening_entries_total) = legacy_imported_nonzero_users` — one opening per
-  imported user with a POSITIVE balance (the metric keeps its name; it counts `Balance > 0`):
-  none missing, none extra.
-- **W9** `POST[opening_debit_entries] = 0` — no ledger DEBIT opening exists (rehearsal
-  check `no_debit_openings`).
-- **W10** `delta(legacy_debts_total) = legacy imported_negative_users` and
-  `delta(legacy_debts_sum_minor) = imported_negative_magnitude` — one debt per imported user
-  with a negative balance, of exactly its magnitude (`legacy_debts_one_per_negative_user`,
-  `legacy_debts_equal_negative_magnitude`).
+  imported user with a non-zero balance: none missing, none extra.
+- **W9** `POST[legacy_debts_total] = 0` — no legacy-debt side record (rehearsal check
+  `no_legacy_debts`).
+- **W10** `delta(opening_debit_entries) = imported_negative_users` and
+  `delta(opening_debit_sum_minor) = imported_negative_magnitude` — one DEBIT per imported
+  user with a negative balance, of exactly its magnitude
+  (`debit_openings_one_per_negative_user`, `debit_openings_equal_negative_magnitude`).
 - **W5** `POST[opening_customers_with_duplicates] = 0` — **no duplicate openings** (the
   partial unique index `wallet_entries_migration_opening_customer_key` forbids it; this
   proves it held).
@@ -327,14 +324,15 @@ burst (cutover runbook, observation step).
 markdown only, because `final-report.schema.json` v1 is closed. **PR6 folds this section,
 unchanged, into the final report's schema version 2.** Built by
 `apps/api/src/modules/platform/legacy-importer/application/users-wallets-reconciliation.ts`
-from the plan, the `user` map rows, the openings and the debts. Counts, sums and opaque map
+from the plan, the `user` map rows and the openings (since owner decision 2026-10-17 a
+negative balance is a DEBIT opening, not a legacy debt; version 2). Counts, sums and opaque map
 refs only — never a Telegram id, a username or one person's amount.
 
-Shape (`LEGACY_USERS_WALLETS_SECTION_VERSION` = `nexa-legacy-users-wallets/v1`):
+Shape (`LEGACY_USERS_WALLETS_SECTION_VERSION` = `nexa-legacy-users-wallets/v2`):
 
 ```jsonc
 {
-  "version": "nexa-legacy-users-wallets/v1",
+  "version": "nexa-legacy-users-wallets/v2",
   "sourceFingerprint": "<v1 fingerprint of the snapshot reconciled>",
   "users": {
     "sourceRows": 0,
@@ -354,29 +352,18 @@ Shape (`LEGACY_USERS_WALLETS_SECTION_VERSION` = `nexa-legacy-users-wallets/v1`):
   "wallet": {
     "currency": "IRT",
     "positive": { "users": 0, "sumMinor": "0", "openingEntries": 0, "openingSumMinor": "0" },
+    // a negative balance is ONE DEBIT opening of its magnitude (owner decision 2026-10-17)
+    "negative": { "users": 0, "sumMinor": "0", "openingEntries": 0, "openingSumMinor": "0" },
     "zero": { "users": 0 },
-    "legacyDebts": {
-      "users": 0,
-      "sumMinor": "0", // negative balances imported from THIS snapshot
-      "recorded": 0,
-      "recordedSumMinor": "0", // every debt of the tenant
-      "byState": { "PENDING_REVIEW": { "count": 0, "sumMinor": "0" } },
-      "synthetic": 0,
-    },
-    "ledgerDebitOpenings": 0,
-    "perUser": {
-      "matching": 0,
-      "missingOpening": 0,
-      "missingDebt": 0,
-      "priorDebitOpening": 0,
-      "conflicting": 0,
-    },
+    // rows of the retired legacy-debt side record: nothing writes it any more (U6)
+    "legacyDebtRows": 0,
+    "perUser": { "matching": 0, "missingOpening": 0, "conflicting": 0 },
     "carried": {
-      // recorded from an earlier snapshot, never re-applied
-      "changedOpenings": { "count": 0, "sumMinor": "0" },
-      "changedDebts": { "count": 0, "sumMinor": "0" },
-      "absentOpenings": { "count": 0, "sumMinor": "0" },
-      "absentDebts": { "count": 0, "sumMinor": "0" },
+      // recorded from an earlier snapshot, never re-applied; credits Σ, debits Σ |·|
+      "changedCredits": { "count": 0, "sumMinor": "0" },
+      "changedDebits": { "count": 0, "sumMinor": "0" },
+      "absentCredits": { "count": 0, "sumMinor": "0" },
+      "absentDebits": { "count": 0, "sumMinor": "0" },
     },
     // U9/U10: every source row's balance in exactly one bucket; signed = { rows, positive:
     // { rows, sumMinor }, negative: { rows, sumMinor (magnitudes) } }
@@ -385,7 +372,7 @@ Shape (`LEGACY_USERS_WALLETS_SECTION_VERSION` = `nexa-legacy-users-wallets/v1`):
       "readable": {}, // signed
       "unreadable": { "rows": 0, "byOutcome": {} }, // counted, never summed
       "credited": { "rows": 0, "sumMinor": "0" },
-      "debtRecorded": { "rows": 0, "sumMinor": "0" },
+      "debited": { "rows": 0, "sumMinor": "0" },
       "zero": { "rows": 0 },
       "held": { "rows": 0, "positive": {}, "negative": {}, "byOutcome": {} }, // signed, per outcome
       "unaccounted": {}, // signed; never expected
@@ -408,15 +395,15 @@ Shape (`LEGACY_USERS_WALLETS_SECTION_VERSION` = `nexa-legacy-users-wallets/v1`):
 The checks:
 
 - **U1** every source user row is in exactly one outcome (Σ outcomes = source rows).
-- **U2/U3** Σ and count of openings = the positive balances imported from this snapshot +
-  the openings carried by SOURCE_CHANGED users and by users this snapshot no longer has.
-- **U4/U5** the same for legacy debts against the negative balances.
-- **U6** no ledger DEBIT opening (owner decision 6).
-- **U7** per imported user, NEXA holds exactly the source figure (a CREDIT, a debt, or
-  nothing for zero); a missing opening, a missing debt, a prior DEBIT or any other value
-  fails it.
-- **U8** no debt recorded from a synthetic source, unless the snapshot reconciled is
-  synthetic (PR3's review lesson on recorded state).
+- **U2/U3** Σ and count of CREDIT openings = the positive balances imported from this
+  snapshot + the credits carried by SOURCE_CHANGED users and by users this snapshot no
+  longer has.
+- **U4/U5** the same for DEBIT openings (magnitudes) against the negative balances.
+- **U6** no legacy-debt side record exists: a negative balance is the wallet balance itself
+  (owner decision 2026-10-17, superseding decision 6).
+- **U7** per imported user, NEXA holds exactly the source figure (a CREDIT, a DEBIT, or
+  nothing for zero); a missing opening, the other sign or any other value fails it.
+- **U8** the opening total is exactly its two signs (count and signed Σ).
 - **U9** every source row's balance is in exactly ONE money bucket (`wallet.sourceMoney`):
   `credited` (an imported user holding exactly one opening of it), `debtRecorded`, `zero`,
   `held` (readable, not applied from this snapshot, keyed by the outcome that says why:
