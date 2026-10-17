@@ -58,7 +58,6 @@ import {
 import {
   decideLegacyUser,
   legacyProfileUsername,
-  needsHiddenShape,
   type ServiceCandidateCategory,
 } from './decisions.js';
 import { legacyShapeKey } from '../../../commerce/catalog/application/legacy-shape.js';
@@ -111,7 +110,7 @@ import { buildFinalReportV2 } from './final-report-v2.js';
 import type { LegacyInventory } from './legacy-inventory.js';
 import { decideEvidenceClass, type EvidenceClass } from './production-guard.js';
 import { LEGACY_REPORT_FORMAT, type LegacyImportReport, type LegacyReportMode } from './report.js';
-import { sha256Hex, type LegacySnapshot } from './source-snapshot.js';
+import { serviceCandidateInvoices, sha256Hex, type LegacySnapshot } from './source-snapshot.js';
 import { productMapAgainstReview, productMapRefusalMessage } from './product-map-review.js';
 import {
   approvalGate,
@@ -415,6 +414,11 @@ export interface ApplyTallies {
       PENDING: number;
       /** Mirza PR5: eligible, and a person kept it as history — never handed to (or by) P6. */
       KEPT_AS_HISTORY: number;
+      /**
+       * ADOPTED this run with the panel's state `on_hold` or unrecognised, adopted as ACTIVE
+       * for a person to look at (`adoptionReviewFlag`). Informational: not an attention item.
+       */
+      flaggedForReview: number;
     };
     /** Mirza PR5: the ONE outcome each live invoice got this run (Σ = live invoices). */
     outcomes: Record<LegacyServiceOutcome, number>;
@@ -643,7 +647,7 @@ export class LegacyImporterService {
     // (the Web Admin's) decides these when the panel is not one complete snapshot — a live
     // panel that keeps selling — and only these; any other source ignores them.
     const needed = neededNamesByPanel(
-      snapshot.liveInvoices,
+      serviceCandidateInvoices(snapshot),
       importableLegacyUserIds(snapshot.users, existingCustomers),
       mapping.policy,
       review.inputs.operatorPanels ?? new Map(),
@@ -707,7 +711,7 @@ export class LegacyImporterService {
     ownershipHold: ReadonlySet<string> | undefined,
     inventoryHold: ReadonlySet<string> | undefined,
   ): Promise<PreparedReview> {
-    const live = new Map(snapshot.liveInvoices.map((i) => [i.idInvoice, i]));
+    const live = new Map(serviceCandidateInvoices(snapshot).map((i) => [i.idInvoice, i]));
     const keys = [...live.keys()].filter(recordableKey);
     const candidates = new Map(
       (await this.deps.serviceCandidates.findByInvoiceKeys(scope, keys)).map((c) => [
@@ -1237,6 +1241,7 @@ export class LegacyImporterService {
           reviewReasons: {},
           PENDING: 0,
           KEPT_AS_HISTORY: 0,
+          flaggedForReview: 0,
         },
         outcomes: Object.fromEntries(LEGACY_SERVICE_OUTCOMES.map((o) => [o, 0])) as Record<
           LegacyServiceOutcome,
@@ -1563,7 +1568,7 @@ export class LegacyImporterService {
       }
       // 2. The targeted re-read: only the panels the claims name, only their names.
       const needed = laneNeededNamesByPanel(
-        snapshot.liveInvoices.filter((i) => claims.executing.has(i.idInvoice)),
+        serviceCandidateInvoices(snapshot).filter((i) => claims.executing.has(i.idInvoice)),
         new Set(lane.imported.keys()),
         mapping.policy,
         claims.operatorPanels,
@@ -1816,8 +1821,7 @@ export class LegacyImporterService {
     }
 
     const shapeKeys = new Set<string>();
-    for (const invoice of snapshot.liveInvoices) {
-      if (!needsHiddenShape(invoice, snapshot.productCodes)) continue;
+    for (const invoice of serviceCandidateInvoices(snapshot)) {
       const keyed = legacyShapeKey({
         codePanel: invoice.codePanel,
         volume: invoice.volume,
@@ -2429,6 +2433,9 @@ export class LegacyImporterService {
       eligibleResults.set(invoice.idInvoice, { kind: 'ADOPTION', outcome });
       // P6 wrote the invoice's map row for every one of these; P7 records nothing here.
       tallies.services.adoption[outcome.kind] += 1;
+      if (outcome.kind === 'ADOPTED' && (outcome.reviewFlag ?? null) !== null) {
+        tallies.services.adoption.flaggedForReview += 1;
+      }
       if (outcome.kind === 'ALREADY_ADOPTED' && outcome.sourceChanged) {
         tallies.services.adoption.alreadyAdoptedSourceChanged += 1;
       }
@@ -2711,7 +2718,7 @@ export class LegacyImporterService {
       productCodes: snapshot.productCodes,
       tariffOf: (key: string) =>
         shapes.get(key)?.resolved === true ? ('RESOLVED' as const) : ('UNRESOLVED' as const),
-      claimsByName: claimsByName(snapshot.liveInvoices, keptAsHistory),
+      claimsByName: claimsByName(serviceCandidateInvoices(snapshot), keptAsHistory),
     };
     const recordable = services.filter(({ invoice }) => {
       if (recordableKey(invoice.idInvoice)) return true;

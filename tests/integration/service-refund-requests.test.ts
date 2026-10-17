@@ -2378,9 +2378,11 @@ describe('WP19 — a customer asks for their money back', () => {
       text: '1000',
     });
     if (entered.outcome !== 'AMOUNT_ENTERED') throw new Error(entered.outcome);
-    // Between the amount and the confirmation, the service stops being deletable.
+    // Between the amount and the confirmation, the service stops being deletable. (An
+    // UNRECONCILED service is not one: a TERMINATED one never comes back — the database says
+    // so — and this case needs a state that recovers.)
     await ctx.container.database.db.execute(
-      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+      sql`UPDATE services SET state = 'UNRECONCILED', provisioned_at = NULL
            WHERE id = ${service.id}` as never,
     );
     const refusedOnce = await ctx.container.serviceRefundDecisions.confirmApprove(tenantA, owner, {
@@ -2390,7 +2392,7 @@ describe('WP19 — a customer asks for their money back', () => {
     // It recovers. The administrator was told the approval failed; the same old button must
     // not now carry it out.
     await ctx.container.database.db.execute(
-      sql`UPDATE services SET state = 'ACTIVE', terminated_at = NULL WHERE id = ${service.id}` as never,
+      sql`UPDATE services SET state = 'ACTIVE', provisioned_at = now() WHERE id = ${service.id}` as never,
     );
     const tappedAgain = await ctx.container.serviceRefundDecisions.confirmApprove(tenantA, owner, {
       captureId: entered.capture.id,

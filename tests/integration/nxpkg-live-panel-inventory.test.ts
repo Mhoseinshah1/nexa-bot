@@ -670,7 +670,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
     // The panel decided what a complete read decides: the missing account, the collision.
-    expect(w['PROVIDER_MISSING']).toBe(1);
+    // svc_missing and, matched like every invoice, the removed svc_old (owner decision 2026-10-17).
+    expect(w['PROVIDER_MISSING']).toBe(2);
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
     // A/B: no per-user request at all — never a manual account or a sale, nor the backup's
     // own names (svc_missing is absent because the gap-free last walk returned no spelling).
@@ -692,9 +693,10 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expectOneServicePerAccount(held);
     // C: the matched candidates' evidence — one holder, on the mapped panel, one exact
     // spelling; the collision two spellings; the missing account none. Only backup invoices
-    // are candidates at all (19, as the source has live invoices).
+    // are candidates at all (21: the source's 19 live invoices and its two removed ones —
+    // every invoice is matched, not only the live ones).
     const decided = await candidates();
-    expect(Object.keys(decided)).toHaveLength(19);
+    expect(Object.keys(decided)).toHaveLength(21);
     expect(decided['a0000001']).toEqual({
       outcome: 'ADOPTED',
       holders: [{ panel: 'A', spellings: 1 }],
@@ -786,7 +788,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // svc_missing (never there): both absent, decided from the walk alone — no lookup.
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBeUndefined();
-    expect(w['PROVIDER_MISSING']).toBe(2);
+    expect(w['PROVIDER_MISSING']).toBe(3);
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
 
@@ -894,7 +896,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // svc_a1, svc_a2, svc_a4, svc_missing, and the three panel-less invoices' names (asked of
     // every production panel, for holder discovery); case_x is a collision whatever the walks
     // prove.
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(8);
     expect(w['INVENTORY_INCOMPLETE']).toBeGreaterThanOrEqual(4);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
@@ -930,8 +932,9 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(dry.status).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
     expect(lookupsOf(panelA, before)).toEqual([]);
-    // Four mapped names and the three panel-less ones (see above).
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
+    // Five mapped names (the removed svc_old is one: every invoice is matched) and the three
+    // panel-less ones (see above).
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(8);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
     expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBeUndefined();
@@ -1254,8 +1257,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
     expect(failed.applyLegacyRunId).toBeNull();
     const refusal = codes(failed.progress.refusalCounts);
-    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(1);
-    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(2);
+    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(2);
+    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(3);
     for (const table of ['customers', 'wallet_entries', 'services', 'orders']) {
       expect(await count(table), table).toBe(0);
     }

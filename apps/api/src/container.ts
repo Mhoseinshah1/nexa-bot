@@ -369,6 +369,9 @@ import { CustomerBotLinkService } from './modules/commerce/customers/application
 import { DrizzleCustomerBotLinkRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-bot-link.repository.js';
 import { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
 import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
+// legacy-materialize: ended services
+import { TerminatedServicesStep } from './modules/platform/legacy-materialize/application/terminated-services.step.js';
+import { DrizzleEndedServicesRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-ended-services.repository.js';
 import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store.js';
 import { LegacyImporterService } from './modules/platform/legacy-importer/application/legacy-importer.service.js';
 import type {
@@ -1182,6 +1185,8 @@ export interface Container {
    * client: adoption is not provisioning.
    */
   readonly legacyAdoption: LegacyAdoptionService;
+  // legacy-materialize: ended services
+  readonly legacyEndedServices: TerminatedServicesStep;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
   /** WP13 — the Web Admin's management of this tenant's Telegram bot instances. */
@@ -4148,6 +4153,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     outbox,
     idempotency,
+    clock,
+    ids,
+  });
+  // legacy-materialize: ended services
+  // The one-time Mirza import's ENDED services: a TERMINATED service and a LEGACY_HISTORY order
+  // per invoice whose account is not on the panel. Like the adoption it holds no provider
+  // client; it writes only orders and services, and never the outbox, a notice or the ledger.
+  const legacyEndedServices = new TerminatedServicesStep({
+    repository: new DrizzleEndedServicesRepository(database.db),
+    guard,
+    uow,
+    audit,
+    scopeActivity: tenants,
+    secrets: serviceSecrets,
     clock,
     ids,
   });
@@ -7303,6 +7322,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyMaterializePort,
     legacyBotLinkPort,
     legacyAdoption,
+    legacyEndedServices,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
     botManagement,

@@ -18,6 +18,7 @@ import {
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
+import { DrizzleEndedServicesRepository } from '../../apps/api/src/modules/platform/legacy-materialize/infrastructure/drizzle-ended-services.repository';
 import { DrizzleLegacyImportRepository } from '../../apps/api/src/modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzlePanelCapacityRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-capacity.repository';
@@ -284,9 +285,11 @@ describe('Migration P6: legacy service adoption', () => {
     const [order] = await rows<Record<string, unknown>>(sql`
       SELECT state, purpose, origin, subtotal_amount, discount_amount, total_amount,
              line_unit_price_amount, discount_code, settled_at, product_id, line_traffic_bytes,
-             line_duration_days, customer_id
+             line_duration_days, customer_id, source, source_ref
         FROM orders WHERE id = ${outcome.orderId}`);
     expect(order).toMatchObject({
+      source: 'MIRZA',
+      source_ref: `invoice:${c.legacyInvoiceKey}`,
       state: 'PAID',
       purpose: 'NEW_SERVICE',
       origin: 'LEGACY_ADOPTION',
@@ -304,9 +307,13 @@ describe('Migration P6: legacy service adoption', () => {
     const [service] = await rows<Record<string, unknown>>(sql`
       SELECT state, provider_username, subscription_ref, subscription_url, delivery_state,
              traffic_limit_bytes, traffic_used_bytes, usage_synced_at, expires_at,
-             provisioned_at, delivered_at, order_id, product_id, is_trial, customer_id
+             provisioned_at, delivered_at, order_id, product_id, is_trial, customer_id,
+             source, source_ref, is_test
         FROM services WHERE id = ${outcome.serviceId}`);
     expect(service).toMatchObject({
+      source: 'MIRZA',
+      source_ref: `invoice:${c.legacyInvoiceKey}`,
+      is_test: false,
       state: 'ACTIVE',
       provider_username: 'Legacy_Ali7',
       subscription_url: LINK,
@@ -733,12 +740,24 @@ describe('Migration P6: legacy service adoption', () => {
       );
       expect(svc?.state).toBe(nexa);
     }
-    for (const state of ['on_hold', 'UNKNOWN'] as const) {
-      expect(await adopt(command({ telegramUserId, runtime: facts({ state }) }))).toMatchObject({
-        kind: 'MANUAL_REVIEW',
-        reason: 'UNSUPPORTED_SHAPE',
-      });
+    // on_hold and an unrecognised state are adopted as ACTIVE and FLAGGED, never dropped
+    // (owner decision 2026-10-17): the flag is on the outcome and the audit row.
+    for (const [state, flag] of [
+      ['on_hold', 'PANEL_STATE_ON_HOLD'],
+      ['UNKNOWN', 'PANEL_STATE_UNKNOWN'],
+    ] as const) {
+      const o = await adopted(command({ telegramUserId, runtime: facts({ state }) }));
+      expect(o).toMatchObject({ state: 'ACTIVE', reviewFlag: flag });
+      const [audit] = await rows<{ flag: string | null }>(
+        sql`SELECT after->>'reviewFlag' AS flag FROM audit_logs
+             WHERE action = 'legacy.service.adopt' AND entity_id = ${o.serviceId}`,
+      );
+      expect(audit?.flag).toBe(flag);
     }
+    // A plain state carries no flag.
+    expect(
+      (await adopted(command({ telegramUserId, runtime: facts({ state: 'active' }) }))).reviewFlag,
+    ).toBeNull();
     // An unreadable record is a FAILED attempt a rerun with a fresh read retries — not a
     // question for a person (PROVIDER_READ_FAILED is not a review reason).
     const unreadable = command({ telegramUserId, runtime: facts({ usage: null }) });
@@ -857,6 +876,92 @@ describe('Migration P6: legacy service adoption', () => {
       reason: 'CONFLICTING_EXISTING_ENTITY',
     });
     expect(await count(sql`SELECT count(*)::int AS n FROM services`)).toBe(1);
+  });
+
+  it('an ENDED (TERMINATED) service no longer holds its name: a live adoption of it succeeds', async () => {
+    const telegramUserId = tg();
+    const customerId = await fx.customer({ telegramUserId });
+    const ended = await fx.service({ customerId, panelId: panel, productId: product });
+    await db().execute(
+      sql`UPDATE services SET provider_username = 'Ended_Name', state = 'TERMINATED',
+                 terminated_at = now() WHERE id = ${ended}`,
+    );
+    const o = await adopted(command({ telegramUserId, match: eligible('Ended_Name') }));
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM services WHERE lower(provider_username) = 'ended_name'`,
+      ),
+    ).toBe(2);
+    // The partial index still refuses a second LIVE holder of the name.
+    await expect(
+      db().execute(sql`UPDATE services SET state = 'ACTIVE', terminated_at = NULL,
+                              provisioned_at = now() WHERE id = ${ended}`),
+    ).rejects.toThrow();
+    expect(o.state).toBe('ACTIVE');
+  });
+
+  it('an invoice already recorded as an ENDED service is a conflict for a person — never a second row', async () => {
+    const telegramUserId = tg();
+    const customerId = await fx.customer({ telegramUserId });
+    const key = invoiceKey();
+    await ctx.container.uow.run(tenantA, (tx) =>
+      new DrizzleEndedServicesRepository(db()).insertEnded(
+        tenantA,
+        {
+          orderId: ctx.container.ids.uuid(),
+          serviceId: ctx.container.ids.uuid(),
+          sourceRef: `invoice:${key}`,
+          customerId,
+          panelId: panel,
+          product: {
+            productId: product,
+            title: 'سرویس قدیمی',
+            durationDays: 30,
+            trafficBytes: 50n * GB,
+          },
+          lineTitle: 'سرویس قدیمی',
+          providerUsername: `legacy_${key}`,
+          subscriptionRef: 'c'.repeat(32),
+          amountMinor: 150_000n,
+          currency: 'IRT',
+          purchasedAt: new Date('2025-01-01T00:00:00.000Z'),
+          isTest: false,
+          now: new Date('2026-10-17T00:00:00.000Z'),
+        },
+        tx,
+      ),
+    );
+    const before = await businessRows();
+    expect(await adopt(command({ telegramUserId, legacyInvoiceKey: key }))).toMatchObject({
+      kind: 'MANUAL_REVIEW',
+      reason: 'CONFLICTING_EXISTING_ENTITY',
+    });
+    expect(await businessRows()).toEqual(before);
+    expect(
+      await count(sql`SELECT count(*)::int AS n FROM services WHERE state = 'TERMINATED'`),
+    ).toBe(1);
+  });
+
+  it('an on_hold account with no expiry is adopted (flagged) whatever its plan says; an active one is not', async () => {
+    const telegramUserId = tg();
+    await fx.customer({ telegramUserId });
+    const noExpiry = (state: AdoptionRuntimeFacts['state']) =>
+      facts({
+        state,
+        usage: { usedBytes: 0n, totalBytes: 50n * GB, expiresAt: null },
+      });
+    // The plan is 30 days; an active account with NO expiry does not fit it and is refused…
+    expect(await adopt(command({ telegramUserId, runtime: noExpiry('active') }))).toMatchObject({
+      kind: 'MANUAL_REVIEW',
+      reason: 'PRODUCT_MAPPING_UNRESOLVED',
+    });
+    // …an on-hold one has no clock started yet, and is adopted for a person to look at.
+    const held = await adopted(command({ telegramUserId, runtime: noExpiry('on_hold') }));
+    expect(held).toMatchObject({ state: 'ACTIVE', reviewFlag: 'PANEL_STATE_ON_HOLD' });
+    const [service] = await rows<{ expires_at: string | null }>(
+      sql`SELECT expires_at FROM services WHERE id = ${held.serviceId}`,
+    );
+    expect(service?.expires_at).toBeNull();
   });
 
   it('a hold of the name in the namespace — another tenant on the same host — is a conflict', async () => {
