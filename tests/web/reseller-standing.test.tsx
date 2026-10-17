@@ -51,6 +51,8 @@ const reseller = (overrides: Record<string, unknown> = {}) => ({
   discountPercentage: null,
   creditLimit: null,
   effectiveCreditLimit: { amount: '0', currency: 'IRT' },
+  source: 'NEXA',
+  importedPurchaseCap: null,
   createdAt: '2026-09-02T08:00:00.000Z',
   updatedAt: '2026-09-02T08:00:00.000Z',
   ...overrides,

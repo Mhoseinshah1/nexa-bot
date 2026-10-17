@@ -44,6 +44,7 @@ import {
   Empty,
   Field,
   KV,
+  Money,
   Ltr,
   PageHead,
   StateSwitch,
@@ -402,6 +403,16 @@ export function ResellersPage({
       render: (row) => (
         <PricingText label={OVERRIDE_LABELS[row.pricingMode]} percent={row.discountPercentage} />
       ),
+    },
+    {
+      key: 'imported-cap',
+      header: t('web.reseller_imported_cap'),
+      render: (row) =>
+        row.importedPurchaseCap === null ? (
+          <span className="muted">—</span>
+        ) : (
+          <Money value={limitWire(row.importedPurchaseCap)} />
+        ),
     },
     {
       key: 'actions',
@@ -1037,6 +1048,21 @@ function ResellerForm({
       ) : (
         /* TEXT, not a disabled input: a reseller row never moves to another customer. */
         <KV items={[[t('web.reseller_customer'), <ResellerCell key="c" reseller={reseller} />]]} />
+      )}
+
+      {reseller?.importedPurchaseCap != null && (
+        /* READ ONLY, and not a field: a limit Mirza gave this agent. Applied nowhere. */
+        <KV
+          items={[
+            [
+              t('web.reseller_imported_cap'),
+              <Money key="cap" value={limitWire(reseller.importedPurchaseCap)} />,
+            ],
+          ]}
+        />
+      )}
+      {reseller?.importedPurchaseCap != null && (
+        <p className="muted small">{t('web.reseller_imported_cap_hint')}</p>
       )}
 
       <Field label={t('web.reseller_tier')} htmlFor={`${prefix}-tier`}>

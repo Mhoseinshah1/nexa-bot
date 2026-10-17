@@ -280,6 +280,10 @@ import { LegacyInvoiceArchiveService } from './modules/platform/legacy-invoice-a
 import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy-invoice-archive/infrastructure/drizzle-legacy-invoice-archive.repository.js';
 import { LegacyHistoryIngest } from './modules/platform/legacy-history/application/legacy-history-ingest.js';
 import { LegacyHistoryReadService } from './modules/platform/legacy-history/application/legacy-history-read.service.js';
+import { ProductsMaterializeStep } from './modules/platform/legacy-materialize/application/products-step.js';
+import { ResellersMaterializeStep } from './modules/platform/legacy-materialize/application/resellers-step.js';
+import { DiscountsMaterializeStep } from './modules/platform/legacy-materialize/application/discounts-step.js';
+import { DrizzleCatalogMaterializeRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-catalog-materialize.repository.js';
 import { DrizzleLegacyHistoryRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-history.repository.js';
 import { LegacyRecordsReadService } from './modules/platform/legacy-history/application/legacy-records-read.service.js';
 import { DrizzleLegacyRecordsRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-records.repository.js';
@@ -1020,6 +1024,15 @@ export interface Container {
    * (`users.view` + `legacy.history.view`). Neither touches money, orders, services or roles.
    */
   readonly legacyHistoryIngest: LegacyHistoryIngest;
+  /**
+   * legacy-materialize: the one-time Mirza import's catalogue steps — products (with their
+   * categories), resellers and discount codes — each a `MaterializeStep` the coordinator runs.
+   */
+  readonly legacyMaterializeCatalog: {
+    readonly products: ProductsMaterializeStep;
+    readonly resellers: ResellersMaterializeStep;
+    readonly discounts: DiscountsMaterializeStep;
+  };
   readonly legacyHistoryRead: LegacyHistoryReadService;
   readonly legacyRecordsRead: LegacyRecordsReadService;
   /** Mirza money history beside the opening figure, and the tenant-wide report (read only). */
@@ -4485,6 +4498,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  // legacy-materialize: catalogue steps (products, resellers, discount codes)
+  const catalogMaterializeRepository = new DrizzleCatalogMaterializeRepository(database.db);
+  const catalogMaterializeDeps = { guard, uow, scopeActivity: tenants, ids };
+  const legacyMaterializeCatalog = {
+    products: new ProductsMaterializeStep(catalogMaterializeRepository, catalogMaterializeDeps),
+    resellers: new ResellersMaterializeStep(catalogMaterializeRepository, catalogMaterializeDeps),
+    discounts: new DiscountsMaterializeStep(catalogMaterializeRepository, catalogMaterializeDeps),
+  } as const;
   const legacyHistoryRead = new LegacyHistoryReadService({
     repository: legacyHistoryRepository,
     customers: customerRepository,
@@ -7145,6 +7166,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyProductReviews: legacyProductReviewService,
     legacyInvoiceArchive: legacyInvoiceArchiveService,
     legacyHistoryIngest,
+    legacyMaterializeCatalog,
     legacyHistoryRead,
     legacyRecordsRead,
     legacyMoneyHistory,

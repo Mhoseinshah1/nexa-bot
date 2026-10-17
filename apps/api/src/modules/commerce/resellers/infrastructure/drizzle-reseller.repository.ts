@@ -11,6 +11,7 @@ import type {
   ResellerOverrideMode,
   ResellerPriceLayer,
   ResellerPricingMode,
+  RecordSource,
   ResellerStatus,
   TenantContext,
 } from '@nexa/contracts';
@@ -94,6 +95,8 @@ function toReseller(row: typeof resellers.$inferSelect): ResellerRecord {
         ? null
         : money(row.creditLimitAmount, row.creditLimitCurrency as CurrencyCode),
     monthlyMinimum: minimumOf(row.monthlyMinimumAmount, row.monthlyMinimumCurrency),
+    source: row.source as RecordSource,
+    importedPurchaseCap: minimumOf(row.importedPurchaseCapMinor, row.importedPurchaseCapCurrency),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
