@@ -297,7 +297,7 @@ jobs:
       # commit. Eight keeps the whole workflow under the 20 concurrent jobs a
       # free public repository gets.
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 
     services:
       postgres:
