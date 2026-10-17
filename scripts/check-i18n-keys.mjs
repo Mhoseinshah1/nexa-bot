@@ -77,16 +77,9 @@ const CATALOGUE_FILES = new Set([
   'apps/web/src/i18n/templates.fa.ts',
 ]);
 
-/*
- * TEMPORARY (web-admin demo branch): per-agent working catalogue fragments, folded into
- * `web.fa.ts` by the lead before the branch is pushed. They hold Persian like a catalogue,
- * and their keys are checked once folded.
- */
-const FRAGMENT_DIR = 'apps/web/src/i18n/fragments/';
-
 for (const dir of SURFACE_DIRS) {
   for (const file of walk(dir)) {
-    if (CATALOGUE_FILES.has(file) || file.startsWith(FRAGMENT_DIR)) continue;
+    if (CATALOGUE_FILES.has(file)) continue;
     const source = readFileSync(file, 'utf8');
     source.split('\n').forEach((line, index) => {
       // Comments explaining the legacy behaviour may quote Persian; code may not.

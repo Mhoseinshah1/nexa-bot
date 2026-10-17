@@ -696,7 +696,7 @@ describe('the order list', () => {
     const { container } = renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
     await screen.findByText('پلن یک‌ماهه');
     const text = container.textContent ?? '';
-    expect(text).not.toContain(t('web.orders_scope_title'));
+    expect(text).not.toContain(/* former web.orders_scope_title */ 'دو پایان ممکن برای یک سفارش');
     expect(text).not.toContain('پروجکشن مشترک');
   });
 });

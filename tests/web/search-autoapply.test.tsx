@@ -97,7 +97,7 @@ interface Spec {
   readonly terms: readonly [string, string];
   readonly paste: string;
   /** The pager's "next" button, and the request parameter its cursor travels in. */
-  readonly next: 'web.page_next' | 'web.newer';
+  readonly next: 'web.page_next';
   readonly cursorParam: string;
 }
 

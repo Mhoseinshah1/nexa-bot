@@ -1246,8 +1246,10 @@ describe('system and operations', () => {
     expect(await screen.findByText(t('web.system_logs_title'))).toBeInTheDocument();
     // W5: the meta note («… این یک تصمیم است») and the commit are gone; the build info keeps
     // the version and the environment.
-    expect(screen.queryByText(t('web.system_logs_absent'))).toBeNull();
-    expect(screen.queryByText(t('web.commit'))).toBeNull();
+    expect(
+      screen.queryByText(/* former web.system_logs_absent */ 'صفحهٔ لاگ عمومی وجود ندارد'),
+    ).toBeNull();
+    expect(screen.queryByText(/* former web.commit */ 'کامیت')).toBeNull();
     expect(screen.queryByText(/abc123/)).toBeNull();
     expect(screen.getByRole('link', { name: t('web.nav_ops_group') })).toHaveAttribute(
       'href',

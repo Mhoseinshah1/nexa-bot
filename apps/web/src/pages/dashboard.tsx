@@ -1173,7 +1173,7 @@ function AttentionCard({
               </Badge>
               {/*
                 W6: the code's Persian name. The event's own message names WHICH panel or
-                payment it is about, so it stays — under «جزئیات فنی», where English may be.
+                payment it is about, so it stays — under the technical-details disclosure.
               */}
               <span className="grow" title={event.code}>
                 {opsCodeLabel(event.code)}

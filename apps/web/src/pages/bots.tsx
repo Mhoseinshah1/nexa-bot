@@ -704,7 +704,7 @@ function DiagnosticView({ diagnostic }: { diagnostic: BotDiagnostic }) {
                   {formatTimestamp(webhook.lastErrorAt)}{' '}
                   {webhook.lastErrorMessage !== null && (
                     <ProviderText
-                      summary="web.err_provider_webhook"
+                      summary={'web.err_provider_webhook'}
                       text={webhook.lastErrorMessage}
                     />
                   )}

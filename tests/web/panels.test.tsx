@@ -1081,7 +1081,9 @@ describe('the panel detail', () => {
 
     // W5: the latest-state card stays; the «فقط آخرین وضعیت» meta banner is gone.
     expect(await screen.findByText(t('web.panel_health_latest_card'))).toBeInTheDocument();
-    expect(screen.queryByText(t('web.panel_health_latest_title'))).toBeNull();
+    expect(
+      screen.queryByText(/* former web.panel_health_latest_title */ 'فقط آخرین وضعیت'),
+    ).toBeNull();
     // No chart: the backend stores one row per panel, so a trend line could
     // only be illustrative — which is what the preview's was.
     expect(container.querySelector('svg.chart')).toBeNull();
@@ -1533,7 +1535,9 @@ describe('the panel detail', () => {
     stubApi([...detail(), ...workload([], [])]);
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
-    expect(screen.queryByRole('heading', { name: t('web.panel_lifecycle') })).toBeNull();
+    expect(
+      screen.queryByRole('heading', { name: /* former web.panel_lifecycle */ 'چرخهٔ عمر' }),
+    ).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_workload') }));
     const archive = screen.getByRole('button', { name: t('web.panel_archive') });
     // Above the tab strip, not inside the overview it used to sit in.

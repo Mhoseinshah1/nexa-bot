@@ -258,7 +258,7 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
         row.lastError === null ? (
           <span className="faint">—</span>
         ) : (
-          <ProviderText summary="web.err_provider_outbox" text={row.lastError} />
+          <ProviderText summary={'web.err_provider_outbox'} text={row.lastError} />
         ),
     },
   ];

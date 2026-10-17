@@ -804,7 +804,9 @@ describe('the promotion of /services', () => {
    */
   it('draws no protocol field, and no longer the page-rules card', () => {
     const { container } = renderList();
-    expect(container.textContent).not.toContain(t('web.services_rules_title'));
+    expect(container.textContent).not.toContain(
+      /* former web.services_rules_title */ 'قاعده‌های این صفحه',
+    );
     expect(container.textContent).not.toContain('created_at');
     // Nothing on the page is a protocol FIELD: no label, no column, no control.
     expect(screen.queryByLabelText(/پروتکل/)).toBeNull();
@@ -943,7 +945,7 @@ describe('the service action panel', () => {
     await screen.findByText('op-0');
     expect(screen.getByText('op-9')).toBeInTheDocument();
     expect(screen.queryByText('op-10')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: t('web.report_page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
     expect(await screen.findByText('op-11')).toBeInTheDocument();
     expect(screen.queryByText('op-0')).toBeNull();
   });

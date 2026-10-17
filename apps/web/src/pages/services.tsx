@@ -1313,7 +1313,7 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
       op.failureMessage === null ? (
         <Dash />
       ) : (
-        <ProviderText summary="web.err_provider_operation" text={op.failureMessage} />
+        <ProviderText summary={'web.err_provider_operation'} text={op.failureMessage} />
       ),
   },
 ];

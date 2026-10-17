@@ -100,7 +100,9 @@ describe('the customer list (W1)', () => {
     ]);
     renderPage(<LiveUsers />);
     await screen.findByText(customer().telegramUserId as string);
-    expect(screen.queryByText(t('web.users_scope_title'))).toBeNull();
+    expect(
+      screen.queryByText(/* former web.users_scope_title */ 'آنچه در این نسخه نیست'),
+    ).toBeNull();
   });
 });
 
@@ -233,6 +235,8 @@ describe('the order list and page (W1, W4)', () => {
       within(balanced as HTMLElement).getByText(t('web.order_lifecycle_title')),
     ).toBeInTheDocument();
     expect(within(tail as HTMLElement).getByText(t('web.order_service_title'))).toBeInTheDocument();
-    expect(screen.queryByText(t('web.orders_scope_title'))).toBeNull();
+    expect(
+      screen.queryByText(/* former web.orders_scope_title */ 'دو پایان ممکن برای یک سفارش'),
+    ).toBeNull();
   });
 });
