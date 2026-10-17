@@ -394,6 +394,9 @@ export class ReferralProgram {
 
     const referral = await this.deps.referrals.findByReferee(scope, order.customerId, tx);
     if (referral === null) return;
+    // An attribution the Mirza import carried is history: no commission is promised on a
+    // NEXA purchase of a customer Mirza referred, and none is ever earned from one.
+    if (referral.source !== 'NEXA') return;
     const commissionScope = referralScopeOf(referral.trigger);
     if (commissionScope === null) return;
 

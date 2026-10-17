@@ -4,6 +4,7 @@ import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
   CustomerStatus,
+  RecordSource,
   ReferralCommissionScope,
   ReferralCommissionState,
   ReferralTrigger,
@@ -434,6 +435,16 @@ export class DrizzleReferralCommissionRepository implements ReferralCommissionRe
           eq(orders.id, orderReferralCommissions.orderId),
         ),
       )
+      // A commission of an attribution the Mirza import carried is never settled: that
+      // referral is history (see `ReferralProgram.promise`, which never promises one).
+      .innerJoin(
+        referrals,
+        and(
+          eq(referrals.tenantId, orderReferralCommissions.tenantId),
+          eq(referrals.id, orderReferralCommissions.referralId),
+          eq(referrals.source, 'NEXA'),
+        ),
+      )
       .where(and(...conditions))
       .orderBy(asc(orderReferralCommissions.createdAt), asc(orderReferralCommissions.id))
       .limit(limit);
@@ -676,6 +687,7 @@ function toReferral(row: typeof referrals.$inferSelect): ReferralRecord {
     referrerId: row.referrerId,
     refereeId: row.refereeId,
     trigger: row.trigger as ReferralTrigger,
+    source: row.source as RecordSource,
     createdAt: row.createdAt,
   };
 }

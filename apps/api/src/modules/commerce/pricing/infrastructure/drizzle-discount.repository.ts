@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -224,6 +224,10 @@ export class DrizzleDiscountRepository implements DiscountRepository {
       eq(discountRedemptions.tenantId, tenantId),
       inArray(discountRedemptions.discountId, [...ruleIds]),
       inArray(orders.state, [...LIVE_ORDER_STATES]),
+      // A redemption the Mirza import carried is HISTORY: its order is PAID, which would
+      // otherwise read as a live redemption and spend the limit of a code an operator later
+      // activates. Only an order this installation sold counts against a limit.
+      ne(orders.origin, 'LEGACY_HISTORY'),
     ];
     if (excludingOrderId !== null) {
       conditions.push(sql`${discountRedemptions.orderId} <> ${excludingOrderId}::uuid`);
