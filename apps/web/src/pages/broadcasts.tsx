@@ -254,13 +254,8 @@ export function BroadcastsPage({
   const cursor = route.query.get('cursor');
   const list = useQuery({
     queryKey: ['broadcasts', cursor],
-    queryFn: () => {
-      // The server takes `limit` (`broadcastListQuerySchema`); the client helper passes every
-      // field it is given through to the query string.
-      const query: { cursor?: string; limit: number } =
-        cursor === null ? { limit: LIST_PAGE_SIZE } : { cursor, limit: LIST_PAGE_SIZE };
-      return fetchBroadcasts(query);
-    },
+    queryFn: () =>
+      fetchBroadcasts({ limit: LIST_PAGE_SIZE, ...(cursor === null ? {} : { cursor }) }),
     enabled: !denied,
   });
   const columns: readonly Column<BroadcastResponseItem>[] = [
@@ -1523,7 +1518,7 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
         limit: LIST_PAGE_SIZE,
         ...(state === '' ? {} : { state }),
         ...(cursor === undefined ? {} : { cursor }),
-      } as { state?: string; cursor?: string }),
+      }),
     refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
   });
   const seenState = useRef(broadcastState);

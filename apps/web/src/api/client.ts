@@ -4727,7 +4727,9 @@ function paged(base: string, query: Record<string, string | number | undefined>)
   return suffix ? `${base}?${suffix}` : base;
 }
 
-export function fetchBroadcasts(query: { cursor?: string } = {}): Promise<BroadcastListResponse> {
+export function fetchBroadcasts(
+  query: { cursor?: string; limit?: number } = {},
+): Promise<BroadcastListResponse> {
   return authedGet(paged(BROADCAST_ROUTES.list, query), broadcastListResponseSchema);
 }
 
@@ -4737,7 +4739,7 @@ export function fetchBroadcast(id: string): Promise<BroadcastResponse> {
 
 export function fetchBroadcastRecipients(
   id: string,
-  query: { state?: string; cursor?: string } = {},
+  query: { state?: string; cursor?: string; limit?: number } = {},
 ): Promise<BroadcastRecipientListResponse> {
   return authedGet(
     paged(BROADCAST_ROUTES.recipients(id), query),
