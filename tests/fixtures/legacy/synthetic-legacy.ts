@@ -429,8 +429,9 @@ export const SYNTHETIC_EXPECTED = {
     /** Σ legacy Balance over the eight importable users. */
     legacyBalanceSumMinor: 50_000n - 20_000n + 30_000n + 1_000n + 7_000n + 12_345n,
     /**
-     * Mirza PR4 (owner decision 6): only the positive balances become ledger openings; the
-     * one negative balance is a legacy debt of its magnitude, beside the ledger.
+     * Owner decision 2026-10-17: every non-zero balance becomes ONE ledger opening — the
+     * positives as CREDITs, the one negative as a DEBIT of its magnitude (`debtSumMinor`), so
+     * the wallet total moves by `legacyBalanceSumMinor`.
      */
     positiveBalanceSumMinor: 50_000n + 30_000n + 1_000n + 7_000n + 12_345n,
     debtSumMinor: 20_000n,

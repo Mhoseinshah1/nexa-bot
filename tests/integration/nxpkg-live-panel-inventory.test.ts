@@ -26,6 +26,7 @@ import { decideLegacyUser } from '../../apps/api/src/modules/platform/legacy-imp
 import { classifyLegacyUserStatus } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import { targetAcknowledgement } from '../../apps/api/src/modules/platform/legacy-importer/application/production-guard';
 import {
+  SYNTHETIC_EXPECTED,
   SYNTHETIC_PANEL_ACCOUNTS,
   SYNTHETIC_PANEL_CODES,
   buildSyntheticLegacyDataset,
@@ -960,7 +961,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       invoices: (rows) => [...rows, extraInvoice(rows, 'b0000003', '100000009', 'svc_a3')],
     });
 
-  it('Q: one needed name unresolved beside decided ones — approvable; the apply writes customers, wallets and debts, adopts ONLY the eligible invoice, and keeps the held one as an OPEN INVENTORY_INCOMPLETE candidate with no service', async () => {
+  it('Q: one needed name unresolved beside decided ones — approvable; the apply writes customers and wallets (the negative balance a DEBIT opening), adopts ONLY the eligible invoice, and keeps the held one as an OPEN INVENTORY_INCOMPLETE candidate with no service', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await withSvcA3());
     panelA.seedUser('svc_a3', ACCOUNT);
@@ -982,10 +983,34 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     panelA.beforeListPage = null;
     const done = await detail(id);
     expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
-    // Money: every importable customer, every positive opening and every legacy debt.
+    // Money: every importable customer and every non-zero balance as ONE opening — the
+    // positives as CREDITs, the negative one as a DEBIT of its magnitude — and no debt row.
     expect(await count('customers')).toBeGreaterThan(0);
-    expect(await count('wallet_entries')).toBeGreaterThan(0);
-    expect(await count('legacy_wallet_debts')).toBeGreaterThan(0);
+    const openings = SYNTHETIC_EXPECTED.users.opening;
+    expect(await count('wallet_entries')).toBe(openings.POSITIVE + openings.NEGATIVE);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    const ledger = (
+      await ctx.container.database.db.execute<{
+        tg: string;
+        direction: string;
+        reason: string;
+        reference: string;
+        amount: string;
+      }>(
+        sql`SELECT c.telegram_user_id AS tg, w.direction, w.reason, w.reference, w.amount::text AS amount
+              FROM wallet_entries w JOIN customers c ON c.id = w.customer_id
+             WHERE w.tenant_id = ${TENANT}`,
+      )
+    ).rows;
+    expect(ledger.every((e) => e.reason === 'MIGRATION_OPENING_BALANCE')).toBe(true);
+    expect(ledger.every((e) => e.reference === `legacy:opening:${e.tg}`)).toBe(true);
+    expect(ledger.filter((e) => e.direction === 'DEBIT')).toEqual([
+      expect.objectContaining({ tg: '100000003', amount: '20000' }),
+    ]);
+    // The wallets together are exactly the Mirza balances' signed sum.
+    expect(
+      ledger.reduce((a, e) => a + (e.direction === 'CREDIT' ? 1n : -1n) * BigInt(e.amount), 0n),
+    ).toBe(SYNTHETIC_EXPECTED.users.legacyBalanceSumMinor);
     // Reconcile is decided under the same hold: the quarantine is no discrepancy.
     expect(done.progress.reconcileVerdict).toBe('RECONCILED');
     expect(
@@ -1337,7 +1362,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(approved.reviewState).toBe('ADOPT_APPROVED');
   }
 
-  /** Customers, money and debts: what the lane must never touch. */
+  /** Customers, money (the ledger, openings included) and any debt row: what the lane must never touch. */
   async function moneyState(): Promise<Record<string, unknown>> {
     const one = async (q: ReturnType<typeof sql>) =>
       (await ctx.container.database.db.execute<Record<string, unknown>>(q)).rows[0];
