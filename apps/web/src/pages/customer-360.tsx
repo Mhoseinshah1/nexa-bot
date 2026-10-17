@@ -155,6 +155,9 @@ export function customerTabs(messages: boolean): { id: CustomerTab; label: strin
     .map((item) => ({ id: item.id, label: t(item.label) }));
 }
 
+/** The id of the page's one tab panel. */
+const PANEL_ID = 'c360-tab-panel';
+
 /** Which tab holds a card a jump names (the ids the in-page anchors used to scroll to). */
 export const CARD_TABS: Readonly<Record<string, CustomerTab>> = {
   'c360-general': 'overview',
@@ -410,6 +413,14 @@ export function UserDetailPage({
   const jumpTo = (cardId: string) => {
     const owner = CARD_TABS[cardId];
     if (owner === undefined) return;
+    /*
+     * The page does not move (W2, `pnpm web:no-scroll` at 390). The shortcut sits deep in
+     * «نمای کلی», and swapping the panel's content under it let the browser's scroll
+     * anchoring pick some node of the new tab and shift the page by its offset — a jump of a
+     * hundred pixels in either direction. Out of anchoring until the flash ends, the new tab
+     * simply opens in place; the strip brings its tab into view sideways (`ui/tab-strip.ts`).
+     */
+    document.getElementById(PANEL_ID)?.classList.add('no-scroll-anchor');
     selectTab(owner);
     setFlash(cardId);
   };
@@ -419,6 +430,7 @@ export function UserDetailPage({
     card?.classList.add('wb-flash');
     const timer = setTimeout(() => {
       card?.classList.remove('wb-flash');
+      document.getElementById(PANEL_ID)?.classList.remove('no-scroll-anchor');
       setFlash(null);
     }, 1600);
     return () => clearTimeout(timer);
@@ -630,8 +642,8 @@ export function UserDetailPage({
               card switches to the tab that holds it and flashes the card; another customer
               opens on the overview tab.
             */}
-            <Tabs value={tab} onChange={selectTab} items={tabs} panelId="c360-tab-panel" />
-            <TabPanel id="c360-tab-panel" labelledBy={`c360-tab-panel-tab-${tab}`}>
+            <Tabs value={tab} onChange={selectTab} items={tabs} panelId={PANEL_ID} />
+            <TabPanel id={PANEL_ID} labelledBy={`${PANEL_ID}-tab-${tab}`}>
               {tab === 'overview' && (
                 <TwoColumn
                   main={

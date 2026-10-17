@@ -3033,6 +3033,42 @@ describe('the panel detail', () => {
   });
 });
 
+/*
+ * W2 (`pnpm web:no-scroll`, 390): «قابلیت‌ها» and «سرویس تست» read their own data, and while
+ * they did the panel held a few skeleton rows — the page fell shorter than the screen and the
+ * browser clamped its scroll to the top. The loading panel's placeholder is its direct child,
+ * the element the stylesheet holds a screen tall (`stylesheet-contract.test.tsx`), and the
+ * switch neither remounts the page nor scrolls it.
+ */
+describe('the panel detail tab switch', () => {
+  it('holds the loading tab in the panel, with no remount and no scroll', async () => {
+    stubApi([{ url: '/panels/', body: { panel: panel() } }]);
+    const answered = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) =>
+        /\/advanced|\/trial/.test(String(input))
+          ? new Promise<Response>(() => undefined)
+          : answered(input as RequestInfo, init),
+      ),
+    );
+    const scrolled = vi.spyOn(window, 'scrollTo');
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    const tabpanel = screen.getByRole('tabpanel');
+    for (const tab of ['web.panel_tab_capabilities', 'web.panel_tab_trial'] as const) {
+      fireEvent.click(screen.getByRole('tab', { name: t(tab) }));
+      await waitFor(() =>
+        expect(screen.getByRole('tab', { name: t(tab), selected: true })).toBeInTheDocument(),
+      );
+      expect(screen.getByRole('tabpanel')).toBe(tabpanel);
+      expect(tabpanel.querySelector(':scope > .skel')).not.toBeNull();
+    }
+    expect(scrolled).not.toHaveBeenCalled();
+    scrolled.mockRestore();
+  });
+});
+
 describe('the new-panel form', () => {
   const providersRoute = (body: unknown, status?: number) => ({
     url: '/providers',
