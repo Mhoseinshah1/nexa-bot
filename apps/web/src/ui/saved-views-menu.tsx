@@ -142,6 +142,12 @@ export function SavedViewsMenu({ registration }: { registration: SavedViewsRegis
       {open &&
         createPortal(
           <div ref={layer.inside} className="saved-views-layer">
+            {/* A phone's bottom sheet dims the page; a tap there closes it (PR #285, A3). */}
+            <div
+              className="saved-views-backdrop"
+              aria-hidden="true"
+              onClick={() => setOpen(false)}
+            />
             <SavedViewsDropdown
               id={panelId}
               views={views}
@@ -270,6 +276,18 @@ function SavedViewsDropdown({
       role="dialog"
       aria-label={t('web.saved_views')}
     >
+      {/* The bottom sheet's × (phones only, `ui.css`); Escape and a tap outside close it too. */}
+      <div className="saved-views-sheet">
+        <button
+          type="button"
+          className="btn ghost icon sm"
+          aria-label={t('web.close')}
+          title={t('web.close')}
+          onClick={onClose}
+        >
+          <Icon name="x" />
+        </button>
+      </div>
       {views.length > 0 ? (
         <>
           <h3>{t('web.saved_views_mine')}</h3>

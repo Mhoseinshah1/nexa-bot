@@ -320,10 +320,27 @@
     position-try-fallbacks: flip-block, flip-inline;
   }
 }
-@media (max-width: 640px) {
+/* The phone sheet's backdrop and × (PR #285 review, A3): drawn at ≤760px only. */
+.date-pop-backdrop,
+.date-pop-sheet {
+  display: none;
+}
+@media (max-width: 760px) {
   .date-field,
   .date-field.sm {
     width: 100%;
+  }
+  .date-pop-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 149;
+    background: var(--overlay);
+  }
+  .date-pop-sheet {
+    display: flex;
+    justify-content: flex-end;
+    margin-block-end: 4px;
   }
   .date-pop {
     position: fixed;
@@ -422,7 +439,7 @@
   flex: none;
   gap: 4px;
 }
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   .file-picker {
     flex-wrap: wrap;
   }
@@ -698,7 +715,7 @@
     position-try-fallbacks: flip-block;
   }
 }
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   .list-filter-bar.with-saved {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1023,7 +1040,24 @@
     position-try-fallbacks: flip-block, flip-inline;
   }
 }
-@media (max-width: 640px) {
+/* The phone sheet's backdrop and × (PR #285 review, A3): drawn at ≤760px only. */
+.saved-views-backdrop,
+.saved-views-sheet {
+  display: none;
+}
+@media (max-width: 760px) {
+  .saved-views-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 89;
+    background: var(--overlay);
+  }
+  .saved-views-sheet {
+    display: flex;
+    justify-content: flex-end;
+    margin-block-end: 4px;
+  }
   .saved-views-pop {
     position: fixed;
     inset: auto 0 0 0;
@@ -1477,7 +1511,7 @@
 .aq-mi:focus-visible {
   background: var(--bg-3);
 }
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   .aq-rh {
     flex-wrap: wrap;
   }
