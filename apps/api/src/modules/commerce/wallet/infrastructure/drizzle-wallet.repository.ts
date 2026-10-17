@@ -155,6 +155,26 @@ export class DrizzleWalletRepository implements WalletRepository {
    * implicit conversion at a rate nobody chose, and no rate exists anywhere in this
    * system — see `WalletBalance`.
    */
+  async hasMigrationDebitOpening(
+    scope: TenantContext,
+    customerId: UserId,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const rows = await this.exec(tx)
+      .select({ id: walletEntries.id })
+      .from(walletEntries)
+      .where(
+        and(
+          eq(walletEntries.tenantId, requireTenantId(scope)),
+          eq(walletEntries.customerId, customerId),
+          eq(walletEntries.reason, 'MIGRATION_OPENING_BALANCE'),
+          eq(walletEntries.direction, 'DEBIT'),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
   async balanceOf(
     scope: TenantContext,
     customerId: UserId,
