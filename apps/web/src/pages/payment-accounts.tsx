@@ -33,6 +33,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { Drawer } from '../ui/overlays';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Payment accounts — where an out-of-band transfer is told to go.
@@ -375,6 +376,7 @@ export function CardAccountsSection({
         {rowFailure != null && (
           <Banner tone="danger" role="alert">
             {messageFor(rowFailure)}
+            <ErrorRef error={rowFailure} />
           </Banner>
         )}
         <StateSwitch
@@ -524,7 +526,12 @@ export function CardAccountsSection({
               <Copyable value={editing} />
             </p>
           )}
-          {save.error != null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          {save.error != null && (
+            <Banner tone="danger">
+              {messageFor(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
         </div>
       </Drawer>
     </>

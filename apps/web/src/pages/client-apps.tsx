@@ -70,6 +70,7 @@ import {
   useToast,
   type Column,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Apps & connection guides (WP-A10) — the client apps the bot recommends, per platform.
@@ -556,7 +557,12 @@ function ImageCard({
             </button>
           )}
         </div>
-        {failure != null && <Banner tone="danger">{imageFaultOf(failure)}</Banner>}
+        {failure != null && (
+          <Banner tone="danger">
+            {imageFaultOf(failure)}
+            <ErrorRef error={failure} />
+          </Banner>
+        )}
       </form>
     </Card>
   );
@@ -1104,7 +1110,12 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                   </button>
                 </div>
 
-                {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
+                {save.error != null && (
+                  <Banner tone="danger">
+                    {faultOf(save.error)}
+                    <ErrorRef error={save.error} />
+                  </Banner>
+                )}
               </div>
             </form>
           </div>
@@ -1180,8 +1191,18 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
         />
       )}
 
-      {toggle.error != null && <Banner tone="danger">{faultOf(toggle.error)}</Banner>}
-      {remove.error != null && <Banner tone="danger">{faultOf(remove.error)}</Banner>}
+      {toggle.error != null && (
+        <Banner tone="danger">
+          {faultOf(toggle.error)}
+          <ErrorRef error={toggle.error} />
+        </Banner>
+      )}
+      {remove.error != null && (
+        <Banner tone="danger">
+          {faultOf(remove.error)}
+          <ErrorRef error={remove.error} />
+        </Banner>
+      )}
     </>
   );
 }

@@ -578,7 +578,7 @@ describe('the Bots page', () => {
     expect(api.calls).toHaveLength(0);
   });
 
-  /** Owner revision 20 — no "primary bot" to add, and the reseller sales bot is not built. */
+  /** Owner revision 20 — no "primary bot" to add; the page carries no note about unbuilt bots. */
   it('records the add-flow decision at /bots, and offers no way to add a bot', async () => {
     stubApi([listRoute()]);
     const resolved = resolve({ path: '/bots', query: new URLSearchParams() }, [
@@ -589,9 +589,12 @@ describe('the Bots page', () => {
     const { container } = renderPage(resolved.element as ReactElement);
     await screen.findByText('@acme_store_bot');
     const text = container.textContent ?? '';
-    expect(text).toContain('ربات فروش نماینده');
     expect(text).toContain('ربات اصلی');
     expect(text).toContain('وجود نخواهد داشت');
+    // C6: no meta note about what is not built yet, and no talk of a missing add button.
+    expect(text).not.toContain('هنوز ساخته نشده');
+    expect(text).not.toContain('دکمهٔ افزودن وجود ندارد');
+    expect(text).not.toContain('ربات فروش نماینده');
     // Not the planned placeholder any more, and no add control anywhere.
     expect(text).not.toContain('چرا هنوز فعال نیست');
     for (const button of container.querySelectorAll('button')) {

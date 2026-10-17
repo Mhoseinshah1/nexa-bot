@@ -35,6 +35,7 @@ import {
   withTagRole,
   type AudienceDraft,
 } from './model';
+import { ErrorRef } from '../../ui/technical-details';
 
 /**
  * The ONE audience builder (W1.6), shared by bulk operations, broadcasts and campaigns: a live
@@ -1029,7 +1030,10 @@ function AudienceCount({ value }: { value: AudienceDraft }) {
       {refused ? (
         <Banner tone="info">{t('web.no_permission')}</Banner>
       ) : count.error !== null && !count.isFetching ? (
-        <Banner tone="danger">{audienceMessage(count.error) ?? t('web.error')}</Banner>
+        <Banner tone="danger">
+          {audienceMessage(count.error) ?? t('web.error')}
+          <ErrorRef error={count.error} />
+        </Banner>
       ) : (
         <>
           <b className="num" data-testid="audience-customers">

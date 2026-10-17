@@ -92,7 +92,7 @@ export const PLANNED_SURFACES: readonly PlannedSurface[] = [
    * in the same commit, for the reason `payments` gives above. Its "missing" sentence said
    * the bot runtime was a later phase, which was false long before this. Its recorded owner
    * decision — no "add primary bot", and the reseller sales bot not built — moved onto the
-   * real page as `web.bots_add_body`, where it is still true.
+   * real page as `web.bots_add_body`; the unbuilt-bot note was later dropped from it.
    */
 ];
 

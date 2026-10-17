@@ -51,6 +51,7 @@ import {
 import { CheckField, FormSection, SaveBar } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Service location change (WP-A6) — a panel's locations, the one its new accounts start
@@ -450,7 +451,12 @@ export function ServiceLocationsPage({
         </Banner>
       )}
       {/* A refused delete (in use) is said above the list, never by scrolling to a form. */}
-      {remove.error !== null && <Banner tone="danger">{failureText(remove.error)}</Banner>}
+      {remove.error !== null && (
+        <Banner tone="danger">
+          {failureText(remove.error)}
+          <ErrorRef error={remove.error} />
+        </Banner>
+      )}
 
       <div className="stack">
         <StateSwitch
@@ -713,7 +719,12 @@ export function ServiceLocationsPage({
                 {(panels.isError || products.isError) && (
                   <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
                 )}
-                {save.error !== null && <Banner tone="danger">{failureText(save.error)}</Banner>}
+                {save.error !== null && (
+                  <Banner tone="danger">
+                    {failureText(save.error)}
+                    <ErrorRef error={save.error} />
+                  </Banner>
+                )}
               </div>
             )}
           </Drawer>

@@ -608,6 +608,51 @@ describe('the settings page', () => {
     expect(await screen.findByText(refusal)).toBeInTheDocument();
   });
 
+  /**
+   * C5: a guard's sentence is shown only for a key whose server guard writes Persian, and only
+   * when it carries no Latin letter. One Arabic-script letter is not enough any more.
+   */
+  it.each([
+    [
+      'an allow-listed key whose refusal mixes in English',
+      'reminders.expiry_first_days',
+      'web.setting_reminders_expiry_first_days',
+      'The first reminder must be earlier: یادآور اول',
+    ],
+    [
+      'a key whose guard is not on the allow-list, even with a Persian sentence',
+      'ops.notifications.max_per_minute',
+      'web.setting_ops_max_per_minute',
+      'این جمله را نگهبانی نوشته که در فهرست نیست.',
+    ],
+  ] as const)('shows the generic Persian refusal for %s', async (_, key, label, message) => {
+    stubApi([
+      {
+        url: '/settings',
+        body: { settings: [setting({ key, value: 3, configures: null })] },
+      },
+      {
+        url: `/settings/${key}`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'control.invalid_value',
+            message,
+            correlationId: 'corr-c5',
+            details: { key },
+          },
+        },
+      },
+    ]);
+    const { container } = renderPage(<SettingsPage mayEdit denied={false} />);
+    await screen.findByLabelText(t(label));
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    expect(await screen.findByText(t('web.settings_invalid_value'))).toBeInTheDocument();
+    expect(visibleText(container)).not.toContain(message);
+    expect(screen.getByText('corr-c5')).toHaveAttribute('dir', 'ltr');
+  });
+
   it('titles a key this bundle does not know in Persian, and keeps the key in the disclosure', async () => {
     stubApi([
       {

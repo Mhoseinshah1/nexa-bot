@@ -50,6 +50,7 @@ import {
   type Column,
   Num,
 } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Payment routes — which ways a customer may pay, and under what conditions.
@@ -977,7 +978,10 @@ export function PaymentGatewaysPage({
               </button>
             </div>
             {credential.error != null && (
-              <Banner tone="danger">{messageFor(credential.error)}</Banner>
+              <Banner tone="danger">
+                {messageFor(credential.error)}
+                <ErrorRef error={credential.error} />
+              </Banner>
             )}
             {/*
             A signed route's IPN secret (NOWPayments): its own write-only field and its own
@@ -1012,7 +1016,12 @@ export function PaymentGatewaysPage({
                     {t('web.payment_gateway_webhook_secret_save')}
                   </button>
                 </div>
-                {secret.error != null && <Banner tone="danger">{messageFor(secret.error)}</Banner>}
+                {secret.error != null && (
+                  <Banner tone="danger">
+                    {messageFor(secret.error)}
+                    <ErrorRef error={secret.error} />
+                  </Banner>
+                )}
               </>
             )}
             {/*
@@ -1048,21 +1057,34 @@ export function PaymentGatewaysPage({
                     {t('web.payment_gateway_verify_key_save')}
                   </button>
                 </div>
-                {verify.error != null && <Banner tone="danger">{messageFor(verify.error)}</Banner>}
+                {verify.error != null && (
+                  <Banner tone="danger">
+                    {messageFor(verify.error)}
+                    <ErrorRef error={verify.error} />
+                  </Banner>
+                )}
               </>
             )}
           </div>
         </Drawer>
 
         {/* The credential check's own failure (Codex review of #141), like every other command's. */}
-        {check.error != null && <Banner tone="danger">{messageFor(check.error)}</Banner>}
+        {check.error != null && (
+          <Banner tone="danger">
+            {messageFor(check.error)}
+            <ErrorRef error={check.error} />
+          </Banner>
+        )}
 
         {/*
         A refusal to switch a route on — TonPays without its key — lands here, since the
         toggle has no form of its own.
       */}
         {editing === null && toggle.error != null && (
-          <Banner tone="danger">{messageFor(toggle.error)}</Banner>
+          <Banner tone="danger">
+            {messageFor(toggle.error)}
+            <ErrorRef error={toggle.error} />
+          </Banner>
         )}
 
         {/*
@@ -1310,7 +1332,12 @@ export function PaymentGatewaysPage({
               NOT pre-checked in the browser, deliberately: a second opinion about what a
               valid route is would be the one nobody tests.
             */}
-                {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+                {failure != null && (
+                  <Banner tone="danger">
+                    {messageFor(failure)}
+                    <ErrorRef error={failure} />
+                  </Banner>
+                )}
                 <div className="form-actions">
                   <button
                     type="button"

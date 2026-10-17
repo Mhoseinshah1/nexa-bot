@@ -1,5 +1,5 @@
 import type { DeliveryOutcome } from '@nexa/contracts';
-import { ERROR_TEXT } from './error-text';
+import { API_LOCAL_ERROR_TEXT, ERROR_TEXT } from './error-text';
 import { t, type WebKey } from './i18n/web.fa';
 
 /**
@@ -269,6 +269,7 @@ export const LEGACY_REASON_LABELS: Readonly<Record<string, WebKey>> = {
 export function errorCodeLabel(code: string): string {
   const key =
     (ERROR_TEXT as Readonly<Record<string, WebKey>>)[code] ??
+    (API_LOCAL_ERROR_TEXT as Readonly<Record<string, WebKey>>)[code] ??
     DELIVERY_CODE_LABELS[code] ??
     EXTRA_CODE_LABELS[code] ??
     PROVIDER_CODE_LABELS[code] ??

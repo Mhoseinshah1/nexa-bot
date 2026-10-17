@@ -1,4 +1,4 @@
-import { errors } from '@nexa/contracts';
+import { errors, MESSAGING_ERROR_CODES } from '@nexa/contracts';
 
 /**
  * Telegram's two length bounds on what this installation sends a customer, in ONE
@@ -55,7 +55,7 @@ const LINE = '\n';
 export function splitMessageBody(text: string, max: number): string[] {
   if (!Number.isInteger(max) || max < 1) {
     throw errors.validation(
-      'messaging.split_bound_invalid',
+      MESSAGING_ERROR_CODES.SPLIT_BOUND_INVALID,
       'A message bound is a positive integer.',
       {
         max,

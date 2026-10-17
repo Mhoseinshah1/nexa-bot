@@ -71,7 +71,7 @@ import {
 import { ActionPanel } from '../ui/action-panel';
 import { DateField } from '../ui/date-field';
 import { Modal } from '../ui/overlays';
-import { ErrorCodeLabel } from '../ui/technical-details';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
  * Phase E3: incidents and maintenance windows (`docs/incidents.md`).
@@ -438,6 +438,7 @@ export function IncidentDetailPage({
           {apply.isError && (
             <Banner tone="danger" role="alert">
               {incidentMessageFor(apply.error)}
+              <ErrorRef error={apply.error} />
             </Banner>
           )}
           {live && (mayManage || mayNotify) && (
@@ -802,6 +803,7 @@ function ActionModal({
       {run.isError && (
         <Banner tone="danger" role="alert">
           {incidentMessageFor(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
     </Modal>
@@ -883,6 +885,7 @@ function NoticeModal({ incident, onClose }: { incident: IncidentItem; onClose: (
       {run.isError && (
         <Banner tone="danger" role="alert">
           {incidentMessageFor(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
     </Modal>
@@ -1056,6 +1059,7 @@ function IncidentFormModal({
         save.isError && (
           <Banner tone="danger" role="alert">
             {incidentMessageFor(save.error)}
+            <ErrorRef error={save.error} />
           </Banner>
         )
       )}

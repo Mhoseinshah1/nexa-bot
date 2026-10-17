@@ -83,3 +83,42 @@ function channelProblem(path: readonly string[], draft: unknown): WebKey {
     ? 'web.err_setting_channel_identity'
     : 'web.err_setting_channel_open';
 }
+
+/**
+ * The settings whose server change guard writes its refusal (a 409 `control.invalid_value`)
+ * in Persian, for the operator, as it is meant to be read: the quiet-hours pair, the five
+ * reminder thresholds and the week-out reminder. Every other guard speaks English (the main
+ * menu, the trial product, the Stars ratio and mode, the store currency), so its sentence is
+ * never shown, whatever letters it happens to contain.
+ *
+ * Pinned to the API's own key lists by `tests/unit/web-setting-guard-persian.test.ts`.
+ */
+export const PERSIAN_GUARD_SETTING_KEYS: ReadonlySet<string> = new Set([
+  'reminders.quiet_hours_start',
+  'reminders.quiet_hours_end',
+  'reminders.expiry_first_days',
+  'reminders.expiry_second_days',
+  'reminders.usage_first_percent',
+  'reminders.usage_second_percent',
+  'reminders.usage_final_percent',
+  'reminders.expiry_early_days',
+]);
+
+/** Persian or Arabic script. */
+const PERSIAN_LETTER = /[\u0600-\u06FF]/u;
+/** Any Latin letter: a guard sentence for the operator carries none. */
+const LATIN_LETTER = /[A-Za-z]/u;
+
+/**
+ * Whether a change guard's refusal may be shown as the server wrote it: only for a setting
+ * whose guard is known to write Persian (above), and only when the sentence is Persian with
+ * no Latin letter in it. Both conditions, so neither a new English guard on an allow-listed
+ * key nor a Persian word inside an English sentence ever reaches the operator.
+ */
+export function guardSentenceShown(settingKey: string, message: string): boolean {
+  return (
+    PERSIAN_GUARD_SETTING_KEYS.has(settingKey) &&
+    PERSIAN_LETTER.test(message) &&
+    !LATIN_LETTER.test(message)
+  );
+}

@@ -43,6 +43,7 @@ import { messageFor } from './settings';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
 import { OPERATION_STATE_LABELS, OPERATION_STATE_TONES } from './services';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Customers' service refund requests in the Web Admin (WP19, brief §2.10): the smallest
@@ -486,7 +487,12 @@ function DecisionForm({
               checked={confirmed}
               onChange={setConfirmed}
             />
-            {approve.error !== null && <Banner tone="danger">{messageFor(approve.error)}</Banner>}
+            {approve.error !== null && (
+              <Banner tone="danger">
+                {messageFor(approve.error)}
+                <ErrorRef error={approve.error} />
+              </Banner>
+            )}
             <div className="form-actions">
               <Button
                 variant="danger"
@@ -506,7 +512,12 @@ function DecisionForm({
                 onChange={(event) => setReason(event.target.value)}
               />
             </Field>
-            {reject.error !== null && <Banner tone="danger">{messageFor(reject.error)}</Banner>}
+            {reject.error !== null && (
+              <Banner tone="danger">
+                {messageFor(reject.error)}
+                <ErrorRef error={reject.error} />
+              </Banner>
+            )}
             <div className="form-actions">
               <Button
                 disabled={busy || !isServiceRefundRejectionReason(reason)}

@@ -35,6 +35,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
 import { Badge, Banner, Button, Card, Field, useToast, useUnsavedChanges } from '../ui/kit';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Phase 2 item 4: «پس‌زمینهٔ QR» — the subscription QR drawn on the tenant's own image.
@@ -439,7 +440,12 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
                   {current === null ? t('web.qrt_upload') : t('web.qrt_replace')}
                 </Button>
               </div>
-              {upload.error != null && <Banner tone="danger">{uploadMessage(upload.error)}</Banner>}
+              {upload.error != null && (
+                <Banner tone="danger">
+                  {uploadMessage(upload.error)}
+                  <ErrorRef error={upload.error} />
+                </Banner>
+              )}
             </form>
           )}
         </section>
@@ -554,7 +560,12 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
               </Button>
             )}
           </div>
-          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+          {failure != null && (
+            <Banner tone="danger">
+              {messageFor(failure)}
+              <ErrorRef error={failure} />
+            </Banner>
+          )}
           {!mayEdit && <p className="muted">{t('web.qrt_read_only')}</p>}
         </section>
       </div>
@@ -584,7 +595,10 @@ export function QrTemplateSection({ mayEdit }: { mayEdit: boolean }) {
             </figcaption>
           </figure>
         ) : preview.isError ? (
-          <Banner tone="danger">{messageFor(preview.error)}</Banner>
+          <Banner tone="danger">
+            {messageFor(preview.error)}
+            <ErrorRef error={preview.error} />
+          </Banner>
         ) : (
           <p className="muted">{t('web.qrt_preview_loading')}</p>
         )}

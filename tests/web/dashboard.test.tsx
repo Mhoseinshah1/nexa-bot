@@ -597,11 +597,13 @@ describe('the dashboard for an operator who is not the owner', () => {
       },
     ]);
     const { container } = renderPage(<DashboardPage permissions={[]} />);
-    await screen.findByText('migrations');
+    // C1: the dependency by its Persian name, the raw name muted in the foot line.
+    await screen.findByText(t('web.readiness_dep_migrations'));
     const text = container.textContent ?? '';
     expect(text.match(/ ms/g) ?? []).toHaveLength(1);
     expect(text).not.toMatch(/(undefined|NaN|null)/);
-    expect(screen.getByText('3 ms')).toBeInTheDocument();
+    expect(screen.getByText('postgres · 3 ms')).toBeInTheDocument();
+    expect(screen.getByText('migrations')).toHaveClass('foot');
   });
 });
 

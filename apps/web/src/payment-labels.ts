@@ -3,8 +3,10 @@ import {
   NOWPAYMENTS_STATUSES,
   TONPAYS_STATUSES,
   type CustomerNotificationKind,
+  type GatewayCardChangeState,
   type GatewayInvoiceCreationState,
   type GatewayInvoiceOutcome,
+  type GatewayReceiptSubmissionState,
   type LedgerDirection,
   type PaymentEvidenceKind,
   type PaymentGatewayProvider,
@@ -170,6 +172,28 @@ export const PROVIDER_STATUS_LABELS: Readonly<Record<string, WebKey>> = {
   refunded: 'web.pay_provider_refunded',
   verified: 'web.pay_provider_verified',
   unverified: 'web.pay_provider_unverified',
+};
+
+/** A card-transfer route's card-change request, by state (TonPays Telegram §7.3). */
+export const GATEWAY_CARD_CHANGE_STATE_LABELS: Readonly<Record<GatewayCardChangeState, WebKey>> = {
+  REQUESTED: 'web.gw_card_change_requested',
+  SENT: 'web.gw_card_change_sent',
+  APPLIED: 'web.gw_card_change_applied',
+  REFUSED: 'web.gw_card_change_refused',
+  RATE_LIMITED: 'web.gw_card_change_rate_limited',
+  UNKNOWN: 'web.gw_card_change_unknown',
+};
+
+/** A receipt the customer sent the provider, by state (TonPays Telegram §7.5). */
+export const GATEWAY_RECEIPT_SUBMISSION_STATE_LABELS: Readonly<
+  Record<GatewayReceiptSubmissionState, WebKey>
+> = {
+  QUEUED: 'web.gw_receipt_queued',
+  SENDING: 'web.gw_receipt_sending',
+  ACCEPTED: 'web.gw_receipt_accepted',
+  REFUSED: 'web.gw_receipt_refused',
+  UNKNOWN: 'web.gw_receipt_unknown',
+  ABANDONED: 'web.gw_receipt_abandoned',
 };
 
 /** Every provider status word the contracts define (the test checks each has a name). */

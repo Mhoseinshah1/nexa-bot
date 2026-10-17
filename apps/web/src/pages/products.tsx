@@ -77,6 +77,7 @@ import { ListFilterBar } from '../ui/filter-bar';
 import { useListClearAll } from './commerce-parts';
 import { Drawer } from '../ui/overlays';
 import { useDiscardGuard, useReportDirty } from '../ui/unsaved';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Products — the tenant's catalogue, as the operator curates it.
@@ -1506,7 +1507,10 @@ function ProductForm({
 
       {mutate.error !== null && (
         <div className="cb-form-error">
-          <Banner tone="danger">{messageFor(mutate.error)}</Banner>
+          <Banner tone="danger">
+            {messageFor(mutate.error)}
+            <ErrorRef error={mutate.error} />
+          </Banner>
         </div>
       )}
     </Card>
@@ -1678,7 +1682,12 @@ export function ProductDetailPage({
                 {/* The sentence that stops a withdrawal being feared: it changes what can
                     be bought NEXT and nothing about what was bought. */}
                 <p className="muted small">{t('web.product_deactivate_note')}</p>
-                {status.error !== null && <Banner tone="danger">{messageFor(status.error)}</Banner>}
+                {status.error !== null && (
+                  <Banner tone="danger">
+                    {messageFor(status.error)}
+                    <ErrorRef error={status.error} />
+                  </Banner>
+                )}
                 <Drawer
                   open={moving}
                   onClose={() => {
@@ -1720,7 +1729,10 @@ export function ProductDetailPage({
                     </Button>
                   </div>
                   {assign.error != null && (
-                    <Banner tone="danger">{messageFor(assign.error)}</Banner>
+                    <Banner tone="danger">
+                      {messageFor(assign.error)}
+                      <ErrorRef error={assign.error} />
+                    </Banner>
                   )}
                 </Drawer>
               </>

@@ -80,4 +80,8 @@ export const ANTI_SPAM_RECOVERED_CODE = 'antispam.recovered';
 export const MESSAGING_ERROR_CODES = {
   /** A URL button whose link does not parse as a URL. */
   BUTTON_URL_INVALID: 'messaging.button_url_invalid',
+  /** A URL button whose link parses but opens neither `https://` nor `tg://`. */
+  BUTTON_URL_SCHEME: 'messaging.button_url_scheme',
+  /** A message body was asked to be split by a bound that is not a positive integer. */
+  SPLIT_BOUND_INVALID: 'messaging.split_bound_invalid',
 } as const;

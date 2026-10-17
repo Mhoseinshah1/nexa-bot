@@ -44,6 +44,7 @@ import {
   LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { SaveBar } from './editor-layout';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Extra users / devices (WP-A5) — the per-user rate a customer is charged for more
@@ -397,7 +398,12 @@ export function ExtraDevicesPage({
           )}
         </Banner>
       )}
-      {toggle.error !== null && <Banner tone="danger">{messageFor(toggle.error)}</Banner>}
+      {toggle.error !== null && (
+        <Banner tone="danger">
+          {messageFor(toggle.error)}
+          <ErrorRef error={toggle.error} />
+        </Banner>
+      )}
 
       <div className="stack">
         <StateSwitch
@@ -564,7 +570,12 @@ export function ExtraDevicesPage({
             {(panels.isError || products.isError) && (
               <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
             )}
-            {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+            {save.error !== null && (
+              <Banner tone="danger">
+                {messageFor(save.error)}
+                <ErrorRef error={save.error} />
+              </Banner>
+            )}
           </Drawer>
         )}
       </div>

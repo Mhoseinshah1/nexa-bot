@@ -208,6 +208,13 @@ describe('the legacy service candidates page', () => {
     expect(sent).toMatchObject({ expectedVersion: 3, panelId: PANEL_B, reason: 'حساب در پنل B' });
   });
 
+  it('names the import map row’s reason in Persian, the code beside it (C1)', async () => {
+    page();
+    fireEvent.click(await screen.findByRole('button', { name: t('web.lsr_open') }));
+    const name = await screen.findByText(t('web.legacy_reason_panel_unmapped'));
+    expect(name.closest('.code-label')).toHaveAttribute('title', 'PANEL_UNMAPPED');
+  });
+
   it('with no mapped holder the ADOPT cannot be sent, and the page says why', async () => {
     const api = page({ adoptPanels: [] });
     fireEvent.click(await screen.findByRole('button', { name: t('web.lsr_open') }));

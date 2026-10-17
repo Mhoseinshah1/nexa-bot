@@ -41,6 +41,7 @@ import {
   usePagedRows,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Support — the FAQ the bot answers with, and a pointer at where support goes.
@@ -371,7 +372,12 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
         </Card>
       </StateSwitch>
 
-      {toggle.error != null && <Banner tone="danger">{faultOf(toggle.error)}</Banner>}
+      {toggle.error != null && (
+        <Banner tone="danger">
+          {faultOf(toggle.error)}
+          <ErrorRef error={toggle.error} />
+        </Banner>
+      )}
 
       <Drawer
         open={mayEdit && editor.kind !== 'closed'}
@@ -431,7 +437,12 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
             </Banner>
           )}
 
-          {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
+          {save.error != null && (
+            <Banner tone="danger">
+              {faultOf(save.error)}
+              <ErrorRef error={save.error} />
+            </Banner>
+          )}
 
           <div className="form-actions">
             <button

@@ -862,7 +862,9 @@ describe('the recovery page', () => {
     it('shows the restore-test evidence an operator has to read before confirming', async () => {
       await reachConfirmation(ALL);
       // The migration verdict and the source database. Not "it worked".
-      expect(await screen.findByText('CURRENT')).toBeInTheDocument();
+      // C1: the verdict by its Persian name; the raw word stays in the title.
+      expect(await screen.findByText('هم‌خوان با این نسخه')).toHaveAttribute('title', 'CURRENT');
+      expect(screen.queryByText('CURRENT')).toBeNull();
       expect(screen.getByText('nexa')).toBeInTheDocument();
     });
   });

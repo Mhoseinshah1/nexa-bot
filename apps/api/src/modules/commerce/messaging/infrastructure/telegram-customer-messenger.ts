@@ -362,7 +362,7 @@ function validatedButtonUrl(url: string): string {
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'tg:') {
     throw errors.validation(
-      'messaging.button_url_scheme',
+      MESSAGING_ERROR_CODES.BUTTON_URL_SCHEME,
       'A URL button opens https:// or tg:// and nothing else.',
       { scheme: parsed.protocol },
     );

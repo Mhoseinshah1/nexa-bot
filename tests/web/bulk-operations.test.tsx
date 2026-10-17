@@ -164,6 +164,36 @@ describe('mass operations in the Web Admin', () => {
     }
   });
 
+  it('names an item’s provider failure kind in Persian, the raw kind in the title (C1)', async () => {
+    const item = (suffix: string, failureKind: string) => ({
+      id: `019290ab-cdef-7012-8345-6789abcdef${suffix}`,
+      customerId: '019290ab-cdef-7012-8345-6789abcdef03',
+      firstName: 'Sara',
+      username: null,
+      serviceId: '019290ab-cdef-7012-8345-6789abcdef04',
+      serviceLabel: `nx${suffix}`,
+      state: 'FAILED',
+      skipReason: null,
+      operationState: 'FAILED',
+      failureKind,
+      notified: false,
+      notificationState: null,
+      processedAt: '2026-09-20T10:00:00.000Z',
+    });
+    stubApi([
+      { url: `/bulk-operations/${ID}`, body: { operation: operation() } },
+      {
+        url: `/bulk-operations/${ID}/items`,
+        body: { items: [item('12', 'TIMEOUT'), item('13', 'SOMETHING_NEW')], nextCursor: null },
+      },
+    ]);
+    renderPage(<BulkOperationDetailPage id={ID} denied={false} mayWallet={false} mayGrant />);
+    expect(await screen.findByText(t('web.report_fk_timeout'))).toHaveAttribute('title', 'TIMEOUT');
+    expect(screen.queryByText('TIMEOUT')).toBeNull();
+    // A kind this build has no name for is shown as itself, never blank.
+    expect(screen.getByText('SOMETHING_NEW')).toHaveClass('ltr');
+  });
+
   it('says a grant is awaiting reconciliation rather than calling it done', async () => {
     stubApi([
       { url: `/bulk-operations/${ID}`, body: { operation: operation() } },

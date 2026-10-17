@@ -67,6 +67,7 @@ import {
   ResellerPurchasesCard,
 } from './reseller-standing';
 import { ResellerPolicyCard, usePolicyKeys } from './reseller-plans';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Resellers — who buys at a reseller's price, and on which tier
@@ -1135,7 +1136,12 @@ function ResellerForm({
           {mode === 'register' ? t('web.reseller_register') : t('web.rule_save')}
         </Button>
       </SaveBar>
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Card>
   );
 }

@@ -60,6 +60,8 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { CheckField } from './editor-layout';
+import { CodeName } from './code-name';
+import { REPORT_FAILURE_KIND_LABEL } from '../report-view';
 import { messageFor } from './settings';
 import {
   AudienceBuilder,
@@ -69,6 +71,7 @@ import {
   wireAudience,
   type AudienceDraft,
 } from './audience-builder';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * «عملیات گروهی» — safe mass actions (round N, B2): a mass wallet credit (Mirza's
@@ -509,7 +512,12 @@ export function BulkOperationNewPage({
             {t('web.bulk_preview_button')}
           </Button>
         </div>
-        {load.error !== null && <Banner tone="danger">{bulkMessage(load.error)}</Banner>}
+        {load.error !== null && (
+          <Banner tone="danger">
+            {bulkMessage(load.error)}
+            <ErrorRef error={load.error} />
+          </Banner>
+        )}
         {preview !== null && (
           <>
             <div className="stat-grid cb-stat-row">
@@ -617,7 +625,12 @@ export function BulkOperationNewPage({
             )}
           </>
         )}
-        {execute.error !== null && <Banner tone="danger">{bulkMessage(execute.error)}</Banner>}
+        {execute.error !== null && (
+          <Banner tone="danger">
+            {bulkMessage(execute.error)}
+            <ErrorRef error={execute.error} />
+          </Banner>
+        )}
       </Card>
     </>
   );
@@ -738,8 +751,18 @@ export function BulkOperationDetailPage({
             <p>{t('web.bulk_cancel_note')}</p>
             <p>{t('web.bulk_pause_note')}</p>
           </div>
-          {cancel.error !== null && <Banner tone="danger">{bulkMessage(cancel.error)}</Banner>}
-          {steer.error !== null && <Banner tone="danger">{bulkMessage(steer.error)}</Banner>}
+          {cancel.error !== null && (
+            <Banner tone="danger">
+              {bulkMessage(cancel.error)}
+              <ErrorRef error={cancel.error} />
+            </Banner>
+          )}
+          {steer.error !== null && (
+            <Banner tone="danger">
+              {bulkMessage(steer.error)}
+              <ErrorRef error={steer.error} />
+            </Banner>
+          )}
           <div className="stat-grid cb-stat-row">
             <StatCard label={t('web.bulk_items')} value={formatNumber(op.itemCount)} />
             <StatCard
@@ -918,7 +941,7 @@ export function BulkOperationDetailPage({
                           row.skipReason !== null ? (
                             t(SKIP_LABELS[row.skipReason])
                           ) : row.failureKind !== null ? (
-                            <code>{row.failureKind}</code>
+                            <CodeName value={row.failureKind} labels={REPORT_FAILURE_KIND_LABEL} />
                           ) : (
                             '—'
                           ),
@@ -1074,8 +1097,18 @@ function BulkRetryAction({ operation }: { operation: BulkOperationResponseItem }
             )}
           </div>
         )}
-        {preview.error !== null && <Banner tone="danger">{bulkMessage(preview.error)}</Banner>}
-        {retry.error !== null && <Banner tone="danger">{bulkMessage(retry.error)}</Banner>}
+        {preview.error !== null && (
+          <Banner tone="danger">
+            {bulkMessage(preview.error)}
+            <ErrorRef error={preview.error} />
+          </Banner>
+        )}
+        {retry.error !== null && (
+          <Banner tone="danger">
+            {bulkMessage(retry.error)}
+            <ErrorRef error={retry.error} />
+          </Banner>
+        )}
       </Modal>
     </>
   );

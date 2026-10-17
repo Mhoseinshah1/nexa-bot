@@ -44,6 +44,7 @@ import {
 } from '../ui/kit';
 import { Drawer, Modal } from '../ui/overlays';
 import { ListFilterBar } from '../ui/filter-bar';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * Mirza migration PR4 — legacy wallet debts (owner decision 6, 2026-10-07).
@@ -441,6 +442,7 @@ function Decisions({ row }: { row: LegacyWalletDebtView }) {
     decide.error !== null ? (
       <Banner tone="danger" role="alert">
         {legacyDebtFault(decide.error)}
+        <ErrorRef error={decide.error} />
       </Banner>
     ) : null;
 

@@ -86,7 +86,7 @@ export function qrModules(text: string): boolean[][] {
   }
   if (text.length > QR_TEXT_MAX_LENGTH) {
     throw errors.validation(
-      'qr.text_too_long',
+      DELIVERY_QR_ERROR_CODES.TEXT_TOO_LONG,
       `A QR code may encode at most ${QR_TEXT_MAX_LENGTH} characters.`,
       { length: text.length, max: QR_TEXT_MAX_LENGTH },
     );
@@ -94,7 +94,7 @@ export function qrModules(text: string): boolean[][] {
   const utf8 = new TextEncoder().encode(text);
   if (utf8.length > QR_BYTE_CAPACITY_M) {
     throw errors.validation(
-      'qr.text_too_long',
+      DELIVERY_QR_ERROR_CODES.TEXT_TOO_LONG,
       `A QR code may encode at most ${QR_BYTE_CAPACITY_M} bytes of UTF-8.`,
       { bytes: utf8.length, max: QR_BYTE_CAPACITY_M },
     );
@@ -189,7 +189,7 @@ export function encodeQrModulesPng(
   }
   if (!Number.isInteger(margin) || margin < 0 || margin > QR_TEMPLATE_QUIET_ZONE_MAX) {
     throw errors.validation(
-      'qr.margin_invalid',
+      DELIVERY_QR_ERROR_CODES.MARGIN_INVALID,
       `A QR margin is a whole number of modules from 0 to ${QR_TEMPLATE_QUIET_ZONE_MAX}.`,
       { margin, max: QR_TEMPLATE_QUIET_ZONE_MAX },
     );

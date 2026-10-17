@@ -35,7 +35,7 @@ import {
   LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { opsCodeLabel } from '../ops-code-labels';
-import { CodeLabel, TechnicalDetails } from '../ui/technical-details';
+import { CodeLabel, ErrorRef, TechnicalDetails } from '../ui/technical-details';
 import { ListFilterBar } from '../ui/filter-bar';
 
 /*
@@ -327,7 +327,10 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
         <div className="nc-filters">{showPills}</div>
       )}
       {(mark.error !== null || markAll.error !== null) && (
-        <Banner tone="danger">{messageFor(mark.error ?? markAll.error)}</Banner>
+        <Banner tone="danger">
+          {messageFor(mark.error ?? markAll.error)}
+          <ErrorRef error={mark.error ?? markAll.error} />
+        </Banner>
       )}
       <Card tight>
         <StateSwitch query={inbox}>

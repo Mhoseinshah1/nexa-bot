@@ -4,7 +4,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import * as contracts from '@nexa/contracts';
 import { ApiError } from '../../apps/web/src/api/client';
-import { ERROR_TEXT, errorIssues, errorText, fieldText } from '../../apps/web/src/error-text';
+import {
+  API_LOCAL_ERROR_TEXT,
+  ERROR_TEXT,
+  errorIssues,
+  errorText,
+  fieldText,
+  hasErrorText,
+} from '../../apps/web/src/error-text';
 import { WEB_FA, t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 import { messageFor } from '../../apps/web/src/pages/settings';
 import { ApiErrorReport } from '../../apps/web/src/ui/technical-details';
@@ -62,6 +69,172 @@ describe('ERROR_TEXT covers every contract error code', () => {
       ENGLISH_SENTENCE.test(t(key).replace(/https?:\/\/\S*|BotFather|API|HTTPS|QR/gu, '')),
     );
     expect(english).toEqual([]);
+  });
+});
+
+/**
+ * C2: every code the API RAISES as a refusal (4xx) has a Persian sentence — not only the codes a
+ * contracts catalogue declares. The API is read as text (the Web Admin may not import it):
+ *
+ * - every `errors.validation|notFound|conflict|permissionDenied|unauthenticated|
+ *   preconditionFailed(<code>, …)` call, and every `new NexaError({ … code: <code> … })` whose
+ *   `kind` is a 4xx kind (or is not a literal);
+ * - `<code>` is resolved: a string literal is the code; each `NAME.PROP` inside it (a ternary
+ *   names two) is looked up in `@nexa/contracts`, else in an object literal `const NAME = { PROP:
+ *   '…' }` declared in the API (a local catalogue such as `SUPPORT_AI_ERROR_CODES`), following
+ *   one `const NAME = OTHER_ERROR_CODES` alias;
+ * - an argument that resolves to nothing must be on `DYNAMIC_RAISES`, each reviewed: a new
+ *   unresolvable raise fails until somebody looks at what it can carry.
+ *
+ * Each resolved code must then have a sentence (`hasErrorText`).
+ */
+describe('every refusal code the API raises has Persian', () => {
+  const repo = join(import.meta.dirname, '../..');
+  const apiRoot = join(repo, 'apps/api/src');
+  const RAISE =
+    /errors\.(?:validation|notFound|conflict|permissionDenied|unauthenticated|preconditionFailed)\(\s*([^,]+?)\s*,/gu;
+  const NEXA_ERROR = /new NexaError\(\{([^}]*)\}/gu;
+  const REFUSAL_KINDS = new Set([
+    'VALIDATION',
+    'NOT_FOUND',
+    'CONFLICT',
+    'PERMISSION_DENIED',
+    'UNAUTHENTICATED',
+    'PRECONDITION_FAILED',
+    'RATE_LIMITED',
+  ]);
+  /**
+   * Raise sites whose code is a variable. Each was read: the variable is typed or assigned
+   * from catalogued constants only, and those constants are walked by the catalogue test above.
+   */
+  const DYNAMIC_RAISES = new Set([
+    // `stateRefusal` is typed as ORDER_STATE_INVALID | SERVICE_ACTION_NOT_ALLOWED.
+    'apps/api/src/modules/commerce/provisioning/application/provisioning.service.ts: stateRefusal',
+    // `refuse(code, …)`: every caller passes a COMMERCE_ERROR_CODES constant.
+    'apps/api/src/modules/commerce/provisioning/application/provisioning.service.ts: code',
+    // `code` is PANEL_TARGET_BLOCKED or PANEL_URL_INVALID, two lines above.
+    'apps/api/src/modules/platform/panels/application/panel.service.ts: code',
+  ]);
+
+  function walk(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) walk(path, out);
+      else if (/\.ts$/u.test(path) && !/\.test\.ts$/u.test(path)) out.push(path);
+    }
+    return out;
+  }
+
+  /** Source with its comments removed: a raise inside prose is not a raise. */
+  const uncommented = (text: string) =>
+    text.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/^\s*\/\/.*$/gmu, '');
+  const sources = new Map(
+    walk(apiRoot).map((path) => [path, uncommented(readFileSync(path, 'utf8'))]),
+  );
+  const catalogues = contracts as unknown as Readonly<Record<string, unknown>>;
+
+  function contractValue(name: string, prop: string): string | null {
+    const table = catalogues[name];
+    if (typeof table !== 'object' || table === null) return null;
+    const value = (table as Record<string, unknown>)[prop];
+    return typeof value === 'string' ? value : null;
+  }
+
+  function localValue(name: string, prop: string): string | null {
+    for (const text of sources.values()) {
+      const alias = new RegExp(`const ${name}\\s*(?::[^=]+)?=\\s*([A-Z_]+)\\s*;`, 'u').exec(text);
+      if (alias?.[1] !== undefined) {
+        const value = contractValue(alias[1], prop);
+        if (value !== null) return value;
+      }
+      const object = new RegExp(`const ${name}\\s*=\\s*\\{([^}]*)\\}`, 'u').exec(text);
+      if (object?.[1] === undefined) continue;
+      const entry = new RegExp(`\\b${prop}:\\s*'([^']+)'`, 'u').exec(object[1]);
+      if (entry?.[1] !== undefined) return entry[1];
+    }
+    return null;
+  }
+
+  /** The codes one raise argument can carry, or `null` when it names none. */
+  function resolve(argument: string): string[] | null {
+    const code = argument.trim();
+    const literal = /^'([^']+)'$/u.exec(code);
+    if (literal?.[1] !== undefined) return [literal[1]];
+    const references = [...code.matchAll(/\b([A-Z][A-Z0-9_]*)\.([A-Z][A-Z0-9_]*)\b/gu)];
+    if (references.length === 0) return null;
+    const found: string[] = [];
+    for (const [, name, prop] of references) {
+      const value = contractValue(name ?? '', prop ?? '') ?? localValue(name ?? '', prop ?? '');
+      if (value === null) return null;
+      found.push(value);
+    }
+    return found;
+  }
+
+  function raised(): { codes: Map<string, string>; unresolved: string[] } {
+    const codes = new Map<string, string>();
+    const unresolved: string[] = [];
+    for (const [path, text] of sources) {
+      const file = relative(repo, path);
+      const argumentsOf = [...text.matchAll(RAISE)].map((match) => match[1] ?? '');
+      for (const match of text.matchAll(NEXA_ERROR)) {
+        const body = match[1] ?? '';
+        const kind = /kind:\s*'([A-Z_]+)'/u.exec(body)?.[1];
+        if (kind !== undefined && !REFUSAL_KINDS.has(kind)) continue;
+        const code = /code:\s*([^,\n]+)/u.exec(body)?.[1];
+        if (code !== undefined) argumentsOf.push(code);
+      }
+      for (const argument of argumentsOf) {
+        const resolved = resolve(argument);
+        if (resolved === null) {
+          const entry = `${file}: ${argument.trim()}`;
+          if (!DYNAMIC_RAISES.has(entry)) unresolved.push(entry);
+          continue;
+        }
+        for (const code of resolved) codes.set(code, file);
+      }
+    }
+    return { codes, unresolved };
+  }
+
+  const { codes, unresolved } = raised();
+
+  it('walks a real set of raise sites, local catalogues included', () => {
+    expect(codes.size).toBeGreaterThan(300);
+    // Literals, contract constants and the API-local catalogues are all seen.
+    expect(codes.has('platform.permission_denied')).toBe(true);
+    expect(codes.has('commerce.order_not_found')).toBe(true);
+    expect(codes.has('support_ai.version_conflict')).toBe(true);
+    expect(codes.has('business_chats.not_in_state')).toBe(true);
+    expect(codes.has('qr.margin_invalid')).toBe(true);
+  });
+
+  it('resolves every raise argument, or knows why it cannot', () => {
+    expect(unresolved).toEqual([]);
+  });
+
+  it('has a Persian sentence for every raised code', () => {
+    const missing = [...codes].filter(([code]) => !hasErrorText(code));
+    expect(missing).toEqual([]);
+  });
+
+  it('says every API-local code in Persian, never English', () => {
+    const catalogue = WEB_FA as Readonly<Record<string, string>>;
+    for (const [code, key] of Object.entries(API_LOCAL_ERROR_TEXT)) {
+      expect(codes.has(code), code).toBe(true);
+      expect(catalogue[key] ?? '', code).toMatch(PERSIAN);
+      expect(t(key), code).not.toMatch(ENGLISH_SENTENCE);
+    }
+  });
+
+  it('the scan sees a planted raise of an untranslated code', () => {
+    const planted = "throw errors.conflict('planted.nothing_says_this', 'English.');";
+    const [match] = [...planted.matchAll(RAISE)];
+    const resolved = resolve(match?.[1] ?? '');
+    expect(resolved).toEqual(['planted.nothing_says_this']);
+    expect(hasErrorText('planted.nothing_says_this')).toBe(false);
+    expect(resolve('SUPPORT_AI_ERROR_CODES.TEST_TOO_SOON')).toEqual(['support_ai.test_too_soon']);
+    expect(resolve('someVariable')).toBeNull();
   });
 });
 
@@ -200,6 +373,109 @@ describe('ApiErrorReport', () => {
 });
 
 /**
+ * C3 (W6 §4): a refusal said in a `Banner` carries its code and correlation id.
+ *
+ * "Says an error" is found, not listed: every `function name(x: unknown, …): string` in
+ * `apps/web/src` whose body reads `ApiError` or calls another such function (to a fixpoint,
+ * from `errorText` and `messageFor`) is an error-sentence function — `kitMessage`,
+ * `ticketFault`, `bulkMessage`, … — so a page's new helper is covered the day it is written.
+ * Every `<Banner …>…</Banner>` in a page or kit component that calls one must also hold an
+ * `ErrorRef` (or be an `ApiErrorReport`, which draws one).
+ */
+describe('every error banner carries the reference', () => {
+  const repo = join(import.meta.dirname, '../..');
+  const ROOTS = ['apps/web/src/pages', 'apps/web/src/ui'];
+  const BANNER = /<Banner\b[\s\S]*?<\/Banner>/gu;
+  const REFERENCED = /\b(?:ErrorRef|ApiErrorReport)\b/u;
+
+  function walkSource(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) walkSource(path, out);
+      else if (/\.tsx?$/u.test(path)) out.push(path);
+    }
+    return out;
+  }
+
+  const sources = walkSource(join(repo, 'apps/web/src')).map((path) => ({
+    path,
+    text: readFileSync(path, 'utf8'),
+  }));
+
+  /** The error-sentence functions, by name. */
+  function sentenceFunctions(): Set<string> {
+    const FUNCTION =
+      /^(?:export )?function ([a-z]\w*)\(\w+: unknown[^)]*\):\s*string\b[^{]*\{\n([\s\S]*?)^\}/gmu;
+    const bodies = new Map<string, string[]>();
+    for (const { text } of sources) {
+      for (const match of text.matchAll(FUNCTION)) {
+        const name = match[1] ?? '';
+        bodies.set(name, [...(bodies.get(name) ?? []), match[2] ?? '']);
+      }
+    }
+    const names = new Set(['errorText', 'messageFor']);
+    for (let grew = true; grew;) {
+      grew = false;
+      const calls = new RegExp(`\\bApiError\\b|\\b(?:${[...names].join('|')})\\(`, 'u');
+      for (const [name, found] of bodies) {
+        if (!names.has(name) && found.some((body) => calls.test(body))) {
+          names.add(name);
+          grew = true;
+        }
+      }
+    }
+    return names;
+  }
+
+  const names = sentenceFunctions();
+  const SAYS_ERROR = new RegExp(`\\b(?:${[...names].join('|')})\\(`, 'u');
+
+  /** The error banners in one source text that draw no reference, by line. */
+  function unreferenced(text: string): number[] {
+    const lines: number[] = [];
+    for (const match of text.matchAll(BANNER)) {
+      if (SAYS_ERROR.test(match[0]) && !REFERENCED.test(match[0])) {
+        lines.push(text.slice(0, match.index).split('\n').length);
+      }
+    }
+    return lines;
+  }
+
+  it('finds the pages’ own error-sentence helpers', () => {
+    for (const name of ['kitMessage', 'ticketFault', 'bulkMessage', 'recoveryErrorText']) {
+      expect(names.has(name), name).toBe(true);
+    }
+    expect(names.size).toBeGreaterThan(30);
+  });
+
+  it('finds no error banner without its code and correlation id', () => {
+    const offenders: string[] = [];
+    let banners = 0;
+    for (const { path, text } of sources) {
+      const file = relative(repo, path);
+      if (!ROOTS.some((root) => file.startsWith(root))) continue;
+      banners += [...text.matchAll(BANNER)].filter((match) => SAYS_ERROR.test(match[0])).length;
+      for (const line of unreferenced(text)) offenders.push(`${file}:${line}`);
+    }
+    // A guard against a broken walk making the scan vacuous.
+    expect(banners).toBeGreaterThan(140);
+    expect(offenders).toEqual([]);
+  });
+
+  it('the scan sees a planted banner without a reference, and one with it', () => {
+    const planted = [
+      '{save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}',
+      '<Banner tone="danger">',
+      '  {kitMessage(exporter.error)}',
+      '</Banner>',
+      '<Banner tone="danger">{messageFor(x)}<ErrorRef error={x} /></Banner>',
+      '<Banner tone="ok">{t(\'web.saved\')}</Banner>',
+    ].join('\n');
+    expect(unreferenced(planted)).toEqual([1, 2]);
+  });
+});
+
+/**
  * No page or kit component shows `.message` of an `Error` / `ApiError`.
  *
  * The server's message is English for a log; a page reaches a Persian sentence through
@@ -214,8 +490,8 @@ describe('no page renders an error message', () => {
    * sentence written in Persian for the operator; it is shown only when it IS Persian.
    */
   const ALLOWED = new Set([
-    'apps/web/src/pages/settings.tsx:  if (guarded && PERSIAN_SCRIPT.test(error.message)) {',
-    'apps/web/src/pages/settings.tsx:    return <Banner tone="danger">{error.message}</Banner>;',
+    'apps/web/src/pages/settings.tsx:  if (guarded && guardSentenceShown(settingKey, error.message)) {',
+    'apps/web/src/pages/settings.tsx:        {error.message}',
   ]);
 
   function walk(dir: string, out: string[] = []): string[] {

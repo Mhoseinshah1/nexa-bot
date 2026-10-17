@@ -87,6 +87,7 @@ import { routeViewRegistration, type SavedViewsRegistration } from '../ui/saved-
 import { dayRangeLabel } from '../ops-list-filters';
 // Review N8 (PR #240): the status vocabulary lives in its own module, shared with Customer 360.
 import { TICKET_STATUS_LABELS, TICKET_STATUS_TONES as STATUS_TONES } from '../ticket-labels';
+import { ErrorRef } from '../ui/technical-details';
 // Kept importable from this page under the names it exported before the move.
 export { TICKET_STATUS_LABELS, STATUS_TONES };
 
@@ -969,7 +970,12 @@ function TicketCategoriesCard({
                 onChange={(event) => setOrder(event.target.value)}
               />
             </Field>
-            {create.error !== null && <Banner tone="danger">{ticketFault(create.error)}</Banner>}
+            {create.error !== null && (
+              <Banner tone="danger">
+                {ticketFault(create.error)}
+                <ErrorRef error={create.error} />
+              </Banner>
+            )}
             <div className="ops-row-actions">
               <button
                 type="submit"
@@ -1376,7 +1382,12 @@ function TicketLinksForm({ ticket, onClose }: { ticket: TicketSummary; onClose: 
             onChange={(e) => setPayment(e.target.value)}
           />
         </Field>
-        {save.error !== null && <Banner tone="danger">{ticketFault(save.error)}</Banner>}
+        {save.error !== null && (
+          <Banner tone="danger">
+            {ticketFault(save.error)}
+            <ErrorRef error={save.error} />
+          </Banner>
+        )}
         <div className="ops-row-actions">
           <button type="submit" className="btn primary" disabled={save.isPending}>
             {t('web.ticket_links_save')}
@@ -1831,7 +1842,12 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
           </button>
         </div>
       </form>
-      {reply.error !== null && <Banner tone="danger">{ticketFault(reply.error)}</Banner>}
+      {reply.error !== null && (
+        <Banner tone="danger">
+          {ticketFault(reply.error)}
+          <ErrorRef error={reply.error} />
+        </Banner>
+      )}
     </Card>
   );
 }

@@ -41,6 +41,8 @@ import { DateField } from '../ui/date-field';
 import { ListFilterBar } from '../ui/filter-bar';
 import { dayRangeLabel } from '../ops-list-filters';
 import { auditActionLabel } from '../audit-action-labels';
+import { auditReasonCode, auditReasonLabel } from '../audit-reason-labels';
+import { CodeLabel, ProviderText } from '../ui/technical-details';
 
 /**
  * The audit log (Phase D1, program §16, `docs/audit-log.md`).
@@ -334,7 +336,7 @@ export function AuditLogPage({
           </button>
           {row.reason !== null && row.reason !== '' && (
             <span className="muted small audit-reason">
-              {t('web.audit_reason')} <bdi>{row.reason}</bdi>
+              {t('web.audit_reason')} <AuditReason reason={row.reason} />
             </span>
           )}
         </span>
@@ -946,4 +948,16 @@ function ChangesCell({ row }: { row: AuditLogEntry }) {
       </p>
     </Disclosure>
   );
+}
+
+/**
+ * A row's `reason` (C1). An operator's own words (Persian) are shown as written. A machine
+ * code — `THROTTLED`, `auth.rate_limited` — is its Persian name with the code beside it, or the
+ * code itself when it has none. Any other Latin-only text is a sentence the server wrote for a
+ * log: a Persian line stands in for it, and the text is kept under «جزئیات فنی».
+ */
+function AuditReason({ reason }: { reason: string }) {
+  if (/[\u0600-\u06FF]/u.test(reason)) return <bdi>{reason}</bdi>;
+  if (auditReasonCode(reason)) return <CodeLabel label={auditReasonLabel(reason)} code={reason} />;
+  return <ProviderText summary={'web.audit_reason_technical'} text={reason} />;
 }

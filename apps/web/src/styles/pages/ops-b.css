@@ -874,8 +874,23 @@ form.set-row > * + * {
     grid-template-columns: minmax(0, 1fr);
   }
   .notifications-side {
-    position: static;
+    position: relative;
   }
+}
+/*
+ * While another notification's detail is read, the previous card keeps the column's height
+ * but is not shown (nor focusable, nor read out); the loading line sits over it, so neither
+ * appearing nor going changes the height and the page does not jump.
+ */
+.notifications-holding {
+  visibility: hidden;
+}
+.notifications-holding-status {
+  position: absolute;
+  inset-block-start: 16px;
+  inset-inline: 0;
+  margin: 0;
+  text-align: center;
 }
 
 /* --- System (status, diagnostics, monitor, administrators) ----------------------- */

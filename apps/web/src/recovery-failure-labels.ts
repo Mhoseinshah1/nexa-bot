@@ -2,6 +2,7 @@ import {
   PLATFORM_ERROR_CODES,
   type BackupRunState,
   type RecoveryFailureCode,
+  type RecoveryMigrationVerdict,
   type RecoveryStage,
   type RecoveryState,
 } from '@nexa/contracts';
@@ -41,6 +42,16 @@ export const RECOVERY_FAILURE_TEXT: Readonly<Record<RecoveryFailureCode, WebKey>
   'recovery.candidate_keys_missing': 'web.recovery_failure_keys_missing',
   'recovery.internal': 'web.recovery_code_internal',
 };
+
+/** A restored candidate's migration verdict (C1): the same five words `MigrationVerdict` uses. */
+export const RECOVERY_MIGRATION_VERDICT_LABELS: Readonly<Record<RecoveryMigrationVerdict, WebKey>> =
+  {
+    CURRENT: 'web.recovery_verdict_current',
+    AHEAD: 'web.recovery_verdict_ahead',
+    BEHIND: 'web.recovery_verdict_behind',
+    NONE: 'web.recovery_verdict_none',
+    DIVERGED: 'web.recovery_verdict_diverged',
+  };
 
 /** The failure in words; a code this build does not know reads as the internal one. */
 export function recoveryFailureText(code: string): string {

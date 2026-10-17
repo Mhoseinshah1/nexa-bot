@@ -77,6 +77,7 @@ import { ChipGroup } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { ListFilterBar } from '../ui/filter-bar';
 import { chipFilter } from './money-filters';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * «تنظیمات نمایندگان / پلن‌ها و حداقل فروش» — round N, package D
@@ -599,7 +600,12 @@ function TierMinimumForm({
           {t('web.rule_save')}
         </Button>
       </div>
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+      {save.error !== null && (
+        <Banner tone="danger">
+          {messageFor(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
     </Card>
   );
 }
@@ -1255,7 +1261,12 @@ function OverrideEditor({
           {t('web.reseller_policy_save')}
         </button>
       </div>
-      {saveGrants.error !== null && <Banner tone="danger">{messageFor(saveGrants.error)}</Banner>}
+      {saveGrants.error !== null && (
+        <Banner tone="danger">
+          {messageFor(saveGrants.error)}
+          <ErrorRef error={saveGrants.error} />
+        </Banner>
+      )}
 
       <fieldset className="field">
         <legend>{t('web.reseller_minimum')}</legend>
@@ -1300,7 +1311,12 @@ function OverrideEditor({
           {t('web.rule_cancel_edit')}
         </button>
       </div>
-      {saveMinimum.error !== null && <Banner tone="danger">{messageFor(saveMinimum.error)}</Banner>}
+      {saveMinimum.error !== null && (
+        <Banner tone="danger">
+          {messageFor(saveMinimum.error)}
+          <ErrorRef error={saveMinimum.error} />
+        </Banner>
+      )}
     </div>
   );
 }

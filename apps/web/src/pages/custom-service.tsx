@@ -61,6 +61,7 @@ import {
 import { SaveBar } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { useConfirmedClose } from '../ui/unsaved';
+import { ErrorRef } from '../ui/technical-details';
 
 /**
  * The custom service (سرویس دلخواه), Package D (`docs/package-d-custom-service-audit.md`).
@@ -429,7 +430,10 @@ function Locations({
           />
         </StateSwitch>
         {remove.error !== null && (
-          <Banner tone="danger">{customServiceMessage(remove.error)}</Banner>
+          <Banner tone="danger">
+            {customServiceMessage(remove.error)}
+            <ErrorRef error={remove.error} />
+          </Banner>
         )}
       </Card>
 
@@ -607,7 +611,12 @@ function LocationForm({
         />
 
         {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-        {save.error !== null && <Banner tone="danger">{customServiceMessage(save.error)}</Banner>}
+        {save.error !== null && (
+          <Banner tone="danger">
+            {customServiceMessage(save.error)}
+            <ErrorRef error={save.error} />
+          </Banner>
+        )}
       </Drawer>
       {dialog}
     </>
@@ -817,7 +826,10 @@ function Rules({
           />
         </StateSwitch>
         {remove.error !== null && (
-          <Banner tone="danger">{customServiceMessage(remove.error)}</Banner>
+          <Banner tone="danger">
+            {customServiceMessage(remove.error)}
+            <ErrorRef error={remove.error} />
+          </Banner>
         )}
       </Card>
 
@@ -1240,7 +1252,12 @@ function RuleForm({
         />
 
         {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-        {save.error !== null && <Banner tone="danger">{customServiceMessage(save.error)}</Banner>}
+        {save.error !== null && (
+          <Banner tone="danger">
+            {customServiceMessage(save.error)}
+            <ErrorRef error={save.error} />
+          </Banner>
+        )}
       </Drawer>
       {dialog}
     </>
