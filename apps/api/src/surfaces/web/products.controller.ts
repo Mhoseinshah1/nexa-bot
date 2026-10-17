@@ -59,6 +59,7 @@ export class ProductsController {
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.status === undefined ? {} : { status: query.status }),
       ...(query.audience === undefined ? {} : { audience: query.audience }),
+      ...(query.source === undefined ? {} : { source: query.source }),
       ...(query.title === undefined ? {} : { title: query.title }),
       ...(query.panelId === undefined ? {} : { panelId: query.panelId }),
       ...(query.categoryId === undefined ? {} : { categoryId: query.categoryId }),
@@ -71,6 +72,7 @@ export class ProductsController {
       search: {
         ...(page.status === undefined ? {} : { status: page.status }),
         ...(page.audience === undefined ? {} : { audience: page.audience }),
+        ...(page.source === undefined ? {} : { source: page.source }),
         ...(page.title === undefined ? {} : { titlePrefix: page.title }),
         ...(page.panelId === undefined ? {} : { panelId: page.panelId as PanelId }),
         /*
@@ -245,6 +247,7 @@ function productCursorFrom(raw: string): ProductCursor {
 function toSummary(record: ProductRecord): ProductSummaryResponse {
   return {
     id: record.id,
+    source: record.source,
     title: record.title,
     description: record.description,
     status: record.status,

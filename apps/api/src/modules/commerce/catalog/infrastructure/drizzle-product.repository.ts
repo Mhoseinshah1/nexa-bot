@@ -9,6 +9,7 @@ import type {
   ProductCategoryVisibility,
   ProductId,
   ProductStatus,
+  RecordSource,
   TenantContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -160,6 +161,7 @@ export class DrizzleProductRepository implements ProductRepository {
 
     if (search.status !== undefined) conditions.push(eq(products.status, search.status));
     if (search.audience !== undefined) conditions.push(eq(products.audience, search.audience));
+    if (search.source !== undefined) conditions.push(eq(products.source, search.source));
     if (search.panelId !== undefined) conditions.push(eq(products.panelId, search.panelId));
     if (search.categoryId === 'UNCATEGORISED') {
       conditions.push(isNull(products.categoryId));
@@ -601,6 +603,7 @@ function toCategoryRecord(row: typeof productCategories.$inferSelect): ProductCa
 function toRecord(row: typeof products.$inferSelect): ProductRecord {
   return {
     id: row.id as ProductId,
+    source: row.source as RecordSource,
     title: row.title,
     description: row.description,
     status: row.status as ProductStatus,

@@ -16,6 +16,7 @@ import type {
   TenantContext,
   UserId,
   ProviderLastSeen,
+  RecordSource,
   ServiceLastSeenState,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -36,6 +37,8 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 export interface ServiceRecord {
   readonly id: string;
   readonly tenantId: string;
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   readonly customerId: UserId;
   readonly orderId: OrderId;
   readonly panelId: PanelId;
@@ -178,6 +181,8 @@ export interface ServiceCustomerIdentity {
 
 export interface ServiceSearch {
   readonly customerId?: UserId;
+  /** Only rows from this source (the source filter). */
+  readonly source?: RecordSource;
   /**
    * The order that bought this service. EXACT, and at most one row can match.
    *

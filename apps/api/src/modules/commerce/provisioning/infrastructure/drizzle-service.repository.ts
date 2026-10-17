@@ -25,6 +25,7 @@ import type {
   PanelId,
   ProductId,
   ProviderLastSeen,
+  RecordSource,
   ServiceDeliveryState,
   ServiceLastSeenState,
   ServiceState,
@@ -108,6 +109,7 @@ function toRecord(row: Row): ServiceRecord {
   return {
     id: row.id,
     tenantId: row.tenantId,
+    source: row.source as RecordSource,
     customerId: row.customerId as UserId,
     orderId: row.orderId as OrderId,
     panelId: row.panelId as PanelId,
@@ -375,6 +377,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     if (search.orderId !== undefined) filters.push(eq(services.orderId, search.orderId));
     if (search.panelId !== undefined) filters.push(eq(services.panelId, search.panelId));
     if (search.state !== undefined) filters.push(eq(services.state, search.state));
+    if (search.source !== undefined) filters.push(eq(services.source, search.source));
     // Program §13: the workspace's product, location and expiry filters.
     if (search.productId !== undefined) filters.push(eq(services.productId, search.productId));
     if (search.locationKey !== undefined) {

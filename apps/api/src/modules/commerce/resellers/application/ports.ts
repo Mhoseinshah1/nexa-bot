@@ -10,6 +10,7 @@ import type {
   ResellerOverrideMode,
   ResellerPriceLayer,
   ResellerPricingMode,
+  RecordSource,
   ResellerStatus,
   TenantContext,
 } from '@nexa/contracts';
@@ -47,6 +48,8 @@ export interface ResellerTierListing extends ResellerTierRecord {
 export interface ResellerRecord {
   readonly id: string;
   readonly customerId: string;
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   readonly tierId: string;
   readonly status: ResellerStatus;
   readonly pricingMode: ResellerOverrideMode;
@@ -239,6 +242,7 @@ export interface ResellerRepository {
     filter: {
       readonly status?: ResellerStatus;
       readonly tierId?: string;
+      readonly source?: RecordSource;
       readonly search?: string;
     },
     limit: number,

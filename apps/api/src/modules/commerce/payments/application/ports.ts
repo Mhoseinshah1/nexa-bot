@@ -10,6 +10,7 @@ import type {
   PaymentOpsQueue,
   PaymentResolvedState,
   PaymentState,
+  RecordSource,
   ReceiptDisposition,
   TenantContext,
   TimePeriod,
@@ -28,6 +29,8 @@ import type {
  */
 export interface PaymentRecord {
   readonly id: PaymentId;
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   readonly customerId: UserId;
   /** Null would be a wallet top-up. Nothing in this release produces one. */
   readonly orderId: OrderId | null;
@@ -184,6 +187,8 @@ export interface PaymentPage {
 
 export interface PaymentSearch {
   readonly state?: PaymentState;
+  /** Only rows from this source (the source filter). */
+  readonly source?: RecordSource;
   readonly method?: PaymentMethod;
   readonly customerId?: UserId;
   readonly orderId?: OrderId;

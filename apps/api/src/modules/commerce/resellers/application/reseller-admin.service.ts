@@ -32,6 +32,7 @@ import {
   type ResellerOverrideMode,
   type ResellerPriceLayer,
   type ResellerPricingMode,
+  type RecordSource,
   type ResellerStatus,
   type SalesCurrencyCode,
   type TenantContext,
@@ -386,6 +387,7 @@ export class ResellerAdminService {
       readonly cursor?: ResellerCursor;
       readonly status?: ResellerStatus;
       readonly tierId?: string;
+      readonly source?: RecordSource;
       readonly search?: string;
     },
   ): Promise<{ readonly items: readonly ResellerListing[]; readonly next: ResellerCursor | null }> {
@@ -399,6 +401,7 @@ export class ResellerAdminService {
       {
         ...(query.status === undefined ? {} : { status: query.status }),
         ...(query.tierId === undefined ? {} : { tierId: query.tierId }),
+        ...(query.source === undefined ? {} : { source: query.source }),
         ...(query.search === undefined ? {} : { search: query.search }),
       },
       limit,
