@@ -390,7 +390,9 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect(drySections['ownershipHold']).toEqual({ invoices: 1, changedCategory: 1 });
     expect(drySections['planTalliesDigest']).toMatch(/^[0-9a-f]{64}$/u);
     const categories = drySections['plan'].services.categories as Record<string, number>;
-    expect(categories['ADOPTION_ELIGIBLE']).toBe(1);
+    // svc_a1, the custom tariff-less svc_b1 and the panel-less svc_nullmatch (only B holds it):
+    // owner rule 2026-10-18 — a product never blocks, an empty code is searched.
+    expect(categories['ADOPTION_ELIGIBLE']).toBe(3);
     expect(categories['AMBIGUOUS_OWNERSHIP']).toBe(1);
     expect(await count('customers')).toBe(0);
 
@@ -411,7 +413,7 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect(a.openings).toMatchObject({ debitPosted: 1 });
     expect(a.openings.postedSumMinor).toBe(SYNTHETIC_EXPECTED.users.legacyBalanceSumMinor);
     expect(a.openings.debitPostedSumMinor).toBe(SYNTHETIC_EXPECTED.users.debtSumMinor);
-    expect(a.services.adoption).toMatchObject({ wired: true, ADOPTED: 1, PENDING: 0 });
+    expect(a.services.adoption).toMatchObject({ wired: true, ADOPTED: 3, PENDING: 0 });
     expect(await count('customers')).toBe(8);
     expect(await count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'")).toBe(6);
     expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
@@ -435,11 +437,15 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
         amount: '20000',
       },
     ]);
-    expect(await count('services')).toBe(1);
+    expect(await count('services')).toBe(3);
     const adopted = await ctx.container.database.db.execute<{ provider_username: string }>(
       sql`SELECT provider_username FROM services WHERE tenant_id = ${TENANT}`,
     );
-    expect(adopted.rows.map((r) => r.provider_username)).toEqual(['svc_a1']);
+    expect(adopted.rows.map((r) => r.provider_username).sort()).toEqual([
+      'svc_a1',
+      'svc_b1',
+      'svc_nullmatch',
+    ]);
     // The held invoice: manual review (the map's AMBIGUOUS_OWNERSHIP reason), a candidate
     // with that outcome, no service.
     expect(
@@ -466,7 +472,7 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect(after).toMatchObject({ fresh: false, code: 'FRESH_TARGET_NOT_EMPTY' });
     expect(after.counts).toMatchObject({
       customers: 8,
-      services: 1,
+      services: 3,
       wallet_entries: 6,
       legacy_wallet_debts: 0,
       legacy_import_runs_apply: 1,

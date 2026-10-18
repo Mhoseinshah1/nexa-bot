@@ -572,11 +572,31 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   // ── helpers over the scenarios ─────────────────────────────────────────────────────────
 
   /**
-   * The services the synthetic backup becomes on this target: its one ADOPTION_ELIGIBLE
-   * invoice (svc_a1, the 30 GB / 30 d hidden shape) on its one account. svc_a2 names a legacy
-   * product nobody mapped (PRODUCT_UNRESOLVED); `gone` is unmapped here (no target selected).
+   * The services the synthetic backup becomes on this target (owner rule 2026-10-18: a product
+   * never blocks an account on a connected panel; an empty code is searched across them):
+   * svc_a1, svc_a2 (a legacy product nobody mapped), svc_b1 on B (a custom shape with no
+   * current tariff) and the panel-less svc_nullmatch, which only B holds — each on its one
+   * account, its owner's. `gone` is unmapped here (no target selected).
    */
-  const BASELINE_SERVICES = [{ panel: 'A', username: 'svc_a1', owner: '100000001' }];
+  const BASELINE_SERVICES = [
+    { panel: 'A', username: 'svc_a1', owner: '100000001' },
+    { panel: 'A', username: 'svc_a2', owner: '100000001' },
+    { panel: 'B', username: 'svc_b1', owner: '100000009' },
+    { panel: 'B', username: 'svc_nullmatch', owner: '100000002' },
+  ];
+  /** The baseline and `extra`, in the order `services()` reads them (panel, then name). */
+  const withBaseline = (...extra: { panel: string; username: string; owner: string }[]) =>
+    [...BASELINE_SERVICES, ...extra].sort((a, b) =>
+      a.panel === b.panel
+        ? a.username < b.username
+          ? -1
+          : a.username > b.username
+            ? 1
+            : 0
+        : a.panel < b.panel
+          ? -1
+          : 1,
+    );
 
   /** A live 30 GB / 30 d invoice on rp1 (panel A) for `idUser`, named `username`. */
   const extraInvoice = (rows: Row[], id: string, idUser: string, username: string): Row => ({
@@ -684,7 +704,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
     // The panel decided what a complete read decides: the missing account, the collision.
     // svc_missing and, matched like every invoice, the removed svc_old (owner decision 2026-10-17).
-    expect(w['PROVIDER_MISSING']).toBe(2);
+    // And the panel-less svc_nowhere, on no connected panel (owner rule 2026-10-18).
+    expect(w['PROVIDER_MISSING']).toBe(3);
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
     // A/B: no per-user request at all — never a manual account or a sale, nor the backup's
     // own names (svc_missing is absent because the gap-free last walk returned no spelling).
@@ -714,8 +735,9 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       outcome: 'ADOPTED',
       holders: [{ panel: 'A', spellings: 1 }],
     });
+    // Owner rule 2026-10-18: a legacy product nobody mapped never holds an account back.
     expect(decided['a000000f']).toEqual({
-      outcome: 'PRODUCT_UNRESOLVED',
+      outcome: 'ADOPTED',
       holders: [{ panel: 'A', spellings: 1 }],
     });
     expect(decided['a0000008']).toEqual({
@@ -723,10 +745,10 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       holders: [{ panel: 'A', spellings: 2 }],
     });
     expect(decided['7c1f']).toEqual({ outcome: 'PROVIDER_MISSING', holders: [] });
-    // Codex: a panel-less invoice is asked of every production panel, so its holder is found
-    // through the targeted read and can be offered for an ADOPT — never adopted automatically.
+    // A panel-less invoice is asked of every production panel; one holder (B) attaches it there
+    // (owner rule 2026-10-18).
     expect(decided['1700001b2c3d4e5']).toEqual({
-      outcome: 'NO_PANEL',
+      outcome: 'ADOPTED',
       holders: [{ panel: 'B', spellings: 1 }],
     });
     // A/B: no customer that is not the backup's.
@@ -801,7 +823,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // svc_missing (never there): both absent, decided from the walk alone — no lookup.
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBeUndefined();
-    expect(w['PROVIDER_MISSING']).toBe(3);
+    // And the panel-less svc_nowhere, on no connected panel (owner rule 2026-10-18).
+    expect(w['PROVIDER_MISSING']).toBe(4);
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
 
@@ -810,7 +833,12 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect((await detail(id)).status).toBe('COMPLETED');
     // The deleted account is not attached to anybody; the slipped-past one is, to its owner.
     const held = await services();
-    expect(held).toEqual([{ panel: 'A', username: 'svc_a3', owner: '100000009' }]);
+    // (svc_a1's account is the deleted one; the rest of the baseline is attached as ever.)
+    expect(held).toEqual(
+      withBaseline({ panel: 'A', username: 'svc_a3', owner: '100000009' }).filter(
+        (x) => x.username !== 'svc_a1',
+      ),
+    );
     expectOneServicePerAccount(held);
     const decided = await candidates();
     expect(decided['a0000001']).toEqual({ outcome: 'PROVIDER_MISSING', holders: [] });
@@ -854,7 +882,13 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     const done = await detail(id);
     expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
     const held = await services();
-    expect(held).toEqual([{ panel: 'A', username: 'svc_shared', owner: '100000011' }]);
+    // svc_a1 is attached to nobody; the rest of the baseline is attached as ever (the
+    // panel-less svc_shared invoice is held by both panels — AMBIGUOUS_PANEL, no claim).
+    expect(held).toEqual(
+      withBaseline({ panel: 'A', username: 'svc_shared', owner: '100000011' }).filter(
+        (x) => x.username !== 'svc_a1',
+      ),
+    );
     expectOneServicePerAccount(held);
     const decided = await candidates();
     for (const key of ['a0000001', 'b0000001', 'b0000003']) {
@@ -1270,8 +1304,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
     expect(failed.applyLegacyRunId).toBeNull();
     const refusal = codes(failed.progress.refusalCounts);
-    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(2);
-    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(3);
+    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(3);
+    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(4);
     for (const table of ['customers', 'wallet_entries', 'services', 'orders']) {
       expect(await count(table), table).toBe(0);
     }
@@ -1460,10 +1494,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(await laneRuns()).toEqual([{ mode: 'ADOPT_APPROVED', status: 'COMPLETED' }]);
     // The held invoice is now the service of exactly its one account, its owner's.
     const held = await services();
-    expect(held).toEqual([
-      ...BASELINE_SERVICES,
-      { panel: 'A', username: 'svc_a3', owner: '100000009' },
-    ]);
+    expect(held).toEqual(withBaseline({ panel: 'A', username: 'svc_a3', owner: '100000009' }));
     expectOneServicePerAccount(held);
     const after = await candidateRows();
     expect(after['b0000003']).toMatchObject({
@@ -1504,83 +1535,28 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(fresh.fresh).toBe(false);
   }, 900_000);
 
-  // A real Mirza package (2026-10-16): ~N of ~M candidates on the real panel's code
-  // name a legacy product. The review rows are written by the import's own products read, so
-  // the import's map never carries a product, and the lane — bound to that map — refused every
-  // such invoice PRODUCT_UNRESOLVED whatever the owner decided on /legacy-products. The lane now
-  // decides under the import's map plus the APPROVED review (exactly what products-export
-  // writes), held to the review again by prepareLane.
-  it('§4b: a NAMED legacy product the owner approves on /legacy-products after the import is the product the lane adopts the invoice as — refused PRODUCT_UNRESOLVED before the decision; only it adopted, GETs only, no customer or money touched', async () => {
-    const { page, pkg } = await importHoldingSvcA3();
+  // A real Mirza package (2026-10-16): ~N of ~M candidates on the real panel's code name a
+  // legacy product nobody maps. Owner rule 2026-10-18: no /legacy-products decision, no ADOPT
+  // approval, no second upload — the import itself attaches such an invoice, its order naming
+  // the hidden product of its shape for navigation only.
+  it('a NAMED legacy product nobody mapped is attached by the import itself — no product decision, no ADOPT approval, no lane', async () => {
+    await importHoldingSvcA3();
     // a000000f: svc_a2 (user 100000001), legacy product p1, 30 GB / 30 d, on panel A.
-    expect((await candidates())['a000000f']?.outcome).toBe('PRODUCT_UNRESOLVED');
-    const money = await moneyState();
-
-    // 1. The ADOPT approved, the product not decided: refused, back to OPEN, no service.
-    await approveCandidate('a000000f');
-    const first = await detail(await runLane(page, pkg));
-    expect(first.status, JSON.stringify([first.errorCode, first.progress])).toBe('ADOPT_DONE');
-    expect(first.adoptReport).toMatchObject({ adopted: 0, providerWrites: 0 });
     expect((await candidateRows())['a000000f']).toMatchObject({
-      review_state: 'OPEN',
-      last_approval_refusal: 'PRODUCT_UNRESOLVED',
-      service_id: null,
+      outcome: 'ADOPTED',
+      review_state: 'ADOPTED',
     });
     expect(await services()).toEqual(BASELINE_SERVICES);
-
-    // 2. The owner maps p1 to the current 30 GB / 30 d product, then approves the ADOPT again.
-    const plan = (
-      await ctx.container.database.db.execute<{ id: string }>(
-        sql`SELECT id FROM products WHERE tenant_id = ${TENANT} AND title = 'پلن ۳۰'`,
-      )
-    ).rows[0]?.id;
-    const review = (
-      await ctx.container.database.db.execute<{
-        id: string;
-        version: number;
-        facts_checksum: string;
-      }>(
-        sql`SELECT id, version, facts_checksum FROM legacy_product_reviews
-             WHERE tenant_id = ${TENANT} AND code_product = 'p1'`,
-      )
-    ).rows[0];
-    expect(plan).toBeDefined();
-    expect(review).toBeDefined();
-    await ctx.container.legacyProductReviews.approveExisting(tenantA, owner, String(review?.id), {
-      idempotencyKey: key(),
-      expectedFactsChecksum: review?.facts_checksum,
-      expectedVersion: Number(review?.version),
-      productId: plan,
-      reason: 'همان پلن ۳۰ فعلی',
-    });
-    await approveCandidate('a000000f');
-    const before = await candidateRows();
-    const second = await detail(await runLane(page, pkg));
-    expect(second.adoptReport).toMatchObject({
-      verdict: 'COMPLETED',
-      approvals: 1,
-      adopted: 1,
-      refused: [],
-      providerWrites: 0,
-    });
-    expect(await services()).toEqual([
-      ...BASELINE_SERVICES,
-      { panel: 'A', username: 'svc_a2', owner: '100000001' },
-    ]);
-    const adopted = (
-      await ctx.container.database.db.execute<{ product_id: string }>(
-        sql`SELECT product_id FROM services
-             WHERE tenant_id = ${TENANT} AND provider_username = 'svc_a2'`,
+    const named = (
+      await ctx.container.database.db.execute<{ shaped: boolean }>(
+        sql`SELECT EXISTS (SELECT 1 FROM legacy_product_shapes sh
+                            WHERE sh.tenant_id = s.tenant_id AND sh.product_id = s.product_id)
+                     AS shaped
+              FROM services s
+             WHERE s.tenant_id = ${TENANT} AND s.provider_username = 'svc_a2'`,
       )
     ).rows;
-    expect(adopted).toEqual([{ product_id: plan }]);
-    const after = await candidateRows();
-    expect(after['a000000f']).toMatchObject({ outcome: 'ADOPTED', review_state: 'ADOPTED' });
-    for (const [invoiceKey, row] of Object.entries(before)) {
-      if (invoiceKey === 'a000000f') continue;
-      expect(after[invoiceKey], invoiceKey).toEqual(row);
-    }
-    expect(await moneyState()).toEqual(money);
+    expect(named).toEqual([{ shaped: true }]);
     expectReadsOnly(panelA);
     expectReadsOnly(panelB);
   }, 900_000);
@@ -1756,10 +1732,9 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     const done = await detail(laneId);
     expect(done.status, JSON.stringify(done.errorCode)).toBe('ADOPT_DONE');
     expect(done.adoptReport).toMatchObject({ adopted: 1, approvals: 1 });
-    expect(await services()).toEqual([
-      ...BASELINE_SERVICES,
-      { panel: 'A', username: 'svc_a3', owner: '100000009' },
-    ]);
+    expect(await services()).toEqual(
+      withBaseline({ panel: 'A', username: 'svc_a3', owner: '100000009' }),
+    );
     expectReadsOnly(panelA);
   }, 900_000);
 

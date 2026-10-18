@@ -651,27 +651,38 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
   }
 
   /**
-   * The names the backup needs on panel A (real, importable owner, rp1): svc_a1
-   * (eligible), svc_a2 (product unresolved), svc_a4 (unsupported shape), case_x (Case_X and
-   * case_x on the panel: a collision whatever the walks prove), svc_missing (no account) and,
-   * since every invoice is matched against the panel (owner decision 2026-10-17), svc_old —
-   * the removed invoice, whose account is not there either.
-   * Without a gap-free walk every one but the collision is UNRESOLVED — five invoices
-   * `INVENTORY_INCOMPLETE`, and, among the names, also the three panel-less invoices' (asked of
-   * every production panel so their holders can be offered for an ADOPT; their outcome stays
-   * `NO_PANEL`).
+   * The names the backup needs on panel A (real, importable owner, rp1): svc_a1, svc_a2 (a
+   * named product nobody mapped — attached all the same, owner rule 2026-10-18), svc_a4
+   * (unsupported shape), case_x (Case_X and case_x on the panel: a collision whatever the walks
+   * prove), svc_missing (no account) and, since every invoice is matched against the panel
+   * (owner decision 2026-10-17), svc_old — the removed invoice, whose account is not there
+   * either. The three panel-less invoices' names are asked of every connected panel too, and
+   * since owner rule 2026-10-18 they are DECIDED by that search: without a gap-free walk of A
+   * none of them can be (B alone is not every connected panel).
+   *
+   * So without a gap-free walk: every needed NAME but the collision is UNRESOLVED (five of A's
+   * own, plus the three panel-less), and so is every one of those INVOICES.
    */
-  const UNRESOLVED_WITHOUT_GAP_FREE = 5;
-  const PANEL_LESS_NAMES = 3;
-  const NAMES_UNRESOLVED_WITHOUT_GAP_FREE = UNRESOLVED_WITHOUT_GAP_FREE + PANEL_LESS_NAMES;
+  const UNRESOLVED_WITHOUT_GAP_FREE = 8;
+  const NAMES_UNRESOLVED_WITHOUT_GAP_FREE = 8;
   /**
-   * The accounts a gap-free read finds absent: `svc_missing` (live) and `svc_old` (a removed
-   * invoice, which is matched against the panel like any other — owner decision 2026-10-17).
+   * The accounts a gap-free read finds absent: `svc_missing` (live), `svc_old` (a removed
+   * invoice, matched against the panel like any other — owner decision 2026-10-17), and the
+   * panel-less `svc_nowhere`, which no connected panel holds (owner rule 2026-10-18).
    */
-  const PROVIDER_MISSING_INVOICES = 2;
+  const PROVIDER_MISSING_INVOICES = 3;
 
-  /** The one eligible candidate of the synthetic backup, on its own account and owner. */
-  const BASELINE = { 'A:svc_a1': '100000001' } as const;
+  /**
+   * What the synthetic backup attaches when panel A is read gap-free (owner rule 2026-10-18):
+   * svc_a1, svc_a2 (its product unmapped), svc_b1 on B (a custom shape with no current
+   * tariff), and the panel-less svc_nullmatch, which only B holds — each on its own owner.
+   */
+  const BASELINE = {
+    'A:svc_a1': '100000001',
+    'A:svc_a2': '100000001',
+    'B:svc_b1': '100000009',
+    'B:svc_nullmatch': '100000002',
+  } as const;
 
   /** The most walks one targeted read of a panel makes (a non-gap-free last walk walks again). */
   const MAX_WALKS = 3;
@@ -778,8 +789,9 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
       outcome: 'USERNAME_CASE_COLLISION',
       holders: [{ panel: 'A', spellings: 2 }],
     });
-    // Neither spelling of svc_a2 is anybody's service; svc_a1 is its own owner's only.
-    await expectOwners(BASELINE);
+    // Neither spelling of svc_a2 is anybody's service; the rest are their own owners' only.
+    const { 'A:svc_a2': _collided, ...withoutA2 } = BASELINE;
+    await expectOwners(withoutA2);
     expect(lookupsOf(panelA)).toEqual([]);
     expectReadsOnly(panelA, panelB);
   }, 600_000);
@@ -814,7 +826,8 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
       outcome: 'USERNAME_CASE_COLLISION',
       holders: [{ panel: 'A', spellings: 2 }],
     });
-    await expectOwners({});
+    const { 'A:svc_a1': _collided, ...withoutA1 } = BASELINE;
+    await expectOwners(withoutA1);
     expectReadsOnly(panelA, panelB);
   }, 600_000);
 

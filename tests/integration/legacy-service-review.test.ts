@@ -281,7 +281,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
 
   // --- outcomes ---------------------------------------------------------------------------
 
-  it('every live invoice gets exactly ONE outcome; an empty-code invoice is never adopted, even with one holder', async () => {
+  it('every live invoice gets exactly ONE outcome; an empty-code invoice is attached on its one holder panel (owner rule 2026-10-18)', async () => {
     const snap = await snapshot();
     const report = await apply('import', snap);
     expect(report.verdict).toBe('COMPLETED');
@@ -293,34 +293,42 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     }
     expect(await outcomeCounts()).toEqual(expected);
     const applied = (report.sections as Record<string, any>)['applied'].services;
-    expect(applied.outcomes['NO_PANEL']).toBe(3);
+    // Owner rule 2026-10-18: an empty code is searched across the connected panels.
+    expect(applied.outcomes['NO_PANEL'] ?? 0).toBe(0);
     expect(
       Object.values(applied.outcomes as Record<string, number>).reduce((a, b) => a + b, 0),
     ).toBe(SYNTHETIC_EXPECTED.services.candidates);
 
-    // svc_nullmatch: one holder (panel B, mapped), and STILL not adopted (owner decision 8).
+    // svc_nullmatch: one holder (panel B) — attached there, by the import itself.
     const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
     expect(nullmatch).toMatchObject({
-      outcome: 'NO_PANEL',
-      blocker: 'PANEL_UNMAPPED',
+      outcome: 'ADOPTED',
+      reviewState: 'ADOPTED',
+      panelCode: null,
+    });
+    const attached = await db().execute<{ panel_id: string }>(
+      sql`SELECT panel_id FROM services WHERE provider_username = 'svc_nullmatch'`,
+    );
+    expect(attached.rows).toEqual([{ panel_id: panelBId }]);
+    // Two holders stay in review (AMBIGUOUS_PANEL), none is PROVIDER_MISSING (ended).
+    const shared = await candidate(invoiceKeyOf(snap, 'svc_shared'));
+    expect(shared).toMatchObject({
+      outcome: 'AMBIGUOUS_PANEL',
       reviewState: 'OPEN',
       serviceId: null,
       panelCode: null,
     });
-    expect(nullmatch.evidence).toMatchObject({
+    expect(shared.evidence).toMatchObject({
       panelCodeClass: 'EMPTY',
       mappedPanelId: null,
       customer: 'IMPORTED',
-      holders: [{ panelId: panelBId, mapped: true, spellings: 1, state: 'active' }],
       incompletePanels: [],
     });
-    expect(
-      await count('services', "provider_username = 'svc_nullmatch'"),
-      'a no-panel invoice was adopted automatically',
-    ).toBe(0);
-    // Two holders, and none: NO_PANEL as well — never AMBIGUOUS, never PROVIDER_MISSING.
-    expect((await candidate(invoiceKeyOf(snap, 'svc_shared'))).outcome).toBe('NO_PANEL');
-    expect((await candidate(invoiceKeyOf(snap, 'svc_nowhere'))).outcome).toBe('NO_PANEL');
+    expect(shared.evidence.holders.map((h) => h.panelId).sort()).toEqual(
+      [panelAId, panelBId].sort(),
+    );
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(0);
+    expect((await candidate(invoiceKeyOf(snap, 'svc_nowhere'))).outcome).toBe('PROVIDER_MISSING');
     // An adopted candidate names its service.
     const adopted = await candidate(invoiceKeyOf(snap, 'svc_a2'));
     expect(adopted).toMatchObject({ outcome: 'ADOPTED', reviewState: 'ADOPTED' });
@@ -462,15 +470,15 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
   it('an explicit ADOPT: refused without a mapped holder panel or at a stale version; executed by the next run through P6, with no provider write', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const before = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const before = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     const detail = await review().get(tenantA, owner, before.id);
-    expect(detail.adoptPanels).toEqual([panelBId]);
+    expect([...detail.adoptPanels].sort()).toEqual([panelAId, panelBId].sort());
 
     // No panel named for an invoice that names none; a panel that does not hold it.
     await expect(approve(before)).rejects.toMatchObject({
       code: LEGACY_SERVICE_REVIEW_ERROR_CODES.PANEL_REFUSED,
     });
-    await expect(approve(before, panelAId)).rejects.toMatchObject({
+    await expect(approve(before, '01900000-0000-7000-8000-0000000000ff')).rejects.toMatchObject({
       code: LEGACY_SERVICE_REVIEW_ERROR_CODES.PANEL_REFUSED,
     });
     // Bound to the version the operator saw.
@@ -501,7 +509,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       reviewState: 'ADOPT_APPROVED',
       approvedPanelId: panelBId,
       approvedChecksum: before.invoiceChecksum,
-      approvedOutcome: 'NO_PANEL',
+      approvedOutcome: 'AMBIGUOUS_PANEL',
       version: before.version + 1,
     });
     // An idempotent replay answers the same; nothing moves twice.
@@ -521,7 +529,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       idempotencyKey: key(),
       expectedVersion: reopened.version,
     });
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(0);
 
     // The next run re-runs every check against the inventory it walks, and adopts via P6.
     const run = await apply('import-2', snap);
@@ -535,7 +543,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     const services = await db().execute<{ panel_id: string; provider_username: string }>(
       sql`SELECT panel_id, provider_username FROM services WHERE id = ${after.serviceId}`,
     );
-    expect(services.rows).toEqual([{ panel_id: panelBId, provider_username: 'svc_nullmatch' }]);
+    expect(services.rows).toEqual([{ panel_id: panelBId, provider_username: 'svc_shared' }]);
     expect(
       await count(
         'legacy_import_map',
@@ -557,7 +565,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     ]);
     // A third run adopts nothing twice.
     await apply('import-3', snap);
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(1);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(1);
     expect((await candidate(before.invoiceKey)).outcome).toBe('ALREADY_ADOPTED');
     expectOnlyReads();
   });
@@ -618,11 +626,11 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
   it("an explicit ADOPT on a panel that keeps changing while the Web Admin importer reads it: the approved name is decided on the operator's panel and adopted — the ADOPT is a needed name of that panel", async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
-    expect(nullmatch.outcome).toBe('NO_PANEL');
+    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_shared'));
+    expect(nullmatch.outcome).toBe('AMBIGUOUS_PANEL');
     await approve(nullmatch, panelBId);
 
-    // svc_nullmatch names no panel: only the operator's approval makes panel B ask for it.
+    // svc_shared names no panel and two panels hold it: the operator's approval names B.
     // Panel B changes under the first walk (an account created before its second page), so
     // B is not one snapshot and is decided per needed name.
     let changed = false;
@@ -653,7 +661,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     const services = await db().execute<{ panel_id: string; provider_username: string }>(
       sql`SELECT panel_id, provider_username FROM services WHERE id = ${after.serviceId}`,
     );
-    expect(services.rows).toEqual([{ panel_id: panelBId, provider_username: 'svc_nullmatch' }]);
+    expect(services.rows).toEqual([{ panel_id: panelBId, provider_username: 'svc_shared' }]);
     // The manual account is nobody's: never adopted, and never asked for — a canary is
     // always a name the backup needs.
     expect(await count('services', "provider_username = 'manual_mid_walk'")).toBe(0);
@@ -667,7 +675,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
   it('an approval whose checks fail at execution adopts nothing and creates no account: account gone, inventory changed mid-walk, source row changed', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     await approve(nullmatch, panelBId);
 
     // 1. The panel's inventory changes during the walk (TOTAL_CHANGED): fail closed.
@@ -697,15 +705,15 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     });
     await apply('complete-again', snap);
     now = await candidate(nullmatch.invoiceKey);
-    expect(now.outcome).toBe('NO_PANEL');
+    expect(now.outcome).toBe('AMBIGUOUS_PANEL');
 
     // 2. The account left the panel: PROVIDER_MISSING, never a fake account.
     await approve(now, panelBId);
-    (panelB.users as Map<string, unknown>).delete('svc_nullmatch');
+    (panelB.users as Map<string, unknown>).delete('svc_shared');
     await apply('gone', snap);
     now = await candidate(nullmatch.invoiceKey);
     expect(now).toMatchObject({ reviewState: 'OPEN', lastApprovalRefusal: 'PROVIDER_MISSING' });
-    panelB.seedUser('svc_nullmatch', {
+    panelB.seedUser('svc_shared', {
       expire: Math.floor(Date.UTC(2027, 0, 1) / 1000),
       dataLimit: 30 * 1024 ** 3,
       usedTraffic: 1024 ** 3,
@@ -721,7 +729,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       tables: {
         ...base.tables,
         invoice: base.tables.invoice.map((r) =>
-          r['username'] === 'svc_nullmatch' ? { ...r, Volume: '31' } : r,
+          r['username'] === 'svc_shared' ? { ...r, Volume: '31' } : r,
         ),
       },
     } as SyntheticLegacyDataset;
@@ -729,7 +737,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     now = await candidate(nullmatch.invoiceKey);
     expect(now).toMatchObject({ reviewState: 'OPEN', lastApprovalRefusal: 'SOURCE_CHANGED' });
 
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(0);
     expect(
       await count(
         'legacy_import_map',
@@ -748,7 +756,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     // tests/unit/legacy-service-review-rules.test.ts ('a synthetic approval is never acted on').
     const snap = await snapshot();
     await apply('import', snap);
-    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     const approved = await approve(nullmatch, panelBId);
     const runs = await count('legacy_import_runs');
     await expect(apply('prod-like', snap, { productionLikeTarget: true })).rejects.toMatchObject({
@@ -758,14 +766,14 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     const after = await candidate(nullmatch.invoiceKey);
     expect(after).toMatchObject({ reviewState: 'ADOPT_APPROVED', approvedPanelId: panelBId });
     expect(after.version).toBe(approved.version);
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(0);
     expectOnlyReads();
   });
 
   it('crash and resume: a claimed approval (ADOPTING) is executed by the resume, adopting exactly once', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     await approve(nullmatch, panelBId);
     // The process dies right after P6 committed the adoption, before the approval settles.
     const real = ctx.container.legacyAdoption;
@@ -794,14 +802,14 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       reviewState: 'ADOPTED',
       outcome: 'ALREADY_ADOPTED',
     });
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(1);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(1);
     expectOnlyReads();
   });
 
   it('Codex #234: an adoption the map does not confirm settles the claim OPEN (ADOPTION_UNCONFIRMED), never stuck ADOPTING', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const c = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     await approve(c, panelBId);
     const real = ctx.container.legacyAdoption;
     const lying: LegacyAdoptionPort = {
@@ -842,13 +850,13 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       decision: 'ACKNOWLEDGE',
       reason: 'seen',
     });
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(0);
   });
 
   it('Codex #234: a claim no run can execute is released to ADOPT_APPROVED (no adoption step), never left ADOPTING', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const c = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     await approve(c, panelBId);
     const dying: LegacyAdoptionPort = {
       adopt: (_scope, _actor, cand) =>
@@ -872,13 +880,13 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       expectedVersion: released.version,
       reason: 'later',
     });
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(0);
   });
 
   it('Codex #234: a refusal a person withdrew mid-run is not counted as a refusal', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const c = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     const approved = await approve(c, panelBId);
     const base = buildSyntheticLegacyDataset();
     const changed = {
@@ -886,7 +894,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       tables: {
         ...base.tables,
         invoice: base.tables.invoice.map((r) =>
-          r['username'] === 'svc_nullmatch' ? { ...r, Volume: '31' } : r,
+          r['username'] === 'svc_shared' ? { ...r, Volume: '31' } : r,
         ),
       },
     } as SyntheticLegacyDataset;
@@ -915,7 +923,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
   it('two operators approving the same candidate at once: exactly one wins; the other is refused, never applied', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const c = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     const second = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-pr5-2', roleKeys: ['owner'] }),
     );
@@ -936,7 +944,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     const now = await candidate(c.invoiceKey);
     expect(now.version).toBe(c.version + 1);
     await apply('import-2', snap);
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBeLessThanOrEqual(1);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBeLessThanOrEqual(1);
   });
 
   it('an operator alongside a running import: a keep landing mid-run is honoured by P6 under the invoice lock; an approval mid-run waits for the next run', async () => {
@@ -952,9 +960,9 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     )?.idInvoice as string;
     const a1 = await candidate(a1Key);
     expect(a1.outcome).toBe('ADOPTION_ELIGIBLE');
-    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     // During the next run — after it read the review state, before it adopts — a person
-    // keeps svc_a1 as history and approves svc_nullmatch.
+    // keeps svc_a1 as history and approves svc_shared.
     await apply('concurrent', snap, {
       afterPhase: async (phase) => {
         if (phase !== 'products') return;
@@ -978,7 +986,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     expect((await candidate(nullmatch.invoiceKey)).reviewState).toBe('ADOPT_APPROVED');
     await apply('next', snap);
     expect((await candidate(nullmatch.invoiceKey)).reviewState).toBe('ADOPTED');
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(1);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(1);
     expect(await count('services', "provider_username = 'svc_a1'")).toBe(0);
     expectOnlyReads();
   });
@@ -1051,7 +1059,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
   it('a person reopening an approval mid-run wins: the run does not claim or execute it', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const c = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     const approved = await approve(c, panelBId);
     const run = await apply('mid', snap, {
       afterPhase: async (phase) => {
@@ -1068,7 +1076,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       claimLost: 1,
     });
     expect((await candidate(c.invoiceKey)).reviewState).toBe('OPEN');
-    expect(await count('services', "provider_username = 'svc_nullmatch'")).toBe(0);
+    expect(await count('services', "provider_username = 'svc_shared'")).toBe(0);
   });
 
   // --- the archive link ------------------------------------------------------------------------
@@ -1094,7 +1102,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       "archive_id IS NULL AND outcome NOT IN ('ADOPTED', 'ALREADY_ADOPTED')",
     );
     expect(notLinked).toBe(0);
-    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const nullmatch = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     const detail = await review().get(tenantA, owner, nullmatch.id);
     expect(detail.archive).toMatchObject({ classification: 'NO_PANEL', panelCode: null });
     const reconciled = await importer().reconcile({
@@ -1114,7 +1122,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
   it('is permission-gated: an observer cannot view, a support admin cannot decide, the importer cannot decide; denials audited', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const c = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     const observer = adminActorFor(
       await createAdmin(ctx.container, tenantA, {
         username: 'observer-pr5',
@@ -1147,7 +1155,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
   it('keeps tenants apart, refuses a stopped tenant, and audits codes and ids only', async () => {
     const snap = await snapshot();
     await apply('import', snap);
-    const c = await candidate(invoiceKeyOf(snap, 'svc_nullmatch'));
+    const c = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     const ownerB = adminActorFor(
       await createAdmin(ctx.container, tenantB, { username: 'owner-pr5-b', roleKeys: ['owner'] }),
     );
@@ -1175,7 +1183,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       sql`SELECT before, after FROM audit_logs WHERE action = 'legacy.service_candidate.decide' AND entity_id = ${c.id}`,
     );
     const text = JSON.stringify(audit.rows);
-    for (const word of ['svc_nullmatch', '100000002', c.invoiceKey]) {
+    for (const word of ['svc_shared', '100000003', c.invoiceKey]) {
       expect(text, `audit carries ${word}`).not.toContain(word);
     }
 
@@ -1237,10 +1245,11 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
         ip: '203.0.113.10',
       }) as unknown as WebRequest;
     const controller = new LegacyServicesController(ctx.container);
+    // Owner rule 2026-10-18: the panel-less invoices are searched; the one two panels hold.
     const noPanel = legacyServiceCandidateListResponseSchema.parse(
-      await controller.list(request('GET'), { outcome: 'NO_PANEL' }),
+      await controller.list(request('GET'), { outcome: 'AMBIGUOUS_PANEL' }),
     );
-    expect(noPanel.candidates).toHaveLength(3);
+    expect(noPanel.candidates).toHaveLength(1);
     const byPanel = legacyServiceCandidateListResponseSchema.parse(
       await controller.list(request('GET'), { panelCode: SYNTHETIC_PANEL_CODES.mappedB }),
     );
@@ -1268,12 +1277,13 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     );
     expect(summary.candidateCount).toBe(SYNTHETIC_EXPECTED.services.candidates);
     expect(Object.keys(summary.byOutcome).sort()).toEqual([...LEGACY_SERVICE_OUTCOMES].sort());
-    const target = noPanel.candidates.find((c) => c.evidence.holders.length === 1);
-    if (target === undefined) throw new Error('no single-holder candidate');
+    // The panel-less invoice two panels hold: an operator picks one.
+    const target = noPanel.candidates.find((c) => c.evidence.holders.length === 2);
+    if (target === undefined) throw new Error('no two-holder candidate');
     const detail = legacyServiceCandidateDetailResponseSchema.parse(
       await controller.detail(request('GET'), target.id),
     );
-    expect(detail.adoptPanels).toEqual([panelBId]);
+    expect([...detail.adoptPanels].sort()).toEqual([panelAId, panelBId].sort());
     const approved = legacyServiceCandidateResponseSchema.parse(
       await controller.adopt(request('POST'), target.id, {
         idempotencyKey: key(),

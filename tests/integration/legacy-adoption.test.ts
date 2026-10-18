@@ -6,6 +6,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   BYTES_PER_GB,
+  COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
   isNexaError,
   money,
@@ -1082,7 +1083,7 @@ describe('Migration P6: legacy service adoption', () => {
     expect(providerCalls).toEqual([]);
   });
 
-  it('renewal of an adopted service quotes the CURRENT tariff of its product, never a legacy price', async () => {
+  it('renewal of an adopted service offers its panel’s CURRENT plans at their current price, never a legacy price', async () => {
     const telegramUserId = tg();
     const customerId = (await fx.customer({ telegramUserId })) as UserId;
     // An operable panel (credentials and activation), as a renewal needs; nothing dials it.
@@ -1096,25 +1097,52 @@ describe('Migration P6: legacy service adoption', () => {
     });
     const renewPanel = created.view.panel.id;
     const o = await adopted(command({ telegramUserId, match: eligible('renewme1', renewPanel) }));
-    const quote = async (): Promise<bigint> => {
+    const actor = (k: string) => ({
+      type: 'SYSTEM_JOB' as const,
+      id: null,
+      label: 'telegram-update:test',
+      surface: 'TELEGRAM' as const,
+      correlationId: k as CorrelationId,
+    });
+    // Owner rule 2026-10-18: the adopted service's own product (on another panel) is never
+    // what it renews from; its panel sells nothing yet, so there is nothing to offer.
+    const empty = await ctx.container.commercialActions.offer(
+      tenantA,
+      actor('offer-empty'),
+      customerId,
+      o.serviceId,
+      'RENEW',
+    );
+    expect(empty).toMatchObject({ product: null, plans: [] });
+    const plan = await publicProduct(250_000n, undefined, tenantA, renewPanel);
+    const offered = await ctx.container.commercialActions.offer(
+      tenantA,
+      actor('offer-plan'),
+      customerId,
+      o.serviceId,
+      'RENEW',
+    );
+    expect(offered.plans?.map((p) => p.id)).toEqual([plan]);
+    const quote = async (productId?: string): Promise<bigint> => {
       const k = `renew-${String(T())}`;
-      const { order } = await ctx.container.commercialActions.draft(
-        tenantA,
-        {
-          type: 'SYSTEM_JOB',
-          id: null,
-          label: 'telegram-update:test',
-          surface: 'TELEGRAM',
-          correlationId: k as CorrelationId,
-        },
-        customerId,
-        { serviceId: o.serviceId, kind: 'RENEW', idempotencyKey: k },
-      );
+      const { order } = await ctx.container.commercialActions.draft(tenantA, actor(k), customerId, {
+        serviceId: o.serviceId,
+        kind: 'RENEW',
+        ...(productId === undefined ? {} : { productId }),
+        idempotencyKey: k,
+      });
       return order.totals.total.amountMinor;
     };
-    expect(await quote()).toBe(250_000n);
-    await db().execute(sql`UPDATE products SET price_amount = 310000 WHERE id = ${product}`);
-    expect(await quote()).toBe(310_000n);
+    expect(await quote(plan)).toBe(250_000n);
+    await db().execute(sql`UPDATE products SET price_amount = 310000 WHERE id = ${plan}`);
+    expect(await quote(plan)).toBe(310_000n);
+    // Without a chosen plan, or with the service's own (navigation) product: refused.
+    await expect(quote()).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+    });
+    await expect(quote(product)).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+    });
   });
 
   // ---------------------------------------------------------------------------
