@@ -12,6 +12,7 @@ import type {
   EndedServicesCounts,
   EndedServicesRepository,
   MapFactRow,
+  NeverPaidOrderInsert,
   ShapeProductRow,
 } from '../application/ended-services.ports.js';
 
@@ -20,6 +21,8 @@ import type {
  * reason the adoption's store gives: each writes a row no business repository may — an order
  * that is `PAID` at birth with origin `LEGACY_HISTORY` at its original amount, and a service
  * that is `TERMINATED` at birth and was never provisioned.
+ *
+ * A never-paid invoice is one more insert: an order alone, EXPIRED or CANCELLED.
  *
  * Nothing here touches `provisioning_operations`, `service_username_reservations`,
  * `wallet_entries`, `outbox_messages` or `customer_notifications`; the database's own rules
@@ -197,7 +200,8 @@ export class DrizzleEndedServicesRepository implements EndedServicesRepository {
     const refs = sql.param([...sourceRefs]);
     const result = await this.exec(tx).execute(sql`
       SELECT COALESCE(o.source_ref, s.source_ref) AS source_ref,
-             o.id AS order_id, o.origin AS order_origin, o.customer_id AS order_customer_id,
+             o.id AS order_id, o.origin AS order_origin, o.state AS order_state,
+             o.customer_id AS order_customer_id,
              o.panel_id AS order_panel_id, o.total_amount AS order_total,
              s.id AS service_id, s.state AS service_state, s.customer_id AS service_customer_id,
              s.is_test AS service_is_test
@@ -210,6 +214,7 @@ export class DrizzleEndedServicesRepository implements EndedServicesRepository {
       source_ref: string;
       order_id: string | null;
       order_origin: string | null;
+      order_state: string | null;
       order_customer_id: string | null;
       order_panel_id: string | null;
       order_total: string | bigint | null;
@@ -221,6 +226,7 @@ export class DrizzleEndedServicesRepository implements EndedServicesRepository {
       out.set(r.source_ref, {
         orderId: r.order_id,
         orderOrigin: r.order_origin,
+        orderState: r.order_state,
         orderCustomerId: r.order_customer_id,
         orderPanelId: r.order_panel_id,
         orderTotal: r.order_total === null ? null : BigInt(r.order_total),
@@ -246,22 +252,12 @@ export class DrizzleEndedServicesRepository implements EndedServicesRepository {
     tx: TransactionScope,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
-    const quote = JSON.stringify({
-      productId: input.product.productId,
-      quotedAt: input.purchasedAt.toISOString(),
-      currency: input.currency,
-      finalAmount: { amountMinor: input.amountMinor.toString(), currency: input.currency },
-      trace: [
-        {
-          step: 'BASE_PRICE',
-          effect: 'REPLACES',
-          ruleId: null,
-          ruleLabel: 'legacy history',
-          amountBefore: { amountMinor: '0', currency: input.currency },
-          amountAfter: { amountMinor: input.amountMinor.toString(), currency: input.currency },
-        },
-      ],
-    });
+    const quote = historyQuote(
+      input.product.productId,
+      input.purchasedAt,
+      input.amountMinor,
+      input.currency,
+    );
     /*
      * The order: a Mirza invoice as history. NEW_SERVICE + LEGACY_HISTORY, PAID at birth at
      * the invoice's own amount and date, no code, no deadline. `orders_legacy_history_shape_check`
@@ -304,8 +300,49 @@ export class DrizzleEndedServicesRepository implements EndedServicesRepository {
          'MIRZA', ${input.sourceRef}, ${input.isTest})`);
   }
 
+  async insertNeverPaid(
+    scope: TenantContext,
+    input: NeverPaidOrderInsert,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    const quote = historyQuote(
+      input.product.productId,
+      input.createdAt,
+      input.amountMinor,
+      input.currency,
+    );
+    /*
+     * A never-paid Mirza invoice as history: NEW_SERVICE + LEGACY_HISTORY in EXPIRED or
+     * CANCELLED, at the invoice's own amount and date, and NOTHING beside it — no service, no
+     * payment, no ledger entry, no reservation. Never settled (`settled_at` NULL, which
+     * `orders_settled_at_check` requires of an unpaid state), never confirmed (no evidence it
+     * was), no payment deadline (`expires_at` NULL, and `orders_expiry_idx` is on
+     * AWAITING_PAYMENT only, so the order sweeper never sees it). A CANCELLED one records the
+     * import time as `cancelled_at` (`orders_cancelled_at_check`), as an ended service records
+     * it as `terminated_at`: Mirza kept no time for the failure. The 0253 trigger freezes the
+     * state and the amounts from here on; origin is not a sale (`SALE_ORDER_ORIGINS`).
+     */
+    await tx.tx.execute(sql`
+      INSERT INTO orders
+        (id, tenant_id, customer_id, state, purpose, origin, product_id, panel_id, line_title,
+         line_duration_days, line_traffic_bytes, line_device_limit, line_unit_price_amount,
+         line_quantity, subtotal_amount, discount_amount, total_amount, currency, quote,
+         confirmed_at, settled_at, cancelled_at, created_at, updated_at, source, source_ref)
+      VALUES
+        (${input.orderId}, ${tenantId}, ${input.customerId}, ${input.state}, 'NEW_SERVICE',
+         'LEGACY_HISTORY', ${input.product.productId}, ${input.panelId}, ${input.lineTitle},
+         ${input.product.durationDays}, ${input.product.trafficBytes}, NULL,
+         ${input.amountMinor}, 1, ${input.amountMinor}, 0, ${input.amountMinor},
+         ${input.currency}, ${quote}::jsonb,
+         NULL, NULL, ${input.state === 'CANCELLED' ? input.now : null},
+         ${input.createdAt}, ${input.now}, 'MIRZA', ${input.sourceRef})`);
+  }
+
   async counts(scope: TenantContext): Promise<EndedServicesCounts> {
     const tenantId = requireTenantId(scope);
+    // `invoice-never-paid:%` is not matched by `invoice:%` (the character after `invoice` is
+    // `-`, not `:`), so the two populations are counted apart and never twice.
     const result = await this.exec().execute(sql`
       SELECT
         (SELECT count(*)::int FROM services
@@ -316,23 +353,55 @@ export class DrizzleEndedServicesRepository implements EndedServicesRepository {
             AND state = 'TERMINATED') AS terminated,
         (SELECT count(*)::int FROM orders
           WHERE tenant_id = ${tenantId} AND origin = 'LEGACY_HISTORY'
-            AND source_ref LIKE 'invoice:%') AS orders,
+            AND (source_ref LIKE 'invoice:%' OR source_ref LIKE 'invoice-never-paid:%'))
+          AS orders,
+        (SELECT COALESCE(sum(total_amount), 0)::text FROM orders
+          WHERE tenant_id = ${tenantId} AND origin = 'LEGACY_HISTORY' AND state = 'PAID'
+            AND (source_ref LIKE 'invoice:%' OR source_ref LIKE 'invoice-never-paid:%'))
+          AS paid_total,
+        (SELECT count(*)::int FROM orders
+          WHERE tenant_id = ${tenantId} AND origin = 'LEGACY_HISTORY'
+            AND source_ref LIKE 'invoice-never-paid:%') AS never_paid,
         (SELECT COALESCE(sum(total_amount), 0)::text FROM orders
           WHERE tenant_id = ${tenantId} AND origin = 'LEGACY_HISTORY'
-            AND source_ref LIKE 'invoice:%') AS total`);
+            AND source_ref LIKE 'invoice-never-paid:%') AS never_paid_total`);
     const row = (
       result.rows as {
         services: number;
         terminated: number;
         orders: number;
-        total: string;
+        paid_total: string;
+        never_paid: number;
+        never_paid_total: string;
       }[]
     )[0];
     return {
       services: row?.services ?? 0,
       terminatedServices: row?.terminated ?? 0,
       historyOrders: row?.orders ?? 0,
-      historyOrdersTotalMinor: BigInt(row?.total ?? '0'),
+      paidHistoryOrdersTotalMinor: BigInt(row?.paid_total ?? '0'),
+      neverPaidOrders: row?.never_paid ?? 0,
+      neverPaidOrdersTotalMinor: BigInt(row?.never_paid_total ?? '0'),
     };
   }
+}
+
+/** The one-line quote a history order carries: its own amount as the base price, nothing else. */
+function historyQuote(productId: string, at: Date, amountMinor: bigint, currency: 'IRT'): string {
+  return JSON.stringify({
+    productId,
+    quotedAt: at.toISOString(),
+    currency,
+    finalAmount: { amountMinor: amountMinor.toString(), currency },
+    trace: [
+      {
+        step: 'BASE_PRICE',
+        effect: 'REPLACES',
+        ruleId: null,
+        ruleLabel: 'legacy history',
+        amountBefore: { amountMinor: '0', currency },
+        amountAfter: { amountMinor: amountMinor.toString(), currency },
+      },
+    ],
+  });
 }

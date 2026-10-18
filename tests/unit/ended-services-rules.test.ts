@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   ENDED_SERVICE_GAP_REASONS,
+  NEVER_PAID_AMOUNT_BUCKET,
+  NEVER_PAID_ORDER_GAP_REASONS,
   endedServiceUsername,
   fateOfInvoice,
   invoiceSourceRef,
+  neverPaidOrderState,
+  neverPaidSourceRef,
   shapeKeyOfCells,
   type ArchivedInvoice,
   type InvoiceMapFact,
@@ -11,10 +15,13 @@ import {
 import {
   lineTitleOf,
   sameAsCarried,
+  sameAsCarriedNeverPaid,
 } from '../../apps/api/src/modules/platform/legacy-materialize/application/terminated-services.step';
+import { LEGACY_NEVER_PAID_STATUSES } from '../../apps/api/src/modules/platform/legacy-importer/application/source-port';
 import type {
   CarriedInvoice,
   EndedInvoiceInsert,
+  NeverPaidOrderInsert,
 } from '../../apps/api/src/modules/platform/legacy-materialize/application/ended-services.ports';
 
 /**
@@ -51,17 +58,42 @@ describe('fateOfInvoice', () => {
     }
   });
 
-  it('an invoice that was never paid is a gap before the map is even asked', () => {
-    for (const status of ['unpaid', 'Unsuccessful', null]) {
-      expect(fateOfInvoice(invoice({ status }), undefined)).toEqual({
-        kind: 'GAP',
-        reason: 'NEVER_PAID',
-      });
-      // …and a PROVIDER_MISSING row cannot turn it into a service.
+  it('an invoice that was never paid is NEVER_PAID (an order, never a service) before the map is asked', () => {
+    const cases: [string | null, string][] = [
+      ['unpaid', 'EXPIRED'],
+      ['Unsuccessful', 'CANCELLED'],
+      [null, 'EXPIRED'],
+    ];
+    for (const [status, state] of cases) {
+      expect(fateOfInvoice(invoice({ status }), undefined)).toEqual({ kind: 'NEVER_PAID', state });
+      // …and a PROVIDER_MISSING or an IMPORTED row cannot turn it into a service.
       expect(fateOfInvoice(invoice({ status }), map('MANUAL_REVIEW', 'PROVIDER_MISSING'))).toEqual({
-        kind: 'GAP',
-        reason: 'NEVER_PAID',
+        kind: 'NEVER_PAID',
+        state,
       });
+      expect(fateOfInvoice(invoice({ status }), map('IMPORTED', null, 'SERVICE'))).toEqual({
+        kind: 'NEVER_PAID',
+        state,
+      });
+      // …and an invalid key does not hide that it was never paid (the order step decides it).
+      expect(fateOfInvoice(invoice({ status, keyShapeEvidenced: false }), undefined)).toEqual({
+        kind: 'NEVER_PAID',
+        state,
+      });
+    }
+  });
+
+  it('the never-paid state mapping is exact, total over the never-paid statuses, and nothing else', () => {
+    expect(neverPaidOrderState('unpaid')).toBe('EXPIRED');
+    expect(neverPaidOrderState('Unsuccessful')).toBe('CANCELLED');
+    expect(neverPaidOrderState(null)).toBe('EXPIRED');
+    // Every never-paid status the importer knows has a state: none falls to UNEXPLAINED.
+    for (const status of LEGACY_NEVER_PAID_STATUSES) {
+      expect(neverPaidOrderState(status), status).not.toBeNull();
+    }
+    // Compared exactly, as the importer compares them; a paid status is never mapped.
+    for (const status of ['Unpaid', 'unsuccessful', 'UNPAID', ' unpaid', '', 'active', 'removed']) {
+      expect(neverPaidOrderState(status), status).toBeNull();
     }
   });
 
@@ -113,6 +145,20 @@ describe('fateOfInvoice', () => {
 
   it('the gap vocabulary is closed and every fate above stays inside it', () => {
     expect(new Set(ENDED_SERVICE_GAP_REASONS).size).toBe(ENDED_SERVICE_GAP_REASONS.length);
+    const all = [
+      ...ENDED_SERVICE_GAP_REASONS,
+      ...NEVER_PAID_ORDER_GAP_REASONS,
+      NEVER_PAID_AMOUNT_BUCKET,
+    ];
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('a never-paid ref can never be a paid invoice ref, nor match its LIKE', () => {
+    expect(neverPaidSourceRef('a0000001')).toBe('invoice-never-paid:a0000001');
+    expect(neverPaidSourceRef('a0000001')).not.toBe(invoiceSourceRef('a0000001'));
+    expect(neverPaidSourceRef('a0000001').startsWith('invoice:')).toBe(false);
+    // the longest evidenced key fits the 128-character source_ref
+    expect(neverPaidSourceRef('1700000abcdef01').length).toBeLessThanOrEqual(128);
   });
 });
 
@@ -174,6 +220,7 @@ describe('sameAsCarried', () => {
   const same: CarriedInvoice = {
     orderId: 'o0',
     orderOrigin: 'LEGACY_HISTORY',
+    orderState: 'PAID',
     orderCustomerId: 'c1',
     orderPanelId: 'p1',
     orderTotal: 150_000n,
@@ -190,6 +237,7 @@ describe('sameAsCarried', () => {
   it('is a divergence for each fact that differs — never a rewrite', () => {
     for (const change of [
       { orderOrigin: 'LEGACY_ADOPTION' },
+      { orderState: 'EXPIRED' },
       { orderCustomerId: 'c2' },
       { orderPanelId: 'p2' },
       { orderTotal: 1n },
@@ -200,6 +248,53 @@ describe('sameAsCarried', () => {
       { serviceId: null },
     ]) {
       expect(sameAsCarried({ ...same, ...change }, insert)).toBe(false);
+    }
+  });
+});
+
+describe('sameAsCarriedNeverPaid', () => {
+  const insert: NeverPaidOrderInsert = {
+    orderId: 'o',
+    sourceRef: 'invoice-never-paid:a0000001',
+    state: 'EXPIRED',
+    customerId: 'c1',
+    panelId: 'p1',
+    product: { productId: 'pr', title: 't', durationDays: 30, trafficBytes: 1n },
+    lineTitle: 't',
+    amountMinor: 150_000n,
+    currency: 'IRT',
+    createdAt: new Date(0),
+    now: new Date(1),
+  };
+  const same: CarriedInvoice = {
+    orderId: 'o0',
+    orderOrigin: 'LEGACY_HISTORY',
+    orderState: 'EXPIRED',
+    orderCustomerId: 'c1',
+    orderPanelId: 'p1',
+    orderTotal: 150_000n,
+    serviceId: null,
+    serviceState: null,
+    serviceCustomerId: null,
+    serviceIsTest: null,
+  };
+
+  it('is a rerun only when the order is exactly the one, with no service beside it', () => {
+    expect(sameAsCarriedNeverPaid(same, insert)).toBe(true);
+  });
+
+  it('is a divergence for each fact that differs — a service beside it included', () => {
+    for (const change of [
+      { orderOrigin: 'STANDARD' },
+      { orderState: 'CANCELLED' },
+      { orderState: 'PAID' },
+      { orderCustomerId: 'c2' },
+      { orderPanelId: 'p2' },
+      { orderTotal: 1n },
+      { orderId: null },
+      { serviceId: 's0' },
+    ]) {
+      expect(sameAsCarriedNeverPaid({ ...same, ...change }, insert)).toBe(false);
     }
   });
 });

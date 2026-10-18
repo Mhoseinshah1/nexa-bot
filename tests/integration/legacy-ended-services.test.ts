@@ -44,8 +44,16 @@ const SOLD_AT_BASE = 1_700_000_000;
 const refusedBy = (text: RegExp) => (e: unknown) =>
   text.test(String((e as { cause?: { message?: string } }).cause?.message ?? ''));
 
-/** Invoices not carried: unpaid, unmapped panel, no panel, unmappable shape, test with no panel. */
+/** Invoices not carried as a SERVICE: unpaid, unmapped panel, no panel, unmappable shape, test with no panel. */
 const GAPS = 5;
+/**
+ * Of those, carried as an ORDER all the same: the unpaid one (owner instruction 2026-10-18) —
+ * its owner is imported, its panel bound and its shape the dataset's 30 GB / 30 d, so it is an
+ * EXPIRED LEGACY_HISTORY order and nothing else. The other four are paid invoices with no
+ * order either (an ended order needs its service). `legacy-never-paid-orders.test.ts` covers
+ * every never-paid status and gap.
+ */
+const NEVER_PAID_ORDERS = 1;
 
 describe('ended services: every Mirza invoice is a live, ended or counted service', () => {
   let ctx: TestContext;
@@ -210,7 +218,16 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     expect(await rig.count('services', "source = 'MIRZA' AND source_ref LIKE 'invoice:%'")).toBe(
       adoptedCount + ended,
     );
-    expect(await rig.count('orders', "origin = 'LEGACY_HISTORY'")).toBe(ended);
+    // 18 ended orders (PAID) + the unpaid invoice's EXPIRED order, which has no service.
+    expect(await rig.count('orders', "origin = 'LEGACY_HISTORY'")).toBe(ended + NEVER_PAID_ORDERS);
+    expect(await rig.count('orders', "origin = 'LEGACY_HISTORY' AND state = 'PAID'")).toBe(ended);
+    expect(
+      await rig.count(
+        'orders',
+        `origin = 'LEGACY_HISTORY' AND state = 'EXPIRED' AND source = 'MIRZA' AND source_ref = 'invoice-never-paid:${names['unpaid']}'`,
+      ),
+    ).toBe(1);
+    expect(await rig.count('services', `source_ref LIKE '%${names['unpaid']}'`)).toBe(0);
     expect(
       Number(
         await scalar(
@@ -274,20 +291,20 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     const outcome = await step().apply(context());
 
     // The step writes back exactly what the executor had written (same refs, states, test marks).
-    // 40 invoices: 16 live + 1 on-panel are adopted; the unpaid, no-panel, unmapped and
-    // unmappable-shape ones are counted gaps; everything else is ended.
+    // 40 invoices: 16 live + 1 on-panel are adopted; the no-panel, unmapped and
+    // unmappable-shape ones are counted gaps; the unpaid one is an EXPIRED order (written,
+    // never skipped); everything else is ended.
     const live = generated.invoices.filter((i) => i.live).length;
     const gaps = GAPS; // unpaid, unmapped, nopanel, shape, and a test invoice with no panel
     const ended = INVOICES - live - 1 - gaps;
     expect(outcome).toMatchObject({
       step: 'ended-services',
-      written: ended,
+      written: ended + NEVER_PAID_ORDERS,
       alreadyPresent: 0,
       diverged: 0,
     });
     expect(outcome.skipped).toEqual({
       ADOPTED_BY_IMPORTER: live + 1,
-      NEVER_PAID: 1,
       PANEL_NOT_MAPPED: 1,
       NO_PANEL: 2,
       SHAPE_UNMAPPABLE: 1,
@@ -323,8 +340,9 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     const test = names['test'];
     const priced = await db().execute<{ source_ref: string; total: string; created: string }>(
       sql`SELECT source_ref, total_amount::text AS total, extract(epoch FROM created_at)::bigint::text AS created
-            FROM orders WHERE origin = 'LEGACY_HISTORY' ORDER BY source_ref`,
+            FROM orders WHERE origin = 'LEGACY_HISTORY' AND source_ref LIKE 'invoice:%' ORDER BY source_ref`,
     );
+    expect(priced.rows.length).toBe(ended);
     for (const row of priced.rows) {
       const index = generated.invoices.findIndex((i) => `invoice:${i.id}` === row.source_ref);
       const wanted =
@@ -337,9 +355,27 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
       expect(row.created, row.source_ref).toBe(String(SOLD_AT_BASE + index));
     }
     expect(priced.rows.some((r) => r.source_ref === `invoice:${test}`)).toBe(true);
+    // The unpaid invoice's order: its own amount and date too, EXPIRED, never settled.
+    const unpaidIndex = generated.invoices.findIndex((i) => i.id === names['unpaid']);
+    const [unpaid] = (
+      await db().execute<Record<string, unknown>>(
+        sql`SELECT state, purpose, total_amount::text AS total, settled_at, cancelled_at,
+                   extract(epoch FROM created_at)::bigint::text AS created
+              FROM orders WHERE source_ref = ${`invoice-never-paid:${names['unpaid']}`}`,
+      )
+    ).rows;
+    expect(unpaid).toEqual({
+      state: 'EXPIRED',
+      purpose: 'NEW_SERVICE',
+      total: PRICE.toString(),
+      settled_at: null,
+      cancelled_at: null,
+      created: String(SOLD_AT_BASE + unpaidIndex),
+    });
 
     // Every ended order points at the hidden product of its shape — a named-product invoice
-    // included (its shape exists because EVERY candidate gets one, not only the productless).
+    // included (its shape exists because EVERY candidate gets one, not only the productless) —
+    // and so does the unpaid invoice's order (its shape is a paid invoice's too).
     expect(
       Number(
         await scalar(
@@ -348,7 +384,7 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
             WHERE o.origin = 'LEGACY_HISTORY'`,
         ),
       ),
-    ).toBe(ended);
+    ).toBe(ended + NEVER_PAID_ORDERS);
     expect(
       await rig.count(
         'orders',
@@ -396,9 +432,23 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     expect(adopted?.sumMinor).toBe(PRICE * BigInt(live + 1));
     // the test invoice, the unreadable price and the no-panel test invoice are 0
     expect(orders?.mirzaSumMinor).toBe(PRICE * BigInt(INVOICES - 3));
+    // NEXA's money is the PAID orders' only: the unpaid invoice's EXPIRED order is NOT in it.
     expect(orders?.nexaSumMinor).toBe(
       PRICE * BigInt(INVOICES - live - 1 - GAPS - 2) /* ended and priced */,
     );
+    // Its row IS NEXA's (18 ended + 1 never-paid = 19)…
+    expect(orders?.nexaRows).toBe(INVOICES - live - 1 - GAPS + NEVER_PAID_ORDERS);
+    // …and its amount is named apart, in money only, never as paid: so the orders row's gaps
+    // are the adopted ones, the four paid invoices with no service, and that bucket.
+    expect(
+      Object.fromEntries((orders?.explained ?? []).map((g) => [g.reason, [g.rows, g.sumMinor]])),
+    ).toEqual({
+      ADOPTED_AMOUNT_NOT_CARRIED: [live + 1, PRICE * BigInt(live + 1)],
+      NEVER_PAID_AMOUNT_NOT_REVENUE: [0, PRICE],
+      PANEL_NOT_MAPPED: [1, PRICE],
+      NO_PANEL: [2, PRICE] /* one priced, the test one 0 */,
+      SHAPE_UNMAPPABLE: [1, PRICE],
+    });
   });
 
   it('reads the archive page by page: a page of 7 gives the same report as the production page', async () => {
@@ -428,7 +478,7 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     expect(outcome.written).toBe(0);
     expect(outcome.diverged).toBe(0);
     expect(outcome.alreadyPresent).toBe(
-      INVOICES - generated.invoices.filter((i) => i.live).length - 1 - GAPS,
+      INVOICES - generated.invoices.filter((i) => i.live).length - 1 - GAPS + NEVER_PAID_ORDERS,
     );
     expect({
       ...(await untouched()),

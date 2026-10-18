@@ -14,22 +14,26 @@ import type { PermissionGuard } from '../../access/application/permission-guard.
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { ServiceSecretSource } from '../../../commerce/provisioning/application/ports.js';
 import {
+  NEVER_PAID_AMOUNT_BUCKET,
   endedServiceUsername,
   fateOfInvoice,
   invoiceSourceRef,
+  neverPaidSourceRef,
   shapeKeyOfCells,
   type EndedServiceGapReason,
+  type NeverPaidOrderGapReason,
+  type NeverPaidOrderState,
 } from './ended-services.rules.js';
 import type {
   ArchivedInvoiceRow,
   CarriedInvoice,
   EndedInvoiceInsert,
   EndedServicesRepository,
+  NeverPaidOrderInsert,
   ShapeProductRow,
 } from './ended-services.ports.js';
 import type {
   ExactMatchRow,
-  ExplainedGap,
   MaterializeContext,
   MaterializeStep,
   MaterializeStepOutcome,
@@ -48,13 +52,25 @@ import type {
  *   row, no provider call: this module holds no provider client, adapter or transport, and the
  *   only tables it writes are `orders` and `services`.
  * - Never a sale. The order's origin is `LEGACY_HISTORY` (not in `SALE_ORDER_ORIGINS`), so no
- *   revenue report counts it; it is PAID, so no expiry or settlement lane picks it up; and the
- *   service is TERMINATED, which no operation is legal from.
+ *   revenue report counts it; it is PAID (or, never paid, EXPIRED or CANCELLED), never
+ *   AWAITING_PAYMENT, so no expiry, payment or settlement lane picks it up, and the 0253
+ *   trigger freezes its state and amounts; and the service is TERMINATED, which no operation
+ *   is legal from.
  * - Never money. Nothing here writes a ledger entry or changes a balance.
  * - Nothing triggered. No outbox event, notification, reminder or audit of a customer-visible
  *   fact: one audit row per `apply` records the counts, and that is all.
  * - Never rewritten. A row already present is compared and counted; a different one is
  *   `diverged` and left exactly as it is.
+ *
+ * A NEVER-PAID invoice (`unpaid`, `Unsuccessful`, no status) is carried too (owner
+ * instruction 2026-10-18), as an ORDER and nothing else: `LEGACY_HISTORY`, EXPIRED or
+ * CANCELLED (`neverPaidOrderState` holds the mapping and its evidence), at its own amount and
+ * date, under `invoice-never-paid:<id>` — no service, payment, ledger entry, event or notice.
+ * Its amount is not a payment, so the exact-match orders row never adds it to the paid money
+ * (`NEVER_PAID_AMOUNT_BUCKET`). One that cannot be an order honestly (no key, owner, panel or
+ * product) is a counted `NEVER_PAID_ORDER_GAP_REASONS` gap. It lives in this step, not one of
+ * its own, because the `invoice` rows of the exact-match report are this step's: one step
+ * decides every invoice's one fate, so no invoice can be counted by two steps or by none.
  *
  * The fate of each invoice comes from the importer's own map (`fateOfInvoice`); this step never
  * asks the panel anything.
@@ -91,8 +107,25 @@ interface WritableEnded {
   readonly product: ShapeProductRow;
 }
 
+/** A never-paid invoice with everything its order needs resolved. */
+interface WritableNeverPaid {
+  readonly kind: 'NEVER_PAID_WRITE';
+  readonly row: ArchivedInvoiceRow;
+  readonly state: NeverPaidOrderState;
+  readonly customerId: string;
+  readonly panelId: string;
+  readonly product: ShapeProductRow;
+}
+
+type Writable = WritableEnded | WritableNeverPaid;
+
 type Decided =
-  | WritableEnded
+  | Writable
+  | {
+      readonly kind: 'NEVER_PAID_GAP';
+      readonly row: ArchivedInvoiceRow;
+      readonly reason: NeverPaidOrderGapReason;
+    }
   | { readonly kind: 'ADOPTED'; readonly row: ArchivedInvoiceRow }
   | {
       readonly kind: 'GAP';
@@ -117,9 +150,10 @@ export class TerminatedServicesStep implements MaterializeStep {
     };
 
     for await (const page of this.decidedPages(ctx)) {
-      const writable: WritableEnded[] = [];
+      const writable: Writable[] = [];
       for (const decided of page) {
-        if (decided.kind === 'WRITE') writable.push(decided);
+        if (decided.kind === 'WRITE' || decided.kind === 'NEVER_PAID_WRITE') writable.push(decided);
+        else if (decided.kind === 'NEVER_PAID_GAP') bump(decided.reason);
         else if (decided.kind === 'ADOPTED') bump('ADOPTED_BY_IMPORTER');
         else if (decided.kind === 'GAP') bump(decided.reason);
         else bump(`UNEXPLAINED:${decided.why}`);
@@ -154,33 +188,44 @@ export class TerminatedServicesStep implements MaterializeStep {
   async match(ctx: MaterializeContext): Promise<readonly ExactMatchRow[]> {
     let mirzaRows = 0;
     let mirzaSum = 0n;
-    const gaps = new Map<string, { rows: number; sum: bigint }>();
-    const add = (reason: string, price: bigint): void => {
-      const gap = gaps.get(reason) ?? { rows: 0, sum: 0n };
-      gaps.set(reason, { rows: gap.rows + 1, sum: gap.sum + price });
+    // The services row and the orders row explain different things: a never-paid invoice is
+    // never a service (NEVER_PAID there, whatever became of its order), and an adopted one is
+    // a service whose order does not carry the amount (a gap of the orders row only).
+    const servicesGaps = new Map<string, number>();
+    const ordersGaps = new Map<string, { rows: number; sum: bigint }>();
+    const serviceGap = (reason: string): void => {
+      servicesGaps.set(reason, (servicesGaps.get(reason) ?? 0) + 1);
+    };
+    const orderGap = (reason: string, rows: number, price: bigint): void => {
+      const gap = ordersGaps.get(reason) ?? { rows: 0, sum: 0n };
+      ordersGaps.set(reason, { rows: gap.rows + rows, sum: gap.sum + price });
     };
     for await (const page of this.decidedPages(ctx)) {
       for (const decided of page) {
         const price = decided.row.priceMinor ?? 0n;
         mirzaRows += 1;
         mirzaSum += price;
-        if (decided.kind === 'ADOPTED') add('ADOPTED_AMOUNT_NOT_CARRIED', price);
-        else if (decided.kind === 'GAP') add(decided.reason, price);
+        if (decided.kind === 'ADOPTED') {
+          orderGap('ADOPTED_AMOUNT_NOT_CARRIED', 1, price);
+        } else if (decided.kind === 'GAP') {
+          serviceGap(decided.reason);
+          orderGap(decided.reason, 1, price);
+        } else if (decided.kind === 'NEVER_PAID_GAP') {
+          serviceGap('NEVER_PAID');
+          orderGap(decided.reason, 1, price);
+        } else if (decided.kind === 'NEVER_PAID_WRITE') {
+          // The ORDER is NEXA's row (the counts below verify it); its amount was never paid,
+          // so it is named here and never in the paid money NEXA's side sums.
+          serviceGap('NEVER_PAID');
+          orderGap(NEVER_PAID_AMOUNT_BUCKET, 0, price);
+        }
         // WRITE: NEXA must hold it — the counts below verify that. UNEXPLAINED: left out of
         // the explained gaps on purpose, so the report shows the difference.
       }
     }
     const counts = await this.deps.repository.counts(ctx.scope);
-    const adopted = gaps.get('ADOPTED_AMOUNT_NOT_CARRIED') ?? { rows: 0, sum: 0n };
-    const explained = (includeAdopted: boolean): ExplainedGap[] =>
-      [...gaps.entries()]
-        .filter(([reason]) => includeAdopted || reason !== 'ADOPTED_AMOUNT_NOT_CARRIED')
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([reason, gap]) => ({
-          reason,
-          rows: gap.rows,
-          sumMinor: gap.sum,
-        }));
+    const sorted = <T>(m: Map<string, T>): [string, T][] =>
+      [...m.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
     return [
       {
         // The services table carries no amount: rows only. Adopted and ended services alike.
@@ -190,22 +235,30 @@ export class TerminatedServicesStep implements MaterializeStep {
         nexaRows: counts.services,
         mirzaSumMinor: null,
         nexaSumMinor: null,
-        explained: explained(false).map((gap) => ({ ...gap, sumMinor: null })),
+        explained: sorted(servicesGaps).map(([reason, rows]) => ({
+          reason,
+          rows,
+          sumMinor: null,
+        })),
       },
       {
         // The orders table carries the money. An adopted service's order is the free
-        // LEGACY_ADOPTION one, so it is a gap here — in rows and in money.
+        // LEGACY_ADOPTION one, so it is a gap here — in rows and in money. A never-paid
+        // invoice's order IS a row here, but NEXA's money is the PAID history orders' only:
+        // the never-paid amounts are the NEVER_PAID_AMOUNT_BUCKET, so "NEXA + explained =
+        // Mirza" holds without ever adding an unpaid amount to a paid one (and a never-paid
+        // order written PAID, or a paid one written unpaid, breaks the money and fails).
         mirzaTable: 'invoice',
         nexaTable: 'orders',
         mirzaRows,
         nexaRows: counts.historyOrders,
         mirzaSumMinor: mirzaSum,
-        nexaSumMinor: counts.historyOrdersTotalMinor,
-        explained: explained(true).map((gap) =>
-          gap.reason === 'ADOPTED_AMOUNT_NOT_CARRIED'
-            ? { ...gap, rows: adopted.rows, sumMinor: adopted.sum }
-            : gap,
-        ),
+        nexaSumMinor: counts.paidHistoryOrdersTotalMinor,
+        explained: sorted(ordersGaps).map(([reason, gap]) => ({
+          reason,
+          rows: gap.rows,
+          sumMinor: gap.sum,
+        })),
       },
     ];
   }
@@ -240,8 +293,32 @@ export class TerminatedServicesStep implements MaterializeStep {
         if (shape.ok) shapeKeys.add(shape.key);
       }
       const products = await repo.shapeProducts(ctx.scope, [...shapeKeys]);
+      /**
+       * A never-paid invoice's order needs what any order needs — a key to be found by, a
+       * customer, a panel, a product — and the first one missing is its gap. Same order of
+       * questions as an ended invoice's, so one archive fact is one reason in both.
+       */
+      const neverPaid = (row: ArchivedInvoiceRow, state: NeverPaidOrderState): Decided => {
+        const gap = (reason: NeverPaidOrderGapReason): Decided => ({
+          kind: 'NEVER_PAID_GAP',
+          row,
+          reason,
+        });
+        if (!row.keyShapeEvidenced) return gap('NEVER_PAID_KEY_INVALID');
+        const customerId = row.legacyUserId === null ? undefined : customers.get(row.legacyUserId);
+        if (customerId === undefined) return gap('NEVER_PAID_OWNER_NOT_IMPORTED');
+        if (row.panelCode === null) return gap('NEVER_PAID_NO_PANEL');
+        const panelId = bindings.get(row.panelCode);
+        if (panelId === undefined) return gap('NEVER_PAID_PANEL_NOT_MAPPED');
+        const shape = shapeKeyOfCells(row);
+        if (!shape.ok) return gap('NEVER_PAID_SHAPE_UNMAPPABLE');
+        const product = products.get(shape.key);
+        if (product === undefined) return gap('NEVER_PAID_PRODUCT_NOT_RESOLVED');
+        return { kind: 'NEVER_PAID_WRITE', row, state, customerId, panelId, product };
+      };
       yield page.map((row): Decided => {
         const fate = fateOfInvoice(row, maps.get(row.invoiceKey));
+        if (fate.kind === 'NEVER_PAID') return neverPaid(row, fate.state);
         if (fate.kind === 'ADOPTED') return { kind: 'ADOPTED', row };
         if (fate.kind === 'GAP') return { kind: 'GAP', row, reason: fate.reason };
         if (fate.kind === 'UNEXPLAINED') return { kind: 'UNEXPLAINED', row, why: fate.why };
@@ -265,31 +342,43 @@ export class TerminatedServicesStep implements MaterializeStep {
 
   private async writeBatch(
     ctx: MaterializeContext,
-    batch: readonly WritableEnded[],
+    batch: readonly Writable[],
   ): Promise<{ written: number; alreadyPresent: number; diverged: number }> {
     const repo = this.deps.repository;
+    const refOf = (item: Writable): string =>
+      item.kind === 'WRITE'
+        ? invoiceSourceRef(item.row.invoiceKey)
+        : neverPaidSourceRef(item.row.invoiceKey);
     return this.deps.uow.run(ctx.scope, async (tx) => {
       await this.requireActive(ctx.scope, tx);
       await repo.lock(ctx.scope, tx);
-      const carried = await repo.carried(
-        ctx.scope,
-        batch.map((b) => invoiceSourceRef(b.row.invoiceKey)),
-        tx,
-      );
+      const carried = await repo.carried(ctx.scope, batch.map(refOf), tx);
       let written = 0;
       let alreadyPresent = 0;
       let diverged = 0;
       for (const item of batch) {
-        const sourceRef = invoiceSourceRef(item.row.invoiceKey);
-        const insert = this.insertFor(ctx, item, sourceRef);
+        const sourceRef = refOf(item);
         const existing = carried.get(sourceRef);
-        if (existing === undefined) {
-          await repo.insertEnded(ctx.scope, insert, tx);
-          written += 1;
-        } else if (sameAsCarried(existing, insert)) {
-          alreadyPresent += 1;
+        if (item.kind === 'WRITE') {
+          const insert = this.insertFor(ctx, item, sourceRef);
+          if (existing === undefined) {
+            await repo.insertEnded(ctx.scope, insert, tx);
+            written += 1;
+          } else if (sameAsCarried(existing, insert)) {
+            alreadyPresent += 1;
+          } else {
+            diverged += 1;
+          }
         } else {
-          diverged += 1;
+          const insert = this.neverPaidInsertFor(ctx, item, sourceRef);
+          if (existing === undefined) {
+            await repo.insertNeverPaid(ctx.scope, insert, tx);
+            written += 1;
+          } else if (sameAsCarriedNeverPaid(existing, insert)) {
+            alreadyPresent += 1;
+          } else {
+            diverged += 1;
+          }
         }
       }
       return { written, alreadyPresent, diverged };
@@ -314,10 +403,30 @@ export class TerminatedServicesStep implements MaterializeStep {
       subscriptionRef: this.deps.secrets.hex(SUBSCRIPTION_REF_BYTES),
       amountMinor: row.priceMinor ?? 0n,
       currency: 'IRT',
-      // The original creation date; an unreadable one is the import's, never a guess.
-      purchasedAt:
-        row.soldAt !== null && row.soldAt.getTime() <= ctx.now.getTime() ? row.soldAt : ctx.now,
+      purchasedAt: originalDate(row, ctx),
       isTest: item.test,
+      now: ctx.now,
+    };
+  }
+
+  private neverPaidInsertFor(
+    ctx: MaterializeContext,
+    item: WritableNeverPaid,
+    sourceRef: string,
+  ): NeverPaidOrderInsert {
+    const { row } = item;
+    return {
+      orderId: this.deps.ids.uuid(),
+      sourceRef,
+      state: item.state,
+      customerId: item.customerId,
+      panelId: item.panelId,
+      product: item.product,
+      lineTitle: lineTitleOf(row.productName, item.product.title),
+      // The invoice's own amount, 0 when it did not read — exactly as an ended order's.
+      amountMinor: row.priceMinor ?? 0n,
+      currency: 'IRT',
+      createdAt: originalDate(row, ctx),
       now: ctx.now,
     };
   }
@@ -332,6 +441,11 @@ export class TerminatedServicesStep implements MaterializeStep {
   }
 }
 
+/** The original creation date; an unreadable (or future) one is the import's, never a guess. */
+function originalDate(row: ArchivedInvoiceRow, ctx: MaterializeContext): Date {
+  return row.soldAt !== null && row.soldAt.getTime() <= ctx.now.getTime() ? row.soldAt : ctx.now;
+}
+
 /** The order line's title: the Mirza product's own name when the archive has one. */
 export function lineTitleOf(productName: string | null, productTitle: string): string {
   const name = productName?.trim() ?? '';
@@ -340,7 +454,7 @@ export function lineTitleOf(productName: string | null, productTitle: string): s
 
 /**
  * Whether what NEXA already holds under an invoice's ref is exactly what this step would
- * write: the same customer, panel and amount, an order of origin `LEGACY_HISTORY`, a
+ * write: the same customer, panel and amount, a PAID order of origin `LEGACY_HISTORY`, a
  * TERMINATED service with the same test mark. Anything else — an adopted live service, an
  * order of another customer — is a divergence the step reports and never rewrites.
  */
@@ -349,11 +463,32 @@ export function sameAsCarried(existing: CarriedInvoice, insert: EndedInvoiceInse
     existing.orderId !== null &&
     existing.serviceId !== null &&
     existing.orderOrigin === 'LEGACY_HISTORY' &&
+    existing.orderState === 'PAID' &&
     existing.orderCustomerId === insert.customerId &&
     existing.orderPanelId === insert.panelId &&
     existing.orderTotal === insert.amountMinor &&
     existing.serviceState === 'TERMINATED' &&
     existing.serviceCustomerId === insert.customerId &&
     existing.serviceIsTest === insert.isTest
+  );
+}
+
+/**
+ * Whether what NEXA holds under a never-paid invoice's ref is exactly its order: a
+ * `LEGACY_HISTORY` order in the mapped state, for the same customer, panel and amount, and NO
+ * service beside it. Anything else is a divergence, reported and never rewritten.
+ */
+export function sameAsCarriedNeverPaid(
+  existing: CarriedInvoice,
+  insert: NeverPaidOrderInsert,
+): boolean {
+  return (
+    existing.orderId !== null &&
+    existing.serviceId === null &&
+    existing.orderOrigin === 'LEGACY_HISTORY' &&
+    existing.orderState === insert.state &&
+    existing.orderCustomerId === insert.customerId &&
+    existing.orderPanelId === insert.panelId &&
+    existing.orderTotal === insert.amountMinor
   );
 }

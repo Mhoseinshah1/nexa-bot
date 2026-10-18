@@ -6,7 +6,7 @@ import { LEGACY_NEVER_PAID_STATUSES } from '../../legacy-importer/application/so
  * `docs/migration/mirza-import-plan-fa.md` §6): what becomes of each archived invoice once the
  * importer's own phases have run. Pure; no I/O.
  *
- * Three fates, and every invoice gets exactly one:
+ * Four fates, and every invoice gets exactly one:
  *
  * - ADOPTED   the importer found the account on the read-only panel inventory and made it a
  *             live NEXA service (`legacy_import_map` IMPORTED / SERVICE). This step writes
@@ -14,6 +14,10 @@ import { LEGACY_NEVER_PAID_STATUSES } from '../../legacy-importer/application/so
  * - ENDED     the account is NOT on the panel after a complete inventory read (the importer
  *             recorded `PROVIDER_MISSING`), or the invoice is a Mirza test invoice
  *             (`HISTORY_NOT_IMPORTED`): a TERMINATED service and a `LEGACY_HISTORY` order.
+ * - NEVER_PAID the invoice was never paid (`unpaid`, `Unsuccessful`, or no status at all):
+ *             never a service, but still an ORDER — a `LEGACY_HISTORY` order in a terminal
+ *             unpaid state (`neverPaidOrderState`), with no service, payment or money
+ *             (owner instruction 2026-10-18: nothing is left only in the archive).
  * - GAP       neither, with a closed reason. A gap is a decision somebody still owes or a fact
  *             the importer could not read; it is counted in the exact-match report and never
  *             invented away.
@@ -25,7 +29,11 @@ import { LEGACY_NEVER_PAID_STATUSES } from '../../legacy-importer/application/so
 
 /** The reasons an invoice is not carried, as the exact-match report spells them. */
 export const ENDED_SERVICE_GAP_REASONS = [
-  /** `unpaid` / `Unsuccessful`, or no status: the order never completed, so it was never a service. */
+  /**
+   * `unpaid` / `Unsuccessful`, or no status: the order never completed, so it was never a
+   * service. A gap of the SERVICES row only: the invoice is an order (or one of the
+   * `NEVER_PAID_ORDER_GAP_REASONS` when even the order cannot be written honestly).
+   */
   'NEVER_PAID',
   /** The key is outside the evidenced shape: the import map cannot hold a decision for it. */
   'INVOICE_KEY_INVALID',
@@ -62,6 +70,68 @@ export const ENDED_SERVICE_GAP_REASONS = [
 ] as const;
 export type EndedServiceGapReason = (typeof ENDED_SERVICE_GAP_REASONS)[number];
 
+/**
+ * Why a never-paid invoice is not an order either: each is a fact the order cannot be written
+ * without, and none is invented (an order names its customer, its panel and its product —
+ * `orders_customer_fk`, `panel_id NOT NULL`, `orders_product_purpose_check`).
+ */
+export const NEVER_PAID_ORDER_GAP_REASONS = [
+  /** The key is outside the evidenced shape: as for a paid invoice, nothing is keyed by it. */
+  'NEVER_PAID_KEY_INVALID',
+  /** The invoice's owner is not a NEXA customer: an order cannot name nobody. */
+  'NEVER_PAID_OWNER_NOT_IMPORTED',
+  /** The invoice names no `code_panel`. */
+  'NEVER_PAID_NO_PANEL',
+  /** The `code_panel` has no NEXA panel bound to it. */
+  'NEVER_PAID_PANEL_NOT_MAPPED',
+  /** The shape (volume, duration) is not one the import can name. */
+  'NEVER_PAID_SHAPE_UNMAPPABLE',
+  /**
+   * The shape is mappable but no hidden product stands for it: the importer creates a shape
+   * product for every invoice that was ever PAID, so a shape only a never-paid invoice had
+   * has none, and an order cannot point at a product that does not exist.
+   */
+  'NEVER_PAID_PRODUCT_NOT_RESOLVED',
+] as const;
+export type NeverPaidOrderGapReason = (typeof NEVER_PAID_ORDER_GAP_REASONS)[number];
+
+/**
+ * The exact-match bucket for the AMOUNTS of the never-paid invoices that ARE orders. The row
+ * is carried (it counts as a NEXA row), but its amount was never paid, so the orders row's
+ * NEXA money is the PAID orders' only and this bucket names the rest: an EXPIRED or CANCELLED
+ * order's amount is never added to what was paid. Rows 0: the rows are NEXA's.
+ */
+export const NEVER_PAID_AMOUNT_BUCKET = 'NEVER_PAID_AMOUNT_NOT_REVENUE';
+
+/** The terminal state a never-paid invoice's order is recorded in. */
+export type NeverPaidOrderState = 'EXPIRED' | 'CANCELLED';
+
+/**
+ * The state mapping for a never-paid invoice (owner instruction 2026-10-18), deterministic:
+ *
+ * - `unpaid` -> EXPIRED. Mirza's own label for an invoice issued and never paid; its
+ *   retention deletes one after 5 days unpaid (`docs/research/
+ *   mirzabottelegramloggroupinvestigationcomplete/telegram-log-group-rebuild-recommendation.md`,
+ *   "unpaid invoice 5 days -> delete"). Nobody ended it; the time to pay ran out, which is
+ *   exactly NEXA's EXPIRED ("the payment window closed with no payment").
+ * - `Unsuccessful` -> CANCELLED. A failed attempt (`LEGACY_NEVER_PAID_STATUSES`: "an unpaid
+ *   order and a failed one"): a verdict that ended the order, not a clock that ran out. NEXA
+ *   has no FAILED order state, and CANCELLED is its one terminal unpaid state that is not the
+ *   clock. What Mirza did to reach it (a gateway refusal, a rejected receipt) is not evidenced;
+ *   the choice of CANCELLED over EXPIRED is a JUDGEMENT on the word, said here as one.
+ * - no status (NULL) -> EXPIRED. A GUESS, stated as one: nothing evidences what a NULL status
+ *   means. The importer already treats it as never paid (it is never a service candidate),
+ *   and EXPIRED is the state that claims the least — no payment, and no actor who ended it.
+ *
+ * Anything else is not a never-paid status and returns null.
+ */
+export function neverPaidOrderState(status: string | null): NeverPaidOrderState | null {
+  if (status === null) return 'EXPIRED';
+  if (status === 'unpaid') return 'EXPIRED';
+  if (status === 'Unsuccessful') return 'CANCELLED';
+  return null;
+}
+
 /** What the importer's map says about one invoice (`legacy_import_map`, table `invoice`). */
 export interface InvoiceMapFact {
   readonly status: string;
@@ -81,6 +151,7 @@ export interface ArchivedInvoice {
 export type InvoiceFate =
   | { readonly kind: 'ADOPTED' }
   | { readonly kind: 'ENDED'; readonly test: boolean }
+  | { readonly kind: 'NEVER_PAID'; readonly state: NeverPaidOrderState }
   | { readonly kind: 'GAP'; readonly reason: EndedServiceGapReason }
   | { readonly kind: 'UNEXPLAINED'; readonly why: string };
 
@@ -105,15 +176,21 @@ const MAP_REASON_GAP: Readonly<Record<string, EndedServiceGapReason>> = {
  * The fate of one archived invoice, from the archive row and the importer's map row for it.
  *
  * Order matters and is the contract: an invoice that was never paid is never looked up in the
- * map (the importer did not consider it); a key outside the evidenced shape cannot have a map
- * row; then the map decides.
+ * map (the importer did not consider it) and is never a service, whatever the map says — it is
+ * NEVER_PAID, an order at most; a key outside the evidenced shape cannot have a map row; then
+ * the map decides.
  */
 export function fateOfInvoice(
   invoice: ArchivedInvoice,
   map: InvoiceMapFact | undefined,
 ): InvoiceFate {
   if (invoice.status === null || NEVER_PAID.has(invoice.status)) {
-    return { kind: 'GAP', reason: 'NEVER_PAID' };
+    const state = neverPaidOrderState(invoice.status);
+    // `LEGACY_NEVER_PAID_STATUSES` and the mapping are one list: a status added to one and
+    // not the other is refused here rather than given a state nobody chose.
+    if (state === null)
+      return { kind: 'UNEXPLAINED', why: `NEVER_PAID_UNMAPPED:${invoice.status}` };
+    return { kind: 'NEVER_PAID', state };
   }
   if (!invoice.keyShapeEvidenced) return { kind: 'GAP', reason: 'INVOICE_KEY_INVALID' };
   if (map === undefined) return { kind: 'UNEXPLAINED', why: 'NO_MAP_ROW' };
@@ -174,6 +251,22 @@ export function shapeKeyOfCells(
 /** The `source_ref` both the order and the service of an invoice carry. */
 export function invoiceSourceRef(invoiceKey: string): string {
   return `invoice:${invoiceKey}`;
+}
+
+/** The prefix of a never-paid invoice's order ref. */
+export const NEVER_PAID_REF_PREFIX = 'invoice-never-paid:';
+
+/**
+ * The `source_ref` of a never-paid invoice's order: `invoice-never-paid:<id_invoice>`. Never
+ * `invoice:<id>`, which is a PAID invoice's (an adopted or an ended service and its order), so
+ * the two can never collide: should a later snapshot show the same invoice paid, its order and
+ * service take `invoice:<id>` and this row is not in their way (the exact-match row then counts
+ * both, and fails, which is the truth). It is also not matched by `LIKE 'invoice:%'`, so no
+ * reader of paid invoice refs (adoption's `invoiceCarried`, the discount-usage step's order
+ * lookup) ever mistakes an unpaid order for a paid one.
+ */
+export function neverPaidSourceRef(invoiceKey: string): string {
+  return `${NEVER_PAID_REF_PREFIX}${invoiceKey}`;
 }
 
 /**

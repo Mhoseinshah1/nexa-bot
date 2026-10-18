@@ -32,7 +32,10 @@ const LABEL_PREFIX = 'Mirza ';
  * rule that credits a wallet does not exist, and must not): it is imported as an INACTIVE
  * FIXED_AMOUNT shell whose `source_detail.mirzaKind` says what it was. A record with no
  * readable percent/amount, or of an unknown fork kind, is a counted gap and stays in the
- * archive.
+ * archive. The deployed fork's `discount_sell` (converter 0.8) is the exception: its code text
+ * is exported, so it is recreated under that real code whenever one of its own raw columns
+ * reads as a whole percent (`source_detail.valueBasis` names the column, which is unproven).
+ * Only a record with no code text at all falls back to a code derived from its reference.
  *
  * LIMITS. `limit_total` becomes the total-redemptions limit as Mirza had it; how many Mirza
  * uses were spent is kept in `source_detail` (NEXA counts live redemptions itself).
@@ -80,6 +83,7 @@ export class DiscountsMaterializeStep implements MaterializeStep {
         if (p.detail['codeNormalised'] === true) bump(notes, 'CODE_NORMALISED');
         if (p.detail['codeDerived'] === true) bump(notes, 'CODE_DERIVED');
         if (p.mirzaKind === 'GIFT_BALANCE_CODE') bump(notes, 'GIFT_CODE_NO_NEXA_EQUIVALENT');
+        if (p.detail['valueBasis'] !== undefined) bump(notes, 'FORK_CODE_PERCENT_UNPROVEN');
         return {
           id: this.deps.ids.uuid(),
           sourceRef: p.sourceRef,

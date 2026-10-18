@@ -265,6 +265,72 @@ describe('planDiscount', () => {
     expect(planDiscount(row({ kind: 'UNKNOWN' }))).toEqual({ kind: 'gap', reason: 'KIND_UNKNOWN' });
   });
 
+  describe("the deployed fork's discount_sell, whose code text converter 0.8 exports", () => {
+    const fork = (fields: Record<string, unknown>, code: string | null = 'Spring-25') =>
+      planDiscount(
+        row({
+          kind: 'UNKNOWN',
+          code_plaintext_exported: code !== null,
+          ...(code === null ? {} : { code_text: code }),
+          fields_raw: fields,
+        }),
+      );
+
+    it('is recreated under its REAL code, not a derived MZ- one', () => {
+      const planned = fork({ percent: '25' });
+      expect(planned).toMatchObject({
+        kind: 'create',
+        type: 'PERCENTAGE',
+        value: 25n,
+        currency: null,
+        codeText: 'Spring-25',
+        baseCode: 'SPRING-25',
+      });
+      if (planned.kind !== 'create') throw new Error('planned');
+      expect(planned.baseCode.startsWith('MZ-')).toBe(false);
+      expect(planned.detail).toMatchObject({
+        codeOriginal: 'Spring-25',
+        codeDerived: false,
+        valueBasis: 'FORK_COLUMN_PERCENT_UNPROVEN',
+        fieldsRaw: { percent: '25' },
+      });
+    });
+
+    it('reads the percent from `percent`, else from `price`, as a whole 1..100 only', () => {
+      expect(fork({ percent: 10 })).toMatchObject({ value: 10n });
+      expect(fork({ price: '40' })).toMatchObject({
+        value: 40n,
+        detail: { valueBasis: 'FORK_COLUMN_PRICE_UNPROVEN' },
+      });
+      // an unreadable `percent` does not stop a readable `price`
+      expect(fork({ percent: 'abc', price: '15' })).toMatchObject({ value: 15n });
+      for (const bad of [
+        {},
+        { percent: '0' },
+        { percent: '101' },
+        { price: '2.5' },
+        { price: 9000 },
+      ]) {
+        expect(fork(bad), JSON.stringify(bad)).toEqual({
+          kind: 'gap',
+          reason: 'FORK_PERCENT_UNREADABLE',
+        });
+      }
+    });
+
+    it('falls back to the derived MZ- code only when the text is absent', () => {
+      // No text: the converter could not carry one, so the record is not the fork's code list.
+      expect(fork({ percent: '25' }, null)).toEqual({ kind: 'gap', reason: 'KIND_UNKNOWN' });
+      // A public code (never exported as text) still gets the derived code.
+      const publicCode = planDiscount(row({ kind: 'PURCHASE_PERCENT_CODE', percent: 25 }));
+      expect(publicCode).toMatchObject({ kind: 'create' });
+      if (publicCode.kind !== 'create') throw new Error('planned');
+      expect(publicCode.baseCode).toMatch(/^MZ-[0-9A-F]{12}$/u);
+      expect(publicCode.detail['codeDerived']).toBe(true);
+      expect(publicCode.detail).not.toHaveProperty('valueBasis');
+    });
+  });
+
   it('first-purchase codes apply to a new service only', () => {
     expect(
       planDiscount(

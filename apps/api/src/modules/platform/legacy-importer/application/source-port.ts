@@ -123,8 +123,9 @@ export const LEGACY_LIVE_STATUSES = [
 /**
  * The invoice statuses that were never a service: an unpaid order and a failed one (Mirza's
  * own cron deletes them). Compared exactly. They are not matched against a panel and not
- * carried as an ended service; the import's exact-match report counts them as an explained
- * gap, so nothing is dropped silently.
+ * carried as a service; the ended-services step records each as a `LEGACY_HISTORY` order in
+ * a terminal unpaid state (`neverPaidOrderState`), or as a counted gap when even the order
+ * cannot be written, so nothing is dropped silently.
  */
 export const LEGACY_NEVER_PAID_STATUSES = ['unpaid', 'Unsuccessful'] as const;
 

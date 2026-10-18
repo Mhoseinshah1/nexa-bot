@@ -190,13 +190,6 @@ export interface WalletRepository {
     tx?: unknown,
   ): Promise<WalletBalance>;
 
-  /** Whether the one-time Mirza import posted this customer's opening as a DEBIT. */
-  hasMigrationDebitOpening(
-    scope: TenantContext,
-    customerId: UserId,
-    tx?: unknown,
-  ): Promise<boolean>;
-
   /**
    * A page of movements, newest first, in ONE currency.
    *
