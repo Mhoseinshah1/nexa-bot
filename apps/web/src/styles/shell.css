@@ -677,7 +677,7 @@
     gap: 8px;
   }
   .content {
-    padding: 16px 2px 48px;
+    padding: 16px 2px;
   }
   .form-grid,
   .form-grid.c3 {
@@ -707,7 +707,7 @@
     width: min(290px, 82vw);
   }
   .content {
-    padding: 12px 2px 48px;
+    padding: 12px 2px 16px;
   }
 }
 
