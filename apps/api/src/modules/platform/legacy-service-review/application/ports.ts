@@ -130,6 +130,15 @@ export interface LegacyServiceCandidateStore {
     },
     tx: TransactionScope,
   ): Promise<LegacyServiceCandidateRecord>;
+  /** `insert` for many new candidates (each key once): multi-row inserts, the same rows. */
+  insertMany(
+    scope: TenantContext,
+    rows: readonly (LegacyServiceOutcomeWrite & {
+      readonly archiveId: string | null;
+      readonly reviewState: LegacyServiceReviewState;
+    })[],
+    tx: TransactionScope,
+  ): Promise<void>;
   /** The importer's re-decision: a conditional UPDATE at `version` (null when it moved). */
   updateOutcome(
     scope: TenantContext,

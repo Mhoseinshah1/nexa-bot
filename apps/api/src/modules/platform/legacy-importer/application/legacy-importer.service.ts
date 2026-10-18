@@ -36,7 +36,11 @@ import {
   buildUsersWalletsSection,
   type UsersWalletsSection,
 } from './users-wallets-reconciliation.js';
-import { timedSection, type SectionTimingLogger } from './section-timing.js';
+import {
+  SECTION_TIMING_MESSAGE,
+  timedSection,
+  type SectionTimingLogger,
+} from './section-timing.js';
 import { recordAuditMany } from '../../audit/application/record-audit-many.js';
 import {
   isReviewClosedToRerun,
@@ -203,6 +207,13 @@ const BULK_BATCH_MAX = 5000;
 function nextBulkBatch(size: number): number {
   return Math.min(size * 2, BULK_BATCH_MAX);
 }
+/** Rows per transaction of the services section's bulk writes (map rows, candidates). */
+const SERVICE_WRITE_BATCH = 5000;
+/**
+ * The candidates' audit slice: one `legacy.service_candidate.recorded` row per this many
+ * candidates, the batch the per-batch audit has always counted (CUSTOMER_BATCH, 200).
+ */
+const CANDIDATE_AUDIT_SLICE = 200;
 const DRY_RUN_BATCH = 10_000;
 
 export interface LegacyImporterDeps {
@@ -2484,11 +2495,11 @@ export class LegacyImporterService {
     const mapKeys = decided.services
       .map((s) => s.invoice.idInvoice)
       .filter((k) => isLegacyImportKey('invoice', k));
-    for (let i = 0; i < mapKeys.length; i += CUSTOMER_BATCH) {
+    for (let i = 0; i < mapKeys.length; i += SERVICE_WRITE_BATCH) {
       const rows = await this.deps.runs.findByLegacyKeys(
         scope,
         'invoice',
-        mapKeys.slice(i, i + CUSTOMER_BATCH),
+        mapKeys.slice(i, i + SERVICE_WRITE_BATCH),
       );
       for (const row of rows) prior.set(row.legacyId, row);
     }
@@ -2504,23 +2515,26 @@ export class LegacyImporterService {
       }
       return [{ invoice, rule: decision.map }];
     });
-    for (let i = 0; i < toRecord.length; i += CUSTOMER_BATCH) {
-      const batch = toRecord.slice(i, i + CUSTOMER_BATCH);
+    const mapStarted = performance.now();
+    for (let i = 0; i < toRecord.length; i += SERVICE_WRITE_BATCH) {
+      const batch = toRecord.slice(i, i + SERVICE_WRITE_BATCH);
       await this.mutate(scope, actor, 'legacy_import.invoices', runId, async (tx) => {
         const now = this.deps.clock.now();
-        for (const { invoice, rule } of batch) {
-          const outcome = await this.deps.runs.recordDecision(
-            scope,
-            {
-              runId,
-              legacyTable: 'invoice',
-              legacyId: invoice.idInvoice,
-              checksum: invoice.checksum,
-              decision: rule,
-              now,
-            },
-            tx,
-          );
+        // One multi-row write of the batch's map rows; a key that already has a row takes
+        // `recordDecision`'s own path, so the outcomes are exactly the per-row ones.
+        const written = await this.deps.runs.recordDecisions(
+          scope,
+          batch.map(({ invoice, rule }) => ({
+            runId,
+            legacyTable: 'invoice',
+            legacyId: invoice.idInvoice,
+            checksum: invoice.checksum,
+            decision: rule,
+            now,
+          })),
+          tx,
+        );
+        for (const outcome of written) {
           // A row a person closed (DISMISSED, or RESOLVED other than RETRY_AFTER_FIX) is
           // refused REVIEW_CLOSED: counted, never retried, never overwritten.
           if (outcome.kind === 'REFUSED' && outcome.reason === 'REVIEW_CLOSED') {
@@ -2532,8 +2546,19 @@ export class LegacyImporterService {
       });
     }
 
+    this.deps.logger?.info(
+      {
+        section: 'apply.services.map_rows',
+        rows: toRecord.length,
+        ms: Math.round(performance.now() - mapStarted),
+      },
+      SECTION_TIMING_MESSAGE,
+    );
+
     // An eligible invoice whose map row a person closed is not handed to P6, nor one a
     // person kept as history (P6 also re-reads that under the invoice lock).
+    const adoptStarted = performance.now();
+    let adoptions = 0;
     const eligibleResults = new Map<string, EligibleResult>();
     for (const { invoice, decision } of decided.services) {
       if (decision.category !== 'ADOPTION_ELIGIBLE') continue;
@@ -2565,6 +2590,7 @@ export class LegacyImporterService {
         prepared.inventories,
       );
       eligibleResults.set(invoice.idInvoice, { kind: 'ADOPTION', outcome });
+      adoptions += 1;
       // P6 wrote the invoice's map row for every one of these; P7 records nothing here.
       tallies.services.adoption[outcome.kind] += 1;
       if (outcome.kind === 'ADOPTED' && (outcome.reviewFlag ?? null) !== null) {
@@ -2579,6 +2605,15 @@ export class LegacyImporterService {
       }
     }
 
+    this.deps.logger?.info(
+      {
+        section: 'apply.services.adopt',
+        rows: adoptions,
+        ms: Math.round(performance.now() - adoptStarted),
+      },
+      SECTION_TIMING_MESSAGE,
+    );
+
     // Step 3: every live invoice's ONE outcome. "Adopted" is what the MAP says after the
     // adoption, read now — never the adoption's word alone: the map row is written in the same
     // transaction as the service, so it is the record a candidate may point at.
@@ -2590,20 +2625,22 @@ export class LegacyImporterService {
     await this.settleClaims(scope, actor, runId, executing, outcomes, tallies.services.approvals);
 
     // Step 5: record every outcome on the invoice's candidate row, in batches.
-    await this.recordCandidates(
-      scope,
-      actor,
-      runId,
-      prepared,
-      snapshot,
-      mapping,
-      decided.services,
-      outcomes,
-      importedUsers,
-      keptAsHistory,
-      operatorPanels,
-      shapes,
-      tallies,
+    await timedSection(this.deps.logger, 'apply.services.candidates', () =>
+      this.recordCandidates(
+        scope,
+        actor,
+        runId,
+        prepared,
+        snapshot,
+        mapping,
+        decided.services,
+        outcomes,
+        importedUsers,
+        keptAsHistory,
+        operatorPanels,
+        shapes,
+        tallies,
+      ),
     );
   }
 
@@ -2626,11 +2663,11 @@ export class LegacyImporterService {
       .filter(([, r]) => r.kind === 'ADOPTION' && isAdoptedOutcomeKind(r.outcome.kind))
       .map(([key]) => key);
     const confirmed = new Map<string, string>();
-    for (let i = 0; i < claimedAdopted.length; i += CUSTOMER_BATCH) {
+    for (let i = 0; i < claimedAdopted.length; i += SERVICE_WRITE_BATCH) {
       const rows = await this.deps.runs.findByLegacyKeys(
         scope,
         'invoice',
-        claimedAdopted.slice(i, i + CUSTOMER_BATCH),
+        claimedAdopted.slice(i, i + SERVICE_WRITE_BATCH),
       );
       for (const row of rows) {
         if (row.status === 'IMPORTED' && row.entityType === 'SERVICE' && row.entityId !== null) {
@@ -2859,96 +2896,104 @@ export class LegacyImporterService {
       tallies.services.candidates.unrecordable += 1;
       return false;
     });
-    for (let i = 0; i < recordable.length; i += CUSTOMER_BATCH) {
-      const batch = recordable.slice(i, i + CUSTOMER_BATCH);
+    // Transactions of SERVICE_WRITE_BATCH rows; inside, the audit row is still one per
+    // CANDIDATE_AUDIT_SLICE rows (the slices the per-batch audit always counted), so the audit
+    // trail is the same rows. New candidates go in multi-row inserts; an existing one is
+    // re-decided under its row lock, one by one, as before.
+    for (let i = 0; i < recordable.length; i += SERVICE_WRITE_BATCH) {
+      const group = recordable.slice(i, i + SERVICE_WRITE_BATCH);
       await this.mutate(scope, actor, 'legacy_import.service_candidates', runId, async (tx) => {
         const now = this.deps.clock.now();
-        const keys = batch.map((s) => s.invoice.idInvoice);
+        const groupKeys = group.map((s) => s.invoice.idInvoice);
         const existing = new Map(
           (
-            await this.deps.serviceCandidates.findByInvoiceKeys(scope, keys, tx, {
+            await this.deps.serviceCandidates.findByInvoiceKeys(scope, groupKeys, tx, {
               forUpdate: true,
             })
           ).map((c) => [c.invoiceKey, c]),
         );
-        const archive = await this.deps.serviceCandidates.latestArchiveIds(scope, keys, tx);
-        const counts: Record<string, number> = {};
-        for (const { invoice, decision } of batch) {
-          const o = outcomes.get(invoice.idInvoice);
-          if (o === undefined) continue;
-          const evidence = candidateEvidence(invoice, ctx);
-          const panelOfDecision =
-            decision.category === 'ADOPTION_ELIGIBLE'
-              ? decision.panelId
-              : (operatorPanels.get(invoice.idInvoice) ?? evidence.mappedPanelId);
-          const facts = {
-            runId,
-            sourceFingerprint: snapshot.fingerprint,
-            invoiceChecksum: invoice.checksum,
-            outcome: o.outcome,
-            blocker: o.blocker,
-            evidence,
-            evidenceHash: evidenceHash(evidence),
-            panelCode: recordableCode(invoice.codePanel),
-            productCode: recordableCode(invoice.codeProduct),
-            archiveId: archive.get(invoice.idInvoice) ?? null,
-            serviceId: o.serviceId,
-            observedAt: observedAtFor(panelOfDecision, prepared.inventories),
-          };
-          const before = existing.get(invoice.idInvoice);
-          if (before === undefined) {
-            await this.deps.serviceCandidates.insert(
-              scope,
-              {
+        const archive = await this.deps.serviceCandidates.latestArchiveIds(scope, groupKeys, tx);
+        const inserts: Parameters<LegacyServiceCandidateStore['insertMany']>[1][number][] = [];
+        const audits: Record<string, number>[] = [];
+        for (let j = 0; j < group.length; j += CANDIDATE_AUDIT_SLICE) {
+          const batch = group.slice(j, j + CANDIDATE_AUDIT_SLICE);
+          const counts: Record<string, number> = {};
+          for (const { invoice, decision } of batch) {
+            const o = outcomes.get(invoice.idInvoice);
+            if (o === undefined) continue;
+            const evidence = candidateEvidence(invoice, ctx);
+            const panelOfDecision =
+              decision.category === 'ADOPTION_ELIGIBLE'
+                ? decision.panelId
+                : (operatorPanels.get(invoice.idInvoice) ?? evidence.mappedPanelId);
+            const facts = {
+              runId,
+              sourceFingerprint: snapshot.fingerprint,
+              invoiceChecksum: invoice.checksum,
+              outcome: o.outcome,
+              blocker: o.blocker,
+              evidence,
+              evidenceHash: evidenceHash(evidence),
+              panelCode: recordableCode(invoice.codePanel),
+              productCode: recordableCode(invoice.codeProduct),
+              archiveId: archive.get(invoice.idInvoice) ?? null,
+              serviceId: o.serviceId,
+              observedAt: observedAtFor(panelOfDecision, prepared.inventories),
+            };
+            const before = existing.get(invoice.idInvoice);
+            if (before === undefined) {
+              inserts.push({
                 ...facts,
                 id: this.deps.ids.uuid(),
                 invoiceKey: invoice.idInvoice,
                 synthetic: snapshot.synthetic,
                 reviewState: initialReviewState(o.outcome),
                 now,
-              },
+              });
+              tallies.services.candidates.INSERTED += 1;
+              counts[o.outcome] = (counts[o.outcome] ?? 0) + 1;
+              continue;
+            }
+            // A real snapshot never writes over test data, nor test data over a real decision.
+            if (before.synthetic !== snapshot.synthetic) {
+              tallies.services.candidates.sourceClassMismatch += 1;
+              continue;
+            }
+            const reviewState = reviewStateAfterRun(before, o.outcome);
+            const bump = isMaterialChange(before, { ...facts, reviewState });
+            if (!bump && before.runId === runId) {
+              tallies.services.candidates.UNCHANGED += 1;
+              continue;
+            }
+            const written = await this.deps.serviceCandidates.updateOutcome(
+              scope,
+              before.id,
+              before.version,
+              { ...facts, reviewState, bump, updatedAt: now },
               tx,
             );
-            tallies.services.candidates.INSERTED += 1;
+            if (written === null) {
+              throw new Error('a legacy service candidate moved under its row lock');
+            }
+            tallies.services.candidates.UPDATED += 1;
             counts[o.outcome] = (counts[o.outcome] ?? 0) + 1;
-            continue;
           }
-          // A real snapshot never writes over test data, nor test data over a real decision.
-          if (before.synthetic !== snapshot.synthetic) {
-            tallies.services.candidates.sourceClassMismatch += 1;
-            continue;
-          }
-          const reviewState = reviewStateAfterRun(before, o.outcome);
-          const bump = isMaterialChange(before, { ...facts, reviewState });
-          if (!bump && before.runId === runId) {
-            tallies.services.candidates.UNCHANGED += 1;
-            continue;
-          }
-          const written = await this.deps.serviceCandidates.updateOutcome(
-            scope,
-            before.id,
-            before.version,
-            { ...facts, reviewState, bump, updatedAt: now },
-            tx,
-          );
-          if (written === null) {
-            throw new Error('a legacy service candidate moved under its row lock');
-          }
-          tallies.services.candidates.UPDATED += 1;
-          counts[o.outcome] = (counts[o.outcome] ?? 0) + 1;
+          audits.push(counts);
         }
-        // One audit row per batch: counts by outcome, never a key or a name.
-        await this.deps.audit.record(
+        await this.deps.serviceCandidates.insertMany(scope, inserts, tx);
+        // One audit row per slice: counts by outcome, never a key or a name.
+        await recordAuditMany(
+          this.deps.audit,
           scope,
           actor,
-          {
+          audits.map((counts) => ({
             action: LEGACY_SERVICE_REVIEW_AUDIT_ACTIONS.recorded,
             entityType: 'LegacyImportRun',
             entityId: runId,
             before: null,
             after: { written: counts },
-            result: 'SUCCESS',
-          },
+            result: 'SUCCESS' as const,
+          })),
           tx,
         );
       });
