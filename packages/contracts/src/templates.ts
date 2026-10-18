@@ -263,6 +263,145 @@ export const FILE_CAPTION_PLACEHOLDERS: readonly PlaceholderDefinition[] = [
 ];
 
 /**
+ * Track 3 §2: the closed set of variables a panel's connection-file caption may name —
+ * the default template (`bot.service.connection_files_caption`) and an operator's custom
+ * template stored RAW in `panel.connection_files.caption_template`, rendered only at send
+ * time. Every one is OPTIONAL: a fact the service does not have is absent, and a line made
+ * only of absent facts is dropped (`renderTemplateBody`). Any other `{name}` — and any
+ * `{icon:…}` marker, which this caption does not decorate — is refused at save time by
+ * `connectionFileCaptionTemplateIssues`, on the server and in the Web Admin alike.
+ *
+ * `platform` and `file_name` describe ONE file. With the caption on the last file only
+ * (the default placement) they name the last file. `platform` is the file's own name
+ * without its extension — the panel's word for the platform (`Android`, `iOS MacOS`,
+ * `Windows`), never a guess. Deliberately NOT here, as for `FILE_CAPTION_PLACEHOLDERS`:
+ * the panel-side client UUID, sub id, provider user id and internal row ids.
+ */
+export const CONNECTION_FILE_CAPTION_VARIABLES: readonly PlaceholderDefinition[] = [
+  {
+    token: 'username',
+    type: 'STRING',
+    description: 'The service username on the panel.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'service_name',
+    type: 'STRING',
+    description: 'The name of what the customer bought (the order line title).',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'product',
+    type: 'STRING',
+    description: "The catalogue product's current name, when the service has a product.",
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'volume_total',
+    type: 'TRAFFIC_LIMIT',
+    description: 'The traffic allowance; unlimited reads as unlimited.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'volume_used',
+    type: 'BYTES',
+    description: 'Traffic used, when usage has been read from the panel at least once.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'volume_left',
+    type: 'BYTES',
+    description: 'Traffic left, for a limited allowance whose usage is known; never below zero.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'expires_at_jalali',
+    type: 'STRING',
+    description: "The expiry date in the Jalali calendar and the tenant's zone, when there is one.",
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'days_left',
+    type: 'NUMBER',
+    description: 'Whole days until expiry, rounded up and never below zero, when there is one.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'platform',
+    type: 'STRING',
+    description: "The file's platform: its own name without the extension.",
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'file_name',
+    type: 'STRING',
+    description: "The file's name as the panel sent it.",
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'sub_link',
+    type: 'STRING',
+    description: 'The subscription link the customer was already delivered.',
+    required: false,
+    repeatable: true,
+  },
+  {
+    token: 'support',
+    type: 'STRING',
+    description: "The tenant's first support account (`support.accounts`), as @handle.",
+    required: false,
+    repeatable: true,
+  },
+];
+
+/** The variable names alone, in their declared order — for a picker and a test. */
+export const CONNECTION_FILE_CAPTION_VARIABLE_TOKENS: readonly string[] =
+  CONNECTION_FILE_CAPTION_VARIABLES.map((variable) => variable.token);
+
+/** Why a connection-file caption template was refused. */
+export type ConnectionFileCaptionIssue =
+  | { readonly kind: 'EMPTY' }
+  | { readonly kind: 'TOO_LONG'; readonly length: number; readonly max: number }
+  /** `token` as written between the braces: `usrname`, or `icon:user`. */
+  | { readonly kind: 'UNKNOWN_VARIABLE'; readonly token: string };
+
+/**
+ * Validates a connection-file caption template (Track 3 §2). Pure, and the ONE check: the
+ * registry's schema for `panel.connection_files.caption_template` runs it on every write
+ * and every read, and the Web Admin runs it as the operator types.
+ *
+ * A body is refused when it is blank, longer than Telegram's caption bound, or names a
+ * variable outside `CONNECTION_FILE_CAPTION_VARIABLES` — including an `{icon:…}` marker,
+ * because this caption is rendered by the closed caption grammar and never decorated. Text
+ * in braces that is not an ASCII identifier (`{تست}`) is decoration, exactly as in every
+ * other template (`PLACEHOLDER_TOKEN_PATTERN`).
+ */
+export function connectionFileCaptionTemplateIssues(body: string): ConnectionFileCaptionIssue[] {
+  const issues: ConnectionFileCaptionIssue[] = [];
+  if (body.trim().length === 0) issues.push({ kind: 'EMPTY' });
+  if (body.length > TELEGRAM_CAPTION_MAX_LENGTH) {
+    issues.push({ kind: 'TOO_LONG', length: body.length, max: TELEGRAM_CAPTION_MAX_LENGTH });
+  }
+  const unknown = new Set<string>();
+  for (const token of placeholderTokensIn(body)) {
+    if (!CONNECTION_FILE_CAPTION_VARIABLE_TOKENS.includes(token)) unknown.add(token);
+  }
+  for (const slot of appearanceMarkersIn(body)) unknown.add(`icon:${slot}`);
+  for (const token of unknown) issues.push({ kind: 'UNKNOWN_VARIABLE', token });
+  return issues;
+}
+
+/**
  * The registered keys.
  *
  * Deliberately few, and they stay that way: a key is added when something in
@@ -6371,6 +6510,25 @@ export const TEMPLATES = [
         repeatable: false,
       },
     ],
+  },
+  /*
+   * Track 3 §2: the DEFAULT body of a panel's connection-file caption, used when the panel's
+   * `panel.connection_files.caption_mode` is CUSTOM and it stores no template of its own.
+   */
+  {
+    key: 'bot.service.connection_files_caption',
+    description:
+      "The default caption on a panel's connection files when the panel's caption mode is " +
+      'CUSTOM and the panel stores no template of its own (`panel.connection_files.' +
+      'caption_template` null). Named from `CONNECTION_FILE_CAPTION_VARIABLES`, every one ' +
+      'optional — a line whose facts are all absent is dropped. TELEGRAM_HTML: the body may ' +
+      'carry Telegram formatting tags and every value is HTML-escaped as it is substituted; ' +
+      'the result is read by the closed caption grammar (`parseCaptionMarkup`) into text and ' +
+      'entities and is never handed to Telegram\'s HTML parser. Bounded by Telegram\'s caption ' +
+      'limit; a render past it is cut with an ellipsis at send time.',
+    format: 'TELEGRAM_HTML',
+    maxLength: TELEGRAM_CAPTION_MAX_LENGTH,
+    placeholders: CONNECTION_FILE_CAPTION_VARIABLES,
   },
   {
     key: 'bot.service.link_rotated',
