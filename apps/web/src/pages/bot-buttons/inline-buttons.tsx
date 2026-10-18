@@ -144,6 +144,7 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'service.connected': 'web.ib_button_service_connected',
   'service.problem': 'web.ib_button_service_problem',
   'service.refresh': 'web.ib_button_service_refresh',
+  'service.support': 'web.ib_button_service_support',
   'service.files': 'web.ib_button_service_files',
   'service.link': 'web.ib_button_service_link',
   'service.rotate': 'web.ib_button_service_rotate',

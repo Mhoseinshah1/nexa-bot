@@ -896,6 +896,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.back_to_card_button': '🔙 بازگشت به مشخصات سرویس',
   'bot.service.refresh_failed':
     'خواندن اطلاعات از سرور ممکن نشد. لطفاً کمی بعد دوباره امتحان کنید.',
+  // Track 3 §1: the live panel check on opening a service card.
+  'bot.service.panel_missing':
+    'این سرویس در پنل پیدا نشد. اگر فکر می‌کنید اشتباه است با پشتیبانی تماس بگیرید.',
+  'bot.service.last_updated': '{icon:time} آخرین به‌روزرسانی: {at}',
+  'bot.service.support_button': '📨 تماس با پشتیبانی',
   'bot.service.files_partial':
     '{icon:warning} {failed} فرمت از فایل‌های اتصال آماده نشد. فایل‌های دیگر ارسال شدند.',
   'bot.service.files_unavailable':
