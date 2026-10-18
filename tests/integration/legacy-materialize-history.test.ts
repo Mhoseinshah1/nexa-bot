@@ -708,9 +708,16 @@ describe('Mirza import: history into the normal tables', () => {
       expect(await ctx.container.hasher.verify('locked', importAdmin[0]?.hash ?? '')).toBe(false);
 
       // The category customers are never offered, and no event left the building.
+      // Neutral wording (owner rule 2026-10-18): no previous-bot name on the ticket pages.
       const [category] = await q<{ is_active: boolean }>(sql`
-        SELECT is_active FROM ticket_categories WHERE title = 'Mirza (imported)'`);
+        SELECT is_active FROM ticket_categories WHERE title = 'منتقل‌شده از ربات قبلی'`);
       expect(category?.is_active).toBe(false);
+      expect(await q(sql`SELECT id FROM ticket_categories WHERE title ILIKE '%mirza%'`)).toEqual(
+        [],
+      );
+      const [author] = await q<{ display_name: string }>(sql`
+        SELECT display_name FROM admins WHERE username = 'mirza-import'`);
+      expect(author?.display_name).toBe('انتقال از ربات قبلی (سیستم)');
       expect(await triggered()).toEqual(before);
       expect(
         await n(
@@ -731,6 +738,23 @@ describe('Mirza import: history into the normal tables', () => {
       expect(
         await q(sql`SELECT id, seq, body, created_at FROM ticket_messages ORDER BY seq`),
       ).toEqual(snapshot);
+    });
+
+    it('reuses the category an earlier release created under its old title, never a second one', async () => {
+      // A resumed or re-run import on a database that already holds 'Mirza (imported)'.
+      // MUTATION: dropping the old title from findCategory writes a second category and fails this.
+      await seed();
+      const oldId = randomUUID();
+      await q(sql`
+        INSERT INTO ticket_categories (id, tenant_id, title, sort_order, is_active, created_at, updated_at)
+        VALUES (${oldId}, ${tenantA.tenantId}, 'Mirza (imported)', 0, false, now(), now())`);
+      await steps().tickets.apply(materializeCtx());
+      expect(await q(sql`SELECT id, title FROM ticket_categories ORDER BY title`)).toEqual([
+        { id: oldId, title: 'Mirza (imported)' },
+      ]);
+      const used = await q<{ category_id: string }>(sql`
+        SELECT DISTINCT category_id FROM tickets WHERE source = 'MIRZA'`);
+      expect(used).toEqual([{ category_id: oldId }]);
     });
 
     it('never makes a real administrator named mirza-import the author of Mirza answers', async () => {

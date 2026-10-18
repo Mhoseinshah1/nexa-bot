@@ -1009,7 +1009,7 @@ describe('the wallet card', () => {
       />,
     );
     await openC360Tab('financial');
-    expect(await screen.findByText('موجودی منتقل‌شده از میرزا')).toBeTruthy();
+    expect(await screen.findByText('موجودی منتقل‌شده از ربات قبلی')).toBeTruthy();
     expect(screen.queryByText('MIGRATION_OPENING_BALANCE')).toBeNull();
   });
 
@@ -1365,8 +1365,8 @@ describe('the Mirza wallet history (one-time import)', () => {
       />,
     );
     await openC360Tab('financial');
-    expect((await screen.findAllByText('تاریخچهٔ کیف پول در میرزا')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('از میرزا').length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('تاریخچهٔ کیف پول در ربات قبلی')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('منتقل‌شده').length).toBeGreaterThan(0);
     expect(screen.getByText('buy_service')).toBeTruthy();
     // Its own pager, its own cursor: the ledger's is untouched.
     const nexts = await screen.findAllByText('بعدی');
@@ -1393,7 +1393,7 @@ describe('the Mirza wallet history (one-time import)', () => {
     );
     await openC360Tab('financial');
     await screen.findByText('تاریخچه تراکنش‌ها');
-    expect(screen.queryByText('تاریخچهٔ کیف پول در میرزا')).toBeNull();
+    expect(screen.queryByText('تاریخچهٔ کیف پول در ربات قبلی')).toBeNull();
   });
 });
 
@@ -1525,9 +1525,9 @@ describe("a customer's orders and services", () => {
     await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
     const adopted = screen.getByText('nx-7f3a91').closest('tr') as HTMLElement;
-    expect(await within(adopted).findByText('منتقل‌شده از میرزا')).toBeTruthy();
+    expect(await within(adopted).findByText('منتقل‌شده از ربات قبلی')).toBeTruthy();
     const plain = screen.getByText('nx-0000aa').closest('tr') as HTMLElement;
-    expect(within(plain).queryByText('منتقل‌شده از میرزا')).toBeNull();
+    expect(within(plain).queryByText('منتقل‌شده از ربات قبلی')).toBeNull();
     const asked = api.calls.find((call) => call.url.includes('/legacy-adopted-services'));
     expect(decodeURIComponent(asked?.url ?? '')).toContain(`serviceIds=${SERVICE_ID},${other}`);
   });
@@ -1550,7 +1550,7 @@ describe("a customer's orders and services", () => {
     await openC360Tab('services');
     await screen.findByText('nx-7f3a91');
     expect(api.calls.some((call) => call.url.includes('legacy'))).toBe(false);
-    expect(screen.queryByText('منتقل‌شده از میرزا')).toBeNull();
+    expect(screen.queryByText('منتقل‌شده از ربات قبلی')).toBeNull();
   });
 
   it('draws a delivered failure as ACTIVE and FAILED, never as one merged state', async () => {
@@ -1861,7 +1861,7 @@ describe('rows imported from Mirza', () => {
     source: 'MIRZA',
   });
 
-  it('marks only the imported customer «از میرزا»', async () => {
+  it('marks only the imported customer «منتقل‌شده»', async () => {
     stubApi(list([native, imported]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5550000003');
@@ -1904,12 +1904,12 @@ describe('rows imported from Mirza', () => {
       />
     );
     const first = renderPage(page);
-    expect(await screen.findByText('از میرزا')).toBeInTheDocument();
+    expect(await screen.findByText('منتقل‌شده')).toBeInTheDocument();
     first.unmount();
 
     stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...walletRoutes()]);
     renderPage(page);
     await screen.findAllByText('5551234567');
-    expect(screen.queryByText('از میرزا')).toBeNull();
+    expect(screen.queryByText('منتقل‌شده')).toBeNull();
   });
 });

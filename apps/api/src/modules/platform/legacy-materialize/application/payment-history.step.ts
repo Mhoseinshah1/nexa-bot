@@ -166,7 +166,7 @@ export function planPayment(
   const rawMethod = token(at(record.payload, 'method', 'raw'), 40);
   const rawStatus = token(at(record.payload, 'status', 'raw'), 20);
   const note =
-    `mirza method=${method ?? 'UNKNOWN'}` +
+    `legacy method=${method ?? 'UNKNOWN'}` +
     (method === null || method === 'UNKNOWN' ? ` raw=${rawMethod ?? 'NULL'}` : '') +
     ` status=${rawStatus ?? 'NULL'}`;
   const fields = {

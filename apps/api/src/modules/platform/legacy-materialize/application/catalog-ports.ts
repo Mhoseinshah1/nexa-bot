@@ -98,7 +98,6 @@ export interface NewResellerRow {
   readonly customerId: string;
   readonly tierId: string;
   readonly percent: number | null;
-  readonly capMinor: bigint | null;
   readonly detail: Record<string, unknown>;
 }
 
@@ -130,7 +129,9 @@ export interface ResellersRepository extends PackageRows {
     tx: TransactionScope,
   ): Promise<ReadonlySet<string>>;
   // read only, for `match`
-  mirzaResellerTotals(scope: TenantContext): Promise<CatalogTotals & { readonly levels: number }>;
+  mirzaResellerTotals(
+    scope: TenantContext,
+  ): Promise<{ readonly rows: number; readonly levels: number }>;
   mirzaResellerRefs(scope: TenantContext): Promise<ReadonlySet<string>>;
 }
 

@@ -15,6 +15,8 @@ import {
 import { MIRZA_SOURCE } from '../application/materialize-support.js';
 import {
   ANSWER_REF_SUFFIX,
+  LEGACY_MIRZA_TICKET_CATEGORY_TITLE,
+  MIRZA_IMPORT_ADMIN_DISPLAY_NAME,
   MIRZA_IMPORT_ADMIN_USERNAME,
   MIRZA_TICKET_CATEGORY_TITLE,
   bodyDigest,
@@ -72,6 +74,9 @@ export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
 
   async ensureCategory(scope: TenantContext, now: Date, tx: TransactionScope) {
     const tenantId = requireTenantId(scope);
+    // A category an earlier release created under the old title is the same category: reuse it.
+    const existing = await this.findCategory(tenantId, tx);
+    if (existing !== undefined) return existing;
     await this.exec(tx)
       .insert(ticketCategories)
       .values({
@@ -85,17 +90,29 @@ export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
         updatedAt: now,
       })
       .onConflictDoNothing({ target: [ticketCategories.tenantId, ticketCategories.title] });
-    const [row] = await this.exec(tx)
+    const row = await this.findCategory(tenantId, tx);
+    if (row === undefined) throw new Error('the Mirza ticket category was not found after insert');
+    return row;
+  }
+
+  /** The import's category under its current title, else under the title an earlier release wrote. */
+  private async findCategory(tenantId: string, tx: TransactionScope) {
+    const rows = await this.exec(tx)
       .select({ id: ticketCategories.id, title: ticketCategories.title })
       .from(ticketCategories)
       .where(
         and(
           eq(ticketCategories.tenantId, tenantId),
-          eq(ticketCategories.title, MIRZA_TICKET_CATEGORY_TITLE),
+          inArray(ticketCategories.title, [
+            MIRZA_TICKET_CATEGORY_TITLE,
+            LEGACY_MIRZA_TICKET_CATEGORY_TITLE,
+          ]),
         ),
       );
-    if (row === undefined) throw new Error('the Mirza ticket category was not found after insert');
-    return row;
+    return (
+      rows.find((r) => r.title === MIRZA_TICKET_CATEGORY_TITLE) ??
+      rows.find((r) => r.title === LEGACY_MIRZA_TICKET_CATEGORY_TITLE)
+    );
   }
 
   async ensureImportAdmin(scope: TenantContext, now: Date, tx: TransactionScope): Promise<string> {
@@ -106,7 +123,7 @@ export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
         id: this.ids.uuid(),
         tenantId,
         username: MIRZA_IMPORT_ADMIN_USERNAME,
-        displayName: 'Mirza import (system)',
+        displayName: MIRZA_IMPORT_ADMIN_DISPLAY_NAME,
         passwordHash: UNUSABLE_PASSWORD_HASH,
         passwordUpdatedAt: now,
         status: 'DISABLED',

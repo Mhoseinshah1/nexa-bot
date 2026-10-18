@@ -8,6 +8,7 @@ import type {
   ProductCategoryStatus,
   ProductCategoryVisibility,
   ProductId,
+  ProductListView,
   ProductStatus,
   RecordSource,
   TenantContext,
@@ -18,6 +19,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
+  legacyProductShapes,
   panels,
   productCategories,
   products,
@@ -66,6 +68,29 @@ function audienceClause(audience: CatalogueAudience): SQL {
   if (audience.productIds === 'ALL' || audience.categoryIds === 'ALL') return listed;
   return sql`(${listed} AND (${products.id} = ANY(${sql.param([...audience.productIds])}::uuid[])
     OR ${products.categoryId} = ANY(${sql.param([...audience.categoryIds])}::uuid[])))`;
+}
+
+/**
+ * The import's historical products: what an import created to stand behind old orders and
+ * services, and that can be neither sold as it is nor deleted. INACTIVE, HIDDEN and bound to
+ * no panel, AND made by an import — a MIRZA row, or the hidden product a legacy shape stands
+ * for (those are written through the ordinary product create, so their `source` is NEXA).
+ *
+ * An operator's own product that happens to be inactive and hidden stays in the current list:
+ * hiding it in an archive would be a product nobody can find. And a historical product an
+ * operator binds to a panel, publishes or makes visible leaves the archive by itself.
+ */
+function archivedClause(): SQL {
+  return sql`(${products.status} = 'INACTIVE' AND ${products.audience} = 'HIDDEN'
+    AND ${products.panelId} IS NULL
+    AND (${products.source} = 'MIRZA' OR EXISTS (
+      SELECT 1 FROM ${legacyProductShapes}
+       WHERE ${legacyProductShapes.tenantId} = ${products.tenantId}
+         AND ${legacyProductShapes.productId} = ${products.id})))`;
+}
+
+function viewClause(view: ProductListView): SQL {
+  return view === 'ARCHIVE' ? archivedClause() : sql`NOT ${archivedClause()}`;
 }
 
 export class DrizzleProductRepository implements ProductRepository {
@@ -159,6 +184,7 @@ export class DrizzleProductRepository implements ProductRepository {
     const tenantId = requireTenantId(scope);
     const conditions: SQL[] = [eq(products.tenantId, tenantId)];
 
+    if (search.view !== undefined) conditions.push(viewClause(search.view));
     if (search.status !== undefined) conditions.push(eq(products.status, search.status));
     if (search.audience !== undefined) conditions.push(eq(products.audience, search.audience));
     if (search.source !== undefined) conditions.push(eq(products.source, search.source));

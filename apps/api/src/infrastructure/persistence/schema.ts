@@ -9405,12 +9405,12 @@ export const resellers = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
     /**
-     * The purchase cap Mirza gave this agent (`maxbuyagent`), as the one-time import found it.
+     * DEPRECATED, written by nothing and read by nothing: drop in the next release
+     * (expand/contract — a column is never dropped in the release that stops writing it).
      *
-     * A LIMIT, never money, and deliberately NOT named like a credit line: it is shown to the
-     * owner and applied nowhere. Nothing reads it to decide a purchase, a balance or a price —
-     * reseller credit was removed (owner decision, 2026-10-01) and `creditAllowanceOf` stays
-     * zero. NULL for every row that is not an import and for an agent Mirza gave no cap.
+     * It held the legacy agent's `maxbuyagent`. That is a credit/limit concept and reseller
+     * credit is removed (owner decision, 2026-10-01), so the cap is no NEXA field at all: it
+     * lives only in the import's history — the package rows and `source_detail.purchaseCap`.
      */
     importedPurchaseCapMinor: bigint('imported_purchase_cap_minor', { mode: 'bigint' }),
     importedPurchaseCapCurrency: text('imported_purchase_cap_currency'),

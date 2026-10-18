@@ -61,11 +61,6 @@ export interface ResellerRecord {
    * is an explicit "no minimum for this reseller".
    */
   readonly monthlyMinimum: Money | null;
-  /**
-   * The purchase cap Mirza gave this agent: shown, applied nowhere. A limit, never money —
-   * no decision reads it (reseller credit stays removed).
-   */
-  readonly importedPurchaseCap: Money | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

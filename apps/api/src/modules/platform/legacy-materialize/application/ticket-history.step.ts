@@ -55,7 +55,18 @@ export const ANSWER_REF_SUFFIX = ':answer';
 export const FORK_TICKET_REF_PREFIX = 'ticket';
 export const FORK_MESSAGE_REF_PREFIX = 'ticket-msg';
 export const MIRZA_IMPORT_ADMIN_USERNAME = 'mirza-import';
-export const MIRZA_TICKET_CATEGORY_TITLE = 'Mirza (imported)';
+/**
+ * The imported tickets' category, as the ticket pages show it. Neutral wording (owner rule
+ * 2026-10-18: no previous-bot name outside the one-time import page).
+ */
+export const MIRZA_TICKET_CATEGORY_TITLE = 'منتقل‌شده از ربات قبلی';
+/**
+ * The title an earlier release wrote. A resumed or re-run import on a database that already
+ * holds it reuses that row, never a second category beside it.
+ */
+export const LEGACY_MIRZA_TICKET_CATEGORY_TITLE = 'Mirza (imported)';
+/** The import's disabled system identity, as an author name in ticket history. */
+export const MIRZA_IMPORT_ADMIN_DISPLAY_NAME = 'انتقال از ربات قبلی (سیستم)';
 
 const THREAD_REF_PREFIX = 'legacy:support:thread:';
 

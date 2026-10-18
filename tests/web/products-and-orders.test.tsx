@@ -234,6 +234,51 @@ describe('the product list', () => {
     expect(api.calls.find((call) => call.url.includes('/products?'))?.url).toContain('limit=10');
   });
 
+  it('asks the server for the CURRENT view by default, and opens the archive as its own tab', async () => {
+    const api = stubApi(productList([product()]));
+    window.history.replaceState(null, '', '/products');
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('پلن یک‌ماهه');
+    const url = api.calls.find((call) => call.url.includes('/products?'))?.url ?? '';
+    expect(new URLSearchParams(url.split('?')[1]).get('view')).toBe('CURRENT');
+    const current = screen.getByRole('tab', { name: t('web.products_view_current') });
+    expect(current).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByText(t('web.products_archive_intro'))).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: t('web.products_view_archive') }));
+    expect(new URLSearchParams(window.location.search).get('view')).toBe('archive');
+  });
+
+  it('the archive tab is a SERVER view: it asks for view=ARCHIVE and draws every row it is sent', async () => {
+    const archived = product({
+      id: '01900000-0000-7000-8000-00000000a7c1',
+      title: 'محصول تاریخچه‌ای',
+      status: 'INACTIVE',
+      audience: 'HIDDEN',
+      panelId: null,
+      source: 'MIRZA',
+    });
+    const api = stubApi(productList([archived]));
+    const query = new URLSearchParams({ view: 'archive' });
+    renderPage(<ProductsPage route={{ path: '/products', query }} mayEdit denied={false} />);
+    expect(await screen.findByText('محصول تاریخچه‌ای')).toBeInTheDocument();
+    const urls = api.calls.filter((call) => call.url.includes('/products?')).map((c) => c.url);
+    expect(urls.length).toBeGreaterThan(0);
+    for (const u of urls) expect(new URLSearchParams(u.split('?')[1]).get('view')).toBe('ARCHIVE');
+    expect(screen.getByRole('tab', { name: t('web.products_view_archive') })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByText(t('web.products_archive_intro'))).toBeInTheDocument();
+  });
+
+  it('says the archive is empty in its own words', async () => {
+    stubApi(productList([]));
+    const query = new URLSearchParams({ view: 'archive' });
+    renderPage(<ProductsPage route={{ path: '/products', query }} mayEdit denied={false} />);
+    expect(await screen.findByText(t('web.products_archive_empty'))).toBeInTheDocument();
+  });
+
   it('takes a new product’s traffic in GB, and starts it unlimited, said by its own box', async () => {
     stubApi(productList([product()]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);

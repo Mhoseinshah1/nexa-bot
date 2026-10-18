@@ -96,7 +96,6 @@ function toReseller(row: typeof resellers.$inferSelect): ResellerRecord {
         ? null
         : money(row.creditLimitAmount, row.creditLimitCurrency as CurrencyCode),
     monthlyMinimum: minimumOf(row.monthlyMinimumAmount, row.monthlyMinimumCurrency),
-    importedPurchaseCap: minimumOf(row.importedPurchaseCapMinor, row.importedPurchaseCapCurrency),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

@@ -107,6 +107,7 @@ import {
   PRODUCT_CATEGORY_STATUSES,
   PRODUCT_CATEGORY_VISIBILITIES,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
+  PRODUCT_LIST_VIEWS,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
   PRODUCT_STATUSES,
@@ -2378,6 +2379,8 @@ export const productListQuerySchema = z.object({
   cursor: z.string().max(512).optional(),
   /** Only rows from this source (the «منبع» filter). */
   source: recordSourceSchema.optional(),
+  /** The current products or the import's historical archive (`PRODUCT_LIST_VIEWS`); absent is both. */
+  view: z.enum(PRODUCT_LIST_VIEWS).optional(),
   status: z.enum(PRODUCT_STATUSES).optional(),
   audience: z.enum(PRODUCT_AUDIENCES).optional(),
   title: z.string().max(PRODUCT_TITLE_MAX_LENGTH).optional(),
@@ -3362,14 +3365,11 @@ export const resellerSummarySchema = z.object({
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
   /** The stored own limit, else the tier's. Grants nothing; kept so stored rows read. */
   effectiveCreditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
-  /**
-   * The purchase cap Mirza gave this agent (`maxbuyagent`), shown to the owner and applied
-   * NOWHERE: it is a limit, not money, and never a balance or a credit line (reseller credit
-   * stays removed, owner decision 2026-10-01). Null for every reseller that is not an import.
+  /*
+   * No imported purchase cap. A legacy agent's `maxbuyagent` is a credit/limit concept, and
+   * reseller credit stays removed (owner decision 2026-10-01): it lives only in the import's
+   * own history (the package rows and `resellers.source_detail`), never on this wire.
    */
-  importedPurchaseCap: z
-    .object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) })
-    .nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });

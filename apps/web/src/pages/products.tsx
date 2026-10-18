@@ -22,6 +22,7 @@ import {
   type CurrencyCode,
   type ProductAudience,
   type ProductCategoryListingResponse,
+  type ProductListView,
   type ProductStatus,
   type ProductSummaryResponse,
 } from '@nexa/contracts';
@@ -61,6 +62,9 @@ import {
   Money,
   PageHead,
   StateSwitch,
+  TabPanel,
+  Tabs,
+  useQueryTab,
   useToast,
   useUnsavedChanges,
   type Column,
@@ -284,6 +288,19 @@ function Price({ row }: { row: ProductSummaryResponse }) {
 /** The URL keys the products list filters by, and what the bar's clear-all removes. */
 const PRODUCT_FILTER_KEYS = ['status', 'audience', 'categoryId', 'title', 'source'] as const;
 
+/**
+ * The list's two tabs (`?view=`), and the server view each one asks for. The import's
+ * historical products (inactive, hidden, no panel) are not this page's working list, so they
+ * sit under «آرشیو»; which row belongs where is the SERVER's predicate, on the keyset, never a
+ * filter or a count on this page.
+ */
+const PRODUCT_VIEW_TABS = ['current', 'archive'] as const;
+type ProductViewTab = (typeof PRODUCT_VIEW_TABS)[number];
+const PRODUCT_VIEW_OF: Readonly<Record<ProductViewTab, ProductListView>> = {
+  current: 'CURRENT',
+  archive: 'ARCHIVE',
+};
+
 export function ProductsPage({
   route,
   mayEdit,
@@ -304,6 +321,8 @@ export function ProductsPage({
   const appliedAudience = audienceFromQuery(route.query.get('audience'));
   const appliedTitle = route.query.get('title') ?? '';
   const appliedSource = sourceFromQuery(route.query.get('source'));
+  const [viewTab, setViewTab] = useQueryTab<ProductViewTab>(route, PRODUCT_VIEW_TABS, 'view');
+  const archive = viewTab === 'archive';
   /*
    * The category filter, and `'none'` is one of its values.
    *
@@ -344,6 +363,7 @@ export function ProductsPage({
    * anything, so it goes LAST — no other field can absorb its separator.
    */
   const searchSignature = [
+    viewTab,
     appliedStatus ?? '',
     appliedAudience ?? '',
     // Before the title, which must stay last: a category id cannot contain `|`, and the
@@ -370,6 +390,7 @@ export function ProductsPage({
           // W1.8: ten rows a page on the keyset.
           limit: LIST_PAGE_SIZE,
           ...(cursor === undefined ? {} : { cursor }),
+          view: PRODUCT_VIEW_OF[viewTab],
           ...(appliedStatus === null ? {} : { status: appliedStatus }),
           ...(appliedAudience === null ? {} : { audience: appliedAudience }),
           ...(appliedSource === null ? {} : { source: appliedSource }),
@@ -536,142 +557,158 @@ export function ProductsPage({
       />
 
       <Card>
-        {/* Hidden while the card below cannot answer: a control that mints a new query
+        {!denied && (
+          <Tabs
+            value={viewTab}
+            onChange={setViewTab}
+            panelId="products-list"
+            items={[
+              { id: 'current', label: t('web.products_view_current') },
+              { id: 'archive', label: t('web.products_view_archive') },
+            ]}
+          />
+        )}
+        <TabPanel id="products-list" labelledBy={`products-list-tab-${viewTab}`}>
+          {archive && <p className="muted small">{t('web.products_archive_intro')}</p>}
+          {/* Hidden while the card below cannot answer: a control that mints a new query
             key is a fresh request against a question the server has just refused. */}
-        <div className="cb-filters" hidden={!mayRequest(products, denied)}>
-          <ListFilterBar
-            label={t('web.products_title')}
-            search={
-              <form className="toolbar" onSubmit={apply}>
-                <div className="search cb-search">
-                  <label className="visually-hidden" htmlFor="products-title">
-                    {t('web.products_search_title')}
-                  </label>
-                  <Icon name="search" size={14} />
-                  <input
-                    id="products-title"
-                    className="input"
-                    type="search"
-                    value={draftTitle}
-                    maxLength={PRODUCT_TITLE_MAX_LENGTH}
-                    placeholder={t('web.products_search_title_hint')}
-                    title={t('web.products_search_title_hint')}
-                    onChange={(event) => {
-                      setDraft({ signature: appliedTitle, title: event.target.value });
-                      debounce.edited();
+          <div className="cb-filters" hidden={!mayRequest(products, denied)}>
+            <ListFilterBar
+              label={t('web.products_title')}
+              search={
+                <form className="toolbar" onSubmit={apply}>
+                  <div className="search cb-search">
+                    <label className="visually-hidden" htmlFor="products-title">
+                      {t('web.products_search_title')}
+                    </label>
+                    <Icon name="search" size={14} />
+                    <input
+                      id="products-title"
+                      className="input"
+                      type="search"
+                      value={draftTitle}
+                      maxLength={PRODUCT_TITLE_MAX_LENGTH}
+                      placeholder={t('web.products_search_title_hint')}
+                      title={t('web.products_search_title_hint')}
+                      onChange={(event) => {
+                        setDraft({ signature: appliedTitle, title: event.target.value });
+                        debounce.edited();
+                      }}
+                      {...debounce.composition}
+                    />
+                  </div>
+                  <button type="submit" className="btn primary sm">
+                    {t('web.users_search_apply')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn sm ghost"
+                    disabled={!clearable}
+                    onClick={() => {
+                      setDraft({ signature: appliedTitle, title: '' });
+                      setQuery(route, 'title', null);
                     }}
-                    {...debounce.composition}
-                  />
-                </div>
-                <button type="submit" className="btn primary sm">
-                  {t('web.users_search_apply')}
-                </button>
-                <button
-                  type="button"
-                  className="btn sm ghost"
-                  disabled={!clearable}
-                  onClick={() => {
-                    setDraft({ signature: appliedTitle, title: '' });
-                    setQuery(route, 'title', null);
-                  }}
-                >
-                  {t('web.users_search_clear')}
-                </button>
-              </form>
-            }
-            filters={[
-              // The cursor trail is keyed by the filters, so a change starts at page one.
-              queryChipFilter({
-                route,
-                param: 'status',
-                resetKeys: [],
-                label: t('web.status'),
-                value: appliedStatus,
-                allLabel: t('web.users_filter_all'),
-                items: [
-                  { id: 'ACTIVE', label: t('web.product_status_active') },
-                  { id: 'INACTIVE', label: t('web.product_status_inactive') },
-                ],
-              }),
-              queryChipFilter({
-                route,
-                param: 'audience',
-                resetKeys: [],
-                label: t('web.product_audience'),
-                value: appliedAudience,
-                allLabel: t('web.product_audience_all'),
-                items: [
-                  { id: 'EVERYONE', label: t('web.product_audience_everyone') },
-                  { id: 'RESELLERS_ONLY', label: t('web.product_audience_resellers') },
-                  { id: 'HIDDEN', label: t('web.product_audience_hidden') },
-                ],
-              }),
-              /*
+                  >
+                    {t('web.users_search_clear')}
+                  </button>
+                </form>
+              }
+              filters={[
+                // The cursor trail is keyed by the filters, so a change starts at page one.
+                queryChipFilter({
+                  route,
+                  param: 'status',
+                  resetKeys: [],
+                  label: t('web.status'),
+                  value: appliedStatus,
+                  allLabel: t('web.users_filter_all'),
+                  items: [
+                    { id: 'ACTIVE', label: t('web.product_status_active') },
+                    { id: 'INACTIVE', label: t('web.product_status_inactive') },
+                  ],
+                }),
+                queryChipFilter({
+                  route,
+                  param: 'audience',
+                  resetKeys: [],
+                  label: t('web.product_audience'),
+                  value: appliedAudience,
+                  allLabel: t('web.product_audience_all'),
+                  items: [
+                    { id: 'EVERYONE', label: t('web.product_audience_everyone') },
+                    { id: 'RESELLERS_ONLY', label: t('web.product_audience_resellers') },
+                    { id: 'HIDDEN', label: t('web.product_audience_hidden') },
+                  ],
+                }),
+                /*
                 `none` is offered explicitly because it is the operator's most useful
                 view — the plans that cannot be sold yet.
               */
-              queryChipFilter({
-                route,
-                param: 'categoryId',
-                resetKeys: [],
-                label: t('web.product_category'),
-                value: appliedCategory === '' ? null : appliedCategory,
-                allLabel: t('web.category_filter_all'),
-                items: [
-                  { id: 'none', label: t('web.category_filter_none') },
-                  ...(categories.data?.categories ?? []).map((category) => ({
-                    id: category.id,
-                    label: category.name,
-                  })),
-                ],
-              }),
-              sourceRouteFilter(route, appliedSource),
-            ]}
-            onClearAll={clearAll}
-          />
-        </div>
+                queryChipFilter({
+                  route,
+                  param: 'categoryId',
+                  resetKeys: [],
+                  label: t('web.product_category'),
+                  value: appliedCategory === '' ? null : appliedCategory,
+                  allLabel: t('web.category_filter_all'),
+                  items: [
+                    { id: 'none', label: t('web.category_filter_none') },
+                    ...(categories.data?.categories ?? []).map((category) => ({
+                      id: category.id,
+                      label: category.name,
+                    })),
+                  ],
+                }),
+                sourceRouteFilter(route, appliedSource),
+              ]}
+              onClearAll={clearAll}
+            />
+          </div>
 
-        <StateSwitch
-          query={products}
-          denied={denied}
-          isEmpty={rows.length === 0}
-          empty={
-            searching ? (
-              <Empty
-                title={t('web.products_search_empty')}
-                hint={t('web.products_search_empty_hint')}
-                icon="inbox"
-              />
-            ) : (
-              <Empty
-                title={t('web.products_empty')}
-                hint={t('web.products_empty_hint')}
-                icon="products"
-              />
-            )
-          }
-        >
-          <DataTable
-            caption={t('web.products_title')}
-            columns={columns}
-            rows={rows}
-            rowKey={(row) => row.id}
-            dense
-            sticky
-          />
-        </StateSwitch>
+          <StateSwitch
+            query={products}
+            denied={denied}
+            isEmpty={rows.length === 0}
+            empty={
+              searching ? (
+                <Empty
+                  title={t('web.products_search_empty')}
+                  hint={t('web.products_search_empty_hint')}
+                  icon="inbox"
+                />
+              ) : archive ? (
+                <Empty title={t('web.products_archive_empty')} icon="inbox" />
+              ) : (
+                <Empty
+                  title={t('web.products_empty')}
+                  hint={t('web.products_empty_hint')}
+                  icon="products"
+                />
+              )
+            }
+          >
+            <DataTable
+              caption={t('web.products_title')}
+              columns={columns}
+              rows={rows}
+              rowKey={(row) => row.id}
+              dense
+              sticky
+            />
+          </StateSwitch>
 
-        {!denied && queryState(products) === 'ready' && (
-          <CursorPager
-            shown={rows.length}
-            hasPrevious={cursors.length > 0}
-            hasNext={nextCursor !== null}
-            onPrevious={popCursor}
-            onNext={() => nextCursor !== null && pushCursor(nextCursor)}
-            // `GET /products` pages an ASCENDING keyset — the earliest product first —
-            // so "next" is NEWER here, as on `/users`.
-          />
-        )}
+          {!denied && queryState(products) === 'ready' && (
+            <CursorPager
+              shown={rows.length}
+              hasPrevious={cursors.length > 0}
+              hasNext={nextCursor !== null}
+              onPrevious={popCursor}
+              onNext={() => nextCursor !== null && pushCursor(nextCursor)}
+              // `GET /products` pages an ASCENDING keyset — the earliest product first —
+              // so "next" is NEWER here, as on `/users`.
+            />
+          )}
+        </TabPanel>
       </Card>
 
       {!mayEdit && (

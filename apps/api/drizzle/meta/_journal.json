@@ -1779,6 +1779,13 @@
       "when": 1792280430780,
       "tag": "0253_ended_services",
       "breakpoints": true
+    },
+    {
+      "idx": 254,
+      "version": "7",
+      "when": 1792358046881,
+      "tag": "0254_products_referenced_never_deleted",
+      "breakpoints": true
     }
   ]
 }
