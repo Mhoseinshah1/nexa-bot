@@ -61,13 +61,32 @@ export const TONPAYS_ERROR_CODES = [
 export type TonPaysErrorCode = (typeof TONPAYS_ERROR_CODES)[number];
 
 /**
+ * Codes the WEBSITE route's own error list does not name, and which it is handled for anyway.
+ *
+ * `WRONG_API_KEY_KIND` is documented on the Custom Telegram API
+ * (`TONPAYS_TELEGRAM_ERROR_CODES`): the key sent is of the other kind. TonPays issues a
+ * website key and a Custom Telegram key from one account, and an operator can paste
+ * either into either route, so the website route can be answered with it too.
+ *
+ * Nexa decision (owner, 2026-10-18; `docs/tonpays-gateway-audit.md` §6): on the website
+ * route it is CONFIGURATION, like on the Telegram route. Before, it was undocumented
+ * for this route and therefore `REFUSED`, which told the customer their payment FAILED
+ * and opened nothing for the operator, who was the only one who could fix it.
+ */
+export const TONPAYS_CROSS_ROUTE_ERROR_CODES = ['WRONG_API_KEY_KIND'] as const;
+export type TonPaysCrossRouteErrorCode = (typeof TONPAYS_CROSS_ROUTE_ERROR_CODES)[number];
+
+/**
  * The codes that describe the MERCHANT'S configuration, never the customer's payment.
  *
  * Nexa decision (brief §19): these are never presented to a customer as their payment
  * failing or succeeding. They open an operational condition for the operator, and the
  * customer is told the method is unavailable right now.
  */
-export const TONPAYS_CONFIGURATION_ERROR_CODES: readonly TonPaysErrorCode[] = [
+export const TONPAYS_CONFIGURATION_ERROR_CODES: readonly (
+  | TonPaysErrorCode
+  | TonPaysCrossRouteErrorCode
+)[] = [
   'MISSING_API_KEY',
   'INVALID_API_KEY',
   'INACTIVE_API_KEY',
@@ -76,6 +95,7 @@ export const TONPAYS_CONFIGURATION_ERROR_CODES: readonly TonPaysErrorCode[] = [
   'STORE_INACTIVE',
   'ACCESS_DENIED',
   'INVALID_CALLBACK_URL',
+  'WRONG_API_KEY_KIND',
 ];
 
 /**
