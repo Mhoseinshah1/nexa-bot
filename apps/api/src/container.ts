@@ -7725,6 +7725,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         clock,
         ids,
         codeVersion: config.BUILD_VERSION,
+        logger,
       });
     },
     async shutdown() {

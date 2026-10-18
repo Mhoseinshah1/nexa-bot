@@ -247,12 +247,38 @@ export interface LegacyImportRepository {
     tx: unknown,
   ): Promise<LegacyImportRunRecord>;
 
+  /**
+   * `recordDryRunDecision` for a whole batch: each status's counter incremented by its count,
+   * in ONE conditional UPDATE with the same predicate (RUNNING, DRY_RUN, this tenant). The
+   * counters end exactly where one call per decision would have left them.
+   */
+  recordDryRunDecisions(
+    scope: TenantContext,
+    runId: string,
+    counts: Readonly<Partial<Record<LegacyImportMapStatus, number>>>,
+    now: Date,
+    tx: unknown,
+  ): Promise<LegacyImportRunRecord>;
+
   /** The idempotent upsert by legacy key. See `decideMapWrite`. */
   recordDecision(
     scope: TenantContext,
     write: LegacyImportMapWrite,
     tx: unknown,
   ): Promise<LegacyImportMapWriteOutcome>;
+
+  /**
+   * `recordDecision` for many writes of ONE run: the run is
+   * checked once, the new rows go in multi-row inserts, and only a key that already has a row
+   * takes `recordDecision`'s own path (lock, `decideMapWrite`, conditional update) — as does
+   * a key named again later in the batch, after its first write. The outcomes are in the
+   * writes' order and mean exactly what `recordDecision`'s mean.
+   */
+  recordDecisions(
+    scope: TenantContext,
+    writes: readonly LegacyImportMapWrite[],
+    tx: unknown,
+  ): Promise<LegacyImportMapWriteOutcome[]>;
 
   /** The rows already decided for these legacy keys — what a resume asks first. */
   findByLegacyKeys(

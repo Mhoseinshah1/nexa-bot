@@ -36,11 +36,16 @@ import {
   buildUsersWalletsSection,
   type UsersWalletsSection,
 } from './users-wallets-reconciliation.js';
+import { timedSection, type SectionTimingLogger } from './section-timing.js';
+import { recordAuditMany } from '../../audit/application/record-audit-many.js';
 import {
   isReviewClosedToRerun,
   resumeDecision,
 } from '../../legacy-import/application/legacy-import-ports.js';
-import type { MigrationOpeningBalanceService } from '../../../commerce/wallet/application/migration-opening-balance.service.js';
+import type {
+  MigrationOpeningBalanceCommand,
+  MigrationOpeningBalanceService,
+} from '../../../commerce/wallet/application/migration-opening-balance.service.js';
 import type { LegacyTrialEligibilityService } from '../../../commerce/trials/application/legacy-trial-eligibility.service.js';
 import type { LegacyProductService } from '../../../commerce/catalog/application/legacy-product.service.js';
 import type { LegacyProductReviewService } from '../../../commerce/legacy-product-review/application/legacy-product-review.service.js';
@@ -181,8 +186,16 @@ export const LEGACY_IMPORT_PERMISSION: PermissionKey = 'maintenance.run';
 /** NEXA's currency for a legacy Toman balance. Any other selling currency is refused. */
 export const LEGACY_BALANCE_CURRENCY = 'IRT';
 
+/** Keys per read (and rows per transaction) of the phases that still write row by row. */
 const CUSTOMER_BATCH = 200;
-const DRY_RUN_BATCH = 1000;
+/**
+ * Rows per transaction of the bulk phases. Each statement inside stays under PostgreSQL's
+ * 65 535 bind parameters (the writers chunk their own multi-row inserts).
+ */
+const CUSTOMER_WRITE_BATCH = 5000;
+const OPENING_BATCH = 5000;
+const TRIAL_BATCH = 5000;
+const DRY_RUN_BATCH = 10_000;
 
 export interface LegacyImporterDeps {
   readonly destination: LegacyImporterDestination;
@@ -196,8 +209,8 @@ export interface LegacyImporterDeps {
   readonly invoiceArchive: InvoiceArchiveIngest;
   readonly customers: LegacyCustomerWriter;
   readonly inventory: LegacyInventoryPort;
-  readonly openings: Pick<MigrationOpeningBalanceService, 'post'>;
-  readonly trials: Pick<LegacyTrialEligibilityService, 'preserveForImport'>;
+  readonly openings: Pick<MigrationOpeningBalanceService, 'postMany'>;
+  readonly trials: Pick<LegacyTrialEligibilityService, 'preserveManyForImport'>;
   readonly products: Pick<
     LegacyProductService,
     'ensureShapeForImport' | 'resolveTariffMatchForImport'
@@ -223,6 +236,8 @@ export interface LegacyImporterDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly codeVersion: string | null;
+  /** Per-section timing lines (`section-timing.ts`): counts and milliseconds only. */
+  readonly logger?: SectionTimingLogger;
 }
 
 export interface LegacyImportInput {
@@ -901,12 +916,11 @@ export class LegacyImporterService {
   async dryRun(input: LegacyImportInput): Promise<LegacyImportReport> {
     const { scope, actor, snapshot, mapping } = input;
     const startedAt = this.deps.clock.now();
-    const prepared = await this.prepare(
-      scope,
-      snapshot,
-      mapping,
-      input.productionLikeTarget,
-      holdOf(input),
+    const prepared = await timedSection(
+      this.deps.logger,
+      'dry_run.prepare',
+      () => this.prepare(scope, snapshot, mapping, input.productionLikeTarget, holdOf(input)),
+      (p) => p.plan.users.length + p.plan.services.length,
     );
     const runId = this.deps.ids.uuid();
     await this.mutate(scope, actor, 'legacy_import.run.start', runId, async (tx) => {
@@ -947,15 +961,25 @@ export class LegacyImporterService {
         d.category === 'ADOPTION_ELIGIBLE' ? 'IMPORTED' : (d.map?.status ?? 'MANUAL_REVIEW'),
       );
     }
-    for (let i = 0; i < statuses.length; i += DRY_RUN_BATCH) {
-      const batch = statuses.slice(i, i + DRY_RUN_BATCH);
-      await this.mutate(scope, actor, 'legacy_import.run.dry_run_batch', runId, async (tx) => {
-        const now = this.deps.clock.now();
-        for (const status of batch)
-          await this.deps.runs.recordDryRunDecision(scope, runId, status, now, tx);
-        await this.deps.runs.checkpoint(scope, runId, i + batch.length, now, tx);
-      });
-    }
+    await timedSection(
+      this.deps.logger,
+      'dry_run.decisions',
+      async () => {
+        for (let i = 0; i < statuses.length; i += DRY_RUN_BATCH) {
+          const batch = statuses.slice(i, i + DRY_RUN_BATCH);
+          await this.mutate(scope, actor, 'legacy_import.run.dry_run_batch', runId, async (tx) => {
+            const now = this.deps.clock.now();
+            // The batch's counts in one conditional UPDATE: the counters end where one
+            // increment per decision would have left them.
+            const counts: Partial<Record<LegacyImportMapStatus, number>> = {};
+            for (const status of batch) counts[status] = (counts[status] ?? 0) + 1;
+            await this.deps.runs.recordDryRunDecisions(scope, runId, counts, now, tx);
+            await this.deps.runs.checkpoint(scope, runId, i + batch.length, now, tx);
+          });
+        }
+      },
+      () => statuses.length,
+    );
     const finished = await this.finish(scope, actor, runId, mapping, { status: 'COMPLETED' });
     return this.report(
       'DRY_RUN',
@@ -1025,11 +1049,17 @@ export class LegacyImporterService {
       });
     }
     const inventoryHold = await this.inventoryHoldKeys(scope, input);
-    const prepared = await this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
-      forApply: true,
-      ...holdOf(input),
-      ...(inventoryHold === undefined ? {} : { inventoryHold }),
-    });
+    const prepared = await timedSection(
+      this.deps.logger,
+      'apply.prepare',
+      () =>
+        this.prepare(scope, snapshot, mapping, input.productionLikeTarget, {
+          forApply: true,
+          ...holdOf(input),
+          ...(inventoryHold === undefined ? {} : { inventoryHold }),
+        }),
+      (p) => p.plan.users.length + p.plan.services.length,
+    );
     // G10, the same predicate as the audit, decided again NOW: an import never starts on
     // a map that forgets a live code_panel — whatever the audit said earlier.
     const incomplete = incompletePanelMapMessage(
@@ -1278,28 +1308,56 @@ export class LegacyImporterService {
       if (lease.isLost()) {
         throw new Error('the process claim was lost (its database session ended); stopping');
       }
-      const imported = await this.customersPhase(scope, actor, run.id, prepared.plan, tallies);
+      const log = this.deps.logger;
+      const users = prepared.plan.users.length;
+      const imported = await timedSection(
+        log,
+        'apply.customers',
+        () => this.customersPhase(scope, actor, run.id, prepared.plan, tallies),
+        () => users,
+      );
       await hook('customers');
       phase = 'openings';
-      await this.openingsPhase(scope, actor, run.id, snapshot, prepared, imported, tallies);
+      await timedSection(
+        log,
+        'apply.wallet_openings',
+        () => this.openingsPhase(scope, actor, run.id, snapshot, prepared, imported, tallies),
+        () => users,
+      );
       await hook('openings');
       phase = 'trials';
-      await this.trialsPhase(scope, actor, run.id, prepared, snapshot, imported, tallies);
+      await timedSection(
+        log,
+        'apply.trials',
+        () => this.trialsPhase(scope, actor, run.id, prepared, snapshot, imported, tallies),
+        () => users,
+      );
       await hook('trials');
       phase = 'products';
-      const shapeIds = await this.productsPhase(scope, actor, run.id, prepared, tallies);
+      const shapeIds = await timedSection(
+        log,
+        'apply.products',
+        () => this.productsPhase(scope, actor, run.id, prepared, tallies),
+        () => prepared.plan.shapes.length,
+      );
       await hook('products');
       phase = 'adoption';
-      await this.adoptionPhase(
-        scope,
-        actor,
-        run.id,
-        prepared,
-        snapshot,
-        mapping,
-        imported,
-        shapeIds,
-        tallies,
+      await timedSection(
+        log,
+        'apply.services',
+        () =>
+          this.adoptionPhase(
+            scope,
+            actor,
+            run.id,
+            prepared,
+            snapshot,
+            mapping,
+            imported,
+            shapeIds,
+            tallies,
+          ),
+        () => prepared.plan.services.length,
       );
       await hook('adoption');
     } catch (error) {
@@ -1994,8 +2052,8 @@ export class LegacyImporterService {
     const imported = new Map<string, { telegramUserId: string; customerId: string }>();
     const rows = plan.users.filter((u) => u.decision.kind !== 'INVALID_IDENTITY');
     let seen = 0;
-    for (let i = 0; i < rows.length; i += CUSTOMER_BATCH) {
-      const batch = rows.slice(i, i + CUSTOMER_BATCH);
+    for (let i = 0; i < rows.length; i += CUSTOMER_WRITE_BATCH) {
+      const batch = rows.slice(i, i + CUSTOMER_WRITE_BATCH);
       const written = await this.mutate(
         scope,
         actor,
@@ -2014,28 +2072,25 @@ export class LegacyImporterService {
             ).map((r) => [r.legacyId, r]),
           );
           const now = this.deps.clock.now();
+          // The batch's writes, many rows a statement: first the customers (a refused row is
+          // decided BEFORE any write, so it leaves no customer behind), then every map row,
+          // then the audit rows and events of the customers this batch created. One
+          // transaction, as before: a refusal that must roll back a new customer rolls back
+          // the batch.
+          type Planned = (typeof batch)[number];
+          const reviews: {
+            row: Planned['row'];
+            decision: Extract<Planned['decision'], { kind: 'MANUAL_REVIEW' }>;
+          }[] = [];
+          const importing: {
+            row: Planned['row'];
+            decision: Extract<Planned['decision'], { kind: 'IMPORT' }>;
+            prior: LegacyImportMapRecord | undefined;
+          }[] = [];
           for (const planned of batch) {
             const { row, decision } = planned;
             if (decision.kind === 'MANUAL_REVIEW') {
-              const outcome = await this.deps.runs.recordDecision(
-                scope,
-                {
-                  runId,
-                  legacyTable: 'user',
-                  legacyId: row.id,
-                  checksum: row.checksum,
-                  decision: { status: 'MANUAL_REVIEW', reasonCode: decision.mapReason },
-                  now,
-                },
-                tx,
-              );
-              if (outcome.kind === 'REFUSED' && outcome.reason === 'REVIEW_CLOSED') {
-                tallies.customers.reviewClosed += 1;
-              } else if (outcome.kind === 'REFUSED') {
-                tallies.customers.entityMismatch += 1;
-              } else {
-                tallies.customers.manualReviewRecorded += 1;
-              }
+              reviews.push({ row, decision });
               continue;
             }
             if (decision.kind !== 'IMPORT') continue;
@@ -2052,48 +2107,77 @@ export class LegacyImporterService {
               tallies.customers.sourceChanged += 1;
               continue;
             }
-            const { customerId, created } = await this.deps.customers.insertIfAbsent(
-              scope,
-              {
-                id: this.deps.ids.uuid(),
-                telegramUserId: decision.telegramUserId,
-                username: legacyProfileUsername(row.username),
-                // OQ-LWD-07: a MirzaBot ban survives the cutover. Applies only to a customer
-                // this statement creates; an existing customer's status is never touched.
-                status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
-                now,
-              },
-              tx,
-            );
-            const outcome = await this.deps.runs.recordDecision(
-              scope,
-              {
+            importing.push({ row, decision, prior });
+          }
+          const customers = await this.deps.customers.insertManyIfAbsent(
+            scope,
+            importing.map(({ row, decision }) => ({
+              id: this.deps.ids.uuid(),
+              telegramUserId: decision.telegramUserId,
+              username: legacyProfileUsername(row.username),
+              // OQ-LWD-07: a MirzaBot ban survives the cutover. Applies only to a customer
+              // this statement creates; an existing customer's status is never touched.
+              status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
+              now,
+            })),
+            tx,
+          );
+          const outcomes = await this.deps.runs.recordDecisions(
+            scope,
+            [
+              ...reviews.map(({ row, decision }) => ({
                 runId,
                 legacyTable: 'user',
                 legacyId: row.id,
                 checksum: row.checksum,
-                decision: {
-                  status: 'IMPORTED',
-                  entityType: 'CUSTOMER',
-                  entityId: customerId,
-                  reasonCode: created
-                    ? decision.openingKind === 'NEGATIVE'
-                      ? 'NEGATIVE_BALANCE'
-                      : null
-                    : // A rerun meets the customer it created itself: keep that row's own
-                      // reason, or a rerun would relabel every created customer "existing".
-                      prior?.status === 'IMPORTED' && prior.entityId === customerId
-                      ? prior.reasonCode
-                      : 'EXISTING_CUSTOMER',
-                },
+                decision: { status: 'MANUAL_REVIEW' as const, reasonCode: decision.mapReason },
                 now,
-              },
-              tx,
-            );
+              })),
+              ...importing.map(({ row, decision, prior }, i) => {
+                const { customerId, created } = customers[i] as (typeof customers)[number];
+                return {
+                  runId,
+                  legacyTable: 'user',
+                  legacyId: row.id,
+                  checksum: row.checksum,
+                  decision: {
+                    status: 'IMPORTED' as const,
+                    entityType: 'CUSTOMER' as const,
+                    entityId: customerId,
+                    reasonCode: created
+                      ? decision.openingKind === 'NEGATIVE'
+                        ? ('NEGATIVE_BALANCE' as const)
+                        : null
+                      : // A rerun meets the customer it created itself: keep that row's own
+                        // reason, or a rerun would relabel every created customer "existing".
+                        prior?.status === 'IMPORTED' && prior.entityId === customerId
+                        ? prior.reasonCode
+                        : ('EXISTING_CUSTOMER' as const),
+                  },
+                  now,
+                };
+              }),
+            ],
+            tx,
+          );
+          reviews.forEach((_, i) => {
+            const outcome = outcomes[i] as (typeof outcomes)[number];
+            if (outcome.kind === 'REFUSED' && outcome.reason === 'REVIEW_CLOSED') {
+              tallies.customers.reviewClosed += 1;
+            } else if (outcome.kind === 'REFUSED') {
+              tallies.customers.entityMismatch += 1;
+            } else {
+              tallies.customers.manualReviewRecorded += 1;
+            }
+          });
+          const created: { customerId: string; blocked: boolean }[] = [];
+          importing.forEach(({ row, decision }, i) => {
+            const outcome = outcomes[reviews.length + i] as (typeof outcomes)[number];
+            const customer = customers[i] as (typeof customers)[number];
             if (outcome.kind === 'REFUSED') {
               // Provenance is never rewritten. A customer this statement just created must
               // not outlive the refusal, so the batch rolls back and the run is interrupted.
-              if (created) {
+              if (customer.created) {
                 throw errors.conflict(
                   LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT,
                   `A legacy user's map row refused its new customer (${outcome.reason}).`,
@@ -2103,42 +2187,52 @@ export class LegacyImporterService {
               else if (outcome.reason === 'IMPORTED_SOURCE_CHANGED')
                 tallies.customers.sourceChanged += 1;
               else tallies.customers.entityMismatch += 1;
-              continue;
+              return;
             }
-            if (created) {
+            if (customer.created) {
               tallies.customers.created += 1;
               if (decision.blocked) tallies.customers.createdBlocked += 1;
-              await this.deps.audit.record(
-                scope,
-                actor,
-                {
-                  action: 'customer.legacy_imported',
-                  entityType: 'Customer',
-                  entityId: customerId,
-                  before: null,
-                  after: {
-                    source: 'LEGACY_MIGRATION',
-                    runId,
-                    status: decision.blocked ? 'BLOCKED' : 'ACTIVE',
-                  },
-                  result: 'SUCCESS',
-                },
-                tx,
-              );
-              await this.deps.outbox.write(tx, actor, {
-                eventType: 'CustomerImported',
-                aggregateType: 'Customer',
-                aggregateId: customerId,
-                payload: {
-                  source: 'LEGACY_MIGRATION',
-                  runId,
-                },
-              });
+              created.push({ customerId: customer.customerId, blocked: decision.blocked });
             } else {
               tallies.customers.matchedExisting += 1;
             }
-            local.push({ legacyId: row.id, telegramUserId: decision.telegramUserId, customerId });
-          }
+            local.push({
+              legacyId: row.id,
+              telegramUserId: decision.telegramUserId,
+              customerId: customer.customerId,
+            });
+          });
+          await recordAuditMany(
+            this.deps.audit,
+            scope,
+            actor,
+            created.map(({ customerId, blocked }) => ({
+              action: 'customer.legacy_imported',
+              entityType: 'Customer',
+              entityId: customerId,
+              before: null,
+              after: {
+                source: 'LEGACY_MIGRATION',
+                runId,
+                status: blocked ? 'BLOCKED' : 'ACTIVE',
+              },
+              result: 'SUCCESS' as const,
+            })),
+            tx,
+          );
+          await this.deps.outbox.writeMany(
+            tx,
+            actor,
+            created.map(({ customerId }) => ({
+              eventType: 'CustomerImported' as const,
+              aggregateType: 'Customer' as const,
+              aggregateId: customerId,
+              payload: {
+                source: 'LEGACY_MIGRATION' as const,
+                runId,
+              },
+            })),
+          );
           seen += batch.length;
           await this.deps.runs.checkpoint(scope, runId, seen, now, tx);
           return local;
@@ -2159,6 +2253,30 @@ export class LegacyImporterService {
     imported: ReadonlyMap<string, { telegramUserId: string; customerId: string }>,
     tallies: ApplyTallies,
   ): Promise<void> {
+    // Every opening is idempotent by its reference (`legacy:opening:<tg>`), so a batch that
+    // a crash interrupts is written again, exactly once, by the resume.
+    let batch: MigrationOpeningBalanceCommand[] = [];
+    let inBatch = new Set<string>();
+    const flush = async () => {
+      if (batch.length === 0) return;
+      const commands = batch;
+      batch = [];
+      inBatch = new Set();
+      const outcomes = await this.deps.openings.postMany(scope, actor, commands);
+      for (const outcome of outcomes) {
+        tallies.openings[outcome.kind] += 1;
+        if (outcome.kind === 'POSTED') {
+          // A negative Mirza balance is a DEBIT of its magnitude (owner decision 2026-10-17).
+          tallies.openings.postedSumMinor += outcome.signedAmountMinor;
+          if (outcome.signedAmountMinor < 0n) {
+            tallies.openings.debitPosted += 1;
+            tallies.openings.debitPostedSumMinor += -outcome.signedAmountMinor;
+          } else {
+            tallies.openings.creditPostedSumMinor += outcome.signedAmountMinor;
+          }
+        }
+      }
+    };
     for (const planned of prepared.plan.users) {
       if (planned.decision.kind !== 'IMPORT') continue;
       const who = imported.get(planned.row.id);
@@ -2171,35 +2289,19 @@ export class LegacyImporterService {
         else if (balance < 0n) tallies.openings.customerNotImportedNegativeSumMinor += -balance;
         continue;
       }
-      try {
-        const outcome = await this.deps.openings.post(scope, actor, {
-          customerId: who.customerId,
-          telegramUserId: who.telegramUserId,
-          legacyBalanceMinor: planned.decision.balanceMinor,
-          currency: prepared.salesCurrency as CurrencyCode,
-        });
-        tallies.openings[outcome.kind] += 1;
-        if (outcome.kind === 'POSTED') {
-          // A negative Mirza balance is a DEBIT of its magnitude (owner decision 2026-10-17).
-          tallies.openings.postedSumMinor += outcome.signedAmountMinor;
-          if (outcome.signedAmountMinor < 0n) {
-            tallies.openings.debitPosted += 1;
-            tallies.openings.debitPostedSumMinor += -outcome.signedAmountMinor;
-          } else {
-            tallies.openings.creditPostedSumMinor += outcome.signedAmountMinor;
-          }
-        }
-      } catch (error) {
-        if (
-          isNexaError(error) &&
-          error.code === PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH
-        ) {
-          tallies.openings.CONFLICT += 1;
-          continue;
-        }
-        throw error;
-      }
+      // Two legacy rows matched to one customer: the second waits for the first's batch to
+      // commit and then meets its opening, as two calls in that order would.
+      if (inBatch.has(who.telegramUserId)) await flush();
+      inBatch.add(who.telegramUserId);
+      batch.push({
+        customerId: who.customerId,
+        telegramUserId: who.telegramUserId,
+        legacyBalanceMinor: planned.decision.balanceMinor,
+        currency: prepared.salesCurrency as CurrencyCode,
+      });
+      if (batch.length >= OPENING_BATCH) await flush();
     }
+    await flush();
   }
 
   private async trialsPhase(
@@ -2211,33 +2313,45 @@ export class LegacyImporterService {
     imported: ReadonlyMap<string, { telegramUserId: string; customerId: string }>,
     tallies: ApplyTallies,
   ): Promise<void> {
+    // Each decision is idempotent by its key (and the record is written once per customer),
+    // so a batch that a crash interrupts is decided again, exactly once, by the resume.
+    type TrialInput = Parameters<LegacyImporterDeps['trials']['preserveManyForImport']>[2][number];
+    let batch: TrialInput[] = [];
+    let inBatch = new Set<string>();
+    const flush = async () => {
+      if (batch.length === 0) return;
+      const inputs = batch;
+      batch = [];
+      inBatch = new Set();
+      for (const answer of await this.deps.trials.preserveManyForImport(scope, actor, inputs)) {
+        if (answer.kind === 'PAYLOAD_MISMATCH') {
+          tallies.trials.CONFLICT += 1;
+          continue;
+        }
+        const result = answer.result;
+        tallies.trials[result.outcome] += 1;
+        tallies.trials.decisions[result.record.decision] =
+          (tallies.trials.decisions[result.record.decision] ?? 0) + 1;
+      }
+    };
     for (const planned of prepared.plan.users) {
       if (planned.decision.kind !== 'IMPORT') continue;
       const who = imported.get(planned.row.id);
       if (who === undefined) continue;
-      try {
-        const result = await this.deps.trials.preserveForImport(scope, actor, {
-          idempotencyKey: `legacy-import:trial:${runId}:${who.customerId}`,
-          customerId: who.customerId,
-          legacy: {
-            limitUsertest: planned.row.limitUsertest,
-            hadTrial: snapshot.trialUsers.has(planned.row.id),
-          },
-        });
-        tallies.trials[result.outcome] += 1;
-        tallies.trials.decisions[result.record.decision] =
-          (tallies.trials.decisions[result.record.decision] ?? 0) + 1;
-      } catch (error) {
-        if (
-          isNexaError(error) &&
-          error.code === PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH
-        ) {
-          tallies.trials.CONFLICT += 1;
-          continue;
-        }
-        throw error;
-      }
+      // One customer twice: the second decision is made after the first commits, as before.
+      if (inBatch.has(who.customerId)) await flush();
+      inBatch.add(who.customerId);
+      batch.push({
+        idempotencyKey: `legacy-import:trial:${runId}:${who.customerId}`,
+        customerId: who.customerId,
+        legacy: {
+          limitUsertest: planned.row.limitUsertest,
+          hadTrial: snapshot.trialUsers.has(planned.row.id),
+        },
+      });
+      if (batch.length >= TRIAL_BATCH) await flush();
     }
+    await flush();
   }
 
   private async productsPhase(

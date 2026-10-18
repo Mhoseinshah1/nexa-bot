@@ -1,4 +1,4 @@
-import { and, desc, eq, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { CustomerStatus, TenantContext, UserId } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -14,6 +14,11 @@ import type {
 } from '../application/ports.js';
 
 /** Custom trial limits, in PostgreSQL. Every query leads with the tenant. */
+/** Overrides per INSERT: 4 parameters a row. */
+const OVERRIDE_INSERT_CHUNK = 10_000;
+/** Keys per `IN (…)` read. */
+const OVERRIDE_READ_CHUNK = 10_000;
+
 export class DrizzleTrialOverrideRepository implements TrialOverrideRepository {
   constructor(private readonly db: Database) {}
 
@@ -40,6 +45,61 @@ export class DrizzleTrialOverrideRepository implements TrialOverrideRepository {
     const row = rows[0];
     if (row === undefined) return null;
     return { customerId: row.customerId as UserId, limit: row.trialLimit, setAt: row.setAt };
+  }
+
+  /** `find` for many customers in one read; a customer with no override is not in the map. */
+  async findMany(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx?: TransactionScope,
+  ): Promise<ReadonlyMap<string, TrialOverrideRecord>> {
+    const tenantId = requireTenantId(scope);
+    const out = new Map<string, TrialOverrideRecord>();
+    for (let i = 0; i < customerIds.length; i += OVERRIDE_READ_CHUNK) {
+      const rows = await this.exec(tx)
+        .select()
+        .from(trialLimitOverrides)
+        .where(
+          and(
+            eq(trialLimitOverrides.tenantId, tenantId),
+            inArray(trialLimitOverrides.customerId, customerIds.slice(i, i + OVERRIDE_READ_CHUNK)),
+          ),
+        );
+      for (const row of rows) {
+        out.set(row.customerId, {
+          customerId: row.customerId as UserId,
+          limit: row.trialLimit,
+          setAt: row.setAt,
+        });
+      }
+    }
+    return out;
+  }
+
+  /** `upsert` for many customers (each named once): multi-row upserts, same rows. */
+  async upsertMany(
+    scope: TenantContext,
+    overrides: readonly { readonly customerId: UserId; readonly limit: number }[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    for (let i = 0; i < overrides.length; i += OVERRIDE_INSERT_CHUNK) {
+      await this.exec(tx)
+        .insert(trialLimitOverrides)
+        .values(
+          overrides.slice(i, i + OVERRIDE_INSERT_CHUNK).map((o) => ({
+            tenantId,
+            customerId: o.customerId,
+            trialLimit: o.limit,
+            setAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [trialLimitOverrides.tenantId, trialLimitOverrides.customerId],
+          set: { trialLimit: sql`excluded.trial_limit`, setAt: sql`excluded.set_at` },
+        });
+    }
   }
 
   async upsert(

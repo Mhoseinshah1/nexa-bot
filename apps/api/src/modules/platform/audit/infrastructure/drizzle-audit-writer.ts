@@ -1,7 +1,6 @@
 import {
   type ActorContext,
   type AuditEntry,
-  type AuditWriter,
   type Clock,
   type IdGenerator,
   type ScopeContext,
@@ -11,6 +10,7 @@ import { auditLogs } from '../../../../infrastructure/persistence/schema.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { scopeTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { redactRecord } from '../../../../infrastructure/redaction.js';
+import type { BulkAuditWriter } from '../application/record-audit-many.js';
 
 /**
  * The audit log.
@@ -27,7 +27,10 @@ import { redactRecord } from '../../../../infrastructure/redaction.js';
  * answer "who changed this, and to what".
  */
 
-export class DrizzleAuditWriter implements AuditWriter {
+/** Audit rows per INSERT: 18 parameters a row, so 3 000 rows stay under PostgreSQL's 65 535. */
+const AUDIT_INSERT_CHUNK = 3000;
+
+export class DrizzleAuditWriter implements BulkAuditWriter {
   constructor(
     private readonly db: Database,
     private readonly ids: IdGenerator,
@@ -42,7 +45,29 @@ export class DrizzleAuditWriter implements AuditWriter {
   ): Promise<void> {
     const executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
 
-    await executor.insert(auditLogs).values({
+    await executor.insert(auditLogs).values(this.row(scope, actor, entry));
+  }
+
+  /**
+   * `record` for many entries of ONE actor, in as few statements as the bind-parameter limit
+   * allows: the same rows, in the same order, each with its own id and `occurredAt`. For a
+   * bulk writer (the one-time import) inside its own transaction.
+   */
+  async recordMany(
+    scope: ScopeContext,
+    actor: ActorContext,
+    entries: readonly AuditEntry[],
+    tx?: unknown,
+  ): Promise<void> {
+    const executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
+    const rows = entries.map((entry) => this.row(scope, actor, entry));
+    for (let i = 0; i < rows.length; i += AUDIT_INSERT_CHUNK) {
+      await executor.insert(auditLogs).values(rows.slice(i, i + AUDIT_INSERT_CHUNK));
+    }
+  }
+
+  private row(scope: ScopeContext, actor: ActorContext, entry: AuditEntry) {
+    return {
       id: this.ids.uuid(),
       tenantId: scopeTenantId(scope),
       occurredAt: this.clock.now(),
@@ -61,6 +86,6 @@ export class DrizzleAuditWriter implements AuditWriter {
       ip: actor.ip ?? null,
       userAgent: actor.userAgent ?? null,
       result: entry.result,
-    });
+    };
   }
 }
