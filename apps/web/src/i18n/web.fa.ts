@@ -633,6 +633,11 @@ export const WEB_FA = {
   'web.navgroup_resellers': 'نمایندگان',
   'web.navgroup_bot': 'ربات و ارتباط با مشتری',
   'web.open_menu': 'باز کردن منو',
+  // The phone's bottom navigation: short labels for the capsule's four destinations and its menu.
+  'web.bottom_nav_label': 'دسترسی سریع',
+  'web.bottom_nav_chats': 'گفتگوها',
+  'web.bottom_nav_payments': 'پرداخت‌ها',
+  'web.bottom_nav_menu': 'منو',
   'web.close': 'بستن',
   'web.search_open': 'جست‌وجو یا رفتن به صفحه…',
   'web.search_label': 'رفتن به صفحه',

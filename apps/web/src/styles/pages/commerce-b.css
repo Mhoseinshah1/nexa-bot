@@ -474,7 +474,8 @@
 /* The draft's save stays in reach while the sections scroll past. */
 .campaign-savebar {
   position: sticky;
-  bottom: 0;
+  /* Clear of the phone's bottom-navigation capsule (shell.css); 0 at a desk. */
+  bottom: var(--bottom-nav-clear, 0px);
   z-index: 2;
   box-shadow: var(--shadow);
 }

@@ -386,7 +386,8 @@
 }
 .bx-save {
   position: sticky;
-  bottom: 12px;
+  /* Clear of the phone's bottom-navigation capsule (shell.css); 12px at a desk. */
+  bottom: calc(var(--bottom-nav-clear, 0px) + 12px);
   z-index: 5;
   display: flex;
   align-items: center;

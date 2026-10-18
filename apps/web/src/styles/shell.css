@@ -740,6 +740,147 @@
   }
 }
 
+/* --- Bottom navigation (a phone) ------------------------------------------------ */
+/*
+ * The Liquid Glass capsule: four destinations and the menu, fixed above the
+ * home indicator. Drawn at phone widths only. It sits above the page and the
+ * topbar (35) and below the sidebar drawer (44/45) and every sheet, drawer and
+ * dialog (89+), so anything that opens over the page also covers it.
+ *
+ * `--bottom-nav-clear` is the distance from the viewport's bottom edge to the
+ * capsule's top. The content's end, the toasts and every sticky-bottom save bar
+ * add it to their own offset (`var(--bottom-nav-clear, 0px)`), so above the
+ * phone width, where it is undefined, they keep their desk offsets.
+ */
+.bottom-nav {
+  display: none;
+}
+@media (max-width: 820px) {
+  :root {
+    --bottom-nav-clear: calc(62px + 10px + env(safe-area-inset-bottom, 0px));
+  }
+  .bottom-nav {
+    position: fixed;
+    inset-inline: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    height: 62px;
+    z-index: 38;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    align-items: center;
+    gap: 2px;
+    padding: 0 5px;
+    border-radius: 28px;
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow:
+      inset 0 1px 0 var(--spec),
+      inset 0 0 0 1px var(--edge-2),
+      var(--gshadow);
+  }
+  .bottom-nav::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    background: linear-gradient(
+      150deg,
+      var(--edge),
+      transparent 40%,
+      transparent 62%,
+      var(--edge-2)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+  .bottom-nav a,
+  .bottom-nav button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+    min-height: 52px;
+    padding: 4px 2px;
+    border: 0;
+    border-radius: 22px;
+    background: transparent;
+    color: var(--fg-2);
+    font: inherit;
+    font-size: var(--fs-2xs);
+    font-weight: 600;
+    line-height: 1.3;
+    cursor: pointer;
+    transition:
+      background 0.2s ease,
+      color 0.2s ease;
+  }
+  .bottom-nav a:hover,
+  .bottom-nav button:hover {
+    color: var(--fg);
+    text-decoration: none;
+  }
+  .bottom-nav a:focus-visible,
+  .bottom-nav button:focus-visible {
+    outline-offset: -2px;
+  }
+  .bottom-nav a[aria-current='page'] {
+    background: var(--glass-hi);
+    color: var(--fg);
+    box-shadow: inset 0 1px 0 var(--spec);
+  }
+  .bottom-nav .bn-ico {
+    position: relative;
+    display: inline-flex;
+  }
+  .bottom-nav .lbl {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The badge rides the icon's corner, as the demo draws it. */
+  .bottom-nav .cnt {
+    position: absolute;
+    top: -7px;
+    inset-inline-start: 11px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-4);
+    color: var(--fg);
+    font-size: var(--fs-2xs);
+    font-weight: 700;
+    line-height: 17px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .bottom-nav .cnt.warn {
+    background: var(--warn);
+    color: var(--on-warn);
+  }
+  .bottom-nav .cnt.danger {
+    background: var(--danger);
+    color: var(--on-danger);
+  }
+  /* Nothing at a page's end hides behind the capsule. */
+  .content {
+    padding-bottom: calc(var(--bottom-nav-clear) + 16px);
+  }
+}
+
 /* The sign-in form spaces its fields with its own gap, not the plain-form margin. */
 .screen-card form > * + * {
   margin-top: 0;
@@ -777,11 +918,13 @@
 @media (prefers-reduced-transparency: reduce) {
   .sidebar,
   .topbar,
+  .bottom-nav,
   .app:not(.collapsed) .sidebar {
     background: var(--panel);
   }
   .sidebar,
   .topbar,
+  .bottom-nav,
   .search-trigger,
   .topbar .btn.icon,
   .topbar .user-trigger {

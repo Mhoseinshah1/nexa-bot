@@ -2390,7 +2390,8 @@ textarea.input,
 /* A phone: the toasts span the screen, clear of the home indicator. */
 @media (max-width: 820px) {
   .toasts {
-    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    /* Above the bottom-navigation capsule (`--bottom-nav-clear`, shell.css). */
+    bottom: calc(var(--bottom-nav-clear, env(safe-area-inset-bottom, 0px)) + 12px);
     inset-inline: 10px;
     align-items: center;
   }
