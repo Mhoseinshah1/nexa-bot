@@ -1504,6 +1504,42 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
     scope: 'PANEL',
   },
+  {
+    key: 'panel.connection_files.caption_template',
+    description:
+      "This panel's own connection-file caption template, used when its caption mode is " +
+      'CUSTOM. Stored RAW and rendered only at send time. It may name only ' +
+      'CONNECTION_FILE_CAPTION_VARIABLES and is refused when blank, longer than Telegram\u2019s ' +
+      '1024-unit caption bound, or naming any other variable ' +
+      '(connectionFileCaptionTemplateIssues). Telegram formatting tags are allowed; every ' +
+      'value is HTML-escaped as it is substituted and the result is read by the closed ' +
+      'caption grammar, never by Telegram\u2019s HTML parser. Null means this panel stores no ' +
+      'template and the catalogue default bot.service.connection_files_caption is used.',
+    schema: z
+      .string()
+      .superRefine((body, context) => {
+        for (const issue of connectionFileCaptionTemplateIssues(body)) {
+          context.addIssue({
+            code: 'custom',
+            message:
+              issue.kind === 'UNKNOWN_VARIABLE'
+                ? `Unknown variable {${issue.token}}.`
+                : issue.kind === 'TOO_LONG'
+                  ? `At most ${issue.max} characters; this is ${issue.length}.`
+                  : 'A caption template may not be blank.',
+          });
+        }
+      })
+      .nullable(),
+    defaultValue: null,
+    configures: null,
+    // Null is an ordinary value: "no template of this panel's own, use the default".
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+    scope: 'PANEL',
+  },
 ] as const satisfies readonly SettingDefinition[];
 
 export type SettingKey = (typeof SETTINGS)[number]['key'];
