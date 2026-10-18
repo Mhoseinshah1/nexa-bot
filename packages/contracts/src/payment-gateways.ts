@@ -577,6 +577,28 @@ export type PaymentGatewayIneligibilityReason =
   (typeof PAYMENT_GATEWAY_INELIGIBILITY_REASONS)[number];
 
 /**
+ * Why a route cannot be offered for a purpose to ANY customer: its own configuration,
+ * before any customer's thresholds or amount are asked.
+ *
+ * The bot asks the same question per customer (`PaymentGatewayService.routesFor`). The
+ * operator's warning that no route can fund a wallet top-up is this list per route,
+ * produced by the SAME evaluator (`routeOfferabilityBlockers`). A surface draws these
+ * reasons and never re-decides them: a second predicate in the Web Admin would be a
+ * second answer to "why is «💰 افزایش موجودی» missing from the bot".
+ */
+export const PAYMENT_ROUTE_UNOFFERABLE_REASONS = [
+  /** The route is not ACTIVE. A route with no key cannot be ACTIVE either. */
+  'INACTIVE',
+  /** The route's switch for this purpose is off (`allowWalletTopup`, `allowServicePurchase`). */
+  'PURPOSE_OFF',
+  /** It settles by manual transfer and no receiving card is enabled. */
+  'NO_RECEIVING_ACCOUNT',
+  /** It is priced only by the central rate, and that rate's unit ratio is unset. */
+  'UNPRICEABLE',
+] as const;
+export type PaymentRouteUnofferableReason = (typeof PAYMENT_ROUTE_UNOFFERABLE_REASONS)[number];
+
+/**
  * What an operator submits for one route.
  *
  * There is no `provider` field and no `status` field. The provider is the row's
