@@ -243,6 +243,12 @@
     linear-gradient(var(--fg) 0 0);
   mask-composite: exclude;
 }
+/* A table inside a glass card lets the glass through its header. */
+.dash-row > .card .tbl th,
+.dash-charts > .card .tbl th,
+.content-inner:has(> .dash-row) > .card .tbl th {
+  background: transparent;
+}
 /* An alerting KPI keeps its tone: the rim line takes the danger or warn colour. */
 .dash-kpis > .card.alert {
   box-shadow:
