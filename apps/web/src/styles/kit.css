@@ -1660,6 +1660,11 @@ textarea.input,
 .no-scroll-anchor {
   overflow-anchor: none;
 }
+/* The empty height a tab swap keeps so the page does not move (`ui/scroll-hold.tsx`). */
+.scroll-hold {
+  display: block;
+  pointer-events: none;
+}
 .pills {
   display: inline-flex;
   flex-wrap: wrap;
