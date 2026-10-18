@@ -251,6 +251,16 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
  * here and the specific one is in `PLACEHOLDER_LABEL_OVERRIDES_FA` below.
  */
 export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
+  // Track 3 §2: a panel's connection-file caption variables.
+  volume_total: 'حجم کل',
+  volume_used: 'حجم مصرف‌شده',
+  volume_left: 'حجم باقی‌مانده',
+  expires_at_jalali: 'تاریخ انقضا (شمسی)',
+  days_left: 'روزهای باقی‌مانده',
+  platform: 'سکوی فایل',
+  file_name: 'نام فایل',
+  sub_link: 'لینک اشتراک',
+  support: 'پشتیبانی',
   // UX Batch 01 item 4: the connection file caption's facts.
   remaining_volume: 'حجم باقی‌مانده',
   service_name: 'نام سرویس خریداری‌شده',

@@ -9,6 +9,8 @@ import {
 import { DrizzleDirectMessageRepository } from './modules/commerce/direct-messages/infrastructure/drizzle-direct-message.repository.js';
 import { fileURLToPath } from 'node:url';
 import {
+  type ConnectionFileCaptionMode,
+  type ConnectionFileCaptionPlacement,
   ADMIN_MENU_BUTTON,
   ADMIN_MENU_COMMAND,
   BACKUP_LEASE_STALE_AFTER_MS,
@@ -5765,8 +5767,31 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
             serviceStateLabelKey({ ...service, now: clock.now() }),
             {},
           ),
+          product: product?.title ?? null,
         };
       },
+    },
+    /*
+     * Track 3 §2: the panel's caption settings (PANEL-scoped keys), the default key's RAW
+     * body (the tenant's wording or the catalogue's), the tenant's zone, and its first
+     * support account — everything a CUSTOM caption is rendered with at send time.
+     */
+    connectionCaptions: {
+      policyFor: async (scope, panelId) => {
+        const values = await panelSettingsResolver.valuesOf(scope, panelId);
+        return {
+          mode: values.get('panel.connection_files.caption_mode') as ConnectionFileCaptionMode,
+          template: values.get('panel.connection_files.caption_template') as string | null,
+          placement: values.get(
+            'panel.connection_files.caption_placement',
+          ) as ConnectionFileCaptionPlacement,
+        };
+      },
+      defaultTemplate: async (scope) =>
+        (await templateResolver.resolve(scope, 'bot.service.connection_files_caption')).body,
+      presentationFor: (scope) => templatePresentation.presentationFor(scope),
+      supportHandle: async (scope) =>
+        (await settingsResolver.valueOf<readonly string[]>(scope, 'support.accounts'))[0] ?? null,
     },
   });
 
