@@ -1,5 +1,6 @@
 import {
   BACKUP_SCHEDULE_SETTING_KEYS,
+  PANEL_SETTING_KEYS,
   isSettingKey,
   settingIntegerRange,
   type FxFallbackSource,
@@ -119,6 +120,8 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   // backups it schedules, as a switch and an interval with a unit — never raw minutes.
   BACKUP_SCHEDULE_SETTING_KEYS.enabled,
   BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
+  // Track 3 §2: PANEL-scoped — one value per panel, on that panel's «فایل‌های اتصال» tab.
+  ...PANEL_SETTING_KEYS,
 ];
 
 /**
@@ -454,6 +457,42 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_panels_balancing_strategy_desc',
     group: 'services',
     control: { kind: 'select', options: options(BALANCING_STRATEGY_OPTIONS) },
+  },
+  /*
+   * Track 3 §2: PANEL-scoped keys. Drawn on each panel's «فایل‌های اتصال» tab and never on
+   * this page (`SETTINGS_MANAGED_ELSEWHERE`); the tenant API does not list them at all. Their
+   * entries exist because this map is total over the registry.
+   */
+  'panel.connection_files.caption_mode': {
+    title: 'web.connection_files_mode',
+    description: 'web.setting_connection_files_mode_desc',
+    group: 'services',
+    control: {
+      kind: 'select',
+      options: options({
+        PANEL_DEFAULT: 'web.connection_files_mode_panel_default',
+        CUSTOM: 'web.connection_files_mode_custom',
+        NONE: 'web.connection_files_mode_none',
+      }),
+    },
+  },
+  'panel.connection_files.caption_template': {
+    title: 'web.connection_files_template',
+    description: 'web.setting_connection_files_template_desc',
+    group: 'services',
+    control: { kind: 'text' },
+  },
+  'panel.connection_files.caption_placement': {
+    title: 'web.connection_files_placement',
+    description: 'web.setting_connection_files_placement_desc',
+    group: 'services',
+    control: {
+      kind: 'select',
+      options: options({
+        LAST_FILE: 'web.connection_files_placement_last',
+        EVERY_FILE: 'web.connection_files_placement_every',
+      }),
+    },
   },
   'services.link_rotation_cooldown_hours': {
     title: 'web.setting_link_rotation_cooldown_hours',

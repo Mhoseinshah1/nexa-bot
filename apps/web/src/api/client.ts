@@ -5613,3 +5613,24 @@ export function cancelLegacyMigration(
     legacyMigrationImportResponseSchema,
   );
 }
+
+// Track 3 §2: one panel's PANEL-scoped settings (the «فایل‌های اتصال» tab).
+import {
+  panelSettingListResponseSchema,
+  panelSettingWriteResponseSchema,
+  type PanelSettingListResponse,
+  type PanelSettingWriteResponse,
+} from '@nexa/contracts';
+
+export function fetchPanelSettings(panelId: string): Promise<PanelSettingListResponse> {
+  return authedGet(PANEL_ROUTES.settings(panelId), panelSettingListResponseSchema);
+}
+
+/** One key, with the version it was read at; a stale one is refused, not merged. */
+export function savePanelSetting(
+  panelId: string,
+  input: { key: string; value: unknown; expectedVersion: number | null; idempotencyKey: string },
+): Promise<PanelSettingWriteResponse> {
+  const { key, ...body } = input;
+  return post(PANEL_ROUTES.setting(panelId, key), body, panelSettingWriteResponseSchema);
+}

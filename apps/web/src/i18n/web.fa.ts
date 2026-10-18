@@ -3893,6 +3893,50 @@ export const WEB_FA = {
   'web.trials_history_reason': 'دلیل',
   'web.trials_history_time': 'زمان',
 
+  // Track 3 §2: a panel's connection-file caption — its «فایل‌های اتصال» tab.
+  'web.panel_tab_connection_files': 'فایل‌های اتصال',
+  'web.connection_files_title': 'توضیح فایل‌های اتصال',
+  'web.connection_files_hint':
+    'متنی که زیر فایل‌های اتصال این پنل (مثل Android.bpf و Windows.bpf) برای مشتری فرستاده می‌شود.',
+  'web.connection_files_mode': 'حالت توضیح',
+  'web.connection_files_mode_panel_default': 'پیش‌فرض پنل',
+  'web.connection_files_mode_custom': 'سفارشی',
+  'web.connection_files_mode_none': 'بدون توضیح',
+  'web.connection_files_mode_panel_default_note':
+    'توضیح آمادهٔ خود پنل برای هر فایل نشان داده می‌شود؛ اگر پنل توضیحی نفرستد، نام کاربری سرویس.',
+  'web.connection_files_mode_none_note': 'فایل‌ها بدون هیچ توضیحی فرستاده می‌شوند.',
+  'web.connection_files_use_default': 'استفاده از قالب پیش‌فرض',
+  'web.connection_files_use_default_note':
+    'قالب پیش‌فرض همان «توضیح پیش‌فرض فایل‌های اتصال» در صفحهٔ قالب پیام‌هاست.',
+  'web.connection_files_template': 'قالب توضیح این پنل',
+  'web.connection_files_template_hint':
+    'متغیرها را داخل آکولاد بنویسید، مثل {username}. هر خطی که مقدار متغیرهایش برای سرویس موجود نباشد حذف می‌شود. برچسب‌های قالب‌بندی تلگرام مثل <b> و <code> مجازند و مقدار متغیرها هرگز به‌عنوان برچسب خوانده نمی‌شود.',
+  'web.connection_files_variables': 'متغیرهای مجاز',
+  'web.connection_files_unknown_variable':
+    'متغیر ناشناخته: {token}. فقط متغیرهای فهرست‌شده مجازند.',
+  'web.connection_files_template_empty': 'قالب توضیح نمی‌تواند خالی باشد.',
+  'web.connection_files_template_too_long':
+    'قالب توضیح حداکثر {max} نویسه است؛ این قالب {count} نویسه دارد.',
+  'web.connection_files_length': '{count} از {max} نویسه',
+  'web.connection_files_length_warning':
+    'تلگرام توضیح فایل را حداکثر ۱۰۲۴ نویسه می‌پذیرد. اگر متن نهایی با مقدارهای واقعی بلندتر شود، هنگام ارسال کوتاه می‌شود و «…» در پایانش می‌آید.',
+  'web.connection_files_placement': 'محل توضیح',
+  'web.connection_files_placement_last': 'فقط زیر آخرین فایل',
+  'web.connection_files_placement_every': 'زیر همهٔ فایل‌ها',
+  'web.connection_files_preview': 'پیش‌نمایش',
+  'web.connection_files_preview_hint':
+    'این فقط پیش‌نمایش است: به جای هر متغیر نام آن نشان داده می‌شود و مقدار واقعی سرویس هنگام ارسال جایگزین می‌شود.',
+  'web.connection_files_preview_empty': 'با این قالب توضیحی فرستاده نمی‌شود.',
+  'web.connection_files_stale': 'این تنظیم در این فاصله تغییر کرده است؛ مقدار تازه بارگذاری شد.',
+  'web.connection_files_invalid': 'قالب توضیح هنوز ایراد دارد؛ پیش از ذخیره آن را اصلاح کنید.',
+  'web.connection_files_updated_at': 'آخرین تغییر',
+  'web.setting_connection_files_mode_desc':
+    'برای هر پنل جدا، در صفحهٔ همان پنل، بخش «فایل‌های اتصال» تنظیم می‌شود.',
+  'web.setting_connection_files_template_desc':
+    'قالب توضیح سفارشی هر پنل، در صفحهٔ همان پنل، بخش «فایل‌های اتصال».',
+  'web.setting_connection_files_placement_desc':
+    'اینکه توضیح زیر آخرین فایل بیاید یا زیر همهٔ فایل‌ها؛ برای هر پنل جدا.',
+
   // R1: the free trial per panel — its tab on the panel page and the Trials page overview.
   'web.panel_tab_trial': 'سرویس تست',
   'web.service_trial_badge': 'سرویس تست',
