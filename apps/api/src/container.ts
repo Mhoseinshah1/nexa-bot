@@ -644,6 +644,7 @@ import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisionin
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { SubscriptionFileService } from './modules/commerce/provisioning/application/subscription-file.service.js';
+import { I18N_CAPTION_TEXT } from './modules/commerce/messaging/infrastructure/caption-markup.js';
 import {
   ServiceRefreshService,
   SERVICE_LIVE_CHECK_TIMEOUT_MS,
@@ -5793,6 +5794,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * body (the tenant's wording or the catalogue's), the tenant's zone, and its first
      * support account — everything a CUSTOM caption is rendered with at send time.
      */
+    // The caption grammar and renderer (`@nexa/i18n`), behind the application's port.
+    captionText: I18N_CAPTION_TEXT,
     connectionCaptions: {
       policyFor: async (scope, panelId) => {
         const values = await panelSettingsResolver.valuesOf(scope, panelId);

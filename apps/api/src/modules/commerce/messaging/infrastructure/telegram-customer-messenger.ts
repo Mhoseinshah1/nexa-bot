@@ -56,7 +56,7 @@ import {
   TELEGRAM_MESSAGE_MAX,
   worstOutcome,
 } from '../application/message-split.js';
-import { placeCaptionEntities } from '../application/caption-markup.js';
+import { placeCaptionEntities } from './caption-markup.js';
 import {
   NO_DECORATION,
   appearanceFallbackText,

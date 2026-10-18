@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseCaptionMarkup,
   placeCaptionEntities,
-} from '../../apps/api/src/modules/commerce/messaging/application/caption-markup';
+} from '../../apps/api/src/modules/commerce/messaging/infrastructure/caption-markup';
 import {
   planMediaBatches,
   TELEGRAM_MEDIA_GROUP_MAX,

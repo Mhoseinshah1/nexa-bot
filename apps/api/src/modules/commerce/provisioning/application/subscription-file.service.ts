@@ -35,12 +35,8 @@ import type {
   CustomerMessenger,
   CustomerSendResult,
 } from '../../messaging/application/ports.js';
-import {
-  formatDateOnly,
-  parseCaptionMarkup,
-  renderConnectionFileCaption,
-  type TemplatePresentation,
-} from '@nexa/i18n';
+import type { CaptionMarkup, CaptionText } from '../../messaging/application/caption-markup.js';
+import type { TemplatePresentation } from '../../../control/templates/application/ports.js';
 import { planMediaBatches } from '../../messaging/application/media-group.js';
 import { decideOperability } from './panel-operability.js';
 import { providerRefFor } from './provision-executor.js';
@@ -90,6 +86,12 @@ export interface SubscriptionFileDeps {
    * Track 3 (`LEGACY_CAPTION_POLICY`): the panel's own caption, on every file.
    */
   readonly connectionCaptions?: ConnectionFileCaptionSource;
+  /**
+   * The caption grammar and the connection-file caption renderer (`@nexa/i18n`, behind a
+   * port: an application file does not import the catalogue package). Bound in
+   * `container.ts` to `I18N_CAPTION_TEXT`.
+   */
+  readonly captionText: CaptionText;
 }
 
 /** Track 3 §2: one panel's caption settings, as its PANEL-scoped keys resolve. */
@@ -395,7 +397,13 @@ export class SubscriptionFileService {
       const facts = fileCaptionValues(service, extras);
       return (index, file) =>
         captioned(index)
-          ? { caption: connectionFileCaption(file.caption, service.providerUsername, facts) }
+          ? {
+              caption: connectionFileCaption(
+                file.caption === null ? null : this.deps.captionText.parse(file.caption),
+                service.providerUsername,
+                facts,
+              ),
+            }
           : {};
     }
 
@@ -411,8 +419,13 @@ export class SubscriptionFileService {
         now,
         presentation,
         support,
+        jalaliDate: (date, timezone) => this.deps.captionText.jalaliDate(date, timezone),
       });
-      const rendered = renderConnectionFileCaption(body, values, presentation);
+      const rendered = this.deps.captionText.renderConnectionFileCaption(
+        body,
+        values,
+        presentation,
+      );
       if (rendered.text.length === 0) return {};
       return {
         caption: {
@@ -451,6 +464,8 @@ export function connectionFileCaptionVariables(
     readonly now: Date;
     readonly presentation: TemplatePresentation;
     readonly support: string | null;
+    /** `CaptionText.jalaliDate`: the date in the Jalali calendar and the given zone. */
+    readonly jalaliDate: (date: Date, timezone: string) => string;
   },
 ): TemplateValues {
   const values: Record<string, TemplateValues[string]> = {};
@@ -469,10 +484,10 @@ export function connectionFileCaptionVariables(
     }
   }
   if (service.expiresAt !== null) {
-    values['expires_at_jalali'] = formatDateOnly(service.expiresAt, {
-      timezone: context.presentation.timezone,
-      calendar: 'jalali',
-    });
+    values['expires_at_jalali'] = context.jalaliDate(
+      service.expiresAt,
+      context.presentation.timezone,
+    );
     const remaining = service.expiresAt.getTime() - context.now.getTime();
     values['days_left'] = Math.max(0, Math.ceil(remaining / DAY_MS));
   }
@@ -534,9 +549,9 @@ export function fileCaptionValues(
  *
  * `bot.service.file_caption` carries the PANEL's caption (`{caption}`, the default body and
  * the source of truth until a tenant says otherwise) and the service's own facts, for a
- * tenant that rewrote the template to name them. The panel's markup is read by
- * `parseCaptionMarkup` into text and entities, so `<code>` shows as code and never as a raw
- * tag, and nothing the panel wrote is parsed by Telegram as HTML.
+ * tenant that rewrote the template to name them. The panel's markup arrives ALREADY read by
+ * the closed caption grammar (`CaptionText.parse`) into text and entities, so `<code>` shows
+ * as code and never as a raw tag, and nothing the panel wrote is parsed by Telegram as HTML.
  *
  * When that renders to nothing — the panel gave no caption and the default body names only
  * `{caption}`, or a tenant's body named only facts this service lacks — the file carries
@@ -544,11 +559,10 @@ export function fileCaptionValues(
  * introduced), rather than going bare.
  */
 export function connectionFileCaption(
-  providerCaption: string | null,
+  markup: CaptionMarkup | null,
   serviceUsername: string,
   facts: TemplateValues = {},
 ): CustomerCaption {
-  const markup = providerCaption === null ? null : parseCaptionMarkup(providerCaption);
   const caption = markup === null || markup.text.length === 0 ? null : markup;
   return {
     templateKey: 'bot.service.file_caption',

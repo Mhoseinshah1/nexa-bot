@@ -22,6 +22,7 @@ import {
   renderConnectionFileCaption,
 } from '@nexa/i18n';
 import { RickpanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
+import { I18N_CAPTION_TEXT } from '../../apps/api/src/modules/commerce/messaging/infrastructure/caption-markup';
 import {
   SubscriptionFileService,
   connectionFileCaptionVariables,
@@ -183,7 +184,12 @@ describe('the variables a service and a file give', () => {
       service,
       extras,
       { fileName: 'iOS MacOS.bpf' },
-      { now, presentation: DEFAULT_TEMPLATE_PRESENTATION, support: 'nexa_support' },
+      {
+        now,
+        presentation: DEFAULT_TEMPLATE_PRESENTATION,
+        support: 'nexa_support',
+        jalaliDate: I18N_CAPTION_TEXT.jalaliDate,
+      },
     );
     expect(values).toMatchObject({
       username: 'nx_ali',
@@ -206,7 +212,12 @@ describe('the variables a service and a file give', () => {
       { ...service, usageSyncedAt: null, expiresAt: null, subscriptionUrl: null },
       { serviceName: null, location: null, status: null },
       { fileName: 'Windows.bpf' },
-      { now, presentation: DEFAULT_TEMPLATE_PRESENTATION, support: null },
+      {
+        now,
+        presentation: DEFAULT_TEMPLATE_PRESENTATION,
+        support: null,
+        jalaliDate: I18N_CAPTION_TEXT.jalaliDate,
+      },
     );
     for (const token of [
       'service_name',
@@ -295,6 +306,7 @@ describe('which file carries the caption', () => {
       uow: { run: async (_s: unknown, fn: (tx: unknown) => unknown) => fn({}) } as never,
       clock: { now: () => new Date('2026-10-18T00:00:00Z') },
       panelPolicy: { forPanel: vi.fn(async () => resolvePanelPolicy(null)) },
+      captionText: I18N_CAPTION_TEXT,
       ...(policy === null
         ? {}
         : {

@@ -8,7 +8,12 @@ import {
   type TemplateKey,
   type TemplateValues,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, renderTemplateBody, type TemplatePresentation } from '@nexa/i18n';
+import {
+  CATALOGUE_FA,
+  parseCaptionMarkup,
+  renderTemplateBody,
+  type TemplatePresentation,
+} from '@nexa/i18n';
 import {
   connectionFileCaption,
   fileCaptionValues,
@@ -173,7 +178,7 @@ describe('rendering the caption', () => {
 
   it('carries the panel’s caption and the facts, with the username line as the fallback', () => {
     const caption = connectionFileCaption(
-      '<b>Config</b> for you',
+      parseCaptionMarkup('<b>Config</b> for you'),
       'ali_01',
       fileCaptionValues(service, extras),
     );
@@ -260,7 +265,13 @@ describe('the messenger sending the caption', () => {
   it('sends the tenant’s caption with the service’s facts', async () => {
     accept();
     override = '👤 {username}\n📍 {location}\n⏳ {expiry}';
-    await send(connectionFileCaption('panel text', 'ali_01', fileCaptionValues(service, extras)));
+    await send(
+      connectionFileCaption(
+        parseCaptionMarkup('panel text'),
+        'ali_01',
+        fileCaptionValues(service, extras),
+      ),
+    );
     expect(bodies[0]?.['caption']).toBe('👤 ali_01\n📍 آلمان\n⏳ 1405/08/09 00:00');
   });
 
@@ -284,7 +295,7 @@ describe('the messenger sending the caption', () => {
     override = '{caption}\n{subscription_url}';
     await send(
       connectionFileCaption(
-        `<b>${'x'.repeat(900)}</b>`,
+        parseCaptionMarkup(`<b>${'x'.repeat(900)}</b>`),
         'ali_01',
         fileCaptionValues(
           { ...service, subscriptionUrl: `https://s.test/${'y'.repeat(300)}` },
