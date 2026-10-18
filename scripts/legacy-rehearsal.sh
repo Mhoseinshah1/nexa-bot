@@ -1266,8 +1266,9 @@ for cycle in $(seq 1 "$CYCLES"); do
   # Services: with P6 wired, every live invoice has exactly one map row EXCEPT those whose
   # key is outside the evidenced shape — the map's CHECK cannot hold them (OQ-P4-01), P7
   # counts them as INVOICE_KEY_INVALID, and only an owner can decide them (PENDING).
-  CANDIDATES="$(metric "$LEGACY_SRC" live_invoices_total)"
-  KEY_INVALID="$(metric "$LEGACY_SRC" live_invoices_key_unmappable)"
+  # Every paid invoice is a candidate now (owner decision 2026-10-17), not only the live ones.
+  CANDIDATES="$(metric "$LEGACY_SRC" candidate_invoices_total)"
+  KEY_INVALID="$(metric "$LEGACY_SRC" candidate_invoices_key_unmappable)"
   check "$cycle" report_candidates_equal_source "$CANDIDATES" "$(report_get "$cycle" services.candidates)"
   check "$cycle" service_closure_map_plus_invalid_keys "$CANDIDATES" \
     "$(($(metric_sum "$POST" 'map:invoice:') + KEY_INVALID))"
