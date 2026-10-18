@@ -254,14 +254,22 @@ describe('service candidates', () => {
     expect(decideServiceCandidate({ ...base, username: 'nobody' }, ctx()).category).toBe(
       'PROVIDER_MISSING',
     );
-    // Owner decision 8 (Mirza PR5): no panel is never searched — NO_PANEL, whoever holds it.
+    // Owner rule 2026-10-18: no panel is searched across every connected panel — one holder
+    // is eligible there, none PROVIDER_MISSING (ended), several AMBIGUOUS_PANEL (review).
     for (const codePanel of [null, '', '   ']) {
-      for (const username of ['svc_shared', 'svc_nullmatch', 'nobody']) {
-        expect(decideServiceCandidate({ ...base, codePanel, username }, ctx())).toEqual({
-          category: 'NO_PANEL',
-          map: { status: 'MANUAL_REVIEW', reasonCode: 'PANEL_UNMAPPED' },
-        });
-      }
+      expect(
+        decideServiceCandidate({ ...base, codePanel, username: 'svc_nullmatch' }, ctx()),
+      ).toMatchObject({ category: 'ADOPTION_ELIGIBLE', panelId: PANEL_B });
+      expect(decideServiceCandidate({ ...base, codePanel, username: 'svc_shared' }, ctx())).toEqual(
+        {
+          category: 'AMBIGUOUS_PANEL',
+          map: { status: 'MANUAL_REVIEW', reasonCode: 'AMBIGUOUS_PANEL' },
+        },
+      );
+      expect(decideServiceCandidate({ ...base, codePanel, username: 'nobody' }, ctx())).toEqual({
+        category: 'PROVIDER_MISSING',
+        map: { status: 'MANUAL_REVIEW', reasonCode: 'PROVIDER_MISSING' },
+      });
     }
     // A code the operator DECLARED missing is still searched: two holders are ambiguous.
     expect(
@@ -278,9 +286,10 @@ describe('service candidates', () => {
       category: 'UNSUPPORTED_SHAPE',
       shapeReason: 'TIME_UNIT_UNKNOWN',
     });
+    // Owner rule 2026-10-18: a shape with no current tariff never holds an account back.
     expect(
-      decideServiceCandidate({ ...base }, ctx({ tariffOf: () => 'UNRESOLVED' })).category,
-    ).toBe('PRODUCT_UNRESOLVED');
+      decideServiceCandidate({ ...base }, ctx({ tariffOf: () => 'UNRESOLVED' })),
+    ).toMatchObject({ category: 'ADOPTION_ELIGIBLE', product: { kind: 'HIDDEN_SHAPE' } });
   });
 
   it('an eligible candidate carries the panel, the exact provider spelling and the product path', () => {
@@ -322,24 +331,31 @@ describe('service candidates', () => {
     });
   });
 
-  it('a named product the owner did not map is PRODUCT_MAPPING_UNRESOLVED, never a guess', () => {
-    const unmapped = decideServiceCandidate(
-      { ...base, codeProduct: 'p1' },
-      ctx({ productMap: new Map() }),
-    );
-    if (unmapped.category === 'ADOPTION_ELIGIBLE') throw new Error('unexpectedly eligible');
-    expect(unmapped.category).toBe('PRODUCT_UNRESOLVED');
-    expect(unmapped.map).toMatchObject({
-      status: 'MANUAL_REVIEW',
-      reasonCode: 'PRODUCT_MAPPING_UNRESOLVED',
-    });
-    // The mapping is by exact code: a map for another code does not stand in for p1.
+  it('owner rule 2026-10-18: no product blocks an account on the panel — unmapped, unknown, deleted, unresolved', () => {
+    // A named legacy product nobody mapped: attached, naming its shape's hidden product.
+    expect(
+      decideServiceCandidate({ ...base, codeProduct: 'p1' }, ctx({ productMap: new Map() })),
+    ).toMatchObject({ category: 'ADOPTION_ELIGIBLE', product: { kind: 'HIDDEN_SHAPE' } });
+    // The mapping is by exact code: a map for another code does not stand in for p1 — and
+    // still the account is attached.
     expect(
       decideServiceCandidate(
         { ...base, codeProduct: 'p1' },
         ctx({ productMap: new Map([['P1', 'prod-p1']]) }),
-      ).category,
-    ).toBe('PRODUCT_UNRESOLVED');
+      ),
+    ).toMatchObject({ category: 'ADOPTION_ELIGIBLE', product: { kind: 'HIDDEN_SHAPE' } });
+    // A code the legacy product table does not have (deleted), with no current tariff either.
+    expect(
+      decideServiceCandidate(
+        { ...base, codeProduct: 'deleted' },
+        ctx({ productMap: new Map(), tariffOf: () => 'UNRESOLVED' }),
+      ),
+    ).toMatchObject({ category: 'ADOPTION_ELIGIBLE', product: { kind: 'HIDDEN_SHAPE' } });
+    // A mapped named product carries its shape too, the fallback when the product is gone.
+    expect(decideServiceCandidate({ ...base, codeProduct: 'p1' }, ctx())).toMatchObject({
+      category: 'ADOPTION_ELIGIBLE',
+      product: { kind: 'NAMED_PRODUCT', productId: 'prod-p1', shapeKey: expect.any(String) },
+    });
   });
 
   it('an is_custom outside 0/1 is never a named product: it is held, as the shape path holds it', () => {
@@ -617,13 +633,13 @@ describe('the invoice key and what the map records', () => {
         [{ username: '' }, {}, 'MANUAL_REVIEW', 'INVALID_SOURCE_ROW'],
         [{}, { inventories: new Map() }, 'MANUAL_REVIEW', 'INVENTORY_INCOMPLETE'],
         [{ username: 'nobody' }, {}, 'MANUAL_REVIEW', 'PROVIDER_MISSING'],
-        // Owner decision 8: no panel is review, PANEL_UNMAPPED on the map (outcome NO_PANEL).
-        [{ codePanel: null, username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'PANEL_UNMAPPED'],
+        // Owner rule 2026-10-18: no panel is searched; two holders stay in review.
+        [{ codePanel: null, username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'AMBIGUOUS_PANEL'],
+        [{ codePanel: null, username: 'nobody' }, {}, 'MANUAL_REVIEW', 'PROVIDER_MISSING'],
         [{ codePanel: 'gone', username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'AMBIGUOUS_PANEL'],
         [{ codePanel: 'zzz' }, {}, 'MANUAL_REVIEW', 'PANEL_UNMAPPED'],
         [{ username: 'case_x' }, {}, 'MANUAL_REVIEW', 'USERNAME_CASE_COLLISION'],
         [{ timeUnit: 'month' }, {}, 'MANUAL_REVIEW', 'UNSUPPORTED_SHAPE'],
-        [{}, { tariffOf: () => 'UNRESOLVED' }, 'MANUAL_REVIEW', 'PRODUCT_MAPPING_UNRESOLVED'],
       ];
     for (const [row, over, status, reason] of cases) {
       const decision = decideServiceCandidate({ ...base, ...row }, { ...ctx, ...over });

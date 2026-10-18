@@ -37,7 +37,11 @@ export const ENDED_SERVICE_GAP_REASONS = [
   'NEVER_PAID',
   /** The key is outside the evidenced shape: the import map cannot hold a decision for it. */
   'INVOICE_KEY_INVALID',
-  /** The invoice names no `code_panel`; owner decision 8: never searched, never adopted. */
+  /**
+   * The invoice names no `code_panel`, and no connected panel holds its account (owner rule
+   * 2026-10-18: it is searched across every connected panel, one holder attaches it). It is
+   * ended, but an ended service names a panel and none is guessed, so it is this gap.
+   */
   'NO_PANEL',
   /** The `code_panel` has no NEXA panel bound to it (no panel to attach a service to). */
   'PANEL_NOT_MAPPED',

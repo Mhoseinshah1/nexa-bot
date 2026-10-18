@@ -285,9 +285,9 @@ export function neededNamesByPanel(
  * `neededNamesByPanel` over the CLAIMED approvals' invoices alone, so each panel is asked
  * exactly the names those approvals need — on the panel the operator named, the panel the
  * invoice's code maps, or (a code declared missing, which the matcher searches) every
- * production panel. A panel-less invoice with no named panel is `NO_PANEL` whatever any panel
- * holds (owner decision 8), so it asks nothing. Only panels with a name are returned: a panel
- * no claimed approval names is never read.
+ * production panel; a panel-less invoice with no named panel is searched across every
+ * production panel too (owner rule 2026-10-18), so it asks every one of them. Only panels with
+ * a name are returned: a panel no claimed approval names is never read.
  */
 export function laneNeededNamesByPanel(
   claimed: readonly NeedingInvoice[],
@@ -297,11 +297,8 @@ export function laneNeededNamesByPanel(
   canonical: (raw: string) => string | null,
   isInvoiceKey: (key: string) => boolean,
 ): Map<string, Map<string, string | null>> {
-  const asking = claimed.filter(
-    (invoice) => operatorPanels.has(invoice.idInvoice) || (invoice.codePanel?.trim() ?? '') !== '',
-  );
   const needed = neededNamesByPanel(
-    asking,
+    claimed,
     importableUserIds,
     policy,
     operatorPanels,

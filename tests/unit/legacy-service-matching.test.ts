@@ -13,11 +13,11 @@ import {
  * RickPanels, 1 → eligible, 0 → PROVIDER_MISSING, >1 → AMBIGUOUS_PANEL. No other guessing,
  * never the inbound id.
  *
- * Mirza PR5 (owner decision 8, 2026-10-07): a row with NO panel (`code_panel` empty or NULL)
- * is no longer searched — it is `NO_PANEL` whatever the inventories hold, and only an
- * operator's explicit approval naming a mapped panel (`matchOnPanel`) may adopt it. The
- * "panel missing" cases below were rewritten deliberately: before PR5 they pinned the search
- * for a NULL code too; now they pin it for a declared-missing code only.
+ * Owner rule 2026-10-18 (replacing owner decision 8 of Mirza PR5): a row with NO panel
+ * (`code_panel` empty or NULL) is searched across every connected production panel, exactly as
+ * a declared-missing code is — one holder → eligible there, none → PROVIDER_MISSING (ended),
+ * several → AMBIGUOUS_PANEL (review). An operator's explicit panel (`matchOnPanel`) still
+ * decides on that panel alone.
  */
 
 const P1 = '00000000-0000-4000-8000-0000000000a1';
@@ -87,18 +87,32 @@ describe('panel known', () => {
 
 const MISSING = 'old-netherlands';
 
-describe('no panel (owner decision 8)', () => {
-  it('a NULL code_panel is NO_PANEL whatever the inventories hold — never searched', () => {
-    // A unique holder (carol), none (zed), two (shared), a collision, an incomplete walk:
-    // before PR5 these were ELIGIBLE / PROVIDER_MISSING / AMBIGUOUS / … ; now all NO_PANEL.
+describe('no panel (owner rule 2026-10-18)', () => {
+  it('a NULL code_panel is searched across every connected panel: one, none, several', () => {
+    // Exactly one holder: eligible there, with the panel's own spelling.
+    expect(matchLegacyService({ codePanel: null, username: 'Carol' }, policy, inventories)).toEqual(
+      { kind: 'ELIGIBLE', panelId: P3, username: 'carol', providerUsername: 'carol' },
+    );
+    // No holder on any connected panel: the account is gone — PROVIDER_MISSING (ended).
+    expect(matchLegacyService({ codePanel: null, username: 'zed' }, policy, inventories)).toEqual({
+      kind: 'MANUAL_REVIEW',
+      reason: 'PROVIDER_MISSING',
+      candidatePanels: 0,
+    });
+    // Several holders: which panel is a guess — it stays in review.
+    expect(
+      matchLegacyService({ codePanel: null, username: 'shared' }, policy, inventories),
+    ).toEqual({ kind: 'MANUAL_REVIEW', reason: 'AMBIGUOUS_PANEL', candidatePanels: 2 });
+  });
+
+  it('an incomplete connected panel leaves a zero or one holder undecidable, never missing', () => {
     const partial = new Map(inventories);
     partial.delete(P2);
-    for (const username of ['Carol', 'zed', 'shared']) {
-      for (const inv of [inventories, partial]) {
-        expect(matchLegacyService({ codePanel: null, username }, policy, inv)).toEqual({
-          kind: 'NO_PANEL',
-        });
-      }
+    for (const username of ['Carol', 'zed']) {
+      expect(matchLegacyService({ codePanel: null, username }, policy, partial)).toEqual({
+        kind: 'UNDECIDABLE',
+        reason: 'INVENTORY_INCOMPLETE',
+      });
     }
   });
 

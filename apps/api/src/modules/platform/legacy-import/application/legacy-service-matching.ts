@@ -7,12 +7,13 @@
  * - **Panel known** — the legacy `code_panel` is in the operator's EXPLICIT
  *   `code_panel → NEXA panel UUID` map. Match `lower(username)` on that panel's
  *   inventory: present → eligible; absent → `manual_review / PROVIDER_MISSING`.
- * - **No panel** — the legacy row names no panel (`code_panel` empty or NULL). Owner
- *   decision 8 (2026-10-07, Mirza PR5): such a row is NEVER adopted automatically and NEVER
- *   searched for: `NO_PANEL`, whatever the inventories hold. Only an operator's explicit
- *   approval, naming a mapped panel, may adopt it (`matchOnPanel`, executed by an import run
- *   that re-runs every check). Before PR5 this row was searched across every production
- *   panel and adopted on a unique hit — a panel guessed from a username.
+ * - **No panel** — the legacy row names no panel (`code_panel` empty or NULL). Owner rule
+ *   2026-10-18 (replacing owner decision 8 of 2026-10-07): the exact lowercase username is
+ *   searched across every CONNECTED production panel, exactly as a declared-missing code is:
+ *   exactly one holder → eligible on that panel; none → `PROVIDER_MISSING` (the account is
+ *   on no connected panel, so the service is ended history); more than one →
+ *   `AMBIGUOUS_PANEL` (stays in review). An operator's explicit approval naming a panel
+ *   (`matchOnPanel`) still decides on that panel alone.
  * - **Panel declared missing** — a code the operator listed in the map's `missingPanels`:
  *   the operator explicitly asked for its rows to be searched across every configured
  *   production RickPanel: exactly one → eligible on that panel; none → `PROVIDER_MISSING`;
@@ -104,8 +105,10 @@ export type LegacyServiceMatch =
     }
   | { readonly kind: 'SKIPPED'; readonly reason: 'TEST_PANEL' }
   /**
-   * Owner decision 8: the row names no panel. Never searched, never eligible; recorded for
-   * review (`PANEL_UNMAPPED` on the map row: no mapped panel exists for it).
+   * The row names no panel and no connected panel could be searched for it. Since the owner
+   * rule of 2026-10-18 `matchLegacyService` searches every connected panel for such a row and
+   * no longer answers this; the kind stays for the review vocabulary of rows recorded before
+   * (`PANEL_UNMAPPED` on the map row: no mapped panel exists for it).
    */
   | { readonly kind: 'NO_PANEL' }
   /** A legacy username this matcher will not compare (empty, non-ASCII, too long). */
@@ -188,14 +191,27 @@ export function matchLegacyService(
     return onMappedPanel(policy.knownPanels.get(row.codePanel) as string, username, inventories);
   }
 
-  // Owner decision 8: no panel is never searched for — not even a unique hit is adopted.
-  if (row.codePanel === null) return { kind: 'NO_PANEL' };
+  // Owner rule 2026-10-18: a row naming no panel is searched across every connected panel,
+  // exactly as a declared-missing code is — one holder adopts, none is ended, several stay in
+  // review.
+  if (row.codePanel === null) return searchProductionPanels(username, policy, inventories);
 
   if (!policy.missingPanels.has(row.codePanel)) {
     return { kind: 'MANUAL_REVIEW', reason: 'PANEL_UNMAPPED', candidatePanels: 0 };
   }
 
-  // Declared missing: exact lowercase username across every configured production panel.
+  return searchProductionPanels(username, policy, inventories);
+}
+
+/**
+ * The exact lowercase username across every configured (connected) production panel: what a
+ * declared-missing code and a row naming no panel are both decided by.
+ */
+function searchProductionPanels(
+  username: string,
+  policy: LegacyPanelPolicy,
+  inventories: ReadonlyMap<string, PanelInventoryIndex>,
+): LegacyServiceMatch {
   // The AVAILABLE inventories are scanned first: two known holders are ambiguous whatever
   // a panel without a complete inventory might add. Only while zero or one holder is
   // known can an unavailable inventory change the answer, so only then is it UNDECIDABLE.

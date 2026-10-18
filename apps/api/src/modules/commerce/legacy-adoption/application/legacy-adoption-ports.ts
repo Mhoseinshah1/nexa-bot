@@ -87,7 +87,11 @@ export interface LegacyAdoptionCommand {
   readonly match: AdoptionInventoryMatch;
   /** Required when `match.kind === 'ELIGIBLE'`; ignored otherwise. */
   readonly runtime: AdoptionRuntimeFacts | null;
-  /** The resolved hidden/current product; null = unresolved (manual review). */
+  /**
+   * The product the adoption order names, for navigation only (owner rule 2026-10-18): the
+   * mapped product, or the hidden product of the invoice's shape. Null only when no such row
+   * exists at all (manual review: the order cannot name nothing, and none is invented).
+   */
   readonly productId: string | null;
   /** The legacy purchase time, for the order's `settled_at`; null = adoption time. */
   readonly legacyPurchasedAt: Date | null;
@@ -120,6 +124,12 @@ export interface LegacyAdoptionCandidate {
         readonly kind: 'NAMED_PRODUCT';
         readonly codeProduct: string;
         readonly productId?: string | null;
+        /**
+         * The hidden shape of the invoice's own shape, named instead when the mapped product
+         * no longer exists: a deleted product never holds an attachment back (owner rule
+         * 2026-10-18). Empty or absent when the importer has none.
+         */
+        readonly fallbackShapeId?: string;
       }
     | {
         readonly kind: 'HIDDEN_SHAPE';

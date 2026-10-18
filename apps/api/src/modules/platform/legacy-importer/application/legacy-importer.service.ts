@@ -2664,9 +2664,16 @@ export class LegacyImporterService {
     inventories: ReadonlyMap<string, LegacyInventoryRead>,
   ): Promise<LegacyAdoptionOutcome> {
     if (this.deps.adoption === null) throw new Error('unreachable: the adoption step is not wired');
+    // Navigation only (owner rule 2026-10-18): a mapped product, its shape's hidden product
+    // when that product is gone, or the shape's hidden product — never a condition.
     const product =
       decision.product.kind === 'NAMED_PRODUCT'
-        ? decision.product
+        ? {
+            kind: 'NAMED_PRODUCT' as const,
+            codeProduct: decision.product.codeProduct,
+            productId: decision.product.productId,
+            fallbackShapeId: shapes.get(decision.product.shapeKey)?.id ?? '',
+          }
         : { ...decision.product, shapeId: shapes.get(decision.product.shapeKey)?.id ?? '' };
     const read = inventories.get(decision.panelId);
     const facts =
