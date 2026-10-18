@@ -263,9 +263,30 @@ creates up to 50 per minute, inquiries up to 40, across every replica.
 | `DUPLICATE_ORDER_ID`                                                                                                                               | ambiguous     | CREATE_UNKNOWN                                              | —                                                  |
 | `AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`, `INVALID_BUYER_CHAT_ID`, `BUYER_IS_MERCHANT`, `BUYER_SUSPENDED`, `PAYER_RESERVE_FAILED`, `WEB_PAY_URL_FAILED` | invoice       | FAILED                                                      | —                                                  |
 | `INVALID_CALLBACK_URL`                                                                                                                             | configuration | FAILED + condition                                          | —                                                  |
+| `WRONG_API_KEY_KIND` (not in this route's list; see below)                                                                                         | configuration | FAILED + condition; customer told the method is unavailable | backoff + condition                                |
 | `INVOICE_NOT_FOUND`                                                                                                                                | not found     | —                                                           | recorded, backoff; never treated as failed or paid |
 | anything else with a 4xx                                                                                                                           | refused       | FAILED                                                      | backoff                                            |
 | 5xx, timeout, network, unreadable                                                                                                                  | unknown       | CREATE_UNKNOWN                                              | backoff                                            |
+
+**`WRONG_API_KEY_KIND` on the website route (owner decision, 2026-10-18).** The code is
+documented on the Custom Telegram API (`docs/tonpays-telegram-gateway-audit.md` §2): the
+key sent is of the other kind. TonPays issues both keys from one account, so an operator
+can store the Custom Telegram key on this route. Until this decision the code was
+undocumented here and fell to "anything else with a 4xx": the attempt FAILED as an
+invoice refusal, the customer was sent `GATEWAY_PAYMENT_FAILED` — a failure of THEIR
+payment to reconcile — and no operator condition opened. It is now a configuration code
+(`TONPAYS_CROSS_ROUTE_ERROR_CODES`, folded into `TONPAYS_CONFIGURATION_ERROR_CODES`): the
+customer gets the ordinary "method unavailable right now" answer and nothing else, and
+`payments.gateway_misconfigured` opens under `payments.gateway_misconfigured:TONPAYS` with
+`reason: WRONG_API_KEY_KIND`, which the Web Admin's operations log shows. Whether the
+website API actually answers this code, and with which status, is not documented and not
+assumed (`OQ-WP11A-02`). Tests: `tonpays-adapter.test.ts` (create and inquiry classify it
+as configuration) and `tonpays-gateway.test.ts` › "treats WRONG_API_KEY_KIND …".
+
+The three rules in `CLAUDE.md` are unchanged by this: only the inquiry decides, the
+70-minute deadline is checked under the payment's lock, and a create whose answer was lost
+is never retried or re-keyed. A configuration code is a readable refusal, so none of them
+is touched.
 
 ## 7. Implementation notes
 

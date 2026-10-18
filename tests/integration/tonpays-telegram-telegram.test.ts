@@ -285,7 +285,7 @@ describe('TonPays Telegram in the bot', () => {
     expect(prompt.replyKey).toBe('bot.payment.gateway_receipt_prompt');
     // Its own message: the payment message still shows the card.
     const promptBody = telegram.sent.slice(before).find((body) => body['message_id'] === undefined);
-    expect(String(promptBody?.['text'])).toContain('۵ مگابایت');
+    expect(String(promptBody?.['text'])).toContain('۱۰ مگابایت');
     expect(String(lastOn(message)?.['text'])).toContain('شماره کارت');
 
     const photo = await sendPhoto('ph-1');

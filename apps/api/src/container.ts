@@ -3435,7 +3435,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     cardAdapters: cardTransferAdapters,
     /*
      * A receipt's bytes, with the token of the bot the photo was sent to, bounded at the
-     * provider's 5 MB while streaming. Late-bound: `receiptFiles` is built further down;
+     * provider's 10 MB while streaming. Late-bound: `receiptFiles` is built further down;
      * only the worker's pass calls this, after the container has finished.
      */
     receiptFiles: {
