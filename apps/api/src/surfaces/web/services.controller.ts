@@ -91,6 +91,7 @@ export class ServicesController {
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.state === undefined ? {} : { state: query.state }),
       ...(query.deliveryState === undefined ? {} : { deliveryState: query.deliveryState }),
+      ...(query.source === undefined ? {} : { source: query.source }),
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
       ...(query.orderId === undefined ? {} : { orderId: query.orderId }),
       ...(query.panelId === undefined ? {} : { panelId: query.panelId }),
@@ -114,6 +115,7 @@ export class ServicesController {
       search: {
         ...(page.state === undefined ? {} : { state: page.state }),
         ...(page.deliveryState === undefined ? {} : { deliveryState: page.deliveryState }),
+        ...(page.source === undefined ? {} : { source: page.source }),
         ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
         ...(page.orderId === undefined ? {} : { orderId: page.orderId }),
         ...(page.panelId === undefined ? {} : { panelId: page.panelId as PanelId }),
@@ -483,6 +485,7 @@ function toSummary(
 ): ServiceSummaryResponse {
   return {
     id: record.id,
+    source: record.source,
     customerId: record.customerId,
     // Null on the detail, which this branch does not redesign; every list row carries it.
     customerTelegramUserId: identity?.telegramUserId ?? null,

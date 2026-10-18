@@ -85,6 +85,10 @@ import type {
   OrderRepository,
   OrderSearch,
 } from './ports.js';
+import {
+  assertWalletNotNegative,
+  type WalletBalanceReader,
+} from '../../wallet/application/negative-balance-gate.js';
 
 /** What an operator needs to read the order list and an order's detail. */
 export const ORDER_VIEW_PERMISSION: PermissionKey = 'orders.view';
@@ -215,6 +219,8 @@ export interface OrderServiceDeps {
    */
   readonly categories: ProductCategoryRepository;
   readonly customers: CustomerRepository;
+  /** The derived balance, for the negative-wallet gate at confirmation. */
+  readonly wallet: WalletBalanceReader;
   readonly settings: SettingsResolver;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -1753,6 +1759,14 @@ export class OrderService {
           return order;
         };
         if (before.state !== 'DRAFT') return alreadyConfirmed(before);
+        // A replay of a confirmed order above is never refused; a NEW commitment is.
+        await assertWalletNotNegative(
+          this.deps.wallet,
+          scope,
+          customerId,
+          before.totals.currency,
+          tx,
+        );
 
         /*
          * The draft's own deadline, checked BEFORE the product.

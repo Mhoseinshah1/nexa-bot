@@ -68,6 +68,7 @@ export class OrdersController {
       ...(query.state === undefined ? {} : { state: query.state }),
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
       ...(query.productId === undefined ? {} : { productId: query.productId }),
+      ...(query.source === undefined ? {} : { source: query.source }),
       ...(query.q === undefined ? {} : { q: query.q }),
     });
     const text = page.q === undefined ? null : classifyListSearch(page.q);
@@ -78,6 +79,7 @@ export class OrdersController {
         ...(page.state === undefined ? {} : { state: page.state }),
         ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
         ...(page.productId === undefined ? {} : { productId: page.productId as ProductId }),
+        ...(page.source === undefined ? {} : { source: page.source }),
         ...(text === null ? {} : { text }),
       },
     });
@@ -165,6 +167,7 @@ function toSummary(
 ): OrderSummaryResponse {
   return {
     id: record.id,
+    source: record.source,
     customerId: record.customerId,
     customerTelegramUserId: identity?.telegramUserId ?? null,
     customerUsername: identity?.username ?? null,

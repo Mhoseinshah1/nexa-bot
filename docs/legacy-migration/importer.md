@@ -435,6 +435,38 @@ never retried and never overwritten — even when the source row changed. A user
 gets no customer, opening or trial; an eligible invoice so closed is not handed to P6.
 `RETRY_AFTER_FIX` invites the next run to decide again (tested both ways).
 
+### Every invoice is matched; the ones not on the panel are ENDED services (owner decision 2026-10-17)
+
+The service candidates are no longer only the live invoices. `snapshot.liveInvoices` is still
+the live ones (`LEGACY_LIVE_STATUSES`); `snapshot.otherInvoices` is every other invoice that
+was ever paid for (`removebyuser`, `end_of_time`, `send_on_hold`, …), and
+`serviceCandidateInvoices` puts them in one list, live first. Only the never-paid statuses
+(`unpaid`, `Unsuccessful`) and a missing status are left out (`LEGACY_NEVER_PAID_STATUSES`):
+they were never a service. Every candidate goes through the same `decideServiceCandidate`, the
+same dry-run approval, the same inventory hold and `refusedWrites = 0`:
+
+- **The account is on the panel** (any invoice status, any panel state): the P6 adoption makes
+  it a live NEXA service. `limited` → ACTIVE, `disabled` → SUSPENDED, `expired` → EXPIRED, and
+  `on_hold` or an unrecognised state → ACTIVE, flagged `PANEL_STATE_ON_HOLD` /
+  `PANEL_STATE_UNKNOWN` on the adoption's audit row and counted in
+  `services.adoption.flaggedForReview` (a flagged account is also exempt from the "expiry
+  matches the plan" check: an on-hold account has no expiry yet). The adopted order and
+  service carry `source = 'MIRZA'`, `source_ref = 'invoice:<id_invoice>'`.
+- **Ownership**: an old invoice never makes a live adoption ambiguous. Among the claimants of
+  one account, the live ones decide first; an old invoice of another owner is held
+  (`AMBIGUOUS_OWNERSHIP`), one of the same owner meets the adoption's own name-taken rule. The
+  converter writes ownership records for live candidates, so an old invoice with NO record is
+  not held for that absence (a live one still is).
+- **The account is not on the panel** (`PROVIDER_MISSING` after a complete read), and a Mirza
+  test invoice: the **ended-services step**
+  (`legacy-materialize/application/terminated-services.step.ts`) writes a `TERMINATED` service
+  and a `LEGACY_HISTORY` order — never provisioned, no operation, no username hold, no provider
+  call, never a sale, no money. See the step's header for the rules and
+  `ended-services.rules.ts` for the closed list of reasons an invoice is _not_ carried.
+- A username is free once its service is `TERMINATED`: `services_panel_provider_username_key`
+  is partial (`state <> 'TERMINATED'`), which is what the application already assumed
+  (`usernameInUseOnPanel`) and what lets an ended row sit beside a live one.
+
 ### Service outcomes and the operator's review (Mirza PR5)
 
 Every APPLY run records each live invoice's ONE outcome (`LEGACY_SERVICE_OUTCOMES`) with its

@@ -26,6 +26,7 @@ import { decideLegacyUser } from '../../apps/api/src/modules/platform/legacy-imp
 import { classifyLegacyUserStatus } from '../../apps/api/src/modules/platform/legacy-importer/application/source-snapshot';
 import { targetAcknowledgement } from '../../apps/api/src/modules/platform/legacy-importer/application/production-guard';
 import {
+  SYNTHETIC_EXPECTED,
   SYNTHETIC_PANEL_ACCOUNTS,
   SYNTHETIC_PANEL_CODES,
   buildSyntheticLegacyDataset,
@@ -377,20 +378,33 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   }
   const NOTHING_WRITTEN = Object.fromEntries(BUSINESS_TABLES.map((t) => [t, 0]));
 
-  /** Every service NEXA holds: its panel, exact provider spelling and owner's Telegram id. */
+  /**
+   * Every service NEXA attached to a panel account: its panel, exact provider spelling and
+   * owner's Telegram id. An ENDED service (TERMINATED: the one-time import's record of an
+   * invoice whose account is not on the panel) is attached to no account, so it is not
+   * listed — and every call checks that none of them names an account the panel holds.
+   */
   async function services(): Promise<{ panel: string; username: string; owner: string }[]> {
-    const result = await ctx.container.database.db.execute<{
-      panel: string;
-      username: string;
-      owner: string;
-    }>(sql`
-      SELECT CASE s.panel_id WHEN ${panelAId}::uuid THEN 'A' WHEN ${panelBId}::uuid THEN 'B'
-             ELSE 'other' END AS panel,
-             s.provider_username AS username, c.telegram_user_id AS owner
-        FROM services s JOIN customers c ON c.id = s.customer_id
-       WHERE s.tenant_id = ${TENANT}
-       ORDER BY 1, 2`);
-    return result.rows;
+    const read = (ended: boolean) =>
+      ctx.container.database.db.execute<{
+        panel: string;
+        username: string;
+        owner: string;
+      }>(sql`
+        SELECT CASE s.panel_id WHEN ${panelAId}::uuid THEN 'A' WHEN ${panelBId}::uuid THEN 'B'
+               ELSE 'other' END AS panel,
+               s.provider_username AS username, c.telegram_user_id AS owner
+          FROM services s JOIN customers c ON c.id = s.customer_id
+         WHERE s.tenant_id = ${TENANT} AND (s.state = 'TERMINATED') = ${ended}
+         ORDER BY 1, 2`);
+    for (const e of (await read(true)).rows) {
+      const fake = e.panel === 'A' ? panelA : panelB;
+      const spellings = [...fake.users.keys()].map((u) => u.toLowerCase());
+      expect(spellings, `${e.panel}:${e.username} is ended, yet an account`).not.toContain(
+        e.username.toLowerCase(),
+      );
+    }
+    return (await read(false)).rows;
   }
 
   async function customerTelegramIds(): Promise<string[]> {
@@ -508,6 +522,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       runner: adapters,
       freshTarget: adapters,
       history: adapters,
+      materialize: ctx.container.legacyMaterializePort,
+      botLink: ctx.container.legacyBotLinkPort,
       backup: new PipelineBackupPort(container.backup, container.recoveryQuiesced),
       recoveryActive: async () => (await container.recoveryRequests.installationLock()) !== null,
       latestCutoverAt: () => container.recoveryRequests.latestCutoverAt(),
@@ -667,7 +683,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
     // The panel decided what a complete read decides: the missing account, the collision.
-    expect(w['PROVIDER_MISSING']).toBe(1);
+    // svc_missing and, matched like every invoice, the removed svc_old (owner decision 2026-10-17).
+    expect(w['PROVIDER_MISSING']).toBe(2);
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
     // A/B: no per-user request at all — never a manual account or a sale, nor the backup's
     // own names (svc_missing is absent because the gap-free last walk returned no spelling).
@@ -689,9 +706,10 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expectOneServicePerAccount(held);
     // C: the matched candidates' evidence — one holder, on the mapped panel, one exact
     // spelling; the collision two spellings; the missing account none. Only backup invoices
-    // are candidates at all (19, as the source has live invoices).
+    // are candidates at all (21: the source's 19 live invoices and its two removed ones —
+    // every invoice is matched, not only the live ones).
     const decided = await candidates();
-    expect(Object.keys(decided)).toHaveLength(19);
+    expect(Object.keys(decided)).toHaveLength(21);
     expect(decided['a0000001']).toEqual({
       outcome: 'ADOPTED',
       holders: [{ panel: 'A', spellings: 1 }],
@@ -783,7 +801,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // svc_missing (never there): both absent, decided from the walk alone — no lookup.
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBeUndefined();
-    expect(w['PROVIDER_MISSING']).toBe(2);
+    expect(w['PROVIDER_MISSING']).toBe(3);
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
 
@@ -891,7 +909,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // svc_a1, svc_a2, svc_a4, svc_missing, and the three panel-less invoices' names (asked of
     // every production panel, for holder discovery); case_x is a collision whatever the walks
     // prove.
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(8);
     expect(w['INVENTORY_INCOMPLETE']).toBeGreaterThanOrEqual(4);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
@@ -927,8 +945,9 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(dry.status).toBe('DRY_RUN_DONE');
     const w = codes(dry.dryRunReport?.warnings);
     expect(lookupsOf(panelA, before)).toEqual([]);
-    // Four mapped names and the three panel-less ones (see above).
-    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(7);
+    // Five mapped names (the removed svc_old is one: every invoice is matched) and the three
+    // panel-less ones (see above).
+    expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBe(8);
     expect(w['PROVIDER_MISSING']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_INCOMPLETE:UNRESOLVED']).toBe(1);
     expect(w['PROVIDER_INVENTORY_QUARANTINED']).toBeUndefined();
@@ -960,7 +979,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
       invoices: (rows) => [...rows, extraInvoice(rows, 'b0000003', '100000009', 'svc_a3')],
     });
 
-  it('Q: one needed name unresolved beside decided ones — approvable; the apply writes customers, wallets and debts, adopts ONLY the eligible invoice, and keeps the held one as an OPEN INVENTORY_INCOMPLETE candidate with no service', async () => {
+  it('Q: one needed name unresolved beside decided ones — approvable; the apply writes customers and wallets (the negative balance a DEBIT opening), adopts ONLY the eligible invoice, and keeps the held one as an OPEN INVENTORY_INCOMPLETE candidate with no service', async () => {
     const page = productionLikePage();
     const id = await page.toVerified(await withSvcA3());
     panelA.seedUser('svc_a3', ACCOUNT);
@@ -982,10 +1001,34 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     panelA.beforeListPage = null;
     const done = await detail(id);
     expect(done.status, JSON.stringify(done.errorCode)).toBe('COMPLETED');
-    // Money: every importable customer, every positive opening and every legacy debt.
+    // Money: every importable customer and every non-zero balance as ONE opening — the
+    // positives as CREDITs, the negative one as a DEBIT of its magnitude — and no debt row.
     expect(await count('customers')).toBeGreaterThan(0);
-    expect(await count('wallet_entries')).toBeGreaterThan(0);
-    expect(await count('legacy_wallet_debts')).toBeGreaterThan(0);
+    const openings = SYNTHETIC_EXPECTED.users.opening;
+    expect(await count('wallet_entries')).toBe(openings.POSITIVE + openings.NEGATIVE);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    const ledger = (
+      await ctx.container.database.db.execute<{
+        tg: string;
+        direction: string;
+        reason: string;
+        reference: string;
+        amount: string;
+      }>(
+        sql`SELECT c.telegram_user_id AS tg, w.direction, w.reason, w.reference, w.amount::text AS amount
+              FROM wallet_entries w JOIN customers c ON c.id = w.customer_id
+             WHERE w.tenant_id = ${TENANT}`,
+      )
+    ).rows;
+    expect(ledger.every((e) => e.reason === 'MIGRATION_OPENING_BALANCE')).toBe(true);
+    expect(ledger.every((e) => e.reference === `legacy:opening:${e.tg}`)).toBe(true);
+    expect(ledger.filter((e) => e.direction === 'DEBIT')).toEqual([
+      expect.objectContaining({ tg: '100000003', amount: '20000' }),
+    ]);
+    // The wallets together are exactly the Mirza balances' signed sum.
+    expect(
+      ledger.reduce((a, e) => a + (e.direction === 'CREDIT' ? 1n : -1n) * BigInt(e.amount), 0n),
+    ).toBe(SYNTHETIC_EXPECTED.users.legacyBalanceSumMinor);
     // Reconcile is decided under the same hold: the quarantine is no discrepancy.
     expect(done.progress.reconcileVerdict).toBe('RECONCILED');
     expect(
@@ -1227,8 +1270,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
     expect(failed.applyLegacyRunId).toBeNull();
     const refusal = codes(failed.progress.refusalCounts);
-    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(1);
-    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(2);
+    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(2);
+    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(3);
     for (const table of ['customers', 'wallet_entries', 'services', 'orders']) {
       expect(await count(table), table).toBe(0);
     }
@@ -1337,7 +1380,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(approved.reviewState).toBe('ADOPT_APPROVED');
   }
 
-  /** Customers, money and debts: what the lane must never touch. */
+  /** Customers, money (the ledger, openings included) and any debt row: what the lane must never touch. */
   async function moneyState(): Promise<Record<string, unknown>> {
     const one = async (q: ReturnType<typeof sql>) =>
       (await ctx.container.database.db.execute<Record<string, unknown>>(q)).rows[0];

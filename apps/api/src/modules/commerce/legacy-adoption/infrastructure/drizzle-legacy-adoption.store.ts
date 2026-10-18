@@ -106,10 +106,12 @@ export class DrizzleLegacyAdoptionStore implements LegacyAdoptionStore {
   }
 
   /**
-   * Any service on the panel whose name folds to the candidate — any state, any tenant
-   * (`services_panel_provider_username_key` is per panel, not per tenant, and a TERMINATED
-   * row still holds its exact spelling) — or any hold of the lowercase name in the
-   * namespace, which is the host's and not the tenant's.
+   * Any NON-TERMINATED service on the panel whose name folds to the candidate — any tenant
+   * (`services_panel_provider_username_key` is per panel, not per tenant) — or any hold of the
+   * lowercase name in the namespace, which is the host's and not the tenant's. A TERMINATED
+   * row no longer holds its spelling: the index is partial, the Mirza import records ended
+   * services under names a live account may since have taken, and a name that stayed
+   * "taken" by an ended row would refuse a live adoption of the very account it describes.
    */
   async usernameTaken(
     _scope: TenantContext,
@@ -120,12 +122,26 @@ export class DrizzleLegacyAdoptionStore implements LegacyAdoptionStore {
       SELECT EXISTS (
                SELECT 1 FROM services
                 WHERE panel_id = ${input.panelId}
+                  AND state <> 'TERMINATED'
                   AND lower(provider_username) = ${input.canonical})
           OR EXISTS (
                SELECT 1 FROM service_username_reservations
                 WHERE namespace_key = ${input.namespaceKey}
                   AND username = ${input.canonical}) AS taken`);
     return (result.rows as { taken: boolean }[])[0]?.taken === true;
+  }
+
+  async invoiceCarried(
+    scope: TenantContext,
+    sourceRef: string,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const result = await tx.tx.execute(sql`
+      SELECT EXISTS (SELECT 1 FROM orders WHERE tenant_id = ${tenantId} AND source_ref = ${sourceRef})
+          OR EXISTS (SELECT 1 FROM services WHERE tenant_id = ${tenantId} AND source_ref = ${sourceRef})
+             AS carried`);
+    return (result.rows as { carried: boolean }[])[0]?.carried === true;
   }
 
   async insertAdoption(
@@ -160,13 +176,14 @@ export class DrizzleLegacyAdoptionStore implements LegacyAdoptionStore {
         (id, tenant_id, customer_id, state, purpose, origin, product_id, panel_id, line_title,
          line_duration_days, line_traffic_bytes, line_device_limit, line_unit_price_amount,
          line_quantity, subtotal_amount, discount_amount, total_amount, currency, quote,
-         confirmed_at, settled_at, created_at, updated_at)
+         confirmed_at, settled_at, created_at, updated_at, source, source_ref)
       VALUES
         (${input.orderId}, ${tenantId}, ${input.customerId}, 'PAID', 'NEW_SERVICE',
          'LEGACY_ADOPTION', ${input.productId}, ${input.panelId}, ${input.line.title},
          ${input.line.durationDays}, ${input.line.trafficBytes}, ${input.line.deviceLimit}, 0,
          1, 0, 0, 0, ${input.currency}, ${quote}::jsonb,
-         ${input.settledAt}, ${input.settledAt}, ${input.now}, ${input.now})`);
+         ${input.settledAt}, ${input.settledAt}, ${input.now}, ${input.now},
+         'MIRZA', ${input.sourceRef})`);
     /*
      * The service, live: provisioned and delivered at adoption (the customer already holds
      * the account and its link), usage measured at `observedAt`. No operation is written —
@@ -178,13 +195,14 @@ export class DrizzleLegacyAdoptionStore implements LegacyAdoptionStore {
         (id, tenant_id, customer_id, order_id, panel_id, product_id, state, provider_username,
          subscription_ref, provider_client_id, subscription_url, expires_at,
          traffic_limit_bytes, traffic_used_bytes, usage_synced_at, delivery_state,
-         delivered_at, provisioned_at, created_at, updated_at)
+         delivered_at, provisioned_at, created_at, updated_at, source, source_ref)
       VALUES
         (${input.serviceId}, ${tenantId}, ${input.customerId}, ${input.orderId},
          ${input.panelId}, ${input.productId}, ${s.state}, ${s.providerUsername},
          ${s.subscriptionRef}, ${s.providerClientId}::uuid, ${s.subscriptionUrl},
          ${s.expiresAt}, ${s.trafficLimitBytes}, ${s.trafficUsedBytes}, ${s.usageSyncedAt},
-         'DELIVERED', ${input.now}, ${input.now}, ${input.now}, ${input.now})`);
+         'DELIVERED', ${input.now}, ${input.now}, ${input.now}, ${input.now},
+         'MIRZA', ${input.sourceRef})`);
     /*
      * The name's hold in the panel's namespace, funded now: it is never reapable, exactly as
      * a purchased name after settlement. `expires_at` is required and meaningless once

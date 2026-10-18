@@ -61,6 +61,8 @@ import { PaymentTimelineCard } from './payment-timeline';
 import { Modal } from '../ui/overlays';
 import { CodeName } from './code-name';
 import { queryChipFilter } from './money-filters';
+import { SourceBadge } from '../ui/source-badge';
+import { sourceFromQuery, sourceRouteFilter } from './record-source';
 import { ListFilterBar } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type SavedViewsRegistration } from '../ui/saved-views';
@@ -780,7 +782,16 @@ function ReinquireButton({ paymentId }: { paymentId: string }) {
 }
 
 /** The URL parameters a saved filter holds on this list: the search and every filter. */
-const PAYMENT_VIEW_KEYS = ['q', 'queue', 'gateway', 'range', 'state', 'method', 'disposition'];
+const PAYMENT_VIEW_KEYS = [
+  'q',
+  'queue',
+  'gateway',
+  'range',
+  'state',
+  'method',
+  'disposition',
+  'source',
+];
 
 /**
  * Saved filters (W1.4) on the payments list. A view is the list's filter parameters; applying
@@ -831,6 +842,7 @@ export function PaymentsPage({
   const state = route.query.get('state');
   const method = route.query.get('method');
   const disposition = route.query.get('disposition');
+  const source = sourceFromQuery(route.query.get('source'));
   const queue = oneOf(route.query.get('queue'), PAYMENT_OPS_QUEUES);
   const gateway = oneOf(route.query.get('gateway'), PAYMENT_GATEWAY_PROVIDERS);
   const range = oneOf(route.query.get('range'), RANGES);
@@ -850,6 +862,7 @@ export function PaymentsPage({
           state,
           method,
           disposition,
+          source,
           appliedSearch,
           queue,
           gateway,
@@ -863,6 +876,7 @@ export function PaymentsPage({
             ...(state === null ? {} : { state: state as PaymentState }),
             ...(method === null ? {} : { method: method as PaymentMethod }),
             ...(disposition === null ? {} : { disposition: disposition as ReceiptDisposition }),
+            ...(source === null ? {} : { source }),
             ...(appliedSearch === '' ? {} : { q: appliedSearch }),
             ...(queue === null ? {} : { queue }),
             ...(gateway === null ? {} : { gateway }),
@@ -894,9 +908,12 @@ export function PaymentsPage({
       key: 'reference',
       header: t('web.payment_reference'),
       render: (row) => (
-        <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          <Ltr>{paymentTrackingCode(row.reference)}</Ltr>
-        </a>
+        <>
+          <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+            <Ltr>{paymentTrackingCode(row.reference)}</Ltr>
+          </a>
+          <SourceBadge source={row.source} />
+        </>
       ),
     },
     {
@@ -1097,6 +1114,7 @@ export function PaymentsPage({
                 allLabel: t('web.payments_filter_all'),
                 items: PAYMENT_METHODS.map((one) => ({ id: one, label: t(METHOD_LABELS[one]) })),
               }),
+              sourceRouteFilter(route, source),
               queryChipFilter({
                 route,
                 param: 'disposition',

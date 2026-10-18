@@ -97,6 +97,21 @@ WHERE Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume
        OR NOT (CONVERT(id_invoice USING utf8mb4) COLLATE utf8mb4_bin
                REGEXP '^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$'))
 UNION ALL
+-- Owner decision 2026-10-17: EVERY invoice that was ever paid for is a service candidate
+-- (matched against the read-only inventory; on the panel = adopted, absent = an ended
+-- service). Never paid: a NULL Status and the two never-paid states, compared exactly as the
+-- importer does (LEGACY_NEVER_PAID_STATUSES), so case-sensitively.
+SELECT 'candidate_invoices_total', CAST(COUNT(*) AS CHAR) FROM invoice
+WHERE Status IS NOT NULL
+  AND CONVERT(Status USING utf8mb4) COLLATE utf8mb4_bin NOT IN ('unpaid', 'Unsuccessful')
+UNION ALL
+SELECT 'candidate_invoices_key_unmappable', CAST(COUNT(*) AS CHAR) FROM invoice
+WHERE Status IS NOT NULL
+  AND CONVERT(Status USING utf8mb4) COLLATE utf8mb4_bin NOT IN ('unpaid', 'Unsuccessful')
+  AND (id_invoice IS NULL
+       OR NOT (CONVERT(id_invoice USING utf8mb4) COLLATE utf8mb4_bin
+               REGEXP '^([1-9][0-9]{6})?([0-9a-f]{4}|[0-9a-f]{8})$'))
+UNION ALL
 SELECT 'live_real_orphan', CAST(COUNT(*) AS CHAR) FROM invoice i LEFT JOIN user u ON u.id = i.id_user
 WHERE i.Status IN ('active','disabled','disabledn','disablebyadmin','end_of_volume') AND i.is_test = 0
   AND u.id IS NULL;

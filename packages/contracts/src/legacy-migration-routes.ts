@@ -505,6 +505,75 @@ export function legacyMigrationDryRunInventoryIncomplete(
   return Math.max(provider, uncovered > 0 ? 1 : 0);
 }
 
+/**
+ * The one-time Mirza import's "exact match" report (owner decision 2026-10-17,
+ * `docs/migration/mirza-import-plan-fa.md` §8): per Mirza table, rows and money in Mirza
+ * against what NEXA now holds, with a counted reason for every row not carried. Minor units
+ * as decimal strings (IRT). Counts and sums only: never an id or a name.
+ */
+export const legacyExactMatchGapSchema = z.object({
+  reason: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/u),
+  rows: count,
+  sumMinor: z
+    .string()
+    .regex(/^-?\d+$/u)
+    .nullable(),
+});
+export const legacyExactMatchRowSchema = z.object({
+  mirzaTable: z.string().min(1).max(64),
+  nexaTable: z.string().min(1).max(64),
+  mirzaRows: count,
+  nexaRows: count,
+  mirzaSumMinor: z
+    .string()
+    .regex(/^-?\d+$/u)
+    .nullable(),
+  nexaSumMinor: z
+    .string()
+    .regex(/^-?\d+$/u)
+    .nullable(),
+  explained: z.array(legacyExactMatchGapSchema),
+  /** NEXA + explained = Mirza, in rows and in money. */
+  holds: z.boolean(),
+});
+export type LegacyExactMatchRow = z.infer<typeof legacyExactMatchRowSchema>;
+export const legacyExactMatchReportSchema = z.object({
+  rows: z.array(legacyExactMatchRowSchema),
+  /** Rows that do not hold: each one is a difference nobody has explained. */
+  unexplained: count,
+  /** The import is COMPLETE only when this is true. */
+  holds: z.boolean(),
+});
+export type LegacyExactMatchReport = z.infer<typeof legacyExactMatchReportSchema>;
+
+/**
+ * What the materialize phase did per step (history into the normal tables). `diverged` is a
+ * row already present with other content: never rewritten, and always a difference.
+ */
+export const legacyMaterializeOutcomeSchema = z.object({
+  step: z.string().min(1).max(64),
+  written: count,
+  alreadyPresent: count,
+  diverged: count,
+  skipped: z.array(legacyMigrationCodeCountSchema),
+});
+export type LegacyMaterializeOutcome = z.infer<typeof legacyMaterializeOutcomeSchema>;
+
+/**
+ * The automatic link of the imported customers to the tenant's active bot (their first bot):
+ * `LINKED` (with how many were eligible and linked), `NO_ACTIVE_BOT`, or `SEVERAL_ACTIVE_BOTS`
+ * (nothing is guessed: the owner links them with `customers-link-bot`).
+ */
+export const LEGACY_BOT_LINK_OUTCOMES = ['LINKED', 'NO_ACTIVE_BOT', 'SEVERAL_ACTIVE_BOTS'] as const;
+export type LegacyBotLinkOutcome = (typeof LEGACY_BOT_LINK_OUTCOMES)[number];
+export const legacyBotLinkReportSchema = z.object({
+  outcome: z.enum(LEGACY_BOT_LINK_OUTCOMES),
+  botInstanceId: z.string().nullable(),
+  eligible: count,
+  linked: count,
+});
+export type LegacyBotLinkReport = z.infer<typeof legacyBotLinkReportSchema>;
+
 /** The apply's outcome (stored as `apply_report`). */
 export const legacyMigrationApplyReportSchema = z.object({
   importerVerdict: z.string(),
@@ -516,6 +585,13 @@ export const legacyMigrationApplyReportSchema = z.object({
   failedSections: z.array(z.string()),
   sections: z.array(legacyMigrationSectionCountsSchema),
   history: z.array(legacyMigrationCodeCountSchema),
+  /**
+   * The one-time import's history steps, the bot link and the exact-match report. Optional:
+   * a report recorded before they existed has none, and is never COMPLETE by this rule.
+   */
+  materialize: z.array(legacyMaterializeOutcomeSchema).optional(),
+  botLink: legacyBotLinkReportSchema.nullable().optional(),
+  exactMatch: legacyExactMatchReportSchema.optional(),
 });
 export type LegacyMigrationApplyReport = z.infer<typeof legacyMigrationApplyReportSchema>;
 
@@ -526,6 +602,10 @@ export const LEGACY_MIGRATION_PHASES = [
   'APPLY_PRECHECK',
   'APPLY_IMPORT',
   'HISTORY',
+  /** The one-time import: the archived history carried into the normal tables. */
+  'MATERIALIZE',
+  /** The one-time import: the imported customers linked to the tenant's active bot. */
+  'BOT_LINK',
   'RECONCILE',
   'REPORT',
   'BACKUP',
@@ -591,6 +671,10 @@ export const legacyMigrationProgressSchema = z.object({
   reconcileVerdict: z.enum(['RECONCILED', 'DISCREPANCY']).nullable(),
   /** Archived history records per record type (design §5). */
   history: z.array(legacyMigrationCodeCountSchema),
+  /** What the MATERIALIZE phase did, per step; absent before it ran. */
+  materialize: z.array(legacyMaterializeOutcomeSchema).optional(),
+  /** What the BOT_LINK phase did; absent before it ran. */
+  botLink: legacyBotLinkReportSchema.nullable().optional(),
   /** Why a fresh-target check refused (design §6): the non-empty tables and their counts. */
   refusalCounts: z.array(legacyMigrationCodeCountSchema),
   backup: z.enum(LEGACY_MIGRATION_BACKUP_OUTCOMES).nullable(),

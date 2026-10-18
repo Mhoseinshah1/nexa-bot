@@ -458,7 +458,7 @@ export function buildFinalReportV2(input: FinalReportV2Input) {
   const a = (id: string) => invoiceArchive.checks.find((c) => c.id === id)?.holds === true;
   const p = (id: string) => products.checks.find((c) => c.id === id)?.holds === true;
   const d = facts.duplicates;
-  const debts = usersWallets.wallet.legacyDebts;
+  const negative = usersWallets.wallet.negative;
 
   const invariants: {
     readonly id: LegacyFinalReportV2Invariant;
@@ -489,14 +489,14 @@ export function buildFinalReportV2(input: FinalReportV2Input) {
     {
       id: 'WALLETS_RECONCILED',
       statement:
-        'wallet sums reconciled (v1 W1, W4, W5; PR4 U2–U10); debts and conflicts reported, never netted',
+        'wallet sums reconciled (v1 W1, W4, W5; PR4 U2–U10); credits, debits and conflicts reported, never netted',
       holds:
         v1('W1') &&
         v1('W4') &&
         v1('W5') &&
         ['U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9', 'U10'].every(u),
       evidence:
-        `debts=${String(debts.recorded)} debtsSumMinor=${debts.recordedSumMinor} ` +
+        `debitOpenings=${String(negative.openingEntries)} debitSumMinor=${negative.openingSumMinor} ` +
         `conflicts=${String(usersWallets.wallet.perUser.conflicting)} sourceChanged=${String(usersWallets.sourceChanged.users)} ` +
         `heldRows=${String(usersWallets.wallet.sourceMoney.held.rows)} unreadableRows=${String(usersWallets.wallet.sourceMoney.unreadable.rows)} ` +
         `unaccountedRows=${String(usersWallets.wallet.sourceMoney.unaccounted.rows)}`,
@@ -510,14 +510,14 @@ export function buildFinalReportV2(input: FinalReportV2Input) {
     {
       id: 'UNRESOLVED_RETAINED',
       statement:
-        'all unresolved records retained: archive never shrinks, every unadopted candidate kept as history, every debt recorded',
+        'all unresolved records retained: archive never shrinks, every unadopted candidate kept as history, every negative balance posted',
       holds:
         a('A5') &&
         serviceOutcomes.archivedHistory.notLinkedToArchive === 0 &&
-        debts.recorded >= debts.users,
+        negative.openingEntries >= negative.users,
       evidence:
         `A5=${String(a('A5'))} notLinkedToArchive=${String(serviceOutcomes.archivedHistory.notLinkedToArchive)} ` +
-        `debtsRecorded=${String(debts.recorded)} negativeUsers=${String(debts.users)}`,
+        `debitOpenings=${String(negative.openingEntries)} negativeUsers=${String(negative.users)}`,
     },
     {
       id: 'RERUN_NO_DUPLICATES',

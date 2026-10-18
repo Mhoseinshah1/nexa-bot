@@ -4,6 +4,7 @@ import type {
   Money,
   OrderPurpose,
   OrderState,
+  RecordSource,
   ResellerEntitlementDimension,
   ResellerGrantKind,
   ResellerMinimumNoticeKind,
@@ -47,6 +48,8 @@ export interface ResellerTierListing extends ResellerTierRecord {
 export interface ResellerRecord {
   readonly id: string;
   readonly customerId: string;
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   readonly tierId: string;
   readonly status: ResellerStatus;
   readonly pricingMode: ResellerOverrideMode;
@@ -58,6 +61,11 @@ export interface ResellerRecord {
    * is an explicit "no minimum for this reseller".
    */
   readonly monthlyMinimum: Money | null;
+  /**
+   * The purchase cap Mirza gave this agent: shown, applied nowhere. A limit, never money —
+   * no decision reads it (reseller credit stays removed).
+   */
+  readonly importedPurchaseCap: Money | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -239,6 +247,7 @@ export interface ResellerRepository {
     filter: {
       readonly status?: ResellerStatus;
       readonly tierId?: string;
+      readonly source?: RecordSource;
       readonly search?: string;
     },
     limit: number,

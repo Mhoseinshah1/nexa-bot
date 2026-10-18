@@ -6,6 +6,7 @@ import { resolve } from '../../apps/web/src/app';
 import { customer, order, renderPage, stubApi } from './harness';
 import { openC360Tab, openWalletDialog, submitWalletDialog } from './c360-helpers';
 import { openFilterPanel } from './ui-helpers';
+import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
 
 /**
  * The Users surface, rendered against the shapes the server actually returns.
@@ -1322,6 +1323,80 @@ describe('the wallet card', () => {
   });
 });
 
+describe('the Mirza wallet history (one-time import)', () => {
+  const ALL_WALLET = { mayViewWallet: true, mayCredit: true, mayDebit: true } as const;
+  const imported = {
+    id: '019270ab-cdef-7012-8345-6789abcdef01',
+    customerId: ROW_ID,
+    source: 'MIRZA',
+    origin: 'WALLET_TRANSACTION',
+    sourceRef: 'wallet-tx:91',
+    direction: 'DEBIT',
+    amount: '45000',
+    signedAmount: '-45000',
+    currency: 'IRT',
+    rawKind: 'buy_service',
+    note: null,
+    occurredAt: '2025-06-01T10:00:00.000Z',
+  };
+
+  it('shows Mirza rows apart from the ledger, marked, and pages them by their own cursor', async () => {
+    const api = stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      {
+        url: `/users/${ROW_ID}/wallet/entries`,
+        body: {
+          entries: [walletEntry()],
+          nextCursor: null,
+          importedEntries: [imported],
+          importedNextCursor: 'mirza-next',
+        },
+      },
+      ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }),
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
+    await openC360Tab('financial');
+    expect((await screen.findAllByText('تاریخچهٔ کیف پول در میرزا')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('از میرزا').length).toBeGreaterThan(0);
+    expect(screen.getByText('buy_service')).toBeTruthy();
+    // Its own pager, its own cursor: the ledger's is untouched.
+    const nexts = await screen.findAllByText('بعدی');
+    fireEvent.click(nexts[nexts.length - 1]!);
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('importedCursor=mirza-next'))).toBe(true);
+    });
+  });
+
+  it('draws no Mirza section for a customer NEXA never imported', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes({ balanceAmount: '0', entryCount: 0 }),
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...ALL_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />,
+    );
+    await openC360Tab('financial');
+    await screen.findByText('تاریخچه تراکنش‌ها');
+    expect(screen.queryByText('تاریخچهٔ کیف پول در میرزا')).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // This customer's orders and services (WP2)
 // ---------------------------------------------------------------------------
@@ -1772,5 +1847,69 @@ describe("a customer's orders and services", () => {
     for (const anchor of Array.from(card.querySelectorAll('a'))) {
       expect(anchor.getAttribute('href') ?? '').not.toContain('http');
     }
+  });
+});
+
+describe('rows imported from Mirza', () => {
+  const native = customer({
+    id: '019210ab-cdef-7012-8345-6789abcdef02',
+    telegramUserId: '5550000002',
+  });
+  const imported = customer({
+    id: '019210ab-cdef-7012-8345-6789abcdef03',
+    telegramUserId: '5550000003',
+    source: 'MIRZA',
+  });
+
+  it('marks only the imported customer «از میرزا»', async () => {
+    stubApi(list([native, imported]));
+    renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await screen.findByText('5550000003');
+    expect(rowHasBadge('5550000003')).toBe(true);
+    expect(rowHasBadge('5550000002')).toBe(false);
+  });
+
+  it('puts the «منبع» filter in the URL and asks the API for it', async () => {
+    window.history.replaceState(null, '', '/users');
+    stubApi(list([native, imported]));
+    renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await screen.findByText('5550000002');
+    pickMirzaSource();
+    expect(await sourceInUrl()).toBe('MIRZA');
+
+    const again = stubApi(list([imported]));
+    renderPage(
+      <UsersPage
+        route={{ path: '/users', query: new URLSearchParams({ source: 'MIRZA' }) }}
+        maySearch
+        denied={false}
+      />,
+    );
+    await waitFor(() => expect(requestsWithSource(again.calls, '/users', 'MIRZA')).toBe(1));
+  });
+
+  it("marks the imported customer's own page, and not a native one", async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer({ source: 'MIRZA' }) } },
+      ...walletRoutes(),
+    ]);
+    const page = (
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={false}
+      />
+    );
+    const first = renderPage(page);
+    expect(await screen.findByText('از میرزا')).toBeInTheDocument();
+    first.unmount();
+
+    stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...walletRoutes()]);
+    renderPage(page);
+    await screen.findAllByText('5551234567');
+    expect(screen.queryByText('از میرزا')).toBeNull();
   });
 });

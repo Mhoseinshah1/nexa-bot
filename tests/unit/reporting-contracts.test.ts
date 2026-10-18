@@ -44,10 +44,12 @@ describe('reporting contracts', () => {
   });
 
   it('counts only a STANDARD order as a sale, never a legacy adoption (Migration P3)', () => {
-    expect([...ORDER_ORIGINS]).toEqual(['STANDARD', 'LEGACY_ADOPTION']);
+    expect([...ORDER_ORIGINS]).toEqual(['STANDARD', 'LEGACY_ADOPTION', 'LEGACY_HISTORY']);
     expect(DEFAULT_ORDER_ORIGIN).toBe('STANDARD');
     expect([...SALE_ORDER_ORIGINS]).toEqual(['STANDARD']);
     expect(orderOriginIsSale('LEGACY_ADOPTION')).toBe(false);
+    // A Mirza invoice carried as history is Mirza's sale, never this installation's.
+    expect(orderOriginIsSale('LEGACY_HISTORY')).toBe(false);
     expect(orderOriginSchema.safeParse('MIGRATED').success).toBe(false);
   });
 

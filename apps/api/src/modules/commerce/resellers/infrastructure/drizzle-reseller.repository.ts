@@ -11,6 +11,7 @@ import type {
   ResellerOverrideMode,
   ResellerPriceLayer,
   ResellerPricingMode,
+  RecordSource,
   ResellerStatus,
   TenantContext,
 } from '@nexa/contracts';
@@ -85,6 +86,7 @@ function toReseller(row: typeof resellers.$inferSelect): ResellerRecord {
   return {
     id: row.id,
     customerId: row.customerId,
+    source: row.source as RecordSource,
     tierId: row.tierId,
     status: row.status as ResellerStatus,
     pricingMode: row.pricingMode as ResellerOverrideMode,
@@ -94,6 +96,7 @@ function toReseller(row: typeof resellers.$inferSelect): ResellerRecord {
         ? null
         : money(row.creditLimitAmount, row.creditLimitCurrency as CurrencyCode),
     monthlyMinimum: minimumOf(row.monthlyMinimumAmount, row.monthlyMinimumCurrency),
+    importedPurchaseCap: minimumOf(row.importedPurchaseCapMinor, row.importedPurchaseCapCurrency),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -465,6 +468,7 @@ export class DrizzleResellerRepository implements ResellerRepository {
     filter: {
       readonly status?: ResellerStatus;
       readonly tierId?: string;
+      readonly source?: RecordSource;
       readonly search?: string;
     },
     limit: number,
@@ -474,6 +478,7 @@ export class DrizzleResellerRepository implements ResellerRepository {
     const conditions: (SQL | undefined)[] = [eq(resellers.tenantId, tenantId)];
     if (filter.status !== undefined) conditions.push(eq(resellers.status, filter.status));
     if (filter.tierId !== undefined) conditions.push(eq(resellers.tierId, filter.tierId));
+    if (filter.source !== undefined) conditions.push(eq(resellers.source, filter.source));
     if (filter.search !== undefined) {
       const term = filter.search.trim();
       const pattern = `%${term.replace(/[\\%_]/gu, (c) => `\\${c}`)}%`;

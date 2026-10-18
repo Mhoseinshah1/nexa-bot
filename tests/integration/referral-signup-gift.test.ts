@@ -992,4 +992,85 @@ describe('the referral signup gift and the referral statistics', () => {
       expect((await f.stats(referrer)).commissionReceivedTotal).toEqual(money(100_000n, 'IRT'));
     });
   });
+  // -------------------------------------------------------------------------
+  // 9. A referral the Mirza import carried is history: it pays nobody
+  // -------------------------------------------------------------------------
+
+  describe('a referral carried by the Mirza import', () => {
+    /**
+     * What the import writes: the same row, marked MIRZA with the Mirza id. A referral is
+     * append-only, so the test marks it the way only a superuser could.
+     */
+    const markAsMirza = async (referralId: string) => {
+      const db = ctx.container.database.db;
+      await db.execute(sql`ALTER TABLE referrals DISABLE TRIGGER USER`);
+      await db.execute(sql`
+        UPDATE referrals SET source = 'MIRZA', source_ref = ${`referral:${referralId}`}
+         WHERE id = ${referralId}`);
+      await db.execute(sql`ALTER TABLE referrals ENABLE TRIGGER USER`);
+    };
+
+    const commissionRows = () =>
+      f.count(sql`SELECT count(*)::int AS n FROM order_referral_commissions`);
+
+    it('is not offered as a signup gift to either side', async () => {
+      await f.gift();
+      const { referee, referrer, referralId } = await f.referred();
+      expect(await f.claimable(referee)).toHaveLength(1);
+      await markAsMirza(referralId);
+
+      expect(await f.claimable(referee)).toEqual([]);
+      expect(await f.claimable(referrer)).toEqual([]);
+    });
+
+    it('is not paid by a claim, and the claim writes no gift row', async () => {
+      await f.gift();
+      const { referee, referrer, referralId } = await f.referred();
+      await markAsMirza(referralId);
+
+      expect(await f.claim(referee)).toEqual({ credited: money(0n, 'IRT'), claimedCount: 0 });
+      expect(await f.claim(referrer)).toEqual({ credited: money(0n, 'IRT'), claimedCount: 0 });
+      expect(await f.giftEntries()).toEqual([]);
+      expect(await f.giftRows()).toEqual([]);
+    });
+
+    it('earns no purchase commission: none is promised at confirmation (and a NEXA referral does)', async () => {
+      const nexa = await f.referred('940101', '940102');
+      const mirza = await f.referred('940103', '940104');
+      await markAsMirza(mirza.referralId);
+
+      const mirzaOrder = await f.confirmed(mirza.referee, 1_000_000n);
+      expect(await commissionRows()).toBe(0);
+      const nexaOrder = await f.confirmed(nexa.referee, 1_000_000n);
+      expect(await commissionRows()).toBe(1);
+      expect(
+        await f.count(
+          sql`SELECT count(*)::int AS n FROM order_referral_commissions WHERE order_id = ${mirzaOrder.id}`,
+        ),
+      ).toBe(0);
+      expect(
+        await f.count(
+          sql`SELECT count(*)::int AS n FROM order_referral_commissions WHERE order_id = ${nexaOrder.id}`,
+        ),
+      ).toBe(1);
+    });
+
+    it('is never settled by the commission sweep, even for a commission promised before the mark', async () => {
+      const { referee, referrer, referralId } = await f.referred();
+      const order = await f.confirmed(referee, 1_000_000n);
+      await f.paidFromWallet(order);
+      expect(await commissionRows()).toBe(1);
+      await markAsMirza(referralId);
+      await f.deliver(order.id);
+
+      expect(await ctx.container.referralCommissions.settle(tenantA, order.id)).toBe(false);
+      expect(await ctx.container.referralCommissions.settleDue(tenantA, 50)).toBe(0);
+      expect(
+        await f.count(
+          sql`SELECT count(*)::int AS n FROM wallet_entries WHERE reason = 'REFERRAL_COMMISSION'`,
+        ),
+      ).toBe(0);
+      expect((await f.stats(referrer)).commissionReceivedTotal).toEqual(money(0n, 'IRT'));
+    });
+  });
 });

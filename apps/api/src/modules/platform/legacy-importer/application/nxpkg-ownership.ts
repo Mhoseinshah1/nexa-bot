@@ -132,6 +132,18 @@ export function nxpkgOwnershipHold(input: {
   readonly records: readonly NxpkgOwnershipRecordFacts[];
   readonly decisions: VerifiedOwnershipDecisions | null;
   readonly liveInvoices: readonly { readonly idInvoice: string; readonly idUser: string | null }[];
+  /**
+   * The other (ended) invoices matched against the panel too (`snapshot.otherInvoices`). The
+   * converter writes an ownership record for every LIVE candidate and for the invoices a
+   * service operation names, not for the rest, so the absence of a record is NOT a hold here
+   * (it is for a live invoice): an ended invoice with no record has no evidence to contradict
+   * `id_user`, and the importer's own ownership rule still holds it when another owner claims
+   * the account. A record, when there is one, is judged exactly as a live invoice's is.
+   */
+  readonly otherInvoices?: readonly {
+    readonly idInvoice: string;
+    readonly idUser: string | null;
+  }[];
 }): NxpkgOwnershipHold {
   const byInvoice = new Map<string, NxpkgOwnershipRecordFacts[]>();
   for (const r of input.records) {
@@ -143,12 +155,17 @@ export function nxpkgOwnershipHold(input: {
   const proven = new Set<string>();
   const reasons: Partial<Record<NxpkgOwnershipHoldReason, number>> = {};
 
-  for (const invoice of input.liveInvoices) {
+  const judged = [
+    ...input.liveInvoices.map((invoice) => ({ invoice, live: true })),
+    ...(input.otherInvoices ?? []).map((invoice) => ({ invoice, live: false })),
+  ];
+  for (const { invoice, live } of judged) {
     const key = invoice.idInvoice;
     const records = byInvoice.get(key) ?? [];
     // Two records for one invoice is two answers to one question: neither is taken.
     const record = records.length === 1 ? records[0] : undefined;
     let why: NxpkgOwnershipHoldReason | null;
+    if (record === undefined && !live && records.length === 0) continue;
     if (record === undefined) {
       why = 'NO_OWNERSHIP_RECORD';
     } else {

@@ -51,6 +51,7 @@ import {
 import { PartyCell, TriggerBadge } from './referrals';
 import { OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
 import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
+import { SourceBadge } from '../ui/source-badge';
 import {
   CustomerControlsCard,
   FinancialSummaryCard,
@@ -66,13 +67,6 @@ import { ActionPanel } from '../ui/action-panel';
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
 import { CustomerCrmSection } from './customer-360-crm';
-// Mirza `.nxpkg` importer: the archived legacy history card (read only).
-import {
-  CustomerLegacyDebtCard,
-  CustomerLegacyHistoryCard,
-  CustomerLegacyInvoicesCard,
-} from './customer-360-legacy';
-import { CustomerLegacyMoneyCard } from './customer-360-legacy-money';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 // Roadmap B5: the workspace — attention, the newest rows, support, shortcuts.
 import {
@@ -203,11 +197,7 @@ export function UserDetailPage({
   mayViewPayments = false,
   mayViewTickets = false,
   mayViewBusinessChats = false,
-  mayViewLegacyHistory = false,
-  mayViewLegacyInvoices = false,
-  mayViewLegacyPii = false,
   mayViewLegacyServices = false,
-  mayViewLegacyDebts = false,
   denied,
 }: {
   id: string;
@@ -279,16 +269,8 @@ export function UserDetailPage({
   mayViewTickets?: boolean;
   /** `business_chats.view` — the handoff inbox shortcut. */
   mayViewBusinessChats?: boolean;
-  /** `legacy.history.view` — the archived Mirza history card; not drawn without it. */
-  mayViewLegacyHistory?: boolean;
-  /** `legacy.invoices.view` — the customer's Mirza invoices card; not drawn without it. */
-  mayViewLegacyInvoices?: boolean;
-  /** `legacy.invoices.pii.view` — the legacy owner filter on the archive link. */
-  mayViewLegacyPii?: boolean;
   /** `legacy.services.view` — the «migrated from Mirza» mark on the services card. */
   mayViewLegacyServices?: boolean;
-  /** `legacy.debts.view` — the customer's legacy debt beside the wallet. */
-  mayViewLegacyDebts?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -757,24 +739,8 @@ export function UserDetailPage({
                       mayDebit={mayDebit}
                       onAdjust={setWalletDialog}
                     />
-                    <CustomerLegacyDebtCard
-                      telegramUserId={row.telegramUserId}
-                      mayView={mayViewLegacyDebts}
-                    />
                   </div>
                   <FinancialSummaryCard customerId={id} />
-                  <CustomerLegacyInvoicesCard
-                    customerId={id}
-                    telegramUserId={row.telegramUserId}
-                    mayView={mayViewLegacyInvoices}
-                    mayViewPii={mayViewLegacyPii}
-                  />
-                  {/* The Mirza money history: evidence beside the money, never added to a balance. */}
-                  <CustomerLegacyMoneyCard
-                    customerId={id}
-                    // The response names the legacy debt: the server charges legacy.debts.view too.
-                    mayView={mayViewLegacyHistory && mayViewLegacyDebts}
-                  />
                 </div>
               )}
               {tab === 'controls' && (
@@ -822,7 +788,6 @@ export function UserDetailPage({
               {tab === 'timeline' && (
                 <div className="stack">
                   <TimelineCard customerId={id} mayView={mayViewAudit} />
-                  <CustomerLegacyHistoryCard customerId={id} mayView={mayViewLegacyHistory} />
                 </div>
               )}
             </TabPanel>
@@ -886,6 +851,7 @@ function UserHead({
       badge={
         <>
           <StatusBadge status={row.status} />
+          <SourceBadge source={row.source} />
           {isReseller && <Badge tone="teal">{t('web.c360_badge_reseller')}</Badge>}
           {exempt && <Badge tone="violet">{t('web.c360_channel_exempt')}</Badge>}
         </>
@@ -1319,6 +1285,7 @@ function WalletCard({
   onAdjust: (direction: LedgerDirection) => void;
 }) {
   const [cursor, setCursor] = useState<string | null>(null);
+  const [importedCursor, setImportedCursor] = useState<string | null>(null);
 
   const wallet = useQuery({
     queryKey: ['wallet', customerId],
@@ -1327,11 +1294,12 @@ function WalletCard({
   });
   const entries = useQuery(
     keepPageWhileTurning({
-      queryKey: ['wallet-entries', customerId, cursor],
+      queryKey: ['wallet-entries', customerId, cursor, importedCursor],
       queryFn: () =>
         fetchWalletEntries(customerId, {
           limit: LIST_PAGE_SIZE,
           ...(cursor === null ? {} : { cursor }),
+          ...(importedCursor === null ? {} : { importedCursor }),
         }),
       enabled: mayView,
     }),
@@ -1403,8 +1371,9 @@ function WalletCard({
 
   const balance = wallet.data?.wallet;
   /*
-   * BELOW ZERO is a real state now, and only for one reason: a reseller's purchase drawn
-   * on their credit line (`docs/wp9-reseller-audit.md` R8). The figure is drawn exactly
+   * BELOW ZERO is a real state, for two reasons: a reseller's legacy purchase drawn on the
+   * removed credit line (`docs/wp9-reseller-audit.md` R8), and a negative Mirza balance the
+   * one-time import carried over (owner decision 2026-10-17). The figure is drawn exactly
    * as derived — `Money` carries the sign — and said in words beside it, because a
    * negative balance read as a rendering glitch is a debt nobody follows up.
    */
@@ -1485,6 +1454,67 @@ function WalletCard({
         )}
       </StateSwitch>
       <p className="muted small">{t('web.wallet_immutable')}</p>
+
+      {/*
+        The one-time import's Mirza wallet history: shown beside the ledger, never part of
+        it. The balance above is the ledger's alone; Mirza's own balance was carried as ONE
+        opening entry, so these rows are what happened in Mirza, not money in NEXA.
+      */}
+      {entries.data !== undefined &&
+        ((entries.data.importedEntries ?? []).length > 0 || importedCursor !== null) && (
+          <>
+            <h3 className="ca-subhead">
+              {t('web.wallet_imported_title')} <SourceBadge source="MIRZA" />
+            </h3>
+            <p className="muted small">{t('web.wallet_imported_hint')}</p>
+            <DataTable
+              caption={t('web.wallet_imported_title')}
+              columns={[
+                {
+                  key: 'signedAmount',
+                  header: t('web.wallet_balance'),
+                  render: (row) => (
+                    <Money value={{ amountMinor: row.signedAmount, currency: row.currency }} />
+                  ),
+                },
+                {
+                  key: 'rawKind',
+                  header: t('web.wallet_reason'),
+                  render: (row) =>
+                    row.origin === 'WHEEL_SPIN' ? (
+                      t('web.wallet_imported_wheel')
+                    ) : row.rawKind === null ? (
+                      <Dash />
+                    ) : (
+                      <Ltr>{row.rawKind}</Ltr>
+                    ),
+                },
+                {
+                  key: 'note',
+                  header: t('web.wallet_note'),
+                  render: (row) => (row.note === null ? <Dash /> : row.note),
+                },
+                {
+                  key: 'occurredAt',
+                  header: t('web.wallet_created_at'),
+                  render: (row) => (
+                    <span className="nowrap">{formatTimestamp(row.occurredAt)}</span>
+                  ),
+                },
+              ]}
+              rows={entries.data.importedEntries ?? []}
+              rowKey={(row) => row.id}
+              dense
+            />
+            <CursorPager
+              shown={(entries.data.importedEntries ?? []).length}
+              hasPrevious={importedCursor !== null}
+              hasNext={(entries.data.importedNextCursor ?? null) !== null}
+              onPrevious={() => setImportedCursor(null)}
+              onNext={() => setImportedCursor(entries.data?.importedNextCursor ?? null)}
+            />
+          </>
+        )}
 
       {/*
         Named separately, because the two permissions are separate decisions with

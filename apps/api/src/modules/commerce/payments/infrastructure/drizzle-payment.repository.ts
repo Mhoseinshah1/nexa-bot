@@ -34,6 +34,7 @@ import type {
   PaymentResolvedState,
   PaymentState,
   ReceiptDisposition,
+  RecordSource,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
@@ -247,6 +248,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     const conditions: SQL[] = [eq(payments.tenantId, tenantId)];
     if (search.state !== undefined) conditions.push(eq(payments.state, search.state));
     if (search.method !== undefined) conditions.push(eq(payments.method, search.method));
+    if (search.source !== undefined) conditions.push(eq(payments.source, search.source));
     if (search.customerId !== undefined)
       conditions.push(eq(payments.customerId, search.customerId));
     if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
@@ -1172,6 +1174,7 @@ function noReceiptFiled(): SQL {
 
 type Row = {
   id: string;
+  source: string;
   customerId: string;
   orderId: string | null;
   state: string;
@@ -1204,6 +1207,7 @@ type Row = {
 function toRecord(row: Row): PaymentRecord {
   return {
     id: row.id as PaymentId,
+    source: row.source as RecordSource,
     customerId: row.customerId as UserId,
     orderId: row.orderId as OrderId | null,
     state: row.state as PaymentState,

@@ -25,9 +25,11 @@ import { createTestContext, tenantA, type TestContext } from './harness';
  *
  * - money, recomputed independently from the package's snapshot `Balance` cells: every
  *   positive balance is exactly one MIGRATION_OPENING_BALANCE credit referenced
- *   `legacy:opening:<tg>`, every negative one a legacy debt of its magnitude, a zero nothing;
- *   no payment, no revenue, and the only orders are the zero-total LEGACY_ADOPTION ones
- *   behind adopted services;
+ *   `legacy:opening:<tg>`, every negative one exactly one DEBIT of its magnitude (the wallet equals the Mirza balance,
+ *   negative included, no legacy-debt row), a zero nothing;
+ *   no revenue: the payments are the package's history (MIRZA, LEGACY_IMPORT, terminal, no
+ *   ledger entry), and the orders are the zero-total LEGACY_ADOPTION ones behind adopted
+ *   services plus the LEGACY_HISTORY ones behind ended services;
  * - the RickPanel binding leaves the panels exactly as they were (row and policy), and the
  *   panels saw reads only;
  * - the history archive holds every packaged history line and a customer's is readable
@@ -233,25 +235,33 @@ describe('legacy migration: one lifecycle, checked from outside the importer', (
              FROM wallet_entries WHERE tenant_id = ${TENANT}`)
     ).rows;
     expect(ledger.every((e) => e.reason === 'MIGRATION_OPENING_BALANCE')).toBe(true);
-    expect(ledger.every((e) => e.direction === 'CREDIT' && e.currency === 'IRT')).toBe(true);
+    expect(ledger.every((e) => e.currency === 'IRT')).toBe(true);
     expect(ledger.every((e) => e.order_id === null && e.payment_id === null)).toBe(true);
-    expect(ledger.reduce((sum, e) => sum + BigInt(e.amount), 0n)).toBe(money.positive.sum);
-    expect(ledger.map((e) => e.reference).sort()).toEqual(
+    // Owner decision 2026-10-17: every non-zero balance is ONE opening, a CREDIT for a positive
+    // one and a DEBIT of the magnitude for a negative one, so each wallet equals the Mirza balance.
+    const credits = ledger.filter((e) => e.direction === 'CREDIT');
+    const debits = ledger.filter((e) => e.direction === 'DEBIT');
+    expect(credits.length + debits.length).toBe(ledger.length);
+    expect(credits.reduce((sum, e) => sum + BigInt(e.amount), 0n)).toBe(money.positive.sum);
+    expect(debits.reduce((sum, e) => sum + BigInt(e.amount), 0n)).toBe(money.negative.sum);
+    expect(credits.map((e) => e.reference).sort()).toEqual(
       [...money.positive.ids].map((tg) => `legacy:opening:${tg}`).sort(),
     );
-    const debts = (
-      await db().execute<{ legacy_user_id: string; amount_minor: string; state: string }>(
-        sql`SELECT legacy_user_id, amount_minor::text, state FROM legacy_wallet_debts WHERE tenant_id = ${TENANT}`,
-      )
-    ).rows;
-    expect(new Map(debts.map((d) => [d.legacy_user_id, BigInt(d.amount_minor)]))).toEqual(
-      money.negative.byId,
+    expect(debits.map((e) => e.reference).sort()).toEqual(
+      [...money.negative.byId.keys()].map((tg) => `legacy:opening:${tg}`).sort(),
     );
-    expect(debts.reduce((s, d) => s + BigInt(d.amount_minor), 0n)).toBe(money.negative.sum);
-    expect(debts.every((d) => d.state === 'PENDING_REVIEW')).toBe(true);
-    // Zero balances: neither an entry nor a debt, but still a customer.
+    expect(new Map(debits.map((e) => [e.reference, BigInt(e.amount)]))).toEqual(
+      new Map([...money.negative.byId].map(([tg, v]) => [`legacy:opening:${tg}`, v])),
+    );
+    // The whole ledger nets to the Mirza total, negatives included.
+    expect(
+      ledger.reduce((s, e) => s + (e.direction === 'CREDIT' ? 1n : -1n) * BigInt(e.amount), 0n),
+    ).toBe(money.positive.sum - money.negative.sum);
+    // No legacy-debt side record exists any more.
+    expect(await rig.count('legacy_wallet_debts')).toBe(0);
+    // Zero balances: no entry, but still a customer.
     expect(await rig.count('customers')).toBe(USERS);
-    expect(ledger.length + debts.length + money.zero).toBe(USERS);
+    expect(ledger.length + money.zero).toBe(USERS);
     // What the owner approved is what was written.
     expect(view.dryRunReport?.wallets).toMatchObject({
       customers: money.positive.count,
@@ -261,11 +271,36 @@ describe('legacy migration: one lifecycle, checked from outside the importer', (
     expect(view.dryRunReport?.debts.count).toBe(money.negative.count);
     const debtTotal = BigInt(view.dryRunReport?.debts.totalMinor ?? '0');
     expect(debtTotal < 0n ? -debtTotal : debtTotal).toBe(money.negative.sum);
-    // No money moved: no payment, no revenue; adoption orders are zero-total LEGACY_ADOPTION.
+    // No money moved. The MATERIALIZE phase writes the package's payment HISTORY — exactly one
+    // MIRZA payment per history record, evidence LEGACY_IMPORT, terminal — and nothing of it
+    // is revenue or a ledger entry: no NEXA payment, no open one, no payment-linked ledger row.
+    const packagedPayments = [...paymentRecords(generated.users)].length;
+    expect(packagedPayments).toBe(Math.ceil(USERS / 2)); // every 2nd of USERS users
+    expect(await rig.count('payments')).toBe(packagedPayments);
+    expect(
+      await rig.count(
+        'payments',
+        "source = 'MIRZA' AND evidence_kind = 'LEGACY_IMPORT' AND state = 'CONFIRMED' AND source_ref LIKE 'payment:%'",
+      ),
+    ).toBe(packagedPayments);
+    expect(await rig.count('payments', "source = 'NEXA'")).toBe(0);
+    expect(
+      await rig.count(
+        'payments',
+        "state NOT IN ('CONFIRMED', 'FAILED', 'CANCELLED', 'EXPIRED')", // none PENDING / UNKNOWN
+      ),
+    ).toBe(0);
+    expect(await rig.count('payments', 'order_id IS NOT NULL')).toBe(0);
+    expect(await rig.count('wallet_entries', 'payment_id IS NOT NULL')).toBe(0);
+    // Adopted services are the LIVE invoices (orders: zero-total LEGACY_ADOPTION); every other
+    // paid invoice is an ENDED service behind a LEGACY_HISTORY order (one each, never a sale).
     const live = generated.invoices.filter((i) => i.live).length;
-    expect(await rig.count('payments')).toBe(0);
-    expect(await rig.count('services')).toBe(live);
-    expect(await rig.count('orders')).toBe(live);
+    const ended = await rig.count('services', "state = 'TERMINATED'");
+    expect(await rig.count('services', "state <> 'TERMINATED'")).toBe(live);
+    expect(await rig.count('orders', "origin = 'LEGACY_ADOPTION'")).toBe(live);
+    expect(await rig.count('orders', "origin = 'LEGACY_HISTORY' AND source = 'MIRZA'")).toBe(ended);
+    expect(await rig.count('orders')).toBe(live + ended);
+    expect(await rig.count('orders', "origin = 'STANDARD'")).toBe(0);
     expect(
       await rig.count(
         'orders',

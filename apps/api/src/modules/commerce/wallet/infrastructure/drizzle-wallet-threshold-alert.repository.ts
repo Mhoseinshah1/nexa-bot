@@ -86,8 +86,9 @@ export class DrizzleWalletThresholdAlertRepository implements WalletThresholdAle
       WHERE s.last_high IS NOT NULL
         AND latest.after_entry < ${wallet.threshold}
         -- Customer 360: a balance moved out by an account transfer is not a customer
-        -- running low; the account it moved to is the one they use now.
-        AND crossing.reason <> 'ACCOUNT_TRANSFER_OUT'
+        -- running low; the account it moved to is the one they use now. Nor is the Mirza
+        -- import's DEBIT opening: the one-time migration sends nobody a message.
+        AND crossing.reason NOT IN ('ACCOUNT_TRANSFER_OUT', 'MIGRATION_OPENING_BALANCE')
         AND NOT EXISTS (
           SELECT 1 FROM wallet_threshold_alerts a
           WHERE a.tenant_id = ${tenantId}

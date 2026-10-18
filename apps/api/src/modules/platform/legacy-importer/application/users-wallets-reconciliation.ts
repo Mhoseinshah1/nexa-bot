@@ -26,13 +26,14 @@ import type { PlannedUser } from './plan.js';
  * 1. Is every source user row accounted for? One outcome per row (`LEGACY_USER_OUTCOMES`),
  *    and the closure Σ outcomes = source rows.
  * 2. Does the money add up? Σ positive legacy balances of the users imported from THIS
- *    snapshot = the opening CREDITs; Σ |negative| = the legacy debts; no ledger DEBIT opening
- *    exists (owner decision 6); and per user, what NEXA recorded is exactly the source figure.
+ *    snapshot = the opening CREDITs; Σ |negative| = the opening DEBITs (owner decision
+ *    2026-10-17: a negative balance is the wallet's own balance, not a side record); no legacy
+ *    debt row exists; and per user, the one opening NEXA posted is exactly the source figure.
  * 3. What changed since the snapshot NEXA imported from? Every SOURCE_CHANGED user is
  *    classed by how its balance moved; the sign flips are listed for the owner by map ref.
  *    Nothing here — or anywhere — applies a changed figure.
  * 4. Where is every source row's money? Each balance lands in exactly one bucket (credited,
- *    recorded as a debt, zero, held with the outcome that says why, or unreadable — counted
+ *    debited, zero, held with the outcome that says why, or unreadable — counted
  *    by rows, never summed as 0), and the buckets add up EXACTLY, by sign, to the readable
  *    source sum (U9/U10). Money on a review row is reported, never invisible.
  */
@@ -47,24 +48,22 @@ export interface UsersWalletsInput {
   readonly mapRows: ReadonlyMap<string, LegacyImportMapRecord>;
   /** Telegram id → SIGNED ledger opening already posted. */
   readonly openings: ReadonlyMap<string, bigint>;
-  /** Telegram id → magnitude of the legacy debt recorded. */
-  readonly debts: ReadonlyMap<string, bigint>;
-  /** Tenant-wide ledger opening aggregate. */
+  /** Tenant-wide ledger opening aggregate, by sign. */
   readonly openingTotals: {
     readonly count: number;
+    /** Signed. */
     readonly sumMinor: bigint;
+    readonly positive: number;
     readonly negative: number;
+    readonly creditSumMinor: bigint;
+    /** Magnitude. */
+    readonly debitSumMinor: bigint;
   };
-  /** Tenant-wide debt aggregate. */
-  readonly debtTotals: {
-    readonly count: number;
-    readonly sumMinor: bigint;
-    readonly byState: Readonly<
-      Record<string, { readonly count: number; readonly sumMinor: bigint }>
-    >;
-    /** Recorded from a synthetic source. */
-    readonly synthetic: number;
-  };
+  /**
+   * Rows of the retired legacy-debt side record for this tenant. The importer writes none
+   * since owner decision 2026-10-17; one existing means money is held outside the wallet.
+   */
+  readonly legacyDebtRows: number;
 }
 
 interface ChangeTally {
@@ -128,18 +127,19 @@ export const HELD_OUTCOMES = LEGACY_USER_OUTCOMES.filter(
  * - `UNREADABLE`: the cell is not a whole number of Toman. Its value is unknown, so it is
  *   counted by ROWS and never summed — never as a 0 (the closed v1 `legacyTotalMinor` does
  *   read it as 0; this accounting is where that is said).
- * - `CREDITED` / `DEBT_RECORDED` / `ZERO`: an imported user for whom NEXA holds EXACTLY the
- *   source figure — one opening CREDIT of it, one legacy debt of its magnitude, or nothing.
+ * - `CREDITED` / `DEBITED` / `ZERO`: an imported user for whom NEXA holds EXACTLY the
+ *   source figure — one opening CREDIT of it, one opening DEBIT of its magnitude, or nothing.
  * - `HELD`: readable, and not applied from this snapshot, with the outcome that says why
  *   (manual review, an invalid identity, a duplicated id, a closed review, a changed source,
  *   or not imported yet).
  * - `UNACCOUNTED`: an imported user for whom NEXA holds something other than the source
- *   figure (nothing, a different amount, the other kind, a DEBIT opening). Never expected.
+ *   figure (nothing, a different amount, the other sign). Never expected.
  */
 export type SourceMoneyBucket =
   | { readonly kind: 'UNREADABLE' }
   | { readonly kind: 'CREDITED'; readonly amountMinor: bigint }
-  | { readonly kind: 'DEBT_RECORDED'; readonly amountMinor: bigint }
+  /** `amountMinor` is the magnitude. */
+  | { readonly kind: 'DEBITED'; readonly amountMinor: bigint }
   | { readonly kind: 'ZERO' }
   | { readonly kind: 'HELD'; readonly outcome: HeldOutcome; readonly balanceMinor: bigint }
   | { readonly kind: 'UNACCOUNTED'; readonly balanceMinor: bigint };
@@ -148,20 +148,15 @@ export function sourceMoneyBucket(
   planned: PlannedUser,
   outcome: LegacyUserOutcome,
   opening: bigint | undefined,
-  debt: bigint | undefined,
 ): SourceMoneyBucket {
   const balance = parseLegacyBalance(planned.row.balance);
   if (balance === null) return { kind: 'UNREADABLE' };
   if (outcome !== 'IMPORTED_NEW' && outcome !== 'IMPORTED_EXISTING') {
     return { kind: 'HELD', outcome, balanceMinor: balance };
   }
-  if (balance > 0n && opening === balance && debt === undefined) {
-    return { kind: 'CREDITED', amountMinor: opening };
-  }
-  if (balance < 0n && debt === -balance && opening === undefined) {
-    return { kind: 'DEBT_RECORDED', amountMinor: debt };
-  }
-  if (balance === 0n && opening === undefined && debt === undefined) return { kind: 'ZERO' };
+  if (balance > 0n && opening === balance) return { kind: 'CREDITED', amountMinor: opening };
+  if (balance < 0n && opening === balance) return { kind: 'DEBITED', amountMinor: -opening };
+  if (balance === 0n && opening === undefined) return { kind: 'ZERO' };
   return { kind: 'UNACCOUNTED', balanceMinor: balance };
 }
 
@@ -210,14 +205,10 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
   const negative = { users: 0, sumMinor: 0n };
   let zero = 0;
   const perUser = {
-    /** What NEXA holds is exactly the source figure (a CREDIT, a debt, or nothing for 0). */
+    /** What NEXA holds is exactly the source figure (a CREDIT, a DEBIT, or nothing for 0). */
     matching: 0,
-    /** Positive in the source, no opening recorded. */
+    /** Non-zero in the source, no opening recorded. */
     missingOpening: 0,
-    /** Negative in the source, no debt recorded. */
-    missingDebt: 0,
-    /** A ledger DEBIT opening from before owner decision 6 (never rewritten, never doubled). */
-    priorDebitOpening: 0,
     /** Something is recorded, and it is not the source figure. */
     conflicting: 0,
   };
@@ -239,10 +230,21 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
    * `sourceChanged`, never hidden in a failed sum.
    */
   const carried = {
-    changedOpenings: { count: 0, sumMinor: 0n },
-    changedDebts: { count: 0, sumMinor: 0n },
-    absentOpenings: { count: 0, sumMinor: 0n },
-    absentDebts: { count: 0, sumMinor: 0n },
+    /** Positive openings: Σ amounts. */
+    changedCredits: { count: 0, sumMinor: 0n },
+    /** Negative openings: Σ magnitudes. */
+    changedDebits: { count: 0, sumMinor: 0n },
+    absentCredits: { count: 0, sumMinor: 0n },
+    absentDebits: { count: 0, sumMinor: 0n },
+  };
+  const carry = (
+    credit: { count: number; sumMinor: bigint },
+    debit: { count: number; sumMinor: bigint },
+    opening: bigint,
+  ): void => {
+    const into = opening < 0n ? debit : credit;
+    into.count += 1;
+    into.sumMinor += opening < 0n ? -opening : opening;
   };
   /**
    * The source-money accounting: every source row's balance in exactly one bucket
@@ -255,7 +257,7 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
       byOutcome: zeroOutcomes(),
     },
     credited: { rows: 0, sumMinor: 0n },
-    debtRecorded: { rows: 0, sumMinor: 0n },
+    debited: { rows: 0, sumMinor: 0n },
     zero: { rows: 0 },
     held: Object.fromEntries(HELD_OUTCOMES.map((o) => [o, signedTally()])) as Record<
       HeldOutcome,
@@ -269,12 +271,7 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
     const map = input.mapRows.get(planned.row.id);
     const outcome = userOutcome(planned, map);
     outcomes[outcome] += 1;
-    const bucket = sourceMoneyBucket(
-      planned,
-      outcome,
-      input.openings.get(planned.row.id),
-      input.debts.get(planned.row.id),
-    );
+    const bucket = sourceMoneyBucket(planned, outcome, input.openings.get(planned.row.id));
     if (bucket.kind === 'UNREADABLE') {
       money.unreadable.rows += 1;
       money.unreadable.byOutcome[outcome] += 1;
@@ -283,9 +280,9 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
       if (bucket.kind === 'CREDITED') {
         money.credited.rows += 1;
         money.credited.sumMinor += bucket.amountMinor;
-      } else if (bucket.kind === 'DEBT_RECORDED') {
-        money.debtRecorded.rows += 1;
-        money.debtRecorded.sumMinor += bucket.amountMinor;
+      } else if (bucket.kind === 'DEBITED') {
+        money.debited.rows += 1;
+        money.debited.sumMinor += bucket.amountMinor;
       } else if (bucket.kind === 'ZERO') {
         money.zero.rows += 1;
       } else if (bucket.kind === 'HELD') {
@@ -305,18 +302,10 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
     if (agent) agents.sourceRows += 1;
 
     const opening = input.openings.get(planned.row.id);
-    const debt = input.debts.get(planned.row.id);
-    const recorded = opening ?? (debt === undefined ? 0n : -debt);
+    const recorded = opening ?? 0n;
 
     if (outcome === 'SOURCE_CHANGED' && map !== undefined) {
-      if (opening !== undefined) {
-        carried.changedOpenings.count += 1;
-        carried.changedOpenings.sumMinor += opening;
-      }
-      if (debt !== undefined) {
-        carried.changedDebts.count += 1;
-        carried.changedDebts.sumMinor += debt;
-      }
+      if (opening !== undefined) carry(carried.changedCredits, carried.changedDebits, opening);
       const now = parseLegacyBalance(planned.row.balance);
       const cls = classifyBalanceChange(recorded, now);
       const t = changes[cls];
@@ -345,17 +334,9 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
     } else {
       zero += 1;
     }
-    if (balance < 0n && opening === balance && debt === undefined) {
-      perUser.priorDebitOpening += 1;
-    } else if (balance > 0n && opening === undefined && debt === undefined) {
+    if (balance !== 0n && opening === undefined) {
       perUser.missingOpening += 1;
-    } else if (balance < 0n && opening === undefined && debt === undefined) {
-      perUser.missingDebt += 1;
-    } else if (
-      (balance > 0n && opening === balance && debt === undefined) ||
-      (balance < 0n && debt === -balance && opening === undefined) ||
-      (balance === 0n && opening === undefined && debt === undefined)
-    ) {
+    } else if (opening === (balance === 0n ? undefined : balance)) {
       perUser.matching += 1;
     } else {
       perUser.conflicting += 1;
@@ -364,22 +345,15 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
 
   for (const [id, amount] of input.openings) {
     if (seen.has(id)) continue;
-    carried.absentOpenings.count += 1;
-    carried.absentOpenings.sumMinor += amount;
+    carry(carried.absentCredits, carried.absentDebits, amount);
   }
-  for (const [id, amount] of input.debts) {
-    if (seen.has(id)) continue;
-    carried.absentDebts.count += 1;
-    carried.absentDebts.sumMinor += amount;
-  }
-  const expectedOpenings = {
-    count: positive.users + carried.changedOpenings.count + carried.absentOpenings.count,
-    sumMinor:
-      positive.sumMinor + carried.changedOpenings.sumMinor + carried.absentOpenings.sumMinor,
+  const expectedCredits = {
+    count: positive.users + carried.changedCredits.count + carried.absentCredits.count,
+    sumMinor: positive.sumMinor + carried.changedCredits.sumMinor + carried.absentCredits.sumMinor,
   };
-  const expectedDebts = {
-    count: negative.users + carried.changedDebts.count + carried.absentDebts.count,
-    sumMinor: negative.sumMinor + carried.changedDebts.sumMinor + carried.absentDebts.sumMinor,
+  const expectedDebits = {
+    count: negative.users + carried.changedDebits.count + carried.absentDebits.count,
+    sumMinor: negative.sumMinor + carried.changedDebits.sumMinor + carried.absentDebits.sumMinor,
   };
   for (const refs of Object.values(ownerReview)) refs.sort();
   const sourceRows = input.users.length;
@@ -408,18 +382,12 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
   const bucketRows =
     money.unreadable.rows +
     money.credited.rows +
-    money.debtRecorded.rows +
+    money.debited.rows +
     money.zero.rows +
     heldTotal.rows +
     money.unaccounted.rows;
   const accountedPositive = money.credited.sumMinor + heldTotal.positive.sumMinor;
-  const accountedNegative = money.debtRecorded.sumMinor + heldTotal.negative.sumMinor;
-  const debtByState = Object.fromEntries(
-    Object.entries(input.debtTotals.byState).map(([k, v]) => [
-      k,
-      { count: v.count, sumMinor: minor(v.sumMinor) },
-    ]),
-  );
+  const accountedNegative = money.debited.sumMinor + heldTotal.negative.sumMinor;
 
   const checks = [
     {
@@ -431,67 +399,64 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
     },
     {
       id: 'U2',
-      what: 'Σ openings = Σ positive balances imported from this snapshot + openings carried (changed or absent users)',
-      holds: input.openingTotals.sumMinor === expectedOpenings.sumMinor,
-      expected: minor(expectedOpenings.sumMinor),
-      actual: minor(input.openingTotals.sumMinor),
+      what: 'Σ CREDIT openings = Σ positive balances imported from this snapshot + credits carried (changed or absent users)',
+      holds: input.openingTotals.creditSumMinor === expectedCredits.sumMinor,
+      expected: minor(expectedCredits.sumMinor),
+      actual: minor(input.openingTotals.creditSumMinor),
     },
     {
       id: 'U3',
-      what: 'one opening per imported positive user, plus the openings carried',
-      holds: input.openingTotals.count === expectedOpenings.count,
-      expected: String(expectedOpenings.count),
-      actual: String(input.openingTotals.count),
+      what: 'one CREDIT opening per imported positive user, plus the credits carried',
+      holds: input.openingTotals.positive === expectedCredits.count,
+      expected: String(expectedCredits.count),
+      actual: String(input.openingTotals.positive),
     },
     {
       id: 'U4',
-      what: 'Σ legacy debts = Σ |negative balances| imported from this snapshot + debts carried (changed or absent users)',
-      holds: input.debtTotals.sumMinor === expectedDebts.sumMinor,
-      expected: minor(expectedDebts.sumMinor),
-      actual: minor(input.debtTotals.sumMinor),
+      what: 'Σ |DEBIT openings| = Σ |negative balances| imported from this snapshot + debits carried (changed or absent users)',
+      holds: input.openingTotals.debitSumMinor === expectedDebits.sumMinor,
+      expected: minor(expectedDebits.sumMinor),
+      actual: minor(input.openingTotals.debitSumMinor),
     },
     {
       id: 'U5',
-      what: 'one legacy debt per imported negative user, plus the debts carried',
-      holds: input.debtTotals.count === expectedDebts.count,
-      expected: String(expectedDebts.count),
-      actual: String(input.debtTotals.count),
+      what: 'one DEBIT opening per imported negative user, plus the debits carried',
+      holds: input.openingTotals.negative === expectedDebits.count,
+      expected: String(expectedDebits.count),
+      actual: String(input.openingTotals.negative),
     },
     {
       id: 'U6',
-      what: 'no ledger DEBIT opening exists (a negative balance is never a ledger entry)',
-      holds: input.openingTotals.negative === 0,
+      what: 'no legacy debt side record exists (a negative balance is the wallet balance itself)',
+      holds: input.legacyDebtRows === 0,
       expected: '0',
-      actual: String(input.openingTotals.negative),
+      actual: String(input.legacyDebtRows),
     },
     {
       id: 'U7',
       what: 'per imported user, NEXA holds exactly the source figure',
       holds:
         perUser.matching === positive.users + negative.users + zero &&
-        perUser.missingOpening +
-          perUser.missingDebt +
-          perUser.priorDebitOpening +
-          perUser.conflicting ===
-          0,
+        perUser.missingOpening + perUser.conflicting === 0,
       expected: String(positive.users + negative.users + zero),
       actual: String(perUser.matching),
     },
     {
       id: 'U8',
-      // PR3's review lesson (#232): recorded state is re-checked for its evidence class. A
-      // debt read from a synthetic fixture is test data; a real snapshot's reconciliation
-      // never holds while one is recorded beside real ones.
-      what: 'no legacy debt recorded from a synthetic source, unless this snapshot is synthetic',
-      holds: input.synthetic || input.debtTotals.synthetic === 0,
-      expected: input.synthetic ? 'any' : '0',
-      actual: String(input.debtTotals.synthetic),
+      // Every opening is one of the two signs, and nothing else posts under the reason.
+      what: 'openings by sign add up to the opening total (count and signed Σ)',
+      holds:
+        input.openingTotals.positive + input.openingTotals.negative === input.openingTotals.count &&
+        input.openingTotals.creditSumMinor - input.openingTotals.debitSumMinor ===
+          input.openingTotals.sumMinor,
+      expected: `count=${String(input.openingTotals.count)} sum=${minor(input.openingTotals.sumMinor)}`,
+      actual: `count=${String(input.openingTotals.positive + input.openingTotals.negative)} sum=${minor(input.openingTotals.creditSumMinor - input.openingTotals.debitSumMinor)}`,
     },
     {
       id: 'U9',
-      // Every source row's money is somewhere a person can see: credited, recorded as a debt,
-      // zero, held with its reason, or unreadable (counted) — and none is unaccounted for.
-      what: 'every source balance is in exactly one money bucket (credited, debt, zero, held with a reason, unreadable), none unaccounted',
+      // Every source row's money is somewhere a person can see: credited, debited, zero, held
+      // with its reason, or unreadable (counted) — and none is unaccounted for.
+      what: 'every source balance is in exactly one money bucket (credited, debited, zero, held with a reason, unreadable), none unaccounted',
       holds: bucketRows === sourceRows && money.unaccounted.rows === 0,
       expected: `rows=${String(sourceRows)} unaccounted=0`,
       actual: `rows=${String(bucketRows)} unaccounted=${String(money.unaccounted.rows)}`,
@@ -499,11 +464,11 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
     {
       id: 'U10',
       // Exact, by sign, never netted: Σ readable positive source balances = Σ credited + Σ
-      // held positives; Σ |readable negative| = Σ debts recorded + Σ held negatives.
-      // NOT independent of U9: a row is CREDITED / DEBT_RECORDED only when NEXA holds exactly its
+      // held positives; Σ |readable negative| = Σ debited + Σ held negatives.
+      // NOT independent of U9: a row is CREDITED / DEBITED only when NEXA holds exactly its
       // source figure, so with nothing unaccounted these sums agree by construction. It states
       // U9's accounting in money for the operator; U2–U7 are the independent money checks.
-      what: 'source money is accounted exactly: Σ positive = credited + held; Σ |negative| = debts + held (unreadable counted by rows)',
+      what: 'source money is accounted exactly: Σ positive = credited + held; Σ |negative| = debited + held (unreadable counted by rows)',
       holds:
         accountedPositive === money.source.positive.sumMinor &&
         accountedNegative === money.source.negative.sumMinor,
@@ -531,26 +496,27 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
       positive: {
         users: positive.users,
         sumMinor: minor(positive.sumMinor),
-        openingEntries: input.openingTotals.count,
-        openingSumMinor: minor(input.openingTotals.sumMinor),
+        openingEntries: input.openingTotals.positive,
+        openingSumMinor: minor(input.openingTotals.creditSumMinor),
       },
-      zero: { users: zero },
-      /** Owner decision 6: held for review beside the ledger, never collected. Count and Σ only. */
-      legacyDebts: {
+      /**
+       * Owner decision 2026-10-17: a negative balance is posted as a DEBIT opening, so the
+       * wallet is negative and blocks purchase until topped up. Count and Σ |·| only.
+       */
+      negative: {
         users: negative.users,
         sumMinor: minor(negative.sumMinor),
-        recorded: input.debtTotals.count,
-        recordedSumMinor: minor(input.debtTotals.sumMinor),
-        byState: debtByState,
-        synthetic: input.debtTotals.synthetic,
+        openingEntries: input.openingTotals.negative,
+        openingSumMinor: minor(input.openingTotals.debitSumMinor),
       },
-      ledgerDebitOpenings: input.openingTotals.negative,
+      zero: { users: zero },
+      legacyDebtRows: input.legacyDebtRows,
       perUser,
       carried: {
-        changedOpenings: aggregateView(carried.changedOpenings),
-        changedDebts: aggregateView(carried.changedDebts),
-        absentOpenings: aggregateView(carried.absentOpenings),
-        absentDebts: aggregateView(carried.absentDebts),
+        changedCredits: aggregateView(carried.changedCredits),
+        changedDebits: aggregateView(carried.changedDebits),
+        absentCredits: aggregateView(carried.absentCredits),
+        absentDebits: aggregateView(carried.absentDebits),
       },
       /**
        * Every source row's balance, in exactly one bucket (U9), summed exactly by sign (U10).
@@ -567,10 +533,7 @@ export function buildUsersWalletsSection(input: UsersWalletsInput) {
           ),
         },
         credited: { rows: money.credited.rows, sumMinor: minor(money.credited.sumMinor) },
-        debtRecorded: {
-          rows: money.debtRecorded.rows,
-          sumMinor: minor(money.debtRecorded.sumMinor),
-        },
+        debited: { rows: money.debited.rows, sumMinor: minor(money.debited.sumMinor) },
         zero: { rows: money.zero.rows },
         held: {
           ...signedView(heldTotal),

@@ -88,8 +88,10 @@ metrics(metric, value) AS (
               (SELECT count(*) FROM openings WHERE direction = 'CREDIT')::text
   UNION ALL SELECT 'opening_debit_entries',
               (SELECT count(*) FROM openings WHERE direction = 'DEBIT')::text
-  -- Mirza PR4 (owner decision 6): a negative legacy balance is a legacy DEBT beside the
-  --    ledger, never a wallet entry. Count and Σ magnitude, for the debt equations.
+  -- Owner decision 2026-10-17: a negative legacy balance is a DEBIT opening of its magnitude.
+  UNION ALL SELECT 'opening_debit_sum_minor',
+              (SELECT COALESCE(SUM(amount), 0) FROM openings WHERE direction = 'DEBIT')::text
+  -- The retired legacy-debt side record: nothing writes it any more, so it stays empty.
   UNION ALL SELECT 'legacy_debts_total',
               (SELECT count(*) FROM legacy_wallet_debts d JOIN t ON d.tenant_id = t.id)::text
   UNION ALL SELECT 'legacy_debts_sum_minor',

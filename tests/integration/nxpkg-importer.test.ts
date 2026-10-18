@@ -40,6 +40,7 @@ import {
   type NxpkgLegacySourceConnector,
 } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/nxpkg-legacy-source';
 import {
+  SYNTHETIC_EXPECTED,
   SYNTHETIC_PANEL_ACCOUNTS,
   SYNTHETIC_PANEL_CODES,
   buildSyntheticLegacyDataset,
@@ -377,7 +378,7 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     };
   }
 
-  it('dry run and import through the NXPKG connector: customers, openings, debts, adoption; the held service is never adopted; reconcile RECONCILED; provider writes 0', async () => {
+  it('dry run and import through the NXPKG connector: customers, openings (the negative one a DEBIT), adoption; the held service is never adopted; reconcile RECONCILED; provider writes 0', async () => {
     const { connector: c, v1, binding, argv, importer, context } = await setup();
 
     const dry = await runMode(importer, argv('dry-run'), c, binding.text, 'corr-dry', context);
@@ -405,11 +406,35 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     const a = (applied.sections as Record<string, any>)['applied'];
     expect(applied.verdict).toBe('COMPLETED');
     expect(a.customers.created).toBe(8);
-    expect(a.openings).toMatchObject({ POSTED: 5, DEBT_RECORDED: 1 });
+    // Owner decision 2026-10-17: the negative balance is a DEBIT opening, like the positives.
+    expect(a.openings).toMatchObject({ POSTED: 6, ALREADY_POSTED: 0, CONFLICT: 0 });
+    expect(a.openings).toMatchObject({ debitPosted: 1 });
+    expect(a.openings.postedSumMinor).toBe(SYNTHETIC_EXPECTED.users.legacyBalanceSumMinor);
+    expect(a.openings.debitPostedSumMinor).toBe(SYNTHETIC_EXPECTED.users.debtSumMinor);
     expect(a.services.adoption).toMatchObject({ wired: true, ADOPTED: 1, PENDING: 0 });
     expect(await count('customers')).toBe(8);
-    expect(await count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'")).toBe(5);
-    expect(await count('legacy_wallet_debts')).toBe(1);
+    expect(await count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'")).toBe(6);
+    expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    // The debtor's wallet is exactly their Mirza balance: -20 000 (one DEBIT of 20 000).
+    const debtor = await ctx.container.database.db.execute<{
+      direction: string;
+      reason: string;
+      reference: string;
+      amount: string;
+    }>(
+      sql`SELECT w.direction, w.reason, w.reference, w.amount::text AS amount
+            FROM wallet_entries w JOIN customers c ON c.id = w.customer_id
+           WHERE w.tenant_id = ${TENANT} AND c.telegram_user_id = '100000003'`,
+    );
+    expect(debtor.rows).toEqual([
+      {
+        direction: 'DEBIT',
+        reason: 'MIGRATION_OPENING_BALANCE',
+        reference: 'legacy:opening:100000003',
+        amount: '20000',
+      },
+    ]);
     expect(await count('services')).toBe(1);
     const adopted = await ctx.container.database.db.execute<{ provider_username: string }>(
       sql`SELECT provider_username FROM services WHERE tenant_id = ${TENANT}`,
@@ -442,8 +467,8 @@ describe('Mirza .nxpkg: the existing importer over a package', () => {
     expect(after.counts).toMatchObject({
       customers: 8,
       services: 1,
-      wallet_entries: 5,
-      legacy_wallet_debts: 1,
+      wallet_entries: 6,
+      legacy_wallet_debts: 0,
       legacy_import_runs_apply: 1,
     });
     expect((applied.sections as Record<string, any>)['provider']).toMatchObject({ writes: 0 });

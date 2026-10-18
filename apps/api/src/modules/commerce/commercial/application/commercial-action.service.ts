@@ -81,6 +81,10 @@ import type { PricingService } from '../../pricing/application/pricing.service.j
 import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
 import type { CommercialActionRecord, CommercialActionRepository } from './ports.js';
+import {
+  assertWalletNotNegative,
+  type WalletBalanceReader,
+} from '../../wallet/application/negative-balance-gate.js';
 
 /**
  * What a customer-triggered commercial command acts under.
@@ -216,6 +220,8 @@ export interface DeviceOffer {
 }
 
 export interface CommercialActionServiceDeps {
+  /** The derived balance, for the negative-wallet gate at confirmation. */
+  readonly wallet: WalletBalanceReader;
   readonly services: ServiceRepository;
   readonly products: ProductRepository;
   readonly addons: ServiceAddonRepository;
@@ -785,6 +791,13 @@ export class CommercialActionService {
             'This order was held for too long and must be started again.',
           );
         }
+        await assertWalletNotNegative(
+          this.deps.wallet,
+          scope,
+          customerId,
+          before.totals.currency,
+          tx,
+        );
 
         /*
          * The SERVICE is re-checked, and so is what was quoted.

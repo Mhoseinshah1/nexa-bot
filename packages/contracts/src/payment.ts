@@ -224,6 +224,13 @@ export const PAYMENT_EVIDENCE_KINDS = [
    * for money that arrived through a third party.
    */
   'GATEWAY_INQUIRY',
+  /**
+   * The payment was confirmed in Mirza, before this installation existed, and the one-time
+   * import carried it as HISTORY (owner decision 2026-10-17). Nothing was proven to NEXA:
+   * the money is already in the customer's opening balance, so a payment of this kind
+   * credits nothing, settles nothing and is never revenue of this installation.
+   */
+  'LEGACY_IMPORT',
 ] as const;
 export type PaymentEvidenceKind = (typeof PAYMENT_EVIDENCE_KINDS)[number];
 export const paymentEvidenceKindSchema = z.enum(PAYMENT_EVIDENCE_KINDS);

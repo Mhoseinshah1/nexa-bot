@@ -7,6 +7,7 @@ import type {
   OrderOrigin,
   OrderPurpose,
   OrderState,
+  RecordSource,
   PanelId,
   PriceQuote,
   ProductId,
@@ -72,6 +73,8 @@ export interface OrderRecord {
   readonly id: OrderId;
   readonly customerId: UserId;
   readonly state: OrderState;
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   /**
    * What this order is FOR, and the column settlement dispatches on.
    *
@@ -141,6 +144,8 @@ export interface OrderSearch {
   readonly state?: OrderState;
   readonly customerId?: UserId;
   readonly productId?: ProductId;
+  /** Only rows from this source (the source filter). */
+  readonly source?: RecordSource;
   /**
    * The list's ONE free-text search (spec §10), already classified: a Telegram id or an
    * `@username` prefix names the customer; a uuid the order, its customer or its product;

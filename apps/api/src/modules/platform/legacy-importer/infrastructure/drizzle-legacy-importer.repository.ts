@@ -25,7 +25,6 @@ import type {
   LegacyReadSetRunRepository,
   LegacyRunInputs,
   LegacyRunInputsRepository,
-  RecordedDebt,
 } from '../application/ports.js';
 import type { LegacySourceEngine } from '../application/source-port.js';
 import type { FreshTargetCheck, FreshTargetOptions } from '../application/fresh-target.js';
@@ -200,31 +199,6 @@ export class DrizzleLegacyImporterRepository
     return out;
   }
 
-  /**
-   * Mirza PR4: Telegram id → the legacy debt recorded for it — its magnitude AND its
-   * evidence class (owner decision 6; Codex on #233: the plan must decide "the same debt"
-   * exactly as the opening service does). Read here for the plan and the reconciliation
-   * only; no balance query reads the table.
-   */
-  async debtsByTelegramId(scope: TenantContext): Promise<ReadonlyMap<string, RecordedDebt>> {
-    const tenantId = requireTenantId(scope);
-    const result = await this.db.execute<{
-      legacy_user_id: string;
-      amount_minor: string;
-      synthetic: boolean;
-    }>(sql`
-      SELECT legacy_user_id, amount_minor::text AS amount_minor, synthetic
-        FROM legacy_wallet_debts
-       WHERE tenant_id = ${tenantId}
-    `);
-    return new Map(
-      result.rows.map((r) => [
-        r.legacy_user_id,
-        { amountMinor: BigInt(r.amount_minor), synthetic: r.synthetic },
-      ]),
-    );
-  }
-
   /** Mirza PR4: count and Σ of recorded legacy debts, in total and per owner-decision state. */
   async debtAggregates(scope: TenantContext) {
     const tenantId = requireTenantId(scope);
@@ -393,10 +367,14 @@ export class DrizzleLegacyImporterRepository
       total: string;
       positive: number;
       negative: number;
+      credit_total: string;
+      debit_total: string;
       per_customer_max: number;
     }>(sql`
       SELECT count(*)::int AS n,
              COALESCE(sum(CASE direction WHEN 'CREDIT' THEN amount ELSE -amount END), 0)::text AS total,
+             COALESCE(sum(amount) FILTER (WHERE direction = 'CREDIT'), 0)::text AS credit_total,
+             COALESCE(sum(amount) FILTER (WHERE direction = 'DEBIT'), 0)::text AS debit_total,
              count(*) FILTER (WHERE direction = 'CREDIT')::int AS positive,
              count(*) FILTER (WHERE direction = 'DEBIT')::int AS negative,
              COALESCE((SELECT max(c)::int FROM (
@@ -412,6 +390,8 @@ export class DrizzleLegacyImporterRepository
       sumMinor: BigInt(row?.total ?? '0'),
       positive: row?.positive ?? 0,
       negative: row?.negative ?? 0,
+      creditSumMinor: BigInt(row?.credit_total ?? '0'),
+      debitSumMinor: BigInt(row?.debit_total ?? '0'),
       perCustomerMax: row?.per_customer_max ?? 0,
     };
   }

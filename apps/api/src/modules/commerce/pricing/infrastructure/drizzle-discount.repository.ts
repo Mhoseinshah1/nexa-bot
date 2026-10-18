@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -7,6 +7,7 @@ import type {
   DiscountType,
   DiscountablePurpose,
   Money,
+  RecordSource,
   TenantContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -185,6 +186,7 @@ export class DrizzleDiscountRepository implements DiscountRepository {
     const conditions: SQL[] = [eq(discounts.tenantId, tenantId)];
     if (search.kind !== undefined) conditions.push(eq(discounts.kind, search.kind));
     if (search.status !== undefined) conditions.push(eq(discounts.status, search.status));
+    if (search.source !== undefined) conditions.push(eq(discounts.source, search.source));
     if (cursor !== null) {
       conditions.push(
         sql`(${discounts.createdAt}, ${discounts.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
@@ -224,6 +226,10 @@ export class DrizzleDiscountRepository implements DiscountRepository {
       eq(discountRedemptions.tenantId, tenantId),
       inArray(discountRedemptions.discountId, [...ruleIds]),
       inArray(orders.state, [...LIVE_ORDER_STATES]),
+      // A redemption the Mirza import carried is HISTORY: its order is PAID, which would
+      // otherwise read as a live redemption and spend the limit of a code an operator later
+      // activates. Only an order this installation sold counts against a limit.
+      ne(orders.origin, 'LEGACY_HISTORY'),
     ];
     if (excludingOrderId !== null) {
       conditions.push(sql`${discountRedemptions.orderId} <> ${excludingOrderId}::uuid`);
@@ -390,6 +396,7 @@ function columnsOf(write: DiscountRuleWrite) {
 function toRecord(row: typeof discounts.$inferSelect): DiscountRuleRecord {
   return {
     id: row.id,
+    source: row.source as RecordSource,
     kind: row.kind as DiscountKind,
     code: row.code,
     label: row.label,

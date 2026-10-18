@@ -8,6 +8,7 @@ import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { order, renderPage, stubApi, type Api } from './harness';
 import { openFilterPanel } from './ui-helpers';
+import { pickMirzaSource, requestsWithSource, rowHasBadge } from './source-helpers';
 
 /**
  * WP8 on the Web Admin: discount rules, cashback rules, the price preview and an order's
@@ -904,5 +905,35 @@ describe('replacing a rule form that holds unsaved edits', () => {
     );
     await waitFor(() => expect(document.getElementById('cashback-create-label')).not.toBeNull());
     expect(document.getElementById('cashback-edit-label')).toBeNull();
+  });
+});
+
+describe('rows imported from Mirza', () => {
+  const native = discount({
+    id: '019250ab-cdef-7012-8345-6789abcdef0a',
+    code: null,
+    kind: 'AUTOMATIC',
+    label: 'Native rule',
+  });
+  const imported = discount({
+    id: '019250ab-cdef-7012-8345-6789abcdef0b',
+    label: 'Imported rule',
+    source: 'MIRZA',
+  });
+
+  it('marks only the imported rule', async () => {
+    stubApi(lists([native, imported]));
+    render();
+    await screen.findByText('Imported rule');
+    expect(rowHasBadge('Imported rule')).toBe(true);
+    expect(rowHasBadge('Native rule')).toBe(false);
+  });
+
+  it('sends the «منبع» filter to the API and starts from the first page', async () => {
+    const api = stubApi(lists([native, imported]));
+    render();
+    await screen.findByText('Native rule');
+    pickMirzaSource();
+    await waitFor(() => expect(requestsWithSource(api.calls, '/discounts', 'MIRZA')).toBe(1));
   });
 });

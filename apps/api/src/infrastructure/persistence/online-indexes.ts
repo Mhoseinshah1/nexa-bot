@@ -539,10 +539,18 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
      * statement can count, and a window on it implies the predicate. INCLUDE `state`
      * because the statement counts by it. Measured on 320 000 payments: 114 ms → 7 ms over
      * the three calls, which had been a sequential scan of the tenant's payments.
+     *
+     * INCLUDE `source` too, since the statement leaves out the payments the one-time Mirza
+     * import carried (`source <> 'MIRZA'`). Without it every entry in the window fetched
+     * its heap row to read that one column. It has a NEW name because the name is the
+     * recovery key and `CREATE ... IF NOT EXISTS` never rebuilds an index that exists under
+     * the old one. The superseded `payments_tenant_resolved_idx` stays where it was built.
+     * It is never read and is harmless, and dropping it belongs to a release that drops
+     * indexes on purpose.
      */
-    name: 'payments_tenant_resolved_idx',
+    name: 'payments_tenant_resolved_source_idx',
     definition:
-      'ON "payments" USING btree ("tenant_id","resolved_at") INCLUDE ("state") ' +
+      'ON "payments" USING btree ("tenant_id","resolved_at") INCLUDE ("state","source") ' +
       'WHERE (resolved_at IS NOT NULL)',
   },
   {

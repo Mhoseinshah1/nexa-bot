@@ -8,6 +8,7 @@ import {
   type WalletEntryListResponse,
   type WalletEntryResponse,
   type WalletEntrySummaryResponse,
+  type WalletImportedEntryResponse,
   type WalletResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -18,6 +19,7 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 import type {
   WalletCursor,
   WalletEntryRecord,
+  WalletImportedRecord,
 } from '../../modules/commerce/wallet/application/ports.js';
 
 /**
@@ -80,14 +82,26 @@ export class WalletController {
     const page = walletEntryListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      ...(query.importedCursor === undefined ? {} : { importedCursor: query.importedCursor }),
     });
     const result = await this.container.wallet.history(scope, actor, customerId, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: walletCursorFrom(page.cursor) }),
     });
+    // The Mirza history beside the ledger rows: its own array and its own cursor, so a
+    // client that sums `entries` still gets the balance.
+    const imported = await this.container.wallet.importedHistory(scope, actor, customerId, {
+      ...(page.limit === undefined ? {} : { limit: page.limit }),
+      ...(page.importedCursor === undefined
+        ? {}
+        : { cursor: walletCursorFrom(page.importedCursor) }),
+    });
     return {
       entries: result.items.map(toSummary),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
+      importedEntries: imported.items.map(toImportedSummary),
+      importedNextCursor:
+        imported.nextCursor === null ? null : encodeKeysetCursor(imported.nextCursor),
     };
   }
 
@@ -164,5 +178,23 @@ function toSummary(record: WalletEntryRecord): WalletEntrySummaryResponse {
     actorAdminId: record.actorAdminId,
     note: record.note,
     createdAt: record.createdAt.toISOString(),
+  };
+}
+
+/** An imported (Mirza) movement on the wire: magnitude and the stored signed figure, as text. */
+function toImportedSummary(record: WalletImportedRecord): WalletImportedEntryResponse {
+  return {
+    id: record.id,
+    customerId: record.customerId,
+    source: record.source,
+    origin: record.origin,
+    sourceRef: record.sourceRef,
+    direction: record.direction,
+    amount: record.amountMinor.toString(),
+    signedAmount: record.signedAmountMinor.toString(),
+    currency: record.currency,
+    rawKind: record.rawKind,
+    note: record.note,
+    occurredAt: record.occurredAt.toISOString(),
   };
 }

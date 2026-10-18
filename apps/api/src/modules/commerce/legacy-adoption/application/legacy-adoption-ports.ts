@@ -169,6 +169,12 @@ export type LegacyAdoptionOutcome =
       readonly customerId: string;
       readonly panelId: string;
       readonly state: 'ACTIVE' | 'SUSPENDED' | 'EXPIRED';
+      /**
+       * Non-null when the panel's state (`on_hold`, or one the inventory could not fold) was
+       * adopted as ACTIVE for a person to look at. Optional: an outcome replayed from before
+       * this field carries none.
+       */
+      readonly reviewFlag?: 'PANEL_STATE_ON_HOLD' | 'PANEL_STATE_UNKNOWN' | null;
       readonly capacity: AdoptionCapacity;
       /** The reminder kinds recorded as already passed (burst protection). */
       readonly remindersSeeded: readonly string[];
@@ -250,6 +256,8 @@ export interface AdoptionInsert {
     readonly usageSyncedAt: Date;
   };
   readonly reservation: { readonly namespaceKey: string; readonly username: string };
+  /** `invoice:<id_invoice>`: the Mirza id both the order and the service are marked with. */
+  readonly sourceRef: string;
   readonly now: Date;
 }
 
@@ -291,14 +299,23 @@ export interface LegacyAdoptionStore {
   ): Promise<string | null>;
   /**
    * Whether this name is already somebody's on this panel or in its namespace: any service
-   * on the panel whose name folds to it (any state), or a reservation of the lowercase name
-   * in the namespace (any tenant — the namespace is the host's).
+   * on the panel whose name folds to it (TERMINATED excepted: an ended account's name is
+   * free, and `services_panel_provider_username_key` says so), or a reservation of the
+   * lowercase name in the namespace (any tenant — the namespace is the host's).
    */
   usernameTaken(
     scope: TenantContext,
     input: { readonly panelId: string; readonly namespaceKey: string; readonly canonical: string },
     tx: TransactionScope,
   ): Promise<boolean>;
+  /**
+   * Whether an order or a service already carries this `source_ref` (`invoice:<id>`): the
+   * ended-services step recorded the invoice as an ENDED service before its account turned up
+   * on the panel. One invoice is one row of each table, so adopting it now would be a unique
+   * violation; it is a conflict for a person instead, and the ended rows are left exactly as
+   * they are.
+   */
+  invoiceCarried(scope: TenantContext, sourceRef: string, tx: TransactionScope): Promise<boolean>;
   insertAdoption(scope: TenantContext, input: AdoptionInsert, tx: TransactionScope): Promise<void>;
   findService(
     scope: TenantContext,

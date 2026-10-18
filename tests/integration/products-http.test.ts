@@ -243,6 +243,8 @@ describe('product HTTP surface', () => {
         'priceCurrency',
         'serviceLocationLabel',
         'sortOrder',
+        // The one-time Mirza import: NEXA or MIRZA, a provenance marker and never a panel fact.
+        'source',
         'status',
         'title',
         'trafficBytes',

@@ -100,6 +100,7 @@ export class PaymentsController {
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.state === undefined ? {} : { state: query.state }),
       ...(query.method === undefined ? {} : { method: query.method }),
+      ...(query.source === undefined ? {} : { source: query.source }),
       ...(query.customerId === undefined ? {} : { customerId: query.customerId }),
       ...(query.orderId === undefined ? {} : { orderId: query.orderId }),
       ...(query.reference === undefined ? {} : { reference: query.reference }),
@@ -122,6 +123,7 @@ export class PaymentsController {
         search: {
           ...(page.state === undefined ? {} : { state: page.state }),
           ...(page.method === undefined ? {} : { method: page.method }),
+          ...(page.source === undefined ? {} : { source: page.source }),
           ...(page.customerId === undefined ? {} : { customerId: page.customerId as UserId }),
           ...(page.orderId === undefined ? {} : { orderId: page.orderId as OrderId }),
           ...(page.reference === undefined ? {} : { reference: page.reference }),
@@ -452,6 +454,7 @@ function toSummary(
 ): PaymentSummaryResponse {
   return {
     id: record.id,
+    source: record.source,
     customerId: record.customerId,
     orderId: record.orderId,
     state: record.state,

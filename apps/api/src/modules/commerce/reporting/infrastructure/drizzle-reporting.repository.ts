@@ -528,6 +528,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
              p.state, p.currency, count(*)::int AS n, sum(p.amount)::text AS amount
         FROM payments p
        WHERE p.tenant_id = ${tenant(scope)}
+         AND ${notLegacyImport}
          AND ${within(sql`p.created_at`, window)}
        GROUP BY 1, 2, 3, 4, 5`);
     const groups = new Map<
@@ -897,6 +898,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
         FROM payments p
        WHERE p.tenant_id = ${tenant(scope)}
          AND p.state = ANY(${text(REPORT_FAILED_PAYMENT_STATES)})
+         AND ${notLegacyImport}
          AND ${within(sql`p.resolved_at`, window)}`);
     return { failed: row?.failed ?? 0, cancelled: row?.cancelled ?? 0, expired: row?.expired ?? 0 };
   }
@@ -1027,6 +1029,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
              p.state, p.amount::text AS amount, p.currency, p.order_id
         FROM payments p
        WHERE p.tenant_id = ${tenant(scope)}
+         AND ${notLegacyImport}
          AND ${within(sql`p.created_at`, window)}
          ${filter.method === undefined ? sql`` : sql`AND p.method = ${filter.method}`}
          ${filter.provider === undefined ? sql`` : sql`AND p.gateway_provider = ${filter.provider}`}
@@ -1209,6 +1212,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
        WHERE p.tenant_id = ${tenant(scope)}
          AND p.state = 'CONFIRMED'
          AND p.method <> 'WALLET'
+         AND ${notLegacyImport}
          AND ${within(ts, windowOf(boundaries))}
        GROUP BY 1, 2, 3, 4, 5`);
     return rows.map((row) => ({
@@ -1439,6 +1443,15 @@ export function resellerSalesStatement(tenantId: string, window: Window): SQL {
  * could surface even where a count forgot it.
  */
 const saleOrigin: SQL = sql`o.origin = ANY(${text(SALE_ORDER_ORIGINS)})`;
+
+/**
+ * A payment the Mirza import carried (`source = 'MIRZA'`; the confirmed ones also have
+ * `evidence_kind = 'LEGACY_IMPORT'`) is a RECORD of an attempt Mirza saw, not money or a
+ * failure of this installation: NEXA's payment, failure and cash reports never count one.
+ * Selecting on `source` rather than the evidence kind is what also keeps the FAILED and EXPIRED
+ * ones out, which have no evidence.
+ */
+const notLegacyImport: SQL = sql`p.source <> 'MIRZA'`;
 
 function tenant(scope: TenantContext): SQL {
   return sql`${scope.tenantId}::uuid`;

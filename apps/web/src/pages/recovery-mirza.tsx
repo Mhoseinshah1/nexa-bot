@@ -10,6 +10,9 @@ import {
   LEGACY_MIGRATION_PROVIDER_INVENTORY_UNRESOLVED,
   legacyMigrationDryRunInventoryIncomplete,
   validInventoryHold,
+  type LegacyBotLinkOutcome,
+  type LegacyExactMatchRow,
+  type LegacyMaterializeOutcome,
   type LegacyMigrationBackupOutcome,
   type LegacyMigrationBlocker,
   type LegacyMigrationCapabilitiesResponse,
@@ -55,6 +58,7 @@ import {
   Input,
   KV,
   Ltr,
+  Money,
   Num,
   Select,
   Textarea,
@@ -199,6 +203,8 @@ const PHASE_LABELS: Readonly<Record<LegacyMigrationPhase, WebKey>> = {
   APPLY_PRECHECK: 'web.lmg_phase_precheck',
   APPLY_IMPORT: 'web.lmg_phase_import',
   HISTORY: 'web.lmg_phase_history',
+  MATERIALIZE: 'web.mrz_phase_materialize',
+  BOT_LINK: 'web.mrz_phase_bot_link',
   RECONCILE: 'web.lmg_phase_reconcile',
   REPORT: 'web.lmg_phase_report',
   BACKUP: 'web.lmg_phase_backup',
@@ -1436,6 +1442,8 @@ const PHASE_STAGE: Readonly<Record<LegacyMigrationPhase, number>> = {
   APPLY_PRECHECK: 1,
   APPLY_IMPORT: 1,
   HISTORY: 1,
+  MATERIALIZE: 1,
+  BOT_LINK: 1,
   RECONCILE: 2,
   REPORT: 3,
   BACKUP: 4,
@@ -1563,6 +1571,11 @@ function ResultStep({ row }: { row: LegacyMigrationImportView }) {
       {row.preImportBackupRunId !== null && <p className="muted small">{t('web.mrz_undo_hint')}</p>}
       {report !== null && (
         <>
+          {report.exactMatch !== undefined && <ExactMatchTable report={report.exactMatch} />}
+          {report.botLink !== undefined && report.botLink !== null && (
+            <BotLinkSummary link={report.botLink} />
+          )}
+          {report.materialize !== undefined && <MaterializeTable rows={report.materialize} />}
           <SectionTable rows={report.sections} />
           <CodeCounts title={t('web.lmg_history')} rows={report.history} />
         </>
@@ -1573,6 +1586,190 @@ function ResultStep({ row }: { row: LegacyMigrationImportView }) {
         </a>
       </p>
     </Step>
+  );
+}
+
+// --- the one-time import's exact match ---------------------------------------------------------
+
+const BOT_LINK_LABELS: Readonly<Record<LegacyBotLinkOutcome, WebKey>> = {
+  LINKED: 'web.mrz_bot_link_linked',
+  NO_ACTIVE_BOT: 'web.mrz_bot_link_no_bot',
+  SEVERAL_ACTIVE_BOTS: 'web.mrz_bot_link_several',
+};
+
+function irt(minor: string | null): ReactNode {
+  return minor === null ? '—' : <Money value={{ amountMinor: minor, currency: 'IRT' }} />;
+}
+
+/**
+ * Per Mirza table: rows and money in Mirza against NEXA, every gap with its reason. A row
+ * that does not hold is a difference nobody explained, and the import is not COMPLETE.
+ */
+export function ExactMatchTable({
+  report,
+}: {
+  report: { rows: readonly LegacyExactMatchRow[]; unexplained: number; holds: boolean };
+}) {
+  return (
+    <div className="stack">
+      <h3>{t('web.mrz_exact_title')}</h3>
+      {report.holds ? (
+        <Banner tone="ok">{t('web.mrz_exact_complete')}</Banner>
+      ) : (
+        <Banner tone="danger">
+          {t('web.mrz_exact_unexplained')} <Num value={report.unexplained} />
+        </Banner>
+      )}
+      <DataTable
+        columns={[
+          {
+            key: 'table',
+            header: t('web.mrz_exact_col_table'),
+            render: (row) => (
+              <CellMain
+                primary={<Ltr>{row.mirzaTable}</Ltr>}
+                secondary={<Ltr>{row.nexaTable}</Ltr>}
+              />
+            ),
+          },
+          {
+            key: 'mirzaRows',
+            header: t('web.mrz_exact_col_mirza_rows'),
+            align: 'end',
+            render: (row) => <Num value={row.mirzaRows} />,
+          },
+          {
+            key: 'nexaRows',
+            header: t('web.mrz_exact_col_nexa_rows'),
+            align: 'end',
+            render: (row) => <Num value={row.nexaRows} />,
+          },
+          {
+            key: 'mirzaSum',
+            header: t('web.mrz_exact_col_mirza_sum'),
+            align: 'end',
+            render: (row) => irt(row.mirzaSumMinor),
+          },
+          {
+            key: 'nexaSum',
+            header: t('web.mrz_exact_col_nexa_sum'),
+            align: 'end',
+            render: (row) => irt(row.nexaSumMinor),
+          },
+          {
+            key: 'explained',
+            header: t('web.mrz_exact_col_explained'),
+            render: (row) =>
+              row.explained.length === 0 ? (
+                '—'
+              ) : (
+                <ul className="plain">
+                  {row.explained.map((g) => (
+                    <li key={g.reason}>
+                      <CodeLabel
+                        code={g.reason}
+                        view={migrationCodeView(g.reason, LEGACY_SERVICE_OUTCOME_LABELS)}
+                      />{' '}
+                      <Num value={g.rows} />
+                      {g.sumMinor !== null && <> ({irt(g.sumMinor)})</>}
+                    </li>
+                  ))}
+                </ul>
+              ),
+          },
+          {
+            key: 'holds',
+            header: t('web.mrz_exact_col_holds'),
+            render: (row) =>
+              row.holds ? (
+                <Badge tone="ok">{t('web.mrz_exact_match')}</Badge>
+              ) : (
+                <Badge tone="danger">{t('web.mrz_exact_differs')}</Badge>
+              ),
+          },
+        ]}
+        caption={t('web.mrz_exact_title')}
+        rows={report.rows.map((row) => ({ ...row, id: `${row.mirzaTable}>${row.nexaTable}` }))}
+        rowKey={(row) => row.id}
+      />
+    </div>
+  );
+}
+
+/** The imported customers linked to the active bot: the step and its own count. */
+export function BotLinkSummary({
+  link,
+}: {
+  link: {
+    outcome: LegacyBotLinkOutcome;
+    botInstanceId: string | null;
+    eligible: number;
+    linked: number;
+  };
+}) {
+  return (
+    <div className="stack">
+      <h3>{t('web.mrz_bot_link_title')}</h3>
+      {link.outcome !== 'LINKED' && <Banner tone="warn">{t('web.mrz_bot_link_manual')}</Banner>}
+      <KV
+        items={[
+          [t('web.mrz_bot_link_outcome'), t(BOT_LINK_LABELS[link.outcome])],
+          [
+            t('web.mrz_bot_link_bot'),
+            link.botInstanceId === null ? '—' : <Ltr key="b">{link.botInstanceId}</Ltr>,
+          ],
+          [t('web.mrz_bot_link_eligible'), <Num key="e" value={link.eligible} />],
+          [t('web.mrz_bot_link_linked_count'), <Num key="l" value={link.linked} />],
+        ]}
+      />
+    </div>
+  );
+}
+
+/** What each history step wrote into the normal tables. */
+export function MaterializeTable({ rows }: { rows: readonly LegacyMaterializeOutcome[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="stack">
+      <h3>{t('web.mrz_materialize_title')}</h3>
+      <DataTable
+        columns={[
+          {
+            key: 'step',
+            header: t('web.mrz_materialize_col_step'),
+            render: (row) => <Ltr>{row.step}</Ltr>,
+          },
+          {
+            key: 'written',
+            header: t('web.mrz_materialize_col_written'),
+            align: 'end',
+            render: (row) => <Num value={row.written} />,
+          },
+          {
+            key: 'alreadyPresent',
+            header: t('web.mrz_materialize_col_present'),
+            align: 'end',
+            render: (row) => <Num value={row.alreadyPresent} />,
+          },
+          {
+            key: 'diverged',
+            header: t('web.mrz_materialize_col_diverged'),
+            align: 'end',
+            render: (row) =>
+              row.diverged === 0 ? (
+                <Num value={0} />
+              ) : (
+                <Badge tone="danger">
+                  <Num value={row.diverged} />
+                </Badge>
+              ),
+          },
+        ]}
+        caption={t('web.mrz_materialize_title')}
+        rows={rows.map((row) => ({ ...row, id: row.step }))}
+        rowKey={(row) => row.id}
+      />
+    </div>
   );
 }
 

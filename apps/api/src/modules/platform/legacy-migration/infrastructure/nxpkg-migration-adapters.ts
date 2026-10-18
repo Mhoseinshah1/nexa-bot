@@ -1,3 +1,8 @@
+import {
+  exactMatchCoreRows,
+  exactMatchReport,
+} from '../../legacy-materialize/application/exact-match.js';
+import type { UsersWalletsSection } from '../../legacy-importer/application/users-wallets-reconciliation.js';
 import { readFile } from 'node:fs/promises';
 import {
   isNexaError,
@@ -637,6 +642,8 @@ export class NxpkgMigrationAdapters
             verdict?: { holds?: unknown; failedSections?: unknown; failedInvariants?: unknown };
           }
         | undefined;
+      const usersWallets = (v2 as { sections?: { usersWallets?: UsersWalletsSection } } | undefined)
+        ?.sections?.usersWallets;
       const strings = (value: unknown): string[] =>
         Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
       const holds =
@@ -658,6 +665,11 @@ export class NxpkgMigrationAdapters
           quarantined: 0,
         })),
         history: [...input.history],
+        // The exact-match report's core rows (every Mirza user, every unit of Balance), from
+        // the importer's own users-and-wallets section; the executor adds the history steps'.
+        ...(usersWallets === undefined
+          ? {}
+          : { exactMatch: exactMatchReport(exactMatchCoreRows(usersWallets)) }),
       };
     });
   }
@@ -802,6 +814,7 @@ export class NxpkgMigrationAdapters
             records: facts,
             decisions,
             liveInvoices: snapshot.liveInvoices,
+            otherInvoices: snapshot.otherInvoices,
           });
           return Promise.resolve(hold.hold);
         },
@@ -1429,6 +1442,7 @@ interface PlanShape {
     readonly positive?: { readonly count?: number; readonly sumMinor?: bigint | string | number };
     readonly negative?: { readonly count?: number; readonly sumMinor?: bigint | string | number };
     readonly openings?: Readonly<Record<string, number>>;
+    readonly debitOpenings?: Readonly<Record<string, number>>;
   };
   readonly trials?: Readonly<Record<string, number>>;
   readonly products?: {
@@ -1736,7 +1750,7 @@ export function mismatchCounts(
     ],
     ['customers:new', section('customers')?.imported],
     ['wallet:positive', section('wallet_openings')?.source],
-    ['wallet:negative', section('legacy_debts')?.source],
+    ['wallet:negative', section('wallet_debit_openings')?.source],
     ['products:distinct_shapes', section('products')?.source],
     [
       'panels:inventory_incomplete',
@@ -1810,6 +1824,8 @@ export function dryRunReportOf(
     extra.holdChangedCategory ??
     Math.min(hold?.hold.size ?? 0, n(categories['AMBIGUOUS_OWNERSHIP']));
   const openings = plan.wallet?.openings ?? {};
+  const debits = plan.wallet?.debitOpenings ?? {};
+  const credit = (k: string) => n(openings[k]) - n(debits[k]);
   const trials = plan.trials ?? {};
   const products = plan.products ?? {};
   const historyTotal = history.reduce((a, h) => a + h.count, 0);
@@ -1843,18 +1859,19 @@ export function dryRunReportOf(
     {
       section: 'wallet_openings',
       source: n(plan.wallet?.positive?.count),
-      imported: n(openings['POST']),
+      imported: credit('POST'),
       archived: 0,
-      skipped: n(openings['ALREADY_POSTED']),
-      quarantined: n(openings['CONFLICT']) + n(openings['PRIOR_DEBIT_OPENING']),
+      skipped: credit('ALREADY_POSTED'),
+      quarantined: credit('CONFLICT'),
     },
+    // Owner decision 2026-10-17: a negative balance is a DEBIT opening, not a legacy debt.
     {
-      section: 'legacy_debts',
+      section: 'wallet_debit_openings',
       source: n(plan.wallet?.negative?.count),
-      imported: n(openings['RECORD_DEBT']),
+      imported: n(debits['POST']),
       archived: 0,
-      skipped: n(openings['DEBT_ALREADY_RECORDED']),
-      quarantined: 0,
+      skipped: n(debits['ALREADY_POSTED']),
+      quarantined: n(debits['CONFLICT']),
     },
     {
       section: 'trials',

@@ -707,6 +707,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.open_button': '💰 کیف پول',
   'bot.catalog.open_button': '🛒 خرید سرویس',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
+  'bot.wallet.negative_balance':
+    'موجودی کیف پول شما منفی است. برای خرید، ابتدا کیف پول را شارژ کنید.',
   'bot.wallet.topup_refused':
     'این مبلغ برای شارژ پذیرفته نشد. لطفاً مبلغ دیگری انتخاب کنید یا بفرستید.',
   'bot.wallet.topup_unavailable':

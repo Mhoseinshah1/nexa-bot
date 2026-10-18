@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -9,6 +9,10 @@ import { describe, expect, it } from 'vitest';
  * settlement that could see it could net it off. So the table and its module are reachable
  * from exactly these files, and the debt module reaches no money path. A new reader is a
  * deliberate change to this list, with a reason, in the same commit.
+ *
+ * Owner decision 2026-10-17 superseded decision 6 for the one-time import: a negative
+ * balance is now a DEBIT opening, and NOTHING writes the table any more. What is left of it
+ * is read-only, so a table a previous rehearsal filled is still reported (U6), never acted on.
  */
 
 function sources(dir: string): string[] {
@@ -26,12 +30,6 @@ const ALLOWED = new Set([
   // The table's definition and the composition root.
   'apps/api/src/infrastructure/persistence/schema.ts',
   'apps/api/src/container.ts',
-  // The debt module itself: the owner's review, which moves no money.
-  'apps/api/src/modules/commerce/legacy-wallet-debts/application/legacy-wallet-debt.service.ts',
-  'apps/api/src/modules/commerce/legacy-wallet-debts/application/ports.ts',
-  'apps/api/src/modules/commerce/legacy-wallet-debts/infrastructure/drizzle-legacy-wallet-debt.repository.ts',
-  // The ONE writer: the migration-only opening balance records a debt instead of a DEBIT.
-  'apps/api/src/modules/commerce/wallet/application/migration-opening-balance.service.ts',
   // The importer's read-only plan and reconciliation aggregates.
   'apps/api/src/modules/platform/legacy-importer/infrastructure/drizzle-legacy-importer.repository.ts',
   // Mirza PR6: the final report v2's duplicate counter (the most debts one customer holds),
@@ -48,8 +46,6 @@ const ALLOWED = new Set([
   // Mirza `.nxpkg` importer: the fresh-target guard (design §6) counts the tenant's debt rows
   // to refuse a non-empty target. A row count only: no amount, no write, no customer.
   'apps/api/src/modules/platform/legacy-importer/infrastructure/nxpkg-fresh-target.ts',
-  // The Web Admin's list and decisions (through the review service only).
-  'apps/api/src/surfaces/web/legacy-debts.controller.ts',
 ]);
 
 describe('the legacy wallet debt boundary (never collected)', () => {
@@ -63,13 +59,9 @@ describe('the legacy wallet debt boundary (never collected)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the debt module imports no wallet, ledger, payment, order, pricing, refund or provider code', () => {
-    const files = sources('apps/api/src/modules/commerce/legacy-wallet-debts');
-    expect(files.length).toBeGreaterThanOrEqual(3);
-    const money =
-      /from '[^']*(?:\/wallet\/|\/payments\/|\/orders\/|\/pricing\/|\/refunds?\/|\/commercial\/|\/provisioning\/|\/providers\/|\/resellers\/|\/referrals\/)/u;
-    const offenders = files.filter((file) => money.test(readFileSync(file, 'utf8')));
-    expect(offenders).toEqual([]);
+  it('the owner’s separate debt review is gone (owner decision 2026-10-17)', () => {
+    expect(existsSync('apps/api/src/modules/commerce/legacy-wallet-debts')).toBe(false);
+    expect(existsSync('apps/api/src/surfaces/web/legacy-debts.controller.ts')).toBe(false);
   });
 
   it('the wallet balance and every ordinary wallet movement never mention a debt', () => {
@@ -82,18 +74,23 @@ describe('the legacy wallet debt boundary (never collected)', () => {
     }
   });
 
-  it('the opening-balance service writes a negative balance as a debt and never as a DEBIT', () => {
+  it('the opening-balance service writes no legacy debt: a negative balance is its DEBIT', () => {
     const text = readFileSync(
       'apps/api/src/modules/commerce/wallet/application/migration-opening-balance.service.ts',
       'utf8',
     );
-    // The only `append` is the positive path's CREDIT; the negative path returns before it.
-    const negative = text.indexOf(
-      'if (command.legacyBalanceMinor < 0n) {\n          return this.holdNegative(',
-    );
-    const append = text.indexOf('this.deps.repository.append(');
-    expect(negative).toBeGreaterThan(0);
-    expect(append).toBeGreaterThan(negative);
+    expect(MENTION.test(text)).toBe(false);
+    // One write path for both signs: the direction is the sign of the legacy balance.
     expect(text.match(/this\.deps\.repository\.append\(/gu)).toHaveLength(1);
+    expect(text).toContain("command.legacyBalanceMinor < 0n ? 'DEBIT' : 'CREDIT'");
+  });
+
+  it('nothing writes the legacy-debt table any more (no INSERT anywhere in the API)', () => {
+    const offenders = sources('apps/api/src').filter((file) =>
+      /INSERT INTO\s+"?legacy_wallet_debts|insert\(legacyWalletDebts\)/u.test(
+        readFileSync(file, 'utf8'),
+      ),
+    );
+    expect(offenders).toEqual([]);
   });
 });

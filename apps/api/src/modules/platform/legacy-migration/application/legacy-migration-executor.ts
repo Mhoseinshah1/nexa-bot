@@ -6,6 +6,7 @@ import {
   type Clock,
   type CorrelationId,
   type LegacyMigrationBlocker,
+  type LegacyMigrationApplyReport,
   type LegacyMigrationCodeCount,
   type LegacyMigrationPhase,
   type LegacyMigrationProgress,
@@ -31,16 +32,22 @@ import {
 } from '../domain/import-lifecycle.js';
 import { LEGACY_MIGRATION_KEY_PURPOSE } from './legacy-migration.service.js';
 import {
+  exactMatchReport,
+  exactMatchRowsFromWire,
+} from '../../legacy-materialize/application/exact-match.js';
+import {
   LegacyMigrationBlocked,
   LegacyMigrationNotWired,
   LegacyMigrationRetry,
   LegacyMigrationStepFailure,
   type BackupPort,
+  type BotLinkPort,
   type FreshTargetGuard,
   type HistoryIngestPort,
   type LegacyNxpkgImportPatch,
   type LegacyNxpkgImportRepository,
   type LegacyNxpkgImportRow,
+  type MaterializePort,
   type MigrationRunner,
   type MigrationStepContext,
   type MigrationWorkspaces,
@@ -56,6 +63,10 @@ export interface LegacyMigrationExecutorDeps {
   readonly runner: MigrationRunner;
   readonly freshTarget: FreshTargetGuard;
   readonly history: HistoryIngestPort;
+  /** The one-time import: the history into the normal tables, and its exact-match rows. */
+  readonly materialize: MaterializePort;
+  /** The one-time import: the imported customers linked to the tenant's active bot. */
+  readonly botLink: BotLinkPort;
   readonly backup: BackupPort;
   /**
    * Phase 7 — mutual exclusion: a disaster recovery is confirmed and not finished
@@ -756,9 +767,31 @@ export class LegacyMigrationExecutor {
           }
           row = await this.bookmark(row, { phase: 'HISTORY' });
         }
-        if (!phaseReached(row.progress.phase, 'RECONCILE')) {
+        if (!phaseReached(row.progress.phase, 'MATERIALIZE')) {
           const archived = await this.deps.history.ingest(context);
-          row = await this.bookmark(row, { phase: 'RECONCILE', history: [...archived.counts] });
+          row = await this.bookmark(row, {
+            phase: 'MATERIALIZE',
+            history: [...archived.counts],
+          });
+        }
+        // The two one-time-import phases are decided by their OWN progress field, not only by
+        // the phase order: an import a previous release left APPLYING at RECONCILE, REPORT or
+        // later never recorded them, and the ordinal check alone would take them as done
+        // (Codex on #288). A phase bookmark never moves backwards.
+        const atLeast = (phase: LegacyMigrationPhase): LegacyMigrationPhase =>
+          phaseReached(row.progress.phase, phase) ? (row.progress.phase ?? phase) : phase;
+        if (row.progress.materialize === undefined) {
+          // Every step is idempotent: a resumed phase runs them all again and writes nothing
+          // twice. Nothing it writes is money, a message or a provider call.
+          const materialized = await this.deps.materialize.apply(context);
+          row = await this.bookmark(row, {
+            phase: atLeast('BOT_LINK'),
+            materialize: [...materialized],
+          });
+        }
+        if (row.progress.botLink === undefined) {
+          const linked = await this.deps.botLink.link(context);
+          row = await this.bookmark(row, { phase: atLeast('RECONCILE'), botLink: linked });
         }
         if (!phaseReached(row.progress.phase, 'REPORT')) {
           const reconciled = await this.deps.runner.reconcile(context);
@@ -767,11 +800,23 @@ export class LegacyMigrationExecutor {
             reconcileVerdict: reconciled.verdict,
           });
         }
-        const report = await this.deps.runner.finalReport(context, {
+        const core = await this.deps.runner.finalReport(context, {
           importerVerdict: row.progress.importerVerdict ?? 'UNKNOWN',
           reconcileVerdict: row.progress.reconcileVerdict ?? 'DISCREPANCY',
           history: row.progress.history,
         });
+        // The exact-match report: the importer's own rows (users, balances) and every
+        // history step's. COMPLETE needs every one of them to hold.
+        const exactMatch = exactMatchReport([
+          ...exactMatchRowsFromWire(core.exactMatch?.rows ?? []),
+          ...exactMatchRowsFromWire(await this.deps.materialize.match(context)),
+        ]);
+        const report: LegacyMigrationApplyReport = {
+          ...core,
+          materialize: row.progress.materialize ?? [],
+          botLink: row.progress.botLink ?? null,
+          exactMatch,
+        };
         // The key is erased WITH the BACKUP bookmark — before the backup is requested, so
         // the backup never holds it, and a crash from here on needs no key: the backup is
         // all that is left.
@@ -1139,7 +1184,9 @@ export function completedStatusOf(
 ): 'COMPLETED' | 'COMPLETED_WITH_DISCREPANCY' {
   return row.progress.importerVerdict === 'COMPLETED' &&
     row.progress.reconcileVerdict === 'RECONCILED' &&
-    row.applyReport?.reportHolds === true
+    row.applyReport?.reportHolds === true &&
+    // The one-time import is COMPLETE only when no difference is left unexplained.
+    row.applyReport.exactMatch?.holds === true
     ? 'COMPLETED'
     : 'COMPLETED_WITH_DISCREPANCY';
 }

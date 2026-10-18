@@ -4780,6 +4780,8 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   // Reachable despite the surface's own check: an operator can block a customer between
   // the resolve and the order write, and the service refuses it inside the transaction.
   [COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED]: 'bot.blocked',
+  // Owner decision 2026-10-17: a wallet carried over below zero buys nothing until topped up.
+  [COMMERCE_ERROR_CODES.WALLET_NEGATIVE_TOP_UP_REQUIRED]: 'bot.wallet.negative_balance',
   /*
    * A rail this installation cannot perform. NAMED rather than hidden — the button is
    * not drawn, and a customer holding an older message still gets a sentence that says

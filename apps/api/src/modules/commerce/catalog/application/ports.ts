@@ -9,6 +9,7 @@ import type {
   ProductId,
   ProductSpecification,
   ProductStatus,
+  RecordSource,
   TenantContext,
 } from '@nexa/contracts';
 
@@ -22,6 +23,8 @@ import type {
  */
 export interface ProductRecord {
   readonly id: ProductId;
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   readonly title: string;
   readonly description: string | null;
   readonly status: ProductStatus;
@@ -101,6 +104,8 @@ export interface ProductPage {
 /** How an operator narrowed the product list. */
 export interface ProductSearch {
   readonly status?: ProductStatus;
+  /** Only rows from this source (the source filter). */
+  readonly source?: RecordSource;
   readonly audience?: ProductAudience;
   /** Case-insensitive prefix on the title, the same shape the customer search uses. */
   readonly titlePrefix?: string;

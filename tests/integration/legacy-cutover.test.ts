@@ -800,7 +800,10 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     const after = {
       customers: await count('customers'),
       openings: await count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'"),
-      debts: await count('legacy_wallet_debts'),
+      debitOpenings: await count(
+        'wallet_entries',
+        "reason = 'MIGRATION_OPENING_BALANCE' AND direction = 'DEBIT'",
+      ),
       services: await count('services'),
       candidates: await count('legacy_service_candidates'),
     };
@@ -845,7 +848,21 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     expect(await count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'")).toBe(
       after.openings + 1,
     );
-    expect(await count('legacy_wallet_debts')).toBe(after.debts);
+    // The negative Mirza balance (100000003, -20 000) is ONE DEBIT opening, posted by the first
+    // import and neither doubled nor re-posted by the re-run; no legacy-debt row ever exists.
+    expect(after.debitOpenings).toBe(1);
+    expect(
+      await count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE' AND direction = 'DEBIT'"),
+    ).toBe(after.debitOpenings);
+    expect(await count('legacy_wallet_debts')).toBe(0);
+    const debtor = await db().execute<{ direction: string; amount: string; reference: string }>(
+      sql`SELECT w.direction, w.amount::text AS amount, w.reference FROM wallet_entries w JOIN customers c
+            ON c.tenant_id = w.tenant_id AND c.id = w.customer_id
+           WHERE w.tenant_id = ${tenantA.tenantId} AND c.telegram_user_id = '100000003'`,
+    );
+    expect(debtor.rows).toEqual([
+      { direction: 'DEBIT', amount: '20000', reference: 'legacy:opening:100000003' },
+    ]);
     expect(await count('services')).toBe(after.services);
     expect(await count('legacy_service_candidates')).toBe(after.candidates);
     const changed = await db().execute<{ amount: string }>(
@@ -871,6 +888,13 @@ describe('Mirza PR6: the cutover approval, the gate and the final report v2', ()
     });
     const v2 = report.finalV2 as Record<string, any>;
     expect(v2['sections'].usersWallets.sourceChanged.users).toBe(1);
+    expect(v2['sections'].usersWallets.wallet.negative).toMatchObject({
+      users: 1,
+      sumMinor: '20000', // the magnitude of the source balance (-20 000)
+      openingEntries: 1,
+      openingSumMinor: '20000',
+    });
+    expect(v2['sections'].usersWallets.wallet.legacyDebtRows).toBe(0);
     expect(v2['sections'].cutover.supersededSources).toEqual([
       { sourceFingerprint: fpA.v1, acknowledged: true },
     ]);

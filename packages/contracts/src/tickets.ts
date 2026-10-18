@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { uuidV7Schema, type Branded } from './ids.js';
+import { DEFAULT_RECORD_SOURCE, recordSourceSchema } from './record-source.js';
 import {
   BUSINESS_HANDOFF_WIRE_REASONS,
   businessHandoffReasonDetailSchema,
@@ -638,6 +639,12 @@ export type TicketCategoryResponse = z.infer<typeof ticketCategoryResponseSchema
 
 export const ticketSummarySchema = z.object({
   id: z.string(),
+  /**
+   * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
+   * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
+   * parsing; the API always sends it.
+   */
+  source: recordSourceSchema.default(DEFAULT_RECORD_SOURCE),
   number: z.number().int().positive(),
   status: ticketStatusSchema,
   priority: ticketPrioritySchema,
@@ -750,6 +757,8 @@ export const ticketListQuerySchema = z
      * Customer 360's "awaiting support" counts use — so a count and the list it links to
      * agree. ANDed with `status` when both are given.
      */
+    /** Only rows from this source (the «منبع» filter). */
+    source: recordSourceSchema.optional(),
     awaiting: z.literal('support').optional(),
     categoryId: uuidV7Schema.optional(),
     customer: z.string().trim().min(1).max(64).optional(),

@@ -10,6 +10,7 @@ import type {
   TicketMessageSender,
   TicketPriority,
   TicketReplyFileMimeType,
+  RecordSource,
   TicketStatus,
   TicketSystemEvent,
   TicketOrigin,
@@ -36,6 +37,8 @@ export interface TicketCategoryRecord {
 
 export interface TicketRecord {
   readonly id: TicketId;
+  /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
+  readonly source: RecordSource;
   readonly number: number;
   readonly customerId: UserId;
   readonly botInstanceId: BotInstanceId;
@@ -132,6 +135,8 @@ export interface TicketListItem {
 /** The inbox's filter, already resolved to ids by the service. */
 export interface TicketListFilter {
   readonly status?: TicketStatus;
+  /** Only rows from this source (the source filter). */
+  readonly source?: RecordSource;
   /** Any of these statuses (ANDed with `status`): the "awaiting support" facet. */
   readonly statuses?: readonly TicketStatus[];
   readonly categoryId?: TicketCategoryId;

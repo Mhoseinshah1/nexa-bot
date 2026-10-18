@@ -804,6 +804,8 @@ function resellerRow(index: number, name: string | null, tierIndex: number, over
     discountPercentage: null,
     creditLimit: null,
     effectiveCreditLimit: tier['creditLimit'],
+    source: 'NEXA',
+    importedPurchaseCap: null,
     createdAt: ago(60 * 24 * (120 - index * 7)),
     updatedAt: ago(60 * 24 * index),
     ...over,

@@ -267,8 +267,16 @@ export const orderPurposeSchema = z.enum(ORDER_PURPOSES);
  * arrived in NEXA for it, so it is never a sale, never revenue, never refundable, and the
  * origin itself starts nothing — no provisioning, no cashback, no commission. The write
  * path that creates one (P6) is HOLD. `docs/migration-order-origin.md`.
+ *
+ * `LEGACY_HISTORY` (the one-time Mirza import, owner decision 2026-10-17) is a Mirza
+ * invoice carried into `orders` as HISTORY: its original amount, date and status, so the
+ * customer's order list and the owner's reports show what was bought in Mirza. The money
+ * moved in Mirza and is already in the customer's opening balance, so like an adoption it
+ * is never a NEXA sale, never revenue of this installation, never refundable, and it starts
+ * nothing — no provisioning, no settlement, no cashback, no commission, no message. Reports
+ * show it apart, as Mirza history.
  */
-export const ORDER_ORIGINS = ['STANDARD', 'LEGACY_ADOPTION'] as const;
+export const ORDER_ORIGINS = ['STANDARD', 'LEGACY_ADOPTION', 'LEGACY_HISTORY'] as const;
 export type OrderOrigin = (typeof ORDER_ORIGINS)[number];
 export const orderOriginSchema = z.enum(ORDER_ORIGINS);
 export const DEFAULT_ORDER_ORIGIN: OrderOrigin = 'STANDARD';

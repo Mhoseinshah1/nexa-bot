@@ -1,4 +1,11 @@
 import { CustomerDirectMessageService } from './modules/commerce/direct-messages/application/customer-direct-message.service.js';
+import { LegacyMaterializeService } from './modules/platform/legacy-materialize/application/materialize.service.js';
+import { CustomerSourceStep } from './modules/platform/legacy-materialize/application/customers-source.step.js';
+import { DrizzleCustomerSourceMarker } from './modules/platform/legacy-materialize/infrastructure/drizzle-customer-source-marker.js';
+import {
+  LegacyBotLinkPort,
+  LegacyMaterializePort,
+} from './modules/platform/legacy-materialize/infrastructure/materialize-ports.js';
 import { DrizzleDirectMessageRepository } from './modules/commerce/direct-messages/infrastructure/drizzle-direct-message.repository.js';
 import { fileURLToPath } from 'node:url';
 import {
@@ -271,8 +278,6 @@ import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastr
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
 import { LegacyProductReviewService } from './modules/commerce/legacy-product-review/application/legacy-product-review.service.js';
-import { LegacyWalletDebtService } from './modules/commerce/legacy-wallet-debts/application/legacy-wallet-debt.service.js';
-import { DrizzleLegacyWalletDebtRepository } from './modules/commerce/legacy-wallet-debts/infrastructure/drizzle-legacy-wallet-debt.repository.js';
 import { LegacyServiceReviewService } from './modules/platform/legacy-service-review/application/legacy-service-review.service.js';
 import { DrizzleLegacyServiceCandidateRepository } from './modules/platform/legacy-service-review/infrastructure/drizzle-legacy-service-candidate.repository.js';
 import { LegacyCutoverService } from './modules/platform/legacy-cutover/application/legacy-cutover.service.js';
@@ -282,7 +287,24 @@ import { LegacyInvoiceArchiveService } from './modules/platform/legacy-invoice-a
 import { DrizzleLegacyInvoiceArchiveRepository } from './modules/platform/legacy-invoice-archive/infrastructure/drizzle-legacy-invoice-archive.repository.js';
 import { LegacyHistoryIngest } from './modules/platform/legacy-history/application/legacy-history-ingest.js';
 import { LegacyHistoryReadService } from './modules/platform/legacy-history/application/legacy-history-read.service.js';
+import { ProductsMaterializeStep } from './modules/platform/legacy-materialize/application/products-step.js';
+import { ResellersMaterializeStep } from './modules/platform/legacy-materialize/application/resellers-step.js';
+import { DiscountsMaterializeStep } from './modules/platform/legacy-materialize/application/discounts-step.js';
+import { DrizzleCatalogMaterializeRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-catalog-materialize.repository.js';
 import { DrizzleLegacyHistoryRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-history.repository.js';
+// legacy-materialize: history steps
+import { DiscountUsageHistoryStep } from './modules/platform/legacy-materialize/application/discount-usage-history.step.js';
+import { PaymentHistoryStep } from './modules/platform/legacy-materialize/application/payment-history.step.js';
+import { ReferralHistoryStep } from './modules/platform/legacy-materialize/application/referral-history.step.js';
+import { TicketHistoryStep } from './modules/platform/legacy-materialize/application/ticket-history.step.js';
+import { WalletHistoryStep } from './modules/platform/legacy-materialize/application/wallet-history.step.js';
+import type { MaterializeStep } from './modules/platform/legacy-materialize/application/ports.js';
+import { DrizzleDiscountUsageHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-discount-usage-history.repository.js';
+import { DrizzleHistoryRecordReader } from './modules/platform/legacy-materialize/infrastructure/drizzle-history-record.reader.js';
+import { DrizzlePaymentHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-payment-history.repository.js';
+import { DrizzleReferralHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-referral-history.repository.js';
+import { DrizzleTicketHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-ticket-history.repository.js';
+import { DrizzleWalletHistoryRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-wallet-history.repository.js';
 import { LegacyRecordsReadService } from './modules/platform/legacy-history/application/legacy-records-read.service.js';
 import { DrizzleLegacyRecordsRepository } from './modules/platform/legacy-history/infrastructure/drizzle-legacy-records.repository.js';
 import { LegacyMoneyHistoryService } from './modules/platform/legacy-history/application/legacy-money-history.service.js';
@@ -347,6 +369,9 @@ import { CustomerBotLinkService } from './modules/commerce/customers/application
 import { DrizzleCustomerBotLinkRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-bot-link.repository.js';
 import { LegacyReviewQueueService } from './modules/platform/legacy-import/application/legacy-review-queue.service.js';
 import { LegacyAdoptionService } from './modules/commerce/legacy-adoption/application/legacy-adoption.service.js';
+// legacy-materialize: ended services
+import { TerminatedServicesStep } from './modules/platform/legacy-materialize/application/terminated-services.step.js';
+import { DrizzleEndedServicesRepository } from './modules/platform/legacy-materialize/infrastructure/drizzle-ended-services.repository.js';
 import { DrizzleLegacyAdoptionStore } from './modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store.js';
 import { LegacyImporterService } from './modules/platform/legacy-importer/application/legacy-importer.service.js';
 import type {
@@ -1022,17 +1047,27 @@ export interface Container {
    * (`users.view` + `legacy.history.view`). Neither touches money, orders, services or roles.
    */
   readonly legacyHistoryIngest: LegacyHistoryIngest;
+  /**
+   * legacy-materialize: the one-time Mirza import's catalogue steps — products (with their
+   * categories), resellers and discount codes — each a `MaterializeStep` the coordinator runs.
+   */
+  readonly legacyMaterializeCatalog: {
+    readonly products: ProductsMaterializeStep;
+    readonly resellers: ResellersMaterializeStep;
+    readonly discounts: DiscountsMaterializeStep;
+  };
   readonly legacyHistoryRead: LegacyHistoryReadService;
   readonly legacyRecordsRead: LegacyRecordsReadService;
+  // legacy-materialize: history steps. Order: payments, wallet history, tickets, referrals, discount usage.
+  readonly legacyMaterializeHistory: {
+    readonly payments: MaterializeStep;
+    readonly walletHistory: MaterializeStep;
+    readonly tickets: MaterializeStep;
+    readonly referrals: MaterializeStep;
+    readonly discountUsage: MaterializeStep;
+  };
   /** Mirza money history beside the opening figure, and the tenant-wide report (read only). */
   readonly legacyMoneyHistory: LegacyMoneyHistoryService;
-  /**
-   * Mirza PR4 (owner decision 6): the owner's review of legacy wallet debts — negative legacy
-   * balances held beside the ledger. Reads under `legacy.debts.view`, decisions under
-   * `legacy.debts.decide`; it moves no money. The importer RECORDS debts through
-   * `migrationOpeningBalance`, never through this.
-   */
-  readonly legacyWalletDebts: LegacyWalletDebtService;
   /**
    * Mirza PR5 (Area D; owner decision 8): the operator's review of legacy service candidates —
    * one outcome per live legacy invoice. Reads under `legacy.services.view`, decisions and ADOPT
@@ -1141,12 +1176,17 @@ export interface Container {
   readonly legacyReviewQueue: LegacyReviewQueueService;
   /** OI-1: the cutover command that links imported customers to a bot (`customers-link-bot.cli.ts`). */
   readonly customerBotLink: CustomerBotLinkService;
+  /** The one-time Mirza import's MATERIALIZE and BOT_LINK phases, as the executor uses them. */
+  readonly legacyMaterializePort: LegacyMaterializePort;
+  readonly legacyBotLinkPort: LegacyBotLinkPort;
   /**
    * Migration P6: legacy service adoption. Migration-only — no surface reaches it; the P7
    * importer is its one caller (`docs/migration-p6-service-adoption.md`). Holds no provider
    * client: adoption is not provisioning.
    */
   readonly legacyAdoption: LegacyAdoptionService;
+  // legacy-materialize: ended services
+  readonly legacyEndedServices: TerminatedServicesStep;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
   /** WP13 — the Web Admin's management of this tenant's Telegram bot instances. */
@@ -2410,18 +2450,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     operationId: (key) => operationIdFor('payment', key),
   });
-  const legacyWalletDebtRepository = new DrizzleLegacyWalletDebtRepository(database.db);
-  const legacyWalletDebts = new LegacyWalletDebtService({
-    repository: legacyWalletDebtRepository,
-    guard,
-    uow,
-    audit,
-    opsLog,
-    sessions,
-    idempotency,
-    scopeActivity: tenants,
-    clock,
-  });
   const legacyServiceCandidateRepository = new DrizzleLegacyServiceCandidateRepository(database.db);
   const legacyServiceReview = new LegacyServiceReviewService({
     repository: legacyServiceCandidateRepository,
@@ -2449,7 +2477,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const migrationOpeningBalance = new MigrationOpeningBalanceService({
     repository: walletRepository,
     customers: customerRepository,
-    debts: legacyWalletDebtRepository,
     guard,
     audit,
     opsLog,
@@ -2671,6 +2698,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
   const orderService = new OrderService({
+    wallet: walletRepository,
     customService: { pricer: customServicePricer, terms: orderCustomServiceTermsRepository },
     placement: panelPlacement,
     placements: orderPlacementRepository,
@@ -2850,6 +2878,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * `AWAITING_PAYMENT` order and wallet settlement works on it without knowing it is one.
    */
   const commercialActionService = new CommercialActionService({
+    wallet: walletRepository,
     resellers: resellerService,
     pricing: pricingService,
     services: serviceRepository,
@@ -4127,6 +4156,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  // legacy-materialize: ended services
+  // The one-time Mirza import's ENDED services: a TERMINATED service and a LEGACY_HISTORY order
+  // per invoice whose account is not on the panel. Like the adoption it holds no provider
+  // client; it writes only orders and services, and never the outbox, a notice or the ledger.
+  const legacyEndedServices = new TerminatedServicesStep({
+    repository: new DrizzleEndedServicesRepository(database.db),
+    guard,
+    uow,
+    audit,
+    scopeActivity: tenants,
+    secrets: serviceSecrets,
+    clock,
+    ids,
+  });
   const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
     // The same per-pass closure the payment expiry loop uses, and for the same
     // reason: the installation's tenant is a row, so it is not known while this
@@ -4505,12 +4548,50 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  // legacy-materialize: catalogue steps (products, resellers, discount codes)
+  const catalogMaterializeRepository = new DrizzleCatalogMaterializeRepository(database.db);
+  const catalogMaterializeDeps = { guard, uow, scopeActivity: tenants, ids };
+  const legacyMaterializeCatalog = {
+    products: new ProductsMaterializeStep(catalogMaterializeRepository, catalogMaterializeDeps),
+    resellers: new ResellersMaterializeStep(catalogMaterializeRepository, catalogMaterializeDeps),
+    discounts: new DiscountsMaterializeStep(catalogMaterializeRepository, catalogMaterializeDeps),
+  } as const;
   const legacyHistoryRead = new LegacyHistoryReadService({
     repository: legacyHistoryRepository,
     customers: customerRepository,
     guard,
     audit,
   });
+  // legacy-materialize: history steps (payments, wallet history, tickets, referrals, discount usage)
+  const legacyMaterializeDeps = {
+    records: new DrizzleHistoryRecordReader(database.db),
+    uow,
+    scopeActivity: tenants,
+    ids,
+  };
+  const legacyMaterializeHistory = {
+    payments: new PaymentHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzlePaymentHistoryRepository(database.db, ids),
+    ),
+    walletHistory: new WalletHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzleWalletHistoryRepository(database.db, ids),
+    ),
+    tickets: new TicketHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzleTicketHistoryRepository(database.db, ids),
+    ),
+    referrals: new ReferralHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzleReferralHistoryRepository(database.db, ids),
+    ),
+    discountUsage: new DiscountUsageHistoryStep(
+      legacyMaterializeDeps,
+      new DrizzleDiscountUsageHistoryRepository(database.db, ids),
+    ),
+  };
+  // End legacy-materialize: history steps
   const legacyRecordsRead = new LegacyRecordsReadService({
     repository: new DrizzleLegacyRecordsRepository(database.db),
     guard,
@@ -6840,7 +6921,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     }),
     logger,
   });
+  // The one-time Mirza import's MATERIALIZE phase: its steps run in this order.
+  const legacyMaterialize = new LegacyMaterializeService([
+    new CustomerSourceStep({
+      marker: new DrizzleCustomerSourceMarker(),
+      uow,
+      scopeActivity: tenants,
+    }),
+    legacyMaterializeCatalog.products,
+    legacyMaterializeCatalog.resellers,
+    legacyMaterializeCatalog.discounts,
+    legacyMaterializeHistory.payments,
+    legacyMaterializeHistory.walletHistory,
+    legacyMaterializeHistory.tickets,
+    legacyMaterializeHistory.referrals,
+    // Every invoice the importer did not adopt: an ended (TERMINATED) service and its order.
+    legacyEndedServices,
+    // After the discounts and the invoice orders it links to.
+    legacyMaterializeHistory.discountUsage,
+  ]);
+  const legacyMaterializePort = new LegacyMaterializePort(legacyMaterialize, () => clock.now());
+  const legacyBotLinkPort = new LegacyBotLinkPort(customerBotLink);
   const migrationExecutor = new LegacyMigrationExecutor({
+    materialize: legacyMaterializePort,
+    botLink: legacyBotLinkPort,
     repository: legacyNxpkgImports,
     workspaces: migrationWorkspaces,
     cipher,
@@ -7165,8 +7269,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     legacyProductReviews: legacyProductReviewService,
     legacyInvoiceArchive: legacyInvoiceArchiveService,
     legacyHistoryIngest,
+    legacyMaterializeCatalog,
     legacyHistoryRead,
     legacyRecordsRead,
+    legacyMaterializeHistory,
     legacyMoneyHistory,
     productCategories: productCategoryService,
     serviceAddons: serviceAddonService,
@@ -7211,12 +7317,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     bulkOperationLoop,
     wallet: walletService,
     migrationOpeningBalance,
-    legacyWalletDebts,
     legacyServiceReview,
     legacyCutover,
     legacyReviewQueue,
     customerBotLink,
+    legacyMaterializePort,
+    legacyBotLinkPort,
     legacyAdoption,
+    legacyEndedServices,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
     botManagement,

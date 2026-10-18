@@ -32,9 +32,10 @@ import type {
   LegacyInventoryDiagnostics,
   LegacyInventoryRead,
   LegacyInventoryResolution,
-  RecordedDebt,
 } from './ports.js';
 import {
+  isLiveInvoiceStatus,
+  serviceCandidateInvoices,
   sha256Hex,
   type LegacyInvoiceRow,
   type LegacySnapshot,
@@ -51,26 +52,16 @@ import {
  */
 
 /**
- * What the openings phase will do for an importable user. Since owner decision 6 a negative
- * balance is `RECORD_DEBT` (a legacy debt, no ledger entry), and an existing ledger DEBIT
- * opening from the code before it is `PRIOR_DEBIT_OPENING` (never rewritten, never doubled).
+ * What the openings phase will do for an importable user. Since owner decision 2026-10-17 a
+ * negative balance is posted like a positive one, as a ledger DEBIT opening: the wallet holds
+ * exactly the Mirza balance, and a negative one blocks purchase until it is topped up.
  */
-export type OpeningPlan =
-  | 'POST'
-  | 'ALREADY_POSTED'
-  | 'ZERO_NO_ENTRY'
-  | 'CONFLICT'
-  | 'RECORD_DEBT'
-  | 'DEBT_ALREADY_RECORDED'
-  | 'PRIOR_DEBIT_OPENING';
+export type OpeningPlan = 'POST' | 'ALREADY_POSTED' | 'ZERO_NO_ENTRY' | 'CONFLICT';
 export const OPENING_PLANS: readonly OpeningPlan[] = [
   'POST',
   'ALREADY_POSTED',
   'ZERO_NO_ENTRY',
   'CONFLICT',
-  'RECORD_DEBT',
-  'DEBT_ALREADY_RECORDED',
-  'PRIOR_DEBIT_OPENING',
 ];
 export type TrialPlan = LegacyTrialDecision | 'ALREADY_DECIDED';
 
@@ -218,6 +209,8 @@ export interface PlanTallies {
     readonly zero: number;
     readonly negative: { readonly count: number; readonly sumMinor: bigint };
     readonly openings: Readonly<Record<OpeningPlan, number>>;
+    /** The part of `openings` for NEGATIVE balances (a DEBIT opening each). */
+    readonly debitOpenings: Readonly<Record<OpeningPlan, number>>;
   };
   readonly trials: Readonly<Record<TrialPlan, number>>;
   readonly products: {
@@ -245,8 +238,6 @@ export interface PlanInput {
   readonly salesCurrency: string;
   readonly existingCustomers: ReadonlyMap<string, string>;
   readonly existingOpenings: ReadonlyMap<string, bigint>;
-  /** Mirza PR4: Telegram id → the legacy debt already recorded (magnitude, evidence class). */
-  readonly existingDebts?: ReadonlyMap<string, RecordedDebt>;
   readonly trialOverrides: ReadonlyMap<string, number>;
   readonly trialDecided: ReadonlySet<string>;
   readonly existingShapes: ReadonlyMap<
@@ -273,28 +264,10 @@ function zeroes<K extends string>(keys: readonly K[]): Record<K, number> {
 }
 
 /**
- * `existing` is the SIGNED ledger opening already posted; `existingDebt` the legacy debt
- * already recorded. A figure that differs from what is recorded — in amount, in kind, or in
- * evidence class (a synthetic debt met by a real snapshot, or the reverse) — is a CONFLICT,
- * never re-applied: exactly the opening service's own "same debt" (Codex on #233).
+ * `existing` is the SIGNED ledger opening already posted. A figure that differs from it — in
+ * amount or in sign — is a CONFLICT, never re-applied: exactly the opening service's own rule.
  */
-export function openingPlanFor(
-  balanceMinor: bigint,
-  existing: bigint | undefined,
-  existingDebt?: RecordedDebt,
-  synthetic = false,
-): OpeningPlan {
-  if (balanceMinor < 0n) {
-    if (existing !== undefined)
-      return existing === balanceMinor ? 'PRIOR_DEBIT_OPENING' : 'CONFLICT';
-    if (existingDebt !== undefined) {
-      return existingDebt.amountMinor === -balanceMinor && existingDebt.synthetic === synthetic
-        ? 'DEBT_ALREADY_RECORDED'
-        : 'CONFLICT';
-    }
-    return 'RECORD_DEBT';
-  }
-  if (existingDebt !== undefined) return 'CONFLICT';
+export function openingPlanFor(balanceMinor: bigint, existing: bigint | undefined): OpeningPlan {
   if (existing === undefined) return balanceMinor === 0n ? 'ZERO_NO_ENTRY' : 'POST';
   return existing === balanceMinor ? 'ALREADY_POSTED' : 'CONFLICT';
 }
@@ -403,7 +376,7 @@ export function decideAllServices(
   const decided: PlannedService[] = [];
   const undecidable = new Set<string>();
   const inventoryHold = review.inventoryHold ?? new Set<string>();
-  for (const invoice of snapshot.liveInvoices) {
+  for (const invoice of serviceCandidateInvoices(snapshot)) {
     const panelId = review.operatorPanels?.get(invoice.idInvoice);
     const fresh = decideServiceCandidate(
       invoice,
@@ -454,7 +427,17 @@ export function withOwnershipRule(
   services: readonly PlannedService[],
   keptAsHistory: ReadonlySet<string>,
 ): readonly PlannedService[] {
-  const owners = new Map<string, Set<string>>();
+  /*
+   * Two tiers (owner decision 2026-10-17: every invoice is matched, not only the live ones).
+   * A LIVE invoice's claim on an account is the stronger one: it is the service the customer
+   * is using. An ended (non-live) invoice naming the same account never makes a live claimant
+   * ambiguous — an old removed invoice must not take a live adoption away — but it is held
+   * when its owner differs from the live claimant's, since which customer holds the account is
+   * still a guess. Among the ended invoices alone the original rule applies unchanged.
+   */
+  const liveOwners = new Map<string, Set<string>>();
+  const endedOwners = new Map<string, Set<string>>();
+  const live = (s: PlannedService): boolean => isLiveInvoiceStatus(s.invoice.status);
   const accountOf = (s: PlannedService): string | null =>
     s.decision.category === 'ADOPTION_ELIGIBLE' && !keptAsHistory.has(s.invoice.idInvoice)
       ? JSON.stringify([s.decision.panelId, s.decision.providerUsername.toLowerCase()])
@@ -462,13 +445,22 @@ export function withOwnershipRule(
   for (const s of services) {
     const account = accountOf(s);
     if (account === null || s.decision.category !== 'ADOPTION_ELIGIBLE') continue;
-    const set = owners.get(account) ?? new Set<string>();
+    const tier = live(s) ? liveOwners : endedOwners;
+    const set = tier.get(account) ?? new Set<string>();
     set.add(s.decision.telegramUserId);
-    owners.set(account, set);
+    tier.set(account, set);
   }
   return services.map((s) => {
     const account = accountOf(s);
-    if (account === null || (owners.get(account)?.size ?? 0) < 2) return s;
+    if (account === null || s.decision.category !== 'ADOPTION_ELIGIBLE') return s;
+    const liveSet = liveOwners.get(account);
+    const endedSet = endedOwners.get(account);
+    const ambiguous = live(s)
+      ? (liveSet?.size ?? 0) >= 2
+      : liveSet !== undefined
+        ? !liveSet.has(s.decision.telegramUserId) || liveSet.size >= 2
+        : (endedSet?.size ?? 0) >= 2;
+    if (!ambiguous) return s;
     return {
       invoice: s.invoice,
       decision: { category: 'AMBIGUOUS_OWNERSHIP', map: INVOICE_MAP_DECISIONS.AMBIGUOUS_OWNERSHIP },
@@ -541,6 +533,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     zero: 0,
     negative: { count: 0, sumMinor: 0n },
     openings: zeroes<OpeningPlan>(OPENING_PLANS),
+    debitOpenings: zeroes<OpeningPlan>(OPENING_PLANS),
   };
   const trials = zeroes<TrialPlan>(TRIAL_PLANS);
   const importedUsers = new Map<string, string>();
@@ -594,10 +587,9 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     const opening = openingPlanFor(
       decision.balanceMinor,
       input.existingOpenings.get(decision.telegramUserId),
-      input.existingDebts?.get(decision.telegramUserId),
-      snapshot.synthetic,
     );
     wallet.openings[opening] += 1;
+    if (decision.balanceMinor < 0n) wallet.debitOpenings[opening] += 1;
 
     let trial: TrialPlan;
     if (existingCustomerId !== null && input.trialDecided.has(existingCustomerId)) {
@@ -619,9 +611,16 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
   const unmappable: Partial<Record<LegacyShapeUnmappableReason, number>> = {};
   const q1bKeys = new Set<string>();
   let hiddenShapeInvoices = 0;
-  for (const invoice of snapshot.liveInvoices) {
-    if (!needsHiddenShape(invoice, snapshot.productCodes)) continue;
-    hiddenShapeInvoices += 1;
+  for (const invoice of serviceCandidateInvoices(snapshot)) {
+    /*
+     * Every candidate gets its shape, not only the ones whose ADOPTION needs a hidden product:
+     * an invoice whose account is not on the panel becomes an ENDED service, and the ended
+     * service's order must name a product. A named-product invoice has none of its own to
+     * point at here, so it points at its shape's hidden product like any other. The counters
+     * below keep their old meaning: they count the invoices whose adoption needs one.
+     */
+    const adoptionNeeds = needsHiddenShape(invoice, snapshot.productCodes);
+    if (adoptionNeeds) hiddenShapeInvoices += 1;
     const shapeInput: LegacyShapeInput = {
       codePanel: invoice.codePanel,
       volume: invoice.volume,
@@ -631,7 +630,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
     };
     const keyed = legacyShapeKey(shapeInput);
     if (!keyed.ok) {
-      unmappable[keyed.reason] = (unmappable[keyed.reason] ?? 0) + 1;
+      if (adoptionNeeds) unmappable[keyed.reason] = (unmappable[keyed.reason] ?? 0) + 1;
       continue;
     }
     if (isQ1bPopulation(invoice)) q1bKeys.add(keyed.key);
@@ -758,7 +757,7 @@ export function planLegacyImport(input: PlanInput): LegacyPlan {
         namedProductCandidates,
       },
       services: {
-        candidates: snapshot.liveInvoices.length,
+        candidates: serviceCandidateInvoices(snapshot).length,
         categories,
         unmappedCodePanels: Object.fromEntries(
           unmappedCodePanels(

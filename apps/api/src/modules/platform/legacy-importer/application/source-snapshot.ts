@@ -3,6 +3,7 @@ import { LEGACY_USER_STATUS_SPELLINGS, type LegacyUserStatusClass } from '@nexa/
 import {
   IMPORT_READ_SET_V1,
   LEGACY_LIVE_STATUSES,
+  LEGACY_NEVER_PAID_STATUSES,
   LEGACY_OPTIONAL_COLUMNS,
   LEGACY_REQUIRED_COLUMNS,
   LEGACY_SOURCE_TABLES,
@@ -96,6 +97,14 @@ export interface LegacySnapshot {
   readonly trialUsers: ReadonlySet<string>;
   /** Invoices whose `Status` is one of `LEGACY_LIVE_STATUSES`: the service candidates. */
   readonly liveInvoices: readonly LegacyInvoiceRow[];
+  /**
+   * Every OTHER invoice that was ever paid for (owner decision 2026-10-17): a removed, expired
+   * or warned invoice can still have its account on the panel, so it is matched against the
+   * read-only inventory exactly as a live one is. Excluded: a NULL `Status` and the two
+   * never-paid states (`LEGACY_NEVER_PAID_STATUSES`), which were never a service.
+   * `serviceCandidateInvoices` is the one place the two lists are put together.
+   */
+  readonly otherInvoices: readonly LegacyInvoiceRow[];
   readonly productCodes: ReadonlySet<string>;
   /**
    * The source carries the SYNTHETIC marker (`nexa_synthetic_fixture`). Forces the report's
@@ -241,6 +250,23 @@ export function legacyFingerprint(
 }
 
 const LIVE: ReadonlySet<string> = new Set(LEGACY_LIVE_STATUSES);
+const NEVER_PAID: ReadonlySet<string> = new Set(LEGACY_NEVER_PAID_STATUSES);
+
+/** Whether an invoice `Status` is one of `LEGACY_LIVE_STATUSES` (exact). */
+export function isLiveInvoiceStatus(status: LegacyCell): boolean {
+  return status !== null && LIVE.has(status);
+}
+
+/**
+ * Every invoice that is matched against a panel: the live ones first, in source order, then
+ * the others. The order is part of the contract — an account two invoices of ONE owner name
+ * is adopted by the first, so a live invoice always wins it over an ended one.
+ */
+export function serviceCandidateInvoices(
+  snapshot: Pick<LegacySnapshot, 'liveInvoices' | 'otherInvoices'>,
+): readonly LegacyInvoiceRow[] {
+  return [...snapshot.liveInvoices, ...snapshot.otherInvoices];
+}
 
 function cellOf(columns: readonly string[], row: readonly LegacyCell[], name: string): LegacyCell {
   const index = columns.indexOf(name);
@@ -295,13 +321,15 @@ export async function readFromSession(
 
   const trialUsers = new Set<string>();
   const liveInvoices: LegacyInvoiceRow[] = [];
+  const otherInvoices: LegacyInvoiceRow[] = [];
   const invoiceEvidence = await digestV1Table(session, 'invoice', invoiceColumns, (row) => {
     const cell = (name: string) => cellOf(invoiceColumns, row, name);
     const idUser = cell('id_user');
     const isTest = cell('is_test');
     if (idUser !== null && isTest !== null && isTest.trim() === '1') trialUsers.add(idUser);
     const status = cell('Status');
-    if (status === null || !LIVE.has(status)) return;
+    if (status === null || NEVER_PAID.has(status)) return;
+    const live = LIVE.has(status);
     const facts = [
       cell('id_invoice'),
       idUser,
@@ -315,7 +343,7 @@ export async function readFromSession(
       cell('time_unit'),
       cell('is_custom'),
     ];
-    liveInvoices.push({
+    (live ? liveInvoices : otherInvoices).push({
       idInvoice: cell('id_invoice') ?? '',
       idUser,
       username: cell('username'),
@@ -370,6 +398,7 @@ export async function readFromSession(
     users: withChecksums,
     trialUsers,
     liveInvoices,
+    otherInvoices,
     productCodes,
     balanceColumnType:
       schema.find((c) => c.table === 'user' && c.column === 'Balance')?.dataType ?? null,

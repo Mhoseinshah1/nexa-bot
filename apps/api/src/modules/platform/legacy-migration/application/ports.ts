@@ -1,4 +1,7 @@
 import type {
+  LegacyBotLinkReport,
+  LegacyExactMatchRow,
+  LegacyMaterializeOutcome,
   ActorContext,
   LegacyMigrationAdoptReport,
   LegacyMigrationBlocker,
@@ -489,6 +492,21 @@ export interface MigrationRunner {
 }
 
 /** Archives every non-operational record type (design §5), idempotently by key. */
+/**
+ * The one-time import's MATERIALIZE phase (`legacy-materialize`): the archived history carried
+ * into the normal tables, and the rows it adds to the exact-match report. Both idempotent; the
+ * second read only.
+ */
+export interface MaterializePort {
+  apply(context: MigrationStepContext): Promise<readonly LegacyMaterializeOutcome[]>;
+  match(context: MigrationStepContext): Promise<readonly LegacyExactMatchRow[]>;
+}
+
+/** The one-time import's BOT_LINK phase: the imported customers' first bot. */
+export interface BotLinkPort {
+  link(context: MigrationStepContext): Promise<LegacyBotLinkReport>;
+}
+
 export interface HistoryIngestPort {
   ingest(context: MigrationStepContext): Promise<{
     readonly counts: readonly { readonly code: string; readonly count: number }[];

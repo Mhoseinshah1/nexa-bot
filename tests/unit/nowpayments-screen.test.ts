@@ -19,6 +19,7 @@ const EXPIRES_AT = new Date('2026-10-02T11:10:00Z');
 function payment(overrides: Partial<PaymentRecord> = {}): PaymentRecord {
   return {
     id: PAYMENT_ID,
+    source: 'NEXA',
     customerId: '01a0fa00-0000-7000-8000-0000000000c1' as UserId,
     orderId: '01a0fa00-0000-7000-8000-0000000000d1' as never,
     state: 'PENDING',

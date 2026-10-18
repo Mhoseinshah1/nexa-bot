@@ -2,6 +2,8 @@ import { useState, type FormEvent } from 'react';
 import { ListFilterBar } from '../ui/filter-bar';
 import { Drawer, Modal } from '../ui/overlays';
 import { chipFilter } from './money-filters';
+import { SourceBadge } from '../ui/source-badge';
+import { sourceStateFilter } from './record-source';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -11,6 +13,7 @@ import {
   type CurrencyCode,
   type MoneyWire,
   type PricingStep,
+  type RecordSource,
   type ResellerOverrideMode,
   type ResellerPriceLayer,
   type ResellerPricingMode,
@@ -44,6 +47,7 @@ import {
   Empty,
   Field,
   KV,
+  Money,
   Ltr,
   PageHead,
   StateSwitch,
@@ -199,6 +203,7 @@ function ResellerCell({ reseller }: { reseller: ResellerSummaryResponse }) {
         >
           {reseller.displayName ?? <Ltr>{reseller.telegramUserId}</Ltr>}
         </a>
+        <SourceBadge source={reseller.source} />
         {reseller.displayName !== null && (
           <div className="muted small">
             <Ltr>{reseller.telegramUserId}</Ltr>
@@ -288,7 +293,8 @@ export function ResellersPage({
 
   const [status, setStatus] = useState<StatusFilter>('ALL');
   const [tierId, setTierId] = useState('');
-  const signature = `${applied}|${status}|${tierId}`;
+  const [source, setSource] = useState<RecordSource | null>(null);
+  const signature = `${applied}|${status}|${tierId}|${source ?? ''}`;
   const trail = useTrail(signature);
 
   const tiers = useQuery({
@@ -307,6 +313,7 @@ export function ResellersPage({
           ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
           ...(status === 'ALL' ? {} : { status }),
           ...(tierId === '' ? {} : { tierId }),
+          ...(source === null ? {} : { source }),
           ...(applied === '' ? {} : { search: applied }),
         }),
       enabled: !denied,
@@ -314,7 +321,7 @@ export function ResellersPage({
   );
   const rows = resellers.data?.resellers ?? [];
   const nextCursor = resellers.data?.nextCursor ?? null;
-  const filtered = applied !== '' || status !== 'ALL' || tierId !== '';
+  const filtered = applied !== '' || status !== 'ALL' || tierId !== '' || source !== null;
 
   /** The reseller whose edit form is open, as the server last described it. */
   const [editing, setEditing] = useState<ResellerSummaryResponse | null>(null);
@@ -402,6 +409,16 @@ export function ResellersPage({
       render: (row) => (
         <PricingText label={OVERRIDE_LABELS[row.pricingMode]} percent={row.discountPercentage} />
       ),
+    },
+    {
+      key: 'imported-cap',
+      header: t('web.reseller_imported_cap'),
+      render: (row) =>
+        row.importedPurchaseCap === null ? (
+          <span className="muted">—</span>
+        ) : (
+          <Money value={limitWire(row.importedPurchaseCap)} />
+        ),
     },
     {
       key: 'actions',
@@ -561,6 +578,7 @@ export function ResellersPage({
                   label: t(RESELLER_STATUS_LABELS[one]),
                 })),
               }),
+              sourceStateFilter(source, setSource),
             ]}
           />
         </div>
@@ -1037,6 +1055,21 @@ function ResellerForm({
       ) : (
         /* TEXT, not a disabled input: a reseller row never moves to another customer. */
         <KV items={[[t('web.reseller_customer'), <ResellerCell key="c" reseller={reseller} />]]} />
+      )}
+
+      {reseller?.importedPurchaseCap != null && (
+        /* READ ONLY, and not a field: a limit Mirza gave this agent. Applied nowhere. */
+        <KV
+          items={[
+            [
+              t('web.reseller_imported_cap'),
+              <Money key="cap" value={limitWire(reseller.importedPurchaseCap)} />,
+            ],
+          ]}
+        />
+      )}
+      {reseller?.importedPurchaseCap != null && (
+        <p className="muted small">{t('web.reseller_imported_cap_hint')}</p>
       )}
 
       <Field label={t('web.reseller_tier')} htmlFor={`${prefix}-tier`}>

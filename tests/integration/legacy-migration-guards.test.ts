@@ -243,21 +243,36 @@ describe('legacy migration: what the migration role refuses', () => {
     expect(view.dryRunReport?.ownership.adminApprovedUnverified).toBeGreaterThanOrEqual(1);
 
     await executor.tick();
-    const adopted = new Set(
-      (
-        await ctx.container.database.db.execute<{ u: string }>(
-          sql`SELECT provider_username AS u FROM services WHERE tenant_id = ${TENANT}`,
-        )
-      ).rows.map((r) => r.u),
-    );
+    // Adoption claims count NON-ended services only: the executor's MATERIALIZE phase also
+    // writes an ENDED (TERMINATED) service for every paid invoice whose account is not on the
+    // panel, which is not an adoption. A live invoice's account IS on the panel, so none of
+    // the live ones may be ended either (checked below by invoice reference).
+    const serviceRows = (
+      await ctx.container.database.db.execute<{ u: string; ref: string | null; state: string }>(
+        sql`SELECT provider_username AS u, source_ref AS ref, state FROM services WHERE tenant_id = ${TENANT}`,
+      )
+    ).rows;
+    const adopted = new Set(serviceRows.filter((r) => r.state !== 'TERMINATED').map((r) => r.u));
+    const anyServiceFor = (invoiceId: string | undefined) =>
+      serviceRows.some((r) => r.ref === `invoice:${invoiceId ?? ''}`);
     for (const inv of [quarantined, rejected, pending, stale]) {
       expect(adopted.has(inv?.username ?? ''), inv?.id).toBe(false);
+      // …and the decision is not bypassed by the widened path: not ended, not in any state.
+      expect(anyServiceFor(inv?.id), `${inv?.id ?? ''} has no service in any state`).toBe(false);
     }
     // An attestation is not proof: it neither promotes nor lifts the converter's own hold.
     expect(adopted.has(attestedHeld.username)).toBe(false);
+    expect(anyServiceFor(attestedHeld.id)).toBe(false);
     // Attested over a converter-confirmed record: NEXA's own rules adopt it onto id_user.
     expect(adopted.has(attested?.username ?? '')).toBe(true);
+    // live minus the 5 held (quarantined, rejected, pending, stale, attestedHeld):
     expect(adopted.size).toBe(live.length - 5);
+    // Every non-adopted live invoice is a held gap, never an ended service: the only ended
+    // services are the non-live invoices whose account is gone.
+    const liveRefs = new Set(live.map((i) => `invoice:${i.id}`));
+    expect(
+      serviceRows.filter((r) => r.state === 'TERMINATED' && liveRefs.has(r.ref ?? '')),
+    ).toEqual([]);
     expect(rig.providerWrites()).toEqual([]);
   }, 300_000);
 

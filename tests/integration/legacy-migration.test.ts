@@ -521,6 +521,8 @@ describe('legacy migration (Mirza .nxpkg)', () => {
       },
       freshTarget: { check: async () => ({ fresh: true }) },
       history: { ingest: async () => ({ counts: [{ code: 'payment', count: 3 }] }) },
+      materialize: container.legacyMaterializePort,
+      botLink: container.legacyBotLinkPort,
       backup: {
         runBeforeImport: async () => ({
           outcome: 'TAKEN',

@@ -82,7 +82,7 @@ export const LEGACY_WALLET_DEBT_PAGE_MAX = 200;
  * sums and opaque map refs — never a Telegram id, a username or a per-user amount. PR6
  * folds this section, unchanged, into the final report's schema version 2.
  */
-export const LEGACY_USERS_WALLETS_SECTION_VERSION = 'nexa-legacy-users-wallets/v1' as const;
+export const LEGACY_USERS_WALLETS_SECTION_VERSION = 'nexa-legacy-users-wallets/v2' as const;
 
 /**
  * Where every source user row ended, one class per row (the closure: Σ classes = source

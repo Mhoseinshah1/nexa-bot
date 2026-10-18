@@ -15,6 +15,7 @@ import {
   uuid,
   doublePrecision,
   customType,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql, type SQL } from 'drizzle-orm';
 import {
@@ -80,6 +81,9 @@ import {
   SERVICE_ADDON_STATUSES,
   COMMERCIAL_ORDER_PURPOSES,
   ORDER_ORIGINS,
+  RECORD_SOURCES,
+  WALLET_HISTORY_IMPORT_ORIGINS,
+  WALLET_HISTORY_IMPORT_TEXT_MAX_LENGTH,
   ORDER_PURPOSES,
   ORDER_SETTLED_STATES,
   ORDER_STATES,
@@ -373,6 +377,39 @@ import {
  * which `tests/unit/schema-ddl-guards.test.ts` asserts one character at a time.
  */
 const ENUM_LITERAL = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * The one-time Mirza import's provenance (owner decision 2026-10-17,
+ * `docs/migration/mirza-import-plan-fa.md` §2), on every NORMAL table it writes rows into.
+ *
+ * `source` is `NEXA` by default, so every existing writer is untouched and the migration is
+ * expand-only; `MIRZA` marks a row the import wrote, and `source_ref` is that row's id in
+ * Mirza. The pair is pinned by a CHECK (NEXA exactly when there is no ref) and the ref is
+ * unique per tenant, which is what makes a rerun of the import find its row instead of
+ * writing a second one.
+ */
+function recordSourceColumns() {
+  return {
+    source: text('source').notNull().default('NEXA'),
+    sourceRef: text('source_ref'),
+  };
+}
+
+function recordSourceChecks(
+  name: string,
+  table: { readonly tenantId: AnyPgColumn; readonly sourceRef: AnyPgColumn },
+) {
+  return [
+    check(`${name}_source_check`, enumCheck('source', RECORD_SOURCES)),
+    check(
+      `${name}_source_ref_check`,
+      sql`(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)`,
+    ),
+    uniqueIndex(`${name}_tenant_source_ref_key`)
+      .on(table.tenantId, table.sourceRef)
+      .where(sql`source_ref IS NOT NULL`),
+  ];
+}
 
 export function enumCheck(column: string, values: readonly string[]): SQL {
   // This is the only sql.raw in the codebase. Every argument today is a
@@ -3478,8 +3515,10 @@ export const customers = pgTable(
     phoneVerifiedAt: timestamptz('phone_verified_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('customers', table),
     /** The identity. Per tenant, so the same human may be a customer of two. */
     uniqueIndex('customers_tenant_telegram_key').on(table.tenantId, table.telegramUserId),
     /** The list's deterministic keyset: created_at then id, never a mutable column. */
@@ -3707,8 +3746,10 @@ export const products = pgTable(
     serviceLocationLabel: text('service_location_label'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('products', table),
     index('products_tenant_status_idx').on(table.tenantId, table.status),
     /** The catalogue's order, and the list's keyset: sort, then created, then id. */
     index('products_tenant_sort_idx').on(
@@ -4047,8 +4088,10 @@ export const orders = pgTable(
     refundedAt: timestamptz('refunded_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('orders', table),
     /** A child row may not name a customer of another tenant. */
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -4087,6 +4130,16 @@ export const orders = pgTable(
       sql`origin <> 'LEGACY_ADOPTION' OR (purpose = 'NEW_SERVICE' AND state = 'PAID'
           AND subtotal_amount = 0 AND discount_amount = 0 AND total_amount = 0
           AND discount_code IS NULL)`,
+    ),
+    /**
+     * A Mirza invoice carried as history (owner decision 2026-10-17) is a Mirza row, with no
+     * NEXA code, and ended (PAID, CANCELLED, EXPIRED or REFUNDED), so no lane ever settles,
+     * expires or refunds it.
+     */
+    check(
+      'orders_legacy_history_shape_check',
+      sql`origin <> 'LEGACY_HISTORY' OR (source = 'MIRZA' AND discount_code IS NULL
+          AND state IN ('PAID', 'CANCELLED', 'EXPIRED', 'REFUNDED'))`,
     ),
     /**
      * What the line snapshot MEANS, per purpose, as a constraint rather than a comment.
@@ -4356,8 +4409,10 @@ export const payments = pgTable(
     providerReviewUntil: timestamptz('provider_review_until'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('payments', table),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -4442,6 +4497,12 @@ export const payments = pgTable(
     check(
       'payments_evidence_kind_check',
       nullableEnumCheck('evidence_kind', PAYMENT_EVIDENCE_KINDS),
+    ),
+    // A LEGACY_IMPORT confirmation is history carried from Mirza, and only the import writes
+    // one: the kind can never be claimed by a NEXA payment.
+    check(
+      'payments_legacy_import_source_check',
+      sql`evidence_kind IS DISTINCT FROM 'LEGACY_IMPORT' OR source = 'MIRZA'`,
     ),
     check('payments_amount_check', sql`amount > 0`),
     /**
@@ -6439,6 +6500,76 @@ export const walletEntries = pgTable(
 );
 
 /**
+ * Mirza wallet history carried by the one-time import (`docs/migration/mirza-import-plan-fa.md`
+ * §5-3): the movement log (`wallet_transaction`) and the wheel results.
+ *
+ * A SISTER of `wallet_entries`, never a part of it. The customer's balance is `user.Balance`,
+ * written once as the opening entry; these rows are what Mirza LOGGED on the way there, so
+ * summing them into the balance would count the same money twice, and writing them to the
+ * ledger would need a compensating row — touching money twice. Nothing derives a balance from
+ * this table, and `WalletRepository.balanceOf` does not read it. Append-only (migration
+ * triggers), keyed by `(tenant_id, source_ref)` so a rerun finds its row.
+ *
+ * `amount_minor` is the magnitude and `signed_amount_minor` the figure exactly as Mirza stored
+ * it; `direction` is null when Mirza's own arithmetic does not say which way the money moved.
+ */
+export const walletHistoryImports = pgTable(
+  'wallet_history_imports',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    source: text('source').notNull().default('MIRZA'),
+    /** `wallet-tx:<id>` or `wheel:<id>`: the Mirza id. Unique per tenant. */
+    sourceRef: text('source_ref').notNull(),
+    origin: text('origin').notNull(),
+    occurredAt: timestamptz('occurred_at').notNull(),
+    direction: text('direction'),
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+    signedAmountMinor: bigint('signed_amount_minor', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    rawKind: text('raw_kind'),
+    note: text('note'),
+    createdAt: timestamptz('created_at').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'wallet_history_imports_customer_fk',
+    }),
+    uniqueIndex('wallet_history_imports_tenant_source_ref_key').on(table.tenantId, table.sourceRef),
+    /** The customer's history page: newest first over the immutable `(occurred_at, id)`. */
+    index('wallet_history_imports_customer_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.occurredAt,
+      table.id,
+    ),
+    check('wallet_history_imports_source_check', sql`source = 'MIRZA'`),
+    check(
+      'wallet_history_imports_origin_check',
+      enumCheck('origin', WALLET_HISTORY_IMPORT_ORIGINS),
+    ),
+    check(
+      'wallet_history_imports_direction_check',
+      nullableEnumCheck('direction', LEDGER_DIRECTIONS),
+    ),
+    check('wallet_history_imports_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check(
+      'wallet_history_imports_amount_check',
+      sql`amount_minor >= 0 AND amount_minor = abs(signed_amount_minor)`,
+    ),
+    check(
+      'wallet_history_imports_text_check',
+      sql`length(source_ref) BETWEEN 1 AND 128 AND (raw_kind IS NULL OR length(raw_kind) <= ${sql.raw(String(WALLET_HISTORY_IMPORT_TEXT_MAX_LENGTH))}) AND (note IS NULL OR length(note) <= ${sql.raw(String(WALLET_HISTORY_IMPORT_TEXT_MAX_LENGTH))})`,
+    ),
+  ],
+);
+
+/**
  * A card-to-card receipt's credit-to-wallet disposition (Payment File 02 §12,
  * `docs/payments-file02-design.md` D2).
  *
@@ -6773,10 +6904,21 @@ export const services = pgTable(
     deliverySendStartedAt: timestamptz('delivery_send_started_at'),
     provisionedAt: timestamptz('provisioned_at'),
     terminatedAt: timestamptz('terminated_at'),
+    /**
+     * A Mirza TEST invoice carried as an ended service (the one-time import, owner decision
+     * 2026-10-17): the account was a legacy trial. Only an imported row can be one
+     * (`services_is_test_source_check`); every NEXA service is `false`, and a trial of this
+     * installation is `is_trial`, a different fact. DEFAULT false keeps the migration
+     * expand-only for the release running beside this one.
+     */
+    isTest: boolean('is_test').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('services', table),
+    check('services_is_test_source_check', sql`NOT is_test OR source = 'MIRZA'`),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -6806,8 +6948,17 @@ export const services = pgTable(
      * they would collide on is derived from a service id, so a collision here means two
      * services claim one provider account — which is the duplicate that makes usage
      * figures meaningless.
+     *
+     * Partial: a TERMINATED service's account is gone (or, for a Mirza account that was never
+     * on the panel, never existed here), so its name is free again. The application already
+     * said so (`usernameInUseOnPanel` excludes TERMINATED); the index now agrees, which is
+     * also what lets the Mirza import record an ended service beside a live one that has
+     * since taken the name. No live state is ever left by TERMINATED, so a name cannot be
+     * un-freed.
      */
-    uniqueIndex('services_panel_provider_username_key').on(table.panelId, table.providerUsername),
+    uniqueIndex('services_panel_provider_username_key')
+      .on(table.panelId, table.providerUsername)
+      .where(sql`state <> 'TERMINATED'`),
     /**
      * And the subscription reference, for the same reason one step further along.
      *
@@ -7934,8 +8085,18 @@ export const discounts = pgTable(
     redemptionCount: integer('redemption_count').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
+    /**
+     * What the one-time Mirza import knew about this code and NEXA has no column for: the
+     * original code text when it had to be normalised, the Mirza kind (a wallet "gift" code has
+     * no NEXA equivalent), the counters and the scope fields as Mirza stored them. Reversible
+     * evidence, read by nothing that prices or redeems. NULL unless `source = 'MIRZA'`.
+     */
+    sourceDetail: jsonb('source_detail'),
   },
   (table) => [
+    ...recordSourceChecks('discounts', table),
+    check('discounts_source_detail_check', sql`source_detail IS NULL OR source = 'MIRZA'`),
     uniqueIndex('discounts_tenant_code_key').on(table.tenantId, table.code),
     index('discounts_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     /** The candidates the engine reads for every quote: live automatic rules. */
@@ -8568,8 +8729,10 @@ export const referrals = pgTable(
     rewardEntryId: uuid('reward_entry_id'),
     rewardedAt: timestamptz('rewarded_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('referrals', table),
     foreignKey({
       columns: [table.tenantId, table.referrerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -9240,8 +9403,36 @@ export const resellers = pgTable(
     monthlyMinimumCurrency: text('monthly_minimum_currency'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
+    /**
+     * The purchase cap Mirza gave this agent (`maxbuyagent`), as the one-time import found it.
+     *
+     * A LIMIT, never money, and deliberately NOT named like a credit line: it is shown to the
+     * owner and applied nowhere. Nothing reads it to decide a purchase, a balance or a price —
+     * reseller credit was removed (owner decision, 2026-10-01) and `creditAllowanceOf` stays
+     * zero. NULL for every row that is not an import and for an agent Mirza gave no cap.
+     */
+    importedPurchaseCapMinor: bigint('imported_purchase_cap_minor', { mode: 'bigint' }),
+    importedPurchaseCapCurrency: text('imported_purchase_cap_currency'),
+    /**
+     * What the import knew and NEXA has no column for: the tier price levels and the
+     * per-user discount as Mirza stored them, and whether each was applied. NULL unless
+     * `source = 'MIRZA'`.
+     */
+    sourceDetail: jsonb('source_detail'),
   },
   (table) => [
+    ...recordSourceChecks('resellers', table),
+    check('resellers_source_detail_check', sql`source_detail IS NULL OR source = 'MIRZA'`),
+    check(
+      'resellers_imported_cap_check',
+      sql`(imported_purchase_cap_minor IS NULL) = (imported_purchase_cap_currency IS NULL)
+        AND (imported_purchase_cap_minor IS NULL OR (source = 'MIRZA' AND imported_purchase_cap_minor >= 0))`,
+    ),
+    check(
+      'resellers_imported_cap_currency_check',
+      sql`imported_purchase_cap_currency IS NULL OR ${enumCheck('imported_purchase_cap_currency', CURRENCY_CODES)}`,
+    ),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -11009,8 +11200,10 @@ export const tickets = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     lastMessageAt: timestamptz('last_message_at').notNull().defaultNow(),
     closedAt: timestamptz('closed_at'),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('tickets', table),
     unique('tickets_tenant_id_key').on(table.tenantId, table.id),
     unique('tickets_opening_key').on(table.tenantId, table.openingKey),
     /** The inbox: newest first, under a keyset on the immutable `(created_at, id)`. */
@@ -11110,8 +11303,10 @@ export const ticketMessages = pgTable(
     /** What the key was first used for, so the same key with different words is refused. */
     requestHash: text('request_hash'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    ...recordSourceColumns(),
   },
   (table) => [
+    ...recordSourceChecks('ticket_messages', table),
     unique('ticket_messages_tenant_id_key').on(table.tenantId, table.id),
     unique('ticket_messages_key').on(table.tenantId, table.idempotencyKey),
     index('ticket_messages_ticket_idx').on(table.tenantId, table.ticketId, table.seq),

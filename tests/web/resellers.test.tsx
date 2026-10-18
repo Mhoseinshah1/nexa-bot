@@ -29,6 +29,7 @@ import {
 } from './harness';
 import { openFilterPanel } from './ui-helpers';
 import { openC360Tab } from './c360-helpers';
+import { pickMirzaSource, requestsWithSource, rowHasBadge } from './source-helpers';
 
 /**
  * WP9-B on the Web Admin: the Resellers page, the Tiers page and its grants editor, the
@@ -79,6 +80,8 @@ function reseller(overrides: Record<string, unknown> = {}): Record<string, unkno
     discountPercentage: null,
     creditLimit: null,
     effectiveCreditLimit: { amount: '500000', currency: 'IRT' },
+    source: 'NEXA',
+    importedPurchaseCap: null,
     createdAt: '2026-09-02T08:00:00.000Z',
     updatedAt: '2026-09-02T08:00:00.000Z',
     ...overrides,
@@ -258,6 +261,8 @@ describe('the reseller list', () => {
           discountPercentage: 15,
           creditLimit: { amount: '1000000', currency: 'IRT' },
           effectiveCreditLimit: { amount: '1000000', currency: 'IRT' },
+          source: 'NEXA',
+          importedPurchaseCap: null,
         }),
       ]),
     );
@@ -283,6 +288,25 @@ describe('the reseller list', () => {
     expect(second.textContent).toContain('15');
     expect(second.textContent).not.toContain('1,000,000');
     expect(second.textContent).not.toContain('اختصاصی این نماینده');
+  });
+
+  it('shows the purchase cap Mirza gave an imported reseller, labelled as not applied', async () => {
+    stubApi(
+      listRoutes([
+        reseller({
+          source: 'MIRZA',
+          importedPurchaseCap: { amount: '5000000', currency: 'IRT' },
+        }),
+      ]),
+    );
+    renderList();
+    const table = await screen.findByRole('table', { name: 'فهرست نمایندگان' });
+    // The column says, in its header, that the number is applied nowhere ...
+    expect(within(table).getByText('سقف خرید در میرزا (اعمال نمی‌شود)')).toBeTruthy();
+    // ... and the cap itself is on the reseller's row, not mistaken for a credit limit.
+    const row = within(table).getByText('Reza Reseller').closest('tr') as HTMLElement;
+    expect(row.textContent).toContain('5,000,000');
+    expect(row.textContent).not.toContain('اعتبار');
   });
 
   it('filters on the server: the applied search, the status and the tier', async () => {
@@ -1126,6 +1150,8 @@ describe("the customer's reseller card", () => {
             discountPercentage: 20,
             creditLimit: { amount: '900000', currency: 'IRT' },
             effectiveCreditLimit: { amount: '900000', currency: 'IRT' },
+            source: 'NEXA',
+            importedPurchaseCap: null,
           }),
         },
       },
@@ -1501,5 +1527,33 @@ describe('a reseller write whose answer was lost keeps its key across close and 
     await send(2);
     const [first, second] = keysOf(api, '/grants');
     expect(second).toBe(first);
+  });
+});
+
+describe('rows imported from Mirza', () => {
+  const native = reseller({
+    customerId: '019210ab-cdef-7012-8345-6789abcdef0a',
+    displayName: 'Native Reseller',
+  });
+  const imported = reseller({
+    customerId: '019210ab-cdef-7012-8345-6789abcdef0b',
+    displayName: 'Imported Reseller',
+    source: 'MIRZA',
+  });
+
+  it('marks only the imported reseller', async () => {
+    stubApi(listRoutes([native, imported]));
+    renderList();
+    await screen.findByText('Imported Reseller');
+    expect(rowHasBadge('Imported Reseller')).toBe(true);
+    expect(rowHasBadge('Native Reseller')).toBe(false);
+  });
+
+  it('sends the «منبع» filter to the API', async () => {
+    const api = stubApi(listRoutes([native, imported]));
+    renderList();
+    await screen.findByText('Native Reseller');
+    pickMirzaSource();
+    await waitFor(() => expect(requestsWithSource(api.calls, '/resellers', 'MIRZA')).toBe(1));
   });
 });

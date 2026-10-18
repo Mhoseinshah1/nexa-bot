@@ -166,10 +166,13 @@ What the measurement ruled OUT, so it was not changed:
    so a window is an index-only range scan (root cause 1). An ONLINE index
    (`online-indexes.ts`, built `CONCURRENTLY` after migrating), so it needs no numbered
    migration and takes no write lock on a live `orders` table.
-2. **`payments_tenant_resolved_idx`** — `(tenant_id, resolved_at)` INCLUDE `state`,
-   partial on `resolved_at IS NOT NULL` (exactly the FAILED/CANCELLED/EXPIRED rows per
-   `payments_resolved_check`): `paymentFailures`, the largest dashboard statement left
-   after (1). Also online.
+2. **`payments_tenant_resolved_source_idx`**: `(tenant_id, resolved_at)` INCLUDE
+   `state, source`, partial on `resolved_at IS NOT NULL`. That is exactly the
+   FAILED/CANCELLED/EXPIRED rows, per `payments_resolved_check`. It serves
+   `paymentFailures`, the largest dashboard statement left after (1). Also online. It
+   replaced `payments_tenant_resolved_idx`, which included only `state`, once the
+   statement began to leave out the one-time Mirza import's payments
+   (`source <> 'MIRZA'`).
 3. **An explicit empty icon** (`<link rel="icon" href="data:,">`) — removes the
    uncacheable `/favicon.ico` round trip from every navigation (root cause 3).
 4. **Sidebar prefetch on pointing or focus** for Customers, Audit Log and Settings
@@ -257,19 +260,19 @@ JavaScript chunk.
 at a time, runs the test that names it, and restores the file. Every mutation must be
 KILLED:
 
-| Id    | Rule reverted                                    | Test that fails                       |
-| ----- | ------------------------------------------------ | ------------------------------------- |
-| NP-01 | the 5-second `staleTime` on the customer list    | page after its prefetch asks again    |
-| NP-02 | the sidebar's pointer handler                    | no prefetch happens                   |
-| NP-03 | the permission check before a prefetch           | a refused page is asked for           |
-| NP-04 | the shell keyed by route (a remount)             | sidebar and top bar replaced          |
-| NP-05 | the audit log key without its filters            | bare page answers a filtered one      |
-| NP-06 | the customer key without the search              | bare list answers a searched one      |
-| NP-07 | the empty icon                                   | `web-index-icon.test.ts`              |
-| NP-08 | the `orders_tenant_paid_settled_idx` declaration | four `reporting-plan` plans           |
-| NP-09 | the `payments_tenant_resolved_idx` declaration   | the `paymentFailures` plan            |
-| NP-10 | the sidebar's keyboard-focus handler             | focusing a link prefetches nothing    |
-| NP-11 | the audit-log invalidation after every mutation  | a write inside the window is not seen |
+| Id    | Rule reverted                                         | Test that fails                       |
+| ----- | ----------------------------------------------------- | ------------------------------------- |
+| NP-01 | the 5-second `staleTime` on the customer list         | page after its prefetch asks again    |
+| NP-02 | the sidebar's pointer handler                         | no prefetch happens                   |
+| NP-03 | the permission check before a prefetch                | a refused page is asked for           |
+| NP-04 | the shell keyed by route (a remount)                  | sidebar and top bar replaced          |
+| NP-05 | the audit log key without its filters                 | bare page answers a filtered one      |
+| NP-06 | the customer key without the search                   | bare list answers a searched one      |
+| NP-07 | the empty icon                                        | `web-index-icon.test.ts`              |
+| NP-08 | the `orders_tenant_paid_settled_idx` declaration      | four `reporting-plan` plans           |
+| NP-09 | the `payments_tenant_resolved_source_idx` declaration | the `paymentFailures` plan            |
+| NP-10 | the sidebar's keyboard-focus handler                  | focusing a link prefetches nothing    |
+| NP-11 | the audit-log invalidation after every mutation       | a write inside the window is not seen |
 
 NP-08 and NP-09 also drop the index from the test database (online indexes are built
 outside the migrator) and rebuild it afterwards with the compiled migrator, so they need

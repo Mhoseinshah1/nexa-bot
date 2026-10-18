@@ -1751,6 +1751,34 @@
       "when": 1792097144222,
       "tag": "0249_legacy_adopt_approved_lane",
       "breakpoints": true
+    },
+    {
+      "idx": 250,
+      "version": "7",
+      "when": 1792270025687,
+      "tag": "0250_record_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 251,
+      "version": "7",
+      "when": 1792270492730,
+      "tag": "0251_catalog_import_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 252,
+      "version": "7",
+      "when": 1792273591888,
+      "tag": "0252_wallet_history_imports",
+      "breakpoints": true
+    },
+    {
+      "idx": 253,
+      "version": "7",
+      "when": 1792280430780,
+      "tag": "0253_ended_services",
+      "breakpoints": true
     }
   ]
 }

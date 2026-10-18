@@ -120,6 +120,14 @@ export const LEGACY_LIVE_STATUSES = [
   'end_of_volume',
 ] as const;
 
+/**
+ * The invoice statuses that were never a service: an unpaid order and a failed one (Mirza's
+ * own cron deletes them). Compared exactly. They are not matched against a panel and not
+ * carried as an ended service; the import's exact-match report counts them as an explained
+ * gap, so nothing is dropped silently.
+ */
+export const LEGACY_NEVER_PAID_STATUSES = ['unpaid', 'Unsuccessful'] as const;
+
 /** The table a SYNTHETIC dataset loads to say so (`tests/fixtures/legacy/synthetic-legacy.ts`). */
 export const LEGACY_SYNTHETIC_MARKER_TABLE = 'nexa_synthetic_fixture';
 

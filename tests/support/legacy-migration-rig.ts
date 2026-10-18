@@ -93,7 +93,7 @@ export const userId = (i: number): string => String(300_000_000 + i);
 export const invoiceId = (j: number): string => (0xd0000000 + j).toString(16);
 
 /**
- * `users` users and `invoices` invoices. Balances: every 10th user from 3 a debt, from 7 a
+ * `users` users and `invoices` invoices. Balances: every 10th user from 3 negative (a DEBIT opening), from 7 a
  * zero, the rest positive. Invoices: `liveEvery` of every 5 live ('active'), the rest
  * 'removed'; owner `(13·j) mod users`; panel alternating rp1 / rp2; username `svc_<j>`.
  */
@@ -370,7 +370,7 @@ export async function writeMigrationPackage(
 /**
  * The money a package implies, recomputed from its OWN snapshot cells (`source/tables/
  * user.jsonl`), independently of the importer: a positive `Balance` is an opening credit, a
- * negative one a debt of its magnitude, a zero nothing. Only meaningful for the rig's edge-free
+ * negative one a DEBIT opening of its magnitude (the wallet equals the Mirza balance), a zero nothing. Only meaningful for the rig's edge-free
  * datasets (every id a Telegram id, every balance an integer within bounds).
  */
 export function moneyOfSnapshot(parts: SnapshotParts): {
@@ -627,7 +627,7 @@ export class MigrationRig {
   /**
    * The tenant's migrated state, keyed by LEGACY identity (never a generated id), so two runs
    * of one package into two fresh tenants compare equal exactly when they wrote the same
-   * things: customers by Telegram id, openings by reference and amount, debts by legacy user,
+   * things: customers by Telegram id, openings by reference, direction and amount (DEBITs included), debt rows by legacy user (always none now),
    * services by panel account and owner, history by idempotency key, plus every count.
    */
   async migratedState(): Promise<Record<string, string | number | null>> {
@@ -754,6 +754,8 @@ export function rigExecutor(
     runner,
     freshTarget: adapters,
     history,
+    materialize: container.legacyMaterializePort,
+    botLink: container.legacyBotLinkPort,
     backup: {
       runBeforeImport: async () => ({ outcome: 'TAKEN', runId: RIG_PRE_IMPORT_BACKUP_RUN }),
       runAfterImport: async () => ({ outcome: 'TAKEN', runId: null }),

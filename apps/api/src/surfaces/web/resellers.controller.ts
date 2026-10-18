@@ -136,6 +136,7 @@ export class ResellersController {
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.status === undefined ? {} : { status: query.status }),
       ...(query.tierId === undefined ? {} : { tierId: query.tierId }),
+      ...(query.source === undefined ? {} : { source: query.source }),
       ...(query.search === undefined ? {} : { search: query.search }),
     });
     const result = await this.container.resellersAdmin.list(scope, actor, {
@@ -147,6 +148,7 @@ export class ResellersController {
           }),
       ...(page.status === undefined ? {} : { status: page.status }),
       ...(page.tierId === undefined ? {} : { tierId: page.tierId }),
+      ...(page.source === undefined ? {} : { source: page.source }),
       ...(page.search === undefined ? {} : { search: page.search }),
     });
     return {
@@ -413,6 +415,7 @@ function toResellerSummary(reseller: ResellerListing): ResellerSummaryResponse {
   }).limit;
   return {
     customerId: reseller.customerId,
+    source: reseller.source,
     telegramUserId: reseller.telegramUserId,
     displayName: reseller.displayName,
     tier: { id: reseller.tier.id, name: reseller.tier.name },
@@ -430,6 +433,7 @@ function toResellerSummary(reseller: ResellerListing): ResellerSummaryResponse {
       amount: effective.amountMinor.toString(),
       currency: effective.currency,
     },
+    importedPurchaseCap: wireMoney(reseller.importedPurchaseCap),
     createdAt: reseller.createdAt.toISOString(),
     updatedAt: reseller.updatedAt.toISOString(),
   };

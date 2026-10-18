@@ -11,7 +11,6 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
-import { DrizzleLegacyImportRepository } from '../../apps/api/src/modules/platform/legacy-import/infrastructure/drizzle-legacy-import.repository';
 import type { MigrationOpeningBalanceCommand } from '../../apps/api/src/modules/commerce/wallet/application/migration-opening-balance.service';
 import {
   adminActorFor,
@@ -31,12 +30,10 @@ import {
  * customer already holds, once however many times the import is run, and never read by any
  * report as a sale, a top-up, cash or a grant.
  *
- * Mirza PR4 (owner decision 6): a NEGATIVE legacy balance is no ledger entry at all — it is
- * a legacy debt held for review (`legacy_wallet_debts`), and the NEXA balance is untouched.
- * `tests/integration/legacy-wallet-debts.test.ts` covers the debt itself.
+ * Owner decision 2026-10-17 (superseding decision 6's held-for-review debt): a NEGATIVE
+ * legacy balance is ONE `MIGRATION_OPENING_BALANCE` DEBIT, so the NEXA balance is exactly
+ * the Mirza balance, negative included, and purchase is refused until it is topped up.
  */
-const FP = 'f'.repeat(64);
-const ROW = 'c'.repeat(64);
 
 const IMPORTER: ActorContext = systemJobActor(
   'legacy-import:test',
@@ -56,31 +53,8 @@ describe('Migration P2: the legacy opening balance', () => {
     await ctx?.close();
   });
 
-  const runs = new Map<string, string>();
-  async function runFor(scope: typeof tenantA): Promise<string> {
-    const known = runs.get(scope.tenantId);
-    if (known !== undefined) return known;
-    const repo = new DrizzleLegacyImportRepository(ctx.container.database.db);
-    const started = await ctx.container.uow.run(scope, (tx) =>
-      repo.startOrResume(
-        scope,
-        {
-          id: ctx.container.ids.uuid(),
-          mode: 'APPLY',
-          sourceFingerprint: FP,
-          codeVersion: null,
-          now: new Date(),
-        },
-        tx,
-      ),
-    );
-    runs.set(scope.tenantId, started.run.id);
-    return started.run.id;
-  }
-
   beforeEach(async () => {
     await ctx.reset();
-    runs.clear();
     repository = new DrizzleWalletRepository(ctx.container.database.db);
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-opening', roleKeys: ['owner'] }),
@@ -119,22 +93,8 @@ describe('Migration P2: the legacy opening balance', () => {
       telegramUserId,
       legacyBalanceMinor,
       currency: 'IRT',
-      provenance: {
-        runId: await runFor(scope),
-        sourceFingerprint: FP,
-        rowChecksum: ROW,
-        synthetic: false,
-      },
       ...overrides,
     });
-
-  const debts = async (scope: typeof tenantA, customerId: UserId) =>
-    (
-      await ctx.container.database.db.execute(sql`
-        SELECT amount_minor::text AS amount, currency, state
-          FROM legacy_wallet_debts
-         WHERE tenant_id = ${scope.tenantId} AND customer_id = ${customerId}`)
-    ).rows as { amount: string; currency: string; state: string }[];
 
   const balance = async (scope: typeof tenantA, customerId: UserId): Promise<bigint> =>
     (await repository.balanceOf(scope, customerId, 'IRT')).amountMinor;
@@ -194,21 +154,26 @@ describe('Migration P2: the legacy opening balance', () => {
     expect(await events(c)).toBe(0);
   });
 
-  it('holds a NEGATIVE legacy balance for review: no ledger entry, one debt, balance 0', async () => {
+  it('opens a NEGATIVE legacy balance as one DEBIT: the wallet is the Mirza balance', async () => {
     const c = await customer(tenantA, '700300');
     const outcome = await post(tenantA, c, '700300', -45_000n);
-    expect(outcome.kind).toBe('DEBT_RECORDED');
-    expect(outcome.kind === 'DEBT_RECORDED' && outcome.amountMinor).toBe(45_000n);
-    expect(await openings(tenantA, c)).toEqual([]);
-    expect(await debts(tenantA, c)).toEqual([
-      { amount: '45000', currency: 'IRT', state: 'PENDING_REVIEW' },
-    ]);
-    expect(await balance(tenantA, c)).toBe(0n);
-    // No wallet event: nothing happened to the wallet.
-    expect(await events(c)).toBe(0);
+    expect(outcome.kind).toBe('POSTED');
+    if (outcome.kind !== 'POSTED') throw new Error('unreachable');
+    expect(outcome.signedAmountMinor).toBe(-45_000n);
+    expect(outcome.entry.direction).toBe('DEBIT');
+    expect(outcome.entry.amount).toEqual(money(45_000n, 'IRT'));
+    expect(outcome.entry.reference).toBe('legacy:opening:700300');
+    expect(await balance(tenantA, c)).toBe(-45_000n);
+    expect(await auditRows(c)).toBe(1);
+    expect(await events(c)).toBe(1);
+    // No side record: the legacy-debt table is never written any more.
+    expect(
+      await count(sql`SELECT count(*)::int AS n FROM legacy_wallet_debts
+        WHERE tenant_id = ${tenantA.tenantId}`),
+    ).toBe(0);
   });
 
-  it('never nets a legacy debt off a later top-up: the top-up is spendable in full', async () => {
+  it('nets a later top-up against the negative balance; a debit below zero is refused', async () => {
     const c = await customer(tenantA, '700400');
     await post(tenantA, c, '700400', -45_000n);
 
@@ -220,12 +185,11 @@ describe('Migration P2: the legacy opening balance', () => {
         currency: 'IRT',
         note: 'test',
       });
-    // The balance is 0, not -45 000: an ordinary debit is refused as for anyone at 0…
+    // Nothing takes it further below zero.
     await expect(debit(1n, 'debit-1')).rejects.toMatchObject({
       code: COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
     });
-
-    // …and a top-up is the customer's in full. Before owner decision 6 this left -5 000.
+    // A top-up is never refused, and settles the carried balance first.
     await ctx.container.wallet.adjust(tenantA, owner, c, {
       idempotencyKey: 'credit-1',
       direction: 'CREDIT',
@@ -233,13 +197,10 @@ describe('Migration P2: the legacy opening balance', () => {
       currency: 'IRT',
       note: 'test',
     });
-    expect(await balance(tenantA, c)).toBe(40_000n);
-    await debit(40_000n, 'debit-2');
-    expect(await balance(tenantA, c)).toBe(0n);
-    // The debt is exactly as recorded: nothing collected it, nothing reduced it.
-    expect(await debts(tenantA, c)).toEqual([
-      { amount: '45000', currency: 'IRT', state: 'PENDING_REVIEW' },
-    ]);
+    expect(await balance(tenantA, c)).toBe(-5_000n);
+    await expect(debit(1n, 'debit-2')).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -266,13 +227,10 @@ describe('Migration P2: the legacy opening balance', () => {
     expect(up.kind === 'POSTED' && up.signedAmountMinor).toBe(50_000n);
     expect(await balance(tenantA, rich)).toBe(120_000n);
 
-    // A negative legacy balance takes nothing from an existing customer's NEXA balance.
+    // A negative legacy balance is added too: 70 000 − 100 000.
     const down = await post(tenantA, poor, '700501', -100_000n);
-    expect(down.kind).toBe('DEBT_RECORDED');
-    expect(await balance(tenantA, poor)).toBe(70_000n);
-    expect(await debts(tenantA, poor)).toEqual([
-      { amount: '100000', currency: 'IRT', state: 'PENDING_REVIEW' },
-    ]);
+    expect(down.kind === 'POSTED' && down.signedAmountMinor).toBe(-100_000n);
+    expect(await balance(tenantA, poor)).toBe(-30_000n);
   });
 
   /*
@@ -355,16 +313,26 @@ describe('Migration P2: the legacy opening balance', () => {
     expect(await events(c)).toBe(1);
   });
 
-  it('records ONE debt when several importers race a negative balance', async () => {
+  it('writes ONE DEBIT when several importers race a negative balance', async () => {
     const c = await customer(tenantA, '700801');
     const outcomes = await Promise.all(
       Array.from({ length: 6 }, () => post(tenantA, c, '700801', -12_345n)),
     );
-    expect(outcomes.filter((o) => o.kind === 'DEBT_RECORDED')).toHaveLength(1);
-    expect(outcomes.filter((o) => o.kind === 'DEBT_ALREADY_RECORDED')).toHaveLength(5);
-    expect(await debts(tenantA, c)).toHaveLength(1);
-    expect(await openings(tenantA, c)).toEqual([]);
-    expect(await balance(tenantA, c)).toBe(0n);
+    expect(outcomes.filter((o) => o.kind === 'POSTED')).toHaveLength(1);
+    expect(outcomes.filter((o) => o.kind === 'ALREADY_POSTED')).toHaveLength(5);
+    expect(await openings(tenantA, c)).toHaveLength(1);
+    expect(await balance(tenantA, c)).toBe(-12_345n);
+  });
+
+  it('refuses a negative rerun with a different figure or sign', async () => {
+    const c = await customer(tenantA, '700802');
+    await post(tenantA, c, '700802', -12_345n);
+    for (const changed of [-12_346n, 12_345n, 0n]) {
+      await expect(post(tenantA, c, '700802', changed)).rejects.toMatchObject({
+        code: PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
+      });
+    }
+    expect(await balance(tenantA, c)).toBe(-12_345n);
   });
 
   // ---------------------------------------------------------------------------
@@ -375,11 +343,9 @@ describe('Migration P2: the legacy opening balance', () => {
     const a = await customer(tenantA, '700900');
     const b = await customer(tenantB, '700900');
     expect((await post(tenantA, a, '700900', 10_000n)).kind).toBe('POSTED');
-    expect((await post(tenantB, b, '700900', -20_000n)).kind).toBe('DEBT_RECORDED');
+    expect((await post(tenantB, b, '700900', -20_000n)).kind).toBe('POSTED');
     expect(await balance(tenantA, a)).toBe(10_000n);
-    expect(await balance(tenantB, b)).toBe(0n);
-    expect(await debts(tenantA, a)).toEqual([]);
-    expect(await debts(tenantB, b)).toHaveLength(1);
+    expect(await balance(tenantB, b)).toBe(-20_000n);
 
     // A customer of A, named under B's scope, does not exist there.
     await expect(post(tenantB, a, '700900', 10_000n)).rejects.toMatchObject({
@@ -481,9 +447,9 @@ describe('Migration P2: the legacy opening balance', () => {
     const c1 = await customer(tenantA, '701500');
     const c2 = await customer(tenantA, '701501');
     await post(tenantA, c1, '701500', 2_000_000n);
-    // Owner decision 6: the negative one is a debt, so it moves no report and no wallet.
+    // The negative one is a DEBIT opening: an opening balance too, never a sale or a charge.
     await post(tenantA, c2, '701501', -300_000n);
-    const net = 2_000_000n;
+    const net = 1_700_000n;
     const request = { range: 'TODAY' as const };
 
     const financial = await ctx.container.reports.financial(tenantA, owner, request, 'DAY');
@@ -511,7 +477,7 @@ describe('Migration P2: the legacy opening balance', () => {
 
     const walletReport = await ctx.container.reports.wallet(tenantA, owner, request);
     expect(walletReport.groups).toEqual([
-      { group: 'OPENING_BALANCE', currency: 'IRT', entries: 1, amount: net.toString() },
+      { group: 'OPENING_BALANCE', currency: 'IRT', entries: 2, amount: net.toString() },
     ]);
 
     const dashboard = await ctx.container.reports.dashboard(tenantA, owner, request);
