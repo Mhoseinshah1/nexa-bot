@@ -891,6 +891,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.file_caption': '{caption}',
   // R3: the files' caption, the link-change result and the refresh failure notice.
   'bot.service.connection_file_caption': '{icon:user} نام کاربری: {serviceUsername}',
+  // Track 3 §2: the default CUSTOM caption — once, on the last file by default; no username line.
+  'bot.service.connection_files_caption':
+    '📂 فایل‌های اتصال سرویس {service_name}\nفایل مخصوص دستگاه خود را در برنامه باز کنید.\n⏳ اعتبار تا {expires_at_jalali} ({days_left} روز)\n💬 پشتیبانی: {support}',
   'bot.service.link_rotated':
     '{icon:success} لینک اشتراک سرویس {serviceUsername} با موفقیت تغییر کرد.\nلینک قبلی دیگر قابل استفاده نیست. لطفاً لینک و فایل‌های جدید را در برنامه خود جایگزین کنید.\n\n{icon:link} لینک جدید:\n<code>{subscriptionUrl}</code>',
   'bot.service.back_to_card_button': '🔙 بازگشت به مشخصات سرویس',
