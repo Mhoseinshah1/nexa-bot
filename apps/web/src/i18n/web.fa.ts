@@ -2400,6 +2400,17 @@ export const WEB_FA = {
   // actually operate, so there is no Add button and its absence is not a defect.
   'web.payment_gateways_hint':
     'فهرست روش‌ها ثابت است و تنها روش‌هایی را نشان می‌دهد که این نسخه می‌تواند انجام دهد. روش جدید با نسخهٔ جدید اضافه می‌شود، نه از این صفحه.',
+  // The wallet top-up warning: the server's own route decision (the one the bot uses to
+  // hide «💰 افزایش موجودی»), drawn per route. Never re-decided here.
+  'web.payment_gateways_topup_unavailable_title': 'هیچ روشی برای افزایش موجودی کیف پول فعال نیست',
+  'web.payment_gateways_topup_unavailable_body':
+    'برای همین دکمهٔ «💰 افزایش موجودی» در ربات به مشتری نشان داده نمی‌شود. دلیل هر روش:',
+  'web.payment_gateways_topup_block_inactive': 'خاموش است',
+  'web.payment_gateways_topup_block_inactive_keyed': 'کلید API دارد اما خاموش است',
+  'web.payment_gateways_topup_block_inactive_no_key': 'خاموش است و کلید API ندارد',
+  'web.payment_gateways_topup_block_purpose_off': 'افزایش موجودی برای این روش خاموش است',
+  'web.payment_gateways_topup_block_no_receiving_account': 'هیچ کارت مقصد فعالی ندارد',
+  'web.payment_gateways_topup_block_unpriceable': 'نسبت واحد نرخ مرکزی تنظیم نشده است',
   'web.payment_gateway_provider': 'روش',
   'web.payment_gateway_provider_manual_transfer': 'کارت به کارت',
   'web.payment_gateway_provider_tonpays': 'درگاه پرداخت تون پی وبسایت',

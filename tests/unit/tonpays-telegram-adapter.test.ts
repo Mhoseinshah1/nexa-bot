@@ -322,7 +322,26 @@ describe('the TonPays Telegram adapter: inquiry, card change and receipt', () =>
     });
   });
 
-  it('never uploads past the documented 5 MB, and never an empty file', async () => {
+  it('the documented bound is 10 MB, read as 10,000,000 bytes (OQ-TPTG-07)', () => {
+    expect(TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES).toBe(10_000_000);
+  });
+
+  it('uploads a photo of exactly the bound — one the old 5 MB bound refused', async () => {
+    const { fetch, calls } = fakeFetch(() =>
+      json(200, { status: 'processing', paid: false, receipt_received: true }),
+    );
+    const atBound = new Uint8Array(TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES);
+    atBound.set([0xff, 0xd8, 0xff]);
+    const outcome = await adapterWith(fetch).uploadReceipt(API_KEY, 'TPT-1001', {
+      bytes: atBound,
+      mimeType: 'image/jpeg',
+      fileName: 'r.jpg',
+    });
+    expect(outcome.kind).toBe('ACCEPTED');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('never uploads past the documented 10 MB, and never an empty file', async () => {
     const { fetch, calls } = fakeFetch(() => json(200, {}));
     const big = new Uint8Array(TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES + 1);
     big.set([0xff, 0xd8, 0xff]);

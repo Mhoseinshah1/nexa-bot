@@ -26,6 +26,7 @@ import {
   PAYMENT_GATEWAY_SORT_MIN,
   PAYMENT_GATEWAY_API_KEY_MAX_LENGTH,
   PAYMENT_GATEWAY_THRESHOLD_MAX,
+  PAYMENT_ROUTE_UNOFFERABLE_REASONS,
   paymentGatewayProviderSchema,
   paymentGatewayStatusSchema,
   topupCashbackPercentSchema,
@@ -5365,6 +5366,27 @@ export type PaymentGatewayView = z.infer<typeof paymentGatewaySchema>;
  */
 export const paymentGatewayListResponseSchema = z.object({
   gateways: z.array(paymentGatewaySchema),
+  /**
+   * Whether ANY route can fund a wallet top-up, and why each route cannot.
+   *
+   * The bot hides «💰 افزایش موجودی» when no route is offered for `WALLET_TOPUP`; this is
+   * the same decision before the customer's own thresholds, so the operator can see why the
+   * button is gone. `available` is true when at least one route has no blocker; `routes`
+   * lists every route's blockers, empty for a route that can take top-ups. Null from the
+   * previous release, which did not send it, so nothing is drawn rather than a guess.
+   */
+  walletTopup: z
+    .object({
+      available: z.boolean(),
+      routes: z.array(
+        z.object({
+          provider: paymentGatewayProviderSchema,
+          blockers: z.array(z.enum(PAYMENT_ROUTE_UNOFFERABLE_REASONS)),
+        }),
+      ),
+    })
+    .nullable()
+    .default(null),
 });
 export type PaymentGatewayListResponse = z.infer<typeof paymentGatewayListResponseSchema>;
 

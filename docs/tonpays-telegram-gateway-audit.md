@@ -71,17 +71,17 @@ The document keeps the WP11A separation:
 
 From the owner's transcription only.
 
-| Concern        | Documented                                                                                                                                                                                                                                                      |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Base URL, auth | `https://tonpays.online`; `X-API-Key: <Custom Telegram Gateway key from the store panel>`.                                                                                                                                                                      |
-| Create         | `POST /api/custom/v1/invoices/telegram/create`: `amount` int **required** (Toman), `order_id` string **required**, unique, max 20, `buyer_chat_id` int **required**, `callback_url` optional.                                                                   |
-| Create 201     | `invoice_id`, `order_id`, `request_amount`, `final_amount`, `status`, `callback_url`, `card_number`, `card_name`. Not a web-invoice-link flow: **no invoice URL**.                                                                                              |
-| Inquiry        | `GET /api/custom/v1/invoices/check/{invoice_id}`: invoice and order ids, request and final amounts, `status`, `paid`. Only `status === "completed" && paid === true` approves.                                                                                  |
-| Change card    | `POST /api/custom/v1/invoices/{invoice_id}/change-card`. Engine: 60 s cooldown, excludes cards already used, eventually exhausts. Response: new card info, `show_change_card`, `change_card_cooldown_seconds`, `change_card_exhausted`. Provider authoritative. |
-| Receipt        | `POST /api/custom/v1/invoices/{invoice_id}/receipt`, `multipart/form-data`, field `file`, required, image, max 5 MB. Success may be `status: "processing"`, `paid: false`, `receipt_received: true` — which is NOT approval.                                    |
-| Statuses       | `pending` در انتظار پرداخت; `processing` در انتظار تأیید; `completed` تأیید شده; `need_action` نیاز به اقدام; `rejected` رد شده; `expired` منقضی; `canceled` لغو.                                                                                               |
-| Webhook        | Headers `X-API-Key` (the same Custom Telegram key), `X-TonPays-Delivery-Id`, `X-TonPays-Signature`, `X-TonPays-Event`. Body: invoice and order ids, request/final/credit amounts, `status`, `paid`, `delivery_id`, `event`, `occurred_at`, `api_version`.       |
-| Errors         | `WRONG_API_KEY_KIND`, `GATEWAY_NOT_APPROVED`, `MISSING_API_KEY`, `INVALID_API_KEY`, `DUPLICATE_ORDER_ID`, `INVALID_RECEIPT_TYPE`, `RECEIPT_TOO_LARGE`, `RATE_LIMIT_EXCEEDED`, `INVOICE_NOT_FOUND`. `WRONG_API_KEY_KIND` means the two key kinds differ.         |
+| Concern        | Documented                                                                                                                                                                                                                                                             |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Base URL, auth | `https://tonpays.online`; `X-API-Key: <Custom Telegram Gateway key from the store panel>`.                                                                                                                                                                             |
+| Create         | `POST /api/custom/v1/invoices/telegram/create`: `amount` int **required** (Toman), `order_id` string **required**, unique, max 20, `buyer_chat_id` int **required**, `callback_url` optional.                                                                          |
+| Create 201     | `invoice_id`, `order_id`, `request_amount`, `final_amount`, `status`, `callback_url`, `card_number`, `card_name`. Not a web-invoice-link flow: **no invoice URL**.                                                                                                     |
+| Inquiry        | `GET /api/custom/v1/invoices/check/{invoice_id}`: invoice and order ids, request and final amounts, `status`, `paid`. Only `status === "completed" && paid === true` approves.                                                                                         |
+| Change card    | `POST /api/custom/v1/invoices/{invoice_id}/change-card`. Engine: 60 s cooldown, excludes cards already used, eventually exhausts. Response: new card info, `show_change_card`, `change_card_cooldown_seconds`, `change_card_exhausted`. Provider authoritative.        |
+| Receipt        | `POST /api/custom/v1/invoices/{invoice_id}/receipt`, `multipart/form-data`, field `file`, required, image, max 10 MB (5 MB when the route was built; see §18). Success may be `status: "processing"`, `paid: false`, `receipt_received: true` — which is NOT approval. |
+| Statuses       | `pending` در انتظار پرداخت; `processing` در انتظار تأیید; `completed` تأیید شده; `need_action` نیاز به اقدام; `rejected` رد شده; `expired` منقضی; `canceled` لغو.                                                                                                      |
+| Webhook        | Headers `X-API-Key` (the same Custom Telegram key), `X-TonPays-Delivery-Id`, `X-TonPays-Signature`, `X-TonPays-Event`. Body: invoice and order ids, request/final/credit amounts, `status`, `paid`, `delivery_id`, `event`, `occurred_at`, `api_version`.              |
+| Errors         | `WRONG_API_KEY_KIND`, `GATEWAY_NOT_APPROVED`, `MISSING_API_KEY`, `INVALID_API_KEY`, `DUPLICATE_ORDER_ID`, `INVALID_RECEIPT_TYPE`, `RECEIPT_TOO_LARGE`, `RATE_LIMIT_EXCEEDED`, `INVOICE_NOT_FOUND`. `WRONG_API_KEY_KIND` means the two key kinds differ.                |
 
 Differences from the website route that matter to the code (website: `contracts/src/tonpays.ts`):
 
@@ -128,7 +128,7 @@ Differences from the website route that matter to the code (website: `contracts/
 | Webhook route                  | `surfaces/gateway/webhook.controller.ts:54-82`, `POST /payments/webhook/:provider/:tenantId`; provider segment is a lower-cased member with `settlesVia === 'GATEWAY'` (`:86-90`); 16 KiB body limit `:18`, applied `bootstrap.ts:198-199`; Caddy `deploy/caddy/routes.caddy:71-74`; path generator `gateway-payment.service.ts:80-98` | Reused unchanged: the route serves `/payments/webhook/tonpays_telegram/<tenant>` with no edit. §9.3.                                                                                                                      |
 | Telegram gateway UX            | `g:`/`gc:`/`gp:` `bot-runtime.ts:785-801`; `pm:` selector; `gatewayPayment` `:14240-14287`; `gatewayCheck` `:14294-14307`; `gatewayAttemptScreen` `:15363-15480`; top-up chooser `tp:<capture>.<provider>` `:1078`, `:11519`, dispatched in `WalletTopupFlowService.choose` (`wallet-topup-flow.service.ts:291-294`)                   | Selection and check reused. The screen gains a card-transfer branch; two new callbacks (§8).                                                                                                                              |
 | Edit-in-place                  | `WizardInvoiceScreens` `surfaces/telegram/wizard-invoice-screens.ts:51-114` (one conditional `moveAll` per origin, 429 moved back, UNKNOWN left moved); steps `contracts/src/telegram-wizards.ts:49-63`                                                                                                                                | Reused unchanged for every card/receipt state change. No new wizard step is needed (§8.1).                                                                                                                                |
-| Media download                 | `infrastructure/telegram/fetch-file.ts:54-68` (`getFile` then `/file/bot<token>/<path>`, path validated, `redirect: 'error'`, bound enforced while streaming `:154-161`, `:197+`); bound is `PAYMENT_RECEIPT_MAX_BYTES` = 20 MiB (`contracts/src/payment-receipts.ts:227`); bot binding `telegram-receipt-files.ts:27-31,53-81`        | Reused with a caller-supplied `maxBytes` (5 MB) — the one change outside the payments module. Bot token from the ROW's bot, never the request.                                                                            |
+| Media download                 | `infrastructure/telegram/fetch-file.ts:54-68` (`getFile` then `/file/bot<token>/<path>`, path validated, `redirect: 'error'`, bound enforced while streaming `:154-161`, `:197+`); bound is `PAYMENT_RECEIPT_MAX_BYTES` = 20 MiB (`contracts/src/payment-receipts.ts:227`); bot binding `telegram-receipt-files.ts:27-31,53-81`        | Reused with a caller-supplied `maxBytes` (10 MB) — the one change outside the payments module. Bot token from the ROW's bot, never the request.                                                                           |
 | Inbound photo parsing          | `receiptFileOf` `bot-runtime.ts:3400-3448` (PHOTO largest size, DOCUMENT); routed as `RECEIPT_UPLOAD` `:3179-3181`; handler `:9909-9923` (ticket window first, then manual `submitReceipt`)                                                                                                                                            | Parser reused. Handler gains one branch BEFORE the manual receipt (§8.3).                                                                                                                                                 |
 | Manual receipt workflow        | `receipt_captures` `schema.ts:4834-4893`; `ReceiptService.submit` `receipt.service.ts:190+`; review queue `:455-480`; `payment_receipts`                                                                                                                                                                                               | **Not reused** (§3.4).                                                                                                                                                                                                    |
 | Web Admin gateways             | `surfaces/web/payment-gateways.controller.ts:54-235` (list/update/status/credential; credential state is set-at + callback URL `:203-235`); `apps/web/src/pages/payment-gateways.tsx` (`nameOf` `:136-146`, key form `:292-429`, `:694-703`, callback cell `:1011-1014`)                                                               | Reused; exhaustive switches gain a case; no new endpoint.                                                                                                                                                                 |
@@ -323,12 +323,12 @@ The website adapter itself is not edited.
   `notifyCustomer: false`, the customer is told the method is unavailable, and
   `payments.gateway_misconfigured` opens with `reason: WRONG_API_KEY_KIND` under the dedupe key
   `payments.gateway_misconfigured:TONPAYS_TELEGRAM` (`gateway-payment.service.ts:1185-1199`), so
-  the operator sees which route holds the wrong kind. _Proposed, owner decision:_ also add
-  `WRONG_API_KEY_KIND` to the WEBSITE route's configuration codes — today an operator who
-  pastes the Telegram key into the website route gets an undocumented code, classified
-  `REFUSED` non-configuration (`domain/tonpays.ts:129-143`), so the customer is told their
-  payment FAILED and no operator condition opens. That is a behaviour change to the website
-  route and must be its own decision; it is not required for the Telegram route.
+  the operator sees which route holds the wrong kind. _Decided by the owner 2026-10-18 (§18):_
+  `WRONG_API_KEY_KIND` is also a configuration code on the WEBSITE route. Before, an operator
+  who pasted the Telegram key into the website route got an undocumented code, classified
+  `REFUSED` non-configuration, so the customer was told their payment FAILED and no operator
+  condition opened. Now the customer gets the ordinary "method unavailable" answer and
+  `payments.gateway_misconfigured:TONPAYS` opens with `reason: WRONG_API_KEY_KIND`.
 - The webhook's `X-API-Key` header carries the Custom Telegram key. It is **never read and
   never logged**, as today (`webhook.controller.ts:31-38`). Comparing it against the stored
   key would be a secret-dependent branch on an unauthenticated route for no gain: the URL
@@ -528,7 +528,7 @@ The screen is refreshed after each.
 ### 8.3 Receipt capture
 
 - `gr:` opens a `gateway_receipt_captures` window (§7.4) and answers a prompt (image only,
-  at most 5 MB). It is refused while a submission is `QUEUED`/`SENDING`, while an `UNKNOWN`
+  at most 10 MB). It is refused while a submission is `QUEUED`/`SENDING`, while an `UNKNOWN`
   one is unresolved (§9.1), once the provider status is `processing` or terminal, once a
   review has started (§9.6), and at or after `expires_at`. The tap itself extends nothing
   (§9.6.3 c).
@@ -538,13 +538,13 @@ input.botInstanceId, customer)` takes the file. A window in another bot is invis
   key. The window's payment, invoice and provider come from the ROW, never from the update.
 - Accepted: a `PHOTO` only. A `DOCUMENT` (even `image/*`), a video, a PDF or anything else is
   answered with a template asking for a photo; nothing is stored. Declared `file_size` over
-  5 MB is refused at once. Telegram re-encodes photos to JPEG; the worker still sniffs the
+  10 MB is refused at once. Telegram re-encodes photos to JPEG; the worker still sniffs the
   magic bytes after download and refuses anything not JPEG/PNG (§13 OQ-TPTG-07).
 - The turn writes a `gateway_receipt_submissions` row `QUEUED` and closes the window
   `RECEIVED`, under the payment's row lock; the answer is "sending to TonPays…". No download
   and no upload happen in the turn.
 - The worker claims the row, downloads with the INVOICE's bot token
-  (`TelegramReceiptFiles.download`, `telegram-receipt-files.ts:53-81`) bounded at 5 MB while
+  (`TelegramReceiptFiles.download`, `telegram-receipt-files.ts:53-81`) bounded at 10 MB while
   streaming, takes the budget, and re-reads the payment. If it is no longer `PENDING`, or
   `now >= expires_at`, the row is `ABANDONED` with `nexa.deadline_passed` and NOTHING is
   uploaded, because a receipt sent after the window could not open a review anyway. Then it
@@ -1021,17 +1021,17 @@ across this release (§7.6).
 
 ## 11. Error classification — the nine documented codes
 
-| Code                   | Class           | Create                                      | Inquiry                                     | Change card                               | Receipt                                                      | Customer told                                    |
-| ---------------------- | --------------- | ------------------------------------------- | ------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------ |
-| `WRONG_API_KEY_KIND`   | configuration   | FAILED, `notifyCustomer: false`, condition  | backoff + condition                         | `REFUSED`, condition                      | `REFUSED`, condition; may resend after the fix               | method unavailable — never "your payment failed" |
-| `GATEWAY_NOT_APPROVED` | configuration   | as above                                    | as above                                    | as above                                  | as above                                                     | method unavailable                               |
-| `MISSING_API_KEY`      | configuration   | as above                                    | as above                                    | as above                                  | as above                                                     | method unavailable                               |
-| `INVALID_API_KEY`      | configuration   | as above                                    | as above                                    | as above                                  | as above                                                     | method unavailable                               |
-| `DUPLICATE_ORDER_ID`   | ambiguous       | `CREATE_UNKNOWN`, never retried or re-keyed | — (not expected; `FAILED`, backoff)         | —                                         | —                                                            | the invoice could not be confirmed; choose again |
-| `INVALID_RECEIPT_TYPE` | receipt refused | —                                           | —                                           | —                                         | `REFUSED`; the window may be reopened                        | send a photo of the receipt                      |
-| `RECEIPT_TOO_LARGE`    | receipt refused | —                                           | —                                           | —                                         | `REFUSED` (should be unreachable after the local 5 MB bound) | send a smaller photo                             |
-| `RATE_LIMIT_EXCEEDED`  | rate limit      | defer, same order id, ≤ 3 (only on a 4xx)   | backoff ≥ 60 s                              | not applied; customer may tap again       | re-queued, same file, ≤ 3, then `ABANDONED`                  | try again shortly — never a payment failure      |
-| `INVOICE_NOT_FOUND`    | not found       | —                                           | recorded, backoff; never paid, never failed | `NOT_FOUND`, recorded, identity condition | `NOT_FOUND`, recorded, identity condition                    | check status; nothing else changes               |
+| Code                   | Class           | Create                                      | Inquiry                                     | Change card                               | Receipt                                                       | Customer told                                    |
+| ---------------------- | --------------- | ------------------------------------------- | ------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------ |
+| `WRONG_API_KEY_KIND`   | configuration   | FAILED, `notifyCustomer: false`, condition  | backoff + condition                         | `REFUSED`, condition                      | `REFUSED`, condition; may resend after the fix                | method unavailable — never "your payment failed" |
+| `GATEWAY_NOT_APPROVED` | configuration   | as above                                    | as above                                    | as above                                  | as above                                                      | method unavailable                               |
+| `MISSING_API_KEY`      | configuration   | as above                                    | as above                                    | as above                                  | as above                                                      | method unavailable                               |
+| `INVALID_API_KEY`      | configuration   | as above                                    | as above                                    | as above                                  | as above                                                      | method unavailable                               |
+| `DUPLICATE_ORDER_ID`   | ambiguous       | `CREATE_UNKNOWN`, never retried or re-keyed | — (not expected; `FAILED`, backoff)         | —                                         | —                                                             | the invoice could not be confirmed; choose again |
+| `INVALID_RECEIPT_TYPE` | receipt refused | —                                           | —                                           | —                                         | `REFUSED`; the window may be reopened                         | send a photo of the receipt                      |
+| `RECEIPT_TOO_LARGE`    | receipt refused | —                                           | —                                           | —                                         | `REFUSED` (should be unreachable after the local 10 MB bound) | send a smaller photo                             |
+| `RATE_LIMIT_EXCEEDED`  | rate limit      | defer, same order id, ≤ 3 (only on a 4xx)   | backoff ≥ 60 s                              | not applied; customer may tap again       | re-queued, same file, ≤ 3, then `ABANDONED`                   | try again shortly — never a payment failure      |
+| `INVOICE_NOT_FOUND`    | not found       | —                                           | recorded, backoff; never paid, never failed | `NOT_FOUND`, recorded, identity condition | `NOT_FOUND`, recorded, identity condition                     | check status; nothing else changes               |
 
 Rules carried over unchanged: a 5xx is UNKNOWN whatever its body says; a 4xx without a
 readable `detail.code` is UNKNOWN on a create/change/receipt and `FAILED` (backoff) on an
@@ -1139,7 +1139,7 @@ Each "TPTG" rule is reverted ALONE in a mutation worktree and the named test mus
 | TPTG-06 | Only a 4xx `RATE_LIMIT_EXCEEDED` re-queues a receipt; a 5xx with that code in its body is `UNKNOWN`                                                                                                                                                                                                                                                                                                                                                                                             | unit + integration                                 |
 | TPTG-07 | A photo goes to the gateway window only within `(tenant, bot, customer)`; a window in bot A never takes a photo from bot B                                                                                                                                                                                                                                                                                                                                                                      | integration                                        |
 | TPTG-08 | A gateway receipt never writes `payment_receipts`, never appears in the review queue, and never exempts the payment from expiry through `noReceiptFiled()`; only a recorded acknowledgement opens the bounded review window                                                                                                                                                                                                                                                                     | integration                                        |
-| TPTG-09 | A `DOCUMENT`, video or >5 MB file is refused before any row is written; a download stops at 5 MB while streaming                                                                                                                                                                                                                                                                                                                                                                                | unit (fetch-file bound) + integration              |
+| TPTG-09 | A `DOCUMENT`, video or >10 MB file is refused before any row is written; a download stops at 10 MB while streaming                                                                                                                                                                                                                                                                                                                                                                              | unit (fetch-file bound) + integration              |
 | TPTG-10 | Opening a gateway window supersedes the manual window in the same bot, and vice versa                                                                                                                                                                                                                                                                                                                                                                                                           | integration                                        |
 | TPTG-11 | `final_amount` different from the payable changes neither the settled/credited amount, the fee, the gift nor the refund ceiling                                                                                                                                                                                                                                                                                                                                                                 | integration                                        |
 | TPTG-12 | A created card invoice is the open attempt (handed back); one without a card is not                                                                                                                                                                                                                                                                                                                                                                                                             | integration                                        |
@@ -1215,12 +1215,14 @@ This is where the build differs from the sections above, and why:
 - **A lost receipt upload (`UNKNOWN`) is resolved for display by any answered inquiry about the
   attempt.** A later `pending` lets the customer send another photo. That resolution never opens
   a review.
-- **"5 MB" is read as 5,000,000 bytes.** That is the stricter of the two readings.
+- **"10 MB" is read as 10,000,000 bytes.** That is the stricter of the two readings. (It was
+  "5 MB", read as 5,000,000, until the provider's current document raised it; see §18.)
 - **A video sent while a provider window is open is not intercepted.** It gets the bot's generic
   "unsupported" reply, and nothing is stored. A document is refused with
   `gateway_receipt_photo_only`.
 - **The website route gains no `WRONG_API_KEY_KIND` mapping.** It is the owner's call, so
-  nothing was added there.
+  nothing was added there. _Superseded 2026-10-18 by the owner's decision (§18): the website
+  route now treats it as configuration._
 - **OQ-TPTG-17 was decided by the lead (2026-10-02) and is approved by the owner
   (2026-10-03), so it is RESOLVED.** This follows the
   independent review's F1 and F3. The rules:
@@ -1261,3 +1263,22 @@ This is where the build differs from the sections above, and why:
   where the sweep's snapshot is taken before the acknowledgement commits and its lock after.
   The predicate is row-local, so PostgreSQL's re-check of the locked row sees it. `SKIP LOCKED`
   never waits, so no barrier can force that interleaving. Cases (a) and (b) are tested.
+
+## 18. Alignment with the provider's current API document (2026-10-18)
+
+The provider has revised the document this route was built from. Two changes are adopted;
+nothing else is assumed to have changed, and no copy of the revised document is kept in
+this repository, so each row below names what moved and where it is enforced.
+
+| What                                | Was                                                    | Now                                                                                               | Enforced in                                                                                                                                                                                                                         |
+| ----------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Receipt size limit                  | "max 5 MB", read as 5,000,000 bytes                    | "max 10 MB", read as 10,000,000 bytes (the smaller reading, `OQ-TPTG-07`)                         | `TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES` — the declared-size check in `GatewayReceiptCaptureService.receivePhoto`, the streaming download bound, and the adapter's pre-upload check. The prompt and the too-large reply say ۱۰ مگابایت. |
+| `WRONG_API_KEY_KIND` on the website | undocumented there: `REFUSED`, customer told it failed | configuration (owner decision): customer told the method is unavailable; operator condition opens | `TONPAYS_CROSS_ROUTE_ERROR_CODES` in `TONPAYS_CONFIGURATION_ERROR_CODES`; `docs/tonpays-gateway-audit.md` §6                                                                                                                        |
+
+A template body an operator has already EDITED keeps its own wording: templates are
+stored raw, and an edited prompt that still says ۵ مگابایت is the operator's to update. The
+default catalogue says ۱۰.
+
+The real-provider acceptance (`OQ-WP10-01`) still owes, among its other checks: a photo
+between 5,000,001 and 10,000,000 bytes accepted by the provider, and the website route's
+answer to a Custom Telegram key (`OQ-WP11A-02`).

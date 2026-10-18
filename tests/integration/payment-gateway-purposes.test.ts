@@ -288,6 +288,92 @@ describe('payment routes per purpose', () => {
   });
 
   // -------------------------------------------------------------------------
+  // The operator's wallet top-up warning: the bot's own decision, per route
+  // -------------------------------------------------------------------------
+
+  describe('wallet top-up readiness (the Web Admin warning)', () => {
+    const readiness = async () => {
+      const { walletTopup } = await ctx.container.paymentGateways.list(tenantA, ownerA);
+      return walletTopup;
+    };
+    const manualBlockers = async () =>
+      (await readiness()).routes.find((route) => route.provider === 'MANUAL_TRANSFER')?.blockers;
+    /*
+     * The warning and the bot can never disagree: for a customer no threshold excludes,
+     * `available` is exactly "the bot draws «💰 افزایش موجودی»".
+     */
+    const expectAgreesWithBot = async () => {
+      const bot = (await providers('WALLET_TOPUP')).length > 0;
+      expect((await readiness()).available).toBe(bot);
+    };
+
+    it('is available with the seeded route, which has no blocker; every other route says why not', async () => {
+      const ready = await readiness();
+      expect(ready.available).toBe(true);
+      expect(await manualBlockers()).toEqual([]);
+      for (const route of ready.routes) {
+        if (route.provider !== 'MANUAL_TRANSFER') expect(route.blockers).toContain('INACTIVE');
+      }
+      await expectAgreesWithBot();
+    });
+
+    it('names INACTIVE for a switched-off route', async () => {
+      await setStatus('DISABLED', 'rd-off');
+      expect(await readiness()).toMatchObject({ available: false });
+      expect(await manualBlockers()).toEqual(['INACTIVE']);
+      await expectAgreesWithBot();
+    });
+
+    it('names PURPOSE_OFF when top-up is switched off for the route, and not for a purchase-only switch', async () => {
+      await configure({ allowServicePurchase: false }, 'rd-no-purchase');
+      expect(await manualBlockers()).toEqual([]);
+      await expectAgreesWithBot();
+      await configure({ allowWalletTopup: false }, 'rd-no-topup');
+      expect(await manualBlockers()).toEqual(['PURPOSE_OFF']);
+      expect((await readiness()).available).toBe(false);
+      await expectAgreesWithBot();
+    });
+
+    it('names NO_RECEIVING_ACCOUNT for card-to-card with no enabled card — and every blocker at once', async () => {
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_accounts SET enabled = false, is_default = false WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(await manualBlockers()).toEqual(['NO_RECEIVING_ACCOUNT']);
+      expect((await readiness()).available).toBe(false);
+      await expectAgreesWithBot();
+
+      await setStatus('DISABLED', 'rd-off-too');
+      expect(await manualBlockers()).toEqual(['INACTIVE', 'NO_RECEIVING_ACCOUNT']);
+      await expectAgreesWithBot();
+    });
+
+    it('does not count a customer threshold as a blocker: that is per customer, not configuration', async () => {
+      await configure(
+        {
+          eligibility: {
+            activateAfterPayments: 2,
+            deactivateAfterPayments: 0,
+            activateAfterAccountDays: 0,
+          },
+        },
+        'rd-elig',
+      );
+      expect(await manualBlockers()).toEqual([]);
+      expect((await readiness()).available).toBe(true);
+    });
+
+    it('is charged payments.gateways.view, like the list it rides on', async () => {
+      const nobody = adminActorFor(
+        await createAdmin(ctx.container, tenantA, { username: 'nobody-rd', roleKeys: [] }),
+      );
+      await expectRefusal(
+        ctx.container.paymentGateways.list(tenantA, nobody),
+        PLATFORM_ERROR_CODES.PERMISSION_DENIED,
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // The purpose the manual route is offered FOR
   // -------------------------------------------------------------------------
 

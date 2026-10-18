@@ -1320,6 +1320,27 @@ describe('TonPays, through the one settlement path', () => {
       expect(await ledger()).toEqual([]);
     });
 
+    it('treats WRONG_API_KEY_KIND (a Custom Telegram key on the website route) as configuration: no customer failure, a condition for the operator', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      tonpays.createMode = { code: 'WRONG_API_KEY_KIND', status: 403 };
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      expect((await invoiceOf(paymentId)).creation_state).toBe('CREATE_FAILED');
+      expect((await paymentOf(paymentId)).state).toBe('FAILED');
+      // Never "your payment failed": the customer has nothing to reconcile.
+      expect(await notified(paymentId)).toEqual([]);
+      expect(await orderState(orderId)).toBe('AWAITING_PAYMENT');
+      const events = await rows<{ dedupe_key: string; reason: string }>(
+        sql`SELECT dedupe_key, context->>'reason' AS reason FROM operational_events
+            WHERE tenant_id = ${tenantA.tenantId} AND code = 'payments.gateway_misconfigured'`,
+      );
+      // The operator sees which route holds the wrong kind of key, and why.
+      expect(events).toEqual([
+        { dedupe_key: 'payments.gateway_misconfigured:TONPAYS', reason: 'WRONG_API_KEY_KIND' },
+      ]);
+    });
+
     it('treats a merchant configuration refusal as unavailable, not as the customer’s payment failing', async () => {
       await enableTonPays();
       const orderId = await draftOrder();

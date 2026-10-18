@@ -217,6 +217,8 @@ describe('what a create outcome may conclude', () => {
       'STORE_INACTIVE',
       'ACCESS_DENIED',
       'INVALID_CALLBACK_URL',
+      // Owner decision 2026-10-18: a Custom Telegram key on the website route.
+      'WRONG_API_KEY_KIND',
     ]) {
       expect(await create(() => json(401, { detail: { code, message: 'x' } }))).toEqual({
         kind: 'REFUSED',
@@ -554,6 +556,9 @@ describe('the TonPays inquiry', () => {
     expect(
       (await inquire({ detail: { code: 'INVALID_API_KEY', message: 'x' } }, 401)).outcome,
     ).toEqual({ kind: 'CONFIGURATION', code: 'INVALID_API_KEY' });
+    expect(
+      (await inquire({ detail: { code: 'WRONG_API_KEY_KIND', message: 'x' } }, 403)).outcome,
+    ).toEqual({ kind: 'CONFIGURATION', code: 'WRONG_API_KEY_KIND' });
     expect((await inquire({ nonsense: true })).outcome.kind).toBe('FAILED');
   });
 });
@@ -646,6 +651,8 @@ describe('the TonPays rules', () => {
     expect(classes.DUPLICATE_ORDER_ID).toBe('AMBIGUOUS');
     expect(classes.INVOICE_NOT_FOUND).toBe('NOT_FOUND');
     expect(classes.INVALID_API_KEY).toBe('CONFIGURATION');
+    // Not in the website route's own list, and configuration on it all the same.
+    expect(classifyTonPaysError('WRONG_API_KEY_KIND')).toBe('CONFIGURATION');
     expect(classes.AMOUNT_TOO_LOW).toBe('REFUSED');
   });
 

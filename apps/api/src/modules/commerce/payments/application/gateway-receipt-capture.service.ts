@@ -42,7 +42,7 @@ export type GatewayReceiptPhotoResult =
   | 'ALREADY_SENT'
   /** A document, video or anything but a photo: nothing stored, the window stays open. */
   | 'PHOTO_ONLY'
-  /** Declared over the provider's 5 MB: nothing stored, the window stays open. */
+  /** Declared over the provider's 10 MB: nothing stored, the window stays open. */
   | 'TOO_LARGE'
   /** The payment can no longer take a receipt: the window was closed. */
   | 'CLOSED';
@@ -216,7 +216,7 @@ export class GatewayReceiptCaptureService {
   /**
    * A file the customer sent while a provider window is open IN THIS BOT (TPTG-07): the
    * window is looked up by (tenant, this bot, customer) and the payment, provider and invoice
-   * come from its row, never from the update. A photo only, declared at most 5 MB; queued
+   * come from its row, never from the update. A photo only, declared at most 10 MB; queued
    * and the window closed `RECEIVED`, under the payment's lock. Nothing is downloaded or
    * uploaded here.
    */
