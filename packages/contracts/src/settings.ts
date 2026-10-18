@@ -1489,7 +1489,7 @@ export const SETTINGS = [
   {
     key: 'panel.connection_files.caption_mode',
     description:
-      "How this panel captions the connection files sent to a customer. PANEL_DEFAULT: the " +
+      'How this panel captions the connection files sent to a customer. PANEL_DEFAULT: the ' +
       "panel's own caption per file (bot.service.file_caption), the behaviour before this " +
       "key existed. CUSTOM: this panel's template (panel.connection_files.caption_template), " +
       'or the catalogue default bot.service.connection_files_caption when it stores none. ' +

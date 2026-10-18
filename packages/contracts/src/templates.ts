@@ -6524,7 +6524,7 @@ export const TEMPLATES = [
       'optional — a line whose facts are all absent is dropped. TELEGRAM_HTML: the body may ' +
       'carry Telegram formatting tags and every value is HTML-escaped as it is substituted; ' +
       'the result is read by the closed caption grammar (`parseCaptionMarkup`) into text and ' +
-      'entities and is never handed to Telegram\'s HTML parser. Bounded by Telegram\'s caption ' +
+      "entities and is never handed to Telegram's HTML parser. Bounded by Telegram's caption " +
       'limit; a render past it is cut with an ellipsis at send time.',
     format: 'TELEGRAM_HTML',
     maxLength: TELEGRAM_CAPTION_MAX_LENGTH,
