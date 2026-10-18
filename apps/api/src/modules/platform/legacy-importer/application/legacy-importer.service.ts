@@ -189,12 +189,20 @@ export const LEGACY_BALANCE_CURRENCY = 'IRT';
 /** Keys per read (and rows per transaction) of the phases that still write row by row. */
 const CUSTOMER_BATCH = 200;
 /**
- * Rows per transaction of the bulk phases. Each statement inside stays under PostgreSQL's
- * 65 535 bind parameters (the writers chunk their own multi-row inserts).
+ * Rows per transaction of the bulk phases (customers, openings, trials): the first batch is
+ * `BULK_BATCH_FIRST` rows and each next one twice the last, up to `BULK_BATCH_MAX`. Each
+ * statement inside stays under PostgreSQL's 65 535 bind parameters (the writers chunk their
+ * own multi-row inserts). The ramp keeps the early batches small — a crash in the first few
+ * hundred rows leaves a committed prefix, as the per-row phases did — and costs a 200 000-row
+ * phase five extra transactions.
  */
-const CUSTOMER_WRITE_BATCH = 5000;
-const OPENING_BATCH = 5000;
-const TRIAL_BATCH = 5000;
+const BULK_BATCH_FIRST = 200;
+const BULK_BATCH_MAX = 5000;
+
+/** The size of the bulk batch after one of `size` rows. */
+function nextBulkBatch(size: number): number {
+  return Math.min(size * 2, BULK_BATCH_MAX);
+}
 const DRY_RUN_BATCH = 10_000;
 
 export interface LegacyImporterDeps {
@@ -2052,8 +2060,12 @@ export class LegacyImporterService {
     const imported = new Map<string, { telegramUserId: string; customerId: string }>();
     const rows = plan.users.filter((u) => u.decision.kind !== 'INVALID_IDENTITY');
     let seen = 0;
-    for (let i = 0; i < rows.length; i += CUSTOMER_WRITE_BATCH) {
-      const batch = rows.slice(i, i + CUSTOMER_WRITE_BATCH);
+    for (
+      let i = 0, size = BULK_BATCH_FIRST;
+      i < rows.length;
+      i += size, size = nextBulkBatch(size)
+    ) {
+      const batch = rows.slice(i, i + size);
       const written = await this.mutate(
         scope,
         actor,
@@ -2256,6 +2268,7 @@ export class LegacyImporterService {
     // Every opening is idempotent by its reference (`legacy:opening:<tg>`), so a batch that
     // a crash interrupts is written again, exactly once, by the resume.
     let batch: MigrationOpeningBalanceCommand[] = [];
+    let size = BULK_BATCH_FIRST;
     let inBatch = new Set<string>();
     const flush = async () => {
       if (batch.length === 0) return;
@@ -2299,7 +2312,10 @@ export class LegacyImporterService {
         legacyBalanceMinor: planned.decision.balanceMinor,
         currency: prepared.salesCurrency as CurrencyCode,
       });
-      if (batch.length >= OPENING_BATCH) await flush();
+      if (batch.length >= size) {
+        await flush();
+        size = nextBulkBatch(size);
+      }
     }
     await flush();
   }
@@ -2317,6 +2333,7 @@ export class LegacyImporterService {
     // so a batch that a crash interrupts is decided again, exactly once, by the resume.
     type TrialInput = Parameters<LegacyImporterDeps['trials']['preserveManyForImport']>[2][number];
     let batch: TrialInput[] = [];
+    let size = BULK_BATCH_FIRST;
     let inBatch = new Set<string>();
     const flush = async () => {
       if (batch.length === 0) return;
@@ -2349,7 +2366,10 @@ export class LegacyImporterService {
           hadTrial: snapshot.trialUsers.has(planned.row.id),
         },
       });
-      if (batch.length >= TRIAL_BATCH) await flush();
+      if (batch.length >= size) {
+        await flush();
+        size = nextBulkBatch(size);
+      }
     }
     await flush();
   }
