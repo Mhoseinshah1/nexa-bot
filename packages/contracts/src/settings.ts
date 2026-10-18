@@ -167,6 +167,25 @@ export type SettingClassification = (typeof SETTING_CLASSIFICATIONS)[number];
 export const SETTING_CONSUMERS = ['ACTIVE', 'PLANNED'] as const;
 export type SettingConsumer = (typeof SETTING_CONSUMERS)[number];
 
+/**
+ * What one stored value of a key belongs to.
+ *
+ * `TENANT` is every key this registry held before Track 3: one value per tenant, in
+ * `setting_values`. `PANEL` is a key whose value differs panel by panel — one value per
+ * (tenant, panel), in `panel_setting_values` — such as how one panel's connection files
+ * are captioned. The registry, the schema, the default, the zero meaning and the
+ * consumer are the same machinery for both; only WHERE a value lives, and so which
+ * surface reads and writes it, differs.
+ *
+ * Deliberately two different stores and two different surfaces rather than one table
+ * with a nullable panel id: a tenant key read with a panel id, or a panel key read
+ * without one, is a question with no answer, and a nullable column would let both be
+ * asked. The tenant settings surface refuses a `PANEL` key as unknown, and the panel
+ * settings surface refuses a `TENANT` key the same way.
+ */
+export const SETTING_SCOPES = ['TENANT', 'PANEL'] as const;
+export type SettingScope = (typeof SETTING_SCOPES)[number];
+
 export interface SettingDefinition<TSchema extends z.ZodType = z.ZodType> {
   readonly key: string;
   readonly description: string;
@@ -189,6 +208,13 @@ export interface SettingDefinition<TSchema extends z.ZodType = z.ZodType> {
   readonly configures: string | null;
   /** Whether anything in this release reads the value. */
   readonly consumer: SettingConsumer;
+  /**
+   * Where a value of this key lives (`SETTING_SCOPES`). Absent means `TENANT`, which
+   * every key declared before panel-scoped keys existed is — so a key that does not say
+   * keeps the meaning it always had, and only a key that is genuinely per panel says so.
+   * Read it through `settingScope`, never by inspecting the field.
+   */
+  readonly scope?: SettingScope;
 }
 
 const telegramChatIdSchema = z
@@ -1459,6 +1485,28 @@ export function settingDefinition(key: SettingKey): SettingDefinition {
 export function isSettingKey(value: string): value is SettingKey {
   return SETTING_BY_KEY.has(value);
 }
+
+/** Where a value of `key` lives: `TENANT` unless the key declares `PANEL`. */
+export function settingScope(key: SettingKey): SettingScope {
+  return settingDefinition(key).scope ?? 'TENANT';
+}
+
+/** The keys whose values are per tenant — what the tenant settings surface lists. */
+export const TENANT_SETTING_KEYS: readonly SettingKey[] = SETTING_KEYS.filter(
+  (key) => settingScope(key) === 'TENANT',
+);
+
+/** The keys whose values are per panel — what a panel's settings surface lists. */
+export const PANEL_SETTING_KEYS: readonly SettingKey[] = SETTING_KEYS.filter(
+  (key) => settingScope(key) === 'PANEL',
+);
+
+/**
+ * Where a panel-scoped value came from: the registry default, or a row for THIS panel.
+ * There is no tenant-wide layer between them — a panel key has no tenant value.
+ */
+export const PANEL_SETTING_SOURCES = ['DEFAULT', 'PANEL'] as const;
+export type PanelSettingSource = (typeof PANEL_SETTING_SOURCES)[number];
 
 /**
  * Where a resolved value came from.

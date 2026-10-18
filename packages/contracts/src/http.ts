@@ -140,6 +140,7 @@ import {
 import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR, salesCurrencyCodeSchema } from './money.js';
 import { AUDIT_RESULTS, OPERATIONAL_SEVERITIES } from './ports.js';
 import {
+  PANEL_SETTING_SOURCES,
   SETTING_CLASSIFICATIONS,
   SETTING_CONSUMERS,
   SETTING_MUTABILITIES,
@@ -896,6 +897,33 @@ export const settingWriteResponseSchema = z.object({
   changed: z.boolean(),
 });
 export type SettingWriteResponse = z.infer<typeof settingWriteResponseSchema>;
+
+/**
+ * Track 3 §2: one PANEL-scoped setting (`settingScope(key) === 'PANEL'`) as one panel holds
+ * it. The tenant setting's shape with the panel named and the source narrowed to the two a
+ * panel key can have — the registry default, or a row for this panel. The same version
+ * rule: a row whose value no longer parses reports `DEFAULT` with ITS OWN version.
+ */
+export const resolvedPanelSettingSchema = resolvedSettingSchema.extend({
+  panelId: z.string(),
+  source: z.enum(PANEL_SETTING_SOURCES),
+});
+export type ResolvedPanelSettingResponse = z.infer<typeof resolvedPanelSettingSchema>;
+
+export const panelSettingListResponseSchema = z.object({
+  settings: z.array(resolvedPanelSettingSchema),
+});
+export type PanelSettingListResponse = z.infer<typeof panelSettingListResponseSchema>;
+
+/** The request is the tenant setting's: a value, the version read, and a key. */
+export const setPanelSettingRequestSchema = setSettingRequestSchema;
+export type SetPanelSettingRequest = z.infer<typeof setPanelSettingRequestSchema>;
+
+export const panelSettingWriteResponseSchema = z.object({
+  setting: resolvedPanelSettingSchema,
+  changed: z.boolean(),
+});
+export type PanelSettingWriteResponse = z.infer<typeof panelSettingWriteResponseSchema>;
 
 export const featureFlagSchema = z.object({
   key: z.string(),
@@ -2008,6 +2036,10 @@ export const PANEL_ROUTES = {
   credentials: (id: string) => `/panels/${encodeURIComponent(id)}/credentials`,
   status: (id: string) => `/panels/${encodeURIComponent(id)}/status`,
   test: (id: string) => `/panels/${encodeURIComponent(id)}/test`,
+  /** Track 3 §2: the panel's PANEL-scoped settings. `panels.view`; a write `panels.edit`. */
+  settings: (id: string) => `/panels/${encodeURIComponent(id)}/settings`,
+  setting: (id: string, key: string) =>
+    `/panels/${encodeURIComponent(id)}/settings/${encodeURIComponent(key)}`,
   providers: '/providers',
 } as const;
 
