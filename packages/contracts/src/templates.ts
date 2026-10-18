@@ -6415,6 +6415,45 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * Track 3 §1: the live panel check made when a customer opens a service card. A REPLY
+   * that renders state in the bot surface, never a notification-lane kind (ADR-0030 §1).
+   */
+  {
+    key: 'bot.service.panel_missing',
+    description:
+      'Shown instead of the service card when the panel answered, twice, that this ' +
+      'service’s account does not exist. Offers support and the way back to the list, and ' +
+      'nothing else: no link, no files, no renewal. The customer’s tap changes nothing — ' +
+      'the service keeps its state, nothing is deleted or refunded; an operational event ' +
+      'tells an operator, who decides from the Web Admin.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.last_updated',
+    description:
+      'The one line under the status of a service card drawn from stored figures because ' +
+      'the panel could not be read just now (timeout, rate limit, panel down, budget spent, ' +
+      'or a provider with no proven read). Names when the figures were last read; never an ' +
+      'error.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the panel was last read (`usage_synced_at`).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.support_button',
+    description: 'The button on `bot.service.panel_missing` that opens the support screen (`sp:`).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.service.files_partial',
     description:
