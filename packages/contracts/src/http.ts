@@ -3362,14 +3362,11 @@ export const resellerSummarySchema = z.object({
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
   /** The stored own limit, else the tier's. Grants nothing; kept so stored rows read. */
   effectiveCreditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
-  /**
-   * The purchase cap Mirza gave this agent (`maxbuyagent`), shown to the owner and applied
-   * NOWHERE: it is a limit, not money, and never a balance or a credit line (reseller credit
-   * stays removed, owner decision 2026-10-01). Null for every reseller that is not an import.
+  /*
+   * No imported purchase cap. A legacy agent's `maxbuyagent` is a credit/limit concept, and
+   * reseller credit stays removed (owner decision 2026-10-01): it lives only in the import's
+   * own history (the package rows and `resellers.source_detail`), never on this wire.
    */
-  importedPurchaseCap: z
-    .object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) })
-    .nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
