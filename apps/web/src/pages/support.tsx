@@ -192,16 +192,24 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
     },
   });
 
+  /*
+   * The last toggle's refusal stays on screen until the next toggle has an outcome. Read
+   * straight from the mutation it vanished the moment a retry STARTED, and the page, shorter
+   * by the banner, clamped the operator's scroll position (W2, `pnpm web:no-scroll`).
+   */
+  const [toggleFailure, setToggleFailure] = useState<unknown>(null);
   const toggle = useMutation({
     mutationFn: (input: { id: string; status: SupportFaqStatus; expectedVersion: number }) =>
       setSupportFaqStatus({ ...input, idempotencyKey: submission.current({ toggle: input }) }),
     onSuccess: () => {
       submission.settle();
+      setToggleFailure(null);
       notify({ tone: 'ok', message: t('web.support_faq_status_done') });
       refresh();
     },
     onError: (error) => {
       submission.settleOn(error);
+      setToggleFailure(error);
       refresh();
     },
   });
@@ -372,10 +380,10 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
         </Card>
       </StateSwitch>
 
-      {toggle.error != null && (
+      {toggleFailure != null && (
         <Banner tone="danger">
-          {faultOf(toggle.error)}
-          <ErrorRef error={toggle.error} />
+          {faultOf(toggleFailure)}
+          <ErrorRef error={toggleFailure} />
         </Banner>
       )}
 
