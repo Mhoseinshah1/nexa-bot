@@ -301,6 +301,7 @@ export const DISCOUNT_GAP_REASONS = [
   'PERCENT_UNREADABLE',
   'GIFT_AMOUNT_UNREADABLE',
   'KIND_UNKNOWN',
+  'FORK_PERCENT_UNREADABLE',
   'NO_IDENTITY',
 ] as const;
 export type DiscountGapReason = (typeof DISCOUNT_GAP_REASONS)[number];
@@ -384,6 +385,23 @@ function expiryOf(v: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * The columns a fork `discount_sell` record may name its percent by, in order. The fork has no
+ * public DDL. `percent` is the column the converter's own fixture gives it, and `price` is the
+ * one public `DiscountSell` uses for the same fact. Neither is proven for the deployed fork, so
+ * the code stays INACTIVE and `source_detail` says which column was read (`valueBasis`).
+ */
+const FORK_PERCENT_COLUMNS = ['percent', 'price'] as const;
+
+/** A whole percent 1..100, given as a number or as digits; null for anything else. */
+function wholePercent(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isInteger(v) && v >= 1 && v <= 100 ? v : null;
+  const t = textOf(v)?.trim();
+  if (t === undefined || !/^[0-9]{1,3}$/u.test(t)) return null;
+  const n = Number(t);
+  return n >= 1 && n <= 100 ? n : null;
+}
+
 export function planDiscount(row: HistoryRow): PlannedDiscount | DiscountGap {
   const r = row.payload;
   const key = row.idempotencyKey;
@@ -398,7 +416,20 @@ export function planDiscount(row: HistoryRow): PlannedDiscount | DiscountGap {
   let type: 'PERCENTAGE' | 'FIXED_AMOUNT';
   let value: bigint;
   let currency: 'IRT' | null;
-  if (mirzaKind === 'PURCHASE_PERCENT_CODE') {
+  let valueBasis: string | null = null;
+  if (mirzaKind === 'UNKNOWN' && codeText !== null) {
+    // The deployed fork's `discount_sell` (converter 0.8): its code text IS exported, and the
+    // owner wants that real code recreated, INACTIVE (2026-10-18). The converter cannot name the
+    // fork's kind (no DDL), so a record is a percent code only when one of its own raw columns
+    // reads as a whole percent. With none it is a counted gap: a value is never invented.
+    const fields = recOf(r['fields_raw']);
+    const column = FORK_PERCENT_COLUMNS.find((c) => wholePercent(fields[c]) !== null);
+    if (column === undefined) return { kind: 'gap', reason: 'FORK_PERCENT_UNREADABLE' };
+    type = 'PERCENTAGE';
+    value = BigInt(wholePercent(fields[column]) ?? 0);
+    currency = null;
+    valueBasis = `FORK_COLUMN_${column.toUpperCase()}_UNPROVEN`;
+  } else if (mirzaKind === 'PURCHASE_PERCENT_CODE') {
     const pct = r['percent'];
     if (typeof pct !== 'number' || !Number.isInteger(pct) || pct < 1 || pct > 100) {
       return { kind: 'gap', reason: 'PERCENT_UNREADABLE' };
@@ -452,6 +483,8 @@ export function planDiscount(row: HistoryRow): PlannedDiscount | DiscountGap {
       codeOriginal: codeText,
       codeNormalised: codeText !== null && normalised !== codeText,
       codeDerived: normalised === null,
+      // A fork code says which raw column its percent came from, and keeps the raw row.
+      ...(valueBasis === null ? {} : { valueBasis, fieldsRaw: r['fields_raw'] ?? null }),
       codeRef: textOf(r['code_ref']),
       usedCount: r['used_count'] ?? null,
       usedCountRaw: r['used_count_raw'] ?? null,

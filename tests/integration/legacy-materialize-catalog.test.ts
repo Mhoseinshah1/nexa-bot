@@ -317,7 +317,24 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
       }),
       discount(5, 'PURCHASE_PERCENT_CODE', { percent: null }), // gap
       discount(6, 'PURCHASE_PERCENT_CODE', { code_text: null, code_ref: 'code:abc' }),
-      discount(7, 'UNKNOWN'), // gap
+      // An unknown kind with no code text: not the fork's code list, so a gap.
+      discount(7, 'UNKNOWN', { code_text: null }),
+      // The deployed fork's discount_sell as converter 0.8 writes it: kind UNKNOWN (no DDL),
+      // the REAL code text, and its own columns raw (the code column dropped).
+      discount(8, 'UNKNOWN', {
+        code_text: 'Spring_30',
+        code_plaintext_exported: true,
+        percent: undefined,
+        limit_total: undefined,
+        fields_raw: { percent: '30', limit: '50' },
+      }),
+      // A fork record whose own columns name no readable percent: a gap, never a guess.
+      discount(9, 'UNKNOWN', {
+        code_text: 'NOVALUE',
+        code_plaintext_exported: true,
+        percent: undefined,
+        fields_raw: { percent: 'ten' },
+      }),
     ],
   });
 
@@ -642,8 +659,12 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
   describe('discount codes', () => {
     it('imports every code INACTIVE; normalises what does not fit and keeps the original', async () => {
       const r = await steps().discounts.apply(mctx());
-      expect(r).toMatchObject({ step: 'catalog-discount-codes', written: 5, alreadyPresent: 0 });
-      expect(r.skipped).toEqual({ PERCENT_UNREADABLE: 1, KIND_UNKNOWN: 1 });
+      expect(r).toMatchObject({ step: 'catalog-discount-codes', written: 6, alreadyPresent: 0 });
+      expect(r.skipped).toEqual({
+        PERCENT_UNREADABLE: 1,
+        KIND_UNKNOWN: 1,
+        FORK_PERCENT_UNREADABLE: 1,
+      });
 
       const all = await rows<{
         source_ref: string;
@@ -662,7 +683,7 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
                     ends_at::text AS ends_at, total_redemptions_limit AS total,
                     per_customer_limit AS per, source_detail AS detail, label
                FROM discounts WHERE source = 'MIRZA' ORDER BY source_ref`);
-      expect(all).toHaveLength(5);
+      expect(all).toHaveLength(6);
       expect(all.every((d) => d.status === 'INACTIVE' && d.kind === 'CODE')).toBe(true);
       const by = Object.fromEntries(all.map((d) => [d.source_ref, d]));
 
@@ -703,10 +724,30 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
         codeOriginal: null,
         codeDerived: true,
       });
+      // The fork's code is recreated under its REAL text (converter 0.8), INACTIVE, with the
+      // percent read from its own column and that column named as unproven.
+      expect(by['discount:engagement:discount:8']).toMatchObject({
+        code: 'SPRING_30',
+        status: 'INACTIVE',
+        type: 'PERCENTAGE',
+        value: '30',
+        currency: null,
+        label: 'Mirza SPRING_30',
+      });
+      expect(by['discount:engagement:discount:8']!.detail).toMatchObject({
+        codeOriginal: 'Spring_30',
+        codeDerived: false,
+        valueBasis: 'FORK_COLUMN_PERCENT_UNPROVEN',
+        fieldsRaw: { percent: '30', limit: '50' },
+      });
+      expect(all.filter((d) => d.code.startsWith('MZ-')).map((d) => d.source_ref)).toEqual([
+        'discount:engagement:discount:6',
+      ]);
       expect(r.notes).toMatchObject({
         CODE_SUFFIXED: 1,
         GIFT_CODE_NO_NEXA_EQUIVALENT: 1,
         CODE_DERIVED: 1,
+        FORK_CODE_PERCENT_UNPROVEN: 1,
       });
     });
 
@@ -729,8 +770,9 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
     it('holds the exact match with every gap counted', async () => {
       await steps().discounts.apply(mctx());
       const [row] = await steps().discounts.match(mctx());
-      expect(row).toMatchObject({ mirzaRows: 7, nexaRows: 5, nexaTable: 'discounts' });
+      expect(row).toMatchObject({ mirzaRows: 9, nexaRows: 6, nexaTable: 'discounts' });
       expect(row!.explained.map((g) => `${g.reason}:${g.rows}`).sort()).toEqual([
+        'FORK_PERCENT_UNREADABLE:1',
         'KIND_UNKNOWN:1',
         'PERCENT_UNREADABLE:1',
       ]);
