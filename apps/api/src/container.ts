@@ -6922,24 +6922,27 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     logger,
   });
   // The one-time Mirza import's MATERIALIZE phase: its steps run in this order.
-  const legacyMaterialize = new LegacyMaterializeService([
-    new CustomerSourceStep({
-      marker: new DrizzleCustomerSourceMarker(),
-      uow,
-      scopeActivity: tenants,
-    }),
-    legacyMaterializeCatalog.products,
-    legacyMaterializeCatalog.resellers,
-    legacyMaterializeCatalog.discounts,
-    legacyMaterializeHistory.payments,
-    legacyMaterializeHistory.walletHistory,
-    legacyMaterializeHistory.tickets,
-    legacyMaterializeHistory.referrals,
-    // Every invoice the importer did not adopt: an ended (TERMINATED) service and its order.
-    legacyEndedServices,
-    // After the discounts and the invoice orders it links to.
-    legacyMaterializeHistory.discountUsage,
-  ]);
+  const legacyMaterialize = new LegacyMaterializeService(
+    [
+      new CustomerSourceStep({
+        marker: new DrizzleCustomerSourceMarker(),
+        uow,
+        scopeActivity: tenants,
+      }),
+      legacyMaterializeCatalog.products,
+      legacyMaterializeCatalog.resellers,
+      legacyMaterializeCatalog.discounts,
+      legacyMaterializeHistory.payments,
+      legacyMaterializeHistory.walletHistory,
+      legacyMaterializeHistory.tickets,
+      legacyMaterializeHistory.referrals,
+      // Every invoice the importer did not adopt: an ended (TERMINATED) service and its order.
+      legacyEndedServices,
+      // After the discounts and the invoice orders it links to.
+      legacyMaterializeHistory.discountUsage,
+    ],
+    logger,
+  );
   const legacyMaterializePort = new LegacyMaterializePort(legacyMaterialize, () => clock.now());
   const legacyBotLinkPort = new LegacyBotLinkPort(customerBotLink);
   const migrationExecutor = new LegacyMigrationExecutor({
