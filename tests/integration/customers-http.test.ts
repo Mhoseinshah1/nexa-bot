@@ -206,8 +206,9 @@ describe('customer HTTP surface', () => {
      * `customerListResponseSchema.parse` would pass an extra field straight
      * through — zod strips unknown keys by default and says nothing — so the
      * schema alone cannot catch a response that grew a `walletBalance`. These
-     * are the twelve fields the contract declares (round N close added
-     * `marketingOptOutAt`), listed, so adding a thirteenth fails here.
+     * are the fourteen fields the contract declares (round N close added
+     * `marketingOptOutAt`; the one-time Mirza import added `source`), listed, so
+     * adding a fifteenth fails here.
      */
     expect(Object.keys(row).sort()).toEqual(
       [
@@ -221,6 +222,9 @@ describe('customer HTTP surface', () => {
         'lastName',
         'lastSeenAt',
         'marketingOptOutAt',
+        // The one-time Mirza import: NEXA or MIRZA, the badge «از میرزا». A provenance
+        // marker, never a commercial fact.
+        'source',
         'status',
         'telegramUserId',
         'username',

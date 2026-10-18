@@ -249,7 +249,11 @@ describe('the reporting query plans', () => {
     {
       what: 'paymentFailures (failed payments, twice per dashboard request)',
       call: () => repository.paymentFailures(tenantA, window),
-      index: { index: 'payments_tenant_resolved_idx', column: 'resolved_at', table: 'payments' },
+      index: {
+        index: 'payments_tenant_resolved_source_idx',
+        column: 'resolved_at',
+        table: 'payments',
+      },
     },
   ];
 
