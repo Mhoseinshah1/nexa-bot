@@ -55,7 +55,12 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { ProductRecord, ProductRepository } from '../../catalog/application/ports.js';
+import type {
+  CatalogueAudience,
+  ProductRecord,
+  ProductRepository,
+} from '../../catalog/application/ports.js';
+import { catalogueScope } from '../../resellers/domain/entitlement.js';
 import type {
   ServiceAddonRecord,
   ServiceAddonRepository,
@@ -101,6 +106,20 @@ const COMMERCIAL_NAMESPACE = 'TELEGRAM' as const;
 
 /** How many add-ons of one kind a customer is offered at once. */
 export const ADDON_OFFER_LIMIT = 10;
+
+/** How many of its panel's current plans an imported service's renewal offers at once. */
+export const RENEWAL_PLAN_LIMIT = 10;
+
+/**
+ * Owner rule 2026-10-18: a service the one-time Mirza import attached renews from the CURRENT
+ * sellable plans of its own panel — whatever product its adoption order names for navigation
+ * (a hidden legacy shape, a product nobody mapped, one since deleted). No per-product decision
+ * stands between an imported customer and their renewal. Every other service renews its own
+ * product, exactly as before.
+ */
+export function renewsFromPanelPlans(service: Pick<ServiceRecord, 'source'>): boolean {
+  return service.source === 'MIRZA';
+}
 
 /**
  * The refusals that mean "not offerable", as opposed to "this installation is broken".
@@ -191,8 +210,14 @@ function withinPanelCap(
  */
 export interface CommercialOffer {
   readonly kind: CommercialKind;
-  /** The renewal's product, when this is a renewal. */
+  /** The renewal's product, when this is a renewal of the service's own product. */
   readonly product: ProductRecord | null;
+  /**
+   * An imported service's renewal (`renewsFromPanelPlans`): its panel's current sellable plans
+   * the customer chooses from — possibly none, which the surface says in a sentence. Absent
+   * for every other offer.
+   */
+  readonly plans?: readonly ProductRecord[];
   /** The quantities on offer, when this is a quantity purchase. */
   readonly addons: readonly ServiceAddonRecord[];
   /** WP-A5: the extra-users offer, when this is one; null for every other kind. */
@@ -257,7 +282,7 @@ export interface CommercialActionServiceDeps {
    */
   readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
   /** A buyer's reseller standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6). */
-  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled'>;
+  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled' | 'entitles'>;
   /**
    * WP-A6: the one evaluator of what a service may be moved to — its current location,
    * the configured targets, the cooldown and the rolling limit — and the frozen change
@@ -319,6 +344,11 @@ export class CommercialActionService {
     await this.assertPanelCanPerform(scope, service, kind);
 
     if (kind === 'RENEW') {
+      if (renewsFromPanelPlans(service)) {
+        // An empty list is an answer, not a refusal: the surface says no plan is available.
+        const plans = await this.panelRenewalPlans(scope, service);
+        return { kind, product: null, plans, addons: [], devices: null };
+      }
       const product = await this.renewableProduct(scope, service);
       return { kind, product, addons: [], devices: null };
     }
@@ -390,6 +420,16 @@ export class CommercialActionService {
       const operable = await this.deps.panels.operability(scope, service.panelId, kind);
       if (!operable.ok) continue;
       if (!commercialPolicyAllows(policy, kind)) continue;
+      if (kind === 'RENEW' && renewsFromPanelPlans(service)) {
+        /*
+         * Owner rule 2026-10-18: an imported service's renewal is offered whenever the
+         * service, its panel and the panel's policy allow one — the screen it opens lists the
+         * panel's current plans, or says in a sentence that none is available right now.
+         * Every plan is re-decided by the draft that a tap on it opens.
+         */
+        available.push(kind);
+        continue;
+      }
       if (kind === 'RENEW') {
         /*
          * The product must still be sellable, in the tenant's own currency.
@@ -471,10 +511,16 @@ export class CommercialActionService {
        * price, key and name come off the row, re-decided here; never off the callback.
        */
       readonly locationId?: string;
+      /**
+       * `RENEW` of an imported service only (`renewsFromPanelPlans`): the plan of its panel the
+       * customer tapped. Re-decided here against the panel's current plans; never a price.
+       */
+      readonly productId?: string;
       readonly idempotencyKey: string;
     },
   ): Promise<{ readonly order: OrderRecord; readonly action: CommercialActionRecord }> {
     const serviceId = this.serviceId(input.serviceId);
+    const planId = input.kind === 'RENEW' ? (input.productId ?? null) : null;
     const addonId = input.addonId === undefined ? null : this.addonId(input.addonId);
     const quantity = input.quantity ?? null;
     const locationId = input.locationId === undefined ? null : this.locationId(input.locationId);
@@ -487,6 +533,8 @@ export class CommercialActionService {
       ...(input.kind === 'ADD_DEVICES' ? { quantity } : {}),
       // And only a location change names a location.
       ...(input.kind === 'CHANGE_LOCATION' ? { locationId } : {}),
+      // And only an imported service's renewal names a plan.
+      ...(planId === null ? {} : { productId: planId }),
     });
     const denial = {
       action: `service.${input.kind.toLowerCase()}_draft`,
@@ -544,7 +592,7 @@ export class CommercialActionService {
 
         const priced =
           input.kind === 'RENEW'
-            ? await this.quoteRenewal(scope, service, now, tx)
+            ? await this.quoteRenewal(scope, service, planId, now, tx)
             : input.kind === 'ADD_DEVICES'
               ? await this.quoteDevices(scope, service, addonId, quantity, now, tx)
               : input.kind === 'CHANGE_LOCATION'
@@ -561,8 +609,13 @@ export class CommercialActionService {
           await this.deps.resellers.assertEntitled(
             scope,
             standing,
-            // The service's product: a renewal's line names it and an add-on's copies it.
-            { operation: input.kind, productId: service.productId, panelId: service.panelId },
+            // The product the line names: the renewed plan (an imported service's chosen one,
+            // or the service's own), and for an add-on the service's product it copies.
+            {
+              operation: input.kind,
+              productId: priced.productId ?? service.productId,
+              panelId: service.panelId,
+            },
             tx,
           );
         }
@@ -810,6 +863,9 @@ export class CommercialActionService {
         this.assertLifecycleAllows(action.kind, service);
         await this.assertPanelCanPerform(scope, service, action.kind, tx);
         await this.assertStillOffered(scope, action, tx);
+        if (action.kind === 'RENEW' && renewsFromPanelPlans(service)) {
+          await this.assertStillPanelPlan(scope, service, action, tx);
+        }
         await this.assertWithinPanelCap(scope, service, action, tx);
         if (action.kind === 'ADD_DEVICES') await this.assertDevicesStillFit(scope, action, tx);
         if (action.kind === 'CHANGE_LOCATION') {
@@ -964,10 +1020,13 @@ export class CommercialActionService {
   private async quoteRenewal(
     scope: TenantContext,
     service: ServiceRecord,
+    planId: string | null,
     now: Date,
     tx: TransactionScope,
   ): Promise<PricedAction> {
-    const product = await this.renewableProduct(scope, service, tx);
+    const product = renewsFromPanelPlans(service)
+      ? await this.chosenPanelPlan(scope, service, planId, tx)
+      : await this.ownProductRenewal(scope, service, planId, tx);
     const price = product.price;
     if (price === null) {
       throw errors.conflict(
@@ -1596,6 +1655,113 @@ export class CommercialActionService {
           'This service cannot be renewed right now.',
         );
       }
+    }
+  }
+
+  /** A renewal of the service's OWN product: no plan may be named for it. */
+  private async ownProductRenewal(
+    scope: TenantContext,
+    service: ServiceRecord,
+    planId: string | null,
+    tx: TransactionScope,
+  ): Promise<ProductRecord> {
+    if (planId !== null) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This service renews its own plan.',
+      );
+    }
+    return this.renewableProduct(scope, service, tx);
+  }
+
+  /**
+   * Owner rule 2026-10-18 — the CURRENT sellable plans of an imported service's panel, as
+   * this customer may buy them: the customer catalogue's own predicate
+   * (`listCustomerVisibleProducts` — live, listed, priced, categorised, on THIS panel), in the
+   * tenant's currency, the same shape as the service (a time-limited service renews from a
+   * plan with a duration and the reverse, the rule `quoteRenewal` states), and — for an ACTIVE
+   * reseller — what their tier grants for a renewal (`entitles`, the evaluator
+   * `assertEntitled` uses). Never the product the adoption order names.
+   */
+  private async panelRenewalPlans(
+    scope: TenantContext,
+    service: ServiceRecord,
+    tx?: unknown,
+  ): Promise<readonly ProductRecord[]> {
+    const currency = await this.salesCurrency(scope, tx);
+    const standing = await this.deps.resellers.standing(scope, service.customerId, tx);
+    const audience: CatalogueAudience =
+      standing === null
+        ? { kind: 'CUSTOMER' }
+        : (() => {
+            const view = catalogueScope(standing.grants, scope.botInstanceId);
+            return { kind: 'RESELLER', productIds: view.productIds, categoryIds: view.categoryIds };
+          })();
+    const page = await this.deps.products.listCustomerVisibleProducts(
+      scope,
+      RENEWAL_PLAN_LIMIT,
+      [service.panelId],
+      audience,
+      tx,
+    );
+    const serviceHasWindow = service.expiresAt !== null;
+    return page.items.filter(
+      (product) =>
+        product.panelId === service.panelId &&
+        isPurchasable(product.status) &&
+        product.price !== null &&
+        product.price.currency === currency &&
+        product.specification.durationDays > 0 === serviceHasWindow &&
+        (standing === null ||
+          this.deps.resellers.entitles(scope, standing, {
+            operation: 'RENEW',
+            productId: product.id,
+            categoryId: product.categoryId,
+            panelId: service.panelId,
+          })),
+    );
+  }
+
+  /** The plan an imported service's renewal names, re-decided against its panel's plans now. */
+  private async chosenPanelPlan(
+    scope: TenantContext,
+    service: ServiceRecord,
+    planId: string | null,
+    tx: TransactionScope,
+  ): Promise<ProductRecord> {
+    const plan =
+      planId === null
+        ? undefined
+        : (await this.panelRenewalPlans(scope, service, tx)).find((p) => p.id === planId);
+    if (plan === undefined) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That plan cannot renew this service right now.',
+      );
+    }
+    return plan;
+  }
+
+  /**
+   * At confirmation, an imported service's renewal plan must still be a plan of the service's
+   * panel: an operator who moved the product to another panel between the quote and the
+   * confirmation has withdrawn it from this panel. Never re-priced.
+   */
+  private async assertStillPanelPlan(
+    scope: TenantContext,
+    service: ServiceRecord,
+    action: CommercialActionRecord,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const product =
+      action.productId === null
+        ? null
+        : await this.deps.products.findById(scope, action.productId, tx);
+    if (product === null || product.panelId !== service.panelId) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'This service cannot be renewed right now.',
+      );
     }
   }
 
