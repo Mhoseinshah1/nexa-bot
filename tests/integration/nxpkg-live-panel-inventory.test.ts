@@ -378,20 +378,33 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
   }
   const NOTHING_WRITTEN = Object.fromEntries(BUSINESS_TABLES.map((t) => [t, 0]));
 
-  /** Every service NEXA holds: its panel, exact provider spelling and owner's Telegram id. */
+  /**
+   * Every service NEXA attached to a panel account: its panel, exact provider spelling and
+   * owner's Telegram id. An ENDED service (TERMINATED: the one-time import's record of an
+   * invoice whose account is not on the panel) is attached to no account, so it is not
+   * listed — and every call checks that none of them names an account the panel holds.
+   */
   async function services(): Promise<{ panel: string; username: string; owner: string }[]> {
-    const result = await ctx.container.database.db.execute<{
-      panel: string;
-      username: string;
-      owner: string;
-    }>(sql`
-      SELECT CASE s.panel_id WHEN ${panelAId}::uuid THEN 'A' WHEN ${panelBId}::uuid THEN 'B'
-             ELSE 'other' END AS panel,
-             s.provider_username AS username, c.telegram_user_id AS owner
-        FROM services s JOIN customers c ON c.id = s.customer_id
-       WHERE s.tenant_id = ${TENANT}
-       ORDER BY 1, 2`);
-    return result.rows;
+    const read = (ended: boolean) =>
+      ctx.container.database.db.execute<{
+        panel: string;
+        username: string;
+        owner: string;
+      }>(sql`
+        SELECT CASE s.panel_id WHEN ${panelAId}::uuid THEN 'A' WHEN ${panelBId}::uuid THEN 'B'
+               ELSE 'other' END AS panel,
+               s.provider_username AS username, c.telegram_user_id AS owner
+          FROM services s JOIN customers c ON c.id = s.customer_id
+         WHERE s.tenant_id = ${TENANT} AND (s.state = 'TERMINATED') = ${ended}
+         ORDER BY 1, 2`);
+    for (const e of (await read(true)).rows) {
+      const fake = e.panel === 'A' ? panelA : panelB;
+      const spellings = [...fake.users.keys()].map((u) => u.toLowerCase());
+      expect(spellings, `${e.panel}:${e.username} is ended, yet an account`).not.toContain(
+        e.username.toLowerCase(),
+      );
+    }
+    return (await read(false)).rows;
   }
 
   async function customerTelegramIds(): Promise<string[]> {
