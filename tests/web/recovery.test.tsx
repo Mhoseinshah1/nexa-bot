@@ -851,7 +851,7 @@ describe('the recovery page', () => {
       fireEvent.click(screen.getByRole('button', { name: 'تأیید و شروع بازیابی' }));
       expect(
         await screen.findByText(
-          'یک بازیابی از میرزا روی این نصب تأیید شده یا در جریان است؛ پس از پایان آن دوباره تأیید کنید. چیزی تأیید نشد.',
+          'یک بازیابی از ربات قبلی روی این نصب تأیید شده یا در جریان است؛ پس از پایان آن دوباره تأیید کنید. چیزی تأیید نشد.',
         ),
       ).toBeInTheDocument();
       expect(

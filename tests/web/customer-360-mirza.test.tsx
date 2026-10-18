@@ -63,7 +63,7 @@ describe('the ledger reasons', () => {
     expect(new Set(LEDGER_REASONS.map((r) => LEDGER_REASON_LABELS[r])).size).toBe(
       LEDGER_REASONS.length,
     );
-    expect(t(LEDGER_REASON_LABELS.MIGRATION_OPENING_BALANCE)).toContain('میرزا');
+    expect(t(LEDGER_REASON_LABELS.MIGRATION_OPENING_BALANCE)).toContain('ربات قبلی');
   });
 });
 

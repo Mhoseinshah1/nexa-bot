@@ -17,7 +17,7 @@ export function rowHasBadge(text: string): boolean {
   return within(row).queryByText(t('web.source_badge_mirza')) !== null;
 }
 
-/** Opens the filter panel and presses the «میرزا» chip of the «منبع» filter. */
+/** Opens the filter panel and presses the «ربات قبلی» chip of the «منبع» filter. */
 export function pickMirzaSource(): void {
   const panel = openFilterPanel();
   fireEvent.click(within(panel).getByRole('button', { name: t('web.source_mirza') }));
