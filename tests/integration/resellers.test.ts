@@ -1503,7 +1503,7 @@ describe('resellers (WP9-B)', () => {
       expect(recorded, 'zero values are not recorded as changes').toHaveLength(2);
     });
 
-    it('leaves a legacy debt exactly as it is: no purchase deepens it, nothing collects it', async () => {
+    it('leaves a legacy debt exactly as it is, and buys nothing on any rail until a top-up clears it', async () => {
       await register(resellerCustomer, await tier({ credit: L }));
       // A debt run up under the old credit line, before the decision: a plain ledger row.
       await ctx.container.database.db.execute(sql`
@@ -1517,10 +1517,14 @@ describe('resellers (WP9-B)', () => {
       const before = await ledger();
       expect(await balance(resellerCustomer)).toBe(-40_000n);
 
-      const order = await confirmed(resellerCustomer, await product(1_000n));
-      await expect(settle(resellerCustomer, order.id)).rejects.toMatchObject(
-        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, { shortfallMinor: '41000' }),
-      );
+      // Owner decision 2026-10-18 (replacing 2026-10-01's "never collected"): a negative
+      // wallet, a reseller's included, confirms no purchase on ANY rail until it is topped up.
+      // The confirmation is where every rail commits, so a gateway or receipt cannot sell
+      // around it either.
+      const item = await product(1_000n);
+      await expect(confirmed(resellerCustomer, item)).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.WALLET_NEGATIVE_TOP_UP_REQUIRED,
+      });
       await expect(adjust(resellerCustomer, 'DEBIT', 1n)).rejects.toMatchObject(
         refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
       );
@@ -1528,9 +1532,18 @@ describe('resellers (WP9-B)', () => {
       await setStatus(resellerCustomer, 'SUSPENDED');
       expect(await ledger(), 'no entry written, none changed').toEqual(before);
 
-      // A top-up repays it like any balance; only then does the wallet pay again.
-      await adjust(resellerCustomer, 'CREDIT', 41_000n);
+      // A top-up that leaves it below zero still buys nothing.
       await setStatus(resellerCustomer, 'ACTIVE');
+      await adjust(resellerCustomer, 'CREDIT', 39_000n);
+      expect(await balance(resellerCustomer)).toBe(-1_000n);
+      await expect(confirmed(resellerCustomer, item)).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.WALLET_NEGATIVE_TOP_UP_REQUIRED,
+      });
+      expect(await ledger(), 'the refusals wrote nothing').toHaveLength(before.length + 1);
+
+      // A top-up repays it like any balance; only then does the wallet pay again.
+      await adjust(resellerCustomer, 'CREDIT', 2_000n);
+      const order = await confirmed(resellerCustomer, item);
       expect((await settle(resellerCustomer, order.id)).order.state).toBe('PAID');
       expect(await balance(resellerCustomer)).toBe(0n);
     });

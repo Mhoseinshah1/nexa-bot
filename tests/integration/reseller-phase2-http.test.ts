@@ -370,10 +370,12 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
       overLimitBy: IRT('80000'),
     };
     expect(await creditOf(customerA)).toMatchObject({ status: 'ACTIVE', ...legacy });
-    const order = await confirmedOrder(await product(1_000n));
-    await expect(settle(order)).rejects.toMatchObject({
-      code: COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
+    // Owner decision 2026-10-18: a negative wallet, a reseller's included, confirms no
+    // purchase on any rail until it is topped up (it was "never collected" before).
+    await expect(confirmedOrder(await product(1_000n))).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.WALLET_NEGATIVE_TOP_UP_REQUIRED,
     });
+    expect(await creditOf(customerA), 'the refusal changed nothing').toMatchObject(legacy);
 
     // A suspension that echoes nothing about credit leaves the debt, and the stored limit
     // is cleared by the write (null: no limit of its own).

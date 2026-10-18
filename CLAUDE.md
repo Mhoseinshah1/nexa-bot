@@ -122,8 +122,13 @@ Four reseller rules, each a way to sell below cost or on credit nobody granted:
   is zero for everyone, so `settleFromWallet` never takes a wallet below zero;
   every reseller write refuses a non-zero limit (after its idempotent replay),
   and migration `0155_reseller_credit_removed` zeroed every stored limit so an
-  old replica grants none either. A balance already negative is a legacy debt, left
-  exactly as it is and never collected. An operator's manual debit never
+  old replica grants none either. A balance already negative (a legacy debt from
+  the removed credit line, or a negative Mirza balance the import carried) is a
+  negative wallet like any customer's: no entry rewrites or ages it, and it
+  **blocks every purchase, on every rail, until a top-up brings it to zero**
+  (owner decision 2026-10-18, replacing 2026-10-01's "never collected";
+  `assertWalletNotNegative`, the same gate for customers and resellers). A
+  top-up is never refused. An operator's manual debit never
   overdraws; a clawback never goes below zero. Never reintroduce a credit
   line, a debt, or a monthly-minimum consequence without an explicit owner
   instruction (`docs/reseller-phase3-closure.md`).

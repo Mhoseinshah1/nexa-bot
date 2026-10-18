@@ -15,8 +15,10 @@ import type {
  * operator's credit view and the resellers report all read it — and its answer is zero for
  * every reseller, whatever limit a row stored before the decision still holds.
  *
- * A balance already below zero is a legacy debt: left exactly as it is, never collected,
- * repaid only by the same top-ups and credits as any balance.
+ * A balance already below zero is a legacy debt: left exactly as it is, never charged or aged,
+ * repaid only by the same top-ups and credits as any balance. Until it is repaid the wallet
+ * buys nothing on any rail (owner decision 2026-10-18, `assertWalletNotNegative`, the same
+ * gate as a customer's negative Mirza balance).
  */
 
 export interface CreditTerms {

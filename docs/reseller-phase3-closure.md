@@ -148,8 +148,13 @@ those changes, and where they differ, §6 is current.
   - A limit stored before the decision is still read and returned. It grants nothing.
   - An update writes zero for a tier, and null for a reseller, over it.
 - **Existing negative balances are left exactly as they are.** No entry is written,
-  changed, collected, aged or charged. A legacy debt is repaid only by the same top-ups
+  changed, aged or charged. A legacy debt is repaid only by the same top-ups
   and operator credits as any balance, and until then the wallet pays for nothing.
+  **Owner decision 2026-10-18:** until then it also buys nothing on ANY rail. A
+  negative wallet, a reseller's included, is refused at order and commercial-action
+  confirmation (`WALLET_NEGATIVE_TOP_UP_REQUIRED`, `assertWalletNotNegative`), exactly
+  like a negative Mirza balance. This replaces "never collected": the debt is still
+  never charged or aged, but no further sale is made until a top-up clears it.
   `RESELLER_SETTLEMENT` and `RESELLER_MEMBERSHIP_FEE` stay reserved and unwritten.
   `OQ-WP9-04` records the resolution.
 - **Unchanged:**
