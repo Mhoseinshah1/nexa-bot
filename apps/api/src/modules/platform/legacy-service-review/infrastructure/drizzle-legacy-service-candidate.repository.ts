@@ -155,6 +155,31 @@ export class DrizzleLegacyServiceCandidateRepository implements LegacyServiceCan
     return out;
   }
 
+  async latestArchiveSoldAt(
+    scope: TenantContext,
+    keys: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<ReadonlyMap<string, Date>> {
+    const tenantId = requireTenantId(scope);
+    const a = legacyInvoiceArchive;
+    const r = legacyInvoiceArchiveRuns;
+    const out = new Map<string, Date>();
+    const unique = [...new Set(keys)];
+    for (let i = 0; i < unique.length; i += KEY_CHUNK) {
+      const chunk = unique.slice(i, i + KEY_CHUNK);
+      const rows = await this.exec(tx)
+        .selectDistinctOn([a.invoiceKey], { invoiceKey: a.invoiceKey, soldAt: a.soldAt })
+        .from(a)
+        .innerJoin(r, and(eq(r.tenantId, a.tenantId), eq(r.id, a.runId)))
+        .where(
+          and(eq(a.tenantId, tenantId), inArray(a.invoiceKey, chunk), eq(r.state, 'COMPLETED')),
+        )
+        .orderBy(a.invoiceKey, desc(a.revision));
+      for (const row of rows) if (row.soldAt !== null) out.set(row.invoiceKey, row.soldAt);
+    }
+    return out;
+  }
+
   async insert(
     scope: TenantContext,
     row: LegacyServiceOutcomeWrite & {

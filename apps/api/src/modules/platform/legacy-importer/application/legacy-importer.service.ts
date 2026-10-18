@@ -1623,6 +1623,12 @@ export class LegacyImporterService {
       }
       // 4. P6, for the claimed invoices still eligible, and for nothing else.
       const eligibleResults = new Map<string, EligibleResult>();
+      const laneSoldAt = await this.deps.serviceCandidates.latestArchiveSoldAt(
+        scope,
+        mine.flatMap(({ invoice, decision }) =>
+          decision.category === 'ADOPTION_ELIGIBLE' ? [invoice.idInvoice] : [],
+        ),
+      );
       for (const { invoice, decision } of mine) {
         if (decision.category !== 'ADOPTION_ELIGIBLE') continue;
         const before = prior.get(invoice.idInvoice);
@@ -1638,6 +1644,7 @@ export class LegacyImporterService {
           who,
           lane.shapes,
           inventories,
+          laneSoldAt.get(invoice.idInvoice) ?? null,
         );
         eligibleResults.set(invoice.idInvoice, { kind: 'ADOPTION', outcome });
       }
@@ -2401,6 +2408,14 @@ export class LegacyImporterService {
     // An eligible invoice whose map row a person closed is not handed to P6, nor one a
     // person kept as history (P6 also re-reads that under the invoice lock).
     const eligibleResults = new Map<string, EligibleResult>();
+    // The ORIGINAL purchase dates, from the invoice archive the apply recorded before writing
+    // anything: an attached service's order is settled when the customer bought it.
+    const soldAt = await this.deps.serviceCandidates.latestArchiveSoldAt(
+      scope,
+      decided.services.flatMap(({ invoice, decision }) =>
+        decision.category === 'ADOPTION_ELIGIBLE' ? [invoice.idInvoice] : [],
+      ),
+    );
     for (const { invoice, decision } of decided.services) {
       if (decision.category !== 'ADOPTION_ELIGIBLE') continue;
       const before = prior.get(invoice.idInvoice);
@@ -2429,6 +2444,7 @@ export class LegacyImporterService {
         who,
         shapes,
         prepared.inventories,
+        soldAt.get(invoice.idInvoice) ?? null,
       );
       eligibleResults.set(invoice.idInvoice, { kind: 'ADOPTION', outcome });
       // P6 wrote the invoice's map row for every one of these; P7 records nothing here.
@@ -2662,6 +2678,8 @@ export class LegacyImporterService {
     who: { readonly telegramUserId: string; readonly customerId: string },
     shapes: ReadonlyMap<string, { id: string; resolved: boolean }>,
     inventories: ReadonlyMap<string, LegacyInventoryRead>,
+    /** The invoice's original purchase time (the archive's `time_sell`), or null when unread. */
+    legacyPurchasedAt: Date | null,
   ): Promise<LegacyAdoptionOutcome> {
     if (this.deps.adoption === null) throw new Error('unreachable: the adoption step is not wired');
     // Navigation only (owner rule 2026-10-18): a mapped product, its shape's hidden product
@@ -2689,6 +2707,7 @@ export class LegacyImporterService {
       panelId: decision.panelId,
       providerUsername: decision.providerUsername,
       product,
+      legacyPurchasedAt,
       runtime:
         facts === undefined || read === undefined || !read.ok || !read.complete
           ? null
