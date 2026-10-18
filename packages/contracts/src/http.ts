@@ -5803,6 +5803,15 @@ export const serviceSummarySchema = z.object({
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   /**
+   * When the service was ORIGINALLY bought (Track 3 §3), and the instant `GET /services` orders
+   * by, newest first. For a service this installation made it is `createdAt`. For one carried
+   * over from the previous bot it is the purchase date that bot recorded, never the moment of
+   * the import — which is what `createdAt` holds for an adopted live service. Defaulted on parse
+   * like the identity pair below, so a response from the previous release reads "not known";
+   * the server sends it on every row.
+   */
+  originalStartedAt: z.iso.datetime().nullable().default(null),
+  /**
    * Who the service is for, as Telegram knows them (spec §10): the numeric id is the
    * operator-facing customer identity, the internal `customerId` stays for links. Defaulted
    * on PARSE like the payment summary's pair, so a response from the previous release reads
@@ -5919,9 +5928,25 @@ export const serviceDetailSchema = serviceSummarySchema.extend({
 });
 export type ServiceDetailResponse = z.infer<typeof serviceDetailSchema>;
 
+/**
+ * Which part of a service's life the list shows (Track 3 §3, the «فعال | پایان‌یافته | همه» tabs).
+ *
+ * `LIVE` is every state that is not terminal and `ENDED` is the terminal states, both DERIVED
+ * from `SERVICE_TERMINAL_STATES` rather than listed, so a state added later is classified by
+ * the state machine and not by this enum. `EXPIRED` is live: renewal is the product.
+ *
+ * `ALL` is the same as leaving it out, and leaving it out is the default, so a caller from the
+ * previous release (the order page's one-row lookup, a panel's services) keeps its answer. The
+ * Web Admin's services page sends `LIVE` when its URL names no tab.
+ */
+export const SERVICE_LIST_LIFECYCLES = ['LIVE', 'ENDED', 'ALL'] as const;
+export type ServiceListLifecycle = (typeof SERVICE_LIST_LIFECYCLES)[number];
+
 export const serviceListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(SERVICE_PAGE_MAX).optional(),
   cursor: z.string().min(1).max(255).optional(),
+  /** The lifecycle tab; absent means `ALL`. See `SERVICE_LIST_LIFECYCLES`. */
+  lifecycle: z.enum(SERVICE_LIST_LIFECYCLES).optional(),
   /** Only rows from this source (the «منبع» filter). */
   source: recordSourceSchema.optional(),
   state: z.enum(SERVICE_STATES).optional(),
