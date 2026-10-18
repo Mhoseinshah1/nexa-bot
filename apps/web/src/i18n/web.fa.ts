@@ -1936,10 +1936,12 @@ export const WEB_FA = {
     'این فهرست از قدیمی‌ترین سفارش شروع می‌شود؛ دکمهٔ «تازه‌تر» به سفارش‌های جدیدتر می‌رود.',
   'web.user_orders_all': 'همهٔ سفارش‌های این مشتری',
   'web.user_services_title': 'سرویس‌های این مشتری',
-  'web.user_services_empty': 'این مشتری هنوز سرویسی ندارد.',
   'web.user_services_denied': 'برای دیدن سرویس‌های این مشتری دسترسی services.view لازم است.',
   'web.user_services_hint': 'این فهرست از تازه‌ترین سرویس شروع می‌شود.',
   'web.user_services_all': 'همهٔ سرویس‌های این مشتری',
+  'web.user_services_live_empty': 'این مشتری سرویس فعالی ندارد.',
+  'web.user_services_ended': 'پایان‌یافته',
+  'web.user_services_ended_empty': 'این مشتری سرویس پایان‌یافته‌ای ندارد.',
 
   // --- Wallet (Phase 4C) ---------------------------------------------------
   /*
@@ -3444,6 +3446,14 @@ export const WEB_FA = {
   'web.services_title': 'سرویس‌ها',
   'web.services_intro': 'سرویس‌هایی که ساخته شده‌اند، و آنهایی که هنوز نشده‌اند.',
   'web.services_empty': 'هنوز سرویسی ساخته نشده است.',
+  'web.services_tab_live': 'فعال',
+  'web.services_tab_ended': 'پایان‌یافته',
+  'web.services_tab_all': 'همه',
+  'web.services_empty_live': 'سرویس فعالی نیست.',
+  'web.services_empty_live_hint': 'سرویس‌های پایان‌یافته در زبانهٔ «پایان‌یافته» هستند.',
+  'web.services_empty_ended': 'سرویس پایان‌یافته‌ای نیست.',
+  'web.service_started_at': 'تاریخ خرید',
+  'web.service_imported_line': 'منتقل‌شده از ربات قبلی · تاریخ خرید اصلی: {date}',
   'web.services_empty_hint':
     'سرویس با تسویهٔ یک سفارش ساخته می‌شود؛ تا آن لحظه چیزی برای دیدن نیست.',
   'web.service_detail': 'جزئیات سرویس',

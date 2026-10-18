@@ -231,6 +231,7 @@ import {
   serviceOperationsResponseSchema,
   serviceResponseSchema,
   type ServiceDeliveryState,
+  type ServiceListLifecycle,
   type ServiceActionResponse,
   type ServiceListResponse,
   type ServiceOperationsResponse,
@@ -1869,11 +1870,14 @@ export function fetchServices(
     expiringWithinHours?: number;
     /** Only rows from this source (the source filter). */
     source?: RecordSource;
+    /** Track 3 §3: the lifecycle tab. Absent is ALL, the server's default. */
+    lifecycle?: ServiceListLifecycle;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.lifecycle !== undefined) params.set('lifecycle', query.lifecycle);
   if (query.state !== undefined) params.set('state', query.state);
   if (query.deliveryState !== undefined) params.set('deliveryState', query.deliveryState);
   if (query.source !== undefined) params.set('source', query.source);

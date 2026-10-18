@@ -143,7 +143,7 @@ describe('the service list (W1, W3)', () => {
     navigate('/services', { replace: true, force: true });
     const api = stubApi(empty);
     renderPage(<LiveServices />);
-    await screen.findByText(t('web.services_empty'));
+    await screen.findByText(t('web.services_empty_live'));
     const read = api.calls.find((call) =>
       new URL(call.url, 'http://x').pathname.endsWith('/services'),
     );
@@ -164,7 +164,7 @@ describe('the service list (W1, W3)', () => {
     navigate('/services', { replace: true, force: true });
     stubApi(empty);
     renderPage(<LiveServices mass />);
-    await screen.findByText(t('web.services_empty'));
+    await screen.findByText(t('web.services_empty_live'));
     // Not on the page until asked for.
     expect(screen.queryByLabelText(t('web.bulk_kind'))).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: t('web.soc_mass_title') }));
@@ -186,7 +186,7 @@ describe('the service list (W1, W3)', () => {
     navigate('/services', { replace: true, force: true });
     stubApi(empty);
     renderPage(<LiveServices />);
-    await screen.findByText(t('web.services_empty'));
+    await screen.findByText(t('web.services_empty_live'));
     expect(screen.queryByRole('button', { name: t('web.soc_mass_title') })).toBeNull();
   });
 });

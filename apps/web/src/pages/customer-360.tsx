@@ -86,6 +86,7 @@ import {
   CursorPager,
   DataTable,
   DetailHead,
+  Disclosure,
   Empty,
   Field,
   Input,
@@ -1127,31 +1128,12 @@ function CustomerServicesCard({
   mayViewLegacy?: boolean;
 }) {
   const onLink = useLinkHandler();
-  const pages = useCursorTrail();
-
-  const services = useQuery(
-    keepPageWhileTurning({
-      queryKey: ['customer-services', customerId, pages.cursor ?? null],
-      queryFn: () =>
-        fetchServices({
-          customerId,
-          limit: EMBEDDED_PAGE,
-          ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
-        }),
-      enabled: mayView,
-    }),
-  );
-  // Which services on THIS page were adopted from Mirza — asked of the server for exactly
-  // the ids shown, never inferred from a name or a date.
-  const shownIds = (services.data?.services ?? []).map((row) => row.id);
-  const adoptions = useQuery({
-    queryKey: ['customer-legacy-adopted-services', customerId, shownIds],
-    queryFn: () => fetchCustomerLegacyAdoptedServices(customerId, shownIds),
-    enabled: mayView && mayViewLegacy && shownIds.length > 0,
-  });
-  const adoptedFrom = new Map(
-    (adoptions.data?.adoptions ?? []).map((row) => [row.serviceId, row.invoiceKey]),
-  );
+  /*
+   * Track 3 §3: the live services first; the ended ones under a folded «پایان‌یافته», read only
+   * once it is opened — after a large import a customer's history can be long, and it is not
+   * what an operator opens this tab for.
+   */
+  const [endedOpen, setEndedOpen] = useState(false);
 
   if (!mayView) {
     return (
@@ -1160,6 +1142,89 @@ function CustomerServicesCard({
       </Card>
     );
   }
+
+  return (
+    <Card
+      title={t('web.user_services_title')}
+      hint={t('web.user_services_hint')}
+      actions={
+        <a href={`/services?q=${encodeURIComponent(customerId)}`} onClick={onLink}>
+          {t('web.user_services_all')}
+        </a>
+      }
+    >
+      <CustomerServiceRows
+        customerId={customerId}
+        lifecycle="LIVE"
+        enabled
+        mayViewLegacy={mayViewLegacy}
+        empty={t('web.user_services_live_empty')}
+      />
+      <Disclosure
+        summary={t('web.user_services_ended')}
+        size="sm"
+        className="c360-services-ended"
+        onToggle={(open) => {
+          if (open) setEndedOpen(true);
+        }}
+      >
+        <CustomerServiceRows
+          customerId={customerId}
+          lifecycle="ENDED"
+          enabled={endedOpen}
+          mayViewLegacy={mayViewLegacy}
+          empty={t('web.user_services_ended_empty')}
+        />
+      </Disclosure>
+    </Card>
+  );
+}
+
+/** One lifecycle of a customer's services, paged by the server, newest purchase first. */
+function CustomerServiceRows({
+  customerId,
+  lifecycle,
+  enabled,
+  mayViewLegacy,
+  empty,
+}: {
+  customerId: string;
+  lifecycle: 'LIVE' | 'ENDED';
+  /** False until the section is shown: a folded section issues no request. */
+  enabled: boolean;
+  mayViewLegacy: boolean;
+  /** The sentence an empty list says. */
+  empty: string;
+}) {
+  const onLink = useLinkHandler();
+  const pages = useCursorTrail();
+
+  const services = useQuery(
+    keepPageWhileTurning({
+      queryKey: ['customer-services', customerId, lifecycle, pages.cursor ?? null],
+      queryFn: () =>
+        fetchServices({
+          customerId,
+          lifecycle,
+          limit: EMBEDDED_PAGE,
+          ...(pages.cursor === undefined ? {} : { cursor: pages.cursor }),
+        }),
+      enabled,
+    }),
+  );
+  // Which services on THIS page were adopted from Mirza — asked of the server for exactly
+  // the ids shown, never inferred from a name or a date.
+  const shownIds = (services.data?.services ?? []).map((row) => row.id);
+  const adoptions = useQuery({
+    queryKey: ['customer-legacy-adopted-services', customerId, shownIds],
+    queryFn: () => fetchCustomerLegacyAdoptedServices(customerId, shownIds),
+    enabled: enabled && mayViewLegacy && shownIds.length > 0,
+  });
+  const adoptedFrom = new Map(
+    (adoptions.data?.adoptions ?? []).map((row) => [row.serviceId, row.invoiceKey]),
+  );
+
+  if (!enabled) return null;
 
   const columns: readonly Column<ServiceSummaryResponse>[] = [
     {
@@ -1211,40 +1276,32 @@ function CustomerServicesCard({
     },
   ];
 
+  const caption =
+    lifecycle === 'LIVE' ? t('web.user_services_title') : t('web.user_services_ended');
   return (
-    <Card
-      title={t('web.user_services_title')}
-      hint={t('web.user_services_hint')}
-      actions={
-        <a href={`/services?q=${encodeURIComponent(customerId)}`} onClick={onLink}>
-          {t('web.user_services_all')}
-        </a>
-      }
-    >
-      <StateSwitch query={services}>
-        {services.data === undefined ? null : services.data.services.length === 0 ? (
-          <Empty title={t('web.user_services_empty')} />
-        ) : (
-          <>
-            <DataTable
-              caption={t('web.user_services_title')}
-              columns={columns}
-              rows={services.data.services}
-              rowKey={(row) => row.id}
-              dense
-            />
-            {/* Default labels: this traversal runs newest to oldest. */}
-            <CursorPager
-              shown={services.data.services.length}
-              hasPrevious={pages.hasPrevious}
-              hasNext={services.data.nextCursor !== null}
-              onPrevious={pages.back}
-              onNext={() => pages.forward(services.data?.nextCursor ?? null)}
-            />
-          </>
-        )}
-      </StateSwitch>
-    </Card>
+    <StateSwitch query={services}>
+      {services.data === undefined ? null : services.data.services.length === 0 ? (
+        <Empty variant="compact" title={empty} />
+      ) : (
+        <>
+          <DataTable
+            caption={caption}
+            columns={columns}
+            rows={services.data.services}
+            rowKey={(row) => row.id}
+            dense
+          />
+          {/* Default labels: this traversal runs newest to oldest. */}
+          <CursorPager
+            shown={services.data.services.length}
+            hasPrevious={pages.hasPrevious}
+            hasNext={services.data.nextCursor !== null}
+            onPrevious={pages.back}
+            onNext={() => pages.forward(services.data?.nextCursor ?? null)}
+          />
+        </>
+      )}
+    </StateSwitch>
   );
 }
 

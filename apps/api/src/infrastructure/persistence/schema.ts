@@ -6914,6 +6914,20 @@ export const services = pgTable(
      * expand-only for the release running beside this one.
      */
     isTest: boolean('is_test').notNull().default(false),
+    /**
+     * When the service was ORIGINALLY bought, where that differs from `created_at` (Track 3 §3),
+     * or NULL. The services list orders by `COALESCE(original_started_at, created_at)`, newest
+     * first, so an imported service sits at its own purchase date rather than at the import.
+     *
+     * NULL for every service this installation made: its `created_at` IS its purchase, and a
+     * copy would be a second thing to keep in step. For a row the one-time import wrote it is
+     * the purchase date the previous bot recorded — the import's order's `settled_at` —
+     * filled by `nexa_services_original_started` on INSERT when the writer leaves it out, so
+     * no importer has to remember it, and backfilled for the rows already imported. Nullable
+     * and unwritten by the application, so the release running beside this one inserts as
+     * before. The keyset's indexes are built online (`online-indexes.ts`).
+     */
+    originalStartedAt: timestamptz('original_started_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),

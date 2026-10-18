@@ -568,6 +568,37 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "business_conversations" USING btree ("tenant_id","customer_id") ' +
       "WHERE (state = 'HANDOFF_REQUIRED'::text)",
   },
+  /*
+   * Track 3 §3: the services list's keyset, `(COALESCE(original_started_at, created_at), id)`
+   * DESCENDING — newest by the ORIGINAL purchase, so a large import sits at its own dates
+   * rather than at the import. One index per shape the list's tabs ask, because a
+   * `state <> 'TERMINATED'` filter cannot bound a scan of a state-leading index and a scan
+   * that filtered afterwards walks the imported history to find the live page:
+   *
+   *   - every service (the «همه» tab, and a list with any other filter),
+   *   - the LIVE tab, partial on exactly its predicate (the default view),
+   *   - one state — the ENDED tab is `state = 'TERMINATED'` — leading with the state.
+   *
+   * The expression is spelled exactly as `DrizzleServiceRepository.listStatement` orders by,
+   * because the planner matches an index expression to the query's, not to its meaning.
+   * `services-plan.test.ts` reads each plan over 200 000 rows.
+   */
+  {
+    name: 'services_tenant_started_page_idx',
+    definition:
+      'ON "services" USING btree ("tenant_id",COALESCE("original_started_at","created_at"),"id")',
+  },
+  {
+    name: 'services_tenant_live_started_page_idx',
+    definition:
+      'ON "services" USING btree ("tenant_id",COALESCE("original_started_at","created_at"),"id") ' +
+      "WHERE state <> 'TERMINATED'",
+  },
+  {
+    name: 'services_tenant_state_started_page_idx',
+    definition:
+      'ON "services" USING btree ("tenant_id","state",COALESCE("original_started_at","created_at"),"id")',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */
