@@ -36,27 +36,28 @@ import { createTestContext, type TestContext } from './harness';
  */
 
 const USERS = 360;
-const INVOICES = 150;
+// More than one 200-row slice of the services section, whose audit is counted per slice.
+const INVOICES = 450;
 
 /** The digests captured before the speed work. */
 const PINNED: Record<string, string> = {
-  dryRunReport: '0ee803e72b8d5227f4f25c8ad0fe51615bb3f9c494a560dbec2ea2f55a0e5524',
-  applyCounts: 'b427dc17069d0a92381f617d45bd3d7ba0406ae83ab6b67d39ddff93af29480c',
+  dryRunReport: '7bfda0b23617014ebb8ca9879b0baff9a7bfb836deede0f88873f5fa85cda7b5',
+  applyCounts: '91c4e71389e47a62d6703c26136631db8593aa9f54aa1161f23dc0235828c3f1',
   customers: '1795829b5ff6e48d250360a90fedcbb326f433e36a47f59b16460a502bfe1393',
   wallet: '75a385e8b3e2d0757651d8ba72a53de012a355f0eaa4dbd454541d79ff734d3b',
   trials: '559b0781174574a505585078a6692341553dbc4666b0cffa0e746614da1ef3ee',
-  importMap: '773745e6bdd23e0b3d82ba6be67f12ce6ae374a2693caf60267d1f60962e41c9',
-  audit: '56d67b7371f75b6180ba8229ee6bed59700c008e87557d37a4f3d2b24894e40c',
-  outbox: '55ef2663d2c001f011f01ea3bea79cf43491757f7e29ab688081d503be495bb7',
-  aggregateSequences: '9f99bc188937f3d3db52035cb7f3212d4ff7450d915d6a112fc058a9639e70bb',
-  idempotency: '790fd2450445007adb603a0505a1d97d1c6ba370c2f6105cef4d5a2b7ee9d591',
-  services: '8f3503fa1fba28f724af2b2e7f6345b2020bbe12b168bb5d535973492fc3097f',
-  orders: '128045086449f7e4996ddea7ec660019498216a5e035e2c4b043b11aa68c3d4f',
+  importMap: '4a0d73f6ee1646f9e431053b5396d7cd15d76091885452f0f7d8cbd292803ab6',
+  audit: 'b71cb66189c8719adec16f99c24a94927ce9a0e135319a6d5e5da239b42c2f30',
+  outbox: 'e2615b8d0c5d373c9df2d6914c06baecc754a8b3101e7b7a49a4861f2ed9b043',
+  aggregateSequences: 'bb2d305752089dd2e885db2ee5917498f23a042490da4822b0cb2f3b734a4d1c',
+  idempotency: '9c2f50df9573ee59f3dd540600387326ab0c37096ea8a6bb5e2565dff39307c5',
+  services: '2a0ee48ad33c0fe900fd7e756650579b5c2f93a0d5c3596570c525efbeb373d6',
+  orders: '73978c181f0c7b35ded662d22d855d84e600b33bc463220700b8a1072762da2d',
   payments: 'fea44bf614ec8e726c02f9bd96958919f727ecdd709ce9a2a627afd783ba0665',
-  history: '0663e65e39714485039bcee979ae797f927be4294c894e6f963f4f6deed7799f',
-  candidates: '4f1bd42d7bc226abef9563481e7263e83c41b1690bad48a8f43c3c3b8a9a607c',
-  invoiceArchive: 'daaf5035f260cb3b4d3d1b1b227380d9ad1c64d522b4675012da9f90597e1cf9',
-  runs: '579766a445c89c0660d29036f58be85a33597aae72335ccd2a189311df526bef',
+  history: '03feecc26487a7c0ecd6f6434809336a054a1f2cf110a6ce91759c00b752c054',
+  candidates: 'dbec493afb42de2b30de09a68b340f42dad997a3b995f88ecd5c2cc830169517',
+  invoiceArchive: '2fe38032bcbb79542e416610c7687e11dbbe7cf27d6bb0acc3b1e33e9bb00c4a',
+  runs: '1c6d1c56c6005d1e4bc1841dc7b4026408671a3dda979198957bcc6a121f7a5c',
 };
 
 /** Dates as ISO text, bigints as decimal text: what the database rows carry, made plain. */
