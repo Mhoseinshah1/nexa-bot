@@ -188,10 +188,10 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     // The importer adopted every live invoice AND the removed one whose account is on the
     // panel (every invoice is matched, not only the live ones), as MIRZA-marked rows.
     const live = generated.invoices.filter((i) => i.live).length;
-    expect(await rig.count('services')).toBe(live + 1);
-    expect(await rig.count('services', "source = 'MIRZA' AND source_ref LIKE 'invoice:%'")).toBe(
-      live + 1,
-    );
+    const adoptedCount = live + 1;
+    expect(
+      await rig.count('services', "state <> 'TERMINATED' AND source_ref LIKE 'invoice:%'"),
+    ).toBe(adoptedCount);
     expect(
       await rig.count(
         'orders',
@@ -199,11 +199,60 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
       ),
     ).toBe(1);
     expect(await rig.count('services', `source_ref = 'invoice:${names['onpanel']}'`)).toBe(1);
-    // …and nothing ended yet: the ended step has not run.
-    expect(await rig.count('services', "state = 'TERMINATED'")).toBe(0);
+
+    // The executor's MATERIALIZE phase has ALREADY run the ended step: 40 invoices - 16 live
+    // - 1 on-panel - GAPS (5) = 18 ended services, each behind its own LEGACY_HISTORY order,
+    // and not one row more (a gap invoice or an adopted one is never ended).
+    const ended = INVOICES - adoptedCount - GAPS;
+    expect(ended).toBe(18);
+    expect(await rig.count('services', "state = 'TERMINATED'")).toBe(ended);
+    expect(await rig.count('services')).toBe(adoptedCount + ended);
+    expect(await rig.count('services', "source = 'MIRZA' AND source_ref LIKE 'invoice:%'")).toBe(
+      adoptedCount + ended,
+    );
+    expect(await rig.count('orders', "origin = 'LEGACY_HISTORY'")).toBe(ended);
+    expect(
+      Number(
+        await scalar(
+          `SELECT count(DISTINCT source_ref)::int AS v FROM services WHERE state = 'TERMINATED'`,
+        ),
+      ),
+    ).toBe(ended);
+    // No ended service for an invoice the importer adopted, or one that is a counted gap.
+    expect(
+      Number(
+        await scalar(
+          `SELECT count(*)::int AS v FROM services t JOIN services a
+             ON a.tenant_id = t.tenant_id AND a.source_ref = t.source_ref AND a.id <> t.id`,
+        ),
+      ),
+    ).toBe(0);
+    // The exact-match report already holds after the import (COMPLETED requires it).
+    for (const row of await step().match(context())) {
+      expect(exactMatchHolds(row), row.nexaTable).toBe(true);
+    }
   }, 600_000);
 
+  /** Rows the ended step wrote, as the comparison key of the "ran / has not run" tests. */
+  let endedBefore: string;
+  const endedKey = async (): Promise<string> =>
+    scalar(
+      `SELECT coalesce(string_agg(source_ref || ':' || state || ':' || is_test::text, ',' ORDER BY source_ref), '') AS v
+         FROM services WHERE state = 'TERMINATED'`,
+    );
+
   it('the exact-match report cannot hold before the step has run, and says why', async () => {
+    // Put the database back into the state the step finds BEFORE it has run: remove exactly
+    // the ended services and their history orders the executor wrote (a crash between the
+    // import and the MATERIALIZE phase leaves this state).
+    endedBefore = await endedKey();
+    expect(endedBefore.split(',').length).toBe(18);
+    await db().execute(
+      sql`DELETE FROM services WHERE tenant_id = ${TENANT} AND state = 'TERMINATED'`,
+    );
+    await db().execute(
+      sql`DELETE FROM orders WHERE tenant_id = ${TENANT} AND origin = 'LEGACY_HISTORY'`,
+    );
     const rows = await step().match(context());
     const orders = rows.find((r) => r.nexaTable === 'orders');
     expect(orders).toBeDefined();
@@ -211,6 +260,9 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
     expect(orders.mirzaRows).toBe(INVOICES);
     expect(orders.nexaRows).toBe(0);
     expect(exactMatchHolds(orders)).toBe(false);
+    const services = rows.find((r) => r.nexaTable === 'services');
+    expect(services?.nexaRows).toBe(INVOICES - GAPS - 18);
+    expect(exactMatchHolds(services as NonNullable<typeof services>)).toBe(false);
   });
 
   it('apply writes one TERMINATED service and one LEGACY_HISTORY order per ended invoice, and nothing else', async () => {
@@ -221,6 +273,7 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
 
     const outcome = await step().apply(context());
 
+    // The step writes back exactly what the executor had written (same refs, states, test marks).
     // 40 invoices: 16 live + 1 on-panel are adopted; the unpaid, no-panel, unmapped and
     // unmappable-shape ones are counted gaps; everything else is ended.
     const live = generated.invoices.filter((i) => i.live).length;
@@ -240,7 +293,8 @@ describe('ended services: every Mirza invoice is a live, ended or counted servic
       SHAPE_UNMAPPABLE: 1,
     });
 
-    // The ended rows.
+    // The ended rows — identical to the ones the executor wrote before the test removed them.
+    expect(await endedKey()).toBe(endedBefore);
     expect(await rig.count('services', "state = 'TERMINATED'")).toBe(ended);
     expect(
       await rig.count(

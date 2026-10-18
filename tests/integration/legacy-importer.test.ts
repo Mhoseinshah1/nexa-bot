@@ -534,24 +534,35 @@ describe('Migration P7: the legacy importer', () => {
     // closed code arrives with the review queue are counted, not misfiled.
     expect(
       await count('legacy_import_map', "legacy_table = 'invoice' AND status = 'SKIPPED'"),
-    ).toBe(2);
+      // 3 = TEST_INVOICE_SKIPPED 2 (the live `svc_test` AND the removed `svc_oldtest`: every
+      // paid invoice is decided now, not only live ones) + TEST_PANEL_SKIPPED 1 (`whatever`).
+      // It was 2 while the removed test invoice was never decided.
+    ).toBe(
+      SYNTHETIC_EXPECTED.services.categories.TEST_INVOICE_SKIPPED +
+        SYNTHETIC_EXPECTED.services.categories.TEST_PANEL_SKIPPED,
+    );
+    expect(SYNTHETIC_EXPECTED.services.categories.TEST_INVOICE_SKIPPED).toBe(2);
+    expect(SYNTHETIC_EXPECTED.services.categories.TEST_PANEL_SKIPPED).toBe(1);
     expect(
       await count('legacy_import_map', "legacy_table = 'invoice' AND status = 'MANUAL_REVIEW'"),
-      // Mirza PR5: 13, not 12 — the NULL-code invoice is review (NO_PANEL), never adopted.
-    ).toBe(13);
+      // 14 = 21 candidates - 1 key-invalid (no map row) - 3 SKIPPED - 3 ADOPTION_ELIGIBLE (their
+      // map row is P6's). It was 13 before the removed `svc_old` (account not on the panel)
+      // was decided too: it is PROVIDER_MISSING, a review row like its live twin `svc_missing`.
+    ).toBe(14);
     // Every review row carries its closed review reason and enters review OPEN.
     expect(
       await count(
         'legacy_import_map',
         "legacy_table = 'invoice' AND status = 'MANUAL_REVIEW' AND review_state = 'OPEN'",
       ),
-    ).toBe(13);
+    ).toBe(14);
     for (const [reason, n] of [
       ['CUSTOMER_MISSING', 2],
       ['UNSUPPORTED_SHAPE', 2],
       ['PRODUCT_MAPPING_UNRESOLVED', 1],
       // Mirza PR5: the empty-code invoice is no longer searched (it was PROVIDER_MISSING).
-      ['PROVIDER_MISSING', 1],
+      // `svc_missing` (live) and the removed `svc_old`; the latter is decided now (every invoice).
+      ['PROVIDER_MISSING', 2],
       // The forgotten code, and the three empty/NULL codes (owner decision 8).
       ['PANEL_UNMAPPED', 4],
       ['INVALID_SOURCE_ROW', 2],
@@ -565,7 +576,8 @@ describe('Migration P7: the legacy importer', () => {
       await count('legacy_import_map', "legacy_table = 'invoice' AND status = 'IMPORTED'"),
     ).toBe(0);
     expect(applied.services.map).toMatchObject({
-      INSERTED: 15,
+      // 17 = 14 MANUAL_REVIEW + 3 SKIPPED (was 13 + 2 = 15); the 3 eligible are P6's, not here.
+      INSERTED: 17,
       keyInvalid: 1,
       reviewClosed: 0,
     });
@@ -613,7 +625,8 @@ describe('Migration P7: the legacy importer', () => {
     });
     expect(again.trials).toMatchObject({ APPLIED: 0, REPLAYED: users.imported });
     expect(again.products).toMatchObject({ created: 0, existing: 6 });
-    expect(again.services.map).toMatchObject({ INSERTED: 0, UNCHANGED: 15, REFUSED: 0 });
+    // the same 17 rows (14 review + 3 skipped) are found unchanged, none inserted again
+    expect(again.services.map).toMatchObject({ INSERTED: 0, UNCHANGED: 17, REFUSED: 0 });
     expect(await count('wallet_entries')).toBe(6);
     expect(await count('wallet_entries', "direction = 'DEBIT'")).toBe(1);
     expect(await count('legacy_wallet_debts')).toBe(0);
@@ -747,9 +760,11 @@ describe('Migration P7: the legacy importer', () => {
       expectedPostImportTotalMinor: final['wallet'].actualPostImportTotalMinor,
     });
     expect(final['services']).toMatchObject({
-      candidates: 19,
+      // 21 = every invoice (the 19 live ones + the removed `svc_old` and `svc_oldtest`, which
+      // are matched and decided too); testSkipped 3 = TEST_INVOICE_SKIPPED 2 + TEST_PANEL_SKIPPED 1.
+      candidates: SYNTHETIC_EXPECTED.services.candidates,
       adopted: 0,
-      testSkipped: 2,
+      testSkipped: 3,
       // Mirza PR5: the AMBIGUOUS_PANEL invoice (a NULL code) is NO_PANEL, a missing mapping,
       // with the other two empty/NULL codes: v1's closed fields still add up (S3).
       ambiguous: 1,

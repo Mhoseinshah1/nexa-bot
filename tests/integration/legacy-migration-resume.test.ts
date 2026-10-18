@@ -107,7 +107,7 @@ describe('legacy migration: interrupt, resume and rerun over a real package', ()
     expect(keyAtBackup).toBeNull();
   });
 
-  it('the reference run imports every user, opening (CREDIT or DEBIT), live service and history line once', () => {
+  it('the reference run imports every user, opening (CREDIT or DEBIT), service, order, payment and history line once', async () => {
     const money = moneyOfSnapshot(pkg.parts);
     const live = generated.invoices.filter((i) => i.live).length;
     expect(reference).toMatchObject({
@@ -117,16 +117,30 @@ describe('legacy migration: interrupt, resume and rerun over a real package', ()
       walletEntries: money.positive.count + money.negative.count,
       ledgerSum: (money.positive.sum - money.negative.sum).toString(),
       debts: 0,
-      services: live,
-      orders: live,
-      ordersNonLegacy: 0,
-      payments: 0,
+      // Every one of the 400 invoices is carried: the generator has no gap (all paid, mapped
+      // panel, valid shape), so 160 live ones are ADOPTED (live = 2 of every 5 = 160) and the
+      // other 240 (account gone from the panel) are ENDED services behind LEGACY_HISTORY orders.
+      services: generated.invoices.length,
+      orders: generated.invoices.length,
+      // …`ordersNonLegacy` is "not a zero-total LEGACY_ADOPTION order": the 240 history orders.
+      ordersNonLegacy: generated.invoices.length - live,
+      // The package's payment history is written as payments: one per record, every 2nd user.
+      payments: Math.ceil(USERS / 2),
       provisioningOperations: 0,
       history: pkg.historyLines,
       // every invoice is a candidate, live or not (owner decision 2026-10-17)
       candidates: generated.invoices.length,
       applyRuns: 1,
     });
+    expect(live).toBe(INVOICES * 0.4);
+    expect(await rig.count('services', "state = 'TERMINATED'")).toBe(INVOICES - live);
+    expect(await rig.count('services', "state <> 'TERMINATED'")).toBe(live);
+    expect(await rig.count('orders', "origin = 'LEGACY_HISTORY'")).toBe(INVOICES - live);
+    expect(
+      await rig.count('payments', "source = 'MIRZA' AND evidence_kind = 'LEGACY_IMPORT'"),
+    ).toBe(Math.ceil(USERS / 2));
+    expect(await rig.count('payments', "source = 'NEXA'")).toBe(0);
+    expect(await rig.count('wallet_entries', 'payment_id IS NOT NULL')).toBe(0);
   });
 
   // --- the crash triggers ---------------------------------------------------------------------
@@ -508,8 +522,15 @@ describe('legacy migration: interrupt, resume and rerun over a real package', ()
     );
     await tickToEnd(id, executor);
     const live = generated.invoices.filter((i) => i.live).length;
-    expect(await rig.count('services')).toBe(live - 1);
+    // Adopted = live minus the one held invoice. The 240 non-live invoices are ENDED services
+    // (INVOICES - live), a different thing; the held one is neither adopted NOR ended — it has
+    // no service and no order in ANY state, it stays a counted gap (AMBIGUOUS_OWNERSHIP below).
+    expect(await rig.count('services', "state <> 'TERMINATED'")).toBe(live - 1);
+    expect(await rig.count('services', "state = 'TERMINATED'")).toBe(INVOICES - live);
+    expect(await rig.count('services')).toBe(INVOICES - 1);
     expect(await rig.count('services', `provider_username = '${held.username}'`)).toBe(0);
+    expect(await rig.count('services', `source_ref = 'invoice:${held.id}'`)).toBe(0);
+    expect(await rig.count('orders', `source_ref = 'invoice:${held.id}'`)).toBe(0);
     expect(
       await rig.count(
         'legacy_service_candidates',

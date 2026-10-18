@@ -27,8 +27,9 @@ import { createTestContext, tenantA, type TestContext } from './harness';
  *   positive balance is exactly one MIGRATION_OPENING_BALANCE credit referenced
  *   `legacy:opening:<tg>`, every negative one exactly one DEBIT of its magnitude (the wallet equals the Mirza balance,
  *   negative included, no legacy-debt row), a zero nothing;
- *   no payment, no revenue, and the only orders are the zero-total LEGACY_ADOPTION ones
- *   behind adopted services;
+ *   no revenue: the payments are the package's history (MIRZA, LEGACY_IMPORT, terminal, no
+ *   ledger entry), and the orders are the zero-total LEGACY_ADOPTION ones behind adopted
+ *   services plus the LEGACY_HISTORY ones behind ended services;
  * - the RickPanel binding leaves the panels exactly as they were (row and policy), and the
  *   panels saw reads only;
  * - the history archive holds every packaged history line and a customer's is readable
@@ -270,11 +271,36 @@ describe('legacy migration: one lifecycle, checked from outside the importer', (
     expect(view.dryRunReport?.debts.count).toBe(money.negative.count);
     const debtTotal = BigInt(view.dryRunReport?.debts.totalMinor ?? '0');
     expect(debtTotal < 0n ? -debtTotal : debtTotal).toBe(money.negative.sum);
-    // No money moved: no payment, no revenue; adoption orders are zero-total LEGACY_ADOPTION.
+    // No money moved. The MATERIALIZE phase writes the package's payment HISTORY — exactly one
+    // MIRZA payment per history record, evidence LEGACY_IMPORT, terminal — and nothing of it
+    // is revenue or a ledger entry: no NEXA payment, no open one, no payment-linked ledger row.
+    const packagedPayments = [...paymentRecords(generated.users)].length;
+    expect(packagedPayments).toBe(Math.ceil(USERS / 2)); // every 2nd of USERS users
+    expect(await rig.count('payments')).toBe(packagedPayments);
+    expect(
+      await rig.count(
+        'payments',
+        "source = 'MIRZA' AND evidence_kind = 'LEGACY_IMPORT' AND state = 'CONFIRMED' AND source_ref LIKE 'payment:%'",
+      ),
+    ).toBe(packagedPayments);
+    expect(await rig.count('payments', "source = 'NEXA'")).toBe(0);
+    expect(
+      await rig.count(
+        'payments',
+        "state NOT IN ('CONFIRMED', 'FAILED', 'CANCELLED', 'EXPIRED')", // none PENDING / UNKNOWN
+      ),
+    ).toBe(0);
+    expect(await rig.count('payments', 'order_id IS NOT NULL')).toBe(0);
+    expect(await rig.count('wallet_entries', 'payment_id IS NOT NULL')).toBe(0);
+    // Adopted services are the LIVE invoices (orders: zero-total LEGACY_ADOPTION); every other
+    // paid invoice is an ENDED service behind a LEGACY_HISTORY order (one each, never a sale).
     const live = generated.invoices.filter((i) => i.live).length;
-    expect(await rig.count('payments')).toBe(0);
-    expect(await rig.count('services')).toBe(live);
-    expect(await rig.count('orders')).toBe(live);
+    const ended = await rig.count('services', "state = 'TERMINATED'");
+    expect(await rig.count('services', "state <> 'TERMINATED'")).toBe(live);
+    expect(await rig.count('orders', "origin = 'LEGACY_ADOPTION'")).toBe(live);
+    expect(await rig.count('orders', "origin = 'LEGACY_HISTORY' AND source = 'MIRZA'")).toBe(ended);
+    expect(await rig.count('orders')).toBe(live + ended);
+    expect(await rig.count('orders', "origin = 'STANDARD'")).toBe(0);
     expect(
       await rig.count(
         'orders',
