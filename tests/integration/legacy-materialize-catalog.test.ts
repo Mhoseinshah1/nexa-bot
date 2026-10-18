@@ -537,9 +537,10 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
         pricing_mode: 'PERCENTAGE_DISCOUNT',
         discount_percentage: 20,
         credit: null,
-        cap: '5000000',
-        cap_currency: 'IRT',
-        tier: 'Mirza agent (n)',
+        // maxbuyagent becomes no NEXA field: the deprecated column stays empty.
+        cap: null,
+        cap_currency: null,
+        tier: 'نماینده سطح ۱',
         tier_mode: 'LIST_PRICE',
       });
       // 100 % is a free product: not proven, so NOT applied. The raw value is kept.
@@ -548,8 +549,15 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
         pricing_mode: 'TIER',
         discount_percentage: null,
         cap: null,
-        tier: 'Mirza agent (n2)',
+        tier: 'نماینده سطح ۲',
       });
+      // The cap is kept only as import history: raw, applied to nothing.
+      expect((n!['source_detail'] as { purchaseCap: unknown }).purchaseCap).toEqual({
+        raw: '5000000',
+        applied: false,
+        reason: 'RESELLER_CREDIT_REMOVED',
+      });
+      expect(r.notes).toMatchObject({ PURCHASE_CAP_KEPT_IN_HISTORY_ONLY: 1 });
       const detail = n2!['source_detail'] as {
         pricediscount: { raw: string; applied: number | null };
         tierPriceLevels: { applied: boolean; levels: unknown[] };
@@ -561,7 +569,7 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
       expect(await count('custom_service_price_rules')).toBe(0);
     });
 
-    it('maxbuyagent is a visible limit, never money: balance 0, no ledger row, purchases still refused', async () => {
+    it('maxbuyagent is never a limit, a credit or money: balance 0, no ledger row, purchases still refused', async () => {
       const before = await count('wallet_entries');
       await steps().resellers.apply(mctx());
 
@@ -570,9 +578,9 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
       expect(await count('wallet_entries')).toBe(before);
       expect(await count('wallet_entries')).toBe(0);
 
-      // ... the cap is visible to the owner, through the admin service the API serves ...
+      // ... the cap reaches no NEXA field the admin service serves ...
       const listing = await ctx.container.resellersAdmin.get(tenantA, owner, agentN);
-      expect(listing.importedPurchaseCap).toEqual({ amountMinor: 5_000_000n, currency: 'IRT' });
+      expect(Object.keys(listing).some((k) => /cap/iu.test(k))).toBe(false);
       expect(listing.source).toBe('MIRZA');
       // ... and is not a credit line: no own limit, the tier's limit is zero, the allowance is zero.
       expect(listing.creditLimit).toBeNull();
@@ -633,16 +641,17 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
       expect(report.every(exactMatchHolds)).toBe(true);
     });
 
-    it('holds the exact match: agents, the cap total, and the kept price levels', async () => {
+    it('holds the exact match: agents (no amount: the cap is no money), and the kept price levels', async () => {
       await steps().resellers.apply(mctx());
       const report = await steps().resellers.match(mctx());
       const agents = report.find((x) => x.mirzaTable === 'agent')!;
       expect(agents).toMatchObject({
         mirzaRows: 4,
         nexaRows: 2,
-        mirzaSumMinor: 5_000_000n,
-        nexaSumMinor: 5_000_000n,
+        mirzaSumMinor: null,
+        nexaSumMinor: null,
       });
+      expect(agents.explained.every((g) => g.sumMinor === null)).toBe(true);
       expect(agents.explained.map((g) => g.reason).sort()).toEqual([
         'CUSTOMER_NOT_IMPORTED',
         'NOT_AN_AGENT_TIER',
@@ -796,8 +805,7 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
       );
       const sums = await rows<Record<string, string>>(sql`
         SELECT (SELECT coalesce(sum(price_amount),0) FROM products)::text AS p,
-               (SELECT coalesce(sum(value),0) FROM discounts)::text AS d,
-               (SELECT coalesce(sum(imported_purchase_cap_minor),0) FROM resellers)::text AS c`);
+               (SELECT coalesce(sum(value),0) FROM discounts)::text AS d`);
 
       const second = await applyAll();
       expect(second.products).toMatchObject({
@@ -821,8 +829,7 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
       expect(
         await rows(sql`
         SELECT (SELECT coalesce(sum(price_amount),0) FROM products)::text AS p,
-               (SELECT coalesce(sum(value),0) FROM discounts)::text AS d,
-               (SELECT coalesce(sum(imported_purchase_cap_minor),0) FROM resellers)::text AS c`),
+               (SELECT coalesce(sum(value),0) FROM discounts)::text AS d`),
       ).toEqual(sums);
     });
 

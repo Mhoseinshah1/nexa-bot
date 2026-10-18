@@ -408,8 +408,6 @@ export class DrizzleCatalogMaterializeRepository
             creditLimitCurrency: null,
             monthlyMinimumAmount: null,
             monthlyMinimumCurrency: null,
-            importedPurchaseCapMinor: r.capMinor,
-            importedPurchaseCapCurrency: r.capMinor === null ? null : 'IRT',
             sourceDetail: r.detail,
             createdAt: now,
             updatedAt: now,
@@ -426,18 +424,16 @@ export class DrizzleCatalogMaterializeRepository
 
   async mirzaResellerTotals(
     scope: TenantContext,
-  ): Promise<CatalogTotals & { readonly levels: number }> {
+  ): Promise<{ readonly rows: number; readonly levels: number }> {
     const [row] = await this.db
       .select({
         n: sql<string>`count(*)::text`,
-        sum: sql<string>`coalesce(sum(${resellers.importedPurchaseCapMinor}), 0)::text`,
         levels: sql<string>`coalesce(sum(jsonb_array_length(${resellers.sourceDetail}->'tierPriceLevels'->'levels')), 0)::text`,
       })
       .from(resellers)
       .where(and(eq(resellers.tenantId, requireTenantId(scope)), eq(resellers.source, 'MIRZA')));
     return {
       rows: Number(row?.n ?? 0),
-      sumMinor: BigInt(row?.sum ?? '0'),
       levels: Number(row?.levels ?? 0),
     };
   }

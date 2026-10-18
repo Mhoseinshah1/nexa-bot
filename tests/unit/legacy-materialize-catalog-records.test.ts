@@ -8,6 +8,7 @@ import {
   planDiscount,
   planProduct,
   resellerFacts,
+  resellerSourceDetail,
   tomanMinor,
   type HistoryRow,
 } from '../../apps/api/src/modules/platform/legacy-materialize/application/catalog-records';
@@ -125,12 +126,20 @@ describe('resellerFacts', () => {
     expect(percent(null)).toBeNull();
   });
 
-  it('reads maxbuyagent as a cap, kept raw when unreadable, and never as anything else', () => {
+  it('keeps maxbuyagent raw, as history only, and never parses it into an amount', () => {
     const facts = (raw: string | null) =>
       resellerFacts(agent(), stateRow({}, { overdraft_limit_raw: raw }), []);
-    expect(facts('5000000')).toMatchObject({ capMinor: 5_000_000n, capRaw: '5000000' });
-    expect(facts('5,000')).toMatchObject({ capMinor: null, capRaw: '5,000' });
-    expect(facts(null)).toMatchObject({ capMinor: null, capRaw: null });
+    for (const raw of ['5000000', '5,000', null]) {
+      const f = facts(raw);
+      expect(f?.capRaw).toBe(raw);
+      // No bigint anywhere in the facts: nothing downstream can mistake the cap for money.
+      expect(Object.values(f ?? {}).some((v) => typeof v === 'bigint')).toBe(false);
+      expect(resellerSourceDetail(f!)['purchaseCap']).toEqual({
+        raw,
+        applied: false,
+        reason: 'RESELLER_CREDIT_REMOVED',
+      });
+    }
   });
 
   it('gives an owner-less profile no facts, and an unknown tier no reseller tier', () => {

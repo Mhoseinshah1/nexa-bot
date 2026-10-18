@@ -433,7 +433,6 @@ function toResellerSummary(reseller: ResellerListing): ResellerSummaryResponse {
       amount: effective.amountMinor.toString(),
       currency: effective.currency,
     },
-    importedPurchaseCap: wireMoney(reseller.importedPurchaseCap),
     createdAt: reseller.createdAt.toISOString(),
     updatedAt: reseller.updatedAt.toISOString(),
   };

@@ -204,10 +204,14 @@ export const RESELLER_GAP_REASONS = [
 ] as const;
 export type ResellerGapReason = (typeof RESELLER_GAP_REASONS)[number];
 
-/** The two Mirza agent tiers, each becoming one NEXA tier. */
+/**
+ * The two Mirza agent tiers, each becoming one NEXA tier. The NAME is what the operator reads on
+ * the tier page, so it is Persian and names no legacy system (the provenance is the row's
+ * `source`, not its label). An existing tier with this name is reused as it stands.
+ */
 export const MIRZA_AGENT_TIERS = {
-  n: 'Mirza agent (n)',
-  n2: 'Mirza agent (n2)',
+  n: 'نماینده سطح ۱',
+  n2: 'نماینده سطح ۲',
 } as const;
 export type MirzaAgentTier = keyof typeof MIRZA_AGENT_TIERS;
 
@@ -219,8 +223,11 @@ export interface ResellerFacts {
   readonly telegramUserId: string | null;
   readonly customerId: string | null;
   readonly customerValid: boolean;
-  /** `user.maxbuyagent`, parsed; null when absent or unreadable. */
-  readonly capMinor: bigint | null;
+  /**
+   * `user.maxbuyagent` exactly as the package holds it. Raw text only, and deliberately not
+   * parsed into an amount: it is a credit/limit concept and reseller credit is removed (owner
+   * decision 2026-10-01), so it becomes no NEXA limit, credit or money — import history only.
+   */
   readonly capRaw: string | null;
   /** `user.pricediscount` applied as a per-reseller percentage (1..99), else null. */
   readonly appliedPercent: number | null;
@@ -263,7 +270,6 @@ export function resellerFacts(
     telegramUserId,
     customerId: profile.customerId,
     customerValid: customer['valid'] === true,
-    capMinor: capRaw === null ? null : tomanMinor(capRaw),
     capRaw,
     // 100 % would be a free product: not proven, not applied. 1..99 only.
     appliedPercent: percent !== null && percent <= 99 ? percent : null,
@@ -279,7 +285,7 @@ export function resellerSourceDetail(f: ResellerFacts): Record<string, unknown> 
   return {
     v: 1,
     mirzaTier: f.tier,
-    purchaseCap: { raw: f.capRaw, applied: false },
+    purchaseCap: { raw: f.capRaw, applied: false, reason: 'RESELLER_CREDIT_REMOVED' },
     pricediscount: { raw: f.percentRaw, applied: f.appliedPercent },
     agentExpiry: { value: f.expiry, raw: f.expiryRaw, applied: false },
     tierPriceLevels: {

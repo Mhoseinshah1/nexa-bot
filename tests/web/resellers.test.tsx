@@ -81,7 +81,6 @@ function reseller(overrides: Record<string, unknown> = {}): Record<string, unkno
     creditLimit: null,
     effectiveCreditLimit: { amount: '500000', currency: 'IRT' },
     source: 'NEXA',
-    importedPurchaseCap: null,
     createdAt: '2026-09-02T08:00:00.000Z',
     updatedAt: '2026-09-02T08:00:00.000Z',
     ...overrides,
@@ -262,7 +261,6 @@ describe('the reseller list', () => {
           creditLimit: { amount: '1000000', currency: 'IRT' },
           effectiveCreditLimit: { amount: '1000000', currency: 'IRT' },
           source: 'NEXA',
-          importedPurchaseCap: null,
         }),
       ]),
     );
@@ -290,23 +288,25 @@ describe('the reseller list', () => {
     expect(second.textContent).not.toContain('اختصاصی این نماینده');
   });
 
-  it('shows the purchase cap Mirza gave an imported reseller, labelled as not applied', async () => {
+  it('an imported reseller shows no purchase cap and no legacy wording, even from a stale API', async () => {
     stubApi(
       listRoutes([
-        reseller({
-          source: 'MIRZA',
+        // A payload from the release before: the field is unknown now and must draw nothing.
+        {
+          ...reseller({ source: 'MIRZA' }),
           importedPurchaseCap: { amount: '5000000', currency: 'IRT' },
-        }),
+        },
       ]),
     );
     renderList();
     const table = await screen.findByRole('table', { name: 'فهرست نمایندگان' });
-    // The column says, in its header, that the number is applied nowhere ...
-    expect(within(table).getByText('سقف خرید در میرزا (اعمال نمی‌شود)')).toBeTruthy();
-    // ... and the cap itself is on the reseller's row, not mistaken for a credit limit.
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent ?? '');
+    expect(headers.some((h) => h.includes('سقف'))).toBe(false);
+    expect(table.textContent).not.toContain('میرزا (اعمال');
     const row = within(table).getByText('Reza Reseller').closest('tr') as HTMLElement;
-    expect(row.textContent).toContain('5,000,000');
-    expect(row.textContent).not.toContain('اعتبار');
+    expect(row.textContent).not.toContain('5,000,000');
   });
 
   it('filters on the server: the applied search, the status and the tier', async () => {
@@ -1151,7 +1151,6 @@ describe("the customer's reseller card", () => {
             creditLimit: { amount: '900000', currency: 'IRT' },
             effectiveCreditLimit: { amount: '900000', currency: 'IRT' },
             source: 'NEXA',
-            importedPurchaseCap: null,
           }),
         },
       },
