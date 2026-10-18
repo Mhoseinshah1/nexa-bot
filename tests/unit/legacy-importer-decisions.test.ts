@@ -255,7 +255,8 @@ describe('service candidates', () => {
       'PROVIDER_MISSING',
     );
     // Owner rule 2026-10-18: no panel is searched across every connected panel — one holder
-    // is eligible there, none PROVIDER_MISSING (ended), several AMBIGUOUS_PANEL (review).
+    // is eligible there, none NO_PANEL (archived as an unmapped code is), several
+    // AMBIGUOUS_PANEL (review).
     for (const codePanel of [null, '', '   ']) {
       expect(
         decideServiceCandidate({ ...base, codePanel, username: 'svc_nullmatch' }, ctx()),
@@ -267,8 +268,8 @@ describe('service candidates', () => {
         },
       );
       expect(decideServiceCandidate({ ...base, codePanel, username: 'nobody' }, ctx())).toEqual({
-        category: 'PROVIDER_MISSING',
-        map: { status: 'MANUAL_REVIEW', reasonCode: 'PROVIDER_MISSING' },
+        category: 'NO_PANEL',
+        map: { status: 'MANUAL_REVIEW', reasonCode: 'PANEL_UNMAPPED' },
       });
     }
     // A code the operator DECLARED missing is still searched: two holders are ambiguous.
@@ -635,7 +636,7 @@ describe('the invoice key and what the map records', () => {
         [{ username: 'nobody' }, {}, 'MANUAL_REVIEW', 'PROVIDER_MISSING'],
         // Owner rule 2026-10-18: no panel is searched; two holders stay in review.
         [{ codePanel: null, username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'AMBIGUOUS_PANEL'],
-        [{ codePanel: null, username: 'nobody' }, {}, 'MANUAL_REVIEW', 'PROVIDER_MISSING'],
+        [{ codePanel: null, username: 'nobody' }, {}, 'MANUAL_REVIEW', 'PANEL_UNMAPPED'],
         [{ codePanel: 'gone', username: 'svc_shared' }, {}, 'MANUAL_REVIEW', 'AMBIGUOUS_PANEL'],
         [{ codePanel: 'zzz' }, {}, 'MANUAL_REVIEW', 'PANEL_UNMAPPED'],
         [{ username: 'case_x' }, {}, 'MANUAL_REVIEW', 'USERNAME_CASE_COLLISION'],

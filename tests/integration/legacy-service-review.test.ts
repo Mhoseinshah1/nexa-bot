@@ -310,7 +310,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       sql`SELECT panel_id FROM services WHERE provider_username = 'svc_nullmatch'`,
     );
     expect(attached.rows).toEqual([{ panel_id: panelBId }]);
-    // Two holders stay in review (AMBIGUOUS_PANEL), none is PROVIDER_MISSING (ended).
+    // Two holders stay in review (AMBIGUOUS_PANEL); none is NO_PANEL (archived as unmapped).
     const shared = await candidate(invoiceKeyOf(snap, 'svc_shared'));
     expect(shared).toMatchObject({
       outcome: 'AMBIGUOUS_PANEL',
@@ -328,7 +328,7 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
       [panelAId, panelBId].sort(),
     );
     expect(await count('services', "provider_username = 'svc_shared'")).toBe(0);
-    expect((await candidate(invoiceKeyOf(snap, 'svc_nowhere'))).outcome).toBe('PROVIDER_MISSING');
+    expect((await candidate(invoiceKeyOf(snap, 'svc_nowhere'))).outcome).toBe('NO_PANEL');
     // An adopted candidate names its service.
     const adopted = await candidate(invoiceKeyOf(snap, 'svc_a2'));
     expect(adopted).toMatchObject({ outcome: 'ADOPTED', reviewState: 'ADOPTED' });

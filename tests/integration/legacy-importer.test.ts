@@ -562,13 +562,13 @@ describe('Migration P7: the legacy importer', () => {
       ['UNSUPPORTED_SHAPE', 2],
       // Owner rule 2026-10-18: a product never holds an account on the panel back.
       ['PRODUCT_MAPPING_UNRESOLVED', 0],
-      // `svc_missing` (live), the removed `svc_old`, and the panel-less `svc_nowhere`, which no
-      // connected panel holds (owner rule 2026-10-18: searched, so ended).
-      ['PROVIDER_MISSING', 3],
+      // `svc_missing` (live) and the removed `svc_old`.
+      ['PROVIDER_MISSING', 2],
       // The panel-less `svc_shared`, held by both connected panels: stays in review.
       ['AMBIGUOUS_PANEL', 1],
-      // The forgotten code only: an empty code is searched now, never "unmapped".
-      ['PANEL_UNMAPPED', 1],
+      // The forgotten code, and the panel-less `svc_nowhere` no connected panel holds — archived
+      // exactly as an unmapped code is (owner rule 2026-10-18).
+      ['PANEL_UNMAPPED', 2],
       ['INVALID_SOURCE_ROW', 2],
     ] as const) {
       expect(
@@ -587,8 +587,8 @@ describe('Migration P7: the legacy importer', () => {
     });
     // Mirza PR5: every live invoice has exactly ONE candidate row, with its outcome.
     expect(await count('legacy_service_candidates')).toBe(SYNTHETIC_EXPECTED.services.candidates);
-    expect(await count('legacy_service_candidates', "outcome = 'NO_PANEL'")).toBe(0);
-    expect(applied.services.outcomes).toMatchObject({ NO_PANEL: 0, ADOPTION_ELIGIBLE: 5 });
+    expect(await count('legacy_service_candidates', "outcome = 'NO_PANEL'")).toBe(1);
+    expect(applied.services.outcomes).toMatchObject({ NO_PANEL: 1, ADOPTION_ELIGIBLE: 5 });
     expect(await count('legacy_product_shapes')).toBe(6);
     expect(await count('legacy_product_shapes', "tariff_status = 'RESOLVED'")).toBe(5);
     expect(await count('outbox_messages', "event_type = 'CustomerImported'")).toBe(
@@ -770,10 +770,10 @@ describe('Migration P7: the legacy importer', () => {
       adopted: 0,
       testSkipped: 3,
       // Owner rule 2026-10-18: the NULL-code `svc_shared` is searched and held by two panels
-      // (AMBIGUOUS_PANEL) beside the case collision; only the forgotten code is a missing
-      // mapping: v1's closed fields still add up (S3).
+      // (AMBIGUOUS_PANEL) beside the case collision; the forgotten code and the panel-less
+      // svc_nowhere (on no connected panel) are missing mappings: v1's closed fields add up (S3).
       ambiguous: 2,
-      mappingMissing: 1,
+      mappingMissing: 2,
     });
     expect(final['manualReview'].byReason).toMatchObject({
       ADOPTION_PENDING_P6: 5,

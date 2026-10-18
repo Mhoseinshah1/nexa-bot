@@ -704,8 +704,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(Object.keys(w).filter((c) => c.startsWith('PROVIDER_INVENTORY_INCOMPLETE'))).toEqual([]);
     // The panel decided what a complete read decides: the missing account, the collision.
     // svc_missing and, matched like every invoice, the removed svc_old (owner decision 2026-10-17).
-    // And the panel-less svc_nowhere, on no connected panel (owner rule 2026-10-18).
-    expect(w['PROVIDER_MISSING']).toBe(3);
+    expect(w['PROVIDER_MISSING']).toBe(2);
     expect(w['USERNAME_CASE_COLLISION']).toBe(1);
     // A/B: no per-user request at all — never a manual account or a sale, nor the backup's
     // own names (svc_missing is absent because the gap-free last walk returned no spelling).
@@ -823,8 +822,7 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     // svc_missing (never there): both absent, decided from the walk alone — no lookup.
     expect(lookupsOf(panelA, before)).toEqual([]);
     expect(w['PROVIDER_INVENTORY_LOOKUPS']).toBeUndefined();
-    // And the panel-less svc_nowhere, on no connected panel (owner rule 2026-10-18).
-    expect(w['PROVIDER_MISSING']).toBe(4);
+    expect(w['PROVIDER_MISSING']).toBe(3);
     expect(w['INVENTORY_INCOMPLETE']).toBeUndefined();
     expect(w['PROVIDER_INVENTORY_UNRESOLVED']).toBeUndefined();
 
@@ -1304,8 +1302,8 @@ describe('Web Admin .nxpkg over a live RickPanel that keeps selling (per-name in
     expect(failed).toMatchObject({ status: 'FAILED', errorCode: 'DRY_RUN_MISMATCH' });
     expect(failed.applyLegacyRunId).toBeNull();
     const refusal = codes(failed.progress.refusalCounts);
-    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(3);
-    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(4);
+    expect(refusal['dryrun:services:PROVIDER_MISSING']).toBe(2);
+    expect(refusal['apply:services:PROVIDER_MISSING']).toBe(3);
     for (const table of ['customers', 'wallet_entries', 'services', 'orders']) {
       expect(await count(table), table).toBe(0);
     }

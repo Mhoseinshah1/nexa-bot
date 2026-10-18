@@ -10,9 +10,10 @@
  * - **No panel** — the legacy row names no panel (`code_panel` empty or NULL). Owner rule
  *   2026-10-18 (replacing owner decision 8 of 2026-10-07): the exact lowercase username is
  *   searched across every CONNECTED production panel, exactly as a declared-missing code is:
- *   exactly one holder → eligible on that panel; none → `PROVIDER_MISSING` (the account is
- *   on no connected panel, so the service is ended history); more than one →
- *   `AMBIGUOUS_PANEL` (stays in review). An operator's explicit approval naming a panel
+ *   exactly one holder → eligible on that panel; none → `NO_PANEL` (the account is on no
+ *   connected panel: ended, archived exactly as an unmapped code is — the same map row
+ *   `PANEL_UNMAPPED`, no service, since an ended service names a panel and none is guessed);
+ *   more than one → `AMBIGUOUS_PANEL` (stays in review). An operator's explicit approval naming a panel
  *   (`matchOnPanel`) still decides on that panel alone.
  * - **Panel declared missing** — a code the operator listed in the map's `missingPanels`:
  *   the operator explicitly asked for its rows to be searched across every configured
@@ -105,10 +106,9 @@ export type LegacyServiceMatch =
     }
   | { readonly kind: 'SKIPPED'; readonly reason: 'TEST_PANEL' }
   /**
-   * The row names no panel and no connected panel could be searched for it. Since the owner
-   * rule of 2026-10-18 `matchLegacyService` searches every connected panel for such a row and
-   * no longer answers this; the kind stays for the review vocabulary of rows recorded before
-   * (`PANEL_UNMAPPED` on the map row: no mapped panel exists for it).
+   * Owner rule 2026-10-18: the row names no panel and NO connected panel holds its account
+   * (every complete inventory searched). Ended and archived exactly as an unmapped code is:
+   * `PANEL_UNMAPPED` on the map row (no mapped panel exists for it), no service.
    */
   | { readonly kind: 'NO_PANEL' }
   /** A legacy username this matcher will not compare (empty, non-ASCII, too long). */
@@ -194,13 +194,19 @@ export function matchLegacyService(
   // Owner rule 2026-10-18: a row naming no panel is searched across every connected panel,
   // exactly as a declared-missing code is — one holder adopts, none is ended, several stay in
   // review.
-  if (row.codePanel === null) return searchProductionPanels(username, policy, inventories);
+  if (row.codePanel === null) {
+    return searchProductionPanels(username, policy, inventories, { kind: 'NO_PANEL' });
+  }
 
   if (!policy.missingPanels.has(row.codePanel)) {
     return { kind: 'MANUAL_REVIEW', reason: 'PANEL_UNMAPPED', candidatePanels: 0 };
   }
 
-  return searchProductionPanels(username, policy, inventories);
+  return searchProductionPanels(username, policy, inventories, {
+    kind: 'MANUAL_REVIEW',
+    reason: 'PROVIDER_MISSING',
+    candidatePanels: 0,
+  });
 }
 
 /**
@@ -211,6 +217,8 @@ function searchProductionPanels(
   username: string,
   policy: LegacyPanelPolicy,
   inventories: ReadonlyMap<string, PanelInventoryIndex>,
+  /** What "no connected panel holds it" is for this row. */
+  none: LegacyServiceMatch,
 ): LegacyServiceMatch {
   // The AVAILABLE inventories are scanned first: two known holders are ambiguous whatever
   // a panel without a complete inventory might add. Only while zero or one holder is
@@ -231,8 +239,6 @@ function searchProductionPanels(
   }
   if (unavailable > 0) return { kind: 'UNDECIDABLE', reason: 'INVENTORY_INCOMPLETE' };
   const only = holders[0];
-  if (only === undefined) {
-    return { kind: 'MANUAL_REVIEW', reason: 'PROVIDER_MISSING', candidatePanels: 0 };
-  }
+  if (only === undefined) return none;
   return onePanel(only.panelId, username, only.spellings);
 }

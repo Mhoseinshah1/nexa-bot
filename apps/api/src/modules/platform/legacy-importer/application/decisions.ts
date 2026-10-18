@@ -193,10 +193,9 @@ export const SERVICE_CANDIDATE_CATEGORIES = [
   /** A panel the decision depends on has no complete inventory. */
   'INVENTORY_INCOMPLETE',
   /**
-   * `code_panel` empty or NULL and no connected panel could decide it. Since the owner rule of
-   * 2026-10-18 such a row is searched across every connected panel (one holder adopts, none is
-   * `PROVIDER_MISSING`, several `AMBIGUOUS_PANEL`), so the matcher no longer answers this; the
-   * category stays so the report's closed set still adds up for every recorded row.
+   * `code_panel` empty or NULL, searched across every connected panel (owner rule 2026-10-18),
+   * and on none of them: ended and archived exactly as `PANEL_UNMAPPED` is (one holder adopts;
+   * several are `AMBIGUOUS_PANEL`).
    */
   'NO_PANEL',
   'PROVIDER_MISSING',
@@ -455,6 +454,8 @@ function held(category: HeldCategory): ServiceCandidateDecision {
 export const INVENTORY_DERIVED_CATEGORIES: ReadonlySet<ServiceCandidateCategory> = new Set([
   'INVENTORY_INCOMPLETE',
   'PROVIDER_MISSING',
+  // Owner rule 2026-10-18: a panel-less row is decided by the connected panels' inventories.
+  'NO_PANEL',
   'AMBIGUOUS_PANEL',
   'USERNAME_CASE_COLLISION',
   'UNSUPPORTED_SHAPE',

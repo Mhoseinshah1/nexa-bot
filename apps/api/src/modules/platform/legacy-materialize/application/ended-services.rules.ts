@@ -39,8 +39,8 @@ export const ENDED_SERVICE_GAP_REASONS = [
   'INVOICE_KEY_INVALID',
   /**
    * The invoice names no `code_panel`, and no connected panel holds its account (owner rule
-   * 2026-10-18: it is searched across every connected panel, one holder attaches it). It is
-   * ended, but an ended service names a panel and none is guessed, so it is this gap.
+   * 2026-10-18: one holder attaches it). Ended and archived exactly as an unmapped code is
+   * (`PANEL_NOT_MAPPED`): the archive row, no service — an ended service names a panel.
    */
   'NO_PANEL',
   /** The `code_panel` has no NEXA panel bound to it (no panel to attach a service to). */

@@ -462,14 +462,12 @@ export const SYNTHETIC_EXPECTED = {
       /**
        * Owner rule 2026-10-18 (replacing owner decision 8): the three empty/NULL `code_panel`
        * invoices are searched across every connected panel — `svc_nullmatch` (one holder) is
-       * ELIGIBLE, `svc_shared` (two) AMBIGUOUS_PANEL, `svc_nowhere` (none) PROVIDER_MISSING.
+       * ELIGIBLE, `svc_shared` (two) AMBIGUOUS_PANEL, `svc_nowhere` (none) NO_PANEL — ended
+       * and archived exactly as an unmapped code is.
        */
-      NO_PANEL: 0,
-      /**
-       * `svc_missing` (live), the removed `svc_old`, whose account is not on the panel, and
-       * the panel-less `svc_nowhere`, on no connected panel.
-       */
-      PROVIDER_MISSING: 3,
+      NO_PANEL: 1,
+      /** `svc_missing` (live) and the removed `svc_old`, whose account is not on the panel. */
+      PROVIDER_MISSING: 2,
       /** The panel-less `svc_shared`, on both connected panels. */
       AMBIGUOUS_PANEL: 1,
       PANEL_UNMAPPED: 1,
@@ -546,7 +544,7 @@ export function buildSyntheticLegacyDataset(
     }),
     // NULL code_panel, two holders: AMBIGUOUS_PANEL (stays in review)
     invoice({ idUser: '100000003', username: 'svc_shared', codePanel: null }),
-    // empty code_panel, no holder on any connected panel: PROVIDER_MISSING (ended)
+    // empty code_panel, no holder on any connected panel: NO_PANEL (ended, archived)
     invoice({ idUser: '100000003', username: 'svc_nowhere', codePanel: '' }),
     // a test panel: skipped whatever else holds
     invoice({ idUser: SYNTHETIC_EXISTING_CUSTOMER, username: 'whatever', codePanel: C.test }),

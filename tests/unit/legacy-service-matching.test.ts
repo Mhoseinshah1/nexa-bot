@@ -15,7 +15,7 @@ import {
  *
  * Owner rule 2026-10-18 (replacing owner decision 8 of Mirza PR5): a row with NO panel
  * (`code_panel` empty or NULL) is searched across every connected production panel, exactly as
- * a declared-missing code is — one holder → eligible there, none → PROVIDER_MISSING (ended),
+ * a declared-missing code is — one holder → eligible there, none → NO_PANEL (archived as an unmapped code is),
  * several → AMBIGUOUS_PANEL (review). An operator's explicit panel (`matchOnPanel`) still
  * decides on that panel alone.
  */
@@ -93,11 +93,9 @@ describe('no panel (owner rule 2026-10-18)', () => {
     expect(matchLegacyService({ codePanel: null, username: 'Carol' }, policy, inventories)).toEqual(
       { kind: 'ELIGIBLE', panelId: P3, username: 'carol', providerUsername: 'carol' },
     );
-    // No holder on any connected panel: the account is gone — PROVIDER_MISSING (ended).
+    // No holder on any connected panel: NO_PANEL — archived exactly as an unmapped code is.
     expect(matchLegacyService({ codePanel: null, username: 'zed' }, policy, inventories)).toEqual({
-      kind: 'MANUAL_REVIEW',
-      reason: 'PROVIDER_MISSING',
-      candidatePanels: 0,
+      kind: 'NO_PANEL',
     });
     // Several holders: which panel is a guess — it stays in review.
     expect(

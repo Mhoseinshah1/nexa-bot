@@ -666,11 +666,12 @@ describe('P1: no presence and no absence without a gap-free walk (Web Admin .nxp
   const UNRESOLVED_WITHOUT_GAP_FREE = 8;
   const NAMES_UNRESOLVED_WITHOUT_GAP_FREE = 8;
   /**
-   * The accounts a gap-free read finds absent: `svc_missing` (live), `svc_old` (a removed
-   * invoice, matched against the panel like any other — owner decision 2026-10-17), and the
-   * panel-less `svc_nowhere`, which no connected panel holds (owner rule 2026-10-18).
+   * The accounts a gap-free read finds absent: `svc_missing` (live) and `svc_old` (a removed
+   * invoice, matched against the panel like any other — owner decision 2026-10-17). The
+   * panel-less `svc_nowhere`, which no connected panel holds, is NO_PANEL (owner rule
+   * 2026-10-18: archived exactly as an unmapped code is).
    */
-  const PROVIDER_MISSING_INVOICES = 3;
+  const PROVIDER_MISSING_INVOICES = 2;
 
   /**
    * What the synthetic backup attaches when panel A is read gap-free (owner rule 2026-10-18):
