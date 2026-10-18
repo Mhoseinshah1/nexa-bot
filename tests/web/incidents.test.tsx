@@ -383,6 +383,89 @@ describe("the incident's scope card", () => {
   });
 });
 
+describe("the incident's effects table", () => {
+  beforeEach(() => vi.unstubAllGlobals());
+
+  const LOCATION = '01a05e35-c9ad-7e93-bef3-1ed9b55292ca';
+  const DRAINED = '01a05e35-c9ad-7e93-bef3-1ed9b55292cb';
+  const effectsTable = async () => {
+    const kind = await screen.findByText(t('web.inc_effect_panel_drain'));
+    const table = kind.closest('table');
+    expect(table).not.toBeNull();
+    return table as HTMLElement;
+  };
+  const page = (
+    <IncidentDetailPage id={ID} denied={false} mayManage={false} mayNotify={false} mayViewPanels />
+  );
+
+  it('names a drained panel by the panel name, never by its raw id', async () => {
+    stubApi([
+      detail(),
+      {
+        url: '/panels',
+        body: { panels: [panel({ id: PANEL, name: 'Frankfurt B' })], nextCursor: null },
+      },
+    ]);
+    renderPage(page);
+    const name = await screen.findByTestId('incident-effect-subject-name');
+    expect(name.textContent).toBe('Frankfurt B');
+    expect(name.getAttribute('title')).toBe(PANEL);
+    const table = await effectsTable();
+    expect(within(table).getByText('Frankfurt B')).toBeInTheDocument();
+    expect(within(table).queryByText(PANEL)).toBeNull();
+  });
+
+  it("names a location's drained panel, which is no target, from the same panel list", async () => {
+    const api = stubApi([
+      detail({
+        targets: [{ kind: 'LOCATION', ref: LOCATION }],
+        effects: [
+          {
+            kind: 'PANEL_DRAIN',
+            targetKind: 'LOCATION',
+            targetRef: LOCATION,
+            subjectRef: DRAINED,
+            state: 'APPLIED',
+            errorCode: null,
+            updatedAt: '2026-10-03T10:00:01.000Z',
+          },
+        ],
+      }),
+      {
+        url: '/panels',
+        body: { panels: [panel({ id: DRAINED, name: 'Frankfurt C' })], nextCursor: null },
+      },
+    ]);
+    renderPage(page);
+    expect((await screen.findByTestId('incident-effect-subject-name')).textContent).toBe(
+      'Frankfurt C',
+    );
+    expect(within(await effectsTable()).queryByText(DRAINED)).toBeNull();
+    expect(api.calls.filter((call) => call.url.includes('/panels'))).toHaveLength(1);
+  });
+
+  it('keeps the raw id of a panel the list does not hold', async () => {
+    stubApi([detail(), { url: '/panels', body: { panels: [panel()], nextCursor: null } }]);
+    renderPage(page);
+    expect(await within(await effectsTable()).findByText(PANEL)).toBeInTheDocument();
+    expect(screen.queryByTestId('incident-effect-subject-name')).toBeNull();
+  });
+
+  it('asks for no panel list without panels.view, and shows the raw id', async () => {
+    const api = stubApi([
+      detail(),
+      {
+        url: '/panels',
+        body: { panels: [panel({ id: PANEL, name: 'Frankfurt B' })], nextCursor: null },
+      },
+    ]);
+    renderPage(<IncidentDetailPage id={ID} denied={false} mayManage={false} mayNotify={false} />);
+    expect(await within(await effectsTable()).findByText(PANEL)).toBeInTheDocument();
+    expect(screen.queryByTestId('incident-effect-subject-name')).toBeNull();
+    expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(false);
+  });
+});
+
 describe('the admin banner', () => {
   beforeEach(() => vi.unstubAllGlobals());
 
