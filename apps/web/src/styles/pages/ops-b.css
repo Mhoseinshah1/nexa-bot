@@ -505,7 +505,7 @@ form.set-row > * + * {
   top: 16px;
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - var(--topbar-h) - 32px);
+  max-height: calc(100vh - var(--topbar-h) - var(--chrome-inset) - 32px);
   overflow: hidden;
 }
 .content-nav-tools {
