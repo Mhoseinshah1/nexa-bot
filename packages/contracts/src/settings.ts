@@ -1540,6 +1540,21 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
     scope: 'PANEL',
   },
+  {
+    key: 'panel.connection_files.caption_placement',
+    description:
+      "Which of this panel's connection files carry the caption: LAST_FILE (the last file " +
+      'of the delivery only, so an album shows one caption under it) or EVERY_FILE. Applies ' +
+      'to every caption mode; NONE has nothing to place.',
+    schema: z.enum(CONNECTION_FILE_CAPTION_PLACEMENTS),
+    defaultValue: 'LAST_FILE',
+    configures: null,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+    scope: 'PANEL',
+  },
 ] as const satisfies readonly SettingDefinition[];
 
 export type SettingKey = (typeof SETTINGS)[number]['key'];
