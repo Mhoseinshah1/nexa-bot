@@ -21,7 +21,7 @@ import type {
  */
 
 /** Records per page: one transaction each, and a bound on what is held in memory. */
-export const MATERIALIZE_PAGE = 500;
+export const MATERIALIZE_PAGE = 5000;
 
 /** The marker every row these steps write carries. */
 export const MIRZA_SOURCE = 'MIRZA' as const;

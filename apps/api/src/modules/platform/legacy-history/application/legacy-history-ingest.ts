@@ -47,8 +47,8 @@ import {
  */
 
 export const LEGACY_HISTORY_INGEST_PERMISSION = 'maintenance.run' satisfies PermissionKey;
-export const LEGACY_HISTORY_BATCH_DEFAULT = 500;
-export const LEGACY_HISTORY_BATCH_MAX = 1000;
+export const LEGACY_HISTORY_BATCH_DEFAULT = 5000;
+export const LEGACY_HISTORY_BATCH_MAX = 10_000;
 
 const ENTITY = 'LegacyNxpkgImport';
 

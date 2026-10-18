@@ -215,7 +215,7 @@ reaching it was not.
   answer, on ONE login per read (a 401 mid-read buys one fresh login; a refused login is never
   asked again). A 429 waits the panel's `Retry-After` (over 2 minutes: not asked again); a
   timeout, an unreachable panel or a 5xx waits 2 / 5 / 15 / 30 s; all retries of a read draw on
-  one budget of 4. The Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (100) rows a page. The
+  one budget of 4. The Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (2000, the maximum) rows a page. The
   step's signal ends the read before its next request and ends every wait — a worker that lost
   its lease stops inside the importer's `prepare`, before the import's first write. Each read
   reports its cost in `diagnostics.load` (requests, logins, reuses, refreshes, retries, waits,

@@ -134,6 +134,7 @@ import { OutboxWriter } from './modules/platform/eventing/infrastructure/outbox-
 import { OutboxRelay } from './modules/platform/eventing/infrastructure/outbox-relay.js';
 import { ReadinessService } from './modules/platform/system/application/readiness.service.js';
 import { DrizzleReadinessProbes } from './modules/platform/system/infrastructure/readiness-probes.js';
+import { INVENTORY_MAX_PAGE_SIZE } from './modules/platform/providers/infrastructure/rickpanel-inventory.js';
 import { DrizzleAuditWriter } from './modules/platform/audit/infrastructure/drizzle-audit-writer.js';
 import { DrizzleBootstrapRecordReader } from './modules/platform/identity/infrastructure/drizzle-bootstrap-record.reader.js';
 import { DrizzleOperationalEventRecorder } from './modules/platform/opslog/infrastructure/drizzle-operational-events.js';
@@ -3673,6 +3674,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
 
   /*
+   * The legacy importer's RickPanel INVENTORY reads (list pages only, read-only): the same
+   * client class, URL policy and CA bundle as every panel call, with a response cap sized to
+   * the reader's largest page instead of the provider calls' default. RickPanel answers about
+   * 1.5 KB a row (the G6 probe, `docs/rickpanel-inventory.md`), so a 2000-row page is ~3 MB;
+   * the cap allows 4 KiB a row (8 MiB at 2000) and never less than the operator's own cap.
+   * A page past it still fails the read, closed. The timeout is the operator's, and at least
+   * 30 s for a page that large; the read session's pacing still slows down after a slow page.
+   */
+  const inventoryHttp = new SafeHttpClient({
+    ...urlPolicy,
+    ...(config.PANEL_HTTP_CA_FILE === undefined
+      ? {}
+      : { caCertificates: [readFileSync(config.PANEL_HTTP_CA_FILE, 'utf8')] }),
+    totalTimeoutMs: Math.max(config.PANEL_HTTP_TIMEOUT_MS, INVENTORY_PAGE_TIMEOUT_FLOOR_MS),
+    maxResponseBytes: Math.max(
+      config.PANEL_HTTP_MAX_RESPONSE_BYTES,
+      INVENTORY_MAX_PAGE_SIZE * INVENTORY_ROW_BYTES_BOUND,
+    ),
+    maxRetries: PANEL_HTTP_RETRIES,
+  });
+
+  /*
    * Package FX: the central exchange rate. Its two sources dial through the SAME client
    * class and URL policy as every provider call, with their own tighter bounds; the
    * base URLs are configuration only so the integration suite can stub them. The
@@ -6896,10 +6919,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const nxpkgMigration = new NxpkgMigrationAdapters({
     db: database.db,
     // Resolved at call time: both are members of the container built below.
-    // RICKPANEL_INVENTORY_PAGE_SIZE (100): few enough requests that, paced at one a second, a
-    // double walk stays short, while a page stays well under the panel client's response cap
-    // (RickPanel's row size is unmeasured; each read reports its largest page). The walk still
-    // fails closed on any change (DRY_RUN_MISMATCH). The read is TARGETED: a panel that moved
+    // RICKPANEL_INVENTORY_PAGE_SIZE (2000, the reader's maximum): paced at one request a
+    // second, a walk of ~14 000 accounts is 7 pages instead of 138; the inventory client's
+    // response cap is sized for it (`inventoryHttp`) and each read reports its largest page.
+    // The walk still fails closed on any change (DRY_RUN_MISMATCH). The read is TARGETED: a panel that moved
     // while read (Mirza still selling) has each backup username decided on its own evidence
     // (`inventory-resolution.ts`) instead of repeated double walks, so INVENTORY_READ_ATTEMPTS
     // does not apply to it; what stays undecided blocks approval. All of it inside the panel's
@@ -6925,24 +6948,27 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     logger,
   });
   // The one-time Mirza import's MATERIALIZE phase: its steps run in this order.
-  const legacyMaterialize = new LegacyMaterializeService([
-    new CustomerSourceStep({
-      marker: new DrizzleCustomerSourceMarker(),
-      uow,
-      scopeActivity: tenants,
-    }),
-    legacyMaterializeCatalog.products,
-    legacyMaterializeCatalog.resellers,
-    legacyMaterializeCatalog.discounts,
-    legacyMaterializeHistory.payments,
-    legacyMaterializeHistory.walletHistory,
-    legacyMaterializeHistory.tickets,
-    legacyMaterializeHistory.referrals,
-    // Every invoice the importer did not adopt: an ended (TERMINATED) service and its order.
-    legacyEndedServices,
-    // After the discounts and the invoice orders it links to.
-    legacyMaterializeHistory.discountUsage,
-  ]);
+  const legacyMaterialize = new LegacyMaterializeService(
+    [
+      new CustomerSourceStep({
+        marker: new DrizzleCustomerSourceMarker(),
+        uow,
+        scopeActivity: tenants,
+      }),
+      legacyMaterializeCatalog.products,
+      legacyMaterializeCatalog.resellers,
+      legacyMaterializeCatalog.discounts,
+      legacyMaterializeHistory.payments,
+      legacyMaterializeHistory.walletHistory,
+      legacyMaterializeHistory.tickets,
+      legacyMaterializeHistory.referrals,
+      // Every invoice the importer did not adopt: an ended (TERMINATED) service and its order.
+      legacyEndedServices,
+      // After the discounts and the invoice orders it links to.
+      legacyMaterializeHistory.discountUsage,
+    ],
+    logger,
+  );
   const legacyMaterializePort = new LegacyMaterializePort(legacyMaterialize, () => clock.now());
   const legacyBotLinkPort = new LegacyBotLinkPort(customerBotLink);
   const migrationExecutor = new LegacyMigrationExecutor({
@@ -7160,7 +7186,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
             : { baseUrl: view.panel.baseUrl, providerType: view.panel.providerType };
         },
         credentials: (scope, panelId) => panelCredentials.read(scope, panelId),
-        http: (baseUrl) => panelHttp.forBase(baseUrl),
+        http: (baseUrl) => inventoryHttp.forBase(baseUrl),
       },
       {
         ...(options.inventoryPageSize === undefined ? {} : { pageSize: options.inventoryPageSize }),
@@ -7725,6 +7751,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         clock,
         ids,
         codeVersion: config.BUILD_VERSION,
+        logger,
       });
     },
     async shutdown() {
@@ -7784,6 +7811,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
  * production guard (`classifyTarget`). The Web Admin links the existing cutover approval when
  * it does. An unparsable URL is production-like: the conservative answer.
  */
+/** Response bytes allowed per row of a RickPanel inventory page (measured ~1.5 KB a row). */
+const INVENTORY_ROW_BYTES_BOUND = 4096;
+/** The least total time an inventory page is given, whatever PANEL_HTTP_TIMEOUT_MS says. */
+const INVENTORY_PAGE_TIMEOUT_FLOOR_MS = 30_000;
+
 function productionLikeDatabase(databaseUrl: string, nodeEnv: string): boolean {
   const target = databaseTarget(databaseUrl);
   return target === null || classifyTarget(target, { NODE_ENV: nodeEnv }).productionLike;

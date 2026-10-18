@@ -21,10 +21,11 @@ const valid = {
 
 describe('configuration', () => {
   it("bounds the RickPanel inventory page at the reader's own 2000 rows", () => {
-    expect(loadConfig(valid).RICKPANEL_INVENTORY_PAGE_SIZE).toBe(100);
+    // The default IS the maximum (Track 1 Part B): one walk of a 138-page panel is 7 pages.
+    expect(loadConfig(valid).RICKPANEL_INVENTORY_PAGE_SIZE).toBe(2000);
     expect(
-      loadConfig({ ...valid, RICKPANEL_INVENTORY_PAGE_SIZE: '2000' }).RICKPANEL_INVENTORY_PAGE_SIZE,
-    ).toBe(2000);
+      loadConfig({ ...valid, RICKPANEL_INVENTORY_PAGE_SIZE: '100' }).RICKPANEL_INVENTORY_PAGE_SIZE,
+    ).toBe(100);
     expect(() => loadConfig({ ...valid, RICKPANEL_INVENTORY_PAGE_SIZE: '2001' })).toThrow();
   });
 

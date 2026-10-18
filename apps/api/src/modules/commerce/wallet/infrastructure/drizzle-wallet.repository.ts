@@ -32,6 +32,11 @@ import type {
   WalletRepository,
 } from '../application/ports.js';
 
+/** Ledger rows per INSERT: 14 parameters a row, so 4 000 rows stay under PostgreSQL's 65 535. */
+const WALLET_INSERT_CHUNK = 4000;
+/** Keys per `IN (…)` read. */
+const WALLET_READ_CHUNK = 10_000;
+
 /**
  * The wallet ledger, in PostgreSQL.
  *
@@ -122,6 +127,112 @@ export class DrizzleWalletRepository implements WalletRepository {
       );
     }
     return { entry: existing, inserted: false };
+  }
+
+  /**
+   * `append` for many drafts in as few statements as the bind-parameter limit allows: one
+   * multi-row INSERT … ON CONFLICT (tenant, reference) DO NOTHING, then ONE re-read of the
+   * references that conflicted. The answers are in the drafts' order and mean exactly what
+   * `append`'s mean (`inserted: true` only for a row this call wrote). For the one-time
+   * import's opening balances, inside the caller's transaction; the drafts' references must
+   * be distinct.
+   */
+  async appendMany(
+    scope: TenantContext,
+    drafts: readonly WalletEntryDraft[],
+    tx: unknown,
+  ): Promise<WalletAppendResult[]> {
+    const tenantId = requireTenantId(scope);
+    if (new Set(drafts.map((d) => d.reference)).size !== drafts.length) {
+      throw new Error('appendMany needs distinct references');
+    }
+    const written = new Map<string, WalletEntryRecord>();
+    for (let i = 0; i < drafts.length; i += WALLET_INSERT_CHUNK) {
+      const chunk = drafts.slice(i, i + WALLET_INSERT_CHUNK);
+      const rows = await this.exec(tx)
+        .insert(walletEntries)
+        .values(
+          chunk.map((draft) => ({
+            id: draft.id,
+            tenantId,
+            customerId: draft.customerId,
+            direction: draft.direction,
+            reason: draft.reason,
+            amount: draft.amount.amountMinor,
+            currency: draft.amount.currency,
+            reference: draft.reference,
+            orderId: draft.orderId ?? null,
+            paymentId: draft.paymentId ?? null,
+            actorAdminId: draft.actorAdminId ?? null,
+            note: draft.note ?? null,
+            reversesEntryId: draft.reversesEntryId ?? null,
+            createdAt: draft.now,
+          })),
+        )
+        .onConflictDoNothing({ target: [walletEntries.tenantId, walletEntries.reference] })
+        .returning();
+      for (const row of rows) written.set(row.reference, toRecord(row));
+    }
+    const conflicted = drafts.filter((d) => !written.has(d.reference)).map((d) => d.reference);
+    const existing = await this.findByReferences(scope, conflicted, tx);
+    return drafts.map((draft) => {
+      const fresh = written.get(draft.reference);
+      if (fresh !== undefined) return { entry: fresh, inserted: true };
+      const entry = existing.get(draft.reference);
+      if (entry === undefined) {
+        // As in `append`: a conflict the re-read cannot explain is another constraint.
+        throw new Error(
+          `wallet entry ${draft.reference} conflicted on insert but could not be re-read; ` +
+            'a constraint other than wallet_entries_tenant_reference_key was violated',
+        );
+      }
+      return { entry, inserted: false };
+    });
+  }
+
+  /** `findByReference` for many references in one read; absent ones are not in the map. */
+  async findByReferences(
+    scope: TenantContext,
+    references: readonly string[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<string, WalletEntryRecord>> {
+    const tenantId = requireTenantId(scope);
+    const out = new Map<string, WalletEntryRecord>();
+    for (let i = 0; i < references.length; i += WALLET_READ_CHUNK) {
+      const chunk = references.slice(i, i + WALLET_READ_CHUNK);
+      const rows = await this.exec(tx)
+        .select(columns())
+        .from(walletEntries)
+        .where(and(eq(walletEntries.tenantId, tenantId), inArray(walletEntries.reference, chunk)));
+      for (const row of rows) out.set(row.reference, toRecord(row));
+    }
+    return out;
+  }
+
+  /**
+   * `lockCustomer` for many customers: their rows `FOR UPDATE`, taken in id order (so two
+   * such lockers cannot deadlock each other), with each found customer's Telegram id. A
+   * customer not in the answer does not exist in this tenant and nothing was locked for it.
+   */
+  async lockCustomers(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx: unknown,
+  ): Promise<ReadonlyMap<string, string | null>> {
+    const tenantId = requireTenantId(scope);
+    const out = new Map<string, string | null>();
+    const sorted = [...new Set(customerIds)].sort();
+    for (let i = 0; i < sorted.length; i += WALLET_READ_CHUNK) {
+      const chunk = sorted.slice(i, i + WALLET_READ_CHUNK);
+      const rows = await this.exec(tx)
+        .select({ id: customers.id, telegramUserId: customers.telegramUserId })
+        .from(customers)
+        .where(and(eq(customers.tenantId, tenantId), inArray(customers.id, chunk)))
+        .orderBy(customers.id)
+        .for('update');
+      for (const row of rows) out.set(row.id, row.telegramUserId);
+    }
+    return out;
   }
 
   /**

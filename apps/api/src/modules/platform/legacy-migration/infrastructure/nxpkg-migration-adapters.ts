@@ -104,6 +104,10 @@ import {
 } from '../../legacy-importer/infrastructure/nxpkg-ownership-decisions.js';
 import type { LegacyHistoryIngest } from '../../legacy-history/application/legacy-history-ingest.js';
 import {
+  timedSection,
+  type SectionTimingLogger,
+} from '../../legacy-importer/application/section-timing.js';
+import {
   LegacyMigrationBlocked,
   LegacyMigrationRetry,
   LegacyMigrationStepFailure,
@@ -160,6 +164,8 @@ export interface NxpkgMigrationAdapterDeps {
   /** Reads the decisions file. Injected so a test can give bytes without a disk. */
   readonly readDecisions?: (path: string) => Promise<Uint8Array>;
   readonly logger: {
+    /** Per-section timing lines (`section-timing.ts`), when the logger takes them. */
+    info?(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
     error(context: Record<string, unknown>, message: string): void;
   };
@@ -179,6 +185,12 @@ export class NxpkgMigrationAdapters
   implements PackageVerifier, MigrationRunner, FreshTargetGuard, HistoryIngestPort
 {
   constructor(private readonly deps: NxpkgMigrationAdapterDeps) {}
+
+  /** The logger's `info`, when it has one, for the per-section timing lines. */
+  private get timing(): SectionTimingLogger | undefined {
+    const info = this.deps.logger.info?.bind(this.deps.logger);
+    return info === undefined ? undefined : { info };
+  }
 
   /** The importer's own classification of this database, under this process's environment. */
   private get productionLikeTarget(): boolean {
@@ -406,20 +418,33 @@ export class NxpkgMigrationAdapters
   async dryRun(context: MigrationStepContext) {
     return this.withPackage(context, async (opened) => {
       const fingerprint = requireFingerprint(context);
-      const observed = await this.observeReadSets(context, opened.connector, fingerprint);
-      const run = await this.run('dry-run', context, opened);
-      const history = await this.history(context, opened.pkg, true);
+      const timing = this.timing;
+      const observed = await timedSection(timing, 'dry_run.read_sets', () =>
+        this.observeReadSets(context, opened.connector, fingerprint),
+      );
+      const run = await timedSection(timing, 'dry_run.importer', () =>
+        this.run('dry-run', context, opened),
+      );
+      const history = await timedSection(timing, 'dry_run.history', () =>
+        this.history(context, opened.pkg, true),
+      );
       const tallies = (run.report.sections['plan'] ?? {}) as PlanShape;
       const converter = await converterTotals(opened.pkg);
       const absent = this.compareWithConverter(context, converter, tallies);
       // The importer's own reading of the snapshot's money, by customer: the converter's
       // records are compared with it one by one (money, so a difference blocks like the
       // totals do), and the wallet-history verdicts are counted against it.
-      const expectation = await this.walletExpectationOf(context, opened, run.snapshot);
+      const expectation = await timedSection(timing, 'dry_run.wallet_expectation', () =>
+        this.walletExpectationOf(context, opened, run.snapshot),
+      );
       if (converter !== null) {
-        await this.compareCustomersWithConverter(context, opened, expectation, tallies);
+        await timedSection(timing, 'dry_run.converter_customers', () =>
+          this.compareCustomersWithConverter(context, opened, expectation, tallies),
+        );
       }
-      const walletHistory = await this.walletHistoryOf(context, opened, expectation);
+      const walletHistory = await timedSection(timing, 'dry_run.wallet_history', () =>
+        this.walletHistoryOf(context, opened, expectation),
+      );
       const cutover: LegacyMigrationCutoverValues = {
         sourceFingerprint: fingerprint,
         panelMapFingerprint: (await this.binding(context, opened.pkg)).mapping.fingerprint,
@@ -478,15 +503,18 @@ export class NxpkgMigrationAdapters
         productionLikeTarget: this.productionLikeTarget,
       };
       context.signal.throwIfAborted();
-      const inventory = await runInventory(
-        importer,
-        connector,
-        { expectedFingerprint: fingerprint },
-        {
-          scope: context.scope,
-          actor: context.actor,
-          productionLikeTarget: this.productionLikeTarget,
-        },
+      const timing = this.timing;
+      const inventory = await timedSection(timing, 'apply.read_sets.inventory', () =>
+        runInventory(
+          importer,
+          connector,
+          { expectedFingerprint: fingerprint },
+          {
+            scope: context.scope,
+            actor: context.actor,
+            productionLikeTarget: this.productionLikeTarget,
+          },
+        ),
       );
       if (inventory.inventory.fingerprint !== approved.inventoryFingerprint) {
         throw new LegacyMigrationStepFailure(
@@ -503,15 +531,19 @@ export class NxpkgMigrationAdapters
       context.signal.throwIfAborted();
       // `expected*` = the approved fingerprint: the read ingests and records only when it
       // reads exactly that; anything else is refused before a row is written.
-      await importer.readProducts({
-        ...common,
-        expectedProductsFingerprint: approved.productsFingerprint,
-      });
+      await timedSection(timing, 'apply.read_sets.products', () =>
+        importer.readProducts({
+          ...common,
+          expectedProductsFingerprint: approved.productsFingerprint,
+        }),
+      );
       context.signal.throwIfAborted();
-      await importer.readInvoiceArchive({
-        ...common,
-        expectedInvoiceArchiveFingerprint: approved.invoiceArchiveFingerprint,
-      });
+      await timedSection(timing, 'apply.read_sets.invoice_archive', () =>
+        importer.readInvoiceArchive({
+          ...common,
+          expectedInvoiceArchiveFingerprint: approved.invoiceArchiveFingerprint,
+        }),
+      );
     });
   }
 

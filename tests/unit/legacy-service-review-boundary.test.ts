@@ -73,7 +73,8 @@ describe('the legacy service review boundary', () => {
       'apps/api/src/modules/platform/legacy-importer/application/legacy-importer.service.ts',
       'utf8',
     );
-    expect(importer).toMatch(/serviceCandidates\.insert\(/u);
+    // New candidates are written many a statement (`insertMany`, the same rows `insert` writes).
+    expect(importer).toMatch(/serviceCandidates\.insertMany\(/u);
     expect(importer).toMatch(/serviceCandidates\.updateOutcome\(/u);
     // The only adoption call is the P6 seam.
     expect(importer.match(/\.adopt\(/gu)?.length).toBe(1);
