@@ -84,8 +84,7 @@ export type TonPaysCrossRouteErrorCode = (typeof TONPAYS_CROSS_ROUTE_ERROR_CODES
  * customer is told the method is unavailable right now.
  */
 export const TONPAYS_CONFIGURATION_ERROR_CODES: readonly (
-  | TonPaysErrorCode
-  | TonPaysCrossRouteErrorCode
+  TonPaysErrorCode | TonPaysCrossRouteErrorCode
 )[] = [
   'MISSING_API_KEY',
   'INVALID_API_KEY',
