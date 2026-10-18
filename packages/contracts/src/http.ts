@@ -5916,6 +5916,17 @@ export const serviceDetailSchema = serviceSummarySchema.extend({
    * is what an operator is trying to find out.
    */
   actions: z.array(serviceActionAvailabilitySchema),
+  /**
+   * Owner rule 2026-10-18: a service the one-time import attached keeps what the customer
+   * originally bought, for display and history — the original product's name and price, read
+   * from the archived invoice the service's `source_ref` names. Display only: never a price
+   * anything charges, renews at or refunds. Null for every other service (and for an imported
+   * one whose archive row carries neither); absent from a server before this field.
+   */
+  original: z
+    .object({ productName: z.string().nullable(), price: wireMoneySchema.nullable() })
+    .nullable()
+    .optional(),
 });
 export type ServiceDetailResponse = z.infer<typeof serviceDetailSchema>;
 
