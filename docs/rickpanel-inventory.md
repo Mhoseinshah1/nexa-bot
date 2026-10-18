@@ -109,13 +109,13 @@ surface — the reader itself, and so every rule above, is unchanged:
 
 The page size is `limit` on the one list route there is; no batch endpoint is assumed. The
 reader's own bound is 2000 (`INVENTORY_MAX_PAGE_SIZE`; the probe CLI's `--page-size` takes the
-same bound); the Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (default 100, at most 2000).
-A page larger than `PANEL_HTTP_MAX_RESPONSE_BYTES` (512 KiB by default) fails the read,
-closed, and every page shares `PANEL_HTTP_TIMEOUT_MS` (10 s by default): the G6 probe measured
-about 1.5 KB a row, so a page of more than about 340 rows needs the response cap raised (a
-2000-row page is about 3 MB), and a large page on a slow panel may need the timeout raised
-too — measure on the panel before raising the page size. A panel that caps pages lower loses
-nothing. Every list request asks `sort=created_at` (§Per-name resolution).
+same bound); the Web Admin asks `RICKPANEL_INVENTORY_PAGE_SIZE` (default 2000, the maximum), and the inventory
+reads have their own response cap of 4 KiB a row (8 MiB at 2000; never below
+`PANEL_HTTP_MAX_RESPONSE_BYTES`) and a 30 s floor on `PANEL_HTTP_TIMEOUT_MS`.
+A page larger than that cap fails the read, closed: the G6 probe measured about 1.5 KB a row,
+so a 2000-row page is about 3 MB, well under it. A large page on a very slow panel may need
+`PANEL_HTTP_TIMEOUT_MS` raised past the floor; each read's `load.maxPageBytes` and duration say
+so. A panel that caps pages lower loses nothing. Every list request asks `sort=created_at` (§Per-name resolution).
 
 Each read reports `diagnostics.load`: requests, logins, token reuses, token refreshes,
 retries, time waited, time queued for the gate, duration, page size and the largest page in

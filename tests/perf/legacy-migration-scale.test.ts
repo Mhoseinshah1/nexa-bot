@@ -7,6 +7,7 @@ import {
   MigrationRig,
   rigExecutor,
   withAfterPhase,
+  type RigLogLine,
   TENANT,
   generateDataset,
   moneyOfSnapshot,
@@ -26,11 +27,12 @@ import { createTestContext, type TestContext } from '../integration/harness';
  * (import, history ingest, reconcile, final report v2, the standard backup).
  *
  * It records the wall time of each step (and of each apply phase, from the row's own phase
- * bookmark), the process's peak RSS and heap, and requires every count to reconcile with the
- * package, recomputed independently from its snapshot cells: customers = users, the opening
- * credits' sum = the positive Balance cells' sum, the debts' sum = the negative cells'
- * magnitude, history rows = packaged history lines, services = live invoices; zero payments,
- * zero provider writes. SYNTHETIC data only. NOT EVIDENCE about any real backup or panel.
+ * bookmark, and each timed section), the process's peak RSS and heap, and requires every
+ * count to reconcile with the package, recomputed independently from its snapshot cells:
+ * customers = users, the opening credits' sum = the positive Balance cells' sum, one opening
+ * per non-zero balance (a negative one a DEBIT, no debt row), history rows = packaged history
+ * lines, services = invoices (live adopted, the rest ended), payments = the packaged payment
+ * history, zero provider writes. SYNTHETIC data only. NOT EVIDENCE about any real backup or panel.
  */
 
 const USERS = Number(process.env['NEXA_MIGRATION_SCALE_USERS'] ?? 200_000);
@@ -50,6 +52,8 @@ describe('legacy migration at scale', () => {
       LEGACY_MIGRATION_ENABLED: 'true',
       LEGACY_MIGRATION_WORK_DIR: migrationRoot,
       BACKUP_WORK_DIR: work,
+      // The per-section timing lines (`section-timing.ts`) of the importer and MATERIALIZE.
+      LOG_LEVEL: 'info',
     });
     rig = new MigrationRig(ctx, migrationRoot);
   }, 600_000);
@@ -96,7 +100,9 @@ describe('legacy migration at scale', () => {
       // used only to time its phases.
       const importerPhases: { phase: string; at: number }[] = [];
       let applyStart = performance.now();
+      const lines: RigLogLine[] = [];
       const executor = rigExecutor(ctx, {
+        lines,
         backup: new PipelineBackupPort(ctx.container.backup, ctx.container.recoveryQuiesced),
         importer: (importer) =>
           withAfterPhase(importer, (phase) => {
@@ -145,14 +151,22 @@ describe('legacy migration at scale', () => {
         timingsMs: timings,
         applyPhasesMs: phases,
         importerPhasesDoneAtMs: importerPhases,
+        // The executor's own section lines (the importer's and MATERIALIZE's go to pino).
+        sectionsMs: lines
+          .filter((l) => l.message === 'legacy import section timed')
+          .map((l) => l.context),
         peakRssMiB: Math.round(memory.rss / 2 ** 20),
         peakHeapMiB: Math.round(memory.heap / 2 ** 20),
         counts: {
           customers: await rig.count('customers'),
-          openings: await rig.count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'"),
-          openingSum: await rig.scalar(
-            `SELECT coalesce(sum(amount), 0)::text AS v FROM wallet_entries WHERE tenant_id = '${TENANT}'`,
+          openings: await rig.count(
+            'wallet_entries',
+            "reason = 'MIGRATION_OPENING_BALANCE' AND direction = 'CREDIT'",
           ),
+          openingSum: await rig.scalar(
+            `SELECT coalesce(sum(amount), 0)::text AS v FROM wallet_entries WHERE tenant_id = '${TENANT}' AND direction = 'CREDIT'`,
+          ),
+          openingsAll: await rig.count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'"),
           debts: await rig.count('legacy_wallet_debts'),
           debtSum: await rig.scalar(
             `SELECT coalesce(sum(amount_minor), 0)::text AS v FROM legacy_wallet_debts WHERE tenant_id = '${TENANT}'`,
@@ -165,11 +179,16 @@ describe('legacy migration at scale', () => {
           customers: money.users,
           openings: money.positive.count,
           openingSum: money.positive.sum.toString(),
-          debts: money.negative.count,
-          debtSum: money.negative.sum.toString(),
+          // A negative Mirza balance is a DEBIT opening (owner decision 2026-10-17): every
+          // non-zero balance is one opening, and no legacy-debt row is written any more.
+          openingsAll: money.positive.count + money.negative.count,
+          debts: 0,
+          debtSum: '0',
           history: pkg.historyLines,
-          services: live,
-          payments: 0,
+          // Every invoice is a service: the live ones adopted, the rest ended (MATERIALIZE).
+          services: INVOICES,
+          // The payment history is materialized as terminal LEGACY_IMPORT payments.
+          payments: Math.ceil(USERS / 2),
         },
       };
       // The run's record, for the PR description: printed whatever the assertions say.

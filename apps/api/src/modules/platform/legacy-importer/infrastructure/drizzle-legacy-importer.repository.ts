@@ -707,7 +707,66 @@ export class DrizzleLegacyImporterRepository
       throw new Error('a conflicting customer row vanished inside the transaction');
     return { customerId: row.id, created: false };
   }
+
+  async insertManyIfAbsent(
+    scope: TenantContext,
+    inputs: readonly LegacyCustomerInsert[],
+    tx: TransactionScope,
+  ): Promise<{ readonly customerId: string; readonly created: boolean }[]> {
+    const tenantId = requireTenantId(scope);
+    // The id each input's row was created with (by THIS call), keyed by the input's own id.
+    const createdIds = new Set<string>();
+    for (let i = 0; i < inputs.length; i += CUSTOMER_INSERT_CHUNK) {
+      const chunk = inputs.slice(i, i + CUSTOMER_INSERT_CHUNK);
+      const values = chunk.map((input) => {
+        const at = input.now.toISOString();
+        const status = input.status === 'BLOCKED' ? 'BLOCKED' : 'ACTIVE';
+        return sql`(${input.id}, ${tenantId}, ${input.telegramUserId}, ${input.username},
+                    ${status}, ${status === 'BLOCKED' ? at : null}::timestamptz,
+                    ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz, ${at}::timestamptz)`;
+      });
+      // Rows are inserted in the VALUES order, so of two inputs naming one Telegram id the
+      // first is created and the second conflicts — the order two `insertIfAbsent` calls give.
+      const inserted = await this.exec(tx).execute<{ id: string }>(sql`
+        INSERT INTO customers (id, tenant_id, telegram_user_id, username, status, blocked_at,
+                               first_seen_at, last_seen_at, created_at, updated_at)
+        VALUES ${sql.join(values, sql`, `)}
+        ON CONFLICT (tenant_id, telegram_user_id) DO NOTHING
+        RETURNING id
+      `);
+      for (const row of inserted.rows) createdIds.add(row.id);
+    }
+    const missing = [
+      ...new Set(inputs.filter((i) => !createdIds.has(i.id)).map((i) => i.telegramUserId)),
+    ];
+    const existing = new Map<string, string>();
+    for (let i = 0; i < missing.length; i += CUSTOMER_READ_CHUNK) {
+      const chunk = missing.slice(i, i + CUSTOMER_READ_CHUNK);
+      const rows = await this.exec(tx).execute<{ id: string; telegram_user_id: string }>(sql`
+        SELECT id, telegram_user_id FROM customers
+         WHERE tenant_id = ${tenantId}
+           AND telegram_user_id IN (${sql.join(
+             chunk.map((t) => sql`${t}`),
+             sql`, `,
+           )})
+      `);
+      for (const row of rows.rows) existing.set(row.telegram_user_id, row.id);
+    }
+    return inputs.map((input) => {
+      if (createdIds.has(input.id)) return { customerId: input.id, created: true };
+      const id = existing.get(input.telegramUserId);
+      if (id === undefined) {
+        throw new Error('a conflicting customer row vanished inside the transaction');
+      }
+      return { customerId: id, created: false };
+    });
+  }
 }
+
+/** Customers per INSERT: 10 parameters a row, so 5 000 rows stay under PostgreSQL's 65 535. */
+const CUSTOMER_INSERT_CHUNK = 5000;
+/** Keys per `IN (…)` read. */
+const CUSTOMER_READ_CHUNK = 10_000;
 
 /**
  * `legacy_import_run_inputs.inventory_hold_keys` (a JSON array of invoice keys) as stored, or

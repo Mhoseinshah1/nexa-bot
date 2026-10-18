@@ -852,14 +852,16 @@ export const configSchema = z
       .max(60_000)
       .default(1_000),
     /**
-     * Rows per list page the Web Admin's Mirza importer asks a RickPanel for. 100, not the
-     * reader's 2000 maximum: the panel client keeps at most PANEL_HTTP_MAX_RESPONSE_BYTES
-     * (512 KiB by default) and a page past it fails the read, and RickPanel's row size is
-     * unmeasured. Each read reports its largest page in bytes (`load.maxPageBytes`); raise
-     * this from that evidence. A panel that caps its pages lower loses nothing — the walk
-     * advances by the rows it received.
+     * Rows per list page the Web Admin's Mirza importer asks a RickPanel for: the reader's
+     * 2000 maximum (`INVENTORY_MAX_PAGE_SIZE`), the load the owner asked for — a 138-page walk
+     * at 100 becomes a 7-page one. The inventory reads have their own response cap sized for
+     * it (4 KiB a row against the G6 probe's measured ~1.5 KB; see `container.ts`), so a
+     * 2000-row page is not refused by the provider calls' 512 KiB default. Each read reports
+     * its largest page in bytes (`load.maxPageBytes`). A panel that caps its pages lower loses
+     * nothing — the walk advances by the rows it received; the overlap and gap-free checks do
+     * not depend on the size.
      */
-    RICKPANEL_INVENTORY_PAGE_SIZE: z.coerce.number().int().min(1).max(2000).default(100),
+    RICKPANEL_INVENTORY_PAGE_SIZE: z.coerce.number().int().min(1).max(2000).default(2000),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()

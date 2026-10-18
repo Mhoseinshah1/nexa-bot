@@ -252,6 +252,17 @@ export interface LegacyCustomerWriter {
     input: LegacyCustomerInsert,
     tx: TransactionScope,
   ): Promise<{ readonly customerId: string; readonly created: boolean }>;
+  /**
+   * `insertIfAbsent` for many customers: multi-row inserts, then ONE read of the Telegram ids
+   * that were already there. Answers in the inputs' order, meaning exactly what
+   * `insertIfAbsent`'s mean — a Telegram id named twice is created by its first input and
+   * matched by the second, as two calls in that order would do.
+   */
+  insertManyIfAbsent(
+    scope: TenantContext,
+    inputs: readonly LegacyCustomerInsert[],
+    tx: TransactionScope,
+  ): Promise<{ readonly customerId: string; readonly created: boolean }[]>;
 }
 
 // --- provider --------------------------------------------------------------------------------

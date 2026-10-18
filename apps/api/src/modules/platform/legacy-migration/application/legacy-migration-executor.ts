@@ -31,6 +31,7 @@ import {
   errorKind,
 } from '../domain/import-lifecycle.js';
 import { LEGACY_MIGRATION_KEY_PURPOSE } from './legacy-migration.service.js';
+import { timedSection } from '../../legacy-importer/application/section-timing.js';
 import {
   exactMatchReport,
   exactMatchRowsFromWire,
@@ -535,7 +536,9 @@ export class LegacyMigrationExecutor {
           }
           await this.assertPackageUnchanged(row);
           await this.assertFreshTarget(row, ['DRY_RUN_RUNNING']);
-          const { report, legacyRunId } = await this.deps.runner.dryRun(context);
+          const { report, legacyRunId } = await timedSection(this.deps.logger, 'dry_run', () =>
+            this.deps.runner.dryRun(context),
+          );
           await this.advance(
             row,
             ['DRY_RUN_RUNNING'],
@@ -729,12 +732,21 @@ export class LegacyMigrationExecutor {
           //      fingerprint the approved dry run observed (the dry run itself wrote none);
           //   6. the owner's cutover approval of the seven values and stop-sales
           //      (production-like), which needs the read sets of step 5 recorded.
-          await this.deps.runner.precheck(context, 'TARGET');
-          this.assertApprovedDigest(row);
-          await this.assertPackageUnchanged(row);
-          await this.assertFreshTarget(row, [row.status]);
-          if (row.status === 'APPROVED') row = await this.protect(row);
-          await this.deps.runner.recordReadSets(context);
+          await timedSection(this.deps.logger, 'apply.precheck', async () => {
+            await this.deps.runner.precheck(context, 'TARGET');
+            this.assertApprovedDigest(row);
+            await this.assertPackageUnchanged(row);
+            await this.assertFreshTarget(row, [row.status]);
+          });
+          if (row.status === 'APPROVED') {
+            const approved = row;
+            row = await timedSection(this.deps.logger, 'apply.protective_backup', () =>
+              this.protect(approved),
+            );
+          }
+          await timedSection(this.deps.logger, 'apply.read_sets', () =>
+            this.deps.runner.recordReadSets(context),
+          );
         }
         // Production-like: before the first write AND before every resume. The importer's
         // own gate decides again inside its transaction. A blocker here is met while
@@ -754,10 +766,13 @@ export class LegacyMigrationExecutor {
           // A verdict recorded by an attempt that crashed before the HISTORY bookmark is the
           // outcome: the import is not asked again.
           if (row.progress.importerVerdict === null || row.applyLegacyRunId === null) {
-            const outcome = await this.deps.runner.apply(context, {
-              mode: resumed ? 'RESUME' : 'IMPORT',
-              approvedDryRunSha256: row.approvedDryRunSha256 ?? '',
-            });
+            const approvedDryRunSha256 = row.approvedDryRunSha256 ?? '';
+            const outcome = await timedSection(this.deps.logger, 'apply.import', () =>
+              this.deps.runner.apply(context, {
+                mode: resumed ? 'RESUME' : 'IMPORT',
+                approvedDryRunSha256,
+              }),
+            );
             // Recorded at once, on its own: a crash before the next bookmark keeps it.
             row = await this.bookmark(
               row,
@@ -768,7 +783,12 @@ export class LegacyMigrationExecutor {
           row = await this.bookmark(row, { phase: 'HISTORY' });
         }
         if (!phaseReached(row.progress.phase, 'MATERIALIZE')) {
-          const archived = await this.deps.history.ingest(context);
+          const archived = await timedSection(
+            this.deps.logger,
+            'apply.history',
+            () => this.deps.history.ingest(context),
+            (a) => a.counts.reduce((sum, c) => sum + c.count, 0),
+          );
           row = await this.bookmark(row, {
             phase: 'MATERIALIZE',
             history: [...archived.counts],
@@ -783,33 +803,49 @@ export class LegacyMigrationExecutor {
         if (row.progress.materialize === undefined) {
           // Every step is idempotent: a resumed phase runs them all again and writes nothing
           // twice. Nothing it writes is money, a message or a provider call.
-          const materialized = await this.deps.materialize.apply(context);
+          const materialized = await timedSection(
+            this.deps.logger,
+            'apply.materialize',
+            () => this.deps.materialize.apply(context),
+            (m) => m.reduce((sum, o) => sum + o.written + o.alreadyPresent, 0),
+          );
           row = await this.bookmark(row, {
             phase: atLeast('BOT_LINK'),
             materialize: [...materialized],
           });
         }
         if (row.progress.botLink === undefined) {
-          const linked = await this.deps.botLink.link(context);
+          const linked = await timedSection(this.deps.logger, 'apply.bot_link', () =>
+            this.deps.botLink.link(context),
+          );
           row = await this.bookmark(row, { phase: atLeast('RECONCILE'), botLink: linked });
         }
         if (!phaseReached(row.progress.phase, 'REPORT')) {
-          const reconciled = await this.deps.runner.reconcile(context);
+          const reconciled = await timedSection(this.deps.logger, 'apply.reconcile', () =>
+            this.deps.runner.reconcile(context),
+          );
           row = await this.bookmark(row, {
             phase: 'REPORT',
             reconcileVerdict: reconciled.verdict,
           });
         }
-        const core = await this.deps.runner.finalReport(context, {
+        const verdicts = {
           importerVerdict: row.progress.importerVerdict ?? 'UNKNOWN',
           reconcileVerdict: row.progress.reconcileVerdict ?? 'DISCREPANCY',
           history: row.progress.history,
-        });
+        } as const;
+        const core = await timedSection(this.deps.logger, 'apply.final_report', () =>
+          this.deps.runner.finalReport(context, verdicts),
+        );
         // The exact-match report: the importer's own rows (users, balances) and every
         // history step's. COMPLETE needs every one of them to hold.
         const exactMatch = exactMatchReport([
           ...exactMatchRowsFromWire(core.exactMatch?.rows ?? []),
-          ...exactMatchRowsFromWire(await this.deps.materialize.match(context)),
+          ...exactMatchRowsFromWire(
+            await timedSection(this.deps.logger, 'apply.exact_match', () =>
+              this.deps.materialize.match(context),
+            ),
+          ),
         ]);
         const report: LegacyMigrationApplyReport = {
           ...core,
@@ -924,7 +960,7 @@ export class LegacyMigrationExecutor {
    * `COMPLETED`, the reconcile RECONCILED and the v2 report holds.
    */
   private async finish(row: LegacyNxpkgImportRow): Promise<void> {
-    const backup = await this.backup(row);
+    const backup = await timedSection(this.deps.logger, 'apply.backup', () => this.backup(row));
     await this.advance(row, ['APPLYING'], completedStatusOf(row), {
       backupRunId: backup.runId,
       progress: { ...row.progress, backup: backup.outcome },

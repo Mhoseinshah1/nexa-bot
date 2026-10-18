@@ -149,6 +149,12 @@ export interface EndedServicesRepository {
   lock(scope: TenantContext, tx: TransactionScope): Promise<void>;
   /** Writes the order then the service; both or neither. */
   insertEnded(scope: TenantContext, input: EndedInvoiceInsert, tx: TransactionScope): Promise<void>;
+  /** `insertEnded` for many invoices: the same order and service rows, many a statement. */
+  insertEndedMany(
+    scope: TenantContext,
+    inputs: readonly EndedInvoiceInsert[],
+    tx: TransactionScope,
+  ): Promise<void>;
   /** Writes a never-paid invoice's order, and nothing else. */
   insertNeverPaid(
     scope: TenantContext,

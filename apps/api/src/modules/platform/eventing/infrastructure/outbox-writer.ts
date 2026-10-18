@@ -18,6 +18,11 @@ import {
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { scopeTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 
+/** Aggregates per sequence upsert (3 parameters a row, far under PostgreSQL's 65 535). */
+const SEQUENCE_CHUNK = 5000;
+/** Outbox rows per INSERT (12 parameters a row: 5 000 rows stay under 65 535). */
+const OUTBOX_INSERT_CHUNK = 5000;
+
 /**
  * Writes domain events to the outbox INSIDE the caller's transaction.
  *
@@ -74,6 +79,125 @@ export class OutboxWriter {
     });
 
     return { eventId, sequence };
+  }
+
+  /**
+   * `write` for many events in ONE round trip per table: the same rows `write` would insert
+   * one by one, in the same order — the same ids drawn in the same order, the same
+   * per-aggregate sequences (an aggregate named twice gets consecutive numbers, in the order
+   * given), one `occurredAt` per event from the clock. For a bulk writer (the one-time
+   * import) inside its own transaction; an empty list writes nothing.
+   *
+   * The sequence upsert adds each aggregate's COUNT in one statement (an aggregate may
+   * appear only once per `INSERT … ON CONFLICT`, so they are grouped first) and the numbers
+   * are handed out downwards from the returned last value — exactly what `count` calls of
+   * `nextSequence` would have produced.
+   */
+  async writeMany<T extends EventType>(
+    { tx, scope }: TransactionScope,
+    actor: ActorContext,
+    events: readonly {
+      eventType: T;
+      aggregateType: AggregateType;
+      aggregateId: string;
+      payload: EventPayload<T>;
+      causationId?: string;
+    }[],
+  ): Promise<{ eventId: string; sequence: number }[]> {
+    if (events.length === 0) return [];
+    for (const event of events) {
+      if (!isEventType(event.eventType)) {
+        throw errors.validation(
+          PLATFORM_ERROR_CODES.UNKNOWN_EVENT_TYPE,
+          `"${String(event.eventType)}" is not in the event catalog. Adding an event is a contract change.`,
+        );
+      }
+    }
+    const aggregateKey = (type: string, id: string) => `${type}\u0000${id}`;
+    const counts = new Map<string, { type: string; id: string; count: number }>();
+    for (const event of events) {
+      const key = aggregateKey(event.aggregateType, event.aggregateId);
+      const entry = counts.get(key);
+      if (entry === undefined) {
+        counts.set(key, { type: event.aggregateType, id: event.aggregateId, count: 1 });
+      } else entry.count += 1;
+    }
+    // Next sequence per aggregate: last − count + 1, handed out in the order given.
+    const next = new Map<string, number>();
+    const groups = [...counts.values()];
+    for (let i = 0; i < groups.length; i += SEQUENCE_CHUNK) {
+      const chunk = groups.slice(i, i + SEQUENCE_CHUNK);
+      const rows = await tx
+        .insert(aggregateSequences)
+        .values(
+          chunk.map((g) => ({
+            aggregateType: g.type,
+            aggregateId: g.id,
+            lastSequence: BigInt(g.count),
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [aggregateSequences.aggregateType, aggregateSequences.aggregateId],
+          set: {
+            lastSequence: sql`${aggregateSequences.lastSequence} + excluded.last_sequence`,
+          },
+        })
+        .returning({
+          aggregateType: aggregateSequences.aggregateType,
+          aggregateId: aggregateSequences.aggregateId,
+          lastSequence: aggregateSequences.lastSequence,
+        });
+      if (rows.length !== chunk.length) {
+        throw errors.internal(
+          'platform.outbox_sequence_failed',
+          'Failed to allocate an outbox sequence.',
+        );
+      }
+      for (const row of rows) {
+        const key = aggregateKey(row.aggregateType, row.aggregateId);
+        const group = counts.get(key);
+        if (group === undefined) {
+          throw errors.internal(
+            'platform.outbox_sequence_failed',
+            'Failed to allocate an outbox sequence.',
+          );
+        }
+        next.set(key, Number(row.lastSequence) - group.count + 1);
+      }
+    }
+    const tenantId = scopeTenantId(scope);
+    const written: { eventId: string; sequence: number }[] = [];
+    const values = events.map((event) => {
+      const key = aggregateKey(event.aggregateType, event.aggregateId);
+      const sequence = next.get(key);
+      if (sequence === undefined) {
+        throw errors.internal(
+          'platform.outbox_sequence_failed',
+          'Failed to allocate an outbox sequence.',
+        );
+      }
+      next.set(key, sequence + 1);
+      const eventId = this.ids.uuid();
+      written.push({ eventId, sequence });
+      return {
+        id: eventId,
+        tenantId,
+        aggregateType: event.aggregateType,
+        aggregateId: event.aggregateId,
+        sequence,
+        eventType: event.eventType,
+        eventVersion: EVENT_ENVELOPE_VERSION,
+        payload: event.payload as Record<string, unknown>,
+        actor: actorRef(actor),
+        correlationId: actor.correlationId,
+        causationId: event.causationId ?? null,
+        occurredAt: this.clock.now(),
+      };
+    });
+    for (let i = 0; i < values.length; i += OUTBOX_INSERT_CHUNK) {
+      await tx.insert(outboxMessages).values(values.slice(i, i + OUTBOX_INSERT_CHUNK));
+    }
+    return written;
   }
 
   /**
