@@ -184,7 +184,13 @@ export async function launchChrome() {
       cdp.close();
       chrome.kill('SIGKILL');
       await exited;
-      rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+      // Best effort: a killed Chromium can still be flushing its profile, and a temporary
+      // directory left behind must not throw away a finished run's results (ENOTEMPTY).
+      try {
+        rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+      } catch {
+        // The OS cleans its temporary directory.
+      }
     },
   };
 }
