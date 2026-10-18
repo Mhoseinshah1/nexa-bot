@@ -442,7 +442,11 @@ the live ones (`LEGACY_LIVE_STATUSES`); `snapshot.otherInvoices` is every other 
 was ever paid for (`removebyuser`, `end_of_time`, `send_on_hold`, …), and
 `serviceCandidateInvoices` puts them in one list, live first. Only the never-paid statuses
 (`unpaid`, `Unsuccessful`) and a missing status are left out (`LEGACY_NEVER_PAID_STATUSES`):
-they were never a service. Every candidate goes through the same `decideServiceCandidate`, the
+they were never a service. (They are still imported, as ORDERS only: the ended-services step
+writes each as a `LEGACY_HISTORY` order under `invoice-never-paid:<id_invoice>` — `unpaid` and
+a missing status EXPIRED, `Unsuccessful` CANCELLED — with no service, payment or money, and
+counts the ones it cannot write under a `NEVER_PAID_*` gap; owner instruction 2026-10-18.)
+Every candidate goes through the same `decideServiceCandidate`, the
 same dry-run approval, the same inventory hold and `refusedWrites = 0`:
 
 - **The account is on the panel** (any invoice status, any panel state): the P6 adoption makes

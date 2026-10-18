@@ -1,11 +1,12 @@
 import type { TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { ShapeCells } from './ended-services.rules.js';
+import type { NeverPaidOrderState, ShapeCells } from './ended-services.rules.js';
 
 /**
  * The storage the ended-services step reads and writes. Every read is by key or by page (a
  * 10^5-invoice package is the normal size), and every write is one ended invoice: an order and
- * its service, together, never one without the other.
+ * its service, together, never one without the other — or one never-paid invoice: an order
+ * alone, never a service.
  *
  * Writes go straight to the tables, never through a business service: nothing here may reach
  * the outbox, a notification, a reminder, a provider or the ledger.
@@ -46,6 +47,7 @@ export interface ShapeProductRow {
 export interface CarriedInvoice {
   readonly orderId: string | null;
   readonly orderOrigin: string | null;
+  readonly orderState: string | null;
   readonly orderCustomerId: string | null;
   readonly orderPanelId: string | null;
   readonly orderTotal: bigint | null;
@@ -74,15 +76,42 @@ export interface EndedInvoiceInsert {
   readonly now: Date;
 }
 
+/**
+ * A never-paid invoice as an order and nothing else: `LEGACY_HISTORY`, in a terminal unpaid
+ * state, at the invoice's own amount and date. No service, no payment, no ledger entry.
+ */
+export interface NeverPaidOrderInsert {
+  readonly orderId: string;
+  readonly sourceRef: string;
+  readonly state: NeverPaidOrderState;
+  readonly customerId: string;
+  readonly panelId: string;
+  readonly product: ShapeProductRow;
+  readonly lineTitle: string;
+  /** IRT minor units: the invoice's own price, 0 when it did not read. */
+  readonly amountMinor: bigint;
+  readonly currency: 'IRT';
+  /** The original invoice time, or the import time when the archive could not read one. */
+  readonly createdAt: Date;
+  readonly now: Date;
+}
+
 /** The NEXA side of the exact-match report, read from the tables. */
 export interface EndedServicesCounts {
   /** Services with `source = MIRZA` and an `invoice:` ref: adopted and ended alike. */
   readonly services: number;
   /** Services of those that are TERMINATED. */
   readonly terminatedServices: number;
-  /** Orders of origin `LEGACY_HISTORY` with an `invoice:` ref, and their total. */
+  /**
+   * Orders of origin `LEGACY_HISTORY` with an `invoice:` ref (a paid invoice's) or an
+   * `invoice-never-paid:` ref (a never-paid one's): every invoice NEXA holds as an order.
+   */
   readonly historyOrders: number;
-  readonly historyOrdersTotalMinor: bigint;
+  /** The total of those orders that are PAID: the never-paid amounts are never in it. */
+  readonly paidHistoryOrdersTotalMinor: bigint;
+  /** Of `historyOrders`, those under an `invoice-never-paid:` ref, and their total. */
+  readonly neverPaidOrders: number;
+  readonly neverPaidOrdersTotalMinor: bigint;
 }
 
 export interface EndedServicesRepository {
@@ -120,5 +149,11 @@ export interface EndedServicesRepository {
   lock(scope: TenantContext, tx: TransactionScope): Promise<void>;
   /** Writes the order then the service; both or neither. */
   insertEnded(scope: TenantContext, input: EndedInvoiceInsert, tx: TransactionScope): Promise<void>;
+  /** Writes a never-paid invoice's order, and nothing else. */
+  insertNeverPaid(
+    scope: TenantContext,
+    input: NeverPaidOrderInsert,
+    tx: TransactionScope,
+  ): Promise<void>;
   counts(scope: TenantContext): Promise<EndedServicesCounts>;
 }
