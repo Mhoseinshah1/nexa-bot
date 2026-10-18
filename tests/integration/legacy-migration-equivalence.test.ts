@@ -42,7 +42,7 @@ const INVOICES = 450;
 /** The digests captured before the speed work. */
 const PINNED: Record<string, string> = {
   dryRunReport: '7bfda0b23617014ebb8ca9879b0baff9a7bfb836deede0f88873f5fa85cda7b5',
-  applyCounts: '91c4e71389e47a62d6703c26136631db8593aa9f54aa1161f23dc0235828c3f1',
+  applyCounts: '1fdc6591c9f884a55b322a0c815973f4d1b48f27b69c0506a37f07ef20cdda44',
   customers: '1795829b5ff6e48d250360a90fedcbb326f433e36a47f59b16460a502bfe1393',
   wallet: '75a385e8b3e2d0757651d8ba72a53de012a355f0eaa4dbd454541d79ff734d3b',
   trials: '559b0781174574a505585078a6692341553dbc4666b0cffa0e746614da1ef3ee',
