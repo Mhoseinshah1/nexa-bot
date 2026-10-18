@@ -741,7 +741,7 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
         type: 'PERCENTAGE',
         value: '30',
         currency: null,
-        label: 'Mirza SPRING_30',
+        label: 'ربات قبلی SPRING_30',
       });
       expect(by['discount:engagement:discount:8']!.detail).toMatchObject({
         codeOriginal: 'Spring_30',

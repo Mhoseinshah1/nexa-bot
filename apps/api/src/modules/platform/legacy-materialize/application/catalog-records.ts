@@ -181,7 +181,7 @@ export function planProduct(
         ? title
         : code !== ''
           ? clip(clean(code), PRODUCT_TITLE_MAX)
-          : `Mirza ${legacyId}`,
+          : `ربات قبلی ${legacyId}`,
     status: inactiveReason === null ? 'ACTIVE' : 'INACTIVE',
     inactiveReason,
     audience,

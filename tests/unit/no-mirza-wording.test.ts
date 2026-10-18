@@ -17,6 +17,10 @@ import {
   TEMPLATE_OTHER_GROUP_FA,
 } from '../../apps/web/src/i18n/templates.fa';
 import { WEB_FA } from '../../apps/web/src/i18n/web.fa';
+import {
+  MIRZA_IMPORT_ADMIN_DISPLAY_NAME,
+  MIRZA_TICKET_CATEGORY_TITLE,
+} from '../../apps/api/src/modules/platform/legacy-materialize/application/ticket-history.step';
 
 /**
  * Owner product rule (2026-10-18, superseding the 2026-10-17 «از میرزا» badge): the name of
@@ -132,6 +136,11 @@ describe('no previous-bot name outside the one-time import page', () => {
       .filter(([, text]) => PREVIOUS_BOT_NAME.test(text))
       .map(([path]) => path);
     expect(offending).toEqual([]);
+  });
+
+  it('the labels the import writes into rows the operator sees are neutral', () => {
+    expect(MIRZA_TICKET_CATEGORY_TITLE).not.toMatch(PREVIOUS_BOT_NAME);
+    expect(MIRZA_IMPORT_ADMIN_DISPLAY_NAME).not.toMatch(PREVIOUS_BOT_NAME);
   });
 
   it('no web source outside the catalogue and the import page spells «میرزا» in code', () => {
