@@ -49,7 +49,7 @@
 }
 .attn-link:hover,
 .attn-link:focus-visible {
-  background: var(--bg-2);
+  background: var(--panel-row);
 }
 .attn-go {
   display: inline-flex;
@@ -193,6 +193,120 @@
   display: grid;
   gap: 4px 24px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* --- Liquid Glass: the dashboard's cards are glass ---------------------------- */
+
+/*
+ * The approved theme's «style 2»: on the dashboard every card is the glass material over
+ * the mesh, while work pages keep the kit's solid `--panel` card. Scoped to the page's own
+ * containers — the KPI rows, the chart and card rows, and the cards the page draws at its
+ * top level (`.content-inner` holds the dashboard only when a `.dash-row` is in it) — so no
+ * other page's card turns translucent.
+ */
+.dash-attention,
+.dash-kpis > .card,
+.dash-charts > .card,
+.dash-row > .card,
+.content-inner:has(> .dash-row) > .card {
+  position: relative;
+  border: 0;
+  border-radius: var(--radius-card);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
+}
+/* The 1px rim: bright at the top corner, fading, and catching again at the bottom. */
+.dash-attention::after,
+.dash-kpis > .card::after,
+.dash-charts > .card::after,
+.dash-row > .card::after,
+.content-inner:has(> .dash-row) > .card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(150deg, var(--edge), transparent 40%, transparent 62%, var(--edge-2));
+  -webkit-mask:
+    linear-gradient(var(--fg) 0 0) content-box,
+    linear-gradient(var(--fg) 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(var(--fg) 0 0) content-box,
+    linear-gradient(var(--fg) 0 0);
+  mask-composite: exclude;
+}
+/* An alerting KPI keeps its tone: the rim line takes the danger or warn colour. */
+.dash-kpis > .card.alert {
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent),
+    var(--gshadow);
+}
+.dash-kpis > .card.warnish {
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent),
+    var(--gshadow);
+}
+/* The hero: the first business figure (today's sales), lit from its top corner. */
+.dash-kpis:not(.n1, .n2, .n3, .n4, .n5, .n6) > .card:first-child {
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--fg) 7%, var(--glass)),
+    var(--glass) 65%
+  );
+}
+/*
+ * The attention queue as glass tiles (the demo's `.attn-i`): one 14px tile per waiting
+ * kind, as many abreast as fit, each still ONE link. Customer 360's list keeps its rows.
+ */
+.dash-attention .attn-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 8px;
+}
+.dash-attention .attn-list > li {
+  border-bottom: 0;
+  border-radius: calc(var(--radius-card) - 6px);
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--edge-2);
+}
+.dash-attention .attn-list > .attn-danger {
+  background: color-mix(in srgb, var(--danger) 9%, var(--glass));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.dash-attention .attn-link {
+  padding: 8px 12px;
+  border-radius: inherit;
+}
+.dash-attention .attn-link:hover,
+.dash-attention .attn-link:focus-visible {
+  background: var(--glass-2);
+}
+
+/* Reduced transparency: the same cards and tiles, solid and legible, with no blur. */
+@media (prefers-reduced-transparency: reduce) {
+  .dash-attention,
+  .dash-kpis > .card,
+  .dash-charts > .card,
+  .dash-row > .card,
+  .content-inner:has(> .dash-row) > .card,
+  .dash-kpis:not(.n1, .n2, .n3, .n4, .n5, .n6) > .card:first-child {
+    background: var(--panel);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .dash-attention .attn-list > li {
+    background: var(--panel-row);
+  }
 }
 
 /* --- Responsive ------------------------------------------------------------- */

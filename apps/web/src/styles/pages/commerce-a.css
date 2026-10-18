@@ -19,7 +19,8 @@
 }
 .receipt {
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
+  border-radius: calc(var(--radius-card) - 4px);
+  background: var(--panel-row);
   padding: 14px;
   display: grid;
   gap: 10px;
@@ -173,8 +174,8 @@
   align-items: flex-start;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--bg-1);
+  border-radius: calc(var(--radius-card) - 6px);
+  background: var(--panel-row);
 }
 .ca-delete-options .radio input {
   margin-top: 3px;
@@ -199,8 +200,8 @@
   align-content: start;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--bg-1);
+  border-radius: calc(var(--radius-card) - 6px);
+  background: var(--panel-row);
 }
 .ca-decision-approve {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
@@ -264,7 +265,7 @@
   font-variant-numeric: tabular-nums;
 }
 .ca-totals > .total {
-  background: var(--bg-1);
+  background: var(--panel-row);
   font-weight: 600;
 }
 .ca-totals > .total dt {
@@ -332,9 +333,14 @@
   overflow-x: auto;
   padding: 6px;
   margin-block: 8px;
-  border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: var(--bg-1);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
   scrollbar-width: thin;
 }
 .c360-nav a {
@@ -348,7 +354,7 @@
 }
 .c360-nav a:hover,
 .c360-nav a:focus-visible {
-  background: var(--bg-2);
+  background: var(--glass-2);
   color: var(--fg);
 }
 
@@ -457,7 +463,7 @@
   border-block-end: 1px solid var(--line);
 }
 .nc-item.unread {
-  background: var(--bg-2);
+  background: var(--accent-soft);
 }
 .nc-head,
 .nc-actions {
@@ -626,5 +632,14 @@
     justify-content: center;
     min-height: var(--ctl-h);
     min-width: var(--ctl-h);
+  }
+}
+
+/* Reduced transparency: the sticky section list is solid, with no blur. */
+@media (prefers-reduced-transparency: reduce) {
+  .c360-nav {
+    background: var(--panel);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }

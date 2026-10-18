@@ -49,7 +49,7 @@
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
 }
 
 /* R1: «دکمه‌های ربات» — the main-menu keyboard as the customer will see it. */
@@ -86,7 +86,7 @@
   flex-direction: column;
   min-height: 360px;
   border: 1px solid var(--line-2);
-  border-radius: 22px;
+  border-radius: calc(var(--radius-card) + 2px);
   background: var(--bg-0);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
@@ -282,8 +282,8 @@
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  border-radius: calc(var(--radius-card) - 6px);
+  background: var(--panel-row);
 }
 .bb-pool.is-target {
   border-style: dashed;
@@ -442,7 +442,7 @@
   padding: 0 6px;
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: var(--bg-1);
+  color: var(--accent-fg);
   font-size: var(--fs-xs);
   line-height: 18px;
   white-space: nowrap;
@@ -513,8 +513,8 @@
 /* The four styles Telegram accepts — approximations in theme tokens, nothing custom. */
 .bb-chip.bb-style-primary,
 .menu-preview-key.bb-style-primary {
-  border-color: var(--info);
-  background: var(--info-soft);
+  border-color: var(--chart-1);
+  background: color-mix(in srgb, var(--chart-1) 16%, transparent);
 }
 .bb-chip.bb-style-success,
 .menu-preview-key.bb-style-success {
@@ -534,8 +534,8 @@
   background: var(--bg-3);
 }
 .bb-style-primary .bb-style-swatch {
-  border-color: var(--info);
-  background: var(--info-soft);
+  border-color: var(--chart-1);
+  background: color-mix(in srgb, var(--chart-1) 16%, transparent);
 }
 .bb-style-success .bb-style-swatch {
   border-color: var(--ok);
@@ -576,7 +576,7 @@
   filter: drop-shadow(var(--shadow-sm));
 }
 .bb-ghost.bb-style-primary .bb-ghost-box {
-  fill: var(--info-soft);
+  fill: color-mix(in srgb, var(--chart-1) 16%, transparent);
 }
 .bb-ghost.bb-style-success .bb-ghost-box {
   fill: var(--ok-soft);
@@ -759,14 +759,14 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: var(--bg-1);
+  background: var(--panel-row);
 }
 .fx-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
 }
 .fx-strip > .stat + .stat {
   border-inline-start: 1px solid var(--line);
@@ -853,7 +853,7 @@
   align-items: center;
   padding: 8px 10px;
   border: 1px solid var(--line-2);
-  border-radius: var(--radius-card);
+  border-radius: calc(var(--radius-card) - 6px);
 }
 .ib-row > .ib-note,
 .ib-row > .disclosure {

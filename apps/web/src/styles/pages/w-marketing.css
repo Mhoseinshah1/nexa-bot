@@ -14,7 +14,7 @@
   gap: 4px;
   padding: 3px 10px;
   border-radius: var(--radius-pill);
-  background: var(--bg-2);
+  background: var(--panel-row);
   border: 1px solid var(--line);
   font-size: var(--fs-xs);
   color: var(--fg-2);
@@ -80,7 +80,7 @@
   margin: 0;
 }
 .bx-kv {
-  background: var(--bg-2);
+  background: var(--panel-row);
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
   padding: 8px 10px;
@@ -163,14 +163,19 @@
 }
 .content-editor.bx-sheet.open {
   position: fixed;
-  inset-block: 0;
-  inset-inline-end: 0;
+  inset-block: var(--chrome-inset);
+  inset-inline-end: var(--chrome-inset);
   z-index: 101;
-  inline-size: min(560px, 100vw);
+  inline-size: min(560px, calc(100vw - 2 * var(--chrome-inset)));
   overflow-y: auto;
-  background: var(--bg-1);
-  border-inline-start: 1px solid var(--line);
-  box-shadow: var(--shadow);
+  border-radius: var(--radius-drawer);
+  background: var(--panel);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
   padding: 12px;
 }
 .bx-sheet-head {
@@ -216,8 +221,8 @@
   align-items: center;
   gap: 12px;
   padding: 14px;
-  border-radius: var(--radius-card);
-  background: var(--bg-2);
+  border-radius: calc(var(--radius-card) - 6px);
+  background: var(--panel-row);
   border: 1px solid var(--line);
 }
 .bx-glyph {
@@ -307,8 +312,8 @@
   vertical-align: -1px;
 }
 .bx-dot.bb-style-primary {
-  background: var(--info);
-  border-color: var(--info);
+  background: var(--chart-1);
+  border-color: var(--chart-1);
 }
 .bx-dot.bb-style-success {
   background: var(--ok);
@@ -346,7 +351,7 @@
   padding: 10px 6px;
   border-radius: var(--radius-ctl);
   border: 1px solid var(--line);
-  background: var(--bg-1);
+  background: var(--panel-row);
   color: var(--fg);
   font: inherit;
   font-size: var(--fs-xs);
@@ -355,13 +360,13 @@
 .bx-stopt i {
   inline-size: 100%;
   block-size: 18px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-ctl);
   border: 1px solid var(--line-2);
   background: var(--bg-4);
 }
 .bx-stopt.bb-style-primary i {
-  background: var(--info);
-  border-color: var(--info);
+  background: var(--chart-1);
+  border-color: var(--chart-1);
 }
 .bx-stopt.bb-style-success i {
   background: var(--ok);
@@ -389,8 +394,13 @@
   margin-top: 12px;
   padding: 8px 12px;
   border-radius: var(--radius-pill);
-  background: var(--bg-1);
-  border: 1px solid var(--line);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--edge-2);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    var(--gshadow);
 }
 .bx-save.on {
   box-shadow: var(--shadow);
@@ -491,5 +501,23 @@
 @media (max-width: 760px) {
   .bb-card .bb-workspace {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Liquid Glass: on a phone the floating sheet keeps the chrome's narrower inset. */
+@media (max-width: 640px) {
+  .content-editor.bx-sheet.open {
+    inset-block: var(--chrome-inset-phone);
+    inset-inline-end: var(--chrome-inset-phone);
+    inline-size: calc(100vw - 2 * var(--chrome-inset-phone));
+  }
+}
+/* Reduced transparency: the sticky save capsule and the sheet are solid, with no blur. */
+@media (prefers-reduced-transparency: reduce) {
+  .bx-save,
+  .content-editor.bx-sheet.open {
+    background: var(--panel);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
