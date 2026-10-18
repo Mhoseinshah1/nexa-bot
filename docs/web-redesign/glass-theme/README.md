@@ -28,8 +28,16 @@ approval record):
 
 - The demo's state bar («نمایش حالت‌ها»), its «دادهٔ نمونه» badges, and its palette and
   identity switchers.
-- The phone's bottom-navigation capsule. The app has no bottom navigation, and adding one
-  would be a new navigation surface rather than a restyle. Navigation on a phone stays the
-  menu button and the floating sidebar sheet.
 - The incident banner at the top of the demo. It is the demo's sample incident; the app draws
   the same banner only when a real incident asks to be seen.
+
+The phone's glass bottom-navigation capsule IS carried over: overview, Business chats, payments,
+users and the menu, each drawn only when the operator's navigation already holds it, with the
+sidebar's own server counters as badges. The 390 light views below show it in the light theme:
+
+| Screen                        | 390 light                                 |
+| ----------------------------- | ----------------------------------------- |
+| Users list, filter panel open | [390 light](users-filters--390-light.jpg) |
+| Payments                      | [390 light](payments--390-light.jpg)      |
+| Dashboard                     | [390 light](dashboard--390-light.jpg)     |
+| Customer 360                  | [390 light](customer-360--390-light.jpg)  |

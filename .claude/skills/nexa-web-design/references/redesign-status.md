@@ -40,9 +40,6 @@
   logic, request, route, gate, idempotency key, confirmation or text key changes with the theme.
 - **Not carried over:** the demo's other palettes, its palette and identity switchers, its state
   bar and sample-scenario boxes, and its sample data.
-  Also the phone's bottom-navigation capsule: the app has no bottom navigation to restyle, and
-  adding one would be a new navigation surface, not a theme. The phone keeps the menu button and
-  the floating sidebar sheet.
 - The rules of `SKILL.md` still bind the theme: colours through `tokens.css` only, no `style=`
   attributes (CSP `style-src 'self'`), logical properties, 44px touch targets, and AA contrast
   pinned by `tests/unit/web-token-contrast.test.ts` (glass surfaces over the mesh included).
