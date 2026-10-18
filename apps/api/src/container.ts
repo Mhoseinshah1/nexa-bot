@@ -602,6 +602,7 @@ import {
 } from './modules/commerce/pricing/infrastructure/drizzle-cashback.repository.js';
 import { DrizzleDiscountCodeCaptureRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount-code-capture.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
+import { DrizzleServiceOriginReader } from './modules/commerce/provisioning/infrastructure/drizzle-service-origin.reader.js';
 import {
   DrizzleServiceReminderRepository,
   DrizzleServiceReminderSnapshotReader,
@@ -5519,6 +5520,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     contacts: customerContacts,
     // Program §13: whether an operator could move a service anywhere (a read).
     locationTargets: locationChangeService,
+    // Owner rule 2026-10-18: an imported service's original product and price (display).
+    origins: new DrizzleServiceOriginReader(database.db),
   });
   // Program §13: an operator's free grant to one service, through `planGrant`.
   const serviceGrantService = new ServiceGrantService({

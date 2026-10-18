@@ -3903,6 +3903,8 @@ export const WEB_FA = {
   // R1: the free trial per panel — its tab on the panel page and the Trials page overview.
   'web.panel_tab_trial': 'سرویس تست',
   'web.service_trial_badge': 'سرویس تست',
+  'web.service_original_product': 'محصول اصلی',
+  'web.service_original_price': 'مبلغ اصلی',
   'web.panel_trial_title': 'سرویس تست این پنل',
   'web.panel_trial_hint':
     'سرویس تست مستقل از محصولات فروشی است و فقط از همین‌جا روشن، خاموش و تنظیم می‌شود. وقتی به مشتری پیشنهاد می‌شود که اینجا روشن باشد، این پنل بتواند سرویس جدید بپذیرد و ساخت نام کاربری خودکار در آن مجاز باشد. تعداد دفعات مجاز برای هر مشتری در صفحهٔ تنظیمات است. تغییر این مقادیر روی سرویس‌های تستی که قبلاً داده شده‌اند اثری ندارد.',

@@ -245,9 +245,7 @@ describe('the one-time Mirza import attaches every on-panel service (owner rule 
     }
     expect(await rig.count('services', "source = 'MIRZA' AND state <> 'TERMINATED'")).toBe(3);
     // Not one candidate is held back for a product any more.
-    expect(
-      await rig.count('legacy_service_candidates', "outcome IN ('PRODUCT_UNRESOLVED', 'NO_PANEL')"),
-    ).toBe(0);
+    expect(await rig.count('legacy_service_candidates', "outcome = 'PRODUCT_UNRESOLVED'")).toBe(0);
     expect(rig.providerWrites()).toEqual([]);
     expect(await rig.count('provisioning_operations')).toBe(0);
     expect(await rig.count('customer_notifications')).toBe(0);
@@ -265,7 +263,42 @@ describe('the one-time Mirza import attaches every on-panel service (owner rule 
     const [candidate] = await rows<{ outcome: string }>(sql`
       SELECT outcome FROM legacy_service_candidates
        WHERE tenant_id = ${TENANT} AND invoice_key = ${keyOf('svc_10')}`);
-    expect(candidate?.outcome).toBe('PROVIDER_MISSING');
+    // Ended and archived exactly as an unmapped code is (owner rule 2026-10-18): the same map
+    // row, the invoice archive, no service — and the exact match explains it.
+    expect(candidate?.outcome).toBe('NO_PANEL');
+    const [mapRow] = await rows<{ status: string; reason_code: string }>(sql`
+      SELECT status, reason_code FROM legacy_import_map
+       WHERE tenant_id = ${TENANT} AND legacy_table = 'invoice' AND legacy_id = ${keyOf('svc_10')}`);
+    expect(mapRow).toEqual({ status: 'MANUAL_REVIEW', reason_code: 'PANEL_UNMAPPED' });
+    expect(
+      await rig.count('legacy_invoice_archive', `invoice_key = '${keyOf('svc_10')}'`),
+    ).toBeGreaterThan(0);
+    const report = (await rig.detail(importId)).applyReport;
+    const servicesRow = report?.exactMatch?.rows.find(
+      (r) => r.mirzaTable === 'invoice' && r.nexaTable === 'services',
+    );
+    expect(servicesRow?.explained.find((e) => e.reason === 'NO_PANEL')?.rows).toBe(1);
+  });
+
+  it('an attached service keeps its original purchase: date on the order, product name and price on the detail', async () => {
+    for (const username of ['svc_0', 'svc_1', 'svc_5']) {
+      const service = await serviceOf(keyOf(username));
+      if (service === null) throw new Error(`${username} not attached`);
+      const j = Number(username.slice('svc_'.length));
+      // The order is settled when the customer bought it (the archive's `time_sell`), not at
+      // the import: the services list orders imported services by this date.
+      const [order] = await rows<{ settled: string; created: string }>(sql`
+        SELECT o.settled_at::text AS settled, o.created_at::text AS created
+          FROM orders o JOIN services s ON s.order_id = o.id WHERE s.id = ${service.id}`);
+      expect(new Date(order?.settled ?? '').getTime(), username).toBe((1_700_000_000 + j) * 1000);
+      expect(order?.settled, username).not.toBe(order?.created);
+      // The service detail an operator reads shows the original product and price.
+      const detail = await ctx.container.serviceAdmin.detail(tenantA, rig.owner, service.id);
+      expect(detail.original, username).toEqual({
+        productName: 'synthetic',
+        price: { amountMinor: 150_000n, currency: 'IRT' },
+      });
+    }
   });
 
   it('a renewal of an imported service offers its panel’s CURRENT plans, never its own product', async () => {
