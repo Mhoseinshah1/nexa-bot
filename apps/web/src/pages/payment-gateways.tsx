@@ -8,8 +8,10 @@ import {
   formatBasisPointsPercent,
   parsePercentBasisPoints,
   takesFixedRate,
+  type PaymentGatewayListResponse,
   type PaymentGatewayProvider,
   type PaymentGatewayView,
+  type PaymentRouteUnofferableReason,
   type SalesCurrencyCode,
 } from '@nexa/contracts';
 import {
@@ -871,6 +873,9 @@ export function PaymentGatewaysPage({
       )}
       {tabs}
       <PanelFrame panel={panel}>
+        {gateways.data !== undefined && (
+          <TopupUnavailableWarning walletTopup={gateways.data.walletTopup} rows={rows} />
+        )}
         <StateSwitch
           query={gateways}
           denied={denied}
@@ -1401,6 +1406,60 @@ export function PaymentGatewaysPage({
       </PanelFrame>
     </>
   );
+}
+
+/**
+ * The warning that no route can fund a wallet top-up, so the bot hides «💰 افزایش موجودی».
+ *
+ * Drawn from `walletTopup`, which the server fills from the SAME route decision the bot
+ * makes; this decides nothing. `available` true, or a response from the previous release
+ * (null), draws nothing. Each route's blockers are the server's; the one thing read here is
+ * the route's credential state, to say whether an inactive route already has its key.
+ */
+export function TopupUnavailableWarning({
+  walletTopup,
+  rows,
+}: {
+  walletTopup: PaymentGatewayListResponse['walletTopup'];
+  rows: readonly PaymentGatewayView[];
+}) {
+  if (walletTopup === null || walletTopup.available) return null;
+  return (
+    <Banner tone="warn" title={t('web.payment_gateways_topup_unavailable_title')}>
+      <p>{t('web.payment_gateways_topup_unavailable_body')}</p>
+      <ul>
+        {walletTopup.routes.map((route) => {
+          const row = rows.find((candidate) => candidate.provider === route.provider);
+          if (row === undefined) return null;
+          return (
+            <li key={route.provider}>
+              <strong>{nameOf(row)}</strong>
+              {t('web.ident_separator')}
+              {route.blockers
+                .map((blocker) => blockerText(blocker, row))
+                .join(t('web.list_separator'))}
+            </li>
+          );
+        })}
+      </ul>
+    </Banner>
+  );
+}
+
+function blockerText(blocker: PaymentRouteUnofferableReason, row: PaymentGatewayView): string {
+  switch (blocker) {
+    case 'INACTIVE':
+      if (!row.credential.required) return t('web.payment_gateways_topup_block_inactive');
+      return row.credential.setAt === null
+        ? t('web.payment_gateways_topup_block_inactive_no_key')
+        : t('web.payment_gateways_topup_block_inactive_keyed');
+    case 'PURPOSE_OFF':
+      return t('web.payment_gateways_topup_block_purpose_off');
+    case 'NO_RECEIVING_ACCOUNT':
+      return t('web.payment_gateways_topup_block_no_receiving_account');
+    case 'UNPRICEABLE':
+      return t('web.payment_gateways_topup_block_unpriceable');
+  }
 }
 
 /** The configuration's tabpanel when the page is one tab of two; the bare content otherwise. */
