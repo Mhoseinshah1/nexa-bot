@@ -165,7 +165,7 @@ import type { CustomerCaptureService } from '../../modules/commerce/customers/ap
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { SubscriptionFileService } from '../../modules/commerce/provisioning/application/subscription-file.service.js';
 import type {
-  ServiceRefreshResult,
+  ServiceLiveCheckResult,
   ServiceRefreshService,
 } from '../../modules/commerce/provisioning/application/service-refresh.service.js';
 import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
@@ -3936,7 +3936,7 @@ export interface BotRuntimeDeps {
    * card. Optional for the fixtures that build a runtime without it: then the tap queues
    * the `SYNC_USAGE` operation it always did.
    */
-  readonly serviceRefresh?: Pick<ServiceRefreshService, 'refresh'>;
+  readonly serviceRefresh?: Pick<ServiceRefreshService, 'refresh' | 'liveCheck'>;
   /**
    * WP-A10 — the tenant's client apps, read for this customer's services. Optional for the
    * fixtures that build a runtime without it: then the guide is the five
@@ -10859,9 +10859,18 @@ export class BotRuntime {
      * even planned — the tap's own answer, put on the card first so no later edit can
      * overwrite a final one — and `notice` adds one line under the status.
      */
-    options: { readonly working?: boolean; readonly notice?: TemplateKey } = {},
+    options: {
+      readonly working?: boolean;
+      readonly notice?: TemplateKey;
+      /** Track 3 §1: drawn from stored figures; the status names when they were read. */
+      readonly lastUpdatedAt?: Date;
+    } = {},
   ): Promise<PendingReply> {
     const service = await this.ownedService(scope, customer, serviceId);
+    const cardExtra = {
+      ...(options.notice === undefined ? {} : { notice: options.notice }),
+      ...(options.lastUpdatedAt === undefined ? {} : { lastUpdatedAt: options.lastUpdatedAt }),
+    };
     if (service === null) {
       return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
     }
@@ -10894,7 +10903,7 @@ export class BotRuntime {
       });
       const card = await this.serviceCardScreen(scope, service, title, false, {
         working: true,
-        ...(options.notice === undefined ? {} : { notice: options.notice }),
+        ...cardExtra,
       });
       return { key: card.key, values: card.values, buttons, orderId: null };
     }
@@ -11024,13 +11033,7 @@ export class BotRuntime {
       row: 5,
     });
 
-    const card = await this.serviceCardScreen(
-      scope,
-      service,
-      title,
-      rotation.offered,
-      options.notice === undefined ? {} : { notice: options.notice },
-    );
+    const card = await this.serviceCardScreen(scope, service, title, rotation.offered, cardExtra);
     return { key: card.key, values: card.values, buttons, orderId: null };
   }
 
@@ -11040,7 +11043,11 @@ export class BotRuntime {
     service: ServiceRecord,
     title: string,
     rotateOffered: boolean,
-    extra: { readonly working?: boolean; readonly notice?: TemplateKey },
+    extra: {
+      readonly working?: boolean;
+      readonly notice?: TemplateKey;
+      readonly lastUpdatedAt?: Date;
+    },
   ): Promise<{ readonly key: TemplateKey; readonly values: TemplateValues }> {
     const display = await this.deps.productDisplay.displayFor(scope, service.productId);
     return this.deps.screens.serviceCard(scope, {
@@ -12236,28 +12243,26 @@ export class BotRuntime {
   }
 
   /**
-   * Pre-support A2: opening a card (`s:` and `sv:`) makes the bounded live read the «♻️»
-   * button makes, before the card is drawn — so an opened card shows what the panel says,
-   * not what the last scheduled sync wrote.
+   * Opening a card (`s:` and `sv:`) checks the panel live before the card is drawn
+   * (Track 3 §1; before it, Pre-support A2's opportunistic usage read), through
+   * `ServiceRefreshService.liveCheck` — hard-bounded, cached for a short window, inside the
+   * tenant's one outbound budget above the background floor. Three answers, kept apart:
    *
-   * It is `ServiceRefreshService.refresh` in its `onOpen` mode, so every bound the button
-   * has holds here too — the minimum interval (`RECENT` dials nothing), the
-   * one-read-in-flight reservation (a held one dials nothing), the panel client's timeout
-   * — and two more that only an unasked-for read needs: a panel the monitor has confirmed
-   * unusable is not dialled, and the token comes from above the background floor of the
-   * tenant's ONE bucket, never from it.
+   * - **FRESH** (read now, or within the window): the card, as the database now holds it;
+   * - **MISSING_ON_PANEL** (the panel said twice the account does not exist): NOT the card —
+   *   `bot.service.panel_missing`, with support and the way back to the list, and no link,
+   *   files or renewal. The tap changed nothing about the service; an operator was told;
+   * - **STALE** (timeout, the panel's 429, panel down, budget spent, no proven read): the
+   *   stored card with `bot.service.last_updated` naming when it was last read. Never an
+   *   error, and never a toast: the failure notice belongs to the «♻️» button.
    *
-   * The open is a read of the card; the refresh is opportunistic. So only `NOT_FOUND` is
-   * an answer — the card is not theirs (or not there), told exactly as the stored card
-   * would tell it. `FAILED` (panel down, budget spent, tenant stopped), `RECENT` and
-   * `NOT_READ` draw the stored card with no toast: the failure notice belongs to the button
-   * the customer pressed to ask for a read. Anything the refresh throws draws the stored
-   * card too: an expected refusal (`isExpectedRefreshRefusal`) silently, anything else
-   * reported through `logger`.
+   * `NOT_FOUND` is the card's own not-found answer; `NOT_READ` (a suspended service, reads
+   * not offered) draws the stored card as it stands. Anything the check throws draws the
+   * stored card too: an expected refusal (`isExpectedRefreshRefusal`) silently, anything
+   * else reported through `logger`.
    *
    * Not for the «working» card: a service with a change still being applied is drawn
-   * «working» from its operation rows, and its usage is not what the customer is waiting
-   * on — the read is skipped and the card drawn as it stands.
+   * «working» from its operation rows, and the check is skipped.
    */
   private async openServiceCard(
     scope: TenantContext,
@@ -12268,39 +12273,44 @@ export class BotRuntime {
     const refresh = this.deps.serviceRefresh;
     const service = await this.ownedService(scope, customer, serviceId);
     if (
-      refresh !== undefined &&
-      service !== null &&
-      !(await this.deps.services.changeInProgress(scope, service))
+      refresh === undefined ||
+      service === null ||
+      (await this.deps.services.changeInProgress(scope, service))
     ) {
-      let outcome: ServiceRefreshResult['outcome'] | null;
-      try {
-        outcome = (
-          await refresh.refresh(
-            scope,
-            actor,
-            { customerId: customer.id, serviceId },
-            {
-              onOpen: true,
-            },
-          )
-        ).outcome;
-      } catch (error) {
-        /*
-         * An opportunistic read never costs the customer the card: whatever it threw, the
-         * stored card is drawn below. An expected refusal is silent; anything else is a
-         * defect somebody must see (an unreadable credential, say), so it is reported.
-         */
-        if (!isExpectedRefreshRefusal(error)) {
-          this.deps.logger?.error(
-            { err: error, serviceId, tenantId: scope.tenantId },
-            'the live read on opening a service card failed; the stored card was drawn',
-          );
-        }
-        outcome = null;
+      return this.serviceDetail(scope, actor, customer, serviceId);
+    }
+    let checked: ServiceLiveCheckResult | null;
+    try {
+      checked = await refresh.liveCheck(scope, actor, { customerId: customer.id, serviceId });
+    } catch (error) {
+      /*
+       * A live check never costs the customer the card: whatever it threw, the stored card
+       * is drawn below. An expected refusal is silent; anything else is a defect somebody
+       * must see (an unreadable credential, say), so it is reported.
+       */
+      if (!isExpectedRefreshRefusal(error)) {
+        this.deps.logger?.error(
+          { err: error, serviceId, tenantId: scope.tenantId },
+          'the live read on opening a service card failed; the stored card was drawn',
+        );
       }
-      if (outcome === 'NOT_FOUND') {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-      }
+      checked = null;
+    }
+    if (checked?.outcome === 'NOT_FOUND') {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    if (checked?.outcome === 'MISSING_ON_PANEL') return panelMissingReply();
+    if (checked?.outcome === 'STALE' || checked === null) {
+      // Re-read: the row as it stands now is what the card draws, and what it was read at.
+      const stored = await this.ownedService(scope, customer, serviceId);
+      const at = stored?.usageSyncedAt ?? null;
+      return this.serviceDetail(
+        scope,
+        actor,
+        customer,
+        serviceId,
+        at === null ? {} : { lastUpdatedAt: at },
+      );
     }
     return this.serviceDetail(scope, actor, customer, serviceId);
   }
@@ -16464,6 +16474,28 @@ function ticketsButton(): CustomerButton {
   return {
     ...inlineLabel('tickets.back'),
     data: TICKETS_CALLBACK_DATA,
+  };
+}
+
+/**
+ * Track 3 §1: the answer to opening a card whose account the panel said, twice, it does not
+ * have — support, and the way back to the list. Deliberately no link, files, renew or any
+ * other service action: there is nothing on the panel for them to act on, and what happens
+ * to the service is an operator's decision.
+ */
+function panelMissingReply(): PendingReply {
+  return {
+    key: 'bot.service.panel_missing',
+    values: {},
+    buttons: [
+      { ...inlineLabel('service.support'), data: SUPPORT_CALLBACK_DATA, row: 0 },
+      {
+        ...inlineLabel('service.back_to_list'),
+        data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
+        row: 1,
+      },
+    ],
+    orderId: null,
   };
 }
 

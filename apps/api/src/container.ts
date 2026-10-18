@@ -642,7 +642,10 @@ import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisionin
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { SubscriptionFileService } from './modules/commerce/provisioning/application/subscription-file.service.js';
-import { ServiceRefreshService } from './modules/commerce/provisioning/application/service-refresh.service.js';
+import {
+  ServiceRefreshService,
+  SERVICE_LIVE_CHECK_TIMEOUT_MS,
+} from './modules/commerce/provisioning/application/service-refresh.service.js';
 import {
   OperationCardEditor,
   type ServiceCardRenderer,
@@ -3669,6 +3672,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // client that retried underneath it would multiply the two, turning one
     // configured cadence into an unconfigured one.
     maxRetries: PANEL_HTTP_RETRIES,
+  });
+  /*
+   * Track 3 §1: the client the live check on opening a service card dials through — the
+   * same policy, CA bundle and size cap, with each request bounded by the check's own hard
+   * deadline, so a read the deadline gave up on does not run on for the full panel timeout.
+   */
+  const panelLiveHttp = new SafeHttpClient({
+    ...urlPolicy,
+    ...(config.PANEL_HTTP_CA_FILE === undefined
+      ? {}
+      : { caCertificates: [readFileSync(config.PANEL_HTTP_CA_FILE, 'utf8')] }),
+    totalTimeoutMs: Math.min(config.PANEL_HTTP_TIMEOUT_MS, SERVICE_LIVE_CHECK_TIMEOUT_MS),
+    maxResponseBytes: config.PANEL_HTTP_MAX_RESPONSE_BYTES,
+    maxRetries: 0,
   });
 
   /*
@@ -7498,6 +7515,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         // A read is a log-in and a look-up, each bounded by the client's timeout; three
         // of them plus a margin is comfortably longer than any read that is still alive.
         inFlightMs: 3 * config.PANEL_HTTP_TIMEOUT_MS + 30_000,
+        // Track 3 §1: the live check on opening a card — its verdicts and its client.
+        opsEvents: opsLog,
+        conditions: new DrizzleOperationalConditionReader(database.db),
+        liveHttp: panelLiveHttp,
       }),
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
       clientApps: clientAppCatalog,

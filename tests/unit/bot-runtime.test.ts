@@ -987,6 +987,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // Codex review of #116: a request whose operation had ended is drawn with its notice.
       'bot.service.notice_action_failed',
       'bot.service.page_button',
+      /*
+       * Track 3 §1: the answer to opening a card whose account the panel said, twice, it
+       * does not have. It claims nothing was done to the service — nothing was — and sends
+       * the customer to support, which `sp:` opens on this head.
+       */
+      'bot.service.panel_missing',
       'bot.service.prev_page_button',
       'bot.service.provisioning',
       'bot.service.refresh_button',
@@ -1032,6 +1038,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.search_none',
       'bot.service.search_prompt',
       'bot.service.search_results',
+      // Track 3 §1: the support button on `bot.service.panel_missing` (`sp:`).
+      'bot.service.support_button',
       'bot.service.suspend_button',
       'bot.service.suspend_confirm',
       'bot.service.suspend_confirm_button',

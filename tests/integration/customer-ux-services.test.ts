@@ -568,9 +568,10 @@ describe('a customer looks after the services they bought', () => {
       await ctx.container.database.db.execute(
         sql`UPDATE services SET traffic_used_bytes = 0, usage_synced_at = NULL WHERE id = ${service.id}`,
       );
-      // Pre-support A2: opening the card reads the panel. A panel that cannot answer
-      // leaves the figure unread, which is the state this test draws.
-      panel.forget(service.username);
+      // Opening the card reads the panel. A panel that cannot answer leaves the figure
+      // unread, which is the state this test draws. (An account the panel says is GONE is
+      // a different answer — Track 3 §1 — so the panel fails here rather than forgets.)
+      panel.behaviour = 'server-error';
       await handle(tap(`s:${service.id}`));
       const body = lastText();
       expect(body).toContain('🗂 حجم کل: نامحدود');
@@ -949,7 +950,7 @@ describe('a customer looks after the services they bought', () => {
     it('a panel failure draws the stored card, with no error and no notice', async () => {
       const service = await activeService('open-panel-down');
       await stale(service.id);
-      panel.forget(service.username);
+      panel.behaviour = 'server-error';
       const before = reads(service.username);
       sent = [];
       const result = await handle(tap(`s:${service.id}`));
@@ -983,14 +984,14 @@ describe('a customer looks after the services they bought', () => {
     });
 
     const withRefresh = async (replacement: () => Promise<never>, body: () => Promise<void>) => {
-      const deps = (runtime() as unknown as { deps: { serviceRefresh: { refresh: unknown } } })
+      const deps = (runtime() as unknown as { deps: { serviceRefresh: { liveCheck: unknown } } })
         .deps;
-      const original = deps.serviceRefresh.refresh;
-      deps.serviceRefresh.refresh = replacement;
+      const original = deps.serviceRefresh.liveCheck;
+      deps.serviceRefresh.liveCheck = replacement;
       try {
         await body();
       } finally {
-        deps.serviceRefresh.refresh = original;
+        deps.serviceRefresh.liveCheck = original;
       }
     };
 
@@ -1166,6 +1167,160 @@ describe('a customer looks after the services they bought', () => {
       const before = reads(service.username);
       expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
       expect(reads(service.username) - before).toBe(0);
+    });
+
+    // ---------------------------------------------------------------------------------
+    // Track 3 §1: found, missing, timeout, rate limited and the cache, as the bot draws them
+    // ---------------------------------------------------------------------------------
+    const LAST_UPDATED = 'آخرین به‌روزرسانی:';
+    const missingRows = async (serviceId: string) =>
+      (
+        await ctx.container.database.db.execute(
+          sql`SELECT code, severity, occurrence_count, resolved_at, recovers_code
+                FROM operational_events
+               WHERE dedupe_key = ${`service.panel_account_missing:${serviceId}`}
+                  OR (code = 'service.panel_account_found' AND context->>'serviceId' = ${serviceId})
+               ORDER BY first_seen_at`,
+        )
+      ).rows as {
+        code: string;
+        severity: string;
+        occurrence_count: number;
+        resolved_at: Date | null;
+        recovers_code: string | null;
+      }[];
+    /** Forget the in-process missing verdicts — what a replica that never saw them holds. */
+    const forgetMissingVerdicts = () =>
+      (
+        runtime() as unknown as {
+          deps: { serviceRefresh: { missingVerdicts: Map<string, number> } };
+        }
+      ).deps.serviceRefresh.missingVerdicts.clear();
+
+    it('found: the fresh figure, with no «last updated» line', async () => {
+      const service = await activeService('live-found');
+      await stale(service.id);
+      usedOnPanel(service.username, 5_368_709_120);
+      sent = [];
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(lastText()).toContain('📥 حجم مصرفی: 5 گیگابایت');
+      expect(lastText()).not.toContain(LAST_UPDATED);
+      expect(buttonsOf(lastMarkup()), 'the link stays on a found card').toContain(
+        `r:${service.id}`,
+      );
+    });
+
+    it('missing: the panel says twice the account is gone — told so, nothing changed, an operator told', async () => {
+      const service = await activeService('live-missing');
+      await stale(service.id);
+      const before = await services.findById(tenantA, service.id);
+      panel.forget(service.username);
+      const reads0 = reads(service.username);
+      sent = [];
+      const result = await handle(tap(`s:${service.id}`));
+      expect(result.replyKey).toBe('bot.service.panel_missing');
+      expect(reads(service.username) - reads0, 'confirmed by a second read').toBe(2);
+      expect(lastText()).toBe(
+        'این سرویس در پنل پیدا نشد. اگر فکر می‌کنید اشتباه است با پشتیبانی تماس بگیرید.',
+      );
+      // Support and the way back — no link, no files, no renewal, no other action.
+      expect(buttonsOf(lastMarkup())).toEqual(['sp:', 'sl:1']);
+      expect(lastMarkup()).toContain('📨 تماس با پشتیبانی');
+      // The tap changed nothing about the service, deleted nothing, refunded nothing.
+      const after = await services.findById(tenantA, service.id);
+      expect(after?.state).toBe('ACTIVE');
+      expect(after?.trafficUsedBytes).toBe(before?.trafficUsedBytes);
+      expect(after?.subscriptionUrl).toBe(before?.subscriptionUrl);
+      expect(
+        (await operations.listForService(tenantA, service.id, 50)).filter(
+          (operation) => operation.type !== 'PROVISION',
+        ),
+        'no operation was planned by a customer’s tap',
+      ).toHaveLength(0);
+      // One open condition for an operator, about this service.
+      expect(await missingRows(service.id)).toEqual([
+        expect.objectContaining({
+          code: 'service.panel_account_missing',
+          severity: 'ERROR',
+          occurrence_count: 1,
+          resolved_at: null,
+        }),
+      ]);
+    });
+
+    it('missing, then found again: the condition is closed by its recovery', async () => {
+      const service = await activeService('live-missing-back');
+      await stale(service.id);
+      const user = panel.users.get(service.username);
+      if (user === undefined) throw new Error('no panel user');
+      const saved = { ...user };
+      panel.forget(service.username);
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.panel_missing');
+      // The account returns on the panel; the window has passed (another replica's view).
+      panel.seed(saved);
+      forgetMissingVerdicts();
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      const rows = await missingRows(service.id);
+      expect(rows.map((row) => row.code)).toEqual([
+        'service.panel_account_missing',
+        'service.panel_account_found',
+      ]);
+      expect(rows[0]?.resolved_at).not.toBeNull();
+      expect(rows[1]?.recovers_code).toBe('service.panel_account_missing');
+    });
+
+    it('cache hit: a second open inside the window asks the panel nothing — found or missing', async () => {
+      const found = await activeService('live-cache-found');
+      await stale(found.id);
+      const f0 = reads(found.username);
+      expect((await handle(tap(`s:${found.id}`))).replyKey).toBe('bot.service.card');
+      expect((await handle(tap(`s:${found.id}`))).replyKey).toBe('bot.service.card');
+      expect(reads(found.username) - f0).toBe(1);
+
+      const gone = await activeService('live-cache-missing');
+      await stale(gone.id);
+      panel.forget(gone.username);
+      const g0 = reads(gone.username);
+      expect((await handle(tap(`s:${gone.id}`))).replyKey).toBe('bot.service.panel_missing');
+      expect((await handle(tap(`s:${gone.id}`))).replyKey).toBe('bot.service.panel_missing');
+      expect(reads(gone.username) - g0, 'two reads for the verdict, none for the repeat').toBe(2);
+      expect((await missingRows(gone.id))[0]?.occurrence_count).toBe(1);
+    });
+
+    it('timeout: the stored card with when it was last read, inside the hard bound', async () => {
+      const service = await activeService('live-timeout');
+      await stale(service.id);
+      const release = panel.holdUserReads();
+      try {
+        sent = [];
+        const started = Date.now();
+        const result = await handle(tap(`s:${service.id}`));
+        expect(Date.now() - started, 'the hard bound, not the panel client’s timeout').toBeLessThan(
+          ctx.container.config.PANEL_HTTP_TIMEOUT_MS,
+        );
+        expect(result.replyKey).toBe('bot.service.card');
+        expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+        expect(lastText()).toContain(LAST_UPDATED);
+        noFailureNotice();
+        expect(await missingRows(service.id), 'a timeout is not «missing»').toEqual([]);
+      } finally {
+        release();
+      }
+    });
+
+    it('rate limited: the stored card with when it was last read, never «missing»', async () => {
+      const service = await activeService('live-429');
+      await stale(service.id);
+      panel.behaviour = 'rate-limited';
+      const before = reads(service.username);
+      sent = [];
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(reads(service.username) - before).toBe(1);
+      expect(lastText()).toContain('📥 حجم مصرفی: 2 گیگابایت');
+      expect(lastText()).toContain(LAST_UPDATED);
+      noFailureNotice();
+      expect(await missingRows(service.id)).toEqual([]);
+      expect((await services.findById(tenantA, service.id))?.state).toBe('ACTIVE');
     });
 
     it('a service that is not theirs is answered not-found, and dials nothing', async () => {
