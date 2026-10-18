@@ -107,6 +107,7 @@ import {
   PRODUCT_CATEGORY_STATUSES,
   PRODUCT_CATEGORY_VISIBILITIES,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
+  PRODUCT_LIST_VIEWS,
   PRODUCT_SORT_MAX,
   PRODUCT_SORT_MIN,
   PRODUCT_STATUSES,
@@ -2378,6 +2379,8 @@ export const productListQuerySchema = z.object({
   cursor: z.string().max(512).optional(),
   /** Only rows from this source (the «منبع» filter). */
   source: recordSourceSchema.optional(),
+  /** The current products or the import's historical archive (`PRODUCT_LIST_VIEWS`); absent is both. */
+  view: z.enum(PRODUCT_LIST_VIEWS).optional(),
   status: z.enum(PRODUCT_STATUSES).optional(),
   audience: z.enum(PRODUCT_AUDIENCES).optional(),
   title: z.string().max(PRODUCT_TITLE_MAX_LENGTH).optional(),
