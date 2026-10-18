@@ -208,6 +208,17 @@
  * desk layout, and so does a device whose primary pointer can hover (a touch
  * laptop, an iPad with a trackpad), which `hover: none` excludes. `pnpm web:responsive` measures every route against this.
  */
+/*
+ * A phone: the glass bottom-navigation capsule (shell.css) is 62px high and 10px above the
+ * home indicator. What must clear it — the content's end, the toasts, a sticky save bar —
+ * adds this to its offset; at a desk it is undefined, so `var(--bottom-nav-clear, 0px)` is 0.
+ */
+@media (max-width: 820px) {
+  :root {
+    --bottom-nav-clear: calc(62px + 10px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 /* Less transparency asked for: a sheet is the solid card panel. */
 @media (prefers-reduced-transparency: reduce) {
   :root,
