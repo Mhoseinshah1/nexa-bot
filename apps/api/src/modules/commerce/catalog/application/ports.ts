@@ -8,6 +8,7 @@ import type {
   ProductDisplay,
   ProductId,
   ProductSpecification,
+  ProductListView,
   ProductStatus,
   RecordSource,
   TenantContext,
@@ -103,6 +104,12 @@ export interface ProductPage {
 
 /** How an operator narrowed the product list. */
 export interface ProductSearch {
+  /**
+   * The operator's current list or the import's historical archive (`PRODUCT_LIST_VIEWS`).
+   * Absent is both. The predicate lives in the repository's WHERE clause, beside the keyset,
+   * so a page is never filtered or counted on the client.
+   */
+  readonly view?: ProductListView;
   readonly status?: ProductStatus;
   /** Only rows from this source (the source filter). */
   readonly source?: RecordSource;

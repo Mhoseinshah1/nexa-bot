@@ -3198,6 +3198,12 @@ export const WEB_FA = {
   'web.products_search_title_hint': 'ابتدای عنوان کافی است.',
   'web.products_search_empty': 'محصولی با این عنوان پیدا نشد.',
   'web.products_search_empty_hint': 'عبارت را کوتاه‌تر کنید یا جست‌وجو را پاک کنید.',
+  // The products list's two tabs: the working list and the import's historical archive.
+  'web.products_view_current': 'محصولات جاری',
+  'web.products_view_archive': 'آرشیو',
+  'web.products_archive_intro':
+    'محصولات تاریخچه‌ای که هنگام انتقال اطلاعات برای سفارش‌ها و سرویس‌های قدیمی ساخته شده‌اند: غیرفعال، پنهان و بدون پنل. فروخته نمی‌شوند و چون سابقه به آن‌ها ارجاع می‌دهد، هرگز حذف نمی‌شوند.',
+  'web.products_archive_empty': 'آرشیو خالی است.',
   'web.product_title': 'عنوان',
   'web.product_description': 'توضیح',
   'web.product_description_hint':
