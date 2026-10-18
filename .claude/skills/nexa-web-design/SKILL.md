@@ -5,12 +5,11 @@ description: Rules for changing the NEXA Web Admin (apps/web) — React + TypeSc
 
 # Web Admin (apps/web)
 
-**Status: the visual redesign is PAUSED.** No new design reference has been
-approved. Until the owner approves one, do not change theme, palette, layout,
-spacing, typography, iconography or page composition — only functional fixes
-the owner asked for, in the existing look. The approval state and where the
-approved reference will go are in `references/redesign-status.md`; read it
-before any visual work.
+**Status: approved references only.** The owner has approved the demo's layout and
+behaviour (2026-10-16) and its Liquid Glass «mono» theme (2026-10-18). Visual work
+follows those references and nothing else; anything they do not cover keeps the
+existing look. The approval state, what each reference decides and what is not
+carried over are in `references/redesign-status.md`; read it before any visual work.
 
 ## What the admin is
 
