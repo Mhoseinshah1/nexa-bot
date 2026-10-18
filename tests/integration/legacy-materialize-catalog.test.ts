@@ -815,7 +815,7 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
       await db().execute(sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`);
       for (const step of [steps().products, steps().resellers, steps().discounts]) {
         await expect(step.apply(mctx())).rejects.toMatchObject({
-          code: 'legacy_materialize.scope_stopped',
+          code: COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
         });
       }
       expect({

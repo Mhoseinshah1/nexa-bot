@@ -1,4 +1,4 @@
-import { errors, type PermissionKey, type UnitOfWork } from '@nexa/contracts';
+import { COMMERCE_ERROR_CODES, errors, type PermissionKey, type UnitOfWork } from '@nexa/contracts';
 import type { IdGenerator } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
@@ -40,7 +40,7 @@ export async function inCatalogTransaction<T>(
     await deps.guard.check(ctx.scope, ctx.actor, CATALOG_MATERIALIZE_PERMISSION, tx);
     if (!(await deps.scopeActivity.scopeIsActive(ctx.scope, tx))) {
       throw errors.conflict(
-        'legacy_materialize.scope_stopped',
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
         'This installation has stopped accepting work.',
       );
     }
