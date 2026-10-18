@@ -848,7 +848,7 @@ function TicketCategoriesCard({
       });
       refresh();
     },
-    onError: (error) => notify({ tone: 'danger', message: ticketFault(error) }),
+    onError: (error) => notify({ tone: 'danger', message: ticketFault(error), error }),
   });
 
   const normalized = normalizeTicketCategoryTitle(title);
@@ -1437,7 +1437,7 @@ function TicketActionsCard({
     refresh();
   };
   const failed = (error: unknown) => {
-    notify({ tone: 'danger', message: ticketFault(error) });
+    notify({ tone: 'danger', message: ticketFault(error), error });
     refresh();
   };
   const status = useMutation({

@@ -673,7 +673,7 @@ function ControlCard({
     },
     onError: (error) => {
       takeoverKey.settleOn(error);
-      notify({ tone: 'danger', message: businessChatFault(error) });
+      notify({ tone: 'danger', message: businessChatFault(error), error });
       refresh();
     },
   });
@@ -690,7 +690,7 @@ function ControlCard({
     },
     onError: (error) => {
       resumeKey.settleOn(error);
-      notify({ tone: 'danger', message: businessChatFault(error) });
+      notify({ tone: 'danger', message: businessChatFault(error), error });
       refresh();
     },
   });

@@ -925,7 +925,7 @@ function CredentialRow({
     },
     onError: (error) => {
       deleteKey.settleOn(error);
-      notify({ tone: 'danger', message: supportAiFault(error) });
+      notify({ tone: 'danger', message: supportAiFault(error), error });
       refresh();
     },
   });

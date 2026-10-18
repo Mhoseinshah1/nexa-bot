@@ -694,7 +694,7 @@ function useServiceAction(id: string, onActed: () => void, onTerminated: () => v
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 }

@@ -820,7 +820,7 @@ export function ServiceGrantButton({
     },
     onError: (error) => {
       grantKey.settleOn(error);
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
   const daysValue = Number(amount);
@@ -933,7 +933,7 @@ export function ServiceMoveButton({
     },
     onError: (error) => {
       moveKey.settleOn(error);
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
   return (

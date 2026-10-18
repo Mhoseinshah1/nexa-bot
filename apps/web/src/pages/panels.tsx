@@ -699,7 +699,7 @@ export function PanelDetailPage({
     },
     onError: (error: unknown) => {
       testSubmission.settleOn(error);
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 
@@ -1399,7 +1399,7 @@ function OverviewTab({
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 
@@ -1476,7 +1476,7 @@ function OverviewTab({
         // message that says what to do instead.
         setRenameOnRestore((current) => current ?? panel.name);
       }
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 
@@ -2448,7 +2448,7 @@ function CredentialsTab({
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 
@@ -2854,7 +2854,7 @@ export function NewPanelPage({
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 

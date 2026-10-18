@@ -457,6 +457,38 @@ describe('one business conversation', () => {
     );
   });
 
+  it('draws the code and correlation id under a failed takeover toast', async () => {
+    stubApi([
+      { url: `/business-chats/${CHAT_ID}`, body: detail() },
+      {
+        url: `/business-chats/${CHAT_ID}/takeover`,
+        status: 404,
+        body: {
+          error: {
+            kind: 'not_found',
+            code: 'business_chat.not_found',
+            message: 'gone',
+            correlationId: 'corr-takeover-1',
+          },
+        },
+      },
+    ]);
+    renderPage(<BusinessChatDetailPage id={CHAT_ID} denied={false} mayReply />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.bchat_takeover') }));
+    const toast = await waitFor(() => {
+      const found = document.querySelector('.toast.danger');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    // The Persian sentence first, then the reference under it, left-to-right.
+    expect(toast.textContent).not.toContain('gone');
+    const reference = toast.querySelector('.err-ref');
+    expect(reference).not.toBeNull();
+    expect(within(reference as HTMLElement).getByText('business_chat.not_found')).toBeTruthy();
+    expect(within(reference as HTMLElement).getByText('corr-takeover-1')).toBeTruthy();
+    expect(toast.firstChild?.textContent).not.toBe('');
+  });
+
   it('hands back to the AI only after the confirmation, through the resume route', async () => {
     const api = page();
     fireEvent.click(await screen.findByRole('button', { name: t('web.bchat_resume') }));

@@ -222,7 +222,7 @@ function PanelHealthCard({
     },
     onError: (error: unknown) => {
       probeSubmission.settleOn(error);
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 

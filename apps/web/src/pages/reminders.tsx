@@ -671,7 +671,7 @@ function useRowDraft(
  */
 function useSaveToasts(label: string): {
   readonly saved: (changed: boolean) => void;
-  readonly failed: () => void;
+  readonly failed: (error: unknown) => void;
 } {
   const notify = useToast();
   return {
@@ -680,7 +680,8 @@ function useSaveToasts(label: string): {
         tone: changed ? 'ok' : 'info',
         message: `${t(changed ? 'web.ob_toast_saved' : 'web.ob_toast_unchanged')} — ${label}`,
       }),
-    failed: () => notify({ tone: 'danger', message: `${t('web.ob_toast_failed')} — ${label}` }),
+    failed: (error) =>
+      notify({ tone: 'danger', message: `${t('web.ob_toast_failed')} — ${label}`, error }),
   };
 }
 
@@ -814,7 +815,7 @@ function NumberRow({
     onError: (error: unknown) => {
       submission.settleOn(error);
       followConflict(error);
-      toasts.failed();
+      toasts.failed(error);
       void refresh();
     },
   });
@@ -915,7 +916,7 @@ function TimeRow({
     onError: (error: unknown) => {
       submission.settleOn(error);
       followConflict(error);
-      toasts.failed();
+      toasts.failed(error);
       void refresh();
     },
   });
@@ -1024,7 +1025,7 @@ function MoneyRow({
     onError: (error: unknown) => {
       submission.settleOn(error);
       followConflict(error);
-      toasts.failed();
+      toasts.failed(error);
       void refresh();
     },
   });

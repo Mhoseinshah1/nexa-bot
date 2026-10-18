@@ -996,7 +996,7 @@ function CampaignForm({
         return;
       }
       submission.settleOn(error);
-      notify({ tone: 'danger', message: campaignErrorMessage(error) });
+      notify({ tone: 'danger', message: campaignErrorMessage(error), error });
     },
   });
 
@@ -2036,7 +2036,7 @@ function ConfirmCard({
         onConflict: () => void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] }),
       });
       void preview.refetch();
-      notify({ tone: 'danger', message: campaignErrorMessage(error) });
+      notify({ tone: 'danger', message: campaignErrorMessage(error), error });
     },
   });
 
@@ -2224,7 +2224,7 @@ function useCampaignCommands(campaign: CampaignDetail): {
       submission.settleOn(error, {
         onConflict: () => void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] }),
       });
-      notify({ tone: 'danger', message: campaignErrorMessage(error) });
+      notify({ tone: 'danger', message: campaignErrorMessage(error), error });
     },
   });
   const pendingLaunch = campaign.actions.some((a) => a.state === 'PENDING' || a.state === 'FAILED');

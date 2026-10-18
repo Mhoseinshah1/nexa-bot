@@ -481,7 +481,7 @@ function PolicyCard({ advanced, mayEdit }: { advanced: PanelAdvancedResponse; ma
         await client.invalidateQueries({ queryKey: advancedKey(advanced.panelId) });
         return;
       }
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 

@@ -357,7 +357,7 @@ function SettingRow({
     // row it will be compared against.
     onError: (error: unknown) => {
       submission.settleOn(error);
-      notify({ tone: 'danger', message: `${t('web.ob_toast_failed')} — ${title}` });
+      notify({ tone: 'danger', message: `${t('web.ob_toast_failed')} — ${title}`, error });
       void refresh();
     },
   });

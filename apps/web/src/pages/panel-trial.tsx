@@ -104,7 +104,7 @@ function TrialForm({ trial, mayEdit }: { trial: PanelTrialResponseBody; mayEdit:
         await client.invalidateQueries({ queryKey: panelTrialKey(trial.panelId) });
         return;
       }
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 

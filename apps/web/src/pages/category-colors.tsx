@@ -156,7 +156,7 @@ export function CategoryColorsSection({
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
-      notify({ tone: 'danger', message: t('web.cc_failed') });
+      notify({ tone: 'danger', message: t('web.cc_failed'), error });
       void client.invalidateQueries({ queryKey: ['settings'] });
     },
   });
