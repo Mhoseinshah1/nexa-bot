@@ -1101,6 +1101,36 @@ describe('LegacyMigrationExecutor', () => {
     expect(finished.applyReport?.exactMatch).toMatchObject({ holds: true, unexplained: 0 });
   });
 
+  it('one-time import: an import a previous release left at REPORT still materializes and links', async () => {
+    // Codex on #288: by phase order alone, MATERIALIZE and BOT_LINK sit before REPORT, so a
+    // row resumed there would skip them; their own progress fields decide instead.
+    // MUTATION: gating the two phases on phaseReached alone fails this.
+    const h = executorHarness();
+    const digest = reportDigest(dryRunReport);
+    const id = seed(h, {
+      status: 'APPLYING',
+      dryRunReport,
+      dryRunSha256: digest,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
+      approvedAt: h.now,
+      applyLegacyRunId: '019600ab-cdef-7012-8345-6789abcd7777',
+      progress: {
+        ...emptyRow().progress,
+        phase: 'REPORT',
+        applyAttempts: 1,
+        importerVerdict: 'COMPLETED',
+        reconcileVerdict: 'RECONCILED',
+      },
+    });
+    await h.executor.tick();
+    const finished = h.repository.rows.get(id)!;
+    expect(h.phases).toEqual(['materialize', 'botLink', 'match']);
+    expect(finished.progress.materialize).toHaveLength(1);
+    expect(finished.applyReport?.botLink).toMatchObject({ outcome: 'LINKED' });
+    expect(finished.status).toBe('COMPLETED');
+  });
+
   it('one-time import: an unexplained difference keeps it COMPLETED_WITH_DISCREPANCY', async () => {
     // MUTATION: dropping the exactMatch rule from completedStatusOf fails this.
     const h = executorHarness();

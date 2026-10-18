@@ -35,6 +35,20 @@ const UNUSABLE_PASSWORD_HASH = 'locked$mirza-import$no-login';
  * no SLA timer. A message's `seq` is the table's identity, so the order messages are inserted
  * in is the order of the conversation.
  */
+/**
+ * An administrator named `mirza-import` exists and is not the import's own system identity.
+ * The ticket step stops rather than attribute Mirza's support answers to a real person; the
+ * owner renames that administrator and resumes the import.
+ */
+export class MirzaImportAdminCollision extends Error {
+  constructor() {
+    super(
+      `an administrator named "${MIRZA_IMPORT_ADMIN_USERNAME}" already exists and is not the import's disabled system identity; rename it and resume the import`,
+    );
+    this.name = 'MirzaImportAdminCollision';
+  }
+}
+
 export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
   constructor(
     private readonly db: Database,
@@ -102,10 +116,16 @@ export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
       })
       .onConflictDoNothing({ target: [admins.tenantId, admins.username] });
     const [row] = await this.exec(tx)
-      .select({ id: admins.id })
+      .select({ id: admins.id, status: admins.status, passwordHash: admins.passwordHash })
       .from(admins)
       .where(and(eq(admins.tenantId, tenantId), eq(admins.username, MIRZA_IMPORT_ADMIN_USERNAME)));
     if (row === undefined) throw new Error('the mirza-import admin was not found after insert');
+    // The name is an ordinary admin username, so an operator may already have taken it. Only
+    // the identity this step creates — DISABLED, with a hash no password verifies — may sign
+    // Mirza's answers; a real administrator is never made their author (Codex on #288).
+    if (row.status !== 'DISABLED' || row.passwordHash !== UNUSABLE_PASSWORD_HASH) {
+      throw new MirzaImportAdminCollision();
+    }
     return row.id;
   }
 

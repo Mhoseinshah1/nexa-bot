@@ -112,9 +112,15 @@ export class DrizzleCatalogMaterializeRepository
         ),
       )
       .limit(1);
+    // Stored as the operator's array of `{ codePanel, panelId }` (`legacy_nxpkg_imports`), the
+    // same shape the ended-services step reads (Codex on #288: an object read made it empty).
     const out = new Map<string, string>();
-    for (const [code, id] of Object.entries(recOf(found[0]?.bindings))) {
-      if (typeof id === 'string') out.set(code, id);
+    const raw = found[0]?.bindings;
+    if (!Array.isArray(raw)) return out;
+    for (const binding of raw as { codePanel?: unknown; panelId?: unknown }[]) {
+      if (typeof binding.codePanel === 'string' && typeof binding.panelId === 'string') {
+        out.set(binding.codePanel.trim(), binding.panelId);
+      }
     }
     return out;
   }

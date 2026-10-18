@@ -733,6 +733,20 @@ describe('Mirza import: history into the normal tables', () => {
       ).toEqual(snapshot);
     });
 
+    it('never makes a real administrator named mirza-import the author of Mirza answers', async () => {
+      // Codex on #288: the name is an ordinary admin username. An ACTIVE operator who took it
+      // stops the step; nothing is attributed to them and no ticket is written.
+      // MUTATION: dropping the DISABLED/unusable-hash check in ensureImportAdmin fails this.
+      await seed();
+      await createAdmin(ctx.container, tenantA, {
+        username: 'mirza-import',
+        roleKeys: ['support'],
+      });
+      await expect(steps().tickets.apply(materializeCtx())).rejects.toThrow(/mirza-import/u);
+      expect(await q(sql`SELECT id FROM tickets WHERE source = 'MIRZA'`)).toEqual([]);
+      expect(await q(sql`SELECT id FROM ticket_messages WHERE source = 'MIRZA'`)).toEqual([]);
+    });
+
     it('the exact-match rows hold, each gap counted by reason', async () => {
       await seed();
       await steps().tickets.apply(materializeCtx());
@@ -969,6 +983,21 @@ describe('Mirza import: history into the normal tables', () => {
       expect(second).toMatchObject({ written: 0, alreadyPresent: 1, diverged: 0 });
       const [row] = await matchOf(steps().discountUsage);
       expect(row && exactMatchHolds(row)).toBe(true);
+      expect(row).toMatchObject({ mirzaRows: 6, nexaRows: 1 });
+    });
+
+    it('matches after an apply over the SAME context object, as the executor passes it', async () => {
+      // Codex on #288: the dedupe set was keyed by the context, so the match that follows an
+      // apply with the same object saw every carried pair as a DUPLICATE_REDEMPTION.
+      // MUTATION: dropping the per-traversal context copy in apply/match fails this.
+      await seed();
+      const ctx = materializeCtx();
+      await steps().discountUsage.apply(ctx);
+      const [row] = await steps().discountUsage.match(ctx);
+      expect(
+        row && exactMatchHolds(row),
+        JSON.stringify(row, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString() : v)),
+      ).toBe(true);
       expect(row).toMatchObject({ mirzaRows: 6, nexaRows: 1 });
     });
 

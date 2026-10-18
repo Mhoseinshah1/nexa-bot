@@ -774,15 +774,24 @@ export class LegacyMigrationExecutor {
             history: [...archived.counts],
           });
         }
-        if (!phaseReached(row.progress.phase, 'BOT_LINK')) {
+        // The two one-time-import phases are decided by their OWN progress field, not only by
+        // the phase order: an import a previous release left APPLYING at RECONCILE, REPORT or
+        // later never recorded them, and the ordinal check alone would take them as done
+        // (Codex on #288). A phase bookmark never moves backwards.
+        const atLeast = (phase: LegacyMigrationPhase): LegacyMigrationPhase =>
+          phaseReached(row.progress.phase, phase) ? (row.progress.phase ?? phase) : phase;
+        if (row.progress.materialize === undefined) {
           // Every step is idempotent: a resumed phase runs them all again and writes nothing
           // twice. Nothing it writes is money, a message or a provider call.
           const materialized = await this.deps.materialize.apply(context);
-          row = await this.bookmark(row, { phase: 'BOT_LINK', materialize: [...materialized] });
+          row = await this.bookmark(row, {
+            phase: atLeast('BOT_LINK'),
+            materialize: [...materialized],
+          });
         }
-        if (!phaseReached(row.progress.phase, 'RECONCILE')) {
+        if (row.progress.botLink === undefined) {
           const linked = await this.deps.botLink.link(context);
-          row = await this.bookmark(row, { phase: 'RECONCILE', botLink: linked });
+          row = await this.bookmark(row, { phase: atLeast('RECONCILE'), botLink: linked });
         }
         if (!phaseReached(row.progress.phase, 'REPORT')) {
           const reconciled = await this.deps.runner.reconcile(context);

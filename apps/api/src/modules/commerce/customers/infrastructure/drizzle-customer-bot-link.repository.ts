@@ -9,7 +9,10 @@ import type { CustomerBotLinkRepository } from '../application/customer-bot-link
 
 /**
  * Customers the legacy importer created and nobody has linked to a bot yet.
- * Eligible = NULL link AND an IMPORTED `legacy_import_map` CUSTOMER row naming the customer.
+ * Eligible = NULL link AND an IMPORTED `legacy_import_map` CUSTOMER row naming the customer
+ * that is not `EXISTING_CUSTOMER`: a customer NEXA already had was matched, not created, and
+ * is never linked by this (Codex on #288 — the automatic BOT_LINK would otherwise turn
+ * reminders and notices on for them).
  */
 export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkRepository {
   constructor(private readonly db: Database) {}
@@ -69,6 +72,7 @@ export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkReposito
         JOIN legacy_import_map m
           ON m.tenant_id = c.tenant_id AND m.entity_type = 'CUSTOMER'
          AND m.status = 'IMPORTED' AND m.entity_id = c.id
+         AND m.reason_code IS DISTINCT FROM 'EXISTING_CUSTOMER'
        WHERE c.tenant_id = ${tenantId} AND c.first_bot_instance_id IS NULL`);
     return Number((r.rows[0] as { n: number } | undefined)?.n ?? 0);
   }
@@ -90,6 +94,7 @@ export class DrizzleCustomerBotLinkRepository implements CustomerBotLinkReposito
           JOIN legacy_import_map m
             ON m.tenant_id = c2.tenant_id AND m.entity_type = 'CUSTOMER'
            AND m.status = 'IMPORTED' AND m.entity_id = c2.id
+           AND m.reason_code IS DISTINCT FROM 'EXISTING_CUSTOMER'
          WHERE c2.tenant_id = ${tenantId} AND c2.first_bot_instance_id IS NULL
          ORDER BY c2.id
          LIMIT ${input.limit}

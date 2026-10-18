@@ -36,6 +36,8 @@ describe('customer first-bot link (OI-1)', () => {
   const customer = async (opts: {
     bot?: string | null;
     imported?: boolean;
+    /** The map row says a customer NEXA already had was matched, not created. */
+    existing?: boolean;
   }): Promise<{ id: string; telegramUserId: string }> => {
     const id = randomUUID();
     const telegramUserId = String((nextTelegram += 1));
@@ -45,9 +47,10 @@ describe('customer first-bot link (OI-1)', () => {
     if (opts.imported === true) {
       await db().execute(sql`
         INSERT INTO legacy_import_map (tenant_id, legacy_table, legacy_id, run_id, checksum, status,
-                                       entity_type, entity_id, created_at, updated_at)
+                                       reason_code, entity_type, entity_id, created_at, updated_at)
         VALUES (${tenantA.tenantId}, 'user', ${telegramUserId}, ${RUN}, ${HASH}, 'IMPORTED',
-                'CUSTOMER', ${id}, now(), now())`);
+                ${opts.existing === true ? 'EXISTING_CUSTOMER' : null}, 'CUSTOMER', ${id},
+                now(), now())`);
     }
     return { id, telegramUserId };
   };
@@ -166,6 +169,19 @@ describe('customer first-bot link (OI-1)', () => {
       const again = await service().apply(tenantA, ACTOR, BOT1 as never, 2);
       expect(again).toMatchObject({ linked: 0, batches: 0 });
       expect(await countAudit()).toBe(2);
+    });
+
+    it('never links a NEXA customer the import only matched (EXISTING_CUSTOMER)', async () => {
+      // MUTATION: dropping the EXISTING_CUSTOMER filter from countEligible/linkBatch fails this.
+      const matched = await customer({ imported: true, existing: true });
+      const created = await customer({ imported: true });
+      expect((await service().dryRun(tenantA, ACTOR, BOT1 as never)).eligible).toBe(1);
+      expect((await service().apply(tenantA, ACTOR, BOT1 as never)).linked).toBe(1);
+      expect(await botOf(matched.id)).toBeNull();
+      expect(await botOf(created.id)).toBe(BOT1);
+      const auto = await service().autoLinkImported(tenantA, ACTOR);
+      expect(auto).toMatchObject({ linked: 0, eligible: 0 });
+      expect(await botOf(matched.id)).toBeNull();
     });
 
     it('does not link a customer whose map row is not an IMPORTED CUSTOMER entry', async () => {

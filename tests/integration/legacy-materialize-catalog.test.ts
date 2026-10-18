@@ -340,13 +340,16 @@ describe('the one-time Mirza import: products, resellers and discount codes', ()
     await makePanelSellable(ctx.container, tenantA, panelA);
     const ownerRow = await rows<{ id: string }>(sql`SELECT id FROM admins LIMIT 1`);
     nxpkgImportId = ctx.container.ids.uuid();
+    // The bindings as the Web Admin stores them: an array of { codePanel, panelId }. (An object
+    // keyed by code here once hid a decoder that read nothing from the real shape — Codex on #288.)
     await db().execute(sql`
       INSERT INTO legacy_nxpkg_imports
         (id, tenant_id, status, file_name, file_path, file_sha256, file_bytes, package_import_id,
          panel_bindings, requested_by_admin_id, created_at, updated_at)
       VALUES (${nxpkgImportId}, ${tenantA.tenantId}, 'VERIFIED', 'synthetic.nxpkg',
               '/nonexistent/synthetic.nxpkg', ${'a'.repeat(64)}, 1, ${PACKAGE_IMPORT_ID},
-              ${JSON.stringify({ bac6: panelA })}::jsonb, ${ownerRow[0]!.id}, now(), now())`);
+              ${JSON.stringify([{ codePanel: 'bac6', panelId: panelA }])}::jsonb,
+              ${ownerRow[0]!.id}, now(), now())`);
     buyer = await newCustomer(TG_BUYER);
     agentN = await newCustomer(TG_N);
     agentN2 = await newCustomer(TG_N2);

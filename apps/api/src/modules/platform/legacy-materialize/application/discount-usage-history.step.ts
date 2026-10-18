@@ -197,19 +197,30 @@ export class DiscountUsageHistoryStep implements MaterializeStep {
     };
   }
 
+  /*
+   * Each traversal gets its own context object, so the (order, discount) pairs `plan`
+   * remembers (keyed by the context, across the traversal's pages) are never carried from the
+   * apply into the match that follows it with the same context — which would count every
+   * carried redemption a DUPLICATE_REDEMPTION and break the exact match (Codex on #288).
+   */
   apply(ctx: MaterializeContext): Promise<MaterializeStepOutcome> {
-    return applyPlanned(this.deps, this.step, ctx);
+    return applyPlanned(this.deps, this.step, { ...ctx });
   }
 
   async match(ctx: MaterializeContext): Promise<readonly ExactMatchRow[]> {
     // The usage rows carry no amount in the documented table, so the report compares rows;
     // the redemption's own amount is checked by the rows it explains.
     return [
-      await matchPlanned(this.deps, this.step, ctx, {
-        mirzaTable: 'Giftcodeconsumed',
-        nexaTable: 'discount_redemptions',
-        hasAmount: false,
-      }),
+      await matchPlanned(
+        this.deps,
+        this.step,
+        { ...ctx },
+        {
+          mirzaTable: 'Giftcodeconsumed',
+          nexaTable: 'discount_redemptions',
+          hasAmount: false,
+        },
+      ),
     ];
   }
 }
