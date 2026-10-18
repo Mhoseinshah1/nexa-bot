@@ -9,16 +9,27 @@
 
 /* --- Buttons --------------------------------------------------------------- */
 
+/*
+ * Liquid Glass: every button is a capsule. The default one is a glass capsule — the
+ * translucent `--glass` with the specular top line and a hairline edge — the primary one a
+ * solid accent capsule (white in the dark theme, black in the light one), the danger one a
+ * soft red capsule ringed in red. A press shrinks the capsule a little (`.btn:active`).
+ */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   height: var(--ctl-h);
-  padding-inline: 12px;
-  border-radius: var(--radius-ctl);
-  border: 1px solid var(--line-2);
-  background: var(--bg-2);
+  padding-inline: 13px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  background: var(--glass);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 70%, transparent),
+    inset 0 0 0 1px var(--edge-2);
+  -webkit-backdrop-filter: var(--glass-blur-ctl);
+  backdrop-filter: var(--glass-blur-ctl);
   color: var(--fg);
   font-size: var(--fs-ui);
   font-weight: 500;
@@ -27,13 +38,18 @@
   white-space: nowrap;
   text-decoration: none;
   transition:
-    background 0.12s,
-    border-color 0.12s,
-    color 0.12s;
+    transform 0.25s cubic-bezier(0.34, 1.5, 0.64, 1),
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
 }
 .btn:hover {
-  background: var(--bg-3);
+  background: var(--glass-2);
   text-decoration: none;
+}
+.btn:active:not(:disabled, [aria-disabled='true']) {
+  transform: scale(0.95);
 }
 .btn:disabled,
 .btn[aria-disabled='true'] {
@@ -42,16 +58,23 @@
 }
 .btn.primary {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--accent-fg);
+  border-color: transparent;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 60%, transparent),
+    inset 0 -8px 14px -8px color-mix(in srgb, var(--accent-fg) 22%, transparent),
+    0 10px 22px -14px var(--accent);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  font-weight: 600;
 }
 .btn.primary:hover:not(:disabled) {
   background: var(--accent-strong);
-  border-color: var(--accent-strong);
 }
 .btn.danger {
   background: var(--danger-soft);
   border-color: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
   color: var(--danger);
 }
 .btn.danger:hover:not(:disabled) {
@@ -61,14 +84,23 @@
 .btn.danger.solid {
   background: var(--danger);
   color: var(--on-danger);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 45%, transparent),
+    0 10px 22px -14px var(--danger);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  font-weight: 600;
 }
 .btn.ghost {
   background: transparent;
   border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   color: var(--fg-2);
 }
 .btn.ghost:hover:not(:disabled) {
-  background: var(--bg-3);
+  background: var(--glass);
   color: var(--fg);
 }
 .btn.ghost.danger {
@@ -80,7 +112,7 @@
 }
 .btn.sm {
   height: var(--ctl-h-sm);
-  padding-inline: 8px;
+  padding-inline: 10px;
   font-size: var(--fs-sm);
 }
 .btn.icon {
@@ -110,23 +142,35 @@
   gap: 8px;
   align-items: center;
 }
+/*
+ * Segmented: a glass rail holding capsules, the chosen one raised (`--glass-hi`) — the
+ * demo's `.seg`. The children lose their own glass so the rail reads as one control.
+ */
 .btn-group.segmented {
   flex-wrap: nowrap;
-  gap: 0;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 70%, transparent),
+    inset 0 0 0 1px var(--edge-2);
+  -webkit-backdrop-filter: var(--glass-blur-ctl);
+  backdrop-filter: var(--glass-blur-ctl);
 }
 .btn-group.segmented .btn {
-  border-radius: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  color: var(--fg-2);
 }
-.btn-group.segmented .btn:first-child {
-  border-start-start-radius: var(--radius-ctl);
-  border-end-start-radius: var(--radius-ctl);
-}
-.btn-group.segmented .btn:last-child {
-  border-start-end-radius: var(--radius-ctl);
-  border-end-end-radius: var(--radius-ctl);
+.btn-group.segmented .btn:hover:not(:disabled) {
+  color: var(--fg);
 }
 .btn-group.segmented .btn + .btn {
-  margin-inline-start: -1px;
+  margin-inline-start: 0;
 }
 /*
  * On a phone a segmented set wraps into separate controls rather than running
@@ -137,19 +181,23 @@
   .btn-group.segmented {
     flex-wrap: wrap;
     gap: 4px;
-  }
-  .btn-group.segmented .btn {
-    border-radius: var(--radius-ctl);
+    border-radius: var(--radius-card);
   }
   .btn-group.segmented .btn + .btn {
     margin-inline-start: 0;
   }
 }
 .btn-group .btn.on,
-.btn-group .btn[aria-pressed='true'] {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent);
+.btn-group .btn[aria-pressed='true'],
+.btn-group.segmented .btn.on,
+.btn-group.segmented .btn[aria-pressed='true'] {
+  background: var(--glass-hi);
+  color: var(--fg);
+  border-color: transparent;
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    var(--shadow-sm);
+  font-weight: 600;
   position: relative;
   z-index: 1;
 }
@@ -181,9 +229,10 @@
   gap: 5px;
   height: 20px;
   padding-inline: 7px;
-  border-radius: var(--radius-sm);
+  /* The demo's status chip: a soft rounded tile, its word in bold. */
+  border-radius: 8px;
   font-size: var(--fs-xs);
-  font-weight: 500;
+  font-weight: 700;
   white-space: nowrap;
   background: var(--bg-4);
   color: var(--fg-2);
@@ -382,9 +431,15 @@
 /* --- Cards ------------------------------------------------------------------- */
 
 .card {
-  background: var(--bg-2);
+  /*
+   * Liquid Glass «style 5»: a work page's card is a solid, legible panel floating on the mesh.
+   * The hairline stays a real border (not the demo's inset shadow) so a table, a header row or
+   * a hovered row flush with the card's edge is drawn inside it rather than over it.
+   */
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
+  box-shadow: var(--gshadow);
   min-width: 0;
 }
 .card-head {
@@ -489,6 +544,71 @@
 }
 .card.muted-card > .card-head h2 {
   color: var(--fg-2);
+}
+
+/*
+ * Liquid Glass «style 2»: the dashboard's cards are glass — the translucent layer, its
+ * specular top line and a light rim (the `::after`) — while every other page keeps the solid
+ * panel above. The hook is a `.dash` scope on the dashboard's root; until the page carries it,
+ * the dashboard's own containers name its cards.
+ */
+.dash .card,
+:is(.dash-kpis, .dash-charts, .dash-row) > .card {
+  position: relative;
+  background: var(--glass);
+  border-color: transparent;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
+}
+.dash .card .tbl th,
+:is(.dash-kpis, .dash-charts, .dash-row) > .card .tbl th {
+  background: transparent;
+}
+.dash .card.stat.alert,
+.dash-kpis > .card.stat.alert {
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent),
+    var(--gshadow);
+}
+.dash .card.stat.warnish,
+.dash-kpis > .card.stat.warnish {
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent),
+    var(--gshadow);
+}
+
+/*
+ * The glass rim: a 1px gradient ring, bright at the top-start corner and fading out,
+ * masked to the border box. On every glass surface that has no `::after` of its own.
+ */
+.dash .card::after,
+:is(.dash-kpis, .dash-charts, .dash-row) > .card::after,
+.drawer::after,
+.modal::after,
+.dialog::after,
+.palette::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(150deg, var(--edge), transparent 40%, transparent 62%, var(--edge-2));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
 }
 
 /* Detail-page head card: identity on one side, quick actions on the other, stats below. */
@@ -691,7 +811,7 @@
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
 }
 .inset.danger-zone {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
@@ -744,7 +864,7 @@
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
 }
 .disclosure.boxed > * + * {
   margin-top: 8px;
@@ -811,7 +931,7 @@
   white-space: nowrap;
 }
 .tbl th {
-  background: var(--bg-2);
+  background: var(--panel);
   color: var(--fg-3);
   font-weight: 600;
   font-size: var(--fs-xs);
@@ -835,7 +955,7 @@
   transition: background 0.1s;
 }
 .tbl tbody tr:hover {
-  background: var(--bg-3);
+  background: var(--panel-row);
 }
 .tbl tbody tr.selected {
   background: var(--accent-soft);
@@ -908,7 +1028,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-top: 1px solid var(--line);
   font-size: var(--fs-sm);
   color: var(--fg-2);
@@ -1016,23 +1136,40 @@
   align-items: center;
   gap: 6px;
   height: var(--ctl-h-sm);
-  padding-inline: 10px;
+  padding-inline: 11px;
   border-radius: var(--radius-pill);
-  border: 1px solid var(--line-2);
-  background: var(--bg-2);
+  border: 1px solid transparent;
+  background: var(--glass);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 70%, transparent),
+    inset 0 0 0 1px var(--edge-2);
+  -webkit-backdrop-filter: var(--glass-blur-ctl);
+  backdrop-filter: var(--glass-blur-ctl);
   font-size: var(--fs-sm);
   color: var(--fg-2);
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    transform 0.25s cubic-bezier(0.34, 1.5, 0.64, 1),
+    background 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
 }
 .chip:hover {
+  background: var(--glass-2);
   color: var(--fg);
+}
+.chip:active {
+  transform: scale(0.95);
 }
 .chip.on,
 .chip[aria-pressed='true'] {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent);
+  background: var(--glass-hi);
+  color: var(--fg);
+  font-weight: 700;
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    var(--shadow-sm);
 }
 .chip .x {
   opacity: 0.7;
@@ -1057,6 +1194,23 @@
 .search > .input {
   width: 100%;
   padding-inline-start: 30px;
+}
+/* A search field is a glass capsule, as the top bar's is. */
+.search > .input,
+.input.search {
+  border-radius: var(--radius-pill);
+  border-color: transparent;
+  background: var(--glass);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 70%, transparent),
+    inset 0 0 0 1px var(--edge-2);
+  -webkit-backdrop-filter: var(--glass-blur-ctl);
+  backdrop-filter: var(--glass-blur-ctl);
+}
+.search > .input:focus,
+.input.search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* --- Form controls ------------------------------------------------------------ */
@@ -1085,9 +1239,9 @@
   textarea
 ) {
   height: var(--ctl-h);
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
   padding-inline: 10px;
   color: var(--fg);
   font-size: var(--fs-ui);
@@ -1099,9 +1253,20 @@
     box-shadow 0.12s;
 }
 .input:focus,
+:where(input, select, textarea):focus,
 :where(input, select, textarea):focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* In a sheet (a drawer, a dialog) a field is a shade darker than the glass it sits on. */
+:is(.drawer, .modal, .dialog)
+  :where(
+    .input,
+    input:not([type='checkbox'], [type='radio'], [type='file'], [type='range']),
+    select,
+    textarea
+  ) {
+  background-color: color-mix(in srgb, var(--bg-1) 55%, transparent);
 }
 .input:disabled,
 :where(input, select, textarea):disabled {
@@ -1264,11 +1429,11 @@ textarea.input,
   display: flex;
   align-items: center;
   padding-inline: 10px;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line);
   border-inline-start: none;
   border-start-end-radius: var(--radius-ctl);
   border-end-end-radius: var(--radius-ctl);
-  background: var(--bg-3);
+  background: var(--panel-row);
   color: var(--fg-3);
   font-size: var(--fs-sm);
   white-space: nowrap;
@@ -1278,12 +1443,15 @@ textarea.input,
   position: relative;
   width: 34px;
   height: 20px;
-  border-radius: 10px;
-  background: var(--bg-4);
+  border-radius: var(--radius-pill);
+  background: var(--glass-2);
   border: 1px solid var(--line-2);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--spec) 50%, transparent);
   cursor: pointer;
   flex: none;
-  transition: background 0.15s;
+  transition:
+    background 0.2s,
+    border-color 0.2s;
   padding: 0;
 }
 .switch::after {
@@ -1296,23 +1464,27 @@ textarea.input,
   border-radius: 50%;
   background: var(--fg-2);
   transition:
-    transform 0.15s,
-    background 0.15s;
+    transform 0.3s cubic-bezier(0.34, 1.5, 0.64, 1),
+    background 0.2s;
 }
 .switch > span {
   display: none;
 }
+/* Mono: an on switch is a solid foreground track with a background-coloured knob. */
 .switch[aria-checked='true'] {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--fg);
+  border-color: var(--fg);
 }
 .switch[aria-checked='true']::after {
-  background: var(--on-solid);
+  background: var(--bg-0);
   transform: translateX(-14px);
 }
 .switch.danger[aria-checked='true'] {
   background: var(--danger);
   border-color: var(--danger);
+}
+.switch.danger[aria-checked='true']::after {
+  background: var(--on-danger);
 }
 .switch:disabled {
   opacity: 0.5;
@@ -1376,7 +1548,7 @@ textarea.input,
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
 }
 .secret + .secret {
   margin-top: 8px;
@@ -1416,61 +1588,93 @@ textarea.input,
 
 /* --- Tabs, pills, segmented -------------------------------------------------- */
 
+/*
+ * Liquid Glass: every tab strip is a glass rail of capsules, the chosen tab raised on
+ * `--glass-hi` with the specular line. On a desk the rail wraps onto a second row as the
+ * reference draws it; on a phone it stays one row and scrolls sideways, and `tab-strip.ts`
+ * keeps the chosen tab in view inside it (B6).
+ */
 .tabs {
   display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--line);
+  gap: 5px;
+  padding: 6px;
+  border-radius: var(--radius-card);
+  background: var(--glass);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   overflow-x: auto;
   scrollbar-width: none;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+}
+@media (min-width: 821px) {
+  .tabs:not(.vertical) {
+    flex-wrap: wrap;
+  }
 }
 .tabs button {
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  padding: 8px 12px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: var(--radius-pill);
   color: var(--fg-2);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   white-space: nowrap;
-  margin-bottom: -1px;
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  transition:
+    transform 0.25s cubic-bezier(0.34, 1.5, 0.64, 1),
+    background 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
 }
 .tabs button:hover {
+  background: var(--glass);
   color: var(--fg);
 }
+.tabs button:active {
+  transform: scale(0.95);
+}
 .tabs button.on {
+  background: var(--glass-hi);
   color: var(--fg);
-  border-bottom-color: var(--accent);
+  font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    var(--shadow-sm);
 }
 .tabs button .cnt {
   font-size: 11px;
-  background: var(--bg-4);
-  border-radius: 9px;
+  background: var(--glass);
+  border-radius: var(--radius-pill);
   padding: 0 6px;
   color: var(--fg-3);
 }
+.tabs button.on .cnt {
+  color: var(--fg-2);
+}
 .tabs.vertical {
   flex-direction: column;
-  border-bottom: none;
-  border-inline-end: 1px solid var(--line);
   margin-bottom: 0;
-  gap: 2px;
-  padding-inline-end: 8px;
+  gap: 4px;
   min-width: 180px;
+  align-self: start;
 }
 .tabs.vertical button {
   text-align: start;
-  border: none;
-  border-radius: var(--radius-ctl);
+  justify-content: flex-start;
+  height: auto;
+  min-height: 32px;
+  padding-block: 6px;
   margin: 0;
-}
-.tabs.vertical button.on {
-  background: var(--accent-soft);
-  color: var(--accent);
 }
 [role='tabpanel']:focus-visible {
   outline-offset: 4px;
@@ -1499,27 +1703,43 @@ textarea.input,
   display: inline-flex;
   flex-wrap: wrap;
   gap: 2px;
-  background: var(--bg-3);
   padding: 3px;
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 70%, transparent),
+    inset 0 0 0 1px var(--edge-2);
+  -webkit-backdrop-filter: var(--glass-blur-ctl);
+  backdrop-filter: var(--glass-blur-ctl);
 }
 .pills button {
   border: none;
   background: transparent;
-  border-radius: 6px;
-  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  height: 28px;
+  padding: 0 13px;
   color: var(--fg-2);
   cursor: pointer;
   font-size: var(--fs-sm);
   font-weight: 500;
+  transition:
+    transform 0.25s cubic-bezier(0.34, 1.5, 0.64, 1),
+    background 0.2s,
+    color 0.2s;
 }
 .pills button:hover {
   color: var(--fg);
 }
+.pills button:active {
+  transform: scale(0.95);
+}
 .pills button.on {
-  background: var(--bg-1);
+  background: var(--glass-hi);
   color: var(--fg);
-  box-shadow: var(--shadow-sm);
+  font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    var(--shadow-sm);
 }
 
 /* The period control: a segmented set of presets and a comparison switch. */
@@ -1543,9 +1763,9 @@ textarea.input,
   gap: 10px;
   align-items: flex-start;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-toast);
   border: 1px solid var(--line-2);
-  background: var(--bg-3);
+  background: var(--panel-row);
   color: var(--fg-2);
   font-size: var(--fs-ui);
 }
@@ -1680,8 +1900,8 @@ textarea.input,
 .skel span {
   flex: 1;
   height: 12px;
-  border-radius: 5px;
-  background: linear-gradient(90deg, var(--bg-3) 25%, var(--bg-4) 50%, var(--bg-3) 75%);
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--line) 25%, var(--line-2) 50%, var(--line) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
 }
@@ -1763,14 +1983,15 @@ textarea.input,
 .dist-row svg.bar rect.danger {
   fill: var(--danger);
 }
+/* Mono UI, coloured charts: the info, violet and teal slices take chart series, not the grey tones. */
 .dist-row svg.bar rect.info {
-  fill: var(--accent);
+  fill: var(--chart-1);
 }
 .dist-row svg.bar rect.violet {
-  fill: var(--violet);
+  fill: var(--chart-3);
 }
 .dist-row svg.bar rect.teal {
-  fill: var(--teal);
+  fill: var(--chart-2);
 }
 .dist-row svg.bar rect.neutral {
   fill: var(--fg-3);
@@ -1860,10 +2081,25 @@ textarea.input,
 
 /* --- Overlays: modal, drawer, confirmation, menu ------------------------------ */
 
+/*
+ * Liquid Glass sheets. A sheet (dialog, drawer, popover, menu, toast) is `--glass-2` in the
+ * light theme; in the dark one it is the page's own `--bg-1` at 72%, as the reference draws
+ * its drawers and dialogs, because a lighter glass over a dark page read poorly. Derived from
+ * the tokens here so every sheet changes together.
+ */
+:root {
+  --sheet-bg: color-mix(in srgb, var(--bg-1) 72%, transparent);
+}
+:root[data-theme='light'] {
+  --sheet-bg: var(--glass-2);
+}
+
 .dialog-backdrop {
   position: fixed;
   inset: 0;
   background: var(--overlay);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  backdrop-filter: blur(8px) saturate(1.2);
   z-index: 40;
   animation: fade 0.12s ease;
 }
@@ -1874,7 +2110,7 @@ textarea.input,
 }
 @keyframes pop {
   from {
-    transform: translateY(6px);
+    transform: translateY(6px) scale(0.98);
     opacity: 0;
   }
 }
@@ -1887,6 +2123,12 @@ textarea.input,
 @keyframes pop-up {
   from {
     transform: translateY(8px);
+    opacity: 0;
+  }
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(40px);
     opacity: 0;
   }
 }
@@ -1904,27 +2146,35 @@ textarea.input,
   position: fixed;
   inset: 0;
   background: var(--overlay);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  backdrop-filter: blur(8px) saturate(1.2);
   animation: fade 0.12s ease;
 }
 .modal,
 .dialog {
+  position: relative;
   width: 100%;
   max-width: 520px;
   max-height: 76vh;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  background: var(--sheet-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 0;
+  border-radius: var(--radius-sheet);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
   display: flex;
   flex-direction: column;
-  animation: pop 0.14s ease;
+  animation: pop 0.2s cubic-bezier(0.22, 1.1, 0.36, 1);
 }
 .modal.lg {
   max-width: 760px;
 }
 .dialog {
   max-width: 440px;
-  padding: 18px;
+  padding: 20px;
   display: block;
 }
 .dialog h2 {
@@ -1945,7 +2195,7 @@ textarea.input,
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 18px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--line);
 }
 .drawer-head h2,
@@ -1956,7 +2206,7 @@ textarea.input,
 }
 .drawer-body,
 .modal-body {
-  padding: 18px;
+  padding: 18px 20px;
   overflow: auto;
   flex: 1;
 }
@@ -1966,7 +2216,7 @@ textarea.input,
 }
 .drawer-foot,
 .modal-foot {
-  padding: 12px 18px;
+  padding: 12px 20px;
   border-top: 1px solid var(--line);
   display: flex;
   gap: 8px;
@@ -1981,6 +2231,8 @@ textarea.input,
   inset: 0;
   z-index: 100;
   background: var(--overlay);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  backdrop-filter: blur(8px) saturate(1.2);
   animation: fade 0.12s ease;
 }
 .drawer {
@@ -1989,16 +2241,44 @@ textarea.input,
   bottom: 0;
   inset-inline-end: 0;
   width: min(560px, 92vw);
-  background: var(--bg-1);
-  border-inline-start: 1px solid var(--line);
+  background: var(--sheet-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 0;
   z-index: 101;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow);
-  animation: slide-in 0.18s ease;
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
+  animation: slide-in 0.45s cubic-bezier(0.22, 1.1, 0.36, 1);
 }
 .drawer.wide {
   width: min(760px, 94vw);
+}
+/* A desk: the drawer floats, inset from the viewport's edges like the shell's chrome. */
+@media (min-width: 821px) {
+  .drawer {
+    top: var(--chrome-inset);
+    bottom: var(--chrome-inset);
+    inset-inline-end: var(--chrome-inset);
+    border-radius: var(--radius-drawer);
+  }
+}
+/* A phone: the drawer is a bottom sheet across the screen. */
+@media (max-width: 820px) {
+  .drawer,
+  .drawer.wide {
+    top: 10px;
+    inset-inline: 0;
+    width: 100%;
+    border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
+    animation-name: sheet-up;
+  }
+  .drawer-foot {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 .menu-wrap {
@@ -2007,20 +2287,25 @@ textarea.input,
 }
 .menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   inset-inline-end: 0;
   min-width: 200px;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: 9px;
-  box-shadow: var(--shadow);
-  padding: 4px;
+  background: var(--sheet-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 0;
+  border-radius: var(--radius-pop);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
+  padding: 6px;
   z-index: 30;
   animation: pop-up 0.12s ease;
 }
 .menu.up {
   top: auto;
-  bottom: calc(100% + 4px);
+  bottom: calc(100% + 6px);
 }
 .menu.start {
   inset-inline-end: auto;
@@ -2032,11 +2317,11 @@ textarea.input,
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border: none;
   background: none;
   color: var(--fg);
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   cursor: pointer;
   font-size: var(--fs-ui);
   text-align: start;
@@ -2045,12 +2330,13 @@ textarea.input,
 .menu a:hover,
 .menu button:focus-visible,
 .menu a:focus-visible {
-  background: var(--bg-3);
+  background: var(--accent-soft);
   text-decoration: none;
   outline: none;
 }
 .menu button[aria-checked='true'] {
-  color: var(--accent);
+  color: var(--fg);
+  font-weight: 600;
 }
 .menu .sep {
   height: 1px;
@@ -2078,30 +2364,86 @@ textarea.input,
   z-index: 160;
   pointer-events: none;
 }
+/*
+ * A glass sheet with a dot of its tone at the start. The message is the toast's content as
+ * given — a sentence, and for a refusal the error reference (`.err-ref`) on its own line
+ * beneath it — so the dot is positioned rather than a flex item beside the text.
+ */
 .toast {
-  background: var(--bg-3);
-  border: 1px solid var(--line-2);
-  border-inline-start-width: 3px;
-  border-radius: 9px;
-  padding: 10px 14px;
+  position: relative;
+  background: var(--sheet-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 0;
+  border-radius: var(--radius-toast);
+  padding: 11px 16px;
+  padding-inline-start: 32px;
   min-width: 260px;
   max-width: 380px;
-  box-shadow: var(--shadow);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
   font-size: var(--fs-ui);
-  animation: pop-up 0.18s ease;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  animation: pop-up 0.25s cubic-bezier(0.22, 1.1, 0.36, 1);
   pointer-events: auto;
 }
-.toast.ok {
-  border-inline-start-color: var(--ok);
+.toast::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  inset-inline-start: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+.toast.ok::before {
+  background: var(--ok);
+}
+.toast.danger::before {
+  background: var(--danger);
+}
+.toast.warn::before {
+  background: var(--warn);
+}
+.toast.info::before {
+  background: var(--info);
 }
 .toast.danger {
-  border-inline-start-color: var(--danger);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent),
+    var(--gshadow);
 }
-.toast.warn {
-  border-inline-start-color: var(--warn);
+/*
+ * A refusal's code and correlation id (`ErrorRef`, `.err-ref`) under the toast's sentence:
+ * small, muted, and wrapping anywhere, so a UUID cannot widen a 380px toast.
+ */
+.toast .err-ref {
+  margin: 0;
+  margin-block-start: 4px;
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
 }
-.toast.info {
-  border-inline-start-color: var(--info);
+.toast .err-ref bdi {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+/* A phone: above the glass bottom navigation (62px, 10px off the bottom edge). */
+@media (max-width: 820px) {
+  .toasts {
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+    inset-inline: 10px;
+    align-items: center;
+  }
+  .toast {
+    width: 100%;
+  }
 }
 
 /* --- Charts ------------------------------------------------------------------ */
@@ -2228,6 +2570,14 @@ textarea.input,
 .spark .s3 {
   fill: var(--chart-3);
   stroke: var(--chart-3);
+}
+.spark .s4 {
+  fill: var(--chart-4);
+  stroke: var(--chart-4);
+}
+.spark .s5 {
+  fill: var(--chart-5);
+  stroke: var(--chart-5);
 }
 .spark .s6 {
   fill: var(--chart-6);
@@ -2372,14 +2722,20 @@ textarea.input,
 /* --- Command palette ----------------------------------------------------------- */
 
 .palette {
+  position: relative;
   width: 100%;
   max-width: 600px;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  background: var(--sheet-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 0;
+  border-radius: var(--radius-sheet);
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px var(--edge-2),
+    var(--gshadow);
   overflow: hidden;
-  animation: pop 0.14s ease;
+  animation: pop 0.2s cubic-bezier(0.22, 1.1, 0.36, 1);
 }
 .palette .in {
   display: flex;
@@ -2424,13 +2780,13 @@ textarea.input,
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: var(--radius-ctl);
   color: var(--fg);
   font-size: 13px;
 }
 .palette .list a:hover,
 .palette .list a[aria-selected='true'] {
-  background: var(--bg-3);
+  background: var(--accent-soft);
   text-decoration: none;
 }
 .palette .list a svg {
@@ -2598,4 +2954,72 @@ textarea.input,
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+/*
+ * Liquid Glass, honoured preferences. Reduced transparency: no blur anywhere the kit adds
+ * one, and the translucent capsules, rails, sheets and dashboard cards turn into the solid
+ * panel. Reduced motion: no press scale, no springy transition and no sheet entrance.
+ */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  :root[data-theme='light'] {
+    --sheet-bg: var(--panel);
+  }
+  .btn,
+  .btn-group.segmented,
+  .chip,
+  .search > .input,
+  .input.search,
+  .tabs,
+  .pills,
+  .dialog-backdrop,
+  .modal-layer,
+  .drawer-layer,
+  .modal,
+  .dialog,
+  .drawer,
+  .menu,
+  .toast,
+  .palette,
+  .dash .card,
+  :is(.dash-kpis, .dash-charts, .dash-row) > .card {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .btn:not(.primary, .danger, .ghost),
+  .btn-group.segmented,
+  .chip,
+  .search > .input,
+  .input.search,
+  .tabs,
+  .pills,
+  .dash .card,
+  :is(.dash-kpis, .dash-charts, .dash-row) > .card {
+    background: var(--panel);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .chip,
+  .tabs button,
+  .pills button,
+  .switch,
+  .switch::after {
+    transition: none;
+  }
+  .btn:active:not(:disabled, [aria-disabled='true']),
+  .chip:active,
+  .tabs button:active,
+  .pills button:active {
+    transform: none;
+  }
+  .modal,
+  .dialog,
+  .drawer,
+  .menu,
+  .toast,
+  .palette {
+    animation: none;
+  }
 }
