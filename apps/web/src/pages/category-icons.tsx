@@ -194,7 +194,7 @@ export function CategoryIconsSection({
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
-      notify({ tone: 'danger', message: t('web.ci_failed') });
+      notify({ tone: 'danger', message: t('web.ci_failed'), error });
       void client.invalidateQueries({ queryKey: ['settings'] });
     },
   });

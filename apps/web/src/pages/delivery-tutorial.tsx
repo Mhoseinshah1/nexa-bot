@@ -153,7 +153,7 @@ function TutorialForm({
         await client.invalidateQueries({ queryKey: deliveryTutorialKey(tutorial.panelId) });
         return;
       }
-      toast({ tone: 'danger', message: messageFor(error) });
+      toast({ tone: 'danger', message: messageFor(error), error });
     },
   });
 

@@ -1,14 +1,8 @@
 import type { ReactNode } from 'react';
-import {
-  errorIssues,
-  errorReference,
-  errorText,
-  type ErrorOverrides,
-  type ErrorIssue,
-} from '../error-text';
+import { errorIssues, errorText, type ErrorOverrides, type ErrorIssue } from '../error-text';
 import { t, type WebKey } from '../i18n/web.fa';
 import { errorCodeLabel } from '../ops-code-labels';
-import { Banner, Disclosure } from './kit';
+import { Banner, Disclosure, ErrorRef } from './kit';
 
 /**
  * «جزئیات فنی»: what a provider, a log or a validator actually wrote.
@@ -44,31 +38,8 @@ export function TechnicalDetails({
   );
 }
 
-/**
- * The error's code and correlation id: small, muted, left-to-right, UNDER the Persian
- * sentence — never instead of it. Support finds the log entry by the correlation id.
- */
-export function ErrorRef({ error }: { error: unknown }) {
-  const reference = errorReference(error);
-  if (reference === null) return null;
-  return (
-    <p className="err-ref muted small">
-      <span>{t('web.err_ref_code')}</span>{' '}
-      <bdi dir="ltr" className="ltr mono">
-        {reference.code}
-      </bdi>
-      {reference.correlationId !== null && (
-        <>
-          {' · '}
-          <span>{t('web.err_ref_correlation')}</span>{' '}
-          <bdi dir="ltr" className="ltr mono">
-            {reference.correlationId}
-          </bdi>
-        </>
-      )}
-    </p>
-  );
-}
+/** The code and correlation id under an error sentence; defined beside the toast. */
+export { ErrorRef };
 
 function IssueLine({ issue }: { issue: ErrorIssue }) {
   return (

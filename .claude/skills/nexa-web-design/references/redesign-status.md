@@ -20,6 +20,30 @@
   («all admins») saved filters, the demo's state bar and its sample-scenario boxes, and any
   figure the API has no field for (e.g. saved-filter result counts).
 
+## Theme: Liquid Glass «mono» — APPROVED (2026-10-18)
+
+| Field              | Value                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| State              | **APPROVED** — the owner approved the Liquid Glass «mono» theme of `nexa-admin-demo-polish.html`, dark and light |
+| Since              | 2026-10-18 (owner instruction)                                                                                   |
+| Approved reference | the owner's glass-theme pack (the demo + its `skin.css` and mono palette); kept OUTSIDE the repository           |
+| Allowed now        | the theme change on `feat/web-admin-glass-theme`; side-by-side evidence in `docs/web-redesign/glass-theme/`      |
+
+- **It decides (presentation only):** the mono palette (black and white UI; status colours kept
+  coloured for meaning; charts kept coloured), the glass shell (mesh background, floating glass
+  sidebar and top bar, the phone's glass bottom-navigation capsule), capsule controls (buttons,
+  icon buttons, search, chips, toggles, segmented controls, tab rails), card styles (solid
+  legible panels on work pages, glass cards on the dashboard), radii (20px cards, 12px inputs,
+  999px controls, 24–26px drawers and dialogs) and motion (press scale, drawer easing), with
+  `prefers-reduced-transparency` and `prefers-reduced-motion` honoured.
+- **`main` keeps deciding:** function, data, wire formats, permissions and security. No page
+  logic, request, route, gate, idempotency key, confirmation or text key changes with the theme.
+- **Not carried over:** the demo's other palettes, its palette and identity switchers, its state
+  bar and sample-scenario boxes, and its sample data.
+- The rules of `SKILL.md` still bind the theme: colours through `tokens.css` only, no `style=`
+  attributes (CSP `style-src 'self'`), logical properties, 44px touch targets, and AA contrast
+  pinned by `tests/unit/web-token-contrast.test.ts` (glass surfaces over the mesh included).
+
 ## When a reference is approved
 
 The owner will supply it. Record here, in the same commit that adds it:

@@ -127,3 +127,60 @@ describe('text on a solid tone fill', () => {
     },
   );
 });
+
+/**
+ * The Liquid Glass surfaces are translucent, so their contrast depends on what is behind them:
+ * the page's `--mesh`. Each glass layer is composited over every colour the mesh can show
+ * (each of its gradient stops, with and without its radial tint) and the text drawn on that
+ * layer is held to AA there. `--fg-3` is the muted text of cards, menus and rows, so it is
+ * checked on the reading surfaces; the raised `--glass-hi` pill only ever carries `--fg`.
+ */
+describe.each([
+  ['dark', ":root[data-theme='dark']"],
+  ['light', ":root[data-theme='light']"],
+])('the %s theme over its mesh', (_name, selector) => {
+  const { hex, alpha } = theme(selector);
+  const at = TOKENS.indexOf(selector);
+  const block = TOKENS.slice(at, TOKENS.indexOf('}', at));
+  const mesh = /--mesh:([^;]*);/.exec(block)?.[1] ?? '';
+  const stops = [...mesh.matchAll(/#([0-9a-f]{6})\b/gi)].map(
+    ([, value]) => [0, 2, 4].map((i) => parseInt(value!.slice(i, i + 2), 16)) as unknown as Rgb,
+  );
+  const tints = [...mesh.matchAll(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/g)].map(
+    ([, r, g, b, a]) =>
+      Object.assign([Number(r), Number(g), Number(b)] as unknown as Rgb, { a: Number(a) }),
+  );
+  const backdrops = stops.flatMap((stop) => [stop, ...tints.map((tint) => over(tint, stop))]);
+
+  it('reads the mesh: two gradient stops and a tint', () => {
+    expect(stops.length).toBeGreaterThanOrEqual(2);
+    expect(tints.length).toBeGreaterThanOrEqual(1);
+  });
+
+  const LAYERS: Record<string, readonly string[]> = {
+    panel: ['fg', 'fg-2', 'fg-3', 'accent', 'ok', 'warn', 'danger'],
+    glass: ['fg', 'fg-2', 'fg-3', 'accent', 'ok', 'warn', 'danger'],
+    'glass-2': ['fg', 'fg-2', 'fg-3', 'accent', 'ok', 'warn', 'danger'],
+    'glass-hi': ['fg', 'fg-2'],
+  };
+
+  it.each(Object.keys(LAYERS))('draws its text at 4.5:1 or more on --%s', (layer) => {
+    const fill = alpha[layer];
+    expect(fill, `--${layer}`).toBeDefined();
+    for (const backdrop of backdrops) {
+      const surface = over(fill!, backdrop);
+      for (const text of LAYERS[layer]!) {
+        expect(contrast(hex[text]!, surface), `--${text} on --${layer}`).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      }
+      // A row's hover tint sits on the panel.
+      if (layer === 'panel') {
+        const row = over(alpha['panel-row']!, surface);
+        for (const text of LAYERS.panel!) {
+          expect(contrast(hex[text]!, row), `--${text} on --panel-row`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  });
+});

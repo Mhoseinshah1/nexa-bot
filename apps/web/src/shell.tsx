@@ -326,6 +326,102 @@ export function Sidebar({
   );
 }
 
+/* -------------------------------------------------------------- bottom nav --- */
+
+/**
+ * The phone's bottom navigation (the Liquid Glass capsule): four destinations
+ * and the menu. Shown by CSS at phone widths only. A destination is drawn only
+ * when the permission-filtered `entries` the sidebar receives contain its path —
+ * nothing here decides a permission — and its badge is the sidebar's counter
+ * for the same entry. The order is the demo's, overview at the inline start.
+ */
+export const BOTTOM_NAV: readonly { path: string; label: WebKey }[] = [
+  { path: '/', label: 'web.nav_overview' },
+  { path: '/business-chats', label: 'web.bottom_nav_chats' },
+  { path: '/payments', label: 'web.bottom_nav_payments' },
+  { path: '/users', label: 'web.nav_users' },
+];
+
+export function BottomNav({
+  entries,
+  currentPath,
+  counters,
+  collapsed,
+  onOpenMenu,
+}: {
+  entries: readonly NavEntry[];
+  currentPath: string;
+  counters: NavCounters;
+  /** Whether the sidebar drawer is closed — the menu button's `aria-expanded`, as the topbar's. */
+  collapsed: boolean;
+  onOpenMenu: () => void;
+}) {
+  const onLink = useLinkHandler();
+  const describedBy = useId();
+  return (
+    <nav className="bottom-nav" aria-label={t('web.bottom_nav_label')}>
+      {BOTTOM_NAV.map((item) => {
+        const entry = entries.find((candidate) => candidate.path === item.path);
+        if (entry === undefined) return null;
+        // The sidebar's own rule: a counter present is drawn (the server omits zeros).
+        const shown = counters[entry.id];
+        const countId = `${describedBy}-${entry.id}`;
+        return (
+          <a
+            key={entry.id}
+            href={entry.path}
+            onClick={onLink}
+            aria-current={isCurrent(entry.path, currentPath) ? 'page' : undefined}
+            {...(shown === undefined ? {} : { 'aria-describedby': countId })}
+          >
+            <span className="bn-ico">
+              <Icon name={entry.icon} size={19} />
+              {shown !== undefined && (
+                <span
+                  className={`cnt${shown.tone === undefined ? '' : ` ${shown.tone}`}`}
+                  id={countId}
+                >
+                  {shown.atLeast === true ? (
+                    <>
+                      <span aria-hidden="true">
+                        {t('web.nav_counter_at_least').replace(
+                          '{count}',
+                          formatNumber(shown.count),
+                        )}
+                      </span>
+                      <span className="visually-hidden">
+                        {t('web.nav_counter_at_least_spoken').replace(
+                          '{count}',
+                          formatNumber(shown.count),
+                        )}
+                      </span>
+                    </>
+                  ) : (
+                    formatNumber(shown.count)
+                  )}
+                </span>
+              )}
+            </span>
+            <span className="lbl">{t(item.label)}</span>
+          </a>
+        );
+      })}
+      {/* Named by its visible label, so it is not a second «open menu» beside the topbar's. */}
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        aria-controls="app-sidebar"
+        onClick={onOpenMenu}
+      >
+        <span className="bn-ico">
+          <Icon name="menu" size={19} />
+        </span>
+        <span className="lbl">{t('web.bottom_nav_menu')}</span>
+      </button>
+    </nav>
+  );
+}
+
 /* ------------------------------------------------------------------ topbar --- */
 
 export function Topbar({

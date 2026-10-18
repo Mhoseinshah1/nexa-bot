@@ -771,7 +771,7 @@ function ReinquireButton({ paymentId }: { paymentId: string }) {
     },
     onError: (error) => {
       asking.settleOn(error);
-      notify({ tone: 'danger', message: messageFor(error) });
+      notify({ tone: 'danger', message: messageFor(error), error });
     },
   });
   return (

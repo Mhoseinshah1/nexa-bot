@@ -404,10 +404,11 @@ export function InlineButtonsSection({
         notify({
           tone: 'danger',
           message: t(error.stylesSaved ? 'web.ib_icons_failed_styles_saved' : 'web.ib_failed'),
+          error: error.cause,
         });
       } else {
         submission.settleOn(error);
-        notify({ tone: 'danger', message: t('web.ib_failed') });
+        notify({ tone: 'danger', message: t('web.ib_failed'), error });
       }
       void client.invalidateQueries({ queryKey: ['settings'] });
     },

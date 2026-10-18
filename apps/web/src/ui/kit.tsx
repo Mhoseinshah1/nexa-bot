@@ -20,6 +20,7 @@ import { errorCopy, queryState, retryOf, staleAfterError, type QueryView } from 
 import { t, type WebKey } from '../i18n/web.fa';
 import { formatMoney, formatMoneyText, formatNumber, splitDuration } from '../format';
 import { navigate, useLinkHandler, type Route } from '../router';
+import { errorReference } from '../error-text';
 
 /**
  * The production component kit.
@@ -1980,13 +1981,52 @@ export function usePagedRows<T>(
 
 /* ---------------------------------------------------------------- toasts --- */
 
-interface Toast {
-  readonly id: number;
-  readonly tone: Tone;
-  readonly message: string;
+/**
+ * The error's code and correlation id: small, muted, left-to-right, UNDER the Persian
+ * sentence — never instead of it. Support finds the log entry by the correlation id.
+ * Renders nothing for anything that is not an API error. (Here, not in
+ * `technical-details`, so a toast can draw it without an import cycle; that module
+ * re-exports it.)
+ */
+export function ErrorRef({ error }: { error: unknown }) {
+  const reference = errorReference(error);
+  if (reference === null) return null;
+  return (
+    <p className="err-ref muted small">
+      <span>{t('web.err_ref_code')}</span>{' '}
+      <bdi dir="ltr" className="ltr mono">
+        {reference.code}
+      </bdi>
+      {reference.correlationId !== null && (
+        <>
+          {' · '}
+          <span>{t('web.err_ref_correlation')}</span>{' '}
+          <bdi dir="ltr" className="ltr mono">
+            {reference.correlationId}
+          </bdi>
+        </>
+      )}
+    </p>
+  );
 }
 
-type Notify = (toast: { tone: Tone; message: string }) => void;
+/**
+ * A toast. `error` is the failure a danger toast's sentence was built from: its code and
+ * correlation id are drawn under the sentence, as a banner draws them (`ErrorRef`), so a
+ * refusal that only ever reached a toast can still be found in the log. Pass it whenever
+ * the message came from an API error; a test holds every such call site to it.
+ */
+export interface ToastOptions {
+  readonly tone: Tone;
+  readonly message: string;
+  readonly error?: unknown;
+}
+
+interface Toast extends ToastOptions {
+  readonly id: number;
+}
+
+type Notify = (toast: ToastOptions) => void;
 
 const ToastContext = createContext<Notify>(() => undefined);
 
@@ -2032,6 +2072,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast ${toast.tone}`}>
             {toast.message}
+            {toast.error !== undefined && <ErrorRef error={toast.error} />}
           </div>
         ))}
       </div>

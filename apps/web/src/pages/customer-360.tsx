@@ -64,6 +64,7 @@ import {
   useFinancialSummary,
 } from './customer-360-sections';
 import { ActionPanel } from '../ui/action-panel';
+import { useScrollHold } from '../ui/scroll-hold';
 // Phase A2: «ارسال پیام» — the compose modal and the history, in their own file.
 import { DirectMessageComposeModal, DirectMessagesCard } from './customer-direct-messages';
 import { CustomerCrmSection } from './customer-360-crm';
@@ -392,6 +393,21 @@ export function UserDetailPage({
   const chosen = tabState.id === id ? tabState.tab : 'overview';
   const tab = tabs.some((item) => item.id === chosen) ? chosen : 'overview';
   const selectTab = (next: CustomerTab) => setTabState({ id, tab: next });
+  /*
+   * W2 at 390px: the wallet tab is far shorter than the overview the shortcut sits in, and the
+   * browser clamps the scroll offset to the shorter page — a jump of hundreds of pixels. The
+   * hold keeps the page's height for the swap, so the new tab opens where the operator is.
+   */
+  const scrollHold = useScrollHold('main', `${id}:${tab}`);
+  const [heldFor, setHeldFor] = useState(id);
+  if (heldFor !== id) {
+    setHeldFor(id);
+    scrollHold.release();
+  }
+  const chooseTab = (next: CustomerTab) => {
+    scrollHold.release();
+    selectTab(next);
+  };
   const [flash, setFlash] = useState<string | null>(null);
   const jumpTo = (cardId: string) => {
     const owner = CARD_TABS[cardId];
@@ -404,6 +420,7 @@ export function UserDetailPage({
      * simply opens in place; the strip brings its tab into view sideways (`ui/tab-strip.ts`).
      */
     document.getElementById(PANEL_ID)?.classList.add('no-scroll-anchor');
+    scrollHold.hold();
     selectTab(owner);
     setFlash(cardId);
   };
@@ -630,7 +647,7 @@ export function UserDetailPage({
               card switches to the tab that holds it and flashes the card; another customer
               opens on the overview tab.
             */}
-            <Tabs value={tab} onChange={selectTab} items={tabs} panelId={PANEL_ID} />
+            <Tabs value={tab} onChange={chooseTab} items={tabs} panelId={PANEL_ID} />
             <TabPanel id={PANEL_ID} labelledBy={`${PANEL_ID}-tab-${tab}`}>
               {tab === 'overview' && (
                 <TwoColumn
@@ -791,6 +808,7 @@ export function UserDetailPage({
                 </div>
               )}
             </TabPanel>
+            {scrollHold.spacer}
           </div>
         )}
       </StateSwitch>

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import { SupportPage, sortOrderOf } from '../../apps/web/src/pages/support';
@@ -179,6 +179,62 @@ describe('the support page', () => {
       expectedVersion: 3,
       idempotencyKey: expect.any(String) as unknown,
     });
+  });
+
+  it('keeps a refused toggle on screen while the next one is in flight (W2)', async () => {
+    // Read from the mutation, the refusal vanished the moment a retry STARTED; the page,
+    // a banner shorter, clamped the operator's scroll (`pnpm web:no-scroll` at 390px).
+    const api = stubApi([
+      listAndRow([faq()], faq()),
+      {
+        url: `/support/faqs/${FAQ_ID}/status`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'commerce.support_faq_version_conflict',
+            message: 'This FAQ entry changed since it was read.',
+            details: { currentVersion: 4 },
+            correlationId: 'corr-toggle',
+          },
+        },
+      },
+    ]);
+    // The second status request is held until the test lets it answer.
+    const stubbed = globalThis.fetch;
+    let statusCalls = 0;
+    let answer: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
+      if (String(input).endsWith('/status')) {
+        statusCalls += 1;
+        if (statusCalls === 2) await held;
+      }
+      return stubbed(input as RequestInfo, init);
+    });
+    renderPage(<SupportPage denied={false} mayEdit />);
+
+    fireEvent.click(await screen.findByRole('button', { name: t('web.support_faq_deactivate') }));
+    expect(await screen.findByText('corr-toggle')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: t('web.support_faq_deactivate') })).toBeEnabled();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.support_faq_deactivate') }));
+    // The retry is in flight (the row's buttons wait on it) and has no outcome yet: the
+    // refusal is still drawn.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: t('web.support_faq_deactivate') })).toBeDisabled();
+    });
+    expect(statusCalls).toBe(2);
+    expect(screen.getByText('corr-toggle')).toBeInTheDocument();
+    answer();
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.url.endsWith('/status'))).toHaveLength(2);
+    });
+    expect(await screen.findByText('corr-toggle')).toBeInTheDocument();
   });
 
   it('shows the changed-elsewhere notice with a reload control on a version conflict', async () => {

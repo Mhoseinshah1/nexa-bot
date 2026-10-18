@@ -413,10 +413,13 @@ export function IncidentDetailPage({
     queryFn: () => fetchIncident(id),
     enabled: !denied,
   });
+  // The same panel list names a panel target in the scope list and a drained panel in the
+  // effects table (a location's drain names panels the targets do not).
   const panelNames = useTargetOptions(
     'PANEL',
     mayViewPanels &&
-      (detail.data?.incident.targets.some((target) => target.kind === 'PANEL') ?? false),
+      ((detail.data?.incident.targets.some((target) => target.kind === 'PANEL') ?? false) ||
+        (detail.data?.incident.effects.some((effect) => effect.kind === 'PANEL_DRAIN') ?? false)),
   );
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState<IncidentAction | null>(null);
@@ -594,7 +597,7 @@ export function IncidentDetailPage({
                     })}
                   </ul>
                 )}
-                <EffectsTable effects={incident.effects} />
+                <EffectsTable effects={incident.effects} panelNames={panelNames.data} />
               </Card>
               <Card title={t('web.inc_timeline')}>
                 <Timeline
@@ -688,7 +691,36 @@ function incidentDetailValue(key: string, value: string | number): string {
   return value;
 }
 
-function EffectsTable({ effects }: { effects: readonly IncidentEffectItem[] }) {
+/**
+ * The thing an effect changed, by name where the scope list's panel list knows it (a drain's
+ * subject is a panel); its id otherwise, and always as the title.
+ */
+function EffectSubject({
+  effect,
+  panelNames,
+}: {
+  effect: IncidentEffectItem;
+  panelNames: readonly TargetOption[] | undefined;
+}) {
+  const name =
+    effect.kind === 'PANEL_DRAIN'
+      ? panelNames?.find((option) => option.ref === effect.subjectRef)?.label
+      : undefined;
+  if (name === undefined) return <Ltr>{effect.subjectRef}</Ltr>;
+  return (
+    <bdi title={effect.subjectRef} data-testid="incident-effect-subject-name">
+      {name}
+    </bdi>
+  );
+}
+
+function EffectsTable({
+  effects,
+  panelNames,
+}: {
+  effects: readonly IncidentEffectItem[];
+  panelNames: readonly TargetOption[] | undefined;
+}) {
   if (effects.length === 0) return <p className="faint small">{t('web.inc_no_effects')}</p>;
   return (
     <DataTable
@@ -705,7 +737,7 @@ function EffectsTable({ effects }: { effects: readonly IncidentEffectItem[] }) {
         {
           key: 'subject',
           header: t('web.inc_subject_col'),
-          render: (row) => <Ltr>{row.subjectRef}</Ltr>,
+          render: (row) => <EffectSubject effect={row} panelNames={panelNames} />,
         },
         {
           key: 'state',

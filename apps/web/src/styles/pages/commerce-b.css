@@ -43,7 +43,7 @@
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
 }
 
 /* --- Shared by the COMMERCE-B editors (editor-layout.tsx) ------------------------ */
@@ -251,7 +251,7 @@
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
 }
 
 /* A set of filter chips inside a filter row, beside other sets. */
@@ -334,7 +334,7 @@
   padding: 6px 12px;
   border: 1px solid var(--line-2);
   border-radius: var(--radius-ctl);
-  background: var(--bg-1);
+  background: var(--panel-row);
   cursor: pointer;
 }
 .aud-segment:has(input:checked) {
@@ -474,7 +474,8 @@
 /* The draft's save stays in reach while the sections scroll past. */
 .campaign-savebar {
   position: sticky;
-  bottom: 0;
+  /* Clear of the phone's bottom-navigation capsule (shell.css); 0 at a desk. */
+  bottom: var(--bottom-nav-clear, 0px);
   z-index: 2;
   box-shadow: var(--shadow);
 }
@@ -542,7 +543,7 @@
   justify-content: space-between;
   padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-ctl);
 }
 .customer-picker-who {
   display: flex;

@@ -650,7 +650,10 @@ describe('the settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
     expect(await screen.findByText(t('web.settings_invalid_value'))).toBeInTheDocument();
     expect(visibleText(container)).not.toContain(message);
-    expect(screen.getByText('corr-c5')).toHaveAttribute('dir', 'ltr');
+    // The row's banner and the failure toast both carry the reference, left-to-right.
+    const references = screen.getAllByText('corr-c5');
+    expect(references.length).toBeGreaterThan(0);
+    for (const reference of references) expect(reference).toHaveAttribute('dir', 'ltr');
   });
 
   it('titles a key this bundle does not know in Persian, and keeps the key in the disclosure', async () => {

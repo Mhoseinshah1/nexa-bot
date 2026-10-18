@@ -21,7 +21,7 @@ import { Empty, LeaveGuardHost, ToastProvider } from './ui/kit';
 import { NAV, navPermitted } from './nav';
 import { useNavCounters } from './nav-counters';
 import { prefetchNav, type NavPrefetch } from './nav-prefetch';
-import { CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
+import { BottomNav, CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
 import { PanelHealthPage } from './pages/panel-health';
@@ -2008,6 +2008,15 @@ function SignedIn({
           </div>
         </main>
       </div>
+
+      {/* The phone's bottom navigation; CSS shows it only at phone widths. */}
+      <BottomNav
+        entries={visible}
+        currentPath={route.path}
+        counters={counters}
+        collapsed={collapsed}
+        onOpenMenu={() => setCollapsed(false)}
+      />
 
       {searching && <CommandSearch entries={visible} onClose={() => setSearching(false)} />}
       <LeaveGuardHost />
