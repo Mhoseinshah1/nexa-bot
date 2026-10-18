@@ -642,6 +642,9 @@ import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisionin
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { SubscriptionFileService } from './modules/commerce/provisioning/application/subscription-file.service.js';
+import { DrizzlePanelSettingRepository } from './modules/control/settings/infrastructure/drizzle-panel-settings.repository.js';
+import { PanelSettingsResolver } from './modules/control/settings/application/panel-settings-resolver.js';
+import { PanelSettingsService } from './modules/control/settings/application/panel-settings.service.js';
 import { ServiceRefreshService } from './modules/commerce/provisioning/application/service-refresh.service.js';
 import {
   OperationCardEditor,
@@ -1147,6 +1150,8 @@ export interface Container {
   readonly legacyTrials: LegacyTrialEligibilityService;
   /** R1: each panel's free trial, for an operator. */
   readonly panelTrials: PanelTrialService;
+  /** Track 3 §2: each panel's PANEL-scoped settings, for an operator. */
+  readonly panelSettings: PanelSettingsService;
   /**
    * Round N: the SHARED audience — preview for an operator, evaluation for Broadcast, the
    * mass actions and Campaigns. One query implementation (`audience-sql.ts`).
@@ -2068,6 +2073,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  // Track 3 §2: the PANEL-scoped settings (a panel's connection-file caption).
+  const panelSettingRepository = new DrizzlePanelSettingRepository(database.db);
+  const panelSettingsResolver = new PanelSettingsResolver(panelSettingRepository, opsLog);
   /*
    * Round T: the button builder's rows. Built here, beside the settings it projects into,
    * because three things read it — the `bot.main_menu` change guard, the keyboard's source
@@ -4039,6 +4047,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     scopeActivity: tenants,
     clock,
+  });
+  // Track 3 §2: a panel's PANEL-scoped settings, for an operator.
+  const panelSettings = new PanelSettingsService({
+    guard,
+    uow,
+    settings: panelSettingRepository,
+    resolver: panelSettingsResolver,
+    panels: panelRepository,
+    audit,
+    outbox,
+    idempotency,
+    clock,
+    ids,
+    scopeActivity: tenants,
+    // The RAW recorder, as `SettingsService` takes it.
+    opsLog: opsLogWriter,
+    sessions,
   });
   /** Round N: the shared audience (`docs/round-n-broadcast-audit.md` §3). */
   const audienceService = new AudienceService({
@@ -7308,6 +7333,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     trialAdmin: trialAdminService,
     legacyTrials: legacyTrialEligibilityService,
     panelTrials,
+    panelSettings,
     audience: audienceService,
     broadcasts: broadcastService,
     broadcastLoop,

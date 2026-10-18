@@ -352,6 +352,8 @@ import {
   APPEARANCE_SLOTS,
   APPEARANCE_TEST_ERROR_CODES,
   APPEARANCE_TEST_OUTCOMES,
+  // Track 3 §2: the registry's PANEL-scoped keys, the only keys a panel row may hold.
+  PANEL_SETTING_KEYS,
 } from '@nexa/contracts';
 
 /**
@@ -9196,6 +9198,47 @@ export const panelTrialConfigs = pgTable(
       sql`label IS NULL OR length(btrim(label)) BETWEEN 1 AND ${sql.raw(String(PANEL_TRIAL_LABEL_MAX_LENGTH))}`,
     ),
     check('panel_trial_configs_revision_check', sql`revision >= 1`),
+  ],
+);
+
+/**
+ * Track 3 §2: one panel's value for one PANEL-scoped registry key
+ * (`settingScope(key) === 'PANEL'`). `setting_values` is the tenant scope; this is the
+ * panel scope, and neither can hold the other's keys — the CHECK below names the panel
+ * keys, and the tenant surface refuses them.
+ *
+ * Absence means the registry default applies, exactly as for a tenant setting, and for
+ * the same reason: a flag beside a value can disagree with it, absence cannot. The value
+ * is parsed by the key's declared schema on the way in and on the way out.
+ */
+export const panelSettingValues = pgTable(
+  'panel_setting_values',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    settingKey: text('setting_key').notNull(),
+    value: jsonb('value').notNull(),
+    version: integer('version').notNull().default(1),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    updatedByAdminId: uuid('updated_by_admin_id'),
+  },
+  (table) => [
+    uniqueIndex('panel_setting_values_key').on(table.tenantId, table.panelId, table.settingKey),
+    check('panel_setting_values_version_check', sql`version >= 1`),
+    check('panel_setting_values_key_check', enumCheck('setting_key', PANEL_SETTING_KEYS)),
+    foreignKey({
+      name: 'panel_setting_values_panel_fk',
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+    }),
+    foreignKey({
+      name: 'panel_setting_values_tenant_admin_fk',
+      columns: [table.tenantId, table.updatedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
   ],
 );
 

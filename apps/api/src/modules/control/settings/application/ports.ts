@@ -42,3 +42,33 @@ export interface SettingRepository {
     tx?: unknown,
   ): Promise<StoredSetting | null>;
 }
+
+/**
+ * Track 3 §2: stored values of PANEL-scoped keys, one row per (tenant, panel, key).
+ *
+ * The tenant repository's contract with a panel named: absence is the default, and the
+ * write's version check lives in its own statement.
+ */
+export interface PanelSettingRepository {
+  /** Every stored value of this panel. Keys with no row are simply absent. */
+  findAll(scope: ScopeContext, panelId: string, tx?: unknown): Promise<StoredSetting[]>;
+  find(
+    scope: ScopeContext,
+    panelId: string,
+    key: SettingKey,
+    tx?: unknown,
+  ): Promise<StoredSetting | null>;
+  upsert(
+    scope: ScopeContext,
+    input: {
+      readonly id: string;
+      readonly panelId: string;
+      readonly key: SettingKey;
+      readonly value: unknown;
+      readonly expectedVersion: number | null;
+      readonly now: Date;
+      readonly adminId: string | null;
+    },
+    tx?: unknown,
+  ): Promise<StoredSetting | null>;
+}
