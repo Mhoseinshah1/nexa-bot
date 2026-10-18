@@ -12,6 +12,8 @@ import {
   type ProviderAdapter,
   type ProviderType,
   type ServiceState,
+  type ConnectionFileCaptionMode,
+  type ConnectionFileCaptionPlacement,
   type TemplateValues,
   type TenantContext,
   type UnitOfWork,
@@ -33,7 +35,12 @@ import type {
   CustomerMessenger,
   CustomerSendResult,
 } from '../../messaging/application/ports.js';
-import { parseCaptionMarkup } from '../../messaging/application/caption-markup.js';
+import {
+  formatDateOnly,
+  parseCaptionMarkup,
+  renderConnectionFileCaption,
+  type TemplatePresentation,
+} from '@nexa/i18n';
 import { planMediaBatches } from '../../messaging/application/media-group.js';
 import { decideOperability } from './panel-operability.js';
 import { providerRefFor } from './provision-executor.js';
@@ -77,13 +84,45 @@ export interface SubscriptionFileDeps {
    * in a composition that has none; every such fact is then simply absent from the caption.
    */
   readonly captionFacts?: FileCaptionFactSource;
+  /**
+   * Track 3 §2: the panel's connection-file caption settings and what a CUSTOM caption is
+   * rendered with. Absent in a composition that has none, which then captions as before
+   * Track 3 (`LEGACY_CAPTION_POLICY`): the panel's own caption, on every file.
+   */
+  readonly connectionCaptions?: ConnectionFileCaptionSource;
 }
+
+/** Track 3 §2: one panel's caption settings, as its PANEL-scoped keys resolve. */
+export interface ConnectionFileCaptionPolicy {
+  readonly mode: ConnectionFileCaptionMode;
+  /** The panel's own template; null means the default key's resolved body. */
+  readonly template: string | null;
+  readonly placement: ConnectionFileCaptionPlacement;
+}
+
+export interface ConnectionFileCaptionSource {
+  policyFor(scope: TenantContext, panelId: string): Promise<ConnectionFileCaptionPolicy>;
+  /** The RAW body of `bot.service.connection_files_caption`: the tenant's, or the catalogue's. */
+  defaultTemplate(scope: TenantContext): Promise<string>;
+  presentationFor(scope: TenantContext): Promise<TemplatePresentation>;
+  /** The tenant's first support account, without its `@`; null when none is configured. */
+  supportHandle(scope: TenantContext): Promise<string | null>;
+}
+
+/** What a composition with no caption settings does: the behaviour before Track 3. */
+export const LEGACY_CAPTION_POLICY: ConnectionFileCaptionPolicy = {
+  mode: 'PANEL_DEFAULT',
+  template: null,
+  placement: 'EVERY_FILE',
+};
 
 /** The caption facts that live outside the service row. Each null when there is none. */
 export interface FileCaptionExtras {
   readonly serviceName: string | null;
   readonly location: string | null;
   readonly status: string | null;
+  /** Track 3 §2: the catalogue product's current name, for `{product}`. */
+  readonly product?: string | null;
 }
 
 export interface FileCaptionFactSource {
@@ -280,10 +319,7 @@ export class SubscriptionFileService {
      * after it is sent and nothing is retried, exactly as the one-by-one loop did.
      */
     const files = fetched.files;
-    const facts = fileCaptionValues(
-      service,
-      (await this.deps.captionFacts?.factsFor(scope, service)) ?? NO_CAPTION_EXTRAS,
-    );
+    const captionFor = await this.captionPlan(scope, service, files);
     const kinds = files.map(() => 'DOCUMENT' as const);
     let sent = 0;
     for (const batch of planMediaBatches(kinds)) {
@@ -297,7 +333,7 @@ export class SubscriptionFileService {
             fileName: file.fileName,
             mimeType: file.mediaType,
           },
-          caption: connectionFileCaption(file.caption, service.providerUsername, facts),
+          ...captionFor(index, file),
         };
       });
       const sendMediaGroup = this.deps.messenger.sendMediaGroup;
@@ -328,6 +364,126 @@ export class SubscriptionFileService {
     }
     return { outcome: 'SENT', sent, failed: fetched.failed };
   }
+
+  /**
+   * Track 3 §2: which file carries which caption, decided once per delivery from the
+   * panel's caption settings. `NONE` captions nothing; `PANEL_DEFAULT` is the panel's own
+   * caption per file, as before; `CUSTOM` renders the panel's template (or the default
+   * key's body) with `renderConnectionFileCaption` — HTML-escaped values, the closed
+   * caption grammar, Telegram's bound — and a render that is empty sends the file bare.
+   * `LAST_FILE` puts it on the last file of the delivery only.
+   */
+  private async captionPlan(
+    scope: TenantContext,
+    service: ServiceRecord,
+    files: readonly { readonly fileName: string; readonly caption: string | null }[],
+  ): Promise<
+    (
+      index: number,
+      file: { readonly fileName: string; readonly caption: string | null },
+    ) => { caption?: CustomerCaption }
+  > {
+    const source = this.deps.connectionCaptions;
+    const policy =
+      source === undefined ? LEGACY_CAPTION_POLICY : await source.policyFor(scope, service.panelId);
+    if (policy.mode === 'NONE') return () => ({});
+    const last = files.length - 1;
+    const captioned = (index: number) => policy.placement === 'EVERY_FILE' || index === last;
+    const extras = (await this.deps.captionFacts?.factsFor(scope, service)) ?? NO_CAPTION_EXTRAS;
+
+    if (policy.mode === 'PANEL_DEFAULT' || source === undefined) {
+      const facts = fileCaptionValues(service, extras);
+      return (index, file) =>
+        captioned(index)
+          ? { caption: connectionFileCaption(file.caption, service.providerUsername, facts) }
+          : {};
+    }
+
+    const [body, presentation, support] = await Promise.all([
+      policy.template === null ? source.defaultTemplate(scope) : Promise.resolve(policy.template),
+      source.presentationFor(scope),
+      source.supportHandle(scope),
+    ]);
+    const now = this.deps.clock.now();
+    return (index, file) => {
+      if (!captioned(index)) return {};
+      const values = connectionFileCaptionVariables(service, extras, file, {
+        now,
+        presentation,
+        support,
+      });
+      const rendered = renderConnectionFileCaption(body, values, presentation);
+      if (rendered.text.length === 0) return {};
+      return {
+        caption: {
+          templateKey: 'bot.service.connection_files_caption',
+          values: {},
+          rendered: { text: rendered.text, entities: rendered.entities },
+        },
+      };
+    };
+  }
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Track 3 §2: the values of `CONNECTION_FILE_CAPTION_VARIABLES` this service and this file
+ * have — and nothing else. A fact the service does not have is ABSENT (its line is
+ * dropped), never a placeholder string. The expiry is a Jalali DATE in the tenant's zone,
+ * whatever calendar the tenant otherwise reads; days left are whole days, rounded up and
+ * never below zero. `platform` is the file's own name without its extension. Nothing here
+ * reads a panel-side client id, sub id or user id.
+ */
+export function connectionFileCaptionVariables(
+  service: Pick<
+    ServiceRecord,
+    | 'providerUsername'
+    | 'trafficLimitBytes'
+    | 'trafficUsedBytes'
+    | 'usageSyncedAt'
+    | 'expiresAt'
+    | 'subscriptionUrl'
+  >,
+  extras: FileCaptionExtras,
+  file: { readonly fileName: string },
+  context: {
+    readonly now: Date;
+    readonly presentation: TemplatePresentation;
+    readonly support: string | null;
+  },
+): TemplateValues {
+  const values: Record<string, TemplateValues[string]> = {};
+  const text = (token: string, value: string | null | undefined) => {
+    if (value !== null && value !== undefined && value.trim() !== '') values[token] = value;
+  };
+  text('username', service.providerUsername);
+  text('service_name', extras.serviceName);
+  text('product', extras.product);
+  values['volume_total'] = service.trafficLimitBytes;
+  if (service.usageSyncedAt !== null) {
+    values['volume_used'] = service.trafficUsedBytes;
+    if (service.trafficLimitBytes > 0n) {
+      const left = service.trafficLimitBytes - service.trafficUsedBytes;
+      values['volume_left'] = left > 0n ? left : 0n;
+    }
+  }
+  if (service.expiresAt !== null) {
+    values['expires_at_jalali'] = formatDateOnly(service.expiresAt, {
+      timezone: context.presentation.timezone,
+      calendar: 'jalali',
+    });
+    const remaining = service.expiresAt.getTime() - context.now.getTime();
+    values['days_left'] = Math.max(0, Math.ceil(remaining / DAY_MS));
+  }
+  const dot = file.fileName.lastIndexOf('.');
+  text('platform', dot > 0 ? file.fileName.slice(0, dot) : file.fileName);
+  text('file_name', file.fileName);
+  text('sub_link', service.subscriptionUrl);
+  if (context.support !== null && context.support.trim() !== '') {
+    values['support'] = `@${context.support.replace(/^@/, '')}`;
+  }
+  return values;
 }
 
 const NO_CAPTION_EXTRAS: FileCaptionExtras = { serviceName: null, location: null, status: null };

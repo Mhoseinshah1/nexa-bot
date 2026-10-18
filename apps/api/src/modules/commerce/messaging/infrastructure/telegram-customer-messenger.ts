@@ -936,6 +936,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     caption: CustomerCaption,
     botInstanceId: BotInstanceId,
   ): Promise<RenderedCaption> {
+    // Track 3 §2: rendered already, by the one renderer of its key; sent exactly as given.
+    if (caption.rendered !== undefined) {
+      const wire = { caption: caption.rendered.text, entities: caption.rendered.entities };
+      return { ...wire, html: false, decorated: false, fallback: wire };
+    }
     const text = await this.templates.render(scope, caption.templateKey, caption.values);
     // UX Batch 01 item 4: a template whose every line was dropped renders nothing, and a
     // bare file is told apart from another service's by its fallback.

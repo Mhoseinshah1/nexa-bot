@@ -251,6 +251,16 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
  * here and the specific one is in `PLACEHOLDER_LABEL_OVERRIDES_FA` below.
  */
 export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
+  // Track 3 §2: a panel's connection-file caption variables.
+  volume_total: 'حجم کل',
+  volume_used: 'حجم مصرف‌شده',
+  volume_left: 'حجم باقی‌مانده',
+  expires_at_jalali: 'تاریخ انقضا (شمسی)',
+  days_left: 'روزهای باقی‌مانده',
+  platform: 'سکوی فایل',
+  file_name: 'نام فایل',
+  sub_link: 'لینک اشتراک',
+  support: 'پشتیبانی',
   // UX Batch 01 item 4: the connection file caption's facts.
   remaining_volume: 'حجم باقی‌مانده',
   service_name: 'نام سرویس خریداری‌شده',
@@ -526,6 +536,20 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
     location: 'لوکیشن سرویس',
     status: 'وضعیت سرویس',
     subscription_url: 'لینک اشتراک مشتری',
+  },
+  'bot.service.connection_files_caption': {
+    username: 'نام کاربری سرویس',
+    service_name: 'نام سرویس خریداری‌شده',
+    product: 'نام محصول',
+    volume_total: 'حجم کل (نامحدود هم نوشته می‌شود)',
+    volume_used: 'حجم مصرف‌شده',
+    volume_left: 'حجم باقی‌مانده',
+    expires_at_jalali: 'تاریخ انقضا (شمسی)',
+    days_left: 'روزهای باقی‌مانده',
+    platform: 'سکوی فایل (نام فایل بدون پسوند)',
+    file_name: 'نام فایل',
+    sub_link: 'لینک اشتراک',
+    support: 'پشتیبانی',
   },
   'bot.terms.updated': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.order.summary': { username: 'نام کاربری سرویس' },
@@ -1693,6 +1717,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.service.connection_file_caption': [
     'توضیح فایل اتصال بدون توضیح پنل',
     'فقط وقتی پنل برای یک فایل توضیحی نفرستاده باشد: نام کاربری سرویس.',
+  ],
+  'bot.service.connection_files_caption': [
+    'توضیح پیش‌فرض فایل‌های اتصال',
+    'متن پیش‌فرض زیر فایل‌های اتصال برای پنل‌هایی که حالت توضیح «سفارشی» دارند و قالب خودشان را ندارند. هر پنل می‌تواند در صفحهٔ خود، بخش «فایل‌های اتصال»، قالب جداگانه بگذارد. هر خطی که مقدارش موجود نباشد حذف می‌شود. حداکثر ۱۰۲۴ نویسه.',
   ],
   'bot.service.link_rotated': [
     'لینک اشتراک تغییر کرد',
