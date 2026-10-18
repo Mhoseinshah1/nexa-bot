@@ -34,6 +34,7 @@ import {
   BACKUP_SCHEDULE_SETTING_KEYS,
 } from './backup.js';
 import { uuidV7Schema } from './ids.js';
+import { connectionFileCaptionTemplateIssues } from './templates.js';
 import {
   REFERRAL_COMMISSION_PERCENT_MAX,
   REFERRAL_COMMISSION_PERCENT_MIN,
@@ -311,6 +312,22 @@ export function telegramChannelJoinUrl(channel: TelegramChannel): string | null 
 function unique<T>(of: (item: T) => string) {
   return (items: readonly T[]): boolean => new Set(items.map(of)).size === items.length;
 }
+
+/**
+ * Track 3 §2: how one panel captions the connection files it hands a customer.
+ *
+ * - `PANEL_DEFAULT`: the panel's own ready-made caption per file (`bot.service.file_caption`,
+ *   with the username line when the panel gave none) — the behaviour before Track 3.
+ * - `CUSTOM`: the panel's template (`panel.connection_files.caption_template`), or the
+ *   catalogue's `bot.service.connection_files_caption` when it stores none.
+ * - `NONE`: no caption on any file.
+ */
+export const CONNECTION_FILE_CAPTION_MODES = ['PANEL_DEFAULT', 'CUSTOM', 'NONE'] as const;
+export type ConnectionFileCaptionMode = (typeof CONNECTION_FILE_CAPTION_MODES)[number];
+
+/** Track 3 §2: which of a delivery's files carry the caption. */
+export const CONNECTION_FILE_CAPTION_PLACEMENTS = ['LAST_FILE', 'EVERY_FILE'] as const;
+export type ConnectionFileCaptionPlacement = (typeof CONNECTION_FILE_CAPTION_PLACEMENTS)[number];
 
 export const SETTINGS = [
   {
@@ -1464,6 +1481,28 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
+  },
+  /*
+   * Track 3 §2: a panel's connection-file caption («فایل‌های اتصال» on the panel's page).
+   * PANEL-scoped: one value per panel, edited on that panel's page, never on Settings.
+   */
+  {
+    key: 'panel.connection_files.caption_mode',
+    description:
+      "How this panel captions the connection files sent to a customer. PANEL_DEFAULT: the " +
+      "panel's own caption per file (bot.service.file_caption), the behaviour before this " +
+      "key existed. CUSTOM: this panel's template (panel.connection_files.caption_template), " +
+      'or the catalogue default bot.service.connection_files_caption when it stores none. ' +
+      'NONE: no caption at all. Which files carry it is ' +
+      'panel.connection_files.caption_placement.',
+    schema: z.enum(CONNECTION_FILE_CAPTION_MODES),
+    defaultValue: 'CUSTOM',
+    configures: null,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+    scope: 'PANEL',
   },
 ] as const satisfies readonly SettingDefinition[];
 
