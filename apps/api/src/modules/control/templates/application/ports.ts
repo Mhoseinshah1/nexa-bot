@@ -34,6 +34,8 @@ export interface TemplateCatalogue {
     values: TemplateValues,
     locale: Locale,
     presentation: TemplatePresentation,
+    /** R4 PR-F (F6): `markInstants` wraps each date value for the rich-message builder. */
+    options?: { readonly markInstants?: boolean },
   ): string;
 }
 

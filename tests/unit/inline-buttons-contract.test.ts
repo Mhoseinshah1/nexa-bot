@@ -11,6 +11,7 @@ import {
   inlineButtonStylesSchema,
   parseSettingValue,
   settingDefinition,
+  suggestedInlineButtonStyles,
 } from '@nexa/contracts';
 
 /**
@@ -120,5 +121,34 @@ describe('the bot.inline_button_icons setting', () => {
     expect(inlineButtonIconOf('wallet.topup', {})).toBeNull();
     expect(inlineButtonIconOf('wallet.topup', { 'wallet.topup': ICON })).toBe(ICON);
     expect(inlineButtonIconOf('payment.cancel', { 'wallet.topup': ICON })).toBeNull();
+  });
+});
+
+/**
+ * R4 PR-F (F4): the owner's colour rule is a SUGGESTION the builder can apply, never a default.
+ */
+describe('the suggested inline button colours', () => {
+  it('leaves every default as `default`, so an upgrade changes no keyboard', () => {
+    for (const entry of INLINE_BUTTONS) expect(entry.defaultStyle, entry.key).toBe('default');
+  });
+
+  it('suggests success for paying and confirming, danger for cancelling, primary for main actions', () => {
+    const suggested = suggestedInlineButtonStyles();
+    expect(suggested['payment.wallet']).toBe('success');
+    expect(suggested['payment.sent']).toBe('success');
+    expect(suggested['order.cancel']).toBe('danger');
+    expect(suggested['payment.cancel_confirm']).toBe('danger');
+    expect(suggested['catalog.open']).toBe('primary');
+    // A button the rule names nothing for is absent, as an unchanged button is.
+    expect('main_menu' in suggested).toBe(false);
+  });
+
+  it('is a valid `bot.inline_buttons` value over registry keys only', () => {
+    const suggested = suggestedInlineButtonStyles();
+    expect(inlineButtonStylesSchema.safeParse(suggested).success).toBe(true);
+    for (const key of Object.keys(suggested)) {
+      expect((INLINE_BUTTON_KEYS as readonly string[]).includes(key), key).toBe(true);
+    }
+    expect(Object.keys(suggested).length).toBeGreaterThan(10);
   });
 });
