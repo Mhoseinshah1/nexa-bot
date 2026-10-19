@@ -640,6 +640,12 @@ export type TicketCategoryResponse = z.infer<typeof ticketCategoryResponseSchema
 export const ticketSummarySchema = z.object({
   id: z.string(),
   /**
+   * The short public code (Round 4, PR-C; `public-code.ts`) — what every surface prints
+   * instead of the uuid. Null only before the backfill reaches the row, and on a response
+   * from a server before the field (defaulted on parse).
+   */
+  code: z.string().nullable().default(null),
+  /**
    * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
    * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
    * parsing; the API always sends it.
@@ -660,6 +666,10 @@ export const ticketSummarySchema = z.object({
   serviceId: z.string().nullable(),
   orderId: z.string().nullable(),
   paymentId: z.string().nullable(),
+  /** PR-C: the linked service's, order's and payment's short codes, beside their ids. */
+  serviceCode: z.string().nullable().default(null),
+  orderCode: z.string().nullable().default(null),
+  paymentCode: z.string().nullable().default(null),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   lastMessageAt: z.iso.datetime(),

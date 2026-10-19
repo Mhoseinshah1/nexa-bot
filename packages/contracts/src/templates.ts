@@ -6111,7 +6111,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'This reply EDITS the invoice message, so without it the code the invoice carried ' +
           'would vanish from the chat. Optional: a line holding only it is dropped when absent.',
         required: false,
@@ -6216,7 +6216,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'This reply EDITS the invoice message, so without it the code the invoice carried ' +
           'would vanish from the chat. Optional: a line holding only it is dropped when absent.',
         required: false,
@@ -6237,7 +6237,7 @@ export const TEMPLATES = [
       {
         token: 'reference',
         type: 'STRING',
-        description: 'The payment’s public tracking code, `paymentTrackingCode` of its reference.',
+        description: 'The payment’s public tracking code, `paymentTrackingCode` of the payment.',
         required: true,
         repeatable: false,
       },
@@ -8754,6 +8754,16 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [
       {
+        token: 'orderCode',
+        type: 'STRING',
+        description:
+          'Round 4 (PR-C): the order\u2019s 8-character public code — the code the customer ' +
+          'quotes to support and every operator surface prints. Absent only for an order the ' +
+          'code backfill has not reached.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'serviceUsername',
         type: 'STRING',
         description: 'The reserved or existing username; absent until one is chosen.',
@@ -9127,7 +9137,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9160,7 +9170,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9195,7 +9205,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9224,7 +9234,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9262,7 +9272,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9315,7 +9325,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9353,7 +9363,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9459,7 +9469,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9478,7 +9488,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9509,7 +9519,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9555,7 +9565,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9618,7 +9628,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9637,7 +9647,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9655,7 +9665,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9673,7 +9683,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9697,7 +9707,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9715,7 +9725,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9738,7 +9748,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02): `paymentTrackingCode` of its reference, ' +
+          'The payment’s public tracking code (8 characters since PR-C): `paymentTrackingCode` of the payment, ' +
           'never the stored reference itself. The same code on every screen of this payment.',
         required: true,
         repeatable: false,
@@ -9808,7 +9818,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9841,7 +9851,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9888,7 +9898,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9921,7 +9931,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9954,7 +9964,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -9971,7 +9981,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -10004,7 +10014,7 @@ export const TEMPLATES = [
         token: 'reference',
         type: 'STRING',
         description:
-          'The payment’s public tracking code (FIX-02), `paymentTrackingCode` of its reference. ' +
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
