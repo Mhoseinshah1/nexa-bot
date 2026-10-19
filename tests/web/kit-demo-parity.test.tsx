@@ -294,6 +294,37 @@ describe('X9 — a wide table fits its card', () => {
     expect(KIT_CSS).toMatch(/\.tbl td\.wrap \.badge \{[^}]*white-space: normal/);
   });
 
+  it('turns rows into phone cards only when asked, each cell named by its column', () => {
+    const { container, rerender } = renderPage(
+      <DataTable
+        caption="جدول"
+        columns={columns}
+        rows={[{ id: '1', at: 'الف', note: 'یک' }]}
+        rowKey={(row) => row.id}
+      />,
+    );
+    expect(container.querySelector('table')).not.toHaveClass('phone-cards');
+    rerender(
+      <DataTable
+        caption="جدول"
+        columns={columns}
+        rows={[{ id: '1', at: 'الف', note: 'یک' }]}
+        rowKey={(row) => row.id}
+        phoneCards
+      />,
+    );
+    expect(container.querySelector('table')).toHaveClass('phone-cards');
+    const labels = [...container.querySelectorAll('tbody td')].map((td) =>
+      td.getAttribute('data-label'),
+    );
+    expect(labels).toEqual(['شناسه', 'زمان ثبت', 'یادداشت']);
+    // The card layout is the demo's breakpoint, and the label is drawn from the attribute.
+    expect(KIT_CSS).toMatch(
+      /@media \(max-width: 820px\) \{\s*\.tbl-wrap:has\(> \.tbl\.phone-cards\)/,
+    );
+    expect(KIT_CSS).toMatch(/\.tbl\.phone-cards td::before \{\s*content: attr\(data-label\);/);
+  });
+
   it('opens a row detail on one full-width line under its row, and closes it again', () => {
     const { container } = renderPage(
       <DataTable

@@ -1874,6 +1874,7 @@ export function DataTable<T>({
   filters,
   rowClassName,
   detail,
+  phoneCards = false,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -1891,6 +1892,12 @@ export function DataTable<T>({
    * reference draws them; nothing in the detail is a second copy of a column.
    */
   detail?: { label: string; render: (row: T) => ReactNode };
+  /**
+   * On a phone (≤ 820px) each row becomes a card, every cell on its own line under its
+   * column's name, as the demo draws its lists at 390 — instead of a table scrolling
+   * sideways. The first column is the card's title. Opt-in, per table.
+   */
+  phoneCards?: boolean;
 }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const toggle = (key: string) =>
@@ -1906,7 +1913,7 @@ export function DataTable<T>({
       {toolbar !== undefined && <div className="toolbar">{toolbar}</div>}
       {filters !== undefined && <div className="filter-row">{filters}</div>}
       <div className={cx('tbl-wrap', sticky && 'sticky')}>
-        <table className={cx('tbl', dense && 'dense')}>
+        <table className={cx('tbl', dense && 'dense', phoneCards && 'phone-cards')}>
           <caption className="visually-hidden">{caption}</caption>
           <thead>
             <tr>
@@ -1946,6 +1953,7 @@ export function DataTable<T>({
                     {columns.map((column) => (
                       <td
                         key={column.key}
+                        data-label={column.header}
                         className={cx(
                           `al-${column.align === 'end' ? 'end' : 'start'}`,
                           column.wrap !== undefined && column.wrap !== false && 'wrap',
