@@ -286,8 +286,16 @@
   gap: 3px;
   min-width: 120px;
 }
+/* Demo parity: a 2×2 grid — order type and product, then customer id and discount code. */
 .discounts-preview-inputs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+/* A discount rule's actions, stacked as the demo's: the pencil above the switch. */
+.discounts-row-actions {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 /* The quote beside the rules it was decided by. */
 .discounts-preview-result {
@@ -299,9 +307,6 @@
   padding-top: 14px;
 }
 @media (max-width: 1200px) {
-  .discounts-preview-inputs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .discounts-preview-result {
     grid-template-columns: minmax(0, 1fr);
   }
