@@ -51,9 +51,10 @@ describe('DataTable stack — one card per row at phone width, as the demo', () 
   ];
   const rows: readonly Row[] = [{ id: 'a', name: 'یک', state: 'فعال' }];
 
-  it('labels every cell with its header and marks the wrap only when asked', () => {
+  it('stacks by default, labelling every cell with its header; `stack={false}` opts out', () => {
+    // Default since the kit follow-up: the demo stacks every list below 820px.
     const stacked = renderPage(
-      <DataTable caption="c" columns={columns} rows={rows} rowKey={(row) => row.id} stack />,
+      <DataTable caption="c" columns={columns} rows={rows} rowKey={(row) => row.id} />,
     );
     const cells = stacked.container.querySelectorAll('td');
     expect([...cells].map((cell) => cell.getAttribute('data-label'))).toEqual(['نام', 'وضعیت']);
@@ -61,10 +62,26 @@ describe('DataTable stack — one card per row at phone width, as the demo', () 
     stacked.unmount();
 
     const plain = renderPage(
-      <DataTable caption="c" columns={columns} rows={rows} rowKey={(row) => row.id} />,
+      <DataTable
+        caption="c"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        stack={false}
+      />,
     );
     expect(plain.container.querySelector('td')).not.toHaveAttribute('data-label');
     expect(plain.container.querySelector('.tbl-wrap')).not.toHaveClass('stack');
+  });
+
+  it('keeps the table a table for assistive technology while it is stacked', () => {
+    renderPage(<DataTable caption="c" columns={columns} rows={rows} rowKey={(row) => row.id} />);
+    expect(screen.getByRole('table', { name: 'c' })).toBeInTheDocument();
+    expect(screen.getAllByRole('columnheader').map((th) => th.textContent)).toEqual([
+      'نام',
+      'وضعیت',
+    ]);
+    expect(screen.getAllByRole('cell')).toHaveLength(2);
   });
 
   it("'labelled' keeps the first cell a labelled line instead of the card's title", () => {

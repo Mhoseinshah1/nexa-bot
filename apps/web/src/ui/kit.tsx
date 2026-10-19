@@ -1873,7 +1873,7 @@ export function DataTable<T>({
   toolbar,
   filters,
   rowClassName,
-  stack = false,
+  stack = true,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -1891,6 +1891,11 @@ export function DataTable<T>({
    * `data-label`). The same rows, cells and order; only the CSS layout changes.
    * `'labelled'` draws the first cell as a labelled line too, where the demo does (its
    * generic lists), instead of as the card's title.
+   *
+   * ON BY DEFAULT: the demo stacks every list below 820px (measured on 48 routes: no
+   * `table.t` there scrolls sideways). Of its lists, the ones whose first cell is a labelled
+   * line rather than the card's title pass `'labelled'`; `false` keeps a sideways-scrolling
+   * table for a list that must stay a grid.
    */
   stack?: boolean | 'labelled';
 }) {
@@ -1906,10 +1911,15 @@ export function DataTable<T>({
           stack === 'labelled' && 'labelled',
         )}
       >
-        <table className={cx('tbl', dense && 'dense')}>
+        {/*
+          The explicit roles keep the table a table for assistive technology once the stacked
+          layout changes its elements' display, which a browser may otherwise take as leave to
+          drop the semantics. Native roles restated; nothing else changes.
+        */}
+        <table className={cx('tbl', dense && 'dense')} role="table">
           <caption className="visually-hidden">{caption}</caption>
-          <thead>
-            <tr>
+          <thead role="rowgroup">
+            <tr role="row">
               {columns.map((column) => (
                 // Classes, not a `style` attribute. The production document
                 // policy is `style-src 'self'`, which blocks element `style`
@@ -1919,6 +1929,7 @@ export function DataTable<T>({
                 <th
                   key={column.key}
                   scope="col"
+                  role="columnheader"
                   className={cx(
                     `al-${column.align === 'end' ? 'end' : 'start'}`,
                     column.wrap !== undefined && column.wrap !== false && 'wrap',
@@ -1930,12 +1941,13 @@ export function DataTable<T>({
               ))}
             </tr>
           </thead>
-          <tbody>
+          <tbody role="rowgroup">
             {rows.map((row) => (
-              <tr key={rowKey(row)} className={rowClassName?.(row)}>
+              <tr key={rowKey(row)} role="row" className={rowClassName?.(row)}>
                 {columns.map((column) => (
                   <td
                     key={column.key}
+                    role="cell"
                     data-label={stack === false ? undefined : column.header}
                     className={cx(
                       `al-${column.align === 'end' ? 'end' : 'start'}`,

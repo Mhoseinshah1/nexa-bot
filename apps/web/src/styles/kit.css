@@ -1073,6 +1073,17 @@
   .tbl-wrap.stack:not(.labelled) .tbl td:first-child::before {
     content: none;
   }
+  /* A long value (a hash, an address) breaks rather than widening the card. */
+  .tbl-wrap.stack .tbl td {
+    overflow-wrap: anywhere;
+  }
+  /* A column with no header draws no label. */
+  .tbl-wrap.stack .tbl td[data-label='']::before {
+    content: none;
+  }
+  .tbl-wrap.stack .tbl .row-actions.wrap {
+    max-width: none;
+  }
 }
 .tbl tbody tr {
   transition: background 0.1s;
