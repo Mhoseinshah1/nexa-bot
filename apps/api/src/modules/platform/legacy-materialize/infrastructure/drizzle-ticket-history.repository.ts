@@ -74,7 +74,8 @@ export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
 
   async ensureCategory(scope: TenantContext, now: Date, tx: TransactionScope) {
     const tenantId = requireTenantId(scope);
-    // A category an earlier release created under the old title is the same category: reuse it.
+    // A category an earlier release created under the old title is the same category.
+    await this.retitleLegacyCategory(scope, now, tx);
     const existing = await this.findCategory(tenantId, tx);
     if (existing !== undefined) return existing;
     await this.exec(tx)
@@ -95,8 +96,19 @@ export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
     return row;
   }
 
-  /** The import's category under its current title, else under the title an earlier release wrote. */
-  private async findCategory(tenantId: string, tx: TransactionScope) {
+  /**
+   * Brings the category an earlier release wrote ('Mirza (imported)') to the neutral title,
+   * with the title its tickets carry. Idempotent, and a no-op once no such category is left.
+   *
+   * - No neutral category yet: the old row is renamed IN PLACE, so its id, and every ticket
+   *   filed under it, stay as they are.
+   * - A neutral one already exists (the title is unique per tenant, so the rename would
+   *   collide): the old row's tickets are re-pointed to the neutral one, and the old row,
+   *   which then holds no ticket, is removed. No ticket is lost or copied: the move is one
+   *   UPDATE of `category_id` inside the caller's transaction.
+   */
+  async retitleLegacyCategory(scope: TenantContext, now: Date, tx: TransactionScope) {
+    const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .select({ id: ticketCategories.id, title: ticketCategories.title })
       .from(ticketCategories)
@@ -108,11 +120,55 @@ export class DrizzleTicketHistoryRepository implements TicketHistoryRepository {
             LEGACY_MIRZA_TICKET_CATEGORY_TITLE,
           ]),
         ),
+      )
+      .for('update');
+    const legacy = rows.find((r) => r.title === LEGACY_MIRZA_TICKET_CATEGORY_TITLE);
+    if (legacy === undefined) return;
+    const neutral = rows.find((r) => r.title === MIRZA_TICKET_CATEGORY_TITLE);
+    const target = neutral?.id ?? legacy.id;
+    if (neutral === undefined) {
+      await this.exec(tx)
+        .update(ticketCategories)
+        .set({ title: MIRZA_TICKET_CATEGORY_TITLE, updatedAt: now })
+        .where(
+          and(
+            eq(ticketCategories.tenantId, tenantId),
+            eq(ticketCategories.id, legacy.id),
+            eq(ticketCategories.title, LEGACY_MIRZA_TICKET_CATEGORY_TITLE),
+          ),
+        );
+    }
+    // The title is snapshotted on each ticket, so the pages read it from there.
+    await this.exec(tx)
+      .update(tickets)
+      .set({ categoryId: target, categoryTitle: MIRZA_TICKET_CATEGORY_TITLE })
+      .where(and(eq(tickets.tenantId, tenantId), eq(tickets.categoryId, legacy.id)));
+    if (neutral !== undefined) {
+      await this.exec(tx)
+        .delete(ticketCategories)
+        .where(
+          and(
+            eq(ticketCategories.tenantId, tenantId),
+            eq(ticketCategories.id, legacy.id),
+            eq(ticketCategories.title, LEGACY_MIRZA_TICKET_CATEGORY_TITLE),
+            sql`NOT EXISTS (SELECT 1 FROM ${tickets} WHERE ${tickets.tenantId} = ${tenantId} AND ${tickets.categoryId} = ${legacy.id})`,
+          ),
+        );
+    }
+  }
+
+  /** The import's category, under its neutral title. */
+  private async findCategory(tenantId: string, tx: TransactionScope) {
+    const [row] = await this.exec(tx)
+      .select({ id: ticketCategories.id, title: ticketCategories.title })
+      .from(ticketCategories)
+      .where(
+        and(
+          eq(ticketCategories.tenantId, tenantId),
+          eq(ticketCategories.title, MIRZA_TICKET_CATEGORY_TITLE),
+        ),
       );
-    return (
-      rows.find((r) => r.title === MIRZA_TICKET_CATEGORY_TITLE) ??
-      rows.find((r) => r.title === LEGACY_MIRZA_TICKET_CATEGORY_TITLE)
-    );
+    return row;
   }
 
   async ensureImportAdmin(scope: TenantContext, now: Date, tx: TransactionScope): Promise<string> {

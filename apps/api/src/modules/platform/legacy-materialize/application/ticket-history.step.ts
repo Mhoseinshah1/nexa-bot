@@ -332,6 +332,12 @@ export interface TicketHistoryRepository {
     now: Date,
     tx: TransactionScope,
   ): Promise<{ readonly id: string; readonly title: string }>;
+  /**
+   * Renames the category an earlier release wrote under the old title to the neutral one (or,
+   * when a neutral one exists, moves its tickets there): every run, so an upgraded
+   * installation whose tickets are all already imported is corrected too.
+   */
+  retitleLegacyCategory(scope: TenantContext, now: Date, tx: TransactionScope): Promise<void>;
   /** The system admin that signs imported answers; created once, never able to sign in. */
   ensureImportAdmin(scope: TenantContext, now: Date, tx: TransactionScope): Promise<string>;
   existingTickets(
@@ -523,6 +529,10 @@ export class TicketHistoryStep implements MaterializeStep {
     let alreadyPresent = 0;
     let diverged = 0;
     const bot = await this.repository.resolveBot(ctx.scope);
+    await this.deps.uow.run(ctx.scope, async (tx) => {
+      await assertScopeActive(this.deps, ctx, tx);
+      await this.repository.retitleLegacyCategory(ctx.scope, ctx.now, tx);
+    });
     for await (const batch of this.threads(ctx)) {
       await this.deps.uow.run(ctx.scope, async (tx) => {
         await assertScopeActive(this.deps, ctx, tx);
