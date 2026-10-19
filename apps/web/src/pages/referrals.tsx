@@ -378,7 +378,6 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
 type StateFilter = 'ALL' | ReferralCommissionState;
 
 function Commissions({ denied, referrerId }: { denied: boolean; referrerId: string }) {
-  const onLink = useLinkHandler();
   const [state, setState] = useState<StateFilter>('ALL');
   const trail = useTrail(`${referrerId}|${state}`);
 
