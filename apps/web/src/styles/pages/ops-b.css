@@ -963,6 +963,13 @@ form.set-row > * + * {
   .system-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  /* The verdict is a phrase («اختلال در وابستگی»): it wraps inside its half-width card. */
+  .stat-grid.system-stats > .stat .val {
+    flex-wrap: wrap;
+    min-width: 0;
+    font-size: 18px;
+    overflow-wrap: anywhere;
+  }
   .system-stats > :nth-child(3) {
     grid-column: 1 / -1;
   }
