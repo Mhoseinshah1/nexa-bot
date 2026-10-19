@@ -12,7 +12,10 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleCustomerNotificationRepository } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository';
-import { DrizzleReminderRateWindowStore } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-reminder-rate-window.store';
+import {
+  DrizzleReminderRaiseCounter,
+  DrizzleReminderRateWindowStore,
+} from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-reminder-rate-window.store';
 import type { ReminderRateWindowStore } from '../../apps/api/src/modules/commerce/messaging/application/reminder-rate';
 import { CustomerNotificationService } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification.service';
 import { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
@@ -53,6 +56,8 @@ describe('Round 4 PR-H: the reminder ceiling and the burst alarm', () => {
   let panel: string;
   let sends: CustomerMessage[] = [];
   let limits = { perMinute: 5, burstPerHour: 0 };
+  /** The reminder flags switched off for the dispatcher's kill switch; every other is on. */
+  let flagsOff = new Set<string>();
   let base = 0;
   let n = 0;
 
@@ -68,6 +73,7 @@ describe('Round 4 PR-H: the reminder ceiling and the burst alarm', () => {
     await ctx.reset();
     sends = [];
     limits = { perMinute: 5, burstPerHour: 0 };
+    flagsOff = new Set<string>();
     fx = new AudienceFixtures(ctx, tenantA.tenantId as string);
     panel = await fx.panel('ceiling');
     base = Date.now();
@@ -111,6 +117,8 @@ describe('Round 4 PR-H: the reminder ceiling and the burst alarm', () => {
         windows,
         limits: async () => limits,
         opsLog: ctx.container.opsLog,
+        raises: new DrizzleReminderRaiseCounter(),
+        isEnabled: async (_scope, key) => flagsOff.has(key) === false,
       },
       logger: { info: () => {}, error: () => {} },
     });
@@ -144,6 +152,7 @@ describe('Round 4 PR-H: the reminder ceiling and the burst alarm', () => {
         notifications: new DrizzleCustomerNotificationRepository(db),
         bots: { botFor: async () => BOT_A },
         ids: ctx.container.ids,
+        raises: new DrizzleReminderRaiseCounter(),
       }),
       scopeActivity: ctx.container.tenants,
       uow: ctx.container.uow,
@@ -261,6 +270,8 @@ describe('Round 4 PR-H: the reminder ceiling and the burst alarm', () => {
 
   it('opens one burst condition for the ERRORS topic, keeps it while the hour stays high, and closes it once an hour ends quiet', async () => {
     limits = { perMinute: 5, burstPerHour: 3 };
+    // The lane is running before the sweep raises anything, as it is from a worker's boot.
+    await deliver(-1_000);
     await raiseReminders(12);
     expect(await events(REMINDER_BURST_CODE)).toEqual([]);
 
@@ -288,11 +299,47 @@ describe('Round 4 PR-H: the reminder ceiling and the burst alarm', () => {
     expect(await events(REMINDER_BURST_CLEARED_CODE)).toHaveLength(1);
   });
 
-  it('counts a reminder raised hours ago (held overnight) as a backlog, never as a burst', async () => {
+  it('counts reminders as they are RAISED: a ceiling far below the threshold still opens the alarm, and a backlog claimed later never keeps it open', async () => {
+    // Codex review of PR #296: one a minute could never claim more than 60 in an hour, so a
+    // claim-based count would never pass a threshold of 100.
+    limits = { perMinute: 1, burstPerHour: 100 };
+    await deliver(-1_000);
+    await raiseReminders(130);
+    expect(await deliver()).toMatchObject({ claimed: 1 });
+    expect(await events(REMINDER_BURST_CODE)).toHaveLength(1);
+    // The backlog keeps leaving at one a minute, and those claims are not new raises: the
+    // hour after the burst one is quiet, so the condition closes while the backlog drains.
+    for (let minute = 1; minute <= 122; minute += 1) await deliver(minute * MINUTE_MS);
+    expect(await events(REMINDER_BURST_CLEARED_CODE)).toHaveLength(1);
+    expect(await pending()).toBeGreaterThan(0);
+  }, 900_000);
+
+  it('closes a stale burst after a gap: a whole quiet hour has passed with no pass at all', async () => {
+    // Codex review of PR #296: a worker down for over two hours must not judge the alarm on
+    // the burst hour's count when it comes back.
     limits = { perMinute: 50, burstPerHour: 3 };
+    await deliver(-1_000);
     await raiseReminders(8);
-    // Delivered two hours after it was raised: nothing fresh, no alarm.
-    expect(await deliver(2 * 60 * MINUTE_MS)).toMatchObject({ claimed: 8 });
-    expect(await events(REMINDER_BURST_CODE)).toEqual([]);
+    await deliver();
+    expect(await events(REMINDER_BURST_CODE)).toHaveLength(1);
+    await deliver(130 * MINUTE_MS);
+    expect(await events(REMINDER_BURST_CLEARED_CODE)).toHaveLength(1);
+    expect((await events(REMINDER_BURST_CODE))[0]?.resolved_at).not.toBeNull();
+  });
+
+  it('holds a queued reminder whose flag is switched off: not claimed, not sent, released when it is back on', async () => {
+    // Codex review of PR #296: the burst alarm's advice is to switch the flags off, so
+    // switching them off must halt what is already queued, not only what is raised next.
+    limits = { perMinute: 50, burstPerHour: 0 };
+    await raiseReminders(4);
+    flagsOff = new Set(['service_expiry_reminders']);
+    expect(await deliver()).toMatchObject({ claimed: 0 });
+    expect(await deliver(MINUTE_MS)).toMatchObject({ claimed: 0 });
+    expect(sends).toHaveLength(0);
+    expect(await pending()).toBe(4);
+    // Another family's switch does not hold these.
+    flagsOff = new Set(['service_usage_reminders']);
+    expect(await deliver(2 * MINUTE_MS)).toMatchObject({ claimed: 4, delivered: 4 });
+    expect(sends).toHaveLength(4);
   });
 });

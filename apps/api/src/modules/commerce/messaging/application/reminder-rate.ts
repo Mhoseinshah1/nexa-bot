@@ -2,6 +2,8 @@ import {
   REMINDER_BURST_CLEARED_CODE,
   REMINDER_BURST_CODE,
   type OperationalEventInput,
+  type CustomerNotificationKind,
+  type FeatureFlagKey,
   type OperationalEventRecorder,
   type TenantContext,
 } from '@nexa/contracts';
@@ -35,6 +37,25 @@ export interface ReminderRateWindow {
   readonly hourStartedAt: Date;
   readonly hourFresh: number;
   readonly burstOpen: boolean;
+  /**
+   * Codex review of PR #296: the raise counter's total this row last counted. The alarm
+   * counts reminders as they are RAISED (`ReminderRaiseCounter`), not as the ceiling lets
+   * them be claimed: with a threshold above `perMinute × 60` a claim-based count could never
+   * reach it however large the backlog.
+   */
+  readonly raisedSeen: bigint;
+}
+
+/**
+ * How many automatic reminders have ever been queued for the tenant — bumped by
+ * `CustomerNotifier` in the producer's transaction, read by the dispatcher WITHOUT a lock
+ * (`customer_reminder_raise_counters`, which says why it is its own row).
+ */
+export interface ReminderRaiseCounter {
+  /** Adds `count` raised reminders, in the producer's transaction. */
+  add(scope: TenantContext, count: number, now: Date, tx: TransactionScope): Promise<void>;
+  /** The total so far; zero before the first. */
+  total(scope: TenantContext, tx: TransactionScope): Promise<bigint>;
 }
 
 /** The row, locked for the claim's transaction. */
@@ -76,29 +97,69 @@ export function rollReminderWindow(
       hourStartedAt: now,
       hourFresh: 0,
       burstOpen: false,
+      raisedSeen: 0n,
       endedHourFresh: null,
     };
   }
   const minuteOver = now.getTime() - stored.minuteStartedAt.getTime() >= REMINDER_RATE_MINUTE_MS;
-  const hourOver = now.getTime() - stored.hourStartedAt.getTime() >= REMINDER_RATE_HOUR_MS;
+  const sinceHour = now.getTime() - stored.hourStartedAt.getTime();
+  const hourOver = sinceHour >= REMINDER_RATE_HOUR_MS;
   return {
     minuteStartedAt: minuteOver ? now : stored.minuteStartedAt,
     minuteClaimed: minuteOver ? 0 : stored.minuteClaimed,
     hourStartedAt: hourOver ? now : stored.hourStartedAt,
     hourFresh: hourOver ? 0 : stored.hourFresh,
     burstOpen: stored.burstOpen,
-    endedHourFresh: hourOver ? stored.hourFresh : null,
+    raisedSeen: stored.raisedSeen,
+    /*
+     * Codex review of PR #296: after a gap of two hours or more (a worker that was down, an
+     * installation with nothing to send), a whole hour with no pass has gone by — and no
+     * pass means nothing was counted in it, because the raise counter's difference is added
+     * to the NEW hour. So the hour that ended last is that empty one, not the stale burst
+     * hour, and an open alarm is closed on it rather than kept open by a count hours old.
+     */
+    endedHourFresh: !hourOver
+      ? null
+      : sinceHour >= 2 * REMINDER_RATE_HOUR_MS
+        ? 0
+        : stored.hourFresh,
   };
 }
 
 /**
- * Whether a claimed reminder counts toward the burst alarm: raised within the hour before
- * `now`. A reminder quiet hours held overnight, or one a rate limit kept back for hours, is
- * a backlog leaving late, not a burst of new facts. Pure.
+ * How many reminders were raised since this row last looked: the counter's growth, never
+ * negative (a counter that somehow went backwards counts nothing rather than a negative
+ * burst). A reminder quiet hours held overnight was counted the night it was raised, so a
+ * backlog leaving late is never a burst. Pure.
  */
-export function reminderIsFresh(createdAt: Date, now: Date): boolean {
-  return now.getTime() - createdAt.getTime() < REMINDER_RATE_HOUR_MS;
+export function reminderRaisesSince(seen: bigint, total: bigint): number {
+  return total > seen ? Number(total - seen) : 0;
 }
+
+/**
+ * Codex review of PR #296: the feature flag that switches each automatic reminder kind on.
+ * The dispatcher does not CLAIM a queued reminder whose flag is off, so switching a family
+ * off — the burst alarm's advice — halts what is already queued, not only what the sweeps
+ * would raise next. A held row stays PENDING with no attempt spent and nothing sent; it is
+ * claimed again once the flag is back on, and re-checked against its precondition then.
+ * Nothing about a row already handed to Telegram changes: only unclaimed rows are held.
+ */
+export const REMINDER_KIND_FLAGS: Readonly<
+  Partial<Record<CustomerNotificationKind, FeatureFlagKey>>
+> = {
+  SERVICE_EXPIRY_EARLY: 'service_expiry_reminders',
+  SERVICE_EXPIRY_FIRST: 'service_expiry_reminders',
+  SERVICE_EXPIRY_SECOND: 'service_expiry_reminders',
+  SERVICE_EXPIRY_DAY: 'service_expiry_day_reminder',
+  SERVICE_EXPIRED: 'service_expired_notice',
+  SERVICE_USAGE_FIRST: 'service_usage_reminders',
+  SERVICE_USAGE_SECOND: 'service_usage_reminders',
+  SERVICE_USAGE_FINAL: 'service_usage_reminders',
+  WALLET_LOW_BALANCE: 'wallet_low_balance_reminders',
+  PAYMENT_PENDING_REMINDER: 'payment_pending_reminders',
+  ORDER_PENDING_REMINDER: 'payment_pending_reminders',
+  RESELLER_MINIMUM_REMINDER: 'reseller_minimum_reminders',
+};
 
 /** How many reminders this pass may claim: what the minute leaves, within the pass's room. */
 export function reminderAllowance(
@@ -145,8 +206,9 @@ export function reminderBurstEvent(
       severity: 'ERROR',
       message:
         'More automatic reminders were raised in one hour than an ordinary hour produces. ' +
-        'They are still capped per minute; if this follows an import, switch the reminder ' +
-        'feature flags off and check the import baseline before they go out.',
+        'They are still capped per minute. To halt them, switch the reminder feature flags off: ' +
+        'queued reminders of a switched-off kind are held unsent. If this follows an import, ' +
+        'check the import baseline before switching them back on.',
       dedupeKey: REMINDER_BURST_DEDUPE_KEY,
       context: {
         freshThisHour: facts.hourFresh,
@@ -174,4 +236,12 @@ export interface ReminderRateDeps {
     tx: TransactionScope,
   ) => Promise<{ readonly perMinute: number; readonly burstPerHour: number }>;
   readonly opsLog: OperationalEventRecorder;
+  /** The producers' raise counter, read without a lock. */
+  readonly raises: ReminderRaiseCounter;
+  /** Whether a reminder flag is on, read in the claim's transaction. */
+  readonly isEnabled: (
+    scope: TenantContext,
+    key: FeatureFlagKey,
+    tx: TransactionScope,
+  ) => Promise<boolean>;
 }

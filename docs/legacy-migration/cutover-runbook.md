@@ -837,7 +837,9 @@ What to look for:
   import does not announce a period the previous bot handled either. Automatic reminders are
   capped per minute (`reminders.max_per_minute`, 300 by default) and more fresh reminders in an
   hour than `reminders.burst_alarm_per_hour` (1000) opens `notification.reminder_burst` in the
-  ops group's ERRORS topic. A burst is an incident: switch the reminder feature flags off, then
+  ops group's ERRORS topic. The alarm counts reminders as they are raised, whatever the
+  ceiling lets out. A burst is an incident: switch the reminder feature flags off — the
+  dispatcher then holds every queued reminder of a switched-off kind unsent — then
   investigate;
 - **errors**: no new open operational event caused by the import; `botctl logs` free of
   repeated errors;

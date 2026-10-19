@@ -687,6 +687,11 @@ export interface CustomerNotificationRepository {
      * first. Absent claims both, immediate first.
      */
     only?: 'IMMEDIATE' | 'QUIET',
+    /**
+     * Codex review of PR #296: kinds NOT to claim this pass — the reminders whose feature
+     * flag is off. They stay queued, unclaimed, with no attempt spent.
+     */
+    exceptKinds?: readonly CustomerNotificationKind[],
   ): Promise<readonly CustomerNotificationRecord[]>;
 
   /** Stamps a send as in flight, in its own transaction, before it leaves. */

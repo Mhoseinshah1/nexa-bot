@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CUSTOMER_NOTIFICATION_KINDS,
+  CUSTOMER_NOTIFICATION_QUIET_HOURS,
+  featureFlagDefinition,
+  type FeatureFlagKey,
   REMINDER_BURST_CLEARED_CODE,
   REMINDER_BURST_CODE,
   REMINDER_RATE_SETTING_KEYS,
@@ -14,7 +18,8 @@ import {
   decideReminderBurst,
   reminderAllowance,
   reminderBurstEvent,
-  reminderIsFresh,
+  REMINDER_KIND_FLAGS,
+  reminderRaisesSince,
   rollReminderWindow,
 } from '../../apps/api/src/modules/commerce/messaging/application/reminder-rate';
 
@@ -110,6 +115,7 @@ describe('the reminder ceiling', () => {
     hourStartedAt: T,
     hourFresh: 40,
     burstOpen: false,
+    raisedSeen: 7n,
   };
 
   it('starts both windows empty the first time', () => {
@@ -119,6 +125,7 @@ describe('the reminder ceiling', () => {
       hourStartedAt: T,
       hourFresh: 0,
       burstOpen: false,
+      raisedSeen: 0n,
       endedHourFresh: null,
     });
   });
@@ -151,9 +158,33 @@ describe('the reminder ceiling', () => {
     expect(reminderAllowance({ minuteClaimed: 0 }, 300, 120)).toBe(120);
   });
 
-  it('a reminder is fresh for an hour after it was raised', () => {
-    expect(reminderIsFresh(T, later(REMINDER_RATE_HOUR_MS - 1))).toBe(true);
-    expect(reminderIsFresh(T, later(REMINDER_RATE_HOUR_MS))).toBe(false);
+  it('after a gap of two hours, the hour that ended last is an empty one (Codex, PR #296)', () => {
+    expect(rollReminderWindow(stored, later(2 * REMINDER_RATE_HOUR_MS - 1))).toMatchObject({
+      endedHourFresh: 40,
+    });
+    expect(rollReminderWindow(stored, later(2 * REMINDER_RATE_HOUR_MS))).toMatchObject({
+      endedHourFresh: 0,
+      hourFresh: 0,
+      raisedSeen: 7n,
+    });
+  });
+
+  it('counts the raise counter’s growth, never a negative one', () => {
+    expect(reminderRaisesSince(7n, 19n)).toBe(12);
+    expect(reminderRaisesSince(7n, 7n)).toBe(0);
+    expect(reminderRaisesSince(9n, 7n)).toBe(0);
+  });
+
+  it('names a feature flag for every kind quiet hours hold, and for no other (Codex, PR #296)', () => {
+    const quiet = CUSTOMER_NOTIFICATION_KINDS.filter(
+      (kind) => CUSTOMER_NOTIFICATION_QUIET_HOURS[kind],
+    );
+    expect(Object.keys(REMINDER_KIND_FLAGS).sort()).toEqual([...quiet].sort());
+    for (const flag of Object.values(REMINDER_KIND_FLAGS)) {
+      expect(() => featureFlagDefinition(flag as FeatureFlagKey)).not.toThrow();
+    }
+    expect(REMINDER_KIND_FLAGS.SERVICE_EXPIRED).toBe('service_expired_notice');
+    expect(REMINDER_KIND_FLAGS.ORDER_PENDING_REMINDER).toBe('payment_pending_reminders');
   });
 });
 

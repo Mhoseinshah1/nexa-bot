@@ -9952,14 +9952,45 @@ export const customerNotificationRateWindows = pgTable(
     hourStartedAt: timestamptz('hour_started_at').notNull(),
     hourFresh: integer('hour_fresh').notNull(),
     burstOpen: boolean('burst_open').notNull().default(false),
+    /**
+     * Codex review of PR #296: the last `customer_reminder_raise_counters.raised_total` this
+     * row has counted. `hour_fresh` grows by the difference on each pass, so the burst alarm
+     * counts reminders as they are RAISED, whatever the ceiling lets the claim take.
+     */
+    raisedSeen: bigint('raised_seen', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
     updatedAt: timestamptz('updated_at').notNull(),
   },
   () => [
     check(
       'customer_notification_rate_windows_counts_check',
-      sql`minute_claimed >= 0 AND hour_fresh >= 0`,
+      sql`minute_claimed >= 0 AND hour_fresh >= 0 AND raised_seen >= 0`,
     ),
   ],
+);
+
+/**
+ * Codex review of PR #296: how many automatic reminders (the kinds quiet hours hold) have
+ * ever been QUEUED for a tenant — a monotonic counter, bumped by `CustomerNotifier` in the
+ * producer's own transaction, so it commits with the rows it counts.
+ *
+ * Its own row, apart from `customer_notification_rate_windows`, on purpose: the dispatcher
+ * locks that row for its claim, and a sweep that also had to lock it would sit in a lock
+ * cycle with a dispatcher holding the notification row the sweep's insert waits on. The
+ * dispatcher only READS this one, without a lock, and counts the difference since its last
+ * pass.
+ */
+export const customerReminderRaiseCounters = pgTable(
+  'customer_reminder_raise_counters',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    raisedTotal: bigint('raised_total', { mode: 'bigint' }).notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  () => [check('customer_reminder_raise_counters_total_check', sql`raised_total >= 0`)],
 );
 
 // --- Customer UX completion (docs/customer-ux-completion-audit.md) -------------

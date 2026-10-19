@@ -319,6 +319,25 @@ describe('Round 4 PR-H: the first sweeps after an import send nothing historical
     expect(await kindsSent()).toEqual(['SERVICE_USAGE_SECOND']);
   });
 
+  it('added traffic after the import is a new period too: its re-armed expiry reminder is told (Codex, PR #296)', async () => {
+    // Eight days out at the import: nothing behind it under the defaults.
+    const [id] = await importServices(1, 70_000);
+    await exec(sql`
+      UPDATE services SET state = 'ACTIVE',
+                          expires_at = ${new Date(T0.getTime() + 8 * DAY_MS)},
+                          traffic_used_bytes = 0
+       WHERE id = ${id ?? ''}`);
+    await seedAll([id ?? '']);
+    // The customer buys traffic after the import: the allowance moves, the deadline does not.
+    await exec(sql`UPDATE services SET traffic_limit_bytes = ${LIMIT * 2n}::bigint
+                    WHERE id = ${id ?? ''}`);
+    // A week-out warning at ten days is now due for this new period. It was "already behind"
+    // the service at the import only for the OLD period, so it is told.
+    overrides['reminders.expiry_early_days'] = 10;
+    expect(await drain(T0.getTime() + 60_000)).toMatchObject({ sent: 1 });
+    expect(await kindsSent()).toEqual(['SERVICE_EXPIRY_EARLY']);
+  });
+
   it('a renewal after the import is a new period, and its reminders are told', async () => {
     const [id] = await importServices(1, 30_000);
     await exec(sql`UPDATE services SET state = 'EXPIRED',

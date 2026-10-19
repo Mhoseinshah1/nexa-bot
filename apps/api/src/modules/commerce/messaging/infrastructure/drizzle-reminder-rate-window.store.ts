@@ -1,11 +1,18 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { TenantContext } from '@nexa/contracts';
 import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { customerNotificationRateWindows } from '../../../../infrastructure/persistence/schema.js';
-import type { ReminderRateWindow, ReminderRateWindowStore } from '../application/reminder-rate.js';
+import {
+  customerNotificationRateWindows,
+  customerReminderRaiseCounters,
+} from '../../../../infrastructure/persistence/schema.js';
+import type {
+  ReminderRaiseCounter,
+  ReminderRateWindow,
+  ReminderRateWindowStore,
+} from '../application/reminder-rate.js';
 
 /**
  * Round 4 PR-H: the reminder ceiling's one row per tenant, read under `FOR UPDATE` and
@@ -47,6 +54,7 @@ export class DrizzleReminderRateWindowStore implements ReminderRateWindowStore {
       hourStartedAt: row.hourStartedAt,
       hourFresh: row.hourFresh,
       burstOpen: row.burstOpen,
+      raisedSeen: row.raisedSeen,
     };
   }
 
@@ -65,8 +73,41 @@ export class DrizzleReminderRateWindowStore implements ReminderRateWindowStore {
         hourStartedAt: window.hourStartedAt,
         hourFresh: window.hourFresh,
         burstOpen: window.burstOpen,
+        raisedSeen: window.raisedSeen,
         updatedAt: now,
       })
       .where(eq(customerNotificationRateWindows.tenantId, tenantId));
+  }
+}
+
+/**
+ * Codex review of PR #296: the producers' raise counter. `add` is an upsert in the
+ * producer's transaction (two sweeps are serialised by the row); `total` is a plain read
+ * with no lock, so the dispatcher never waits on a sweep — see the table for why that
+ * matters.
+ */
+export class DrizzleReminderRaiseCounter implements ReminderRaiseCounter {
+  async add(scope: TenantContext, count: number, now: Date, tx: TransactionScope): Promise<void> {
+    if (count <= 0) return;
+    const tenantId = requireTenantId(scope);
+    await tx.tx
+      .insert(customerReminderRaiseCounters)
+      .values({ tenantId, raisedTotal: BigInt(count), updatedAt: now })
+      .onConflictDoUpdate({
+        target: customerReminderRaiseCounters.tenantId,
+        set: {
+          raisedTotal: sql`${customerReminderRaiseCounters.raisedTotal} + ${BigInt(count)}`,
+          updatedAt: now,
+        },
+      });
+  }
+
+  async total(scope: TenantContext, tx: TransactionScope): Promise<bigint> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await tx.tx
+      .select({ total: customerReminderRaiseCounters.raisedTotal })
+      .from(customerReminderRaiseCounters)
+      .where(eq(customerReminderRaiseCounters.tenantId, tenantId));
+    return row?.total ?? 0n;
   }
 }

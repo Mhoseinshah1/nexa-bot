@@ -61,9 +61,9 @@ export interface ServiceReminderCandidate {
  * service's CURRENT period.
  *
  * `at` is when the import created the service. `usedBytes` is the figure the import read,
- * or null when the usage half has no baseline: nothing was measured, or the allowance has
- * changed since. The expiry half applies only while the deadline is the imported one; the
- * query returns null for the whole baseline otherwise.
+ * or null when nothing was measured. The baseline applies only while the period is the
+ * imported one — the deadline AND the allowance; the query returns null for the whole
+ * baseline otherwise.
  */
 export interface ServiceImportBaseline {
   readonly at: Date;

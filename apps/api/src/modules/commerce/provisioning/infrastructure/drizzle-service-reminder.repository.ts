@@ -41,10 +41,11 @@ interface CandidateRow {
  * from the row aliased `b` (`service_reminder_baselines`, LEFT JOINed) — selected beside the
  * candidate so the sweep's decision and the query's row cannot disagree.
  *
- * - With a baseline row: `baseline_at` while the deadline is still the imported one (the
- *   expiry basis, compared exactly as `service_reminders` compares it), `baseline_used_bytes`
- *   while the allowance is too. A renewal or added traffic is a new period, and the row
- *   then says nothing about it.
+ * - With a baseline row: both, while the period is still the imported one — the deadline
+ *   AND the allowance, the two columns `service_reminders_period_key` keys a period on.
+ *   A renewal or added traffic is a new period (added traffic re-arms the expiry kinds too,
+ *   the stated cost on that key), and the row then says nothing about it (Codex review of
+ *   PR #296: comparing the deadline alone swallowed a re-armed expiry reminder).
  * - An IMPORTED service with no row — one an earlier release adopted, before the row
  *   existed: its creation is when the import made it, so that is `baseline_at`, and the
  *   figure on the row is the import's only while no later sync has replaced it
@@ -59,7 +60,9 @@ const IMPORT_BASELINE_JOIN = sql`
 const IMPORT_BASELINE_COLUMNS = sql`
   CASE
     WHEN b.service_id IS NOT NULL THEN
-      CASE WHEN b.basis_expires_at IS NOT DISTINCT FROM s.expires_at THEN b.baseline_at END
+      CASE WHEN b.basis_expires_at IS NOT DISTINCT FROM s.expires_at
+                AND b.basis_traffic_limit_bytes = s.traffic_limit_bytes
+           THEN b.baseline_at END
     WHEN s.source <> 'NEXA' THEN s.created_at
   END AS baseline_at,
   CASE
