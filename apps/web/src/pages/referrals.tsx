@@ -355,7 +355,6 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
-          dense
         />
         {/* `GET /referrals` pages newest to oldest. */}
         <CursorPager
@@ -570,7 +569,6 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
-          dense
           detail={{ label: t('web.referral_row_detail'), render: rowDetail }}
         />
         {/* `GET /referral-commissions` pages newest to oldest. */}

@@ -752,7 +752,6 @@ function DiscountRules({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
           />
           <CursorPager
             order="oldest-first"
@@ -1829,7 +1828,6 @@ function CashbackRules({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
           />
           <CursorPager
             order="oldest-first"
