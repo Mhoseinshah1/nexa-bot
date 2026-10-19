@@ -300,6 +300,50 @@ export function CodeValue({
   );
 }
 
+/**
+ * A technical identifier shown as itself: left to right, monospace, its full value in the
+ * tooltip — and no copy button. The demo draws list identifiers this way (X7); `Copyable`
+ * stays for a detail view, where copying the whole value is the point. `display` shortens
+ * what is drawn (a uuid's first eight characters); the full value is still the title.
+ */
+export function IdText({ value, display }: { value: string; display?: string }) {
+  return (
+    <span className="ltr mono id-text" title={value}>
+      {display ?? value}
+    </span>
+  );
+}
+
+/**
+ * A linkable identifier — a name, a code, an order or payment id, a tracking code, a
+ * campaign title — drawn as the demo's underlined link (X7). `mono` isolates it left to
+ * right in the code face, for an id; a name keeps the body font. Navigation goes through the
+ * router (`useLinkHandler`), so a plain click never reloads the admin.
+ */
+export function RefLink({
+  href,
+  children,
+  mono = false,
+  title,
+}: {
+  href: string;
+  children: ReactNode;
+  mono?: boolean;
+  title?: string;
+}) {
+  const onLink = useLinkHandler();
+  return (
+    <a
+      className={cx('lk', mono && 'ltr mono')}
+      href={href}
+      onClick={onLink}
+      {...(title === undefined ? {} : { title })}
+    >
+      {children}
+    </a>
+  );
+}
+
 /* --------------------------------------------------------------- badges --- */
 
 export function Badge({

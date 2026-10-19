@@ -28,7 +28,7 @@ import {
   Banner,
   Button,
   Card,
-  Copyable,
+  IdText,
   CursorPager,
   DataTable,
   Empty,
@@ -459,7 +459,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
     {
       key: 'actor',
       header: t('web.trials_history_actor'),
-      render: (row) => <Copyable value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />,
+      render: (row) => <IdText value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />,
     },
   ];
 

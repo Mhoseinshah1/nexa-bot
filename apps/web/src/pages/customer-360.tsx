@@ -83,6 +83,7 @@ import {
   Button,
   Card,
   Copyable,
+  IdText,
   CursorPager,
   DataTable,
   DetailHead,
@@ -1432,7 +1433,7 @@ function WalletCard({
         row.actorAdminId === null ? (
           <span className="faint">{t('web.wallet_actor_system')}</span>
         ) : (
-          <Copyable value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />
+          <IdText value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />
         ),
     },
     {
