@@ -147,7 +147,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
           )}
 
           {/* The four facts an operator looks for first — every one a field of the answer. */}
-          <div className="fx-strip" data-testid="fx-strip">
+          <div className="stat-grid fx-strip" data-testid="fx-strip">
             <Stat
               label={t('web.fx_state')}
               value={
