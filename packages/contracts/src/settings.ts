@@ -37,6 +37,15 @@ import {
   BACKUP_LOCAL_COPIES_MIN,
   BACKUP_LOCAL_COPIES_SETTING_KEY,
 } from './backup.js';
+import {
+  DATA_RETENTION_SETTING_KEYS,
+  IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
+  IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_MAX,
+  IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_MIN,
+  OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
+  OUTBOX_PUBLISHED_RETENTION_DAYS_MAX,
+  OUTBOX_PUBLISHED_RETENTION_DAYS_MIN,
+} from './data-retention.js';
 import { uuidV7Schema } from './ids.js';
 import { connectionFileCaptionTemplateIssues } from './templates.js';
 import {
@@ -528,6 +537,48 @@ export const SETTINGS = [
     schema: z.number().int().min(BACKUP_LOCAL_COPIES_MIN).max(BACKUP_LOCAL_COPIES_MAX),
     defaultValue: BACKUP_LOCAL_COPIES_DEFAULT,
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /**
+   * E3: how long a PUBLISHED outbox message is kept. Unpublished ones are kept whatever
+   * their age (`data-retention.ts`).
+   */
+  {
+    key: DATA_RETENTION_SETTING_KEYS.outboxPublishedDays,
+    description:
+      'How many days a PUBLISHED outbox event is kept before the worker removes it, between ' +
+      `${String(OUTBOX_PUBLISHED_RETENTION_DAYS_MIN)} and ${String(OUTBOX_PUBLISHED_RETENTION_DAYS_MAX)}. ` +
+      'An event that is not yet published is never removed, whatever its age.',
+    schema: z
+      .number()
+      .int()
+      .min(OUTBOX_PUBLISHED_RETENTION_DAYS_MIN)
+      .max(OUTBOX_PUBLISHED_RETENTION_DAYS_MAX),
+    defaultValue: OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /** E3: how long an interactive (Web Admin, Telegram) idempotency key is kept. */
+  {
+    key: DATA_RETENTION_SETTING_KEYS.idempotencyInteractiveDays,
+    description:
+      'How many days a Web Admin or Telegram idempotency key is kept, between ' +
+      `${String(IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_MIN)} and ` +
+      `${String(IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_MAX)}. Keys of background jobs and ` +
+      'the importer are never removed: they are what makes a re-run safe.',
+    schema: z
+      .number()
+      .int()
+      .min(IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_MIN)
+      .max(IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_MAX),
+    defaultValue: IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,
