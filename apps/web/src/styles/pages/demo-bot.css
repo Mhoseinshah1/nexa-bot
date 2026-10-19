@@ -163,7 +163,7 @@
  * height-limited pane instead (nexa-web-design), so the page itself stays short.
  */
 .feature-pane {
-  max-block-size: calc(100vh - 260px);
+  max-block-size: calc(100vh - 320px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
