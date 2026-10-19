@@ -48,6 +48,7 @@ import { FilePicker } from '../ui/file-picker';
 import { Icon } from '../ui/icons';
 import { BackupScheduleCard } from './backup-schedule';
 import { BackupPasswordCard } from './backup-password';
+import { LegacyCompactionCard } from './legacy-compaction';
 import { assembleParts } from '../backup-parts';
 import { CodeName } from './code-name';
 import { RecoveryKitSection } from './recovery-kit';
@@ -288,6 +289,13 @@ export function RecoveryPage({
           </StateSwitch>
         )}
       </Card>
+
+      {/* E1: compacting the imported legacy data, for a reader of the migration. */}
+      {mirza.mayView && (
+        <Card title={t('web.lcp_title')}>
+          <LegacyCompactionCard mayApply={mirza.mayApply} />
+        </Card>
+      )}
 
       <Card title={t('web.recovery_requests_title')}>
         <StateSwitch

@@ -147,7 +147,7 @@ describe('backup parts, the 7-Zip archive and local-copy retention (E4)', () => 
     const run = await completedRun(16 * 1024);
     expect(run.state).toBe('SUCCEEDED');
     expect(run.archiveFormat).toBe('SEVEN_ZIP');
-    expect(run.archivePasswordId).not.toBeNull();
+    expect(run.archiveSealId).not.toBeNull();
     expect(run.partCount).toBeGreaterThan(1);
     const archivePath = join(workDir, run.id, 'archive.7z');
     const archive = await readFile(archivePath);

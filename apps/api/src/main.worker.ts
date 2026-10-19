@@ -321,6 +321,8 @@ async function main(): Promise<void> {
   // and overdue conditions. Asks the same quiesce predicate, and does nothing during
   // a recovery.
   container.backupHousekeeping.start();
+  // E1: the owner's legacy-data compaction, once requested. Idle otherwise.
+  container.legacyCompactionExecutor.start();
   container.logger.info(
     {
       environmentDefault: {

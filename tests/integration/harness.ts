@@ -134,7 +134,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- before the bots, payments and tenants they name.
        telegram_message_horizons, telegram_review_messages, telegram_wizards,
        bot_instances, tenants,
-       backup_runs, backup_run_parts, backup_archive_passwords, recovery_requests,
+       backup_runs, backup_run_parts, backup_archive_passwords, legacy_compaction_runs, recovery_requests,
        -- ADR-0032: the imported decrypt-only keys. Installation-wide, no tenant to cascade from.
        installation_keys,
        -- The Phase 4 tables, listed EXPLICITLY rather than left to CASCADE.

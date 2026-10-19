@@ -388,6 +388,9 @@ import {
   recoveryListResponseSchema,
   runBackupResponseSchema,
   setBackupArchivePasswordResponseSchema,
+  LEGACY_COMPACTION_ROUTES,
+  legacyCompactionStatusResponseSchema,
+  type LegacyCompactionStatusResponse,
   type SetBackupArchivePasswordResponse,
   type BackupHistoryResponse,
   type BackupStatusResponse,
@@ -2835,6 +2838,19 @@ export function runBackupNow(input: { idempotencyKey: string }): Promise<RunBack
  */
 export function backupArchiveUrl(id: string): string {
   return `${API_PREFIX}${BACKUP_ROUTES.download(id)}`;
+}
+
+/** E1: the legacy-data compaction's precondition and its latest run. */
+export function fetchLegacyCompaction(): Promise<LegacyCompactionStatusResponse> {
+  return authedGet(LEGACY_COMPACTION_ROUTES.status, legacyCompactionStatusResponseSchema);
+}
+
+/** E1: the owner's typed confirmation. The worker does the work, never this request. */
+export function requestLegacyCompaction(input: {
+  idempotencyKey: string;
+  phrase: string;
+}): Promise<LegacyCompactionStatusResponse> {
+  return post(LEGACY_COMPACTION_ROUTES.request, input, legacyCompactionStatusResponseSchema);
 }
 
 /** One part of a split archive (E4), exactly as it was delivered to Telegram. */

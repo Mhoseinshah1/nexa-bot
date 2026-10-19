@@ -238,6 +238,11 @@ import { planArchiveParts } from './modules/platform/backup/infrastructure/archi
 import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
 import { purgeExpiredIdempotencyBefore } from './modules/platform/idempotency/infrastructure/idempotency-retention.js';
 import { BackupPasswordService } from './modules/platform/backup/application/backup-password.service.js';
+import {
+  LegacyCompactionExecutor,
+  LegacyCompactionService,
+} from './modules/platform/legacy-compaction/application/legacy-compaction.service.js';
+import { DrizzleLegacyCompactionRepository } from './modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
 import { RoutedBackupDelivery } from './modules/platform/backup/application/routed-backup-delivery.js';
@@ -1490,6 +1495,9 @@ export interface Container {
   readonly backupArchiver: DualFormatBackupArchiver;
   /** The owner-set backup password (E4): set and status. Never returns the password. */
   readonly backupPasswords: BackupPasswordService;
+  /** E1: the owner's compaction of the imported legacy data, and the worker that runs it. */
+  readonly legacyCompaction: LegacyCompactionService;
+  readonly legacyCompactionExecutor: LegacyCompactionExecutor;
   readonly backupTools: PostgresDatabaseTools;
   /**
    * The Recovery Kit (ADR-0032): the keyring every cipher in this process reads
@@ -7010,6 +7018,40 @@ export function createContainer(
     verifyStepUp: (scope, actor, stepUp, context, action) =>
       adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
   });
+  const legacyCompactionRepository = new DrizzleLegacyCompactionRepository(database.db);
+  const legacyCompaction = new LegacyCompactionService({
+    repository: legacyCompactionRepository,
+    uow,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    clock,
+    ids,
+    idempotency,
+    scopeActivity: tenants,
+  });
+  /*
+   * E1: STARTED in the worker only (`main.worker.ts`), beside the backup scheduler whose
+   * pipeline takes the «آرشیو ربات قبلی» archive. Never in the api process: the work is
+   * long, and deletes, and VACUUM FULL locks the history tables for its duration.
+   */
+  const legacyCompactionExecutor = new LegacyCompactionExecutor({
+    repository: legacyCompactionRepository,
+    uow,
+    audit,
+    opsLog,
+    scopeActivity: tenants,
+    clock,
+    backup: { run: (trigger, options) => backup.run(trigger, options) },
+    backupParts: (backupId) => backupRuns.parts(backupId),
+    quiesced: () => recoveryQuiesced(),
+    actor: () => systemJobActor('legacy-compaction', newCorrelationId(ids.uuid())),
+    leaseOwner,
+    batchSize: 5_000,
+    tickIntervalMs: 60_000,
+    logger,
+  });
   const backupAdmin = new BackupAdminService({
     runs: backupRuns,
     archivePassword: (scope) => backupPasswords.status(scope),
@@ -7925,6 +7967,8 @@ export function createContainer(
     backupRuns,
     backupArchiver,
     backupPasswords,
+    legacyCompaction,
+    legacyCompactionExecutor,
     backupTools,
     recoveryService,
     backupAdmin,
@@ -7986,6 +8030,7 @@ export function createContainer(
       installationKeyLoader.stop();
       backupScheduler.stop();
       backupHousekeeping.stop();
+      legacyCompactionExecutor.stop();
       recoveryExecutor.stop();
       migrationExecutor.stop();
       await relay.stop();

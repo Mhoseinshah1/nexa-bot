@@ -63,7 +63,7 @@ function toRow(row: Row): BackupRunRow {
     archivePrunedAt: row.archivePrunedAt,
     archiveFormat: row.archiveFormat as BackupArchiveFormat | null,
     partCount: row.partCount,
-    archivePasswordId: row.archivePasswordId,
+    archiveSealId: row.archiveSealId,
     summaryDeliveryState: row.summaryDeliveryState as BackupDeliveryState | null,
   };
 }
@@ -321,7 +321,7 @@ export class DrizzleBackupRunRepository
     cleanupDetail?: string | null;
     archiveFormat?: BackupArchiveFormat | null;
     partCount?: number | null;
-    archivePasswordId?: string | null;
+    archiveSealId?: string | null;
     summaryDeliveryState?: BackupDeliveryState | null;
   }): Promise<void> {
     await this.db
@@ -329,7 +329,7 @@ export class DrizzleBackupRunRepository
       .set({
         archiveFormat: input.archiveFormat ?? null,
         partCount: input.partCount ?? null,
-        archivePasswordId: input.archivePasswordId ?? null,
+        archiveSealId: input.archiveSealId ?? null,
         summaryDeliveryState: input.summaryDeliveryState ?? null,
         state: input.state,
         stage: input.stage,

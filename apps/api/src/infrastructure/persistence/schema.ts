@@ -22,6 +22,8 @@ import {
   ACTOR_TYPES,
   ADMIN_STATUSES,
   BACKUP_ARCHIVE_FORMATS,
+  LEGACY_COMPACTION_FAILURE_CODES,
+  LEGACY_COMPACTION_STATES,
   BACKUP_DELIVERY_STATES,
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
@@ -3058,7 +3060,7 @@ export const backupRuns = pgTable(
      */
     archiveFormat: text('archive_format'),
     partCount: integer('part_count'),
-    archivePasswordId: uuid('archive_password_id'),
+    archiveSealId: uuid('archive_seal_id'),
     summaryDeliveryState: text('summary_delivery_state'),
   },
   (table) => [
@@ -14694,6 +14696,61 @@ export const legacyHistoryRecords = pgTable(
       'legacy_history_records_shape_check',
       sql`idempotency_key LIKE 'legacy:%' AND char_length(idempotency_key) BETWEEN 8 AND 512 AND char_length(package_import_id) BETWEEN 1 AND 200 AND (legacy_user_id IS NULL OR char_length(legacy_user_id) BETWEEN 1 AND 64) AND jsonb_typeof(payload) = 'object'`,
     ),
+  ],
+);
+
+/**
+ * The compaction of the imported legacy data (Round 4 PR-E, E1): one row per run, the
+ * worker's durable, resumable state. `cursor` is the last id the current stage committed,
+ * so a restarted worker resumes the batch after it; `archive_backup_id` is the
+ * «آرشیو ربات قبلی» backup that MUST be delivered in full before anything is deleted;
+ * `before`/`after` are the report (sizes per table, rows per record type). Every state
+ * change is a conditional UPDATE naming its `from` state. One active run per tenant.
+ */
+export const legacyCompactionRuns = pgTable(
+  'legacy_compaction_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    state: text('state').notNull(),
+    requestedAt: timestamptz('requested_at').notNull(),
+    requestedByAdminId: uuid('requested_by_admin_id').references(() => admins.id),
+    requestedByLabel: text('requested_by_label'),
+    updatedAt: timestamptz('updated_at').notNull(),
+    leaseOwner: text('lease_owner'),
+    leaseHeartbeatAt: timestamptz('lease_heartbeat_at'),
+    archiveBackupId: uuid('archive_backup_id'),
+    cursor: uuid('cursor'),
+    deleted: bigint('deleted', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    deduplicated: bigint('deduplicated', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    stripped: bigint('stripped', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    before: jsonb('before'),
+    after: jsonb('after'),
+    failureCode: text('failure_code'),
+    finishedAt: timestamptz('finished_at'),
+  },
+  (table) => [
+    check('legacy_compaction_runs_state_check', enumCheck('state', LEGACY_COMPACTION_STATES)),
+    check(
+      'legacy_compaction_runs_failure_code_check',
+      enumCheck('failure_code', LEGACY_COMPACTION_FAILURE_CODES),
+    ),
+    check(
+      'legacy_compaction_runs_finished_check',
+      sql`(state IN ('COMPLETED', 'FAILED')) = (finished_at IS NOT NULL)`,
+    ),
+    uniqueIndex('legacy_compaction_runs_one_active_idx')
+      .on(table.tenantId)
+      .where(sql`state NOT IN ('COMPLETED', 'FAILED')`),
+    index('legacy_compaction_runs_tenant_requested_idx').on(table.tenantId, table.requestedAt),
   ],
 );
 

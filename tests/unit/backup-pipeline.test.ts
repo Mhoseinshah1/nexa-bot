@@ -145,7 +145,7 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
       archivePrunedAt: null,
       archiveFormat: null,
       partCount: null,
-      archivePasswordId: null,
+      archiveSealId: null,
       summaryDeliveryState: null,
     };
     this.rows.set(row.id, row);
@@ -191,7 +191,7 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
     cleanupDetail?: string | null;
     archiveFormat?: BackupRunRow['archiveFormat'];
     partCount?: number | null;
-    archivePasswordId?: string | null;
+    archiveSealId?: string | null;
     summaryDeliveryState?: BackupDeliveryState | null;
   }): Promise<void> {
     this.writes.push(`finish:${input.state}`);
@@ -215,7 +215,7 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
       cleanupDetail: input.cleanupDetail ?? null,
       archiveFormat: input.archiveFormat ?? null,
       partCount: input.partCount ?? null,
-      archivePasswordId: input.archivePasswordId ?? null,
+      archiveSealId: input.archiveSealId ?? null,
       summaryDeliveryState: input.summaryDeliveryState ?? null,
     });
   }

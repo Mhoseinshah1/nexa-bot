@@ -15,6 +15,10 @@ import {
   RECOVERY_ROUTES,
   recoveryConfirmationSchema,
   recoveryVerifyRequestSchema,
+  LEGACY_COMPACTION_ROUTES,
+  requestLegacyCompactionSchema,
+  type LegacyCompactionRun,
+  type LegacyCompactionStatusResponse,
   runBackupRequestSchema,
   setBackupArchivePasswordRequestSchema,
   uuidV7Schema,
@@ -36,6 +40,7 @@ import { singleValued } from './query.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { BackupRunView } from '../../modules/platform/recovery/application/backup-admin.service.js';
 import type { RecoveryRequestRow } from '../../modules/platform/recovery/application/ports.js';
+import type { LegacyCompactionRow } from '../../modules/platform/legacy-compaction/application/ports.js';
 
 /**
  * Backup and disaster recovery over HTTP.
@@ -225,6 +230,35 @@ export class RecoveryController {
               end: artifact.range.end - 1,
             }),
       );
+  }
+
+  // --- E1: compacting the imported legacy data ------------------------------
+
+  @Get(LEGACY_COMPACTION_ROUTES.status)
+  async legacyCompactionStatus(
+    @Req() request: FastifyRequest,
+  ): Promise<LegacyCompactionStatusResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const status = await this.container.legacyCompaction.status(scope, actor);
+    return {
+      available: status.available,
+      run: status.run === null ? null : toCompactionRun(status.run),
+    };
+  }
+
+  /**
+   * The owner's request. Writes one REQUESTED row; the worker does the work, never this
+   * request (the archive backup, the deletes and VACUUM FULL are all long).
+   */
+  @Post(LEGACY_COMPACTION_ROUTES.request)
+  async requestLegacyCompaction(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<LegacyCompactionStatusResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const command = requestLegacyCompactionSchema.parse(body);
+    const run = await this.container.legacyCompaction.request(scope, actor, command);
+    return { available: false, run: toCompactionRun(run) };
   }
 
   // --- Recovery ------------------------------------------------------------
@@ -498,6 +532,25 @@ function toRunSummary(view: BackupRunView): BackupRunSummary {
       deliveryState: part.deliveryState,
     })),
     summaryDeliveryState: run.summaryDeliveryState,
+  };
+}
+
+/** A compaction run as JSON: counts and sizes, never a record value. */
+function toCompactionRun(row: LegacyCompactionRow): LegacyCompactionRun {
+  return {
+    id: row.id,
+    state: row.state,
+    requestedAt: row.requestedAt.toISOString(),
+    requestedBy: row.requestedByLabel,
+    updatedAt: row.updatedAt.toISOString(),
+    archiveBackupId: row.archiveBackupId,
+    deleted: Number(row.deleted),
+    deduplicated: Number(row.deduplicated),
+    stripped: Number(row.stripped),
+    before: row.before as LegacyCompactionRun['before'],
+    after: row.after as LegacyCompactionRun['after'],
+    failureCode: row.failureCode,
+    finishedAt: row.finishedAt?.toISOString() ?? null,
   };
 }
 

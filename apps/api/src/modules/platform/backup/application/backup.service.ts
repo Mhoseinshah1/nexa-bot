@@ -202,7 +202,15 @@ export class BackupService {
      * holds every imported customer). Every other stage, the lock and the verification are
      * the same run's.
      */
-    options: { readonly deliver?: boolean } = {},
+    options: {
+      readonly deliver?: boolean;
+      /**
+       * E1: the headline the delivered parts and summary carry instead of «بکاپ» — the
+       * one-time «آرشیو ربات قبلی» the legacy compaction takes before deleting anything.
+       * Recorded nowhere else: the run is an ordinary, complete, verified backup.
+       */
+      readonly title?: string;
+    } = {},
   ): Promise<BackupOutcome> {
     // Release any lock whose owner died before it could. Done first, and by
     // FAILING the abandoned run rather than adopting it: its files belong to a
@@ -294,7 +302,7 @@ export class BackupService {
     let deliveryDetail: string | null = null;
     let archiveFormat: BackupArchiveFormat | null = null;
     let partCount: number | null = null;
-    let archivePasswordId: string | null = null;
+    let archiveSealId: string | null = null;
     let summaryDeliveryState: BackupDeliveryState | null = null;
 
     try {
@@ -370,7 +378,7 @@ export class BackupService {
       });
       archiveBytes = BigInt(sealed.archiveBytes);
       archiveFormat = sealed.format ?? 'NXB';
-      archivePasswordId = sealed.passwordId ?? null;
+      archiveSealId = sealed.passwordId ?? null;
       const archivePath = sealed.archivePath ?? workspace.archivePath;
       // The parts: ranges of THIS file, each with its own SHA-256, planned before the
       // verification so that a failure to read the archive fails the run, not the delivery.
@@ -439,6 +447,7 @@ export class BackupService {
               format: archiveFormat,
               parts,
               tableCount: verified.tableCount,
+              ...(options.title === undefined ? {} : { title: options.title }),
             });
       deliveryState = delivered.state;
       deliveryDetail = delivered.detail;
@@ -505,7 +514,7 @@ export class BackupService {
         cleanupDetail: cleanupOk ? null : leftovers.join(', '),
         archiveFormat,
         partCount,
-        archivePasswordId,
+        archiveSealId,
         summaryDeliveryState,
       });
     } catch (error) {
@@ -578,7 +587,7 @@ export class BackupService {
         cleanupDetail: leftovers.length === 0 ? null : leftovers.join(', '),
         archiveFormat,
         partCount,
-        archivePasswordId,
+        archiveSealId,
         summaryDeliveryState,
       });
     } finally {
@@ -686,6 +695,7 @@ export class BackupService {
     format: BackupArchiveFormat;
     parts: readonly BackupArchivePart[];
     tableCount: number;
+    title?: string;
   }): Promise<DeliveryResult> {
     /*
      * WHERE, decided now, once, for this run (spec §13.1): the operations group's backups
@@ -759,6 +769,7 @@ export class BackupService {
             restoreCommand: this.deps.restoreCommand,
             tableCount: input.tableCount,
             postgresVersion: input.manifest.postgresVersion,
+            ...(input.title === undefined ? {} : { title: input.title }),
           }),
           // One part is the whole file; several are ranges of it.
           ...(count === 1 ? {} : { range: { start: part.start, end: part.end } }),
@@ -815,6 +826,7 @@ export class BackupService {
             dumpChecksum: input.manifest.checksum,
             restoreInstruction: BACKUP_SEVEN_ZIP_RESTORE_INSTRUCTION,
             restoreCommand: this.deps.restoreCommand,
+            ...(input.title === undefined ? {} : { title: input.title }),
           }),
         );
       } catch (error) {

@@ -1,5 +1,5 @@
 {
-  "id": "01354c5f-a1f8-4dda-ae60-4cdea820e6f4",
+  "id": "2827bae8-59b9-4557-85b4-80373fd07c30",
   "prevId": "4042387b-16ec-4223-9168-7e285af2fc9e",
   "version": "7",
   "dialect": "postgresql",
@@ -2267,8 +2267,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "archive_password_id": {
-          "name": "archive_password_id",
+        "archive_seal_id": {
+          "name": "archive_seal_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false

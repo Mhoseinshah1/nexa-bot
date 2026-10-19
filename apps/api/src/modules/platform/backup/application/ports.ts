@@ -312,7 +312,7 @@ export interface BackupRunRow {
   /** How many parts the archive was split into, once planned. */
   readonly partCount: number | null;
   /** Which stored backup password sealed a `SEVEN_ZIP` archive. Never the password. */
-  readonly archivePasswordId: string | null;
+  readonly archiveSealId: string | null;
   /** The summary message's outcome (a split archive only). */
   readonly summaryDeliveryState: BackupDeliveryState | null;
 }
@@ -427,7 +427,7 @@ export interface BackupRunRepository {
     readonly cleanupDetail?: string | null;
     readonly archiveFormat?: BackupArchiveFormat | null;
     readonly partCount?: number | null;
-    readonly archivePasswordId?: string | null;
+    readonly archiveSealId?: string | null;
     readonly summaryDeliveryState?: BackupDeliveryState | null;
   }): Promise<void>;
 

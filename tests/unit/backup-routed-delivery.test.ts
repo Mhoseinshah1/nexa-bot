@@ -134,6 +134,16 @@ describe('backup delivery precedence', () => {
     await expect(w.delivery.describe()).resolves.toBe('OPS_GROUP_TOPIC');
   });
 
+  // E4: a part's message id is what lets its local copy go, so the router carries it.
+  it('carries the Telegram message id of a group delivery through to the pipeline', async () => {
+    const w = world({
+      group: ROUTED,
+      groupAnswer: () => ({ state: 'SUCCEEDED', detail: null, messageId: 9001 }),
+    });
+    const { attempt } = await sendDocument(w);
+    expect(attempt).toMatchObject({ state: 'SUCCEEDED', messageId: 9001 });
+  });
+
   it('falls back to the dedicated chat when no group is connected', async () => {
     const w = world({ group: { kind: 'NOT_CONNECTED' }, dedicatedConfigured: true });
     const { resolution } = await sendDocument(w);

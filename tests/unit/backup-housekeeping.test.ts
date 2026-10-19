@@ -60,7 +60,7 @@ function row(overrides: Partial<BackupRunRow> = {}): BackupRunRow {
     deliveryDetail: null,
     archiveFormat: null,
     partCount: null,
-    archivePasswordId: null,
+    archiveSealId: null,
     summaryDeliveryState: null,
     failureCode: null,
     failureMessage: null,

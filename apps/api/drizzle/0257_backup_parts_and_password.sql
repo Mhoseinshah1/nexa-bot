@@ -28,7 +28,7 @@ CREATE TABLE "backup_run_parts" (
 --> statement-breakpoint
 ALTER TABLE "backup_runs" ADD COLUMN "archive_format" text;--> statement-breakpoint
 ALTER TABLE "backup_runs" ADD COLUMN "part_count" integer;--> statement-breakpoint
-ALTER TABLE "backup_runs" ADD COLUMN "archive_password_id" uuid;--> statement-breakpoint
+ALTER TABLE "backup_runs" ADD COLUMN "archive_seal_id" uuid;--> statement-breakpoint
 ALTER TABLE "backup_runs" ADD COLUMN "summary_delivery_state" text;--> statement-breakpoint
 ALTER TABLE "backup_archive_passwords" ADD CONSTRAINT "backup_archive_passwords_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "backup_archive_passwords" ADD CONSTRAINT "backup_archive_passwords_created_by_admin_id_admins_id_fk" FOREIGN KEY ("created_by_admin_id") REFERENCES "public"."admins"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

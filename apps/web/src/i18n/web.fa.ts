@@ -732,6 +732,40 @@ export const WEB_FA = {
   'web.setting_retention_idempotency': 'نگه‌داری کلیدهای تکرارناپذیری',
   'web.setting_retention_idempotency_desc':
     'کلیدهای پنل وب و تلگرام پس از چند روز پاک شوند. کلیدهای کارهای پس‌زمینه و انتقال داده هرگز پاک نمی‌شوند.',
+  // Round 4 PR-E (E1) — compacting the imported legacy data.
+  'web.lcp_title': 'فشرده‌سازی داده‌های ربات قبلی',
+  'web.lcp_hint':
+    'داده‌های واردشده از ربات قبلی که هیچ صفحه یا روندی آن‌ها را نمی‌خواند حذف و بقیه سبک می‌شوند. ابتدا یک بکاپ کامل با عنوان «آرشیو ربات قبلی» در تاپیک بکاپ‌ها ارسال می‌شود و تا همه‌ی بخش‌هایش نرسد چیزی حذف نمی‌شود.',
+  'web.lcp_state': 'وضعیت',
+  'web.lcp_requested': 'زمان درخواست',
+  'web.lcp_deleted': 'سطرهای حذف‌شده',
+  'web.lcp_deduplicated': 'سطرهای تکراری حذف‌شده',
+  'web.lcp_stripped': 'سطرهای سبک‌شده',
+  'web.lcp_state_requested': 'در صف',
+  'web.lcp_state_archiving': 'در حال تهیه و ارسال «آرشیو ربات قبلی»',
+  'web.lcp_state_measuring': 'در حال اندازه‌گیری',
+  'web.lcp_state_dropping': 'در حال حذف داده‌های بی‌استفاده',
+  'web.lcp_state_deduping': 'در حال حذف موارد تکراری',
+  'web.lcp_state_stripping': 'در حال سبک‌کردن سوابق',
+  'web.lcp_state_vacuuming': 'نگه‌داری پایگاه داده',
+  'web.lcp_state_completed': 'انجام شد',
+  'web.lcp_state_failed': 'متوقف شد؛ چیزی حذف نشد',
+  'web.lcp_maintenance':
+    'در حال بازنویسی جدول‌های سوابق ربات قبلی؛ تا پایان این مرحله صفحه‌های سوابق ربات قبلی منتظر می‌مانند.',
+  'web.lcp_failed': 'فشرده‌سازی متوقف شد و هیچ داده‌ای حذف نشد.',
+  'web.lcp_table': 'جدول',
+  'web.lcp_before': 'پیش از فشرده‌سازی',
+  'web.lcp_after': 'پس از فشرده‌سازی',
+  'web.lcp_warning':
+    'این کار برگشت‌ناپذیر است. سوابقی که حذف می‌شوند فقط از «آرشیو ربات قبلی» قابل بازیابی‌اند.',
+  'web.lcp_type_phrase': 'برای تأیید، عبارت {phrase} را دقیقاً بنویسید',
+  'web.lcp_start': 'شروع فشرده‌سازی',
+  'web.lcp_unavailable':
+    'فشرده‌سازی فقط پس از پایان کامل انتقال داده از ربات قبلی و وقتی انتقالی در جریان نیست در دسترس است.',
+  'web.err_legacy_compaction_unavailable':
+    'فشرده‌سازی فقط پس از پایان انتقال داده و وقتی انتقالی در جریان نیست ممکن است.',
+  'web.err_legacy_compaction_phrase_invalid': 'عبارت تأیید درست نوشته نشده است.',
+  'web.err_legacy_compaction_active': 'فشرده‌سازی در جریان است یا قبلاً انجام شده است.',
   // Round 4 PR-E (E4) — the owner-set backup password; never shown once stored.
   'web.backup_password_title': 'رمز فایل بکاپ',
   'web.backup_password_card_hint':

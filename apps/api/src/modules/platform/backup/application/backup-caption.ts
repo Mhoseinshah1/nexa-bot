@@ -78,11 +78,14 @@ export function backupPartCaption(input: {
   /** What the verification restored, and against which server (single part only). */
   readonly tableCount: number;
   readonly postgresVersion: string;
+  /** The headline instead of «بکاپ» (E1's «آرشیو ربات قبلی»). */
+  readonly title?: string;
 }): string {
+  const title = input.title ?? 'بکاپ';
   if (input.partCount === 1) {
     // One file: the caption IS the summary (L31), so no second message is posted.
     return [
-      `💾 بکاپ — ${input.takenAt}`,
+      `💾 ${title} — ${input.takenAt}`,
       `📦 ${input.filename} · ${mebibytes(input.bytes)}`,
       '✅ رمزگذاری و بازیابی آزمایشی موفق',
       ...(input.sevenZip ? ['🔐 با 7-Zip و رمز بکاپ باز می‌شود.'] : []),
@@ -95,7 +98,7 @@ export function backupPartCaption(input: {
     ].join('\n');
   }
   return [
-    `💾 بکاپ — ${input.takenAt} — بخش ${String(input.partNumber)} از ${String(input.partCount)}`,
+    `💾 ${title} — ${input.takenAt} — بخش ${String(input.partNumber)} از ${String(input.partCount)}`,
     `📦 ${input.filename} · ${mebibytes(input.bytes)}`,
     '',
     `Backup: ${input.id}`,
@@ -122,9 +125,10 @@ export function backupSummaryMessage(input: {
   readonly dumpChecksum: string;
   readonly restoreInstruction: string;
   readonly restoreCommand: string;
+  readonly title?: string;
 }): string {
   const head = [
-    `💾 بکاپ — ${input.takenAt}`,
+    `💾 ${input.title ?? 'بکاپ'} — ${input.takenAt}`,
     `📦 حجم کل: ${mebibytes(input.totalBytes)} · ${String(input.parts.length)} بخش`,
     '✅ رمزگذاری و بازیابی آزمایشی موفق',
     '',

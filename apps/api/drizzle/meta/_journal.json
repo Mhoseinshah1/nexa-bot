@@ -1804,8 +1804,22 @@
     {
       "idx": 257,
       "version": "7",
-      "when": 1792443134544,
+      "when": 1792447650753,
       "tag": "0257_backup_parts_and_password",
+      "breakpoints": true
+    },
+    {
+      "idx": 258,
+      "version": "7",
+      "when": 1792447911394,
+      "tag": "0258_legacy_compaction_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 259,
+      "version": "7",
+      "when": 1792448861233,
+      "tag": "0259_legacy_history_compaction_guard",
       "breakpoints": true
     }
   ]
