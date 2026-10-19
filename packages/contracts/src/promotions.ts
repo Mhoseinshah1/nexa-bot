@@ -561,13 +561,22 @@ export const resellerStatusSchema = z.enum(RESELLER_STATUSES);
 /**
  * How a reseller's price differs from the list price.
  *
- * A rate, never a price list. A second price list would have to be kept in step with the
- * first, and the legacy system's custom-pricing rules — no priority, no enabled flag, no
- * date scope, overlapping by design — are what that becomes.
+ * `LIST_PRICE` and `PERCENTAGE_DISCOUNT` are a rate: the rate itself is configuration and
+ * there is no default margin.
  *
- * The rate itself is configuration. There is no default margin.
+ * `FIXED_PRICE_TABLE` (Round 4, owner request): an exact price per product for the tier, in
+ * `reseller_tier_product_prices`, with no percentage. It is still ONE layer — the
+ * `TIER_PRICE` step, which REPLACES the list subtotal — and still one table per tier, not
+ * the legacy system's overlapping custom-pricing rules: one row per (tier, product), no
+ * priority, no date scope. A product the table does not price is NOT sellable to the tier
+ * unless the tier's own `unpricedListFallback` option says to charge the list price
+ * instead. The table prices the purposes in `RESELLER_TIER_PRICE_PURPOSES` only.
  */
-export const RESELLER_PRICING_MODES = ['LIST_PRICE', 'PERCENTAGE_DISCOUNT'] as const;
+export const RESELLER_PRICING_MODES = [
+  'LIST_PRICE',
+  'PERCENTAGE_DISCOUNT',
+  'FIXED_PRICE_TABLE',
+] as const;
 export type ResellerPricingMode = (typeof RESELLER_PRICING_MODES)[number];
 export const resellerPricingModeSchema = z.enum(RESELLER_PRICING_MODES);
 
@@ -732,6 +741,29 @@ export const RESELLER_PRICE_LAYERS = ['LIST', 'TIER', 'OVERRIDE'] as const;
 export type ResellerPriceLayer = (typeof RESELLER_PRICE_LAYERS)[number];
 export const resellerPriceLayerSchema = z.enum(RESELLER_PRICE_LAYERS);
 
+/**
+ * The purposes a `FIXED_PRICE_TABLE` tier's table prices: buying a product and renewing one —
+ * the two whose base is the PRODUCT's list price. An add-on, extra users and a location
+ * change are priced by their own rows (a package, a per-user rate, a location), which the
+ * table has no column for, so under a price table they keep their existing pricing: the
+ * list price of that row, with no reseller layer (Round 4 PR-G, decision recorded there).
+ */
+export const RESELLER_TIER_PRICE_PURPOSES = [
+  'NEW_SERVICE',
+  'RENEW',
+] as const satisfies readonly DiscountablePurpose[];
+export type ResellerTierPricePurpose = (typeof RESELLER_TIER_PRICE_PURPOSES)[number];
+
+export function isResellerTierPricePurpose(purpose: string): purpose is ResellerTierPricePurpose {
+  return (RESELLER_TIER_PRICE_PURPOSES as readonly string[]).includes(purpose);
+}
+
+/** One write of a tier's price table, bounded: a page of edits, not a catalogue import. */
+export const RESELLER_TIER_PRICES_WRITE_MAX = 500;
+/** One page of the tier price table, as the Web Admin reads it. */
+export const RESELLER_TIER_PRICES_PAGE_DEFAULT = 100;
+export const RESELLER_TIER_PRICES_PAGE_MAX = 200;
+
 export const RESELLER_TIER_NAME_MAX = 64;
 /** A tier's grants, bounded: a grant list is a policy, not a catalogue export. */
 export const RESELLER_TIER_GRANTS_MAX = 500;
@@ -753,6 +785,8 @@ export function resellerPriceLayer(
   override: { readonly mode: ResellerOverrideMode; readonly percent: number | null },
 ): { readonly layer: ResellerPriceLayer; readonly percent: number | null } {
   if (override.mode === 'TIER') {
+    // A price table is the TIER layer with no percent: the price is the table's, per product.
+    if (tier.mode === 'FIXED_PRICE_TABLE') return { layer: 'TIER', percent: null };
     return tier.mode === 'PERCENTAGE_DISCOUNT' && tier.percent !== null
       ? { layer: 'TIER', percent: tier.percent }
       : { layer: 'LIST', percent: null };

@@ -1,5 +1,5 @@
 {
-  "id": "209aa712-91b1-4d4a-9e04-35d52c81c5da",
+  "id": "847b5239-6f40-4a4a-b698-2a9c506f3266",
   "prevId": "4042387b-16ec-4223-9168-7e285af2fc9e",
   "version": "7",
   "dialect": "postgresql",
@@ -8396,7 +8396,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -9010,12 +9010,6 @@
         },
         "phone_verified_at": {
           "name": "phone_verified_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "legacy_terms_accepted_at": {
-          "name": "legacy_terms_accepted_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -20335,6 +20329,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "fixed_price": {
+          "name": "fixed_price",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -20445,7 +20446,11 @@
         },
         "order_reseller_terms_percent_check": {
           "name": "order_reseller_terms_percent_check",
-          "value": "(percent IS NULL OR (percent >= 1 AND percent <= 100))\n          AND (layer <> 'TIER' OR percent IS NOT NULL)\n          AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))"
+          "value": "(percent IS NULL OR (percent >= 1 AND percent <= 100))\n          AND (layer <> 'TIER' OR percent IS NOT NULL OR fixed_price)\n          AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))"
+        },
+        "order_reseller_terms_fixed_price_check": {
+          "name": "order_reseller_terms_fixed_price_check",
+          "value": "NOT fixed_price OR (layer = 'TIER' AND percent IS NULL AND cost_amount < list_amount AND cost_amount > 0)"
         }
       },
       "isRLSEnabled": false
@@ -22756,173 +22761,6 @@
         "payment_accounts_sort_order_check": {
           "name": "payment_accounts_sort_order_check",
           "value": "sort_order BETWEEN 0 AND 100000"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.payment_destination_switches": {
-      "name": "payment_destination_switches",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "payment_id": {
-          "name": "payment_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sequence": {
-          "name": "sequence",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "from_account_id": {
-          "name": "from_account_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "account_id": {
-          "name": "account_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "label": {
-          "name": "label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bank_name": {
-          "name": "bank_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "holder_name": {
-          "name": "holder_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "card_number": {
-          "name": "card_number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "iban": {
-          "name": "iban",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "payment_destination_switches_tenant_id_tenants_id_fk": {
-          "name": "payment_destination_switches_tenant_id_tenants_id_fk",
-          "tableFrom": "payment_destination_switches",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "payment_destination_switches_payment_fk": {
-          "name": "payment_destination_switches_payment_fk",
-          "tableFrom": "payment_destination_switches",
-          "tableTo": "payments",
-          "columnsFrom": [
-            "tenant_id",
-            "payment_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "payment_destination_switches_account_fk": {
-          "name": "payment_destination_switches_account_fk",
-          "tableFrom": "payment_destination_switches",
-          "tableTo": "payment_accounts",
-          "columnsFrom": [
-            "tenant_id",
-            "account_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "payment_destination_switches_from_account_fk": {
-          "name": "payment_destination_switches_from_account_fk",
-          "tableFrom": "payment_destination_switches",
-          "tableTo": "payment_accounts",
-          "columnsFrom": [
-            "tenant_id",
-            "from_account_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "payment_destination_switches_sequence_key": {
-          "name": "payment_destination_switches_sequence_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "payment_id",
-            "sequence"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "payment_destination_switches_sequence_check": {
-          "name": "payment_destination_switches_sequence_check",
-          "value": "sequence >= 1"
-        },
-        "payment_destination_switches_card_number_check": {
-          "name": "payment_destination_switches_card_number_check",
-          "value": "card_number ~ '^[0-9]{16}$'"
-        },
-        "payment_destination_switches_iban_check": {
-          "name": "payment_destination_switches_iban_check",
-          "value": "iban IS NULL OR iban ~ '^IR[0-9]{24}$'"
         }
       },
       "isRLSEnabled": false
@@ -27943,6 +27781,147 @@
       },
       "isRLSEnabled": false
     },
+    "public.reseller_tier_product_prices": {
+      "name": "reseller_tier_product_prices",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tier_id": {
+          "name": "tier_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "product_id": {
+          "name": "product_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_amount": {
+          "name": "price_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_currency": {
+          "name": "price_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "reseller_tier_product_prices_product_idx": {
+          "name": "reseller_tier_product_prices_product_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "product_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reseller_tier_product_prices_tenant_id_tenants_id_fk": {
+          "name": "reseller_tier_product_prices_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_tier_product_prices_tier_fk": {
+          "name": "reseller_tier_product_prices_tier_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "reseller_tiers",
+          "columnsFrom": [
+            "tenant_id",
+            "tier_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "reseller_tier_product_prices_product_fk": {
+          "name": "reseller_tier_product_prices_product_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "products",
+          "columnsFrom": [
+            "tenant_id",
+            "product_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "reseller_tier_product_prices_pkey": {
+          "name": "reseller_tier_product_prices_pkey",
+          "columns": [
+            "tenant_id",
+            "tier_id",
+            "product_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_tier_product_prices_currency_check": {
+          "name": "reseller_tier_product_prices_currency_check",
+          "value": "price_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "reseller_tier_product_prices_amount_check": {
+          "name": "reseller_tier_product_prices_amount_check",
+          "value": "price_amount > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.reseller_tiers": {
       "name": "reseller_tiers",
       "schema": "",
@@ -28001,6 +27980,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "unpriced_list_fallback": {
+          "name": "unpriced_list_fallback",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",
@@ -28121,7 +28107,7 @@
         },
         "reseller_tiers_pricing_mode_check": {
           "name": "reseller_tiers_pricing_mode_check",
-          "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT')"
+          "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT', 'FIXED_PRICE_TABLE')"
         },
         "reseller_tiers_credit_currency_check": {
           "name": "reseller_tiers_credit_currency_check",
@@ -31227,12 +31213,6 @@
         },
         "usage_synced_at": {
           "name": "usage_synced_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "missing_on_panel_at": {
-          "name": "missing_on_panel_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -38631,13 +38611,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "note_shown_to_customer": {
-          "name": "note_shown_to_customer",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
         },
         "created_at": {
           "name": "created_at",

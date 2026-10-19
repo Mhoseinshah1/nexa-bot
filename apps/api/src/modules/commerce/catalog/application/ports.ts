@@ -222,6 +222,13 @@ export type CatalogueAudience =
       readonly kind: 'RESELLER';
       readonly productIds: readonly string[] | 'ALL';
       readonly categoryIds: readonly string[] | 'ALL';
+      /**
+       * Round 4 PR-G: a `FIXED_PRICE_TABLE` tier's table, when it decides what is sellable —
+       * a product it does not price (in the product's own currency) is left out, in SQL,
+       * unless the tier sells unpriced products at list. Absent for every other standing.
+       * A courtesy: the draft and the confirmation refuse such a product authoritatively.
+       */
+      readonly tierPrices?: { readonly tierId: string; readonly unpricedListFallback: boolean };
     };
 
 export interface ProductRepository {

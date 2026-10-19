@@ -1804,15 +1804,22 @@
     {
       "idx": 257,
       "version": "7",
-      "when": 1792443116659,
-      "tag": "0257_r4_bot_ux",
+      "when": 1792442362164,
+      "tag": "0257_reseller_tier_product_prices",
       "breakpoints": true
     },
     {
       "idx": 258,
       "version": "7",
-      "when": 1792443135284,
-      "tag": "0258_payment_destination_switches_append_only",
+      "when": 1792453605234,
+      "tag": "0258_r4_bot_ux",
+      "breakpoints": true
+    },
+    {
+      "idx": 259,
+      "version": "7",
+      "when": 1792453611743,
+      "tag": "0259_payment_destination_switches_append_only",
       "breakpoints": true
     }
   ]

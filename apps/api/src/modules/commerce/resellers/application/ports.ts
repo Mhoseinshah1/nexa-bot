@@ -4,6 +4,7 @@ import type {
   Money,
   OrderPurpose,
   OrderState,
+  ProductStatus,
   RecordSource,
   ResellerEntitlementDimension,
   ResellerGrantKind,
@@ -36,8 +37,38 @@ export interface ResellerTierRecord {
   readonly creditLimit: Money;
   /** Round N R2: the tier's monthly minimum sales; null (or zero) for none. */
   readonly monthlyMinimum: Money | null;
+  /**
+   * Round 4 PR-G, «قیمت عادی برای محصولات بدون قیمت»: under `FIXED_PRICE_TABLE`, a product
+   * the table does not price is sold at its list price (true) or not at all (false).
+   */
+  readonly unpricedListFallback: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+}
+
+/** Round 4 PR-G: one row of a tier's price table. */
+export interface ResellerTierProductPriceRecord {
+  readonly productId: string;
+  readonly price: Money;
+  readonly updatedAt: Date;
+}
+
+/** Round 4 PR-G: a product beside the tier's price for it, for the operator's table. */
+export interface ResellerTierPriceTableRow {
+  readonly productId: string;
+  readonly title: string;
+  readonly status: ProductStatus;
+  readonly categoryId: string | null;
+  readonly categoryName: string | null;
+  readonly listPrice: Money | null;
+  readonly tierPrice: Money | null;
+  readonly tierPriceUpdatedAt: Date | null;
+}
+
+/** The table's keyset: category id (null last), then product id. */
+export interface ResellerTierPriceCursor {
+  readonly categoryId: string | null;
+  readonly productId: string;
 }
 
 export interface ResellerTierListing extends ResellerTierRecord {
@@ -111,6 +142,11 @@ export interface OrderResellerTermsRecord {
   readonly marginAmount: bigint;
   readonly currency: CurrencyCode;
   readonly botInstanceId: string | null;
+  /**
+   * Round 4 PR-G: the cost is a `FIXED_PRICE_TABLE` tier's price for the product (layer
+   * `TIER`, no percent) — the "tier price" an ops-log purchase line shows.
+   */
+  readonly fixedPrice: boolean;
   readonly createdAt: Date;
 }
 
@@ -139,6 +175,8 @@ export interface TierWrite {
   readonly pricingMode: ResellerPricingMode;
   readonly discountPercentage: number | null;
   readonly creditLimit: Money;
+  /** Round 4 PR-G: see `ResellerTierRecord.unpricedListFallback`. Absent is off. */
+  readonly unpricedListFallback?: boolean;
 }
 
 export interface ResellerWrite {
@@ -194,6 +232,57 @@ export interface ResellerRepository {
   ): Promise<void>;
 
   listTiers(scope: TenantContext): Promise<readonly ResellerTierListing[]>;
+
+  // -- Round 4 PR-G: a tier's price table ------------------------------------------------
+
+  /**
+   * The tier's prices for these products, keyed by product id; a product the table does
+   * not price is absent. Inside a commercial transaction the caller already holds the
+   * tier `FOR SHARE`, which orders this read against `setTierPrices`.
+   */
+  tierPricesFor(
+    scope: TenantContext,
+    tierId: string,
+    productIds: readonly string[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<string, ResellerTierProductPriceRecord>>;
+
+  /**
+   * Upserts `set` and deletes `cleared`, in the caller's transaction, which holds the tier's
+   * `FOR UPDATE`. Returns how many rows each changed (a clear of an absent row changes none).
+   */
+  setTierPrices(
+    scope: TenantContext,
+    tierId: string,
+    write: {
+      readonly set: readonly { readonly productId: string; readonly price: Money }[];
+      readonly cleared: readonly string[];
+    },
+    now: Date,
+    tx: unknown,
+  ): Promise<{ readonly set: number; readonly cleared: number }>;
+
+  /** The list price and currency of each named product of this tenant; absent when unknown. */
+  productListPrices(
+    scope: TenantContext,
+    productIds: readonly string[],
+    tx: unknown,
+  ): Promise<ReadonlyMap<string, Money | null>>;
+
+  /**
+   * One keyset page of every product (the import's historical archive excluded) beside the
+   * tier's price for it, ordered by category id (uncategorised last), then product id.
+   */
+  listTierPriceTable(
+    scope: TenantContext,
+    tierId: string,
+    filter: { readonly categoryId?: string },
+    limit: number,
+    cursor: ResellerTierPriceCursor | null,
+  ): Promise<{
+    readonly items: readonly ResellerTierPriceTableRow[];
+    readonly next: ResellerTierPriceCursor | null;
+  }>;
 
   // -- Resellers ------------------------------------------------------------------
 
