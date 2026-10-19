@@ -28,7 +28,7 @@ import {
   setTrialOverride,
   unblockCustomer,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatTimestamp, formatTimestampCompact } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
@@ -50,7 +50,7 @@ import {
 } from './services';
 import { PartyCell, TriggerBadge } from './referrals';
 import { OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
-import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
+import { Dash, StatusBadge, avatarTint, displayName, initialOf } from './customer-parts';
 import { SourceBadge } from '../ui/source-badge';
 import {
   CustomerControlsCard,
@@ -82,7 +82,6 @@ import {
   Banner,
   Button,
   Card,
-  Copyable,
   IdText,
   CursorPager,
   DataTable,
@@ -97,6 +96,7 @@ import {
   Money,
   Num,
   PageHead,
+  Stat,
   StateSwitch,
   TabPanel,
   Tabs,
@@ -452,7 +452,6 @@ export function UserDetailPage({
           <div className="c360">
             <UserHead
               row={row}
-              mayViewWallet={mayViewWallet}
               exempt={controls !== undefined && controls.channelMembershipExemptAt !== null}
               isReseller={isReseller === true}
             />
@@ -536,6 +535,8 @@ export function UserDetailPage({
               sensitive={danger.buttons}
             />
             {danger.modals}
+
+            <CustomerStatStrip row={row} mayViewWallet={mayViewWallet} />
 
             {row.status === 'BLOCKED' && (
               <Banner tone="danger" title={t('web.user_blocked_banner_title')}>
@@ -829,37 +830,20 @@ export function UserDetailPage({
  */
 function UserHead({
   row,
-  mayViewWallet,
   exempt,
   isReseller,
 }: {
   row: CustomerSummaryResponse;
-  mayViewWallet: boolean;
   exempt: boolean;
   isReseller: boolean;
 }) {
-  const wallet = useQuery({
-    queryKey: ['wallet', row.id],
-    queryFn: () => fetchWallet(row.id),
-    enabled: mayViewWallet,
-  });
-  const trial = useQuery({
-    queryKey: ['customer-trial', row.id],
-    queryFn: () => fetchCustomerTrial(row.id),
-  });
-  const summary = useFinancialSummary(row.id, true);
   const name = displayName(row);
-  const balance = wallet.data?.wallet;
-  const remaining = trial.data?.trial.remaining;
-  const services = summary.data?.summary.services;
-  const orders = summary.data?.summary.orders;
-  const active = services?.byState.find((entry) => entry.state === 'ACTIVE')?.count ?? 0;
-  const purchases = orders?.purchases.reduce((sum, entry) => sum + entry.count, 0);
-
   return (
     <DetailHead
       level={1}
+      back={{ href: '/users', label: t('web.users_title') }}
       initial={initialOf(name ?? row.username ?? '#')}
+      initialClass={avatarTint(name ?? row.username ?? '#')}
       title={
         name ??
         (row.username === null ? (
@@ -880,50 +864,81 @@ function UserHead({
         <>
           <span className="ca-meta">
             <span className="faint">{t('web.user_telegram_id')}</span>
-            <Copyable value={row.telegramUserId} />
+            {/* X7: the demo draws the id plain, without a copy icon. */}
+            <Ltr>{row.telegramUserId}</Ltr>
           </span>
           {row.username !== null && (
             <span className="ca-meta">
               <span className="faint">{t('web.user_username')}</span>
-              <Ltr mono={false}>{`@${row.username}`}</Ltr>
+              <Ltr>{`@${row.username}`}</Ltr>
             </span>
           )}
           <span className="ca-meta">
             <span className="faint">{t('web.user_language')}</span>
-            {row.languageCode === null ? <Dash /> : <Ltr mono={false}>{row.languageCode}</Ltr>}
+            {row.languageCode === null ? <Dash /> : <Ltr>{row.languageCode}</Ltr>}
           </span>
         </>
       }
-      stats={[
-        { label: t('web.user_first_seen'), value: formatTimestamp(row.firstSeenAt) },
-        { label: t('web.user_last_seen'), value: formatTimestamp(row.lastSeenAt) },
-        ...(mayViewWallet
-          ? [
-              {
-                label: t('web.wallet_balance'),
-                value:
-                  balance === undefined ? (
-                    <Dash />
-                  ) : (
-                    <Money
-                      value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
-                    />
-                  ),
-              },
-            ]
-          : []),
-        ...(services === undefined || services === null
-          ? []
-          : [{ label: t('web.c360_stat_active_services'), value: <Num value={active} /> }]),
-        ...(purchases === undefined
-          ? []
-          : [{ label: t('web.c360_stat_purchases'), value: <Num value={purchases} /> }]),
-        {
-          label: t('web.user_stat_trial_remaining'),
-          value: remaining === undefined ? <Dash /> : <Num value={remaining} />,
-        },
-      ]}
     />
+  );
+}
+
+/**
+ * The customer's figures as a strip of separate stat cards (demo parity: AFTER the operations
+ * panel, never inside the head). Every figure is a field the server sent, read through the SAME
+ * query key its card below uses — so the strip adds no request of its own beyond the summary
+ * the financial card reads, and it can never disagree with the card beside it.
+ */
+function CustomerStatStrip({
+  row,
+  mayViewWallet,
+}: {
+  row: CustomerSummaryResponse;
+  mayViewWallet: boolean;
+}) {
+  const wallet = useQuery({
+    queryKey: ['wallet', row.id],
+    queryFn: () => fetchWallet(row.id),
+    enabled: mayViewWallet,
+  });
+  const trial = useQuery({
+    queryKey: ['customer-trial', row.id],
+    queryFn: () => fetchCustomerTrial(row.id),
+  });
+  const summary = useFinancialSummary(row.id, true);
+  const balance = wallet.data?.wallet;
+  const remaining = trial.data?.trial.remaining;
+  const services = summary.data?.summary.services;
+  const orders = summary.data?.summary.orders;
+  const active = services?.byState.find((entry) => entry.state === 'ACTIVE')?.count ?? 0;
+  const purchases = orders?.purchases.reduce((sum, entry) => sum + entry.count, 0);
+  return (
+    <div className="stat-grid c360-stats" aria-label={t('web.c360_stats_label')} role="group">
+      <Stat label={t('web.user_first_seen')} value={formatTimestampCompact(row.firstSeenAt)} />
+      <Stat label={t('web.user_last_seen')} value={formatTimestampCompact(row.lastSeenAt)} />
+      {mayViewWallet && (
+        <Stat
+          label={t('web.wallet_balance')}
+          value={
+            balance === undefined ? (
+              <Dash />
+            ) : (
+              <Money value={{ amountMinor: balance.balanceAmount, currency: balance.currency }} />
+            )
+          }
+        />
+      )}
+      {services !== undefined && services !== null && (
+        <Stat label={t('web.c360_stat_active_services')} value={<Num value={active} />} />
+      )}
+      {purchases !== undefined && (
+        <Stat label={t('web.c360_stat_purchases')} value={<Num value={purchases} />} />
+      )}
+      <Stat
+        label={t('web.user_stat_trial_remaining')}
+        value={remaining === undefined ? <Dash /> : <Num value={remaining} />}
+      />
+    </div>
   );
 }
 

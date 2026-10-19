@@ -82,7 +82,7 @@ describe("the customer page's head", () => {
     );
 
     const strip = await waitFor(() => {
-      const found = document.querySelector('.head-stats');
+      const found = document.querySelector('.c360-stats');
       if (!(found instanceof HTMLElement)) throw new Error('no summary strip');
       return found;
     });
@@ -114,7 +114,7 @@ describe("the customer page's head", () => {
       />,
     );
     const strip = await waitFor(() => {
-      const found = document.querySelector('.head-stats');
+      const found = document.querySelector('.c360-stats');
       if (!(found instanceof HTMLElement)) throw new Error('no summary strip');
       return found;
     });

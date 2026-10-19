@@ -47,6 +47,28 @@ export function formatTimestamp(iso: string): string {
   return DATE_TIME.format(at);
 }
 
+const DATE_COMPACT = new Intl.DateTimeFormat('fa-IR', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+const TIME_COMPACT = new Intl.DateTimeFormat('fa-IR', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/**
+ * The same instant as `formatTimestamp`, in the numeric form the approved demo's stat cards use
+ * («۱۴۰۵/۰۶/۱۵ ۰۷:۰۰») — for a figure in a narrow stat card, where the month's name would
+ * wrap the value onto two lines. Same zone and unparseable-string rule.
+ */
+export function formatTimestampCompact(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  return `${DATE_COMPACT.format(at)} ${TIME_COMPACT.format(at)}`;
+}
+
 const DATE_ONLY = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' });
 
 /**
