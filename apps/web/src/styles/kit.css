@@ -1067,6 +1067,7 @@
   font-weight: 600;
 }
 .pager-range {
+  /* Read right to left like the sentence around it: «۱–۱۰» is «from 1 to 10». */
   unicode-bidi: isolate;
 }
 

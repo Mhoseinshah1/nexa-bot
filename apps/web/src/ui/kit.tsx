@@ -2081,7 +2081,7 @@ export function CountedPager({
         {t('web.page_previous')}
       </button>
       <span className="pager-info" data-testid="counted-pager-info">
-        <b className="pager-range" dir="ltr">
+        <b className="pager-range">
           <Num value={from} />–<Num value={to} />
         </b>{' '}
         {t('web.page_range_of')} <b>{<Num value={total} />}</b> · {t('web.page_of')}{' '}
