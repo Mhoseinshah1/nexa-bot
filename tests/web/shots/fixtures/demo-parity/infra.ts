@@ -283,7 +283,7 @@ const HEALTH_ROWS: readonly Json[] = [
       lastFailureAt: ago(60 * 10),
       lastFailureKind: 'TIMEOUT',
     },
-    conditions: [condition('panel.unreachable', 'ERROR', 60 * 16, 3, false)],
+    conditions: [condition('panel.health.unreachable', 'ERROR', 60 * 16, 3, false)],
   },
   {
     panel: DE2,
@@ -295,8 +295,8 @@ const HEALTH_ROWS: readonly Json[] = [
       lastFailureKind: 'TIMEOUT',
     },
     conditions: [
-      condition('panel.unreachable', 'ERROR', 280, 14, true),
-      condition('provisioning.outcome_unknown', 'WARN', 35, 2, true),
+      condition('panel.health.unreachable', 'ERROR', 280, 14, true),
+      condition('provisioning.stalled', 'WARN', 35, 2, true),
     ],
   },
   { panel: NL1, services: services(902, 8, 70), provisioning: NO_FAILURES, conditions: [] },
@@ -309,7 +309,7 @@ const HEALTH_ROWS: readonly Json[] = [
       lastFailureAt: ago(170),
       lastFailureKind: 'MALFORMED_RESPONSE',
     },
-    conditions: [condition('panel.degraded', 'WARN', 110, 4, true)],
+    conditions: [condition('panel.health.degraded', 'WARN', 110, 4, true)],
   },
   { panel: FI1, services: services(930, 15, 53), provisioning: NO_FAILURES, conditions: [] },
   { panel: US1, services: services(120, 2, 22), provisioning: NO_FAILURES, conditions: [] },
@@ -557,7 +557,7 @@ function entry(
 /** The demo's newest audit rows: approvals, a system job, a refused read, failures. */
 const AUDIT_ROWS: readonly Json[] = [
   entry(0, 0, 'WEB_ADMIN', ADMIN_REZA, 'reza.fin', 'payment.approve', 'Payment', PAYMENT_A, {
-    reason: 'PAY-8841',
+    reason: 'رسید PAY-8841 بررسی شد',
   }),
   entry(1, 0, 'WEB_ADMIN', ADMIN_OWNER, 'm.hosein', 'payment.approve', 'Payment', PAYMENT_A, {
     before: { status: 'PENDING_REVIEW' },
@@ -585,7 +585,7 @@ const AUDIT_ROWS: readonly Json[] = [
     'PROVIDER_SYNC',
     'tonpays',
     'tonpays',
-    'payment.gateway.inquiry',
+    'payment_gateway.check_credential',
     'PaymentGateway',
     null,
     {
@@ -595,9 +595,9 @@ const AUDIT_ROWS: readonly Json[] = [
     },
   ),
   entry(4, 13, 'WEB_ADMIN', ADMIN_SARA, 'sara.sup', 'ticket.assign', 'Ticket', null, {
-    reason: 'CH-705',
+    reason: 'گفتگوی CH-705',
   }),
-  entry(5, 25, 'WEB_ADMIN', ADMIN_SARA, 'سارا محمدی', 'service.suspend', 'Service', SERVICE_A, {
+  entry(5, 25, 'WEB_ADMIN', ADMIN_SARA, 'سارا محمدی', 'service.set_status', 'Service', SERVICE_A, {
     reason: 'اشتراک‌گذاری بیش از حد مجاز',
     before: { status: 'ACTIVE' },
     after: { status: 'SUSPENDED' },
@@ -606,7 +606,7 @@ const AUDIT_ROWS: readonly Json[] = [
   entry(6, 26, 'WEB_ADMIN', ADMIN_OWNER, 'm.hosein', 'product.update', 'Product', null, {
     reason: 'یک‌ماهه ۵۰ گیگ — آلمان',
   }),
-  entry(7, 32, 'WEB_ADMIN', ADMIN_REZA, 'reza.fin', 'admins.view', 'AuditLog', null, {
+  entry(7, 32, 'WEB_ADMIN', ADMIN_REZA, 'reza.fin', 'audit.export', 'AuditLog', null, {
     result: 'DENIED',
     security: ['DENIED'],
     reason: 'دسترسی «مشاهدهٔ مدیران» را ندارد',
@@ -623,7 +623,7 @@ const AUDIT_ROWS: readonly Json[] = [
     {
       surface: 'WORKER',
       result: 'FAILED',
-      reason: 'DE-2',
+      reason: 'پنل DE-2 پاسخ نداد',
     },
   ),
   entry(9, 49, 'WEB_ADMIN', ADMIN_OWNER, 'm.hosein', 'auth.login', 'Admin', ADMIN_OWNER, {
@@ -750,7 +750,10 @@ export const DEMO_INFRA: readonly ShotFixture[] = [
   fixture(
     '/ops-log',
     operationalEventListResponseSchema,
-    { events: MANAGEMENT_EVENTS, nextCursor: 'demo-older' },
+    {
+      events: MANAGEMENT_EVENTS,
+      nextCursor: { at: ago(3090), id: '01a05e35-c9ad-7e93-bef3-1ed9b55d0c09' },
+    },
     { query: { scope: 'MANAGEMENT' } },
   ),
   fixture('/audit-log', auditLogListResponseSchema, { entries: AUDIT_ROWS, nextCursor: 'older' }),
