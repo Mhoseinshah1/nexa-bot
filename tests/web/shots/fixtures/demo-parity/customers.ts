@@ -1,4 +1,5 @@
 import {
+  inboxListResponseSchema,
   customerListResponseSchema,
   customerResponseSchema,
   customerWorkspaceResponseSchema,
@@ -105,7 +106,35 @@ const WORKSPACE = {
   },
 };
 
+/** The demo's six unread notifications (`#/inbox`), in its order. */
+const INBOX = (
+  [
+    ['payments.gateway_link_create_failed', 'GATEWAYS', 'ERROR', 7, 222, 'PAYMENT_GATEWAYS'],
+    ['panel.health_degraded', 'PANELS', 'CRITICAL', 12, 210, 'PANELS'],
+    ['maintenance.updated', 'INCIDENTS', 'WARN', 1, 239, 'INCIDENTS'],
+    ['backup.interval_exceeded', 'BACKUPS', 'WARN', 4, 230, 'RECOVERY'],
+    ['payments.gateway_late_completion', 'PAYMENTS', 'WARN', 1, 408, 'PAYMENTS'],
+    ['auth.login_locked_out', 'SECURITY', 'WARN', 1, 493, 'ADMINS'],
+  ] as const
+).map(([code, category, severity, count, minutes, target], index) => ({
+  id: uid('019d40ab', index),
+  code,
+  category,
+  severity,
+  message: code,
+  occurrenceCount: count,
+  firstSeenAt: ago(minutes + 600),
+  lastSeenAt: ago(minutes),
+  resolvedAt: null,
+  read: false,
+  link: { target, id: null },
+}));
+
 export const DEMO_CUSTOMERS_FAMILY: readonly ShotFixture[] = [
+  fixture('/notification-center', inboxListResponseSchema, {
+    notifications: INBOX,
+    nextCursor: null,
+  }),
   fixture('/users', customerListResponseSchema, {
     customers: DEMO_CUSTOMER_ROWS,
     nextCursor: 'cus-2',

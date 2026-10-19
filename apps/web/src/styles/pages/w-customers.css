@@ -130,3 +130,30 @@
 .c360 > .detail-head .avatar.lg {
   border-radius: 50%;
 }
+
+/*
+ * The notification center (reference: the demo's `#/inbox`): the filter line sits on the page
+ * with no rule under it, the «خوانده‌نشده / همه» control is compact on the start side, and an
+ * unread item is marked by a line on its start edge rather than a filled row.
+ */
+.nc-toolbar > .list-filter-bar {
+  border-bottom: 0;
+  padding: 0;
+}
+.nc-toolbar .lfb-search > * {
+  justify-self: start;
+}
+.nc-list {
+  padding: 4px 0;
+}
+.nc-item {
+  margin-inline: 12px;
+  padding: 14px 12px;
+}
+.nc-item:last-child {
+  border-block-end: 0;
+}
+.nc-item.unread {
+  background: none;
+  border-inline-start: 2px solid var(--accent);
+}
