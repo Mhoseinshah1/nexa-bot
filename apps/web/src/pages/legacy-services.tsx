@@ -208,7 +208,7 @@ export function legacyServiceRefusalLabel(code: string): string {
 function ApprovalsWaiting({ count }: { count: number }) {
   const onLink = useLinkHandler();
   return (
-    <Banner tone="warn" icon="info">
+    <Banner tone="warn">
       <span>{t('web.lsr_approvals_waiting')}</span>{' '}
       <span className="small">
         {t('web.lsr_approvals_waiting_count')}: <Num value={count} />
@@ -384,15 +384,14 @@ export function LegacyServicesPage({
   return (
     <>
       <PageHead title={t('web.lsr_title')} subtitle={t('web.lsr_subtitle')} />
-      <Banner tone="info" icon="info">
-        {t('web.lsr_banner')}
-      </Banner>
+      <Banner tone="info">{t('web.lsr_banner')}</Banner>
       {(summary.data?.byReviewState.ADOPT_APPROVED ?? 0) > 0 && (
         <ApprovalsWaiting count={summary.data?.byReviewState.ADOPT_APPROVED ?? 0} />
       )}
       {summary.data !== undefined && (
         <Card title={t('web.lsr_summary_title')}>
-          <dl className="kv">
+          {/* Two pairs a row on a wide screen, as the demo lists every result category. */}
+          <dl className="kv lgr-kv2">
             <dt>{t('web.lsr_summary_total')}</dt>
             <dd>
               <Num value={summary.data.candidateCount} />
@@ -411,19 +410,51 @@ export function LegacyServicesPage({
       <ListFilterBar
         label={t('web.lsr_title')}
         search={
-          <Field label={t('web.lsr_search_invoice')} htmlFor="lsr-invoice" compact>
-            <Input
-              id="lsr-invoice"
-              size="sm"
-              dir="ltr"
-              value={invoiceId}
-              maxLength={300}
-              onChange={(event) => {
-                setInvoiceId(event.target.value);
-                resetPaging();
-              }}
-            />
-          </Field>
+          /*
+           * The three exact codes as one inline row of fields (the demo's order: panel,
+           * product, invoice); the two choices stay in «فیلترها».
+           */
+          <div className="lgr-filters">
+            <Field label={t('web.lsr_col_panel_code')} htmlFor="lsr-panel" compact>
+              <Input
+                id="lsr-panel"
+                size="sm"
+                dir="ltr"
+                value={panelCode}
+                maxLength={300}
+                onChange={(event) => {
+                  setPanelCode(event.target.value);
+                  resetPaging();
+                }}
+              />
+            </Field>
+            <Field label={t('web.lsr_col_product_code')} htmlFor="lsr-product" compact>
+              <Input
+                id="lsr-product"
+                size="sm"
+                dir="ltr"
+                value={productCode}
+                maxLength={300}
+                onChange={(event) => {
+                  setProductCode(event.target.value);
+                  resetPaging();
+                }}
+              />
+            </Field>
+            <Field label={t('web.lsr_search_invoice')} htmlFor="lsr-invoice" compact>
+              <Input
+                id="lsr-invoice"
+                size="sm"
+                dir="ltr"
+                value={invoiceId}
+                maxLength={300}
+                onChange={(event) => {
+                  setInvoiceId(event.target.value);
+                  resetPaging();
+                }}
+              />
+            </Field>
+          </div>
         }
         filters={[
           {
@@ -488,52 +519,6 @@ export function LegacyServicesPage({
               </Select>
             ),
           },
-          {
-            key: 'panelCode',
-            label: t('web.lsr_col_panel_code'),
-            active: panelCode.trim() === '' ? null : panelCode,
-            onClear: () => {
-              setPanelCode('');
-              resetPaging();
-            },
-            control: (
-              <Input
-                id="lsr-panel"
-                size="sm"
-                dir="ltr"
-                aria-label={t('web.lsr_col_panel_code')}
-                value={panelCode}
-                maxLength={300}
-                onChange={(event) => {
-                  setPanelCode(event.target.value);
-                  resetPaging();
-                }}
-              />
-            ),
-          },
-          {
-            key: 'productCode',
-            label: t('web.lsr_col_product_code'),
-            active: productCode.trim() === '' ? null : productCode,
-            onClear: () => {
-              setProductCode('');
-              resetPaging();
-            },
-            control: (
-              <Input
-                id="lsr-product"
-                size="sm"
-                dir="ltr"
-                aria-label={t('web.lsr_col_product_code')}
-                value={productCode}
-                maxLength={300}
-                onChange={(event) => {
-                  setProductCode(event.target.value);
-                  resetPaging();
-                }}
-              />
-            ),
-          },
         ]}
       />
       <StateSwitch
@@ -544,13 +529,15 @@ export function LegacyServicesPage({
       >
         <Card title={t('web.lsr_title')}>
           <DataTable
+            stack="labelled"
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
             caption={t('web.lsr_title')}
-            dense
           />
           <CursorPager
+            // `id` ascending, and the ids are uuid v7: the order in which the runs first decided them.
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={trail.length > 0}
             hasNext={nextCursor !== null}

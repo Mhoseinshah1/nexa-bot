@@ -364,13 +364,14 @@ export function CampaignsPage({
           empty={<Empty title={t('web.campaign_empty')} hint={t('web.campaign_empty_hint')} />}
         >
           <DataTable
+            stack
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
             caption={t('web.campaigns_title')}
-            dense
           />
           <CursorPager
+            order="newest-first"
             onPrevious={() => setCursors({ filter, trail: trail.slice(0, -1) })}
             onNext={() => {
               const next = list.data?.nextCursor;
@@ -2100,7 +2101,6 @@ function ConfirmCard({
                         <Money value={p.walletGift.totalLiability} />
                       )
                     }
-                    tone="warn"
                   />
                 </>
               )}

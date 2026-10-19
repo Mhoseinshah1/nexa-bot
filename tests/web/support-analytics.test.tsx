@@ -183,6 +183,28 @@ describe('the support analytics page', () => {
     }
   });
 
+  it('composes as the demo: «بازه» beside the pills, bars scaled to the largest, one colour per outcome', async () => {
+    stubApi([{ url: '/support-ai/analytics', body: analytics() }]);
+    const view = renderPage(<SupportAnalyticsPage route={route()} denied={false} />);
+    await screen.findByText(t('web.sa_conversations_now'));
+    // DIFFS support-analytics #2: the label is drawn beside the period pills.
+    const range = view.container.querySelector('.sa-range') as HTMLElement;
+    expect(within(range).getByText(t('web.sa_range'))).toBeTruthy();
+    // DIFFS support-analytics #3: in every bar card the longest bar is full.
+    for (const dist of Array.from(view.container.querySelectorAll('.dist'))) {
+      const widths = Array.from(dist.querySelectorAll('rect')).map((rect) =>
+        Number(rect.getAttribute('width')),
+      );
+      expect(Math.max(...widths)).toBe(100);
+    }
+    // DIFFS support-analytics #4: the automatic outcomes do not share one colour.
+    const auto = screen.getByText(t('web.sa_auto_guard_handoff_topic')).closest('.dist')!;
+    const tones = new Set(
+      Array.from(auto.querySelectorAll('rect')).map((rect) => rect.getAttribute('class')),
+    );
+    expect(tones.size).toBeGreaterThan(1);
+  });
+
   it('shows no cost and says why: tokens, not a price nobody approved (OQ-TB-07)', async () => {
     stubApi([{ url: '/support-ai/analytics', body: analytics() }]);
     const view = renderPage(<SupportAnalyticsPage route={route()} denied={false} />);

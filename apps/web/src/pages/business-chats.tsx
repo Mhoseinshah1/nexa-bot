@@ -48,6 +48,7 @@ import {
   FilterChips,
   IdentityCell,
   KV,
+  LIST_PAGE_SIZE,
   Ltr,
   Num,
   PageHead,
@@ -62,7 +63,6 @@ import { AssistCard } from './support-assist';
 import { ProposeKnowledgeButton } from './support-knowledge';
 import { FailureDiagnosticView } from './support-ai-failure';
 import { ListFilterBar } from '../ui/filter-bar';
-import { ClientPager, useClientPaging } from './ops-paging';
 import { ErrorRef } from '../ui/technical-details';
 /**
  * TB2 — Telegram Business conversations (ADR-0033): the inbox, the connections it arrives
@@ -253,7 +253,7 @@ function WaitAge({ since }: { since: string | null }) {
   if (since === null) return <Dash />;
   const parts = waitParts(since, Date.now());
   return (
-    <span className="nowrap bchat-wait" title={formatTimestamp(since)}>
+    <span className="nowrap strong bchat-wait" title={formatTimestamp(since)}>
       {parts === null ? (
         t('web.bchat_wait_just_now')
       ) : (
@@ -362,8 +362,27 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
     enabled: !denied,
   });
   const rows = inboxRows(chats.data?.pages ?? []);
-  // W1.8: ten a page over the conversations read so far; «next» past them reads another.
-  const paging = useClientPaging(rows, state ?? '');
+  /*
+   * The demo's inbox footer: «نمایش N» and «نمایش بیشتر» (DIFFS business-chats #2). Ten
+   * rows at first (W1.8); «نمایش بیشتر» shows ten more of the conversations already read,
+   * and past them reads the server's next page by its cursor. The list is in priority order,
+   * not a time order, so it grows downward rather than turning pages. Keyed by the filter, so
+   * a new filter starts again at ten.
+   */
+  const [shownState, setShownState] = useState({ key: state ?? '', count: LIST_PAGE_SIZE });
+  const shownCount = shownState.key === (state ?? '') ? shownState.count : LIST_PAGE_SIZE;
+  const shownRows = rows.slice(0, shownCount);
+  const moreLoaded = rows.length > shownCount;
+  const canShowMore = moreLoaded || chats.hasNextPage;
+  const showMore = () => {
+    const next = { key: state ?? '', count: shownCount + LIST_PAGE_SIZE };
+    if (moreLoaded) {
+      setShownState(next);
+      return;
+    }
+    if (chats.isFetchingNextPage || !chats.hasNextPage) return;
+    void chats.fetchNextPage().then(() => setShownState(next));
+  };
   const requestable = mayRequest(chats, denied);
   const onLink = useLinkHandler();
 
@@ -396,10 +415,16 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
           )}
           {row.connectionStatus !== 'ACTIVE' && <ConnectionBadge status={row.connectionStatus} />}
           {row.ticketId !== null && (
-            <a className="badge info bchat-ticket" href={ticketPath(row.ticketId)} onClick={onLink}>
-              <Icon name="message" />
-              {t('web.bchat_ticket_badge')}
-            </a>
+            <span className="bchat-state-sub">
+              <a
+                className="badge info bchat-ticket"
+                href={ticketPath(row.ticketId)}
+                onClick={onLink}
+              >
+                <Icon name="message" />
+                {t('web.bchat_ticket_badge')}
+              </a>
+            </span>
           )}
         </span>
       ),
@@ -483,27 +508,28 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
             />
           }
         >
-          <DataTable
-            caption={t('web.bchats_title')}
-            columns={columns}
-            rows={paging.rows}
-            rowKey={(row) => row.id}
-            dense
-          />
-          <ClientPager
-            shown={paging.rows.length}
-            hasPrevious={paging.hasPrevious}
-            hasNext={paging.hasNextLoaded || chats.hasNextPage}
-            onPrevious={() => paging.go(paging.page - 1)}
-            onNext={() => {
-              if (paging.hasNextLoaded) {
-                paging.go(paging.page + 1);
-                return;
-              }
-              if (chats.isFetchingNextPage) return;
-              void chats.fetchNextPage().then(() => paging.go(paging.page + 1));
-            }}
-          />
+          <div className="bchat-inbox">
+            <DataTable
+              caption={t('web.bchats_title')}
+              columns={columns}
+              rows={shownRows}
+              rowKey={(row) => row.id}
+            />
+          </div>
+          <div className="pager bchat-more">
+            <span className="muted small">
+              {t('web.showing')} <Num value={shownRows.length} />
+            </span>
+            <span className="spacer" />
+            <button
+              type="button"
+              className="btn sm"
+              disabled={!canShowMore || chats.isFetchingNextPage}
+              onClick={showMore}
+            >
+              {t('web.bchat_show_more')}
+            </button>
+          </div>
         </StateSwitch>
       </Card>
 
@@ -989,9 +1015,7 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
   });
   return (
     <Card title={t('web.bchat_reply')}>
-      <Banner tone="info" icon="info">
-        {t('web.bchat_reply_takes_over')}
-      </Banner>
+      <Banner tone="info">{t('web.bchat_reply_takes_over')}</Banner>
       {!connected && <Banner tone="warn">{t('web.bchat_reply_connection_unusable')}</Banner>}
       <form
         onSubmit={(event) => {

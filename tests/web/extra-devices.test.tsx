@@ -145,13 +145,13 @@ describe('the extra users / devices screen', () => {
     await screen.findByText('کاربر اضافه');
     expect(screen.queryByText('تعرفهٔ دوم')).toBeNull();
 
-    fireEvent.click(screen.getByText('بعدی'));
+    fireEvent.click(screen.getByText(t('web.page_newer')));
     await screen.findByText('تعرفهٔ دوم');
     expect(api.calls.some((call) => call.url.includes('cursor=c-2'))).toBe(true);
     expect(screen.queryByText('کاربر اضافه')).toBeNull();
 
     // And back, to exactly the page it came from.
-    fireEvent.click(screen.getByText('قبلی'));
+    fireEvent.click(screen.getByText(t('web.page_older')));
     await screen.findByText('کاربر اضافه');
     cleanup();
   });

@@ -323,6 +323,12 @@ export function SupportKnowledgePage({
     },
   });
 
+  /*
+   * The last control failure, kept until a control succeeds: a retry clears the mutation's own
+   * error the moment it starts, and the banner leaving and coming back moved the page under the
+   * operator's finger when it was the last thing that made the list scroll.
+   */
+  const [controlFault, setControlFault] = useState<unknown>(null);
   const control = useMutation({
     mutationFn: (input: {
       id: string;
@@ -345,11 +351,13 @@ export function SupportKnowledgePage({
           });
     },
     onSuccess: () => {
+      setControlFault(null);
       submission.settle();
       notify({ tone: 'ok', message: t('web.sk_saved') });
       refresh();
     },
     onError: (error) => {
+      setControlFault(error);
       submission.settleOn(error);
       refresh();
     },
@@ -504,66 +512,69 @@ export function SupportKnowledgePage({
         subtitle={t('web.sk_subtitle')}
         actions={mayReview ? newButton : undefined}
       />
-      <Banner tone="info" icon="info">
+      <Banner tone="info" slim>
         {t('web.sk_only_approved')}
       </Banner>
-      <ListFilterBar
-        label={t('web.sk_title')}
-        filters={[
-          {
-            key: 'source',
-            label: t('web.sk_col_source'),
-            active: source === 'ALL' ? null : t(KNOWLEDGE_SOURCE_LABELS[source]),
-            onClear: () => setSource('ALL'),
-            control: (
-              <Select
-                id="sk-source"
-                size="sm"
-                aria-label={t('web.sk_col_source')}
-                value={source}
-                onChange={(event) =>
-                  setSource(event.target.value as AnyFilter<SupportKnowledgeSource>)
-                }
-              >
-                <option value="ALL">{t('web.sk_all')}</option>
-                {SUPPORT_KNOWLEDGE_SOURCES.map((value) => (
-                  <option key={value} value={value}>
-                    {t(KNOWLEDGE_SOURCE_LABELS[value])}
-                  </option>
-                ))}
-              </Select>
-            ),
-          },
-          {
-            key: 'state',
-            label: t('web.sk_col_state'),
-            active: state === 'ALL' ? null : t(KNOWLEDGE_STATE_LABELS[state]),
-            onClear: () => setState('ALL'),
-            control: (
-              <Select
-                id="sk-state"
-                size="sm"
-                aria-label={t('web.sk_col_state')}
-                value={state}
-                onChange={(event) =>
-                  setState(event.target.value as AnyFilter<SupportKnowledgeArticleState>)
-                }
-              >
-                <option value="ALL">{t('web.sk_all')}</option>
-                {SUPPORT_KNOWLEDGE_ARTICLE_STATES.map((value) => (
-                  <option key={value} value={value}>
-                    {t(KNOWLEDGE_STATE_LABELS[value])}
-                  </option>
-                ))}
-              </Select>
-            ),
-          },
-        ]}
-      />
-      {control.error != null && (
+      {/* Demo parity (DIFFS support-knowledge #1): the filter line in a bordered card of its own. */}
+      <Card tight className="sk-filters">
+        <ListFilterBar
+          label={t('web.sk_title')}
+          filters={[
+            {
+              key: 'source',
+              label: t('web.sk_col_source'),
+              active: source === 'ALL' ? null : t(KNOWLEDGE_SOURCE_LABELS[source]),
+              onClear: () => setSource('ALL'),
+              control: (
+                <Select
+                  id="sk-source"
+                  size="sm"
+                  aria-label={t('web.sk_col_source')}
+                  value={source}
+                  onChange={(event) =>
+                    setSource(event.target.value as AnyFilter<SupportKnowledgeSource>)
+                  }
+                >
+                  <option value="ALL">{t('web.sk_all')}</option>
+                  {SUPPORT_KNOWLEDGE_SOURCES.map((value) => (
+                    <option key={value} value={value}>
+                      {t(KNOWLEDGE_SOURCE_LABELS[value])}
+                    </option>
+                  ))}
+                </Select>
+              ),
+            },
+            {
+              key: 'state',
+              label: t('web.sk_col_state'),
+              active: state === 'ALL' ? null : t(KNOWLEDGE_STATE_LABELS[state]),
+              onClear: () => setState('ALL'),
+              control: (
+                <Select
+                  id="sk-state"
+                  size="sm"
+                  aria-label={t('web.sk_col_state')}
+                  value={state}
+                  onChange={(event) =>
+                    setState(event.target.value as AnyFilter<SupportKnowledgeArticleState>)
+                  }
+                >
+                  <option value="ALL">{t('web.sk_all')}</option>
+                  {SUPPORT_KNOWLEDGE_ARTICLE_STATES.map((value) => (
+                    <option key={value} value={value}>
+                      {t(KNOWLEDGE_STATE_LABELS[value])}
+                    </option>
+                  ))}
+                </Select>
+              ),
+            },
+          ]}
+        />
+      </Card>
+      {controlFault != null && (
         <Banner tone="danger" role="alert">
-          {knowledgeFault(control.error)}
-          <ErrorRef error={control.error} />
+          {knowledgeFault(controlFault)}
+          <ErrorRef error={controlFault} />
         </Banner>
       )}
       <StateSwitch
@@ -578,7 +589,6 @@ export function SupportKnowledgePage({
             rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.sk_title')}
-            dense
           />
           {paging.pager}
         </Card>
@@ -839,17 +849,21 @@ export function LearningCandidatesPage({
   return (
     <>
       <PageHead title={t('web.sk_cand_title')} subtitle={t('web.sk_cand_subtitle')} />
-      <Banner tone="info" icon="info">
-        {t('web.sk_cand_nothing_active')}
-      </Banner>
-      <Pills
-        value={state}
-        onChange={setState}
-        items={SUPPORT_LEARNING_CANDIDATE_STATES.map((value) => ({
-          id: value,
-          label: t(CANDIDATE_STATE_LABELS[value]),
-        }))}
-      />
+      <Banner tone="info">{t('web.sk_cand_nothing_active')}</Banner>
+      {/* The shared toolbar pattern (no demo page here): the state pills in a bordered card
+          of their own, as the knowledge list's filter line beside it. */}
+      <Card tight className="sk-filters">
+        <div className="sk-pills">
+          <Pills
+            value={state}
+            onChange={setState}
+            items={SUPPORT_LEARNING_CANDIDATE_STATES.map((value) => ({
+              id: value,
+              label: t(CANDIDATE_STATE_LABELS[value]),
+            }))}
+          />
+        </div>
+      </Card>
       {decide.error != null && editing === null && (
         <Banner tone="danger" role="alert">
           {knowledgeFault(decide.error)}
@@ -868,7 +882,6 @@ export function LearningCandidatesPage({
             rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.sk_cand_title')}
-            dense
           />
           {paging.pager}
         </Card>

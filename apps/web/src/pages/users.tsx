@@ -17,7 +17,7 @@ import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { ChipGroup, useListClearAll } from './commerce-parts';
-import { Dash, StatusBadge, displayName, initialOf } from './customer-parts';
+import { Dash, StatusBadge, avatarTint, displayName, initialOf } from './customer-parts';
 import { SourceBadge } from '../ui/source-badge';
 import { sourceFromQuery, sourceRouteFilter } from './record-source';
 import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
@@ -249,8 +249,7 @@ export function UsersPage({
     {
       key: 'username',
       header: t('web.user_username'),
-      render: (row) =>
-        row.username === null ? <Dash /> : <Ltr mono={false}>{`@${row.username}`}</Ltr>,
+      render: (row) => (row.username === null ? <Dash /> : <Ltr>{`@${row.username}`}</Ltr>),
     },
     {
       key: 'name',
@@ -261,10 +260,10 @@ export function UsersPage({
           <Dash />
         ) : (
           <span className="who">
-            <span className="avatar" aria-hidden="true">
+            <span className={`avatar ${avatarTint(name)}`} aria-hidden="true">
               {initialOf(name)}
             </span>
-            <span>{name}</span>
+            <span className="strong">{name}</span>
           </span>
         );
       },
@@ -405,6 +404,7 @@ export function UsersPage({
         )}
         <div hidden={toolbarHidden}>
           <ListFilterBar
+            first="search"
             label={t('web.users_title')}
             search={
               maySearch ? (
@@ -451,7 +451,6 @@ export function UsersPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
             sticky
           />
         </StateSwitch>
@@ -472,6 +471,7 @@ export function UsersPage({
             replaced — see the panels pager for the defect this shape fixes. */}
         {!denied && queryState(customers) === 'ready' && (
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}

@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { CompensationsPage } from '../../apps/web/src/pages/compensations';
-import { formatTimestamp } from '../../apps/web/src/format';
+import { formatTimestampNumeric } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -60,15 +60,16 @@ describe('the compensation list', () => {
     expect(within(table).getAllByText(/۲۵۰٬۰۰۰|250,000/u)).toHaveLength(2);
     expect(within(table).getByText('تحویل‌نشدنی')).toBeInTheDocument();
     expect(within(table).getByText('بازگشت انجام شد')).toBeInTheDocument();
-    expect(table.textContent).toContain(formatTimestamp('2026-09-12T10:00:00.000Z'));
+    expect(table.textContent).toContain(formatTimestampNumeric('2026-09-12T10:00:00.000Z'));
     // No action and no timeline: the only controls are the pager's.
     const labels = [...view.container.querySelectorAll('button')]
       .map((b) => b.textContent?.trim())
       .filter((label) => label !== '');
     for (const label of labels) {
-      expect(['بعدی', 'قبلی'], `a control on the compensation list: ${label ?? ''}`).toContain(
-        label,
-      );
+      expect(
+        ['تازه‌تر', 'قدیمی‌تر'],
+        `a control on the compensation list: ${label ?? ''}`,
+      ).toContain(label);
     }
   });
 
@@ -131,7 +132,7 @@ describe('the compensation list', () => {
     ]);
     renderPage(<CompensationsPage route={ROUTE} denied={false} />);
     await screen.findByRole('table');
-    const next = screen.getByRole('button', { name: 'بعدی' });
+    const next = screen.getByRole('button', { name: 'تازه‌تر' });
     expect(next).toBeEnabled();
     fireEvent.click(next);
     await waitFor(() => {

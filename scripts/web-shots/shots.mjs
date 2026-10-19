@@ -9,6 +9,7 @@
  *   pnpm web:shots / --full --no-build --out /tmp/shots
  *   pnpm web:shots /panels/<id> --click '[role=tab]:nth-child(3)'   a state reached by clicking
  *   pnpm web:shots / --signed-out                  the sign-in screen (the session answers 401)
+ *   pnpm web:shots / --fixtures demo-parity        the approved demo's sample numbers
  *
  * What it does, and why each part is there:
  *
@@ -36,7 +37,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ROOT, buildWeb, delay, launchChrome, openPage, startServer } from './harness.mjs';
-import { needsTypeStripping, shotProblems } from './policy.mjs';
+import { TABLE_OVERFLOW_MIN_WIDTH, needsTypeStripping, shotProblems } from './policy.mjs';
 
 /** The default set: one of each page type, the shell states the brief names. */
 const DEFAULT_ROUTES = ['/', '/users', '/panels/01a05e35-c9ad-7e93-bef3-1ed9b55292c8', '/settings'];
@@ -54,6 +55,7 @@ function parseArgs(argv) {
     timeoutMs: 15_000,
     clicks: [],
     signedOut: false,
+    fixtures: undefined,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -74,6 +76,7 @@ function parseArgs(argv) {
     else if (arg === '--timeout') options.timeoutMs = Number(value());
     else if (arg === '--click') options.clicks.push(value());
     else if (arg === '--signed-out') options.signedOut = true;
+    else if (arg === '--fixtures') options.fixtures = value();
     else if (arg === '--help' || arg === '-h') {
       console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0]);
       process.exit(0);
@@ -91,7 +94,10 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
 
   if (options.build) buildWeb();
-  const server = await startServer({ signedOut: options.signedOut });
+  const server = await startServer({
+    signedOut: options.signedOut,
+    ...(options.fixtures === undefined ? {} : { fixtureSet: options.fixtures }),
+  });
   const chrome = await launchChrome();
   const { cdp } = chrome;
 
@@ -152,6 +158,7 @@ function shotName(route, theme, options) {
     options.full ? 'full' : null,
     options.clicks.length > 0 ? `click${options.clicks.length}` : null,
     options.signedOut ? 'signed-out' : null,
+    options.fixtures ?? null,
   ]
     .filter(Boolean)
     .join('--');
@@ -175,6 +182,15 @@ async function shoot(cdp, shot) {
         errorStates: document.querySelectorAll('.empty.error').length,
         horizontalOverflow: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
         contentHeight: content ? content.scrollHeight - content.clientHeight : 0,
+        // X9: a table that scrolls sideways inside its card. Named by its caption (or its
+        // first header) so the line says which table, and by how many pixels.
+        tableOverflow: [...document.querySelectorAll('.tbl-wrap')]
+          .filter((wrap) => wrap.scrollWidth > wrap.clientWidth + 1 && wrap.getClientRects().length > 0)
+          .map((wrap) => {
+            const caption = wrap.querySelector('caption, th');
+            const name = (caption ? caption.textContent : '').trim().slice(0, 40) || '?';
+            return name + ' +' + (wrap.scrollWidth - wrap.clientWidth) + 'px';
+          }),
       };
     })()`);
 
@@ -189,6 +205,8 @@ async function shoot(cdp, shot) {
       stillLoading: facts.stillLoading,
       errorStates: facts.errorStates,
       horizontalOverflow: facts.horizontalOverflow,
+      // Desktop only: a phone may scroll a wide table inside its card by design.
+      tableOverflow: shot.width >= TABLE_OVERFLOW_MIN_WIDTH ? facts.tableOverflow : [],
       errors: page.errors,
     };
   } finally {

@@ -103,7 +103,8 @@ describe('the terms page', () => {
     expect(screen.getByText('قوانین قدیمی')).toBeInTheDocument();
 
     // A published version opens read-only: no edit control inside it.
-    fireEvent.click(screen.getAllByRole('button', { name: t('web.terms_view') })[1] as HTMLElement);
+    // The history row opens through its chevron, named for the version it opens.
+    fireEvent.click(screen.getByRole('button', { name: `${t('web.terms_view')} — قوانین قدیمی` }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(t('web.terms_read_only'))).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: t('web.terms_edit_draft') })).toBeNull();

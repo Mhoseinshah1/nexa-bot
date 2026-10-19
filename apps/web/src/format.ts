@@ -28,13 +28,11 @@ import { t, type WebKey } from './i18n/web.fa';
  * docs/open-questions.md beside the date-format decision it belongs with.
  */
 
-const DATE_TIME = new Intl.DateTimeFormat('fa-IR', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-});
-
 /**
- * An ISO timestamp as a Jalali date and time in the viewer's own zone.
+ * An ISO timestamp as a Jalali date and time in the viewer's own zone, in the approved
+ * demo's numeric shape — `۱۴۰۵/۰۷/۱۴ ۱۹:۳۰` (`formatTimestampNumeric`). The demo draws every
+ * date-time this way on every page (measured on 35 routes: no month name anywhere), so this
+ * is the ONE place the shape is decided; a page never picks its own.
  *
  * An unparseable string is returned unchanged rather than rendered as an
  * "Invalid Date". If the server ever sends something unexpected, showing it is
@@ -42,22 +40,75 @@ const DATE_TIME = new Intl.DateTimeFormat('fa-IR', {
  * arrived.
  */
 export function formatTimestamp(iso: string): string {
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return iso;
-  return DATE_TIME.format(at);
+  return formatTimestampNumeric(iso);
 }
 
-const DATE_ONLY = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' });
+/**
+ * «۵ روز پیش»: how long before `nowMs` an ISO timestamp was, in Persian digits — the demo's
+ * relative cells. Past a month, or for a time in the future or an unparseable string, the
+ * absolute `formatTimestamp` is returned instead; callers keep that as the cell's title.
+ * `nowMs` is the clock the caller already reads (`Date.now()`, frozen in the shots).
+ */
+export function formatRelative(iso: string, nowMs: number = Date.now()): string {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at) || at > nowMs) return formatTimestamp(iso);
+  const minutes = Math.floor((nowMs - at) / 60_000);
+  if (minutes < 1) return t('web.rel_now');
+  if (minutes < 60) return `${formatNumber(minutes)} ${t('web.rel_minutes_ago')}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${formatNumber(hours)} ${t('web.rel_hours_ago')}`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${formatNumber(days)} ${t('web.rel_days_ago')}`;
+  return formatTimestamp(iso);
+}
+
+const DATE_TIME_NUMERIC = new Intl.DateTimeFormat('fa-IR', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
 
 /**
- * An ISO timestamp as a Jalali DATE alone, in the viewer's own zone — for a fact that is a
- * day rather than an instant, such as the original purchase of an imported service. The same
- * unparseable-string rule as `formatTimestamp`.
+ * An ISO timestamp as the approved demo's list cells draw one — `۱۴۰۵/۰۷/۱۴ ۱۹:۳۰`: the Jalali
+ * date in numbers, then the 24-hour time, in Persian digits (the demo's Latin digits are not
+ * part of the spec). `formatTimestamp` is this shape too; the name stays for the callers that
+ * ask for the numeric form explicitly.
+ */
+export function formatTimestampNumeric(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  const parts = new Map(
+    DATE_TIME_NUMERIC.formatToParts(at).map((one) => [one.type, one.value] as const),
+  );
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.get(type) ?? '';
+  // Isolated left to right (U+2066 … U+2069), so the date reads before the time as the demo
+  // draws it, whatever the direction of the cell around it.
+  return `\u2066${part('year')}/${part('month')}/${part('day')} ${part('hour')}:${part('minute')}\u2069`;
+}
+
+const DATE_ONLY_NUMERIC = new Intl.DateTimeFormat('fa-IR', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/**
+ * An ISO timestamp as a Jalali DATE alone, in the viewer's own zone and the demo's numeric
+ * shape (`۱۴۰۵/۰۶/۲۸`) — for a fact that is a day rather than an instant, such as the
+ * original purchase of an imported service. The same unparseable-string rule as
+ * `formatTimestamp`.
  */
 export function formatDate(iso: string): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return iso;
-  return DATE_ONLY.format(at);
+  const parts = new Map(
+    DATE_ONLY_NUMERIC.formatToParts(at).map((one) => [one.type, one.value] as const),
+  );
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.get(type) ?? '';
+  return `\u2066${part('year')}/${part('month')}/${part('day')}\u2069`;
 }
 
 // ---------------------------------------------------------------------------

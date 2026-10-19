@@ -110,7 +110,11 @@ export function CustomServicePage({
       </Banner>
       <Locations denied={denied} mayEdit={mayEdit} options={options} />
       <Rules denied={denied} mayEdit={mayEdit} options={options} />
-      <Card title={t('web.custom_service_specificity_title')} tone="muted">
+      <Card
+        title={t('web.custom_service_specificity_title')}
+        tone="muted"
+        className="cs-specificity"
+      >
         <p className="muted">{t('web.custom_service_specificity_intro')}</p>
         <ol className="custom-levels">
           {CUSTOM_SERVICE_RULE_LEVELS.map((level) => (
@@ -256,6 +260,10 @@ function ToggleLine({
   );
 }
 
+/**
+ * A panel or tier by name (its id when unnamed). Its copy control is the demo's: drawn on the
+ * row's hover or the button's focus at desktop, always on a phone (`.cs-cards`, commerce-b.css).
+ */
 function Reference({ id, name }: { id: string; name: string | undefined }) {
   return name === undefined ? <Copyable value={id} /> : <Copyable value={id} display={name} />;
 }
@@ -384,8 +392,6 @@ function Locations({
               <IconButton
                 size="sm"
                 icon="trash"
-                variant="danger"
-                className="ghost"
                 label={t('web.custom_service_delete')}
                 disabled={remove.isPending}
                 onClick={() => setDeleting(row)}
@@ -397,7 +403,7 @@ function Locations({
   ];
 
   return (
-    <div className="stack">
+    <div className="stack cs-cards">
       <Card
         title={t('web.custom_service_locations_title')}
         hint={t('web.custom_service_locations_hint')}
@@ -422,11 +428,11 @@ function Locations({
           }
         >
           <DataTable
+            stack
             caption={t('web.custom_service_locations_title')}
             columns={columns}
             rows={rows}
             rowKey={(row) => row.panelId}
-            dense
           />
         </StateSwitch>
         {remove.error !== null && (
@@ -787,8 +793,6 @@ function Rules({
             <IconButton
               size="sm"
               icon="trash"
-              variant="danger"
-              className="ghost"
               label={t('web.custom_service_delete')}
               disabled={remove.isPending}
               onClick={() => setDeleting(row)}
@@ -799,7 +803,7 @@ function Rules({
   ];
 
   return (
-    <div className="stack">
+    <div className="stack cs-cards">
       <Card
         title={t('web.custom_service_rules_title')}
         hint={t('web.custom_service_rules_hint')}
@@ -818,11 +822,11 @@ function Rules({
           empty={<Empty title={t('web.custom_service_rules_empty')} icon="discounts" />}
         >
           <DataTable
+            stack
             caption={t('web.custom_service_rules_title')}
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
           />
         </StateSwitch>
         {remove.error !== null && (

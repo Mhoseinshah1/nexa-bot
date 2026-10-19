@@ -179,9 +179,7 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
           ) : undefined
         }
       />
-      <Banner tone="info" icon="info">
-        {t('web.kb_nothing_until_apply')}
-      </Banner>
+      <Banner tone="info">{t('web.kb_nothing_until_apply')}</Banner>
       {error != null && (
         <Banner tone="danger" role="alert">
           {buildFault(error)}
@@ -279,7 +277,9 @@ function BuildCard({
       {changes.length === 0 ? (
         <p className="muted small">{t('web.kb_no_changes')}</p>
       ) : (
-        <ol className="plain stack" aria-label={t('web.kb_proposals')}>
+        // Demo parity (DIFFS knowledge-build #1, #2): unnumbered rows divided by rules; each
+        // text a bordered card — the current one on the start side, the proposed beside it.
+        <ol className="kb-proposals" aria-label={t('web.kb_proposals')}>
           {changes.map((proposal) => (
             <li key={proposal.id} data-kind={proposal.kind} data-decision={proposal.state}>
               <div className="row gap">
@@ -297,18 +297,18 @@ function BuildCard({
                   </Badge>
                 )}
               </div>
-              <div className="two-col">
+              <div className="kb-texts">
                 {proposal.baseBody !== null && (
-                  <div>
+                  <div className="kb-text">
                     <p className="small muted">{t('web.kb_current')}</p>
                     <p className="strong">{proposal.baseTitle}</p>
                     <p className="support-answer">{proposal.baseBody}</p>
                   </div>
                 )}
                 {proposal.kind === 'RETIRE' ? (
-                  <p className="small">{t('web.kb_retire_explained')}</p>
+                  <p className="small kb-retire-note">{t('web.kb_retire_explained')}</p>
                 ) : (
-                  <div>
+                  <div className="kb-text">
                     <p className="small muted">{t('web.kb_proposed')}</p>
                     <p className="strong">{proposal.title}</p>
                     <p className="support-answer">{proposal.body}</p>
@@ -316,7 +316,7 @@ function BuildCard({
                 )}
               </div>
               {mayReview && open && proposal.state === 'PENDING' && (
-                <div className="form-actions">
+                <div className="kb-actions">
                   {proposal.kind === 'CONFLICT' ? (
                     <>
                       <span className="small">{t('web.kb_conflict_explained')}</span>

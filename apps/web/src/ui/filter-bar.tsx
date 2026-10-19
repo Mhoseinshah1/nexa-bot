@@ -11,9 +11,10 @@ import { batchQueryChanges } from '../router';
 /**
  * One compact filter line per list (W1.3).
  *
- * The line: the slim search, a «فیلترها» button with a count badge, the active filters as
- * removable chips («وضعیت: فعال ×»), «پاک کردن همه» when two or more are active, «بدون فیلتر —
- * همه نمایش داده می‌شوند» when none are, and the saved-filters slot at the end.
+ * The first row: a «فیلترها» button with a count badge, the active filters as removable chips
+ * («وضعیت: فعال ×»), «پاک کردن همه» when two or more are active, «بدون فیلتر — همه نمایش داده
+ * می‌شوند» when none are, and the saved-filters slot at the end. The slim search is the row
+ * under it, or above it with `first="search"` (owner decision 2026-10-19: per page, as the demo).
  *
  * «فیلترها» opens a panel with one row per filter (label on the side, the page's existing chip
  * group or select inside). Every change applies immediately — the page's own controls still
@@ -64,6 +65,12 @@ export interface ListFilterBarProps {
   savedViews?: ReactNode;
   /** Accessible name of the filter region. */
   label?: string;
+  /**
+   * Which row comes first. The owner decision of 2026-10-19 is «follow the approved demo, page
+   * by page»: «filters» (default) draws the filter line and saved filters, then the search;
+   * «search» draws the search, then the filter line. The DOM follows the screen either way.
+   */
+  first?: 'filters' | 'search';
 }
 
 export function ListFilterBar({
@@ -72,6 +79,7 @@ export function ListFilterBar({
   onClearAll,
   savedViews,
   label,
+  first = 'filters',
 }: ListFilterBarProps) {
   const [open, setOpen] = useState(false);
   const toggle = useRef<HTMLButtonElement>(null);
@@ -91,7 +99,9 @@ export function ListFilterBar({
       role="search"
       {...(label === undefined ? {} : { 'aria-label': label })}
     >
-      {hasSearch && <div className="lfb-search">{search}</div>}
+      {/* Owner decision 2026-10-19: the row order follows the demo page by page (`first`); the
+          DOM is in the order on screen, so the keyboard meets the rows as the eye does. */}
+      {first === 'search' && hasSearch && <div className="lfb-search">{search}</div>}
       <div className="lfb-line">
         <button
           ref={toggle}
@@ -133,6 +143,7 @@ export function ListFilterBar({
         </div>
       </div>
       {hasSaved && <div className="lfb-saved">{savedViews}</div>}
+      {first === 'filters' && hasSearch && <div className="lfb-search">{search}</div>}
       {open &&
         createPortal(
           <LayerContext.Provider value={layer.registry}>

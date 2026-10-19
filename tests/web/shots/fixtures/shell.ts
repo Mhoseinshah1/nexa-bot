@@ -14,6 +14,9 @@ import {
 } from '@nexa/contracts';
 import { ago, fixture, type ShotFixture } from '../fixture.ts';
 
+/** The shell's attention state for a screenshot run (see the bell and banner fixtures). */
+const SHELL_ATTENTION = process.env['NEXA_SHOTS_SHELL'] === 'attention';
+
 /**
  * What every screen needs: a signed-in owner holding every permission (so the
  * whole navigation is drawn), and the build the sidebar names.
@@ -55,13 +58,33 @@ export const SHELL: readonly ShotFixture[] = [
       { name: 'outbox-relay', status: 'up', latencyMs: 12 },
     ],
   }),
-  // The topbar's bell and the incident banner, on every screen: nothing unread, no incident.
-  fixture('/notification-center/summary', inboxSummaryResponseSchema, {
-    unread: 0,
-    atLeast: false,
-    highestUnread: null,
+  /*
+   * The topbar's bell and the incident banner, on every screen: nothing unread, no incident —
+   * so every family's screens are photographed as they were. `NEXA_SHOTS_SHELL=attention`
+   * (demo parity A1/A4) photographs the shell's other state instead: an unread count on the
+   * bell and one ACTIVE incident on the banner, as the approved demo draws them.
+   */
+  fixture(
+    '/notification-center/summary',
+    inboxSummaryResponseSchema,
+    SHELL_ATTENTION
+      ? { unread: 6, atLeast: false, highestUnread: 'ERROR' }
+      : { unread: 0, atLeast: false, highestUnread: null },
+  ),
+  fixture('/incidents/banner', incidentBannerResponseSchema, {
+    incidents: SHELL_ATTENTION
+      ? [
+          {
+            id: '01a05e35-c9ad-7e93-bef3-1ed9b55292f7',
+            kind: 'INCIDENT',
+            severity: 'CRITICAL',
+            title: 'قطعی پنل DE-2',
+            startedAt: ago(40),
+            scheduledEndAt: ago(-200),
+          },
+        ]
+      : [],
   }),
-  fixture('/incidents/banner', incidentBannerResponseSchema, { incidents: [] }),
   /*
    * Roadmap B2: the reads a few routes make that no family fixtured yet, so
    * `pnpm web:responsive` measures their page rather than an error card. Empty

@@ -214,11 +214,12 @@ form.set-row > * + * {
 /* Where support goes is edited on the settings page: said in one quiet line. */
 .support-destination {
   display: flex;
-  align-items: center;
+  /* Demo parity (DIFFS support #2): the icon and «رفتن به تنظیمات» align with the title. */
+  align-items: flex-start;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: calc(var(--radius-card) - 6px);
+  border-radius: var(--radius-card);
   background: var(--panel-row);
   color: var(--fg-3);
 }
@@ -229,6 +230,9 @@ form.set-row > * + * {
 }
 .support-destination p {
   margin: 2px 0 0;
+}
+.support-destination > svg {
+  margin-top: 3px;
 }
 /*
  * The answer under its question, two lines at most in the list. TB10: each paragraph takes
@@ -378,6 +382,11 @@ form.set-row > * + * {
   text-align: start;
 }
 /* TB10: the ticket a conversation escalated to, as a badge that is also a link. */
+.bchat-state-sub {
+  /* Demo parity: «تیکت دارد» sits on its own line under the status badge. */
+  flex-basis: 100%;
+  display: flex;
+}
 .bchat-ticket {
   text-decoration: none;
   gap: 4px;
@@ -385,6 +394,16 @@ form.set-row > * + * {
 .bchat-ticket:hover,
 .bchat-ticket:focus-visible {
   text-decoration: underline;
+}
+/* Demo parity: the inbox's headers stay on one line and a preview is one truncated line. */
+.bchat-inbox th {
+  white-space: nowrap;
+}
+.bchat-inbox .bchat-preview {
+  -webkit-line-clamp: 1;
+}
+.tbl td a.bchat-ticket:not(:hover):not(:focus-visible) {
+  text-decoration: none;
 }
 /* TB10: the customer's wait — a figure and its unit, never split across lines. */
 .bchat-wait {
@@ -778,8 +797,17 @@ form.set-row > * + * {
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
-.ops-group-topic-when {
-  flex-basis: 100%;
+/* Demo parity: one compact row per topic — name, state, last delivery at the far end. */
+.ops-group-topics li > .strong {
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+/* The connection card and the topics-and-queue column share the row equally (one column
+   where the shell stacks every two-column layout). */
+@media (min-width: 981px) {
+  .two-col.ops-group-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 /* The three connection steps as a numbered sequence. */
 .ops-group-steps {
@@ -814,7 +842,11 @@ form.set-row > * + * {
   font-size: var(--fs-xs);
 }
 .ops-group-connect {
-  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
 }
 /* The one-time binding code: a deep link, and the command to paste instead. */
 .ops-group-code {
@@ -843,9 +875,8 @@ form.set-row > * + * {
 
 /* --- Alerts and notifications --------------------------------------------------- */
 
-.alerts-code {
-  font-size: var(--fs-sm);
-  color: var(--fg-2);
+.alerts-event {
+  font-weight: 600;
 }
 .alerts-severity {
   width: auto;
@@ -904,14 +935,56 @@ form.set-row > * + * {
   color: var(--fg-3);
   font-size: var(--fs-sm);
 }
+/* Demo parity: the dependencies and the build share the row equally on a desk. */
+@media (min-width: 981px) {
+  .two-col.system-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/* The logs card: the description, and the way to the group at the end of the same row. */
+.system-logs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.system-logs > p {
+  margin: 0;
+  flex: 1 1 280px;
+}
 .system-stats,
 .diagnostics-stats {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+/* Demo parity: on a phone the system's first two figures sit side by side (the overall verdict
+   and the slowest latency), the third takes the row under them. */
+@media (max-width: 600px) {
+  .system-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* The verdict is a phrase («اختلال در وابستگی»): it wraps inside its half-width card. */
+  .stat-grid.system-stats > .stat .val {
+    flex-wrap: wrap;
+    min-width: 0;
+    font-size: 18px;
+    overflow-wrap: anywhere;
+  }
+  .system-stats > :nth-child(3) {
+    grid-column: 1 / -1;
+  }
 }
 .system-roles {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+/* Demo parity: the binding's control reads as plain accent text until hovered. */
+.system-telegram .link {
+  text-decoration: none;
+}
+.system-telegram .link:hover {
+  text-decoration: underline;
 }
 .system-telegram {
   display: flex;
@@ -938,6 +1011,71 @@ form.set-row > * + * {
 .recovery-stat-time {
   font-size: var(--fs-body);
   font-weight: 600;
+}
+/*
+ * Demo parity (recovery family). A card whose hint is one sentence draws it on the title's
+ * line, as the demo's «زمان‌بندی بکاپ خودکار», «کیت بازیابی» and «عملیات بازیابی» do; it
+ * wraps under the title when the line is too narrow.
+ */
+.card.rcv-inline-head > .card-head > .titles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+.card.rcv-inline-head > .card-head .hint {
+  margin-top: 0;
+  font-size: var(--fs-xs);
+}
+/* The restore card's part titles («بارگذاری آرشیو», the earlier restores) read as headings. */
+.card.recovery-operations h3.card-subtitle {
+  color: var(--fg);
+  font-size: var(--fs-ui);
+  font-weight: 700;
+}
+/* The history's download is a quiet action in its cell, not an underlined identifier. */
+.card.rcv-history td a.link {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+.card.rcv-history td a.link:hover {
+  text-decoration: underline;
+}
+
+/* --- Legacy review pages (products, services, cutover) ---------------------------- */
+
+/* The exact-code fields: one inline row of narrow fields on the start side. */
+.lgr-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-end;
+}
+.lgr-filters > .field {
+  flex: 0 1 190px;
+  min-width: 150px;
+  margin: 0;
+}
+/* On a phone each field takes the full line, as the demo stacks them. */
+@media (max-width: 600px) {
+  .lgr-filters > .field {
+    flex: 1 1 100%;
+  }
+}
+/* A 64-digit fingerprint in a list: small code face, breaking anywhere on a phone. */
+.lgr-hash {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+/* Every result category with its count: two pairs a row where there is room. */
+@media (min-width: 901px) {
+  .kv.lgr-kv2 {
+    grid-template-columns: repeat(2, minmax(110px, max-content) minmax(60px, 1fr));
+  }
 }
 /* Upload → verify → confirm: where the request in hand stands. */
 .recovery-steps {
@@ -1074,6 +1212,10 @@ form.set-row > * + * {
   gap: 8px;
   margin: 0;
 }
+/* Demo parity: a password box is as wide as a password, not the whole card. */
+.account-page .field > .input {
+  max-width: 440px;
+}
 .account-page .row-inline {
   display: flex;
   flex-wrap: wrap;
@@ -1112,11 +1254,14 @@ form.set-row > * + * {
   padding: 0;
   list-style: none;
 }
+/* Demo parity: each sign-in event is its own quiet row box, as each session is. */
 .account-page .security-event {
   display: grid;
   gap: 2px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
 }
 .account-page .system-session dd,
 .account-page .security-event {
@@ -1134,9 +1279,9 @@ form.set-row > * + * {
   align-items: center;
   gap: 8px;
 }
+/* Demo parity: the roles are rows of one list, a hairline between them. */
 .rbac .rbac-roles {
   display: grid;
-  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1144,10 +1289,17 @@ form.set-row > * + * {
 .rbac .rbac-role {
   display: grid;
   gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--panel-row);
+  padding: 12px 4px;
+}
+.rbac .rbac-role + .rbac-role {
+  border-top: 1px solid var(--line);
+}
+/* The view switch and «نقش تازه», side by side in the roles card's header. */
+.rbac-head-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 .rbac-domain {
   display: grid;
@@ -1177,6 +1329,26 @@ form.set-row > * + * {
 }
 
 /* --- Phase D1 audit log -------------------------------------------------------- */
+
+/* Demo parity: the typed filters as an open grid of labelled fields, the two buttons under. */
+.audit-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(170px, 100%), 1fr));
+  gap: 10px;
+  align-items: start;
+  margin-block: 12px 6px;
+}
+.audit-filters .input,
+.audit-filters .date-field {
+  width: 100%;
+}
+.audit-filters-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
 
 .audit-code {
   font-size: var(--fs-ui);
@@ -1220,6 +1392,19 @@ form.set-row > * + * {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+/* Demo parity: the action and the entity are filters, drawn as plain accent text that
+   underlines on hover; the entity's own links are small and quiet under it. */
+.audit-cell > .link,
+.audit-entity .link {
+  text-decoration: none;
+}
+.audit-cell > .link:hover,
+.audit-entity .link:hover {
+  text-decoration: underline;
+}
+.audit-links {
+  font-size: var(--fs-xs);
+}
 .audit-badges,
 .audit-links {
   display: inline-flex;
@@ -1228,8 +1413,12 @@ form.set-row > * + * {
   align-items: center;
 }
 /* A refusal or a failure stays in the log, marked rather than hidden. */
-.audit-row-refused td:first-child {
-  box-shadow: inset -3px 0 0 var(--warn);
+/* Demo parity: a refused or failed row is tinted red across, not marked at one edge (on a
+   desk; the phone's row cards are not tinted, as the demo's are not). */
+@media (min-width: 821px) {
+  .audit-row-refused td {
+    background: var(--danger-soft);
+  }
 }
 /* The recorded values: long JSON wraps inside its cell instead of widening the page. */
 .audit-diff td {

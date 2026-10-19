@@ -191,13 +191,17 @@ describe('the sidebar', () => {
     stubApi([session([])]);
     renderPage(<App />);
     const nav = await screen.findByRole('navigation', { name: t('web.nav_label') });
-    const themeButton = screen.getByRole('button', {
+    // The sidebar's footer toggle; the top bar carries the same one (checked below).
+    const sidebar = document.getElementById('app-sidebar') as HTMLElement;
+    const themeButton = within(sidebar).getByRole('button', {
       name: `${t('web.theme')}: ${t('web.theme_system')}`,
     });
     fireEvent.click(themeButton);
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
     fireEvent.click(
-      screen.getByRole('button', { name: `${t('web.theme')}: ${t('web.theme_dark')}` }),
+      within(document.querySelector('.topbar') as HTMLElement).getByRole('button', {
+        name: `${t('web.theme')}: ${t('web.theme_dark')}`,
+      }),
     );
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
     // The same node: nothing above it was torn down to repaint.
@@ -211,6 +215,9 @@ describe('the sidebar', () => {
     await waitFor(() =>
       expect(container.querySelector('.build-id')?.textContent).toBe('v0.4.0 · 7ba1837'),
     );
+    // The small mono line in the sidebar's footer, as the reference closes the sidebar.
+    expect(container.querySelector('.sidebar-foot .build-id .mono')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.user_menu') }));
     expect(container.querySelector('.identity-env')?.textContent).toContain('staging');
     unmount();
 
@@ -219,13 +226,23 @@ describe('the sidebar', () => {
     await screen.findByRole('navigation', { name: t('web.nav_label') });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(without.container.querySelector('.build-id')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('web.user_menu') }));
     expect(without.container.querySelector('.identity-env')).toBeNull();
   });
 
-  it('titles the identity card with the product name, never the host', async () => {
+  it('titles the installation with the product name, never the host, in the owner menu', async () => {
     stubApi([session([]), INFO]);
     const { container } = renderPage(<App />);
-    const card = await screen.findByRole('group', { name: t('web.identity_label') });
+    // Not a card of its own in the sidebar any more (demo parity A3): a line in the owner menu.
+    await screen.findByRole('navigation', { name: t('web.nav_label') });
+    expect(
+      within(document.getElementById('app-sidebar') as HTMLElement).queryByRole('group', {
+        name: t('web.identity_label'),
+      }),
+    ).toBeNull();
+    await waitFor(() => expect(container.querySelector('.build-id')).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: t('web.user_menu') }));
+    const card = screen.getByRole('group', { name: t('web.identity_label') });
     await waitFor(() => expect(container.querySelector('.identity-env')).not.toBeNull());
     // The title is the catalogue's product name — no contract carries a store name.
     expect(card.querySelector('.identity-name')?.textContent).toBe(t('web.title'));
@@ -257,7 +274,8 @@ describe('the sidebar', () => {
       },
     ]);
     const { container } = renderPage(<App />);
-    await waitFor(() => expect(container.querySelectorAll('.nav .cnt')).toHaveLength(2));
+    // Both groups are folded: each shows the amber dot, the links' badges are inside.
+    await waitFor(() => expect(screen.getAllByTestId('nav-group-dot')).toHaveLength(2));
     // Both groups are folded on the dashboard: open each to read its link's own counter.
     fireEvent.click(navGroupHeader('web.navgroup_customers') as HTMLElement);
     const services = container.querySelector('.nav a[href="/services"]') as HTMLElement;
@@ -297,7 +315,7 @@ describe('the sidebar', () => {
       },
     ]);
     const { container } = renderPage(<App />);
-    await waitFor(() => expect(container.querySelector('.nav .cnt')).not.toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('nav-group-dot')).not.toBeNull());
     fireEvent.click(navGroupHeader('web.navgroup_system') as HTMLElement);
     const badge = container.querySelector('.nav a .cnt') as HTMLElement;
     const capped = formatNumber(COUNTER_CAP);
@@ -313,5 +331,7 @@ describe('the sidebar', () => {
     const { container } = renderPage(<App />);
     await screen.findByRole('navigation', { name: t('web.nav_label') });
     expect(container.querySelectorAll('.nav .cnt')).toHaveLength(0);
+    // No data, no dot: a group's amber dot is read from the counters alone.
+    expect(screen.queryAllByTestId('nav-group-dot')).toHaveLength(0);
   });
 });

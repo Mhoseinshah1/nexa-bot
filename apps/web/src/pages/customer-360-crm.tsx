@@ -449,6 +449,7 @@ function CustomerNotesCard({
           )}
           {(trail.length > 0 || nextCursor !== null) && (
             <CursorPager
+              order="newest-first"
               shown={all.length}
               hasPrevious={trail.length > 0}
               hasNext={nextCursor !== null && !notes.isPlaceholderData}

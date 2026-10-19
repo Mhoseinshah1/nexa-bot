@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CursorPager, LIST_PAGE_SIZE } from '../ui/kit';
+import { CursorPager, LIST_PAGE_SIZE, type KeysetOrder } from '../ui/kit';
 
 /**
  * W1.8 for a list drawn from rows already in memory (a whole response, or the pages an
@@ -37,12 +37,15 @@ export function useClientPaging<T>(
  * first read another page from the server.
  */
 export function ClientPager({
+  order,
   shown,
   hasPrevious,
   hasNext,
   onPrevious,
   onNext,
 }: {
+  /** The order the rows are in (`CursorPager`): it names the two buttons. */
+  order: KeysetOrder;
   shown: number;
   hasPrevious: boolean;
   hasNext: boolean;
@@ -52,6 +55,7 @@ export function ClientPager({
   if (!hasPrevious && !hasNext) return null;
   return (
     <CursorPager
+      order={order}
       shown={shown}
       hasPrevious={hasPrevious}
       hasNext={hasNext}

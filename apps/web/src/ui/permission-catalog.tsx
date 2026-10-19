@@ -62,6 +62,8 @@ export interface PermissionCatalogProps {
   matrix?: readonly PermissionMatrixColumn[];
   /** DOM id prefix, so two catalogues on one page do not collide. Default `rbac`. */
   idPrefix?: string;
+  /** Which of the two views opens first (`matrix` needs `matrix`); `list` by default. */
+  initialView?: 'list' | 'matrix';
 }
 
 /** Cards start collapsed above this many permissions. */
@@ -136,10 +138,11 @@ export function PermissionCatalog({
   badgeFor,
   matrix,
   idPrefix = 'rbac',
+  initialView = 'list',
 }: PermissionCatalogProps) {
   const [search, setSearch] = useState('');
   const [criticalOnly, setCriticalOnly] = useState(false);
-  const [view, setView] = useState<'list' | 'matrix'>('list');
+  const [view, setView] = useState<'list' | 'matrix'>(matrix === undefined ? 'list' : initialView);
   const startCollapsed = keys.length > PERMISSION_CATALOG_COLLAPSE_ABOVE;
   const [openCards, setOpenCards] = useState<ReadonlySet<string>>(() =>
     startCollapsed ? new Set() : new Set(keys.map(domainOf)),

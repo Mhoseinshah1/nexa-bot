@@ -629,31 +629,31 @@ export function PaymentGatewaysPage({
     {
       key: 'name',
       header: t('web.payment_gateway_provider'),
-      // The name, and — quieter, beneath it — when the route was last changed.
+      /*
+       * The name as the route's link, and beneath it — one fact a line, as the demo stacks
+       * them — the «نام پیش‌فرض» pill and when the route was last changed.
+       */
       render: (row) => (
-        <CellMain
-          primary={
-            <span className="gateways-name">
-              {provider === undefined ? (
-                <a className="strong" href={paymentMethodPath(row.provider)} onClick={onLink}>
-                  {nameOf(row)}
-                </a>
-              ) : (
-                <span className="strong">{nameOf(row)}</span>
-              )}
-              {row.displayName === null && (
-                <Badge tone="neutral" outline>
-                  {t('web.payment_gateway_name_default')}
-                </Badge>
-              )}
-            </span>
-          }
-          secondary={
+        <span className="gateways-lines gateways-name-cell">
+          {provider === undefined ? (
+            <a className="strong" href={paymentMethodPath(row.provider)} onClick={onLink}>
+              {nameOf(row)}
+            </a>
+          ) : (
+            <span className="strong">{nameOf(row)}</span>
+          )}
+          {row.displayName === null && (
             <span>
-              {t('web.payment_gateway_updated')}: {formatTimestamp(row.updatedAt)}
+              <Badge tone="neutral" outline>
+                {t('web.payment_gateway_name_default')}
+              </Badge>
             </span>
-          }
-        />
+          )}
+          <span className="muted">
+            {t('web.payment_gateway_updated')}:{' '}
+            <span className="nowrap">{formatTimestamp(row.updatedAt)}</span>
+          </span>
+        </span>
       ),
     },
     {
@@ -697,6 +697,7 @@ export function PaymentGatewaysPage({
     {
       key: 'amounts',
       header: t('web.payment_gateway_section_amounts'),
+      wrap: 'tight',
       // Both bounds in one cell, each named: `0` on either side is "no bound".
       render: (row) => (
         <span className="gateways-lines">
@@ -714,6 +715,7 @@ export function PaymentGatewaysPage({
     {
       key: 'eligibility',
       header: t('web.payment_gateway_eligibility'),
+      wrap: 'tight',
       /*
        * The thresholds as they are, and a dash when every one of them is off. Rendering
        * "0" three times would read as three conditions the operator has set to zero,
@@ -731,12 +733,22 @@ export function PaymentGatewaysPage({
             ? `${t('web.payment_gateway_after_days')}: ${row.eligibility.activateAfterAccountDays}`
             : null,
         ].filter((part): part is string => part !== null);
-        return parts.length === 0 ? '—' : parts.join(' · ');
+        // One threshold a line, as the demo stacks them.
+        return parts.length === 0 ? (
+          '—'
+        ) : (
+          <span className="gateways-lines">
+            {parts.map((part) => (
+              <span key={part}>{part}</span>
+            ))}
+          </span>
+        );
       },
     },
     {
       key: 'money',
       header: t('web.payment_gateway_section_money'),
+      wrap: 'tight',
       /*
        * The top-up gift, the customer fee and — for a fixed-rate route — the Stars rate,
        * each on its own line and named, or a dash when the route carries none of them.
@@ -784,18 +796,18 @@ export function PaymentGatewaysPage({
           <Badge tone="warn">{t('web.payment_gateway_credential_missing')}</Badge>
         ) : (
           <span className="gateways-lines">
-            <span>
-              <Badge tone="ok">{t('web.payment_gateway_credential_configured')}</Badge>{' '}
+            <span className="gateways-stack">
+              <Badge tone="ok">{t('web.payment_gateway_credential_configured')}</Badge>
               <span className="muted small">{formatTimestamp(row.credential.setAt)}</span>
             </span>
             {/* A signed route's IPN secret: its state alone, never a value. */}
             {row.credential.webhookSecretRequired && (
-              <span>
+              <span className="gateways-stack">
                 {row.credential.webhookSecretSetAt === null ? (
                   <Badge tone="warn">{t('web.payment_gateway_webhook_secret_missing')}</Badge>
                 ) : (
                   <>
-                    <Badge tone="ok">{t('web.payment_gateway_webhook_secret_configured')}</Badge>{' '}
+                    <Badge tone="ok">{t('web.payment_gateway_webhook_secret_configured')}</Badge>
                     <span className="muted small">
                       {formatTimestamp(row.credential.webhookSecretSetAt)}
                     </span>
@@ -805,12 +817,12 @@ export function PaymentGatewaysPage({
             )}
             {/* A route's separate verify key (CentralPay): its state alone, never a value. */}
             {row.credential.verifyKeyRequired && (
-              <span>
+              <span className="gateways-stack">
                 {row.credential.verifyKeySetAt === null ? (
                   <Badge tone="warn">{t('web.payment_gateway_verify_key_missing')}</Badge>
                 ) : (
                   <>
-                    <Badge tone="ok">{t('web.payment_gateway_verify_key_configured')}</Badge>{' '}
+                    <Badge tone="ok">{t('web.payment_gateway_verify_key_configured')}</Badge>
                     <span className="muted small">
                       {formatTimestamp(row.credential.verifyKeySetAt)}
                     </span>
@@ -820,15 +832,17 @@ export function PaymentGatewaysPage({
             )}
             {/* The last credential check: when, and its machine result for diagnosis. */}
             {row.credential.lastCheckAt !== null && row.credential.lastCheckResult !== null && (
-              <span>
-                <span className="muted">{t('web.payment_gateway_last_check')}:</span>{' '}
-                <Badge tone={row.credential.lastCheckResult === 'ok' ? 'ok' : 'danger'}>
-                  {t(
-                    row.credential.lastCheckResult === 'ok'
-                      ? 'web.payment_gateway_check_ok'
-                      : 'web.payment_gateway_check_failed',
-                  )}
-                </Badge>{' '}
+              <span className="gateways-stack">
+                <span>
+                  <span className="muted">{t('web.payment_gateway_last_check')}:</span>{' '}
+                  <Badge tone={row.credential.lastCheckResult === 'ok' ? 'ok' : 'danger'}>
+                    {t(
+                      row.credential.lastCheckResult === 'ok'
+                        ? 'web.payment_gateway_check_ok'
+                        : 'web.payment_gateway_check_failed',
+                    )}
+                  </Badge>
+                </span>
                 <span className="muted small">{formatTimestamp(row.credential.lastCheckAt)}</span>
                 {row.credential.lastCheckResult !== 'ok' && (
                   <>
@@ -894,11 +908,11 @@ export function PaymentGatewaysPage({
           {provider === undefined ? (
             <Card title={t('web.payment_gateways_title')} hint={t('web.payment_gateways_hint')}>
               <DataTable
+                stack
                 columns={columns}
                 rows={rows}
                 rowKey={(row) => row.provider}
                 caption={t('web.payment_gateways_title')}
-                dense
               />
             </Card>
           ) : only === undefined ? null : (
@@ -1427,14 +1441,14 @@ export function TopupUnavailableWarning({
   return (
     <Banner tone="warn" title={t('web.payment_gateways_topup_unavailable_title')}>
       <p>{t('web.payment_gateways_topup_unavailable_body')}</p>
-      <ul>
+      {/* One route a line, its name and why it cannot take a top-up (demo callout shape). */}
+      <ul className="gateways-topup-routes">
         {walletTopup.routes.map((route) => {
           const row = rows.find((candidate) => candidate.provider === route.provider);
           if (row === undefined) return null;
           return (
             <li key={route.provider}>
-              <strong>{nameOf(row)}</strong>
-              {t('web.ident_separator')}
+              <span className="strong">{nameOf(row)}</span> {t('web.ident_separator')}{' '}
               {route.blockers
                 .map((blocker) => blockerText(blocker, row))
                 .join(t('web.list_separator'))}

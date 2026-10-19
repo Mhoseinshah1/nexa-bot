@@ -5,7 +5,7 @@ import { t, type WebKey } from './i18n/web.fa';
 import { navigate, useLinkHandler } from './router';
 import type { ThemeChoice } from './theme';
 import { Icon, type IconName } from './ui/icons';
-import { Breadcrumbs, Menu, confirmDialogOpen, useFocusTrap, type Crumb } from './ui/kit';
+import { Menu, confirmDialogOpen, useFocusTrap } from './ui/kit';
 import { formatNumber } from './format';
 import { GROUP_ORDER, NAV_STANDALONE_GROUP, isCurrent, navGroupOf, type NavEntry } from './nav';
 import type { NavCounter, NavCounters } from './nav-counters';
@@ -105,8 +105,7 @@ export function Sidebar({
   const onLink = useLinkHandler();
   const info = useBuildInfo();
   const describedBy = useId();
-  const nextTheme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length] ?? 'system';
-  const themeLabel = `${t('web.theme')}: ${t(THEME_LABEL[theme])}`;
+  const { next: nextTheme, label: themeLabel, icon: themeIcon } = themeToggle(theme);
   const ref = useRef<HTMLElement>(null);
   useFocusTrap(ref, drawer, () => onDismiss?.());
 
@@ -141,7 +140,7 @@ export function Sidebar({
         title={collapsed ? t(entry.label) : undefined}
         {...(counter === undefined ? {} : { 'aria-describedby': countId })}
       >
-        <Icon name={entry.icon} size={17} className="ico" />
+        <Icon name={entry.icon} size={15} className="ico" />
         <span className="lbl">{t(entry.label)}</span>
         {counter !== undefined && (
           /*
@@ -181,34 +180,21 @@ export function Sidebar({
 
   return (
     <aside className="sidebar" id="app-sidebar" ref={ref}>
+      {/*
+        The brand block, as the reference draws it: the N tile, the letter-spaced wordmark and
+        the console's subtitle. The installation this console is connected to is no longer a card of its
+        own here: it is a line in the owner pill's menu (`Topbar`), at the demo's density.
+      */}
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">
           N
         </span>
         <span className="brand-text">
-          <strong>{t('web.title')}</strong>
+          <strong className="wordmark" title={t('web.title')}>
+            {t('web.brand_wordmark')}
+          </strong>
           <span>{t('web.subtitle')}</span>
         </span>
-      </div>
-
-      {/*
-        The installation this console is connected to. No contract carries a
-        store or tenant display name, so the title is the product's own name
-        and the line beneath it is the environment and service the server
-        reports (`GET /health/info`) — never the host, which is an address and
-        not a name anybody recognises. Identity only: the session carries one
-        tenant and no way to switch, so nothing here is pressable.
-      */}
-      <div className="identity" aria-label={t('web.identity_label')} role="group">
-        <i className={`dot ${info.data === undefined ? '' : 'ok'}`} aria-hidden="true" />
-        <div className="identity-text">
-          <div className="identity-name truncate">{t('web.title')}</div>
-          {info.data !== undefined && (
-            <div className="identity-env truncate">
-              <span className="ltr">{`${info.data.environment} · ${info.data.name}`}</span>
-            </div>
-          )}
-        </div>
       </div>
 
       <nav className="nav" aria-label={t('web.nav_label')}>
@@ -260,30 +246,24 @@ export function Sidebar({
               >
                 <span className="lbl">{t(group)}</span>
                 {total !== undefined && (
-                  // Seen as a badge and heard in the header's name, as a link's count is: a
-                  // capped sum says "or more" in both.
-                  <span className={`cnt${total.tone === undefined ? '' : ` ${total.tone}`}`}>
-                    {total.atLeast === true ? (
-                      <>
-                        <span aria-hidden="true">
-                          {t('web.nav_counter_at_least').replace(
+                  /*
+                    A closed group with something waiting shows the reference's amber dot, read
+                    from the same counters its links carry (no counter, no dot). The sum is
+                    still HEARD in the header's name, a capped one as a floor.
+                  */
+                  <>
+                    <span className="gdot" aria-hidden="true" data-testid="nav-group-dot" />
+                    <span className="visually-hidden">
+                      {total.atLeast === true
+                        ? t('web.nav_counter_at_least_spoken').replace(
                             '{count}',
                             formatNumber(total.count),
-                          )}
-                        </span>
-                        <span className="visually-hidden">
-                          {t('web.nav_counter_at_least_spoken').replace(
-                            '{count}',
-                            formatNumber(total.count),
-                          )}
-                        </span>
-                      </>
-                    ) : (
-                      formatNumber(total.count)
-                    )}
-                  </span>
+                          )
+                        : formatNumber(total.count)}
+                    </span>
+                  </>
                 )}
-                <Icon name="chevron" size={14} className="chev" />
+                <Icon name="chevron" size={12} className="chev" />
               </button>
               {/* Always in the DOM, so `aria-controls` names a real element; `hidden` keeps a
                   closed group's links out of the tab order and the accessibility tree. */}
@@ -295,7 +275,14 @@ export function Sidebar({
         })}
       </nav>
 
+      {/* The reference's footer: the build line, then compact mode and the theme. */}
       <div className="sidebar-foot">
+        {info.data !== undefined && (
+          <span className="build-id" title={`${t('web.build_identity')} — ${info.data.buildTime}`}>
+            <span className="ltr mono">{`v${info.data.version} · ${info.data.commit.slice(0, 7)}`}</span>
+          </span>
+        )}
+        <span className="spacer" />
         <button
           type="button"
           className="btn ghost icon sm"
@@ -314,13 +301,8 @@ export function Sidebar({
           title={themeLabel}
           onClick={() => onTheme(nextTheme)}
         >
-          <Icon name={THEME_ICON[theme]} size={15} />
+          <Icon name={themeIcon} size={15} />
         </button>
-        {info.data !== undefined && (
-          <span className="build-id" title={`${t('web.build_identity')} — ${info.data.buildTime}`}>
-            <span className="ltr mono">{`v${info.data.version} · ${info.data.commit.slice(0, 7)}`}</span>
-          </span>
-        )}
       </div>
     </aside>
   );
@@ -424,45 +406,50 @@ export function BottomNav({
 
 /* ------------------------------------------------------------------ topbar --- */
 
+/** The theme toggle, shared by the topbar and the sidebar's footer: one cycle, one label. */
+export function themeToggle(theme: ThemeChoice) {
+  return {
+    next: THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length] ?? 'system',
+    label: `${t('web.theme')}: ${t(THEME_LABEL[theme])}`,
+    icon: THEME_ICON[theme],
+  } as const;
+}
+
+/**
+ * The top bar, as the reference composes it (demo parity A1 / X11): the search pill on the
+ * sidebar's side, wide, with its Ctrl K hint; at the other end, from the edge inward, the owner
+ * pill, the theme, the notification bell, help and the menu — every one a round glass
+ * button. The page's title is not here: it is the page header's (`PageHead`).
+ */
 export function Topbar({
-  crumbs,
   collapsed,
-  onOpenMenu,
+  onMenu,
   onSearch,
   admin,
   onSignOut,
+  theme,
+  onTheme,
   bell,
 }: {
-  crumbs: readonly Crumb[];
   collapsed: boolean;
-  onOpenMenu: () => void;
+  /** The ≡ button: folds the sidebar to its rail at a desk, opens it as a drawer below that. */
+  onMenu: () => void;
   onSearch: () => void;
   admin: { displayName: string; roleKeys: readonly string[] };
   onSignOut: () => void;
-  /** Phase B3: the notification bell, drawn beside the search. */
+  theme: ThemeChoice;
+  onTheme: (next: ThemeChoice) => void;
+  /** Phase B3: the notification bell. */
   bell?: React.ReactNode;
 }) {
+  const info = useBuildInfo();
   const initial = Array.from(admin.displayName.trim())[0] ?? '·';
   // C1: each role by its Persian name; an unknown key is shown as itself, never blank.
   const roles = admin.roleKeys.map((key) => roleLabel(key)).join(t('web.list_separator')) || '—';
   const roleKeys = admin.roleKeys.join(', ');
+  const toggle = themeToggle(theme);
   return (
     <header className="topbar">
-      <button
-        type="button"
-        className="btn ghost icon menu-toggle"
-        aria-label={t('web.open_menu')}
-        aria-expanded={!collapsed}
-        aria-controls="app-sidebar"
-        onClick={onOpenMenu}
-      >
-        <Icon name="menu" />
-      </button>
-
-      <Breadcrumbs items={crumbs} />
-
-      <span className="spacer" />
-
       <button
         type="button"
         className="search-trigger"
@@ -475,7 +462,45 @@ export function Topbar({
         <kbd>Ctrl K</kbd>
       </button>
 
+      <span className="spacer" />
+
+      <button
+        type="button"
+        className="btn ghost icon menu-toggle"
+        aria-label={t('web.open_menu')}
+        title={t('web.open_menu')}
+        aria-expanded={!collapsed}
+        aria-controls="app-sidebar"
+        onClick={onMenu}
+      >
+        <Icon name="menu" />
+      </button>
+
+      <Menu
+        label={t('web.help')}
+        triggerClassName="btn ghost icon help-trigger"
+        trigger={
+          <span className="help-glyph" aria-hidden="true">
+            ?
+          </span>
+        }
+        items={[
+          { key: 'keys', heading: t('web.help_shortcuts') },
+          { key: 'search', label: t('web.help_search'), icon: 'search', onSelect: onSearch },
+        ]}
+      />
+
       {bell}
+
+      <button
+        type="button"
+        className="btn ghost icon theme-trigger"
+        aria-label={toggle.label}
+        title={toggle.label}
+        onClick={() => onTheme(toggle.next)}
+      >
+        <Icon name={toggle.icon} />
+      </button>
 
       <Menu
         label={t('web.user_menu')}
@@ -485,18 +510,37 @@ export function Topbar({
             <span className="avatar" aria-hidden="true">
               {initial}
             </span>
-            <span className="who-name">
-              {admin.displayName}
-              <span className="faint" title={roleKeys}>
-                {' · '}
-                {roles}
-              </span>
+            {/* Seen: the role (A1). The name is in the menu's heading, and read here. */}
+            <span className="visually-hidden">{admin.displayName}</span>
+            <span className="who-name" title={roleKeys}>
+              {roles}
             </span>
-            <Icon name="chevron" size={13} />
+            <Icon name="chevron" size={13} className="who-chev" />
           </>
         }
         items={[
           { key: 'who', heading: `${admin.displayName} · ${roles}` },
+          /*
+            The installation this console is connected to, compact (demo parity A3). No contract
+            carries a store or tenant display name, so the title is the product's own name and
+            the line beside it the environment and service the server reports
+            (`GET /health/info`) — never the host. The session carries one tenant and no way to
+            switch, so this is a line, not a choice.
+          */
+          {
+            key: 'identity',
+            heading: (
+              <span className="identity" aria-label={t('web.identity_label')} role="group">
+                <i className={`dot ${info.data === undefined ? '' : 'ok'}`} aria-hidden="true" />
+                <span className="identity-name">{t('web.title')}</span>
+                {info.data !== undefined && (
+                  <span className="identity-env">
+                    <span className="ltr">{`${info.data.environment} · ${info.data.name}`}</span>
+                  </span>
+                )}
+              </span>
+            ),
+          },
           { key: 'sep', separator: true },
           // Phase D2: the administrator's own account and its security section.
           {

@@ -217,16 +217,21 @@ describe('the business inbox', () => {
       { url: '/business-connections', body: { connections: [] } },
     ]);
     renderPage(<BusinessChatsPage route={route()} denied={false} />);
-    // W1.8: «بعدی» past the rows read so far reads the server's next page.
-    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
+    // The demo's footer: «نمایش بیشتر» past the rows read so far reads the server's next page.
+    fireEvent.click(await screen.findByRole('button', { name: t('web.bchat_show_more') }));
     expect(await screen.findByText('دومی')).toBeTruthy();
     expect(screen.getByText('سرویس وصل نمی‌شود')).toBeTruthy();
     const second = listCall(api)[1]!;
     expect(new URL(second.url, 'http://x').searchParams.get('cursor')).toBe(
       '2026-10-01T10:00:00.000Z|abc',
     );
-    // The last page draws no further control.
-    expect(screen.queryByRole('button', { name: t('web.page_next') })).toBeNull();
+    // Nothing more to read: the control stays drawn and is disabled.
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: t('web.bchat_show_more') }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true),
+    );
   });
 
   it('says «no permission» and asks the server nothing without the view key', () => {
@@ -576,7 +581,7 @@ describe('one business conversation', () => {
 });
 
 describe('W1.8 and W5 on the inbox and the conversation', () => {
-  it('pages the inbox ten at a time over the conversations already read', async () => {
+  it('shows the inbox ten at a time, and ten more of the conversations already read', async () => {
     const many = Array.from({ length: 12 }, (_, index) =>
       summary({
         id: `019400ab-cdef-7012-8345-6789abcde${String(100 + index)}`,
@@ -591,12 +596,15 @@ describe('W1.8 and W5 on the inbox and the conversation', () => {
     renderPage(<BusinessChatsPage route={route()} denied={false} />);
     const table = await screen.findByRole('table', { name: t('web.bchats_title') });
     expect(within(table).getAllByRole('row')).toHaveLength(11);
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
-    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(3));
-    // Nothing more was asked of the server: the second page was already in memory.
+    fireEvent.click(screen.getByRole('button', { name: t('web.bchat_show_more') }));
+    // The list GROWS (load more): all twelve, under the header row.
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(13));
+    // Nothing more was asked of the server: the rest was already in memory.
     expect(listCall(api)).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
-    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(11));
+    expect(
+      (screen.getByRole('button', { name: t('web.bchat_show_more') }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it('names every known outbound failure code in Persian, and keeps an unknown one raw', () => {

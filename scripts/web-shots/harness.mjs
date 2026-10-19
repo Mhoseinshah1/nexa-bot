@@ -66,12 +66,19 @@ export function buildWeb() {
  * from the fixture registry. `unfixtured()` returns (and `resetUnfixtured()` clears) the
  * requests no fixture answered, by name.
  */
-export async function startServer({ signedOut = false } = {}) {
+export async function startServer({
+  signedOut = false,
+  fixtureSet = process.env.NEXA_SHOT_FIXTURES,
+} = {}) {
   const dist = join(ROOT, 'apps/web/dist');
   if (!existsSync(join(dist, 'index.html')))
     throw new Error('apps/web/dist is missing; drop --no-build.');
 
-  const { FIXTURES, SHOT_NOW, findFixture } = await import(join(ROOT, 'tests/web/shots/index.ts'));
+  const { SHOT_NOW, findFixture, fixturesFor } = await import(
+    join(ROOT, 'tests/web/shots/index.ts')
+  );
+  // A named set (`--fixtures demo-parity`, or NEXA_SHOT_FIXTURES) layers its overrides.
+  const FIXTURES = fixturesFor(fixtureSet);
   const csp = productionCsp();
   let unfixtured = [];
 

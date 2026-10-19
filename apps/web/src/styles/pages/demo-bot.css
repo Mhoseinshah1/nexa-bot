@@ -1,0 +1,357 @@
+/*
+ * Demo parity — the bot and content family (appearance, bot buttons, bots, broadcasts,
+ * content, client apps, features, notifications, reminders, settings, terms, products,
+ * product categories). Page-scoped refinements only, after every other page file, so a
+ * rule here composes the page as `approved-demo.html` draws it without touching a sibling.
+ */
+
+/* --- Appearance (`#/appearance`) --------------------------------------------------- */
+
+/* The demo's rows: a 20px glyph, roomy cells, the whole row opens the slot's sheet. */
+.appearance-glyph.sm {
+  font-size: 20px;
+}
+.bx-rows td {
+  padding-block: 12px;
+}
+.bx-tr {
+  cursor: pointer;
+}
+.bx-tr:hover td {
+  background: var(--bg-2);
+}
+.bx-chev-col {
+  width: 28px;
+}
+.bx-chev {
+  color: var(--fg-3);
+  font-size: 18px;
+  line-height: 1;
+}
+/* The test card lists every bot as a bulleted line, as the demo does. */
+.appearance-bots {
+  list-style: disc;
+  padding-inline-start: 18px;
+  gap: 6px;
+  margin-block: 10px 12px;
+}
+
+/* --- Bot buttons (`#/bot-buttons`) ------------------------------------------------- */
+
+/*
+ * The demo stacks the builder in one column of framed cards: «دکمه‌های آزاد» full width
+ * ABOVE the menu, each free button a full-width row; «منو» its own card with the segmented
+ * control opposite its title and the wide phone under it; the inspector full width below.
+ */
+.bb-card .bb-workspace {
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 12px;
+}
+.bb-card .bb-workspace > .bb-pool {
+  grid-column: 1 / -1;
+  align-self: auto;
+}
+.bb-card .bb-pool,
+.bb-card .bb-canvas,
+.bb-card .bb-inspector {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+  padding: 12px;
+}
+.bb-card .bb-pool.is-target {
+  border-style: dashed;
+  border-color: var(--line-2);
+}
+.bb-card .bb-pool.is-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.bb-card .bb-pool-list {
+  flex-direction: column;
+}
+.bb-card .bb-pool-list .bb-chip {
+  flex: 1 1 auto;
+  inline-size: 100%;
+}
+.bb-card .bb-canvas-head {
+  margin-bottom: 4px;
+}
+.bb-card .bb-inspector > .bb-pane-title {
+  font-size: 15px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+/* The builder's draft note is the demo's quiet `bt-info` callout: a hairline, no accent. */
+.bb-card .banner.info {
+  border-color: var(--line-2);
+  background: var(--bg-2);
+}
+
+/* --- Bots (`#/bots`) ------------------------------------------------------------------ */
+
+/* «افزودن ربات» is the demo's bordered card: a «+» header row, the explanation under it. */
+.bx-add {
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  border-radius: var(--radius-ctl);
+  padding: 9px 12px;
+  margin-top: var(--gap);
+}
+.bx-add-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.bx-add p {
+  margin: 0;
+}
+/* A fact's value reads in the body colour, as the demo draws it; the pills carry the tone. */
+.bx-bot .bx-kv {
+  background: var(--bg-2);
+}
+.bx-bot .bx-kv dd .ok,
+.bx-bot .bx-kv dd .warn {
+  color: var(--fg);
+}
+.bx-bot .bx-kv dd .small {
+  font-size: var(--fs-ui);
+}
+
+/* --- Broadcasts (`#/broadcasts`) -------------------------------------------------------- */
+
+/* Progress in the chart blue while it runs or was stopped; the green «ok» only when done. */
+.bc-list .progress.info rect {
+  fill: var(--chart-1);
+}
+/*
+ * The demo frames the broadcast list INSIDE its card (`mk-tw`): a hairline, rounded table
+ * with the card's padding around it, rather than the kit's flush list.
+ */
+.bc-list .card-body > .tbl-wrap {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+}
+.bc-list .card-body > .pager {
+  margin-inline: 0;
+  margin-top: 12px;
+}
+.bc-list .card-body > .pager:last-child {
+  margin-bottom: 0;
+}
+.bc-list .tbl td {
+  padding-block: 10px;
+}
+
+/* --- Content (`#/content`) -------------------------------------------------------------- */
+
+/* The demo's list column is a little wider than the old 300px. */
+@media (min-width: 1101px) {
+  .content-split {
+    grid-template-columns: 330px minmax(0, 1fr);
+  }
+}
+
+/* --- Features (`#/features`) ------------------------------------------------------------ */
+
+/* Ten whole rows, the rest behind one button: no pane, so no row is ever clipped. */
+.feature-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+}
+
+/* A related setting: its name on the start side, its value at the far end, as the demo. */
+.feature-settings dl > div {
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.feature-settings dt {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.feature-settings dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  max-width: 70%;
+}
+
+/* --- Client apps (`#/client-apps`) ------------------------------------------------------ */
+
+/* An app's name keeps its typed digits: the body's stylistic set would draw «v۲rayNG». */
+.ca-name {
+  font-feature-settings: normal;
+}
+
+/* --- Reminders (`#/reminders`) ---------------------------------------------------------- */
+
+/* The family's switch and its pill sit in the card header, opposite the title. */
+.bx-rem .rem-flag.in-head {
+  flex: none;
+  max-inline-size: 50%;
+}
+.bx-rem .rem-flag.in-head .rem-flag-main {
+  gap: 8px;
+}
+/* A switched-off reminder's value reads muted, as the demo's wallet card does. */
+.bx-rem.off .bx-big {
+  color: var(--fg-3);
+}
+.rem-window {
+  white-space: nowrap;
+}
+
+/* --- Settings (`#/settings`) ------------------------------------------------------------ */
+
+/* «اطلاعات فنی» spans the row as the demo's bordered collapsible bar, not an inline link. */
+.disclosure.set-tech {
+  inline-size: 100%;
+  grid-column: 1 / -1;
+  background: transparent;
+  padding: 6px 10px;
+}
+.disclosure.set-tech > summary {
+  inline-size: 100%;
+}
+/* The demo gives a setting's words the wider column and its control the narrower one. */
+@media (min-width: 821px) {
+  .settings-group .set-row-main {
+    grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr);
+  }
+}
+
+/* --- Terms (`#/terms`) ------------------------------------------------------------------ */
+
+.terms-enf-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.terms-hist-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.terms-hist-open {
+  color: var(--fg-3);
+}
+
+/* --- Products (`#/products`) ------------------------------------------------------------ */
+
+/* The list sits in its own rounded frame inside the card, under the filters, as the demo. */
+.products-list-card .card-body > .tbl-wrap {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+}
+.products-list-card .card-body > .pager {
+  margin-inline: 0;
+}
+.products-list-card .card-body > .pager:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Product categories (`#/product-categories`) ---------------------------------------- */
+
+/*
+ * «آیکون دسته‌بندی‌ها»: each category a roomy card — its name on the start side, the button
+ * as the bot will draw it a small chip at the far end; each field a full-width input under
+ * its label, with «حذف» beside a filled value.
+ */
+.ci-list {
+  gap: 10px;
+}
+.ci-list .ib-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--bg-2);
+  border-color: var(--line);
+}
+.ci-list .ib-head {
+  flex-wrap: nowrap;
+}
+.ci-list .ib-head .ib-preview {
+  flex: none;
+  inline-size: auto;
+  max-inline-size: 50%;
+  margin-inline-start: auto;
+}
+.ci-list .ib-icon {
+  display: grid;
+  grid-template-columns: minmax(0, 360px) auto;
+  justify-content: start;
+  align-items: center;
+  gap: 6px 12px;
+}
+.ci-list .ib-icon > label,
+.ci-list .ib-icon > .ib-icon-error {
+  grid-column: 1 / -1;
+}
+.ci-list .ib-icon .input {
+  inline-size: 100%;
+  max-inline-size: none;
+}
+.ci-list .ib-head .ib-preview {
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+/* At phone width the demo's free buttons wrap as chips rather than full-width rows. */
+@media (max-width: 640px) {
+  .bb-card .bb-pool-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .bb-card .bb-pool-list .bb-chip {
+    flex: 0 1 auto;
+    inline-size: auto;
+  }
+}
+/* At phone width the demo's category chips wrap onto as many rows as they need. */
+@media (max-width: 720px) {
+  .tcat-chips {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}
+
+/*
+ * The category's button as the bot draws it: a FILLED chip in the colour the category
+ * already has in settings (primary, success or danger), tinted from the theme tokens.
+ */
+.ci-list .ib-head .ib-preview.bb-style-primary {
+  background: color-mix(in srgb, var(--chart-1) 38%, var(--bg-2));
+}
+.ci-list .ib-head .ib-preview.bb-style-success {
+  background: color-mix(in srgb, var(--ok) 38%, var(--bg-2));
+}
+.ci-list .ib-head .ib-preview.bb-style-danger {
+  background: color-mix(in srgb, var(--danger) 38%, var(--bg-2));
+}
+
+/*
+ * At phone width the menu editor's mode switch (ویرایش / دید مشتری / منوی زنده فعلی) wraps
+ * into a rounded block of roomy capsules, as the demo draws it, not one cramped rail.
+ */
+@media (max-width: 640px) {
+  .bb-canvas-head .btn-group.segmented {
+    inline-size: 100%;
+    padding: 8px;
+    gap: 8px;
+    border-radius: 28px;
+  }
+  .bb-canvas-head .btn-group.segmented .btn {
+    flex: 0 0 auto;
+    padding-inline: 18px;
+    min-block-size: 44px;
+  }
+}

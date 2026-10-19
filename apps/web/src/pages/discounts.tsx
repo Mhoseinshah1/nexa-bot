@@ -64,7 +64,6 @@ import {
   Badge,
   Banner,
   Card,
-  Copyable,
   CursorPager,
   DataTable,
   Empty,
@@ -79,6 +78,8 @@ import {
   StateSwitch,
   ButtonGroup,
   Button,
+  IconButton,
+  IdText,
   CellMain,
   useToast,
   useDiscardGuard,
@@ -280,9 +281,12 @@ function useScopeOptions(enabled: boolean): ScopeOptions {
   };
 }
 
-/** A product or category reference: its name when known, and its id either way. */
+/**
+ * A product or category reference: its name when known, in the body font with its id as the
+ * tooltip, or the id itself — no copy icon on a list (X7), as the demo draws a scope.
+ */
 function Reference({ id, name }: { id: string; name: string | undefined }) {
-  return name === undefined ? <Copyable value={id} /> : <Copyable value={id} display={name} />;
+  return name === undefined ? <IdText value={id} /> : <span title={id}>{name}</span>;
 }
 
 /** The scope of a rule, in one cell: purposes, then what it is narrowed to. */
@@ -369,26 +373,49 @@ function RuleRowActions({
   busy,
   onEdit,
   onTransition,
+  stacked = false,
 }: {
   status: DiscountStatus;
   busy: boolean;
   onEdit: () => void;
   onTransition: () => void;
+  /**
+   * The discount table's shape (demo parity): the pencil alone, above the switch, so the
+   * column is as narrow as its widest button and the table fits its card at 1440.
+   */
+  stacked?: boolean;
 }) {
+  const toggle = (
+    <Button
+      size="sm"
+      variant={status === 'ACTIVE' ? 'danger' : 'default'}
+      icon={status === 'ACTIVE' ? 'pause' : 'play'}
+      disabled={busy}
+      onClick={onTransition}
+    >
+      {t(status === 'ACTIVE' ? 'web.rule_deactivate' : 'web.rule_activate')}
+    </Button>
+  );
+  if (stacked) {
+    return (
+      <span className="discounts-row-actions">
+        <IconButton
+          icon="edit"
+          label={t('web.rule_edit')}
+          size="sm"
+          disabled={busy}
+          onClick={onEdit}
+        />
+        {toggle}
+      </span>
+    );
+  }
   return (
     <RowActions>
       <Button size="sm" variant="ghost" icon="edit" disabled={busy} onClick={onEdit}>
         {t('web.rule_edit')}
       </Button>
-      <Button
-        size="sm"
-        variant={status === 'ACTIVE' ? 'danger' : 'default'}
-        icon={status === 'ACTIVE' ? 'pause' : 'play'}
-        disabled={busy}
-        onClick={onTransition}
-      >
-        {t(status === 'ACTIVE' ? 'web.rule_deactivate' : 'web.rule_activate')}
-      </Button>
+      {toggle}
     </RowActions>
   );
 }
@@ -538,6 +565,7 @@ function DiscountRules({
     {
       key: 'scope',
       header: t('web.rule_scope'),
+      wrap: true,
       render: (row) => (
         <ScopeCell
           appliesTo={row.appliesTo}
@@ -633,6 +661,7 @@ function DiscountRules({
       render: (row) =>
         !mayEdit ? null : (
           <RuleRowActions
+            stacked
             status={row.status}
             busy={transition.isPending}
             onEdit={() => {
@@ -719,13 +748,14 @@ function DiscountRules({
           }
         >
           <DataTable
+            stack
             caption={t('web.discounts_rules_title')}
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
           />
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={trail.depth > 0}
             hasNext={nextCursor !== null}
@@ -1795,13 +1825,14 @@ function CashbackRules({
           }
         >
           <DataTable
+            stack
             caption={t('web.cashback_rules_title')}
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
           />
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={trail.depth > 0}
             hasNext={nextCursor !== null}

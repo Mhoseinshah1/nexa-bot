@@ -30,7 +30,7 @@ import {
   previewBulkRetry,
   retryBulkOperation,
 } from '../api/client';
-import { formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
+import { formatNumber, formatTimestampNumeric, formatTrafficGbText } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { useSubmissionKey } from '../submission-key';
@@ -252,7 +252,9 @@ export function BulkOperationsPage({
     {
       key: 'created',
       header: t('web.bulk_created'),
-      render: (row) => <span className="nowrap muted small">{formatTimestamp(row.createdAt)}</span>,
+      render: (row) => (
+        <span className="nowrap muted small">{formatTimestampNumeric(row.createdAt)}</span>
+      ),
     },
   ];
   return (
@@ -276,13 +278,14 @@ export function BulkOperationsPage({
           ) : (
             <>
               <DataTable
+                stack
                 caption={t('web.bulk_page_title')}
                 columns={columns}
                 rows={list.data.operations}
                 rowKey={(row) => row.id}
-                dense
               />
               <CursorPager
+                order="newest-first"
                 shown={list.data.operations.length}
                 hasPrevious={cursor !== null}
                 hasNext={list.data.nextCursor !== null}
@@ -537,15 +540,15 @@ export function BulkOperationNewPage({
                 <StatCard
                   label={t('web.bulk_liability')}
                   value={<Money value={preview.totalLiability} />}
-                  tone="warn"
                 />
               )}
               <StatCard
                 label={t('web.bc_as_of')}
-                value={<span className="cb-stat-note">{formatTimestamp(preview.asOf)}</span>}
+                value={<span className="cb-stat-note">{formatTimestampNumeric(preview.asOf)}</span>}
               />
             </div>
             <DataTable
+              stack
               caption={t('web.bulk_sample')}
               columns={[
                 {
@@ -709,7 +712,7 @@ export function BulkOperationDetailPage({
             subtitle={
               <span className="cb-meta">
                 <span>{grantText(op)}</span>
-                <span>{formatTimestamp(op.createdAt)}</span>
+                <span>{formatTimestampNumeric(op.createdAt)}</span>
               </span>
             }
             actions={
@@ -841,12 +844,12 @@ export function BulkOperationDetailPage({
                     items={[
                       [t('web.bulk_reason'), op.note],
                       [t('web.bc_created_by'), op.createdBy?.username ?? '—'],
-                      [t('web.bulk_created'), formatTimestamp(op.createdAt)],
+                      [t('web.bulk_created'), formatTimestampNumeric(op.createdAt)],
                       [
                         t('web.bulk_not_before'),
-                        op.notBefore === null ? '—' : formatTimestamp(op.notBefore),
+                        op.notBefore === null ? '—' : formatTimestampNumeric(op.notBefore),
                       ],
-                      [t('web.bc_as_of'), formatTimestamp(op.audienceAsOf)],
+                      [t('web.bc_as_of'), formatTimestampNumeric(op.audienceAsOf)],
                       ...(op.retryOfId === null
                         ? []
                         : ([
@@ -913,6 +916,7 @@ export function BulkOperationDetailPage({
               {items.data === undefined ? null : (
                 <>
                   <DataTable
+                    stack
                     caption={t('web.bulk_items')}
                     columns={[
                       {
@@ -961,6 +965,7 @@ export function BulkOperationDetailPage({
                     dense
                   />
                   <CursorPager
+                    order="sequence"
                     shown={items.data.items.length}
                     hasPrevious={trail.length > 0}
                     hasNext={items.data.nextCursor !== null}

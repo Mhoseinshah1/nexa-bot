@@ -24,7 +24,7 @@ import {
   fetchServiceOperations,
   fetchServices,
 } from '../api/client';
-import { currencyLabel, formatTimestamp, formatTrafficGbText } from '../format';
+import { currencyLabel, formatTimestampNumeric, formatTrafficGbText } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
@@ -284,7 +284,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
     {
       key: 'created',
       header: t('web.order_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      render: (row) => <span className="nowrap">{formatTimestampNumeric(row.createdAt)}</span>,
     },
     {
       key: 'expires',
@@ -293,7 +293,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
         row.expiresAt === null ? (
           <Dash />
         ) : (
-          <span className="nowrap">{formatTimestamp(row.expiresAt)}</span>
+          <span className="nowrap">{formatTimestampNumeric(row.expiresAt)}</span>
         ),
     },
   ];
@@ -335,6 +335,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
       <Card className="ca-list">
         <div hidden={toolbarHidden}>
           <ListFilterBar
+            first="search"
             label={t('web.orders_title')}
             search={
               <ListSearchBox
@@ -384,6 +385,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
           }
         >
           <DataTable
+            stack="labelled"
             caption={t('web.orders_title')}
             columns={columns}
             rows={rows}
@@ -396,6 +398,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
         {/* A sibling of `StateSwitch`: drawn only over rows it can vouch for. */}
         {!denied && queryState(orders) === 'ready' && (
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}
@@ -570,13 +573,13 @@ export function OrderDetailPage({
                     <KV
                       items={[
                         // The state itself is the badge beside the page title.
-                        [t('web.order_created_at'), formatTimestamp(row.createdAt)],
+                        [t('web.order_created_at'), formatTimestampNumeric(row.createdAt)],
                         [
                           t('web.order_expires_at'),
                           row.expiresAt === null ? (
                             <Dash key="e" />
                           ) : (
-                            formatTimestamp(row.expiresAt)
+                            formatTimestampNumeric(row.expiresAt)
                           ),
                         ],
                         [
@@ -584,7 +587,7 @@ export function OrderDetailPage({
                           row.confirmedAt === null ? (
                             <Dash key="c" />
                           ) : (
-                            formatTimestamp(row.confirmedAt)
+                            formatTimestampNumeric(row.confirmedAt)
                           ),
                         ],
                         [
@@ -592,10 +595,10 @@ export function OrderDetailPage({
                           row.settledAt === null ? (
                             <Dash key="st" />
                           ) : (
-                            formatTimestamp(row.settledAt)
+                            formatTimestampNumeric(row.settledAt)
                           ),
                         ],
-                        [t('web.updated_at'), formatTimestamp(row.updatedAt)],
+                        [t('web.updated_at'), formatTimestampNumeric(row.updatedAt)],
                       ]}
                     />
                   </Card>
@@ -755,7 +758,7 @@ function OrderService({ orderId, mayView }: { orderId: string; mayView: boolean 
                   service.provisionedAt === null ? (
                     <Dash key="pa" />
                   ) : (
-                    formatTimestamp(service.provisionedAt)
+                    formatTimestampNumeric(service.provisionedAt)
                   ),
                 ],
                 [
@@ -763,7 +766,7 @@ function OrderService({ orderId, mayView }: { orderId: string; mayView: boolean 
                   service.deliveredAt === null ? (
                     <Dash key="da" />
                   ) : (
-                    formatTimestamp(service.deliveredAt)
+                    formatTimestampNumeric(service.deliveredAt)
                   ),
                 ],
                 [
@@ -771,7 +774,7 @@ function OrderService({ orderId, mayView }: { orderId: string; mayView: boolean 
                   service.terminatedAt === null ? (
                     <Dash key="ta" />
                   ) : (
-                    formatTimestamp(service.terminatedAt)
+                    formatTimestampNumeric(service.terminatedAt)
                   ),
                 ],
               ]}
@@ -812,6 +815,7 @@ function OrderServiceOperations({ serviceId }: { serviceId: string }) {
         ) : (
           <>
             <DataTable
+              stack="labelled"
               caption={t('web.service_operations_title')}
               columns={OPERATION_COLUMNS}
               rows={operations.data.operations}
@@ -863,7 +867,7 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
       op.completedAt === null ? (
         <Dash />
       ) : (
-        <span className="nowrap">{formatTimestamp(op.completedAt)}</span>
+        <span className="nowrap">{formatTimestampNumeric(op.completedAt)}</span>
       ),
   },
   {
@@ -1101,7 +1105,7 @@ function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
     {
       key: 'at',
       header: t('web.order_pricing_redeemed_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      render: (row) => <span className="nowrap">{formatTimestampNumeric(row.createdAt)}</span>,
     },
   ];
   const cashback = pricing.cashback;
@@ -1132,6 +1136,7 @@ function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
         <p className="muted">{t('web.order_pricing_no_adjustments')}</p>
       ) : (
         <DataTable
+          stack="labelled"
           caption={t('web.order_pricing_adjustments')}
           columns={adjustmentColumns}
           rows={pricing.adjustments}
@@ -1146,6 +1151,7 @@ function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
         <p className="muted">{t('web.order_pricing_no_redemptions')}</p>
       ) : (
         <DataTable
+          stack="labelled"
           caption={t('web.order_pricing_redemptions')}
           columns={redemptionColumns}
           rows={pricing.redemptions}
@@ -1280,7 +1286,7 @@ function ResellerTerms({
               <Copyable key="b" value={terms.botInstanceId} />
             ),
           ],
-          [t('web.order_reseller_recorded_at'), formatTimestamp(terms.createdAt)],
+          [t('web.order_reseller_recorded_at'), formatTimestampNumeric(terms.createdAt)],
         ]}
       />
       <p className="muted small">{t('web.order_reseller_margin_note')}</p>

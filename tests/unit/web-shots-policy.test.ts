@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { needsTypeStripping, shotProblems } from '../../scripts/web-shots/policy.mjs';
+import {
+  TABLE_OVERFLOW_MIN_WIDTH,
+  needsTypeStripping,
+  shotProblems,
+} from '../../scripts/web-shots/policy.mjs';
 
 describe('pnpm web:shots on the minimum supported Node', () => {
   it('re-runs with type stripping where it is off (22.11–22.17), and not where it is on', () => {
@@ -44,5 +48,14 @@ describe('what a capture reports', () => {
       errors: ['boom'],
     });
     expect(problems).toHaveLength(5);
+  });
+
+  it('names a table that scrolls sideways inside its card (demo parity X9)', () => {
+    expect(shotProblems({ ...clean, tableOverflow: [] })).toEqual([]);
+    const problems = shotProblems({ ...clean, tableOverflow: ['دفتر پورسانت +252px'] });
+    expect(problems).toEqual(['table scrolls sideways: دفتر پورسانت +252px']);
+    // From a desktop width up; a phone may scroll a wide table inside its card.
+    expect(TABLE_OVERFLOW_MIN_WIDTH).toBeLessThanOrEqual(1440);
+    expect(TABLE_OVERFLOW_MIN_WIDTH).toBeGreaterThan(1024);
   });
 });

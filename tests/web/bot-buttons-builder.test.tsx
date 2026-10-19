@@ -55,7 +55,22 @@ const grip = (id: MainMenuButtonId) => chip(id)?.querySelector('.bb-grip') as HT
 const pool = () => screen.getByTestId('bb-pool');
 const inspector = () => within(screen.getByTestId('bb-inspector'));
 const state = () => screen.getByTestId('bb-state').getAttribute('data-status');
-const toolbarButton = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
+/*
+ * Role queries cost one `getComputedStyle` per candidate and per ancestor, and this page draws
+ * ~40 buttons: a page-wide `getByRole('button')` measured ~30 ms each and, called ~50 times,
+ * was about half of this file's run time (and the first thing to time out when the CPU is
+ * shared). The same query, same role, same accessible name, is asked of the one region that
+ * owns the control: nothing is weakened, the region just has fewer candidates.
+ */
+const toolbarButton = (name: string) =>
+  within(document.querySelector('.bb-toolbar') as HTMLElement).getByRole('button', {
+    name,
+  }) as HTMLButtonElement;
+const modeButton = (name: string) =>
+  within(document.querySelector('.bb-canvas-head [role="group"]') as HTMLElement).getByRole(
+    'button',
+    { name },
+  );
 
 /** The rows the editor draws, as ids. */
 const drawnRows = (): string[][] =>
@@ -217,11 +232,11 @@ describe('the button builder — editing the draft', () => {
     expect(screen.getByTestId('bb-where').textContent).toBe(t('web.bb_in_pool'));
 
     // The customer preview draws nothing for it.
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
+    fireEvent.click(modeButton(t('web.bb_mode_customer')));
     expect(
       within(screen.getByTestId('bb-customer-preview')).queryByText(LABEL('catalog')),
     ).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_edit') }));
+    fireEvent.click(modeButton(t('web.bb_mode_edit')));
 
     move('web.bb_place_go');
     expect(drawnRows().at(-1)).toEqual(['catalog']);
@@ -242,7 +257,7 @@ describe('the button builder — editing the draft', () => {
     expect(drawnRows()[0]).toEqual(['catalog', 'services']);
     expect(within(chip('services') as HTMLElement).getByText(t('web.bb_state_off'))).toBeTruthy();
     // Not drawn for the customer.
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
+    fireEvent.click(modeButton(t('web.bb_mode_customer')));
     const preview = screen.getByTestId('bb-customer-preview');
     expect(within(preview).queryByText(LABEL('services'))).toBeNull();
     expect(within(preview).getByText(LABEL('catalog'))).toBeTruthy();
@@ -266,7 +281,7 @@ describe('the button builder — editing the draft', () => {
       expect(chip('wallet')?.className).toContain(`bb-style-${style}`);
     }
     fireEvent.click(inspector().getByLabelText(t('web.bb_style_danger')));
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
+    fireEvent.click(modeButton(t('web.bb_mode_customer')));
     const key = screen
       .getByTestId('bb-customer-preview')
       .querySelector('[data-key="wallet"]') as HTMLElement;
@@ -293,13 +308,13 @@ describe('the button builder — editing the draft', () => {
     expect(eligibility.getByText(t('web.bb_icon_eligible'))).toBeTruthy();
     expect(eligibility.getByText(t('web.bb_icon_not_eligible'))).toBeTruthy();
     // The customer preview draws the same marker before the same label.
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
+    fireEvent.click(modeButton(t('web.bb_mode_customer')));
     const key = screen
       .getByTestId('bb-customer-preview')
       .querySelector('[data-key="catalog"]') as HTMLElement;
     expect(key.querySelector('.bb-icon-mark')?.getAttribute('data-icon-slot')).toBe('wallet');
     expect(key.textContent).toBe(`💰${LABEL('catalog')}`);
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_edit') }));
+    fireEvent.click(modeButton(t('web.bb_mode_edit')));
 
     let body = await saveAndRead(api);
     let config = body.layout.buttons.find((one) => one.button === 'catalog');
@@ -389,10 +404,10 @@ describe('the button builder — gates are the server’s answer', () => {
     );
     renderPage(page());
     await ready();
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
+    fireEvent.click(modeButton(t('web.bb_mode_customer')));
     const preview = within(screen.getByTestId('bb-customer-preview'));
     const shown = preview.queryByText(LABEL('trial')) !== null;
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_edit') }));
+    fireEvent.click(modeButton(t('web.bb_mode_edit')));
     const badge = within(chip('trial') as HTMLElement).queryByText(t('web.bb_hidden_now')) !== null;
     select('trial');
     const because = within(screen.getByTestId('bb-gate')).queryByText(
@@ -969,7 +984,7 @@ describe('the button builder — review of PR #134', () => {
     builderApi(explicitView());
     renderPage(page());
     await ready();
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_live') }));
+    fireEvent.click(modeButton(t('web.bb_mode_live')));
     const live = screen.getByTestId('bb-live-preview');
     const first = live.querySelector('[data-key="0-0"]') as HTMLElement;
     expect(first.textContent).toContain(LABEL('catalog'));
@@ -981,7 +996,7 @@ describe('the button builder — review of PR #134', () => {
     builderApi(builderView());
     renderPage(page());
     await ready();
-    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_live') }));
+    fireEvent.click(modeButton(t('web.bb_mode_live')));
     expect(
       screen
         .getByTestId('bb-live-preview')
@@ -1347,8 +1362,8 @@ describe('the revision history pager', () => {
     await waitFor(() => expect(shown()).toEqual(span(25, 16).map((one) => one.revision)));
     expect(history).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'نسخه‌های قدیمی‌تر' })).toBeNull();
-    const next = screen.getByRole('button', { name: t('web.page_next') });
-    const previous = screen.getByRole('button', { name: t('web.page_previous') });
+    const next = screen.getByRole('button', { name: t('web.page_older') });
+    const previous = screen.getByRole('button', { name: t('web.page_newer') });
     expect(previous).toBeDisabled();
 
     fireEvent.click(next);
@@ -1360,7 +1375,7 @@ describe('the revision history pager', () => {
     ]);
     expect(reads.some((call) => /offset|page=/.test(call.url))).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_newer') }));
     await waitFor(() => expect(shown()).toEqual(span(25, 16).map((one) => one.revision)));
   });
 });

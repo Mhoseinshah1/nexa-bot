@@ -65,8 +65,8 @@ import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
 import { errorText } from '../error-text';
 import { roleLabel } from '../rbac-labels';
-import { dependencyLabel, readinessDetailText } from '../readiness-labels';
-import { CodeLabel, ProviderText } from '../ui/technical-details';
+import { readinessDetailText } from '../readiness-labels';
+import { ProviderText } from '../ui/technical-details';
 
 /**
  * System and operations.
@@ -164,21 +164,18 @@ export function SystemPage({
         )}
       </TabPanel>
 
-      <Card
-        title={t('web.system_logs_title')}
-        tone="muted"
-        // The link only where it leads somewhere: `/ops-group` is a `settings.view` page.
-        {...(permissions.includes('settings.view')
-          ? {
-              actions: (
-                <a className="btn sm" href="/ops-group" onClick={onLink}>
-                  {t('web.nav_ops_group')}
-                </a>
-              ),
-            }
-          : {})}
-      >
-        <p className="muted small">{t('web.system_logs_destination')}</p>
+      <Card title={t('web.system_logs_title')} tone="muted">
+        {/* Demo parity: the description, and the way to the group at the end of its row. */}
+        <div className="system-logs">
+          <p className="muted small">{t('web.system_logs_destination')}</p>
+          {/* The link only where it leads somewhere: `/ops-group` is a `settings.view` page. */}
+          {permissions.includes('settings.view') && (
+            <a className="btn sm" href="/ops-group" onClick={onLink}>
+              <Icon name="send" size={14} />
+              {t('web.opsgroup_title')}
+            </a>
+          )}
+        </div>
       </Card>
     </>
   );
@@ -191,7 +188,10 @@ function StatusSection() {
     refetchInterval: pollUnlessFinal(15_000),
   });
   const info = useQuery({ queryKey: ['info'], queryFn: fetchInfo });
-  const dependencies = readiness.data?.dependencies ?? [];
+  // Demo parity: the database leads the list; the rest keep the order the server gave them.
+  const dependencies = [...(readiness.data?.dependencies ?? [])].sort(
+    (a, b) => Number(b.name === 'postgres') - Number(a.name === 'postgres'),
+  );
   const down = dependencies.filter((row) => row.status !== 'up').length;
   // The overall verdict is the SERVER's, not a count of red rows. A dependency the
   // service reports as `required: false` (Redis, today) can be down while the process
@@ -239,7 +239,7 @@ function StatusSection() {
         </div>
       )}
 
-      <div className="two-col">
+      <div className="two-col system-cols">
         <Card title={t('web.system_status')} hint={t('web.system_status_hint')}>
           <StateSwitch query={readiness}>
             <DataTable
@@ -251,7 +251,8 @@ function StatusSection() {
                 {
                   key: 'name',
                   header: t('web.dependency'),
-                  render: (row) => <CodeLabel label={dependencyLabel(row.name)} code={row.name} />,
+                  // Demo parity: the dependency's own name, bare, in the code face.
+                  render: (row) => <Ltr>{row.name}</Ltr>,
                 },
                 {
                   key: 'status',
@@ -540,7 +541,8 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
                 ) : (
                   <span className="system-roles">
                     {row.roleKeys.map((key) => (
-                      <Badge key={key} outline title={key}>
+                      // Demo parity (X10): a role is a filled neutral pill, as the demo draws it.
+                      <Badge key={key} title={key}>
                         {roleLabel(key)}
                       </Badge>
                     ))}

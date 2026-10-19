@@ -526,6 +526,9 @@
 }
 .ca-search.slim .field input {
   width: 100%;
+  /* The demo's list search is a full 32px control (`#users-search`, `#payments-search`), not
+     a 28px small input; on touch `--ctl-h` is 44px as before. */
+  height: var(--ctl-h);
 }
 .ca-search.slim .ca-search-actions {
   padding-top: 0;
@@ -1308,11 +1311,12 @@
   border-radius: var(--radius-card);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
 }
+/* Demo parity (bulk-operations-new): «مخاطبان این عملیات ۳۴ مشتری» on one line, a large figure. */
 .aq-count-title {
-  flex-basis: 100%;
+  flex-basis: auto;
 }
 .aq-count b {
-  font-size: var(--fs-kpi-narrow);
+  font-size: 26px;
   font-weight: 800;
   line-height: 1.2;
 }
@@ -1634,5 +1638,27 @@
   }
   .aq-pill:active:not(:disabled) {
     transform: none;
+  }
+}
+
+/*
+ * Touch: the action panels' buttons (40px on a desk) and the audience builder's quick pills
+ * (32px), and the panel's «چرا … غیرفعال است؟» line, are 44px targets where the pointer cannot hover (tokens.css, `pnpm web:responsive`).
+ */
+@media (pointer: coarse) and (hover: none) {
+  .action-group-buttons .btn {
+    height: var(--ctl-h);
+    min-height: var(--ctl-h);
+  }
+  .aq-pill {
+    min-height: var(--ctl-h);
+  }
+  .action-panel-why > summary {
+    min-height: var(--ctl-h);
+  }
+  /* An active filter chip's ×: the chip grows to hold a 44px target. */
+  .lfb-x {
+    min-width: var(--ctl-h);
+    min-height: var(--ctl-h);
   }
 }

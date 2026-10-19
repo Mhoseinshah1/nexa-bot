@@ -42,7 +42,12 @@ import { templateCopy } from '../template-copy';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
 import { CodeLabel, ErrorRef, TechnicalDetails } from '../ui/technical-details';
-import { DELIVERY_OUTCOME_LABELS, errorCodeLabel, opsCodeLabel } from '../ops-code-labels';
+import {
+  DELIVERY_OUTCOME_LABELS,
+  errorCodeLabel,
+  hasOpsCodeLabel,
+  opsCodeLabel,
+} from '../ops-code-labels';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
@@ -170,19 +175,40 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       ),
     },
     {
-      key: 'code',
-      header: t('web.code'),
-      render: (row) => (
-        <span className="alerts-code">
-          <CodeLabel label={opsCodeLabel(row.code)} code={row.code} />
-        </span>
-      ),
+      /*
+       * Demo parity: «رویداد», the event's readable title. The machine code is its title
+       * (tooltip) and stays the identifier; a code nothing names is shown as itself.
+       */
+      key: 'event',
+      header: t('web.diagnostics_event'),
+      wrap: true,
+      render: (row) =>
+        hasOpsCodeLabel(row.code) ? (
+          <span className="alerts-event" title={row.code}>
+            {opsCodeLabel(row.code)}
+          </span>
+        ) : (
+          <span className="alerts-event">
+            <CodeLabel label={null} code={row.code} />
+          </span>
+        ),
     },
     {
       key: 'message',
       header: t('web.message'),
       wrap: true,
-      render: (row) => <TechnicalDetails lines={[row.message]} />,
+      /*
+       * The message is read in Persian, derived from the event's CODE through the one label
+       * map; the server's own (English) log line stays only inside «جزئیات فنی».
+       */
+      render: (row) => (
+        <>
+          <span className="alerts-message">
+            {hasOpsCodeLabel(row.code) ? opsCodeLabel(row.code) : t('web.alerts_message_unnamed')}
+          </span>
+          <TechnicalDetails lines={[row.message]} />
+        </>
+      ),
     },
     // One row per condition with a counter, not one row per occurrence: the
     // legacy log posted the same TLS error sixty times in a day.
@@ -282,7 +308,9 @@ export function AlertsPage({ denied }: { denied: boolean }) {
               {
                 key: 'status',
                 label: t('web.status'),
-                active: openOnly ? t('web.unresolved') : null,
+                // Demo parity: the status always has a value, so its chip always reads —
+                // «وضعیت: همه» by default; its × returns it to «همه».
+                active: openOnly ? t('web.unresolved') : t('web.all'),
                 onClear: () => filter(() => setOpenOnly(false)),
                 control: (
                   <FilterChips label={t('web.status')}>
@@ -383,6 +411,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         */}
         {!denied && queryState(events) === 'ready' && (
           <CursorPager
+            order="newest-first"
             shown={rows.length}
             hasPrevious={trail.length > 0}
             // The SERVER's cursor. A full page is not the same question as
@@ -594,7 +623,8 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           >
             {notificationTypeName(row.templateKey)}
           </button>
-          <Badge tone="neutral" outline>
+          {/* A filled pill, as the demo draws a notification's category. */}
+          <Badge tone="neutral">
             {t(NOTIFICATION_CATEGORY_LABELS[notificationCategoryOf(row.templateKey)])}
           </Badge>
         </span>
@@ -680,11 +710,11 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         <Card title={t('web.notifications_title')} hint={t('web.notifications_list_hint')}>
           <StateSwitch query={notifications} denied={denied} isEmpty={rows.length === 0}>
             <DataTable
+              stack="labelled"
               caption={t('web.notifications_title')}
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}
-              dense
               rowClassName={(row) => (row.id === selected ? 'selected' : undefined)}
             />
           </StateSwitch>
@@ -699,6 +729,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         */}
           {!denied && queryState(notifications) === 'ready' && (
             <CursorPager
+              order="newest-first"
               shown={rows.length}
               hasPrevious={trail.length > 0}
               // The SERVER's cursor, not a guess from the page length. `null`

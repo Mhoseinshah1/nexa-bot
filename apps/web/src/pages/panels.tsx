@@ -53,6 +53,7 @@ import {
   CapabilitiesTab,
   DiagnosticsCard,
   FAILURE_LABELS,
+  FAILURE_SHORT_LABELS,
   REGISTRY_ROW_LABELS,
 } from './panel-advanced';
 import { messageFor } from './settings';
@@ -83,7 +84,6 @@ import {
   Copyable,
   CursorPager,
   DataTable,
-  DetailHead,
   Empty,
   Field,
   FilterBar,
@@ -96,7 +96,6 @@ import {
   Progress,
   Secret,
   StateSwitch,
-  StatusDot,
   Tabs,
   TabPanel,
   TwoColumn,
@@ -106,6 +105,8 @@ import {
   type Tone,
   PermissionDeniedState,
   Quantity,
+  RefLink,
+  StatCard,
   LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
@@ -205,7 +206,7 @@ function ProviderBadge({ panel }: { panel: PanelSummaryResponse }) {
   return (
     <span className="nowrap panels-provider">
       <Badge tone="info" outline>
-        <Ltr mono={false}>{panel.providerName}</Ltr>
+        <Ltr>{panel.providerName}</Ltr>
       </Badge>
       {panel.health.providerVersion !== null && (
         <span className="faint small">
@@ -234,14 +235,17 @@ export function hostOf(baseUrl: string): string {
 export function FailureBadge({ failure }: { failure: string | null }) {
   if (failure === null) return <span className="faint">—</span>;
   const retryable = PROVIDER_FAILURE_RETRYABLE[failure as keyof typeof PROVIDER_FAILURE_RETRYABLE];
-  const label = (FAILURE_LABELS as Readonly<Record<string, WebKey>>)[failure];
+  const short = (FAILURE_SHORT_LABELS as Readonly<Record<string, WebKey>>)[failure];
+  const sentence = (FAILURE_LABELS as Readonly<Record<string, WebKey>>)[failure];
+  const verdict = retryable === true ? t('web.failure_retryable') : t('web.failure_permanent');
   return (
     <Badge
       tone={retryable === true ? 'warn' : 'danger'}
-      title={`${retryable === true ? t('web.failure_retryable') : t('web.failure_permanent')} (${failure})`}
+      title={`${sentence === undefined ? '' : `${t(sentence)} `}${verdict} (${failure})`}
     >
-      {/* W5/W6: the kind's Persian name; an unknown kind keeps its code, never a blank. */}
-      {label === undefined ? <Ltr>{failure}</Ltr> : t(label)}
+      {/* Demo parity: the kind as a short pill, the full sentence as its title. An unknown
+          kind keeps its code, never a blank (W5/W6). */}
+      {short === undefined ? <Ltr>{failure}</Ltr> : t(short)}
     </Badge>
   );
 }
@@ -269,14 +273,18 @@ export function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['cap
         ) : (
           <Num value={capacity.maxServices} />
         )}
-        {capacity.reservations > 0 && (
-          <span className="faint" title={t('web.panel_capacity_reservations')}>
-            {' ('}
-            <Num value={capacity.reservations} />
-            {')'}
-          </span>
-        )}
       </Quantity>
+      {/* Demo parity: the reservations on their own line under the fraction. */}
+      {capacity.reservations > 0 && (
+        <span
+          className="faint small panels-capacity-held"
+          title={t('web.panel_capacity_reservations')}
+        >
+          {'('}
+          <Num value={capacity.reservations} />
+          {')'}
+        </span>
+      )}
       {/* A share only where there is a whole: an uncapped panel has no bar. */}
       {capacity.maxServices !== null && (
         <Progress
@@ -384,9 +392,11 @@ export function PanelsPage({
       render: (row) => (
         <CellMain
           primary={
-            <a href={`/panels/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-              {row.name}
-            </a>
+            <RefLink href={`/panels/${encodeURIComponent(row.id)}`}>
+              <Ltr mono={false}>
+                <span className="strong">{row.name}</span>
+              </Ltr>
+            </RefLink>
           }
           secondary={<Ltr>{hostOf(row.baseUrl)}</Ltr>}
         />
@@ -405,6 +415,7 @@ export function PanelsPage({
     {
       key: 'failure',
       header: t('web.panel_failure'),
+      wrap: true,
       render: (row) => <FailureBadge failure={row.health.failure} />,
     },
     {
@@ -523,7 +534,6 @@ export function PanelsPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
           />
         </StateSwitch>
 
@@ -537,13 +547,14 @@ export function PanelsPage({
         */}
         {!denied && queryState(panels) === 'ready' && (
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}
             onPrevious={popCursor}
             onNext={() => nextCursor !== null && pushCursor(nextCursor)}
-            // `GET /panels` pages an ASCENDING keyset; the neutral previous/next
-            // labels read correctly in either direction.
+            // `GET /panels` pages an ASCENDING keyset (created_at, id): the next
+            // page is the newer one.
           />
         )}
       </Card>
@@ -797,6 +808,7 @@ export function PanelDetailPage({
       ) : (
         <PanelHead
           panel={data}
+          {...(mayEdit && data.status === 'ACTIVE' ? { note: t('web.panel_lifecycle_hint') } : {})}
           actions={
             <>
               {testButton}
@@ -918,90 +930,97 @@ export function PanelDetailPage({
  * the contract, so they are not here — a strip of invented telemetry is the
  * defect the list page's owner revision 19 removed.
  */
-function PanelHead({ panel, actions }: { panel: PanelSummaryResponse; actions?: ReactNode }) {
+function PanelHead({
+  panel,
+  actions,
+  note,
+}: {
+  panel: PanelSummaryResponse;
+  actions?: ReactNode;
+  /** A line under the header's actions, above the figures (the demo's lifecycle hint). */
+  note?: ReactNode;
+}) {
   const health = panel.health;
   const capacity = panel.capacity;
+  /*
+   * Demo parity: the page header every page has (breadcrumb «زیرساخت و پنل‌ها / پنل‌ها /
+   * جزئیات پنل», the name with its status and health, the provider, version and address
+   * under it, the actions on the header's bottom edge) and the figures as a strip of
+   * separate cards under it — not one hero card holding both.
+   */
   return (
-    <DetailHead
-      title={panel.name}
-      badge={
-        <span className="panel-head-badges">
-          <Badge tone={STATUS_TONES[panel.status]} dot>
-            {t(STATUS_LABELS[panel.status])}
-          </Badge>
-          <HealthBadge panel={panel} />
-        </span>
-      }
-      meta={
-        <span className="panel-head-meta">
-          <ProviderBadge panel={panel} />
-          <span className="faint">·</span>
-          <Ltr>{panel.baseUrl}</Ltr>
-        </span>
-      }
-      {...(actions === undefined ? {} : { actions })}
-      stats={[
-        {
-          label: t('web.panel_health'),
-          value: (
-            <span className="panel-stat">
-              <StatusDot tone={HEALTH_TONES[health.state] ?? 'neutral'}>
-                {t(HEALTH_LABELS[health.state] ?? 'web.health_unchecked')}
-              </StatusDot>
-              <span className="faint small">
-                {health.checkedAt === null
-                  ? t('web.panel_never_checked')
-                  : formatTimestamp(health.checkedAt)}
-              </span>
-            </span>
-          ),
-        },
-        {
-          label: t('web.panel_latency'),
-          value:
+    <>
+      <PageHead
+        title={<Ltr mono={false}>{panel.name}</Ltr>}
+        badge={
+          <span className="panel-head-badges">
+            <Badge tone={STATUS_TONES[panel.status]} dot>
+              {t(STATUS_LABELS[panel.status])}
+            </Badge>
+            <HealthBadge panel={panel} />
+          </span>
+        }
+        meta={
+          <span className="panel-head-meta">
+            <ProviderBadge panel={panel} />
+            <span className="faint">·</span>
+            <Ltr>{panel.baseUrl}</Ltr>
+          </span>
+        }
+        {...(actions === undefined ? {} : { actions })}
+      />
+      {note !== undefined && <p className="muted small panel-head-note">{note}</p>}
+      <div className="stat-grid panel-head-stats" aria-label={t('web.panel_detail')}>
+        <StatCard
+          label={t('web.panel_health')}
+          value={<HealthBadge panel={panel} />}
+          hint={
+            health.checkedAt === null
+              ? t('web.panel_never_checked')
+              : formatTimestamp(health.checkedAt)
+          }
+        />
+        <StatCard
+          label={t('web.panel_latency')}
+          value={
             health.latencyMs === null ? (
               <span className="faint">—</span>
             ) : (
-              <Quantity>
-                <Num value={health.latencyMs} /> ms
-              </Quantity>
-            ),
-        },
-        {
-          label: t('web.panel_last_healthy'),
-          value:
+              <Num value={health.latencyMs} />
+            )
+          }
+          {...(health.latencyMs === null ? {} : { unit: 'ms' })}
+        />
+        <StatCard
+          label={t('web.panel_last_healthy')}
+          value={
             health.lastHealthyAt === null ? (
               <span className="faint">—</span>
             ) : (
-              <span className="small">{formatTimestamp(health.lastHealthyAt)}</span>
-            ),
-        },
-        {
-          label: t('web.panel_sellable'),
-          value: (
-            <span className="panel-stat">
-              <span className={panel.sellability.sellable ? 'ok' : 'warn'}>
-                {t(
-                  panel.sellability.sellable
-                    ? 'web.panel_stat_sellable'
-                    : 'web.panels_not_sellable',
-                )}
-              </span>
-              {!panel.sellability.sellable && panel.sellability.reason !== null && (
-                <span className="faint small">
-                  {t(SELLABILITY_REASON_LABELS[panel.sellability.reason])}
-                </span>
+              <span className="panel-stat-when">{formatTimestamp(health.lastHealthyAt)}</span>
+            )
+          }
+        />
+        <StatCard
+          label={t('web.panel_sellable')}
+          value={
+            <span className={panel.sellability.sellable ? 'ok' : 'warn'}>
+              {t(
+                panel.sellability.sellable ? 'web.panel_stat_sellable' : 'web.panels_not_sellable',
               )}
             </span>
-          ),
-        },
-        { label: t('web.panel_capacity'), value: <CapacityCell capacity={capacity} /> },
-        {
-          label: t('web.panel_capacity_services'),
-          value: <Num value={capacity.services} />,
-        },
-      ]}
-    />
+          }
+          {...(!panel.sellability.sellable && panel.sellability.reason !== null
+            ? { hint: t(SELLABILITY_REASON_LABELS[panel.sellability.reason]) }
+            : {})}
+        />
+        <StatCard label={t('web.panel_capacity')} value={<CapacityCell capacity={capacity} />} />
+        <StatCard
+          label={t('web.panel_capacity_services')}
+          value={<Num value={capacity.services} />}
+        />
+      </div>
+    </>
   );
 }
 
@@ -2160,7 +2179,7 @@ function OverviewTab({
             {panel.status !== 'ARCHIVED' && (
               <button
                 type="button"
-                className="btn ghost danger"
+                className="btn danger"
                 disabled={status.isPending}
                 onClick={() => setArchiveAsked(true)}
               >
@@ -2941,7 +2960,7 @@ export function NewPanelPage({
                 <div className="form-section">
                   <h3>{t('web.panel_new_section_identity')}</h3>
                   <div className="form-grid">
-                    <Field label={t('web.panel_name')} htmlFor="new-name">
+                    <Field label={t('web.panel_name')} htmlFor="new-name" required>
                       <input
                         id="new-name"
                         className="input"
@@ -2951,7 +2970,7 @@ export function NewPanelPage({
                       />
                     </Field>
 
-                    <Field label={t('web.panel_provider')} htmlFor="new-provider">
+                    <Field label={t('web.panel_provider')} htmlFor="new-provider" required>
                       <select
                         id="new-provider"
                         className="input"
@@ -2975,6 +2994,7 @@ export function NewPanelPage({
                         label={t('web.panel_base_url')}
                         hint={t('web.panel_base_url_hint')}
                         htmlFor="new-url"
+                        required
                       >
                         <input
                           id="new-url"
@@ -3036,7 +3056,7 @@ export function NewPanelPage({
                   </div>
                 )}
 
-                <div className="form-section panel-form-foot">
+                <div className="form-section panel-form-foot panel-new-foot">
                   <div className="form-actions">
                     <button type="submit" className="btn primary" disabled={create.isPending}>
                       {create.isPending ? t('web.saving') : t('web.save')}
@@ -3124,8 +3144,9 @@ export function ProvidersPage() {
                 key: 'name',
                 header: t('web.panel_provider'),
                 render: (row) => (
+                  // Demo parity: the provider's name as a code-style pill.
                   <Badge tone="info" outline>
-                    <Ltr mono={false}>{row.canonicalName}</Ltr>
+                    <Ltr>{row.canonicalName}</Ltr>
                   </Badge>
                 ),
               },

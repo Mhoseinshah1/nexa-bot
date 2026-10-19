@@ -57,6 +57,7 @@ import {
   Field,
   Input,
   KV,
+  IdText,
   Ltr,
   Money,
   Num,
@@ -472,16 +473,8 @@ export function MirzaRestoreFlow({
   );
   return (
     <div className="stack inset mrz-flow">
-      {inReview && !reupload && (
-        <Banner tone="warn" icon="info">
-          {t('web.lmg_banner')}
-        </Banner>
-      )}
-      {inReview && reupload && (
-        <Banner tone="info" icon="info">
-          {t('web.mrz_reupload_banner')}
-        </Banner>
-      )}
+      {inReview && !reupload && <Banner tone="warn">{t('web.lmg_banner')}</Banner>}
+      {inReview && reupload && <Banner tone="info">{t('web.mrz_reupload_banner')}</Banner>}
       <Summary row={row} mayManage={access.mayManage} />
       {/*
         The review stays readable after the confirmation — it is what was approved — but it
@@ -1867,13 +1860,19 @@ export function MirzaHistory({ rows }: { rows: readonly LegacyMigrationImportVie
     {
       key: 'error',
       header: t('web.lmg_col_error'),
+      wrap: true,
       render: (row): ReactNode => (row.errorCode === null ? '—' : t(ERROR_LABELS[row.errorCode])),
     },
     {
       key: 'protective',
       header: t('web.mrz_protective_run'),
       render: (row): ReactNode =>
-        row.preImportBackupRunId === null ? '—' : <Ltr>{row.preImportBackupRunId}</Ltr>,
+        row.preImportBackupRunId === null ? (
+          '—'
+        ) : (
+          // The demo's short id; the full one is the tooltip (X7).
+          <IdText value={row.preImportBackupRunId} display={row.preImportBackupRunId.slice(0, 8)} />
+        ),
     },
     {
       key: 'at',

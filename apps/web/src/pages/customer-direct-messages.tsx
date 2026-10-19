@@ -393,6 +393,7 @@ export function DirectMessagesCard({
             <Timeline items={messages.map(itemOf)} />
             {(next !== null || cursors.length > 0) && (
               <CursorPager
+                order="newest-first"
                 hasPrevious={cursors.length > 0}
                 hasNext={next !== null}
                 onPrevious={() => setCursors(cursors.slice(0, -1))}

@@ -6,12 +6,14 @@ import {
   type PermissionKey,
 } from '@nexa/contracts';
 import { fetchNavCounters, fetchPaymentAttention, fetchSystemDiagnostics } from '../api/client';
-import { dashboardAttentionItems } from '../attention-view';
+import { dashboardAttentionItems, type AttentionItem } from '../attention-view';
+import { formatNumber } from '../format';
 import { t } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
 import { BUSINESS_REFRESH_MS } from '../report-view';
-import { Banner, Button, Card, Skeleton } from '../ui/kit';
-import { AttentionClear, AttentionList } from './attention-list';
+import { useLinkHandler } from '../router';
+import { Icon } from '../ui/icons';
+import { Banner, Button, Skeleton } from '../ui/kit';
 
 /**
  * The dashboard's attention queue (roadmap B6): what waits for a person NOW, first on the
@@ -86,46 +88,107 @@ export function AttentionQueueCard({ permissions }: { permissions: readonly Perm
     payments: mayViewPayments ? payments.data : undefined,
   });
 
+  const titleId = 'dash-attention-title';
   return (
-    <Card
-      id="dash-attention"
-      className="dash-attention"
-      title={t('web.dash_attn_title')}
-      hint={t('web.dash_attn_hint')}
-    >
-      {failed && (
-        <Banner
-          tone="warn"
-          action={
-            <Button
-              size="sm"
-              onClick={() => {
-                for (const query of sources) if (query.isError) void query.refetch();
-              }}
-            >
-              {t('web.retry')}
-            </Button>
-          }
-        >
-          {t('web.dash_attn_partial')}
-        </Banner>
-      )}
-      {items.length === 0 && pending ? (
-        <Skeleton rows={3} cols={2} />
-      ) : (
-        <AttentionList
-          items={items}
-          label={t('web.dash_attn_title')}
-          empty={
-            failed || pending ? null : (
-              <AttentionClear
-                title={t('web.dash_attn_clear')}
-                hint={t('web.dash_attn_clear_hint')}
-              />
-            )
-          }
-        />
-      )}
-    </Card>
+    /*
+     * The demo's queue: a narrow side column with the amber title and its description, and
+     * the items beside it — the severe ones as large red tiles, four abreast, the rest as
+     * compact rows with a count chip, three abreast. Empty, the side column stays and the
+     * check sits in the item area at the strip's own height.
+     */
+    <section id="dash-attention" className="card dash-attention" aria-labelledby={titleId}>
+      <header className="dash-attn-head">
+        <h2 id={titleId}>{t('web.dash_attn_title')}</h2>
+        <p className="hint">{t('web.dash_attn_hint')}</p>
+      </header>
+      <div className="dash-attn-body">
+        {failed && (
+          <Banner
+            tone="warn"
+            action={
+              <Button
+                size="sm"
+                onClick={() => {
+                  for (const query of sources) if (query.isError) void query.refetch();
+                }}
+              >
+                {t('web.retry')}
+              </Button>
+            }
+          >
+            {t('web.dash_attn_partial')}
+          </Banner>
+        )}
+        {items.length === 0 && pending ? (
+          <Skeleton rows={2} cols={3} />
+        ) : items.length === 0 ? (
+          failed ? null : (
+            <div className="dash-attn-clear">
+              <Icon name="check" size={22} />
+              <b>{t('web.dash_attn_clear')}</b>
+              <span>{t('web.dash_attn_clear_hint')}</span>
+            </div>
+          )
+        ) : (
+          <AttentionGrid items={items} label={t('web.dash_attn_title')} />
+        )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The queue's items, ONE list (each item one link, in `attention-view.ts`'s urgency order):
+ * a `danger` item is a large tile, everything else a compact row; the first compact row
+ * starts a new line, so the two kinds never share one.
+ */
+function AttentionGrid({ items, label }: { items: readonly AttentionItem[]; label: string }) {
+  const onLink = useLinkHandler();
+  const firstNormal = items.findIndex((item) => item.tone !== 'danger');
+  return (
+    <ul className="dash-attn-list" aria-label={label}>
+      {items.map((item, index) => {
+        const count = `${formatNumber(item.count)}${item.atLeast ? '+' : ''}`;
+        const severe = item.tone === 'danger';
+        const name = (
+          <span className="dash-attn-lbl">
+            {t(item.label)}
+            {item.atLeast && <span className="faint small"> ({t('web.attn_at_least')})</span>}
+          </span>
+        );
+        const go = (
+          <span className="dash-attn-go">
+            {t('web.attn_open')}
+            <Icon name="chevronLeft" size={13} />
+          </span>
+        );
+        return (
+          <li
+            key={item.key}
+            className={`attn-${item.tone} ${severe ? 'dash-attn-tile' : 'dash-attn-row'}${index === firstNormal && index > 0 ? ' first-normal' : ''}`}
+            data-attention={item.key}
+          >
+            <a href={item.href} onClick={onLink}>
+              {severe ? (
+                <>
+                  <i className="dash-dot tone-danger" aria-hidden="true" />
+                  <b className="num dash-attn-count">{count}</b>
+                  {name}
+                  {go}
+                </>
+              ) : (
+                <>
+                  <span className={`dash-chip ${item.tone}`}>
+                    <span className="num">{count}</span>
+                  </span>
+                  {name}
+                  {go}
+                </>
+              )}
+            </a>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

@@ -7,6 +7,7 @@ import { customer, order, renderPage, stubApi } from './harness';
 import { openC360Tab, openWalletDialog, submitWalletDialog } from './c360-helpers';
 import { openFilterPanel } from './ui-helpers';
 import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * The Users surface, rendered against the shapes the server actually returns.
@@ -394,7 +395,7 @@ describe('the customer list', () => {
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5551234567');
 
-    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_newer') }));
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.includes('cursor=Y3Vyc29yLW9uZQ'))).toBe(true),
     );
@@ -402,7 +403,7 @@ describe('the customer list', () => {
     // The pager is a sibling of `StateSwitch` and is drawn only in the `ready`
     // state, so it is gone while the new page is in flight. Waiting for it back
     // is waiting for the second page to have arrived.
-    const back = await screen.findByRole('button', { name: 'قبلی' });
+    const back = await screen.findByRole('button', { name: t('web.page_older') });
     // Back pops the trail rather than asking the server to reverse: a keyset
     // cursor only goes forward, and the previous page's start is a cursor this
     // component already held.
@@ -412,7 +413,9 @@ describe('the customer list', () => {
     // freshness window (`NAV_PREFETCH_FRESH_MS`, Issue 16), otherwise re-asked —
     // and in neither case by a request carrying a cursor.
     await screen.findByText('5551234567');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'قبلی' })).toBeDisabled());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled(),
+    );
     for (const call of api.calls.slice(forward)) expect(call.url).not.toContain('cursor=');
   });
 
@@ -422,8 +425,8 @@ describe('the customer list', () => {
     await screen.findByText('5551234567');
     // `nextCursor: null` is the last page. An enabled button here would push a
     // cursor, change the query key and issue a request for nothing.
-    expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'قبلی' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_newer') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled();
   });
 
   it('says the list is empty without claiming a search found nothing', async () => {
@@ -986,7 +989,7 @@ describe('the wallet card', () => {
     expect(within(card).getByText('3')).toBeTruthy();
     // The head's summary strip reads the SAME derived balance (the same query), so the
     // two can never disagree.
-    const strip = document.querySelector('.head-stats') as HTMLElement;
+    const strip = document.querySelector('.c360-stats') as HTMLElement;
     expect(within(strip).getByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
     // The page SAYS the number is computed, because an operator seeing a balance
     // has no other way to know there is no stored column behind it.
@@ -1083,6 +1086,8 @@ describe('the wallet card', () => {
           // The shared pager's own two, which carry no wallet meaning.
           label === 'بعدی' ||
           label === 'قبلی' ||
+          label === 'تازه‌تر' ||
+          label === 'قدیمی‌تر' ||
           // A `Copyable` renders an unlabelled icon button; it copies a value and
           // changes nothing.
           label === '',
@@ -1314,7 +1319,7 @@ describe('the wallet card', () => {
     await openC360Tab('financial');
     await screen.findByText('تاریخچه تراکنش‌ها');
 
-    fireEvent.click(await screen.findByText('بعدی'));
+    fireEvent.click(await screen.findByText(t('web.page_older')));
 
     await waitFor(() => {
       expect(
@@ -1371,7 +1376,7 @@ describe('the Mirza wallet history (one-time import)', () => {
     expect(screen.getAllByText('منتقل‌شده').length).toBeGreaterThan(0);
     expect(screen.getByText('buy_service')).toBeTruthy();
     // Its own pager, its own cursor: the ledger's is untouched.
-    const nexts = await screen.findAllByText('بعدی');
+    const nexts = await screen.findAllByText(t('web.page_older'));
     fireEvent.click(nexts[nexts.length - 1]!);
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('importedCursor=mirza-next'))).toBe(true);
@@ -1667,7 +1672,7 @@ describe("a customer's orders and services", () => {
     const card = screen.getByText('همهٔ سفارش‌های این مشتری').closest('section');
     expect(card).not.toBeNull();
 
-    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: t('web.page_newer') }));
 
     await waitFor(() => {
       expect(
@@ -1677,7 +1682,7 @@ describe("a customer's orders and services", () => {
     });
   });
 
-  /* `/services` pages DESCENDING, so its pager keeps the default labels. */
+  /* `/services` pages DESCENDING, so its next page is «قدیمی‌تر». */
   it('labels the services pager for a descending traversal and sends its cursor', async () => {
     const api = withCards([
       { url: '/orders', body: { orders: [], nextCursor: null } },
@@ -1698,7 +1703,7 @@ describe("a customer's orders and services", () => {
     const card = screen.getByText('همهٔ سرویس‌های این مشتری').closest('section');
     expect(card).not.toBeNull();
 
-    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: t('web.page_older') }));
 
     await waitFor(() => {
       expect(
@@ -1758,11 +1763,11 @@ describe("a customer's orders and services", () => {
      * still showing its skeleton and has no pager to press — which is how the first
      * version of this case failed on its second click rather than on its assertion.
      */
-    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(within(card).getByRole('button', { name: t('web.page_newer') }));
     await screen.findByText('plan-page-2');
     expect(api.calls.some((call) => call.url.includes('cursor=page-2'))).toBe(true);
 
-    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(within(card).getByRole('button', { name: t('web.page_newer') }));
     await screen.findByText('plan-page-3');
     expect(api.calls.some((call) => call.url.includes('cursor=page-3'))).toBe(true);
 
@@ -1772,7 +1777,7 @@ describe("a customer's orders and services", () => {
      * cached hit issues no new request.
      */
     const before = api.calls.length;
-    fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
+    fireEvent.click(within(card).getByRole('button', { name: t('web.page_older') }));
     await screen.findByText('plan-page-2');
 
     const after = api.calls.slice(before);
@@ -1781,7 +1786,7 @@ describe("a customer's orders and services", () => {
       'Previous went somewhere other than the page before',
     ).toBe(true);
     /* And the first page is only reachable by pressing it again. */
-    fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
+    fireEvent.click(within(card).getByRole('button', { name: t('web.page_older') }));
     await screen.findByText('plan-page-1');
   });
 

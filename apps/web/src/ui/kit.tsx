@@ -1,4 +1,5 @@
 import {
+  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -300,6 +301,50 @@ export function CodeValue({
   );
 }
 
+/**
+ * A technical identifier shown as itself: left to right, monospace, its full value in the
+ * tooltip — and no copy button. The demo draws list identifiers this way (X7); `Copyable`
+ * stays for a detail view, where copying the whole value is the point. `display` shortens
+ * what is drawn (a uuid's first eight characters); the full value is still the title.
+ */
+export function IdText({ value, display }: { value: string; display?: string }) {
+  return (
+    <span className="ltr mono id-text" title={value}>
+      {display ?? value}
+    </span>
+  );
+}
+
+/**
+ * A linkable identifier — a name, a code, an order or payment id, a tracking code, a
+ * campaign title — drawn as the demo's underlined link (X7). `mono` isolates it left to
+ * right in the code face, for an id; a name keeps the body font. Navigation goes through the
+ * router (`useLinkHandler`), so a plain click never reloads the admin.
+ */
+export function RefLink({
+  href,
+  children,
+  mono = false,
+  title,
+}: {
+  href: string;
+  children: ReactNode;
+  mono?: boolean;
+  title?: string;
+}) {
+  const onLink = useLinkHandler();
+  return (
+    <a
+      className={cx('lk', mono && 'ltr mono')}
+      href={href}
+      onClick={onLink}
+      {...(title === undefined ? {} : { title })}
+    >
+      {children}
+    </a>
+  );
+}
+
 /* --------------------------------------------------------------- badges --- */
 
 export function Badge({
@@ -475,11 +520,27 @@ export function ButtonGroup({
 
 /* --------------------------------------------------------------- layout --- */
 
+/**
+ * The page's breadcrumb, supplied once by the shell (`app.tsx`, from `page-trail.ts`) and read
+ * by the page header — so no page writes its own trail, and every page that draws a header
+ * draws the same «گروه منو / صفحه» the sidebar implies. Empty outside the shell (a test that
+ * renders a page alone) and on pages with nothing above them (the dashboard).
+ */
+export const PageTrailContext = createContext<readonly Crumb[]>([]);
+
+/**
+ * The page header (demo parity X1, X3, X4): the breadcrumb, the large title, the subtitle and
+ * an optional line under it (a page's «آخرین به‌روزرسانی»); on the opposite side, the page's
+ * controls — its freshness line and refresh, its primary buttons — aligned with the BOTTOM of
+ * the block, never level with the title. When the two do not fit on one row the controls wrap
+ * below the subtitle, still on their own side.
+ */
 export function PageHead({
   title,
   subtitle,
   maturity,
   badge,
+  meta,
   actions,
 }: {
   title: ReactNode;
@@ -492,17 +553,22 @@ export function PageHead({
   maturity?: Exclude<Maturity, 'now'>;
   /** A status badge beside the title — the entity's state on a detail page. */
   badge?: ReactNode;
+  /** A line under the subtitle, such as when the page's figures were last read. */
+  meta?: ReactNode;
   actions?: ReactNode;
 }) {
+  const trail = useContext(PageTrailContext);
   return (
     <div className="page-head">
       <div className="titles">
+        {trail.length > 1 && <Breadcrumbs items={trail} />}
         <h1>
           {title}
           {badge}
           {maturity !== undefined && <MaturityBadge value={maturity} />}
         </h1>
         {subtitle !== undefined && <p className="sub">{subtitle}</p>}
+        {meta !== undefined && <div className="head-meta">{meta}</div>}
       </div>
       {actions !== undefined && <div className="actions">{actions}</div>}
     </div>
@@ -581,6 +647,8 @@ export function DetailHead({
   initial,
   stats,
   level = 2,
+  back,
+  initialClass,
 }: {
   title: ReactNode;
   badge?: ReactNode;
@@ -590,37 +658,55 @@ export function DetailHead({
   initial?: string;
   stats?: readonly { readonly label: ReactNode; readonly value: ReactNode }[];
   level?: 1 | 2;
+  /**
+   * A small «→ فهرست» link to the list the record belongs to, drawn under the breadcrumb and
+   * above the head (the demo's `backl`). Additive: a head without it is unchanged.
+   */
+  back?: { readonly href: string; readonly label: ReactNode };
+  /** An extra class for the avatar tile (a page's tint); additive, absent changes nothing. */
+  initialClass?: string;
 }) {
   const Heading = level === 1 ? 'h1' : 'h2';
+  const trail = useContext(PageTrailContext);
+  const onLink = useLinkHandler();
   return (
-    <section className="card detail-head">
-      <div className="head-card">
-        {initial !== undefined && (
-          <span className="avatar lg" aria-hidden="true">
-            {initial}
-          </span>
-        )}
-        <div className="ident-block">
-          <Heading>
-            {title}
-            {badge}
-          </Heading>
-          {meta !== undefined && <div className="meta">{meta}</div>}
-        </div>
-        {actions !== undefined && <div className="quick">{actions}</div>}
-      </div>
-      {stats !== undefined && stats.length > 0 && (
-        <dl className="head-stats">
-          {stats.map((stat, index) => (
-            // Position is the identity: a fixed, statically written strip.
-            <div key={index}>
-              <dt>{stat.label}</dt>
-              <dd>{stat.value}</dd>
-            </div>
-          ))}
-        </dl>
+    <>
+      {/* A detail page whose head IS this card still says where it is (X1). */}
+      {level === 1 && trail.length > 1 && <Breadcrumbs items={trail} />}
+      {back !== undefined && (
+        <a className="back-link" href={back.href} onClick={onLink}>
+          <span aria-hidden="true">→</span> {back.label}
+        </a>
       )}
-    </section>
+      <section className="card detail-head">
+        <div className="head-card">
+          {initial !== undefined && (
+            <span className={cx('avatar', 'lg', initialClass)} aria-hidden="true">
+              {initial}
+            </span>
+          )}
+          <div className="ident-block">
+            <Heading>
+              {title}
+              {badge}
+            </Heading>
+            {meta !== undefined && <div className="meta">{meta}</div>}
+          </div>
+          {actions !== undefined && <div className="quick">{actions}</div>}
+        </div>
+        {stats !== undefined && stats.length > 0 && (
+          <dl className="head-stats">
+            {stats.map((stat, index) => (
+              // Position is the identity: a fixed, statically written strip.
+              <div key={index}>
+                <dt>{stat.label}</dt>
+                <dd>{stat.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </section>
+    </>
   );
 }
 
@@ -678,8 +764,10 @@ export interface StatDelta {
 
 /**
  * A KPI card: icon and label, the value with its unit, an optional delta and
- * an optional sparkline or footnote. `tone` outlines the card for a figure
- * that needs attention (`alert` red, `warn` amber) — never as decoration.
+ * an optional sparkline or footnote. `tone: 'alert'` outlines the card red for
+ * a figure that is a failure — never as decoration. `warn` marks the card
+ * (`warnish`) but the kit draws it neutral: the demo's stat strips have no amber
+ * borders (X6). Only the dashboard's own KPI grid styles it (dashboard.css).
  */
 export function StatCard({
   label,
@@ -897,22 +985,28 @@ export function Banner({
   tone = 'info',
   title,
   children,
-  icon,
   role,
   action,
+  slim = false,
 }: {
   tone?: Tone;
+  /** A one-line neutral strip with a leading ⓘ (the demo's hint under a page head). */
+  slim?: boolean;
   title?: string;
   children?: ReactNode;
-  icon?: IconName;
   /** Overrides the tone's default. See `StaleNotice` for why one needs to. */
   role?: 'status' | 'alert' | undefined;
   /** A control that resolves what the banner says — at the end of the line. */
   action?: ReactNode;
 }) {
+  // Demo parity X5 (and its follow-up): a callout is an outlined card in its tone, with no
+  // ⓘ or ⚠. An error still announces itself (`role="alert"`), which the icon never did.
   return (
-    <div className={`banner ${tone}`} role={role ?? (tone === 'danger' ? 'alert' : undefined)}>
-      <Icon name={icon ?? (tone === 'danger' || tone === 'warn' ? 'alert' : 'info')} size={16} />
+    <div
+      className={`banner ${tone}${slim ? ' slim' : ''}`}
+      role={role ?? (tone === 'danger' ? 'alert' : undefined)}
+    >
+      {slim && <Icon name="info" size={14} />}
       <div>
         {title !== undefined && <strong>{title}</strong>}
         {children}
@@ -1700,7 +1794,7 @@ function StaleNotice({ onRetry }: { onRetry?: (() => void) | undefined }) {
      * see it. `status` rather than `alert`: it is worth knowing, not worth
      * interrupting what they are reading.
      */
-    <Banner tone="warn" icon="alert" role="status">
+    <Banner tone="warn" role="status">
       {t('web.refresh_failed')}{' '}
       {onRetry !== undefined && (
         <button type="button" className="link" onClick={onRetry}>
@@ -1762,8 +1856,12 @@ export interface Column<T> {
   readonly render: (row: T) => ReactNode;
   /** Right-aligned numeric column in a logical-property world: `end`. */
   readonly align?: 'start' | 'end';
-  /** Lets the cell wrap instead of holding one line — for free text. */
-  readonly wrap?: boolean;
+  /**
+   * Lets the cell wrap instead of holding one line — for free text (`true`, at least
+   * `--tbl-wrap-min` wide). `'tight'` wraps with no floor: a short value of a few words (a
+   * timestamp, a scope name) breaks between them, so a wide ledger fits its card (X9).
+   */
+  readonly wrap?: boolean | 'tight';
 }
 
 /**
@@ -1790,6 +1888,8 @@ export function DataTable<T>({
   toolbar,
   filters,
   rowClassName,
+  detail,
+  stack = true,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -1800,16 +1900,58 @@ export function DataTable<T>({
   toolbar?: ReactNode;
   filters?: ReactNode;
   rowClassName?: (row: T) => string | undefined;
+  /**
+   * A row's DETAIL (demo parity X9): the facts a wide list cannot hold as columns at 1440
+   * without scrolling sideways, drawn on a full-width line under the row when its toggle is
+   * opened. `label` names the toggle for a screen reader. The row's own columns stay as the
+   * reference draws them; nothing in the detail is a second copy of a column.
+   */
+  detail?: { label: string; render: (row: T) => ReactNode };
+  /**
+   * Demo parity (390): at phone and tablet width the table is drawn as the approved demo
+   * draws every list there — one card per row, its first column as the card's title and
+   * every other cell as a «header … value» line (each cell carries its header in
+   * `data-label`). The same rows, cells and order; only the CSS layout changes.
+   * `'labelled'` draws the first cell as a labelled line too, where the demo does (its
+   * generic lists), instead of as the card's title.
+   *
+   * ON BY DEFAULT: the demo stacks every list below 820px (measured on 48 routes: no
+   * `table.t` there scrolls sideways). Of its lists, the ones whose first cell is a labelled
+   * line rather than the card's title pass `'labelled'`; `false` keeps a sideways-scrolling
+   * table for a list that must stay a grid.
+   */
+  stack?: boolean | 'labelled';
 }) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (key: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const span = columns.length + (detail === undefined ? 0 : 1);
   return (
     <>
       {toolbar !== undefined && <div className="toolbar">{toolbar}</div>}
       {filters !== undefined && <div className="filter-row">{filters}</div>}
-      <div className={cx('tbl-wrap', sticky && 'sticky')}>
-        <table className={cx('tbl', dense && 'dense')}>
+      <div
+        className={cx(
+          'tbl-wrap',
+          sticky && 'sticky',
+          stack !== false && 'stack',
+          stack === 'labelled' && 'labelled',
+        )}
+      >
+        {/*
+          The explicit roles keep the table a table for assistive technology once the stacked
+          layout changes its elements' display, which a browser may otherwise take as leave to
+          drop the semantics. Native roles restated; nothing else changes.
+        */}
+        <table className={cx('tbl', dense && 'dense')} role="table">
           <caption className="visually-hidden">{caption}</caption>
-          <thead>
-            <tr>
+          <thead role="rowgroup">
+            <tr role="row">
               {columns.map((column) => (
                 // Classes, not a `style` attribute. The production document
                 // policy is `style-src 'self'`, which blocks element `style`
@@ -1819,32 +1961,68 @@ export function DataTable<T>({
                 <th
                   key={column.key}
                   scope="col"
+                  role="columnheader"
                   className={cx(
                     `al-${column.align === 'end' ? 'end' : 'start'}`,
-                    column.wrap && 'wrap',
+                    column.wrap !== undefined && column.wrap !== false && 'wrap',
+                    column.wrap === 'tight' && 'tight',
                   )}
                 >
                   {column.header}
                 </th>
               ))}
+              {detail !== undefined && (
+                <th scope="col" role="columnheader" className="al-end tbl-toggle">
+                  <span className="visually-hidden">{detail.label}</span>
+                </th>
+              )}
             </tr>
           </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={rowKey(row)} className={rowClassName?.(row)}>
-                {columns.map((column) => (
-                  <td
-                    key={column.key}
-                    className={cx(
-                      `al-${column.align === 'end' ? 'end' : 'start'}`,
-                      column.wrap && 'wrap',
+          <tbody role="rowgroup">
+            {rows.map((row) => {
+              const key = rowKey(row);
+              const expanded = open.has(key);
+              const detailId = `tbl-detail-${key}`;
+              return (
+                <Fragment key={key}>
+                  <tr role="row" className={cx(rowClassName?.(row), expanded && 'expanded')}>
+                    {columns.map((column) => (
+                      <td
+                        key={column.key}
+                        role="cell"
+                        data-label={stack === false ? undefined : column.header}
+                        className={cx(
+                          `al-${column.align === 'end' ? 'end' : 'start'}`,
+                          column.wrap !== undefined && column.wrap !== false && 'wrap',
+                          column.wrap === 'tight' && 'tight',
+                        )}
+                      >
+                        {column.render(row)}
+                      </td>
+                    ))}
+                    {detail !== undefined && (
+                      <td role="cell" className="al-end tbl-toggle">
+                        <IconButton
+                          icon="chevron"
+                          label={detail.label}
+                          size="sm"
+                          aria-expanded={expanded}
+                          {...(expanded ? { 'aria-controls': detailId } : {})}
+                          onClick={() => toggle(key)}
+                        />
+                      </td>
                     )}
-                  >
-                    {column.render(row)}
-                  </td>
-                ))}
-              </tr>
-            ))}
+                  </tr>
+                  {detail !== undefined && expanded && (
+                    <tr role="row" className="tbl-detail" id={detailId}>
+                      <td role="cell" colSpan={span}>
+                        {detail.render(row)}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1872,44 +2050,58 @@ export function RowActions({ children, wrap = false }: { children: ReactNode; wr
 }
 
 /**
+ * The order a keyset list walks, which decides what its two buttons are called.
+ *
+ * - `newest-first`: a `DESC` keyset on a time — the next page is OLDER. «تازه‌تر» goes back,
+ *   «قدیمی‌تر» goes on.
+ * - `oldest-first`: an `ASC` keyset on a time — the next page is NEWER. The same two labels,
+ *   bound the other way round: «قدیمی‌تر» goes back, «تازه‌تر» goes on.
+ * - `sequence`: any order that is not time (a name, a code, a sort position, an id that is
+ *   not time-ordered). «قبلی / بعدی», because «تازه‌تر» over an alphabetical list would be a
+ *   claim the list does not make.
+ *
+ * Required, so every list states its own order where the query is written; a default would
+ * quietly label an ascending list backwards (the demo-parity review found three lists whose
+ * comments said they passed reversed labels and did not).
+ */
+export type KeysetOrder = 'newest-first' | 'oldest-first' | 'sequence';
+
+/**
  * Keyset paging: forward through opaque cursors, and back through the ones
  * already seen.
  *
  * There is no page number, because the API does not offer one: `nextCursor` is
  * opaque and the response says nothing about how many pages exist. Rendering
  * "page 3 of 12" would require counting the collection on every request, which
- * is the thing keyset paging exists to avoid.
+ * is the thing keyset paging exists to avoid. A list whose response DOES carry a
+ * total uses `CountedPager`.
  *
- * The labels FOLLOW the traversal, and the caller is the one that knows it.
- * The ops-log and notification lists walk `before` cursors down a `DESC`
- * keyset, so their next page is older and the way back is newer — the
- * defaults. The panel lists walk an `ASC` keyset, so their next page is NEWER
- * and they pass the labels the other way round.
+ * Over a time order the buttons always read «تازه‌تر» (first, on the start side) and
+ * «قدیمی‌تر» (after it), as the approved demo draws them; `order` decides which of
+ * `onPrevious` / `onNext` each one is. A direction that is not available is disabled, so
+ * only the one the operator can take is active.
  *
  * The cursor is opaque to this component and it stays that way.
  */
 export function CursorPager({
+  order,
   onPrevious,
   onNext,
   hasPrevious,
   hasNext,
   shown,
-  nextLabel = 'web.page_next',
-  previousLabel = 'web.page_previous',
   summary,
 }: {
+  order: KeysetOrder;
   onPrevious: () => void;
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
   /** Rows on this page, drawn as `web.showing` N unless `summary` says something else. */
   shown?: number;
-  nextLabel?: WebKey;
-  previousLabel?: WebKey;
   /**
-   * What the pager says about the rows, in place of «نمایش N»: a report that
-   * pages by offset knows its total («تعداد کل: N»), and one that pages by an
-   * opaque cursor may say nothing at all (`null`).
+   * What the pager says about the rows, in place of «نمایش N», or nothing at all
+   * (`null`) for a list that pages by an opaque cursor and has nothing to add.
    */
   summary?: ReactNode;
 }) {
@@ -1921,16 +2113,33 @@ export function CursorPager({
         {t('web.showing')} <Num value={shown} />
       </>
     );
+  const back = { enabled: hasPrevious, go: onPrevious };
+  const on = { enabled: hasNext, go: onNext };
+  const [first, second] =
+    order === 'sequence'
+      ? [
+          { ...back, label: t('web.page_previous') },
+          { ...on, label: t('web.page_next') },
+        ]
+      : order === 'newest-first'
+        ? [
+            { ...back, label: t('web.page_newer') },
+            { ...on, label: t('web.page_older') },
+          ]
+        : [
+            { ...on, label: t('web.page_newer') },
+            { ...back, label: t('web.page_older') },
+          ];
   return (
-    <div className="pager">
+    <div className="pager" data-order={order}>
       {said !== null && <span className="muted small">{said}</span>}
       <span className="spacer" />
-      <button type="button" className="btn sm" disabled={!hasPrevious} onClick={onPrevious}>
+      <button type="button" className="btn sm" disabled={!first.enabled} onClick={first.go}>
         <Icon name="chevronRight" />
-        {t(previousLabel)}
+        {first.label}
       </button>
-      <button type="button" className="btn sm" disabled={!hasNext} onClick={onNext}>
-        {t(nextLabel)}
+      <button type="button" className="btn sm" disabled={!second.enabled} onClick={second.go}>
+        {second.label}
         <Icon name="chevronLeft" />
       </button>
     </div>
@@ -1938,6 +2147,79 @@ export function CursorPager({
 }
 /** `CursorPager` by the name the kit inventory uses. The semantics are keyset. */
 export const Pagination = CursorPager;
+
+/**
+ * A total the SERVER sent with the list (`totalRows` on the report endpoints): the only
+ * number a counted pager may print. A distinct type so a client-side count — the length of
+ * the rows a page happens to hold — cannot be handed to `CountedPager` by accident; the one
+ * way to make one is `serverTotal`, which a reviewer can grep.
+ */
+export type ServerTotal = number & { readonly __serverTotal: unique symbol };
+
+/** Marks a figure read from a response field that the API defines as the list's total. */
+export function serverTotal(value: number): ServerTotal {
+  return value as ServerTotal;
+}
+
+/**
+ * The counted pager the demo draws where a list knows its size:
+ * «‹ قبلی  ۱–۱۰ از ۲۱ · صفحهٔ ۱ از ۳  بعدی ›».
+ *
+ * ONLY over a server total (`ServerTotal`), so an endpoint that pages by an opaque cursor
+ * keeps `CursorPager` (nexa-web-design: no client counts, no offset paging). `page` is
+ * 1-based, as the report endpoints return it. Draws nothing without a total or over an
+ * empty list — the list's own empty state says that.
+ */
+export function CountedPager({
+  page,
+  pageSize,
+  total,
+  onPage,
+}: {
+  page: number;
+  pageSize: number;
+  total: ServerTotal;
+  onPage: (page: number) => void;
+}) {
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0 || pageSize <= 0) {
+    return null;
+  }
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const current = Math.min(Math.max(1, page), pages);
+  const from = (current - 1) * pageSize + 1;
+  const to = Math.min(current * pageSize, total);
+  return (
+    <div className="pager counted">
+      <button
+        type="button"
+        className="btn sm"
+        disabled={current <= 1}
+        aria-label={t('web.page_previous_aria')}
+        onClick={() => onPage(current - 1)}
+      >
+        <Icon name="chevronRight" />
+        {t('web.page_previous')}
+      </button>
+      <span className="pager-info" data-testid="counted-pager-info">
+        <b className="pager-range">
+          <Num value={from} />–<Num value={to} />
+        </b>{' '}
+        {t('web.page_range_of')} <b>{<Num value={total} />}</b> · {t('web.page_of')}{' '}
+        <Num value={current} /> {t('web.page_range_of')} <Num value={pages} />
+      </span>
+      <button
+        type="button"
+        className="btn sm"
+        disabled={current >= pages}
+        aria-label={t('web.page_next_aria')}
+        onClick={() => onPage(current + 1)}
+      >
+        {t('web.page_next')}
+        <Icon name="chevronLeft" />
+      </button>
+    </div>
+  );
+}
 
 /**
  * Rows per page on EVERY list the admin draws (W1.8). A keyset list asks the
@@ -1965,6 +2247,7 @@ export function usePagedRows<T>(
   const pager =
     rows.length > LIST_PAGE_SIZE ? (
       <CursorPager
+        order="sequence"
         hasPrevious={page > 0}
         hasNext={page < pages - 1}
         onPrevious={() => setState({ key: resetKey, page: page - 1 })}
@@ -2101,8 +2384,24 @@ export interface DistributionSlice {
  * breakdown does not. This component takes slices and knows nothing about
  * either — the caller decides, and the dashboard's caller passes panels.
  */
-export function Distribution({ slices }: { slices: readonly DistributionSlice[] }) {
+export function Distribution({
+  slices,
+  scale = 'total',
+}: {
+  slices: readonly DistributionSlice[];
+  /**
+   * What a full bar means: the slices' `total` (each bar its share, the default), or the
+   * largest slice (`max`: the longest bar is full and the rest compare to it, as the approved
+   * demo's bar cards draw them). The numbers beside the bars are the counts either way.
+   */
+  scale?: 'total' | 'max';
+}) {
   const total = useMemo(() => slices.reduce((sum, slice) => sum + slice.count, 0), [slices]);
+  const largest = useMemo(
+    () => slices.reduce((top, slice) => Math.max(top, slice.count), 0),
+    [slices],
+  );
+  const full = scale === 'max' ? largest : total;
 
   if (total === 0) return <Empty title={t('web.empty')} />;
 
@@ -2132,7 +2431,7 @@ export function Distribution({ slices }: { slices: readonly DistributionSlice[] 
               x="0"
               y="0"
               height="8"
-              width={(slice.count / total) * 100}
+              width={(slice.count / full) * 100}
             />
           </svg>
         </div>
@@ -2262,24 +2561,30 @@ export function Breadcrumbs({ items }: { items: readonly Crumb[] }) {
   const onLink = useLinkHandler();
   return (
     <nav className="crumbs" aria-label={t('web.breadcrumbs')}>
-      {items.map((crumb, index) => (
-        <span key={`${crumb.label}-${index}`}>
-          {index > 0 && (
-            <span className="sep" aria-hidden="true">
-              /
-            </span>
-          )}
-          {crumb.href === undefined ? (
-            <span className="cur" aria-current="page">
-              {crumb.label}
-            </span>
-          ) : (
-            <a href={crumb.href} onClick={onLink}>
-              {crumb.label}
-            </a>
-          )}
-        </span>
-      ))}
+      {items.map((crumb, index) => {
+        const last = index === items.length - 1;
+        return (
+          <span key={`${crumb.label}-${index}`}>
+            {index > 0 && (
+              <span className="sep" aria-hidden="true">
+                /
+              </span>
+            )}
+            {last ? (
+              <span className="cur" aria-current="page">
+                {crumb.label}
+              </span>
+            ) : crumb.href === undefined ? (
+              // A menu group: a place in the navigation, not a page of its own.
+              <span className="grp">{crumb.label}</span>
+            ) : (
+              <a href={crumb.href} onClick={onLink}>
+                {crumb.label}
+              </a>
+            )}
+          </span>
+        );
+      })}
     </nav>
   );
 }

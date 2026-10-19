@@ -230,7 +230,7 @@ const ownerPage = () => {
 const card = (label: string) =>
   screen
     .getAllByText(label)
-    .map((node) => node.closest('.stat'))
+    .map((node) => node.closest('.dash-kpi'))
     .find((node) => node !== null) as HTMLElement;
 const deltaOf = (label: string) => card(label).querySelector('.delta') as HTMLElement | null;
 
@@ -369,14 +369,14 @@ describe('the owner dashboard', () => {
     const api = stubApi(OWNER_ROUTES);
     const { container } = ownerPage();
     await screen.findByText(t('web.dashboard_today_sales'));
-    expect(container.querySelectorAll('.stat .delta').length).toBeGreaterThan(0);
+    expect(container.querySelectorAll('.dash-kpi .delta').length).toBeGreaterThan(0);
     expect(container.querySelectorAll('path.line.dashed').length).toBeGreaterThan(0);
     const asked = summaryCalls(api.calls).length;
 
-    fireEvent.click(screen.getByLabelText(t('web.period_compare')));
+    fireEvent.click(screen.getByRole('switch', { name: t('web.period_compare') }));
 
     await waitFor(() => {
-      expect(container.querySelectorAll('.stat .delta')).toHaveLength(0);
+      expect(container.querySelectorAll('.dash-kpi .delta')).toHaveLength(0);
     });
     expect(container.querySelectorAll('path.line.dashed')).toHaveLength(0);
     expect(window.location.search).toContain('compare=0');

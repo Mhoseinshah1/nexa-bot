@@ -180,9 +180,9 @@ describe('the attention card’s paging', () => {
     // One page on arrival: a failure history is not drained on every visit (round 9).
     expect(within(first).queryByText('قدیمی‌ترین')).not.toBeInTheDocument();
     expect(api.calls.filter((call) => call.url.includes('before='))).toHaveLength(0);
-    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_newer') })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
     await waitFor(() =>
       expect(within(screen.getByRole('table')).getByText('قدیمی‌ترین')).toBeInTheDocument(),
     );
@@ -190,7 +190,7 @@ describe('the attention card’s paging', () => {
     const second = api.calls.find((call) => call.url.includes('before='));
     expect(second?.url).toContain('attention=true');
     expect(second?.url).toContain('beforeId=019250ab-cdef-7012-8345-6789abcdef08');
-    expect(screen.getByRole('button', { name: t('web.page_next') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled();
   });
 });
 

@@ -12,7 +12,7 @@ import {
   ServiceDetailPage,
   ServicesPage,
 } from '../../apps/web/src/pages/services';
-import { formatDate, formatNumber, formatTimestamp } from '../../apps/web/src/format';
+import { formatDate, formatNumber, formatTimestampNumeric } from '../../apps/web/src/format';
 import { massDefinitionOf, type ServiceFilters } from '../../apps/web/src/pages/service-ops';
 import { resolve } from '../../apps/web/src/app';
 import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
@@ -904,7 +904,8 @@ describe('the promotion of /services', () => {
     const pager = container.querySelector('.pager');
     expect(pager).not.toBeNull();
     const labels = [...pager!.querySelectorAll('button')].map((b) => b.textContent ?? '');
-    expect(labels).toEqual(['قبلی', 'بعدی']);
+    // «تازه‌تر» goes back to the newer page; «قدیمی‌تر» is the next one (X2).
+    expect(labels).toEqual([t('web.page_newer'), t('web.page_older')]);
   });
 
   it('refuses to render the list at all without services.view', () => {
@@ -1224,8 +1225,8 @@ describe('the lifecycle tabs', () => {
     );
     expect(screen.getByRole('columnheader', { name: 'تاریخ خرید' })).toBeTruthy();
     const first = bodyRows.find((text) => text.includes('nx-first')) ?? '';
-    expect(first).toContain(formatTimestamp('2025-01-01T09:00:00.000Z'));
-    expect(first).not.toContain(formatTimestamp('2026-10-18T09:00:00.000Z'));
+    expect(first).toContain(formatTimestampNumeric('2025-01-01T09:00:00.000Z'));
+    expect(first).not.toContain(formatTimestampNumeric('2026-10-18T09:00:00.000Z'));
   });
 
   it('offers only the states the open tab can show', async () => {

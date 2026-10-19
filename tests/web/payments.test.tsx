@@ -294,17 +294,19 @@ describe('the payment list', () => {
    * renders nothing still has one. This finds the header's INDEX and reads the body
    * cell beneath it, which is the only place a customer's claim can actually appear.
    */
+  /*
+   * Demo parity X9: the claim moved from a column into the row's DETAIL (one toggle on the
+   * row), so this opens the detail and reads the VALUE beside the claim's label — still the
+   * only place a customer's claim can appear on the list, and still not the header.
+   */
   const signalCell = (): string => {
     const table = screen.getByRole('table');
-    const headers = within(table)
-      .getAllByRole('columnheader')
-      .map((cell) => cell.textContent ?? '');
-    const index = headers.indexOf('مشتری گفته پرداخت کرده');
-    expect(index, 'no customer-signal column').toBeGreaterThanOrEqual(0);
-    const cells = within(table)
-      .getAllByRole('cell')
-      .map((cell) => cell.textContent ?? '');
-    return cells[index] ?? '';
+    fireEvent.click(within(table).getByRole('button', { name: t('web.payment_row_detail') }));
+    const term = within(table)
+      .getAllByRole('term')
+      .find((cell) => cell.textContent === 'مشتری گفته پرداخت کرده');
+    expect(term, 'no customer-signal fact in the row detail').toBeDefined();
+    return term?.nextElementSibling?.textContent ?? '';
   };
 
   it('shows that a customer said they paid, and still calls the payment pending', async () => {
@@ -942,8 +944,11 @@ describe('the refund card', () => {
     expect(view.container.textContent).toContain('در انتظار واریز بیرونی');
     expect(view.container.textContent).toContain('واریز دستی بیرون از سامانه');
     expect(view.container.textContent).toContain('مشتری منصرف شد');
-    // Who asked for it. `/admin/logs` could not answer this, which is the point.
-    expect(view.container.textContent).toContain(ADMIN_ID);
+    // Who asked for it. `/admin/logs` could not answer this, which is the point. The table
+    // draws the id short (X7/X9: no copy icon, no sideways scroll) with the whole id as its
+    // title.
+    expect(view.container.textContent).toContain(ADMIN_ID.slice(0, 8));
+    expect(view.container.querySelector(`[title="${ADMIN_ID}"]`)).not.toBeNull();
     // And the sentence for the completion nobody has performed — not a dash.
     expect(view.container.textContent).toContain('هنوز کسی واریز را تأیید نکرده است');
   });
@@ -1462,14 +1467,17 @@ describe('the payment diagnostics (§21)', () => {
     const headers = within(table)
       .getAllByRole('columnheader')
       .map((cell) => cell.textContent);
-    for (const header of [
-      'شناسهٔ پرداخت',
-      'مشتری',
-      'درگاه',
-      'شناسهٔ پیگیری بیرونی',
-      'آخرین تغییر',
-    ]) {
+    // Demo parity X9: the id and the gateway are columns; who paid, the external reference
+    // and updated-at are the row's detail, one toggle away on the same row.
+    for (const header of ['شناسهٔ پرداخت', 'درگاه']) {
       expect(headers, header).toContain(header);
+    }
+    fireEvent.click(within(table).getByRole('button', { name: t('web.payment_row_detail') }));
+    const terms = within(table)
+      .getAllByRole('term')
+      .map((cell) => cell.textContent);
+    for (const term of ['مشتری', 'شناسهٔ پیگیری بیرونی', 'آخرین تغییر']) {
+      expect(terms, term).toContain(term);
     }
     expect(within(table).getByText(ROW_ID.slice(0, 8))).toBeInTheDocument();
     /*
@@ -1502,6 +1510,7 @@ describe('the payment diagnostics (§21)', () => {
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718');
     const table = screen.getByRole('table');
+    fireEvent.click(within(table).getByRole('button', { name: t('web.payment_row_detail') }));
     expect(within(table).getByText('5550001234')).toBeInTheDocument();
     expect(table.textContent).not.toContain('@');
   });

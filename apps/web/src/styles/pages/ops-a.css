@@ -192,9 +192,42 @@
   gap: 6px;
 }
 
-/* The detail head: status and health beside the name, provider and address beneath. */
-.detail-head .panels-capacity {
+/* The reservations, on their own line under the fraction (demo parity). */
+.panels-capacity-held {
+  line-height: 1.2;
+}
+
+/* The detail head (demo parity): the figures as a strip of six separate cards. */
+.panel-head-stats .panels-capacity {
   align-items: flex-start;
+}
+.panel-head-stats .panels-capacity .progress {
+  width: 96px;
+}
+.panel-head-stats .panels-capacity > .num {
+  white-space: nowrap;
+  font-size: 20px;
+}
+.panel-head-note {
+  margin: 0;
+}
+.panel-head-stats .panel-stat-when {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.panel-head-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.panel-head-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: 8px;
+  vertical-align: middle;
 }
 
 /* The provider catalogue: supported capabilities, wrapping. */
@@ -761,19 +794,6 @@
   gap: 10px;
   background: var(--panel-row);
 }
-.fx-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--panel-row);
-}
-.fx-strip > .stat + .stat {
-  border-inline-start: 1px solid var(--line);
-}
-.fx-strip .val {
-  font-size: 16px;
-}
 .fx-subhead {
   margin: 0 0 8px;
   font-size: var(--fs-ui);
@@ -818,6 +838,25 @@
 .card-body > .fx-subhead,
 .card-body > .fx-technical {
   margin-top: 18px;
+}
+/* A gateway row's cells, as the demo stacks them: a pill, and its date on the next line. */
+.gateways-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.gateways-lines:has(> .gateways-stack) {
+  gap: 6px;
+}
+/* The technical details: a full-width bordered bar the summary fills (demo «جزئیات فنی»). */
+.fx-technical.boxed > summary {
+  width: 100%;
+}
+/* «آخرین به‌روزرسانی» is a time, read at the size of a fact, not of a figure. */
+.fx-strip .stat .val .small {
+  font-size: var(--fs-ui);
+  font-weight: 600;
 }
 
 /* Owner spec §6: «دکمه‌های شیشه‌ای ربات». Reuses the builder's style swatches (`bb-style-*`). */
@@ -926,15 +965,31 @@
 .ph-summary > .stat {
   margin: 0;
 }
-/* One card per panel: a single column at 390px, as many as fit on a desk. */
+/* One card per panel: two a row on a desk, as the demo draws them; one at 390px. */
 .ph-cards {
   display: grid;
   gap: var(--gap);
-  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
   margin-block: 12px;
+}
+/* A card's body grows so every footer in a row sits on the same line. */
+.ph-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ph-card > .card-body {
+  flex: 1 1 auto;
 }
 .ph-card .kv {
   overflow-wrap: anywhere;
+}
+/* A value never leaves its card: a long pill wraps inside the cell instead. */
+.ph-card .kv dd,
+.ph-card .kv .badge {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
 }
 .ph-badges {
   display: inline-flex;
@@ -995,4 +1050,30 @@
     inset-inline-start: -2px;
     inset-inline-end: -14px;
   }
+}
+
+/* Demo parity (new panel): the save is the form's full-width last row. */
+.panel-new-foot .form-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+/* In a phone card a key's pill and its date share one line, as the demo's card draws them. */
+@media (max-width: 820px) {
+  .tbl-wrap.stack .gateways-stack {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px 6px;
+  }
+  .tbl-wrap.stack td:not(:first-child) .gateways-lines {
+    align-items: flex-end;
+  }
+}
+/* The top-up warning's routes: a compact list, a route a line. */
+.gateways-topup-routes {
+  margin: 6px 0 0;
+  padding-inline-start: 1.1rem;
+  display: grid;
+  gap: 2px;
 }

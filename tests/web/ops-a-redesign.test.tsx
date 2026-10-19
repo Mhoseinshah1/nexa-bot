@@ -42,6 +42,25 @@ function leave(to = '/orders') {
 
 const PANEL_ID = panel().id as string;
 
+/**
+ * The panel's page heading, once the panel has loaded.
+ *
+ * Waits on the name's TEXT inside the `h1` — a cheap query — and only then asks for the
+ * heading by role, once. A `findByRole` here re-ran the accessibility-tree walk (every
+ * element's role, name and `getComputedStyle` in jsdom) on every poll: ~250 ms for the
+ * first one in a file over the whole detail page (measured: the `h1` was in the DOM 52 ms
+ * after render, the role query returned at 309 ms), so under CPU contention a handful of
+ * polls overran `findBy`'s 1 s and the first test of the file failed while the page had
+ * long since rendered. The assertion is unchanged: an `h1` whose name starts with the
+ * panel's name.
+ */
+async function panelHeading(): Promise<HTMLElement> {
+  await screen.findByText('Frankfurt A', { selector: 'h1, h1 *' });
+  const heading = screen.getByRole('heading', { level: 1 });
+  expect(heading).toHaveAccessibleName(/^Frankfurt A/u);
+  return heading;
+}
+
 describe('the panel detail, redesigned', () => {
   const detail = (overrides: Record<string, unknown> = {}) => [
     { url: `/panels/${PANEL_ID}`, body: { panel: panel(overrides) } },
@@ -51,7 +70,7 @@ describe('the panel detail, redesigned', () => {
     go(`/panels/${PANEL_ID}?tab=credentials`);
     stubApi(detail());
     renderPage(<PanelDetailPage id={PANEL_ID} mayEdit mayRotate denied={false} />);
-    await screen.findByRole('heading', { name: /^Frankfurt A/u });
+    await panelHeading();
 
     expect(screen.getByRole('tab', { name: t('web.panel_tab_credentials') })).toHaveAttribute(
       'aria-selected',
@@ -68,7 +87,7 @@ describe('the panel detail, redesigned', () => {
     go(`/panels/${PANEL_ID}?tab=nonsense`);
     stubApi(detail());
     renderPage(<PanelDetailPage id={PANEL_ID} mayEdit mayRotate denied={false} />);
-    await screen.findByRole('heading', { name: /^Frankfurt A/u });
+    await panelHeading();
     expect(screen.getByRole('tab', { name: t('web.panel_tab_overview') })).toHaveAttribute(
       'aria-selected',
       'true',
@@ -84,7 +103,7 @@ describe('the panel detail, redesigned', () => {
         <LeaveGuardHost />
       </>,
     );
-    await screen.findByRole('heading', { name: /^Frankfurt A/u });
+    await panelHeading();
 
     // Untouched: leaving is not interrupted.
     expect(leave(`/panels/${PANEL_ID}?tab=health`)).toBeNull();
@@ -119,7 +138,7 @@ describe('the panel detail, redesigned', () => {
         <LeaveGuardHost />
       </>,
     );
-    await screen.findByRole('heading', { name: /^Frankfurt A/u });
+    await panelHeading();
     fireEvent.change(screen.getByLabelText(t('web.panel_name')), {
       target: { value: 'Frankfurt Z' },
     });
@@ -150,7 +169,7 @@ describe('the panel detail, redesigned', () => {
         <LeaveGuardHost />
       </>,
     );
-    await screen.findByRole('heading', { name: /^Frankfurt A/u });
+    await panelHeading();
     expect(leave('/orders')).toBeNull();
     expect(window.location.pathname).toBe('/orders');
   });
@@ -172,7 +191,7 @@ describe('the panel detail, redesigned', () => {
       }),
     );
     renderPage(<PanelDetailPage id={PANEL_ID} mayEdit mayRotate denied={false} />);
-    const heading = await screen.findByRole('heading', { name: /Frankfurt A/u });
+    const heading = await panelHeading();
     expect(within(heading).getByText(t('web.panel_status_active'))).toBeInTheDocument();
     expect(within(heading).getByText(t('web.health_auth_failed'))).toBeInTheDocument();
 
@@ -197,7 +216,7 @@ describe('the panel detail, redesigned', () => {
   it('draws no failure or staleness banner for a panel with neither', async () => {
     stubApi(detail());
     renderPage(<PanelDetailPage id={PANEL_ID} mayEdit mayRotate denied={false} />);
-    await screen.findByRole('heading', { name: /^Frankfurt A/u });
+    await panelHeading();
     expect(screen.queryByText(t('web.panel_failure_title'))).toBeNull();
     expect(screen.queryByText(t('web.panel_stale_title'))).toBeNull();
   });
@@ -209,9 +228,10 @@ describe('the panel detail, redesigned', () => {
       }),
     );
     renderPage(<PanelDetailPage id={PANEL_ID} mayEdit mayRotate denied={false} />);
-    await screen.findByRole('heading', { name: /^Frankfurt A/u });
-    const strip = document.querySelector('.detail-head .head-stats') as HTMLElement;
-    const labels = [...strip.querySelectorAll('dt')].map((cell) => cell.textContent);
+    await panelHeading();
+    // Demo parity: the figures are a strip of separate stat cards under the page header.
+    const strip = document.querySelector('.panel-head-stats') as HTMLElement;
+    const labels = [...strip.querySelectorAll('.stat .lbl')].map((cell) => cell.textContent);
     expect(labels).toEqual([
       t('web.panel_health'),
       t('web.panel_latency'),

@@ -202,6 +202,23 @@
   z-index: 1;
 }
 
+/*
+ * Linkable identifiers (demo parity X7): a name, a code or an id that opens its record is
+ * an underlined link, as the demo draws every one — in a table cell, a definition list and
+ * the kit's `RefLink`. A button styled as a link keeps its own look.
+ */
+.lk,
+.tbl td a:not(.btn),
+.kv dd a:not(.btn),
+.ident-cell a.name {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.id-text {
+  white-space: nowrap;
+}
+
 /* Inline link-buttons: a button that reads as a link inside its sentence. */
 .link {
   background: none;
@@ -283,9 +300,17 @@
   background: var(--teal-soft);
   color: var(--teal);
 }
+/*
+ * Filled vs outlined (demo parity X10): a STATE is a filled pill; a type, a kind or a rule
+ * (حجم / زمان, تخفیف / کش‌بک, a protocol) is outlined — no fill, a hairline in its own
+ * colour, as the demo draws it. A neutral outline reads in the body colour.
+ */
 .badge.outline {
   background: transparent;
-  border: 1px solid var(--line-2);
+  border: 1px solid currentColor;
+}
+.badge.neutral.outline {
+  color: var(--fg);
 }
 .badge.pulse .dot {
   animation: pulse 1.8s infinite;
@@ -398,34 +423,90 @@
 
 /* --- Page head --------------------------------------------------------------- */
 
+/*
+ * The page header (demo parity X1, X3, X4): the breadcrumb, a large bold title and the
+ * subtitle on the page's start side; the page's controls on the other side, aligned with the
+ * BOTTOM of the block (never level with the title), wrapping beneath the subtitle when the
+ * row is too narrow for both.
+ */
 .page-head {
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 18px;
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
 }
 .page-head .titles {
-  flex: 1;
-  min-width: 240px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.page-head .crumbs {
+  margin-bottom: 1px;
 }
 .page-head h1 {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1.5;
 }
 .page-head .sub {
-  color: var(--fg-2);
-  font-size: 12.5px;
-  margin-top: 3px;
-  max-width: 72ch;
+  color: var(--fg-3);
+  font-size: var(--fs-ui);
+  margin-top: 2px;
+  max-width: 70ch;
+}
+.page-head .head-meta {
+  color: var(--fg-3);
+  font-size: var(--fs-ui);
+  margin-top: 2px;
 }
 .page-head .actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+  margin-inline-start: auto;
+}
+/* A detail page whose head is a card still carries the trail above it. */
+.content-inner > .crumbs {
+  margin-bottom: 8px;
+}
+/* The record's way back to its list (the demo's `backl`): small, quiet, above the head. */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  text-decoration: none;
+  margin-bottom: 4px;
+}
+.back-link:hover {
+  color: var(--accent);
+}
+@media (pointer: coarse) and (hover: none) {
+  .back-link {
+    min-height: var(--ctl-h);
+    min-width: var(--ctl-h);
+  }
+}
+@media (max-width: 820px) {
+  .page-head h1 {
+    font-size: 21px;
+  }
+  .page-head .actions {
+    width: 100%;
+  }
+  /* The demo's \`.head .ctrls .btn{flex:1}\`: a header action shares the full line on a phone. */
+  .page-head .actions > .btn:not(.icon) {
+    flex: 1;
+    justify-content: center;
+  }
 }
 
 /* --- Cards ------------------------------------------------------------------- */
@@ -442,13 +523,25 @@
   box-shadow: var(--gshadow);
   min-width: 0;
 }
+/*
+ * Demo parity: no rule under a card's title (the demo's \`.ch\` has none). The head's own
+ * bottom padding is the whole gap to the content, so a body right under a head starts at its
+ * edge, and a flush table or toolbar does not pull up into the title.
+ */
 .card-head {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
+}
+.card-head + .card-body {
+  padding-top: 0;
+}
+.card-head + .card-body > .tbl-wrap:first-child,
+.card-head + .card-body > .toolbar:first-child,
+.card-head + .card-body > .filter-row:first-child {
+  margin-top: 0;
 }
 /*
  * The titles keep a floor before the actions may sit beside them: with a zero
@@ -699,19 +792,30 @@
 .stat.alert {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
 }
-.stat.warnish {
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
-}
 .stat.alert .lbl svg {
   color: var(--danger);
 }
-.stat.warnish .lbl svg {
-  color: var(--warn);
-}
+/*
+ * A stat strip (demo parity X6): separate bordered cards sharing the row equally — four
+ * figures are four full-width quarters, never four small cards and a hole — each with a
+ * large, neutral number. A bare `Stat` in a strip is drawn as the same card as a `StatCard`.
+ */
 .stat-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.stat-grid > .stat:not(.card) {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--gshadow);
+  padding: 11px 14px;
+}
+.stat-grid > .stat .val {
+  font-size: 24px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
 }
 
 /* --- Progress ------------------------------------------------------------------ */
@@ -892,6 +996,12 @@
   white-space: nowrap;
 }
 .tbl th {
+  /*
+   * Demo parity X9: a header is a label, not data, so it breaks between its words rather
+   * than widening its column («مبلغ وعده‌داده‌شده» on two lines); a cell stays on one line
+   * unless its column wraps.
+   */
+  white-space: normal;
   background: var(--panel);
   color: var(--fg-3);
   font-weight: 600;
@@ -907,10 +1017,90 @@
 .tbl td {
   font-variant-numeric: tabular-nums;
 }
+/* Demo parity X9: no table scrolls sideways inside its card at 1440 (see `.tbl th`). */
 .tbl td.wrap,
 .tbl th.wrap {
   white-space: normal;
-  min-width: 14rem;
+  min-width: var(--tbl-wrap-min);
+}
+.tbl td.wrap.tight,
+.tbl th.wrap.tight {
+  min-width: 0;
+}
+/* A long pill (a failure sentence, a scope) wraps inside a column that wraps. */
+.tbl td.wrap .badge {
+  height: auto;
+  min-height: 20px;
+  white-space: normal;
+  line-height: 1.4;
+  padding-block: 2px;
+}
+/*
+ * Demo parity (390): a `stack` table at phone and tablet width is one card per row, as the
+ * approved demo draws every list there — the first cell is the row's title, every other cell
+ * a line with its header (`data-label`) at the start and its value at the end. The header row
+ * stays in the accessibility tree, visually hidden.
+ */
+@media (max-width: 820px) {
+  .tbl-wrap.stack,
+  .tbl-wrap.stack.sticky {
+    max-height: none;
+    overflow: visible;
+  }
+  .tbl-wrap.stack .tbl,
+  .tbl-wrap.stack .tbl tbody,
+  .tbl-wrap.stack .tbl tr,
+  .tbl-wrap.stack .tbl td {
+    display: block;
+    width: 100%;
+  }
+  .tbl-wrap.stack .tbl thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tbl-wrap.stack .tbl tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tbl-wrap.stack .tbl tr:last-child {
+    border-bottom: 0;
+  }
+  .tbl-wrap.stack .tbl td {
+    min-width: 0;
+    padding: 3px 0;
+    border: 0;
+    overflow: hidden;
+    text-align: end;
+    white-space: normal;
+  }
+  .tbl-wrap.stack .tbl td::before {
+    content: attr(data-label);
+    float: inline-start;
+    margin-inline-end: 12px;
+    color: var(--fg-3);
+    font-size: var(--fs-xs);
+  }
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child {
+    padding-bottom: 6px;
+    font-size: var(--fs-body);
+    text-align: start;
+  }
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child::before {
+    content: none;
+  }
+  /* A column with no header draws no label. */
+  .tbl-wrap.stack .tbl td[data-label='']::before {
+    content: none;
+  }
+  /* A row's actions wrap inside the card line instead of running past the screen's edge. */
+  .tbl-wrap.stack .tbl .row-actions {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
 }
 .tbl tbody tr {
   transition: background 0.1s;
@@ -984,7 +1174,7 @@
   text-align: end;
 }
 
-/* Keyset paging: «showing N» and the two directions, nothing numbered. */
+/* Keyset paging: «showing N» and the two directions («تازه‌تر / قدیمی‌تر»), nothing numbered. */
 .pager {
   display: flex;
   align-items: center;
@@ -997,6 +1187,23 @@
 }
 .pager .spacer {
   flex: 1;
+}
+/* The counted pager (X2): «‹ قبلی  ۱–۱۰ از ۲۱ · صفحهٔ ۱ از ۳  بعدی ›», centred, over a server total. */
+.pager.counted {
+  justify-content: center;
+  gap: 10px;
+}
+.pager-info {
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+}
+.pager-info b {
+  color: var(--fg);
+  font-weight: 600;
+}
+.pager-range {
+  /* Read right to left like the sentence around it: «۱–۱۰» is «from 1 to 10». */
+  unicode-bidi: isolate;
 }
 
 /* The identity cell: a name, then the technical handles beside it. */
@@ -1551,9 +1758,10 @@ textarea.input,
 
 /*
  * Liquid Glass: every tab strip is a glass rail of capsules, the chosen tab raised on
- * `--glass-hi` with the specular line. On a desk the rail wraps onto a second row as the
- * reference draws it; on a phone it stays one row and scrolls sideways, and `tab-strip.ts`
- * keeps the chosen tab in view inside it (B6).
+ * `--glass-hi` with the specular line. The rail WRAPS onto further rows at every width, as
+ * the demo's `.tabs{flex-wrap:wrap;overflow:visible}` does — on a phone too (Customer 360's
+ * nine tabs are two or three rows, every tab visible, none behind the edge). `tab-strip.ts`
+ * still keeps the chosen tab in view in a strip that scrolls (a vertical one).
  */
 .tabs {
   display: flex;
@@ -1571,10 +1779,9 @@ textarea.input,
   scrollbar-width: none;
   margin-bottom: 14px;
 }
-@media (min-width: 821px) {
-  .tabs:not(.vertical) {
-    flex-wrap: wrap;
-  }
+.tabs:not(.vertical) {
+  flex-wrap: wrap;
+  overflow-x: visible;
 }
 .tabs button {
   background: none;
@@ -1735,12 +1942,6 @@ textarea.input,
   color: var(--fg-2);
   font-size: var(--fs-ui);
 }
-.banner > svg {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  margin-top: 3px;
-}
 .banner > div {
   flex: 1;
   min-width: 0;
@@ -1757,33 +1958,53 @@ textarea.input,
 }
 .banner.warn {
   background: var(--warn-soft);
-  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  border-color: var(--warn);
+  color: var(--fg);
 }
-.banner.warn > svg,
+/* The demo's callout title is the body colour; the outline and fill carry the tone. */
 .banner.warn strong {
-  color: var(--warn);
+  color: var(--fg);
 }
 .banner.danger {
   background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  border-color: var(--danger);
+  color: var(--fg);
 }
-.banner.danger > svg,
 .banner.danger strong {
-  color: var(--danger);
+  color: var(--fg);
 }
+/*
+ * The information callout (demo parity X5): an outlined card a step brighter than the page —
+ * the accent's hairline over its soft fill, its words in the body colour, and no icon.
+ */
 .banner.info {
-  background: var(--info-soft);
-  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  border-radius: var(--radius-ctl);
+  color: var(--fg);
 }
-.banner.info > svg,
 .banner.info strong {
-  color: var(--info);
+  color: var(--fg);
+}
+/* A slim strip (R2): the demo's one-line hint — neutral hairline, the page's own row fill, a
+   leading ⓘ — instead of the accent-outlined callout. */
+.banner.info.slim {
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-color: var(--line-2);
+  background: var(--panel-row);
+  color: var(--fg-2);
+  font-size: var(--fs-xs);
+}
+.banner.slim > svg {
+  flex: none;
+  color: var(--fg-3);
 }
 .banner.ok {
   background: var(--ok-soft);
   border-color: color-mix(in srgb, var(--ok) 40%, transparent);
 }
-.banner.ok > svg,
 .banner.ok strong {
   color: var(--ok);
 }
@@ -1791,7 +2012,6 @@ textarea.input,
   background: var(--violet-soft);
   border-color: color-mix(in srgb, var(--violet) 40%, transparent);
 }
-.banner.violet > svg,
 .banner.violet strong {
   color: var(--violet);
 }
@@ -1799,12 +2019,8 @@ textarea.input,
   background: var(--teal-soft);
   border-color: color-mix(in srgb, var(--teal) 40%, transparent);
 }
-.banner.teal > svg,
 .banner.teal strong {
   color: var(--teal);
-}
-.banner.neutral > svg {
-  color: var(--fg-3);
 }
 .banner p + p {
   margin-top: 4px;
@@ -2611,9 +2827,15 @@ textarea.input,
 }
 .trend-svg {
   width: 100%;
-  height: 220px;
+  height: auto;
   display: block;
   direction: ltr;
+}
+/* The current period's area, filled down to the axis (demo parity: the reports trend). */
+.trend-area {
+  fill: var(--chart-1);
+  stroke: none;
+  opacity: 0.16;
 }
 .trend-axis {
   stroke: var(--line-2);
@@ -2644,25 +2866,6 @@ textarea.input,
 }
 .trend-hit:focus-visible {
   fill: var(--accent-soft);
-}
-.trend-legend {
-  display: flex;
-  gap: 14px;
-  font-size: var(--fs-sm);
-  color: var(--fg-2);
-  margin-top: 6px;
-}
-.trend-key::before {
-  content: '';
-  display: inline-block;
-  width: 14px;
-  height: 0;
-  margin-inline-end: 6px;
-  vertical-align: middle;
-  border-top: 2px solid var(--chart-1);
-}
-.trend-key.previous::before {
-  border-top: 2px dashed var(--fg-3);
 }
 .trend-readout {
   display: flex;
@@ -2903,11 +3106,23 @@ textarea.input,
   }
 }
 
-/* `ListFreshness`: when the rows were read, and a refresh beside it. */
+/* `ListFreshness`: when the rows were read, and a refresh beside it — a round glass button. */
 .list-freshness {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+.list-freshness .btn.icon {
+  border-radius: var(--radius-pill);
+  border-color: transparent;
+  background: var(--glass);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 70%, transparent),
+    inset 0 0 0 1px var(--edge-2);
+}
+.list-freshness .btn.icon:hover:not(:disabled) {
+  background: var(--glass-2);
+  color: var(--fg);
 }
 
 /*
@@ -2967,5 +3182,76 @@ textarea.input,
   .toast,
   .palette {
     animation: none;
+  }
+}
+
+/*
+ * A row's detail (demo parity X9, `DataTable`'s `detail`): the toggle is the narrow last
+ * column, its chevron turns when open, and the detail is one full-width line under the row
+ * on the row's own tint — the facts a wide list cannot hold as columns at 1440.
+ */
+.tbl th.tbl-toggle,
+.tbl td.tbl-toggle {
+  width: 1%;
+  padding-inline: 4px 8px;
+}
+.tbl td.tbl-toggle .btn.icon svg {
+  transition: transform 0.15s;
+}
+.tbl tr.expanded td.tbl-toggle .btn.icon svg {
+  transform: rotate(180deg);
+}
+.tbl tbody tr.expanded,
+.tbl tbody tr.tbl-detail {
+  background: var(--panel-row);
+}
+.tbl tbody tr.expanded td {
+  border-bottom-color: transparent;
+}
+.tbl tbody tr.tbl-detail > td {
+  white-space: normal;
+  padding: 4px 12px 14px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tbl td.tbl-toggle .btn.icon svg {
+    transition: none;
+  }
+}
+
+/*
+ * A `stack` table's row detail (`DataTable`'s `detail`) on a phone: the toggle sits in the
+ * card's corner beside the title, the detail is one unlabelled line under its card, and a
+ * title's two lines (a Latin code included) keep to the start side. Additive to `.stack`.
+ */
+@media (max-width: 820px) {
+  .tbl-wrap.stack .tbl tbody tr {
+    position: relative;
+  }
+  .tbl-wrap.stack .tbl tbody tr.expanded {
+    border-bottom-color: transparent;
+  }
+  .tbl-wrap.stack .tbl td {
+    overflow-wrap: anywhere;
+  }
+  .tbl-wrap.stack .tbl tr:has(> td.tbl-toggle) > td:first-child {
+    padding-inline-end: 44px;
+  }
+  .tbl-wrap.stack .tbl td.tbl-toggle::before,
+  .tbl-wrap.stack .tbl tr.tbl-detail > td::before {
+    content: none;
+  }
+  .tbl-wrap.stack .tbl td.tbl-toggle {
+    position: absolute;
+    inset-block-start: 6px;
+    inset-inline-end: 8px;
+    width: auto;
+    padding: 0;
+  }
+  .tbl-wrap.stack .tbl tr.tbl-detail > td {
+    padding: 0;
+    text-align: start;
+  }
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child .cell-main {
+    align-items: flex-start;
   }
 }

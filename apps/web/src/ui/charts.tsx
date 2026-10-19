@@ -26,7 +26,7 @@ import { formatNumber } from '../format';
 
 export type SeriesTone = 1 | 2 | 3 | 4 | 5 | 6;
 
-const WIDTH = 720;
+const DEFAULT_WIDTH = 720;
 
 /** A "nice" ceiling for an axis: 1, 2 or 5 times a power of ten. */
 export function niceCeiling(max: number): number {
@@ -173,6 +173,109 @@ export function Sparkline({
   );
 }
 
+/* ------------------------------------------------------------ area spark --- */
+
+/** A `useId` value as a token an SVG `url(#…)` reference can name. */
+function svgId(id: string): string {
+  return `g${id.replace(/[^A-Za-z0-9_-]/gu, '')}`;
+}
+
+/** How tall an area spark's geometry is, by where it is drawn. */
+const AREA_SPARK_HEIGHT = { hero: 120, card: 56, tile: 40 } as const;
+
+/**
+ * A KPI trend as a filled area: a gradient under the line, fading to the baseline, and the
+ * last known point marked. The geometry is inset from every edge, so a final rise is drawn
+ * inside the card, never as a hairline spike against its border.
+ *
+ * Two shapes are not trends and are drawn as a flat, centred baseline instead: fewer than
+ * two known points, and a series whose every point is the same (all zero, typically). A
+ * `null` is a gap, as on every chart here — never a zero.
+ */
+export function AreaSpark({
+  values,
+  label,
+  tone = 1,
+  size = 'tile',
+}: {
+  values: readonly (number | null)[];
+  /** The accessible name: what trend this is. */
+  label: string;
+  tone?: SeriesTone;
+  /** `hero` fills the space its card gives it; `card` and `tile` are fixed strips. */
+  size?: keyof typeof AREA_SPARK_HEIGHT;
+}) {
+  const gradientId = svgId(useId());
+  const w = 300;
+  const h = AREA_SPARK_HEIGHT[size];
+  const padX = 4;
+  const padTop = Math.round(h * 0.14);
+  const padBottom = 2;
+  const known = values.filter((value): value is number => value !== null);
+  const max = known.length === 0 ? 0 : Math.max(...known);
+  const min = known.length === 0 ? 0 : Math.min(0, ...known);
+  const flat = known.length < 2 || max === Math.min(...known);
+  const className = `area-spark as-${size} s${tone}${flat ? ' flat' : ''}`;
+  if (flat) {
+    return (
+      <svg
+        className={className}
+        viewBox={`0 0 ${w} ${h}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={label}
+      >
+        <path className="baseline" d={`M${padX},${h / 2} L${w - padX},${h / 2}`} />
+      </svg>
+    );
+  }
+  const span = max - min || 1;
+  const x = (i: number) =>
+    values.length <= 1 ? w / 2 : padX + (i / (values.length - 1)) * (w - 2 * padX);
+  const y = (v: number) => padTop + (1 - (v - min) / span) * (h - padTop - padBottom);
+  const runs = segments(values);
+  const lastIndex = values.reduce<number>((last, value, i) => (value === null ? last : i), -1);
+  const lastValue = values[lastIndex] as number;
+  return (
+    <svg
+      className={className}
+      viewBox={`0 0 ${w} ${h}`}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={label}
+    >
+      <defs>
+        <linearGradient id={gradientId} className="grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopOpacity={0.38} />
+          <stop offset="1" stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      {runs.map((run) => {
+        const d = run
+          .map(
+            (i, n) =>
+              `${n === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(values[i] as number).toFixed(1)}`,
+          )
+          .join(' ');
+        const first = run[0] as number;
+        const last = run[run.length - 1] as number;
+        return (
+          <g key={first}>
+            <path
+              className="area"
+              fill={`url(#${gradientId})`}
+              d={`${d} L${x(last).toFixed(1)},${h} L${x(first).toFixed(1)},${h} Z`}
+            />
+            <path className="line" d={d} />
+          </g>
+        );
+      })}
+      {/* A zero-length round-capped stroke: a dot that stays round however the box stretches. */}
+      <path className="last" d={`M${x(lastIndex).toFixed(1)},${y(lastValue).toFixed(1)} h0`} />
+    </svg>
+  );
+}
+
 /* ------------------------------------------------------------ line chart --- */
 
 /**
@@ -205,14 +308,22 @@ export function LineChart({
   caption,
   format = defaultFormat,
   height = 220,
+  width = DEFAULT_WIDTH,
+  gradient = false,
 }: {
   labels: readonly string[];
   series: readonly LineSeries[];
   caption: string;
   format?: (value: number) => string;
   height?: number;
+  /** The viewBox width: the card's own width keeps the axis text at its true size. */
+  width?: number;
+  /** Fill the area under each solid line with a gradient that fades to the axis. */
+  gradient?: boolean;
 }) {
   const [active, setActive] = useState<number | null>(null);
+  const gradientId = svgId(useId());
+  const WIDTH = width;
   const known = series.flatMap((one) => one.values.filter((v): v is number => v !== null));
   const padL = 56;
   const padR = 12;
@@ -223,14 +334,32 @@ export function LineChart({
   const x = (i: number) => padL + (slots <= 1 ? 0 : (i / (slots - 1)) * (WIDTH - padL - padR));
   const y = (v: number) => padT + (1 - v / max) * (height - padT - padB);
   const slotW = slots <= 1 ? WIDTH - padL - padR : (WIDTH - padL - padR) / (slots - 1);
-  const labelled = axisLabelSlots(slots, 8);
+  const labelled = axisLabelSlots(slots, Math.max(3, Math.round(WIDTH / 90)));
 
   if (known.length === 0) return <ChartEmpty />;
 
   return (
     <figure className="chart-figure">
       <svg className="chart" viewBox={`0 0 ${WIDTH} ${height}`} role="img" aria-label={caption}>
-        <Grid max={max} y={y} padL={padL} padR={padR} format={format} />
+        {gradient && (
+          <defs>
+            {series.map((one, index) => (
+              <linearGradient
+                key={one.name}
+                id={`${gradientId}-${index}`}
+                className={`grad s${one.tone ?? (index % 6) + 1}`}
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="1"
+              >
+                <stop offset="0" stopOpacity={0.32} />
+                <stop offset="1" stopOpacity={0} />
+              </linearGradient>
+            ))}
+          </defs>
+        )}
+        <Grid max={max} y={y} padL={padL} padR={padR} format={format} width={WIDTH} />
         {labels.map((label, i) =>
           labelled.has(i) ? (
             <text key={i} x={x(i)} y={height - 8} textAnchor="middle">
@@ -256,8 +385,9 @@ export function LineChart({
                   <g key={first}>
                     {one.dashed !== true && one.area !== false && (
                       <path
-                        className="area"
+                        className={gradient ? 'area graded' : 'area'}
                         d={`${d} L${x(last).toFixed(1)},${y(0)} L${x(first).toFixed(1)},${y(0)} Z`}
+                        {...(gradient ? { fill: `url(#${gradientId}-${index})` } : {})}
                       />
                     )}
                     <path className={one.dashed === true ? 'line dashed' : 'line'} d={d} />
@@ -310,6 +440,8 @@ export function BarChart({
   stacked = false,
   format = defaultFormat,
   height = 200,
+  width = DEFAULT_WIDTH,
+  ticks = [0, 0.5, 1],
 }: {
   labels: readonly string[];
   series: readonly BarSeries[];
@@ -317,8 +449,13 @@ export function BarChart({
   stacked?: boolean;
   format?: (value: number) => string;
   height?: number;
+  /** The viewBox width: the card's own width keeps the axis text at its true size. */
+  width?: number;
+  /** The gridlines, as shares of the axis ceiling. */
+  ticks?: readonly number[];
 }) {
   const [active, setActive] = useState<number | null>(null);
+  const WIDTH = width;
   const padL = 46;
   const padR = 8;
   const padT = 10;
@@ -334,14 +471,14 @@ export function BarChart({
   const slot = slots === 0 ? 0 : (WIDTH - padL - padR) / slots;
   const bw = stacked ? slot * 0.55 : (slot * 0.7) / Math.max(1, series.length);
   const y = (v: number) => padT + (1 - v / max) * (height - padT - padB);
-  const labelled = axisLabelSlots(slots, 10);
+  const labelled = axisLabelSlots(slots, Math.max(3, Math.round(WIDTH / 72)));
 
   if (!anything) return <ChartEmpty />;
 
   return (
     <figure className="chart-figure">
       <svg className="chart" viewBox={`0 0 ${WIDTH} ${height}`} role="img" aria-label={caption}>
-        <Grid max={max} y={y} padL={padL} padR={padR} format={format} ticks={[0, 0.5, 1]} />
+        <Grid max={max} y={y} padL={padL} padR={padR} format={format} ticks={ticks} width={WIDTH} />
         {labels.map((label, i) => {
           const cx = padL + slot * i + slot / 2;
           let acc = 0;
@@ -498,6 +635,7 @@ function Grid({
   padR,
   format,
   ticks = [0, 0.25, 0.5, 0.75, 1],
+  width = DEFAULT_WIDTH,
 }: {
   max: number;
   y: (v: number) => number;
@@ -505,7 +643,9 @@ function Grid({
   padR: number;
   format: (value: number) => string;
   ticks?: readonly number[];
+  width?: number;
 }) {
+  const WIDTH = width;
   return (
     <g>
       {ticks.map((tick) => (

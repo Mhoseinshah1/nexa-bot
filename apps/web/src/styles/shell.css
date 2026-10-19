@@ -75,76 +75,71 @@
   overflow: hidden;
 }
 
+/* The brand block (demo parity A3): the N tile, the letter-spaced wordmark, the subtitle. */
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: var(--topbar-h);
-  padding-inline: 14px;
+  padding: 18px 18px 10px;
   flex: none;
   min-width: 0;
 }
 /* Mono: the mark is the foreground's square with the page's colour cut out of it. */
 .brand-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-ctl);
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   background: var(--fg);
   color: var(--bg-0);
   display: grid;
   place-items: center;
   font-weight: 800;
-  font-size: 15px;
+  font-size: 16px;
   flex: none;
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
 .brand-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.2;
+  line-height: 1.5;
   min-width: 0;
 }
 .brand-text strong {
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 800;
+}
+.brand-text .wordmark {
+  letter-spacing: 3px;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  direction: ltr;
+  text-align: end;
 }
 .brand-text span {
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   color: var(--fg-3);
 }
 
 /*
- * The installation identity card — what this console is connected to, from
- * the build the server reports. It is not a switcher: the session carries one
- * tenant and no way to change it, so nothing here is pressable.
+ * The installation this console is connected to, as one compact line in the owner pill's
+ * menu (it used to be a card of its own in the sidebar).
  */
-.identity {
-  margin: 4px 10px 4px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--radius-ctl);
-  background: var(--glass);
-  box-shadow: inset 0 0 0 1px var(--edge-2);
+.menu .identity {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+  font-weight: 400;
+}
+.menu .identity .dot {
   flex: none;
 }
-.identity .dot {
-  flex: none;
-}
-.identity-text {
-  flex: 1;
-  min-width: 0;
-  line-height: 1.35;
-}
-.identity-name {
-  font-size: 12.5px;
+.menu .identity-name {
+  color: var(--fg);
   font-weight: 600;
 }
-.identity-env {
-  font-size: var(--fs-2xs);
+.menu .identity-env {
   color: var(--fg-3);
+  font-size: var(--fs-2xs);
 }
 
 .nav {
@@ -193,8 +188,8 @@
   background: transparent;
   color: var(--fg-2);
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--fs-xs);
+  font-weight: 700;
   text-align: start;
   cursor: pointer;
 }
@@ -216,21 +211,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.nav-group-head .cnt {
-  font-size: 11px;
-  color: var(--fg-3);
-  background: var(--bg-3);
-  border-radius: 10px;
-  padding: 0 6px;
-  font-variant-numeric: tabular-nums;
+/*
+ * A closed group with something waiting: the reference's small amber dot beside the label
+ * (A3), drawn only from the counters its links carry. The chevron sits at the far end.
+ */
+.nav-group-head .lbl {
+  flex: 0 1 auto;
 }
-.nav-group-head .cnt.warn {
-  color: var(--warn);
-  background: var(--warn-soft);
+.nav-group-head .gdot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: none;
 }
-.nav-group-head .cnt.danger {
-  color: var(--danger);
-  background: var(--danger-soft);
+.nav-group-head .chev {
+  margin-inline-start: auto;
 }
 .nav-group-head .chev {
   flex: none;
@@ -246,11 +242,10 @@
 .nav-group-items[hidden] {
   display: none;
 }
+/* An open group's links, a step in from its header (the reference draws no guide line). */
 .nav-group-items {
-  margin: 2px 0 6px;
-  padding-inline-start: 10px;
-  margin-inline-start: 14px;
-  border-inline-start: 1px solid var(--line);
+  margin: 0 0 4px;
+  padding-inline-start: 6px;
 }
 @media (prefers-reduced-motion: reduce) {
   .nav-group-head .chev {
@@ -260,12 +255,12 @@
 .nav a {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   min-height: 34px;
   padding: 6px 10px;
   border-radius: var(--radius-ctl);
   color: var(--fg-2);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 500;
   min-width: 0;
   position: relative;
@@ -278,32 +273,37 @@
   color: var(--fg);
   text-decoration: none;
 }
-/* The current page is a raised glass pill with a specular top edge; no side bar. */
+/*
+ * The current page is a soft filled glass pill with a specular top edge and a soft drop
+ * beneath (A3) — no rim, no outline, no side bar.
+ */
 .nav a[aria-current='page'] {
   background: var(--glass-hi);
   color: var(--fg);
-  font-weight: 600;
+  font-weight: 700;
   box-shadow:
     inset 0 1px 0 var(--spec),
-    var(--shadow-sm);
+    var(--pill-drop);
 }
 .nav a[aria-current='page'] .ico {
   color: var(--fg);
   opacity: 1;
 }
 .nav a .ico {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   flex: none;
   opacity: 0.9;
 }
+/* The count follows its label, as the reference draws it, not at the row's far end. */
 .nav a .lbl {
-  flex: 1;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .nav a .cnt {
+  margin-inline-end: auto;
   font-size: 11px;
   color: var(--fg-3);
   background: var(--bg-3);
@@ -326,16 +326,19 @@
 
 .sidebar-foot {
   border-top: 1px solid var(--line);
-  padding: 8px 10px;
+  padding: 8px 10px 8px 12px;
   display: flex;
   gap: 4px;
   align-items: center;
   flex: none;
   min-width: 0;
 }
+.sidebar-foot .spacer {
+  flex: 1;
+}
+/* The small mono build line the reference closes the sidebar with. */
 .build-id {
-  margin-inline-start: auto;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   color: var(--fg-3);
   min-width: 0;
   overflow: hidden;
@@ -350,13 +353,8 @@
   padding-inline: 0;
 }
 .collapsed .brand-text,
-.collapsed .identity-text,
 .collapsed .build-id {
   display: none;
-}
-.collapsed .identity {
-  justify-content: center;
-  padding: 8px 0;
 }
 .collapsed .nav-group-label {
   height: 1px;
@@ -376,6 +374,10 @@
 }
 .collapsed .sidebar-foot {
   flex-direction: column;
+  padding-inline: 0;
+}
+.collapsed .sidebar-foot .spacer {
+  display: none;
 }
 
 /* --- Main column -------------------------------------------------------------- */
@@ -434,6 +436,10 @@
     inset 0 1px 0 color-mix(in srgb, var(--spec) 70%, transparent),
     inset 0 0 0 1px var(--edge-2);
 }
+.topbar .btn.icon,
+.topbar .user-trigger {
+  flex: none;
+}
 .topbar .btn.icon:hover:not(:disabled),
 .topbar .user-trigger:hover:not(:disabled) {
   background: var(--glass-2);
@@ -442,14 +448,28 @@
 .topbar .spacer {
   flex: 1;
 }
-.topbar .menu-toggle {
-  display: none;
+/* The help button's glyph: a bold question mark, the reference's. */
+.help-glyph {
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
 }
+/* The bell's count rides the icon's corner as a small red disc (the reference's). */
+.topbar .nc-bell-count {
+  inset-block-start: -3px;
+  inset-inline-end: -3px;
+  min-inline-size: 16px;
+  line-height: 16px;
+  padding-inline: 3px;
+  font-size: 10px;
+  font-weight: 700;
+}
+/* The page header's breadcrumb (X1): «گروه منو / صفحه», small and quiet, above the title. */
 .crumbs {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-xs);
   color: var(--fg-3);
   min-width: 0;
   overflow: hidden;
@@ -462,14 +482,14 @@
   min-width: 0;
 }
 .crumbs a {
+  color: inherit;
+}
+.crumbs a:hover {
   color: var(--fg-2);
 }
-.crumbs .sep {
-  opacity: 0.5;
-}
 .crumbs .cur {
-  color: var(--fg);
-  font-weight: 500;
+  color: var(--fg-2);
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -489,8 +509,10 @@
   border-radius: var(--radius-pill);
   color: var(--fg-3);
   cursor: pointer;
-  min-width: 240px;
-  font-size: 12.5px;
+  /* Wide, on the sidebar's side (A1). */
+  flex: 0 1 340px;
+  min-width: 200px;
+  font-size: var(--fs-ui);
 }
 .search-trigger:hover {
   background: var(--glass-2);
@@ -498,28 +520,44 @@
 }
 .search-trigger kbd {
   margin-inline-start: auto;
-  font-family: inherit;
-  font-size: var(--fs-2xs);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 15px;
   border: 1px solid var(--line-2);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
   padding: 0 5px;
   direction: ltr;
 }
+.search-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The owner pill (A1): the avatar's letter, the role, a chevron. */
 .user-trigger {
   gap: 8px;
-  padding-inline: 6px 8px;
+  height: 34px;
+  padding-inline: 3px 10px;
 }
 .user-trigger .avatar {
-  width: 24px;
-  height: 24px;
-  font-size: var(--fs-2xs);
+  width: 28px;
+  height: 28px;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--fg);
+  background: var(--bg-4);
 }
 .user-trigger .who-name {
-  font-size: var(--fs-sm);
-  color: var(--fg);
+  font-size: var(--fs-ui);
+  color: var(--fg-2);
   max-width: 14rem;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-trigger .who-chev {
+  color: var(--fg-3);
 }
 
 .content {
@@ -540,6 +578,50 @@
 }
 .content-inner {
   max-width: 1440px;
+}
+
+/*
+ * The incident card (demo parity A4): a red-tinted, full-width glass card under the top bar,
+ * the kind in bold above the title, and a «جزئیات» capsule at the far end. A MINOR incident
+ * takes the amber tint. Shown only while the server reports an ACTIVE incident.
+ */
+.incident-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--danger);
+  background: var(--danger-soft);
+  -webkit-backdrop-filter: var(--glass-blur-ctl);
+  backdrop-filter: var(--glass-blur-ctl);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--spec) 40%, transparent);
+  font-size: var(--fs-xs);
+  line-height: 1.8;
+}
+.incident-banner.is-warn {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+.incident-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.incident-banner-text strong {
+  font-size: var(--fs-ui);
+  font-weight: 700;
+}
+.incident-banner-open {
+  flex: none;
+  border-radius: var(--radius-pill);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .incident-banner {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 /* The scrim behind the sidebar drawer on a narrow screen. */
@@ -662,8 +744,13 @@
   .grid-2 {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* A narrow top bar keeps the search as a round icon button on the sidebar's side. */
   .search-trigger {
+    flex: none;
     min-width: 0;
+    width: var(--ctl-h);
+    padding: 0;
+    justify-content: center;
   }
   .search-trigger span,
   .search-trigger kbd {
@@ -701,6 +788,12 @@
   .topbar {
     border-radius: 18px;
   }
+  /* The phone's top bar (A5): search, then the owner pill, theme and bell; the bottom
+     capsule carries the menu, and help waits for a keyboard. */
+  .topbar .menu-toggle,
+  .topbar .menu-wrap:has(> .help-trigger) {
+    display: none;
+  }
   .app:not(.collapsed) .sidebar {
     inset-block: var(--chrome-inset-phone);
     inset-inline-start: var(--chrome-inset-phone);
@@ -723,20 +816,11 @@
   .main {
     grid-column: 1;
   }
-  .topbar .menu-toggle {
-    display: inline-flex;
-  }
   .stat .val {
     font-size: 18px;
   }
   .head-stats > div {
     min-width: 50%;
-  }
-  .page-head .actions {
-    width: 100%;
-  }
-  .crumbs > span:not(:last-child) {
-    display: none;
   }
 }
 
@@ -903,6 +987,11 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    min-height: var(--ctl-h);
+    min-width: var(--ctl-h);
+  }
+  /* The owner pill is a 44px target on touch; on a desk it stays the demo's 34px capsule. */
+  .user-trigger {
     min-height: var(--ctl-h);
     min-width: var(--ctl-h);
   }

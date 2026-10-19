@@ -1,5 +1,5 @@
 import { SavedViewsScope, type SavedViewsScopeValue } from './ui/saved-views-menu';
-import { useEffect, useMemo, useState, type FormEvent, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isPermissionKey, type PermissionKey, type SessionResponse } from '@nexa/contracts';
 import { finalAnswer, pollSession } from './polling';
@@ -17,7 +17,8 @@ import {
 } from './router';
 import { useTheme } from './theme';
 import { Icon } from './ui/icons';
-import { Empty, LeaveGuardHost, ToastProvider } from './ui/kit';
+import { Empty, LeaveGuardHost, PageTrailContext, ToastProvider } from './ui/kit';
+import { pageTrail } from './page-trail';
 import { NAV, navPermitted } from './nav';
 import { useNavCounters } from './nav-counters';
 import { prefetchNav, type NavPrefetch } from './nav-prefetch';
@@ -1022,7 +1023,8 @@ export function resolve(
           mayViewPanels={may('panels.view')}
         />
       ),
-      crumbs: [nav('resellers'), { label: t('web.reseller_plans_title') }],
+      // The demo's trail names the menu entry («پلن‌ها و حداقل فروش»), not the long title.
+      crumbs: [nav('resellers'), { label: t('web.nav_reseller_plans') }],
       title: t('web.reseller_plans_title'),
     };
   }
@@ -1037,7 +1039,8 @@ export function resolve(
           mayReconcile={may('payments.reconcile')}
         />
       ),
-      crumbs: [{ label: t('web.payment_ops_title') }],
+      // The demo's trail names the menu entry («پرداخت‌ها و کیف پول»); the title stays the page's.
+      crumbs: [{ label: t('web.nav_payments') }],
       title: t('web.payment_ops_title'),
     };
   }
@@ -1908,6 +1911,19 @@ function SignedIn({
     return () => query.removeEventListener('change', onChange);
   }, []);
 
+  /*
+   * A new page opens at its own top. The shell has ONE scroller (`main#main`) shared by every
+   * page, so without this a page opened after scrolling another one opened mid-page — the
+   * dashboard's header controls read as missing in v0.7.2 for exactly that reason. Keyed on
+   * the PATHNAME only: a tab, a filter or a search is a query change on the same page and
+   * must never move it (the owner's no-scroll-jump rule), and nothing in a page's own state
+   * reaches this. A layout effect, so the new page is never painted at the old offset.
+   */
+  useLayoutEffect(() => {
+    const scroller = document.getElementById('main');
+    if (scroller !== null) scroller.scrollTop = 0;
+  }, [route.path]);
+
   // On a narrow screen the open sidebar is a drawer: following a link closes it.
   useEffect(() => {
     if (window.matchMedia('(max-width: 980px)').matches) setCollapsed(true);
@@ -1918,6 +1934,8 @@ function SignedIn({
   const counters = useNavCounters();
 
   const resolved = resolve(route, permissions, admin.roleKeys);
+  // Rebuilt with the page on every render of the shell, which re-creates the page element anyway.
+  const trail = pageTrail(route.path, resolved.crumbs);
   useDocumentTitle(`${resolved.title} — ${t('web.title')}`);
 
   const leave = useMutation({
@@ -1991,12 +2009,15 @@ function SignedIn({
 
       <div className="main">
         <Topbar
-          crumbs={resolved.crumbs}
           collapsed={collapsed}
-          onOpenMenu={() => setCollapsed(false)}
+          // At a desk ≡ folds the sidebar to its rail (a remembered preference); below the
+          // breakpoint it opens the drawer, and the drawer's own scrim and links close it.
+          onMenu={() => (narrow ? setCollapsed(!collapsed) : choose(!collapsed))}
           onSearch={() => setSearching(true)}
           admin={admin}
           onSignOut={() => leave.mutate()}
+          theme={choice}
+          onTheme={setChoice}
           bell={<NotificationBell />}
         />
 
@@ -2004,7 +2025,8 @@ function SignedIn({
           <div className="content-inner">
             {/* Phase E3: every administrator sees an ACTIVE incident that asked to be seen. */}
             <IncidentBanner mayView={permissions.includes('incidents.view')} />
-            {resolved.element}
+            {/* X1: the page header's breadcrumb, derived from the navigation, for every page. */}
+            <PageTrailContext.Provider value={trail}>{resolved.element}</PageTrailContext.Provider>
           </div>
         </main>
       </div>

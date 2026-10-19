@@ -18,7 +18,7 @@ import {
   fetchTrialResets,
   fetchTrialPanels,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatTimestampNumeric } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
@@ -28,7 +28,7 @@ import {
   Banner,
   Button,
   Card,
-  Copyable,
+  IdText,
   CursorPager,
   DataTable,
   Empty,
@@ -145,6 +145,7 @@ function PanelTrialsCard({ mayView }: { mayView: boolean }) {
           <Empty title={t('web.trials_panels_empty')} />
         ) : (
           <DataTable
+            stack="labelled"
             columns={columns}
             rows={panels.data.panels}
             rowKey={(row) => row.panelId}
@@ -203,7 +204,11 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
     { key: 'limit', header: t('web.trial_override'), render: (row) => String(row.limit) },
     { key: 'used', header: t('web.trial_used'), render: (row) => String(row.used) },
     { key: 'remaining', header: t('web.trial_remaining'), render: (row) => String(row.remaining) },
-    { key: 'setAt', header: t('web.trials_set_at'), render: (row) => formatTimestamp(row.setAt) },
+    {
+      key: 'setAt',
+      header: t('web.trials_set_at'),
+      render: (row) => formatTimestampNumeric(row.setAt),
+    },
   ];
 
   return (
@@ -215,6 +220,7 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
         ) : (
           <>
             <DataTable
+              stack="labelled"
               caption={t('web.trials_overrides_title')}
               columns={columns}
               rows={overrides.data.overrides}
@@ -222,6 +228,7 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={overrides.data.overrides.length}
               hasPrevious={trail.length > 0}
               hasNext={overrides.data.nextCursor !== null}
@@ -357,6 +364,7 @@ function ResetButton({ mayReset }: { mayReset: boolean }) {
                 />
                 <h3 className="ca-subhead">{t('web.trials_reset_sample')}</h3>
                 <DataTable
+                  stack="labelled"
                   caption={t('web.trials_reset_sample')}
                   columns={[
                     {
@@ -442,7 +450,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
     {
       key: 'createdAt',
       header: t('web.trials_history_time'),
-      render: (row) => formatTimestamp(row.createdAt),
+      render: (row) => formatTimestampNumeric(row.createdAt),
     },
     {
       key: 'grants',
@@ -458,7 +466,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
     {
       key: 'actor',
       header: t('web.trials_history_actor'),
-      render: (row) => <Copyable value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />,
+      render: (row) => <IdText value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />,
     },
   ];
 
@@ -470,6 +478,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
         ) : (
           <>
             <DataTable
+              stack="labelled"
               caption={t('web.trials_history_title')}
               columns={columns}
               rows={resets.data.resets}
@@ -477,6 +486,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={resets.data.resets.length}
               hasPrevious={trail.length > 0}
               hasNext={resets.data.nextCursor !== null}

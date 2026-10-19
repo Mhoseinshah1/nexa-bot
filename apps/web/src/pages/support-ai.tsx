@@ -204,7 +204,9 @@ export function SupportAiPage({
       <PageHead
         title={t('web.sai_title')}
         subtitle={t('web.sai_intro')}
-        badge={
+        // Demo parity (DIFFS support-ai #3): the mode is a pill on the controls' side, under
+        // the subtitle — not a chip beside the title.
+        actions={
           data === undefined ? undefined : (
             <Badge tone={MODE_TONES[data.config.mode]}>
               {t(SUPPORT_AI_MODE_LABELS[data.config.mode])}
@@ -527,7 +529,7 @@ function ConfigCard({
         the page stays put; anchored, the rows above were pushed up off the screen (390).
       */}
       <form
-        className="stack no-scroll-anchor"
+        className="stack no-scroll-anchor sai-config"
         onSubmit={(event) => {
           event.preventDefault();
           if (parsed.success) save.mutate(parsed.data);
@@ -552,7 +554,7 @@ function ConfigCard({
           </div>
         </fieldset>
         {draft.mode === 'AUTO_REPLY_SAFE' && response.config.mode !== 'AUTO_REPLY_SAFE' && (
-          <Banner tone="warn" icon="lock">
+          <Banner tone="warn">
             {t(mayAutoReply ? 'web.sai_mode_auto_entering' : 'web.sai_mode_auto_needs_owner')}
           </Banner>
         )}
@@ -592,7 +594,7 @@ function ConfigCard({
           {draft.fallbacks.length < SUPPORT_AI_LIMITS.maxFallbacks && (
             <button
               type="button"
-              className="btn sm"
+              className="btn sm sai-fallback-add"
               onClick={() => set('fallbacks', [...draft.fallbacks, { provider: '', model: '' }])}
             >
               <Icon name="plus" />
@@ -659,7 +661,7 @@ function ConfigCard({
           </select>
         </Field>
         {widened && (
-          <Banner tone="warn" icon="lock">
+          <Banner tone="warn">
             {t(mayAutoReply ? 'web.sai_auto_widen_entering' : 'web.sai_auto_widen_needs_owner')}
           </Banner>
         )}
@@ -753,7 +755,7 @@ function StepFields({
   onRemove?: () => void;
 }) {
   return (
-    <div className="grid-2">
+    <div className="grid-2 sai-step">
       <Field label={label} htmlFor={`${id}-provider`}>
         <select
           id={`${id}-provider`}
@@ -810,7 +812,7 @@ function chainModelFor(
 function CredentialsCard({ response }: { response: SupportAiConfigResponse }) {
   return (
     <Card title={t('web.sai_credentials')} hint={t('web.sai_credentials_hint')}>
-      <ul className="plain stack" aria-label={t('web.sai_credentials')}>
+      <ul className="plain sai-keys" aria-label={t('web.sai_credentials')}>
         {response.credentials.map((credential) => (
           <li key={credential.provider} data-provider={credential.provider}>
             <CredentialRow
@@ -973,8 +975,8 @@ function CredentialRow({
           <p>{t('web.sai_key_rejected_hint')}</p>
         </Banner>
       )}
+      {/* Demo parity (DIFFS support-ai #1): a vertical label/value list, not one line. */}
       <KV
-        inline
         items={[
           [
             t('web.sai_key_set_at'),
@@ -1133,7 +1135,9 @@ function CredentialRow({
             <Icon name="plug" />
             {t('web.sai_test')}
           </button>
-          {model.trim() !== '' && <Ltr>{model.trim()}</Ltr>}
+          <span className="muted small">
+            {t('web.sai_test_model')}: {model.trim() === '' ? <Dash /> : <Ltr>{model.trim()}</Ltr>}
+          </span>
         </div>
       )}
       {credential.configured && (

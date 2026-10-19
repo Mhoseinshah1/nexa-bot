@@ -488,7 +488,7 @@ export function TicketsPage({
         row.assignedAdminUsername === null ? (
           <span className="muted">{t('web.ticket_unassigned')}</span>
         ) : (
-          <Ltr mono={false}>@{row.assignedAdminUsername}</Ltr>
+          <Ltr>@{row.assignedAdminUsername}</Ltr>
         ),
     },
     {
@@ -543,46 +543,47 @@ export function TicketsPage({
       <PageHead
         title={t('web.tickets_title')}
         subtitle={t('web.tickets_intro')}
-        actions={<ListFreshness query={tickets} hidden={!requestable} />}
+        actions={<ListFreshness query={tickets} hidden={!requestable} labelled />}
       />
 
       <Card>
         {requestable && (
           <ListFilterBar
             label={t('web.tickets_title')}
-            search={
-              <form className="ops-search" onSubmit={apply}>
-                <input
-                  id="tickets-customer"
-                  className="input sm"
-                  dir="ltr"
-                  aria-label={t('web.ticket_customer')}
-                  placeholder={t('web.ticket_filter_customer_hint')}
-                  title={t('web.ticket_filter_customer_hint')}
-                  value={draftCustomer}
-                  onChange={(event) => editField({ customer: event.target.value })}
-                  {...debounce.composition}
-                />
-                <button type="submit" className="btn primary sm" disabled={dateProblem}>
-                  {t('web.users_search_apply')}
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost sm"
-                  disabled={!filtering}
-                  onClick={() => {
-                    setDraft({ signature: '||', customer: '', fromDay: '', toDay: '' });
-                    setQueries(
-                      route,
-                      TICKET_VIEW_KEYS.map((key) => [key, null] as const),
-                    );
-                  }}
-                >
-                  {t('web.users_search_clear')}
-                </button>
-              </form>
-            }
             filters={[
+              /*
+               * Demo parity (DIFFS tickets #1): the customer search is a filter in the panel,
+               * not a row of its own above the table — the toolbar is «فیلترها» and the saved
+               * filters only. Same field, same debounce, same URL key; Enter still applies.
+               */
+              {
+                key: 'customer',
+                label: t('web.ticket_customer'),
+                active: customer === '' ? null : customer,
+                onClear: () => {
+                  edit({ customer: '' });
+                  setQuery(route, 'customer', null);
+                },
+                wide: true,
+                control: (
+                  <form className="ops-search" onSubmit={apply}>
+                    <input
+                      id="tickets-customer"
+                      className="input sm"
+                      dir="ltr"
+                      aria-label={t('web.ticket_customer')}
+                      placeholder={t('web.ticket_filter_customer_hint')}
+                      title={t('web.ticket_filter_customer_hint')}
+                      value={draftCustomer}
+                      onChange={(event) => editField({ customer: event.target.value })}
+                      {...debounce.composition}
+                    />
+                    <button type="submit" className="btn primary sm" disabled={dateProblem}>
+                      {t('web.users_search_apply')}
+                    </button>
+                  </form>
+                ),
+              },
               {
                 key: 'status',
                 label: t('web.status'),
@@ -769,10 +770,10 @@ export function TicketsPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
             rowClassName={(row) => (row.status === 'CLOSED' ? 'tickets-row-closed' : undefined)}
           />
           <CursorPager
+            order="newest-first"
             shown={rows.length}
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}
@@ -886,6 +887,7 @@ function TicketCategoriesCard({
                   className="btn sm ghost"
                   onClick={() => setDrawer({ kind: 'rename', category: row })}
                 >
+                  <Icon name="edit" size={13} />
                   {t('web.ticket_category_rename')}
                 </button>
                 <button
@@ -922,6 +924,7 @@ function TicketCategoriesCard({
                 className="btn sm primary"
                 onClick={() => setDrawer({ kind: 'create' })}
               >
+                <Icon name="plus" size={14} />
                 {t('web.ticket_category_add')}
               </button>
             ),
@@ -934,7 +937,6 @@ function TicketCategoriesCard({
           columns={columns}
           rows={categories}
           rowKey={(row) => row.id}
-          dense
         />
       </StateSwitch>
       {mayEdit && (

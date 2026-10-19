@@ -18,7 +18,11 @@ import { renderPage, stubApi } from './harness';
  */
 
 const H = (c: string) => c.repeat(64);
-const NEXT_LABEL = 'web.page_next' as const;
+/*
+ * Every list on the page is `id` ascending over uuid v7 ids, so the next page is NEWER:
+ * «تازه‌تر» walks forward (demo parity: the time-ordered pager's labels).
+ */
+const NEXT_LABEL = 'web.page_newer' as const;
 const ID = '019600ab-cdef-7012-8345-6789abcd0201';
 
 const approval = (overrides: Record<string, unknown> = {}) => ({
@@ -52,12 +56,12 @@ const readSet = (n: number) => ({
   recordedAt: '2026-10-07T08:00:00.000Z',
 });
 
-function page(options: { mayApprove?: boolean } = {}) {
+function page(options: { mayApprove?: boolean; noApprovals?: boolean } = {}) {
   const api = stubApi([
     {
       url: '/legacy-cutover/approvals',
       method: 'GET',
-      body: { approvals: [approval()], nextCursor: null },
+      body: { approvals: options.noApprovals === true ? [] : [approval()], nextCursor: null },
     },
     {
       url: '/legacy-cutover/read-sets?after=',
@@ -105,6 +109,16 @@ describe('the legacy cutover approval page', () => {
     expect(await screen.findAllByText(H('a'))).not.toHaveLength(0);
     expect(screen.getByText(t('web.lco_banner'))).toBeInTheDocument();
     expect(api.calls.filter((c) => c.method !== 'GET')).toEqual([]);
+  });
+
+  it('draws «تأییدها» as a card even with no approval, the empty state inside it', async () => {
+    page({ noApprovals: true });
+    const empty = await screen.findByText(t('web.lco_empty'));
+    const card = screen
+      .getByRole('heading', { name: t('web.lco_approvals_title') })
+      .closest('section');
+    expect(card).not.toBeNull();
+    expect(card).toContainElement(empty);
   });
 
   it('approve stays disabled until every value is an exact SHA-256; the body is the strict request, verbatim', async () => {

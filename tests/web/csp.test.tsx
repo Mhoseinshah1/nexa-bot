@@ -267,7 +267,7 @@ describe('the production content-security policy', () => {
     expect(container.querySelectorAll('[style]')).toHaveLength(0);
     // And the bar still carries its magnitude — as an SVG geometry attribute,
     // which `style-src` does not govern.
-    const bar = container.querySelector('svg.bar rect');
+    const bar = container.querySelector('svg.dash-stack rect');
     expect(bar).not.toBeNull();
     expect(bar?.getAttribute('width')).toBeTruthy();
   });

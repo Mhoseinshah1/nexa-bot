@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { act } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { LOGIN_FAILURE_REASONS, TEMPLATE_KEYS } from '@nexa/contracts';
 import { App } from '../../apps/web/src/app';
 import { AuditLogPage } from '../../apps/web/src/pages/audit-log';
@@ -56,8 +56,12 @@ describe('the top bar names each role in Persian', () => {
       },
     ]);
     renderPage(<App />);
-    const name = await screen.findByText('سارا احمدی', { selector: '.who-name' });
-    const roles = name.querySelector('.faint') as HTMLElement;
+    // The owner pill carries the role (demo parity A1); the name heads its menu.
+    const roles = (await waitFor(() => {
+      const found = document.querySelector('.user-trigger .who-name');
+      expect(found).not.toBeNull();
+      return found;
+    })) as HTMLElement;
     expect(roles.textContent).toContain(t('web.role_key_operator'));
     expect(roles.textContent).toContain('night_shift');
     expect(roles.textContent).not.toMatch(/\boperator\b/u);
@@ -196,8 +200,10 @@ describe('the readiness probe', () => {
     renderPage(
       <SystemPage route={{ path: '/system', query: new URLSearchParams() }} permissions={[]} />,
     );
-    const name = await screen.findByText(t('web.readiness_dep_postgres'));
-    expect(name.closest('.code-label')).toHaveAttribute('title', 'postgres');
+    // Demo parity (system #4): the dependency's own name, bare, isolated left to right.
+    const name = await screen.findByText('postgres');
+    expect(name.closest('.ltr')).not.toBeNull();
+    expect(screen.queryByText(t('web.readiness_dep_postgres'))).toBeNull();
     const unreachable = screen.getByText(t('web.readiness_detail_unreachable'));
     expect(unreachable).toHaveAttribute('title', 'unreachable');
     expect(

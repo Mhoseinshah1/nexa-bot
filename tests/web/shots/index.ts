@@ -7,6 +7,7 @@ import { OPS_A } from './fixtures/ops-a.ts';
 import { OPS_B } from './fixtures/ops-b.ts';
 import { COVERAGE } from './fixtures/coverage.ts';
 import { COVERAGE_B } from './fixtures/coverage-b.ts';
+import { DEMO_PARITY, DEMO_PARITY_EMPTY } from './fixtures/demo-parity/index.ts';
 
 /** Every fixture the screenshot server answers from, one file per page family. */
 export const FIXTURES: readonly ShotFixture[] = [
@@ -21,6 +22,40 @@ export const FIXTURES: readonly ShotFixture[] = [
 ];
 
 export { SHOT_NOW } from './fixture.ts';
+
+/**
+ * Named fixture sets: OVERRIDES layered over `FIXTURES` (`fixturesFor`). `demo-parity` feeds
+ * the app the approved demo's sample numbers; `demo-parity-empty` is its empty dashboard.
+ */
+export const FIXTURE_SETS: Readonly<Record<string, readonly ShotFixture[]>> = {
+  'demo-parity': DEMO_PARITY,
+  'demo-parity-empty': DEMO_PARITY_EMPTY,
+};
+
+const sameAnswer = (a: ShotFixture, b: ShotFixture) =>
+  a.method === b.method &&
+  a.path === b.path &&
+  a.absolute === b.absolute &&
+  JSON.stringify(Object.entries(a.query).sort()) === JSON.stringify(Object.entries(b.query).sort());
+
+/**
+ * The registry a screenshot run answers from: the named set's overrides first, then every
+ * default fixture the set does not replace. No set (or an empty name) is `FIXTURES` itself;
+ * an unknown name throws, so a typo never silently photographs the default data.
+ */
+export function fixturesFor(set: string | undefined): readonly ShotFixture[] {
+  if (set === undefined || set === '') return FIXTURES;
+  const overrides = FIXTURE_SETS[set];
+  if (overrides === undefined) {
+    throw new Error(
+      `Unknown fixture set "${set}" (known: ${Object.keys(FIXTURE_SETS).join(', ')})`,
+    );
+  }
+  return [
+    ...overrides,
+    ...FIXTURES.filter((base) => !overrides.some((override) => sameAnswer(override, base))),
+  ];
+}
 
 /**
  * The fixture that answers a request, or undefined.
