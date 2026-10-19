@@ -103,19 +103,26 @@ const SCENARIOS = [
     clicks: ['[role=tab]:nth-of-type(2)'],
     expect: `document.querySelector('[role=tab][aria-selected="true"]') !== document.querySelector('[role=tab]')`,
   },
+  /*
+   * The list filters live in the «فیلترها» panel (`ListFilterBar`, W1.3), not in a
+   * `.filter-row` of chips: the scenario opens the panel and presses a chip inside it. The
+   * old selector matched nothing since W1.3 (on main too), so both scenarios failed on a click
+   * that never happened rather than on the page.
+   */
   {
     name: 'phone filter chip applies a filter',
     device: 'phone',
     route: '/orders',
-    clicks: ['.filter-row [aria-pressed="false"]'],
+    clicks: ['.lfb-open', '.lfb-panel [aria-pressed="false"]'],
     expect: `location.search.includes('state=')`,
   },
   {
     name: 'tablet ticket filters',
     device: 'tablet',
     route: '/tickets',
-    clicks: ['.filter-row [aria-pressed="false"]'],
-    expect: `location.search.includes('status=')`,
+    clicks: ['.lfb-open', '.lfb-panel [aria-pressed="false"]'],
+    // The first chip not pressed is «در انتظار پشتیبانی» (`awaiting=`) or a status.
+    expect: `/[?&](status|awaiting)=/.test(location.search)`,
   },
 ];
 

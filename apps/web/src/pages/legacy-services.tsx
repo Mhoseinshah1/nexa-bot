@@ -208,7 +208,7 @@ export function legacyServiceRefusalLabel(code: string): string {
 function ApprovalsWaiting({ count }: { count: number }) {
   const onLink = useLinkHandler();
   return (
-    <Banner tone="warn" icon="info">
+    <Banner tone="warn">
       <span>{t('web.lsr_approvals_waiting')}</span>{' '}
       <span className="small">
         {t('web.lsr_approvals_waiting_count')}: <Num value={count} />

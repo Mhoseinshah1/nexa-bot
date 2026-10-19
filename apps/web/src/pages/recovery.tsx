@@ -672,11 +672,7 @@ function RecoveryOperations({
                   : ''}
         </p>
         {refusal !== null && <Banner tone="danger">{refusal}</Banner>}
-        {kind === 'MIRZA' && refusal === null && (
-          <Banner tone="warn" icon="info">
-            {t('web.lmg_banner')}
-          </Banner>
-        )}
+        {kind === 'MIRZA' && refusal === null && <Banner tone="warn">{t('web.lmg_banner')}</Banner>}
         {tooLarge && (
           <Banner tone="danger">
             {kind === 'MIRZA' ? t('web.lmg_fault_too_large') : t('web.recovery_upload_too_large')}
