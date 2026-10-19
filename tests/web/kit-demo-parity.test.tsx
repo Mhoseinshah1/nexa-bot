@@ -293,6 +293,64 @@ describe('X9 — a wide table fits its card', () => {
     expect(KIT_CSS).toMatch(/\.tbl td\.wrap\.tight,\n\.tbl th\.wrap\.tight \{\s*min-width: 0;/);
     expect(KIT_CSS).toMatch(/\.tbl td\.wrap \.badge \{[^}]*white-space: normal/);
   });
+
+  it('keeps a row detail usable in a stacked (phone card) table', () => {
+    const { container } = renderPage(
+      <DataTable
+        caption="جدول"
+        columns={columns}
+        rows={[{ id: '1', at: 'الف', note: 'یک' }]}
+        rowKey={(row) => row.id}
+        stack
+        detail={{ label: 'جزئیات', render: (row) => `جزئیات ${row.id}` }}
+      />,
+    );
+    expect(container.querySelector('.tbl-wrap')).toHaveClass('stack');
+    // The toggle cell is not a labelled line; the column cells are.
+    const toggleCell = container.querySelector('td.tbl-toggle');
+    expect(toggleCell).not.toHaveAttribute('data-label');
+    expect(container.querySelector('tbody td')).toHaveAttribute('data-label', 'شناسه');
+    fireEvent.click(screen.getByRole('button', { name: 'جزئیات' }));
+    expect(container.querySelector('tr.tbl-detail td')).not.toHaveAttribute('data-label');
+    // On a phone the toggle sits in the card's corner and the detail line carries no label.
+    expect(KIT_CSS).toMatch(/\.tbl-wrap\.stack \.tbl td\.tbl-toggle \{\s*position: absolute;/);
+    expect(KIT_CSS).toMatch(
+      /\.tbl-wrap\.stack \.tbl td\.tbl-toggle::before,\n\s*\.tbl-wrap\.stack \.tbl tr\.tbl-detail > td::before \{\s*content: none;/,
+    );
+  });
+
+  it('opens a row detail on one full-width line under its row, and closes it again', () => {
+    const { container } = renderPage(
+      <DataTable
+        caption="جدول"
+        columns={columns}
+        rows={[
+          { id: '1', at: 'الف', note: 'یک' },
+          { id: '2', at: 'ب', note: 'دو' },
+        ]}
+        rowKey={(row) => row.id}
+        detail={{ label: 'جزئیات', render: (row) => `جزئیات ${row.id}` }}
+      />,
+    );
+    // Nothing is drawn until asked, and each row has its own toggle.
+    expect(container.querySelector('tr.tbl-detail')).toBeNull();
+    const toggles = screen.getAllByRole('button', { name: 'جزئیات' });
+    expect(toggles).toHaveLength(2);
+    expect(toggles[1]).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggles[1] as HTMLElement);
+    const detail = container.querySelector('tr.tbl-detail');
+    expect(detail?.textContent).toBe('جزئیات 2');
+    // It spans every column plus the toggle's, and sits right under ITS row.
+    expect(detail?.querySelector('td')).toHaveAttribute('colspan', String(columns.length + 1));
+    expect(detail?.previousElementSibling).toHaveClass('expanded');
+    expect(detail?.previousElementSibling?.textContent).toContain('دو');
+    expect(toggles[1]).toHaveAttribute('aria-expanded', 'true');
+    expect(toggles[1]).toHaveAttribute('aria-controls', detail?.id);
+
+    fireEvent.click(toggles[1] as HTMLElement);
+    expect(container.querySelector('tr.tbl-detail')).toBeNull();
+  });
 });
 
 describe('X10 — filled states, outlined kinds', () => {

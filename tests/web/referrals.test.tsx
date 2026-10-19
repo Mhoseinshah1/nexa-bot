@@ -183,8 +183,13 @@ describe('the commission ledger', () => {
     const table = await waitFor(commissionTable);
     const row = within(table).getByText('Sara Referrer').closest('tr') as HTMLElement;
     expect(within(row).getByText('در انتظار تحویل')).toBeInTheDocument();
-    // Earned and settled-at are both dashes: no amount and no date were decided.
-    expect(within(row).getAllByText('—')).toHaveLength(2);
+    // Earned and settled-at are both dashes: no amount and no date were decided. Earned is
+    // a column; settled-at is the row's detail (demo parity X9), on the line under the row.
+    expect(within(row).getAllByText('—')).toHaveLength(1);
+    fireEvent.click(within(row).getByRole('button', { name: t('web.referral_row_detail') }));
+    const detail = row.nextElementSibling as HTMLElement;
+    expect(detail).toHaveClass('tbl-detail');
+    expect(within(detail).getAllByText('—')).toHaveLength(1);
   });
 
   it('says out loud when a reversal went unrecovered', async () => {
@@ -195,6 +200,10 @@ describe('the commission ledger', () => {
     );
     render();
     await waitFor(commissionTable);
+    // The banner says it on the card; the figure is the row's detail (demo parity X9).
+    fireEvent.click(
+      within(commissionTable()).getByRole('button', { name: t('web.referral_row_detail') }),
+    );
     expect(commissionTable().textContent).toContain('40,000');
     expect(screen.getByText(/هرگز از معرف مطالبه نمی‌شود/)).toBeInTheDocument();
   });

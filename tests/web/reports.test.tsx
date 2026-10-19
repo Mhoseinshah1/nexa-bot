@@ -226,6 +226,31 @@ describe('the trend chart', () => {
     // No inline style anywhere: the production policy is style-src 'self'.
     expect(document.querySelector('[style]')).toBeNull();
   });
+
+  it('draws the demo trend: a value axis with grid lines, the dates, the area, one legend', () => {
+    renderPage(
+      <TrendChart
+        current={TREND.current}
+        previous={TREND.previous}
+        format={(v) => v}
+        axisFormat={(v) => `v${String(v)}`}
+        caption="درآمد"
+      />,
+    );
+    const texts = [...document.querySelectorAll('svg text')].map((one) => one.textContent);
+    // Zero to a nice ceiling over the largest value (80000 → 100000), five ticks.
+    for (const tick of ['v0', 'v25000', 'v50000', 'v75000', 'v100000']) {
+      expect(texts, tick).toContain(tick);
+    }
+    expect(document.querySelectorAll('svg line.grid-line')).toHaveLength(4);
+    // The current period's own labels under the plot.
+    expect(texts).toContain('00:00');
+    expect(texts).toContain('02:00');
+    // The current period's area, filled; never the previous period's.
+    expect(document.querySelectorAll('polygon.trend-area')).toHaveLength(1);
+    // The card's legend names the periods; the chart draws no second legend under itself.
+    expect(document.querySelector('figcaption')).toBeNull();
+  });
 });
 
 describe('report formatting', () => {
@@ -291,6 +316,29 @@ describe('the Reports page', () => {
     expect(screen.getByRole('link', { name: 'خروجی Excel' }).getAttribute('href')).toContain(
       'format=xlsx',
     );
+  });
+  it('marks the KPI tiles that explain themselves with the demo ⓘ, six in the first row', async () => {
+    stubApi([
+      ...BUSINESS_ROUTES,
+      { url: '/reports/orders', body: { period: PERIOD, rows: [], nextCursor: null } },
+    ]);
+    renderPage(
+      <ReportsPage
+        route={{ path: '/reports', query: new URLSearchParams('range=TODAY') }}
+        denied={false}
+      />,
+    );
+    await waitFor(() => expect(document.querySelector('.report-kpis')).not.toBeNull());
+    const grid = document.querySelector('.report-kpis') as HTMLElement;
+    expect(grid).toHaveClass('report-kpis-six');
+    const marked = (label: string) =>
+      within(grid).getByText(label).parentElement?.querySelector('svg.report-kpi-info') != null;
+    // A tile with a hint carries the mark; the explanation is the tile's tooltip.
+    expect(marked(t('web.report_kpi_sales'))).toBe(true);
+    expect(marked(t('web.report_kpi_active_services'))).toBe(true);
+    // A tile without one does not.
+    expect(marked(t('web.report_kpi_new_users'))).toBe(false);
+    expect(marked(t('web.report_kpi_renewals'))).toBe(false);
   });
 });
 
