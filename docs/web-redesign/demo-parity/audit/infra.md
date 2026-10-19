@@ -108,14 +108,14 @@ Shared for every route below — ⛔ excluded or owned elsewhere, not repeated p
 
 ## /alerts
 
-| #   | difference                                               | status                                                                                                                                                                                     |
-| --- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | DIFFS #1 «رویداد» column, no «کد», no technical expander | ✅ «رویداد» with the Persian title, code as title attribute (93be48d1); ⛔ the message stays behind «جزئیات فنی»: the server's log line is English (owner rule: no English text in the UI) |
-| 2   | DIFFS #2 «فیلترها» with a count and «وضعیت: همه ×»       | ✅ 93be48d1                                                                                                                                                                                |
-| 3   | DIFFS #3 breadcrumb                                      | ✅ Phase A — verified                                                                                                                                                                      |
-| 4   | DIFFS #4 pager «تازه‌تر / قدیمی‌تر»                      | ✅ Phase A X2 — verified                                                                                                                                                                   |
-| 5   | DIFFS #5 message wraps to two lines                      | ⛔ owner rule (no English text): the English message is behind «جزئیات فنی», so there is nothing to wrap                                                                                   |
-| 6   | own: ten rows and an older page                          | ✅ fixture (d4870222)                                                                                                                                                                      |
+| #   | difference                                               | status                                                                                                                                                              |
+| --- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | DIFFS #1 «رویداد» column, no «کد», no technical expander | ✅ «رویداد» with the Persian title, code as title attribute (93be48d1); «پیام» now Persian from the code (round 2), the server line only behind «جزئیات فنی»        |
+| 2   | DIFFS #2 «فیلترها» with a count and «وضعیت: همه ×»       | ✅ 93be48d1                                                                                                                                                         |
+| 3   | DIFFS #3 breadcrumb                                      | ✅ Phase A — verified                                                                                                                                               |
+| 4   | DIFFS #4 pager «تازه‌تر / قدیمی‌تر»                      | ✅ Phase A X2 — verified                                                                                                                                            |
+| 5   | DIFFS #5 message wraps to two lines                      | ✅ round 2: the Persian message (from the code's label) wraps; English only behind «جزئیات فنی». Test: every contract code has a label (`ops-code-labels.test.tsx`) |
+| 6   | own: ten rows and an older page                          | ✅ fixture (d4870222)                                                                                                                                               |
 
 ## /audit-log
 

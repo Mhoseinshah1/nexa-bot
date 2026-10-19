@@ -128,6 +128,8 @@ export const WEB_FA = {
   'web.features_list_title': 'همهٔ قابلیت‌ها',
   'web.features_list_hint':
     'هر تغییر همان لحظه اعمال می‌شود؛ خاموش‌کردن قابلیت‌هایی که چیزی را متوقف می‌کنند پیش از اجرا پرسیده می‌شود.',
+  'web.features_show_all': 'نمایش بقیهٔ قابلیت‌ها',
+  'web.features_show_first': 'نمایش ۱۰ قابلیت نخست',
   'web.features_on_count': 'قابلیت‌های روشن',
   'web.templates_list': 'فهرست متن‌ها',
   'web.alerts_all_severities': 'همهٔ شدت‌ها',
@@ -1040,6 +1042,10 @@ export const WEB_FA = {
     'اتصال ربات به مجموعه ثابت است؛ کاربران ذخیره‌شده به همین ربات تعلق دارند.',
   'web.bot_telegram_id': 'شناسهٔ تلگرام',
   'web.bot_telegram_id_unknown': 'ثبت نشده',
+  'web.rel_now': 'همین حالا',
+  'web.rel_minutes_ago': 'دقیقه پیش',
+  'web.rel_hours_ago': 'ساعت پیش',
+  'web.rel_days_ago': 'روز پیش',
   'web.bot_webhook': 'آخرین ثبت وب‌هوک',
   'web.bot_webhook_never': 'هرگز ثبت نشده',
   'web.bot_secret': 'راز وب‌هوک',
@@ -9427,6 +9433,7 @@ export const WEB_FA = {
   'web.service_group_gift': 'هدیه و تغییر',
   // --- Web Admin demo (errors) ---
   'web.err_technical': 'جزئیات فنی',
+  'web.alerts_message_unnamed': 'رویداد ثبت شد؛ جزئیات فنی را ببینید',
   'web.err_ref_code': 'کد خطا',
   'web.err_ref_correlation': 'شناسهٔ پیگیری',
   'web.err_status_400': 'درخواست پذیرفته نشد. مقدارهای فرم را بررسی کنید.',

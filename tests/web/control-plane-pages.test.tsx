@@ -105,6 +105,18 @@ describe('the feature flags page', () => {
     expect(container.textContent).not.toContain('Project operational events');
   });
 
+  it('shows ten whole rows and the rest behind one button, with no clipping pane', async () => {
+    const flags = FEATURE_FLAGS.slice(0, 13).map((definition) => flag({ key: definition.key }));
+    stubApi([{ url: '/features', body: { flags } }]);
+    const { container } = renderPage(<FeaturesPage mayEdit denied={false} />);
+    await screen.findByText(t('web.features_list_title'));
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(10);
+    expect(container.querySelector('.feature-pane')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(t('web.features_show_all')) }));
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(13);
+    expect(screen.getByRole('button', { name: t('web.features_show_first') })).toBeInTheDocument();
+  });
+
   /**
    * A flag is a BOOLEAN and its parameters are settings — the Phase 2 rule
    * that neither registry may grow a field belonging to the other. The only
@@ -460,7 +472,10 @@ describe('the feature presentation catalogue', () => {
       },
     ]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
-    const switches = await screen.findAllByRole('switch');
+    await screen.findAllByRole('switch');
+    // Ten rows first; every other flag is one button away, none is lost.
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(t('web.features_show_all')) }));
+    const switches = screen.getAllByRole('switch');
     expect(switches).toHaveLength(FEATURE_FLAGS.length);
     for (const one of switches) {
       expect(one.getAttribute('aria-label') ?? one.textContent ?? '').not.toMatch(

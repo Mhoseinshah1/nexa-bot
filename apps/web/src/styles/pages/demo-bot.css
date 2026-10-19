@@ -158,14 +158,12 @@
 
 /* --- Features (`#/features`) ------------------------------------------------------------ */
 
-/*
- * The demo pages the flags ten at a time; with no server total the whole list is a
- * height-limited pane instead (nexa-web-design), so the page itself stays short.
- */
-.feature-pane {
-  max-block-size: calc(100vh - 320px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+/* Ten whole rows, the rest behind one button: no pane, so no row is ever clipped. */
+.feature-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
 }
 
 /* A related setting: its name on the start side, its value at the far end, as the demo. */
@@ -323,5 +321,37 @@
   .tcat-chips {
     flex-wrap: wrap;
     overflow-x: visible;
+  }
+}
+
+/*
+ * The category's button as the bot draws it: a FILLED chip in the colour the category
+ * already has in settings (primary, success or danger), tinted from the theme tokens.
+ */
+.ci-list .ib-head .ib-preview.bb-style-primary {
+  background: color-mix(in srgb, var(--chart-1) 38%, var(--bg-2));
+}
+.ci-list .ib-head .ib-preview.bb-style-success {
+  background: color-mix(in srgb, var(--ok) 38%, var(--bg-2));
+}
+.ci-list .ib-head .ib-preview.bb-style-danger {
+  background: color-mix(in srgb, var(--danger) 38%, var(--bg-2));
+}
+
+/*
+ * At phone width the menu editor's mode switch (ویرایش / دید مشتری / منوی زنده فعلی) wraps
+ * into a rounded block of roomy capsules, as the demo draws it, not one cramped rail.
+ */
+@media (max-width: 640px) {
+  .bb-canvas-head .btn-group.segmented {
+    inline-size: 100%;
+    padding: 8px;
+    gap: 8px;
+    border-radius: 28px;
+  }
+  .bb-canvas-head .btn-group.segmented .btn {
+    flex: 0 0 auto;
+    padding-inline: 18px;
+    min-block-size: 44px;
   }
 }

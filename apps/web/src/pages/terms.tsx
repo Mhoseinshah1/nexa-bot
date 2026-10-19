@@ -17,7 +17,7 @@ import {
   saveFeatureFlag,
   updateTermsDraft,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatRelative, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -294,8 +294,11 @@ export function TermsPage({
       render: (row) => (
         <CellMain
           primary={
-            <span className="nowrap">
-              {row.publishedAt === null ? '—' : formatTimestamp(row.publishedAt)}
+            <span
+              className="nowrap"
+              title={row.publishedAt === null ? undefined : formatTimestamp(row.publishedAt)}
+            >
+              {row.publishedAt === null ? '—' : formatRelative(row.publishedAt)}
             </span>
           }
           secondary={<span className="muted">{row.publishedBy ?? '—'}</span>}
