@@ -14,6 +14,7 @@ import {
 import { ago, fixture, type ShotFixture } from '../../fixture.ts';
 import { COMMERCE_A } from '../commerce-a.ts';
 import { COMMERCE_B } from '../commerce-b.ts';
+import { DEMO_PANEL_IDS } from './infra.ts';
 
 /*
  * DEMO PARITY — the services family (`/services`, `/services/:id`, `/orders`,
@@ -351,7 +352,7 @@ const RESETS: readonly Json[] = [
 // --- /extra-devices -------------------------------------------------------------
 
 const BASE_ADDONS = rows(base(COMMERCE_B, '/service-addons'), 'addons');
-const ADDON_PANEL = BASE_ADDONS[1]?.['panelId'] ?? null;
+const ADDON_PANEL: unknown = DEMO_PANEL_IDS.de1;
 const ADDON_PRODUCT = BASE_ADDONS[2]?.['productId'] ?? null;
 
 /** The demo's five rates: title, price (null = unpriced), currency, max, panel, product, on. */
