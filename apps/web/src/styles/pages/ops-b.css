@@ -939,6 +939,65 @@ form.set-row > * + * {
   font-size: var(--fs-body);
   font-weight: 600;
 }
+/*
+ * Demo parity (recovery family). A card whose hint is one sentence draws it on the title's
+ * line, as the demo's «زمان‌بندی بکاپ خودکار», «کیت بازیابی» and «عملیات بازیابی» do; it
+ * wraps under the title when the line is too narrow.
+ */
+.card.rcv-inline-head > .card-head > .titles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+.card.rcv-inline-head > .card-head .hint {
+  margin-top: 0;
+  font-size: var(--fs-xs);
+}
+/* The history's download is a quiet action in its cell, not an underlined identifier. */
+.card.rcv-history td a.link {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+.card.rcv-history td a.link:hover {
+  text-decoration: underline;
+}
+
+/* --- Legacy review pages (products, services, cutover) ---------------------------- */
+
+/* The exact-code fields: one inline row of narrow fields on the start side. */
+.lgr-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-end;
+}
+.lgr-filters > .field {
+  flex: 0 1 190px;
+  min-width: 150px;
+  margin: 0;
+}
+/* On a phone each field takes the full line, as the demo stacks them. */
+@media (max-width: 600px) {
+  .lgr-filters > .field {
+    flex: 1 1 100%;
+  }
+}
+/* A 64-digit fingerprint in a list: small code face, breaking anywhere on a phone. */
+.lgr-hash {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+/* Every result category with its count: two pairs a row where there is room. */
+@media (min-width: 901px) {
+  .kv.lgr-kv2 {
+    grid-template-columns: repeat(2, minmax(110px, max-content) minmax(60px, 1fr));
+  }
+}
 /* Upload → verify → confirm: where the request in hand stands. */
 .recovery-steps {
   list-style: none;
