@@ -5,10 +5,12 @@ import {
   MAIN_MENU_BUTTONS,
   appearanceResponseSchema,
   botListResponseSchema,
+  broadcastListResponseSchema,
   botMenuBuilderResponseSchema,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { ago, fixture, type ShotFixture } from '../../fixture.ts';
+import { BROADCASTS } from '../commerce-b.ts';
 
 /*
  * DEMO PARITY — the bot and content family, fed the approved demo's own sample rows
@@ -173,4 +175,53 @@ const bots = fixture('/bots', botListResponseSchema, {
   installation: { webhookRouteEnabled: true, webhookSecretConfigured: true },
 });
 
-export const DEMO_BOT: readonly ShotFixture[] = [appearance, botButtons, bots];
+/*
+ * `#/broadcasts`: the demo's first page of ten — finished, drafts of every kind, one
+ * sending, one paused, one scheduled, one cancelled — with an older page behind it, so
+ * «قدیمی‌تر» is the one direction offered.
+ */
+const BROADCAST_BASE = BROADCASTS[0] ?? {};
+const demoBroadcast = (
+  index: number,
+  title: string,
+  state: string,
+  contentKind: string,
+  recipientCount: number | null,
+  progressPercent: number | null,
+  createdMinutesAgo: number,
+) => ({
+  ...BROADCAST_BASE,
+  id: `0192c0de-0000-7000-8000-0000000d0b${String(index).padStart(2, '0')}`,
+  title,
+  state,
+  contentKind,
+  body: contentKind === 'FORWARD' || contentKind === 'COPY' ? '' : 'متن نمونهٔ پیام',
+  recipientCount,
+  progressPercent,
+  createdAt: ago(createdMinutesAgo),
+});
+const broadcasts = fixture('/broadcasts', broadcastListResponseSchema, {
+  broadcasts: [
+    demoBroadcast(1, 'تخفیف ۲۰٪ پاییزه', 'COMPLETED', 'TEXT', 6214, 100, 60 * 24 * 6),
+    demoBroadcast(2, 'اطلاعیهٔ تعمیرات NL-1', 'DRAFT', 'TEXT', null, null, 60 * 20),
+    demoBroadcast(3, 'آموزش اتصال iOS', 'DRAFT', 'VIDEO', null, null, 60 * 24 * 2),
+    demoBroadcast(4, 'معرفی پلن نامحدود هلند', 'DRAFT', 'PHOTO', null, null, 60 * 23),
+    demoBroadcast(5, 'فوروارد پست کانال', 'DRAFT', 'FORWARD', null, null, 60 * 21),
+    demoBroadcast(6, 'قطعی DE-2 — جبران', 'SENDING', 'TEXT', 611, 69, 60 * 19),
+    demoBroadcast(7, 'یادآوری تمدید — نمایندگان', 'PAUSED', 'TEXT', 182, 35, 60 * 36),
+    demoBroadcast(8, 'کد یلدا', 'SCHEDULED', 'TEXT', 7920, 6, 60 * 24 * 3),
+    demoBroadcast(9, 'نظرسنجی کیفیت سرویس', 'CANCELLED', 'TEXT', 3200, 100, 60 * 24 * 9),
+    demoBroadcast(
+      10,
+      'کپی پیام کانال — آموزش اندروید',
+      'COMPLETED',
+      'COPY',
+      420,
+      100,
+      60 * 24 * 11,
+    ),
+  ],
+  nextCursor: 'demo-older-page',
+});
+
+export const DEMO_BOT: readonly ShotFixture[] = [appearance, botButtons, bots, broadcasts];

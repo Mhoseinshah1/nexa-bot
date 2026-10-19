@@ -334,7 +334,7 @@ export function BroadcastsPage({
           ) : undefined
         }
       />
-      <Card>
+      <Card className="bc-list">
         <StateSwitch query={list} denied={denied}>
           {list.data === undefined ? null : list.data.broadcasts.length === 0 ? (
             <Empty title={t('web.bc_empty')} icon="send" />

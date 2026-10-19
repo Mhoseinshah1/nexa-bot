@@ -120,3 +120,29 @@
 .bx-bot .bx-kv dd .small {
   font-size: var(--fs-ui);
 }
+
+/* --- Broadcasts (`#/broadcasts`) -------------------------------------------------------- */
+
+/* Progress in the chart blue while it runs or was stopped; the green «ok» only when done. */
+.bc-list .progress.info rect {
+  fill: var(--chart-1);
+}
+/*
+ * The demo frames the broadcast list INSIDE its card (`mk-tw`): a hairline, rounded table
+ * with the card's padding around it, rather than the kit's flush list.
+ */
+.bc-list .card-body > .tbl-wrap {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+}
+.bc-list .card-body > .pager {
+  margin-inline: 0;
+  margin-top: 12px;
+}
+.bc-list .card-body > .pager:last-child {
+  margin-bottom: 0;
+}
+.bc-list .tbl td {
+  padding-block: 10px;
+}
