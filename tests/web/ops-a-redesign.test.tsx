@@ -210,8 +210,9 @@ describe('the panel detail, redesigned', () => {
     );
     renderPage(<PanelDetailPage id={PANEL_ID} mayEdit mayRotate denied={false} />);
     await screen.findByRole('heading', { name: /^Frankfurt A/u });
-    const strip = document.querySelector('.detail-head .head-stats') as HTMLElement;
-    const labels = [...strip.querySelectorAll('dt')].map((cell) => cell.textContent);
+    // Demo parity: the figures are a strip of separate stat cards under the page header.
+    const strip = document.querySelector('.panel-head-stats') as HTMLElement;
+    const labels = [...strip.querySelectorAll('.stat .lbl')].map((cell) => cell.textContent);
     expect(labels).toEqual([
       t('web.panel_health'),
       t('web.panel_latency'),

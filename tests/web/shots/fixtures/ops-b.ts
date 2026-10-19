@@ -15,6 +15,7 @@ import {
   recoveryCapabilitiesResponseSchema,
   recoveryListResponseSchema,
   roleListResponseSchema,
+  roleViewListResponseSchema,
   settingListResponseSchema,
   supportFaqListSchema,
   systemDiagnosticsResponseSchema,
@@ -655,6 +656,15 @@ export const OPS_B: readonly ShotFixture[] = [
   fixture('/system/monitor', monitorProfileResponseSchema, MONITOR),
   fixture('/admins', adminListResponseSchema, { admins: ADMINS }),
   fixture('/roles', roleListResponseSchema, { roles: ROLES }),
+  // The roles tab of `/system`: the same three system roles, as the RBAC read returns them.
+  fixture('/rbac/roles', roleViewListResponseSchema, {
+    roles: ROLES.map((role) => ({
+      ...role,
+      immutable: role.key === 'owner',
+      version: 1,
+      assignedAdmins: [],
+    })),
+  }),
   fixture('/backups/status', backupStatusResponseSchema, {
     scheduleEnabled: true,
     intervalMs: 6 * 60 * 60 * 1000,
