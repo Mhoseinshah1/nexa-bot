@@ -261,6 +261,27 @@ export interface ProductRepository {
     tx?: unknown,
   ): Promise<CustomerPage<ProductRecord>>;
 
+  /**
+   * Owner rule 2026-10-18 — the CURRENT plans an imported service's renewal may offer: the
+   * customer catalogue's own predicate (`customerVisibleProduct`) on the service's ONE panel,
+   * AND priced in `currency`, AND the service's shape (`timeLimited`: a duration, or none) —
+   * every predicate in the statement, BEFORE the limit (Codex on #292: a limit applied first
+   * hid compatible plans behind the first ten). `productId` narrows it to that one plan: the
+   * draft's and the confirmation's re-decision is this same statement, never a copy of it.
+   */
+  listRenewalPlans(
+    scope: TenantContext,
+    query: {
+      readonly panelId: string;
+      readonly currency: string;
+      readonly timeLimited: boolean;
+      readonly audience: CatalogueAudience;
+      readonly productId?: string;
+      readonly limit: number;
+    },
+    tx?: unknown,
+  ): Promise<readonly ProductRecord[]>;
+
   /** One PAGE of the products inside one category, every predicate applied in SQL. */
   listCustomerProductsInCategory(
     scope: TenantContext,

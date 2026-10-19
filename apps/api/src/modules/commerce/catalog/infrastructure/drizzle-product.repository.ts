@@ -469,6 +469,48 @@ export class DrizzleProductRepository implements ProductRepository {
     return { items: rows.slice(0, limit).map(toRecord), hasMore: rows.length > limit };
   }
 
+  /** See the port: the catalogue's predicate, the currency and the shape, then the limit. */
+  async listRenewalPlans(
+    scope: TenantContext,
+    query: {
+      readonly panelId: string;
+      readonly currency: string;
+      readonly timeLimited: boolean;
+      readonly audience: CatalogueAudience;
+      readonly productId?: string;
+      readonly limit: number;
+    },
+    tx?: unknown,
+  ): Promise<readonly ProductRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select(getTableColumns(products))
+      .from(products)
+      .innerJoin(
+        productCategories,
+        and(
+          eq(productCategories.id, products.categoryId),
+          eq(productCategories.tenantId, products.tenantId),
+        ),
+      )
+      .where(
+        and(
+          this.customerVisibleProduct(tenantId, [query.panelId], query.audience),
+          eq(products.priceCurrency, query.currency),
+          query.timeLimited ? sql`${products.durationDays} > 0` : eq(products.durationDays, 0),
+          query.productId === undefined ? undefined : eq(products.id, query.productId),
+        ),
+      )
+      .orderBy(
+        asc(productCategories.sortOrder),
+        asc(productCategories.id),
+        asc(products.sortOrder),
+        asc(products.id),
+      )
+      .limit(Math.max(query.limit, 1));
+    return rows.map(toRecord);
+  }
+
   async listCatalog(
     scope: TenantContext,
     limit: number,
