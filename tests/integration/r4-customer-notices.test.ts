@@ -158,8 +158,8 @@ describe('R4: customer notices for manual wallet changes and unblocks; imported 
       VALUES (${runId}, ${tenantA.tenantId}, 'APPLY', 'COMPLETED', repeat('a', 64), 'test',
               now(), now(), now())`);
     await ctx.container.database.db.execute(sql`
-      INSERT INTO legacy_import_map (id, tenant_id, legacy_table, legacy_id, run_id, checksum, status, entity_type, entity_id, created_at, updated_at)
-      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'user', '940001', ${runId}, 'x', 'IMPORTED', 'CUSTOMER', ${customerA}, now(), now())`);
+      INSERT INTO legacy_import_map (tenant_id, legacy_table, legacy_id, run_id, checksum, status, entity_type, entity_id, created_at, updated_at)
+      VALUES (${tenantA.tenantId}, 'user', '940001', ${runId}, repeat('b', 64), 'IMPORTED', 'CUSTOMER', ${customerA}, now(), now())`);
     const repo = new DrizzleLegacyImporterRepository(ctx.container.database.db);
     const mark = () =>
       ctx.container.database.db.transaction((tx) =>

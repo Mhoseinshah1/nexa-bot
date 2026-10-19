@@ -405,24 +405,27 @@ export class DrizzleWalletRepository implements WalletRepository {
          * cannot describe different sets. A correlated subquery rather than two
          * round trips: the second read could see a credit the first did not.
          */
+        /*
+         * Explicit aliases (R4): drizzle renders a one-table SELECT's columns UNQUALIFIED, so
+         * the `${credit.…}` references this used inside the subqueries named the subquery's
+         * own row — the bound compared a row with itself and the customer filter matched
+         * every customer of the tenant.
+         */
         refunded: sql<string>`COALESCE((
-          SELECT SUM(${walletEntries.amount}) FROM ${walletEntries}
-           WHERE ${walletEntries.tenantId} = ${tenantId}
-             AND ${walletEntries.orderId} = ${orderId}
-             AND ${walletEntries.reason} = 'REFUND'
-             AND ${walletEntries.direction} = 'CREDIT'
-             AND ${walletEntries.currency} = ${credit.currency}
+          SELECT SUM(w.amount) FROM wallet_entries w
+           WHERE w.tenant_id = ${tenantId}
+             AND w.order_id = ${orderId}
+             AND w.reason = 'REFUND'
+             AND w.direction = 'CREDIT'
+             AND w.currency = "refund_credit"."currency"
         ), 0)`,
         balance: sql<string>`COALESCE((
-          SELECT SUM(CASE WHEN ${walletEntries.direction} = 'CREDIT'
-                          THEN ${walletEntries.amount}
-                          ELSE -${walletEntries.amount} END)
-            FROM ${walletEntries}
-           WHERE ${walletEntries.tenantId} = ${tenantId}
-             AND ${walletEntries.customerId} = ${credit.customerId}
-             AND ${walletEntries.currency} = ${credit.currency}
-             AND (${walletEntries.createdAt}, ${walletEntries.id})
-                 <= (${credit.createdAt}, ${credit.id})
+          SELECT SUM(CASE WHEN w.direction = 'CREDIT' THEN w.amount ELSE -w.amount END)
+            FROM wallet_entries w
+           WHERE w.tenant_id = ${tenantId}
+             AND w.customer_id = "refund_credit"."customer_id"
+             AND w.currency = "refund_credit"."currency"
+             AND (w.created_at, w.id) <= ("refund_credit"."created_at", "refund_credit"."id")
         ), 0)`,
       })
       .from(credit)
@@ -474,16 +477,18 @@ export class DrizzleWalletRepository implements WalletRepository {
         currency: entry.currency,
         note: entry.note,
         shown: entry.noteShownToCustomer,
+        /*
+         * Written with explicit aliases on purpose: in a one-table SELECT drizzle renders its
+         * columns UNQUALIFIED, so `${entry.createdAt}` inside this subquery would name the
+         * subquery's own row and the bound would compare a row with itself.
+         */
         balance: sql<string>`COALESCE((
-          SELECT SUM(CASE WHEN ${walletEntries.direction} = 'CREDIT'
-                          THEN ${walletEntries.amount}
-                          ELSE -${walletEntries.amount} END)
-            FROM ${walletEntries}
-           WHERE ${walletEntries.tenantId} = ${tenantId}
-             AND ${walletEntries.customerId} = ${entry.customerId}
-             AND ${walletEntries.currency} = ${entry.currency}
-             AND (${walletEntries.createdAt}, ${walletEntries.id})
-                 <= (${entry.createdAt}, ${entry.id})
+          SELECT SUM(CASE WHEN w.direction = 'CREDIT' THEN w.amount ELSE -w.amount END)
+            FROM wallet_entries w
+           WHERE w.tenant_id = ${tenantId}
+             AND w.customer_id = "adjustment"."customer_id"
+             AND w.currency = "adjustment"."currency"
+             AND (w.created_at, w.id) <= ("adjustment"."created_at", "adjustment"."id")
         ), 0)`,
       })
       .from(entry)
