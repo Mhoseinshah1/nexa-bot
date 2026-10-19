@@ -162,13 +162,14 @@ export function RemindersPage({
       templates: EXPIRY_TEMPLATES,
       summary: (
         <>
-          <Ltr mono={false}>
+          {/* Read right to left, as the demo reads «۷ · ۳ · ۱ روز». */}
+          <bdi dir="rtl">
             {[
               days('reminders.expiry_early_days'),
               days('reminders.expiry_first_days'),
               days('reminders.expiry_second_days'),
             ].join(' · ')}
-          </Ltr>{' '}
+          </bdi>{' '}
           {t('web.reminders_unit_days')}
         </>
       ),
@@ -230,8 +231,7 @@ export function RemindersPage({
       templates: USAGE_TEMPLATES,
       summary: (
         <>
-          <Ltr mono={false}>{USAGE_SETTINGS.map(remaining).join(' · ')}</Ltr>{' '}
-          {t('web.reminders_unit_percent')}
+          <bdi dir="rtl">{USAGE_SETTINGS.map(remaining).join(' · ')}</bdi> {t('web.reminders_unit_percent')}
         </>
       ),
       body: (
@@ -306,7 +306,11 @@ export function RemindersPage({
       keys: ['reminders.quiet_hours_start', 'reminders.quiet_hours_end'],
       templates: [],
       summary: (
-        <Ltr>{`${time('reminders.quiet_hours_start')} ← ${time('reminders.quiet_hours_end')}`}</Ltr>
+        // Read right to left like the page: the start on the right, the end after the arrow.
+        <span className="rem-window">
+          <Ltr>{time('reminders.quiet_hours_start')}</Ltr> ←{' '}
+          <Ltr>{time('reminders.quiet_hours_end')}</Ltr>
+        </span>
       ),
       body: (
         <>
@@ -366,8 +370,17 @@ export function RemindersPage({
                           </h2>
                           <p className="muted small">{section.hint}</p>
                         </div>
+                        {/*
+                         * The family's main switch sits in the header, opposite the title,
+                         * as the demo draws it; its name is the switch's accessible label.
+                         */}
+                        <FlagRow
+                          flag={main}
+                          label={section.main.label}
+                          mayEdit={mayEdit}
+                          inHeader
+                        />
                       </div>
-                      <FlagRow flag={main} label={section.main.label} mayEdit={mayEdit} />
                       <div className="bx-rem-s">
                         <span className="bx-big">{section.summary}</span>
                         {section.flags.length > 1 && (
@@ -400,8 +413,8 @@ export function RemindersPage({
                             <Icon name="content" />
                             {t('web.reminders_templates')}
                             {mayViewTemplates && (
-                              <span className="cnt num">
-                                {formatNumber(templatesOf(section.templates).length)}
+                              <span className="num">
+                                ({formatNumber(templatesOf(section.templates).length)})
                               </span>
                             )}
                           </button>
@@ -495,11 +508,14 @@ function FlagRow({
   label,
   hint,
   mayEdit,
+  inHeader = false,
 }: {
   flag: FeatureFlagResponse | undefined;
   label: string;
   hint?: string;
   mayEdit: boolean;
+  /** Drawn in a card's header: the state pill and the switch, the name only as its label. */
+  inHeader?: boolean;
 }) {
   const refresh = useRefresh();
   const submission = useSubmissionKey();
@@ -546,12 +562,14 @@ function FlagRow({
   };
 
   return (
-    <div className="rem-flag">
+    <div className={inHeader ? 'rem-flag in-head' : 'rem-flag'}>
       <div className="rem-flag-main">
-        <div className="rem-flag-text">
-          <span className="strong">{label}</span>
-          {hint !== undefined && <span className="muted small">{hint}</span>}
-        </div>
+        {!inHeader && (
+          <div className="rem-flag-text">
+            <span className="strong">{label}</span>
+            {hint !== undefined && <span className="muted small">{hint}</span>}
+          </div>
+        )}
         <Badge tone={flag.enabled ? 'ok' : 'neutral'} dot>
           {flag.enabled ? t('web.enabled') : t('web.disabled')}
         </Badge>

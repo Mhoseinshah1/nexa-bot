@@ -201,3 +201,40 @@
 .ca-name {
   font-feature-settings: normal;
 }
+
+/* --- Reminders (`#/reminders`) ---------------------------------------------------------- */
+
+/* The family's switch and its pill sit in the card header, opposite the title. */
+.bx-rem .rem-flag.in-head {
+  flex: none;
+  max-inline-size: 50%;
+}
+.bx-rem .rem-flag.in-head .rem-flag-main {
+  gap: 8px;
+}
+/* A switched-off reminder's value reads muted, as the demo's wallet card does. */
+.bx-rem.off .bx-big {
+  color: var(--fg-3);
+}
+.rem-window {
+  white-space: nowrap;
+}
+
+/* --- Settings (`#/settings`) ------------------------------------------------------------ */
+
+/* «اطلاعات فنی» spans the row as the demo's bordered collapsible bar, not an inline link. */
+.disclosure.set-tech {
+  inline-size: 100%;
+  grid-column: 1 / -1;
+  background: transparent;
+  padding: 6px 10px;
+}
+.disclosure.set-tech > summary {
+  inline-size: 100%;
+}
+/* The demo gives a setting's words the wider column and its control the narrower one. */
+@media (min-width: 821px) {
+  .settings-group .set-row-main {
+    grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr);
+  }
+}

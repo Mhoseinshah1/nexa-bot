@@ -11,6 +11,8 @@ import {
   broadcastListResponseSchema,
   clientAppListSchema,
   featureFlagListResponseSchema,
+  notificationListResponseSchema,
+  settingListResponseSchema,
   templateDefinition,
   templateListResponseSchema,
   botMenuBuilderResponseSchema,
@@ -320,11 +322,13 @@ const clientApps = fixture('/client-apps', clientAppListSchema, {
  */
 const DEMO_SETTING_VALUES: Readonly<Record<string, unknown>> = {
   'ops.notifications.max_per_minute': 20,
-  'wallet.low_balance.threshold': { amountMinor: '20000', currency: 'IRT' },
+  'wallet.low_balance.threshold': { amountMinor: '50000', currency: 'IRT' },
+  'sales.payment_window_minutes': 45,
   'reminders.quiet_hours_start': '23:00',
   'reminders.quiet_hours_end': '08:00',
 };
 const OFF_FLAGS = new Set([
+  'wallet_low_balance_reminders',
   'reseller_minimum_achieved_notices',
   'customer_link_rotation',
   'referral_signup_gift',
@@ -366,7 +370,94 @@ const features = fixture('/features', featureFlagListResponseSchema, {
   }),
 });
 
+/*
+ * `#/notifications`: the demo's first page of ten — one still waiting («در انتظار»), one
+ * failed after every attempt, the rest sent — with an older page behind it.
+ */
+const notification = (
+  index: number,
+  status: string,
+  templateKey: string,
+  minutes: number,
+  attemptCount = 1,
+) => ({
+  id: `01a05e35-c9ad-7e93-bef3-1ed9b5d06f${String(index).padStart(2, '0')}`,
+  kind: 'OPERATIONAL_EVENT',
+  status,
+  templateKey,
+  attemptCount,
+  maxAttempts: 10,
+  createdAt: ago(minutes),
+  lastAttemptAt: ago(minutes),
+  completedAt: status === 'SENT' ? ago(minutes) : null,
+  correlationId: null,
+});
+const notifications = fixture('/notifications', notificationListResponseSchema, {
+  notifications: [
+    notification(1, 'SENT', 'ops.financial.payment_failed', 20),
+    notification(2, 'PENDING', 'ops.financial.order_paid', 47),
+    notification(3, 'SENT', 'ops.notification.operational_event', 95),
+    notification(4, 'SENT', 'ops.support.ticket_opened', 150),
+    notification(5, 'FAILED', 'ops.financial.refund_failed', 160, 10),
+    notification(6, 'SENT', 'ops.financial.refund_completed', 210),
+    notification(7, 'SENT', 'ops.financial.topup_credited', 60 * 9),
+    notification(8, 'SENT', 'ops.financial.service_refund_request', 60 * 11),
+    notification(9, 'SENT', 'ops.financial.payment_failed', 60 * 14, 3),
+    notification(10, 'SENT', 'ops.financial.order_paid', 60 * 18),
+  ],
+  nextCursor: { at: ago(60 * 18), id: '01a05e35-c9ad-7e93-bef3-1ed9b5d06f10' },
+});
+
+/*
+ * `#/settings` and `#/reminders`: every registered setting at the demo's values; the
+ * currency and the payment window changed here (so their rows carry «آخرین تغییر»), and
+ * one key this build does not know — the demo's «سایر تنظیمات ۱» tab.
+ */
+const EDITED_AT: Readonly<Record<string, number>> = {
+  'sales.currency': 60 * 24 * 95,
+  'sales.payment_window_minutes': 60 * 24 * 1,
+};
+const settings = fixture('/settings', settingListResponseSchema, {
+  settings: [
+    ...SETTINGS.map((definition) => {
+      const editedAt = EDITED_AT[definition.key];
+      return {
+        key: definition.key,
+        value: DEMO_SETTING_VALUES[definition.key] ?? definition.defaultValue,
+        source: editedAt === undefined ? 'DEFAULT' : 'TENANT',
+        version: editedAt === undefined ? null : 2,
+        updatedAt: editedAt === undefined ? null : ago(editedAt),
+        updatedByAdminId: null,
+        description: definition.description,
+        zeroMeaning: definition.zeroMeaning,
+        mutability: definition.mutability,
+        classification: definition.classification,
+        configures: definition.configures,
+        consumer: definition.consumer,
+        storedValueInvalid: false,
+      };
+    }),
+    {
+      key: 'sales.receipt_reminder_minutes',
+      value: 15,
+      source: 'DEFAULT',
+      version: null,
+      updatedAt: null,
+      updatedByAdminId: null,
+      description: 'Minutes before a pending receipt is reminded.',
+      zeroMeaning: 'DISABLES',
+      mutability: 'RESTART_REQUIRED',
+      classification: 'PUBLIC',
+      configures: null,
+      consumer: 'PLANNED',
+      storedValueInvalid: false,
+    },
+  ],
+});
+
 export const DEMO_BOT: readonly ShotFixture[] = [
+  settings,
+  notifications,
   features,
   clientApps,
   appearance,

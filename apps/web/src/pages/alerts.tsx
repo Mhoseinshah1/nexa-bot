@@ -595,7 +595,8 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           >
             {notificationTypeName(row.templateKey)}
           </button>
-          <Badge tone="neutral" outline>
+          {/* A filled pill, as the demo draws a notification's category. */}
+          <Badge tone="neutral">
             {t(NOTIFICATION_CATEGORY_LABELS[notificationCategoryOf(row.templateKey)])}
           </Badge>
         </span>
@@ -685,7 +686,6 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}
-              dense
               rowClassName={(row) => (row.id === selected ? 'selected' : undefined)}
             />
           </StateSwitch>
