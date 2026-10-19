@@ -1048,12 +1048,12 @@
     color: var(--fg-3);
     font-size: var(--fs-xs);
   }
-  .tbl-wrap.stack .tbl td:first-child {
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child {
     padding-bottom: 6px;
     font-size: var(--fs-body);
     text-align: start;
   }
-  .tbl-wrap.stack .tbl td:first-child::before {
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child::before {
     content: none;
   }
 }
