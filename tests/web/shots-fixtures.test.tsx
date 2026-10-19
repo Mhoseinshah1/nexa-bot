@@ -21,7 +21,10 @@ describe('the screenshot fixtures', () => {
   );
 
   // The named sets (`demo-parity`, …) are photographed the same way, so they are held to the
-  // same contract: a drifted override would photograph the error card beside the demo.
+  // same contract: a drifted override would photograph the error card beside the demo. This is
+  // the general check over every family's overrides; the per-family schema checks
+  // (`customers-parity-fixtures`, `services-family-parity`) predate it and are redundant but
+  // harmless.
   it.each(
     Object.entries(FIXTURE_SETS).flatMap(([set, fixtures]) =>
       fixtures.map((fixture) => [`${set}: ${fixture.method} ${fixture.path}`, fixture] as const),
