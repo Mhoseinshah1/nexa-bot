@@ -325,6 +325,10 @@ describe('the feature flag registry', () => {
       // (inert until a minimum is set); both are raised by the reseller-minimum sweep.
       'reseller_minimum_achieved_notices',
       'reseller_minimum_reminders',
+      // R4 PR-F. Both off by default; the rich-message seam in the customer messenger is
+      // reachable, and with rich_messages off every request is byte for byte the old one.
+      'rich_messages',
+      'rich_premium_emoji',
       // The three reminder switches. `service_expired_notice` is a flag rather than a
       // sixth threshold because it is not a number: it fires at zero days and what an
       // operator decides about it is whether it is sent at all.

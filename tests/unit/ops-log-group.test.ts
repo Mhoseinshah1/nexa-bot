@@ -141,6 +141,7 @@ describe('routing, not severity', () => {
     ['bot.command_sync_failing', 'BOT'],
     ['bot_menu.published_unreadable', 'BOT'],
     ['channels.membership_unavailable', 'BOT'],
+    ['telegram.rich_message_refused', 'ERRORS'],
     ['internal.unhandled', 'ERRORS'],
     ['http.error', 'ERRORS'],
     ['outbox.message_exhausted', 'SYSTEM'],

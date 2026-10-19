@@ -222,6 +222,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
+  'bot.catalog.table_name_header': 'سرویس',
+  'bot.catalog.table_traffic_header': 'حجم',
+  'bot.catalog.table_days_header': 'مدت',
+  'bot.catalog.table_price_header': 'قیمت',
+  'bot.catalog.table_traffic_cell': '{traffic}',
+  'bot.catalog.table_days_cell': '{durationDays}',
   'bot.catalog.categories_heading': 'یک دسته را انتخاب کنید:',
   'bot.catalog.category_empty':
     'در حال حاضر چیزی در این دسته برای فروش نیست. دسته‌های دیگر را ببینید.',

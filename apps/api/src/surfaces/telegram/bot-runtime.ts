@@ -13917,6 +13917,11 @@ export class BotRuntime {
           amount: product.price,
         }),
         data: `${ORDER_CALLBACK_PREFIX}${product.id}`,
+        // R4 PR-F (F2): the plan table of a rich message; an ordinary message ignores it.
+        planFacts: {
+          trafficBytes: product.specification.trafficBytes,
+          durationDays: product.specification.durationDays,
+        },
       });
     }
     if (page > 0) {
