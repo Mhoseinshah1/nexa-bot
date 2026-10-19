@@ -1269,6 +1269,42 @@ describe('a customer looks after the services they bought', () => {
       expect(rows[1]?.recovers_code).toBe('service.panel_account_missing');
     });
 
+    /*
+     * Codex on #291 (a): the scheduled SYNC_USAGE read the account and wrote a fresh
+     * figure. Before the fix it closed nothing, and the next open answered from that fresh
+     * figure's cache — so the condition stayed open for ever. The sync itself closes it.
+     */
+    it('a scheduled usage sync that finds the account closes the missing condition', async () => {
+      const service = await activeService('live-missing-sync');
+      await stale(service.id);
+      const user = panel.users.get(service.username);
+      if (user === undefined) throw new Error('no panel user');
+      const saved = { ...user };
+      panel.forget(service.username);
+      expect((await handle(tap(`s:${service.id}`))).replyKey).toBe('bot.service.panel_missing');
+      panel.seed(saved);
+      forgetMissingVerdicts();
+      await ctx.container.provisioning.requestSyncFromCustomer(
+        tenantA,
+        systemActor('sync'),
+        maryam,
+        service.id,
+        { idempotencyKey: 'live-missing-sync-request' },
+      );
+      await ctx.container.provisionerLoop.tick();
+      expect(
+        (await operations.listForService(tenantA, service.id, 50)).find(
+          (operation) => operation.type === 'SYNC_USAGE',
+        )?.state,
+      ).toBe('SUCCEEDED');
+      const rows = await missingRows(service.id);
+      expect(rows.map((row) => row.code)).toEqual([
+        'service.panel_account_missing',
+        'service.panel_account_found',
+      ]);
+      expect(rows[0]?.resolved_at, 'closed by the sync, not by a later open').not.toBeNull();
+    });
+
     it('cache hit: a second open inside the window asks the panel nothing — found or missing', async () => {
       const found = await activeService('live-cache-found');
       await stale(found.id);

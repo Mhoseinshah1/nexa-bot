@@ -94,6 +94,7 @@ import {
   type ExecutionRefusal,
   type ExecutionResult,
 } from './provision-executor.js';
+import { closePanelAccountMissing, type ServiceConditionReader } from './panel-account-recovery.js';
 import type {
   OperationRecord,
   OperationRepository,
@@ -328,6 +329,11 @@ export interface ProvisionerDeps {
   readonly operationId: (key: string) => OperationId;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
+  /**
+   * Track 3 §1: asked, after a successful usage read, whether this service's
+   * missing-account condition is open, so the read closes it (`closePanelAccountMissing`).
+   */
+  readonly conditions: ServiceConditionReader;
   readonly outbox: OutboxWriter;
   readonly scopeActivity: ScopeActivityReader;
   readonly workerId: string;
@@ -1836,6 +1842,14 @@ export class ProvisionerService {
         { usedBytes: read.usage.usedBytes, syncedAt: now, lastSeen: read.usage.lastSeen },
         tx,
       );
+      // The panel answered with this account's usage: a missing-account condition about
+      // it is over (Codex on #291 — otherwise the card's cache would hide it for ever).
+      await closePanelAccountMissing(
+        { conditions: this.deps.conditions, opsEvents: this.deps.opsLog },
+        scope,
+        service,
+        tx,
+      );
     });
 
     /*
@@ -2555,6 +2569,13 @@ export class ProvisionerService {
           scope,
           serviceId,
           { usedBytes: usage.usedBytes, syncedAt: now, lastSeen: usage.lastSeen },
+          tx,
+        );
+        // Track 3 §1: the panel just answered about this account, so it is there.
+        await closePanelAccountMissing(
+          { conditions: this.deps.conditions, opsEvents: this.deps.opsLog },
+          scope,
+          service,
           tx,
         );
       }

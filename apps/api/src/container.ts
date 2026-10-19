@@ -5735,6 +5735,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     operationId: (key) => operationIdFor('provider', key),
     audit,
     opsLog,
+    // Track 3 §1: a successful usage read closes a missing-account condition.
+    conditions: new DrizzleOperationalConditionReader(database.db),
     outbox,
     scopeActivity: tenants,
     settings: settingsResolver,
