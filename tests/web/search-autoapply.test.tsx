@@ -282,7 +282,12 @@ const SPECS: readonly Spec[] = [
         )}
       </Live>
     ),
-    box: byId('tickets-customer'),
+    // The customer search lives in the «فیلترها» panel (demo parity, DIFFS tickets #1): the
+    // box is reached by opening it, and it is the same field with the same debounce.
+    box: () => {
+      if (document.getElementById('tickets-customer') === null) openFilterPanel();
+      return byId('tickets-customer')();
+    },
     list: '/tickets',
     param: 'customer',
     body: (rows, next) => ({

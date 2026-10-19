@@ -646,6 +646,8 @@ export function DetailHead({
   initial,
   stats,
   level = 2,
+  back,
+  initialClass,
 }: {
   title: ReactNode;
   badge?: ReactNode;
@@ -655,17 +657,30 @@ export function DetailHead({
   initial?: string;
   stats?: readonly { readonly label: ReactNode; readonly value: ReactNode }[];
   level?: 1 | 2;
+  /**
+   * A small «→ فهرست» link to the list the record belongs to, drawn under the breadcrumb and
+   * above the head (the demo's `backl`). Additive: a head without it is unchanged.
+   */
+  back?: { readonly href: string; readonly label: ReactNode };
+  /** An extra class for the avatar tile (a page's tint); additive, absent changes nothing. */
+  initialClass?: string;
 }) {
   const Heading = level === 1 ? 'h1' : 'h2';
   const trail = useContext(PageTrailContext);
+  const onLink = useLinkHandler();
   return (
     <>
       {/* A detail page whose head IS this card still says where it is (X1). */}
       {level === 1 && trail.length > 1 && <Breadcrumbs items={trail} />}
+      {back !== undefined && (
+        <a className="back-link" href={back.href} onClick={onLink}>
+          <span aria-hidden="true">→</span> {back.label}
+        </a>
+      )}
       <section className="card detail-head">
         <div className="head-card">
           {initial !== undefined && (
-            <span className="avatar lg" aria-hidden="true">
+            <span className={cx('avatar', 'lg', initialClass)} aria-hidden="true">
               {initial}
             </span>
           )}
@@ -2308,8 +2323,24 @@ export interface DistributionSlice {
  * breakdown does not. This component takes slices and knows nothing about
  * either — the caller decides, and the dashboard's caller passes panels.
  */
-export function Distribution({ slices }: { slices: readonly DistributionSlice[] }) {
+export function Distribution({
+  slices,
+  scale = 'total',
+}: {
+  slices: readonly DistributionSlice[];
+  /**
+   * What a full bar means: the slices' `total` (each bar its share, the default), or the
+   * largest slice (`max`: the longest bar is full and the rest compare to it, as the approved
+   * demo's bar cards draw them). The numbers beside the bars are the counts either way.
+   */
+  scale?: 'total' | 'max';
+}) {
   const total = useMemo(() => slices.reduce((sum, slice) => sum + slice.count, 0), [slices]);
+  const largest = useMemo(
+    () => slices.reduce((top, slice) => Math.max(top, slice.count), 0),
+    [slices],
+  );
+  const full = scale === 'max' ? largest : total;
 
   if (total === 0) return <Empty title={t('web.empty')} />;
 
@@ -2339,7 +2370,7 @@ export function Distribution({ slices }: { slices: readonly DistributionSlice[] 
               x="0"
               y="0"
               height="8"
-              width={(slice.count / total) * 100}
+              width={(slice.count / full) * 100}
             />
           </svg>
         </div>

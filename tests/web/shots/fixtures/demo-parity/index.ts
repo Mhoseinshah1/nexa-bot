@@ -2,6 +2,8 @@ import type { ShotFixture } from '../../fixture.ts';
 import { DEMO_DASHBOARD, DEMO_DASHBOARD_EMPTY } from './dashboard.ts';
 import { DEMO_RECOVERY } from './recovery.ts';
 import { DEMO_SERVICES_FAMILY } from './services.ts';
+import { DEMO_CUSTOMERS_FAMILY } from './customers.ts';
+import { DEMO_SUPPORT_FAMILY } from './support.ts';
 
 /*
  * The DEMO-PARITY fixture sets (PROMPT.md §D-3): the app fed the approved demo's own
@@ -18,6 +20,8 @@ export const DEMO_PARITY: readonly ShotFixture[] = [
   ...DEMO_DASHBOARD,
   ...DEMO_RECOVERY,
   ...DEMO_SERVICES_FAMILY,
+  ...DEMO_CUSTOMERS_FAMILY,
+  ...DEMO_SUPPORT_FAMILY,
 ];
 
 /** The demo's EMPTY dashboard: nothing in the period, nothing waiting. */

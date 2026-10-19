@@ -297,33 +297,37 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
         }
       />
       {categories.length > 1 ? (
-        <ListFilterBar
-          label={t('web.nc_title')}
-          search={showPills}
-          filters={[
-            {
-              key: 'category',
-              label: t('web.nc_filter_category'),
-              active: category === '' ? null : t(CATEGORY_LABELS[category]),
-              onClear: () => setCategory(''),
-              control: (
-                <Select
-                  size="sm"
-                  aria-label={t('web.nc_filter_category')}
-                  value={category}
-                  onChange={(event) => setCategory(event.target.value as NotificationCategory | '')}
-                >
-                  <option value="">{t('web.nc_category_all')}</option>
-                  {categories.map((one) => (
-                    <option key={one} value={one}>
-                      {t(CATEGORY_LABELS[one])}
-                    </option>
-                  ))}
-                </Select>
-              ),
-            },
-          ]}
-        />
+        <div className="nc-toolbar">
+          <ListFilterBar
+            label={t('web.nc_title')}
+            search={showPills}
+            filters={[
+              {
+                key: 'category',
+                label: t('web.nc_filter_category'),
+                active: category === '' ? null : t(CATEGORY_LABELS[category]),
+                onClear: () => setCategory(''),
+                control: (
+                  <Select
+                    size="sm"
+                    aria-label={t('web.nc_filter_category')}
+                    value={category}
+                    onChange={(event) =>
+                      setCategory(event.target.value as NotificationCategory | '')
+                    }
+                  >
+                    <option value="">{t('web.nc_category_all')}</option>
+                    {categories.map((one) => (
+                      <option key={one} value={one}>
+                        {t(CATEGORY_LABELS[one])}
+                      </option>
+                    ))}
+                  </Select>
+                ),
+              },
+            ]}
+          />
+        </div>
       ) : (
         <div className="nc-filters">{showPills}</div>
       )}

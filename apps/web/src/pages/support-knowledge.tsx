@@ -515,59 +515,62 @@ export function SupportKnowledgePage({
       <Banner tone="info" icon="info">
         {t('web.sk_only_approved')}
       </Banner>
-      <ListFilterBar
-        label={t('web.sk_title')}
-        filters={[
-          {
-            key: 'source',
-            label: t('web.sk_col_source'),
-            active: source === 'ALL' ? null : t(KNOWLEDGE_SOURCE_LABELS[source]),
-            onClear: () => setSource('ALL'),
-            control: (
-              <Select
-                id="sk-source"
-                size="sm"
-                aria-label={t('web.sk_col_source')}
-                value={source}
-                onChange={(event) =>
-                  setSource(event.target.value as AnyFilter<SupportKnowledgeSource>)
-                }
-              >
-                <option value="ALL">{t('web.sk_all')}</option>
-                {SUPPORT_KNOWLEDGE_SOURCES.map((value) => (
-                  <option key={value} value={value}>
-                    {t(KNOWLEDGE_SOURCE_LABELS[value])}
-                  </option>
-                ))}
-              </Select>
-            ),
-          },
-          {
-            key: 'state',
-            label: t('web.sk_col_state'),
-            active: state === 'ALL' ? null : t(KNOWLEDGE_STATE_LABELS[state]),
-            onClear: () => setState('ALL'),
-            control: (
-              <Select
-                id="sk-state"
-                size="sm"
-                aria-label={t('web.sk_col_state')}
-                value={state}
-                onChange={(event) =>
-                  setState(event.target.value as AnyFilter<SupportKnowledgeArticleState>)
-                }
-              >
-                <option value="ALL">{t('web.sk_all')}</option>
-                {SUPPORT_KNOWLEDGE_ARTICLE_STATES.map((value) => (
-                  <option key={value} value={value}>
-                    {t(KNOWLEDGE_STATE_LABELS[value])}
-                  </option>
-                ))}
-              </Select>
-            ),
-          },
-        ]}
-      />
+      {/* Demo parity (DIFFS support-knowledge #1): the filter line in a bordered card of its own. */}
+      <Card tight className="sk-filters">
+        <ListFilterBar
+          label={t('web.sk_title')}
+          filters={[
+            {
+              key: 'source',
+              label: t('web.sk_col_source'),
+              active: source === 'ALL' ? null : t(KNOWLEDGE_SOURCE_LABELS[source]),
+              onClear: () => setSource('ALL'),
+              control: (
+                <Select
+                  id="sk-source"
+                  size="sm"
+                  aria-label={t('web.sk_col_source')}
+                  value={source}
+                  onChange={(event) =>
+                    setSource(event.target.value as AnyFilter<SupportKnowledgeSource>)
+                  }
+                >
+                  <option value="ALL">{t('web.sk_all')}</option>
+                  {SUPPORT_KNOWLEDGE_SOURCES.map((value) => (
+                    <option key={value} value={value}>
+                      {t(KNOWLEDGE_SOURCE_LABELS[value])}
+                    </option>
+                  ))}
+                </Select>
+              ),
+            },
+            {
+              key: 'state',
+              label: t('web.sk_col_state'),
+              active: state === 'ALL' ? null : t(KNOWLEDGE_STATE_LABELS[state]),
+              onClear: () => setState('ALL'),
+              control: (
+                <Select
+                  id="sk-state"
+                  size="sm"
+                  aria-label={t('web.sk_col_state')}
+                  value={state}
+                  onChange={(event) =>
+                    setState(event.target.value as AnyFilter<SupportKnowledgeArticleState>)
+                  }
+                >
+                  <option value="ALL">{t('web.sk_all')}</option>
+                  {SUPPORT_KNOWLEDGE_ARTICLE_STATES.map((value) => (
+                    <option key={value} value={value}>
+                      {t(KNOWLEDGE_STATE_LABELS[value])}
+                    </option>
+                  ))}
+                </Select>
+              ),
+            },
+          ]}
+        />
+      </Card>
       {controlFault != null && (
         <Banner tone="danger" role="alert">
           {knowledgeFault(controlFault)}
@@ -586,7 +589,6 @@ export function SupportKnowledgePage({
             rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.sk_title')}
-            dense
           />
           {paging.pager}
         </Card>
@@ -850,14 +852,20 @@ export function LearningCandidatesPage({
       <Banner tone="info" icon="info">
         {t('web.sk_cand_nothing_active')}
       </Banner>
-      <Pills
-        value={state}
-        onChange={setState}
-        items={SUPPORT_LEARNING_CANDIDATE_STATES.map((value) => ({
-          id: value,
-          label: t(CANDIDATE_STATE_LABELS[value]),
-        }))}
-      />
+      {/* The shared toolbar pattern (no demo page here): the state pills in a bordered card
+          of their own, as the knowledge list's filter line beside it. */}
+      <Card tight className="sk-filters">
+        <div className="sk-pills">
+          <Pills
+            value={state}
+            onChange={setState}
+            items={SUPPORT_LEARNING_CANDIDATE_STATES.map((value) => ({
+              id: value,
+              label: t(CANDIDATE_STATE_LABELS[value]),
+            }))}
+          />
+        </div>
+      </Card>
       {decide.error != null && editing === null && (
         <Banner tone="danger" role="alert">
           {knowledgeFault(decide.error)}
@@ -876,7 +884,6 @@ export function LearningCandidatesPage({
             rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.sk_cand_title')}
-            dense
           />
           {paging.pager}
         </Card>
