@@ -985,28 +985,29 @@ export function Banner({
   tone = 'info',
   title,
   children,
-  icon,
   role,
   action,
 }: {
   tone?: Tone;
   title?: string;
   children?: ReactNode;
+  /**
+   * Accepted and not drawn. The approved demo draws no sign on ANY callout — information,
+   * warning or error alike (every `.note` in `approved-demo.html`, checked on 25 routes) — so
+   * the tone's colour and outline are the whole signal, and `role` carries the urgency for
+   * assistive technology. Kept on the type only so the pages that still pass one need no edit
+   * in this change; removing those props is a page-file follow-up.
+   */
   icon?: IconName;
   /** Overrides the tone's default. See `StaleNotice` for why one needs to. */
   role?: 'status' | 'alert' | undefined;
   /** A control that resolves what the banner says — at the end of the line. */
   action?: ReactNode;
 }) {
-  // An information callout is an outlined card with no ⓘ (demo parity X5): the outline is
-  // what sets it apart, and an icon on every explanatory paragraph was noise. A warning or
-  // an error keeps its sign, because there the icon carries the urgency.
-  const iconless = tone === 'info' || tone === 'neutral';
+  // Demo parity X5 (and its follow-up): a callout is an outlined card in its tone, with no
+  // ⓘ or ⚠. An error still announces itself (`role="alert"`), which the icon never did.
   return (
     <div className={`banner ${tone}`} role={role ?? (tone === 'danger' ? 'alert' : undefined)}>
-      {!iconless && (
-        <Icon name={icon ?? (tone === 'danger' || tone === 'warn' ? 'alert' : 'info')} size={16} />
-      )}
       <div>
         {title !== undefined && <strong>{title}</strong>}
         {children}
@@ -1889,7 +1890,7 @@ export function DataTable<T>({
   filters,
   rowClassName,
   detail,
-  stack = false,
+  stack = true,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -1914,6 +1915,11 @@ export function DataTable<T>({
    * `data-label`). The same rows, cells and order; only the CSS layout changes.
    * `'labelled'` draws the first cell as a labelled line too, where the demo does (its
    * generic lists), instead of as the card's title.
+   *
+   * ON BY DEFAULT: the demo stacks every list below 820px (measured on 48 routes: no
+   * `table.t` there scrolls sideways). Of its lists, the ones whose first cell is a labelled
+   * line rather than the card's title pass `'labelled'`; `false` keeps a sideways-scrolling
+   * table for a list that must stay a grid.
    */
   stack?: boolean | 'labelled';
 }) {
@@ -1938,10 +1944,15 @@ export function DataTable<T>({
           stack === 'labelled' && 'labelled',
         )}
       >
-        <table className={cx('tbl', dense && 'dense')}>
+        {/*
+          The explicit roles keep the table a table for assistive technology once the stacked
+          layout changes its elements' display, which a browser may otherwise take as leave to
+          drop the semantics. Native roles restated; nothing else changes.
+        */}
+        <table className={cx('tbl', dense && 'dense')} role="table">
           <caption className="visually-hidden">{caption}</caption>
-          <thead>
-            <tr>
+          <thead role="rowgroup">
+            <tr role="row">
               {columns.map((column) => (
                 // Classes, not a `style` attribute. The production document
                 // policy is `style-src 'self'`, which blocks element `style`
@@ -1951,6 +1962,7 @@ export function DataTable<T>({
                 <th
                   key={column.key}
                   scope="col"
+                  role="columnheader"
                   className={cx(
                     `al-${column.align === 'end' ? 'end' : 'start'}`,
                     column.wrap !== undefined && column.wrap !== false && 'wrap',
@@ -1961,23 +1973,24 @@ export function DataTable<T>({
                 </th>
               ))}
               {detail !== undefined && (
-                <th scope="col" className="al-end tbl-toggle">
+                <th scope="col" role="columnheader" className="al-end tbl-toggle">
                   <span className="visually-hidden">{detail.label}</span>
                 </th>
               )}
             </tr>
           </thead>
-          <tbody>
+          <tbody role="rowgroup">
             {rows.map((row) => {
               const key = rowKey(row);
               const expanded = open.has(key);
               const detailId = `tbl-detail-${key}`;
               return (
                 <Fragment key={key}>
-                  <tr className={cx(rowClassName?.(row), expanded && 'expanded')}>
+                  <tr role="row" className={cx(rowClassName?.(row), expanded && 'expanded')}>
                     {columns.map((column) => (
                       <td
                         key={column.key}
+                        role="cell"
                         data-label={stack === false ? undefined : column.header}
                         className={cx(
                           `al-${column.align === 'end' ? 'end' : 'start'}`,
@@ -1989,7 +2002,7 @@ export function DataTable<T>({
                       </td>
                     ))}
                     {detail !== undefined && (
-                      <td className="al-end tbl-toggle">
+                      <td role="cell" className="al-end tbl-toggle">
                         <IconButton
                           icon="chevron"
                           label={detail.label}
@@ -2002,8 +2015,10 @@ export function DataTable<T>({
                     )}
                   </tr>
                   {detail !== undefined && expanded && (
-                    <tr className="tbl-detail" id={detailId}>
-                      <td colSpan={span}>{detail.render(row)}</td>
+                    <tr role="row" className="tbl-detail" id={detailId}>
+                      <td role="cell" colSpan={span}>
+                        {detail.render(row)}
+                      </td>
                     </tr>
                   )}
                 </Fragment>

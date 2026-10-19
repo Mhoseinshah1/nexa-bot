@@ -501,6 +501,11 @@
   .page-head .actions {
     width: 100%;
   }
+  /* The demo's \`.head .ctrls .btn{flex:1}\`: a header action shares the full line on a phone. */
+  .page-head .actions > .btn:not(.icon) {
+    flex: 1;
+    justify-content: center;
+  }
 }
 
 /* --- Cards ------------------------------------------------------------------- */
@@ -517,13 +522,25 @@
   box-shadow: var(--gshadow);
   min-width: 0;
 }
+/*
+ * Demo parity: no rule under a card's title (the demo's \`.ch\` has none). The head's own
+ * bottom padding is the whole gap to the content, so a body right under a head starts at its
+ * edge, and a flush table or toolbar does not pull up into the title.
+ */
 .card-head {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
+}
+.card-head + .card-body {
+  padding-top: 0;
+}
+.card-head + .card-body > .tbl-wrap:first-child,
+.card-head + .card-body > .toolbar:first-child,
+.card-head + .card-body > .filter-row:first-child {
+  margin-top: 0;
 }
 /*
  * The titles keep a floor before the actions may sit beside them: with a zero
@@ -1073,6 +1090,13 @@
   }
   .tbl-wrap.stack:not(.labelled) .tbl td:first-child::before {
     content: none;
+  }
+  /* A column with no header draws no label. */
+  .tbl-wrap.stack .tbl td[data-label='']::before {
+    content: none;
+  }
+  .tbl-wrap.stack .tbl .row-actions.wrap {
+    max-width: none;
   }
 }
 .tbl tbody tr {
@@ -1731,9 +1755,10 @@ textarea.input,
 
 /*
  * Liquid Glass: every tab strip is a glass rail of capsules, the chosen tab raised on
- * `--glass-hi` with the specular line. On a desk the rail wraps onto a second row as the
- * reference draws it; on a phone it stays one row and scrolls sideways, and `tab-strip.ts`
- * keeps the chosen tab in view inside it (B6).
+ * `--glass-hi` with the specular line. The rail WRAPS onto further rows at every width, as
+ * the demo's `.tabs{flex-wrap:wrap;overflow:visible}` does — on a phone too (Customer 360's
+ * nine tabs are two or three rows, every tab visible, none behind the edge). `tab-strip.ts`
+ * still keeps the chosen tab in view in a strip that scrolls (a vertical one).
  */
 .tabs {
   display: flex;
@@ -1751,10 +1776,9 @@ textarea.input,
   scrollbar-width: none;
   margin-bottom: 14px;
 }
-@media (min-width: 821px) {
-  .tabs:not(.vertical) {
-    flex-wrap: wrap;
-  }
+.tabs:not(.vertical) {
+  flex-wrap: wrap;
+  overflow-x: visible;
 }
 .tabs button {
   background: none;
@@ -1915,12 +1939,6 @@ textarea.input,
   color: var(--fg-2);
   font-size: var(--fs-ui);
 }
-.banner > svg {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  margin-top: 3px;
-}
 .banner > div {
   flex: 1;
   min-width: 0;
@@ -1937,19 +1955,20 @@ textarea.input,
 }
 .banner.warn {
   background: var(--warn-soft);
-  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  border-color: var(--warn);
+  color: var(--fg);
 }
-.banner.warn > svg,
+/* The demo's callout title is the body colour; the outline and fill carry the tone. */
 .banner.warn strong {
-  color: var(--warn);
+  color: var(--fg);
 }
 .banner.danger {
   background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  border-color: var(--danger);
+  color: var(--fg);
 }
-.banner.danger > svg,
 .banner.danger strong {
-  color: var(--danger);
+  color: var(--fg);
 }
 /*
  * The information callout (demo parity X5): an outlined card a step brighter than the page —
@@ -1968,7 +1987,6 @@ textarea.input,
   background: var(--ok-soft);
   border-color: color-mix(in srgb, var(--ok) 40%, transparent);
 }
-.banner.ok > svg,
 .banner.ok strong {
   color: var(--ok);
 }
@@ -1976,7 +1994,6 @@ textarea.input,
   background: var(--violet-soft);
   border-color: color-mix(in srgb, var(--violet) 40%, transparent);
 }
-.banner.violet > svg,
 .banner.violet strong {
   color: var(--violet);
 }
@@ -1984,12 +2001,8 @@ textarea.input,
   background: var(--teal-soft);
   border-color: color-mix(in srgb, var(--teal) 40%, transparent);
 }
-.banner.teal > svg,
 .banner.teal strong {
   color: var(--teal);
-}
-.banner.neutral > svg {
-  color: var(--fg-3);
 }
 .banner p + p {
   margin-top: 4px;

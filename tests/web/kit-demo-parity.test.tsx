@@ -17,7 +17,12 @@ import {
 } from '../../apps/web/src/ui/kit';
 import { ListFilterBar } from '../../apps/web/src/ui/filter-bar';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { formatNumber } from '../../apps/web/src/format';
+import {
+  formatDate,
+  formatNumber,
+  formatTimestamp,
+  formatTimestampNumeric,
+} from '../../apps/web/src/format';
 import { renderPage } from './harness';
 
 /**
@@ -155,8 +160,8 @@ describe('X2 — CountedPager counts only a server total', () => {
   });
 });
 
-describe('X5 — an information callout is outlined, without the ⓘ', () => {
-  it('draws no icon on info and neutral, and keeps the sign on a warning', () => {
+describe('X5 — a callout is outlined in its tone, without a sign', () => {
+  it('draws no icon on any tone, as every callout in the demo; an error still alerts', () => {
     const { container } = renderPage(
       <>
         <Banner tone="info" title="عنوان">
@@ -167,19 +172,28 @@ describe('X5 — an information callout is outlined, without the ⓘ', () => {
         </Banner>
         <Banner tone="neutral">متن</Banner>
         <Banner tone="warn">هشدار</Banner>
+        <Banner tone="warn" icon="info">
+          هشدار
+        </Banner>
+        <Banner tone="danger">خطا</Banner>
+        <Banner tone="ok">انجام شد</Banner>
       </>,
     );
-    const [info, infoWithIcon, neutral, warn] = [...container.querySelectorAll('.banner')];
-    expect(info?.querySelector('svg')).toBeNull();
-    expect(infoWithIcon?.querySelector('svg')).toBeNull();
-    expect(neutral?.querySelector('svg')).toBeNull();
-    expect(warn?.querySelector('svg')).not.toBeNull();
+    const banners = [...container.querySelectorAll('.banner')];
+    expect(banners).toHaveLength(7);
+    for (const banner of banners) expect(banner.querySelector('svg')).toBeNull();
+    expect(banners[5]).toHaveAttribute('role', 'alert');
   });
 
   it('is outlined in the accent over its soft fill', () => {
     const css = rule(KIT_CSS, '.banner.info');
     expect(css).toContain('border-color: var(--accent)');
     expect(css).toContain('background: var(--accent-soft)');
+  });
+
+  it("outlines a warning and an error in their full tone, as the demo's .note.warn/.danger", () => {
+    expect(rule(KIT_CSS, '.banner.warn')).toContain('border-color: var(--warn)');
+    expect(rule(KIT_CSS, '.banner.danger')).toContain('border-color: var(--danger)');
   });
 });
 
@@ -377,4 +391,45 @@ describe('X10 — filled states, outlined kinds', () => {
 it('keeps the filter bar stylesheet in place for the reordered row', () => {
   // The search row spans the grid below «فیلترها» and the saved filters.
   expect(rule(UI_CSS, '.lfb-search')).toContain('grid-column: 1 / -1');
+});
+
+describe('card heads — no rule under the title, as the demo’s .ch', () => {
+  it('draws no border under a card head, and the body under it starts at its edge', () => {
+    expect(rule(KIT_CSS, '.card-head')).not.toMatch(/border-bottom/);
+    expect(KIT_CSS).not.toMatch(/\.card-head\s*\{[^}]*border-bottom/);
+    expect(rule(KIT_CSS, '.card-head + .card-body')).toContain('padding-top: 0');
+  });
+});
+
+describe('page head — the action takes the full line on a phone, as the demo', () => {
+  it('stretches a header button across the line below 820px, not an icon button', () => {
+    const at = KIT_CSS.indexOf('@media (max-width: 820px) {\n  .page-head h1');
+    expect(at).toBeGreaterThan(-1);
+    const block = KIT_CSS.slice(at, KIT_CSS.indexOf('\n}\n', at));
+    expect(block).toMatch(/\.page-head \.actions > \.btn:not\(\.icon\) \{\s*flex: 1;/);
+    expect(block).toMatch(/\.page-head \.actions \{\s*width: 100%;/);
+  });
+});
+
+describe('tab strips — wrap at every width, as the demo’s .tabs', () => {
+  it('wraps a horizontal rail onto further rows on a phone too, without a sideways scroll', () => {
+    const css = rule(KIT_CSS, '.tabs:not(.vertical)');
+    expect(css).toContain('flex-wrap: wrap');
+    expect(css).toContain('overflow-x: visible');
+    expect(KIT_CSS).not.toMatch(/@media \(min-width: 821px\) \{\s*\.tabs:not\(\.vertical\)/);
+  });
+});
+
+describe('timestamps — the demo’s numeric shape everywhere, decided in one place', () => {
+  it('formats every date-time and date as numbers, never a month name', () => {
+    const at = '2026-10-06T16:00:00.000Z';
+    expect(formatTimestamp(at)).toBe(formatTimestampNumeric(at));
+    expect(formatTimestamp(at)).toMatch(/^⁦[۰-۹]{4}\/[۰-۹]{2}\/[۰-۹]{2} [۰-۹]{2}:[۰-۹]{2}⁩$/);
+    expect(formatDate(at)).toMatch(/^⁦[۰-۹]{4}\/[۰-۹]{2}\/[۰-۹]{2}⁩$/);
+    expect(formatTimestamp('not a date')).toBe('not a date');
+  });
+});
+
+it('draws the list search at the full control height, as the demo’s 32px search', () => {
+  expect(rule(UI_CSS, '.ca-search.slim .field input')).toContain('height: var(--ctl-h)');
 });
