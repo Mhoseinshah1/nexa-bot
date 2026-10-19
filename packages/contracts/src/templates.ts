@@ -10605,6 +10605,14 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.renew_no_plan',
+    description:
+      'An imported service’s renewal: its panel sells no plan it can renew from right now, and ' +
+      'no add-time package is offered either. A sentence, never an error (owner rule 2026-10-18).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.referral.screen',
     description:
       'RETIRED (R1): the single referral screen, which put the invite and the customer’s ' +
