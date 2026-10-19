@@ -422,7 +422,9 @@ export const FEATURE_FLAGS = [
       'is decorated exactly as before, by the appearance test alone. A rich message Telegram ' +
       'refuses is sent the ordinary way, so a refused premium emoji never costs the screen.',
     defaultEnabled: false,
-    blastRadius: 'LOCAL',
+    // TENANT_WIDE (PR #295 review): it changes every rich message every customer of the
+    // tenant receives from an eligible bot.
+    blastRadius: 'TENANT_WIDE',
     configuredBy: [],
   },
 ] as const satisfies readonly FeatureFlagDefinition[];
