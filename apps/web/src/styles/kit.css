@@ -1741,9 +1741,10 @@ textarea.input,
 
 /*
  * Liquid Glass: every tab strip is a glass rail of capsules, the chosen tab raised on
- * `--glass-hi` with the specular line. On a desk the rail wraps onto a second row as the
- * reference draws it; on a phone it stays one row and scrolls sideways, and `tab-strip.ts`
- * keeps the chosen tab in view inside it (B6).
+ * `--glass-hi` with the specular line. The rail WRAPS onto further rows at every width, as
+ * the demo's `.tabs{flex-wrap:wrap;overflow:visible}` does — on a phone too (Customer 360's
+ * nine tabs are two or three rows, every tab visible, none behind the edge). `tab-strip.ts`
+ * still keeps the chosen tab in view in a strip that scrolls (a vertical one).
  */
 .tabs {
   display: flex;
@@ -1761,10 +1762,9 @@ textarea.input,
   scrollbar-width: none;
   margin-bottom: 14px;
 }
-@media (min-width: 821px) {
-  .tabs:not(.vertical) {
-    flex-wrap: wrap;
-  }
+.tabs:not(.vertical) {
+  flex-wrap: wrap;
+  overflow-x: visible;
 }
 .tabs button {
   background: none;

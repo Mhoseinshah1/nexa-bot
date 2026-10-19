@@ -347,3 +347,12 @@ describe('page head — the action takes the full line on a phone, as the demo',
     expect(block).toMatch(/\.page-head \.actions \{\s*width: 100%;/);
   });
 });
+
+describe('tab strips — wrap at every width, as the demo’s .tabs', () => {
+  it('wraps a horizontal rail onto further rows on a phone too, without a sideways scroll', () => {
+    const css = rule(KIT_CSS, '.tabs:not(.vertical)');
+    expect(css).toContain('flex-wrap: wrap');
+    expect(css).toContain('overflow-x: visible');
+    expect(KIT_CSS).not.toMatch(/@media \(min-width: 821px\) \{\s*\.tabs:not\(\.vertical\)/);
+  });
+});
