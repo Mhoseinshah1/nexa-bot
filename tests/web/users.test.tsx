@@ -901,8 +901,10 @@ describe('the route table', () => {
     expect(orders.closest('a')?.getAttribute('href')).toBe(
       `/orders?q=${encodeURIComponent(ROW_ID)}`,
     );
+    // ALL (Track 3 §3): "every service of this customer" includes the ended ones, which the
+    // list's default LIVE tab would hide.
     expect(services.closest('a')?.getAttribute('href')).toBe(
-      `/services?q=${encodeURIComponent(ROW_ID)}`,
+      `/services?q=${encodeURIComponent(ROW_ID)}&lifecycle=ALL`,
     );
   });
 

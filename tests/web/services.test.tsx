@@ -1090,6 +1090,41 @@ describe('the lifecycle tabs', () => {
     expect(screen.getByRole('tab', { name: 'فعال' }).getAttribute('aria-selected')).toBe('true');
   });
 
+  /*
+   * Codex review of #291: a URL from before the tabs names a state and no tab. Defaulting it
+   * to LIVE turned `/services?state=TERMINATED` into an empty live list with its filter
+   * hidden; the tab is the state's own, and the page never sends a contradictory pair.
+   */
+  it('takes the tab from the state when the URL names none, or names one that contradicts it', async () => {
+    for (const [query, tab] of [
+      [{ state: 'TERMINATED' }, 'ENDED'],
+      [{ state: 'SUSPENDED' }, 'LIVE'],
+      [{ state: 'EXPIRED' }, 'LIVE'],
+      [{ lifecycle: 'LIVE', state: 'TERMINATED' }, 'ENDED'],
+      [{ lifecycle: 'ENDED', state: 'ACTIVE' }, 'LIVE'],
+      [{ lifecycle: 'ALL', state: 'TERMINATED' }, 'ALL'],
+      [{ lifecycle: 'ENDED', state: 'NOT_A_STATE' }, 'ENDED'],
+    ] as const) {
+      const api = stubApi(list([service()]));
+      const { unmount } = renderPage(
+        <ServicesPage
+          route={{ path: '/services', query: new URLSearchParams(query) }}
+          denied={false}
+        />,
+      );
+      await screen.findByText('nx-7f3a91');
+      const sent = listParams(api.calls);
+      expect(
+        sent.map((params) => params.get('lifecycle')),
+        JSON.stringify(query),
+      ).toEqual([tab]);
+      expect(screen.getByRole('tab', { selected: true }).textContent).toBe(
+        { LIVE: 'فعال', ENDED: 'پایان‌یافته', ALL: 'همه' }[tab],
+      );
+      unmount();
+    }
+  });
+
   it('reads the tab from the URL and asks the server for exactly it', async () => {
     for (const lifecycle of ['ENDED', 'ALL'] as const) {
       const api = stubApi(list([service({ state: 'TERMINATED' })]));

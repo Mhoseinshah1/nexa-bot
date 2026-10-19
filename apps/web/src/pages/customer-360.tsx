@@ -1147,8 +1147,9 @@ function CustomerServicesCard({
     <Card
       title={t('web.user_services_title')}
       hint={t('web.user_services_hint')}
+      // ALL: the link says "every service of this customer", ended ones included.
       actions={
-        <a href={`/services?q=${encodeURIComponent(customerId)}`} onClick={onLink}>
+        <a href={`/services?q=${encodeURIComponent(customerId)}&lifecycle=ALL`} onClick={onLink}>
           {t('web.user_services_all')}
         </a>
       }

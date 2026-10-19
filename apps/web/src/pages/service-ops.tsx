@@ -89,10 +89,22 @@ export const LIFECYCLE_STATES: Readonly<Record<ServiceListLifecycle, readonly Se
   ALL: SERVICE_STATES,
 };
 
-/** The tab the URL names (`?lifecycle=`); none, or one the contract does not know, is LIVE. */
+/**
+ * The tab a URL stands for, and never one that contradicts its state filter.
+ *
+ * The tab is `?lifecycle=`; with none (or one the contract does not know) a known `?state=`
+ * decides it — a terminal state is ENDED, any other LIVE — so a bookmark or link from before
+ * the tabs (`/services?state=TERMINATED`) still shows what it named instead of an empty LIVE
+ * list with its filter hidden. A tab that cannot show the URL's state (a hand-edited
+ * `?lifecycle=LIVE&state=TERMINATED`) yields to the state, the more specific of the two, so
+ * the page never asks the server for a set that is empty by construction. With neither, LIVE.
+ */
 export function lifecycleOf(route: Route): ServiceListLifecycle {
-  const raw = route.query.get('lifecycle');
-  return SERVICE_LIST_LIFECYCLES.find((one) => one === raw) ?? 'LIVE';
+  const raw = SERVICE_LIST_LIFECYCLES.find((one) => one === route.query.get('lifecycle'));
+  const state = SERVICE_STATES.find((one) => one === route.query.get('state'));
+  if (state === undefined) return raw ?? 'LIVE';
+  if (raw !== undefined && LIFECYCLE_STATES[raw].includes(state)) return raw;
+  return LIFECYCLE_STATES.ENDED.includes(state) ? 'ENDED' : 'LIVE';
 }
 
 /** The workspace's filters, as the URL holds them. */
