@@ -2,8 +2,6 @@ import { useState, type FormEvent } from 'react';
 import { ListFilterBar } from '../ui/filter-bar';
 import { Drawer, Modal } from '../ui/overlays';
 import { chipFilter } from './money-filters';
-import { SourceBadge } from '../ui/source-badge';
-import { sourceStateFilter } from './record-source';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -13,7 +11,6 @@ import {
   type CurrencyCode,
   type MoneyWire,
   type PricingStep,
-  type RecordSource,
   type ResellerOverrideMode,
   type ResellerPriceLayer,
   type ResellerPricingMode,
@@ -202,7 +199,6 @@ function ResellerCell({ reseller }: { reseller: ResellerSummaryResponse }) {
         >
           {reseller.displayName ?? <Ltr>{reseller.telegramUserId}</Ltr>}
         </a>
-        <SourceBadge source={reseller.source} />
         {reseller.displayName !== null && (
           <div className="muted small">
             <Ltr>{reseller.telegramUserId}</Ltr>
@@ -292,8 +288,7 @@ export function ResellersPage({
 
   const [status, setStatus] = useState<StatusFilter>('ALL');
   const [tierId, setTierId] = useState('');
-  const [source, setSource] = useState<RecordSource | null>(null);
-  const signature = `${applied}|${status}|${tierId}|${source ?? ''}`;
+  const signature = `${applied}|${status}|${tierId}`;
   const trail = useTrail(signature);
 
   const tiers = useQuery({
@@ -312,7 +307,6 @@ export function ResellersPage({
           ...(trail.cursor === undefined ? {} : { cursor: trail.cursor }),
           ...(status === 'ALL' ? {} : { status }),
           ...(tierId === '' ? {} : { tierId }),
-          ...(source === null ? {} : { source }),
           ...(applied === '' ? {} : { search: applied }),
         }),
       enabled: !denied,
@@ -320,7 +314,7 @@ export function ResellersPage({
   );
   const rows = resellers.data?.resellers ?? [];
   const nextCursor = resellers.data?.nextCursor ?? null;
-  const filtered = applied !== '' || status !== 'ALL' || tierId !== '' || source !== null;
+  const filtered = applied !== '' || status !== 'ALL' || tierId !== '';
 
   /** The reseller whose edit form is open, as the server last described it. */
   const [editing, setEditing] = useState<ResellerSummaryResponse | null>(null);
@@ -510,6 +504,7 @@ export function ResellersPage({
                     id="resellers-search"
                     className="input"
                     type="search"
+                    dir="rtl"
                     value={draft.value}
                     maxLength={64}
                     placeholder={t('web.resellers_search_hint')}
@@ -567,7 +562,6 @@ export function ResellersPage({
                   label: t(RESELLER_STATUS_LABELS[one]),
                 })),
               }),
-              sourceStateFilter(source, setSource),
             ]}
           />
         </div>

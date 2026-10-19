@@ -8,7 +8,7 @@ import { resolve } from '../../apps/web/src/app';
 import { categoryListing, order, panel, product, renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
+import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
 
 /**
  * Products and Orders, rendered against the shapes the server actually returns.
@@ -1145,56 +1145,33 @@ describe('rows imported from Mirza', () => {
     source: 'MIRZA',
   });
 
-  it('marks only the imported product', async () => {
+  it('marks no product as imported (Round 4 B2)', async () => {
     stubApi(productList([NATIVE_PRODUCT, IMPORTED_PRODUCT]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
     await screen.findByText('پلن میرزا');
-    expect(rowHasBadge('پلن میرزا')).toBe(true);
+    expect(rowHasBadge('پلن میرزا')).toBe(false);
     expect(rowHasBadge('پلن بومی')).toBe(false);
   });
 
-  it('marks only the imported order', async () => {
+  it('marks no order as imported (Round 4 B2)', async () => {
     stubApi(orderList([NATIVE_ORDER, IMPORTED_ORDER]));
     renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
     await screen.findByText('سفارش میرزا');
-    expect(rowHasBadge('سفارش میرزا')).toBe(true);
+    expect(rowHasBadge('سفارش میرزا')).toBe(false);
     expect(rowHasBadge('سفارش بومی')).toBe(false);
   });
 
-  it('sends the products «منبع» filter', async () => {
-    window.history.replaceState(null, '', '/products');
+  it('has no products «منبع» filter (Round 4 B2)', async () => {
     stubApi(productList([NATIVE_PRODUCT, IMPORTED_PRODUCT]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
     await screen.findByText('پلن بومی');
-    pickMirzaSource();
-    expect(await sourceInUrl()).toBe('MIRZA');
-
-    const again = stubApi(productList([IMPORTED_PRODUCT]));
-    renderPage(
-      <ProductsPage
-        route={{ path: '/products', query: new URLSearchParams({ source: 'MIRZA' }) }}
-        mayEdit
-        denied={false}
-      />,
-    );
-    await waitFor(() => expect(requestsWithSource(again.calls, '/products', 'MIRZA')).toBe(1));
+    expect(sourceFilterAbsent()).toBe(true);
   });
 
-  it('sends the orders «منبع» filter', async () => {
-    window.history.replaceState(null, '', '/orders');
+  it('has no orders «منبع» filter (Round 4 B2)', async () => {
     stubApi(orderList([NATIVE_ORDER, IMPORTED_ORDER]));
     renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
     await screen.findByText('سفارش بومی');
-    pickMirzaSource();
-    expect(await sourceInUrl()).toBe('MIRZA');
-
-    const again = stubApi(orderList([IMPORTED_ORDER]));
-    renderPage(
-      <OrdersPage
-        route={{ path: '/orders', query: new URLSearchParams({ source: 'MIRZA' }) }}
-        denied={false}
-      />,
-    );
-    await waitFor(() => expect(requestsWithSource(again.calls, '/orders', 'MIRZA')).toBe(1));
+    expect(sourceFilterAbsent()).toBe(true);
   });
 });
