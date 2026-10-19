@@ -6,7 +6,7 @@ import { TelegramPhone } from '../telegram-phone';
 export interface RichPreviewButton {
   readonly key: string;
   readonly label: string;
-  readonly style: InlineButtonStyle;
+  readonly look: InlineButtonStyle;
   /** A premium icon is set for it (and its id is valid). */
   readonly icon: boolean;
 }
@@ -41,7 +41,7 @@ export function RichModePreview({
   const key = (one: RichPreviewButton) => (
     <span
       key={one.key}
-      className={`menu-preview-key ib-preview bb-style-${one.style}`}
+      className={`menu-preview-key ib-preview bb-style-${one.look}`}
       data-testid="ib-rich-preview-key"
     >
       {drawIcons && one.icon && (

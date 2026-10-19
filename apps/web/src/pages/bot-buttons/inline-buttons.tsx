@@ -644,7 +644,7 @@ export function InlineButtonsSection({
           buttons={shown.slice(0, 4).map((entry) => ({
             key: entry.key,
             label: templateOf(entry.label)?.body ?? t(INLINE_BUTTON_NAME[entry.key]),
-            style: inlineButtonStyleOf(entry.key, current),
+            look: inlineButtonStyleOf(entry.key, current),
             icon:
               inlineButtonIconOf(entry.key, canonicalIcons(currentIcons)) !== null &&
               !badIcons.includes(entry.key),
