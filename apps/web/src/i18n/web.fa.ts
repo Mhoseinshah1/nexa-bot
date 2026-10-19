@@ -2295,6 +2295,7 @@ export const WEB_FA = {
   'web.payment_ops_signal_create': 'ساخت فاکتور',
   'web.payment_ops_actions': 'اقدام',
   'web.payment_ops_open': 'باز کردن',
+  'web.payment_row_detail': 'جزئیات این پرداخت',
   'web.payment_ops_no_force_paid':
     'تأیید یک پرداخت فقط از راه تسویه و با مدرک انجام می‌شود. برای نامعلوم‌ها «استعلام دوباره» و سپس تطبیق در صفحهٔ پرداخت؛ برای برگشت پول، کارت بازپرداخت همان صفحه.',
   'web.payment_confirm_title': 'بررسی رسید',

@@ -643,3 +643,16 @@
     backdrop-filter: none;
   }
 }
+
+/* A payment row's detail (demo parity X9): the facts beside the row's actions, one line. */
+.pay-row-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 22px;
+}
+.pay-signal-action {
+  display: block;
+  margin-block-start: 4px;
+}

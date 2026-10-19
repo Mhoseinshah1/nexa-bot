@@ -963,7 +963,20 @@ export function PaymentsPage({
       key: 'signal',
       header: t('web.payment_ops_signal'),
       wrap: true,
-      render: (row) => <SignalCell row={row} />,
+      /*
+       * "Ask the provider again" sits under what the provider last said, the answer it asks
+       * for: on the row, never behind its detail, because an UNKNOWN is what the queue is for.
+       */
+      render: (row) => (
+        <>
+          <SignalCell row={row} />
+          {mayReconcile && row.state === 'UNKNOWN' && row.method === 'GATEWAY' && (
+            <span className="pay-signal-action">
+              <ReinquireButton paymentId={row.id} />
+            </span>
+          )}
+        </>
+      ),
     },
     {
       key: 'amount',
@@ -971,76 +984,84 @@ export function PaymentsPage({
       align: 'end',
       render: (row) => <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
     },
-    {
-      // Who paid, by their Telegram numeric id (spec §10), as the link.
-      key: 'customer',
-      header: t('web.payment_customer'),
-      render: (row) => (
-        <CustomerIdentityLink
-          customerId={row.customerId}
-          telegramUserId={row.customerTelegramUserId}
-          username={row.customerUsername}
-          onLink={onLink}
-        />
-      ),
-    },
-    {
-      key: 'order',
-      header: t('web.payment_order'),
-      // No order means a WALLET TOP-UP, and saying so is the point.
-      render: (row) =>
-        row.orderId === null ? (
-          <span className="muted small">{t('web.payment_topup')}</span>
-        ) : (
-          <a href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
-            <Ltr>{row.orderId.slice(0, 8)}</Ltr>
-          </a>
-        ),
-    },
-    {
-      // The customer's own claim: not a state and not evidence.
-      key: 'signalled',
-      header: t('web.payment_customer_signalled'),
-      render: (row) =>
-        row.customerSignalledAt === null ? (
-          <Dash />
-        ) : (
-          <span className="nowrap">{formatTimestamp(row.customerSignalledAt)}</span>
-        ),
-    },
-    {
-      key: 'external',
-      header: t('web.payment_external_reference'),
-      render: (row) =>
-        row.externalReference === null ? <Dash /> : <Ltr>{row.externalReference}</Ltr>,
-    },
-    {
-      key: 'created',
-      header: t('web.payment_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
-    },
-    {
-      key: 'updated',
-      header: t('web.payment_updated_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.updatedAt)}</span>,
-    },
-    {
-      key: 'actions',
-      header: t('web.payment_ops_actions'),
-      render: (row) => (
-        <span className="nowrap">
-          {mayReconcile && row.state === 'UNKNOWN' && row.method === 'GATEWAY' && (
-            <>
-              <ReinquireButton paymentId={row.id} />{' '}
-            </>
-          )}
-          <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink}>
-            {t('web.payment_ops_open')}
-          </a>
-        </span>
-      ),
-    },
   ];
+
+  /*
+   * Demo parity X9: the list shows the reference's nine columns, as the demo draws them at
+   * 1440; the rest of what a row says — who paid, the order, the customer's own claim, the
+   * gateway's external reference, both times and the row's actions — is its DETAIL, one
+   * toggle away on the same line. Nothing is dropped: every fact the columns used to carry is
+   * here, rendered the same way.
+   */
+  const rowDetail = (row: PaymentSummaryResponse) => (
+    <div className="pay-row-detail">
+      <KV
+        inline
+        items={[
+          [
+            // Who paid, by their Telegram numeric id (spec §10), as the link.
+            t('web.payment_customer'),
+            <CustomerIdentityLink
+              key="customer"
+              customerId={row.customerId}
+              telegramUserId={row.customerTelegramUserId}
+              username={row.customerUsername}
+              onLink={onLink}
+            />,
+          ],
+          [
+            t('web.payment_order'),
+            // No order means a WALLET TOP-UP, and saying so is the point.
+            row.orderId === null ? (
+              <span key="order" className="muted small">
+                {t('web.payment_topup')}
+              </span>
+            ) : (
+              <a key="order" href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
+                <Ltr>{row.orderId.slice(0, 8)}</Ltr>
+              </a>
+            ),
+          ],
+          [
+            // The customer's own claim: not a state and not evidence.
+            t('web.payment_customer_signalled'),
+            row.customerSignalledAt === null ? (
+              <Dash key="signalled" />
+            ) : (
+              <span key="signalled" className="nowrap" data-testid="payment-signalled">
+                {formatTimestamp(row.customerSignalledAt)}
+              </span>
+            ),
+          ],
+          [
+            t('web.payment_external_reference'),
+            row.externalReference === null ? (
+              <Dash key="external" />
+            ) : (
+              <Ltr key="external">{row.externalReference}</Ltr>
+            ),
+          ],
+          [
+            t('web.payment_created_at'),
+            <span key="created" className="nowrap">
+              {formatTimestamp(row.createdAt)}
+            </span>,
+          ],
+          [
+            t('web.payment_updated_at'),
+            <span key="updated" className="nowrap">
+              {formatTimestamp(row.updatedAt)}
+            </span>,
+          ],
+        ]}
+      />
+      <span className="row-actions">
+        <a className="btn sm" href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink}>
+          {t('web.payment_ops_open')}
+        </a>
+      </span>
+    </div>
+  );
 
   // Hidden while the list cannot answer: a control that mints a new query key is
   // a fresh request against a question the server has just refused.
@@ -1155,6 +1176,7 @@ export function PaymentsPage({
                 rowKey={(row) => row.id}
                 dense
                 sticky
+                detail={{ label: t('web.payment_row_detail'), render: rowDetail }}
               />
               {/* An ascending keyset (created_at, id) with the cursor in the URL: "newer" is
                   the next page, and "older" returns to the first. */}
