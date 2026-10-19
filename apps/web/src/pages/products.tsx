@@ -692,7 +692,6 @@ export function ProductsPage({
             }
           >
             <DataTable
-              stack
               caption={t('web.products_title')}
               columns={columns}
               rows={rows}
