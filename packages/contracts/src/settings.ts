@@ -32,6 +32,10 @@ import {
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
   BACKUP_SCHEDULE_SETTING_KEYS,
+  BACKUP_LOCAL_COPIES_DEFAULT,
+  BACKUP_LOCAL_COPIES_MAX,
+  BACKUP_LOCAL_COPIES_MIN,
+  BACKUP_LOCAL_COPIES_SETTING_KEY,
 } from './backup.js';
 import { uuidV7Schema } from './ids.js';
 import { connectionFileCaptionTemplateIssues } from './templates.js';
@@ -504,6 +508,26 @@ export const SETTINGS = [
     schema: z.number().int().min(BACKUP_ARCHIVE_KEEP_DAYS_MIN).max(BACKUP_ARCHIVE_KEEP_DAYS_MAX),
     defaultValue: BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /**
+   * E4: how many DELIVERED local copies stay. A run's directory goes only once every part
+   * has a recorded Telegram message id, and only outside the newest N such runs. Zero keeps
+   * none: the Telegram parts are then the only copy.
+   */
+  {
+    key: BACKUP_LOCAL_COPIES_SETTING_KEY,
+    description:
+      'How many backups that were delivered to Telegram in full (every part has a message id) ' +
+      `also stay on the server, between ${String(BACKUP_LOCAL_COPIES_MIN)} and ` +
+      `${String(BACKUP_LOCAL_COPIES_MAX)}. 0 keeps none. A backup whose delivery failed or is ` +
+      'unknown is never removed by this rule.',
+    schema: z.number().int().min(BACKUP_LOCAL_COPIES_MIN).max(BACKUP_LOCAL_COPIES_MAX),
+    defaultValue: BACKUP_LOCAL_COPIES_DEFAULT,
+    zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,

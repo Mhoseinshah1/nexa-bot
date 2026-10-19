@@ -275,6 +275,7 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
   // The archive did not leave the host, plaintext was left behind, the backup volume is
   // nearly full, or the schedule has stopped producing verified backups.
   { code: 'backup.delivery_failed', category: 'BACKUPS', link: 'RECOVERY', minSeverity: 'WARN' },
+  { code: 'backup.delivery_partial', category: 'BACKUPS', link: 'RECOVERY', minSeverity: 'WARN' },
   { code: 'backup.cleanup_failed', category: 'BACKUPS', link: 'RECOVERY', minSeverity: 'WARN' },
   {
     code: 'backup.disk_threshold_exceeded',

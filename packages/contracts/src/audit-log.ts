@@ -80,6 +80,8 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   'admin.sessions_revoked': ['admins.edit'],
   'backup.download': ['backup.download'],
   'backup.archive_downloaded': ['backup.download'],
+  // E4: whoever sets the backup password decides what every future archive opens with.
+  'backup.archive_password_set': ['backup.download'],
   'recovery.confirm': ['recovery.restore'],
   'recovery.confirmed': ['recovery.restore'],
   'recovery_kit.exported': ['recovery.kit.export'],

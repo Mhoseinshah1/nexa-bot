@@ -463,6 +463,10 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   recovery('backup.run_ok', 'BACKUPS', 'backup.run_failed'),
   failure('backup.delivery_failed', 'BACKUPS', 'CONDITION'),
   recovery('backup.delivery_ok', 'BACKUPS', 'backup.delivery_failed'),
+  // E4: some parts of a split archive reached Telegram and some did not — the copy that
+  // left the host is incomplete. Its own condition, routed to ERRORS (`OPS_LOG_TOPIC_ROUTES`).
+  failure('backup.delivery_partial', 'BACKUPS', 'CONDITION'),
+  recovery('backup.delivery_partial_ok', 'BACKUPS', 'backup.delivery_partial'),
   failure('backup.cleanup_failed', 'BACKUPS', 'CONDITION'),
   recovery('backup.cleanup_ok', 'BACKUPS', 'backup.cleanup_failed'),
   failure('backup.disk_threshold_exceeded', 'BACKUPS', 'CONDITION'),

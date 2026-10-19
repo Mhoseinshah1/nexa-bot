@@ -329,6 +329,11 @@ export const PLATFORM_ERROR_CODES = {
    * would be worse than saying so.
    */
   BACKUP_ALREADY_RUNNING: 'backup.already_running',
+  /** E4: a backup password that 7-Zip could not be handed on one line (a control character). */
+  BACKUP_ARCHIVE_PASSWORD_INVALID: 'backup.archive_password_invalid',
+  /** E4: the account-password step-up for setting the backup password was not accepted. */
+  BACKUP_ARCHIVE_PASSWORD_REAUTHENTICATION_FAILED:
+    'backup.archive_password_reauthentication_failed',
 
   /**
    * A recovery refused something, and the response says only which class.

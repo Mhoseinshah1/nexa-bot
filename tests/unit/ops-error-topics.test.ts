@@ -103,6 +103,9 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'backup.run_ok': 'BACKUPS',
   'backup.delivery_failed': 'BACKUPS',
   'backup.delivery_ok': 'BACKUPS',
+  // E4: a split archive delivered only in part is reported in ERRORS, not beside its parts.
+  'backup.delivery_partial': 'ERRORS',
+  'backup.delivery_partial_ok': 'ERRORS',
   'backup.cleanup_failed': 'BACKUPS',
   'backup.cleanup_ok': 'BACKUPS',
   'backup.disk_threshold_exceeded': 'BACKUPS',

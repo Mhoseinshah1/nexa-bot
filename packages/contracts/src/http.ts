@@ -201,6 +201,9 @@ import {
   BACKUP_TRIGGERS,
   BACKUP_DELIVERY_DESTINATIONS,
   BACKUP_SCHEDULE_SOURCES,
+  BACKUP_ARCHIVE_FORMATS,
+  BACKUP_ARCHIVE_PASSWORD_MAX_LENGTH,
+  BACKUP_ARCHIVE_PASSWORD_MIN_LENGTH,
 } from './backup.js';
 import {
   RECOVERY_CONFIRMATION_PHRASE,
@@ -6485,6 +6488,23 @@ export const backupRunSummarySchema = z.object({
   cleanupLeftovers: z.number().int().nonnegative(),
   /** Whether the encrypted archive is still on this host and downloadable. */
   archiveAvailable: z.boolean(),
+  /** The container (E4). A run before this release is `NXB`. */
+  archiveFormat: z.enum(BACKUP_ARCHIVE_FORMATS),
+  /** How many parts the archive was delivered in, or null before it was split. */
+  partCount: z.number().int().nonnegative().nullable(),
+  /** How many parts carry a recorded Telegram message id. */
+  partsDelivered: z.number().int().nonnegative(),
+  /** Each part's own delivery outcome, in order (E4). Never a path, never a message id. */
+  parts: z.array(
+    z.object({
+      partNumber: z.number().int().positive(),
+      bytes: z.string(),
+      sha256: z.string(),
+      deliveryState: z.enum(BACKUP_DELIVERY_STATES),
+    }),
+  ),
+  /** The summary message's outcome, or null when none was owed or sent. */
+  summaryDeliveryState: z.enum(BACKUP_DELIVERY_STATES).nullable(),
 });
 export type BackupRunSummary = z.infer<typeof backupRunSummarySchema>;
 
@@ -6524,8 +6544,59 @@ export const backupStatusResponseSchema = z.object({
   unknownDeliveries: z.number().int().nonnegative(),
   /** Whether a destructive recovery currently refuses new durable writes. */
   quiesced: z.boolean(),
+  /**
+   * Whether an owner-set backup password is stored (E4), and since when. NEVER the password:
+   * once stored it is not shown again. Without one, archives stay in the keyring `NXB` format.
+   */
+  archivePassword: z.object({
+    configured: z.boolean(),
+    setAt: z.iso.datetime().nullable(),
+  }),
 });
 export type BackupStatusResponse = z.infer<typeof backupStatusResponseSchema>;
+
+/**
+ * Sets (or replaces) the owner's backup password (E4).
+ *
+ * Typed twice, and behind the account-password step-up the Recovery Kit uses: whoever sets
+ * it decides what every future archive opens with. Stored with `SecretCipher`; the response
+ * says only that it is set. A replaced password is kept (superseded, never shown) so the
+ * archives it sealed still open on this server.
+ */
+export const setBackupArchivePasswordRequestSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    password: z
+      .string()
+      .min(BACKUP_ARCHIVE_PASSWORD_MIN_LENGTH)
+      .max(BACKUP_ARCHIVE_PASSWORD_MAX_LENGTH),
+    confirmation: z.string().max(BACKUP_ARCHIVE_PASSWORD_MAX_LENGTH),
+    stepUp: stepUpSchema,
+  })
+  .refine((value) => value.password === value.confirmation, {
+    message: 'The two passwords do not match.',
+    path: ['confirmation'],
+  });
+export type SetBackupArchivePasswordRequest = z.infer<typeof setBackupArchivePasswordRequestSchema>;
+
+export const setBackupArchivePasswordResponseSchema = z.object({
+  archivePassword: z.object({ configured: z.literal(true), setAt: z.iso.datetime() }),
+});
+export type SetBackupArchivePasswordResponse = z.infer<
+  typeof setBackupArchivePasswordResponseSchema
+>;
+
+/**
+ * The verify request's optional body (E4): the password of an uploaded 7-Zip archive.
+ * Absent for a `.nxb`, and for a 7-Zip archive this installation's own stored passwords
+ * open. Used for this one verification, never stored and never echoed.
+ */
+export const recoveryVerifyRequestSchema = z
+  .object({
+    archivePassword: z.string().min(1).max(BACKUP_ARCHIVE_PASSWORD_MAX_LENGTH).optional(),
+  })
+  .default({});
+export type RecoveryVerifyRequest = z.infer<typeof recoveryVerifyRequestSchema>;
 
 export const runBackupRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
@@ -6632,6 +6703,10 @@ export const BACKUP_ROUTES = {
   detail: (id: string) => `/backups/${encodeURIComponent(id)}`,
   run: '/backups/run',
   download: (id: string) => `/backups/${encodeURIComponent(id)}/archive`,
+  /** One part of a split 7-Zip archive (E4); `part` is 1-based. */
+  downloadPart: (id: string, part: number) =>
+    `/backups/${encodeURIComponent(id)}/archive?part=${String(part)}`,
+  archivePassword: '/backups/archive-password',
 } as const;
 
 export const RECOVERY_ROUTES = {

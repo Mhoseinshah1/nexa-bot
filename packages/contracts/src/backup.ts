@@ -343,3 +343,53 @@ export type BackupScheduleSource = (typeof BACKUP_SCHEDULE_SOURCES)[number];
  */
 export const BACKUP_DELIVERY_DESTINATIONS = ['OPS_GROUP_TOPIC', 'DEDICATED_CHAT', 'NONE'] as const;
 export type BackupDeliveryDestination = (typeof BACKUP_DELIVERY_DESTINATIONS)[number];
+
+// ---------------------------------------------------------------------------
+// Round 4 PR-E (E4): the 7-Zip archive, its parts and the local copies
+// ---------------------------------------------------------------------------
+
+/**
+ * Which container a run's archive is in.
+ *
+ * - `NXB`: the original `NEXABAK1` container (AES-256-GCM under the installation keyring).
+ *   Still written when no backup password is set, and still read for ever.
+ * - `SEVEN_ZIP`: a 7z archive, LZMA2 inside, AES-256 with ENCRYPTED HEADERS (`-mhe=on`),
+ *   sealed under the owner-set backup password. Opens in 7-Zip on Windows with that
+ *   password alone. Holds the dump and its manifest (with the dump's SHA-256).
+ *
+ * A null on an old row means `NXB`: every run before this release wrote one.
+ */
+export const BACKUP_ARCHIVE_FORMATS = ['NXB', 'SEVEN_ZIP'] as const;
+export type BackupArchiveFormat = (typeof BACKUP_ARCHIVE_FORMATS)[number];
+
+/**
+ * The largest part a backup is delivered in: 45 MiB, under Telegram's 50 MiB bot ceiling
+ * with room for the multipart envelope. An archive above it is split into byte-exact
+ * volumes `….001`, `….002`… — which is precisely 7-Zip's own multi-volume layout, so the
+ * `.001` opens directly in 7-Zip and `cat` of every part, in order, is the archive.
+ */
+export const BACKUP_PART_MAX_BYTES = 45 * 1024 * 1024;
+
+/** The owner-set backup password's bounds. Long, because it is the archive's only key. */
+export const BACKUP_ARCHIVE_PASSWORD_MIN_LENGTH = 12;
+export const BACKUP_ARCHIVE_PASSWORD_MAX_LENGTH = 256;
+
+/**
+ * How many DELIVERED local copies stay on the server (E4).
+ *
+ * A run's local directory is removed by this rule only once EVERY part has a recorded
+ * Telegram `message_id`, and then only outside the newest N such runs. Zero is allowed:
+ * the Telegram copy is then the only one. A run whose delivery failed or is unknown is
+ * never removed by this rule (the archive-retention keys above still apply to it).
+ */
+export const BACKUP_LOCAL_COPIES_SETTING_KEY = 'backup.local_copies_keep';
+export const BACKUP_LOCAL_COPIES_MIN = 0;
+export const BACKUP_LOCAL_COPIES_MAX = 100;
+export const BACKUP_LOCAL_COPIES_DEFAULT = 1;
+
+/**
+ * The restore instruction the summary message carries, word for word as the owner
+ * asked (spec §1 PR-E, E4). Operator-facing, posted in the BACKUPS topic only.
+ */
+export const BACKUP_SEVEN_ZIP_RESTORE_INSTRUCTION =
+  'همهٔ بخش‌ها را در یک پوشه بگذارید و فایل ‎.001 را با 7-Zip باز کنید';
