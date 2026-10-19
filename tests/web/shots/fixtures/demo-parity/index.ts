@@ -5,6 +5,7 @@ import { DEMO_SERVICES_FAMILY } from './services.ts';
 import { DEMO_CUSTOMERS_FAMILY } from './customers.ts';
 import { DEMO_SUPPORT_FAMILY } from './support.ts';
 import { DEMO_INFRA } from './infra.ts';
+import { DEMO_FINANCE } from './finance.ts';
 
 /*
  * The DEMO-PARITY fixture sets (PROMPT.md §D-3): the app fed the approved demo's own
@@ -24,6 +25,7 @@ export const DEMO_PARITY: readonly ShotFixture[] = [
   ...DEMO_CUSTOMERS_FAMILY,
   ...DEMO_SUPPORT_FAMILY,
   ...DEMO_INFRA,
+  ...DEMO_FINANCE,
 ];
 
 /** The demo's EMPTY dashboard: nothing in the period, nothing waiting. */

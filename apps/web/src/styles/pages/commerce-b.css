@@ -27,6 +27,11 @@
   gap: 10px;
   align-items: flex-end;
 }
+/* Demo parity: the period is a full-width segmented track, its options from the start side. */
+.report-range > .btn-group.segmented {
+  flex: 1 1 100%;
+  justify-content: flex-start;
+}
 .kpi-money,
 .money-line {
   display: flex;
@@ -315,8 +320,23 @@
   gap: 3px;
   min-width: 120px;
 }
+/* Demo parity: a 2×2 grid — order type and product, then customer id and discount code. */
 .discounts-preview-inputs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+/* A discount rule's actions, stacked as the demo's: the pencil above the switch. */
+.discounts-row-actions {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+/* In a phone card the demo lays them side by side. */
+@media (max-width: 820px) {
+  .tbl-wrap.stack .discounts-row-actions {
+    flex-direction: row;
+    align-items: center;
+  }
 }
 /* The quote beside the rules it was decided by. */
 .discounts-preview-result {
@@ -328,9 +348,6 @@
   padding-top: 14px;
 }
 @media (max-width: 1200px) {
-  .discounts-preview-inputs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .discounts-preview-result {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -394,6 +411,15 @@
 
 .cb-stat-row {
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+/* Demo parity (X6): the progress strip is four equal cards across the card's full width. */
+.cb-stat-row.minimum-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 640px) {
+  .cb-stat-row.minimum-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .cb-progress-cell {
   display: inline-flex;
@@ -546,6 +572,20 @@
 .resellers-foot {
   align-items: start;
 }
+/* Demo parity: the rules card is half the page's width, on the start side. */
+.resellers-foot > .card {
+  max-width: calc(50% - 8px);
+  margin-inline-end: auto;
+}
+@media (max-width: 980px) {
+  .resellers-foot > .card {
+    max-width: none;
+  }
+}
+/* Demo parity: the reseller search is the row's full width, its button beside it. */
+.cb-search.resellers-search {
+  max-width: none;
+}
 /* UX batch 01, item 9: the customer picker. Wraps at 390px; nothing scrolls sideways. */
 .customer-picker-bar {
   display: flex;
@@ -596,13 +636,21 @@
 .tiers-anchor:focus {
   outline: none;
 }
+/* Demo parity: one kind a line — product, category, panel, bot, purchase type — each with its pill. */
 .tiers-grants {
-  display: grid;
-  grid-template-columns: repeat(2, max-content);
-  gap: 2px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
 }
-.tiers-grants > .danger {
-  grid-column: 1 / -1;
+/* «سطح تازه»: the hint on the start side and «ساخت سطح» at the end, on one row (demo). */
+.tiers-form .cb-savebar {
+  flex-wrap: nowrap;
+}
+.tiers-form .cb-savebar > .tiers-form-hint {
+  order: -1;
+  flex: 1 1 0;
+  min-width: 0;
 }
 .tiers-foot {
   align-items: start;
@@ -618,6 +666,34 @@
 }
 .report-kpis {
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+/*
+ * Demo parity: the summary's six figures in one row (sales … renewals), then wallet top-up
+ * and active services; the referral analytics' five in one row. Narrower, three a row.
+ */
+.report-kpis.report-kpis-six {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.report-kpis.report-kpis-five {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+@media (max-width: 1200px) {
+  .report-kpis.report-kpis-six,
+  .report-kpis.report-kpis-five {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+/* On a phone the demo stacks them, one figure a row. */
+@media (max-width: 640px) {
+  .report-kpis.report-kpis-six,
+  .report-kpis.report-kpis-five {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* The ⓘ beside a label whose tile explains itself in its tooltip. */
+.report-kpi-info {
+  color: var(--fg-3);
+  vertical-align: -1px;
 }
 /* The tile keeps its tooltip wrapper; the card fills it. */
 .report-kpi > .card {
@@ -661,4 +737,13 @@
   .aud-segment {
     min-height: var(--ctl-h);
   }
+}
+@media (max-width: 640px) {
+  .tiers-form .cb-savebar {
+    flex-wrap: wrap;
+  }
+}
+/* A tier's row reads from its top line, beside the first of its five grant lines (demo). */
+.tiers-list .tbl td {
+  vertical-align: top;
 }

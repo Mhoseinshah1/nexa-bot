@@ -229,11 +229,14 @@ describe('the reseller plans page', () => {
     const api = stubApi(routes());
     render();
     await screen.findByText('Reza Reseller');
-    fireEvent.click(screen.getByRole('button', { name: 'ماه قبل' }));
+    // Demo parity: the card draws no month control of its own; the month is chosen in the
+    // «فیلترها» panel, beside the state (W1.3), and it is still the report's range.
+    expect(screen.queryByRole('button', { name: 'ماه قبل' })).toBeNull();
+    expect(gets(api, 'period=THIS_MONTH').length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'ماه قبل' }));
     await waitFor(() =>
       expect(gets(api, 'period=PREVIOUS_MONTH').length).toBeGreaterThanOrEqual(1),
     );
-    // W1.3: the state filter is in the «فیلترها» panel; the period stays a range chip.
     fireEvent.click(within(openFilterPanel()).getByRole('button', { name: 'رسیده به حداقل' }));
     await waitFor(() => expect(gets(api, 'filter=ACHIEVED').length).toBeGreaterThanOrEqual(1));
   });
