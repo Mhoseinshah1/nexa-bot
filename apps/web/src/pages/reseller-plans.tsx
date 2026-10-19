@@ -758,7 +758,7 @@ function MinimumProgressCard({
           {/*
             Demo parity: the progress card draws no segmented control of its own. The month is
             the report's range, chosen in the filter panel beside the state: this month unless
-            «ماه قبل» is picked, and clearing it returns to this month. The request is the same.
+            the previous month is picked, and clearing it returns to this month. The request is the same.
           */}
           <ListFilterBar
             label={t('web.reseller_minimum_progress_title')}

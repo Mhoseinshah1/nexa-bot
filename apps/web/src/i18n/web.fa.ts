@@ -2293,7 +2293,6 @@ export const WEB_FA = {
   'web.payment_ops_signal': 'آخرین پاسخ درگاه',
   'web.payment_ops_signal_inquiry_error': 'خطای استعلام',
   'web.payment_ops_signal_create': 'ساخت فاکتور',
-  'web.payment_ops_actions': 'اقدام',
   'web.payment_ops_open': 'باز کردن',
   'web.payment_row_detail': 'جزئیات این پرداخت',
   'web.referral_row_detail': 'جزئیات این پورسانت',
