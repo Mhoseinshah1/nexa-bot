@@ -1352,6 +1352,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.renew_option_button': '🔄 تمدید {title} — {price}',
   'bot.service.renew_unavailable':
     '{icon:warning} در حال حاضر گزینه‌ای برای تمدید این سرویس در دسترس نیست.',
+  'bot.service.renew_no_plan':
+    '{icon:warning} در حال حاضر هیچ پلنی برای تمدید این سرویس روی سرور آن موجود نیست.\nلطفاً کمی بعد دوباره سر بزنید یا با پشتیبانی در تماس باشید.',
   'bot.referral.screen':
     '💼 زیرمجموعه‌گیری\n\n📤 لینک دعوت اختصاصی خود را برای دوستانتان بفرستید. به ازای خرید کاربرانی که برای نخستین بار با لینک شما وارد ربات شوند، طبق شرایط برنامه {commissionPercent} درصد پورسانت پس از تحویل سرویس به کیف پول شما در ربات واریز می‌شود.\n\n{icon:link} {referralLink}\n\n{giftBlock}\n\n📊 آمار شما:\n• زیرمجموعه‌ها: {referralCount} نفر\n• خریدها: {referredPurchaseCount} عدد\n• مجموع خرید: {referredPurchaseTotal}\n• پورسانت دریافتی: {commissionReceivedTotal}',
   'bot.referral.gift_block':
