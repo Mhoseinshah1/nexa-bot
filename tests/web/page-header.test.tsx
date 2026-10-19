@@ -68,6 +68,17 @@ describe('the breadcrumb is derived from the navigation (X1)', () => {
     ]);
   });
 
+  it('names the menu entry where the demo does, not a longer page title', () => {
+    expect(trailOf('/payments').map((crumb) => crumb.label)).toEqual([
+      t('web.navgroup_finance'),
+      t('web.nav_payments'),
+    ]);
+    expect(trailOf('/reseller-plans').map((crumb) => crumb.label)).toEqual([
+      t('web.navgroup_resellers'),
+      t('web.nav_reseller_plans'),
+    ]);
+  });
+
   it('goes group / list / detail on a page under a list, the list a link back', () => {
     const trail = trailOf(`/services/${SAMPLE_ID}`);
     expect(trail.map((crumb) => crumb.label)).toEqual([
