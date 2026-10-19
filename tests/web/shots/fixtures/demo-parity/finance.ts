@@ -1,4 +1,6 @@
 import {
+  fxStatusResponseSchema,
+  paymentGatewayListResponseSchema,
   paymentListResponseSchema,
   paymentSituationOf,
   type PaymentSituationFacts,
@@ -185,4 +187,172 @@ const PAYMENTS: readonly ShotFixture[] = [
   }),
 ];
 
-export const DEMO_FINANCE: readonly ShotFixture[] = [...PAYMENTS];
+// --- payment methods (`#/payment-gateways`) -----------------------------------
+
+function route(over: Json): Json {
+  return {
+    status: 'ACTIVE',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    customerFeeBasisPoints: 0,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    credential: { required: false, setAt: null },
+    callbackUrl: null,
+    conversion: { rateRequired: false, rateMinor: null },
+    createdAt: ago(60 * 24 * 60),
+    updatedAt: ago(60 * 24 * 3),
+    ...over,
+  };
+}
+
+/** The demo's six routes: keys set, an IPN secret, a passed check, a missing verify key. */
+const GATEWAYS: readonly ShotFixture[] = [
+  fixture('/payment-gateways', paymentGatewayListResponseSchema, {
+    gateways: [
+      route({
+        provider: 'MANUAL_TRANSFER',
+        minAmountMinor: '50000',
+        maxAmountMinor: '20000000',
+        updatedAt: ago(60 * 24 * 3 + 60),
+      }),
+      route({
+        provider: 'TONPAYS',
+        displayName: 'پرداخت آنلاین (شتاب)',
+        minAmountMinor: '100000',
+        topupCashbackPercent: 2,
+        credential: { required: true, setAt: ago(60 * 24 * 12) },
+        callbackUrl: 'https://admin.nexa.example/api/payments/tonpays/callback',
+        sortOrder: 1,
+        updatedAt: ago(60 * 24 * 4),
+      }),
+      route({
+        provider: 'TELEGRAM_STARS',
+        allowWalletTopup: false,
+        eligibility: {
+          activateAfterPayments: 1,
+          deactivateAfterPayments: 0,
+          activateAfterAccountDays: 0,
+        },
+        sortOrder: 2,
+        updatedAt: ago(60 * 24 * 7),
+      }),
+      route({
+        provider: 'TONPAYS_TELEGRAM',
+        status: 'DISABLED',
+        credential: { required: true, setAt: null },
+        sortOrder: 3,
+        updatedAt: ago(60 * 24 * 10),
+      }),
+      route({
+        provider: 'NOWPAYMENTS',
+        displayName: 'ارز دیجیتال (تتر و ترون)',
+        minAmountMinor: '300000',
+        customerFeeBasisPoints: 150,
+        eligibility: {
+          activateAfterPayments: 2,
+          deactivateAfterPayments: 0,
+          activateAfterAccountDays: 7,
+        },
+        credential: {
+          required: true,
+          setAt: ago(60 * 24 * 9),
+          webhookSecretRequired: true,
+          webhookSecretSetAt: ago(60 * 24 * 9 - 2),
+          lastCheckAt: ago(60 * 24 + 30),
+          lastCheckResult: 'ok',
+        },
+        sortOrder: 4,
+        updatedAt: ago(60 * 24 + 30),
+      }),
+      route({
+        provider: 'CENTRALPAY',
+        status: 'DISABLED',
+        allowServicePurchase: false,
+        allowWalletTopup: false,
+        topupCashbackPercent: 3,
+        credential: {
+          required: true,
+          setAt: ago(60 * 24 * 6),
+          verifyKeyRequired: true,
+          verifyKeySetAt: null,
+        },
+        sortOrder: 5,
+        updatedAt: ago(60 * 24 * 6),
+      }),
+    ],
+    walletTopup: {
+      available: true,
+      routes: [
+        { provider: 'MANUAL_TRANSFER', blockers: [] },
+        { provider: 'TONPAYS', blockers: [] },
+        { provider: 'TELEGRAM_STARS', blockers: ['PURPOSE_OFF'] },
+        { provider: 'TONPAYS_TELEGRAM', blockers: ['INACTIVE'] },
+        { provider: 'NOWPAYMENTS', blockers: [] },
+        { provider: 'CENTRALPAY', blockers: ['INACTIVE', 'PURPOSE_OFF'] },
+      ],
+    },
+  }),
+  // The demo's central rate: 98,450 toman, 42 seconds old, Wallex failing three times.
+  fixture('/fx/status', fxStatusResponseSchema, {
+    enabled: true,
+    baseAsset: 'USDT',
+    quoteCurrency: 'IRT',
+    side: 'SELL_USDT_TO_RECEIVE_FIAT',
+    primarySource: 'NOBITEX',
+    fallbackSource: 'WALLEX',
+    freshTtlSeconds: 300,
+    maxStaleSeconds: 1800,
+    state: 'FRESH',
+    quote: {
+      quoteId: '01a0f1c2-0000-7000-8000-00000000f002',
+      source: 'NOBITEX',
+      rate: '98450',
+      rateMantissa: '98450',
+      rateScale: 0,
+      sourceAt: ago(1),
+      fetchedAt: ago(1),
+      ageSeconds: 42,
+      policyVersion: 4,
+    },
+    lastAttemptAt: ago(1),
+    lastErrorCode: null,
+    sources: [
+      {
+        source: 'NOBITEX',
+        lastSuccessAt: ago(1),
+        lastFailureAt: ago(60 * 24 + 60 * 11),
+        lastFailureCode: 'fx.source_unavailable',
+        retryAfter: null,
+        consecutiveFailures: 0,
+      },
+      {
+        source: 'WALLEX',
+        lastSuccessAt: ago(60 * 5),
+        lastFailureAt: ago(33),
+        lastFailureCode: 'fx.quote_rejected',
+        retryAfter: ago(-9),
+        consecutiveFailures: 3,
+      },
+    ],
+    stars: {
+      pricingMode: 'CENTRAL_FX_RATIO',
+      starsPerUsdt: '60',
+      fixedRateMinor: null,
+      centralRatePerStar: '1640.83',
+    },
+    policyVersion: 4,
+  }),
+];
+
+export const DEMO_FINANCE: readonly ShotFixture[] = [...PAYMENTS, ...GATEWAYS];
