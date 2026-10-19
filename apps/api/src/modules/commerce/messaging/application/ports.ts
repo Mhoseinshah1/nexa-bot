@@ -100,6 +100,12 @@ export interface CustomerCallbackButton {
    * Presentation only, exactly as `inline`: the route is `data`, whatever this names.
    */
   readonly category?: string;
+  /**
+   * R4 PR-F (F2): a `catalog.product` button's plan figures. In a rich message they are a
+   * row of the plan table above the buttons (name | traffic | days | price); an ordinary
+   * message ignores them. Presentation only: the route is `data`.
+   */
+  readonly planFacts?: { readonly trafficBytes: bigint; readonly durationDays: number };
 }
 
 /**

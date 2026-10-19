@@ -7,11 +7,17 @@ import {
   TRACKING_CODE_LINE_KEYS,
   validateTemplateValues,
   type ScopeContext,
+  type TemplateDefinition,
   type TemplateKey,
   type TemplateValues,
 } from '@nexa/contracts';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
-import type { TemplateCatalogue, TemplateRepository, TenantPresentationReader } from './ports.js';
+import type {
+  TemplateCatalogue,
+  TemplatePresentation,
+  TemplateRepository,
+  TenantPresentationReader,
+} from './ports.js';
 
 /**
  * The locales this product ships.
@@ -100,6 +106,45 @@ export class TemplateResolver {
     locale: Locale = DEFAULT_TEMPLATE_LOCALE,
     tx?: unknown,
   ): Promise<string> {
+    const { definition, body, presentation } = await this.prepare(scope, key, values, locale, tx);
+    return this.catalogue.render(definition, body, values, locale, presentation);
+  }
+
+  /**
+   * R4 PR-F (F6): the same rendering twice from ONE resolution — `text`, exactly what
+   * `render` returns, and `marked`, the same text with every date value wrapped in the
+   * instant marks (`renderTemplateBody`'s `markInstants`) for the rich-message builder.
+   * One validation, one resolution, two pure renders: the two can never come from two
+   * different bodies.
+   */
+  async renderWithInstants(
+    scope: ScopeContext,
+    key: TemplateKey,
+    values: TemplateValues,
+    locale: Locale = DEFAULT_TEMPLATE_LOCALE,
+    tx?: unknown,
+  ): Promise<{ readonly text: string; readonly marked: string }> {
+    const { definition, body, presentation } = await this.prepare(scope, key, values, locale, tx);
+    return {
+      text: this.catalogue.render(definition, body, values, locale, presentation),
+      marked: this.catalogue.render(definition, body, values, locale, presentation, {
+        markInstants: true,
+      }),
+    };
+  }
+
+  /** Validation, resolution and presentation — everything a render needs but the render. */
+  private async prepare(
+    scope: ScopeContext,
+    key: TemplateKey,
+    values: TemplateValues,
+    locale: Locale,
+    tx: unknown,
+  ): Promise<{
+    readonly definition: TemplateDefinition;
+    readonly body: string;
+    readonly presentation: TemplatePresentation;
+  }> {
     const definition = templateDefinition(key);
 
     // The values are checked HERE, on the way to a customer, and not only when
@@ -132,7 +177,7 @@ export class TemplateResolver {
     // is shown the same way, and so a caller cannot render one for a tenant with a
     // presentation that belongs to another.
     const presentation = await this.presentation.presentationFor(scope, tx);
-    return this.catalogue.render(definition, body, values, locale, presentation);
+    return { definition, body, presentation };
   }
 
   /**

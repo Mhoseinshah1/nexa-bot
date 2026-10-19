@@ -420,6 +420,9 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
     'TELEGRAM',
     'telegram.appearance_decoration_failed',
   ),
+  // R4 PR-F: a screen Telegram refused as a rich message and that was re-sent the ordinary
+  // way. One row per bot per hour (`opsAggregationKey`), routed to ERRORS.
+  failure('telegram.rich_message_refused', 'TELEGRAM', 'WINDOW'),
   failure('telegram.turn_failed', 'TELEGRAM', 'WINDOW'),
   failure('telegram.ops_group_update_failed', 'TELEGRAM', 'WINDOW'),
   failure('telegram.message_retention_failing', 'TELEGRAM', 'CONDITION'),

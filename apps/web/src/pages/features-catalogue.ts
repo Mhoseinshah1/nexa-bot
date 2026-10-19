@@ -205,6 +205,20 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
       confirmLabel: 'web.terms_enforce_confirm',
     },
   },
+  // R4 PR-F. Off sends every screen the ordinary way again at once, and nothing is lost:
+  // a screen already sent as a rich message is edited the ordinary way, or sent anew.
+  rich_messages: {
+    title: 'web.feature_rich_messages_title',
+    summary: 'web.feature_rich_messages_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
+  rich_premium_emoji: {
+    title: 'web.feature_rich_premium_emoji_title',
+    summary: 'web.feature_rich_premium_emoji_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
 };
 
 /**
