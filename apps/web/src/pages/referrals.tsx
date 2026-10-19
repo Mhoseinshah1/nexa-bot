@@ -570,6 +570,8 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
+          // Ten money columns: the compact row keeps the ledger inside its card at 1440 (X9).
+          dense
           detail={{ label: t('web.referral_row_detail'), render: rowDetail }}
         />
         {/* `GET /referral-commissions` pages newest to oldest. */}
