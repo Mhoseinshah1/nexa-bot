@@ -88,6 +88,8 @@
   --edge: rgba(255, 255, 255, 0.14);
   --edge-2: rgba(255, 255, 255, 0.06);
   --spec: rgba(255, 255, 255, 0.32);
+  /* The sidebar's current-page pill: the demo's soft drop beneath the raised glass. */
+  --pill-drop: 0 6px 16px -10px rgba(0, 0, 0, 0.5);
   /*
    * A sheet (dialog, drawer, popover, menu, toast): the page's own surface at 72% in the dark
    * theme, because a lighter glass over the dark page read poorly.
@@ -155,6 +157,7 @@
   --edge: rgba(255, 255, 255, 0.9);
   --edge-2: rgba(30, 40, 90, 0.07);
   --spec: rgba(255, 255, 255, 1);
+  --pill-drop: 0 6px 16px -10px rgba(30, 40, 90, 0.22);
   --sheet-bg: var(--glass-2);
   --mesh:
     radial-gradient(75% 55% at 90% -12%, rgba(0, 0, 0, 0.04), transparent 68%),

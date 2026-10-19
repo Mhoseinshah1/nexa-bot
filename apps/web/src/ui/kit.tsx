@@ -519,11 +519,27 @@ export function ButtonGroup({
 
 /* --------------------------------------------------------------- layout --- */
 
+/**
+ * The page's breadcrumb, supplied once by the shell (`app.tsx`, from `page-trail.ts`) and read
+ * by the page header — so no page writes its own trail, and every page that draws a header
+ * draws the same «گروه منو / صفحه» the sidebar implies. Empty outside the shell (a test that
+ * renders a page alone) and on pages with nothing above them (the dashboard).
+ */
+export const PageTrailContext = createContext<readonly Crumb[]>([]);
+
+/**
+ * The page header (demo parity X1, X3, X4): the breadcrumb, the large title, the subtitle and
+ * an optional line under it (a page's «آخرین به‌روزرسانی»); on the opposite side, the page's
+ * controls — its freshness line and refresh, its primary buttons — aligned with the BOTTOM of
+ * the block, never level with the title. When the two do not fit on one row the controls wrap
+ * below the subtitle, still on their own side.
+ */
 export function PageHead({
   title,
   subtitle,
   maturity,
   badge,
+  meta,
   actions,
 }: {
   title: ReactNode;
@@ -536,17 +552,22 @@ export function PageHead({
   maturity?: Exclude<Maturity, 'now'>;
   /** A status badge beside the title — the entity's state on a detail page. */
   badge?: ReactNode;
+  /** A line under the subtitle, such as when the page's figures were last read. */
+  meta?: ReactNode;
   actions?: ReactNode;
 }) {
+  const trail = useContext(PageTrailContext);
   return (
     <div className="page-head">
       <div className="titles">
+        {trail.length > 1 && <Breadcrumbs items={trail} />}
         <h1>
           {title}
           {badge}
           {maturity !== undefined && <MaturityBadge value={maturity} />}
         </h1>
         {subtitle !== undefined && <p className="sub">{subtitle}</p>}
+        {meta !== undefined && <div className="head-meta">{meta}</div>}
       </div>
       {actions !== undefined && <div className="actions">{actions}</div>}
     </div>
@@ -636,35 +657,40 @@ export function DetailHead({
   level?: 1 | 2;
 }) {
   const Heading = level === 1 ? 'h1' : 'h2';
+  const trail = useContext(PageTrailContext);
   return (
-    <section className="card detail-head">
-      <div className="head-card">
-        {initial !== undefined && (
-          <span className="avatar lg" aria-hidden="true">
-            {initial}
-          </span>
-        )}
-        <div className="ident-block">
-          <Heading>
-            {title}
-            {badge}
-          </Heading>
-          {meta !== undefined && <div className="meta">{meta}</div>}
+    <>
+      {/* A detail page whose head IS this card still says where it is (X1). */}
+      {level === 1 && trail.length > 1 && <Breadcrumbs items={trail} />}
+      <section className="card detail-head">
+        <div className="head-card">
+          {initial !== undefined && (
+            <span className="avatar lg" aria-hidden="true">
+              {initial}
+            </span>
+          )}
+          <div className="ident-block">
+            <Heading>
+              {title}
+              {badge}
+            </Heading>
+            {meta !== undefined && <div className="meta">{meta}</div>}
+          </div>
+          {actions !== undefined && <div className="quick">{actions}</div>}
         </div>
-        {actions !== undefined && <div className="quick">{actions}</div>}
-      </div>
-      {stats !== undefined && stats.length > 0 && (
-        <dl className="head-stats">
-          {stats.map((stat, index) => (
-            // Position is the identity: a fixed, statically written strip.
-            <div key={index}>
-              <dt>{stat.label}</dt>
-              <dd>{stat.value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-    </section>
+        {stats !== undefined && stats.length > 0 && (
+          <dl className="head-stats">
+            {stats.map((stat, index) => (
+              // Position is the identity: a fixed, statically written strip.
+              <div key={index}>
+                <dt>{stat.label}</dt>
+                <dd>{stat.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </section>
+    </>
   );
 }
 
@@ -2425,24 +2451,30 @@ export function Breadcrumbs({ items }: { items: readonly Crumb[] }) {
   const onLink = useLinkHandler();
   return (
     <nav className="crumbs" aria-label={t('web.breadcrumbs')}>
-      {items.map((crumb, index) => (
-        <span key={`${crumb.label}-${index}`}>
-          {index > 0 && (
-            <span className="sep" aria-hidden="true">
-              /
-            </span>
-          )}
-          {crumb.href === undefined ? (
-            <span className="cur" aria-current="page">
-              {crumb.label}
-            </span>
-          ) : (
-            <a href={crumb.href} onClick={onLink}>
-              {crumb.label}
-            </a>
-          )}
-        </span>
-      ))}
+      {items.map((crumb, index) => {
+        const last = index === items.length - 1;
+        return (
+          <span key={`${crumb.label}-${index}`}>
+            {index > 0 && (
+              <span className="sep" aria-hidden="true">
+                /
+              </span>
+            )}
+            {last ? (
+              <span className="cur" aria-current="page">
+                {crumb.label}
+              </span>
+            ) : crumb.href === undefined ? (
+              // A menu group: a place in the navigation, not a page of its own.
+              <span className="grp">{crumb.label}</span>
+            ) : (
+              <a href={crumb.href} onClick={onLink}>
+                {crumb.label}
+              </a>
+            )}
+          </span>
+        );
+      })}
     </nav>
   );
 }

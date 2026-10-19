@@ -10,6 +10,8 @@
 export const WEB_FA = {
   'web.title': 'نکسا بات',
   'web.subtitle': 'پنل مدیریت',
+  // The brand's wordmark, as the approved demo draws it beside the N tile — a name, not prose.
+  'web.brand_wordmark': 'NEXA',
   'web.system_status': 'وضعیت سامانه',
   'web.dependency': 'وابستگی',
   'web.unit_bytes': 'بایت',
@@ -652,6 +654,9 @@ export const WEB_FA = {
   'web.search_none': 'صفحه‌ای با این نام در دسترس شما نیست.',
   'web.search_pages': 'صفحه‌ها',
   'web.user_menu': 'حساب کاربری',
+  'web.help': 'راهنما',
+  'web.help_shortcuts': 'میان‌برهای صفحه‌کلید',
+  'web.help_search': 'جست‌وجو و رفتن به صفحه — Ctrl K',
   'web.identity_label': 'نصب متصل',
   'web.build_identity': 'نسخهٔ در حال اجرا',
   'web.unsaved_title': 'تغییرات ذخیره نشده',
