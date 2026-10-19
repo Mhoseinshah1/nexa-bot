@@ -1,5 +1,8 @@
 import {
   CAPABILITY_REGISTRY_ROWS,
+  adminListResponseSchema,
+  PERMISSIONS,
+  roleViewListResponseSchema,
   adminSessionListResponseSchema,
   auditLogListResponseSchema,
   incidentListResponseSchema,
@@ -631,6 +634,126 @@ const AUDIT_ROWS: readonly Json[] = [
   }),
 ];
 
+const ALL_PERMISSIONS = PERMISSIONS.map((definition) => definition.key as string);
+const permissionsWhere = (test: (key: string) => boolean) => ALL_PERMISSIONS.filter(test);
+const assignee = (id: string, username: string, displayName: string, active = true) => ({
+  id,
+  username,
+  displayName,
+  status: active ? 'ACTIVE' : 'DISABLED',
+});
+
+/** The demo's roles: the four system roles and two the owner made. */
+const ROLES = [
+  {
+    key: 'owner',
+    name: 'مالک',
+    isSystem: true,
+    immutable: true,
+    version: 1,
+    permissions: ALL_PERMISSIONS,
+    assignedAdmins: [assignee(ADMIN_OWNER, 'm.hosein', 'محمدحسین')],
+  },
+  {
+    key: 'operator',
+    name: 'اپراتور',
+    isSystem: true,
+    immutable: false,
+    version: 4,
+    permissions: permissionsWhere((key) =>
+      /^(panels|services|catalog|incidents|backup)\./u.test(key),
+    ),
+    assignedAdmins: [],
+  },
+  {
+    key: 'support',
+    name: 'پشتیبان',
+    isSystem: true,
+    immutable: false,
+    version: 6,
+    permissions: permissionsWhere((key) =>
+      /^(tickets|business_chats|support_knowledge)\./u.test(key),
+    ),
+    assignedAdmins: [assignee(ADMIN_SARA, 'sara.sup', 'سارا محمدی')],
+  },
+  {
+    key: 'finance',
+    name: 'مالی',
+    isSystem: true,
+    immutable: false,
+    version: 3,
+    permissions: permissionsWhere((key) => /^(payments|receipts|refunds|reports)\./u.test(key)),
+    assignedAdmins: [assignee(ADMIN_REZA, 'reza.fin', 'رضا نوری')],
+  },
+  {
+    key: 'night_support',
+    name: 'پشتیبان شیفت شب',
+    isSystem: false,
+    immutable: false,
+    version: 2,
+    permissions: permissionsWhere((key) => ['tickets.view', 'tickets.reply'].includes(key)),
+    assignedAdmins: [],
+  },
+  {
+    key: 'auditor',
+    name: 'ممیز',
+    isSystem: false,
+    immutable: false,
+    version: 1,
+    permissions: permissionsWhere((key) =>
+      ['audit.view', 'audit.export', 'opslog.view'].includes(key),
+    ),
+    assignedAdmins: [],
+  },
+];
+
+function admin(
+  id: string,
+  username: string,
+  displayName: string,
+  roleKeys: readonly string[],
+  over: Json = {},
+): Json {
+  return {
+    id,
+    username,
+    displayName,
+    status: 'ACTIVE',
+    telegramUserId: null,
+    roleKeys,
+    createdAt: ago(60 * 24 * 200),
+    lastLoginAt: ago(60 * 6),
+    ...over,
+  };
+}
+
+/** The demo's five administrators: one disabled, two without Telegram. */
+const ADMINS = [
+  admin(ADMIN_OWNER, 'm.hosein', 'محمدحسین شاه‌پوری', ['owner'], {
+    telegramUserId: '112233445',
+    lastLoginAt: ago(330),
+  }),
+  admin(ADMIN_SARA, 'sara.sup', 'سارا محمدی', ['support'], {
+    telegramUserId: '559812004',
+    lastLoginAt: ago(255),
+  }),
+  admin(ADMIN_REZA, 'reza.fin', 'رضا نوری', ['finance'], { lastLoginAt: ago(170) }),
+  admin(
+    '01a05e35-c9ad-7e93-bef3-1ed9b5528c05',
+    'elham.fin',
+    'الهام قاسمی',
+    ['finance', 'support'],
+    {
+      telegramUserId: '887120931',
+      lastLoginAt: ago(60 * 9 + 20),
+    },
+  ),
+  admin('01a05e35-c9ad-7e93-bef3-1ed9b5528c06', 'nima.sup', 'نیما کریمی', ['night_support'], {
+    status: 'DISABLED',
+    lastLoginAt: null,
+  }),
+];
+
 const INCIDENTS: readonly Json[] = [
   {
     id: '01a05e35-c9ad-7e93-bef3-1ed9b55d1201',
@@ -757,6 +880,8 @@ export const DEMO_INFRA: readonly ShotFixture[] = [
     { query: { scope: 'MANAGEMENT' } },
   ),
   fixture('/audit-log', auditLogListResponseSchema, { entries: AUDIT_ROWS, nextCursor: 'older' }),
+  fixture('/admins', adminListResponseSchema, { admins: ADMINS }),
+  fixture('/rbac/roles', roleViewListResponseSchema, { roles: ROLES }),
   fixture('/incidents', incidentListResponseSchema, { incidents: INCIDENTS, nextCursor: null }),
   fixture('/auth/sessions', adminSessionListResponseSchema, {
     sessions: [
