@@ -104,12 +104,12 @@ not patched per page).
 
 ## /features
 
-| #   | difference                                              | status                                                                                                   |
-| --- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| #   | difference                                              | status                                                                                                                                            |
+| --- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | DIFFS #1 ten a page with «۱–۱۰ از ۲۱ · صفحه ۱ از ۳»     | ⛔ E-total — `/features` returns no total, so no counted pager; round 2: ten whole rows, the rest behind «نمایش بقیهٔ قابلیت‌ها» (no clipped row) |
-| 2   | DIFFS #2 red invalid-value sentence beside the value    | ✅ 6079739e (fixture: an invalid stored minute count)                                                    |
-| 3   | DIFFS #3 values at the far end of a related-setting row | ✅ 6079739e                                                                                              |
-| 4   | DIFFS #4 breadcrumb                                     | ✅ Phase A                                                                                               |
+| 2   | DIFFS #2 red invalid-value sentence beside the value    | ✅ 6079739e (fixture: an invalid stored minute count)                                                                                             |
+| 3   | DIFFS #3 values at the far end of a related-setting row | ✅ 6079739e                                                                                                                                       |
+| 4   | DIFFS #4 breadcrumb                                     | ✅ Phase A                                                                                                                                        |
 
 ## /notifications
 
@@ -172,3 +172,12 @@ not patched per page).
 | 2   | DIFFS #2 «N دسته‌بندی آیکون یا ایموجی دارد»                                                                        | ✅ b627ebd5 (present; fixture makes it ۳)                      |
 | 3   | DIFFS #3 more padding per card; breadcrumb                                                                         | ✅ b627ebd5; Phase A                                           |
 | 4   | Own (390): the category table stacks                                                                               | ✅ af550159                                                    |
+
+## Round 2 (PR #293 follow-ups)
+
+| #   | difference                                                         | status                                                                                 |
+| --- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| 1   | /product-categories: preview chips filled in the category's colour | ✅ colour from the stored `bot.category_colors` only (primary/success/danger tokens)   |
+| 2   | /bots «آخرین ثبت وب‌هوک» and /terms «انتشار» as «۵ روز پیش»        | ✅ `formatRelative` (frozen clock in shots), absolute time as title; no new API field  |
+| 3   | /bot-buttons at 390: mode switch wraps into a rounded block        | ✅ `.bb-canvas-head .btn-group.segmented` at ≤640px                                    |
+| 4   | /features: ten whole rows, invalid-value red sentence visible      | ✅ ten rows + «نمایش بقیهٔ قابلیت‌ها»; fixture row already invalid, now within the ten |
