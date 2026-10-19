@@ -347,6 +347,18 @@ describe('payment routes per purpose', () => {
       await expectAgreesWithBot();
     });
 
+    it('names UNPRICEABLE beside INACTIVE for a switched-off Stars route with no unit ratio', async () => {
+      const stars = async () =>
+        (await readiness()).routes.find((route) => route.provider === 'TELEGRAM_STARS')?.blockers;
+      // Every blocker at once, so the operator does not find the ratio only after enabling.
+      expect(await stars()).toEqual(expect.arrayContaining(['INACTIVE', 'UNPRICEABLE']));
+      await setSetting('stars.per_usdt', '100');
+      expect(await stars()).toContain('INACTIVE');
+      expect(await stars()).not.toContain('UNPRICEABLE');
+      // The bot still offers no inactive route.
+      expect(await providers('WALLET_TOPUP')).not.toContain('TELEGRAM_STARS');
+    });
+
     it('does not count a customer threshold as a blocker: that is per customer, not configuration', async () => {
       await configure(
         {
