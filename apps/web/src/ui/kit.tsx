@@ -910,9 +910,15 @@ export function Banner({
   /** A control that resolves what the banner says — at the end of the line. */
   action?: ReactNode;
 }) {
+  // An information callout is an outlined card with no ⓘ (demo parity X5): the outline is
+  // what sets it apart, and an icon on every explanatory paragraph was noise. A warning or
+  // an error keeps its sign, because there the icon carries the urgency.
+  const iconless = tone === 'info' || tone === 'neutral';
   return (
     <div className={`banner ${tone}`} role={role ?? (tone === 'danger' ? 'alert' : undefined)}>
-      <Icon name={icon ?? (tone === 'danger' || tone === 'warn' ? 'alert' : 'info')} size={16} />
+      {!iconless && (
+        <Icon name={icon ?? (tone === 'danger' || tone === 'warn' ? 'alert' : 'info')} size={16} />
+      )}
       <div>
         {title !== undefined && <strong>{title}</strong>}
         {children}

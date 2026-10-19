@@ -1787,13 +1787,18 @@ textarea.input,
 .banner.danger strong {
   color: var(--danger);
 }
+/*
+ * The information callout (demo parity X5): an outlined card a step brighter than the page —
+ * the accent's hairline over its soft fill, its words in the body colour, and no icon.
+ */
 .banner.info {
-  background: var(--info-soft);
-  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  border-radius: var(--radius-ctl);
+  color: var(--fg);
 }
-.banner.info > svg,
 .banner.info strong {
-  color: var(--info);
+  color: var(--fg);
 }
 .banner.ok {
   background: var(--ok-soft);
