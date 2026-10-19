@@ -16,7 +16,7 @@ import {
   type BotWebhookSecretState,
 } from '@nexa/contracts';
 import { ApiError, checkBot, fetchBots, replaceBotToken, setBotStatus } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatRelative, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -430,7 +430,9 @@ function BotSection({
               {bot.webhook.registeredAt === null ? (
                 <span className="warn">{t('web.bot_webhook_never')}</span>
               ) : (
-                <span className="small">{formatTimestamp(bot.webhook.registeredAt)}</span>
+                <span className="small" title={formatTimestamp(bot.webhook.registeredAt)}>
+                  {formatRelative(bot.webhook.registeredAt)}
+                </span>
               )}
             </dd>
           </div>

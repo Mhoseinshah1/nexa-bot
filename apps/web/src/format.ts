@@ -43,6 +43,25 @@ export function formatTimestamp(iso: string): string {
   return formatTimestampNumeric(iso);
 }
 
+/**
+ * «۵ روز پیش»: how long before `nowMs` an ISO timestamp was, in Persian digits — the demo's
+ * relative cells. Past a month, or for a time in the future or an unparseable string, the
+ * absolute `formatTimestamp` is returned instead; callers keep that as the cell's title.
+ * `nowMs` is the clock the caller already reads (`Date.now()`, frozen in the shots).
+ */
+export function formatRelative(iso: string, nowMs: number = Date.now()): string {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at) || at > nowMs) return formatTimestamp(iso);
+  const minutes = Math.floor((nowMs - at) / 60_000);
+  if (minutes < 1) return t('web.rel_now');
+  if (minutes < 60) return `${formatNumber(minutes)} ${t('web.rel_minutes_ago')}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${formatNumber(hours)} ${t('web.rel_hours_ago')}`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${formatNumber(days)} ${t('web.rel_days_ago')}`;
+  return formatTimestamp(iso);
+}
+
 const DATE_TIME_NUMERIC = new Intl.DateTimeFormat('fa-IR', {
   year: 'numeric',
   month: '2-digit',
