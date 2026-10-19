@@ -120,7 +120,7 @@ export function SupportAnalyticsPage({ route, denied }: { route: Route; denied: 
             : `${t('web.sa_intro')} ${t('web.sa_period_from')} ${formatTimestamp(data.period.start)} ${t('web.sa_period_to')} ${formatTimestamp(data.period.end)}`
         }
       />
-      {/* Demo parity (DIFFS support-analytics #2): «بازه» beside the pills, no rule under them. */}
+      {/* Demo parity (DIFFS support-analytics #2): the range label beside the pills, no rule under them. */}
       {!denied && (
         <Card className="sa-range-card" tight>
           <div className="sa-range">
