@@ -9,6 +9,7 @@ import {
   inlineButtonIconsSchema,
   inlineButtonStyleOf,
   inlineButtonStylesSchema,
+  suggestedInlineButtonStyles,
   type InlineButtonGroup,
   type InlineButtonIcons,
   type InlineButtonKey,
@@ -16,7 +17,7 @@ import {
   type InlineButtonStyles,
   type TemplateViewResponse,
 } from '@nexa/contracts';
-import { fetchSettings, saveSetting } from '../../api/client';
+import { fetchFeatureFlags, fetchSettings, saveSetting } from '../../api/client';
 import { t, type WebKey } from '../../i18n/web.fa';
 import { useSubmissionKey } from '../../submission-key';
 import {
@@ -35,6 +36,7 @@ import { TemplateCard } from '../content';
 import { useReportDirty } from '../ops-b-layout';
 import { ErrorReport } from '../settings';
 import { fill } from './canvas';
+import { RichModePreview } from './rich-preview';
 
 /**
  * Owner spec §6: «دکمه‌های شیشه‌ای ربات» — every customer INLINE button, from the registry
@@ -280,6 +282,15 @@ export function InlineButtonsSection({
   const submission = useSubmissionKey();
   const iconSubmission = useSubmissionKey();
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
+  // R4 PR-F (F8): the preview follows the tenant's two rich-message switches. The features
+  // page reads the same list under the same key and the same permission (`settings.view`).
+  const features = useQuery({
+    queryKey: ['features'],
+    queryFn: fetchFeatureFlags,
+    enabled: !denied,
+  });
+  const flagOf = (key: string): boolean | null =>
+    features.data?.flags.find((one) => one.key === key)?.enabled ?? null;
   const setting = settings.data?.settings.find((one) => one.key === INLINE_BUTTONS_SETTING);
   const iconSetting = settings.data?.settings.find(
     (one) => one.key === INLINE_BUTTON_ICONS_SETTING,
@@ -461,6 +472,15 @@ export function InlineButtonsSection({
   const resetDisabled =
     save.isPending || (overridden === 0 && iconCount === 0 && !invalid && !iconsInvalid);
   /*
+   * R4 PR-F (F4): the owner's colour rule, applied to the draft for every button the tenant
+   * never styled. A colour an operator already chose — `default` included — is never replaced, and
+   * nothing is written until Save — the ordinary versioned, audited setting save.
+   */
+  const suggestion = Object.fromEntries(
+    Object.entries(suggestedInlineButtonStyles()).filter(([key]) => !(key in current)),
+  ) as InlineButtonStyles;
+  const suggestionCount = Object.keys(suggestion).length;
+  /*
    * Save and reset are drawn ONCE: in the open sheet's foot while a button is being edited,
    * and in the sticky bar under the table otherwise. Both act on the whole draft.
    */
@@ -515,6 +535,17 @@ export function InlineButtonsSection({
               </option>
             ))}
           </select>
+          {mayEdit && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={save.isPending || suggestionCount === 0}
+              data-testid="ib-suggest"
+              onClick={() => edit({ ...current, ...suggestion })}
+            >
+              {fill(t('web.ib_suggest'), { n: suggestionCount })}
+            </Button>
+          )}
           <span className="spacer" />
           <span className="bx-pill" data-testid="ib-overridden">
             {fill(t('web.ib_changed_count'), { n: overridden })}
@@ -609,6 +640,18 @@ export function InlineButtonsSection({
             {pager}
           </div>
         )}
+        <RichModePreview
+          rich={flagOf('rich_messages')}
+          premium={flagOf('rich_premium_emoji')}
+          buttons={shown.slice(0, 4).map((entry) => ({
+            key: entry.key,
+            label: templateOf(entry.label)?.body ?? t(INLINE_BUTTON_NAME[entry.key]),
+            look: inlineButtonStyleOf(entry.key, current),
+            icon:
+              inlineButtonIconOf(entry.key, canonicalIcons(currentIcons)) !== null &&
+              !badIcons.includes(entry.key),
+          }))}
+        />
         {save.isError && <ErrorReport error={save.error} />}
         {mayEdit && changedElsewhere && (
           <Banner tone="warn">

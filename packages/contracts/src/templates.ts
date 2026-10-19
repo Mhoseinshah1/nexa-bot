@@ -1980,6 +1980,60 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.catalog.table_name_header',
+    description:
+      'R4 PR-F (F2): the plan-name column heading of the plan table a rich message shows ' +
+      'above the plan buttons (rich_messages on). Never sent in an ordinary message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.table_traffic_header',
+    description: 'R4 PR-F (F2): the traffic column heading of the rich plan table.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.table_days_header',
+    description: 'R4 PR-F (F2): the duration column heading of the rich plan table.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.table_price_header',
+    description: 'R4 PR-F (F2): the price column heading of the rich plan table.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.table_traffic_cell',
+    description: 'R4 PR-F (F2): one plan\u2019s traffic cell in the rich plan table.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'traffic',
+        type: 'TRAFFIC_LIMIT',
+        description: 'The plan\u2019s traffic allowance in bytes, or 0 for unlimited.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.catalog.table_days_cell',
+    description: 'R4 PR-F (F2): one plan\u2019s duration cell in the rich plan table.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'Days of validity, or 0 for unlimited.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.catalog.categories_heading',
     description:
       'Introduces the CATEGORY list — the first step of the two-step browse. A ' +

@@ -70,6 +70,17 @@ export interface InlineButtonDefinition {
   readonly defaultStyle: InlineButtonStyle;
   readonly group: InlineButtonGroup;
   readonly action: InlineButtonAction;
+  /**
+   * R4 PR-F (F4): the colour the owner's rule SUGGESTS for this button — success for paying
+   * and confirming, danger for cancelling and destructive confirmations, primary for the main
+   * action of a screen — or `default` where the rule names none.
+   *
+   * A suggestion, never applied by itself: `defaultStyle` stays `default` for every button, so
+   * an upgrade changes no customer's keyboard. The Web Admin's inline-button builder offers
+   * «رنگ‌های پیشنهادی», which writes these into the tenant's `bot.inline_buttons` through the
+   * ordinary versioned, audited setting save, where the owner can change each one again.
+   */
+  readonly suggestedStyle: InlineButtonStyle;
 }
 
 function button<const K extends string>(
@@ -80,8 +91,53 @@ function button<const K extends string>(
 ): InlineButtonDefinition & { readonly key: K } {
   // Every default is `default`: shipping the registry changes no customer's keyboard.
   // A style is something an operator chooses, never something an upgrade imposes.
-  return { key, label, defaultStyle: 'default', group, action };
+  return {
+    key,
+    label,
+    defaultStyle: 'default',
+    group,
+    action,
+    suggestedStyle: INLINE_BUTTON_SUGGESTED_STYLES[key] ?? 'default',
+  };
 }
+
+/**
+ * R4 PR-F (F4): the owner's colour rule, per button — success = pay / confirm, danger =
+ * delete / cancel, primary = the main action. A button not named here suggests `default`.
+ * Read only by `suggestedStyle`; see there for why nothing applies it automatically.
+ */
+const INLINE_BUTTON_SUGGESTED_STYLES: Readonly<
+  Record<string, Exclude<InlineButtonStyle, 'default'>>
+> = {
+  // Pay / confirm.
+  'payment.wallet': 'success',
+  'payment.sent': 'success',
+  'payment.gateway_pay': 'success',
+  'payment.nowpayments_open': 'success',
+  'payment.centralpay_open': 'success',
+  'service.renew_option': 'success',
+  'service.rotate_confirm': 'success',
+  'service.location_confirm': 'success',
+  'service.resume_confirm': 'success',
+  'service.transfer_confirm': 'success',
+  'terms.accept': 'success',
+  // Delete / cancel.
+  'order.cancel': 'danger',
+  'order.cancel_confirm': 'danger',
+  'payment.cancel': 'danger',
+  'payment.cancel_confirm': 'danger',
+  'discount.remove': 'danger',
+  'service.suspend_confirm': 'danger',
+  'service.refund_request_confirm': 'danger',
+  'tickets.close_confirm': 'danger',
+  // The main action of a screen.
+  'catalog.open': 'primary',
+  'catalog.product': 'primary',
+  'wallet.topup': 'primary',
+  'service.renew': 'primary',
+  'tickets.new': 'primary',
+  'channels.check': 'primary',
+};
 
 /**
  * Every inline button a customer can be shown, in the order the Web Admin lists them.
@@ -270,6 +326,19 @@ export const inlineButtonStylesSchema = z.partialRecord(
   z.enum(INLINE_BUTTON_STYLES),
 );
 export type InlineButtonStyles = Readonly<Partial<Record<InlineButtonKey, InlineButtonStyle>>>;
+
+/**
+ * R4 PR-F (F4): every button the owner's colour rule names, with its suggested style — what
+ * «رنگ‌های پیشنهادی» offers to write into `bot.inline_buttons`. Buttons whose suggestion is
+ * `default` are absent, exactly as an unchanged button is absent from the setting.
+ */
+export function suggestedInlineButtonStyles(): InlineButtonStyles {
+  const suggested: Partial<Record<InlineButtonKey, InlineButtonStyle>> = {};
+  for (const entry of INLINE_BUTTONS) {
+    if (entry.suggestedStyle !== 'default') suggested[entry.key] = entry.suggestedStyle;
+  }
+  return suggested;
+}
 
 /** The style one button is drawn with: the tenant's choice, else the registry default. */
 export function inlineButtonStyleOf(
