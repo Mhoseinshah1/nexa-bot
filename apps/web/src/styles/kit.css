@@ -3090,3 +3090,48 @@ textarea.input,
     animation: none;
   }
 }
+
+/*
+ * A table that stacks at phone width (`DataTable stackOnPhone`, demo parity at 390): each
+ * row a card of «label: value» lines, the label printed from the cell's `data-label`, so
+ * nothing scrolls sideways. The header row stays in the document for screen readers.
+ */
+@media (max-width: 640px) {
+  .tbl.stack-phone thead {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tbl.stack-phone,
+  .tbl.stack-phone tbody,
+  .tbl.stack-phone tr {
+    display: block;
+    inline-size: 100%;
+  }
+  .tbl.stack-phone tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tbl.stack-phone td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    border: 0;
+    white-space: normal;
+    text-align: start;
+  }
+  .tbl.stack-phone td::before {
+    content: attr(data-label);
+    flex: none;
+    color: var(--fg-3);
+    font-size: var(--fs-xs);
+  }
+  .tbl.stack-phone td[data-label='']::before {
+    content: none;
+  }
+}
