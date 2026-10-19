@@ -2720,9 +2720,15 @@ textarea.input,
 }
 .trend-svg {
   width: 100%;
-  height: 220px;
+  height: auto;
   display: block;
   direction: ltr;
+}
+/* The current period's area, filled down to the axis (demo parity: the reports trend). */
+.trend-area {
+  fill: var(--chart-1);
+  stroke: none;
+  opacity: 0.16;
 }
 .trend-axis {
   stroke: var(--line-2);
@@ -2753,25 +2759,6 @@ textarea.input,
 }
 .trend-hit:focus-visible {
   fill: var(--accent-soft);
-}
-.trend-legend {
-  display: flex;
-  gap: 14px;
-  font-size: var(--fs-sm);
-  color: var(--fg-2);
-  margin-top: 6px;
-}
-.trend-key::before {
-  content: '';
-  display: inline-block;
-  width: 14px;
-  height: 0;
-  margin-inline-end: 6px;
-  vertical-align: middle;
-  border-top: 2px solid var(--chart-1);
-}
-.trend-key.previous::before {
-  border-top: 2px dashed var(--fg-3);
 }
 .trend-readout {
   display: flex;

@@ -27,6 +27,11 @@
   gap: 10px;
   align-items: flex-end;
 }
+/* Demo parity: the period is a full-width segmented track, its options from the start side. */
+.report-range > .btn-group.segmented {
+  flex: 1 1 100%;
+  justify-content: flex-start;
+}
 .kpi-money,
 .money-line {
   display: flex;
@@ -594,6 +599,33 @@
 }
 .report-kpis {
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+/*
+ * Demo parity: the summary's six figures in one row (sales … renewals), then wallet top-up
+ * and active services; the referral analytics' five in one row. Narrower, three a row.
+ */
+.report-kpis.report-kpis-six {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.report-kpis.report-kpis-five {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+@media (max-width: 1200px) {
+  .report-kpis.report-kpis-six,
+  .report-kpis.report-kpis-five {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .report-kpis.report-kpis-six,
+  .report-kpis.report-kpis-five {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/* The ⓘ beside a label whose tile explains itself in its tooltip. */
+.report-kpi-info {
+  color: var(--fg-3);
+  vertical-align: -1px;
 }
 /* The tile keeps its tooltip wrapper; the card fills it. */
 .report-kpi > .card {
