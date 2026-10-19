@@ -153,7 +153,9 @@ export function AppearancePage({
   const [open, setOpen] = useState<AppearanceSlot | null>(null);
 
   const slots = view?.slots ?? [];
-  const { rows: pageSlots, pager: slotPager } = usePagedRows(slots);
+  // The endpoint answers every slot at once (no cursor, no limit): its length is the server's
+  // own count of the collection, so the pager may say «۱–۱۰ از ۲۹» as the demo does.
+  const { rows: pageSlots, pager: slotPager } = usePagedRows(slots, '', { wholeCollection: true });
   const unsaved = slots.filter((slot) => draftState(slot, draftOf(slot, drafts)).dirty);
   // A slot edited and not saved: leaving the page asks first, whether its sheet is open or not.
   useUnsavedChanges(mayEdit && unsaved.length > 0);
@@ -180,7 +182,11 @@ export function AppearancePage({
         onChange={setTab}
         panelId="appearance-panel"
         items={[
-          { id: 'slots', label: t('web.appearance_slots_title') },
+          {
+            id: 'slots',
+            label: t('web.appearance_slots_title'),
+            ...(view === undefined ? {} : { count: view.slots.length }),
+          },
           { id: 'colors', label: t('web.cc_title') },
           { id: 'qr', label: t('web.qrt_title') },
         ]}
@@ -216,7 +222,7 @@ export function AppearancePage({
                   }
                 >
                   <div className="tbl-wrap">
-                    <table className="tbl dense bx-rows">
+                    <table className="tbl bx-rows">
                       <caption className="visually-hidden">
                         {t('web.appearance_slots_title')}
                       </caption>
@@ -226,6 +232,9 @@ export function AppearancePage({
                           <th>{t('web.appearance_col_slot')}</th>
                           <th>{t('web.appearance_col_custom')}</th>
                           <th>{t('web.appearance_col_preview')}</th>
+                          <th className="bx-chev-col">
+                            <span className="visually-hidden">{t('web.appearance_col_open')}</span>
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -241,7 +250,6 @@ export function AppearancePage({
                     </table>
                     {slotPager}
                   </div>
-                  <p className="muted small">{t('web.appearance_custom_id_hint')}</p>
                 </Card>
                 <TestCard
                   bots={view.bots}
@@ -305,18 +313,30 @@ function SlotRow({
   const { dirty } = draftState(slot, draft);
   const showsCustom = slot.enabled && slot.customEmojiId !== null;
   return (
-    <tr data-slot={slot.slot}>
+    /*
+     * The whole row opens the slot's sheet, as the demo's rows do; the label is the real
+     * button (keyboard and screen readers), the row's click and chevron are the pointer's.
+     */
+    <tr data-slot={slot.slot} className="bx-tr" onClick={onOpen}>
       <td>
-        <span className="appearance-glyph" aria-label={t('web.appearance_col_fallback')}>
+        <span className="appearance-glyph sm" aria-label={t('web.appearance_col_fallback')}>
           {slot.fallback}
         </span>
       </td>
       <td>
-        <button type="button" className="bx-rowlink" aria-haspopup="dialog" onClick={onOpen}>
+        <button
+          type="button"
+          className="bx-rowlink"
+          aria-haspopup="dialog"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen();
+          }}
+        >
           <span className="strong">{label}</span>
         </button>
         <p className="muted small">
-          {t('web.appearance_marker')} <Ltr>{appearanceMarker(slot.slot)}</Ltr>
+          <Ltr>{appearanceMarker(slot.slot)}</Ltr>
         </p>
       </td>
       <td>{slot.customEmojiId === null ? '—' : <Ltr>{slot.customEmojiId}</Ltr>}</td>
@@ -335,6 +355,11 @@ function SlotRow({
               {t('web.ob_unsaved_row')}
             </Badge>
           )}
+        </span>
+      </td>
+      <td className="end">
+        <span className="bx-chev" aria-hidden="true">
+          ‹
         </span>
       </td>
     </tr>
@@ -546,7 +571,8 @@ function TestCard({
   });
 
   return (
-    <Card title={t('web.appearance_test_title')} hint={t('web.appearance_test_hint')}>
+    <Card title={t('web.appearance_test_title')}>
+      <p className="muted small">{t('web.appearance_test_hint')}</p>
       <ul className="appearance-bots small" data-testid="appearance-bots">
         {bots.map((bot) => (
           <li key={bot.id}>

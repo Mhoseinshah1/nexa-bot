@@ -31,6 +31,7 @@
 @import './styles/pages/w-marketing.css';
 @import './styles/pages/w-ops.css';
 @import './styles/pages/w-errors.css';
+@import './styles/pages/demo-bot.css';
 
 /*
  * `hidden` means hidden, whatever else a rule says about display.

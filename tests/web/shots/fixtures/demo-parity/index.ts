@@ -1,4 +1,5 @@
 import type { ShotFixture } from '../../fixture.ts';
+import { DEMO_BOT } from './bot.ts';
 import { DEMO_DASHBOARD, DEMO_DASHBOARD_EMPTY } from './dashboard.ts';
 
 /*
@@ -12,7 +13,7 @@ import { DEMO_DASHBOARD, DEMO_DASHBOARD_EMPTY } from './dashboard.ts';
  *
  * Selected with `pnpm web:shots … --fixtures demo-parity` (or `NEXA_SHOT_FIXTURES`).
  */
-export const DEMO_PARITY: readonly ShotFixture[] = [...DEMO_DASHBOARD];
+export const DEMO_PARITY: readonly ShotFixture[] = [...DEMO_DASHBOARD, ...DEMO_BOT];
 
 /** The demo's EMPTY dashboard: nothing in the period, nothing waiting. */
 export const DEMO_PARITY_EMPTY: readonly ShotFixture[] = [

@@ -1,0 +1,89 @@
+/*
+ * Demo parity — the bot and content family (appearance, bot buttons, bots, broadcasts,
+ * content, client apps, features, notifications, reminders, settings, terms, products,
+ * product categories). Page-scoped refinements only, after every other page file, so a
+ * rule here composes the page as `approved-demo.html` draws it without touching a sibling.
+ */
+
+/* --- Appearance (`#/appearance`) --------------------------------------------------- */
+
+/* The demo's rows: a 20px glyph, roomy cells, the whole row opens the slot's sheet. */
+.appearance-glyph.sm {
+  font-size: 20px;
+}
+.bx-rows td {
+  padding-block: 12px;
+}
+.bx-tr {
+  cursor: pointer;
+}
+.bx-tr:hover td {
+  background: var(--bg-2);
+}
+.bx-chev-col {
+  width: 28px;
+}
+.bx-chev {
+  color: var(--fg-3);
+  font-size: 18px;
+  line-height: 1;
+}
+/* The test card lists every bot as a bulleted line, as the demo does. */
+.appearance-bots {
+  list-style: disc;
+  padding-inline-start: 18px;
+  gap: 6px;
+  margin-block: 10px 12px;
+}
+
+/* --- Bot buttons (`#/bot-buttons`) ------------------------------------------------- */
+
+/*
+ * The demo stacks the builder in one column of framed cards: «دکمه‌های آزاد» full width
+ * ABOVE the menu, each free button a full-width row; «منو» its own card with the segmented
+ * control opposite its title and the wide phone under it; the inspector full width below.
+ */
+.bb-card .bb-workspace {
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 12px;
+}
+.bb-card .bb-workspace > .bb-pool {
+  grid-column: 1 / -1;
+  align-self: auto;
+}
+.bb-card .bb-pool,
+.bb-card .bb-canvas,
+.bb-card .bb-inspector {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+  padding: 12px;
+}
+.bb-card .bb-pool.is-target {
+  border-style: dashed;
+  border-color: var(--line-2);
+}
+.bb-card .bb-pool.is-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.bb-card .bb-pool-list {
+  flex-direction: column;
+}
+.bb-card .bb-pool-list .bb-chip {
+  flex: 1 1 auto;
+  inline-size: 100%;
+}
+.bb-card .bb-canvas-head {
+  margin-bottom: 4px;
+}
+.bb-card .bb-inspector > .bb-pane-title {
+  font-size: 15px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+/* The builder's draft note is the demo's quiet `bt-info` callout: a hairline, no accent. */
+.bb-card .banner.info {
+  border-color: var(--line-2);
+  background: var(--bg-2);
+}
