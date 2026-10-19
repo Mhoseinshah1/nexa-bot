@@ -22,6 +22,12 @@ untouched. Nothing here may run against them until the owner approves activation
 5. The `recovery` process takes a verified protective backup, freezes the installation (every
    other write is refused, nothing is sent), imports, reconciles, writes the v2 report and takes a
    standard backup. To undo: restore the protective backup on the same page.
+6. When the result screen says the import is complete, run `sudo botctl restart background` on
+   the server once (the screen shows it to copy). It restarts the worker, the monitor and the
+   provisioner, so the first reminder and monitor passes are ones that started after the
+   import. They send nothing historical either way: every imported service carries a reminder
+   baseline, automatic reminders are capped per minute (`reminders.max_per_minute`), and a
+   burst opens `notification.reminder_burst` in the ops group's ERRORS topic.
 
 ## 2. Isolated rehearsal (what was run for this PR)
 
@@ -134,3 +140,4 @@ The CLI and rehearsal path is unchanged: the `migration` role (`main.migration.t
 ۴. نتیجه اجرای آزمایشی (Dry Run) را بررسی و با عبارت تأیید، «تأیید بازیابی» را بزنید؛ پیش از هر نوشتن یک بکاپ محافظ گرفته می‌شود، در طول بازیابی نوشتن دیگری پذیرفته نمی‌شود، و پس از آن بکاپ استاندارد گرفته می‌شود. برای برگرداندن، همان بکاپ محافظ را در همین صفحه بازیابی کنید.
 ۵. Importer فقط روی دیتابیس خالی اجرا می‌شود؛ اگر داده‌ای وجود داشته باشد متوقف می‌شود و هیچ چیزی را پاک نمی‌کند.
 ۶. فعال‌سازی روی سرور واقعی فقط پس از تأیید جداگانه مالک و طبق بخش ۳ همین سند.
+۷. وقتی صفحهٔ نتیجه گفت انتقال از ربات قبلی کامل شد، یک بار روی سرور `sudo botctl restart background` را اجرا کنید تا بخش‌های پس‌زمینه (یادآورها، پایش پنل‌ها و ساخت سرویس) از نو شروع کنند. یادآورهای مربوط به گذشته فرستاده نمی‌شوند، ارسال یادآورها در هر دقیقه سقف دارد و هجوم یادآور در تاپیک خطاهای گروه گزارش اعلام می‌شود.

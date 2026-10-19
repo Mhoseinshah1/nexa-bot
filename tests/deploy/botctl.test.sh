@@ -1787,6 +1787,65 @@ assert_equals 'restart refused an installation with nothing wrong with it' 0 "$B
 assert_not_contains 'restart claimed a disagreement that does not exist' \
   "$BOTCTL_OUTPUT" 'disagree'
 
+test_case 'restart background restarts exactly the three background roles'
+# Round 4 PR-H: the step the import completion screen tells the owner to run. It must
+# restart the worker, the monitor and the provisioner — the processes whose first passes
+# after an import are the ones that could message customers — and nothing else: not the
+# api the owner is reading the import's result in, and never through `up`, which could
+# start whatever image deploy.env names instead of the one that is running.
+fake_set compose_services 'api worker monitor provisioner postgres redis caddy'
+reset_docker_log
+run_botctl restart background
+assert_equals 'restart background failed' 0 "$BOTCTL_STATUS"
+assert_contains 'the three background roles were not restarted' \
+  "$(docker_log)" 'restart worker monitor provisioner'
+assert_not_contains 'restart background recreated containers with up' "$(docker_log)" ' up '
+assert_not_contains 'restart background restarted the api' "$(docker_log)" 'restart api'
+assert_contains 'the operator was not told what was restarted' \
+  "$BOTCTL_OUTPUT" 'restarted worker monitor provisioner'
+
+test_case 'restart background names only the roles this topology defines'
+# A release that predates the provisioner must not be asked to restart one: compose would
+# refuse the unknown service and the step would fail on an installation with nothing wrong.
+fake_set compose_services 'api worker monitor postgres redis caddy'
+reset_docker_log
+run_botctl restart background
+assert_equals 'restart background failed without a provisioner' 0 "$BOTCTL_STATUS"
+assert_contains 'worker and monitor were not restarted' "$(docker_log)" 'restart worker monitor'
+assert_not_contains 'a provisioner this topology lacks was named' "$(docker_log)" 'provisioner'
+
+test_case 'restart background refuses a topology with no background role'
+fake_set compose_services 'api postgres redis caddy'
+reset_docker_log
+run_botctl restart background
+assert_fails 'restart background reported success restarting nothing' test "$BOTCTL_STATUS" -eq 0
+assert_not_contains 'a restart was issued with nothing to restart' "$(docker_log)" ' restart'
+assert_contains 'the refusal does not say why' "$BOTCTL_OUTPUT" 'nothing was restarted'
+
+test_case 'restart background reports a refused restart'
+fake_set compose_services 'api worker monitor provisioner postgres redis caddy'
+fake_set restart_exit 1
+run_botctl restart background
+assert_fails 'a refused restart was reported as success' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the failure does not name what failed' "$BOTCTL_OUTPUT" 'restarting worker'
+fake_set restart_exit 0
+
+test_case 'restart background waits for readiness'
+# A worker that does not come back after the restart is not "restarted".
+fake_set worker_health unhealthy
+NEXA_READY_TIMEOUT=2 run_botctl restart background
+assert_fails 'restart background called an unhealthy worker restarted' \
+  test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the unready installation was not reported' "$BOTCTL_OUTPUT" 'not ready'
+fake_set worker_health healthy
+
+test_case 'restart refuses an argument it does not know'
+reset_docker_log
+run_botctl restart everything
+assert_fails 'an unknown restart target was accepted' test "$BOTCTL_STATUS" -eq 0
+assert_not_contains 'an unknown target still restarted something' "$(docker_log)" ' up '
+fake_set compose_services 'api worker monitor postgres redis caddy'
+
 test_case 're-recording says so when it leaves the two pointers equal'
 # The repair deliberately does not touch `previous`, so an interrupted rollback
 # that made the pointers equal survives it — and the next `botctl rollback`

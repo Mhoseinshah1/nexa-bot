@@ -459,11 +459,19 @@ botctl update <version>    update to a version
 botctl rollback            return to the previous release
 botctl logs [service]      follow logs
 botctl restart             restart the stack
+botctl restart background  restart worker, monitor and provisioner (after an import or a restore)
 botctl admin check-2fa --username NAME
                            whether an administrator has two-step sign-in on
 botctl admin reset-2fa --username NAME --reason TEXT
                            owner recovery: remove two-step sign-in (audited)
 ```
+
+`botctl restart background` is the step after a one-time import from the previous bot
+(and after a restore): it restarts only the background roles — worker, monitor and, when the
+release has one, provisioner — with `docker compose restart`, so the containers that are
+running start again from the image they already run, and then waits for readiness. The api,
+the recovery role and the edge are not touched. Nothing else restarts these processes after
+an import, and the import's completion screen in the Web Admin shows the command to copy.
 
 None of these print a secret. `botctl status` reports container state and the
 resolved configuration by key and by presence, never a secret's value, so its

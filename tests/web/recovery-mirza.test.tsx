@@ -13,7 +13,11 @@ import {
   type PermissionKey,
 } from '@nexa/contracts';
 import { RecoveryPage } from '../../apps/web/src/pages/recovery';
-import { mirzaStepMarks, runStage } from '../../apps/web/src/pages/recovery-mirza';
+import {
+  RESTART_AFTER_IMPORT_COMMAND,
+  mirzaStepMarks,
+  runStage,
+} from '../../apps/web/src/pages/recovery-mirza';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { formatNumber } from '../../apps/web/src/format';
 import { NAV, ROUTE_PATTERNS, resolve } from '../../apps/web/src/app';
@@ -914,6 +918,10 @@ describe('the run and its result', () => {
     expect(screen.getAllByText('history:payment').length).toBeGreaterThan(0);
     const steps = Array.from(document.querySelectorAll('.lmg-steps li'));
     expect(steps.map((li) => li.className)).toEqual(['done', 'done', 'done', 'done']);
+    // Round 4 PR-H: the one server step after an import, shown to copy.
+    expect(screen.getByText(t('web.mrz_restart_after_import_title'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.mrz_restart_after_import_body'))).toBeInTheDocument();
+    expect(screen.getByText(RESTART_AFTER_IMPORT_COMMAND)).toBeInTheDocument();
   });
 
   it('says why a run failed: the protective backup was not taken, nothing imported', async () => {
@@ -927,6 +935,8 @@ describe('the run and its result', () => {
     await choose(MIRZA_PACKAGE_BYTES, 'restore.nxpkg');
     await send();
     expect(await screen.findByText(t('web.mrz_result_failed'))).toBeInTheDocument();
+    // Nothing was imported, so there is nothing to restart for.
+    expect(screen.queryByText(t('web.mrz_restart_after_import_title'))).toBeNull();
     expect(
       screen.getAllByText(t('web.mrz_error_pre_import_backup'), { exact: false }).length,
     ).toBeGreaterThan(0);
@@ -1196,6 +1206,8 @@ describe('the "adopt approved" lane (service-review.md §4b)', () => {
     await send();
     expect(await screen.findByText(t('web.mrz_adopt_result_title'))).toBeInTheDocument();
     expect(screen.getByText(t('web.mrz_adopt_partial'))).toBeInTheDocument();
+    // Round 4 PR-H: the lane created services, so the restart step is shown here too.
+    expect(screen.getByText(RESTART_AFTER_IMPORT_COMMAND)).toBeInTheDocument();
     const value = (label: string) =>
       screen.getByText(label).closest('div, li, tr, dl')?.textContent ?? '';
     expect(value(t('web.mrz_adopt_adopted'))).toContain(formatNumber(1));
