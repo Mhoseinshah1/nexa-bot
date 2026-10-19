@@ -351,6 +351,7 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
         }
       >
         <DataTable
+          phoneCards
           caption={t('web.referrals_attributions_title')}
           columns={columns}
           rows={rows}
@@ -565,6 +566,7 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
         }
       >
         <DataTable
+          phoneCards
           caption={t('web.referrals_commissions_title')}
           columns={columns}
           rows={rows}

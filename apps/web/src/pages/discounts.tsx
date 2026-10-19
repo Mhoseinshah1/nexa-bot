@@ -748,6 +748,7 @@ function DiscountRules({
           }
         >
           <DataTable
+            phoneCards
             caption={t('web.discounts_rules_title')}
             columns={columns}
             rows={rows}
@@ -1824,6 +1825,7 @@ function CashbackRules({
           }
         >
           <DataTable
+            phoneCards
             caption={t('web.cashback_rules_title')}
             columns={columns}
             rows={rows}

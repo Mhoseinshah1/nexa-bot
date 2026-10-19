@@ -1170,6 +1170,7 @@ export function PaymentsPage({
           ) : (
             <>
               <DataTable
+                phoneCards
                 caption={t('web.payment_ops_title')}
                 columns={columns}
                 rows={payments.data.payments}

@@ -747,6 +747,7 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
         {data !== undefined && (
           <>
             <DataTable
+              phoneCards
               columns={columns}
               rows={data.rows}
               rowKey={(r) => `${r.productId}|${r.title}|${r.currency}`}
@@ -1031,6 +1032,7 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
         {data !== undefined && (
           <>
             <DataTable
+              phoneCards
               columns={columns}
               rows={data.rows}
               rowKey={(r) => r.orderId}
@@ -1643,6 +1645,7 @@ export function ReferralAnalytics({
               <Empty title={t('web.report_referrers_empty')} icon="users" />
             ) : (
               <DataTable
+                phoneCards
                 columns={[
                   {
                     key: 'rank',

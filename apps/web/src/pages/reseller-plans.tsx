@@ -371,6 +371,7 @@ export function ResellerPlansPage({
           }
         >
           <DataTable
+            phoneCards
             caption={t('web.reseller_plans_tiers_title')}
             columns={columns}
             rows={tierPage.rows}
@@ -827,6 +828,7 @@ function MinimumProgressCard({
             empty={<Empty title={t('web.reseller_minimum_empty')} icon="inbox" />}
           >
             <DataTable
+              phoneCards
               caption={t('web.reseller_minimum_progress_title')}
               columns={columns}
               rows={progressPage.rows}

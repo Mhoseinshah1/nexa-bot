@@ -589,6 +589,7 @@ export function ResellersPage({
           }
         >
           <DataTable
+            phoneCards
             caption={t('web.resellers_list_title')}
             columns={columns}
             rows={rows}
