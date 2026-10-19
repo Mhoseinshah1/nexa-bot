@@ -17,7 +17,12 @@ import {
 } from '../../apps/web/src/ui/kit';
 import { ListFilterBar } from '../../apps/web/src/ui/filter-bar';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { formatNumber } from '../../apps/web/src/format';
+import {
+  formatDate,
+  formatNumber,
+  formatTimestamp,
+  formatTimestampNumeric,
+} from '../../apps/web/src/format';
 import { renderPage } from './harness';
 
 /**
@@ -354,5 +359,15 @@ describe('tab strips — wrap at every width, as the demo’s .tabs', () => {
     expect(css).toContain('flex-wrap: wrap');
     expect(css).toContain('overflow-x: visible');
     expect(KIT_CSS).not.toMatch(/@media \(min-width: 821px\) \{\s*\.tabs:not\(\.vertical\)/);
+  });
+});
+
+describe('timestamps — the demo’s numeric shape everywhere, decided in one place', () => {
+  it('formats every date-time and date as numbers, never a month name', () => {
+    const at = '2026-10-06T16:00:00.000Z';
+    expect(formatTimestamp(at)).toBe(formatTimestampNumeric(at));
+    expect(formatTimestamp(at)).toMatch(/^⁦[۰-۹]{4}\/[۰-۹]{2}\/[۰-۹]{2} [۰-۹]{2}:[۰-۹]{2}⁩$/);
+    expect(formatDate(at)).toMatch(/^⁦[۰-۹]{4}\/[۰-۹]{2}\/[۰-۹]{2}⁩$/);
+    expect(formatTimestamp('not a date')).toBe('not a date');
   });
 });
