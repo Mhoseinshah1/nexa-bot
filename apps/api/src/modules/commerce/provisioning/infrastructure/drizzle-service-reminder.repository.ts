@@ -13,6 +13,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { serviceReminders } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  ServiceReminderBasis,
   ServiceReminderCandidate,
   ServiceReminderRaise,
   ServiceReminderRepository,
@@ -30,7 +31,45 @@ interface CandidateRow {
   readonly traffic_used_bytes: string;
   /** WP-A9: the expiry query only. */
   readonly expiry_day_starts_at?: string | null;
+  /** Round 4 PR-H: the import baseline for the current period (`IMPORT_BASELINE_COLUMNS`). */
+  readonly baseline_at?: string | null;
+  readonly baseline_used_bytes?: string | null;
 }
+
+/**
+ * Round 4 PR-H: the import baseline of the service aliased `s`, for its CURRENT period,
+ * from the row aliased `b` (`service_reminder_baselines`, LEFT JOINed) — selected beside the
+ * candidate so the sweep's decision and the query's row cannot disagree.
+ *
+ * - With a baseline row: `baseline_at` while the deadline is still the imported one (the
+ *   expiry basis, compared exactly as `service_reminders` compares it), `baseline_used_bytes`
+ *   while the allowance is too. A renewal or added traffic is a new period, and the row
+ *   then says nothing about it.
+ * - An IMPORTED service with no row — one an earlier release adopted, before the row
+ *   existed: its creation is when the import made it, so that is `baseline_at`, and the
+ *   figure on the row is the import's only while no later sync has replaced it
+ *   (`usage_synced_at <= created_at`). Its period cannot be told apart from a later one, so
+ *   the rule is narrower than with a row: a period that began after the import has its
+ *   thresholds after the import too, and only a renewal ending within days of the import
+ *   could have one before it.
+ * - A native service (`source = 'NEXA'`): neither, ever.
+ */
+const IMPORT_BASELINE_JOIN = sql`
+  LEFT JOIN service_reminder_baselines b ON b.tenant_id = s.tenant_id AND b.service_id = s.id`;
+const IMPORT_BASELINE_COLUMNS = sql`
+  CASE
+    WHEN b.service_id IS NOT NULL THEN
+      CASE WHEN b.basis_expires_at IS NOT DISTINCT FROM s.expires_at THEN b.baseline_at END
+    WHEN s.source <> 'NEXA' THEN s.created_at
+  END AS baseline_at,
+  CASE
+    WHEN b.service_id IS NOT NULL THEN
+      CASE WHEN b.basis_expires_at IS NOT DISTINCT FROM s.expires_at
+                AND b.basis_traffic_limit_bytes = s.traffic_limit_bytes
+           THEN b.used_bytes END
+    WHEN s.source <> 'NEXA' AND s.usage_synced_at IS NOT NULL
+         AND s.usage_synced_at <= s.created_at THEN s.traffic_used_bytes
+  END AS baseline_used_bytes`;
 
 function toCandidate(row: CandidateRow): ServiceReminderCandidate {
   const limit = BigInt(row.traffic_limit_bytes);
@@ -59,6 +98,16 @@ function toCandidate(row: CandidateRow): ServiceReminderCandidate {
     trafficLimitBytes: limit,
     trafficUsedBytes: BigInt(row.traffic_used_bytes),
     basis: { expiresAt: row.expires_at, trafficLimitBytes: limit },
+    importBaseline:
+      row.baseline_at === undefined || row.baseline_at === null
+        ? null
+        : {
+            at: new Date(row.baseline_at),
+            usedBytes:
+              row.baseline_used_bytes === undefined || row.baseline_used_bytes === null
+                ? null
+                : BigInt(row.baseline_used_bytes),
+          },
   };
 }
 
@@ -131,7 +180,7 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
     const result = await this.exec(tx).execute(sql`
       SELECT c.id, c.customer_id, c.provider_username, c.expires_at,
              c.traffic_limit_bytes, c.traffic_used_bytes,
-             c.day_start AS expiry_day_starts_at
+             c.day_start AS expiry_day_starts_at, c.baseline_at, c.baseline_used_bytes
       FROM (
         SELECT s.id, s.tenant_id, s.customer_id, s.provider_username, s.expires_at,
                s.traffic_limit_bytes, s.traffic_used_bytes,
@@ -139,9 +188,11 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
                  date_trunc('day', s.expires_at AT TIME ZONE t.display_timezone)
                    AT TIME ZONE t.display_timezone,
                  s.expires_at - make_interval(secs => ${EXPIRY_DAY_MIN_NOTICE_MS / 1000})
-               ) AS day_start
+               ) AS day_start,
+               ${IMPORT_BASELINE_COLUMNS}
         FROM services s
         JOIN tenants t ON t.id = s.tenant_id
+        ${IMPORT_BASELINE_JOIN}
         WHERE s.tenant_id = ${tenantId}
           AND s.state = ANY(${sql.param([...EXPIRY_REMINDER_STATES])}::text[])
           AND s.expires_at IS NOT NULL
@@ -195,8 +246,10 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
     const tenantId = requireTenantId(scope);
     const result = await this.exec(tx).execute(sql`
       SELECT s.id, s.customer_id, s.provider_username, s.expires_at,
-             s.traffic_limit_bytes, s.traffic_used_bytes
+             s.traffic_limit_bytes, s.traffic_used_bytes,
+             ${IMPORT_BASELINE_COLUMNS}
       FROM services s
+      ${IMPORT_BASELINE_JOIN}
       WHERE s.tenant_id = ${tenantId}
         AND s.state = ANY(${sql.param([...USAGE_REMINDER_STATES])}::text[])
         AND s.traffic_limit_bytes > 0
@@ -288,6 +341,37 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
     const row = (result.rows as unknown as (CandidateRow & { usage_measured: boolean })[])[0];
     if (row === undefined) return null;
     return { ...toCandidate(row), usageMeasured: row.usage_measured };
+  }
+
+  /**
+   * Round 4 PR-H: the import baseline, once. `ON CONFLICT DO NOTHING` on the primary key, so
+   * a rerun of the adoption keeps the first row — the import's — and an empty `returning`
+   * says somebody already wrote it. The deadline is cast back from the text the seed's read
+   * returned, for the microsecond reason `ServiceReminderBasis` gives: a millisecond copy
+   * would never be NOT DISTINCT FROM the column it came from.
+   */
+  async recordBaseline(
+    scope: TenantContext,
+    baseline: {
+      readonly serviceId: string;
+      readonly at: Date;
+      readonly basis: ServiceReminderBasis;
+      readonly usedBytes: bigint | null;
+    },
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const inserted = await this.exec(tx).execute(sql`
+      INSERT INTO service_reminder_baselines (tenant_id, service_id, baseline_at,
+                                              basis_expires_at, basis_traffic_limit_bytes,
+                                              used_bytes, created_at)
+      VALUES (${tenantId}, ${baseline.serviceId}, ${baseline.at},
+              ${baseline.basis.expiresAt}::timestamptz, ${baseline.basis.trafficLimitBytes},
+              ${baseline.usedBytes}, ${baseline.at})
+      ON CONFLICT (tenant_id, service_id) DO NOTHING
+      RETURNING service_id
+    `);
+    return inserted.rows.length > 0;
   }
 }
 

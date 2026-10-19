@@ -47,6 +47,27 @@ export interface ServiceReminderCandidate {
   readonly trafficLimitBytes: bigint;
   readonly trafficUsedBytes: bigint;
   readonly basis: ServiceReminderBasis;
+  /**
+   * Round 4 PR-H: what the service already WAS when an import created it, for the period
+   * it is in now — or null for a native service, and for an imported one whose period has
+   * since moved (a renewal, added traffic). See `service_reminder_baselines` and
+   * `importedReminderKinds`. Absent is null.
+   */
+  readonly importBaseline?: ServiceImportBaseline | null;
+}
+
+/**
+ * Round 4 PR-H: an imported service's baseline, as the candidate query resolved it for the
+ * service's CURRENT period.
+ *
+ * `at` is when the import created the service. `usedBytes` is the figure the import read,
+ * or null when the usage half has no baseline: nothing was measured, or the allowance has
+ * changed since. The expiry half applies only while the deadline is the imported one; the
+ * query returns null for the whole baseline otherwise.
+ */
+export interface ServiceImportBaseline {
+  readonly at: Date;
+  readonly usedBytes: bigint | null;
 }
 
 /**
@@ -158,6 +179,23 @@ export interface ServiceReminderRepository {
     serviceId: string,
     tx: TransactionScope,
   ): Promise<(ServiceReminderCandidate & { readonly usageMeasured: boolean }) | null>;
+
+  /**
+   * Round 4 PR-H: records the service's import baseline — the moment, the basis and the
+   * measured figure the seed decided from. Written once: `ON CONFLICT DO NOTHING` on the
+   * service, so a rerun of the adoption keeps the FIRST baseline, which is the import's.
+   * Answers whether this call wrote it.
+   */
+  recordBaseline(
+    scope: TenantContext,
+    baseline: {
+      readonly serviceId: string;
+      readonly at: Date;
+      readonly basis: ServiceReminderBasis;
+      readonly usedBytes: bigint | null;
+    },
+    tx: TransactionScope,
+  ): Promise<boolean>;
 }
 
 /**

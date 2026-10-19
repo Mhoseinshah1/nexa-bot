@@ -681,6 +681,12 @@ export interface CustomerNotificationRepository {
     leaseUntil: Date,
     limit: number,
     tx?: unknown,
+    /**
+     * Round 4 PR-H: claim only the IMMEDIATE kinds, or only the reminders (the kinds quiet
+     * hours hold), so the reminder ceiling can bound the second without touching the
+     * first. Absent claims both, immediate first.
+     */
+    only?: 'IMMEDIATE' | 'QUIET',
   ): Promise<readonly CustomerNotificationRecord[]>;
 
   /** Stamps a send as in flight, in its own transaction, before it leaves. */

@@ -116,8 +116,12 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
     leaseUntil: Date,
     limit: number,
     tx?: unknown,
+    only?: 'IMMEDIATE' | 'QUIET',
   ): Promise<readonly CustomerNotificationRecord[]> {
     const tenantId = requireTenantId(scope);
+    // Round 4 PR-H: one class of kinds, when the caller bounds the reminders separately.
+    const quiet = inArray(customerNotifications.kind, [...QUIET_KINDS]);
+    const kindClass = only === undefined ? undefined : only === 'QUIET' ? quiet : sql`NOT ${quiet}`;
     const ready = or(
       isNull(customerNotifications.nextAttemptAt),
       lte(customerNotifications.nextAttemptAt, now),
@@ -157,6 +161,7 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
            */
           isNull(customerNotifications.sendStartedAt),
           ready,
+          kindClass,
         ),
       )
       /*

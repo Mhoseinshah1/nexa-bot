@@ -18,6 +18,7 @@ import {
   BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_SCHEDULE_SETTING_KEYS,
+  REMINDER_RATE_SETTING_KEYS,
   PAYMENT_GATEWAY_DESCRIPTORS,
   CAMPAIGN_SCHEDULE_INTERVAL_MS,
   CHANNEL_MEMBERSHIP_TIMEOUT_MS,
@@ -697,6 +698,7 @@ import {
   CustomerNotificationLoop,
   CUSTOMER_NOTIFICATION_INTERVAL_MS,
 } from './modules/commerce/messaging/application/customer-notification-loop.js';
+import { DrizzleReminderRateWindowStore } from './modules/commerce/messaging/infrastructure/drizzle-reminder-rate-window.store.js';
 import { DrizzleCustomerNotificationRepository } from './modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository.js';
 import { CustomerNotifier } from './modules/commerce/messaging/application/customer-notifier.js';
 import { OperationOutcomeAnnouncer } from './modules/commerce/messaging/application/operation-outcome-announcer.js';
@@ -5334,6 +5336,26 @@ export function createContainer(
       },
       // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.
       quietHours: reminderQuietHours,
+      /*
+       * Round 4 PR-H: the ceiling on automatic reminders and the burst alarm. The settings
+       * are read in the claim's own transaction; the alarm goes through the one recorder.
+       */
+      reminderRate: {
+        windows: new DrizzleReminderRateWindowStore(),
+        limits: async (scope, tx) => ({
+          perMinute: await settingsResolver.valueOf<number>(
+            scope,
+            REMINDER_RATE_SETTING_KEYS.maxPerMinute,
+            tx,
+          ),
+          burstPerHour: await settingsResolver.valueOf<number>(
+            scope,
+            REMINDER_RATE_SETTING_KEYS.burstAlarmPerHour,
+            tx,
+          ),
+        }),
+        opsLog,
+      },
       // Round N (B2): the mass credit's amount and the grant's service, read from the item.
       massActions: {
         notificationValues: async (scope, kind, itemId) => {
