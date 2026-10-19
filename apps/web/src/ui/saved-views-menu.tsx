@@ -8,6 +8,7 @@ import {
   type FormEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { formatNumber } from '../format';
 import { t } from '../i18n/web.fa';
 import { Icon } from './icons';
 import { useLayer } from './layer';
@@ -134,8 +135,10 @@ export function SavedViewsMenu({ registration }: { registration: SavedViewsRegis
       >
         <span aria-hidden="true">★</span>
         <span className="saved-views-name">{matchName ?? t('web.saved_views')}</span>
+        {/* How many filters this admin has saved here — a count of their own local list,
+            never a result count (the API has no field for one; redesign-status). */}
         {matchName === null && views.length > 0 && (
-          <span className="lfb-n num">{views.length}</span>
+          <span className="lfb-n num">{formatNumber(views.length)}</span>
         )}
         <Icon name="chevron" size={12} />
       </button>
