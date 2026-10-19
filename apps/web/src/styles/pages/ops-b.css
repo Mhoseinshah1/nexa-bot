@@ -955,6 +955,12 @@ form.set-row > * + * {
   margin-top: 0;
   font-size: var(--fs-xs);
 }
+/* The restore card's part titles («بارگذاری آرشیو», the earlier restores) read as headings. */
+.card.recovery-operations h3.card-subtitle {
+  color: var(--fg);
+  font-size: var(--fs-ui);
+  font-weight: 700;
+}
 /* The history's download is a quiet action in its cell, not an underlined identifier. */
 .card.rcv-history td a.link {
   color: var(--fg);
