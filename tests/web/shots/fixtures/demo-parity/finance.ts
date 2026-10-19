@@ -1,4 +1,5 @@
 import {
+  campaignListResponseSchema,
   fxStatusResponseSchema,
   paymentGatewayListResponseSchema,
   paymentListResponseSchema,
@@ -628,7 +629,136 @@ const REPORTS: readonly ShotFixture[] = [
   ),
 ];
 
+// --- campaigns (`#/campaigns`) -------------------------------------------------
+
+type CampaignRow = readonly [
+  name: string,
+  state: string,
+  actions: readonly string[],
+  start: readonly [string, string],
+  end: readonly [string, string],
+  confirmed: number | null,
+];
+
+/** The demo's ten campaigns, every state among them, in its order. */
+const DEMO_CAMPAIGNS: readonly CampaignRow[] = [
+  [
+    'جشنوارهٔ پاییز ۱۴۰۵',
+    'ACTIVE',
+    ['DISCOUNT', 'ANNOUNCEMENT'],
+    ['1405-07-10', '10:00'],
+    ['1405-07-25', '23:59'],
+    6214,
+  ],
+  [
+    'جبران قطعی DE-2',
+    'COMPLETED',
+    ['TRAFFIC_GIFT', 'TIME_GIFT'],
+    ['1405-07-14', '18:00'],
+    ['1405-07-15', '18:00'],
+    611,
+  ],
+  [
+    'هدیهٔ کیف پول مشتریان وفادار',
+    'PAUSED',
+    ['CASHBACK', 'WALLET_GIFT'],
+    ['1405-07-08', '09:00'],
+    ['1405-07-28', '23:00'],
+    1240,
+  ],
+  [
+    'بازگشت مشتریان غیرفعال',
+    'SCHEDULED',
+    ['DISCOUNT'],
+    ['1405-07-20', '10:00'],
+    ['1405-08-05', '10:00'],
+    2031,
+  ],
+  [
+    'یلدا ۱۴۰۵',
+    'DRAFT',
+    ['DISCOUNT', 'ANNOUNCEMENT'],
+    ['1405-09-30', '23:59'],
+    ['1405-10-02', '23:59'],
+    null,
+  ],
+  [
+    'تمدید زودهنگام آبان',
+    'DRAFT',
+    ['CASHBACK', 'WALLET_GIFT'],
+    ['1405-08-01', '00:00'],
+    ['1405-08-10', '23:59'],
+    null,
+  ],
+  [
+    'کمپین نوروز ۱۴۰۵',
+    'COMPLETED',
+    ['DISCOUNT', 'ANNOUNCEMENT'],
+    ['1405-01-01', '00:00'],
+    ['1405-01-13', '23:59'],
+    5120,
+  ],
+  [
+    'آزمایش کد تخفیف تلگرام',
+    'CANCELLED',
+    ['DISCOUNT'],
+    ['1405-07-05', '12:00'],
+    ['1405-07-06', '12:00'],
+    12,
+  ],
+  [
+    'فروش ویژهٔ نمایندگان',
+    'ACTIVE',
+    ['DISCOUNT', 'WALLET_GIFT'],
+    ['1405-07-12', '08:00'],
+    ['1405-07-22', '08:00'],
+    96,
+  ],
+  [
+    'هفتهٔ سرویس نامحدود',
+    'COMPLETED',
+    ['CASHBACK'],
+    ['1405-06-20', '10:00'],
+    ['1405-06-27', '10:00'],
+    4410,
+  ],
+];
+
+const CAMPAIGN_ROWS: readonly Json[] = DEMO_CAMPAIGNS.map(
+  ([name, state, actionKinds, start, end, confirmed], index) => {
+    const launched = state !== 'DRAFT' && state !== 'SCHEDULED';
+    return {
+      id: uid('0199d0ab', index),
+      name,
+      description: '',
+      state,
+      startsAt: ago(-60 * 24 * (index + 1)),
+      endsAt: ago(-60 * 24 * (index + 10)),
+      startLocal: { date: start[0], time: start[1] },
+      endLocal: { date: end[0], time: end[1] },
+      audienceConfirmedCount: confirmed,
+      actionKinds,
+      scheduledAt: state === 'DRAFT' ? null : ago(60 * 24 * (index + 2)),
+      startedAt: launched ? ago(60 * 24 * (index + 1)) : null,
+      pausedAt: state === 'PAUSED' ? ago(60 * 5) : null,
+      completedAt: state === 'COMPLETED' ? ago(60 * 24 * index) : null,
+      cancelledAt: state === 'CANCELLED' ? ago(60 * 24 * index) : null,
+      createdAt: ago(60 * 24 * (index + 20)),
+      updatedAt: ago(60 * index),
+    };
+  },
+);
+
+const CAMPAIGNS: readonly ShotFixture[] = [
+  fixture('/campaigns', campaignListResponseSchema, {
+    campaigns: CAMPAIGN_ROWS,
+    nextCursor: 'camp-2',
+    presentation: { timezone: 'Asia/Tehran', calendar: 'jalali' },
+  }),
+];
+
 export const DEMO_FINANCE: readonly ShotFixture[] = [
+  ...CAMPAIGNS,
   ...PAYMENTS,
   ...GATEWAYS,
   ...REFERRALS,
