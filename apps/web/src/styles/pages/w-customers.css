@@ -335,3 +335,10 @@
   display: flex;
   padding: 10px 12px;
 }
+@media (max-width: 520px) {
+  /* Two figures a row on a phone: a date takes two short lines rather than leaving its card. */
+  .c360-stats > .stat .val {
+    font-size: 15px;
+    white-space: normal;
+  }
+}
