@@ -2,28 +2,36 @@ import { sql } from 'drizzle-orm';
 import type { TenantContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type {
-  ServiceOriginReader,
-  ServiceOriginalPurchase,
-} from '../application/service-admin.service.js';
-import type { ServiceRecord } from '../application/ports.js';
+
+/**
+ * What the reader answers, restated structurally: this module imports nothing of the commerce
+ * modules (`legacy-invoice-archive-boundary.test.ts`); provisioning's `ServiceOriginReader`
+ * port is satisfied by shape.
+ */
+export interface ArchivedOriginalPurchase {
+  readonly productName: string | null;
+  readonly price: { readonly amountMinor: bigint; readonly currency: string } | null;
+}
 
 /**
  * Owner rule 2026-10-18 — what an imported service's customer originally bought, for display
  * and history: the product name and price of the archived invoice its `source_ref`
  * (`invoice:<id_invoice>`) names, from the latest VISIBLE archive revision (its run COMPLETED).
  *
+ * It lives in the archive's own module (`legacy-invoice-archive-boundary.test.ts`: no commerce
+ * module knows the archive); provisioning holds only the port.
+ *
  * A link, not a copy: nothing is duplicated onto the service or its order (whose adoption line
  * is free by `orders_legacy_adoption_shape_check`). The archive's price is metadata — never a
  * price anything charges, renews at or refunds.
  */
-export class DrizzleServiceOriginReader implements ServiceOriginReader {
+export class DrizzleServiceOriginReader {
   constructor(private readonly db: Database) {}
 
   async originalPurchase(
     scope: TenantContext,
-    service: ServiceRecord,
-  ): Promise<ServiceOriginalPurchase | null> {
+    service: { readonly id: string },
+  ): Promise<ArchivedOriginalPurchase | null> {
     const tenantId = requireTenantId(scope);
     const result = await this.db.execute<{
       product_name: string | null;

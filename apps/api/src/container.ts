@@ -603,7 +603,7 @@ import {
 } from './modules/commerce/pricing/infrastructure/drizzle-cashback.repository.js';
 import { DrizzleDiscountCodeCaptureRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount-code-capture.repository.js';
 import { DrizzleServiceRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service.repository.js';
-import { DrizzleServiceOriginReader } from './modules/commerce/provisioning/infrastructure/drizzle-service-origin.reader.js';
+import { DrizzleServiceOriginReader } from './modules/platform/legacy-invoice-archive/infrastructure/drizzle-service-origin.reader.js';
 import {
   DrizzleServiceReminderRepository,
   DrizzleServiceReminderSnapshotReader,
