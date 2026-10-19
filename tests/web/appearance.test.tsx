@@ -49,7 +49,7 @@ describe('the appearance page', () => {
     for (;;) {
       text += container.textContent ?? '';
       rows += container.querySelectorAll('tbody tr').length;
-      const next = screen.queryByRole('button', { name: t('web.page_next_aria') });
+      const next = screen.queryByRole('button', { name: t('web.page_next') });
       if (next === null || (next as HTMLButtonElement).disabled) break;
       fireEvent.click(next);
     }

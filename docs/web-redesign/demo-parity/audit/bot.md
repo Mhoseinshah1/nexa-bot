@@ -8,9 +8,12 @@ fixture set `tests/web/shots/fixtures/demo-parity/bot.ts`.
 
 Breadcrumbs (X1) came with Phase A and were verified on every route here.
 
-Kit changes this family made (additive, each in its own commit): `usePagedRows(…, { wholeCollection })`
-(974985e9) — the demo's counted pager over a list the endpoint answers whole; `DataTable stackOnPhone`
-(8a8a9b04, 9c874054) — the demo's stacked «label: value» rows at phone width.
+No kit change remains from this family. Phone width uses the track's one phone-card mechanism,
+`DataTable stack` / `stack="labelled"` (the appearance slot table uses the same `tbl-wrap stack
+labelled` classes). **E-total** is the rule that a counted pager («… از N») appears only where the
+endpoint returns a server TOTAL (PROMPT.md, nexa-web-design): a count of a whole collection
+computed in the browser is a client-side count, so a list the demo pages that has no total keeps
+its paging from main or becomes a height-limited scroll pane.
 
 Exclusions used: **E-sample** the «داده نمونه» badge and the incident banner's sample content
 (PROMPT.md, excluded); **E-digits** the demo's Latin digits (Persian digits are the project
@@ -30,19 +33,19 @@ not patched per page).
 
 ## /appearance
 
-| #   | difference                                                     | status                                           |
-| --- | -------------------------------------------------------------- | ------------------------------------------------ |
-| 1   | DIFFS #1 breadcrumb                                            | ✅ Phase A                                       |
-| 2   | DIFFS #2 test card lists every bot with its pill and line      | ✅ 71b94ec0 (fixture adds the stopped bot)       |
-| 3   | DIFFS #3 expand chevron on every row; the whole row opens      | ✅ 71b94ec0                                      |
-| 4   | DIFFS #4 «جایگاه‌های آیکون» tab count                          | ✅ 71b94ec0                                      |
-| 5   | DIFFS #5 «خاموش» pill beside the badge                         | ✅ 71b94ec0 (fixture: a stored, switched-off id) |
-| 6   | DIFFS #6 «۱–۱۰ از ۲۹ · صفحه ۱ از ۳»                            | ✅ 974985e9, 71b94ec0                            |
-| 7   | DIFFS #7 footer note removed                                   | ✅ 71b94ec0                                      |
-| 8   | Own: the marker alone under the slot name (no «نشانگر در متن») | ✅ 71b94ec0                                      |
-| 9   | Own: roomy rows and the 20px glyph                             | ✅ 71b94ec0                                      |
-| 10  | Own: test card hint in the body, bulleted bot list             | ✅ 71b94ec0                                      |
-| 11  | Own (390): rows stack into labelled cards                      | ✅ af550159                                      |
+| #   | difference                                                     | status                                                                                         |
+| --- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 1   | DIFFS #1 breadcrumb                                            | ✅ Phase A                                                                                     |
+| 2   | DIFFS #2 test card lists every bot with its pill and line      | ✅ 71b94ec0 (fixture adds the stopped bot)                                                     |
+| 3   | DIFFS #3 expand chevron on every row; the whole row opens      | ✅ 71b94ec0                                                                                    |
+| 4   | DIFFS #4 «جایگاه‌های آیکون» tab count                          | ✅ 71b94ec0                                                                                    |
+| 5   | DIFFS #5 «خاموش» pill beside the badge                         | ✅ 71b94ec0 (fixture: a stored, switched-off id)                                               |
+| 6   | DIFFS #6 «۱–۱۰ از ۲۹ · صفحه ۱ از ۳»                            | ⛔ E-total — `/appearance` returns no total; the slot list keeps main's «صفحه ۱ / ۳» قبلی/بعدی |
+| 7   | DIFFS #7 footer note removed                                   | ✅ 71b94ec0                                                                                    |
+| 8   | Own: the marker alone under the slot name (no «نشانگر در متن») | ✅ 71b94ec0                                                                                    |
+| 9   | Own: roomy rows and the 20px glyph                             | ✅ 71b94ec0                                                                                    |
+| 10  | Own: test card hint in the body, bulleted bot list             | ✅ 71b94ec0                                                                                    |
+| 11  | Own (390): rows stack into labelled cards                      | ✅ af550159                                                                                    |
 
 ## /bot-buttons
 
@@ -80,12 +83,12 @@ not patched per page).
 
 ## /content
 
-| #   | difference                                                           | status                                                                                           |
-| --- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| 1   | DIFFS #1 bounded list pane, «۱–۱۰ از ۷۳۲ · صفحه ۱ از ۷۴» + قبلی/بعدی | ✅ 179b2ad4 (the endpoint answers every template; rows off the page are hidden, never unmounted) |
-| 2   | DIFFS #2 dot markers on customised texts; breadcrumb                 | ✅ 179b2ad4 (fixture: four customised texts); Phase A                                            |
-| 3   | Own: list column 330px so the pager is one row                       | ✅ 179b2ad4                                                                                      |
-| 4   | Own (390): category chips wrap; the pane takes its own height        | ✅ af550159                                                                                      |
+| #   | difference                                                           | status                                                                                                                  |
+| --- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 1   | DIFFS #1 bounded list pane, «۱–۱۰ از ۷۳۲ · صفحه ۱ از ۷۴» + قبلی/بعدی | ⛔ E-total for the count and pager — `/templates` returns no total; the list keeps main's height-limited scrolling pane |
+| 2   | DIFFS #2 dot markers on customised texts; breadcrumb                 | ✅ already drawn (fixture: four customised texts, 179b2ad4); Phase A                                                    |
+| 3   | Own: list column 330px, as the demo                                  | ✅ 179b2ad4                                                                                                             |
+| 4   | Own (390): category chips wrap; the pane takes its own height        | ✅ af550159                                                                                                             |
 
 ## /client-apps
 
@@ -101,12 +104,12 @@ not patched per page).
 
 ## /features
 
-| #   | difference                                              | status                                                |
-| --- | ------------------------------------------------------- | ----------------------------------------------------- |
-| 1   | DIFFS #1 ten a page with «۱–۱۰ از ۲۱ · صفحه ۱ از ۳»     | ✅ 6079739e (the endpoint answers every flag)         |
-| 2   | DIFFS #2 red invalid-value sentence beside the value    | ✅ 6079739e (fixture: an invalid stored minute count) |
-| 3   | DIFFS #3 values at the far end of a related-setting row | ✅ 6079739e                                           |
-| 4   | DIFFS #4 breadcrumb                                     | ✅ Phase A                                            |
+| #   | difference                                              | status                                                                                                   |
+| --- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1   | DIFFS #1 ten a page with «۱–۱۰ از ۲۱ · صفحه ۱ از ۳»     | ⛔ E-total — `/features` returns no total; the list is a height-limited scroll pane (main drew it whole) |
+| 2   | DIFFS #2 red invalid-value sentence beside the value    | ✅ 6079739e (fixture: an invalid stored minute count)                                                    |
+| 3   | DIFFS #3 values at the far end of a related-setting row | ✅ 6079739e                                                                                              |
+| 4   | DIFFS #4 breadcrumb                                     | ✅ Phase A                                                                                               |
 
 ## /notifications
 
@@ -159,7 +162,7 @@ not patched per page).
 | 3   | DIFFS #3 «تازه‌تر / قدیمی‌تر»; breadcrumb                            | ✅ Phase A (ascending keyset, «تازه‌تر» is next, as the demo) |
 | 4   | Own: Track 1's «آرشیو» tab is the page's tab bar above the list card | ✅ b627ebd5                                                   |
 | 5   | Own: the list framed under the filters, demo row height              | ✅ b627ebd5                                                   |
-| 6   | Own (390): rows stack, no trapped scroll pane                        | ✅ 9c874054, af550159                                         |
+| 6   | Own (390): rows stack, no trapped scroll pane                        | ✅ af550159 (track `stack`)                                   |
 
 ## /product-categories
 

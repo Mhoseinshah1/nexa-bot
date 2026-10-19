@@ -91,38 +91,4 @@ describe('ten rows per page (W1.8)', () => {
     render(<Paged rows={[1, 2, 3]} />);
     expect(screen.queryByRole('button', { name: t('web.page_next') })).toBeNull();
   });
-
-  function Whole({ rows }: { rows: readonly number[] }) {
-    const paged = usePagedRows(rows, '', { wholeCollection: true });
-    return (
-      <>
-        <ul>
-          {paged.rows.map((row) => (
-            <li key={row}>{row}</li>
-          ))}
-        </ul>
-        {paged.pager}
-      </>
-    );
-  }
-
-  it('counts a whole collection the server answered as the demo does: «۱–۱۰ از ۲۹ · صفحه ۱ از ۳»', () => {
-    const rows = Array.from({ length: 29 }, (_, index) => index + 1);
-    render(<Whole rows={rows} />);
-    const said = () =>
-      (screen.getByTestId('counted-pager-info').textContent ?? '').replace(/[۰-۹]/g, (d) =>
-        String(d.charCodeAt(0) - 0x6f0),
-      );
-    expect(said()).toMatch(/1–10 از 29 · .* 1 از 3/);
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_next_aria') }));
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_next_aria') }));
-    expect(screen.getAllByRole('listitem')).toHaveLength(9);
-    expect(said()).toMatch(/21–29 از 29 · .* 3 از 3/);
-    expect(screen.getByRole('button', { name: t('web.page_next_aria') })).toBeDisabled();
-  });
-
-  it('draws no counted pager for ten rows or fewer', () => {
-    render(<Whole rows={[1, 2, 3]} />);
-    expect(screen.queryByTestId('counted-pager-info')).toBeNull();
-  });
 });

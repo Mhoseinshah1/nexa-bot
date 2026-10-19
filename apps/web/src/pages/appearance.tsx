@@ -153,9 +153,7 @@ export function AppearancePage({
   const [open, setOpen] = useState<AppearanceSlot | null>(null);
 
   const slots = view?.slots ?? [];
-  // The endpoint answers every slot at once (no cursor, no limit): its length is the server's
-  // own count of the collection, so the pager may say «۱–۱۰ از ۲۹» as the demo does.
-  const { rows: pageSlots, pager: slotPager } = usePagedRows(slots, '', { wholeCollection: true });
+  const { rows: pageSlots, pager: slotPager } = usePagedRows(slots);
   const unsaved = slots.filter((slot) => draftState(slot, draftOf(slot, drafts)).dirty);
   // A slot edited and not saved: leaving the page asks first, whether its sheet is open or not.
   useUnsavedChanges(mayEdit && unsaved.length > 0);

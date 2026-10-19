@@ -2178,34 +2178,11 @@ export const LIST_PAGE_SIZE = 10;
 export function usePagedRows<T>(
   rows: readonly T[],
   resetKey: string = '',
-  options: {
-    /**
-     * Draw the demo's counted pager («۱–۱۰ از ۲۹ · صفحه ۱ از ۳») instead of «صفحه ۱ / ۳».
-     * ONLY for rows that are the WHOLE collection as the server answered it — an endpoint
-     * with no paging at all (no cursor, no limit), so the length of its answer is the
-     * server's own count of the collection, not the size of a page.
-     */
-    wholeCollection?: boolean;
-  } = {},
 ): { rows: readonly T[]; pager: ReactNode } {
   const [state, setState] = useState({ key: resetKey, page: 0 });
   const pages = Math.max(1, Math.ceil(rows.length / LIST_PAGE_SIZE));
   const page = state.key === resetKey ? Math.min(state.page, pages - 1) : 0;
   const shown = rows.slice(page * LIST_PAGE_SIZE, (page + 1) * LIST_PAGE_SIZE);
-  if (options.wholeCollection === true) {
-    return {
-      rows: shown,
-      pager:
-        rows.length > LIST_PAGE_SIZE ? (
-          <CountedPager
-            page={page + 1}
-            pageSize={LIST_PAGE_SIZE}
-            total={serverTotal(rows.length)}
-            onPage={(next) => setState({ key: resetKey, page: next - 1 })}
-          />
-        ) : null,
-    };
-  }
   const pager =
     rows.length > LIST_PAGE_SIZE ? (
       <CursorPager

@@ -149,23 +149,7 @@
 
 /* --- Content (`#/content`) -------------------------------------------------------------- */
 
-/* The list pane ends in the demo's counted pager, under the ten texts of the page. */
-.content-nav-pager {
-  border-top: 1px solid var(--line);
-  padding: 8px 10px;
-}
-.content-nav-pager .pager {
-  justify-content: center;
-}
-.content-nav-pager .pager {
-  flex-wrap: nowrap;
-  gap: 6px;
-}
-.content-nav-pager .pager-info {
-  font-size: var(--fs-2xs);
-  white-space: nowrap;
-}
-/* The demo's list column is a little wider than the old 300px, so its pager stays one row. */
+/* The demo's list column is a little wider than the old 300px. */
 @media (min-width: 1101px) {
   .content-split {
     grid-template-columns: 330px minmax(0, 1fr);
@@ -174,10 +158,16 @@
 
 /* --- Features (`#/features`) ------------------------------------------------------------ */
 
-.feature-pager {
-  border-top: 1px solid var(--line);
-  padding: 10px 16px;
+/*
+ * The demo pages the flags ten at a time; with no server total the whole list is a
+ * height-limited pane instead (nexa-web-design), so the page itself stays short.
+ */
+.feature-pane {
+  max-block-size: calc(100vh - 260px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
+
 /* A related setting: its name on the start side, its value at the far end, as the demo. */
 .feature-settings dl > div {
   flex-wrap: nowrap;
@@ -328,16 +318,7 @@
     inline-size: auto;
   }
 }
-/*
- * At narrower widths the demo keeps the content page whole: the category chips wrap onto
- * as many rows as they need (no strip to scroll), and the list pane — ten texts a page now —
- * takes its own height rather than a 420px scroll box.
- */
-@media (max-width: 1100px) {
-  .content-nav {
-    max-height: none;
-  }
-}
+/* At phone width the demo's category chips wrap onto as many rows as they need. */
 @media (max-width: 720px) {
   .tcat-chips {
     flex-wrap: wrap;

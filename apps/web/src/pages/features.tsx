@@ -6,7 +6,7 @@ import { formatNumber, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
-import { Badge, Card, Ltr, PageHead, StateSwitch, Switch, usePagedRows } from '../ui/kit';
+import { Badge, Card, Ltr, PageHead, StateSwitch, Switch } from '../ui/kit';
 import { featurePresentation } from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
 import { TechnicalDetails } from '../ui/technical-details';
@@ -32,9 +32,6 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   const rows = flags.data?.flags ?? [];
 
   const enabledCount = rows.filter((flag) => flag.enabled).length;
-  // Ten a page, as the demo pages them; the endpoint answers every flag at once, so the
-  // count the pager states is the server's own collection.
-  const { rows: pageRows, pager } = usePagedRows(rows, '', { wholeCollection: true });
 
   return (
     <>
@@ -50,12 +47,16 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
           }
           tight
         >
-          <ul className="feature-list">
-            {pageRows.map((flag) => (
+          {/*
+           * The demo pages this list ten at a time; the endpoint returns no total, so the
+           * whole list sits in a height-limited pane instead (nexa-web-design: counted
+           * pagers only over a server total).
+           */}
+          <ul className="feature-list feature-pane">
+            {rows.map((flag) => (
               <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
             ))}
           </ul>
-          {pager !== null && <div className="feature-pager">{pager}</div>}
         </Card>
       </StateSwitch>
     </>
