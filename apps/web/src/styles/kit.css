@@ -499,13 +499,25 @@
   box-shadow: var(--gshadow);
   min-width: 0;
 }
+/*
+ * Demo parity: no rule under a card's title (the demo's \`.ch\` has none). The head's own
+ * bottom padding is the whole gap to the content, so a body right under a head starts at its
+ * edge, and a flush table or toolbar does not pull up into the title.
+ */
 .card-head {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
+}
+.card-head + .card-body {
+  padding-top: 0;
+}
+.card-head + .card-body > .tbl-wrap:first-child,
+.card-head + .card-body > .toolbar:first-child,
+.card-head + .card-body > .filter-row:first-child {
+  margin-top: 0;
 }
 /*
  * The titles keep a floor before the actions may sit beside them: with a zero

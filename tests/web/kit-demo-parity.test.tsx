@@ -329,3 +329,11 @@ it('keeps the filter bar stylesheet in place for the reordered row', () => {
   // The search row spans the grid below «فیلترها» and the saved filters.
   expect(rule(UI_CSS, '.lfb-search')).toContain('grid-column: 1 / -1');
 });
+
+describe('card heads — no rule under the title, as the demo’s .ch', () => {
+  it('draws no border under a card head, and the body under it starts at its edge', () => {
+    expect(rule(KIT_CSS, '.card-head')).not.toMatch(/border-bottom/);
+    expect(KIT_CSS).not.toMatch(/\.card-head\s*\{[^}]*border-bottom/);
+    expect(rule(KIT_CSS, '.card-head + .card-body')).toContain('padding-top: 0');
+  });
+});
