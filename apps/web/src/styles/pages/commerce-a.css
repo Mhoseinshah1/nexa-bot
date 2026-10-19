@@ -128,7 +128,7 @@
 .ca-title-id > button[data-copy-value]:focus-visible {
   opacity: 1;
 }
-@media (hover: none), (max-width: 820px) {
+@media (pointer: coarse) and (hover: none), (max-width: 820px) {
   .ca-title-id > button[data-copy-value] {
     opacity: 1;
   }

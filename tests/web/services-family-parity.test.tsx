@@ -140,7 +140,7 @@ describe('services detail, as the demo draws it', () => {
     expect(css).toMatch(/\.ca-title-id > button\[data-copy-value\] \{\s*opacity: 0;/);
     expect(css).toContain('.ca-title-id > button[data-copy-value]:focus-visible');
     expect(css).toMatch(
-      /@media \(hover: none\), \(max-width: 820px\) \{\s*\.ca-title-id > button\[data-copy-value\] \{\s*opacity: 1;/,
+      /@media \(pointer: coarse\) and \(hover: none\), \(max-width: 820px\) \{\s*\.ca-title-id > button\[data-copy-value\] \{\s*opacity: 1;/,
     );
   });
 
