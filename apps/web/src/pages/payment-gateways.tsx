@@ -1441,14 +1441,14 @@ export function TopupUnavailableWarning({
   return (
     <Banner tone="warn" title={t('web.payment_gateways_topup_unavailable_title')}>
       <p>{t('web.payment_gateways_topup_unavailable_body')}</p>
-      <ul>
+      {/* One route a line, its name and why it cannot take a top-up (demo callout shape). */}
+      <ul className="gateways-topup-routes">
         {walletTopup.routes.map((route) => {
           const row = rows.find((candidate) => candidate.provider === route.provider);
           if (row === undefined) return null;
           return (
             <li key={route.provider}>
-              <strong>{nameOf(row)}</strong>
-              {t('web.ident_separator')}
+              <span className="strong">{nameOf(row)}</span> {t('web.ident_separator')}{' '}
               {route.blockers
                 .map((blocker) => blockerText(blocker, row))
                 .join(t('web.list_separator'))}

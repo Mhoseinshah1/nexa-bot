@@ -1015,3 +1015,10 @@
     align-items: flex-end;
   }
 }
+/* The top-up warning's routes: a compact list, a route a line. */
+.gateways-topup-routes {
+  margin: 6px 0 0;
+  padding-inline-start: 1.1rem;
+  display: grid;
+  gap: 2px;
+}
