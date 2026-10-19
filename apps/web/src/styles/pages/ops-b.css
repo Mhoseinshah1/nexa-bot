@@ -856,9 +856,8 @@ form.set-row > * + * {
 
 /* --- Alerts and notifications --------------------------------------------------- */
 
-.alerts-code {
-  font-size: var(--fs-sm);
-  color: var(--fg-2);
+.alerts-event {
+  font-weight: 600;
 }
 .alerts-severity {
   width: auto;

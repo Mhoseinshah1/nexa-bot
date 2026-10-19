@@ -42,7 +42,12 @@ import { templateCopy } from '../template-copy';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
 import { CodeLabel, ErrorRef, TechnicalDetails } from '../ui/technical-details';
-import { DELIVERY_OUTCOME_LABELS, errorCodeLabel, opsCodeLabel } from '../ops-code-labels';
+import {
+  DELIVERY_OUTCOME_LABELS,
+  errorCodeLabel,
+  hasOpsCodeLabel,
+  opsCodeLabel,
+} from '../ops-code-labels';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
@@ -170,13 +175,23 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       ),
     },
     {
-      key: 'code',
-      header: t('web.code'),
-      render: (row) => (
-        <span className="alerts-code">
-          <CodeLabel label={opsCodeLabel(row.code)} code={row.code} />
-        </span>
-      ),
+      /*
+       * Demo parity: «رویداد», the event's readable title. The machine code is its title
+       * (tooltip) and stays the identifier; a code nothing names is shown as itself.
+       */
+      key: 'event',
+      header: t('web.diagnostics_event'),
+      wrap: true,
+      render: (row) =>
+        hasOpsCodeLabel(row.code) ? (
+          <span className="alerts-event" title={row.code}>
+            {opsCodeLabel(row.code)}
+          </span>
+        ) : (
+          <span className="alerts-event">
+            <CodeLabel label={null} code={row.code} />
+          </span>
+        ),
     },
     {
       key: 'message',
@@ -282,7 +297,9 @@ export function AlertsPage({ denied }: { denied: boolean }) {
               {
                 key: 'status',
                 label: t('web.status'),
-                active: openOnly ? t('web.unresolved') : null,
+                // Demo parity: the status always has a value, so its chip always reads —
+                // «وضعیت: همه» by default; its × returns it to «همه».
+                active: openOnly ? t('web.unresolved') : t('web.all'),
                 onClear: () => filter(() => setOpenOnly(false)),
                 control: (
                   <FilterChips label={t('web.status')}>

@@ -65,7 +65,6 @@ export const WEB_FA = {
   'web.updated_at': 'آخرین تغییر',
   'web.conflict':
     'این مقدار در همین فاصله توسط شخص دیگری تغییر کرده است. صفحه را تازه کنید و تغییر خود را دوباره اعمال کنید.',
-  'web.code': 'کد',
   'web.severity': 'شدت',
   'web.message': 'پیام',
   'web.occurrences': 'تعداد رخداد',
