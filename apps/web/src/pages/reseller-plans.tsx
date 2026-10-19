@@ -807,7 +807,6 @@ function MinimumProgressCard({
                 <StatCard
                   label={t('web.reseller_minimum_state_below')}
                   value={<Num value={data.counts.below} />}
-                  {...(data.counts.below > 0 ? { tone: 'warn' as const } : {})}
                 />
                 <StatCard
                   label={t('web.reseller_minimum_state_none')}

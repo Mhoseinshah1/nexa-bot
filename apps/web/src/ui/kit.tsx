@@ -678,8 +678,10 @@ export interface StatDelta {
 
 /**
  * A KPI card: icon and label, the value with its unit, an optional delta and
- * an optional sparkline or footnote. `tone` outlines the card for a figure
- * that needs attention (`alert` red, `warn` amber) — never as decoration.
+ * an optional sparkline or footnote. `tone: 'alert'` outlines the card red for
+ * a figure that is a failure — never as decoration. `warn` marks the card
+ * (`warnish`) but the kit draws it neutral: the demo's stat strips have no amber
+ * borders (X6). Only the dashboard's own KPI grid styles it (dashboard.css).
  */
 export function StatCard({
   label,

@@ -2101,7 +2101,6 @@ function ConfirmCard({
                         <Money value={p.walletGift.totalLiability} />
                       )
                     }
-                    tone="warn"
                   />
                 </>
               )}

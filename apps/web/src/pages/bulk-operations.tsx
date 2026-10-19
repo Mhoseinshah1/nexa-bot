@@ -538,7 +538,6 @@ export function BulkOperationNewPage({
                 <StatCard
                   label={t('web.bulk_liability')}
                   value={<Money value={preview.totalLiability} />}
-                  tone="warn"
                 />
               )}
               <StatCard

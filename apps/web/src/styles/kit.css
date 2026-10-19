@@ -699,19 +699,30 @@
 .stat.alert {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
 }
-.stat.warnish {
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
-}
 .stat.alert .lbl svg {
   color: var(--danger);
 }
-.stat.warnish .lbl svg {
-  color: var(--warn);
-}
+/*
+ * A stat strip (demo parity X6): separate bordered cards sharing the row equally — four
+ * figures are four full-width quarters, never four small cards and a hole — each with a
+ * large, neutral number. A bare `Stat` in a strip is drawn as the same card as a `StatCard`.
+ */
 .stat-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.stat-grid > .stat:not(.card) {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--gshadow);
+  padding: 11px 14px;
+}
+.stat-grid > .stat .val {
+  font-size: 24px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
 }
 
 /* --- Progress ------------------------------------------------------------------ */

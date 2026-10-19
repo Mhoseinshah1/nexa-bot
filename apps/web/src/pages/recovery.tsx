@@ -356,7 +356,6 @@ function BackupStatus({
           label={t('web.recovery_unknown_deliveries')}
           icon="send"
           value={<Num value={status.unknownDeliveries} />}
-          {...(status.unknownDeliveries > 0 ? { tone: 'warn' as const } : {})}
         />
       </div>
 

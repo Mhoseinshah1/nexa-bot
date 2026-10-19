@@ -71,15 +71,13 @@ const PANEL_HEALTH_REFRESH_MS = 90_000;
 const HEALTH_GROUPS: readonly {
   key: string;
   label: Parameters<typeof t>[0];
-  tone?: 'alert' | 'warn';
   states: readonly string[];
 }[] = [
   { key: 'online', label: 'web.ph_sum_online', states: ['HEALTHY'] },
-  { key: 'degraded', label: 'web.ph_sum_degraded', tone: 'warn', states: ['DEGRADED'] },
+  { key: 'degraded', label: 'web.ph_sum_degraded', states: ['DEGRADED'] },
   {
     key: 'offline',
     label: 'web.ph_sum_offline',
-    tone: 'alert',
     states: ['UNREACHABLE', 'AUTH_FAILED'],
   },
   { key: 'unchecked', label: 'web.ph_sum_unchecked', states: ['UNCHECKED', 'DISABLED'] },
@@ -141,12 +139,7 @@ export function PanelHealthPage({
               group.states.includes(row.panel.health.state),
             ).length;
             return (
-              <StatCard
-                key={group.key}
-                label={t(group.label)}
-                value={<Num value={count} />}
-                {...(count > 0 && group.tone !== undefined ? { tone: group.tone } : {})}
-              />
+              <StatCard key={group.key} label={t(group.label)} value={<Num value={count} />} />
             );
           })}
           <StatCard
