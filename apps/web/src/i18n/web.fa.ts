@@ -9427,6 +9427,7 @@ export const WEB_FA = {
   'web.service_group_gift': 'هدیه و تغییر',
   // --- Web Admin demo (errors) ---
   'web.err_technical': 'جزئیات فنی',
+  'web.alerts_message_unnamed': 'رویداد ثبت شد؛ جزئیات فنی را ببینید',
   'web.err_ref_code': 'کد خطا',
   'web.err_ref_correlation': 'شناسهٔ پیگیری',
   'web.err_status_400': 'درخواست پذیرفته نشد. مقدارهای فرم را بررسی کنید.',

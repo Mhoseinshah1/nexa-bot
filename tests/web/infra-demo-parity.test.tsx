@@ -52,9 +52,21 @@ describe('alerts (demo parity)', () => {
     ).toBeInTheDocument();
     // The «کد» column it replaced is gone.
     expect(screen.queryByRole('columnheader', { name: 'کد' })).toBeNull();
-    const name = screen.getByText(opsCodeLabel('admin.roles_changed'));
+    const name = document.querySelector('.alerts-event') as HTMLElement;
+    expect(name).toHaveTextContent(opsCodeLabel('admin.roles_changed'));
     expect(name).toHaveAttribute('title', 'admin.roles_changed');
     expect(screen.queryByText('admin.roles_changed')).toBeNull();
+  });
+
+  it('reads «پیام» in Persian from the code; the server line lives only in «جزئیات فنی»', async () => {
+    stubApi([{ url: '/ops-log', body: { events: [event()], nextCursor: null } }]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('Roles changed.');
+    const message = document.querySelector('.alerts-message') as HTMLElement;
+    expect(message).toHaveTextContent(opsCodeLabel('admin.roles_changed'));
+    const raw = screen.getByText('Roles changed.');
+    expect(raw.closest('details')).not.toBeNull();
+    expect(message.closest('details')).toBeNull();
   });
 
   it('shows the status filter as a chip even at its default («وضعیت: همه»)', async () => {

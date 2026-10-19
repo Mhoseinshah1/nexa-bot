@@ -197,7 +197,18 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       key: 'message',
       header: t('web.message'),
       wrap: true,
-      render: (row) => <TechnicalDetails lines={[row.message]} />,
+      /*
+       * The message is read in Persian, derived from the event's CODE through the one label
+       * map; the server's own (English) log line stays only inside «جزئیات فنی».
+       */
+      render: (row) => (
+        <>
+          <span className="alerts-message">
+            {hasOpsCodeLabel(row.code) ? opsCodeLabel(row.code) : t('web.alerts_message_unnamed')}
+          </span>
+          <TechnicalDetails lines={[row.message]} />
+        </>
+      ),
     },
     // One row per condition with a counter, not one row per occurrence: the
     // legacy log posted the same TLS error sixty times in a day.
