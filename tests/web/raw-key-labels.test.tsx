@@ -200,8 +200,10 @@ describe('the readiness probe', () => {
     renderPage(
       <SystemPage route={{ path: '/system', query: new URLSearchParams() }} permissions={[]} />,
     );
-    const name = await screen.findByText(t('web.readiness_dep_postgres'));
-    expect(name.closest('.code-label')).toHaveAttribute('title', 'postgres');
+    // Demo parity (system #4): the dependency's own name, bare, isolated left to right.
+    const name = await screen.findByText('postgres');
+    expect(name.closest('.ltr')).not.toBeNull();
+    expect(screen.queryByText(t('web.readiness_dep_postgres'))).toBeNull();
     const unreachable = screen.getByText(t('web.readiness_detail_unreachable'));
     expect(unreachable).toHaveAttribute('title', 'unreachable');
     expect(

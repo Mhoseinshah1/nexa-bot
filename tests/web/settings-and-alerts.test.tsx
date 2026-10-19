@@ -1220,7 +1220,7 @@ describe('system and operations', () => {
     ]);
     renderPage(<SystemPage route={route} permissions={['panels.view', 'admins.view']} />);
     expect(await screen.findByText(t('web.system_logs_title'))).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: t('web.nav_ops_group') })).toBeNull();
+    expect(screen.queryByRole('link', { name: t('web.opsgroup_title') })).toBeNull();
   });
 
   /** Owner revision 25 — the general logs surface does not exist. */
@@ -1251,7 +1251,7 @@ describe('system and operations', () => {
     ).toBeNull();
     expect(screen.queryByText(/* former web.commit */ 'کامیت')).toBeNull();
     expect(screen.queryByText(/abc123/)).toBeNull();
-    expect(screen.getByRole('link', { name: t('web.nav_ops_group') })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: t('web.opsgroup_title') })).toHaveAttribute(
       'href',
       '/ops-group',
     );

@@ -917,6 +917,24 @@ form.set-row > * + * {
   color: var(--fg-3);
   font-size: var(--fs-sm);
 }
+/* Demo parity: the dependencies and the build share the row equally on a desk. */
+@media (min-width: 981px) {
+  .two-col.system-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/* The logs card: the description, and the way to the group at the end of the same row. */
+.system-logs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.system-logs > p {
+  margin: 0;
+  flex: 1 1 280px;
+}
 .system-stats,
 .diagnostics-stats {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
