@@ -920,6 +920,12 @@
   white-space: nowrap;
 }
 .tbl th {
+  /*
+   * Demo parity X9: a header is a label, not data, so it breaks between its words rather
+   * than widening its column («مبلغ وعده‌داده‌شده» on two lines); a cell stays on one line
+   * unless its column wraps.
+   */
+  white-space: normal;
   background: var(--panel);
   color: var(--fg-3);
   font-weight: 600;
@@ -935,10 +941,23 @@
 .tbl td {
   font-variant-numeric: tabular-nums;
 }
+/* Demo parity X9: no table scrolls sideways inside its card at 1440 (see `.tbl th`). */
 .tbl td.wrap,
 .tbl th.wrap {
   white-space: normal;
-  min-width: 14rem;
+  min-width: var(--tbl-wrap-min);
+}
+.tbl td.wrap.tight,
+.tbl th.wrap.tight {
+  min-width: 0;
+}
+/* A long pill (a failure sentence, a scope) wraps inside a column that wraps. */
+.tbl td.wrap .badge {
+  height: auto;
+  min-height: 20px;
+  white-space: normal;
+  line-height: 1.4;
+  padding-block: 2px;
 }
 .tbl tbody tr {
   transition: background 0.1s;

@@ -538,6 +538,7 @@ function DiscountRules({
     {
       key: 'scope',
       header: t('web.rule_scope'),
+      wrap: true,
       render: (row) => (
         <ScopeCell
           appliesTo={row.appliesTo}

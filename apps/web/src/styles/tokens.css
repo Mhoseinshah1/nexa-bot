@@ -196,6 +196,8 @@
   --sidebar-w-full: 264px;
   --sidebar-w-rail: 60px;
   --row-actions-wrap-w: 170px;
+  /* The narrowest a wrapping table column becomes (the demo's free-text columns, X9). */
+  --tbl-wrap-min: 10rem;
   /* How narrow a card head's titles get before its actions wrap beneath them. */
   --card-head-titles-min: 12rem;
   --topbar-h: 56px;

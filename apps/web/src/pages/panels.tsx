@@ -405,6 +405,7 @@ export function PanelsPage({
     {
       key: 'failure',
       header: t('web.panel_failure'),
+      wrap: true,
       render: (row) => <FailureBadge failure={row.health.failure} />,
     },
     {

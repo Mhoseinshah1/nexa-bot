@@ -1814,8 +1814,12 @@ export interface Column<T> {
   readonly render: (row: T) => ReactNode;
   /** Right-aligned numeric column in a logical-property world: `end`. */
   readonly align?: 'start' | 'end';
-  /** Lets the cell wrap instead of holding one line — for free text. */
-  readonly wrap?: boolean;
+  /**
+   * Lets the cell wrap instead of holding one line — for free text (`true`, at least
+   * `--tbl-wrap-min` wide). `'tight'` wraps with no floor: a short value of a few words (a
+   * timestamp, a scope name) breaks between them, so a wide ledger fits its card (X9).
+   */
+  readonly wrap?: boolean | 'tight';
 }
 
 /**
@@ -1873,7 +1877,8 @@ export function DataTable<T>({
                   scope="col"
                   className={cx(
                     `al-${column.align === 'end' ? 'end' : 'start'}`,
-                    column.wrap && 'wrap',
+                    column.wrap !== undefined && column.wrap !== false && 'wrap',
+                    column.wrap === 'tight' && 'tight',
                   )}
                 >
                   {column.header}
@@ -1889,7 +1894,8 @@ export function DataTable<T>({
                     key={column.key}
                     className={cx(
                       `al-${column.align === 'end' ? 'end' : 'start'}`,
-                      column.wrap && 'wrap',
+                      column.wrap !== undefined && column.wrap !== false && 'wrap',
+                      column.wrap === 'tight' && 'tight',
                     )}
                   >
                     {column.render(row)}
