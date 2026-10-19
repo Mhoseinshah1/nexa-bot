@@ -3140,6 +3140,12 @@ export const orderPricingResponseSchema = z.object({
       saleAmount: z.string(),
       marginAmount: z.string(),
       botInstanceId: z.string().nullable(),
+      /**
+       * Round 4 PR-G: the cost was a `FIXED_PRICE_TABLE` tier's price for the product (layer
+       * `TIER`, no percent), not a rate. Absent on the wire reads as false, so a page loaded
+       * against an API not yet updated keeps parsing.
+       */
+      fixedPrice: z.boolean().default(false),
       createdAt: z.iso.datetime(),
     })
     .nullable(),
