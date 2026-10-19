@@ -79,6 +79,8 @@ import {
   RESELLER_STATUSES,
   RESELLER_TIER_GRANTS_MAX,
   RESELLER_TIER_NAME_MAX,
+  RESELLER_TIER_PRICES_PAGE_MAX,
+  RESELLER_TIER_PRICES_WRITE_MAX,
   RESELLER_ENTITLEMENT_DIMENSIONS,
   RESELLER_GRANT_DIMENSION,
   RESELLER_MINIMUM_SOURCES,
@@ -3338,6 +3340,13 @@ export const resellerTierSummarySchema = z.object({
    * nothing happens to a reseller below it (`docs/round-n-reseller-audit.md` §3.5).
    */
   monthlyMinimum: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
+  /**
+   * Round 4 PR-G, «قیمت عادی برای محصولات بدون قیمت»: under `FIXED_PRICE_TABLE`, whether a
+   * product the tier's table does not price is sold at its list price (true) or not sold to
+   * the tier at all (false, the default). Read only by a price-table tier. Absent on the wire
+   * reads as false, so a page loaded against an API not yet updated keeps parsing.
+   */
+  unpricedListFallback: z.boolean().default(false),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -3350,12 +3359,105 @@ export const resellerTierWriteSchema = z
     pricingMode: z.enum(RESELLER_PRICING_MODES),
     discountPercentage: percentSchema.nullable(),
     creditLimit: creditLimitSchema,
+    /** Round 4 PR-G: see `resellerTierSummarySchema.unpricedListFallback`. Off by default. */
+    unpricedListFallback: z.boolean().default(false),
   })
   .refine((t) => (t.pricingMode === 'PERCENTAGE_DISCOUNT') === (t.discountPercentage !== null), {
     message: 'A percentage discount carries a percentage; the list price carries none.',
     path: ['discountPercentage'],
   });
 export type ResellerTierWriteRequest = z.infer<typeof resellerTierWriteSchema>;
+
+// ---------------------------------------------------------------------------
+// Round 4 PR-G — a tier's fixed price per product (`FIXED_PRICE_TABLE`)
+// ---------------------------------------------------------------------------
+
+/**
+ * One page of a tier's price table, in the table's one order: category, then product, by
+ * id — a keyset, never an offset, and never `sort_order` (an operator drags that, so it
+ * cannot be a cursor key). Products with no category come last. `categoryId` narrows the
+ * page to one category, which is what a bulk fill over a large category walks.
+ */
+export const resellerTierProductPricesQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(RESELLER_TIER_PRICES_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  categoryId: uuidV7Schema.optional(),
+});
+export type ResellerTierProductPricesQuery = z.infer<typeof resellerTierProductPricesQuerySchema>;
+
+/**
+ * One product beside the tier's price for it. `listPrice` is the product's own price (null
+ * for an unpriced product); `tierPrice` is the table's row, or null when the table does not
+ * price the product. No margin is sent: it is `list − tier`, a display the page derives, and
+ * what a reseller is CHARGED is the pricing boundary's answer at checkout.
+ */
+export const resellerTierProductPriceRowSchema = z.object({
+  productId: z.string(),
+  title: z.string(),
+  status: z.enum(PRODUCT_STATUSES),
+  categoryId: z.string().nullable(),
+  categoryName: z.string().nullable(),
+  listPrice: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
+  tierPrice: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
+  tierPriceUpdatedAt: z.iso.datetime().nullable(),
+});
+export type ResellerTierProductPriceRow = z.infer<typeof resellerTierProductPriceRowSchema>;
+
+export const resellerTierProductPricesPageSchema = z.object({
+  tierId: z.string(),
+  items: z.array(resellerTierProductPriceRowSchema),
+  nextCursor: z.string().nullable(),
+});
+export type ResellerTierProductPricesPage = z.infer<typeof resellerTierProductPricesPageSchema>;
+
+/**
+ * Sets or clears the tier's price of each listed product, in one transaction under the
+ * tier's lock. A null price removes the row (the product becomes unpriced for the tier).
+ * An amount is positive whole minor units, in the product's own list currency. Products not
+ * listed are untouched: this is a set of edits, never a replacement of the whole table.
+ */
+export const resellerTierProductPricesWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    prices: z
+      .array(
+        z.object({
+          productId: uuidV7Schema,
+          price: z
+            .object({
+              // Positive digits only, checked before the bound: a refinement after a
+              // failed regex still runs, and `BigInt('1.5')` throws.
+              amount: z
+                .string()
+                .regex(/^[1-9]\d{0,18}$/u)
+                .refine((v) => /^[1-9]\d{0,18}$/u.test(v) && BigInt(v) <= MAX_MONEY_AMOUNT_MINOR, {
+                  message: 'A tier price is a positive amount this system can store.',
+                }),
+              currency: z.enum(CURRENCY_CODES),
+            })
+            .nullable(),
+        }),
+      )
+      .min(1)
+      .max(RESELLER_TIER_PRICES_WRITE_MAX),
+  })
+  .refine((w) => new Set(w.prices.map((p) => p.productId)).size === w.prices.length, {
+    message: 'Each product is listed once.',
+    path: ['prices'],
+  });
+export type ResellerTierProductPricesWriteRequest = z.infer<
+  typeof resellerTierProductPricesWriteSchema
+>;
+
+export const resellerTierProductPricesWriteResponseSchema = z.object({
+  tierId: z.string(),
+  /** How many rows were set and how many cleared — the server's count of what it changed. */
+  set: z.number().int().nonnegative(),
+  cleared: z.number().int().nonnegative(),
+});
+export type ResellerTierProductPricesWriteResponse = z.infer<
+  typeof resellerTierProductPricesWriteResponseSchema
+>;
 
 export const resellerTierGrantsWriteSchema = z
   .object({
@@ -3810,6 +3912,8 @@ export const RESELLER_TIER_ROUTES = {
   history: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/history`,
   // Round N, package D.
   monthlyMinimum: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/monthly-minimum`,
+  // Round 4 PR-G.
+  productPrices: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/product-prices`,
 } as const;
 
 export const RESELLER_ROUTES = {
