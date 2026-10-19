@@ -699,6 +699,7 @@ export function ProductsPage({
 
           {!denied && queryState(products) === 'ready' && (
             <CursorPager
+              order="oldest-first"
               shown={rows.length}
               hasPrevious={cursors.length > 0}
               hasNext={nextCursor !== null}

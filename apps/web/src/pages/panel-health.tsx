@@ -170,6 +170,7 @@ export function PanelHealthPage({
           ))}
         </div>
         <CursorPager
+          order="oldest-first"
           shown={rows.length}
           hasPrevious={cursors.length > 0}
           hasNext={nextCursor !== null}

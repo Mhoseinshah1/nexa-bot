@@ -174,6 +174,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
                 sticky
               />
               <CursorPager
+                order="oldest-first"
                 shown={compensations.data.compensations.length}
                 hasPrevious={cursor !== null}
                 hasNext={compensations.data.nextCursor !== null}

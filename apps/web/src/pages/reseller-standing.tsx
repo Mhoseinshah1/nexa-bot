@@ -282,6 +282,7 @@ export function ResellerPurchasesCard({
             rowKey={(row) => row.orderId}
           />
           <CursorPager
+            order="newest-first"
             shown={rows.length}
             hasPrevious={trail.length > 0}
             hasNext={next !== null}

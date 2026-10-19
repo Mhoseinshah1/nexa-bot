@@ -726,6 +726,7 @@ function DiscountRules({
             dense
           />
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={trail.depth > 0}
             hasNext={nextCursor !== null}
@@ -1802,6 +1803,7 @@ function CashbackRules({
             dense
           />
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={trail.depth > 0}
             hasNext={nextCursor !== null}

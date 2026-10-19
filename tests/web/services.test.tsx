@@ -904,7 +904,8 @@ describe('the promotion of /services', () => {
     const pager = container.querySelector('.pager');
     expect(pager).not.toBeNull();
     const labels = [...pager!.querySelectorAll('button')].map((b) => b.textContent ?? '');
-    expect(labels).toEqual(['قبلی', 'بعدی']);
+    // «تازه‌تر» goes back to the newer page; «قدیمی‌تر» is the next one (X2).
+    expect(labels).toEqual([t('web.page_newer'), t('web.page_older')]);
   });
 
   it('refuses to render the list at all without services.view', () => {

@@ -72,15 +72,15 @@ describe('a server-paged list while the next page is read', () => {
     renderPage(<AuditLogPage route={route()} denied={false} mayExport={false} />);
     await screen.findByRole('link', { name: t('web.audit_link_order') });
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
     await waitFor(() => expect(api.urls.some((url) => url.includes('cursor=CURSOR-1'))).toBe(true));
 
     // The request is in flight: the page-one row is still drawn, with no skeleton in its place.
     expect(screen.getByRole('link', { name: t('web.audit_link_order') })).toBeInTheDocument();
     expect(document.querySelector('.skel')).toBeNull();
     // A second press would push the same cursor twice; «قبلی» is still there.
-    expect(screen.getByRole('button', { name: t('web.page_next') })).toBeDisabled();
-    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeEnabled();
+    expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_newer') })).toBeEnabled();
 
     // The next page lands and replaces the rows.
     api.held.shift()!(

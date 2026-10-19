@@ -429,6 +429,7 @@ export function ExtraDevicesPage({
               dense
             />
             <CursorPager
+              order="oldest-first"
               shown={rows.length}
               hasPrevious={trail.length > 0}
               hasNext={(rates.data?.nextCursor ?? null) !== null}

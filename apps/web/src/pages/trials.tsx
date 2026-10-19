@@ -222,6 +222,7 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={overrides.data.overrides.length}
               hasPrevious={trail.length > 0}
               hasNext={overrides.data.nextCursor !== null}
@@ -477,6 +478,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={resets.data.resets.length}
               hasPrevious={trail.length > 0}
               hasNext={resets.data.nextCursor !== null}

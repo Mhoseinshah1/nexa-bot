@@ -7,6 +7,7 @@ import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { customer, renderPage, stubApi, type Api } from './harness';
 import { openC360Tab } from './c360-helpers';
 import { openFilterPanel } from './ui-helpers';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * WP9-A on the Web Admin: the Referrals page and the referral card on a customer.
@@ -128,8 +129,8 @@ describe('the attributions list', () => {
     const card = (await waitFor(attributionTable)).closest('section') as HTMLElement;
 
     // Newest first, so the NEXT page is older and there is no previous one yet.
-    expect(within(card).getByRole('button', { name: 'قبلی' })).toBeDisabled();
-    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
+    expect(within(card).getByRole('button', { name: t('web.page_newer') })).toBeDisabled();
+    fireEvent.click(within(card).getByRole('button', { name: t('web.page_older') }));
     await waitFor(() =>
       expect(gets(api, '/referrals?limit=10&cursor=ref-cursor-2')).toHaveLength(1),
     );
@@ -137,10 +138,12 @@ describe('the attributions list', () => {
     expect(gets(api, '/referral-commissions?limit=10&cursor=')).toHaveLength(0);
 
     await waitFor(() =>
-      expect(within(card).getByRole('button', { name: 'قبلی' })).not.toBeDisabled(),
+      expect(within(card).getByRole('button', { name: t('web.page_newer') })).not.toBeDisabled(),
     );
-    fireEvent.click(within(card).getByRole('button', { name: 'قبلی' }));
-    await waitFor(() => expect(within(card).getByRole('button', { name: 'قبلی' })).toBeDisabled());
+    fireEvent.click(within(card).getByRole('button', { name: t('web.page_newer') }));
+    await waitFor(() =>
+      expect(within(card).getByRole('button', { name: t('web.page_newer') })).toBeDisabled(),
+    );
   });
 
   it('says there are none rather than drawing an empty table', async () => {
@@ -201,7 +204,7 @@ describe('the commission ledger', () => {
     render();
     const card = (await waitFor(commissionTable)).closest('section') as HTMLElement;
 
-    fireEvent.click(within(card).getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(within(card).getByRole('button', { name: t('web.page_older') }));
     await waitFor(() =>
       expect(gets(api, '/referral-commissions?limit=10&cursor=com-cursor-2')).toHaveLength(1),
     );

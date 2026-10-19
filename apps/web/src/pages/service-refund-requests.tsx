@@ -283,6 +283,7 @@ export function OpenServiceRefundRequestsCard() {
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={rows.length}
               hasPrevious={trail.length > 0}
               hasNext={nextCursor !== null}

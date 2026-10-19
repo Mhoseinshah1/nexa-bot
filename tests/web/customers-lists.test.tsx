@@ -45,7 +45,7 @@ describe('the customer list (W1)', () => {
       { url: '/customer-tags', body: { tags: [] } },
     ]);
     renderPage(<LiveUsers />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_newer') }));
     await waitFor(() => expect(usersReads(api.calls).at(-1)!.url).toContain('cursor=C2'));
     for (const call of usersReads(api.calls)) {
       expect(new URL(call.url, 'http://x').searchParams.get('limit')).toBe('10');

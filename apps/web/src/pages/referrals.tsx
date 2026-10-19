@@ -355,8 +355,9 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
           rowKey={(row) => row.id}
           dense
         />
-        {/* Default labels: `GET /referrals` pages newest to oldest. */}
+        {/* `GET /referrals` pages newest to oldest. */}
         <CursorPager
+          order="newest-first"
           shown={rows.length}
           hasPrevious={trail.depth > 0}
           hasNext={nextCursor !== null}
@@ -554,8 +555,9 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
           rowKey={(row) => row.id}
           dense
         />
-        {/* Default labels: `GET /referral-commissions` pages newest to oldest. */}
+        {/* `GET /referral-commissions` pages newest to oldest. */}
         <CursorPager
+          order="newest-first"
           shown={rows.length}
           hasPrevious={trail.depth > 0}
           hasNext={nextCursor !== null}

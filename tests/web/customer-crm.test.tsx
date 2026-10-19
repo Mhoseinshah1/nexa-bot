@@ -367,11 +367,11 @@ describe('the customer notes pager', () => {
       Array.from(container.querySelectorAll('.crm-note-body'), (node) => node.textContent);
     await waitFor(() => expect(bodies()).toEqual(notes(25, 16).map((one) => one.body)));
     expect(screen.queryByRole('button', { name: 'یادداشت‌های قدیمی‌تر' })).toBeNull();
-    expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_newer') })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
     await waitFor(() => expect(bodies()).toEqual(notes(15, 6).map((one) => one.body)));
-    expect(screen.getByRole('button', { name: t('web.page_next') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled();
     const reads = api.calls.filter((call) => call.method === 'GET' && call.url.includes('/notes'));
     expect(reads.map((call) => call.url)).toEqual([
       expect.stringContaining(`/users/${ID}/notes?limit=10`),
@@ -379,7 +379,7 @@ describe('the customer notes pager', () => {
     ]);
     expect(reads.some((call) => /offset|page=/.test(call.url))).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_newer') }));
     await waitFor(() => expect(bodies()).toEqual(notes(25, 16).map((one) => one.body)));
   });
 });

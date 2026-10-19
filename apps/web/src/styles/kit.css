@@ -984,7 +984,7 @@
   text-align: end;
 }
 
-/* Keyset paging: «showing N» and the two directions, nothing numbered. */
+/* Keyset paging: «showing N» and the two directions («تازه‌تر / قدیمی‌تر»), nothing numbered. */
 .pager {
   display: flex;
   align-items: center;
@@ -997,6 +997,22 @@
 }
 .pager .spacer {
   flex: 1;
+}
+/* The counted pager (X2): «‹ قبلی  ۱–۱۰ از ۲۱ · صفحهٔ ۱ از ۳  بعدی ›», centred, over a server total. */
+.pager.counted {
+  justify-content: center;
+  gap: 10px;
+}
+.pager-info {
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+}
+.pager-info b {
+  color: var(--fg);
+  font-weight: 600;
+}
+.pager-range {
+  unicode-bidi: isolate;
 }
 
 /* The identity cell: a name, then the technical handles beside it. */

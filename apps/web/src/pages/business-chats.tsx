@@ -490,7 +490,9 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
             rowKey={(row) => row.id}
             dense
           />
+          {/* Ordered by priority, then activity: not a time order, so previous / next. */}
           <ClientPager
+            order="sequence"
             shown={paging.rows.length}
             hasPrevious={paging.hasPrevious}
             hasNext={paging.hasNextLoaded || chats.hasNextPage}

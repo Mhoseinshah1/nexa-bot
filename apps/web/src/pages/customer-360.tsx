@@ -1083,8 +1083,9 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
               rowKey={(row) => row.id}
               dense
             />
-            {/* The kit's previous / next labels, as every list (W1.8); `nextCursor` walks towards newer rows. */}
+            {/* `nextCursor` walks towards newer rows: an ascending keyset (oldest first). */}
             <CursorPager
+              order="oldest-first"
               shown={orders.data.orders.length}
               hasPrevious={pages.hasPrevious}
               hasNext={orders.data.nextCursor !== null}
@@ -1292,8 +1293,9 @@ function CustomerServiceRows({
             rowKey={(row) => row.id}
             dense
           />
-          {/* Default labels: this traversal runs newest to oldest. */}
+          {/* This traversal runs newest to oldest. */}
           <CursorPager
+            order="newest-first"
             shown={services.data.services.length}
             hasPrevious={pages.hasPrevious}
             hasNext={services.data.nextCursor !== null}
@@ -1520,6 +1522,7 @@ function WalletCard({
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={entries.data.entries.length}
               hasPrevious={cursor !== null}
               hasNext={entries.data.nextCursor !== null}
@@ -1583,6 +1586,7 @@ function WalletCard({
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={(entries.data.importedEntries ?? []).length}
               hasPrevious={importedCursor !== null}
               hasNext={(entries.data.importedNextCursor ?? null) !== null}

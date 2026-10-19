@@ -396,6 +396,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
         {/* A sibling of `StateSwitch`: drawn only over rows it can vouch for. */}
         {!denied && queryState(orders) === 'ready' && (
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}

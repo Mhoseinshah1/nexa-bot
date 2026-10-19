@@ -1154,9 +1154,10 @@ export function PaymentsPage({
                 dense
                 sticky
               />
-              {/* An ascending keyset (created_at, id) with the cursor in the URL: default
-                  labels, and Previous returns to the first page. */}
+              {/* An ascending keyset (created_at, id) with the cursor in the URL: "newer" is
+                  the next page, and "older" returns to the first. */}
               <CursorPager
+                order="oldest-first"
                 shown={payments.data.payments.length}
                 hasPrevious={cursor !== null}
                 hasNext={payments.data.nextCursor !== null}

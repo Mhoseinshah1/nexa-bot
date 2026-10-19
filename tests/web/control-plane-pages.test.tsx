@@ -1066,7 +1066,7 @@ describe('the notifications page', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     renderPage(<NotificationsPage mayTest denied={false} />);
     await screen.findByText('event.panel.unreachable');
-    expect(screen.getByRole('button', { name: 'بعدی' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: t('web.page_older') })).toBeEnabled();
 
     route.status = 403;
     route.body = {
@@ -1082,7 +1082,7 @@ describe('the notifications page', () => {
     await waitFor(() => {
       expect(screen.queryByRole('table')).toBeNull();
     });
-    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_older') })).toBeNull();
     vi.useRealTimers();
   });
 
@@ -1140,7 +1140,7 @@ describe('the notifications page', () => {
     rerender(<NotificationsPage mayTest denied />);
 
     expect(screen.queryByText('نمایش')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_older') })).toBeNull();
   });
 
   it('draws no notification pager before the first page has arrived', () => {
@@ -1162,7 +1162,7 @@ describe('the notifications page', () => {
    * Narrowing `['ready', 'empty']` to `['ready']` at all three sites left 299
    * green. Page forward on a server-supplied cursor onto a page whose rows
    * have since been resolved, and the state is `'empty'` — so the pager
-   * vanishes and takes the "قبلی" button with it, which is the only way
+   * vanishes and takes the way-back button with it, which is the only way
    * back. The operator is stranded on an empty page and must reload.
    */
   it('keeps the way back when a page turns out to be empty', async () => {
@@ -1172,7 +1172,7 @@ describe('the notifications page', () => {
 
     // Nothing to show, but the pager is how you get off this page.
     expect(screen.getByText('نمایش')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'قبلی' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.page_newer') })).toBeInTheDocument();
   });
 
   it('takes the notification pager down with the rows it was describing', async () => {
@@ -1181,8 +1181,8 @@ describe('the notifications page', () => {
     await screen.findByText(t('web.no_permission'));
 
     // Denied: there are no rows, so there is nothing to page through.
-    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'قبلی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_older') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_newer') })).toBeNull();
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
@@ -1397,7 +1397,7 @@ describe('the notification pager', () => {
     renderPage(<NotificationsPage mayTest denied={false} />);
     await screen.findByText('event.panel.unreachable');
 
-    expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled();
   });
 
   it('pages with the cursor the server returned, not one it guessed', async () => {
@@ -1413,7 +1413,7 @@ describe('the notification pager', () => {
     renderPage(<NotificationsPage mayTest denied={false} />);
     await screen.findByText('event.panel.unreachable');
 
-    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
     await waitFor(() => {
       const paged = api.calls.find((call) => call.url.includes('beforeId'));
       expect(paged?.url).toContain('beforeId=n1');

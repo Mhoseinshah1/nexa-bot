@@ -223,6 +223,7 @@ export function RecoveryPage({
             dense
           />
           <CursorPager
+            order="newest-first"
             onPrevious={() => setQuery(route, 'cursor', null)}
             onNext={() => setQuery(route, 'cursor', nextCursor)}
             hasPrevious={cursor !== undefined}

@@ -535,7 +535,7 @@ describe('the list pages', () => {
     ]);
     renderPage(<IncidentsPage denied={false} mayManage={false} />);
     await screen.findByText('Frankfurt maintenance');
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
     expect(await screen.findByText('Older one')).toBeInTheDocument();
     expect(api.calls.some((c) => c.url.endsWith('/incidents?cursor=c-1'))).toBe(true);
   });

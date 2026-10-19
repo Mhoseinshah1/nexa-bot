@@ -472,6 +472,7 @@ export function UsersPage({
             replaced — see the panels pager for the defect this shape fixes. */}
         {!denied && queryState(customers) === 'ready' && (
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}

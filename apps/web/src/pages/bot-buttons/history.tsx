@@ -136,6 +136,7 @@ export function HistoryDrawer({
       </StateSwitch>
       {(trail.length > 0 || nextBefore !== null) && (
         <CursorPager
+          order="newest-first"
           shown={all.length}
           hasPrevious={trail.length > 0}
           hasNext={nextBefore !== null && !revisions.isPlaceholderData}
