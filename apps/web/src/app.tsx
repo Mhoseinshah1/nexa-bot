@@ -57,9 +57,6 @@ import { BusinessChatDetailPage, BusinessChatsPage } from './pages/business-chat
 import { SupportAiPage } from './pages/support-ai';
 import { SupportAnalyticsPage } from './pages/support-analytics';
 import { LearningCandidatesPage, SupportKnowledgePage } from './pages/support-knowledge';
-import { LegacyProductsPage } from './pages/legacy-products';
-import { LegacyServicesPage } from './pages/legacy-services';
-import { LegacyCutoverPage } from './pages/legacy-cutover';
 import { KnowledgeBuildPage } from './pages/knowledge-build';
 import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
 import {
@@ -69,7 +66,7 @@ import {
 } from './pages/bulk-operations';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
-import { ExtraDevicesPage } from './pages/extra-devices';
+import { ExtraPackagesPage } from './pages/extra-packages';
 import { ServiceLocationsPage } from './pages/service-locations';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
@@ -189,12 +186,6 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/products',
   '/products/:id',
   '/product-categories',
-  // Mirza PR2: the legacy product review.
-  '/legacy-products',
-  // Mirza PR5: legacy service candidates — one outcome each — and their review.
-  '/legacy-services',
-  // Mirza PR6: the owner's cutover approval of one legacy snapshot.
-  '/legacy-cutover',
   // Phase 7: the Mirza restore moved into «بکاپ و بازیابی»; served as a redirect so old links land.
   '/legacy-migration',
   '/extra-devices',
@@ -370,7 +361,6 @@ export function resolve(
           mayViewPayments={may('payments.view')}
           mayViewTickets={may('tickets.view')}
           mayViewBusinessChats={may('business_chats.view')}
-          mayViewLegacyServices={may('legacy.services.view')}
           denied={!may('users.view')}
         />
       ),
@@ -422,47 +412,18 @@ export function resolve(
   if (route.path === '/extra-devices') {
     return {
       element: (
-        <ExtraDevicesPage
+        <ExtraPackagesPage
+          route={route}
           mayEdit={may('catalog.edit')}
           mayViewPanels={may('panels.view')}
           denied={!may('catalog.view')}
         />
       ),
-      crumbs: [{ label: t('web.extra_devices_title') }],
-      title: t('web.extra_devices_title'),
+      crumbs: [{ label: t('web.extra_packages_title') }],
+      title: t('web.extra_packages_title'),
     };
   }
 
-  // Mirza PR2: the legacy product review (its own service; never the importer's queue).
-  if (route.path === '/legacy-products') {
-    return {
-      element: (
-        <LegacyProductsPage
-          denied={!may('legacy.products.view')}
-          mayDecide={may('legacy.products.decide')}
-          mayCreateProduct={may('catalog.edit')}
-          mayPickProduct={may('catalog.view')}
-        />
-      ),
-      crumbs: [{ label: t('web.lpr_title') }],
-      title: t('web.lpr_title'),
-    };
-  }
-  // Mirza PR5: legacy service candidates (an ADOPT here is an approval; a run executes it).
-  if (route.path === '/legacy-services') {
-    return {
-      element: (
-        <LegacyServicesPage
-          denied={!may('legacy.services.view')}
-          mayDecide={may('legacy.services.decide')}
-          mayViewPanels={may('panels.view')}
-          mayViewArchive={may('legacy.invoices.view')}
-        />
-      ),
-      crumbs: [{ label: t('web.lsr_title') }],
-      title: t('web.lsr_title'),
-    };
-  }
   /*
    * Phase 7: restoring from Mirza is a restore source of «بکاپ و بازیابی ← عملیات بازیابی»
    * (a `.nxpkg` chosen there takes the Mirza flow). The old page's path REPLACES itself with
@@ -473,19 +434,6 @@ export function resolve(
       element: <RedirectPage to="/recovery" />,
       crumbs: [{ label: t('web.nav_recovery') }],
       title: t('web.nav_recovery'),
-    };
-  }
-  // Mirza PR6: the owner's cutover approval (an approval imports nothing; the import reads it).
-  if (route.path === '/legacy-cutover') {
-    return {
-      element: (
-        <LegacyCutoverPage
-          denied={!may('legacy.cutover.view')}
-          mayApprove={may('legacy.cutover.approve')}
-        />
-      ),
-      crumbs: [{ label: t('web.lco_title') }],
-      title: t('web.lco_title'),
     };
   }
   if (route.path === '/product-categories') {

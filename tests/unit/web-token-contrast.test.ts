@@ -90,6 +90,14 @@ describe.each([
     }
   });
 
+  it('draws a native select option, resting and hovered, at 4.5:1 or more (Round 4 B1)', () => {
+    expect(contrast(hex['option-fg']!, hex['option-bg']!), 'option').toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrast(hex['option-hover-fg']!, hex['option-hover-bg']!),
+      'hovered option',
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('draws text on the solid fills at 4.5:1 or more', () => {
     expect(contrast(hex['accent-fg']!, hex.accent!), 'accent-fg on accent').toBeGreaterThanOrEqual(
       4.5,
@@ -182,5 +190,17 @@ describe.each([
         }
       }
     }
+  });
+});
+
+describe('native select popup (Round 4 B1)', () => {
+  const kit = readFileSync(join(__dirname, '../../apps/web/src/styles/kit.css'), 'utf8');
+  it('sets color-scheme per theme on select and colours option/optgroup from tokens', () => {
+    expect(kit).toMatch(/:root\[data-theme='dark'\] select \{\s*color-scheme: dark;/);
+    expect(kit).toMatch(/:root\[data-theme='light'\] select \{\s*color-scheme: light;/);
+    expect(kit).toMatch(
+      /select option,\s*select optgroup \{[^}]*var\(--option-bg\)[^}]*var\(--option-fg\)/,
+    );
+    expect(kit).toMatch(/select option:checked \{[^}]*var\(--option-hover-bg\)/);
   });
 });

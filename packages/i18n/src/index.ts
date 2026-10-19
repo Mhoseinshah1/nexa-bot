@@ -19,6 +19,11 @@ import {
   TELEGRAM_CAPTION_MAX_LENGTH,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from './catalogue.fa.js';
+export {
+  OPERATIONAL_EVENT_FAMILY_LABELS_FA,
+  OPERATIONAL_EVENT_LABELS_FA,
+  operationalEventLabelFa,
+} from './operational-events.fa.js';
 import { clipEntities, parseCaptionMarkup, type CaptionMarkup } from './caption-markup.js';
 
 /**

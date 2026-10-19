@@ -21,10 +21,7 @@ function sources(dir: string): string[] {
 }
 
 const MODULE = 'apps/api/src/modules/platform/legacy-cutover';
-const SURFACES = [
-  'apps/api/src/surfaces/web/legacy-cutover.controller.ts',
-  'apps/web/src/pages/legacy-cutover.tsx',
-];
+const SURFACES = ['apps/api/src/surfaces/web/legacy-cutover.controller.ts'];
 
 describe('the legacy cutover boundary', () => {
   it('the module imports no importer, adoption, wallet writer, provider client or network API', () => {
