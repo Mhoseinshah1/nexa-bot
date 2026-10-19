@@ -806,6 +806,25 @@
 .card-body > .fx-technical {
   margin-top: 18px;
 }
+/* A gateway row's cells, as the demo stacks them: a pill, and its date on the next line. */
+.gateways-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.gateways-lines:has(> .gateways-stack) {
+  gap: 6px;
+}
+/* The technical details: a full-width bordered bar the summary fills (demo «جزئیات فنی»). */
+.fx-technical.boxed > summary {
+  width: 100%;
+}
+/* «آخرین به‌روزرسانی» is a time, read at the size of a fact, not of a figure. */
+.fx-strip .stat .val .small {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
 
 /* Owner spec §6: «دکمه‌های شیشه‌ای ربات». Reuses the builder's style swatches (`bb-style-*`). */
 .ib-toolbar {

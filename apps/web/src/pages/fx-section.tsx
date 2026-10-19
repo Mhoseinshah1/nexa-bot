@@ -275,7 +275,12 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             The identifiers somebody debugging a price needs, and nobody else: behind a
             disclosure so the normal view carries no raw key.
           */}
-          <Disclosure size="sm" className="fx-technical" summary={t('web.fx_technical')}>
+          <Disclosure
+            size="sm"
+            variant="boxed"
+            className="fx-technical"
+            summary={t('web.fx_technical')}
+          >
             <KV
               items={[
                 [
