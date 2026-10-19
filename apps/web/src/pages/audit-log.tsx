@@ -642,6 +642,7 @@ export function AuditLogPage({
           }
         >
           <DataTable
+            phoneCards
             caption={t('web.audit_title')}
             columns={columns}
             rows={rows}

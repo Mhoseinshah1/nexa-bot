@@ -240,6 +240,7 @@ function StatusSection() {
         <Card title={t('web.system_status')} hint={t('web.system_status_hint')}>
           <StateSwitch query={readiness}>
             <DataTable
+              phoneCards
               caption={t('web.system_status')}
               rows={dependencies}
               rowKey={(row) => row.name}
@@ -501,6 +502,7 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
     >
       <StateSwitch query={admins} denied={denied} isEmpty={rows.length === 0}>
         <DataTable
+          phoneCards
           caption={t('web.administrators')}
           rows={rows}
           rowKey={(row) => row.id}
@@ -538,7 +540,8 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
                 ) : (
                   <span className="system-roles">
                     {row.roleKeys.map((key) => (
-                      <Badge key={key} outline title={key}>
+                      // Demo parity (X10): a role is a filled neutral pill, as the demo draws it.
+                      <Badge key={key} title={key}>
                         {roleLabel(key)}
                       </Badge>
                     ))}

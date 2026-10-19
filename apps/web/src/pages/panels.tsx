@@ -530,11 +530,11 @@ export function PanelsPage({
           }
         >
           <DataTable
+            phoneCards
             caption={t('web.panels_title')}
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
           />
         </StateSwitch>
 
@@ -3131,6 +3131,7 @@ export function ProvidersPage() {
       <Card>
         <StateSwitch query={providers} isEmpty={rows.length === 0}>
           <DataTable
+            phoneCards
             dense
             caption={t('web.providers_title')}
             rows={rows}

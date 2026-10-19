@@ -304,6 +304,7 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
       >
         <Card>
           <DataTable
+            phoneCards
             caption={t('web.nav_incidents')}
             rows={rows}
             rowKey={(row) => row.id}

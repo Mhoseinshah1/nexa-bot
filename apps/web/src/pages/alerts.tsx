@@ -382,6 +382,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           }
         >
           <DataTable
+            phoneCards
             caption={t('web.alerts_title')}
             columns={columns}
             rows={rows}

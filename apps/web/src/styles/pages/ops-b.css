@@ -943,6 +943,13 @@ form.set-row > * + * {
   flex-wrap: wrap;
   gap: 4px;
 }
+/* Demo parity: the binding's control reads as plain accent text until hovered. */
+.system-telegram .link {
+  text-decoration: none;
+}
+.system-telegram .link:hover {
+  text-decoration: underline;
+}
 .system-telegram {
   display: flex;
   flex-direction: column;
