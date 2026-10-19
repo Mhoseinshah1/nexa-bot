@@ -326,3 +326,12 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Support knowledge: the filter line is a card of its own, with no rule inside it. */
+.sk-filters .list-filter-bar {
+  border-bottom: 0;
+}
+.sk-pills {
+  display: flex;
+  padding: 10px 12px;
+}
