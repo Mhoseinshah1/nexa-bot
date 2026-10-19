@@ -3004,9 +3004,11 @@ registry acceptance, not with a static round. Until then the recovery is a
 version bump, and it is a version bump for a release nobody had installed yet,
 because the workflow fails loudly.
 
-**`BLOCKER-SECRETS-V2`.** The v1 secret envelope binds no context to its
-ciphertext, and a single configured KEK means rotation cannot read what the
-previous key wrote. This checkpoint is arranged so the migration stays
-possible — the key is a value in an operator-owned file, not baked into an
-image — and nothing here implements v2. It remains the blocker before Phase 3
-introduces provider credentials.
+**`BLOCKER-SECRETS-V2`** (historical note for this checkpoint; **now partly closed** —
+the account in `docs/open-questions.md` is authoritative). At this checkpoint the v1
+secret envelope bound no context to its ciphertext, and a single configured KEK meant
+rotation could not read what the previous key wrote. The checkpoint was arranged so the
+migration stayed possible — the key is a value in an operator-owned file, not baked
+into an image. The v2 envelope, the keyring, `secrets rewrap` and `secrets retire-check`
+have since landed (§ "Secrets, keys and rotation"); what remains open is dropping the
+legacy `SECRETS_KEK` alias and refusing v1 everywhere.

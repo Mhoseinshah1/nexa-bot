@@ -243,40 +243,6 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
-    // Mirza migration PR2: the legacy (Mirza) products read for migration, one code at a
-    // time (`docs/legacy-product-review-design.md` §8). Under the catalogue, beside the
-    // products a decision maps a code to. Its own permission, never `catalog.*`.
-    id: 'legacy-products',
-    path: '/legacy-products',
-    label: 'web.nav_legacy_products',
-    icon: 'archive',
-    permission: 'legacy.products.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    // Mirza migration PR5 (owner decision 8): every live legacy invoice's ONE adoption
-    // outcome, and the operator's review of the ones not adopted — an empty-code invoice is
-    // adopted only by an explicit approval here. Beside the other legacy reviews; its own
-    // MEDIUM permission (observers do not see it); deciding needs a HIGH one.
-    id: 'legacy-services',
-    path: '/legacy-services',
-    label: 'web.nav_legacy_services',
-    icon: 'services',
-    permission: 'legacy.services.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    // Mirza migration PR6 (owner constraint 3): the owner's approval of ONE frozen legacy
-    // snapshot for import, bound to seven exact values. Its own MEDIUM view permission;
-    // approving is CRITICAL and owner-only.
-    id: 'legacy-cutover',
-    path: '/legacy-cutover',
-    label: 'web.nav_legacy_cutover',
-    icon: 'shield',
-    permission: 'legacy.cutover.view',
-    group: 'web.navgroup_sales',
-  },
-  {
     id: 'custom-service',
     path: '/custom-service',
     label: 'web.nav_custom_service',

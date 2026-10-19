@@ -134,8 +134,6 @@ M = [
     ('I-19', [(SVC, '        const committed = await replay();\n        if (committed !== null) return reviveApproval(committed.result);\n        const before',
                '        const before')], T_INT, 'concurrent requests'),
     # --- the web page --------------------------------------------------------------------
-    ('W-01', [(WEB, 'const HEX = /^[0-9a-f]{64}$/u;', 'const HEX = /^.{1,64}$/u;')], T_WEB, 'exact SHA-256'),
-    ('W-02', [(WEB, '(HEX.test(prior) && prior !== values.sourceFingerprint)', 'HEX.test(prior)')], T_WEB, 'prior source other'),
     # aud6 F1 = aud5 F5: report v2's products section checks the panel map against the review.
     ('X-01', [(V2, "      str(panelMap.refused.length),", "      '0',")], T_V2, 'aud6 F1'),
     ('X-02', [(PMR, "            : row.approvedProductId !== productId", "            : false")], T_V2, 'aud6 F1'),

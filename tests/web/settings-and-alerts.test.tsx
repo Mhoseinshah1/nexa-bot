@@ -8,6 +8,7 @@ import { openFilterPanel } from './ui-helpers';
 import { openSettingsGroupOf } from './settings-tabs';
 import { MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { operationalEventLabelFa } from '@nexa/i18n';
 
 const settings = (rows: unknown[]) => [{ url: '/settings', body: { settings: rows } }];
 
@@ -1003,6 +1004,39 @@ describe('management alerts', () => {
    * is reachable, and the claim it produced was the strong one: "there is no
    * open alert", printed by a view that had just shown several.
    */
+  /**
+   * Round 4 B5: the operator reads the event in Persian, from its CODE. The server's English
+   * line is kept, but only inside the «جزئیات فنی» disclosure.
+   */
+  it('names an event in Persian from its code and keeps the English message in the technical disclosure', async () => {
+    stubApi([
+      {
+        url: '/ops-log',
+        body: {
+          events: [
+            event({
+              code: 'panel.monitor.scheduler_capacity_exceeded',
+              message: 'Scheduler capacity exceeded for tenant X.',
+            }),
+          ],
+          nextCursor: null,
+        },
+      },
+    ]);
+    renderPage(<AlertsPage denied={false} />);
+    const english = await screen.findByText('Scheduler capacity exceeded for tenant X.');
+    expect(english.closest('details')).not.toBeNull();
+    expect(
+      within(english.closest('details') as HTMLElement).getByText(t('web.err_technical')),
+    ).toBeInTheDocument();
+    const persian = operationalEventLabelFa('panel.monitor.scheduler_capacity_exceeded') as string;
+    expect(screen.getAllByText(persian).length).toBeGreaterThan(0);
+    // The English line is nowhere outside the disclosure.
+    for (const node of screen.getAllByText('Scheduler capacity exceeded for tenant X.')) {
+      expect(node.closest('details')).not.toBeNull();
+    }
+  });
+
   it('does not deny that anything is open from a page after the first', async () => {
     stubApi([
       {

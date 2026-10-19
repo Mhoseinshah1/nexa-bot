@@ -304,11 +304,11 @@ however carefully the service works it out.
 
 **Rule.** Stored credentials are envelope-encrypted with a data key wrapped by a
 key-encryption key held outside the database. The `keyId` is recorded against
-each row so a future rotation can tell which key wrote it — v1 cannot yet
-perform that rotation, because exactly one KEK is configured and rows written
-by a retired key become unreadable. That is `BLOCKER-SECRETS-V2` in
-`docs/open-questions.md`, and it must land before Phase 3 introduces provider
-credentials. Masking is computed server-side. No API response ever
+each row so a rotation can tell which key wrote it. The v2 envelope binds
+purpose, tenant and row as associated data and a keyring rotates and retires keys
+(`botctl secrets rewrap|retire-check`); `BLOCKER-SECRETS-V2` in
+`docs/open-questions.md` is partly closed, with only the legacy `SECRETS_KEK` alias
+and v1 acceptance on legacy-configured hosts left. Masking is computed server-side. No API response ever
 contains a credential, and credentials are never entered through Telegram.
 
 **Why.** The legacy panel detail page renders a masked field followed by the

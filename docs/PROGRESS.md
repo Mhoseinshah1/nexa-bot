@@ -23,7 +23,7 @@ history on `main`; the task branch it was built on no longer exists.
 | Idempotency              | Durable store, replay returns the first result, payload mismatch rejected, per-scope keys                                                                                                                                                                                                                      |
 | Audit and ops log        | Separate models, both with real producers, database-enforced immutability                                                                                                                                                                                                                                      |
 | Access                   | Deny-by-default guard with no actor-type bypass, DENY-wins override resolution, denials audited and recorded as `WARN` operational events                                                                                                                                                                      |
-| Secrets                  | AES-256-GCM envelope encryption, with `keyId` RECORDED against each row for a future rotation that v1 cannot yet perform (see BLOCKER-SECRETS-V2), server-side masking, one redactor shared by the logger, the audit log and the ops log                                                                       |
+| Secrets                  | AES-256-GCM envelope encryption, with `keyId` RECORDED against each row for a rotation the v2 envelope, keyring and `secrets rewrap` now perform (BLOCKER-SECRETS-V2 is partly closed; see `docs/open-questions.md`), server-side masking, one redactor shared by the logger, the audit log and the ops log    |
 | Surfaces                 | `api` and `worker` entrypoints over one module graph, health live/ready/info, Telegram webhook receiver behind a secret token, React RTL admin shell rendering live readiness                                                                                                                                  |
 | Docs                     | Architecture, conventions, glossary, open questions, 12 ADRs, 92 sanitized research files                                                                                                                                                                                                                      |
 | Claude config            | SessionStart hook, 2 skills, 2 agents, permission allowlist                                                                                                                                                                                                                                                    |
@@ -339,10 +339,11 @@ referential integrity, storage bounds, and any change to the append-only rule).
 
 ### Not deployable, and two things block Phase 3
 
-The secret envelope is still v1: ciphertext is not bound to its context, and a
-single configured KEK means rotation cannot decrypt what the previous key
-wrote. That is `BLOCKER-SECRETS-V2` in `docs/open-questions.md` and must land
-before Phase 3 introduces provider credentials.
+(Historical, as of the Phase 2 close.) The secret envelope was still v1: ciphertext was
+not bound to its context, and a single configured KEK meant rotation could not decrypt
+what the previous key wrote. That is `BLOCKER-SECRETS-V2` in `docs/open-questions.md`,
+which is now **partly closed** (v2 envelope, keyring, rewrap and retire-check exist; only
+the legacy `SECRETS_KEK` alias and v1 acceptance on legacy-configured hosts remain).
 
 `BLOCKER-DEPLOY` is closed by the checkpoint below.
 

@@ -1,12 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
-import {
-  uuidV7Schema,
-  type CustomerStatus,
-  type CustomerSummaryResponse,
-  type RecordSource,
-} from '@nexa/contracts';
+import { uuidV7Schema, type CustomerStatus, type CustomerSummaryResponse } from '@nexa/contracts';
 import { fetchCustomers } from '../api/client';
 import { formatTimestamp } from '../format';
 import { mayRequest, queryState } from '../view-state';
@@ -18,8 +13,6 @@ import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { ChipGroup, useListClearAll } from './commerce-parts';
 import { Dash, StatusBadge, avatarTint, displayName, initialOf } from './customer-parts';
-import { SourceBadge } from '../ui/source-badge';
-import { sourceFromQuery, sourceRouteFilter } from './record-source';
 import { TagCatalogueModal, tagCatalogueQuery, useTagCatalogue } from './customer-360-crm';
 import { NAV_PREFETCH_FRESH_MS, type PageQuery } from '../nav-prefetch';
 import {
@@ -75,21 +68,14 @@ export function customersQuery(input: {
   readonly appliedSearch: string;
   readonly appliedStatus: CustomerStatus | null;
   readonly appliedTag: string | null;
-  readonly appliedSource?: RecordSource | null;
   /** The search is SENT only for an actor holding `users.search`; see the page. */
   readonly searching: boolean;
   readonly cursor: string | undefined;
 }): PageQuery<Awaited<ReturnType<typeof fetchCustomers>>> {
   const { appliedSearch, appliedStatus, appliedTag, searching, cursor } = input;
-  const appliedSource = input.appliedSource ?? null;
   // Joined on `|`, which a status literal cannot contain; the search text is LAST, so
   // whatever it contains, no two (status, tag, search) triples produce the same signature.
-  const searchSignature = [
-    appliedStatus ?? '',
-    appliedTag ?? '',
-    appliedSource ?? '',
-    appliedSearch,
-  ].join('|');
+  const searchSignature = [appliedStatus ?? '', appliedTag ?? '', appliedSearch].join('|');
   return {
     // The search is part of the key. Sharing one key across filters would serve
     // the previous result under the new heading for a frame, which is the sort
@@ -104,7 +90,6 @@ export function customersQuery(input: {
         ...(searching ? { q: appliedSearch } : {}),
         ...(appliedStatus === null ? {} : { status: appliedStatus }),
         ...(appliedTag === null ? {} : { tag: appliedTag }),
-        ...(appliedSource === null ? {} : { source: appliedSource }),
       }),
     staleTime: NAV_PREFETCH_FRESH_MS,
   };
@@ -125,7 +110,7 @@ export function customersFirstScreen(): readonly PageQuery[] {
 }
 
 /** Every URL key the customer list filters on, its search included (clear-all, saved views). */
-const USER_FILTER_KEYS = ['q', 'status', 'tag', 'source'] as const;
+const USER_FILTER_KEYS = ['q', 'status', 'tag'] as const;
 
 /** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
 export const USER_PRESETS: readonly ViewPreset[] = [
@@ -166,7 +151,6 @@ export function UsersPage({
    * an id is dropped here rather than sent to be refused.
    */
   const appliedTag = tagFromQuery(route.query.get('tag'));
-  const appliedSource = sourceFromQuery(route.query.get('source'));
   const catalogue = useTagCatalogue(!denied);
 
   /*
@@ -183,12 +167,7 @@ export function UsersPage({
    * Joined on `|`, which a status literal cannot contain; the search text is LAST, so
    * whatever it contains, no two (status, search) pairs produce the same signature.
    */
-  const searchSignature = [
-    appliedStatus ?? '',
-    appliedTag ?? '',
-    appliedSource ?? '',
-    appliedSearch,
-  ].join('|');
+  const searchSignature = [appliedStatus ?? '', appliedTag ?? '', appliedSearch].join('|');
   const [trail, setTrail] = useState<{ signature: string; cursors: readonly string[] }>({
     signature: searchSignature,
     cursors: [],
@@ -219,7 +198,6 @@ export function UsersPage({
         appliedSearch,
         appliedStatus,
         appliedTag,
-        appliedSource,
         searching,
         cursor,
       }),
@@ -235,15 +213,12 @@ export function UsersPage({
       key: 'telegram',
       header: t('web.user_telegram_id'),
       render: (row) => (
-        <>
-          <a href={`/users/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-            {/* LTR and monospaced: a numeric identifier inside a right-to-left
-              page, whose digits a bidi-neutral rendering reorders against the
-              surrounding text. */}
-            <Ltr>{row.telegramUserId}</Ltr>
-          </a>
-          <SourceBadge source={row.source} />
-        </>
+        <a href={`/users/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+          {/* LTR and monospaced: a numeric identifier inside a right-to-left
+            page, whose digits a bidi-neutral rendering reorders against the
+            surrounding text. */}
+          <Ltr>{row.telegramUserId}</Ltr>
+        </a>
       ),
     },
     {
@@ -333,7 +308,6 @@ export function UsersPage({
       ),
     },
   ];
-  userFilters.push(sourceRouteFilter(route, appliedSource));
   if (tags.length > 0 || appliedTag !== null) {
     userFilters.push({
       key: 'tag',
