@@ -68,6 +68,14 @@ import {
   runInvoicesRead,
 } from './legacy-import-invoices.js';
 import { InvoiceArchiveRefused } from './modules/platform/legacy-importer/application/invoice-archive-ingest.js';
+import {
+  TERMS_BACKFILL_USAGE,
+  TermsUsageError,
+  parseTermsBackfillArgs,
+  runTermsBackfill,
+  termsBackfillExitCode,
+  termsBackfillReport,
+} from './legacy-import-terms.js';
 import { InvoiceArchiveStagingRefused } from './modules/platform/legacy-invoice-archive/application/legacy-invoice-archive.service.js';
 import {
   REVIEW_USAGE,
@@ -1251,6 +1259,38 @@ async function invoicesReadMain(argv: readonly string[]): Promise<number> {
 }
 
 /**
+ * `legacy-import terms-backfill …` (R4 A4, `legacy-import-terms.ts`): the previous bot's rules
+ * acceptance onto the imported customers, bound to both approvals. Returns the exit code.
+ */
+async function termsBackfillMain(argv: readonly string[]): Promise<number> {
+  const args = parseTermsBackfillArgs(argv);
+  const env = process.env;
+  const targetUrl = resolveTarget(args.target, env);
+  const target = guardTarget(args, targetUrl, env);
+  const connector = await sourceConnector(args, env);
+  const container = createContainer(
+    loadConfig({ ...env, DATABASE_URL: targetUrl }),
+    'worker',
+    CLI_CONTAINER,
+  );
+  try {
+    const importer = container.legacyImporter();
+    const tenantId = await importer.resolveTenant(args.tenant);
+    if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
+    const outcome = await runTermsBackfill(importer, connector, args, {
+      scope: { tenantId: tenantId as never, botInstanceId: null },
+      actor: systemJobActor('legacy-import:terms-backfill', container.ids.uuid() as CorrelationId),
+      productionLikeTarget: target.productionLike,
+    });
+    process.stdout.write(termsBackfillReport(outcome, args.format));
+    return termsBackfillExitCode(outcome);
+  } finally {
+    await container.shutdown();
+    if (connector instanceof NxpkgLegacySourceConnector) await connector.close();
+  }
+}
+
+/**
  * `legacy-import products-export …` (Mirza PR2): the panel map `products` section from the
  * approved review rows. Read-only on every database; it never writes the map file.
  */
@@ -1394,7 +1434,8 @@ export function exitCodeForError(error: unknown): number {
     error instanceof InventoryUsageError ||
     error instanceof ProductsUsageError ||
     error instanceof InvoicesUsageError ||
-    error instanceof CutoverUsageError
+    error instanceof CutoverUsageError ||
+    error instanceof TermsUsageError
   ) {
     console.error(error.message);
     return 64;
@@ -1461,7 +1502,9 @@ async function main(): Promise<number> {
                 ? INVOICES_READ_USAGE
                 : process.argv[2] === 'cutover-gate'
                   ? CUTOVER_GATE_USAGE
-                  : USAGE;
+                  : process.argv[2] === 'terms-backfill'
+                    ? TERMS_BACKFILL_USAGE
+                    : USAGE;
     process.stdout.write(`${usage}\n`);
     return 0;
   }
@@ -1470,6 +1513,7 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'products-export') return productsExportMain(process.argv.slice(3));
   if (process.argv[2] === 'invoices-read') return invoicesReadMain(process.argv.slice(3));
   if (process.argv[2] === 'cutover-gate') return cutoverGateMain(process.argv.slice(3));
+  if (process.argv[2] === 'terms-backfill') return termsBackfillMain(process.argv.slice(3));
   if (process.argv[2] === 'review') {
     await reviewMain(process.argv.slice(3));
     return 0;

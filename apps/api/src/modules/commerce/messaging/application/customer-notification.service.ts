@@ -457,6 +457,23 @@ export interface CustomerNotificationDeps {
     ): Promise<CustomerSendResult | OrderScreenWait | null>;
   };
   /**
+   * R4 A5: what `WALLET_ADMIN_CREDITED` / `WALLET_ADMIN_DEBITED` render, read at send time from
+   * the ledger entry the notification names — a reader, not a payload (ADR 0030 §1). Null when
+   * the entry is not an ADMIN_CREDIT or ADMIN_DEBIT. Absent, both kinds send nothing.
+   */
+  readonly adminAdjustments?: {
+    adminAdjustmentFor(
+      scope: TenantContext,
+      entryId: string,
+    ): Promise<{
+      readonly direction: 'CREDIT' | 'DEBIT';
+      readonly amount: Money;
+      readonly balanceAfter: Money;
+      /** The note, only when the operator chose to show it; else null. */
+      readonly shownNote: string | null;
+    } | null>;
+  };
+  /**
    * Round N (B2): what `WALLET_MASS_CREDITED` and `SERVICE_GIFT_APPLIED` render, read at send
    * time from the bulk item the notification names — the credited ledger entry, or the grant
    * and the service. A reader, not a payload (ADR 0030 §1). Null when the item does not state
@@ -710,6 +727,26 @@ export class CustomerNotificationService {
           closesOrder: orderId,
         };
       }
+    }
+    /*
+     * R4 A5: an administrator's manual credit or debit — the amount, the balance right after
+     * the entry and (only when the operator ticked «نمایش دلیل به مشتری») the note, read from
+     * the ADMIN_CREDIT/ADMIN_DEBIT entry the row names. Null — nothing sent — when the entry is
+     * not an administrative adjustment of the kind's own direction.
+     */
+    if (row.kind === 'WALLET_ADMIN_CREDITED' || row.kind === 'WALLET_ADMIN_DEBITED') {
+      if (this.deps.adminAdjustments === undefined) return null;
+      const facts = await this.deps.adminAdjustments.adminAdjustmentFor(scope, row.subjectId);
+      const direction = row.kind === 'WALLET_ADMIN_CREDITED' ? 'CREDIT' : 'DEBIT';
+      if (facts === null || facts.direction !== direction) return null;
+      return {
+        values: {
+          amount: facts.amount,
+          balance: facts.balanceAfter,
+          ...(facts.shownNote === null ? {} : { reason: facts.shownNote }),
+        },
+        buttons: this.deps.buttonsFor?.(row.kind, {}) ?? [],
+      };
     }
     if (row.kind === 'WALLET_MASS_CREDITED' || row.kind === 'SERVICE_GIFT_APPLIED') {
       if (this.deps.massActions === undefined) return null;

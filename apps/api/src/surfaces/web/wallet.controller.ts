@@ -129,6 +129,7 @@ export class WalletController {
       amountMinor: BigInt(input.amount),
       currency: input.currency,
       note: input.note,
+      showNoteToCustomer: input.showNoteToCustomer,
     });
     return { entry: toSummary(entry) };
   }

@@ -329,6 +329,20 @@ export class DrizzleTermsRepository implements TermsRepository {
     };
   }
 
+  async legacyAcceptedAt(
+    scope: ScopeContext,
+    customerId: string,
+    tx?: unknown,
+  ): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ at: customers.legacyTermsAcceptedAt })
+      .from(customers)
+      .where(and(eq(customers.tenantId, tenantId), eq(customers.id, customerId)))
+      .limit(1);
+    return row?.at ?? null;
+  }
+
   async insertAcceptance(
     scope: ScopeContext,
     input: {

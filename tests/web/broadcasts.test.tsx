@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { BROADCAST_LARGE_AUDIENCE } from '@nexa/contracts';
+import {
+  BROADCAST_ACTIONS,
+  BROADCAST_BODY_DEFINITION,
+  BROADCAST_LARGE_AUDIENCE,
+  broadcastMessageButtonSchema,
+} from '@nexa/contracts';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import {
   BroadcastDetailPage,
   BroadcastsPage,
+  BROADCAST_ACTION_LABELS,
+  BROADCAST_PLACEHOLDER_LABELS,
+  defaultSample,
   renderBroadcastPreview,
+  wireButton,
 } from '../../apps/web/src/pages/broadcasts';
 import { renderPage, stubApi } from './harness';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -126,6 +135,51 @@ describe('broadcast in the Web Admin', () => {
     expect(renderBroadcastPreview('سلام {firstName}\n@{username}')).toBe('سلام سارا\n@sample_user');
     // A token outside the catalogue is left as written, never silently filled.
     expect(renderBroadcastPreview('{subscriptionUrl}')).toBe('{subscriptionUrl}');
+  });
+
+  it('R4 A6: a chip for every catalogue token, and the preview draws the sample typed in the form', () => {
+    expect(Object.keys(BROADCAST_PLACEHOLDER_LABELS).sort()).toEqual(
+      BROADCAST_BODY_DEFINITION.placeholders.map((p) => p.token).sort(),
+    );
+    const sample = {
+      ...defaultSample(),
+      telegramId: '555',
+      phone: '',
+      servicesTotal: '3',
+      servicesActive: '1',
+    };
+    const text = renderBroadcastPreview(
+      'id {telegramId}\nتلفن [{phone}]\nکل {servicesTotal} فعال {servicesActive}\n{today}',
+      sample,
+      new Date('2026-10-19T08:00:00Z'),
+    );
+    expect(text).toContain('id 555');
+    expect(text).toContain('تلفن []');
+    expect(text).toMatch(/کل (3|۳) فعال (1|۱)/u);
+    expect(text).toMatch(/۱۴۰۵|1405/u);
+    // An empty sample field is a recipient without that fact: its line drops.
+    expect(renderBroadcastPreview('a\nid {telegramId}', defaultSample())).toBe('a');
+  });
+
+  it('R4 A6: link and in-bot action buttons are sent in the shapes the API accepts', () => {
+    for (const action of BROADCAST_ACTIONS) {
+      const wire = wireButton({
+        kind: 'ACTION',
+        label: t(BROADCAST_ACTION_LABELS[action]),
+        url: 'https://',
+        action,
+      });
+      expect(wire).toEqual({ label: t(BROADCAST_ACTION_LABELS[action]), action });
+      expect(broadcastMessageButtonSchema.safeParse(wire).success).toBe(true);
+    }
+    const link = wireButton({
+      kind: 'URL',
+      label: ' سایت ',
+      url: ' https://example.com ',
+      action: 'CATALOG',
+    });
+    expect(link).toEqual({ label: 'سایت', url: 'https://example.com' });
+    expect(broadcastMessageButtonSchema.safeParse(link).success).toBe(true);
   });
 
   it('launches only after the count is taken and confirmed, binding to what was previewed', async () => {

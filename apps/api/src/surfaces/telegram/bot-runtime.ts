@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
+  BROADCAST_ACTION_CALLBACK,
+  BROADCAST_ACTION_COMMANDS,
+  BROADCAST_ACTIONS,
+  type BroadcastAction,
   ANTI_SPAM_BLOCK_REASON,
   appearanceMarker,
   ADMIN_AMOUNT_CAPTURE_TTL_MS,
@@ -80,6 +84,7 @@ import {
   type CustomerService,
 } from '../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
+import type { CardSwitchService } from '../../modules/commerce/payments/application/card-switch.service.js';
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
 import type { ReceiptService } from '../../modules/commerce/payments/application/receipt.service.js';
@@ -301,6 +306,8 @@ export const BOT_INTENTS = [
   'PAY_CANCEL_ASK',
   'PAY_CANCEL',
   'PAY_SENT',
+  /* R4 A1: the card-to-card invoice's «🔄 تغییر شماره کارت». Names the payment and a sequence. */
+  'PAY_SWITCH_CARD',
   'TOPUP_MENU',
   'TOPUP_PICK',
   /*
@@ -940,6 +947,14 @@ export const CANCEL_PAY_CALLBACK_PREFIX = 'z:';
  * have had several payments over its life and this message is about one of them.
  */
 export const PAY_SENT_CALLBACK_PREFIX = 'i:';
+
+/**
+ * R4 A1: «🔄 تغییر شماره کارت» — `pk:<paymentId>.<sequence>`. The sequence is how many switches
+ * the payment had when the keyboard was drawn, so the press is a compare-and-set: a second tap
+ * of the same keyboard (a double tap, a redelivered update) finds the sequence moved, switches
+ * nothing and redraws the card recorded now.
+ */
+export const PAY_SWITCH_CARD_CALLBACK_PREFIX = 'pk:';
 
 /**
  * Withdrawing the ORDER, not one payment. The second destructive pair in this file.
@@ -2640,6 +2655,23 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      * `ck:` — and they are placed first anyway, because if one ever were, the failure
      * would be silent: a tap routed to confirm an order instead of turning a page.
      */
+    /*
+     * R4 A6: a broadcast's in-bot action button, `bc:<ACTION>`. The action is a closed code,
+     * validated here, and it becomes EXACTLY the command its main-menu entry stands for —
+     * parsed by this same function from that command's text — so a broadcast button has no
+     * handler of its own: «خرید سرویس» under a broadcast and «🛒 خرید اشتراک» on the keyboard
+     * are one route. Nothing here authorises anything; the command's own branch decides.
+     */
+    if (data.startsWith(BROADCAST_ACTION_CALLBACK)) {
+      const action = data.slice(BROADCAST_ACTION_CALLBACK.length);
+      if (!(BROADCAST_ACTIONS as readonly string[]).includes(action)) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      const routed = intentOf({
+        message: { text: BROADCAST_ACTION_COMMANDS[action as BroadcastAction] },
+      });
+      return { ...routed, callbackQueryId: id };
+    }
     if (data === TRIAL_CALLBACK_DATA) {
       return { intent: 'TRIAL_CLAIM', targetId: null, callbackQueryId: id };
     }
@@ -2869,6 +2901,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data.startsWith(PAY_SENT_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_SENT', data.slice(PAY_SENT_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(PAY_SWITCH_CARD_CALLBACK_PREFIX)) {
+      return paySwitchCardCommand(data.slice(PAY_SWITCH_CARD_CALLBACK_PREFIX.length), id);
     }
     /*
      * The menu carries no target, so it is matched on the WHOLE string. `callbackCommand`
@@ -3741,6 +3776,29 @@ function positiveSize(value: unknown): bigint | null {
 }
 
 /** A tap on a button, with its id checked before anything is asked to look it up. */
+/**
+ * R4 A1: `pk:<paymentId>.<sequence>`, validated here: a UUIDv7 and a sequence of at most four
+ * digits. Anything else is UNSUPPORTED before a handler sees it.
+ */
+function paySwitchCardCommand(raw: string, callbackQueryId: string | null): BotCommand {
+  const [rawId, rawSequence, ...rest] = raw.split('.');
+  const parsed = uuidV7Schema.safeParse(rawId);
+  if (
+    rest.length > 0 ||
+    !parsed.success ||
+    rawSequence === undefined ||
+    !/^\d{1,4}$/u.test(rawSequence)
+  ) {
+    return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId };
+  }
+  return {
+    intent: 'PAY_SWITCH_CARD',
+    targetId: parsed.data,
+    secondaryId: String(Number(rawSequence)),
+    callbackQueryId,
+  };
+}
+
 function callbackCommand(
   intent: BotIntent,
   rawId: string,
@@ -3997,6 +4055,11 @@ export interface BotRuntimeDeps {
    * this surface holds is a function from a frozen snapshot to a string.
    */
   readonly destinations: PaymentDestinationRenderer;
+  /**
+   * R4 A1: «🔄 تغییر شماره کارت» — whether the card-to-card invoice draws it, and the press.
+   * Absent (a test double, an older wiring): the button is never drawn.
+   */
+  readonly cardSwitch?: Pick<CardSwitchService, 'offer' | 'switchCard'>;
   /**
    * Files the receipt a customer sends, and refuses the file nobody asked for.
    *
@@ -5295,6 +5358,19 @@ export function blockedReply(
 }
 
 /**
+ * R4 A5: «📞 ارتباط با پشتیبانی» under the blocked reply — a URL button to the support account
+ * or link from the support settings, never a callback: a blocked customer's taps are refused,
+ * and a link still opens. Not drawn when no support link is configured.
+ */
+export function withBlockedSupportButton(
+  reply: PendingReply,
+  supportUrl: string | null,
+): PendingReply {
+  if (supportUrl === null) return reply;
+  return { ...reply, buttons: [{ ...inlineLabel('blocked.support'), url: supportUrl }] };
+}
+
+/**
  * R2: one message this bot sent, edited in place through R3's `edit` port — its text — or,
  * for a file whose caption carries the text (a reviewer's receipt), `editCaption`. A
  * messenger without the method answers REFUSED `NOT_EDITABLE`, which every caller already
@@ -5543,7 +5619,13 @@ export class BotRuntime {
      * admin action re-checks its own permission inside its own transaction.
      */
     // File 01 §9: the reason stored on THIS customer's own row, read as this turn resolved it.
-    const blocked: PendingReply = blockedReply(customer);
+    const blocked: PendingReply =
+      arrival === 'BLOCKED'
+        ? withBlockedSupportButton(
+            blockedReply(customer),
+            (await this.deps.support.partsFor(scope)).supportUrl,
+          )
+        : blockedReply(customer);
     /*
      * A blocked customer's plain message still reaches their amount capture when they are
      * an administrator with one open — the same exemption the admin intents have, for the
@@ -10509,6 +10591,20 @@ export class BotRuntime {
         input.idempotencyKey,
       );
     }
+    if (
+      command.intent === 'PAY_SWITCH_CARD' &&
+      command.targetId !== null &&
+      command.secondaryId != null
+    ) {
+      return this.switchCard(
+        scope,
+        actor,
+        command.targetId,
+        Number(command.secondaryId),
+        customer,
+        input.idempotencyKey,
+      );
+    }
     if (command.intent === 'PAY_SENT' && command.targetId !== null) {
       return this.signalTransferSent(
         scope,
@@ -14513,6 +14609,12 @@ export class BotRuntime {
       key: summary.key,
       values: summary.values,
       buttons: [
+        /*
+         * R4 A3: «📋 کپی شناسه» — Telegram's own clipboard button with the numeric id. The id is
+         * also in <code> in the summary (`bot.wallet.summary` is TELEGRAM_HTML), so a tap on
+         * the text copies it too; nothing reaches this server either way.
+         */
+        { ...inlineLabel('account.copy_id'), copyText: customer.telegramUserId },
         ...(fundable
           ? [
               {
@@ -15366,6 +15468,20 @@ export class BotRuntime {
             },
           ];
 
+    const switchOffer =
+      destination === null || this.deps.cardSwitch === undefined
+        ? null
+        : await this.deps.cardSwitch.offer(scope, payment);
+    const switchCard: CustomerButton[] =
+      switchOffer === null || !switchOffer.offered
+        ? []
+        : [
+            {
+              ...inlineLabel('payment.switch_card'),
+              data: `${PAY_SWITCH_CARD_CALLBACK_PREFIX}${payment.id}.${String(switchOffer.sequence)}`,
+            },
+          ];
+
     return {
       key:
         destination === null
@@ -15416,6 +15532,12 @@ export class BotRuntime {
          * who come back to this message want, and the destructive one should not be
          * the nearest thumb.
          */
+        /*
+         * R4 A1: «🔄 تغییر شماره کارت», only while another enabled card exists and the press
+         * limit (when the owner set one) is not reached. Its tap re-decides all of that under
+         * the payment's lock; drawing it authorises nothing.
+         */
+        ...switchCard,
         {
           ...inlineLabel('payment.sent'),
           data: `${PAY_SENT_CALLBACK_PREFIX}${payment.id}`,
@@ -15529,6 +15651,43 @@ export class BotRuntime {
    * where a customer who wants to withdraw after all will look — and re-offering "I
    * have sent it" under a message saying it is recorded invites a second tap.
    */
+  /**
+   * R4 A1: «🔄 تغییر شماره کارت». The answer is the SAME invoice, edited in place (the tap's
+   * wizard gate, `from: ['INVOICE']`), drawn from what the service recorded: the new card when
+   * one was switched to, the card recorded now when nothing was (a second tap of one keyboard,
+   * the limit reached). The payment, its amount and its tracking code are the invoice's own.
+   * A payment no longer an open card-to-card invoice is answered as a stale payment tap is.
+   */
+  private async switchCard(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    expectedSequence: number,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    if (this.deps.cardSwitch === undefined) return staleCallbackReply();
+    try {
+      const result = await this.deps.cardSwitch.switchCard(scope, actor, customer.id, {
+        idempotencyKey: `${idempotencyKey}:card-switch`,
+        paymentId,
+        expectedSequence,
+      });
+      const instruction = result.instruction;
+      if (instruction === null) {
+        return {
+          key: 'bot.payment.not_pending',
+          values: {},
+          buttons: [mainMenuButton()],
+          orderId: null,
+        };
+      }
+      return this.transferInstruction(scope, instruction, instruction.payment.orderId);
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
   private async signalTransferSent(
     scope: TenantContext,
     actor: ActorContext,
@@ -17239,12 +17398,23 @@ export function notificationButtons(
    * credited — answers with the two useful next actions, side by side. Both open a NEW
    * message, so the credit stays in the chat as its record.
    */
-  if (kind === 'WALLET_TOPUP_CREDITED' || kind === 'RECEIPT_CREDITED_TO_WALLET') {
+  if (
+    kind === 'WALLET_TOPUP_CREDITED' ||
+    kind === 'RECEIPT_CREDITED_TO_WALLET' ||
+    // R4 A5: an administrator's manual credit offers the same two next steps.
+    kind === 'WALLET_ADMIN_CREDITED'
+  ) {
     return [
       { ...inlineLabel('wallet.open'), data: WALLET_OPEN_CALLBACK_DATA, row: 0 },
       { ...inlineLabel('catalog.open'), data: CATALOG_OPEN_CALLBACK_DATA, row: 0 },
     ];
   }
+  // R4 A5: a manual debit opens the wallet, where the new balance and its history are.
+  if (kind === 'WALLET_ADMIN_DEBITED') {
+    return [{ ...inlineLabel('wallet.open'), data: WALLET_OPEN_CALLBACK_DATA }];
+  }
+  // R4 A5: unblocked — the way back into the bot.
+  if (kind === 'ACCOUNT_UNBLOCKED') return [mainMenuButton()];
   // R2 (item 11): the renewal result's one button opens the renewed service's card.
   if (kind === 'SERVICE_RENEWED' && subject.serviceId !== undefined) {
     return [

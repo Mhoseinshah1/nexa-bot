@@ -146,7 +146,11 @@ class RefreshBudgetRefused extends Error {}
 
 export interface ServiceRefreshDeps {
   readonly services: Pick<ProvisioningService, 'getForCustomer'>;
-  readonly rows: Pick<ServiceRepository, 'recordUsage'> & UsageRefreshReservations;
+  readonly rows: Pick<
+    ServiceRepository,
+    'recordUsage' | 'markMissingOnPanel' | 'clearMissingOnPanel'
+  > &
+    UsageRefreshReservations;
   /**
    * How long an on-tap read may be in flight before its reservation is presumed dead
    * (the process that held it crashed): longer than the read can take — the panel client's
@@ -618,6 +622,8 @@ export class ServiceRefreshService {
         { usedBytes: usage.usedBytes, syncedAt: now, lastSeen: usage.lastSeen },
         tx,
       );
+      // R4 A2: found — back in the customer's list, whatever state the service is in now.
+      await this.deps.rows.clearMissingOnPanel(scope, service.id, tx);
       await closePanelAccountMissing(this.deps, scope, service, tx);
       return true;
     });
@@ -625,8 +631,10 @@ export class ServiceRefreshService {
 
   /**
    * The panel answered twice that the account does not exist: the condition is recorded
-   * for an operator and the reservation ended. NOTHING about the service changes here —
-   * no state, no delete, no refund. `false` when the tenant stopped in between.
+   * for an operator and the reservation ended. NOTHING about the service's state, money or
+   * order changes here — no state, no delete, no refund, no customer message. R4 A2 adds one
+   * flag, `missing_on_panel_at`, which only takes the service out of the customer's own
+   * list. `false` when the tenant stopped in between.
    */
   private async recordMissing(
     scope: TenantContext,
@@ -636,6 +644,7 @@ export class ServiceRefreshService {
     return this.deps.uow.run(scope, async (tx) => {
       await this.deps.rows.endUsageRefresh(scope, service.id, startedAt, tx);
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
+      await this.deps.rows.markMissingOnPanel(scope, service.id, this.deps.clock.now(), tx);
       await this.deps.opsEvents.record(
         scope,
         {

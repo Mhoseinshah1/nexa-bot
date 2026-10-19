@@ -2033,7 +2033,11 @@ function isTheCampaignsAnnouncement(
     readonly purpose: string;
     readonly contentKind: string;
     readonly body: string;
-    readonly buttons: readonly { readonly label: string; readonly url: string }[];
+    // R4 A6: a broadcast button may be an in-bot action; a campaign's never is.
+    readonly buttons: readonly (
+      | { readonly label: string; readonly url: string }
+      | { readonly label: string; readonly action: string }
+    )[];
     readonly source: unknown;
     readonly pin: boolean;
   },
@@ -2042,8 +2046,19 @@ function isTheCampaignsAnnouncement(
     readonly buttons: readonly { readonly label: string; readonly url: string }[];
   },
 ): boolean {
-  const trimmed = (buttons: readonly { readonly label: string; readonly url: string }[]) =>
-    JSON.stringify(buttons.map((b) => [b.label.trim(), b.url.trim()]));
+  const trimmed = (
+    buttons: readonly (
+      | { readonly label: string; readonly url: string }
+      | { readonly label: string; readonly action: string }
+    )[],
+  ) =>
+    JSON.stringify(
+      buttons.map((b) => [
+        'url' in b ? 'url' : 'action',
+        b.label.trim(),
+        'url' in b ? b.url.trim() : b.action,
+      ]),
+    );
   return (
     draft.purpose === 'MARKETING' &&
     draft.contentKind === 'TEXT' &&

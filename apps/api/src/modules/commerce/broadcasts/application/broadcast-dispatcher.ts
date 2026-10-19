@@ -37,6 +37,24 @@ const PER_BOT_PASS = BROADCAST_SENDS_PER_SECOND;
 /** Sends in flight at once within a pass; the bot's budget still bounds the total. */
 const CONCURRENCY = 4;
 
+/**
+ * What one recipient's facts must be read WITH, from the body's own tokens: the balance only
+ * for `{walletBalance}`, the service counts only for `{servicesTotal}`/`{servicesActive}`
+ * (R4 A6), and the send's instant for `{today}` and "serving now". The dispatcher and the
+ * operator's test send ask the same question.
+ */
+export function recipientFactsOptions(
+  body: string,
+  now: Date,
+): { readonly withBalance: boolean; readonly withServices: boolean; readonly now: Date } {
+  const tokens = placeholderTokensIn(body);
+  return {
+    withBalance: tokens.includes('walletBalance'),
+    withServices: tokens.includes('servicesTotal') || tokens.includes('servicesActive'),
+    now,
+  };
+}
+
 export interface BroadcastPassReport {
   readonly started: number;
   readonly reaped: number;
@@ -279,9 +297,11 @@ export class BroadcastDispatcher {
       }
 
       // Everything that can refuse or throw happens BEFORE the stamp.
-      const facts = await this.deps.facts.factsFor(scope, recipient.customerId, {
-        withBalance: placeholderTokensIn(content.body).includes('walletBalance'),
-      });
+      const facts = await this.deps.facts.factsFor(
+        scope,
+        recipient.customerId,
+        recipientFactsOptions(content.body, this.deps.clock.now()),
+      );
       const rendered = await this.deps.transport.render(scope, {
         contentKind: content.contentKind,
         body: content.body,

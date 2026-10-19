@@ -13,10 +13,16 @@ import {
   BROADCAST_RECIPIENT_STATES,
   BROADCAST_TEXT_MAX_LENGTH,
   BROADCAST_TITLE_MAX_LENGTH,
+  BROADCAST_ACTIONS,
+  BROADCAST_PLACEHOLDER_TOKENS,
   broadcastMediaType,
   broadcastOutcome,
+  isBroadcastActionButton,
   isSourcedBroadcastKind,
   type AudiencePreview,
+  type BroadcastAction,
+  type BroadcastButton,
+  type BroadcastPlaceholderToken,
   type BroadcastOutcome,
   type BroadcastContentKind,
   type BroadcastHistoryAction,
@@ -27,7 +33,7 @@ import {
   type BroadcastState,
   type BroadcastTestResponse,
 } from '@nexa/contracts';
-import { renderTemplateBody } from '@nexa/i18n';
+import { DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
 import {
   ApiError,
   createBroadcast,
@@ -376,11 +382,87 @@ export function BroadcastNewPage({ maySend }: { maySend: boolean }) {
   );
 }
 
+/**
+ * One button as the composer edits it (R4 A6): a LINK (`url`) or an IN-BOT action (`action`),
+ * one row each, mixed freely. Only the field of its own kind is sent.
+ */
+export interface ComposerButton {
+  kind: 'URL' | 'ACTION';
+  label: string;
+  url: string;
+  action: BroadcastAction;
+}
+
+/** A composer button as the API takes it. */
+export function wireButton(button: ComposerButton): BroadcastButton {
+  return button.kind === 'ACTION'
+    ? { label: button.label.trim(), action: button.action }
+    : { label: button.label.trim(), url: button.url.trim() };
+}
+
+function composerButton(button: BroadcastButton): ComposerButton {
+  return isBroadcastActionButton(button)
+    ? { kind: 'ACTION', label: button.label, url: 'https://', action: button.action }
+    : { kind: 'URL', label: button.label, url: button.url, action: 'CATALOG' };
+}
+
+/** R4 A6: the Persian name of each in-bot action — also the label a new action button gets. */
+export const BROADCAST_ACTION_LABELS: Readonly<Record<BroadcastAction, WebKey>> = {
+  START: 'web.bc_action_start',
+  CATALOG: 'web.bc_action_catalog',
+  TRIAL: 'web.bc_action_trial',
+  WALLET_TOPUP: 'web.bc_action_wallet_topup',
+  REFERRAL: 'web.bc_action_referral',
+  SERVICES: 'web.bc_action_services',
+  RENEW: 'web.bc_action_renew',
+  SUPPORT: 'web.bc_action_support',
+  TUTORIAL: 'web.bc_action_tutorial',
+};
+
+/**
+ * R4 A6: the variable chips — every token the bot's catalogue (`BROADCAST_BODY_DEFINITION`)
+ * declares, with its Persian name. A chip inserts the token; it never invents one.
+ */
+export const BROADCAST_PLACEHOLDER_LABELS: Readonly<Record<BroadcastPlaceholderToken, WebKey>> = {
+  firstName: 'web.bc_ph_first_name',
+  username: 'web.bc_ph_username',
+  walletBalance: 'web.bc_ph_wallet',
+  telegramId: 'web.bc_ph_telegram_id',
+  phone: 'web.bc_ph_phone',
+  servicesTotal: 'web.bc_ph_services_total',
+  servicesActive: 'web.bc_ph_services_active',
+  today: 'web.bc_ph_today',
+};
+
+/**
+ * The recipient the composer's preview is drawn for — typed into the composer's own sample
+ * fields, shown in the preview and nowhere else, never sent and never stored.
+ */
+export interface SampleRecipient {
+  firstName: string;
+  username: string;
+  telegramId: string;
+  phone: string;
+  servicesTotal: string;
+  servicesActive: string;
+}
+
+const DIGITS = /^[0-9]{1,9}$/u;
+
+const SAMPLE_FIELDS: readonly (readonly [keyof SampleRecipient, WebKey])[] = [
+  ['firstName', 'web.bc_ph_first_name'],
+  ['username', 'web.bc_ph_username'],
+  ['telegramId', 'web.bc_ph_telegram_id'],
+  ['phone', 'web.bc_ph_phone'],
+  ['servicesTotal', 'web.bc_ph_services_total'],
+  ['servicesActive', 'web.bc_ph_services_active'],
+];
+
 interface ComposerState {
   title: string;
   contentKind: BroadcastContentKind;
   body: string;
-  buttons: { label: string; url: string }[];
+  buttons: ComposerButton[];
   audience: AudienceDraft;
   purpose: BroadcastPurpose;
   /** As typed: the chat id and the message number of a FORWARD or COPY source. */
@@ -406,7 +488,7 @@ function initial(record: BroadcastResponseItem | null): ComposerState {
         title: record.title,
         contentKind: record.contentKind,
         body: record.body,
-        buttons: record.buttons.map((button) => ({ ...button })),
+        buttons: record.buttons.map(composerButton),
         audience: draftOf(record.audience),
         purpose: record.purpose,
         sourceChatId: record.source?.chatId ?? '',
@@ -425,12 +507,45 @@ function sourceOf(state: ComposerState): { chatId: string; messageId: number } |
   return { chatId: state.sourceChatId.trim(), messageId };
 }
 
-/** The operator's own text, rendered by the bot's renderer for a sample recipient. */
-export function renderBroadcastPreview(body: string): string {
-  return renderTemplateBody(BROADCAST_BODY_DEFINITION, body, {
+/**
+ * The operator's own text, rendered by the bot's renderer (`renderTemplateBody` over the same
+ * `BROADCAST_BODY_DEFINITION`) for a sample recipient. Without `sample` it is the composer's
+ * default sample. A sample field left empty is absent, so its line drops exactly as it would
+ * for a recipient without that fact — except `{phone}`, which renders empty, as the bot does.
+ * `{today}` is `now` in the default zone and calendar; `{walletBalance}` is never sampled.
+ */
+export function renderBroadcastPreview(
+  body: string,
+  sample: SampleRecipient = defaultSample(),
+  now: Date = new Date(),
+): string {
+  const values: Record<string, string | number | Date> = { today: now, phone: sample.phone.trim() };
+  if (sample.firstName.trim() !== '') values.firstName = sample.firstName.trim();
+  if (sample.username.trim() !== '') values.username = sample.username.trim();
+  if (sample.telegramId.trim() !== '') values.telegramId = sample.telegramId.trim();
+  if (DIGITS.test(sample.servicesTotal.trim())) values.servicesTotal = Number(sample.servicesTotal);
+  if (DIGITS.test(sample.servicesActive.trim())) {
+    values.servicesActive = Number(sample.servicesActive);
+  }
+  return renderTemplateBody(
+    BROADCAST_BODY_DEFINITION,
+    body,
+    values,
+    undefined,
+    DEFAULT_TEMPLATE_PRESENTATION,
+  );
+}
+
+/** The composer's starting sample: a name and a handle, plainly a sample, nothing else. */
+export function defaultSample(): SampleRecipient {
+  return {
     firstName: t('web.bc_sample_name'),
     username: 'sample_user',
-  });
+    telegramId: '',
+    phone: '',
+    servicesTotal: '',
+    servicesActive: '',
+  };
 }
 
 function Composer({
@@ -481,6 +596,22 @@ function Composer({
   const set = (patch: Partial<ComposerState>) => setState((current) => ({ ...current, ...patch }));
   const max =
     state.contentKind === 'TEXT' ? BROADCAST_TEXT_MAX_LENGTH : BROADCAST_CAPTION_MAX_LENGTH;
+  // R4 A6: the preview's sample recipient, and the chips' insertion at the caret.
+  const [sample, setSample] = useState<SampleRecipient>(defaultSample);
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const insertToken = (token: BroadcastPlaceholderToken) => {
+    const text = `{${token}}`;
+    const area = bodyRef.current;
+    const at = area?.selectionStart ?? state.body.length;
+    const end = area?.selectionEnd ?? at;
+    const next = `${state.body.slice(0, at)}${text}${state.body.slice(end)}`;
+    if (next.length > max) return;
+    set({ body: next });
+    requestAnimationFrame(() => {
+      area?.focus();
+      area?.setSelectionRange(at + text.length, at + text.length);
+    });
+  };
 
   const save = useMutation({
     mutationFn: () => {
@@ -493,9 +624,13 @@ function Composer({
         buttons:
           state.contentKind === 'FORWARD'
             ? []
-            : state.buttons.filter(
-                (button) => button.label.trim() !== '' || button.url.trim() !== '',
-              ),
+            : state.buttons
+                .filter(
+                  (button) =>
+                    button.label.trim() !== '' ||
+                    (button.kind === 'URL' && button.url.trim() !== ''),
+                )
+                .map(wireButton),
         audience: wireAudience(state.audience),
         purpose: state.purpose,
         source: sourceOf(state),
@@ -648,6 +783,7 @@ function Composer({
                 >
                   <textarea
                     id="bc-body"
+                    ref={bodyRef}
                     rows={7}
                     dir="auto"
                     value={state.body}
@@ -655,12 +791,22 @@ function Composer({
                     onChange={(event) => set({ body: event.target.value })}
                   />
                 </Field>
-                <p className="muted small">
-                  {t('web.bc_placeholders')}: <code>{'{firstName}'}</code>{' '}
-                  {t('web.bc_ph_first_name')} · <code>{'{username}'}</code>{' '}
-                  {t('web.bc_ph_username')} · <code>{'{walletBalance}'}</code>{' '}
-                  {t('web.bc_ph_wallet')}
-                </p>
+                {/* R4 A6: a chip inserts its token where the caret is, in the bot's syntax. */}
+                <div className="bc-chips" role="group" aria-label={t('web.bc_placeholders')}>
+                  <span className="muted small">{t('web.bc_placeholders')}:</span>
+                  {BROADCAST_PLACEHOLDER_TOKENS.map((token) => (
+                    <button
+                      key={token}
+                      type="button"
+                      className="chip bc-chip"
+                      title={`{${token}}`}
+                      onClick={() => insertToken(token)}
+                    >
+                      {t(BROADCAST_PLACEHOLDER_LABELS[token])}
+                    </button>
+                  ))}
+                </div>
+                <p className="muted small">{t('web.bc_placeholders_safe_hint')}</p>
               </>
             )}
             <CheckField
@@ -682,7 +828,7 @@ function Composer({
                 ) : state.body.trim() === '' ? (
                   <span className="faint">{t('web.bc_preview_empty')}</span>
                 ) : (
-                  <pre className="preview-text">{renderBroadcastPreview(state.body)}</pre>
+                  <pre className="preview-text">{renderBroadcastPreview(state.body, sample)}</pre>
                 )}
               </div>
               {state.buttons
@@ -694,6 +840,37 @@ function Composer({
                 ))}
             </div>
             <p className="muted small">{t('web.bc_preview_hint')}</p>
+            {/*
+              R4 A6: the sample recipient — typed here, drawn in the preview above and nowhere
+              else; never saved, never sent.
+            */}
+            {!isSourcedBroadcastKind(state.contentKind) && (
+              <fieldset className="bc-sample">
+                <legend className="field-group-head">{t('web.bc_sample_title')}</legend>
+                <p className="muted small">{t('web.bc_sample_hint')}</p>
+                <div className="form-grid">
+                  {SAMPLE_FIELDS.map(([field, label]) => (
+                    <Field key={field} label={t(label)} htmlFor={`bc-sample-${field}`}>
+                      <input
+                        id={`bc-sample-${field}`}
+                        dir={field === 'firstName' ? 'auto' : 'ltr'}
+                        inputMode={
+                          field === 'servicesTotal' ||
+                          field === 'servicesActive' ||
+                          field === 'telegramId'
+                            ? 'numeric'
+                            : undefined
+                        }
+                        value={sample[field]}
+                        onChange={(event) =>
+                          setSample((current) => ({ ...current, [field]: event.target.value }))
+                        }
+                      />
+                    </Field>
+                  ))}
+                </div>
+              </fieldset>
+            )}
           </aside>
         </div>
       </FormSection>
@@ -701,8 +878,36 @@ function Composer({
       {state.contentKind !== 'FORWARD' && (
         <FormSection id="bc-section-buttons" title={t('web.bc_buttons')} grid={false}>
           <div className="stack-sm">
+            <p className="muted small">{t('web.bc_buttons_hint')}</p>
             {state.buttons.map((button, index) => (
               <div className="form-grid" key={index}>
+                {/* R4 A6: a link, or one of the bot's own actions — the main menu's route. */}
+                <Field label={t('web.bc_button_kind')} htmlFor={`bc-btn-kind-${String(index)}`}>
+                  <select
+                    id={`bc-btn-kind-${String(index)}`}
+                    value={button.kind}
+                    onChange={(event) => {
+                      const kind = event.target.value === 'ACTION' ? 'ACTION' : 'URL';
+                      set({
+                        buttons: state.buttons.map((item, at) =>
+                          at === index
+                            ? {
+                                ...item,
+                                kind,
+                                label:
+                                  kind === 'ACTION' && item.label.trim() === ''
+                                    ? t(BROADCAST_ACTION_LABELS[item.action])
+                                    : item.label,
+                              }
+                            : item,
+                        ),
+                      });
+                    }}
+                  >
+                    <option value="URL">{t('web.bc_button_kind_url')}</option>
+                    <option value="ACTION">{t('web.bc_button_kind_action')}</option>
+                  </select>
+                </Field>
                 <Field label={t('web.bc_button_label')} htmlFor={`bc-btn-label-${String(index)}`}>
                   <input
                     id={`bc-btn-label-${String(index)}`}
@@ -717,20 +922,58 @@ function Composer({
                     }
                   />
                 </Field>
-                <Field label={t('web.bc_button_url')} htmlFor={`bc-btn-url-${String(index)}`}>
-                  <input
-                    id={`bc-btn-url-${String(index)}`}
-                    dir="ltr"
-                    value={button.url}
-                    onChange={(event) =>
-                      set({
-                        buttons: state.buttons.map((item, at) =>
-                          at === index ? { ...item, url: event.target.value } : item,
-                        ),
-                      })
-                    }
-                  />
-                </Field>
+                {button.kind === 'URL' ? (
+                  <Field label={t('web.bc_button_url')} htmlFor={`bc-btn-url-${String(index)}`}>
+                    <input
+                      id={`bc-btn-url-${String(index)}`}
+                      dir="ltr"
+                      value={button.url}
+                      onChange={(event) =>
+                        set({
+                          buttons: state.buttons.map((item, at) =>
+                            at === index ? { ...item, url: event.target.value } : item,
+                          ),
+                        })
+                      }
+                    />
+                  </Field>
+                ) : (
+                  <Field
+                    label={t('web.bc_button_action')}
+                    htmlFor={`bc-btn-action-${String(index)}`}
+                  >
+                    <select
+                      id={`bc-btn-action-${String(index)}`}
+                      value={button.action}
+                      onChange={(event) => {
+                        const action = event.target.value as BroadcastAction;
+                        set({
+                          buttons: state.buttons.map((item, at) =>
+                            at === index
+                              ? {
+                                  ...item,
+                                  action,
+                                  // A label still the previous action's own name follows the
+                                  // new one; a label the operator typed is kept.
+                                  label:
+                                    item.label.trim() === '' ||
+                                    item.label === t(BROADCAST_ACTION_LABELS[item.action])
+                                      ? t(BROADCAST_ACTION_LABELS[action])
+                                      : item.label,
+                                }
+                              : item,
+                          ),
+                        });
+                      }}
+                    >
+                      {BROADCAST_ACTIONS.map((action) => (
+                        <option key={action} value={action}>
+                          {t(BROADCAST_ACTION_LABELS[action])}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
               </div>
             ))}
             <div className="form-actions">
@@ -738,7 +981,14 @@ function Composer({
                 size="sm"
                 icon="plus"
                 disabled={state.buttons.length >= BROADCAST_BUTTONS_MAX}
-                onClick={() => set({ buttons: [...state.buttons, { label: '', url: 'https://' }] })}
+                onClick={() =>
+                  set({
+                    buttons: [
+                      ...state.buttons,
+                      { kind: 'URL', label: '', url: 'https://', action: 'CATALOG' },
+                    ],
+                  })
+                }
               >
                 {t('web.bc_button_add')}
               </Button>

@@ -15,7 +15,7 @@ import {
   broadcastMediaType,
   errors,
   isSourcedBroadcastKind,
-  placeholderTokensIn,
+  isBroadcastActionButton,
   validateTemplateBody,
   type ActorContext,
   type AudiencePreview,
@@ -52,6 +52,7 @@ import {
   type MarketingOptOutPolicy,
 } from './marketing-opt-out-policy.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { recipientFactsOptions } from './broadcast-dispatcher.js';
 import {
   freezeAudience,
   toPreview,
@@ -707,9 +708,11 @@ export class BroadcastService {
         'Link your Telegram account and start the bot once to receive a test.',
       );
     }
-    const facts = await this.deps.facts.factsFor(scope, target.customerId, {
-      withBalance: placeholderTokensIn(record.body).includes('walletBalance'),
-    });
+    const facts = await this.deps.facts.factsFor(
+      scope,
+      target.customerId,
+      recipientFactsOptions(record.body, this.deps.clock.now()),
+    );
     const rendered = await this.deps.transport.render(scope, {
       contentKind: record.contentKind,
       body: record.body,
@@ -1215,10 +1218,12 @@ export class BroadcastService {
       title: input.title.trim(),
       contentKind: input.contentKind,
       body: input.body,
-      buttons: input.buttons.map((button) => ({
-        label: button.label.trim(),
-        url: button.url.trim(),
-      })),
+      // R4 A6: a link, or an in-bot action — the action is a closed code, never a payload.
+      buttons: input.buttons.map((button) =>
+        isBroadcastActionButton(button)
+          ? { label: button.label.trim(), action: button.action }
+          : { label: button.label.trim(), url: button.url.trim() },
+      ),
       audience: freezeAudience(input.audience),
       purpose: input.purpose ?? 'MARKETING',
       source,

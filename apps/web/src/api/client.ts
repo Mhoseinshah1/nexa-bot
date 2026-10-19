@@ -67,6 +67,7 @@ import {
   type ServiceLocationTargetsResponse,
   type AudienceOptionsResponse,
   type AudiencePreviewResponse,
+  type BroadcastButton,
   type BroadcastContentKind,
   type BroadcastPurpose,
   type BroadcastListResponse,
@@ -1779,6 +1780,8 @@ export function adjustWallet(input: {
   amount: string;
   currency: CurrencyCode;
   note: string;
+  /** R4 A5: «نمایش دلیل به مشتری» — the customer's message quotes the note. */
+  showNoteToCustomer: boolean;
 }): Promise<WalletEntryResponse> {
   const { customerId, ...body } = input;
   return post(WALLET_ROUTES.adjust(customerId), body, walletEntryResponseSchema);
@@ -4795,7 +4798,8 @@ export interface BroadcastContentWire {
   title: string;
   contentKind: BroadcastContentKind;
   body: string;
-  buttons: { label: string; url: string }[];
+  /** A link or (R4 A6) an in-bot action. */
+  buttons: BroadcastButton[];
   audience: unknown;
   /** Round N close: the purpose, the FORWARD/COPY source and the pin. */
   purpose: BroadcastPurpose;

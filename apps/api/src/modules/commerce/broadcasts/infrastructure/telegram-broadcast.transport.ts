@@ -1,12 +1,14 @@
 import {
   BROADCAST_BODY_DEFINITION,
+  broadcastActionCallbackData,
+  isBroadcastActionButton,
   isSourcedBroadcastKind,
   type BroadcastButton,
   type BroadcastContentKind,
   type TemplateValues,
   type TenantContext,
 } from '@nexa/contracts';
-import { renderTemplateBody } from '@nexa/i18n';
+import { renderTemplateBody, type TemplatePresentation } from '@nexa/i18n';
 import {
   telegramButtonMarkup,
   telegramSend,
@@ -29,7 +31,33 @@ import type {
   BroadcastRenderResult,
   BroadcastSendResult,
   BroadcastTransport,
+  RecipientFacts,
 } from '../application/ports.js';
+
+/**
+ * One recipient's broadcast body, from the explicit placeholder catalogue
+ * (`BROADCAST_BODY_DEFINITION`) and the facts read for THAT recipient at send time — the one
+ * renderer, so a test of every placeholder is a test of what is sent. An absent fact drops its
+ * line; `{phone}` with no number on the row renders empty (the owner's "empty otherwise").
+ */
+export function renderBroadcastBody(
+  body: string,
+  facts: RecipientFacts,
+  presentation?: TemplatePresentation,
+): string {
+  const values: Record<string, TemplateValues[string]> = {};
+  if (facts.firstName !== null) values.firstName = facts.firstName;
+  if (facts.username !== null) values.username = facts.username;
+  if (facts.walletBalance !== null) values.walletBalance = facts.walletBalance;
+  // R4 A6.
+  if (facts.telegramId !== undefined && facts.telegramId !== null)
+    values.telegramId = facts.telegramId;
+  if (facts.phone !== undefined) values.phone = facts.phone ?? '';
+  if (facts.servicesTotal !== undefined) values.servicesTotal = facts.servicesTotal;
+  if (facts.servicesActive !== undefined) values.servicesActive = facts.servicesActive;
+  if (facts.today !== undefined) values.today = facts.today;
+  return renderTemplateBody(BROADCAST_BODY_DEFINITION, body, values, undefined, presentation);
+}
 
 /** The kinds sent from bytes this installation holds. */
 type MediaKind = Exclude<BroadcastContentKind, 'TEXT' | 'FORWARD' | 'COPY'>;
@@ -65,18 +93,37 @@ const UNREACHABLE_DESCRIPTIONS =
  */
 const AMBIGUOUS_ON_SOURCED_SEND = /chat not found|peer_id_invalid/i;
 
-/** A URL button's link, parsed for real: the contract's pattern has no URL parser to call. */
-function openable(url: string): boolean {
+/**
+ * A button that can be sent: an in-bot action is a closed code (R4 A6) and always can; a URL
+ * button's link is parsed for real, since the contract's pattern has no URL parser to call.
+ */
+function openable(button: BroadcastButton): boolean {
+  if (isBroadcastActionButton(button)) return true;
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(button.url);
     return parsed.protocol === 'https:' || parsed.protocol === 'tg:';
   } catch {
     return false;
   }
 }
 
+/**
+ * One broadcast button as the transport sends it: a link opens its URL; an in-bot action
+ * carries `bc:<ACTION>` as `callback_data`, which the Telegram surface turns into the SAME
+ * command its main-menu entry is (R4 A6). Mixed freely in one keyboard, one per row.
+ */
+export function broadcastTelegramButton(
+  button: BroadcastButton,
+):
+  | { readonly text: string; readonly url: string }
+  | { readonly text: string; readonly data: string } {
+  return isBroadcastActionButton(button)
+    ? { text: button.label, data: broadcastActionCallbackData(button.action) }
+    : { text: button.label, url: button.url };
+}
+
 function keyboard(buttons: readonly BroadcastButton[]): Record<string, unknown>[][] {
-  return telegramButtonMarkup(buttons.map((button) => ({ text: button.label, url: button.url })));
+  return telegramButtonMarkup(buttons.map(broadcastTelegramButton));
 }
 
 /**
@@ -98,6 +145,13 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     private readonly bots: BotInstanceTokenSource,
     private readonly apiBaseUrl: string,
     private readonly timeoutMs: number,
+    /**
+     * R4 A6: the tenant's zone and calendar, so `{today}` is the Jalali date in the tenant's
+     * zone. Absent (an older wiring), the renderer's own default presentation applies.
+     */
+    private readonly presentations?: {
+      presentationFor(scope: TenantContext): Promise<TemplatePresentation>;
+    },
   ) {}
 
   async render(
@@ -114,7 +168,7 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
       if (request.contentKind === 'FORWARD' && request.buttons.length > 0) {
         return { ok: false, errorCode: 'broadcast.source_content_invalid' };
       }
-      if (!request.buttons.every((button) => openable(button.url))) {
+      if (!request.buttons.every(openable)) {
         return { ok: false, errorCode: 'broadcast.button_invalid' };
       }
       return {
@@ -127,11 +181,11 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
         },
       };
     }
-    const values: Record<string, TemplateValues[string]> = {};
-    if (request.facts.firstName !== null) values.firstName = request.facts.firstName;
-    if (request.facts.username !== null) values.username = request.facts.username;
-    if (request.facts.walletBalance !== null) values.walletBalance = request.facts.walletBalance;
-    const own = renderTemplateBody(BROADCAST_BODY_DEFINITION, request.body, values);
+    const own = renderBroadcastBody(
+      request.body,
+      request.facts,
+      await this.presentations?.presentationFor(scope),
+    );
     const text =
       request.contentKind !== 'TEXT' && own.trim().length === 0
         ? ''
@@ -144,7 +198,7 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     } else if (text.length > TELEGRAM_CAPTION_MAX) {
       return { ok: false, errorCode: 'broadcast.caption_over_bound' };
     }
-    if (!request.buttons.every((button) => openable(button.url))) {
+    if (!request.buttons.every(openable)) {
       return { ok: false, errorCode: 'broadcast.button_invalid' };
     }
     return {
@@ -194,7 +248,7 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
           chatId: request.chatId,
           text: rendered.text,
           html: false,
-          buttons: rendered.buttons.map((button) => ({ text: button.label, url: button.url })),
+          buttons: rendered.buttons.map(broadcastTelegramButton),
         }),
       };
     } else {

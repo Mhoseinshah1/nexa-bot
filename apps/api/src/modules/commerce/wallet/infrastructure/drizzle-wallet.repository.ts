@@ -98,6 +98,7 @@ export class DrizzleWalletRepository implements WalletRepository {
         paymentId: draft.paymentId ?? null,
         actorAdminId: draft.actorAdminId ?? null,
         note: draft.note ?? null,
+        noteShownToCustomer: draft.noteShownToCustomer === true,
         reversesEntryId: draft.reversesEntryId ?? null,
         createdAt: draft.now,
       })
@@ -445,6 +446,64 @@ export class DrizzleWalletRepository implements WalletRepository {
     return {
       amount: money(BigInt(row.refunded), currency),
       balanceAfter: money(BigInt(row.balance), currency),
+    };
+  }
+
+  /**
+   * R4 A5: one ADMINISTRATIVE adjustment as its customer is told it — the amount, the balance
+   * right after it (as of the entry, `(created_at, id)` ordered, never today's) and its note
+   * only when the operator chose to show it. Null for any entry that is not an ADMIN_CREDIT
+   * or ADMIN_DEBIT, so a migration's opening balance can never be rendered as one.
+   */
+  async adminAdjustmentFor(
+    scope: TenantContext,
+    entryId: string,
+    tx?: unknown,
+  ): Promise<{
+    readonly direction: 'CREDIT' | 'DEBIT';
+    readonly amount: Money;
+    readonly balanceAfter: Money;
+    readonly shownNote: string | null;
+  } | null> {
+    const tenantId = requireTenantId(scope);
+    const entry = alias(walletEntries, 'adjustment');
+    const rows = await this.exec(tx)
+      .select({
+        direction: entry.direction,
+        amount: entry.amount,
+        currency: entry.currency,
+        note: entry.note,
+        shown: entry.noteShownToCustomer,
+        balance: sql<string>`COALESCE((
+          SELECT SUM(CASE WHEN ${walletEntries.direction} = 'CREDIT'
+                          THEN ${walletEntries.amount}
+                          ELSE -${walletEntries.amount} END)
+            FROM ${walletEntries}
+           WHERE ${walletEntries.tenantId} = ${tenantId}
+             AND ${walletEntries.customerId} = ${entry.customerId}
+             AND ${walletEntries.currency} = ${entry.currency}
+             AND (${walletEntries.createdAt}, ${walletEntries.id})
+                 <= (${entry.createdAt}, ${entry.id})
+        ), 0)`,
+      })
+      .from(entry)
+      .where(
+        and(
+          eq(entry.tenantId, tenantId),
+          eq(entry.id, entryId),
+          inArray(entry.reason, ['ADMIN_CREDIT', 'ADMIN_DEBIT']),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return null;
+    const currency = row.currency as CurrencyCode;
+    const note = row.note?.trim() ?? '';
+    return {
+      direction: row.direction === 'DEBIT' ? 'DEBIT' : 'CREDIT',
+      amount: money(row.amount, currency),
+      balanceAfter: money(BigInt(row.balance), currency),
+      shownNote: row.shown && note !== '' ? note : null,
     };
   }
 
