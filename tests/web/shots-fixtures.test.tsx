@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { API_PREFIX, TEMPLATE_KEYS } from '@nexa/contracts';
-import { FIXTURES, findFixture } from './shots/index.ts';
+import { FIXTURES, FIXTURE_SETS, findFixture } from './shots/index.ts';
 
 /**
  * The screenshot fixtures (`pnpm web:shots`) against the frozen contract.
@@ -19,6 +19,20 @@ describe('the screenshot fixtures', () => {
       expect(() => fixture.schema?.parse(fixture.body)).not.toThrow();
     },
   );
+
+  // The named sets (`demo-parity`, …) are photographed the same way, so they are held to the
+  // same contract: a drifted override would photograph the error card beside the demo. This is
+  // the general check over every family's overrides; the per-family schema checks
+  // (`customers-parity-fixtures`, `services-family-parity`) predate it and are redundant but
+  // harmless.
+  it.each(
+    Object.entries(FIXTURE_SETS).flatMap(([set, fixtures]) =>
+      fixtures.map((fixture) => [`${set}: ${fixture.method} ${fixture.path}`, fixture] as const),
+    ),
+  )('%s satisfies its response schema', (_, fixture) => {
+    expect(fixture.schema, 'a 2xx fixture names its schema').not.toBeNull();
+    expect(() => fixture.schema?.parse(fixture.body)).not.toThrow();
+  });
 
   it('answers the requests the shell makes on every screen', () => {
     const answer = (path: string, absolute = false) =>

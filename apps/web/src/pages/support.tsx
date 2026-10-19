@@ -374,7 +374,6 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
             rows={paging.rows}
             rowKey={(row) => row.id}
             caption={t('web.support_title')}
-            dense
           />
           {paging.pager}
         </Card>

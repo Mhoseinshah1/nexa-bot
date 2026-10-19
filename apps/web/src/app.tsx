@@ -1023,7 +1023,8 @@ export function resolve(
           mayViewPanels={may('panels.view')}
         />
       ),
-      crumbs: [nav('resellers'), { label: t('web.reseller_plans_title') }],
+      // The demo's trail names the menu entry («پلن‌ها و حداقل فروش»), not the long title.
+      crumbs: [nav('resellers'), { label: t('web.nav_reseller_plans') }],
       title: t('web.reseller_plans_title'),
     };
   }
@@ -1038,7 +1039,8 @@ export function resolve(
           mayReconcile={may('payments.reconcile')}
         />
       ),
-      crumbs: [{ label: t('web.payment_ops_title') }],
+      // The demo's trail names the menu entry («پرداخت‌ها و کیف پول»); the title stays the page's.
+      crumbs: [{ label: t('web.nav_payments') }],
       title: t('web.payment_ops_title'),
     };
   }

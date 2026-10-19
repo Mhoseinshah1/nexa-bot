@@ -263,6 +263,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             <p className="muted small">{t('web.fx_sources_none')}</p>
           ) : (
             <DataTable
+              stack
               columns={sourceColumns}
               rows={status.data.sources}
               rowKey={(row) => row.source}
@@ -275,7 +276,12 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             The identifiers somebody debugging a price needs, and nobody else: behind a
             disclosure so the normal view carries no raw key.
           */}
-          <Disclosure size="sm" className="fx-technical" summary={t('web.fx_technical')}>
+          <Disclosure
+            size="sm"
+            variant="boxed"
+            className="fx-technical"
+            summary={t('web.fx_technical')}
+          >
             <KV
               items={[
                 [

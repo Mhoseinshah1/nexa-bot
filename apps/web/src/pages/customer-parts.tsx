@@ -42,3 +42,12 @@ export function Dash() {
 export function initialOf(name: string): string {
   return Array.from(name.trim())[0] ?? '';
 }
+
+/**
+ * The avatar tile's tint (the demo's `avc`): one of six soft tones chosen by the name's
+ * characters, so one customer always draws the same colour. Decorative, like the letter.
+ */
+export function avatarTint(name: string): string {
+  const sum = Array.from(name).reduce((total, char) => total + (char.codePointAt(0) ?? 0), 0);
+  return `av${sum % 6}`;
+}

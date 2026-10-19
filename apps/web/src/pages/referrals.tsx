@@ -43,6 +43,8 @@ import {
   DataTable,
   Empty,
   Field,
+  KV,
+  RefLink,
   Ltr,
   Money,
   PageHead,
@@ -349,11 +351,11 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
         }
       >
         <DataTable
+          stack
           caption={t('web.referrals_attributions_title')}
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
-          dense
         />
         {/* `GET /referrals` pages newest to oldest. */}
         <CursorPager
@@ -376,7 +378,6 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
 type StateFilter = 'ALL' | ReferralCommissionState;
 
 function Commissions({ denied, referrerId }: { denied: boolean; referrerId: string }) {
-  const onLink = useLinkHandler();
   const [state, setState] = useState<StateFilter>('ALL');
   const trail = useTrail(`${referrerId}|${state}`);
 
@@ -405,10 +406,11 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
     {
       key: 'order',
       header: t('web.referral_order'),
+      // The order's id as the demo's underlined code link (X7).
       render: (row) => (
-        <a href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
-          <Ltr>{row.orderId.slice(0, 8)}</Ltr>
-        </a>
+        <RefLink href={`/orders/${encodeURIComponent(row.orderId)}`} mono title={row.orderId}>
+          {row.orderId.slice(0, 8)}
+        </RefLink>
       ),
     },
     {
@@ -424,7 +426,6 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
     {
       key: 'scope',
       header: t('web.referral_trigger'),
-      wrap: 'tight',
       render: (row) => t(COMMISSION_SCOPE_LABELS[row.scope]),
     },
     {
@@ -470,32 +471,44 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
       align: 'end',
       render: (row) => money(row.reversedAmount, row.currency),
     },
-    {
-      key: 'unrecovered',
-      header: t('web.referral_unrecovered'),
-      align: 'end',
-      render: (row) => money(row.unrecoveredAmount, row.currency),
-    },
-    {
-      key: 'created',
-      header: t('web.referral_created_at'),
-      wrap: 'tight',
-      render: (row) => formatTimestamp(row.createdAt),
-    },
-    {
-      /*
-       * When it was DECIDED — earned or voided, never both. A PENDING row has neither,
-       * and a dash says that without inventing a date.
-       */
-      key: 'settled',
-      header: t('web.referral_settled_at'),
-      wrap: 'tight',
-      render: (row) => {
-        const at = row.earnedAt ?? row.voidedAt;
-        return at === null ? <Dash /> : formatTimestamp(at);
-      },
-    },
   ];
+
+  /*
+   * Demo parity X9: the ledger shows the demo's columns up to «برگشت‌داده‌شده», each on one
+   * line; what is left unrecovered and the two times are the row's detail, one toggle away on
+   * the same row, so the table fits its card at 1440 instead of wrapping every cell.
+   */
+  const rowDetail = (row: ReferralCommissionSummaryResponse) => {
+    const settled = row.earnedAt ?? row.voidedAt;
+    return (
+      <KV
+        inline
+        items={[
+          [t('web.referral_unrecovered'), money(row.unrecoveredAmount, row.currency)],
+          [
+            t('web.referral_created_at'),
+            <span key="created" className="nowrap">
+              {formatTimestamp(row.createdAt)}
+            </span>,
+          ],
+          [
+            /*
+             * When it was DECIDED — earned or voided, never both. A PENDING row has neither,
+             * and a dash says that without inventing a date.
+             */
+            t('web.referral_settled_at'),
+            settled === null ? (
+              <Dash key="settled" />
+            ) : (
+              <span key="settled" className="nowrap">
+                {formatTimestamp(settled)}
+              </span>
+            ),
+          ],
+        ]}
+      />
+    );
+  };
 
   return (
     <Card title={t('web.referrals_commissions_title')} hint={t('web.referrals_commissions_hint')}>
@@ -552,11 +565,14 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
         }
       >
         <DataTable
+          stack
           caption={t('web.referrals_commissions_title')}
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
+          // Ten money columns: the compact row keeps the ledger inside its card at 1440 (X9).
           dense
+          detail={{ label: t('web.referral_row_detail'), render: rowDetail }}
         />
         {/* `GET /referral-commissions` pages newest to oldest. */}
         <CursorPager

@@ -38,7 +38,7 @@ import {
   reportExportUrl,
   type ReportRangeSelection,
 } from '../api/client';
-import { formatTrafficGbText } from '../format';
+import { formatMoney, formatNumber, formatTrafficGbText } from '../format';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
@@ -379,7 +379,17 @@ function Kpi({
   return (
     <div className="report-kpi" {...(hint === undefined ? {} : { title: hint })}>
       <StatCard
-        label={label}
+        label={
+          hint === undefined ? (
+            label
+          ) : (
+            // The demo's ⓘ beside a label that has an explanation; the explanation is the
+            // tile's tooltip, so the mark is decoration for a sighted reader only.
+            <>
+              {label} <Icon name="info" size={12} className="report-kpi-info" />
+            </>
+          )
+        }
         value={value}
         {...(change === undefined
           ? {}
@@ -470,7 +480,7 @@ function SummaryCards({ selection }: { selection: ReportRangeSelection }) {
       <StateSwitch query={summary}>
         {data !== undefined && (
           <>
-            <div className="stat-grid report-kpis">
+            <div className="stat-grid report-kpis report-kpis-six">
               <CountKpi
                 label={t('web.report_kpi_sales')}
                 hint={t('web.report_kpi_sales_hint')}
@@ -583,6 +593,14 @@ function TrendCard({ selection }: { selection: ReportRangeSelection }) {
               current={data.current}
               previous={data.previous}
               format={format}
+              axisFormat={(value) =>
+                currency === null
+                  ? formatNumber(Math.round(value))
+                  : formatMoney({
+                      amountMinor: BigInt(Math.round(value)).toString(),
+                      currency,
+                    }).amount
+              }
               caption={t(METRIC_LABELS[metric])}
             />
             {data.currencies.length > 1 && (
@@ -729,6 +747,7 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
         {data !== undefined && (
           <>
             <DataTable
+              stack
               columns={columns}
               rows={data.rows}
               rowKey={(r) => `${r.productId}|${r.title}|${r.currency}`}
@@ -1013,6 +1032,7 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
         {data !== undefined && (
           <>
             <DataTable
+              stack
               columns={columns}
               rows={data.rows}
               rowKey={(r) => r.orderId}
@@ -1583,7 +1603,7 @@ export function ReferralAnalytics({
       <StateSwitch query={referrals}>
         {data !== undefined && (
           <>
-            <div className="stat-grid report-kpis">
+            <div className="stat-grid report-kpis report-kpis-five">
               <CountKpi label={t('web.report_referral_signups')} value={data.signups} />
               <Kpi
                 label={t('web.report_referral_buyers')}
@@ -1625,6 +1645,7 @@ export function ReferralAnalytics({
               <Empty title={t('web.report_referrers_empty')} icon="users" />
             ) : (
               <DataTable
+                stack
                 columns={[
                   {
                     key: 'rank',
