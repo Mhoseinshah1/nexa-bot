@@ -1,4 +1,5 @@
 import type { ShotFixture } from '../../fixture.ts';
+import { DEMO_BOT } from './bot.ts';
 import { DEMO_DASHBOARD, DEMO_DASHBOARD_EMPTY } from './dashboard.ts';
 import { DEMO_RECOVERY } from './recovery.ts';
 import { DEMO_SERVICES_FAMILY } from './services.ts';
@@ -26,6 +27,7 @@ export const DEMO_PARITY: readonly ShotFixture[] = [
   ...DEMO_SUPPORT_FAMILY,
   ...DEMO_INFRA,
   ...DEMO_FINANCE,
+  ...DEMO_BOT,
 ];
 
 /** The demo's EMPTY dashboard: nothing in the period, nothing waiting. */

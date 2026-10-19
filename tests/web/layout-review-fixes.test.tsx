@@ -115,11 +115,14 @@ describe('B1: the action panel never leaves an empty cell', () => {
 });
 
 describe('B2: the bot-buttons builder between 761px and 1180px', () => {
-  it('keeps the pool in its own column beside the phone, as tall as the phone', () => {
-    expect(declarations('.bb-card .bb-workspace > .bb-pool', '@media (max-width: 1180px)')).toEqual(
-      { 'grid-column': 'auto' },
-    );
-    expect(declarations('.bb-card .bb-workspace > .bb-pool')['align-self']).toBe('stretch');
+  /*
+   * Superseded by demo parity (DIFFS bot-buttons #1, `styles/pages/demo-bot.css`): the
+   * builder is one column of framed cards at every width — the free buttons full width
+   * ABOVE the menu, not a narrow column beside the phone.
+   */
+  it('puts the free buttons full width above the phone, in one column', () => {
+    expect(declarations('.bb-card .bb-workspace')['grid-template-columns']).toBe('minmax(0, 1fr)');
+    expect(declarations('.bb-card .bb-workspace > .bb-pool')['grid-column']).toBe('1 / -1');
   });
 
   it('goes from three editor columns straight to one', () => {

@@ -554,7 +554,7 @@ function ConfigCard({
           </div>
         </fieldset>
         {draft.mode === 'AUTO_REPLY_SAFE' && response.config.mode !== 'AUTO_REPLY_SAFE' && (
-          <Banner tone="warn" icon="lock">
+          <Banner tone="warn">
             {t(mayAutoReply ? 'web.sai_mode_auto_entering' : 'web.sai_mode_auto_needs_owner')}
           </Banner>
         )}
@@ -661,7 +661,7 @@ function ConfigCard({
           </select>
         </Field>
         {widened && (
-          <Banner tone="warn" icon="lock">
+          <Banner tone="warn">
             {t(mayAutoReply ? 'web.sai_auto_widen_entering' : 'web.sai_auto_widen_needs_owner')}
           </Banner>
         )}

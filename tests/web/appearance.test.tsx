@@ -178,7 +178,14 @@ describe('the appearance page', () => {
     renderPage(<AppearancePage denied={false} mayEdit />);
     await screen.findByRole('button', { name: t('web.appearance_slot_payment') });
     const tab = (label: string) => screen.getByRole('tab', { name: label });
-    expect(tab(t('web.appearance_slots_title'))).toHaveAttribute('aria-selected', 'true');
+    // The slots tab carries its count, as the demo's does: «جایگاه‌های آیکون ۲۹».
+    const slotsTab = screen.getByRole('tab', {
+      name: (name) => name.startsWith(t('web.appearance_slots_title')),
+    });
+    expect(slotsTab).toHaveAttribute('aria-selected', 'true');
+    expect(
+      slotsTab.textContent?.replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x6f0)),
+    ).toContain(String(APPEARANCE_SLOTS.length));
     fireEvent.click(tab(t('web.qrt_title')));
     expect(tab(t('web.qrt_title'))).toHaveAttribute('aria-selected', 'true');
     // The slots are hidden, not unmounted: their drafts survive the switch.

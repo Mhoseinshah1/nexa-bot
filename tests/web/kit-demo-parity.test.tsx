@@ -167,14 +167,10 @@ describe('X5 — a callout is outlined in its tone, without a sign', () => {
         <Banner tone="info" title="عنوان">
           متن
         </Banner>
-        <Banner tone="info" icon="info">
-          متن
-        </Banner>
+        <Banner tone="info">متن</Banner>
         <Banner tone="neutral">متن</Banner>
         <Banner tone="warn">هشدار</Banner>
-        <Banner tone="warn" icon="info">
-          هشدار
-        </Banner>
+        <Banner tone="warn">هشدار</Banner>
         <Banner tone="danger">خطا</Banner>
         <Banner tone="ok">انجام شد</Banner>
       </>,

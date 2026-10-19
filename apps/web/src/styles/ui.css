@@ -1640,3 +1640,25 @@
     transform: none;
   }
 }
+
+/*
+ * Touch: the action panels' buttons (40px on a desk) and the audience builder's quick pills
+ * (32px), and the panel's «چرا … غیرفعال است؟» line, are 44px targets where the pointer cannot hover (tokens.css, `pnpm web:responsive`).
+ */
+@media (pointer: coarse) and (hover: none) {
+  .action-group-buttons .btn {
+    height: var(--ctl-h);
+    min-height: var(--ctl-h);
+  }
+  .aq-pill {
+    min-height: var(--ctl-h);
+  }
+  .action-panel-why > summary {
+    min-height: var(--ctl-h);
+  }
+  /* An active filter chip's ×: the chip grows to hold a 44px target. */
+  .lfb-x {
+    min-width: var(--ctl-h);
+    min-height: var(--ctl-h);
+  }
+}

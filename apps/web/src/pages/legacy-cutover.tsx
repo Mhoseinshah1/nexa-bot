@@ -240,9 +240,7 @@ export function LegacyCutoverPage({
       >
         <ApproveForm held={approveKey} onDone={() => setApproving(false)} />
       </Modal>
-      <Banner tone="warn" icon="info">
-        {t('web.lco_banner')}
-      </Banner>
+      <Banner tone="warn">{t('web.lco_banner')}</Banner>
       {/* The approvals are a card whose empty state sits inside it, as the demo draws it. */}
       <Card title={t('web.lco_approvals_title')}>
         <StateSwitch

@@ -1015,9 +1015,7 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
   });
   return (
     <Card title={t('web.bchat_reply')}>
-      <Banner tone="info" icon="info">
-        {t('web.bchat_reply_takes_over')}
-      </Banner>
+      <Banner tone="info">{t('web.bchat_reply_takes_over')}</Banner>
       {!connected && <Banner tone="warn">{t('web.bchat_reply_connection_unusable')}</Banner>}
       <form
         onSubmit={(event) => {

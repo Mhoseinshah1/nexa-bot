@@ -5970,6 +5970,7 @@ export const WEB_FA = {
   'web.appearance_preview_fallback': 'ایموجی پیش‌فرض',
   'web.appearance_reset': 'بازنشانی',
   'web.appearance_marker': 'نشانگر در متن',
+  'web.appearance_col_open': 'باز کردن',
   'web.appearance_saved': 'ذخیره شد.',
   'web.appearance_unchanged': 'تغییری نبود.',
   'web.appearance_reset_done': 'جایگاه به پیش‌فرض برگشت.',

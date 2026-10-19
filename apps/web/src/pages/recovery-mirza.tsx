@@ -473,16 +473,8 @@ export function MirzaRestoreFlow({
   );
   return (
     <div className="stack inset mrz-flow">
-      {inReview && !reupload && (
-        <Banner tone="warn" icon="info">
-          {t('web.lmg_banner')}
-        </Banner>
-      )}
-      {inReview && reupload && (
-        <Banner tone="info" icon="info">
-          {t('web.mrz_reupload_banner')}
-        </Banner>
-      )}
+      {inReview && !reupload && <Banner tone="warn">{t('web.lmg_banner')}</Banner>}
+      {inReview && reupload && <Banner tone="info">{t('web.mrz_reupload_banner')}</Banner>}
       <Summary row={row} mayManage={access.mayManage} />
       {/*
         The review stays readable after the confirmation — it is what was approved — but it

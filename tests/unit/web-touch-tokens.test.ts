@@ -45,6 +45,17 @@ describe('the touch tokens', () => {
     ['pages/commerce-a.css', '.c360ws-half-head a'],
     ['pages/commerce-a.css', '.gh-links a:not(.btn)'],
     ['kit.css', '.card-head .actions a:not(.btn)'],
+    // The top bar's owner pill (34px on a desk), measured under 44px on every route.
+    ['shell.css', '.user-trigger'],
+    // The rest of the targets the gate measured under 44px after the demo-parity rework.
+    ['pages/dashboard.css', '.dash-toggle'],
+    ['pages/dashboard.css', '.dash-attn-list > li.dash-attn-row > a'],
+    ['ui.css', '.action-group-buttons .btn'],
+    ['ui.css', '.aq-pill'],
+    ['ui.css', '.action-panel-why > summary'],
+    ['kit.css', '.back-link'],
+    ['ui.css', '.lfb-x'],
+    ['pages/w-marketing.css', '.bx-rowlink'],
   ])('%s raises %s to the 44px target on touch', (file, selector) => {
     const css = readFileSync(join(__dirname, '../../apps/web/src/styles', file), 'utf8');
     const rules = touchRules(css);

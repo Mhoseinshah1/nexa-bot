@@ -214,9 +214,8 @@ export function BotsPage({
         <div className="bx-sum" data-testid="bots-summary">
           <SummaryPill value={rows.length} label={t('web.bx_bots_count')} />
           <SummaryPill value={active} label={t('web.bot_status_active')} tone="ok" />
-          {attention > 0 && (
-            <SummaryPill value={attention} label={t('web.bx_bots_attention')} tone="warn" />
-          )}
+          {/* Always drawn, as the demo's strip is: a zero needing attention is itself an answer. */}
+          <SummaryPill value={attention} label={t('web.bx_bots_attention')} tone="warn" />
         </div>
         {rows.map((bot) => (
           <BotSection
@@ -228,10 +227,13 @@ export function BotsPage({
         ))}
       </StateSwitch>
 
-      <p className="bx-note muted small">
-        <Icon name="plus" />
-        <strong>{t('web.bots_add_title')}</strong> — {t('web.bots_add_body')}
-      </p>
+      <section className="bx-add" aria-labelledby="bots-add-title">
+        <h2 id="bots-add-title" className="bx-add-h">
+          <Icon name="plus" />
+          {t('web.bots_add_title')}
+        </h2>
+        <p className="muted small">— {t('web.bots_add_body')}</p>
+      </section>
     </>
   );
 }
@@ -403,7 +405,7 @@ function BotSection({
             </span>
             <div>
               <h2>
-                <Ltr mono={false}>@{bot.username}</Ltr>
+                <Ltr>@{bot.username}</Ltr>
               </h2>
               <p className="muted small bot-head-meta">
                 {bot.tenant.displayName} <Ltr>{bot.tenant.slug}</Ltr>

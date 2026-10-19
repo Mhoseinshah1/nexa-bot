@@ -34,10 +34,9 @@ import {
   Field,
   Num,
   PageHead,
-  RowActions,
   Stat,
   StateSwitch,
-  ToggleRow,
+  Switch,
   useConfirmedClose,
   usePagedRows,
   useToast,
@@ -277,17 +276,16 @@ export function TermsPage({
       key: 'title',
       header: t('web.terms_title_field'),
       wrap: true,
+      // The «نسخهٔ فعلی» pill beside the title, on the same line, as the demo draws it.
       render: (row) => (
-        <CellMain
-          primary={<span className="strong">{row.title}</span>}
-          secondary={
-            row.current ? (
-              <Badge tone="ok" dot>
-                {t('web.terms_current_badge')}
-              </Badge>
-            ) : undefined
-          }
-        />
+        <span className="terms-hist-title">
+          <span className="strong">{row.title}</span>
+          {row.current && (
+            <Badge tone="ok" dot>
+              {t('web.terms_current_badge')}
+            </Badge>
+          )}
+        </span>
       ),
     },
     {
@@ -314,12 +312,16 @@ export function TermsPage({
       key: 'actions',
       header: t('web.terms_actions'),
       align: 'end',
+      // The demo's expand chevron; it opens the version, and is named for that.
       render: (row) => (
-        <RowActions>
-          <button type="button" className="btn ghost sm" onClick={() => setViewing(row)}>
-            {t('web.terms_view')}
-          </button>
-        </RowActions>
+        <button
+          type="button"
+          className="btn ghost icon sm terms-hist-open"
+          aria-label={`${t('web.terms_view')} — ${row.title}`}
+          onClick={() => setViewing(row)}
+        >
+          <Icon name="chevronLeft" />
+        </button>
       ),
     },
   ];
@@ -332,13 +334,24 @@ export function TermsPage({
         {data !== undefined && (
           <div className="stack">
             <Card className="bx-enf-card">
-              <ToggleRow
-                title={t('web.terms_enforcement_label')}
-                description={t('web.terms_enforcement_hint')}
-                checked={data.enforcement.enabled}
-                disabled={!mayToggle || busy}
-                onChange={(next) => (next ? setConfirmEnforce(true) : setEnforcement(false))}
-              />
+              {/* The switch with its on/off pill beside it, as the demo draws it. */}
+              <div className="toggle-row">
+                <div className="txt">
+                  <b>{t('web.terms_enforcement_label')}</b>
+                  <span>{t('web.terms_enforcement_hint')}</span>
+                </div>
+                <span className="terms-enf-state">
+                  <Badge tone={data.enforcement.enabled ? 'ok' : 'neutral'} dot>
+                    {data.enforcement.enabled ? t('web.enabled') : t('web.disabled')}
+                  </Badge>
+                  <Switch
+                    checked={data.enforcement.enabled}
+                    label={t('web.terms_enforcement_label')}
+                    disabled={!mayToggle || busy}
+                    onChange={(next) => (next ? setConfirmEnforce(true) : setEnforcement(false))}
+                  />
+                </span>
+              </div>
               {!mayToggle && (
                 <p className="muted small">{t('web.terms_enforcement_no_permission')}</p>
               )}
@@ -365,14 +378,10 @@ export function TermsPage({
               <Stat
                 label={t('web.terms_stat_accepted')}
                 value={<Num value={data.statistics.acceptedCurrent} />}
-                tone="ok"
               />
               <Stat
                 label={t('web.terms_stat_pending')}
                 value={<Num value={data.statistics.pendingCurrent} />}
-                {...(data.enforcement.enabled && data.statistics.pendingCurrent > 0
-                  ? { tone: 'warn' as const }
-                  : {})}
               />
             </div>
 
@@ -403,7 +412,6 @@ export function TermsPage({
                         className="btn ghost sm"
                         onClick={() => setViewing(current)}
                       >
-                        <Icon name="eye" />
                         {t('web.terms_view')}
                       </button>
                     </div>
@@ -476,11 +484,11 @@ export function TermsPage({
                 <p className="muted">{t('web.terms_history_empty')}</p>
               ) : (
                 <DataTable
+                  stack="labelled"
                   columns={historyColumns}
                   rows={historyPage}
                   rowKey={(row) => row.id}
                   caption={t('web.terms_history_title')}
-                  dense
                 />
               )}
               {historyPager}

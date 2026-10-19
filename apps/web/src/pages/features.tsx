@@ -47,7 +47,12 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
           }
           tight
         >
-          <ul className="feature-list">
+          {/*
+           * The demo pages this list ten at a time; the endpoint returns no total, so the
+           * whole list sits in a height-limited pane instead (nexa-web-design: counted
+           * pagers only over a server total).
+           */}
+          <ul className="feature-list feature-pane">
             {rows.map((flag) => (
               <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
             ))}

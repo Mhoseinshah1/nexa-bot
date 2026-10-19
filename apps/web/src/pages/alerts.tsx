@@ -612,7 +612,8 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           >
             {notificationTypeName(row.templateKey)}
           </button>
-          <Badge tone="neutral" outline>
+          {/* A filled pill, as the demo draws a notification's category. */}
+          <Badge tone="neutral">
             {t(NOTIFICATION_CATEGORY_LABELS[notificationCategoryOf(row.templateKey)])}
           </Badge>
         </span>
@@ -698,11 +699,11 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         <Card title={t('web.notifications_title')} hint={t('web.notifications_list_hint')}>
           <StateSwitch query={notifications} denied={denied} isEmpty={rows.length === 0}>
             <DataTable
+              stack="labelled"
               caption={t('web.notifications_title')}
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}
-              dense
               rowClassName={(row) => (row.id === selected ? 'selected' : undefined)}
             />
           </StateSwitch>

@@ -572,6 +572,20 @@ describe('the Bots page', () => {
     expect(within(sheet).getByText('مجموعه')).toBeInTheDocument();
   });
 
+  it('draws «نیازمند توجه» even at zero, as the demo strip does', async () => {
+    stubApi([listRoute([bot({ readiness: { state: 'REGISTERED', causes: [] } })])]);
+    renderPage(page({}));
+    await screen.findByText('@acme_store_bot');
+    expect(screen.getByTestId('bots-summary')).toHaveTextContent(/[0۰]\s*نیازمند توجه/u);
+  });
+
+  it('draws «افزودن ربات» as its own titled card', async () => {
+    stubApi([listRoute([bot()])]);
+    renderPage(page({}));
+    await screen.findByText('@acme_store_bot');
+    expect(screen.getByRole('region', { name: 'افزودن ربات' })).toHaveTextContent('ربات اصلی');
+  });
+
   it('fetches nothing for a role without settings.view', () => {
     const api = stubApi([listRoute()]);
     renderPage(page({ denied: true }));

@@ -990,6 +990,11 @@
     min-height: var(--ctl-h);
     min-width: var(--ctl-h);
   }
+  /* The owner pill is a 44px target on touch; on a desk it stays the demo's 34px capsule. */
+  .user-trigger {
+    min-height: var(--ctl-h);
+    min-width: var(--ctl-h);
+  }
 }
 
 /*
