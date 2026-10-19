@@ -999,6 +999,55 @@
   line-height: 1.4;
   padding-block: 2px;
 }
+/*
+ * Demo parity: a `phoneCards` table becomes one card per row at ≤ 820px — no header row,
+ * the first cell as the card's heading, every other cell «label … value» (the label from
+ * `data-label`, on the start side; the value on the end side), as the approved demo draws.
+ */
+@media (max-width: 820px) {
+  .tbl-wrap:has(> .tbl.phone-cards) {
+    overflow: visible;
+  }
+  .tbl.phone-cards thead {
+    display: none;
+  }
+  .tbl.phone-cards,
+  .tbl.phone-cards tbody,
+  .tbl.phone-cards tr,
+  .tbl.phone-cards td {
+    display: block;
+    width: 100%;
+  }
+  .tbl.phone-cards tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tbl.phone-cards tr:last-child {
+    border-bottom: 0;
+  }
+  .tbl.phone-cards td {
+    padding: 3px 0;
+    border: 0;
+    white-space: normal;
+    min-width: 0;
+    text-align: end;
+    overflow: hidden;
+  }
+  .tbl.phone-cards td::before {
+    content: attr(data-label);
+    float: inline-start;
+    color: var(--fg-3);
+    font-size: var(--fs-xs);
+  }
+  .tbl.phone-cards td:first-child {
+    font-size: var(--fs-body);
+    padding-bottom: 6px;
+    text-align: start;
+  }
+  .tbl.phone-cards td:first-child::before {
+    display: none;
+  }
+}
 .tbl tbody tr {
   transition: background 0.1s;
 }

@@ -187,3 +187,32 @@ describe('the infrastructure demo-parity fixtures', () => {
     },
   );
 });
+
+describe('DataTable phoneCards (demo parity, kit)', () => {
+  it('labels each cell with its header only when the table opts in', async () => {
+    const { DataTable } = await import('../../apps/web/src/ui/kit');
+    const columns = [
+      { key: 'a', header: 'نام', render: (row: { id: string }) => row.id },
+      { key: 'b', header: 'وضعیت', render: () => 'x' },
+    ];
+    const { container, rerender } = renderPage(
+      <DataTable caption="c" columns={columns} rows={[{ id: 'r1' }]} rowKey={(row) => row.id} />,
+    );
+    expect(container.querySelector('td[data-label]')).toBeNull();
+    expect(container.querySelector('table.phone-cards')).toBeNull();
+    rerender(
+      <DataTable
+        caption="c"
+        columns={columns}
+        rows={[{ id: 'r1' }]}
+        rowKey={(row) => row.id}
+        phoneCards
+      />,
+    );
+    expect(container.querySelector('table.phone-cards')).not.toBeNull();
+    const labels = [...container.querySelectorAll('td')].map((cell) =>
+      cell.getAttribute('data-label'),
+    );
+    expect(labels).toEqual(['نام', 'وضعیت']);
+  });
+});

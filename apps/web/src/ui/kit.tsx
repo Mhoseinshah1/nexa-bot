@@ -1872,6 +1872,7 @@ export function DataTable<T>({
   toolbar,
   filters,
   rowClassName,
+  phoneCards = false,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -1882,13 +1883,19 @@ export function DataTable<T>({
   toolbar?: ReactNode;
   filters?: ReactNode;
   rowClassName?: (row: T) => string | undefined;
+  /**
+   * Demo parity: at phone and tablet width (≤ 820px) each row is drawn as a card — the
+   * first column as its heading, every other cell as «label … value» — instead of a table
+   * that scrolls sideways, as the approved demo draws every list. Opt-in per table.
+   */
+  phoneCards?: boolean;
 }) {
   return (
     <>
       {toolbar !== undefined && <div className="toolbar">{toolbar}</div>}
       {filters !== undefined && <div className="filter-row">{filters}</div>}
       <div className={cx('tbl-wrap', sticky && 'sticky')}>
-        <table className={cx('tbl', dense && 'dense')}>
+        <table className={cx('tbl', dense && 'dense', phoneCards && 'phone-cards')}>
           <caption className="visually-hidden">{caption}</caption>
           <thead>
             <tr>
@@ -1918,6 +1925,8 @@ export function DataTable<T>({
                 {columns.map((column) => (
                   <td
                     key={column.key}
+                    // The header again, for the phone card's «label … value» line.
+                    {...(phoneCards ? { 'data-label': column.header } : {})}
                     className={cx(
                       `al-${column.align === 'end' ? 'end' : 'start'}`,
                       column.wrap !== undefined && column.wrap !== false && 'wrap',
