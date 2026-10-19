@@ -149,6 +149,17 @@
   font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
+/* R4 PR-F (F8): a rich message's buttons, inside its bubble. */
+.tg-phone-inline.in-bubble {
+  max-width: 100%;
+  margin-block-start: 8px;
+}
+.ib-rich-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-block-start: 16px;
+}
 .tg-phone-note {
   margin: auto;
   color: var(--fg-3);

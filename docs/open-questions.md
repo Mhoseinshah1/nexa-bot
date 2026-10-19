@@ -4120,3 +4120,49 @@ None of the providers' inquiry answers carries a `Retry-After` this installation
 limit on an inquiry backs the row off at least 60 s (unchanged). **Decide** with the real
 provider (`OQ-WP10-01`): record each limit and whether it is per key, per account or per IP,
 and set the budgets from it in the same commit.
+
+## OQ-R4F — Telegram rich messages (R4 PR-F, 2026-10-19)
+
+Status: OPEN. `docs/r4-telegram-rich-audit.md` §1 verified the Bot API 10.3 reference from
+verbatim copies (`core.telegram.org` is refused by the build's egress proxy). What the
+reference does NOT say is listed here and was not guessed; each one is decided by a real-bot
+acceptance with `rich_messages` on for a test tenant.
+
+- **OQ-R4F-01 — old clients.** How a client that predates rich messages renders one is not
+  documented. The fallback catches a REFUSAL only; a message Telegram accepted and an old client
+  draws badly cannot be detected. Decide by opening a rich screen on the oldest client the
+  owner's customers use.
+- **OQ-R4F-02 — converting an existing message.** `editMessageText` edits "text, rich and game
+  messages"; whether it turns a TEXT message into a rich one (and a rich one back into text) is
+  not stated. A refused edit falls back to the ordinary edit, and an ordinary edit refused on a
+  rich message is `NOT_EDITABLE`, after which the caller sends anew — but each refused rich edit
+  also writes the hourly `telegram.rich_message_refused` row, so switching the flag on may log
+  one ERROR per bot per hour while old screens are edited.
+- **OQ-R4F-03 — premium emoji inside rich messages.** The Premium rule is documented for
+  messages (9.4 changelog) and for `icon_custom_emoji_id`; nothing says how a
+  `RichTextCustomEmoji` from a non-Premium bot is treated — refused, or drawn as its
+  `alternative_text`. A refusal falls back; a silent plain render cannot be detected.
+- **OQ-R4F-04 — the rich HTML / Markdown dialect.** `InputRichMessage.html` points at "rich
+  message formatting options", which neither copy carries. The builder sends `blocks` only.
+- **OQ-R4F-05 — size limits.** No limit on blocks, table cells or characters of a rich message
+  is stated. Only screens that fit one ordinary message (4096 units) are sent rich.
+- **OQ-R4F-06 — the `date_time` format.** Dates go with an EMPTY format ("displayed as-is; the
+  user can still receive the underlying date in their local format"), so the tenant's own
+  calendar text is kept. Which calendar a Persian-locale client uses for `D`/`d` is not
+  documented; the owner may choose a visible local format once it is seen on a real client.
+- **OQ-R4F-07 — `DisabledButton` cannot explain itself.** The reference: "a disabled button which
+  does nothing". The spec asks that pressing one explains why. Not built; the owner chooses
+  between a greyed button that says nothing and today's button that explains on press.
+- **OQ-R4F-08 — streaming drafts for the AI support assistant.** `sendMessageDraft` /
+  `sendRichMessageDraft` address a private `chat_id` and take no `business_connection_id`; the
+  assistant answers inside Telegram Business chats, and its provider port returns one complete
+  answer. Not built. Decide whether drafts are wanted for a bot-chat assistant that does not
+  exist yet, or whether a later Bot API gives drafts a business connection.
+- **OQ-R4F-09 — the callback's `message`.** A rich button's tap is "sent in a callback query",
+  so routing by `data` is identical; `CallbackQuery`'s description still speaks of "a callback
+  button in an inline keyboard". Whether `message` is present (the edit-in-place target) is
+  checked at acceptance: the runtime treats a callback without one exactly as it treats any
+  such callback today, and nothing in this PR changes that path.
+- **OQ-R4F-10 — the source itself.** Re-read `core.telegram.org/bots/api` and the changelog
+  directly when egress allows, and correct `docs/r4-telegram-rich-audit.md` §1 in the commit that
+  does.

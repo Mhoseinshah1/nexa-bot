@@ -692,3 +692,93 @@ describe('canonicalIcons / invalidIcons', () => {
     });
   });
 });
+
+/**
+ * R4 PR-F (F8): the phone preview follows «دکمه‌های داخل پیام» and «ایموجی پریمیوم»; (F4)
+ * «رنگ‌های پیشنهادی» fills the draft and writes nothing by itself.
+ */
+describe('the rich-message preview and the suggested colours', () => {
+  const flag = (key: string, enabled: boolean) => ({
+    key,
+    description: key,
+    enabled,
+    source: 'TENANT',
+    blastRadius: 'LOCAL',
+    version: 1,
+    reason: null,
+    updatedAt: '2026-10-19T00:00:00.000Z',
+    updatedByAdminId: 'a1',
+    configuration: [],
+  });
+
+  function withFlags(rich: boolean, premium: boolean, icons: Record<string, string> = {}) {
+    return stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            setting({ key: 'bot.inline_buttons', value: {}, version: 1, configures: null }),
+            setting({ key: 'bot.inline_button_icons', value: icons, version: 1, configures: null }),
+          ],
+        },
+      },
+      {
+        url: '/features',
+        body: { flags: [flag('rich_messages', rich), flag('rich_premium_emoji', premium)] },
+      },
+    ]);
+  }
+
+  const inside = () => document.querySelector('[data-testid="ib-rich-preview-inside"]');
+  const below = () => document.querySelector('[data-testid="ib-rich-preview-below"]');
+  const mode = () => screen.getByTestId('ib-rich-preview-mode').textContent;
+
+  it('draws the buttons under the message while the switch is off — today', async () => {
+    withFlags(false, false);
+    renderPage(section());
+    await loaded();
+    await waitFor(() => expect(mode()).toBe(t('web.ib_rich_preview_off')));
+    expect(inside()).toBeNull();
+    expect(below()?.querySelectorAll('[data-testid="ib-rich-preview-key"]').length).toBe(4);
+  });
+
+  it('draws them inside the bubble while it is on', async () => {
+    withFlags(true, false);
+    renderPage(section());
+    await loaded();
+    await waitFor(() => expect(mode()).toBe(t('web.ib_rich_preview_on')));
+    expect(inside()?.querySelectorAll('[data-testid="ib-rich-preview-key"]').length).toBe(4);
+    expect(below()).toBeNull();
+  });
+
+  it('keeps an iconed button under the message while premium emoji are on', async () => {
+    const first = INLINE_BUTTONS[0]?.key as string;
+    withFlags(true, true, { [first]: '5368324170671202286' });
+    renderPage(section());
+    await loaded();
+    await waitFor(() => expect(mode()).toBe(t('web.ib_rich_preview_on_premium')));
+    expect(below()?.querySelectorAll('[data-testid="ib-rich-preview-key"]').length).toBe(1);
+    expect(inside()?.querySelectorAll('[data-testid="ib-rich-preview-key"]').length).toBe(3);
+  });
+
+  it('says the switches are unknown when they cannot be read, and draws today', async () => {
+    api();
+    renderPage(section());
+    await loaded();
+    await waitFor(() => expect(mode()).toBe(t('web.ib_rich_preview_unknown')));
+    expect(inside()).toBeNull();
+  });
+
+  it('fills the draft with the suggested colours, never replacing a chosen one, writing nothing', async () => {
+    const calls = api({ 'payment.wallet': 'danger' }, 3);
+    renderPage(section());
+    await loaded();
+    fireEvent.click(screen.getByTestId('ib-suggest'));
+    expect(styleOf('payment.sent')).toBe('success');
+    expect(styleOf('order.cancel')).toBe('danger');
+    // The operator's own choice stays.
+    expect(styleOf('payment.wallet')).toBe('danger');
+    expect(calls.calls.filter((call) => call.method !== 'GET')).toEqual([]);
+    expect(screen.getByText(t('web.ib_unsaved'))).toBeTruthy();
+  });
+});

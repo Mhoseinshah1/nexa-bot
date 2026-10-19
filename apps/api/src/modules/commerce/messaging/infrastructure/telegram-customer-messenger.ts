@@ -22,6 +22,7 @@ import {
   inlineButtonIconOf,
   inlineButtonStyleOf,
   MESSAGING_ERROR_CODES,
+  opsAggregationKey,
   type AppearanceTestErrorCode,
   type CategoryColors,
   type CategoryIcons,
@@ -69,6 +70,21 @@ import {
   type CustomEmojiEntity,
 } from '../application/appearance-render.js';
 import type { MainMenuKeyboardButton } from '../application/main-menu.js';
+import {
+  RICH_MESSAGE_REFUSED_CODE,
+  RICH_MESSAGES_OFF,
+  RICH_SCREEN_LAYOUTS,
+  type RichMessageMode,
+  type RichMessageSupport,
+} from '../application/rich-messages.js';
+import {
+  editRichMessageBody,
+  richBlocksFromText,
+  richButtonLayout,
+  richMessageBody,
+  richTableBlock,
+  type RichBlock,
+} from '../../../../infrastructure/telegram/rich-message.js';
 import type { InlineButtonStyleReader } from '../application/inline-buttons.js';
 import {
   APPEARANCE_DECORATION_FAILED_CODE,
@@ -387,6 +403,16 @@ export interface CustomerTemplateRenderer {
    * check is the one the legacy system does not have.
    */
   render(scope: ScopeContext, key: TemplateKey, values: TemplateValues): Promise<string>;
+  /**
+   * R4 PR-F (F6): the same rendering with every date value wrapped in the instant marks, for
+   * a rich message's `date_time` texts (`TemplateResolver.renderWithInstants`). Absent in a
+   * stand-in, whose rich messages then carry the dates as plain text.
+   */
+  renderWithInstants?(
+    scope: ScopeContext,
+    key: TemplateKey,
+    values: TemplateValues,
+  ): Promise<{ readonly text: string; readonly marked: string }>;
 }
 
 export interface BotInstanceTokenSource {
@@ -451,6 +477,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     private readonly logger?: {
       warn(context: Record<string, unknown>, message: string): void;
     },
+    /**
+     * R4 PR-F: the tenant's rich-message switches and the clock of the refusal window.
+     * Absent in a stand-in, which sends every screen exactly as before.
+     */
+    private readonly rich?: RichMessageSupport,
   ) {}
 
   /**
@@ -612,7 +643,22 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     // R2: the id of the part that carries the keyboard, so a later turn can edit it.
     let lastMessageId: number | null = null;
     let decorationRefused = false;
-    for (const [index, maskedPart] of sequence.entries()) {
+    /*
+     * R4 PR-F (F1): a ONE-part screen with inline buttons and no reply keyboard is offered to
+     * Telegram as a rich message first, when the tenant has «دکمه‌های داخل پیام» on. Its
+     * answer is the message's answer — except a definite refusal, after which the screen is
+     * sent below EXACTLY as it is with the switch off, once (`richSend`). With the switch off
+     * `richSend` makes no request and this loop is the only path, byte for byte as before.
+     */
+    const richAnswer =
+      buttons.length > 0 && message.keyboard === undefined && sequence.length === 1
+        ? await this.richSend(scope, message, token, buttons, decoration)
+        : null;
+    if (richAnswer !== null) {
+      if (richAnswer.outcome === 'SUCCEEDED') lastMessageId = richAnswer.messageId;
+      worst = this.classify(richAnswer);
+    }
+    for (const [index, maskedPart] of (richAnswer === null ? sequence : []).entries()) {
       const last = index === sequence.length - 1;
       const decorated = decorateAppearance(
         restore(maskedPart),
@@ -1184,6 +1230,19 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
     const buttons = await this.labelButtons(scope, message.buttons, decoration);
+    /*
+     * R4 PR-F (F1): with «دکمه‌های داخل پیام» on, the screen is edited into a rich message —
+     * `editMessageText` with `rich_message`. A definite refusal (other than "not modified")
+     * falls back to the ordinary edit below, once; with the switch off nothing is sent here.
+     */
+    const richOutcome = await this.richEdit(scope, message, token, buttons, decoration);
+    if (richOutcome !== null) {
+      if (isMessageNotModified(richOutcome)) return { outcome: 'DELIVERED' };
+      const richSent = this.classify(richOutcome).sent;
+      return richSent.outcome === 'REFUSED'
+        ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' }
+        : richSent;
+    }
     const iconed = rawIconSource(message.buttons, buttons, this.categoryIconsDrawn.get(buttons));
     const plainText = html ? undoHtmlDecoration(text) : text;
     const { raw: outcome } = await this.deliverDecorated(
@@ -1436,6 +1495,208 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       errorCode: classifyProbeRefusal(raw.errorMessage),
       decoratedSlots,
     };
+  }
+
+  /** R4 PR-F: the tenant's rich-message switches; unreadable is off, today's behaviour. */
+  private async richModeFor(scope: TenantContext): Promise<RichMessageMode> {
+    const rich = this.rich;
+    if (rich === undefined) return RICH_MESSAGES_OFF;
+    return this.bestEffort('read the rich-message switches', RICH_MESSAGES_OFF, () =>
+      rich.modeFor(scope),
+    );
+  }
+
+  /**
+   * R4 PR-F: one screen as rich blocks — its text, the plan table when its buttons carry plan
+   * figures (F2), and its buttons — or null when the switch is off or the text cannot be
+   * converted exactly (`richBlocksFromText`), in which case the ordinary path sends it.
+   *
+   * The text is rendered with its date values marked (F6) and decorated with the SENDING
+   * bot's custom emoji only when «ایموجی پریمیوم» is on (F3); otherwise every marker is its
+   * plain emoji and no button carries an icon, so a bot that never proved premium emoji, or
+   * a tenant that did not ask for them, sends none.
+   */
+  private async richScreen(
+    scope: TenantContext,
+    message: {
+      readonly templateKey: TemplateKey;
+      readonly values: TemplateValues;
+      readonly buttons?: readonly CustomerButton[];
+    },
+    labelled: readonly TelegramButton[],
+    decoration: AppearanceDecoration,
+  ): Promise<{
+    readonly blocks: RichBlock[];
+    readonly inlineRows: Record<string, unknown>[][];
+  } | null> {
+    const mode = await this.richModeFor(scope);
+    if (!mode.enabled) return null;
+    const renderer = this.templates;
+    const marked =
+      renderer.renderWithInstants === undefined
+        ? await renderer.render(scope, message.templateKey, message.values)
+        : (await renderer.renderWithInstants(scope, message.templateKey, message.values)).marked;
+    const format = templateDefinition(message.templateKey).format;
+    const premium = mode.premiumEmoji && mayCarryCustomEmoji(decoration);
+    const decorated = decorateAppearance(marked, format, premium ? decoration : NO_DECORATION);
+    const text = richBlocksFromText({
+      text: decorated.text,
+      html: format === 'TELEGRAM_HTML',
+      entities: decorated.entities,
+      customEmoji: premium,
+      layout: RICH_SCREEN_LAYOUTS[message.templateKey] ?? {},
+    });
+    if (text === null) return null;
+    const table = await this.planTable(scope, message.buttons ?? []);
+    const layout = richButtonLayout(premium ? labelled : withoutButtonIcons(labelled));
+    return {
+      blocks: [...text, ...(table === null ? [] : [table]), ...layout.blocks],
+      inlineRows: layout.inline,
+    };
+  }
+
+  /**
+   * R4 PR-F (F2): the plan table — name | traffic | days | price — for the `catalog.product`
+   * buttons that carry their plan's figures, compact for the phone. Every heading and cell is
+   * a template (`bot.catalog.table_*`) except the name, which is the tenant's own data, and
+   * the price, which is `formatMoney` like the button under it. Null when no button has
+   * figures, which is every screen but the plan list.
+   */
+  private async planTable(
+    scope: TenantContext,
+    buttons: readonly CustomerButton[],
+  ): Promise<RichBlock | null> {
+    const plans = buttons.flatMap((button) =>
+      'data' in button &&
+      button.inline === 'catalog.product' &&
+      button.planFacts !== undefined &&
+      button.label.kind === 'TEXT' &&
+      button.label.amount !== undefined
+        ? [{ title: button.label.text, amount: button.label.amount, facts: button.planFacts }]
+        : [],
+    );
+    if (plans.length === 0) return null;
+    const label = async (key: TemplateKey, values: TemplateValues = {}) =>
+      appearanceFallbackText(await this.templates.render(scope, key, values));
+    const header = [
+      await label('bot.catalog.table_name_header'),
+      await label('bot.catalog.table_traffic_header'),
+      await label('bot.catalog.table_days_header'),
+      await label('bot.catalog.table_price_header'),
+    ];
+    const rows: string[][] = [];
+    for (const plan of plans) {
+      rows.push([
+        plan.title,
+        await label('bot.catalog.table_traffic_cell', { traffic: plan.facts.trafficBytes }),
+        await label('bot.catalog.table_days_cell', { durationDays: plan.facts.durationDays }),
+        formatMoney(plan.amount),
+      ]);
+    }
+    return richTableBlock({ header, rows, compact: true });
+  }
+
+  /**
+   * R4 PR-F (F1): `sendRichMessage` for one screen, or null when the ordinary send must run.
+   *
+   * Null for: the switch off, a text that does not convert, and a DEFINITE refusal — which is
+   * logged once (`recordRichRefusal`) and then sent the ordinary way, the one resend the owner
+   * allows. Anything else is returned as the message's answer and never resent: a timeout, a
+   * 5xx or an unreadable answer may have delivered the rich message, and a 429 says the next
+   * request will be refused too — the rule every send in this file keeps.
+   */
+  private async richSend(
+    scope: TenantContext,
+    message: CustomerMessage,
+    token: string,
+    labelled: readonly TelegramButton[],
+    decoration: AppearanceDecoration,
+  ): Promise<TelegramSendOutcome | null> {
+    const screen = await this.richScreen(scope, message, labelled, decoration);
+    if (screen === null) return null;
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'sendRichMessage',
+      body: richMessageBody({
+        chatId: message.chatId,
+        blocks: screen.blocks,
+        inlineRows: screen.inlineRows,
+        ...(message.replyToMessageId === undefined
+          ? {}
+          : { replyToMessageId: message.replyToMessageId }),
+      }),
+    });
+    if (outcome.outcome !== 'FAILED_PERMANENT') return outcome;
+    await this.recordRichRefusal(scope, message, 'sendRichMessage', outcome.errorCode);
+    return null;
+  }
+
+  /** R4 PR-F (F1): `editMessageText(rich_message)`, by the same rules as `richSend`. */
+  private async richEdit(
+    scope: TenantContext,
+    message: CustomerEditMessage,
+    token: string,
+    labelled: readonly TelegramButton[],
+    decoration: AppearanceDecoration,
+  ): Promise<TelegramSendOutcome | null> {
+    const screen = await this.richScreen(scope, message, labelled, decoration);
+    if (screen === null) return null;
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'editMessageText',
+      body: editRichMessageBody({
+        chatId: message.chatId,
+        messageId: message.messageId,
+        blocks: screen.blocks,
+        inlineRows: screen.inlineRows,
+      }),
+    });
+    if (outcome.outcome !== 'FAILED_PERMANENT' || isMessageNotModified(outcome)) return outcome;
+    await this.recordRichRefusal(scope, message, 'editMessageText', outcome.errorCode);
+    return null;
+  }
+
+  /**
+   * R4 PR-F: ONE error row per bot per hour for refused rich messages (`WINDOW`), so a
+   * Telegram that refuses every one of them is a counter, not a storm. The code and the bot,
+   * never Telegram's description, which can quote a chat id. Best effort: the screen is
+   * still sent the ordinary way whatever happens to the log.
+   */
+  private async recordRichRefusal(
+    scope: TenantContext,
+    message: { readonly botInstanceId: BotInstanceId; readonly templateKey: TemplateKey },
+    method: 'sendRichMessage' | 'editMessageText',
+    errorCode: string,
+  ): Promise<void> {
+    const rich = this.rich;
+    if (rich === undefined) return;
+    await this.bestEffort(
+      'record a refused rich message',
+      undefined,
+      () =>
+        this.opsLog.record(scope, {
+          code: RICH_MESSAGE_REFUSED_CODE,
+          severity: 'ERROR',
+          message:
+            'Telegram refused a screen sent as a rich message; it was sent again the ordinary ' +
+            'way. Turn the rich_messages feature off if this keeps happening.',
+          dedupeKey: opsAggregationKey(
+            `${RICH_MESSAGE_REFUSED_CODE}:${message.botInstanceId}`,
+            rich.now(),
+          ),
+          context: {
+            botInstanceId: message.botInstanceId,
+            templateKey: message.templateKey,
+            method,
+            errorCode,
+          },
+        }),
+      { botInstanceId: message.botInstanceId },
+    );
   }
 
   /** The decoration for one bot's messages; a stand-in without a reader decorates nothing. */
