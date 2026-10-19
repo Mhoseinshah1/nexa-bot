@@ -901,6 +901,7 @@ export function ResellerPolicyCard({
 
             <h4>{t('web.reseller_policy_entitlements')}</h4>
             <DataTable
+              stack="labelled"
               caption={t('web.reseller_policy_entitlements')}
               rowKey={(row) => row.dimension}
               rows={data.dimensions}
@@ -1042,6 +1043,7 @@ export function ResellerPolicyCard({
               <Empty title={t('web.reseller_policy_products_empty')} icon="inbox" />
             ) : (
               <DataTable
+                stack="labelled"
                 caption={t('web.reseller_policy_products')}
                 rowKey={(row) => row.productId}
                 rows={data.products}
