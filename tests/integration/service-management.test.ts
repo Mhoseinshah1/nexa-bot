@@ -621,6 +621,10 @@ describe('a customer manages the service they bought', () => {
       'not listed',
     ).toEqual([kept.id]);
     expect(page.count, 'not counted').toBe(1);
+    // R4 A6: a broadcast's {servicesTotal}/{servicesActive} read the SAME list predicate.
+    expect(
+      await services.listedCountsForCustomer(tenantA, customerA, ctx.container.clock.now()),
+    ).toEqual({ listed: 1, serving: 1 });
     const paged = await services.pageForCustomer(tenantA, customerA, { number: 2, size: 1 });
     expect(paged.items, 'no page holds it').toEqual([]);
     expect((await services.findById(tenantA, gone.id))?.state, 'its state is untouched').toBe(

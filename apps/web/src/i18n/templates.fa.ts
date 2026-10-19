@@ -635,6 +635,16 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   // Round N: the broadcast wrapper and the two mass-action notices.
   'bot.broadcast.message': { message: 'متن پیام همگانی' },
   'bot.wallet.mass_credited': { amount: 'مبلغ شارژ همگانی' },
+  'bot.wallet.admin_credited': {
+    amount: 'مبلغ افزوده‌شده',
+    balance: 'موجودی جدید',
+    reason: 'دلیل (فقط اگر «نمایش دلیل به مشتری» زده شده باشد)',
+  },
+  'bot.wallet.admin_debited': {
+    amount: 'مبلغ کسرشده',
+    balance: 'موجودی جدید',
+    reason: 'دلیل (فقط اگر «نمایش دلیل به مشتری» زده شده باشد)',
+  },
   'bot.service.gift_applied': {
     service: 'نام کاربری سرویس',
     traffic: 'حجم هدیه',
@@ -3471,6 +3481,31 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.broadcast.message': [
     'قالب پیام همگانی',
     'هر پیام همگانی درون این قالب فرستاده می‌شود؛ می‌توانید سرتیتر یا پانویس ثابتی به همهٔ پیام‌های همگانی اضافه کنید.',
+  ],
+  // --- R4 PR-A ---
+  'bot.wallet.admin_credited': [
+    'اطلاع افزایش دستی موجودی',
+    'وقتی ادمین کیف پول مشتری را دستی شارژ می‌کند فرستاده می‌شود؛ هرگز برای موجودی منتقل‌شده از ربات قبلی.',
+  ],
+  'bot.wallet.admin_debited': [
+    'اطلاع کسر دستی موجودی',
+    'وقتی ادمین از کیف پول مشتری دستی کسر می‌کند فرستاده می‌شود.',
+  ],
+  'bot.account.unblocked': [
+    'اطلاع رفع مسدودی',
+    'وقتی مسدودی حساب مشتری (دستی یا اسپم) برداشته می‌شود فرستاده می‌شود.',
+  ],
+  'bot.blocked.support_button': [
+    'دکمهٔ ارتباط با پشتیبانی در پیام مسدودی',
+    'دکمهٔ لینک زیر پیام مسدودی که به حساب یا لینک پشتیبانی از تنظیمات باز می‌شود.',
+  ],
+  'bot.payment.switch_card_button': [
+    'دکمهٔ تغییر شماره کارت',
+    'روی فاکتور کارت‌به‌کارت، وقتی بیش از یک کارت فعال است؛ همان فاکتور را با کارت فعال بعدی نشان می‌دهد.',
+  ],
+  'bot.wallet.copy_id_button': [
+    'دکمهٔ کپی شناسه',
+    'زیر اطلاعات حساب کاربری؛ شناسهٔ عددی تلگرام مشتری را کپی می‌کند.',
   ],
   'bot.wallet.mass_credited': [
     'اطلاع شارژ همگانی کیف پول',

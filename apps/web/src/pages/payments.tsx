@@ -2067,6 +2067,7 @@ export function PaymentDetailPage({
             */}
                   {row.destination !== null && (
                     <Card title={t('web.payment_destination')}>
+                      <p className="muted small">{t('web.payment_destination_last_hint')}</p>
                       <KV
                         items={[
                           [t('web.payment_destination_label'), row.destination.label],

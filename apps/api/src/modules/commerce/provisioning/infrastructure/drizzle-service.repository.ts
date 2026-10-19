@@ -1080,11 +1080,11 @@ export class DrizzleServiceRepository implements ServiceRepository {
     scope: TenantContext,
     customerId: string,
     now: Date,
-  ): Promise<{ readonly total: number; readonly serving: number }> {
+  ): Promise<{ readonly listed: number; readonly serving: number }> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.db
       .select({
-        total: sql<number>`count(*)::int`,
+        listed: sql<number>`count(*)::int`,
         serving: sql<number>`count(*) FILTER (WHERE ${services.state} = 'ACTIVE'
           AND (${services.expiresAt} IS NULL OR ${services.expiresAt} > ${now})
           AND NOT (${services.usageSyncedAt} IS NOT NULL
@@ -1099,7 +1099,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
           listedForCustomer(),
         ),
       );
-    return { total: Number(row?.total ?? 0), serving: Number(row?.serving ?? 0) };
+    return { listed: Number(row?.listed ?? 0), serving: Number(row?.serving ?? 0) };
   }
 
   async supportServicesForCustomer(

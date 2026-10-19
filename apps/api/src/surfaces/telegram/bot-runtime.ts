@@ -306,7 +306,7 @@ export const BOT_INTENTS = [
   'PAY_CANCEL_ASK',
   'PAY_CANCEL',
   'PAY_SENT',
-  /* R4 A1: the card-to-card invoice's «🔄 تغییر شماره کارت». Names the payment and a sequence. */
+  /* R4 A1: the card-to-card invoice's card-switch button. Names the payment and a sequence. */
   'PAY_SWITCH_CARD',
   'TOPUP_MENU',
   'TOPUP_PICK',

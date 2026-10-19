@@ -1780,7 +1780,7 @@ export function adjustWallet(input: {
   amount: string;
   currency: CurrencyCode;
   note: string;
-  /** R4 A5: «نمایش دلیل به مشتری» — the customer's message quotes the note. */
+  /** R4 A5: show the note to the customer as the reason of their adjustment message. */
   showNoteToCustomer: boolean;
 }): Promise<WalletEntryResponse> {
   const { customerId, ...body } = input;

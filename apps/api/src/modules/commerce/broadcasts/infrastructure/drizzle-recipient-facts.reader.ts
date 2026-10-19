@@ -19,7 +19,7 @@ export interface RecipientServiceCounts {
     scope: TenantContext,
     customerId: string,
     now: Date,
-  ): Promise<{ readonly total: number; readonly serving: number }>;
+  ): Promise<{ readonly listed: number; readonly serving: number }>;
 }
 
 export class DrizzleRecipientFactsReader implements RecipientFactsReader {
@@ -73,7 +73,7 @@ export class DrizzleRecipientFactsReader implements RecipientFactsReader {
           : money(BigInt(row.balance), currency),
       telegramId: row?.telegram_user_id ?? null,
       phone: row?.phone_number ?? null,
-      ...(counts === null ? {} : { servicesTotal: counts.total, servicesActive: counts.serving }),
+      ...(counts === null ? {} : { servicesTotal: counts.listed, servicesActive: counts.serving }),
       ...(options.now === undefined ? {} : { today: options.now }),
     };
   }

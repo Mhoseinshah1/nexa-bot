@@ -197,7 +197,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'حساب شما مسدود شده است.\n\nدلیل:\n{reason}\n\nبرای بررسی یا رفع مسدودی با پشتیبانی در ارتباط باشید.',
   // R4 A5: the support link under every blocked reply, and the sentence an unblock sends.
   'bot.blocked.support_button': '📞 ارتباط با پشتیبانی',
-  'bot.account.unblocked': '✅ حساب شما از مسدودی خارج شد و می‌توانید دوباره از ربات استفاده کنید.',
+  'bot.account.unblocked':
+    '{icon:success} حساب شما از مسدودی خارج شد و می‌توانید دوباره از ربات استفاده کنید.',
 
   // What this bot can do, and the descriptions Telegram shows in its own command menu.
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
@@ -1465,9 +1466,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.mass_credited': '{icon:referral} مبلغ {amount} به کیف پول شما اضافه شد.',
   // R4 A5: an administrator's own credit or debit. The reason line only when it was ticked.
   'bot.wallet.admin_credited':
-    '💰 مبلغ {amount} به کیف پول شما اضافه شد.\n\n{icon:wallet} موجودی جدید: {balance}\n📝 دلیل: {reason}',
+    '{icon:wallet} مبلغ {amount} به کیف پول شما اضافه شد.\n\n{icon:amount} موجودی جدید: {balance}\n📝 دلیل: {reason}',
   'bot.wallet.admin_debited':
-    '💰 مبلغ {amount} از کیف پول شما کسر شد.\n\n{icon:wallet} موجودی جدید: {balance}\n📝 دلیل: {reason}',
+    '{icon:wallet} مبلغ {amount} از کیف پول شما کسر شد.\n\n{icon:amount} موجودی جدید: {balance}\n📝 دلیل: {reason}',
   'bot.service.gift_applied':
     '{icon:referral} هدیه برای سرویس {service} اعمال شد.\n📦 حجم اضافه: {traffic}\n{icon:time} زمان اضافه: {days}',
   /*
