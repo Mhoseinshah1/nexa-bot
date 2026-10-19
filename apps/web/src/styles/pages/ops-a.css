@@ -192,9 +192,42 @@
   gap: 6px;
 }
 
-/* The detail head: status and health beside the name, provider and address beneath. */
-.detail-head .panels-capacity {
+/* The reservations, on their own line under the fraction (demo parity). */
+.panels-capacity-held {
+  line-height: 1.2;
+}
+
+/* The detail head (demo parity): the figures as a strip of six separate cards. */
+.panel-head-stats .panels-capacity {
   align-items: flex-start;
+}
+.panel-head-stats .panels-capacity .progress {
+  width: 96px;
+}
+.panel-head-stats .panels-capacity > .num {
+  white-space: nowrap;
+  font-size: 20px;
+}
+.panel-head-note {
+  margin: 0;
+}
+.panel-head-stats .panel-stat-when {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.panel-head-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.panel-head-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: 8px;
+  vertical-align: middle;
 }
 
 /* The provider catalogue: supported capabilities, wrapping. */
@@ -913,15 +946,31 @@
 .ph-summary > .stat {
   margin: 0;
 }
-/* One card per panel: a single column at 390px, as many as fit on a desk. */
+/* One card per panel: two a row on a desk, as the demo draws them; one at 390px. */
 .ph-cards {
   display: grid;
   gap: var(--gap);
-  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
   margin-block: 12px;
+}
+/* A card's body grows so every footer in a row sits on the same line. */
+.ph-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ph-card > .card-body {
+  flex: 1 1 auto;
 }
 .ph-card .kv {
   overflow-wrap: anywhere;
+}
+/* A value never leaves its card: a long pill wraps inside the cell instead. */
+.ph-card .kv dd,
+.ph-card .kv .badge {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
 }
 .ph-badges {
   display: inline-flex;
@@ -982,4 +1031,10 @@
     inset-inline-start: -2px;
     inset-inline-end: -14px;
   }
+}
+
+/* Demo parity (new panel): the save is the form's full-width last row. */
+.panel-new-foot .form-actions {
+  flex-direction: column;
+  align-items: stretch;
 }

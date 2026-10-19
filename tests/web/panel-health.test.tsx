@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { opsCodeLabel } from '../../apps/web/src/ops-code-labels';
 import { PanelHealthPage } from '../../apps/web/src/pages/panel-health';
 import { panel, renderPage, stubApi } from './harness';
 
@@ -76,7 +77,10 @@ describe('the panel health dashboard', () => {
     expect(inCard.getByText(t('web.ph_streak'))).toBeInTheDocument();
     expect(inCard.getByText('12')).toBeInTheDocument(); // active services
     expect(inCard.getByText('4')).toBeInTheDocument(); // failed in the window
-    expect(inCard.getByText('panel.health.unreachable')).toBeInTheDocument();
+    // Demo parity: the condition's Persian name, its code as the title.
+    expect(inCard.getByTitle('panel.health.unreachable')).toHaveTextContent(
+      opsCodeLabel('panel.health.unreachable'),
+    );
     expect(inCard.getByText(/24/u)).toBeInTheDocument(); // the window it counted
     expect(inCard.getByText(t('web.ph_sellable_yes'))).toBeInTheDocument();
   });
@@ -225,9 +229,9 @@ describe('the panel health dashboard', () => {
     renderPage(<PanelHealthPage denied={false} mayProbe mayDrain mayViewServices />);
     const current = await screen.findByRole('list', { name: t('web.ph_conditions') });
     const history = screen.getByRole('list', { name: t('web.ph_conditions_history') });
-    expect(within(current).getByText('panel.capacity.warning')).toBeInTheDocument();
-    expect(within(current).queryByText('panel.health.provider_error')).toBeNull();
-    expect(within(history).getByText('panel.health.provider_error')).toBeInTheDocument();
+    expect(within(current).getByTitle('panel.capacity.warning')).toBeInTheDocument();
+    expect(within(current).queryByTitle('panel.health.provider_error')).toBeNull();
+    expect(within(history).getByTitle('panel.health.provider_error')).toBeInTheDocument();
     // Labelled as history, not with the ERROR severity of an active failure.
     expect(within(history).getByText(t('web.ph_condition_historical'))).toBeInTheDocument();
     expect(within(history).queryByText(t('web.setting_severity_error'))).toBeNull();

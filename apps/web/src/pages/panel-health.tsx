@@ -15,7 +15,7 @@ import { useLinkHandler } from '../router';
 import { pollUnlessFinal } from '../polling';
 import { messageFor } from './settings';
 import { SEVERITY_LABELS } from './alerts';
-import { FAILURE_LABELS } from './panel-advanced';
+import { FAILURE_LABELS, FAILURE_SHORT_LABELS } from './panel-advanced';
 import {
   CapacityCell,
   FailureBadge,
@@ -37,6 +37,7 @@ import {
   Num,
   PageHead,
   Quantity,
+  RefLink,
   StatCard,
   StateSwitch,
   Textarea,
@@ -45,7 +46,7 @@ import {
   LIST_PAGE_SIZE,
 } from '../ui/kit';
 import { Modal } from '../ui/overlays';
-import { opsCodeLabel } from '../ops-code-labels';
+import { hasOpsCodeLabel, opsCodeLabel } from '../ops-code-labels';
 import { CodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
@@ -227,9 +228,9 @@ function PanelHealthCard({
       className="ph-card"
       title={
         <>
-          <a href={`/panels/${encodeURIComponent(panel.id)}`} onClick={onLink}>
-            {panel.name}
-          </a>{' '}
+          <RefLink href={`/panels/${encodeURIComponent(panel.id)}`}>
+            <Ltr mono={false}>{panel.name}</Ltr>
+          </RefLink>{' '}
           <span className="faint small">
             <Ltr>{hostOf(panel.baseUrl)}</Ltr>
           </span>
@@ -391,10 +392,16 @@ function PanelHealthCard({
                   {failureKind !== null && (
                     <>
                       {' '}
-                      {FAILURE_LABELS[failureKind] === undefined
-                        ? null
-                        : t(FAILURE_LABELS[failureKind])}{' '}
-                      <Ltr>{failureKind}</Ltr>
+                      {/* Demo parity: the kind's short name, its sentence and code as title. */}
+                      <span
+                        title={`${FAILURE_LABELS[failureKind] === undefined ? '' : `${t(FAILURE_LABELS[failureKind])} `}(${failureKind})`}
+                      >
+                        {FAILURE_SHORT_LABELS[failureKind] === undefined ? (
+                          <Ltr>{failureKind}</Ltr>
+                        ) : (
+                          t(FAILURE_SHORT_LABELS[failureKind])
+                        )}
+                      </span>
                     </>
                   )}
                 </span>
@@ -444,8 +451,7 @@ function PanelConditions({ conditions }: { conditions: PanelHealthRow['condition
               <Badge tone={SEVERITY_TONES[condition.severity] ?? 'neutral'}>
                 {t(SEVERITY_LABELS[condition.severity])}
               </Badge>{' '}
-              <CodeLabel label={opsCodeLabel(condition.code)} code={condition.code} />{' '}
-              <ConditionTimes condition={condition} />
+              <ConditionName code={condition.code} /> <ConditionTimes condition={condition} />
             </li>
           ))}
         </ul>
@@ -458,8 +464,7 @@ function PanelConditions({ conditions }: { conditions: PanelHealthRow['condition
             {history.map((condition) => (
               <li key={condition.code}>
                 <Badge tone="neutral">{t('web.ph_condition_historical')}</Badge>{' '}
-                <CodeLabel label={opsCodeLabel(condition.code)} code={condition.code} />{' '}
-                <ConditionTimes condition={condition} />
+                <ConditionName code={condition.code} /> <ConditionTimes condition={condition} />
               </li>
             ))}
           </ul>
@@ -472,6 +477,17 @@ function PanelConditions({ conditions }: { conditions: PanelHealthRow['condition
         </a>
       </p>
     </div>
+  );
+}
+
+/** Demo parity: the condition's Persian name, its code as the title; an unnamed code as itself. */
+function ConditionName({ code }: { code: string }) {
+  return hasOpsCodeLabel(code) ? (
+    <span className="strong" title={code}>
+      {opsCodeLabel(code)}
+    </span>
+  ) : (
+    <CodeLabel label={null} code={code} />
   );
 }
 

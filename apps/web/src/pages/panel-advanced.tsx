@@ -191,6 +191,21 @@ export const FAILURE_LABELS: Readonly<Record<ProviderFailureKind, WebKey>> = {
   UNSUPPORTED_CAPABILITY: 'web.diag_failure_unsupported_capability',
 };
 
+/** Demo parity (panels): each failure kind's short name, for a pill in a list or a card. */
+export const FAILURE_SHORT_LABELS: Readonly<Record<ProviderFailureKind, WebKey>> = {
+  AUTHENTICATION_FAILED: 'web.failure_short_authentication_failed',
+  AUTHENTICATION_REQUIRES_INTERACTION: 'web.failure_short_authentication_requires_interaction',
+  UNREACHABLE: 'web.failure_short_unreachable',
+  TIMEOUT: 'web.failure_short_timeout',
+  TLS_FAILED: 'web.failure_short_tls_failed',
+  BLOCKED_TARGET: 'web.failure_short_blocked_target',
+  RATE_LIMITED: 'web.failure_short_rate_limited',
+  MALFORMED_RESPONSE: 'web.failure_short_malformed_response',
+  PROVIDER_ERROR: 'web.failure_short_provider_error',
+  PROVIDER_REFUSED: 'web.failure_short_provider_refused',
+  UNSUPPORTED_CAPABILITY: 'web.failure_short_unsupported_capability',
+};
+
 const REQUIRED_CAPABILITY_LABELS: Readonly<Record<string, WebKey>> = {
   HEALTH_CHECK: 'web.diag_capability_health_check',
   CREATE_USER: 'web.diag_capability_create_user',

@@ -6276,6 +6276,18 @@ export const WEB_FA = {
   'web.diag_failure_provider_error': 'پنل با خطای خودش پاسخ داد.',
   'web.diag_failure_provider_refused': 'پنل درخواست را طبق قاعدهٔ خودش رد کرد.',
   'web.diag_failure_unsupported_capability': 'این ارائه‌دهنده کار خواسته‌شده را انجام نمی‌دهد.',
+  // Demo parity (panels): the failure kind as a short pill; the sentence above is its title.
+  'web.failure_short_authentication_failed': 'ورود ناموفق',
+  'web.failure_short_authentication_requires_interaction': 'نیاز به کد دومرحله‌ای',
+  'web.failure_short_unreachable': 'در دسترس نیست',
+  'web.failure_short_timeout': 'پاسخ دیر رسید',
+  'web.failure_short_tls_failed': 'خطای گواهی TLS',
+  'web.failure_short_blocked_target': 'مقصد غیرمجاز',
+  'web.failure_short_rate_limited': 'محدودیت درخواست',
+  'web.failure_short_malformed_response': 'پاسخ نامعتبر',
+  'web.failure_short_provider_error': 'خطای خود پنل',
+  'web.failure_short_provider_refused': 'پنل درخواست را رد کرد',
+  'web.failure_short_unsupported_capability': 'کار پشتیبانی نمی‌شود',
 
   // The Super Admin's read-only technical view.
   'web.tech_title': 'نمای فنی (فقط مدیر ارشد)',
