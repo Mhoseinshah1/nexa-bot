@@ -25,10 +25,7 @@ function sources(dir: string): string[] {
 }
 
 const MODULE = 'apps/api/src/modules/platform/legacy-service-review';
-const SURFACES = [
-  'apps/api/src/surfaces/web/legacy-services.controller.ts',
-  'apps/web/src/pages/legacy-services.tsx',
-];
+const SURFACES = ['apps/api/src/surfaces/web/legacy-services.controller.ts'];
 
 describe('the legacy service review boundary', () => {
   it('the module imports no adoption, provider client, adapter, transport or network API', () => {

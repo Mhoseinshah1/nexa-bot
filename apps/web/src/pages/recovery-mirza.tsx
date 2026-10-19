@@ -44,7 +44,7 @@ import { pollUnlessFinalWhile } from '../polling';
 import { useLinkHandler } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import { messageFor } from './settings';
-import { LEGACY_SERVICE_OUTCOME_LABELS, legacyServiceRefusalLabel } from './legacy-services';
+import { LEGACY_SERVICE_OUTCOME_LABELS, legacyServiceRefusalLabel } from './legacy-service-labels';
 import { migrationCodeView, migrationSectionView, type MigrationCodeView } from './mirza-labels';
 import {
   Badge,
@@ -837,7 +837,6 @@ function AdoptStep({ row, mayApply }: { row: LegacyMigrationImportView; mayApply
 
 /** The lane under way, or what it did: counts and codes, never an invoice or a name. */
 function AdoptLaneStep({ row }: { row: LegacyMigrationImportView }) {
-  const onLink = useLinkHandler();
   const report = row.adoptReport;
   const running = row.status === 'ADOPT_REQUESTED' || row.status === 'ADOPT_RUNNING';
   const complete =
@@ -888,11 +887,6 @@ function AdoptLaneStep({ row }: { row: LegacyMigrationImportView }) {
           )}
         </>
       )}
-      <p className="small">
-        <a className="link" href="/legacy-services" onClick={onLink}>
-          {t('web.mrz_adopt_services_link')}
-        </a>
-      </p>
     </Step>
   );
 }

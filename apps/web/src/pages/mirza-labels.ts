@@ -130,7 +130,7 @@ function historyTypeLabel(code: string): string | null {
   return key === undefined ? null : t(key);
 }
 
-/** The service outcomes' labels, injected by the caller (they live with `/legacy-services`). */
+/** The service outcomes' labels, injected by the caller (they live in `legacy-service-labels.ts`). */
 export type OutcomeLabels = Readonly<Record<LegacyServiceOutcome, WebKey>>;
 
 function isOutcome(code: string): code is LegacyServiceOutcome {
@@ -158,18 +158,13 @@ const SECTION_LABELS: Readonly<Record<string, WebKey>> = {
   history: 'web.mrz_section_history',
 };
 
-const SECTION_LINKS: Readonly<Record<string, string>> = {
-  products: '/legacy-products',
-  services: '/legacy-services?reviewState=ALL',
-};
-
 /** A per-section row of the dry-run or apply report (`customers`, `history:payment`, `table:…`). */
 export function migrationSectionView(section: string): MigrationCodeView {
   const own = Object.hasOwn(SECTION_LABELS, section) ? SECTION_LABELS[section] : undefined;
   if (own !== undefined) {
     return {
       label: t(own),
-      href: Object.hasOwn(SECTION_LINKS, section) ? (SECTION_LINKS[section] ?? null) : null,
+      href: null,
     };
   }
   if (section.startsWith('history:')) {
@@ -207,21 +202,21 @@ const CODE_LABELS: Readonly<Record<string, WebKey>> = {
 };
 
 /**
- * A warning, quarantine or history code of the report. A service outcome links to the
- * candidates with that outcome; `PRODUCT_*` to the product review; `X:<reason>` keeps its
- * reason raw beside the label of `X`.
+ * A warning, quarantine or history code of the report. The three review pages the report used to
+ * link to are retired (Round 4 B4), so no code links anywhere; `X:<reason>` keeps its reason
+ * raw beside the label of `X`.
  */
 export function migrationCodeView(code: string, outcomes: OutcomeLabels): MigrationCodeView {
   if (isOutcome(code)) {
     return {
       label: t(outcomes[code]),
-      href: `/legacy-services?outcome=${encodeURIComponent(code)}&reviewState=ALL`,
+      href: null,
     };
   }
   const history = historyTypeLabel(code);
   if (history !== null) return { label: history, href: null };
   if (code.startsWith('PRODUCT_')) {
-    return { label: t('web.mrz_code_product'), href: '/legacy-products' };
+    return { label: t('web.mrz_code_product'), href: null };
   }
   const base = code.includes(':') ? code.slice(0, code.indexOf(':')) : code;
   const key = Object.hasOwn(CODE_LABELS, base) ? CODE_LABELS[base] : undefined;

@@ -11,7 +11,6 @@ import {
   TRAFFIC_GB_PATTERN,
   type BulkGrant,
   type BulkPreview,
-  type RecordSource,
   type ServiceActionAvailability,
   type ServiceActionBlocker,
   type ServiceListLifecycle,
@@ -48,7 +47,6 @@ import { Drawer } from '../ui/overlays';
 import { useConfirmedClose, useReportDirty } from '../ui/unsaved';
 import { bulkMessage } from './bulk-operations';
 import { messageFor } from './settings';
-import { sourceFromQuery } from './record-source';
 import { ChipGroup } from './commerce-parts';
 import type { ListFilter } from '../ui/filter-bar';
 import { ErrorRef } from '../ui/technical-details';
@@ -120,8 +118,6 @@ export interface ServiceFilters {
   readonly productId: string | null;
   readonly locationKey: string | null;
   readonly expiringWithinHours: number | null;
-  /** The source filter: the list narrows by it, a mass action cannot (see `massDefinitionOf`). */
-  readonly source?: RecordSource | null;
   readonly q: string;
 }
 
@@ -135,7 +131,6 @@ export function serviceFiltersOf(route: Route, search: string): ServiceFilters {
     productId: route.query.get('productId'),
     locationKey: route.query.get('locationKey'),
     expiringWithinHours: Number.isInteger(hours) && hours > 0 ? hours : null,
-    source: sourceFromQuery(route.query.get('source')),
     q: search,
   };
 }
@@ -312,17 +307,12 @@ const INELIGIBLE_LABELS: Readonly<Record<'NOT_IN_STATE' | 'PANEL_NOT_OPERABLE' |
 
 /**
  * The audience definition the filters stand for, or null when a filter the shared audience
- * cannot express is set (the free-text search, delivery state, location, source). A mass action
+ * cannot express is set (the free-text search, delivery state, location). A mass action
  * over a set the operator cannot see on screen would be the "apply to all" this page
  * refuses to offer.
  */
 export function massDefinitionOf(filters: ServiceFilters): unknown {
-  if (
-    filters.q !== '' ||
-    filters.deliveryState !== null ||
-    filters.locationKey !== null ||
-    (filters.source ?? null) !== null
-  ) {
+  if (filters.q !== '' || filters.deliveryState !== null || filters.locationKey !== null) {
     return null;
   }
   /*

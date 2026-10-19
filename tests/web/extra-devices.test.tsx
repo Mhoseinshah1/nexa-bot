@@ -202,7 +202,7 @@ describe('the extra users / devices screen', () => {
   it('is routed at /extra-devices, under the catalogue permissions', () => {
     const route = { path: '/extra-devices', query: new URLSearchParams() };
     const viewer = resolve(route, ['catalog.view']);
-    expect(viewer.title).toBe('افزایش کاربر / دستگاه');
+    expect(viewer.title).toBe('حجم، زمان و کاربر اضافه');
   });
 });
 

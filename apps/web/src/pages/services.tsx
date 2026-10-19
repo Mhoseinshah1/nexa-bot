@@ -33,7 +33,6 @@ import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
-import { sourceRouteFilter } from './record-source';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import { BalancedColumns, ChipGroup, useListClearAll } from './commerce-parts';
@@ -280,7 +279,6 @@ const SERVICE_FILTER_KEYS = [
   'productId',
   'locationKey',
   'expiring',
-  'source',
 ] as const;
 
 /** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
@@ -365,7 +363,6 @@ export function ServicesPage({
           filters.productId,
           filters.locationKey,
           filters.expiringWithinHours,
-          filters.source ?? null,
         ],
         queryFn: () =>
           fetchServices({
@@ -376,7 +373,6 @@ export function ServicesPage({
             ...(state === null ? {} : { state: state as ServiceState }),
             ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
             ...(appliedSearch === '' ? {} : { q: appliedSearch }),
-            ...(filters.source == null ? {} : { source: filters.source }),
             ...(filters.panelId === null ? {} : { panelId: filters.panelId }),
             ...(filters.productId === null ? {} : { productId: filters.productId }),
             ...(filters.locationKey === null ? {} : { locationKey: filters.locationKey }),
@@ -559,7 +555,6 @@ export function ServicesPage({
         />
       ),
     },
-    sourceRouteFilter(route, filters.source ?? null),
     ...extraRows,
   ];
 
@@ -1115,15 +1110,16 @@ export function ServiceDetailPage({
               subtitle={t('web.service_detail')}
             />
             {/*
-              Track 3 §3: one quiet line for a service the one-time import carried over, with
-              the purchase date the previous bot recorded — the date the list orders it by.
-              Provenance only; the service is otherwise an ordinary one.
+              Track 3 §3: one quiet line for an IMPORTED service — the date the list orders it by.
+              The API normalises `originalStartedAt` to `createdAt` for a native service, so the
+              date alone cannot tell the two apart: `source` does. Round 4 B2: it names no
+              source; the «from the previous bot» mark is for imported tickets and payments only.
             */}
-            {row.source === 'MIRZA' && (
+            {row.source !== 'NEXA' && row.originalStartedAt !== null && (
               <p className="muted small">
-                {t('web.service_imported_line').replace(
+                {t('web.service_original_start_line').replace(
                   '{date}',
-                  formatDate(row.originalStartedAt ?? row.createdAt),
+                  formatDate(row.originalStartedAt),
                 )}
               </p>
             )}

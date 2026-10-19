@@ -8,7 +8,7 @@ import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { order, renderPage, stubApi, type Api } from './harness';
 import { openFilterPanel } from './ui-helpers';
-import { pickMirzaSource, requestsWithSource, rowHasBadge } from './source-helpers';
+import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
 
 /**
  * WP8 on the Web Admin: discount rules, cashback rules, the price preview and an order's
@@ -921,19 +921,18 @@ describe('rows imported from Mirza', () => {
     source: 'MIRZA',
   });
 
-  it('marks only the imported rule', async () => {
+  it('marks no rule as imported (Round 4 B2)', async () => {
     stubApi(lists([native, imported]));
     render();
     await screen.findByText('Imported rule');
-    expect(rowHasBadge('Imported rule')).toBe(true);
+    expect(rowHasBadge('Imported rule')).toBe(false);
     expect(rowHasBadge('Native rule')).toBe(false);
   });
 
-  it('sends the «منبع» filter to the API and starts from the first page', async () => {
-    const api = stubApi(lists([native, imported]));
+  it('has no «منبع» filter (Round 4 B2)', async () => {
+    stubApi(lists([native, imported]));
     render();
     await screen.findByText('Native rule');
-    pickMirzaSource();
-    await waitFor(() => expect(requestsWithSource(api.calls, '/discounts', 'MIRZA')).toBe(1));
+    expect(sourceFilterAbsent()).toBe(true);
   });
 });

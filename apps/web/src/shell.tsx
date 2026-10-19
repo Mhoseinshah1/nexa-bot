@@ -623,6 +623,7 @@ export function CommandSearch({
           <input
             ref={input}
             role="combobox"
+            dir="rtl"
             aria-expanded="true"
             aria-controls={listId}
             aria-autocomplete="list"

@@ -9,13 +9,14 @@ import {
   OPERATION_STATES,
   PROVIDER_FAILURE_KINDS,
 } from '@nexa/contracts';
+import { OPERATIONAL_EVENT_LABELS_FA } from '@nexa/i18n';
 import { refundFailureLabel } from '../../apps/web/src/pages/service-refund-requests';
 import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
 import {
   DELIVERY_CODE_LABELS,
   DELIVERY_OUTCOME_LABELS,
-  OPS_CODE_LABELS,
   errorCodeLabel,
+  hasOpsCodeLabel,
   opsCodeLabel,
 } from '../../apps/web/src/ops-code-labels';
 import { CodeLabel, ProviderText } from '../../apps/web/src/ui/technical-details';
@@ -46,12 +47,13 @@ describe('operational-event code names', () => {
   it('names every operational-event code the contracts declare', () => {
     const codes = declaredOpsCodes();
     expect(codes.length).toBeGreaterThan(40);
-    expect(codes.filter((code) => OPS_CODE_LABELS[code] === undefined)).toEqual([]);
+    expect(codes.filter((code) => !hasOpsCodeLabel(code))).toEqual([]);
   });
 
   it('every name is a Persian catalogue entry', () => {
     const catalogue = WEB_FA as Readonly<Record<string, string>>;
-    for (const map of [OPS_CODE_LABELS, DELIVERY_CODE_LABELS, DELIVERY_OUTCOME_LABELS]) {
+    for (const text of Object.values(OPERATIONAL_EVENT_LABELS_FA)) expect(text).toMatch(PERSIAN);
+    for (const map of [DELIVERY_CODE_LABELS, DELIVERY_OUTCOME_LABELS]) {
       for (const key of Object.values(map)) expect(catalogue[key]).toMatch(PERSIAN);
     }
     for (const outcome of DELIVERY_OUTCOMES) {
@@ -88,7 +90,7 @@ describe('operational-event code names', () => {
 describe('CodeLabel and ProviderText', () => {
   it('draws the Persian name with the code small and left-to-right', () => {
     render(<CodeLabel label={opsCodeLabel('backup.run_failed')} code="backup.run_failed" />);
-    expect(screen.getByText(t('web.opscode_backup_run_failed'))).toBeInTheDocument();
+    expect(screen.getByText(opsCodeLabel('backup.run_failed'))).toBeInTheDocument();
     expect(screen.getByText('backup.run_failed')).toHaveAttribute('dir', 'ltr');
   });
 

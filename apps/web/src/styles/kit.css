@@ -1381,6 +1381,22 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/*
+ * Round 4 B3: every search field is right-to-left with its text and placeholder on the START
+ * edge (the right, in Persian). Logical alignment only; a Latin id typed in it stays on the
+ * right rather than flipping the whole field.
+ */
+input[type='search'],
+.palette .in input,
+.search > .input {
+  direction: rtl;
+  text-align: start;
+}
+input[type='search']::placeholder,
+.palette .in input::placeholder {
+  text-align: start;
+}
+
 /* --- Form controls ------------------------------------------------------------ */
 
 /*
@@ -1462,6 +1478,28 @@ select.input,
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: left 8px center;
+}
+/*
+ * Round 4 B1: the opened list of a native select is painted by the browser from the select's
+ * own colours, which here are translucent. An option gets an opaque token surface, and the
+ * hovered/checked one inverts so it stays readable in both themes.
+ */
+:root[data-theme='dark'] select {
+  color-scheme: dark;
+}
+:root[data-theme='light'] select {
+  color-scheme: light;
+}
+select option,
+select optgroup {
+  background-color: var(--option-bg);
+  color: var(--option-fg);
+}
+select option:hover,
+select option:focus,
+select option:checked {
+  background-color: var(--option-hover-bg);
+  color: var(--option-hover-fg);
 }
 select[multiple] {
   height: auto;

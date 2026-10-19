@@ -135,11 +135,17 @@ export function ExtraDevicesPage({
   denied,
   mayEdit,
   mayViewPanels = false,
+  embedded = false,
 }: {
   denied: boolean;
   mayEdit: boolean;
   /** `panels.view`: what the panel list the scope labels come from requires. */
   mayViewPanels?: boolean;
+  /**
+   * Round 4 B6: drawn as the «کاربر» tab of «حجم، زمان و کاربر اضافه», which owns the page
+   * head; the add button then sits in a toolbar above the list.
+   */
+  embedded?: boolean;
 }) {
   const queries = useQueryClient();
   const notify = useToast();
@@ -366,30 +372,32 @@ export function ExtraDevicesPage({
     String(DEVICE_ADDON_MAX_QUANTITY),
   );
 
+  const addButton = (
+    <Button
+      variant="primary"
+      icon="plus"
+      onClick={() =>
+        discard.confirmDiscard(() => {
+          reset();
+          setOpen(true);
+        })
+      }
+    >
+      {t('web.cb_add')}
+    </Button>
+  );
+
   return (
     <>
-      <PageHead
-        title={t('web.extra_devices_title')}
-        subtitle={t('web.extra_devices_subtitle')}
-        {...(mayEdit
-          ? {
-              actions: (
-                <Button
-                  variant="primary"
-                  icon="plus"
-                  onClick={() =>
-                    discard.confirmDiscard(() => {
-                      reset();
-                      setOpen(true);
-                    })
-                  }
-                >
-                  {t('web.cb_add')}
-                </Button>
-              ),
-            }
-          : {})}
-      />
+      {embedded ? (
+        mayEdit && <div className="toolbar">{addButton}</div>
+      ) : (
+        <PageHead
+          title={t('web.extra_devices_title')}
+          subtitle={t('web.extra_devices_subtitle')}
+          {...(mayEdit ? { actions: addButton } : {})}
+        />
+      )}
 
       {/* W5: no «none supports it in this version» note; the panel select says it per panel. */}
       {CAPABLE_PROVIDERS.length > 0 && (

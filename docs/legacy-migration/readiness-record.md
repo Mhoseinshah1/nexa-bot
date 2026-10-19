@@ -43,6 +43,41 @@ exists, the real-data half does not; **OPEN** — the evidence does not exist.
 | G19 | Every legacy table classified    | OPEN    | **Missing:** `table-inventory.md` filled from `legacy-import inventory` on the staging copy of the real dump, and the reviewed commit classifying every table (OQ-MZ-INV, OQ-LCO-06). Until then the gated import, the cutover gate and report v2 refuse (`TABLES_UNCLASSIFIED`).                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | G20 | Migration program rehearsed      | PARTIAL | Code side: the synthetic rehearsal's cycle 9 (Mirza PR6) — gated import refusals, SOURCE_SUPERSEDED, the acknowledged re-run with no duplicate, report v2 holding, `cutover-gate` CUTOVER_READY — see § Synthetic evidence. **Missing:** the staging run with the owner's approval recorded in `/legacy-cutover` and manual-acceptance W1–W8.                                                                                                                                                                                                                                                                                                                                                          |
 
+## The one-click `.nxpkg` path on the test server (owner's run, 2026-10)
+
+The gates above were written for the staged, many-step programme. The path the owner actually
+used on the test server is the one-click `.nxpkg` import: upload a package in «بکاپ و بازیابی ←
+عملیات بازیابی», review the dry run, and confirm once. That one confirmation folds in the
+owner gates the staged programme asked for elsewhere — the target acknowledgement and the
+owner's cutover approval of the dry run's seven values — in the same transaction
+(`LegacyMigrationService.approve`). The three manual review pages that used to carry those
+steps («بازبینی محصولات قدیمی»، «سرویس‌های ربات قدیمی»، «تأیید انتقال نهایی») are retired from
+the Web Admin (Round 4 B4); their API endpoints, tables and services stay, because the importer
+reads and writes the same rows.
+
+**Proved on the test server** (recorded here as the owner reported them; the repository holds
+no machine-readable artifact for this run, so none is cited):
+
+- the import completed, with the dry run's report accepted and the apply finished;
+- wallet balances match the old bot's, entry by entry for the customers checked;
+- payments, tickets and resellers are correct after the import;
+- services whose invoice carries no panel code (`NO_PANEL`) are correct: imported as history,
+  with no panel account invented and no provider write.
+
+This is **test-server evidence**, not production evidence and not a substitute for any row of
+the gate table: G5–G7, G10–G15 and G17–G19 keep the states recorded above until their own
+artifacts exist.
+
+**Still NOT RUN:**
+
+- the production cutover (the owner's alone, cutover step 13);
+- the production backup verification and the production restore drill (G17), and the Web Admin
+  recovery lane rehearsed on a real installation (G13b);
+- the real-panel inventory acceptance per production panel (G6, G7);
+- the manual-acceptance rows of [`manual-acceptance.md`](manual-acceptance.md);
+- a written, per-step record of the test-server run itself (durations, the import run id, the
+  reconciliation equations) — it should be added here as its own commit.
+
 ## Accepted pending checks (G11)
 
 One line per PENDING check of the **staging** run, decided by the owner. Empty: there is

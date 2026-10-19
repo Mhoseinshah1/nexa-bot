@@ -494,6 +494,7 @@ export function InlineButtonsSection({
             <span className="visually-hidden">{t('web.ib_filter')}</span>
             <input
               type="search"
+              dir="rtl"
               className="input sm"
               value={filter}
               placeholder={t('web.ib_filter_placeholder')}
