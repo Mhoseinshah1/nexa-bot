@@ -51,6 +51,29 @@ describe('the system status card', () => {
   const overall = async () =>
     (await screen.findByText(t('web.system_overall'))).closest('.stat') as HTMLElement;
 
+  it('lists postgres first whatever order the server answered in (demo parity)', async () => {
+    stubApi([
+      {
+        url: '/system/readiness',
+        body: {
+          status: 'ok',
+          dependencies: [
+            { name: 'redis', status: 'up', latencyMs: 1, required: false },
+            { name: 'postgres', status: 'up', latencyMs: 2, required: true },
+            { name: 'migrations', status: 'up', required: true },
+          ],
+        },
+      },
+    ]);
+    renderPage(<SystemPage route={statusRoute} permissions={[]} />);
+    await overall();
+    const names = (await screen.findAllByRole('row'))
+      .map((row) => row.textContent ?? '')
+      .filter((text) => /postgres|redis|migrations/.test(text))
+      .map((text) => /postgres|redis|migrations/.exec(text)?.[0]);
+    expect(names).toEqual(['postgres', 'redis', 'migrations']);
+  });
+
   it('stays ready when only a dependency that does not block readiness is down', async () => {
     stubApi([
       {

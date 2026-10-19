@@ -512,7 +512,9 @@ export function SupportKnowledgePage({
         subtitle={t('web.sk_subtitle')}
         actions={mayReview ? newButton : undefined}
       />
-      <Banner tone="info">{t('web.sk_only_approved')}</Banner>
+      <Banner tone="info" slim>
+        {t('web.sk_only_approved')}
+      </Banner>
       {/* Demo parity (DIFFS support-knowledge #1): the filter line in a bordered card of its own. */}
       <Card tight className="sk-filters">
         <ListFilterBar

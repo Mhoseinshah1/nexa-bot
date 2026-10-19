@@ -957,6 +957,16 @@ form.set-row > * + * {
 .diagnostics-stats {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
+/* Demo parity: on a phone the system's first two figures sit side by side (the overall verdict
+   and the slowest latency), the third takes the row under them. */
+@media (max-width: 600px) {
+  .system-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .system-stats > :nth-child(3) {
+    grid-column: 1 / -1;
+  }
+}
 .system-roles {
   display: inline-flex;
   flex-wrap: wrap;

@@ -987,8 +987,11 @@ export function Banner({
   children,
   role,
   action,
+  slim = false,
 }: {
   tone?: Tone;
+  /** A one-line neutral strip with a leading ⓘ (the demo's hint under a page head). */
+  slim?: boolean;
   title?: string;
   children?: ReactNode;
   /** Overrides the tone's default. See `StaleNotice` for why one needs to. */
@@ -999,7 +1002,11 @@ export function Banner({
   // Demo parity X5 (and its follow-up): a callout is an outlined card in its tone, with no
   // ⓘ or ⚠. An error still announces itself (`role="alert"`), which the icon never did.
   return (
-    <div className={`banner ${tone}`} role={role ?? (tone === 'danger' ? 'alert' : undefined)}>
+    <div
+      className={`banner ${tone}${slim ? ' slim' : ''}`}
+      role={role ?? (tone === 'danger' ? 'alert' : undefined)}
+    >
+      {slim && <Icon name="info" size={14} />}
       <div>
         {title !== undefined && <strong>{title}</strong>}
         {children}

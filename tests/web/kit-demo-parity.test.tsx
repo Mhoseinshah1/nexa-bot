@@ -454,3 +454,21 @@ describe('timestamps — the demo’s numeric shape everywhere, decided in one p
 it('draws the list search at the full control height, as the demo’s 32px search', () => {
   expect(rule(UI_CSS, '.ca-search.slim .field input')).toContain('height: var(--ctl-h)');
 });
+
+describe('R2 — the slim information strip', () => {
+  it('draws a leading icon and the slim class only when asked', () => {
+    const { container } = renderPage(
+      <>
+        <Banner tone="info" slim>
+          hint
+        </Banner>
+        <Banner tone="info">plain</Banner>
+      </>,
+    );
+    const [slim, plain] = [...container.querySelectorAll('.banner')];
+    expect(slim).toHaveClass('slim');
+    expect(slim?.querySelector('svg')).not.toBeNull();
+    expect(plain).not.toHaveClass('slim');
+    expect(plain?.querySelector('svg')).toBeNull();
+  });
+});
