@@ -58,7 +58,12 @@ import type {
   SecretCipher,
   TenantId,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, createTranslator } from '@nexa/i18n';
+import {
+  CATALOGUE_FA,
+  createTranslator,
+  DEFAULT_TEMPLATE_PRESENTATION,
+  formatDateTime,
+} from '@nexa/i18n';
 import type {
   OperationType,
   BotInstanceId,
@@ -6906,6 +6911,7 @@ export function createContainer(
       plan: (input) => planArchiveParts({ ...input, partBytes: BACKUP_PART_MAX_BYTES }),
     },
     restoreCommand: 'botctl restore --target <empty-db> <part.001> [<part.002> …]',
+    formatTakenAt: (at) => formatDateTime(at, DEFAULT_TEMPLATE_PRESENTATION),
     conditionOpen: backupConditionOpen,
   });
   /*

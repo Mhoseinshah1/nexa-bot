@@ -13,7 +13,6 @@ import {
 } from '@nexa/contracts';
 import type { Clock, IdGenerator, OperationalEventRecorder, ScopeContext } from '@nexa/contracts';
 import type { DeliveryAttempt } from './ports.js';
-import { DEFAULT_TEMPLATE_PRESENTATION, formatDateTime } from '@nexa/i18n';
 import {
   isBackupDeliveryRouter,
   type BackupArchivePart,
@@ -69,6 +68,11 @@ export interface BackupServiceDeps {
   readonly parts: BackupPartPlanner;
   /** The operator's restore command, printed in the summary (`docs/backup.md`). */
   readonly restoreCommand: string;
+  /**
+   * How the caption shows the moment the dump began (the installation's calendar and zone,
+   * bound in the container). Absent: the ISO instant.
+   */
+  readonly formatTakenAt?: (at: Date) => string;
   readonly tools: DatabaseTools;
   readonly archiver: BackupArchiver;
   readonly workspaces: BackupWorkspaceFactory;
@@ -740,10 +744,8 @@ export class BackupService {
     }
 
     const { channel } = resolution;
-    const takenAt = formatDateTime(
-      new Date(input.manifest.createdAt),
-      DEFAULT_TEMPLATE_PRESENTATION,
-    );
+    const created = new Date(input.manifest.createdAt);
+    const takenAt = this.deps.formatTakenAt?.(created) ?? created.toISOString();
     const sevenZip = input.format === 'SEVEN_ZIP';
     const count = input.parts.length;
     let delivered = 0;

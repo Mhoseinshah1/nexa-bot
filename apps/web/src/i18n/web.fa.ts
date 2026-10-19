@@ -789,12 +789,7 @@ export const WEB_FA = {
   'web.backup_password_saving': 'در حال ذخیره…',
   'web.backup_password_saved': 'رمز ذخیره شد. بکاپ بعدی با این رمز ساخته می‌شود.',
   'web.backup_password_reauth_failed': 'رمز حساب شما پذیرفته نشد؛ رمز فایل بکاپ تغییر نکرد.',
-  // E4: a backup delivered in parts, and its restore.
-  'web.backup_parts': 'بخش‌ها',
-  'web.backup_parts_delivered': '{done} از {total} بخش ارسال شد',
-  'web.backup_part_download': 'دریافت بخش {n}',
-  'web.backup_format_7z': '7-Zip',
-  'web.backup_format_nxb': 'NXB',
+  // E4: restoring a backup delivered in parts.
   'web.recovery_parts_hint':
     'اگر بکاپ چندبخشی است، همه‌ی بخش‌ها (‎.001، ‎.002 …) را با هم انتخاب کنید؛ به ترتیب به هم چسبانده و یک‌جا بارگذاری می‌شوند.',
   'web.recovery_parts_invalid':
