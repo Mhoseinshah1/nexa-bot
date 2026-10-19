@@ -13,7 +13,7 @@ Shared pieces this family added (additive, opt-in): `formatTimestampNumeric` (th
 `stack="labelled"` (one card per row at ≤820px, as the demo draws every list at 390).
 
 Phase A SHAs: breadcrumb and header 3d51d2b6 (X1/X3/X4), pagers fd5dfbe5 (X2), callouts
-22c931ce (X5), linkable ids d7f4bda0 (X7), toolbar order dd8f02b5 (X8), wide tables
+22c931ce (X5), linkable ids d7f4bda0 (X7), toolbar order dd8f02b5 (X8; per page from 3c55279d), wide tables
 ed676810 (X9), outlined pills 4f4f5e1a (X10).
 
 ## services
@@ -30,7 +30,7 @@ ed676810 (X9), outlined pills 4f4f5e1a (X10).
 | 8   | own 390: the table scrolls sideways; the demo draws one labelled card per row  | ✅ fixed (c66bfc96, ef5dd180, 11f39ca4)                                                                                                                                                                                                                                                     |
 | 9   | own: Track 3's «فعال / پایان‌یافته / همه» tabs (no demo counterpart)           | ✅ kept, drawn as the demo's `.tabs` rail (the kit `Tabs` already is); no per-tab count — the API has no per-tab total (skill: counts are server totals)                                                                                                                                    |
 | 10  | own: last column header «تاریخ خرید» vs the demo's «زمان ثبت»                  | ⛔ Track 3 decision kept: the column is the ORIGINAL purchase the list is ordered by (preamble: keep Track 1/3 additions)                                                                                                                                                                   |
-| 11  | own: demo puts the search row above «فیلترها»                                  | ⛔ X8 (Phase A dd8f02b5, DIFFS X: filter row first on every list)                                                                                                                                                                                                                           |
+| 11  | own: demo puts the search row above «فیلترها»                                  | ✅ 3c55279d (search row first, as the demo — owner decision 2026-10-19: follow the demo per page; X8 overridden where the demo differs)                                                                                                                                                     |
 | 12  | own 390: header action «عملیات گروهی…» is a full-width capsule in the demo     | ⛔ shared `PageHead` (Phase A, X3); reported to the lead as cross-cutting                                                                                                                                                                                                                   |
 | 13  | own: incident banner and «دادهٔ نمونه» badge in the demo                       | ⛔ excluded (PROMPT.md: sample incident content, sample badge)                                                                                                                                                                                                                              |
 
@@ -57,6 +57,7 @@ ed676810 (X9), outlined pills 4f4f5e1a (X10).
 | 3   | DIFFS: customer column `@username` + Telegram id in monospace; breadcrumb | ✅ the column draws both from the API (`CustomerIdentityLink`); fixture rows carry them (7adfc80e). Breadcrumb Phase A |
 | 4   | own: numeric times; 390 labelled cards                                    | ✅ fixed (c66bfc96, cfd88811, ef5dd180, 11f39ca4)                                                                      |
 | 5   | own: product names underlined (demo bold)                                 | ⛔ X7 (Phase A)                                                                                                        |
+| 6   | own: demo puts the search row above «فیلترها»                             | ✅ 3c55279d (owner decision 2026-10-19: follow the demo per page; X8 overridden where the demo differs)                |
 
 ## extra-devices
 
