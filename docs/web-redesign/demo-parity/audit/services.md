@@ -24,7 +24,7 @@ ed676810 (X9), outlined pills 4f4f5e1a (X10).
 | 2   | DIFFS: location column shows «—»; demo shows flag + «country — city»           | ✅ the column is the API's own `locationLabel`, drawn as sent — the flag is part of the label the operator configures (the demo's label is literally `'🇩🇪 آلمان — فرانکفورت'`). Fixture rows carry real labels (7adfc80e); a service with no location stays «—» (skill: no fabricated data) |
 | 3   | DIFFS: saved-filters chip lacks its count                                      | ✅ already drawn: the count of this admin's own saved views (`lfb-n`, `tests/web/saved-views.test.tsx`); the screenshot browser has none saved, so none is counted — never a result count (redesign-status: no API field)                                                                   |
 | 4   | DIFFS: pager labels «قدیمی‌تر / تازه‌تر»                                       | ✅ fixed (Phase A fd5dfbe5)                                                                                                                                                                                                                                                                 |
-| 5   | DIFFS: refund table's leftmost columns clipped                                 | ✅ fixed: outcome and time wrap tight, the queue fits at 1440 (de825162)                                                                                                                                                                                                                    |
+| 5   | DIFFS: refund table's leftmost columns clipped                                 | ✅ fixed: customer, outcome and time wrap tight; `web:shots` reports no sideways table at 1440 (de825162, d9c7da76)                                                                                                                                                                         |
 | 6   | own: list times «۷ شهریور ۱۴۰۵، ۷:۵۷» vs the demo's numeric «1405/07/14 19:30» | ✅ fixed (c66bfc96, 83bc5ec3; Persian digits per owner rule)                                                                                                                                                                                                                                |
 | 7   | own: customer column «مشتری نامشخص» vs «@parisa_h 513033985»                   | ✅ the column already draws both from the API; the fixture now carries them (7adfc80e)                                                                                                                                                                                                      |
 | 8   | own 390: the table scrolls sideways; the demo draws one labelled card per row  | ✅ fixed (c66bfc96, ef5dd180, 11f39ca4)                                                                                                                                                                                                                                                     |
@@ -60,15 +60,17 @@ ed676810 (X9), outlined pills 4f4f5e1a (X10).
 
 ## extra-devices
 
-| #   | difference                                                                    | status                                                                     |
-| --- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | DIFFS: breadcrumb                                                             | ✅ fixed (Phase A 3d51d2b6)                                                |
-| 2   | DIFFS: pager labels                                                           | ✅ fixed (Phase A fd5dfbe5)                                                |
-| 3   | DIFFS: «آخرین تغییر» numeric date-time («1405/07/03 12:10»)                   | ✅ fixed, in the body colour as the demo (c66bfc96, cfd88811, 83bc5ec3)    |
-| 4   | own: rows denser than the demo's (~40px)                                      | ✅ fixed (cfd88811)                                                        |
-| 5   | own: max-quantity column aligned to the end; the demo reads it from the start | ✅ fixed (cfd88811)                                                        |
-| 6   | own: an unknown product shown as a raw id                                     | ✅ data only: fixture rows reference listed panels and products (7adfc80e) |
-| 7   | own 390: labelled cards                                                       | ✅ fixed (ef5dd180, 11f39ca4)                                              |
+| #   | difference                                                                                            | status                                                                       |
+| --- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 1   | DIFFS: breadcrumb                                                                                     | ✅ fixed (Phase A 3d51d2b6)                                                  |
+| 2   | DIFFS: pager labels                                                                                   | ✅ fixed (Phase A fd5dfbe5)                                                  |
+| 3   | DIFFS: «آخرین تغییر» numeric date-time («1405/07/03 12:10»)                                           | ✅ fixed, in the body colour as the demo (c66bfc96, cfd88811, 83bc5ec3)      |
+| 4   | own: rows denser than the demo's (~40px)                                                              | ✅ fixed (cfd88811)                                                          |
+| 5   | own: max-quantity column aligned to the end; the demo reads it from the start                         | ✅ fixed (cfd88811)                                                          |
+| 6   | own: an unknown product shown as a raw id                                                             | ✅ data only: fixture rows reference listed panels and products (7adfc80e)   |
+| 7   | own 390: labelled cards                                                                               | ✅ fixed (ef5dd180, 11f39ca4)                                                |
+| 8   | own: the rates table scrolled sideways by 17px at 1440 (X9)                                           | ✅ fixed: scope and time wrap tight (d9c7da76)                               |
+| 9   | own 390: a refused toggle's banner appeared above the list and moved the clicked row (no-scroll jump) | ✅ fixed: the banner is drawn under the rows (d9c7da76); `no-scroll` 0 jumps |
 
 ## custom-service
 
