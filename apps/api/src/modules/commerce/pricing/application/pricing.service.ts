@@ -5,6 +5,7 @@ import {
   money,
   normaliseDiscountCode,
   type ActorContext,
+  type CurrencyCode,
   type DiscountablePurpose,
   type IdGenerator,
   type TenantContext,
@@ -54,6 +55,11 @@ export interface PricingServiceDeps {
     pricingTerms(
       scope: TenantContext,
       customerId: string,
+      subject: {
+        readonly purpose: DiscountablePurpose;
+        readonly productId: string | null;
+        readonly currency: CurrencyCode;
+      },
       tx?: unknown,
     ): Promise<ResellerPricingTerms | null>;
     recordPurchase(
@@ -112,7 +118,18 @@ export class PricingService {
       // be a second answer to what a reseller pays (Package D §7).
       request.purpose === 'CUSTOM_SERVICE'
         ? null
-        : await this.deps.resellers.pricingTerms(scope, request.customerId, tx);
+        : await this.deps.resellers.pricingTerms(
+            scope,
+            request.customerId,
+            // Round 4 PR-G: a price-table tier prices the PRODUCT, so the layer is asked for
+            // this product and purpose — and refuses one its table does not sell.
+            {
+              purpose: request.purpose,
+              productId: request.productId,
+              currency: request.base.currency,
+            },
+            tx,
+          );
     const base = terms === null ? request.base : applyResellerLayer(request.base, terms);
 
     const automatic = await this.deps.discounts.listLiveAutomatic(scope, tx);

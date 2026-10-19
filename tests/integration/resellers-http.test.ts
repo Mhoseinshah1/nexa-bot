@@ -609,6 +609,53 @@ describe('reseller HTTP surface', () => {
     expect(pricing.adjustments).toEqual([]);
   });
 
+  it('sets a tier price table over HTTP and marks a table price on the order pricing read (Round 4 PR-G)', async () => {
+    const tierId = await createdTier({
+      name: 'Silver',
+      pricingMode: 'FIXED_PRICE_TABLE',
+      discountPercentage: null,
+    });
+    await post(RESELLER_TIER_ROUTES.grants(tierId), { idempotencyKey: key(), grants: EVERYTHING });
+    await post(RESELLER_ROUTES.register, registerBody(customerA, tierId));
+    const productId = await product(100_000n);
+    const written = await post(RESELLER_TIER_ROUTES.productPrices(tierId), {
+      idempotencyKey: key(),
+      prices: [{ productId, price: { amount: '70000', currency: 'IRT' } }],
+    });
+    expect(written.statusCode, written.body).toBe(201);
+    expect(written.json()).toEqual({ tierId, set: 1, cleared: 0 });
+    const table = await get(RESELLER_TIER_ROUTES.productPrices(tierId));
+    expect(table.statusCode, table.body).toBe(200);
+    expect(
+      (table.json() as { items: { productId: string; tierPrice: unknown }[] }).items.find(
+        (row) => row.productId === productId,
+      )?.tierPrice,
+    ).toEqual({ amount: '70000', currency: 'IRT' });
+
+    const drafted = await api.container.orders.createDraft(viaBot, customerActor(key()), {
+      idempotencyKey: key(),
+      customerId: customerA,
+      productId,
+    });
+    await api.container.orders.confirm(viaBot, customerActor(key()), {
+      idempotencyKey: key(),
+      customerId: customerA,
+      orderId: drafted.id,
+    });
+    const response = await get(ORDER_ROUTES.pricing(drafted.id));
+    // The raw body, not the parsed one: the schema defaults an absent flag to false.
+    expect((response.json() as { reseller: { fixedPrice?: unknown } }).reseller.fixedPrice).toBe(
+      true,
+    );
+    expect(orderPricingResponseSchema.parse(response.json()).reseller).toMatchObject({
+      layer: 'TIER',
+      percent: null,
+      costAmount: '70000',
+      marginAmount: '30000',
+      fixedPrice: true,
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Regressions: defects this suite found in the first implementation
   // -------------------------------------------------------------------------

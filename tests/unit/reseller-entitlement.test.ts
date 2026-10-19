@@ -401,6 +401,7 @@ describe('the reseller price layer', () => {
       tierName: 'Gold',
       layer,
       percent,
+      fixedPrice: null,
     };
   }
 
