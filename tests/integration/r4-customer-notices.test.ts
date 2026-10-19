@@ -160,7 +160,7 @@ describe('R4: customer notices for manual wallet changes and unblocks; imported 
     await ctx.container.database.db.execute(sql`
       INSERT INTO legacy_import_map (tenant_id, legacy_table, legacy_id, run_id, checksum, status, entity_type, entity_id, created_at, updated_at)
       VALUES (${tenantA.tenantId}, 'user', '940001', ${runId}, repeat('b', 64), 'IMPORTED', 'CUSTOMER', ${customerA}, now(), now())`);
-    const repo = new DrizzleLegacyImporterRepository(ctx.container.database.db);
+    const repo = new DrizzleLegacyImporterRepository(ctx.container.database.db, async () => 'IRT');
     const mark = () =>
       ctx.container.database.db.transaction((tx) =>
         repo.markLegacyTermsAccepted(tenantA, ['940001', '949999'], at, { tx } as never),
