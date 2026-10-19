@@ -15,6 +15,7 @@ import {
   settingListResponseSchema,
   templateDefinition,
   templateListResponseSchema,
+  termsOverviewSchema,
   botMenuBuilderResponseSchema,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
@@ -324,6 +325,18 @@ const DEMO_SETTING_VALUES: Readonly<Record<string, unknown>> = {
   'ops.notifications.max_per_minute': 20,
   'wallet.low_balance.threshold': { amountMinor: '50000', currency: 'IRT' },
   'sales.payment_window_minutes': 45,
+  // `#/product-categories` and the colour tab: three decorated categories, as the demo.
+  'bot.category_icons': {
+    '0192c0de-0000-7000-8000-00000000ca01': { before: '5368324170671202286', after: '📦' },
+    '0192c0de-0000-7000-8000-00000000ca03': { after: '♾️' },
+    '0192c0de-0000-7000-8000-00000000ca04': { before: '5372981976804366741' },
+  },
+  'bot.category_colors': {
+    '0192c0de-0000-7000-8000-00000000ca01': 'primary',
+    '0192c0de-0000-7000-8000-00000000ca02': 'primary',
+    '0192c0de-0000-7000-8000-00000000ca03': 'success',
+    '0192c0de-0000-7000-8000-00000000ca04': 'danger',
+  },
   'reminders.quiet_hours_start': '23:00',
   'reminders.quiet_hours_end': '08:00',
 };
@@ -455,7 +468,59 @@ const settings = fixture('/settings', settingListResponseSchema, {
   ],
 });
 
+/*
+ * `#/terms`: version 3 in force and enforced, a draft being edited, three published
+ * versions in the history — the demo's state, so every card draws its meta and buttons.
+ */
+const TERMS_BODY = [
+  '۱. سرویس‌ها فقط برای استفادهٔ شخصی است و اشتراک‌گذاری لینک با دیگران مجاز نیست.',
+  '۲. مسئولیت استفادهٔ غیرقانونی از سرویس با خریدار است.',
+  '۳. هزینهٔ سرویس پس از تحویل بازگردانده نمی‌شود، مگر طبق «درخواست بازگشت وجه» در ربات.',
+  '۴. در صورت قطعی سراسری اینترنت، زمان سرویس به اندازهٔ قطعی جبران می‌شود.',
+].join('\n');
+const termsVersion = (
+  number: number | null,
+  title: string,
+  minutes: number,
+  acceptanceCount: number,
+  over: Record<string, unknown> = {},
+) => ({
+  id: `01a0f1c2-0000-7000-8000-0000000de0${String(number ?? 9).padStart(2, '0')}`,
+  status: number === null ? 'DRAFT' : 'PUBLISHED',
+  versionNumber: number,
+  title,
+  body: TERMS_BODY,
+  revision: 1,
+  createdAt: ago(minutes + 60),
+  createdBy: 'محمدحسین',
+  updatedAt: ago(minutes),
+  publishedAt: number === null ? null : ago(minutes),
+  publishedBy: number === null ? null : 'محمدحسین',
+  current: false,
+  acceptanceCount,
+  ...over,
+});
+const CURRENT_TERMS = termsVersion(3, 'قوانین استفاده از سرویس‌های نکسا', 60 * 24 * 25, 4390, {
+  current: true,
+});
+const terms = fixture('/terms', termsOverviewSchema, {
+  enforcement: { enabled: true, version: 4 },
+  current: CURRENT_TERMS,
+  draft: termsVersion(null, 'قوانین استفاده از سرویس‌های نکسا', 60 * 17, 0, {
+    revision: 2,
+    createdBy: 'سارا',
+    body: `${TERMS_BODY}\n۵. تغییر لوکیشن سرویس فقط از داخل ربات و با هزینهٔ اعلام‌شده انجام می‌شود.`,
+  }),
+  history: [
+    CURRENT_TERMS,
+    termsVersion(2, 'قوانین استفاده از سرویس‌ها', 60 * 24 * 120, 2961),
+    termsVersion(1, 'قوانین', 60 * 24 * 200, 1204, { publishedBy: null }),
+  ],
+  statistics: { customers: 4812, acceptedCurrent: 4390, pendingCurrent: 422 },
+});
+
 export const DEMO_BOT: readonly ShotFixture[] = [
+  terms,
   settings,
   notifications,
   features,

@@ -266,7 +266,7 @@ export function CategoryIconsSection({
             <p className="muted small" data-testid="ci-count">
               {fill(t('web.ci_count'), { n: decorated })}
             </p>
-            <ul className="ib-list" data-testid="ci-list">
+            <ul className="ib-list ci-list" data-testid="ci-list">
               {pageRows.map((category) => {
                 const name =
                   category.emoji === null ? category.name : `${category.emoji} ${category.name}`;

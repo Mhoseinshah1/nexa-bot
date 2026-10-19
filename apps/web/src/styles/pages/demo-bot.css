@@ -238,3 +238,82 @@
     grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr);
   }
 }
+
+/* --- Terms (`#/terms`) ------------------------------------------------------------------ */
+
+.terms-enf-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.terms-hist-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.terms-hist-open {
+  color: var(--fg-3);
+}
+
+/* --- Products (`#/products`) ------------------------------------------------------------ */
+
+/* The list sits in its own rounded frame inside the card, under the filters, as the demo. */
+.products-list-card .card-body > .tbl-wrap {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+}
+.products-list-card .card-body > .pager {
+  margin-inline: 0;
+}
+.products-list-card .card-body > .pager:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Product categories (`#/product-categories`) ---------------------------------------- */
+
+/*
+ * «آیکون دسته‌بندی‌ها»: each category a roomy card — its name on the start side, the button
+ * as the bot will draw it a small chip at the far end; each field a full-width input under
+ * its label, with «حذف» beside a filled value.
+ */
+.ci-list {
+  gap: 10px;
+}
+.ci-list .ib-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--bg-2);
+  border-color: var(--line);
+}
+.ci-list .ib-head {
+  flex-wrap: nowrap;
+}
+.ci-list .ib-head .ib-preview {
+  flex: none;
+  inline-size: auto;
+  max-inline-size: 50%;
+  margin-inline-start: auto;
+}
+.ci-list .ib-icon {
+  display: grid;
+  grid-template-columns: minmax(0, 360px) auto;
+  justify-content: start;
+  align-items: center;
+  gap: 6px 12px;
+}
+.ci-list .ib-icon > label,
+.ci-list .ib-icon > .ib-icon-error {
+  grid-column: 1 / -1;
+}
+.ci-list .ib-icon .input {
+  inline-size: 100%;
+  max-inline-size: none;
+}
+.ci-list .ib-head .ib-preview {
+  padding: 6px 14px;
+  border-radius: 999px;
+}

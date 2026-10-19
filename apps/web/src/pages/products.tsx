@@ -556,19 +556,23 @@ export function ProductsPage({
         }
       />
 
-      <Card>
-        {!denied && (
-          <Tabs
-            value={viewTab}
-            onChange={setViewTab}
-            panelId="products-list"
-            items={[
-              { id: 'current', label: t('web.products_view_current') },
-              { id: 'archive', label: t('web.products_view_archive') },
-            ]}
-          />
-        )}
-        <TabPanel id="products-list" labelledBy={`products-list-tab-${viewTab}`}>
+      {/*
+       * «محصولات جاری / آرشیو» is the page's own tab bar above the list card, as the demo
+       * draws a page's sections (appearance, settings), not a strip inside the card.
+       */}
+      {!denied && (
+        <Tabs
+          value={viewTab}
+          onChange={setViewTab}
+          panelId="products-list"
+          items={[
+            { id: 'current', label: t('web.products_view_current') },
+            { id: 'archive', label: t('web.products_view_archive') },
+          ]}
+        />
+      )}
+      <TabPanel id="products-list" labelledBy={`products-list-tab-${viewTab}`}>
+        <Card className="products-list-card">
           {archive && <p className="muted small">{t('web.products_archive_intro')}</p>}
           {/* Hidden while the card below cannot answer: a control that mints a new query
             key is a fresh request against a question the server has just refused. */}
@@ -692,7 +696,6 @@ export function ProductsPage({
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}
-              dense
               sticky
             />
           </StateSwitch>
@@ -709,8 +712,8 @@ export function ProductsPage({
               // so "next" is NEWER here, as on `/users`.
             />
           )}
-        </TabPanel>
-      </Card>
+        </Card>
+      </TabPanel>
 
       {!mayEdit && (
         // A sentence, not a disabled form. Both make the same claim and only one names
