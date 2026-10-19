@@ -149,6 +149,8 @@ import {
   hashRequest,
 } from './modules/platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import { PermissionGuard } from './modules/platform/access/application/permission-guard.js';
+import { PublicLabelService } from './modules/commerce/public-codes/application/public-labels.js';
+import { DrizzlePublicLabelReader } from './modules/commerce/public-codes/infrastructure/drizzle-public-label.reader.js';
 import { AdminPermissionResolver } from './modules/platform/access/infrastructure/admin-permission-resolver.js';
 import { ScryptPasswordHasher, scryptParamsFor } from './infrastructure/crypto/password-hasher.js';
 import { operationIdFor, sha256Hex } from './infrastructure/crypto/operation-id.js';
@@ -1296,6 +1298,8 @@ export interface Container {
   readonly receipts: ReceiptService;
   readonly receiptFiles: TelegramReceiptFiles;
   readonly orders: OrderService;
+  /** PR-C: what a row prints for an id it links to — codes and names, never a uuid. */
+  readonly publicLabels: PublicLabelService;
   readonly botRuntime: BotRuntime;
   /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
   readonly antiSpam: Pick<AntiSpamService, 'observe'>;
@@ -7482,6 +7486,10 @@ export function createContainer(
     provisionerLoop,
     delivery: deliveryService,
     orders: orderService,
+    publicLabels: new PublicLabelService({
+      guard,
+      reader: new DrizzlePublicLabelReader(database.db),
+    }),
     antiSpam,
     botRuntime: new BotRuntime({
       // Best-effort steps are logged here: a card's live read on open that failed

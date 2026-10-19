@@ -189,7 +189,7 @@ export class ReceiptReviewCaption {
           });
 
     return {
-      reference: paymentTrackingCode(payment.reference),
+      reference: paymentTrackingCode(payment),
       total: payment.amount,
       // The customer's Telegram id, which is the identity this installation holds for them,
       // and the username beside it when they have one — a name is chosen by the person it
@@ -252,7 +252,7 @@ export class ReceiptReviewCaption {
       operation,
       customer: customer?.telegramUserId ?? payment.customerId,
       total: payment.amount,
-      reference: paymentTrackingCode(payment.reference),
+      reference: paymentTrackingCode(payment),
     };
     if (facts.productTitle !== null) values['order'] = facts.productTitle;
     if (facts.trafficBytes !== null) values['trafficBytes'] = facts.trafficBytes;

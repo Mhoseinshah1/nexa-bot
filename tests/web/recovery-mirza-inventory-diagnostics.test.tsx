@@ -122,7 +122,8 @@ describe('the dry run explains an unresolved RickPanel read', () => {
       />,
     );
     // Without a binding the panel is named by its id.
-    fireEvent.click(screen.getByText(PANEL));
+    // PR-C: a panel with no previous-bot code is named, never by its uuid.
+    fireEvent.click(screen.getByText(t('web.mrz_diag_panel_without_code')));
     expect(
       screen.getByText(t('web.mrz_diag_cause_last_not_decisive'), { exact: false }),
     ).toBeInTheDocument();

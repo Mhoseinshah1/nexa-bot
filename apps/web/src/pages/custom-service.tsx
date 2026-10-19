@@ -33,7 +33,7 @@ import {
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { useLinkHandler } from '../router';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import { messageFor } from './settings';
 import {
   Badge,
@@ -46,7 +46,6 @@ import {
   Empty,
   Field,
   IconButton,
-  Ltr,
   Money,
   PageHead,
   RowActions,
@@ -652,14 +651,11 @@ function Audience({
   row: CustomServiceRuleSummaryResponse;
   options: PickerOptions;
 }) {
-  const onLink = useLinkHandler();
   if (row.customerId !== null) {
     return (
       <span>
         {t('web.custom_service_audience_customer')}{' '}
-        <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
-          <Ltr>{row.customerId.slice(0, 8)}</Ltr>
-        </a>
+        <RecordLink href={recordHref.customer(row.customerId)} id={row.customerId} code={null} />
       </span>
     );
   }
@@ -1243,7 +1239,7 @@ function RuleForm({
                 {/* A rule may name a panel the list no longer returns; keep it choosable. */}
                 {state.panelId !== '' &&
                   !options.panels.some((panel) => panel.id === state.panelId) && (
-                    <option value={state.panelId}>{state.panelId}</option>
+                    <option value={state.panelId}>{t('web.panel_unlisted')}</option>
                   )}
               </select>
             )}

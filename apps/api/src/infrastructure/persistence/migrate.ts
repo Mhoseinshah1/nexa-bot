@@ -4,6 +4,7 @@ import { createDatabase } from './database.js';
 import { migrationsFolder } from './migration-state.js';
 import { ensureOnlineIndexes } from './online-indexes.js';
 import { MigrationPreflightError, preflightMigrations } from './preflight.js';
+import { backfillPublicCodes } from './public-code-backfill.js';
 
 /**
  * Applies pending migrations. Forward-only: an applied migration is never
@@ -36,6 +37,12 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
     // transaction, where PostgreSQL refuses a concurrent build.
     const built = await ensureOnlineIndexes(handle);
     for (const name of built) console.warn(`Built index ${name} concurrently`);
+    // Then the short public codes (PR-C) onto every row from before 0257, in keyset batches
+    // of their own short transactions — never inside the migrator's one transaction, for the
+    // same reason as the indexes above. Idempotent: a run with nothing to do writes nothing.
+    for (const report of await backfillPublicCodes(handle)) {
+      if (report.filled > 0) console.warn(`Gave ${report.filled} ${report.table} a public code`);
+    }
   } finally {
     await handle.close();
   }

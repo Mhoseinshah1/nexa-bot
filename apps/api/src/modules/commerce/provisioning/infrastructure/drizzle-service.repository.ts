@@ -48,6 +48,7 @@ import {
 import {
   customerIdsWithTelegramId,
   customerIdsWithUsernamePrefix,
+  orPublicCode,
   readCustomerIdentities,
 } from '../../../../infrastructure/persistence/list-search.js';
 import type {
@@ -137,6 +138,7 @@ function lifecycleCondition(lifecycle: 'LIVE' | 'ENDED'): SQL {
 function toRecord(row: Row): ServiceRecord {
   return {
     id: row.id,
+    code: row.code,
     tenantId: row.tenantId,
     source: row.source as RecordSource,
     customerId: row.customerId as UserId,
@@ -439,7 +441,18 @@ export class DrizzleServiceRepository implements ServiceRepository {
        */
       filters.push(eq(services.providerUsername, search.providerUsername));
     }
-    if (search.text !== undefined) filters.push(serviceTextCondition(tenantId, search.text));
+    if (search.text !== undefined) {
+      // PR-C: the service's own short code, or the code of the order that created it.
+      filters.push(
+        orPublicCode(
+          serviceTextCondition(tenantId, search.text),
+          tenantId,
+          search.text,
+          services.code,
+          services.orderId,
+        ),
+      );
+    }
     if (cursor !== null) {
       /*
        * Keyset, on `(COALESCE(original_started_at, created_at), id)`, DESCENDING.

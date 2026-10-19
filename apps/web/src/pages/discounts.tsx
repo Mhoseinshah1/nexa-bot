@@ -57,6 +57,7 @@ import { formatTimestamp } from '../format';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
 import {
@@ -461,7 +462,6 @@ function DiscountRules({
   mayEdit: boolean;
   options: ScopeOptions;
 }) {
-  const onLink = useLinkHandler();
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -577,9 +577,11 @@ function DiscountRules({
               {row.customerId !== null && (
                 <div className="muted small">
                   {t('web.discount_customer')}:{' '}
-                  <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
-                    <Ltr>{row.customerId}</Ltr>
-                  </a>
+                  <RecordLink
+                    href={recordHref.customer(row.customerId)}
+                    id={row.customerId}
+                    code={null}
+                  />
                 </div>
               )}
               {row.firstPurchaseOnly && (

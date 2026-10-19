@@ -2125,6 +2125,13 @@ textarea.input,
   max-width: 22rem;
 }
 
+/* PR-C: a record by its short code (or a name), linked, with «کپی شناسه» beside it. */
+.record-ref {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
 /* The reorder chevron's flip — a class, because an inline transform is dropped by the CSP. */
 .flip {
   display: inline-flex;

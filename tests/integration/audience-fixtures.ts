@@ -81,6 +81,8 @@ export class AudienceFixtures {
     readonly state?: 'PAID' | 'REFUNDED' | 'AWAITING_PAYMENT';
     readonly purpose?: 'NEW_SERVICE' | 'TRIAL';
     readonly settledAt?: Date;
+    /** The stored quote document; `{}` unless a suite READS the order back (PR-C). */
+    readonly quote?: string;
   }): Promise<string> {
     const id = this.id();
     const state = input.state ?? 'PAID';
@@ -97,7 +99,7 @@ export class AudienceFixtures {
           subtotal_amount, discount_amount, total_amount, currency, quote, settled_at,
           refunded_at, confirmed_at, expires_at)
          VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::uuid, $7::uuid, 'plan', 30,
-                 53687091200, $8, 1, $8, 0, $8, 'IRT', '{}'::jsonb, $9::timestamptz,
+                 53687091200, $8, 1, $8, 0, $8, 'IRT', $10::jsonb, $9::timestamptz,
                  CASE WHEN $4 = 'REFUNDED' THEN $9::timestamptz END,
                  now(), CASE WHEN $4 = 'AWAITING_PAYMENT' THEN now() + interval '1 hour' END)`,
       [
@@ -110,6 +112,7 @@ export class AudienceFixtures {
         input.panelId,
         total,
         settled === null ? null : settled.toISOString(),
+        input.quote ?? '{}',
       ],
     );
     return id;
@@ -124,6 +127,7 @@ export class AudienceFixtures {
     readonly expiresAt?: Date | null;
     readonly trafficLimitBytes?: bigint;
     readonly orderPurpose?: 'NEW_SERVICE' | 'TRIAL';
+    readonly quote?: string;
   }): Promise<string> {
     const productId =
       input.productId ??
@@ -133,6 +137,7 @@ export class AudienceFixtures {
       panelId: input.panelId,
       productId,
       purpose: input.orderPurpose ?? 'NEW_SERVICE',
+      ...(input.quote === undefined ? {} : { quote: input.quote }),
     });
     const id = this.id();
     await this.q(

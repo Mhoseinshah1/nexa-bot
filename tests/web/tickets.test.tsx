@@ -813,7 +813,7 @@ describe('one ticket', () => {
     const api = stubApi([
       {
         url: `/tickets/${TICKET_ID}`,
-        body: detail({ orderId: '019350ab-cdef-7012-8345-6789abcdef01' }),
+        body: detail({ orderId: '019350ab-cdef-7012-8345-6789abcdef01', orderCode: 'K7M2P9QA' }),
       },
       {
         url: '/tickets/assignees',
@@ -836,7 +836,8 @@ describe('one ticket', () => {
         mayClose={false}
       />,
     );
-    const order = await screen.findByRole('link', { name: '019350ab' });
+    // PR-C: the linked order by its short code, never a uuid prefix.
+    const order = await screen.findByRole('link', { name: 'K7M2P9QA' });
     expect(order.getAttribute('href')).toBe('/orders/019350ab-cdef-7012-8345-6789abcdef01');
     expect(screen.getByRole('link', { name: 'مریم' }).getAttribute('href')).toBe(
       `/users/${CUSTOMER_ID}`,

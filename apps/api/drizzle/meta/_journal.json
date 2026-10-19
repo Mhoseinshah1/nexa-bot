@@ -1800,6 +1800,20 @@
       "when": 1792379024643,
       "tag": "0256_products_referenced_never_deleted",
       "breakpoints": true
+    },
+    {
+      "idx": 257,
+      "version": "7",
+      "when": 1792442520160,
+      "tag": "0257_public_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 258,
+      "version": "7",
+      "when": 1792442566951,
+      "tag": "0258_public_code_triggers",
+      "breakpoints": true
     }
   ]
 }

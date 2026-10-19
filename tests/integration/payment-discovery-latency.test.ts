@@ -509,14 +509,14 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
 
   /** A top-up's final message: the customer notification lane's next tick. */
   async function expectTopupMessagedOnce(paymentId: string) {
-    const [payment] = await rows<{ reference: string }>(
-      sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
+    const [payment] = await rows<{ reference: string; code: string | null }>(
+      sql`SELECT reference, code FROM payments WHERE id = ${paymentId}`,
     );
     const toMaryam = () =>
       telegram.sent.filter(
         (body) =>
           String(body['chat_id']) === MARYAM &&
-          String(body['text'] ?? '').includes(paymentTrackingCode(payment!.reference)),
+          String(body['text'] ?? '').includes(paymentTrackingCode(payment!)),
       );
     expect(toMaryam()).toHaveLength(0);
     await ctx.container.customerNotificationLoop.tick();

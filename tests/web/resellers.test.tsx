@@ -342,11 +342,12 @@ describe('registering and editing a reseller', () => {
     renderList({ query: `register=${CUSTOMER_ID}` });
     await screen.findByText('Reza Reseller');
     // Handed over by the customer page's link, already chosen: no search box to fill.
+    // PR-C: the handed-over id is copyable, never drawn.
+    const chosen = screen.getByRole('group', { name: t('web.customer_picker_selected') });
+    expect(chosen.textContent).not.toContain(CUSTOMER_ID);
     expect(
-      within(screen.getByRole('group', { name: t('web.customer_picker_selected') })).getByText(
-        CUSTOMER_ID,
-      ),
-    ).toBeInTheDocument();
+      within(chosen).getByRole('button', { name: 'کپی شناسه' }).getAttribute('data-copy-value'),
+    ).toBe(CUSTOMER_ID);
 
     fireEvent.change(screen.getByLabelText('سطح', { selector: '#reseller-register-tier' }), {
       target: { value: TIER_ID },
@@ -1317,9 +1318,9 @@ describe("an order's reseller terms", () => {
     expect(text).toContain('حاشیهٔ نماینده');
     expect(text).toContain('تومان');
     expect(text).toContain(BOT_ID);
-    expect(
-      within(container).getByText(CUSTOMER_ID.slice(0, 8)).closest('a')?.getAttribute('href'),
-    ).toBe(`/users/${CUSTOMER_ID}`);
+    // PR-C: the reseller customer is a link and «کپی شناسه», never a uuid prefix.
+    expect(text).not.toContain(CUSTOMER_ID.slice(0, 8));
+    expect(container.querySelector(`a[href="/users/${CUSTOMER_ID}"]`)).not.toBeNull();
   });
 
   it('labels an override as USER_OVERRIDE, and the list layer with no step and no percent', async () => {

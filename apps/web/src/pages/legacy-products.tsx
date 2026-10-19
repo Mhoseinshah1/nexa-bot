@@ -514,7 +514,7 @@ export function ReviewDetail({
               <dt>{t('web.lpr_approved_product')}</dt>
               <dd>
                 <a href={`/products/${encodeURIComponent(row.approvedProductId)}`} onClick={onLink}>
-                  {row.approvedProductTitle ?? <Ltr>{row.approvedProductId}</Ltr>}
+                  {row.approvedProductTitle ?? t('web.record_open')}
                 </a>
               </dd>
             </>

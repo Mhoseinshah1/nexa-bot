@@ -34,6 +34,7 @@ import {
   migrationCodeView,
 } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { messageFor } from './settings';
@@ -655,7 +656,11 @@ export function CandidateDetail({
             <>
               <dt>{t('web.lsr_service')}</dt>
               <dd>
-                <Ltr>{row.serviceId}</Ltr>
+                <RecordLink
+                  href={recordHref.service(row.serviceId)}
+                  id={row.serviceId}
+                  code={null}
+                />
               </dd>
             </>
           )}

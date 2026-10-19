@@ -1187,7 +1187,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.handoff_notice':
     'پیام شما برای بررسی بیشتر به پشتیبان ارجاع شد و پاسخ در همین گفتگو داده می‌شود. لطفاً گفتگو را همین‌جا ادامه دهید؛ نیازی به ارسال دوبارهٔ پیام نیست.',
   'bot.order.preinvoice':
-    '{icon:invoice} پیش‌فاکتور\n\n{icon:service} سرویس: {productName}\n{icon:user} نام کاربری: {serviceUsername}\n{icon:date} مدت: {durationDays}\n{icon:traffic} حجم: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n{icon:amount} مبلغ سفارش: {total}\n\n{description}\n\n{icon:wallet} موجودی کیف پول: {walletBalance}\n\n{icon:purchase} سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
+    '{icon:invoice} پیش‌فاکتور\n🔖 کد سفارش: {orderCode}\n\n{icon:service} سرویس: {productName}\n{icon:user} نام کاربری: {serviceUsername}\n{icon:date} مدت: {durationDays}\n{icon:traffic} حجم: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n{icon:amount} مبلغ سفارش: {total}\n\n{description}\n\n{icon:wallet} موجودی کیف پول: {walletBalance}\n\n{icon:purchase} سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
   'bot.order.preinvoice_custom':
     '🛠 سرویس دلخواه\n📍 لوکیشن: {location}\n📦 حجم: {volumeBytes} × {pricePerGb} = {volumePrice}\n{icon:time} مدت: {durationDays} × {pricePerDay} = {timePrice}',
   'bot.order.preinvoice_devices':

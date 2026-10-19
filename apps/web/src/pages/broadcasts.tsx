@@ -51,6 +51,7 @@ import { jalaliDatesIn } from './editor-layout';
 import { FilePicker } from '../ui/file-picker';
 import { DateField } from '../ui/date-field';
 import { t, type WebKey } from '../i18n/web.fa';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import {
@@ -1615,7 +1616,15 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
                 {
                   key: 'who',
                   header: t('web.bc_customer'),
-                  render: (row) => row.firstName ?? row.username ?? row.customerId.slice(0, 8),
+                  render: (row) =>
+                    row.firstName ??
+                    row.username ?? (
+                      <RecordLink
+                        href={recordHref.customer(row.customerId)}
+                        id={row.customerId}
+                        code={null}
+                      />
+                    ),
                 },
                 {
                   key: 'state',

@@ -6,7 +6,7 @@ import {
   EMPTY_PRODUCT_DISPLAY,
   TELEGRAM_SECRET_TOKEN_HEADER,
   money,
-  paymentTrackingCode,
+  PUBLIC_CODE_PATTERN,
   type ProductId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatDateOnly, formatMoney } from '@nexa/i18n';
@@ -62,12 +62,12 @@ const RECEIPT_RECEIVED_TEXT =
  * A10: the invoice's final, button-less text — rendered from the catalogue and compared
  * EXACTLY, because the receipt prompt opens with the same first sentence.
  */
-const invoiceFinalText = (reference: string): string =>
+const invoiceFinalText = (code: string): string =>
   plain(CATALOGUE_FA['bot.payment.received_for_review'])
     .replace('{icon:info}', 'ℹ️')
-    // Roadmap E6: the tracking code the invoice carried stays on its final state — FIX-02: the
+    // Roadmap E6: the tracking code the invoice carried stays on its final state — PR-C: the
     // PUBLIC code, never the stored `:manual` reference.
-    .replace('{reference}', paymentTrackingCode(reference));
+    .replace('{reference}', code);
 
 interface Sent {
   readonly url: string;
@@ -316,7 +316,7 @@ describe('the customer payment flow over Telegram', () => {
   const payments = async () =>
     (
       await api.container.database.db.execute(
-        sql`SELECT id, state, method, amount, currency, evidence_kind, order_id, reference
+        sql`SELECT id, state, method, amount, currency, evidence_kind, order_id, reference, code
             FROM payments ORDER BY created_at ASC` as never,
       )
     ).rows as Record<string, unknown>[];
@@ -683,7 +683,8 @@ describe('the customer payment flow over Telegram', () => {
     // FIX-02: the invoice carries the public code under the exact label, and no suffix.
     const reference = String(payment?.['reference'] ?? '');
     expect(reference).toMatch(/^[0-9a-f]{16}:manual$/u);
-    expect(text).toContain(`کد پیگیری پرداخت: ${paymentTrackingCode(reference)}`);
+    expect(text).toContain(`کد پیگیری پرداخت: ${String(payment?.['code'])}`);
+    expect(String(payment?.['code'])).toMatch(PUBLIC_CODE_PATTERN);
     expect(text).not.toContain(reference);
     expect(text).not.toContain(':manual');
 
@@ -720,8 +721,8 @@ describe('the customer payment flow over Telegram', () => {
     expect(promptText).not.toContain('فایل');
     expect(promptText).not.toContain('6037991234567893');
     // FIX-02 (Codex review of #253): the prompt EDITS the invoice, so it keeps the code.
-    const issued = String((await payments())[0]?.['reference']);
-    expect(promptText).toContain(`کد پیگیری پرداخت: ${paymentTrackingCode(issued)}`);
+    const issued = String((await payments())[0]?.['code']);
+    expect(promptText).toContain(`کد پیگیری پرداخت: ${issued}`);
     expect(promptText).not.toContain(':manual');
     const promptButtons = buttonsOf(prompt);
     expect(promptButtons.map((b) => b.callback_data)).toEqual([`x:${payment}`]);
@@ -736,7 +737,7 @@ describe('the customer payment flow over Telegram', () => {
     expect(final?.url).toContain('/editMessageText');
     expect(final?.body['message_id']).toBe(invoice);
     expect(String(final?.body['text'])).toBe(
-      invoiceFinalText(String((await payments())[0]?.['reference'])),
+      invoiceFinalText(String((await payments())[0]?.['code'])),
     );
     // The keyboard is sent EMPTY, which is what removes the old one.
     expect(final?.body['reply_markup']).toEqual({ inline_keyboard: [] });
@@ -894,7 +895,7 @@ describe('the customer payment flow over Telegram', () => {
     expect(newMessages()).toHaveLength(1);
     // Still waiting for a reviewer — never "no longer pending", which invites a second payment.
     expect(String(newMessages()[0]?.body['text'])).toBe(
-      invoiceFinalText(String((await payments())[0]?.['reference'])),
+      invoiceFinalText(String((await payments())[0]?.['code'])),
     );
     expect(buttonsOf(newMessages()[0])).toEqual([]);
   });
@@ -936,7 +937,7 @@ describe('the customer payment flow over Telegram', () => {
     await tap(`i:${payment}`, { message: invoiceTap });
     const reply = messages().at(-1);
     expect(String(reply?.body['text'])).toBe(
-      invoiceFinalText(String((await payments())[0]?.['reference'])),
+      invoiceFinalText(String((await payments())[0]?.['code'])),
     );
   });
 
@@ -1048,7 +1049,7 @@ describe('the customer payment flow over Telegram', () => {
     );
     const lastOnInvoice = onInvoice.at(-1);
     expect(String(lastOnInvoice?.body['text'])).toBe(
-      invoiceFinalText(String((await payments())[0]?.['reference'])),
+      invoiceFinalText(String((await payments())[0]?.['code'])),
     );
     expect(lastOnInvoice?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     // The receipt's one new message went out once, although it never found the invoice.
@@ -1104,7 +1105,7 @@ describe('the customer payment flow over Telegram', () => {
       (one) => one.url.includes('/editMessageText') && one.body['message_id'] === invoice,
     );
     expect(String(onInvoice.at(-1)?.body['text'])).toBe(
-      invoiceFinalText(String((await payments())[0]?.['reference'])),
+      invoiceFinalText(String((await payments())[0]?.['code'])),
     );
     expect(onInvoice.at(-1)?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     expect(
@@ -1188,7 +1189,7 @@ describe('the customer payment flow over Telegram', () => {
     expect(String(lastMessage()?.body['text'])).toContain('برگشت‌پذیر نیست');
     // FIX-02 (Codex review of #253): the question replaces the invoice and keeps its code.
     expect(String(lastMessage()?.body['text'])).toContain(
-      `کد پیگیری پرداخت: ${paymentTrackingCode(String(payment?.['reference']))}`,
+      `کد پیگیری پرداخت: ${String(payment?.['code'])}`,
     );
     expect(confirm[0]?.callback_data).toBe(`z:${String(payment?.['id'])}`);
 

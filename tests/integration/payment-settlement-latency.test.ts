@@ -365,9 +365,12 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
 
   const paymentRow = async (paymentId: string) =>
     (
-      await rows<{ state: string; confirmed_at: Date | null; reference: string }>(
-        sql`SELECT state, confirmed_at, reference FROM payments WHERE id = ${paymentId}`,
-      )
+      await rows<{
+        state: string;
+        confirmed_at: Date | null;
+        reference: string;
+        code: string | null;
+      }>(sql`SELECT state, confirmed_at, reference, code FROM payments WHERE id = ${paymentId}`)
     )[0]!;
 
   /**
@@ -394,13 +397,16 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
   }
 
   /** The message the customer reads: the amount, and the payment's own tracking code. */
-  function expectFinalMessage(reference: string, amountMinor: bigint) {
+  function expectFinalMessage(
+    payment: { code: string | null; reference: string },
+    amountMinor: bigint,
+  ) {
     expect(sends).toHaveLength(1);
     expect(sends[0]!.message.templateKey).toBe('bot.wallet.topup_credited');
     expect(sends[0]!.message.values).toEqual({
       amount: money(amountMinor, 'IRT'),
-      // FIX-02: the public tracking code, never the stored `<code>:<role>` reference.
-      reference: paymentTrackingCode(reference),
+      // PR-C: the public tracking code, never the stored `<code>:<role>` reference.
+      reference: paymentTrackingCode(payment),
     });
     expect(
       String(sends[0]!.message.values['reference']),
@@ -586,7 +592,7 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
       expect(latency, `sent ${String(latency)} ms after the credit`).toBeLessThanOrEqual(
         PROMPT_BOUND_MS,
       );
-      expectFinalMessage(confirmed.reference, 500_000n);
+      expectFinalMessage(confirmed, 500_000n);
     });
 
     it('TONPAYS: the inquiry’s approval credits once, and the message follows within one interval', async () => {
@@ -600,7 +606,7 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
       expect(latency, `sent ${String(latency)} ms after the credit`).toBeLessThanOrEqual(
         PROMPT_BOUND_MS,
       );
-      expectFinalMessage(confirmed.reference, 250_000n);
+      expectFinalMessage(confirmed, 250_000n);
     });
 
     it('NOWPAYMENTS: an approval credits once, and the message follows within one interval', async () => {
@@ -617,7 +623,7 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
       const confirmed = await expectCreditedOnceAndDueAtCommit(paymentId, 1_035_000n);
       const latency = await sentWithinPromptBound(committedAt);
       expect(latency).toBeLessThanOrEqual(PROMPT_BOUND_MS);
-      expectFinalMessage(confirmed.reference, 1_035_000n);
+      expectFinalMessage(confirmed, 1_035_000n);
     });
 
     it('CENTRALPAY: an approval naming its bound reference credits once, and the message follows promptly', async () => {
@@ -638,7 +644,7 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
       const confirmed = await expectCreditedOnceAndDueAtCommit(paymentId, 150_000n);
       const latency = await sentWithinPromptBound(committedAt);
       expect(latency).toBeLessThanOrEqual(PROMPT_BOUND_MS);
-      expectFinalMessage(confirmed.reference, 150_000n);
+      expectFinalMessage(confirmed, 150_000n);
     });
 
     it('TELEGRAM_STARS: a recorded successful_payment credits once, and the message follows promptly', async () => {
@@ -660,7 +666,7 @@ describe('FIX-03: approval, credit and the final message, without an artificial 
       const confirmed = await expectCreditedOnceAndDueAtCommit(paymentId, 100_000n);
       const latency = await sentWithinPromptBound(committedAt);
       expect(latency).toBeLessThanOrEqual(PROMPT_BOUND_MS);
-      expectFinalMessage(confirmed.reference, 100_000n);
+      expectFinalMessage(confirmed, 100_000n);
       // A redelivered update settles nothing again and queues nothing again.
       expect(await ctx.container.gatewayPayments.settleRecorded(tenantA, paymentId)).toBe(
         'SETTLED',

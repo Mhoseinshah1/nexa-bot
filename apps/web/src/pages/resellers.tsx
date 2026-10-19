@@ -35,6 +35,7 @@ import { CustomerIdentity, CustomerPicker } from './customer-picker';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
+import { CopyIdButton } from '../ui/record-ref';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import {
@@ -737,7 +738,7 @@ function StandingHead({
     <DetailHead
       title={
         row === undefined ? (
-          <Ltr>{customerId}</Ltr>
+          <CopyIdButton id={customerId} />
         ) : (
           (row.displayName ?? <Ltr>{row.telegramUserId}</Ltr>)
         )
@@ -1025,7 +1026,7 @@ function ResellerForm({
                 // Handed over by id and not readable here (no `users.view`, or still
                 // loading): the id is what the customer's own page sent.
                 <span className="muted small">
-                  {t('web.customer_picker_handed_over')} <Ltr>{state.customerId}</Ltr>
+                  {t('web.customer_picker_handed_over')} <CopyIdButton id={state.customerId} />
                 </span>
               )}
               <Button

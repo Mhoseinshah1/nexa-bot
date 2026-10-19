@@ -14,6 +14,7 @@ import type {
 import { fetchPaymentReceipts, fetchPaymentTimeline } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import {
   Banner,
   Button,
@@ -27,7 +28,6 @@ import {
   type Tone,
 } from '../ui/kit';
 import { pollUnlessFinalWhile } from '../polling';
-import { useLinkHandler } from '../router';
 import { retryOf } from '../view-state';
 import {
   CUSTOMER_NOTIFICATION_KIND_NAMES,
@@ -151,12 +151,7 @@ const SECTION_LABELS: Readonly<Record<PaymentTimelineSection, WebKey>> = {
 
 /** An order named by an entry: a link to it, the way the detail links one. */
 function OrderLink({ orderId }: { orderId: string }) {
-  const onLink = useLinkHandler();
-  return (
-    <a href={`/orders/${encodeURIComponent(orderId)}`} onClick={onLink}>
-      <Ltr>{orderId.slice(0, 8)}</Ltr>
-    </a>
-  );
+  return <RecordLink href={recordHref.order(orderId)} id={orderId} code={null} />;
 }
 
 /** A provider's own code (an error code), as recorded: left-to-right, or a dash. */

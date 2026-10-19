@@ -47,14 +47,11 @@ describe('the compensation list', () => {
     const view = renderPage(<CompensationsPage route={ROUTE} denied={false} />);
 
     const table = await screen.findByRole('table');
-    expect(within(table).getByText(PAYMENT_ID.slice(0, 8)).closest('a')).toHaveAttribute(
-      'href',
-      `/payments/${PAYMENT_ID}`,
-    );
-    expect(within(table).getByText(ORDER_ID.slice(0, 8)).closest('a')).toHaveAttribute(
-      'href',
-      `/orders/${ORDER_ID}`,
-    );
+    // PR-C: links and «کپی شناسه», never a uuid prefix.
+    expect(table.querySelector(`a[href="/payments/${PAYMENT_ID}"]`)).not.toBeNull();
+    expect(table.querySelector(`a[href="/orders/${ORDER_ID}"]`)).not.toBeNull();
+    expect(table.textContent).not.toContain(PAYMENT_ID.slice(0, 8));
+    expect(table.textContent).not.toContain(ORDER_ID.slice(0, 8));
     expect(within(table).getByText('5550004321')).toBeInTheDocument();
     expect(within(table).getByText('@reza_buyer')).toBeInTheDocument();
     expect(within(table).getAllByText(/۲۵۰٬۰۰۰|250,000/u)).toHaveLength(2);

@@ -56,6 +56,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import { ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { CustomerIdentityLink } from '../ui/customer-identity';
+import { CopyIdButton, RecordLink, recordHref } from '../ui/record-ref';
 import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
 import { Modal } from '../ui/overlays';
@@ -898,24 +899,19 @@ export function PaymentsPage({
   const columns: readonly Column<PaymentSummaryResponse>[] = [
     {
       /*
-       * The payment's own id (§21), shortened on the list with the whole value as its
-       * title (the detail page copies it), because it is what the audit log, the ledger
-       * and a support conversation name. No copy icon on the list, as in the demo (X7).
+       * PR-C: the payment by its tracking code — its 8-character public code, the one the
+       * customer, the bot and the ops log quote. The uuid is behind «کپی شناسه» only.
        */
-      key: 'id',
-      header: t('web.payment_id'),
-      render: (row) => <IdText value={row.id} display={row.id.slice(0, 8)} />,
-    },
-    {
       key: 'reference',
       header: t('web.payment_reference'),
       render: (row) => (
-        <>
+        <span className="nowrap record-ref">
           <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-            <Ltr>{paymentTrackingCode(row.reference)}</Ltr>
+            <Ltr>{paymentTrackingCode(row)}</Ltr>
           </a>
+          <CopyIdButton id={row.id} />
           <SourceBadge source={row.source} />
-        </>
+        </span>
       ),
     },
     {
@@ -1017,9 +1013,12 @@ export function PaymentsPage({
                 {t('web.payment_topup')}
               </span>
             ) : (
-              <a key="order" href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
-                <Ltr>{row.orderId.slice(0, 8)}</Ltr>
-              </a>
+              <RecordLink
+                key="order"
+                href={recordHref.order(row.orderId)}
+                id={row.orderId}
+                code={row.orderCode}
+              />
             ),
           ],
           [
@@ -1884,7 +1883,7 @@ function RefundsCard({
                             currency: answeredRow.currency,
                           }}
                         />{' '}
-                        <Ltr>{answeredRow.id}</Ltr>
+                        <CopyIdButton id={answeredRow.id} />
                       </span>,
                     ],
                   ]}
@@ -2002,8 +2001,9 @@ export function PaymentDetailPage({
         <PageHead
           title={
             <span className="ca-title-id">
-              <Ltr>{paymentTrackingCode(row.reference)}</Ltr>
-              <CopyButton value={paymentTrackingCode(row.reference)} />
+              <Ltr>{paymentTrackingCode(row)}</Ltr>
+              <CopyButton value={paymentTrackingCode(row)} />
+              <CopyIdButton id={row.id} />
             </span>
           }
           badge={<StateBadge value={row.state} />}
@@ -2145,13 +2145,15 @@ export function PaymentDetailPage({
                           ],
                           [
                             t('web.payment_customer'),
-                            <a
-                              key="c"
-                              href={`/users/${encodeURIComponent(row.customerId)}`}
-                              onClick={onLink}
-                            >
-                              <Ltr>{row.customerId}</Ltr>
-                            </a>,
+                            <span key="c" className="nowrap record-ref">
+                              <CustomerIdentityLink
+                                customerId={row.customerId}
+                                telegramUserId={row.customerTelegramUserId}
+                                username={row.customerUsername}
+                                onLink={onLink}
+                              />
+                              <CopyIdButton id={row.customerId} />
+                            </span>,
                           ],
                           [
                             t('web.payment_telegram'),
@@ -2169,13 +2171,12 @@ export function PaymentDetailPage({
                                 {t('web.payment_topup')}
                               </span>
                             ) : (
-                              <a
+                              <RecordLink
                                 key="o"
-                                href={`/orders/${encodeURIComponent(row.orderId)}`}
-                                onClick={onLink}
-                              >
-                                <Ltr>{row.orderId}</Ltr>
-                              </a>
+                                href={recordHref.order(row.orderId)}
+                                id={row.orderId}
+                                code={row.orderCode}
+                              />
                             ),
                           ],
                           [

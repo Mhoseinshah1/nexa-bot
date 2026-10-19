@@ -1458,7 +1458,7 @@ describe('the payment diagnostics (§21)', () => {
     updatedAt: '2026-09-11T08:15:00.000Z',
   });
 
-  it('lists the payment id, the Telegram id and username, the gateway, the external reference and updated-at', async () => {
+  it('lists the tracking code with «کپی شناسه», the Telegram id and username, the gateway, the external reference and updated-at', async () => {
     stubApi(list([diagnosed]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('a1b2c3d4e5f60718');
@@ -1467,9 +1467,11 @@ describe('the payment diagnostics (§21)', () => {
     const headers = within(table)
       .getAllByRole('columnheader')
       .map((cell) => cell.textContent);
-    // Demo parity X9: the id and the gateway are columns; who paid, the external reference
-    // and updated-at are the row's detail, one toggle away on the same row.
-    for (const header of ['شناسهٔ پرداخت', 'درگاه']) {
+    // Demo parity X9: the gateway is a column; who paid, the external reference and updated-at
+    // are the row's detail, one toggle away on the same row. PR-C: the payment's uuid is no
+    // longer a column — the tracking code is the payment's name, the uuid is «کپی شناسه».
+    expect(headers).not.toContain('شناسهٔ پرداخت');
+    for (const header of ['درگاه']) {
       expect(headers, header).toContain(header);
     }
     fireEvent.click(within(table).getByRole('button', { name: t('web.payment_row_detail') }));
@@ -1479,7 +1481,12 @@ describe('the payment diagnostics (§21)', () => {
     for (const term of ['مشتری', 'شناسهٔ پیگیری بیرونی', 'آخرین تغییر']) {
       expect(terms, term).toContain(term);
     }
-    expect(within(table).getByText(ROW_ID.slice(0, 8))).toBeInTheDocument();
+    expect(table.textContent).not.toContain(ROW_ID.slice(0, 8));
+    expect(
+      within(table)
+        .getAllByRole('button', { name: 'کپی شناسه' })
+        .some((button) => button.getAttribute('data-copy-value') === ROW_ID),
+    ).toBe(true);
     /*
      * Spec §10: the customer IS the Telegram id — the link to their page — and the
      * internal uuid is not drawn. This used to be two columns, a uuid prefix headed

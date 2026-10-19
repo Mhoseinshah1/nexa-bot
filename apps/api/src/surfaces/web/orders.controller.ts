@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   ORDER_ROUTES,
   classifyListSearch,
+  orderCodeOf,
   orderListQuerySchema,
   type OrderId,
   type OrderListResponse,
@@ -15,6 +16,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
 import { adminActor, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
@@ -85,8 +87,11 @@ export class OrdersController {
     });
     // Who each order is for, as Telegram knows them — one read for the page (spec §10).
     const identities = await this.container.orders.customerIdentities(scope, actor, result.items);
+    const labels = await this.labels(scope, actor, result.items);
     return {
-      orders: result.items.map((record) => toSummary(record, identities.get(record.customerId))),
+      orders: result.items.map((record) =>
+        toSummary(record, identities.get(record.customerId), labels),
+      ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -98,7 +103,20 @@ export class OrdersController {
     // segment is a 400 rather than a 500 at the `uuid` cast.
     const order = await this.container.orders.get(scope, actor, id);
     const identities = await this.container.orders.customerIdentities(scope, actor, [order]);
-    return { order: toSummary(order, identities.get(order.customerId)) };
+    const labels = await this.labels(scope, actor, [order]);
+    return { order: toSummary(order, identities.get(order.customerId), labels) };
+  }
+
+  /** PR-C: the products' codes and titles and the panels' names a page of orders links to. */
+  private labels(
+    scope: TenantContext,
+    actor: ReturnType<typeof adminActor>,
+    orders: readonly OrderRecord[],
+  ): Promise<PublicLabels> {
+    return this.container.publicLabels.read(scope, actor, 'orders.view', {
+      productIds: orders.map((order) => order.line.productId),
+      panelIds: orders.map((order) => order.line.panelId),
+    });
   }
 
   /**
@@ -164,9 +182,16 @@ function orderCursorFrom(raw: string): OrderCursor {
 function toSummary(
   record: OrderRecord,
   identity: OrderCustomerIdentity | undefined,
+  labels: PublicLabels,
 ): OrderSummaryResponse {
+  const product =
+    record.line.productId === null ? undefined : labels.products.get(record.line.productId);
   return {
     id: record.id,
+    code: orderCodeOf(record),
+    productCode: product?.code ?? null,
+    productTitle: product?.title ?? null,
+    panelName: labels.panels.get(record.line.panelId) ?? null,
     source: record.source,
     customerId: record.customerId,
     customerTelegramUserId: identity?.telegramUserId ?? null,

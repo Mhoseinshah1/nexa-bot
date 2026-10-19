@@ -61,12 +61,12 @@ describe('the receipt-review message is edited into its decision, once', () => {
   const captionOf = (sent: readonly Sent[], messageId: number) =>
     String(editOf(sent, messageId)?.body['caption'] ?? '');
   async function referenceOf(payment: string): Promise<string> {
-    const found = await rows<{ reference: string }>(
+    const found = await rows<{ reference: string; code: string | null }>(
       f,
-      sql`SELECT reference FROM payments WHERE id = ${payment}`,
+      sql`SELECT reference, code FROM payments WHERE id = ${payment}`,
     );
-    // FIX-02: what a reviewer is shown is the PUBLIC code, never the `:manual`/`:topup` reference.
-    return paymentTrackingCode(found[0]?.reference ?? 'MISSING');
+    // PR-C: what a reviewer is shown is the PUBLIC code, never the `:manual`/`:topup` reference.
+    return paymentTrackingCode(found[0] ?? { code: null, reference: 'MISSING' });
   }
 
   async function notices(kind: string): Promise<number> {

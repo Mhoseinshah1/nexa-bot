@@ -2,6 +2,7 @@ import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  serviceCodeOf,
   COMMERCE_ERROR_CODES,
   currencyCodeSchema,
   errors,
@@ -27,6 +28,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
@@ -152,8 +154,11 @@ export class ServicesController {
       actor,
       result.items,
     );
+    const labels = await this.labels(scope, actor, result.items);
     return {
-      services: result.items.map((record) => toSummary(record, identities.get(record.customerId))),
+      services: result.items.map((record) =>
+        toSummary(record, identities.get(record.customerId), labels),
+      ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -162,7 +167,42 @@ export class ServicesController {
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<ServiceResponse> {
     const { scope, actor } = await this.authenticate(request);
     const found = await this.container.serviceAdmin.detail(scope, actor, id);
-    return { service: toDetail(found.service, found.actions, found.original) };
+    return { service: await this.detailOf(scope, actor, found) };
+  }
+
+  /**
+   * PR-C: the detail names its customer (Telegram id and name), order (code), panel (name) and
+   * product (code and title) — never a uuid — so it reads them like a list row does.
+   */
+  private async detailOf(
+    scope: TenantContext,
+    actor: ReturnType<typeof adminActor>,
+    found: Awaited<ReturnType<Container['serviceAdmin']['detail']>>,
+  ): Promise<ServiceDetailResponse> {
+    const identities = await this.container.serviceAdmin.customerIdentities(scope, actor, [
+      found.service,
+    ]);
+    const labels = await this.labels(scope, actor, [found.service]);
+    return toDetail(
+      found.service,
+      found.actions,
+      found.original,
+      identities.get(found.service.customerId),
+      labels,
+    );
+  }
+
+  /** The order codes, panel names and product codes a page of services links to. */
+  private labels(
+    scope: TenantContext,
+    actor: ReturnType<typeof adminActor>,
+    records: readonly ServiceRecord[],
+  ): Promise<PublicLabels> {
+    return this.container.publicLabels.read(scope, actor, 'services.view', {
+      orderIds: records.map((record) => record.orderId),
+      panelIds: records.map((record) => record.panelId),
+      productIds: records.map((record) => record.productId),
+    });
   }
 
   /**
@@ -441,7 +481,7 @@ export class ServicesController {
   ): Promise<ServiceActionResponse> {
     const found = await this.container.serviceAdmin.detail(scope, actor, id);
     return {
-      service: toDetail(found.service, found.actions),
+      service: await this.detailOf(scope, actor, found),
       operation: operation === null ? null : toOperation(operation),
     };
   }
@@ -489,9 +529,17 @@ function serviceCursorFrom(raw: string): ServiceCursor {
 function toSummary(
   record: ServiceRecord,
   identity: ServiceCustomerIdentity | undefined,
+  labels: PublicLabels | null,
 ): ServiceSummaryResponse {
+  const product = record.productId === null ? undefined : labels?.products.get(record.productId);
   return {
     id: record.id,
+    code: serviceCodeOf(record),
+    orderCode: labels?.orders.get(record.orderId) ?? null,
+    panelName: labels?.panels.get(record.panelId) ?? null,
+    productCode: product?.code ?? null,
+    productTitle: product?.title ?? null,
+    customerDisplayName: identity?.displayName ?? null,
     source: record.source,
     customerId: record.customerId,
     // Null on the detail, which this branch does not redesign; every list row carries it.
@@ -535,9 +583,11 @@ function toDetail(
   record: ServiceRecord,
   actions: readonly ServiceActionAvailability[],
   original: ServiceOriginalPurchase | null = null,
+  identity: ServiceCustomerIdentity | undefined = undefined,
+  labels: PublicLabels | null = null,
 ): ServiceDetailResponse {
   return {
-    ...toSummary(record, undefined),
+    ...toSummary(record, identity, labels),
     deliveryAttempts: record.deliveryAttempts,
     deliveryNextAttemptAt:
       record.deliveryNextAttemptAt === null ? null : record.deliveryNextAttemptAt.toISOString(),

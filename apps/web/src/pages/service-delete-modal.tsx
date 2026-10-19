@@ -11,6 +11,7 @@ import {
 import { ApiError, deleteServiceWithRefund, fetchDeleteRefundQuote } from '../api/client';
 import { currencyLabel } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { CopyIdButton } from '../ui/record-ref';
 import { useSubmissionKey } from '../submission-key';
 import {
   Banner,
@@ -231,7 +232,7 @@ function DeleteBody({
             ],
             [
               t('web.service_delete_result_reference'),
-              <Ltr key="r">{result.refundId ?? result.id}</Ltr>,
+              <CopyIdButton key="r" id={result.refundId ?? result.id} />,
             ],
           ]}
         />

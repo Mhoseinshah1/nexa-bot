@@ -574,11 +574,12 @@ describe('the Telegram receipt review, as one message with three decisions', () 
   }
 
   async function referenceOf(paymentId: string): Promise<string> {
-    const rows = await ctx.container.database.db.execute<{ reference: string }>(
-      sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
-    );
-    // FIX-02: reviewers are shown the PUBLIC code, never the stored `:manual` reference.
-    return paymentTrackingCode(rows.rows[0]?.reference ?? 'MISSING');
+    const rows = await ctx.container.database.db.execute<{
+      reference: string;
+      code: string | null;
+    }>(sql`SELECT reference, code FROM payments WHERE id = ${paymentId}`);
+    // PR-C: reviewers are shown the PUBLIC code, never the stored `:manual` reference.
+    return paymentTrackingCode(rows.rows[0] ?? { code: null, reference: 'MISSING' });
   }
 
   async function captureCount(): Promise<number> {

@@ -24,6 +24,8 @@ import type {
  */
 export interface ProductRecord {
   readonly id: ProductId;
+  /** The per-tenant number behind `P-102` (PR-C; `productCode`). Null before the backfill. */
+  readonly codeNumber: number | null;
   /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
   readonly source: RecordSource;
   readonly title: string;

@@ -3494,7 +3494,7 @@ export class GatewayPaymentService {
         providerInvoiceId: known.providerInvoiceId ?? invoice.providerInvoiceId,
         // The public code the customer's invoice shows (FIX-02), never the stored
         // `<code>:<role>` reference — an operator matches the two by eye.
-        trackingCode: payment === null ? null : paymentTrackingCode(payment.reference),
+        trackingCode: payment === null ? null : paymentTrackingCode(payment),
         telegramUserId,
         botInstanceId: invoice.botInstanceId,
         elapsedMs: known.elapsedMs ?? null,

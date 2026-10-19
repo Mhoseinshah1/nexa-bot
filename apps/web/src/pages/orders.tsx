@@ -35,6 +35,14 @@ import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { SourceBadge } from '../ui/source-badge';
 import { sourceFromQuery, sourceRouteFilter } from './record-source';
 import { CustomerIdentityLink } from '../ui/customer-identity';
+import {
+  CodeText,
+  CopyIdButton,
+  PanelLink,
+  ProductLink,
+  RecordLink,
+  recordHref,
+} from '../ui/record-ref';
 /*
  * The SERVICES page's vocabularies, borrowed rather than copied — the same rule
  * `users.tsx` follows when it borrows this page's order maps. A second
@@ -48,6 +56,7 @@ import {
   OPERATION_STATE_LABELS,
   OPERATION_STATE_TONES,
   OPERATION_TYPE_LABELS,
+  panelUsernameAbsence,
   STATE_LABELS as SERVICE_STATE_LABELS,
   STATE_TONES as SERVICE_STATE_TONES,
 } from './services';
@@ -261,6 +270,12 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
         </>
       ),
     },
+    {
+      // PR-C: the order's short public code, never its uuid.
+      key: 'code',
+      header: t('web.record_code'),
+      render: (row) => <RecordLink href={recordHref.order(row.id)} id={row.id} code={row.code} />,
+    },
     { key: 'state', header: t('web.status'), render: (row) => <StateBadge value={row.state} /> },
     {
       key: 'total',
@@ -454,8 +469,9 @@ export function OrderDetailPage({
           subtitle={
             <span className="ca-subline">
               <span>{t('web.order_detail')}</span>
-              <span>
-                <Ltr>{row.id}</Ltr>
+              <span className="record-ref">
+                <CodeText code={row.code} />
+                <CopyIdButton id={row.id} />
               </span>
             </span>
           }
@@ -611,13 +627,15 @@ export function OrderDetailPage({
                       items={[
                         [
                           t('web.order_customer'),
-                          <a
-                            key="cu"
-                            href={`/users/${encodeURIComponent(row.customerId)}`}
-                            onClick={onLink}
-                          >
-                            <Ltr>{row.customerId}</Ltr>
-                          </a>,
+                          <span key="cu" className="nowrap record-ref">
+                            <CustomerIdentityLink
+                              customerId={row.customerId}
+                              telegramUserId={row.customerTelegramUserId}
+                              username={row.customerUsername}
+                              onLink={onLink}
+                            />
+                            <CopyIdButton id={row.customerId} />
+                          </span>,
                         ],
                         [
                           t('web.order_product'),
@@ -626,16 +644,18 @@ export function OrderDetailPage({
                               {t('web.purpose_custom_service')}
                             </span>
                           ) : (
-                            <a
+                            <ProductLink
                               key="pr"
-                              href={`/products/${encodeURIComponent(row.productId)}`}
-                              onClick={onLink}
-                            >
-                              <Ltr>{row.productId}</Ltr>
-                            </a>
+                              id={row.productId}
+                              code={row.productCode}
+                              title={row.productTitle}
+                            />
                           ),
                         ],
-                        [t('web.product_panel'), <Copyable key="pa" value={row.panelId} />],
+                        [
+                          t('web.product_panel'),
+                          <PanelLink key="pa" id={row.panelId} name={row.panelName} />,
+                        ],
                       ]}
                     />
                   </Card>
@@ -745,12 +765,21 @@ function OrderService({ orderId, mayView }: { orderId: string; mayView: boolean 
                  * production shape: a name was reserved, the create never landed, and
                  * no screen said so.
                  */
+                [t('web.record_code'), <CodeText key="code" code={service.code} />],
+                /*
+                 * «شناسهٔ کاربری در پنل» (PR-C): the panel's username once the panel holds
+                 * the account. NULL beside an assigned username is exactly the production
+                 * shape — a name was reserved, the create never landed — and the cell says
+                 * which, the service's own page giving the history.
+                 */
                 [
                   t('web.service_provider_user_id'),
-                  service.providerUserId === null ? (
-                    <Dash key="pu" />
+                  panelUsernameAbsence(service) === null ? (
+                    <Copyable key="pu" value={service.providerUsername} />
                   ) : (
-                    <Copyable key="pu" value={service.providerUserId} />
+                    <span key="pu" className="muted">
+                      {t(panelUsernameAbsence(service) ?? 'web.service_panel_username_never')}
+                    </span>
                   ),
                 ],
                 [
@@ -925,7 +954,7 @@ function OrderPayments({ orderId, mayView }: { orderId: string; mayView: boolean
             {payments.data.payments.map((one) => (
               <li key={one.id}>
                 <a href={`/payments/${encodeURIComponent(one.id)}`} onClick={onLink}>
-                  <Ltr>{paymentTrackingCode(one.reference)}</Ltr>
+                  <Ltr>{paymentTrackingCode(one)}</Ltr>
                 </a>
                 <Badge tone="neutral">{t(PAYMENT_STATE_LABELS[one.state])}</Badge>
                 <Money value={{ amountMinor: one.amount, currency: one.currency }} />
@@ -1231,7 +1260,6 @@ function ResellerTerms({
   terms: NonNullable<OrderPricingResponse['reseller']>;
   currency: OrderPricingResponse['currency'];
 }) {
-  const onLink = useLinkHandler();
   const money = (amountMinor: string) => <Money value={{ amountMinor, currency }} />;
   const step = PRICE_LAYER_STEPS[terms.layer];
   return (
@@ -1241,13 +1269,12 @@ function ResellerTerms({
         items={[
           [
             t('web.order_reseller_customer'),
-            <a
+            <RecordLink
               key="r"
-              href={`/users/${encodeURIComponent(terms.resellerCustomerId)}`}
-              onClick={onLink}
-            >
-              <Ltr>{terms.resellerCustomerId.slice(0, 8)}</Ltr>
-            </a>,
+              href={recordHref.customer(terms.resellerCustomerId)}
+              id={terms.resellerCustomerId}
+              code={null}
+            />,
           ],
           [t('web.reseller_tier'), terms.tierName],
           [

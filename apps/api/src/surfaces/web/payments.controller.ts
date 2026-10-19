@@ -147,6 +147,8 @@ export class PaymentsController {
     const signals = await this.container.payments.gatewaySignals(scope, actor, result.items);
     // Roadmap E1: each payment's situation, from the ONE classifier, and its queues.
     const situations = await this.container.payments.situations(scope, actor, result.items);
+    // PR-C: the settled orders' short codes, so a row never prints an order uuid.
+    const orderCodes = await this.orderCodes(scope, actor, result.items);
     return {
       // The LIST omits `evidenceNote`: it is an operator's own text about somebody's
       // bank transfer, and it is returned only on the detail, behind the same
@@ -158,6 +160,7 @@ export class PaymentsController {
           dispositions.get(record.id) ?? null,
           signals.get(record.id) ?? null,
           situations.get(record.id) ?? null,
+          orderCodes,
         ),
       ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
@@ -231,8 +234,21 @@ export class PaymentsController {
         cardFacts,
         situations.get(payment.id) ?? null,
         signals.get(payment.id) ?? null,
+        await this.orderCodes(scope, actor, [payment]),
       ),
     };
+  }
+
+  /** PR-C: the short codes of the orders a page of payments settles, in one read. */
+  private async orderCodes(
+    scope: TenantContext,
+    actor: ReturnType<typeof adminActor>,
+    records: readonly PaymentRecord[],
+  ): Promise<ReadonlyMap<string, string | null>> {
+    const labels = await this.container.publicLabels.read(scope, actor, 'payments.view', {
+      orderIds: records.map((record) => record.orderId),
+    });
+    return labels.orders;
   }
 
   /**
@@ -451,9 +467,13 @@ function toSummary(
   receiptDisposition: ReceiptDisposition | null,
   gatewaySignal: PaymentGatewaySignalRecord | null = null,
   situation: PaymentSituationRead | null = null,
+  orderCodes: ReadonlyMap<string, string | null> = new Map(),
 ): PaymentSummaryResponse {
   return {
     id: record.id,
+    // PR-C: THE tracking code, and the settled order's code beside its id.
+    code: record.code,
+    orderCode: record.orderId === null ? null : (orderCodes.get(record.orderId) ?? null),
     source: record.source,
     customerId: record.customerId,
     orderId: record.orderId,
@@ -643,9 +663,10 @@ function toDetail(
   cardFacts: GatewayCardFacts | null = null,
   situation: PaymentSituationRead | null = null,
   gatewaySignal: PaymentGatewaySignalRecord | null = null,
+  orderCodes: ReadonlyMap<string, string | null> = new Map(),
 ): PaymentDetailResponse {
   return {
-    ...toSummary(record, identity, receiptDisposition, gatewaySignal, situation),
+    ...toSummary(record, identity, receiptDisposition, gatewaySignal, situation, orderCodes),
     evidenceNote: record.evidenceNote,
     resolutionNote: record.resolutionNote,
     destination: destination === null ? null : toDestinationView(destination),
