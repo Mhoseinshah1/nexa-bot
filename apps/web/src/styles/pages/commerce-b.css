@@ -240,7 +240,19 @@
   padding-inline-start: 1.25rem;
 }
 .custom-levels li + li {
-  margin-top: 2px;
+  margin-top: 6px;
+}
+/* Demo parity (custom-service): the specificity card's paragraphs spaced as the demo's. */
+.cs-specificity > .card-body {
+  display: grid;
+  gap: 14px;
+}
+.cs-specificity > .card-body > p {
+  margin: 0;
+}
+/* Demo parity (custom-service): a card's action sits level with its title, not centred. */
+.cs-cards > .card > .card-head {
+  align-items: flex-start;
 }
 /* A form's on/off line: its label, and the switch at the end. */
 .cb-toggle-line {

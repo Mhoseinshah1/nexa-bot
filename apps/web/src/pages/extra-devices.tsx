@@ -19,7 +19,7 @@ import {
   setServiceAddonActive,
   updateServiceAddon,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatTimestampNumeric } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -298,7 +298,6 @@ export function ExtraDevicesPage({
     {
       key: 'max',
       header: t('web.extra_devices_max_quantity'),
-      align: 'end',
       render: (row) => <span className="num">{String(row.maxQuantity ?? '—')}</span>,
     },
     {
@@ -320,7 +319,7 @@ export function ExtraDevicesPage({
     {
       key: 'updated',
       header: t('web.extra_devices_updated'),
-      render: (row) => <span className="muted small">{formatTimestamp(row.updatedAt)}</span>,
+      render: (row) => <span className="nowrap">{formatTimestampNumeric(row.updatedAt)}</span>,
     },
     {
       key: 'actions',
@@ -422,11 +421,11 @@ export function ExtraDevicesPage({
         >
           <Card title={t('web.extra_devices_rates')}>
             <DataTable
+              stack
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}
               caption={t('web.extra_devices_rates')}
-              dense
             />
             <CursorPager
               order="oldest-first"
