@@ -137,6 +137,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'telegram.customer_send_failed': 'ارسال پیام به مشتری انجام نشد',
   'telegram.customer_send_ok': 'ارسال پیام به مشتری برگشت',
   'telegram.message_retention_failing': 'پاک‌سازی پیام‌های قدیمی تلگرام انجام نمی‌شود',
+  'telegram.rich_message_refused':
+    'تلگرام پیام با دکمه‌های داخل پیام را نپذیرفت و صفحه به روش قبلی ارسال شد',
   'telegram.message_retention_recovered': 'پاک‌سازی پیام‌های قدیمی تلگرام برگشت',
   'telegram.ops_group_update_failed': 'به‌روزرسانی گروه عملیات انجام نشد',
   'telegram.turn_failed': 'پردازش پیام تلگرام شکست خورد',
