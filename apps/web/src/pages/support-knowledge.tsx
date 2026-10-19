@@ -323,6 +323,12 @@ export function SupportKnowledgePage({
     },
   });
 
+  /*
+   * The last control failure, kept until a control succeeds: a retry clears the mutation's own
+   * error the moment it starts, and the banner leaving and coming back moved the page under the
+   * operator's finger when it was the last thing that made the list scroll.
+   */
+  const [controlFault, setControlFault] = useState<unknown>(null);
   const control = useMutation({
     mutationFn: (input: {
       id: string;
@@ -345,11 +351,13 @@ export function SupportKnowledgePage({
           });
     },
     onSuccess: () => {
+      setControlFault(null);
       submission.settle();
       notify({ tone: 'ok', message: t('web.sk_saved') });
       refresh();
     },
     onError: (error) => {
+      setControlFault(error);
       submission.settleOn(error);
       refresh();
     },
@@ -560,10 +568,10 @@ export function SupportKnowledgePage({
           },
         ]}
       />
-      {control.error != null && (
+      {controlFault != null && (
         <Banner tone="danger" role="alert">
-          {knowledgeFault(control.error)}
-          <ErrorRef error={control.error} />
+          {knowledgeFault(controlFault)}
+          <ErrorRef error={controlFault} />
         </Banner>
       )}
       <StateSwitch

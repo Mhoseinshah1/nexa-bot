@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   LearningCandidatesPage,
@@ -220,6 +220,32 @@ describe('the knowledge page', () => {
     const list = await screen.findByRole('list', { name: t('web.sk_revisions') });
     expect(within(list).getByText('دوم')).toBeInTheDocument();
     expect(within(list).getByText(t('web.sk_live_revision'))).toBeInTheDocument();
+  });
+
+  it('keeps a control failure on screen through the retry, until a control succeeds', async () => {
+    // The banner leaving the moment a retry started moved the list under the operator (no-scroll).
+    const refusal = {
+      url: '/enabled',
+      method: 'POST',
+      status: 409,
+      body: { error: { kind: 'conflict', code: 'x.stale', message: 'stale', correlationId: 'c' } },
+    };
+    page();
+    stubApi([
+      { url: '/support-knowledge/articles', method: 'GET', body: { articles: [article()] } },
+      refusal,
+    ]);
+    await screen.findByText('چطور لینک را وارد کنم؟');
+    fireEvent.click(screen.getByRole('button', { name: t('web.sk_disable') }));
+    await screen.findByRole('alert');
+    // The retry is in flight and has no answer yet: the failure it is retrying stays drawn.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.sk_disable') }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
   });
 
   it('draws no write control without the review permission', async () => {
