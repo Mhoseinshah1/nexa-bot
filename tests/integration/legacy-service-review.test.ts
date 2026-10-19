@@ -294,7 +294,8 @@ describe('Mirza PR5: legacy service candidates and their review', () => {
     expect(await outcomeCounts()).toEqual(expected);
     const applied = (report.sections as Record<string, any>)['applied'].services;
     // Owner rule 2026-10-18: an empty code is searched across the connected panels.
-    expect(applied.outcomes['NO_PANEL'] ?? 0).toBe(0);
+    // …and the one no connected panel holds (svc_nowhere) is NO_PANEL, archived.
+    expect(applied.outcomes['NO_PANEL']).toBe(1);
     expect(
       Object.values(applied.outcomes as Record<string, number>).reduce((a, b) => a + b, 0),
     ).toBe(SYNTHETIC_EXPECTED.services.candidates);
