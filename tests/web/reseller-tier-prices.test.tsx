@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import type { ResellerTierSummaryResponse } from '@nexa/contracts';
+import type { ResellerTierProductPriceRow, ResellerTierSummaryResponse } from '@nexa/contracts';
 import {
   TierPricesEditor,
   groupByCategory,
@@ -49,7 +49,7 @@ function row(
   list: string | null,
   tierPrice: string | null,
   categoryId: string | null = CAT_1,
-) {
+): ResellerTierProductPriceRow {
   return {
     productId,
     title,
@@ -59,7 +59,7 @@ function row(
     listPrice: list === null ? null : { amount: list, currency: 'IRT' },
     tierPrice: tierPrice === null ? null : { amount: tierPrice, currency: 'IRT' },
     tierPriceUpdatedAt: tierPrice === null ? null : '2026-10-02T08:00:00.000Z',
-  } as const;
+  };
 }
 
 const PAGE = {
