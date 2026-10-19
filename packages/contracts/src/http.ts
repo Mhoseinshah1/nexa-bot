@@ -5221,7 +5221,10 @@ export type RefundResponse = z.infer<typeof refundResponseSchema>;
 export const compensationSchema = z.object({
   refundId: z.string(),
   paymentId: z.string(),
+  /** PR-C: the payment's tracking code and the order's short code, printed instead of uuids. */
+  paymentCode: z.string().nullable().default(null),
   orderId: z.string().nullable(),
+  orderCode: z.string().nullable().default(null),
   customerId: z.string(),
   customerTelegramUserId: z.string().nullable(),
   customerUsername: z.string().nullable(),

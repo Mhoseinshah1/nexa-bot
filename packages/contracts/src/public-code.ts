@@ -90,3 +90,15 @@ export function serviceCodeOf(service: { readonly code: string | null }): string
 export function ticketCodeOf(ticket: { readonly code: string | null }): string | null {
   return ticket.code;
 }
+
+/**
+ * The pre-invoice templates that carry `{orderCode}` since PR-C. A tenant override of one of
+ * them saved before then cannot carry the code, and template bodies are stored raw and never
+ * rewritten, so the resolver PREPENDS `ORDER_CODE_LINE_KEY` to such an override at render
+ * time — for these keys only, and only when the override has no `{orderCode}` of its own —
+ * the same arrangement `TRACKING_CODE_LINE_KEYS` uses for the payment tracking code.
+ */
+export const ORDER_CODE_LINE_KEYS = ['bot.order.preinvoice'] as const;
+
+/** The line itself, as a template key, so its words live in the catalogue. */
+export const ORDER_CODE_LINE_KEY = 'bot.order.order_code_line' as const;
