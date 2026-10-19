@@ -647,6 +647,7 @@ export function DetailHead({
   stats,
   level = 2,
   back,
+  initialClass,
 }: {
   title: ReactNode;
   badge?: ReactNode;
@@ -661,6 +662,8 @@ export function DetailHead({
    * above the head (the demo's `backl`). Additive: a head without it is unchanged.
    */
   back?: { readonly href: string; readonly label: ReactNode };
+  /** An extra class for the avatar tile (a page's tint); additive, absent changes nothing. */
+  initialClass?: string;
 }) {
   const Heading = level === 1 ? 'h1' : 'h2';
   const trail = useContext(PageTrailContext);
@@ -677,7 +680,7 @@ export function DetailHead({
       <section className="card detail-head">
         <div className="head-card">
           {initial !== undefined && (
-            <span className="avatar lg" aria-hidden="true">
+            <span className={cx('avatar', 'lg', initialClass)} aria-hidden="true">
               {initial}
             </span>
           )}
