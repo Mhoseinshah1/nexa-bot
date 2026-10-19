@@ -200,6 +200,7 @@ export function PermissionCatalog({
           id={`${idPrefix}-search`}
           className="input sm perm-cat-search"
           type="search"
+          dir="rtl"
           aria-label={t('web.rbac_search')}
           placeholder={t('web.rbac_search')}
           value={search}

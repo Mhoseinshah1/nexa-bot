@@ -248,8 +248,9 @@ export function ListSearchBox({
         <Input
           id={id}
           size="sm"
-          // Persian names and Latin ids both arrive here; the browser picks the direction.
-          dir="auto"
+          // Round 4 B3: the field is right-to-left whatever it holds — a Latin id or @username
+          // typed in it stays on the start (right) edge instead of flipping the field left.
+          dir="rtl"
           type="search"
           maxLength={LIST_SEARCH_MAX_LENGTH}
           value={text}

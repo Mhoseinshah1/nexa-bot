@@ -397,6 +397,36 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: [],
   },
+  {
+    key: 'rich_messages',
+    description:
+      'Send every customer screen that carries inline buttons as a Telegram rich message ' +
+      '(sendRichMessage) whose buttons sit INSIDE the message, in a buttons block, and edit ' +
+      'it in place with editMessageText(rich_message). Off by default: off is exactly what ' +
+      'every installation sent before this switch existed. A screen Telegram refuses as a ' +
+      'rich message is sent once more the ordinary way and the refusal is logged to the ' +
+      'errors topic once an hour per bot; a button that cannot sit inside the block stays an ' +
+      'ordinary inline keyboard under the message, never dropped. What a tap does is ' +
+      'identical in both modes. The main menu keyboard and photo screens do not change.',
+    defaultEnabled: false,
+    // TENANT_WIDE: every inline-button screen every customer of the tenant sees changes shape.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
+    key: 'rich_premium_emoji',
+    description:
+      'Inside rich messages, draw the custom emoji of the bot appearance slots as premium ' +
+      'emoji, for a bot whose appearance test succeeded. Off by default and inert without ' +
+      'rich_messages: a rich message then carries the plain emoji, and an ordinary message ' +
+      'is decorated exactly as before, by the appearance test alone. A rich message Telegram ' +
+      'refuses is sent the ordinary way, so a refused premium emoji never costs the screen.',
+    defaultEnabled: false,
+    // TENANT_WIDE (PR #295 review): it changes every rich message every customer of the
+    // tenant receives from an eligible bot.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

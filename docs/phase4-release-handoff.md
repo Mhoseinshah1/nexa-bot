@@ -174,11 +174,14 @@ past this release.
 
 ### BLOCKER
 
-- **`BLOCKER-SECRETS-V2`** — the v1 secret envelope binds no context to its
-  ciphertext and `keyId` is recorded but no rotation can yet be performed. A key
-  retired today makes every row encrypted under it unreadable. Tracked in
-  `docs/open-questions.md`; `docs/deployment.md` §"Secrets, keys and rotation"
-  states what an operator can and cannot do until it lands.
+- **`BLOCKER-SECRETS-V2`** — **partly closed.** The v2 envelope (purpose, tenant and
+  row bound as associated data), the keyring, the bounded rewrap and
+  `secrets retire-check` exist, and new writes are v2. What is still open is the last
+  step: a host still configured with the legacy `SECRETS_KEK` alias accepts v1
+  ciphertext by default, which is still transplantable between rows until the alias
+  is dropped and v1 refused. Tracked in `docs/open-questions.md` (the authoritative
+  account); `docs/deployment.md` §"Secrets, keys and rotation" states what an operator
+  can do now (`botctl secrets status|rewrap|retire-check`).
 
 ### REQUIRED BEFORE REAL CUSTOMER TRAFFIC
 

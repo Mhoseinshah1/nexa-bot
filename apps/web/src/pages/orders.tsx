@@ -32,8 +32,6 @@ import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-sear
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
-import { SourceBadge } from '../ui/source-badge';
-import { sourceFromQuery, sourceRouteFilter } from './record-source';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import {
   CodeText,
@@ -196,7 +194,7 @@ function Duration({ days }: { days: number }) {
 // ---------------------------------------------------------------------------
 
 /** Every URL key the order list filters on, its search included (clear-all, saved views). */
-const ORDER_FILTER_KEYS = ['q', 'state', 'source'] as const;
+const ORDER_FILTER_KEYS = ['q', 'state'] as const;
 
 /** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
 export const ORDER_PRESETS: readonly ViewPreset[] = [
@@ -208,7 +206,6 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
   const onLink = useLinkHandler();
 
   const appliedState = stateFromQuery(route.query.get('state'));
-  const appliedSource = sourceFromQuery(route.query.get('source'));
   /*
    * ONE search box (spec §10), in the URL as `q`: a Telegram id, an order / customer /
    * product id, an `@username`, or a product name. The old pair of internal-uuid boxes is
@@ -222,7 +219,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
    * one filter strands every row before it under another. Joined on `|`, which an order
    * state cannot contain; the search text is last.
    */
-  const searchSignature = [appliedState ?? '', appliedSource ?? '', appliedSearch].join('|');
+  const searchSignature = [appliedState ?? '', appliedSearch].join('|');
   const [trail, setTrail] = useState<{ signature: string; cursors: readonly string[] }>({
     signature: searchSignature,
     cursors: [],
@@ -245,7 +242,6 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
           limit: LIST_PAGE_SIZE,
           ...(cursor === undefined ? {} : { cursor }),
           ...(appliedState === null ? {} : { state: appliedState }),
-          ...(appliedSource === null ? {} : { source: appliedSource }),
           ...(appliedSearch === '' ? {} : { q: appliedSearch }),
         }),
       enabled: !denied,
@@ -254,20 +250,17 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
 
   const rows = orders.data?.orders ?? [];
   const nextCursor = orders.data?.nextCursor ?? null;
-  const filtering = appliedSearch !== '' || appliedSource !== null;
+  const filtering = appliedSearch !== '';
 
   const columns: readonly Column<OrderSummaryResponse>[] = [
     {
       key: 'title',
       header: t('web.order_line'),
       render: (row) => (
-        <>
-          <a href={`/orders/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-            {/* The SNAPSHOT title, not a lookup. What the customer bought. */}
-            {row.lineTitle}
-          </a>
-          <SourceBadge source={row.source} />
-        </>
+        <a href={`/orders/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+          {/* The SNAPSHOT title, not a lookup. What the customer bought. */}
+          {row.lineTitle}
+        </a>
       ),
     },
     {
@@ -336,7 +329,6 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
         />
       ),
     },
-    sourceRouteFilter(route, appliedSource),
   ];
 
   return (

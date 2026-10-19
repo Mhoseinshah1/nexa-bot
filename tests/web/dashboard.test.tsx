@@ -27,6 +27,7 @@ import { formatTimestamp } from '../../apps/web/src/format';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { useRoute } from '../../apps/web/src/router';
 import { event, renderPage, stubApi } from './harness';
+import { opsCodeLabel } from '../../apps/web/src/ops-code-labels';
 
 /**
  * The dashboard (`docs/web-redesign/dashboard.md` §6).
@@ -722,8 +723,8 @@ describe('the attention card', () => {
     renderPage(<DashboardPage permissions={['opslog.view']} />);
     // W6: each condition by its code's Persian name; the log's English message, which names
     // WHICH panel or payment it is, is kept only inside the closed «جزئیات فنی» disclosure.
-    await screen.findByText(t('web.opscode_backup_run_failed'));
-    expect(screen.getByText(t('web.opscode_panel_health_unreachable'))).toBeInTheDocument();
+    await screen.findByText(opsCodeLabel('backup.run_failed'));
+    expect(screen.getByText(opsCodeLabel('panel.health.unreachable'))).toBeInTheDocument();
     const message = screen.getByText('Older condition');
     expect(message.closest('details')).not.toBeNull();
     expect(message.closest('details')).not.toHaveAttribute('open');

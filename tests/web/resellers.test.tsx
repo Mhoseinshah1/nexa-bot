@@ -29,7 +29,7 @@ import {
 } from './harness';
 import { openFilterPanel } from './ui-helpers';
 import { openC360Tab } from './c360-helpers';
-import { pickMirzaSource, requestsWithSource, rowHasBadge } from './source-helpers';
+import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
 
 /**
  * WP9-B on the Web Admin: the Resellers page, the Tiers page and its grants editor, the
@@ -1541,19 +1541,18 @@ describe('rows imported from Mirza', () => {
     source: 'MIRZA',
   });
 
-  it('marks only the imported reseller', async () => {
+  it('marks no reseller as imported (Round 4 B2)', async () => {
     stubApi(listRoutes([native, imported]));
     renderList();
     await screen.findByText('Imported Reseller');
-    expect(rowHasBadge('Imported Reseller')).toBe(true);
+    expect(rowHasBadge('Imported Reseller')).toBe(false);
     expect(rowHasBadge('Native Reseller')).toBe(false);
   });
 
-  it('sends the «منبع» filter to the API', async () => {
-    const api = stubApi(listRoutes([native, imported]));
+  it('has no «منبع» filter (Round 4 B2)', async () => {
+    stubApi(listRoutes([native, imported]));
     renderList();
     await screen.findByText('Native Reseller');
-    pickMirzaSource();
-    await waitFor(() => expect(requestsWithSource(api.calls, '/resellers', 'MIRZA')).toBe(1));
+    expect(sourceFilterAbsent()).toBe(true);
   });
 });
