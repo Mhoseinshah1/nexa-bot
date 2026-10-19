@@ -778,8 +778,17 @@ form.set-row > * + * {
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
-.ops-group-topic-when {
-  flex-basis: 100%;
+/* Demo parity: one compact row per topic — name, state, last delivery at the far end. */
+.ops-group-topics li > .strong {
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+/* The connection card and the topics-and-queue column share the row equally (one column
+   where the shell stacks every two-column layout). */
+@media (min-width: 981px) {
+  .two-col.ops-group-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 /* The three connection steps as a numbered sequence. */
 .ops-group-steps {
@@ -814,7 +823,11 @@ form.set-row > * + * {
   font-size: var(--fs-xs);
 }
 .ops-group-connect {
-  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
 }
 /* The one-time binding code: a deep link, and the command to paste instead. */
 .ops-group-code {

@@ -45,6 +45,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { ListFilterBar } from '../ui/filter-bar';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
@@ -310,7 +311,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
               />
             </div>
 
-            <div className="two-col ops-equal-cols">
+            <div className="two-col ops-equal-cols ops-group-cols">
               <Card
                 title={t('web.opsgroup_connection')}
                 actions={
@@ -475,22 +476,42 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
                 {view.bots.length === 0 ? (
                   <Banner tone="warn">{t('web.opsgroup_no_bot')}</Banner>
                 ) : (
-                  <div className="toolbar ops-group-connect">
+                  <div className="ops-group-connect">
+                    {/*
+                      Demo parity: with more than one bot, the choice of bot is this line's
+                      filters button — the bot select in its panel, a chosen bot other than
+                      the first as its chip (× goes back to the first), no chip at the first.
+                    */}
                     {view.bots.length > 1 && (
-                      <Field label={t('web.opsgroup_bot')} htmlFor="ops-group-bot" compact>
-                        <select
-                          id="ops-group-bot"
-                          className="input sm"
-                          value={chosenBot}
-                          onChange={(event) => setBotId(event.target.value)}
-                        >
-                          {view.bots.map((bot) => (
-                            <option key={bot.id} value={bot.id}>
-                              @{bot.username}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
+                      <ListFilterBar
+                        label={t('web.opsgroup_connect_title')}
+                        filters={[
+                          {
+                            key: 'bot',
+                            label: t('web.opsgroup_bot'),
+                            active:
+                              botId === '' || botId === view.bots[0]?.id
+                                ? null
+                                : `@${view.bots.find((bot) => bot.id === botId)?.username ?? ''}`,
+                            onClear: () => setBotId(''),
+                            control: (
+                              <select
+                                id="ops-group-bot"
+                                className="input sm"
+                                aria-label={t('web.opsgroup_bot')}
+                                value={chosenBot}
+                                onChange={(event) => setBotId(event.target.value)}
+                              >
+                                {view.bots.map((bot) => (
+                                  <option key={bot.id} value={bot.id}>
+                                    @{bot.username}
+                                  </option>
+                                ))}
+                              </select>
+                            ),
+                          },
+                        ]}
+                      />
                     )}
                     <button
                       type="button"
