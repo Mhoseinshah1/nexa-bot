@@ -367,6 +367,12 @@ export const WEB_FA = {
   'web.feature_custom_service_summary':
     'مشتری موقعیت، حجم و مدت دلخواه خود را انتخاب می‌کند و قیمت بر اساس قیمت هر گیگابایت و هر روز محاسبه می‌شود.',
   'web.feature_central_fx_title': 'نرخ ارز مرکزی',
+  'web.feature_rich_messages_title': 'دکمه‌های داخل پیام',
+  'web.feature_rich_messages_summary':
+    'صفحه‌های دکمه‌دار ربات به‌صورت «پیام غنی» تلگرام فرستاده می‌شوند و دکمه‌ها داخل خود پیام، بالای ساعت، قرار می‌گیرند؛ فهرست پلن‌ها جدول می‌شود و هر تاریخ طوری فرستاده می‌شود که کاربر بتواند آن را به وقت محلی خودش هم ببیند. اگر تلگرام پیامی را نپذیرد، همان صفحه یک بار به روش قبلی فرستاده و یک خطا در تاپیک «خطاها» ثبت می‌شود. منوی اصلی و صفحه‌های عکس‌دار تغییر نمی‌کنند.',
+  'web.feature_rich_premium_emoji_title': 'ایموجی پریمیوم',
+  'web.feature_rich_premium_emoji_summary':
+    'در پیام‌های غنی، ایموجی‌های «ظاهر ربات» به‌صورت ایموجی پریمیوم کشیده می‌شوند — فقط برای رباتی که پیام آزمایشی‌اش موفق بوده است. بدون «دکمه‌های داخل پیام» اثری ندارد؛ اگر تلگرام نپذیرد، صفحه با ایموجی معمولی فرستاده می‌شود.',
   'web.feature_terms_enforcement_title': 'الزام پذیرش قوانین',
   'web.feature_terms_enforcement_summary':
     'مشتری‌ای که نسخهٔ فعلی قوانین را نپذیرفته، پیش از هر کاری در ربات قوانین و دکمهٔ پذیرش را می‌بیند. متن و نسخه‌ها در صفحهٔ «قوانین و مقررات» مدیریت می‌شود.',
@@ -4313,6 +4319,18 @@ export const WEB_FA = {
   'web.ib_copy': 'کپی',
   'web.ib_save': 'ذخیرهٔ رنگ‌ها و آیکون‌ها',
   'web.ib_reset': 'همه پیش‌فرض',
+  'web.ib_suggest': 'رنگ‌های پیشنهادی ({n})',
+  'web.ib_rich_preview_title': 'پیش‌نمایش جای دکمه‌ها',
+  'web.ib_rich_preview_chat': 'ربات',
+  'web.ib_rich_preview_note': 'متن صفحه',
+  'web.ib_rich_preview_off':
+    '«دکمه‌های داخل پیام» خاموش است: دکمه‌ها مثل همیشه زیر پیام نشان داده می‌شوند.',
+  'web.ib_rich_preview_on':
+    '«دکمه‌های داخل پیام» روشن است: دکمه‌ها داخل خود پیام قرار می‌گیرند. «ایموجی پریمیوم» خاموش است و هیچ دکمه‌ای آیکون ندارد.',
+  'web.ib_rich_preview_on_premium':
+    '«دکمه‌های داخل پیام» و «ایموجی پریمیوم» روشن‌اند: دکمه‌ها داخل پیام قرار می‌گیرند و دکمه‌ای که آیکون پریمیوم دارد زیر پیام می‌ماند تا آیکونش حفظ شود.',
+  'web.ib_rich_preview_unknown':
+    'وضعیت «دکمه‌های داخل پیام» خوانده نشد؛ چیدمان معمول نشان داده می‌شود.',
   'web.ib_unsaved': 'تغییرات رنگ یا آیکون ذخیره نشده است.',
   'web.ib_changed_elsewhere':
     'رنگ‌ها یا آیکون‌ها پس از شروع ویرایش شما جای دیگری تغییر کرده است؛ ذخیره رد می‌شود تا تغییر دیگری از بین نرود.',
@@ -5383,6 +5401,45 @@ export const WEB_FA = {
     '«مطابق سطح» یعنی نرخ اختصاصی ندارد. هر گزینهٔ دیگر جایگزین نرخ سطح می‌شود و فقط برای همین نماینده است.',
   'web.reseller_pricing_list': 'قیمت فهرست',
   'web.reseller_pricing_percentage': 'کمتر از قیمت فهرست',
+  'web.reseller_pricing_fixed_table': 'قیمت ثابت هر محصول',
+  'web.order_reseller_layer_fixed': 'قیمت ثابت سطح برای این محصول',
+  'web.reseller_tier_unpriced_fallback': 'قیمت عادی برای محصولات بدون قیمت',
+  'web.reseller_tier_unpriced_fallback_hint':
+    'اگر روشن باشد، محصولی که برای این سطح قیمت ندارد با قیمت عادی فروخته می‌شود. اگر خاموش باشد (پیش‌فرض)، آن محصول به نماینده‌های این سطح فروخته نمی‌شود.',
+  'web.reseller_tier_fixed_hint':
+    'قیمت هر محصول را در «قیمت محصولات» همین سطح بنویسید. خرید و تمدید با این قیمت است؛ حجم و زمان اضافه، کاربر اضافه و تغییر لوکیشن با قیمت معمول خودشان.',
+  'web.tier_prices_open': 'قیمت محصولات',
+  'web.tier_prices_title': 'قیمت محصولات',
+  'web.tier_prices_hint':
+    'قیمت دقیق هر محصول برای این سطح. حاشیه یعنی قیمت عادی منهای قیمت سطح. قیمتی بالاتر از قیمت عادی گرفته نمی‌شود؛ نماینده همان قیمت عادی را می‌پردازد.',
+  'web.tier_prices_mode_not_table':
+    'قیمت‌گذاری این سطح «قیمت ثابت هر محصول» نیست؛ این جدول ذخیره می‌شود ولی تا وقتی قیمت‌گذاری سطح را عوض نکنید اثری ندارد.',
+  'web.tier_prices_fallback_on': 'محصولات بدون قیمت در این سطح با قیمت عادی فروخته می‌شوند.',
+  'web.tier_prices_fallback_off': 'محصولات بدون قیمت به نماینده‌های این سطح فروخته نمی‌شوند.',
+  'web.tier_prices_edit_denied': 'برای ویرایش قیمت‌ها دسترسی resellers.edit لازم است.',
+  'web.tier_prices_catalog_denied':
+    'جدول قیمت محصولات به دسترسی catalog.view نیاز دارد؛ عنوان و قیمت محصولات از کاتالوگ خوانده می‌شود.',
+  'web.tier_prices_empty': 'هنوز محصولی ثبت نشده است.',
+  'web.tier_prices_no_category': 'بدون دسته',
+  'web.tier_prices_product': 'محصول',
+  'web.tier_prices_list': 'قیمت عادی',
+  'web.tier_prices_tier': 'قیمت سطح',
+  'web.tier_prices_margin': 'حاشیه',
+  'web.tier_prices_above_list': '(بالاتر از قیمت عادی)',
+  'web.tier_prices_inactive': 'غیرفعال',
+  'web.tier_prices_fill_label': 'یک قیمت برای همهٔ محصولات این دسته',
+  'web.tier_prices_fill_apply': 'اعمال به همه',
+  'web.tier_prices_more': 'بارگذاری بیشتر',
+  'web.tier_prices_pasted': 'از جدول چسبانده شد؛ ردیف‌ها:',
+  'web.tier_prices_save': 'ذخیرهٔ قیمت‌ها',
+  'web.tier_prices_save_note':
+    'فقط ردیف‌های تغییرکرده فرستاده می‌شوند. خالی‌کردن یک قیمت، قیمت سطح را برای آن محصول برمی‌دارد.',
+  'web.tier_prices_saved': 'قیمت‌ها ذخیره شد',
+  'web.tier_prices_saved_set': 'ثبت‌شده:',
+  'web.tier_prices_saved_cleared': 'برداشته‌شده:',
+  'web.tier_prices_problem_amount': 'هر قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد.',
+  'web.tier_prices_problem_unpriced': 'محصولی که قیمت عادی ندارد قیمت سطح هم نمی‌گیرد.',
+  'web.tier_prices_problem_too_many': 'در هر ذخیره حداکثر ۵۰۰ قیمت را می‌توان تغییر داد.',
   'web.reseller_override_tier': 'مطابق سطح',
   'web.reseller_override_list': 'قیمت فهرست (بی‌توجه به نرخ سطح)',
   'web.reseller_override_percentage': 'درصد اختصاصی کمتر از قیمت فهرست',
@@ -5481,6 +5538,7 @@ export const WEB_FA = {
   'web.history_action_tier_create': 'ساخت سطح',
   'web.history_action_tier_update': 'ویرایش سطح',
   'web.history_action_tier_grants': 'تغییر مجوزها',
+  'web.history_action_tier_product_prices': 'تغییر قیمت محصولات',
   'web.history_action_tier_minimum': 'تغییر حداقل فروش ماهانه',
   'web.history_action_reseller_grants_override': 'تغییر مجوزهای اختصاصی',
   'web.history_action_reseller_minimum': 'تغییر حداقل فروش ماهانهٔ اختصاصی',

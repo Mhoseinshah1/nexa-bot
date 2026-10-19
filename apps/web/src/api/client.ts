@@ -131,6 +131,8 @@ import {
   resellerPurchasePageSchema,
   resellerResponseSchema,
   resellerTierListResponseSchema,
+  resellerTierProductPricesPageSchema,
+  resellerTierProductPricesWriteResponseSchema,
   resellerTierResponseSchema,
   type ResellerCreditResponse,
   type ResellerGrantOverridesWriteRequest,
@@ -150,6 +152,9 @@ import {
   type ResellerTierListResponse,
   type ResellerTierResponse,
   type ResellerTierWriteRequest,
+  type ResellerTierProductPricesPage,
+  type ResellerTierProductPricesWriteRequest,
+  type ResellerTierProductPricesWriteResponse,
   type ResellerUpdateRequest,
   REFERRAL_ROUTES,
   TENANT_MEDIA_ROUTES,
@@ -3626,6 +3631,35 @@ export function replaceResellerTierGrants(
 ): Promise<ResellerTierResponse> {
   const { id, ...body } = input;
   return post(RESELLER_TIER_ROUTES.grants(id), body, resellerTierResponseSchema);
+}
+
+/**
+ * Round 4 PR-G: one keyset page of a tier's price table — every product, by category then
+ * product, beside the tier's price for it. `catalog.view` and `resellers.view` on the server.
+ */
+export function fetchResellerTierPrices(
+  tierId: string,
+  query: { cursor?: string; limit?: number; categoryId?: string } = {},
+): Promise<ResellerTierProductPricesPage> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.categoryId !== undefined) params.set('categoryId', query.categoryId);
+  const suffix = params.toString();
+  const path = RESELLER_TIER_ROUTES.productPrices(tierId);
+  return authedGet(suffix ? `${path}?${suffix}` : path, resellerTierProductPricesPageSchema);
+}
+
+/** Round 4 PR-G: sets or clears the tier's price of each listed product (null clears). */
+export function setResellerTierPrices(
+  input: ResellerTierProductPricesWriteRequest & { id: string },
+): Promise<ResellerTierProductPricesWriteResponse> {
+  const { id, ...body } = input;
+  return post(
+    RESELLER_TIER_ROUTES.productPrices(id),
+    body,
+    resellerTierProductPricesWriteResponseSchema,
+  );
 }
 
 /**

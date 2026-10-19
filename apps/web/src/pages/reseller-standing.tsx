@@ -93,6 +93,8 @@ const ACTION_LABELS: Readonly<Record<string, WebKey>> = {
   'reseller_tier.create': 'web.history_action_tier_create',
   'reseller_tier.update': 'web.history_action_tier_update',
   'reseller_tier.grants': 'web.history_action_tier_grants',
+  // Round 4 PR-G.
+  'reseller_tier.product_prices': 'web.history_action_tier_product_prices',
   // Round N, package D.
   'reseller_tier.monthly_minimum': 'web.history_action_tier_minimum',
   'reseller.grants_override': 'web.history_action_reseller_grants_override',
@@ -108,6 +110,9 @@ const FIELD_LABELS: Readonly<Record<string, WebKey>> = {
   creditLimit: 'web.reseller_credit_limit',
   name: 'web.reseller_tier_name',
   grants: 'web.reseller_grants',
+  // Round 4 PR-G.
+  unpricedListFallback: 'web.reseller_tier_unpriced_fallback',
+  prices: 'web.tier_prices_title',
 };
 
 // ---------------------------------------------------------------------------

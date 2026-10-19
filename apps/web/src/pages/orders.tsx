@@ -1245,7 +1245,12 @@ function ResellerTerms({
           [
             t('web.order_reseller_layer'),
             <span key="l">
-              {t(PRICE_LAYER_LABELS[terms.layer])}
+              {/* Round 4 PR-G: a tier's table price is not a rate, and says so. */}
+              {t(
+                terms.fixedPrice
+                  ? 'web.order_reseller_layer_fixed'
+                  : PRICE_LAYER_LABELS[terms.layer],
+              )}
               {step !== null && (
                 <>
                   {' '}

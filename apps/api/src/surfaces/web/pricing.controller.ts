@@ -444,6 +444,7 @@ function toOrderPricing(pricing: OrderPricing): OrderPricingResponse {
             saleAmount: reseller.saleAmount.toString(),
             marginAmount: reseller.marginAmount.toString(),
             botInstanceId: reseller.botInstanceId,
+            fixedPrice: reseller.fixedPrice,
             createdAt: reseller.createdAt.toISOString(),
           },
     orderId: order.id,

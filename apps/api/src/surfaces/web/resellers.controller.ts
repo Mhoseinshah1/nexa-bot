@@ -2,6 +2,7 @@ import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  CONTROL_ERROR_CODES,
   RESELLER_MINIMUM_ROUTES,
   RESELLER_ROUTES,
   RESELLER_TIER_ROUTES,
@@ -13,7 +14,10 @@ import {
   resellerTierMinimumWriteSchema,
   resellerPurchaseQuerySchema,
   resellerRegisterSchema,
+  errors,
   resellerTierGrantsWriteSchema,
+  resellerTierProductPricesQuerySchema,
+  resellerTierProductPricesWriteSchema,
   resellerTierWriteSchema,
   resellerUpdateSchema,
   type CurrencyCode,
@@ -28,7 +32,11 @@ import {
   type ResellerPurchasePage,
   type ResellerResponse,
   type ResellerSummaryResponse,
+  type ResellerPricingMode,
   type ResellerTierListResponse,
+  type ResellerTierProductPriceRow,
+  type ResellerTierProductPricesPage,
+  type ResellerTierProductPricesWriteResponse,
   type ResellerTierResponse,
   type ResellerTierSummaryResponse,
   type TenantContext,
@@ -42,6 +50,8 @@ import type {
   ResellerListing,
   ResellerPurchaseRecord,
   ResellerTierListing,
+  ResellerTierPriceCursor,
+  ResellerTierPriceTableRow,
 } from '../../modules/commerce/resellers/application/ports.js';
 import type {
   ResellerCreditStandingRecord,
@@ -122,6 +132,46 @@ export class ResellersController {
       grants: command.grants.map((g) => ({ kind: g.kind, subject: g.subject })),
     });
     return { tier: toTierSummary(tier) };
+  }
+
+  /** Round 4 PR-G: one keyset page of the tier's price table. */
+  @Get('reseller-tiers/:id/product-prices')
+  async productPrices(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Query() raw: Record<string, unknown>,
+  ): Promise<ResellerTierProductPricesPage> {
+    const { scope, actor } = await this.authenticate(request);
+    const query = resellerTierProductPricesQuerySchema.parse(singleValued(raw));
+    const page = await this.container.resellersAdmin.productPriceTable(scope, actor, id, {
+      ...(query.limit === undefined ? {} : { limit: query.limit }),
+      ...(query.categoryId === undefined ? {} : { categoryId: query.categoryId }),
+      cursor: query.cursor === undefined ? null : decodePriceCursor(query.cursor),
+    });
+    return {
+      tierId: page.tierId,
+      items: page.items.map(toPriceRow),
+      nextCursor: page.next === null ? null : encodePriceCursor(page.next),
+    };
+  }
+
+  /** Round 4 PR-G: sets or clears the tier's price of each listed product. */
+  @Post('reseller-tiers/:id/product-prices')
+  async setProductPrices(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ResellerTierProductPricesWriteResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const command = resellerTierProductPricesWriteSchema.parse(body);
+    return this.container.resellersAdmin.setProductPrices(scope, actor, {
+      idempotencyKey: command.idempotencyKey,
+      tierId: id,
+      prices: command.prices.map((p) => ({
+        productId: p.productId,
+        price: p.price === null ? null : money(BigInt(p.price.amount), p.price.currency),
+      })),
+    });
   }
 
   @Get(RESELLER_ROUTES.list)
@@ -377,15 +427,66 @@ function creditLimitFrom(
 
 function tierWriteFrom(command: {
   readonly name: string;
-  readonly pricingMode: 'LIST_PRICE' | 'PERCENTAGE_DISCOUNT';
+  readonly pricingMode: ResellerPricingMode;
   readonly discountPercentage: number | null;
   readonly creditLimit: { readonly amount: string; readonly currency: CurrencyCode };
+  readonly unpricedListFallback: boolean;
 }) {
   return {
     name: command.name,
     pricingMode: command.pricingMode,
     discountPercentage: command.discountPercentage,
     creditLimit: money(BigInt(command.creditLimit.amount), command.creditLimit.currency),
+    unpricedListFallback: command.unpricedListFallback,
+  };
+}
+
+/**
+ * The tier price table's cursor (Round 4 PR-G): `(category id or '-', product id)`, unpadded
+ * base64url. The house rule of `decodeKeysetCursor`: a cursor this server did not mint is a
+ * 400, never a first page.
+ */
+const PRICE_CURSOR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+function encodePriceCursor(cursor: ResellerTierPriceCursor): string {
+  return Buffer.from(`${cursor.categoryId ?? '-'}:${cursor.productId}`, 'utf8').toString(
+    'base64url',
+  );
+}
+
+function decodePriceCursor(raw: string): ResellerTierPriceCursor {
+  const bad = () =>
+    errors.validation(
+      CONTROL_ERROR_CODES.INVALID_VALUE,
+      'The `cursor` is not a cursor this server issued.',
+      {
+        cursor: raw.length > 64 ? `${raw.slice(0, 64)}…` : raw,
+      },
+    );
+  const bytes = Buffer.from(raw, 'base64url');
+  if (bytes.toString('base64url') !== raw) throw bad();
+  const [category, product, ...rest] = bytes.toString('utf8').split(':');
+  if (category === undefined || product === undefined || rest.length > 0) throw bad();
+  if (category !== '-' && !PRICE_CURSOR_UUID.test(category)) throw bad();
+  if (!PRICE_CURSOR_UUID.test(product)) throw bad();
+  return { categoryId: category === '-' ? null : category, productId: product };
+}
+
+function wirePrice(value: Money | null) {
+  return value === null ? null : { amount: value.amountMinor.toString(), currency: value.currency };
+}
+
+function toPriceRow(row: ResellerTierPriceTableRow): ResellerTierProductPriceRow {
+  return {
+    productId: row.productId,
+    title: row.title,
+    status: row.status,
+    categoryId: row.categoryId,
+    categoryName: row.categoryName,
+    listPrice: wirePrice(row.listPrice),
+    tierPrice: wirePrice(row.tierPrice),
+    tierPriceUpdatedAt:
+      row.tierPriceUpdatedAt === null ? null : row.tierPriceUpdatedAt.toISOString(),
   };
 }
 
@@ -402,6 +503,7 @@ function toTierSummary(tier: ResellerTierListing): ResellerTierSummaryResponse {
     grants: tier.grants.map((g) => ({ kind: g.kind, subject: g.subject })),
     resellerCount: tier.resellerCount,
     monthlyMinimum: wireMoney(tier.monthlyMinimum),
+    unpricedListFallback: tier.unpricedListFallback,
     createdAt: tier.createdAt.toISOString(),
     updatedAt: tier.updatedAt.toISOString(),
   };

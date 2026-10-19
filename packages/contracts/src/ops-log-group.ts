@@ -146,6 +146,9 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   { prefix: 'auth.', category: 'SECURITY' },
   { prefix: 'admin.', category: 'SECURITY' },
   { prefix: 'antispam.', category: 'SECURITY' },
+  // R4 PR-F (owner spec): a rich message Telegram refused is an error report, ahead of the
+  // bots' own `telegram.` route. The screen itself was re-sent the ordinary way.
+  { prefix: 'telegram.rich_message_', category: 'ERRORS' },
   // The bots themselves: sends to customers, menus, commands, channel checks, tokens.
   { prefix: 'telegram.', category: 'BOT' },
   { prefix: 'bot.', category: 'BOT' },

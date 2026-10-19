@@ -99,7 +99,7 @@ export interface LegacyCompactionRepository {
     },
   ): Promise<BatchResult>;
   /**
-   * Names this run to the archive's guard (migration 0259) for THIS transaction only: the
+   * Names this run to the archive's guard (migration 0260) for THIS transaction only: the
    * one way an update or delete of a legacy history record is accepted.
    */
   authorise(tx: Executor, runId: string): Promise<void>;

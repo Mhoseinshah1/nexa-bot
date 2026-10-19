@@ -5115,6 +5115,19 @@ export function createContainer(
     },
     // Roadmap D4: best-effort bookkeeping around a send is logged, never thrown.
     logger,
+    // R4 PR-F: «دکمه‌های داخل پیام» and «ایموجی پریمیوم», the tenant's two feature flags.
+    {
+      modeFor: async (scope) => {
+        // The second switch is inert without the first, so it is read only behind it.
+        const enabled = await featureFlagResolver.isEnabled(scope, 'rich_messages');
+        return {
+          enabled,
+          premiumEmoji:
+            enabled && (await featureFlagResolver.isEnabled(scope, 'rich_premium_emoji')),
+        };
+      },
+      now: () => clock.now(),
+    },
   );
   const appearance = new AppearanceService({
     repository: appearanceRepository,

@@ -315,7 +315,9 @@ export function renderTemplateBody(
   values: TemplateValues,
   locale: Locale = DEFAULT_LOCALE,
   presentation?: TemplatePresentation,
+  options: RenderOptions = {},
 ): string {
+  const mark = options.markInstants === true && instantMarksAreFree(body, values);
   const declared = new Map<string, PlaceholderDefinition>(
     definition.placeholders.map((p) => [p.token, p]),
   );
@@ -341,7 +343,12 @@ export function renderTemplateBody(
         if (placeholder === undefined) return match;
         const value = values[token];
         if (value === undefined) return placeholder.required ? match : '';
-        return escape(renderValue(value, locale, placeholder.type, presentation));
+        const shown = escape(renderValue(value, locale, placeholder.type, presentation));
+        return mark &&
+          value instanceof Date &&
+          (placeholder.type === 'DATETIME' || placeholder.type === 'DATE')
+          ? markInstant(value, shown)
+          : shown;
       }),
     );
   }
@@ -354,6 +361,38 @@ export function renderTemplateBody(
    */
   const joined = rendered.join('\n');
   return dropped ? joined.replace(/\n{3,}/g, '\n\n').replace(/\n+$/u, '') : joined;
+}
+
+/**
+ * R4 PR-F (F6): how `renderTemplateBody` may be asked to render.
+ *
+ * `markInstants` wraps the rendering of every `DATETIME` and `DATE` value in three
+ * private-use characters — `U+E000`, the value's Unix time in decimal, `U+E001`, the text
+ * exactly as it renders without the option, `U+E002` — so the rich-message builder can put
+ * Telegram's `date_time` rich text over exactly the date the customer reads. Nothing else
+ * changes: without the marks the output is byte for byte the unmarked render (pinned by a
+ * test). A body or a value that already contains one of the three characters is rendered
+ * WITHOUT marks, so a tenant's text can never forge one.
+ */
+export interface RenderOptions {
+  readonly markInstants?: boolean;
+}
+
+export const INSTANT_MARK_OPEN = '\uE000';
+export const INSTANT_MARK_TEXT = '\uE001';
+export const INSTANT_MARK_CLOSE = '\uE002';
+const INSTANT_MARK_CHARS = /[\uE000-\uE002]/u;
+
+function instantMarksAreFree(body: string, values: TemplateValues): boolean {
+  if (INSTANT_MARK_CHARS.test(body)) return false;
+  return Object.values(values).every(
+    (value) => typeof value !== 'string' || !INSTANT_MARK_CHARS.test(value),
+  );
+}
+
+function markInstant(value: Date, shown: string): string {
+  const unix = Math.floor(value.getTime() / 1000);
+  return `${INSTANT_MARK_OPEN}${String(unix)}${INSTANT_MARK_TEXT}${shown}${INSTANT_MARK_CLOSE}`;
 }
 
 /**
