@@ -341,7 +341,7 @@ export function BroadcastsPage({
           ) : (
             <>
               <DataTable
-                stackOnPhone
+                stack
                 caption={t('web.bc_page_title')}
                 columns={columns}
                 rows={list.data.broadcasts}

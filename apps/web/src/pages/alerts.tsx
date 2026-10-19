@@ -682,7 +682,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         <Card title={t('web.notifications_title')} hint={t('web.notifications_list_hint')}>
           <StateSwitch query={notifications} denied={denied} isEmpty={rows.length === 0}>
             <DataTable
-              stackOnPhone
+              stack="labelled"
               caption={t('web.notifications_title')}
               columns={columns}
               rows={rows}

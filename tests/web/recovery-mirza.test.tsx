@@ -945,7 +945,8 @@ describe('the run and its result', () => {
         finishedAt: '2026-10-09T09:30:00.000Z',
       }),
     ]);
-    expect(await screen.findByText(PROTECTIVE)).toBeInTheDocument();
+    // The demo's short id in the cell; the whole id is its tooltip (X7).
+    expect(await screen.findByTitle(PROTECTIVE)).toHaveTextContent(PROTECTIVE.slice(0, 8));
     expect(screen.getAllByText(t('web.lmg_history_title')).length).toBeGreaterThan(0);
     // The restore card still offers the NEXA strip: nothing Mirza is in progress.
     expect(screen.queryByRole('list', { name: t('web.mrz_steps_label') })).toBeNull();

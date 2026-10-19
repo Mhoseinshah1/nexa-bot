@@ -573,6 +573,7 @@ export function ServiceMassActionCard({
               </div>
               {preview.ineligible !== null && preview.ineligible.sample.length > 0 && (
                 <DataTable
+                  stack
                   caption={t('web.soc_mass_ineligible_sample')}
                   columns={[
                     {

@@ -436,7 +436,7 @@ export function ProductCategoriesPage({
           >
             <Card title={t('web.categories_title')}>
               <DataTable
-                stackOnPhone
+                stack
                 columns={columns}
                 rows={rows}
                 rowKey={(row) => row.id}

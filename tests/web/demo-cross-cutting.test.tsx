@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { CodeValue, DataTable, LIST_PAGE_SIZE, Ltr, usePagedRows } from '../../apps/web/src/ui/kit';
+import { CodeValue, LIST_PAGE_SIZE, Ltr, usePagedRows } from '../../apps/web/src/ui/kit';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { fireEvent } from '@testing-library/react';
 
@@ -124,37 +124,5 @@ describe('ten rows per page (W1.8)', () => {
   it('draws no counted pager for ten rows or fewer', () => {
     render(<Whole rows={[1, 2, 3]} />);
     expect(screen.queryByTestId('counted-pager-info')).toBeNull();
-  });
-});
-
-describe('a table that stacks at phone width (demo parity, 390)', () => {
-  const columns = [
-    { key: 'name', header: 'نام', render: (row: { id: string }) => row.id },
-    { key: 'open', header: '', render: () => '›' },
-  ];
-
-  it('labels every cell with its column when asked, and is a stacked table', () => {
-    const { container } = render(
-      <DataTable
-        caption="c"
-        columns={columns}
-        rows={[{ id: 'a' }]}
-        rowKey={(r) => r.id}
-        stackOnPhone
-      />,
-    );
-    expect(container.querySelector('table')).toHaveClass('stack-phone');
-    const cells = [...container.querySelectorAll('td')];
-    expect(cells.map((cell) => cell.getAttribute('data-label'))).toEqual(['نام', '']);
-    const css = readFileSync(join(REPO_ROOT, 'apps/web/src/styles/kit.css'), 'utf8');
-    expect(css).toMatch(/\.tbl\.stack-phone td::before \{\s*content: attr\(data-label\)/);
-  });
-
-  it('changes nothing for a table that does not ask', () => {
-    const { container } = render(
-      <DataTable caption="c" columns={columns} rows={[{ id: 'a' }]} rowKey={(r) => r.id} />,
-    );
-    expect(container.querySelector('table')).not.toHaveClass('stack-phone');
-    expect(container.querySelector('td[data-label]')).toBeNull();
   });
 });

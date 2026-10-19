@@ -1308,11 +1308,12 @@
   border-radius: var(--radius-card);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
 }
+/* Demo parity (bulk-operations-new): «مخاطبان این عملیات ۳۴ مشتری» on one line, a large figure. */
 .aq-count-title {
-  flex-basis: 100%;
+  flex-basis: auto;
 }
 .aq-count b {
-  font-size: var(--fs-kpi-narrow);
+  font-size: 26px;
   font-weight: 800;
   line-height: 1.2;
 }

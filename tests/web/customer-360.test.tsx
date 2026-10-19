@@ -114,9 +114,17 @@ describe('Customer 360 — the customer page', () => {
     expect((await screen.findAllByText('+989121234567')).length).toBeGreaterThan(0);
     // W5: a server without the terms domain shows a dash, never a «not built» note.
     expect(screen.queryByText(/در این نسخه پیاده نشده/)).toBeNull();
-    // Exact aggregates only: the purchase count in the head, from the server's summary.
-    await waitFor(() => expect(within(head).getByText('تعداد خرید')).toBeTruthy());
-    expect(within(head).getByText('سرویس‌های فعال')).toBeTruthy();
+    // Exact aggregates only: the purchase count, from the server's summary — in the stat strip
+    // AFTER the operations panel (demo parity), never inside the identity head.
+    const strip = container.querySelector('.c360-stats') as HTMLElement;
+    await waitFor(() => expect(within(strip).getByText('تعداد خرید')).toBeTruthy());
+    expect(within(strip).getByText('سرویس‌های فعال')).toBeTruthy();
+    expect(within(head).queryByText('تعداد خرید')).toBeNull();
+    const panel = container.querySelector('.action-panel, [data-action-panel]');
+    if (panel !== null) {
+      // DOCUMENT_POSITION_FOLLOWING: the strip comes after the panel.
+      expect(panel.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   it('draws no control and no dangerous operation without their permissions', async () => {
@@ -398,10 +406,10 @@ describe('Customer 360 — tabs and the action panel', () => {
       'سرویس‌ها و سفارش‌ها',
       'پشتیبانی',
       'مالی',
-      'کنترل‌ها',
-      'نماینده و معرفی',
-      'یادداشت و برچسب',
-      'تاریخچه',
+      'محدودیت‌ها و کنترل‌ها',
+      'معرف و نماینده',
+      'یادداشت‌ها و برچسب‌ها',
+      'تاریخچهٔ مدیریتی',
     ]);
     expect(screen.queryByText('محدودیت‌ها و کنترل‌ها', { selector: 'h2' })).toBeNull();
     await openC360Tab('controls');

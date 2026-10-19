@@ -57,6 +57,7 @@ import {
   Field,
   Input,
   KV,
+  IdText,
   Ltr,
   Money,
   Num,
@@ -1867,13 +1868,19 @@ export function MirzaHistory({ rows }: { rows: readonly LegacyMigrationImportVie
     {
       key: 'error',
       header: t('web.lmg_col_error'),
+      wrap: true,
       render: (row): ReactNode => (row.errorCode === null ? '—' : t(ERROR_LABELS[row.errorCode])),
     },
     {
       key: 'protective',
       header: t('web.mrz_protective_run'),
       render: (row): ReactNode =>
-        row.preImportBackupRunId === null ? '—' : <Ltr>{row.preImportBackupRunId}</Ltr>,
+        row.preImportBackupRunId === null ? (
+          '—'
+        ) : (
+          // The demo's short id; the full one is the tooltip (X7).
+          <IdText value={row.preImportBackupRunId} display={row.preImportBackupRunId.slice(0, 8)} />
+        ),
     },
     {
       key: 'at',

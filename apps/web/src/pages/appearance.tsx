@@ -221,8 +221,8 @@ export function AppearancePage({
                     </span>
                   }
                 >
-                  <div className="tbl-wrap">
-                    <table className="tbl bx-rows stack-phone">
+                  <div className="tbl-wrap stack labelled">
+                    <table className="tbl bx-rows">
                       <caption className="visually-hidden">
                         {t('web.appearance_slots_title')}
                       </caption>

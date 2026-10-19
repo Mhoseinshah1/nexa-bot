@@ -484,7 +484,7 @@ export function TermsPage({
                 <p className="muted">{t('web.terms_history_empty')}</p>
               ) : (
                 <DataTable
-                  stackOnPhone
+                  stack="labelled"
                   columns={historyColumns}
                   rows={historyPage}
                   rowKey={(row) => row.id}
