@@ -1807,6 +1807,20 @@
       "when": 1792442362164,
       "tag": "0257_reseller_tier_product_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 258,
+      "version": "7",
+      "when": 1792453292756,
+      "tag": "0258_post_import_reminder_safety",
+      "breakpoints": true
+    },
+    {
+      "idx": 259,
+      "version": "7",
+      "when": 1792453301603,
+      "tag": "0259_reminder_raise_counter",
+      "breakpoints": true
     }
   ]
 }

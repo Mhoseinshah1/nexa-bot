@@ -260,6 +260,18 @@ export function servicePanelAccountMissingKey(serviceId: string): string {
   return `${SERVICE_PANEL_ACCOUNT_MISSING_CODE}:${serviceId}`;
 }
 
+/**
+ * Round 4 PR-H (post-import safety): more freshly raised automatic reminders left in one
+ * hour than `reminders.burst_alarm_per_hour` allows — the "burst" the cutover runbook's
+ * step 18 calls an incident. ONE condition per installation, opened by the customer
+ * notification lane in the transaction that counted it and closed by
+ * `REMINDER_BURST_CLEARED_CODE` when an hour ends below the threshold. Routed to the ERRORS
+ * topic (`OPS_LOG_TOPIC_ROUTES`). The ceiling (`reminders.max_per_minute`) keeps shaping the
+ * flow while it is open; switching the reminder flags off is the operator's remedy.
+ */
+export const REMINDER_BURST_CODE = 'notification.reminder_burst';
+export const REMINDER_BURST_CLEARED_CODE = 'notification.reminder_burst_cleared';
+
 // ---------------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------------
@@ -454,6 +466,8 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   // --- Notifications and the outbox -------------------------------------------------------
   failure('outbox.message_exhausted', 'NOTIFICATIONS', 'PER_SUBJECT'),
   fact('notification.sweep_withdrawn', 'NOTIFICATIONS', 'PER_SUBJECT'),
+  failure(REMINDER_BURST_CODE, 'NOTIFICATIONS', 'CONDITION'),
+  recovery(REMINDER_BURST_CLEARED_CODE, 'NOTIFICATIONS', REMINDER_BURST_CODE),
   fact('ops_group.topic_recreated', 'NOTIFICATIONS', 'PER_OCCURRENCE'),
 
   // --- Jobs and the worker ----------------------------------------------------------------

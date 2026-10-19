@@ -806,6 +806,7 @@ second wallet.
 
 ```bash
 date -u +%FT%TZ | tee unfreeze.txt
+sudo botctl restart background   # worker, monitor, provisioner start again after the import
 ```
 
 ## Step 18 — observe
@@ -832,7 +833,13 @@ What to look for:
 - **queues**: the outbox drains; nothing newly exhausted;
 - **reminders**: after the first reminder sweep, customer notifications since unfreeze look
   like an ordinary day's volume, not a burst — adopted services had their passed thresholds
-  seeded (Item 8). A burst is an incident: switch the reminder feature flags off, then
+  seeded (Item 8) and carry a reminder baseline (Round 4 PR-H), so a threshold moved after the
+  import does not announce a period the previous bot handled either. Automatic reminders are
+  capped per minute (`reminders.max_per_minute`, 300 by default) and more fresh reminders in an
+  hour than `reminders.burst_alarm_per_hour` (1000) opens `notification.reminder_burst` in the
+  ops group's ERRORS topic. The alarm counts reminders as they are raised, whatever the
+  ceiling lets out. A burst is an incident: switch the reminder feature flags off — the
+  dispatcher then holds every queued reminder of a switched-off kind unsent — then
   investigate;
 - **errors**: no new open operational event caused by the import; `botctl logs` free of
   repeated errors;

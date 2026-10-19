@@ -166,3 +166,29 @@ export function refuseQuietHours(start: string, end: string): string | null {
   }
   return null;
 }
+
+/*
+ * Round 4 PR-H (post-import safety): the reminder rate ceiling and its burst alarm.
+ *
+ * After a bulk import the reminder sweeps could, if anything were wrong with the import's
+ * baseline, find tens of thousands of services "past a threshold" at once. The baseline is
+ * the protection (`service_reminder_baselines`); these two keys are the second line: a
+ * ceiling on how many automatic reminders leave in one minute, and an alarm in the
+ * operations group's ERRORS topic when an hour's freshly raised reminders exceed what an
+ * ordinary hour produces. Both apply only to the kinds quiet hours hold
+ * (`CUSTOMER_NOTIFICATION_QUIET_HOURS`): a reply or a payment outcome never waits on them.
+ */
+export const REMINDER_RATE_SETTING_KEYS = {
+  maxPerMinute: 'reminders.max_per_minute',
+  burstAlarmPerHour: 'reminders.burst_alarm_per_hour',
+} as const;
+
+/** Five a second: a full reminder pass (a few hundred rows) still leaves within two minutes. */
+export const REMINDER_RATE_PER_MINUTE_DEFAULT = 300;
+export const REMINDER_RATE_PER_MINUTE_MIN = 1;
+/** The lane's own ceiling: 200 rows a pass, a pass every two seconds. */
+export const REMINDER_RATE_PER_MINUTE_MAX = 6000;
+
+/** Above an ordinary hour at the owner's measured scale; zero turns the alarm off. */
+export const REMINDER_BURST_ALARM_PER_HOUR_DEFAULT = 1000;
+export const REMINDER_BURST_ALARM_PER_HOUR_MAX = 1_000_000;
