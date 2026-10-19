@@ -2232,24 +2232,37 @@ export class LegacyImporterService {
               customerId: customer.customerId,
             });
           });
-          await recordAuditMany(
-            this.deps.audit,
-            scope,
-            actor,
-            created.map(({ customerId, blocked }) => ({
-              action: 'customer.legacy_imported',
-              entityType: 'Customer',
-              entityId: customerId,
-              before: null,
-              after: {
-                source: 'LEGACY_MIGRATION',
-                runId,
-                status: blocked ? 'BLOCKED' : 'ACTIVE',
-              },
-              result: 'SUCCESS' as const,
-            })),
-            tx,
-          );
+          /*
+           * ONE summary audit row per batch (Round 4 PR-E, E2), not one per customer: the
+           * real import wrote ~200k identical rows here. The batch's counts and the first
+           * and last customer it created; each customer's own provenance stays where it
+           * always was — its `legacy_import_map` row and its `CustomerImported` event.
+           */
+          if (created.length > 0) {
+            await recordAuditMany(
+              this.deps.audit,
+              scope,
+              actor,
+              [
+                {
+                  action: 'customer.legacy_imported',
+                  entityType: 'LegacyImportRun',
+                  entityId: runId,
+                  before: null,
+                  after: {
+                    source: 'LEGACY_MIGRATION',
+                    runId,
+                    created: created.length,
+                    blocked: created.filter((entry) => entry.blocked).length,
+                    firstCustomerId: created[0]?.customerId ?? null,
+                    lastCustomerId: created.at(-1)?.customerId ?? null,
+                  },
+                  result: 'SUCCESS' as const,
+                },
+              ],
+              tx,
+            );
+          }
           await this.deps.outbox.writeMany(
             tx,
             actor,

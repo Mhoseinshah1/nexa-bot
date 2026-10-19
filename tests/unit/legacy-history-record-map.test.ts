@@ -101,7 +101,7 @@ describe('the history file plan', () => {
 });
 
 describe('one history record', () => {
-  it('reads a payment: type, key, legacy user, payload verbatim', () => {
+  it('reads a payment: type, key, legacy user, payload verbatim minus its false live flags', () => {
     const raw = payment();
     const read = readHistoryRecord(payments, 1, raw);
     expect(read).toMatchObject({
@@ -110,7 +110,25 @@ describe('one history record', () => {
       legacyUserId: '7000000069',
       occurredAt: null,
     });
-    expect(read.payload).toBe(raw);
+    // E2 (Round 4 PR-E): the top-level live-state flags — all false, or the record was
+    // refused — are not stored per row; the ingest reports them once per type.
+    const { affects_wallet: _wallet, creates_payment: _payment, ...rest } = raw;
+    expect(read.payload).toEqual(rest);
+    expect(read.strippedFlags).toEqual(['affects_wallet', 'creates_payment']);
+    // Everything a reader uses stays: the schema, the provenance, the idempotency key.
+    expect(read.payload['schema']).toBe('mirza.payment_report.v1');
+    expect(read.payload['provenance']).toEqual(raw.provenance);
+    expect(read.payload['idempotency_key']).toBe('legacy:payment:1');
+  });
+
+  it('strips only a top-level live flag that is false; a nested or non-flag key stays', () => {
+    const read = readHistoryRecord(
+      payments,
+      1,
+      payment({ nested: { affects_wallet: false }, wallet_note: false }),
+    );
+    expect(read.payload['nested']).toEqual({ affects_wallet: false });
+    expect(read.payload['wallet_note']).toBe(false);
   });
 
   it('fails closed on an unknown record_type, and on a known one in the wrong file', () => {
