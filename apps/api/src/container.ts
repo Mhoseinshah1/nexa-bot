@@ -116,7 +116,11 @@ import {
   PgCandidateKeyStore,
 } from './modules/platform/recovery/infrastructure/installation-key-adapters.js';
 import { blocksReadiness } from './modules/platform/system/application/readiness.service.js';
-import { createLogger, newCorrelationId } from './infrastructure/logging/logger.js';
+import {
+  createLogger,
+  newCorrelationId,
+  stderrLogDestination,
+} from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
 import { RedisInteractionCounter } from './infrastructure/redis/redis-interaction-counter.js';
@@ -1587,8 +1591,25 @@ export function usageSyncBudgetReserveFor(capacity: number, monitorReserve: numb
   return Math.max(monitorReserve, half);
 }
 
-export function createContainer(config: AppConfig, role: ProcessRole): Container {
-  const logger = createLogger(config.LOG_LEVEL, role);
+export interface ContainerOptions {
+  /**
+   * Where the process's log lines go: stdout (the default, what a service's log collector
+   * reads) or stderr — for a CLI whose stdout IS its output (`--format json` is a document,
+   * and one log line in it makes the document unreadable). Never "off": the lines are kept.
+   */
+  readonly logTo?: 'stdout' | 'stderr';
+}
+
+export function createContainer(
+  config: AppConfig,
+  role: ProcessRole,
+  options: ContainerOptions = {},
+): Container {
+  const logger = createLogger(
+    config.LOG_LEVEL,
+    role,
+    options.logTo === 'stderr' ? stderrLogDestination() : undefined,
+  );
   const clock = new SystemClock();
   const ids = new Uuidv7IdGenerator();
   // One resolution of the keyring, used for both the cipher's keys and the
