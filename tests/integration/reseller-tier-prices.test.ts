@@ -17,6 +17,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import {
   SEED_IDS,
@@ -577,6 +578,23 @@ describe('reseller tier fixed price per product (Round 4 PR-G)', () => {
         cost_amount: '70000',
         list_amount: '100000',
       });
+    });
+
+    it('advertises RENEW only when the tier can buy the renewal (Codex on #297)', async () => {
+      const { serviceId, productId } = await renewableService(100_000n);
+      const tierId = await tableTier();
+      await register(tierId);
+      const kinds = async () => {
+        const record = await new DrizzleServiceRepository(ctx.container.database.db).findById(
+          tenantA,
+          serviceId as never,
+        );
+        if (record === null) throw new Error('service not found');
+        return ctx.container.commercialActions.availableFor(viaBot, customerActor(key()), record);
+      };
+      expect(await kinds()).not.toContain('RENEW');
+      await setPrices(tierId, [{ productId, price: money(70_000n, 'IRT') }]);
+      expect(await kinds()).toContain('RENEW');
     });
 
     it('refuses a renewal of a product the table does not price, and offers none', async () => {

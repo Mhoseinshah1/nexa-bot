@@ -457,12 +457,19 @@ export class CommercialActionService {
          * reaches the runtime's error path, which is what the panel and add-on branches
          * beside it already do by not catching at all.
          */
+        let renewable: ProductRecord;
         try {
-          await this.renewableProduct(scope, service);
+          renewable = await this.renewableProduct(scope, service);
         } catch (error: unknown) {
           if (!isOfferRefusal(error)) throw error;
           continue;
         }
+        /*
+         * Round 4 PR-G (Codex on #297): the SAME offered-price decision `offer` lists with,
+         * so a price-table tier that cannot buy this renewal is not shown a button whose
+         * tap is only "unavailable".
+         */
+        if ((await this.offeredRenewals(scope, service, [renewable])).length === 0) continue;
         available.push(kind);
         continue;
       }

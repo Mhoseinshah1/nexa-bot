@@ -130,6 +130,32 @@ describe('tier price helpers', () => {
     });
   });
 
+  it('rewrites a stored row in a stale currency even for the same figure (Codex on #297)', () => {
+    const stale = {
+      ...row(P1, 'الف', '1000000', '800000'),
+      tierPrice: { amount: '800000', currency: 'IRR' as const },
+    };
+    expect(priceChangesOf([stale], new Map([[P1, '800000']]))).toEqual({
+      prices: [{ productId: P1, price: { amount: '800000', currency: 'IRT' } }],
+    });
+    // The same figure in the same currency is no change.
+    expect(
+      priceChangesOf([row(P1, 'الف', '1000000', '800000')], new Map([[P1, '800000']])),
+    ).toEqual({
+      prices: [],
+    });
+  });
+
+  it('clears a stale tier price of a product with no list price, and refuses a new one', () => {
+    const stale = row(P1, 'الف', null, '800000');
+    expect(priceChangesOf([stale], new Map([[P1, '']]))).toEqual({
+      prices: [{ productId: P1, price: null }],
+    });
+    expect(priceChangesOf([stale], new Map([[P1, '900000']]))).toEqual({
+      problem: 'web.tier_prices_problem_unpriced',
+    });
+  });
+
   it('writes the unpriced-product option into the tier body', () => {
     const checked = tierBodyFrom({
       name: 'نقره‌ای',
@@ -197,6 +223,46 @@ describe('«قیمت محصولات»', () => {
       { productId: P3, price: { amount: '450000', currency: 'IRT' } },
     ]);
     expect(body.idempotencyKey.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('keeps a stale price clearable when the list price is gone, and a new one closed', async () => {
+    stubApi([
+      {
+        url: `/reseller-tiers/${TIER_ID}/product-prices`,
+        method: 'GET',
+        body: {
+          ...PAGE,
+          items: [row(P1, 'بی‌قیمت با سطح', null, '800000'), row(P2, 'بی‌قیمت', null, null)],
+        },
+      },
+    ]);
+    renderPage(<TierPricesEditor tier={tier} mayEdit mayViewCatalog />);
+    expect(await screen.findByLabelText('بی‌قیمت با سطح')).toBeEnabled();
+    expect(screen.getByLabelText('بی‌قیمت')).toBeDisabled();
+  });
+
+  it('locks every figure while a save is in flight, so no edit is lost to its success', async () => {
+    stubApi([{ url: `/reseller-tiers/${TIER_ID}/product-prices`, method: 'GET', body: PAGE }]);
+    const answered = vi.fn();
+    const stubbed = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) =>
+        (init?.method ?? 'GET') === 'POST'
+          ? new Promise<Response>(() => answered())
+          : stubbed(input as never, init),
+      ),
+    );
+    renderPage(<TierPricesEditor tier={tier} mayEdit mayViewCatalog />);
+    const input = await screen.findByLabelText('یک ماهه ۱۰۰ گیگ');
+    fireEvent.change(input, { target: { value: '1200000' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.tier_prices_save') }));
+    await waitFor(() => expect(answered).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByLabelText('یک ماهه ۵۰ گیگ')).toBeDisabled());
+    expect(screen.getByLabelText('یک ماهه ۱۰۰ گیگ')).toBeDisabled();
+    for (const apply of screen.getAllByRole('button', { name: t('web.tier_prices_fill_apply') })) {
+      expect(apply).toBeDisabled();
+    }
   });
 
   it('draws the margin from the two figures, and an em dash for an unpriced row', async () => {

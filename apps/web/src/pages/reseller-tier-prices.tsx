@@ -142,12 +142,21 @@ export function priceChangesOf(
     const amount = tierPriceAmountOf(draft);
     if (amount === 'INVALID') return { problem: 'web.tier_prices_problem_amount' };
     const stored = row.tierPrice === null ? null : row.tierPrice.amount;
-    if (amount === stored) continue;
     if (amount === null) {
-      prices.push({ productId: row.productId, price: null });
+      // A clear needs no list price: a stale row stays erasable (Codex on #297).
+      if (stored !== null) prices.push({ productId: row.productId, price: null });
       continue;
     }
-    if (row.listPrice === null) return { problem: 'web.tier_prices_problem_unpriced' };
+    if (row.listPrice === null) {
+      if (amount === stored) continue;
+      return { problem: 'web.tier_prices_problem_unpriced' };
+    }
+    /*
+     * Unchanged only when the amount AND the currency are what is stored: a row left in a
+     * currency the product no longer sells in is no price at all, and re-typing the same
+     * figure must rewrite it in the list's currency (Codex on #297).
+     */
+    if (amount === stored && row.tierPrice?.currency === row.listPrice.currency) continue;
     prices.push({
       productId: row.productId,
       price: { amount, currency: row.listPrice.currency },
@@ -314,7 +323,14 @@ export function TierPricesEditor({
             dir="ltr"
             inputMode="numeric"
             aria-invalid={amount === 'INVALID'}
-            disabled={!mayEdit || row.listPrice === null}
+            disabled={
+              !mayEdit ||
+              // While a save is in flight nothing is editable: the success clears the drafts
+              // it sent, and an edit typed meanwhile would vanish with them (Codex on #297).
+              save.isPending ||
+              // A new price needs a list price; an existing one stays clearable.
+              (row.listPrice === null && row.tierPrice === null)
+            }
             value={textOf(row)}
             onChange={(event) => setText([[row.productId, event.target.value] as const])}
             onPaste={(event) => onPaste(row, event)}
@@ -386,7 +402,7 @@ export function TierPricesEditor({
                         setFills((current) => new Map(current).set(key, event.target.value))
                       }
                     />
-                    <Button size="sm" onClick={() => fillGroup(group)}>
+                    <Button size="sm" disabled={save.isPending} onClick={() => fillGroup(group)}>
                       {t('web.tier_prices_fill_apply')}
                     </Button>
                   </div>

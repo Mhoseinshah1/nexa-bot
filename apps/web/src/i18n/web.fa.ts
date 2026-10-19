@@ -5325,6 +5325,7 @@ export const WEB_FA = {
   'web.reseller_pricing_list': 'قیمت فهرست',
   'web.reseller_pricing_percentage': 'کمتر از قیمت فهرست',
   'web.reseller_pricing_fixed_table': 'قیمت ثابت هر محصول',
+  'web.order_reseller_layer_fixed': 'قیمت ثابت سطح برای این محصول',
   'web.reseller_tier_unpriced_fallback': 'قیمت عادی برای محصولات بدون قیمت',
   'web.reseller_tier_unpriced_fallback_hint':
     'اگر روشن باشد، محصولی که برای این سطح قیمت ندارد با قیمت عادی فروخته می‌شود. اگر خاموش باشد (پیش‌فرض)، آن محصول به نماینده‌های این سطح فروخته نمی‌شود.',
