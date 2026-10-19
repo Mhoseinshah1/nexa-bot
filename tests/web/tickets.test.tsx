@@ -256,7 +256,6 @@ describe('the ticket inbox', () => {
       assigned: 'me',
       from: '2026-09-01',
       to: '',
-      source: '',
     });
     window.history.replaceState(null, '', '/tickets?status=OPEN&customer=mary');
     views.set({ ...views.empty, assigned: 'none' });

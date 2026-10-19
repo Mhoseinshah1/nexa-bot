@@ -1091,11 +1091,12 @@ export function ServiceDetailPage({
               subtitle={t('web.service_detail')}
             />
             {/*
-              Track 3 §3: one quiet line for a service that records an original purchase date
-              (a carried-over one) — the date the list orders it by. Round 4 B2: it names no
+              Track 3 §3: one quiet line for an IMPORTED service — the date the list orders it by.
+              The API normalises `originalStartedAt` to `createdAt` for a native service, so the
+              date alone cannot tell the two apart: `source` does. Round 4 B2: it names no
               source; the «from the previous bot» mark is for imported tickets and payments only.
             */}
-            {row.originalStartedAt !== null && (
+            {row.source !== 'NEXA' && row.originalStartedAt !== null && (
               <p className="muted small">
                 {t('web.service_original_start_line').replace(
                   '{date}',

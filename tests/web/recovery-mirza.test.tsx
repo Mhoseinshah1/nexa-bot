@@ -1025,18 +1025,15 @@ describe('the report in Persian', () => {
     expect(
       screen.getByText(`${t('web.mrz_section_history_of')} ${t('web.c360_legacy_type_payment')}`),
     ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: t('web.mrz_section_services') })).toHaveAttribute(
-      'href',
-      '/legacy-services?reviewState=ALL',
-    );
+    // The review pages are retired (Round 4 B4): the section is named, and links nowhere.
+    expect(screen.getAllByText(t('web.mrz_section_services')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('link', { name: t('web.mrz_section_services') })).toBeNull();
     // The archive-only pages are gone: those sections are named, and link nowhere.
     expect(screen.queryByRole('link', { name: t('web.mrz_section_invoice_archive') })).toBeNull();
     expect(screen.queryByRole('link', { name: t('web.mrz_section_legacy_debts') })).toBeNull();
-    // A service outcome links to the candidates holding it.
-    expect(screen.getByRole('link', { name: t('web.lsr_outcome_no_panel') })).toHaveAttribute(
-      'href',
-      '/legacy-services?outcome=NO_PANEL&reviewState=ALL',
-    );
+    // A service outcome is named, and links nowhere: its review page is retired.
+    expect(screen.getByText(t('web.lsr_outcome_no_panel'))).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: t('web.lsr_outcome_no_panel') })).toBeNull();
     expect(screen.getByText(t('web.mrz_code_provider_inventory_churn'))).toBeInTheDocument();
     expect(screen.getByText('PROVIDER_INVENTORY_CHURN:TOTAL_CHANGED')).toBeInTheDocument();
     expect(screen.getByText(t('web.mrz_code_decision_quarantined'))).toBeInTheDocument();

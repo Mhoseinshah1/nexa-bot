@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   MAX_DURATION_DAYS,
+  MAX_TRAFFIC_BYTES,
   PRODUCT_SORT_MAX,
   SALES_CURRENCY_CODES,
   TRAFFIC_GB_PATTERN,
   formatTrafficGb,
+  parseTrafficGb,
   type CurrencyCode,
   type SalesCurrencyCode,
   type ServiceAddonSummaryResponse,
@@ -101,11 +103,16 @@ function formOf(row: ServiceAddonSummaryResponse): FormState {
   };
 }
 
-/** The typed amount, validated the way the server does: GB with at most two decimals. */
+/**
+ * The typed amount, validated the way the server does: GB with at most two decimals, above
+ * zero and no larger than `MAX_TRAFFIC_BYTES` (`serviceAddonWriteSchema`'s ceiling).
+ */
 export function trafficAmountOf(raw: string): string | null {
   const text = raw.trim();
   if (!TRAFFIC_GB_PATTERN.test(text)) return null;
-  return Number(text) > 0 ? text : null;
+  const bytes = parseTrafficGb(text);
+  if (bytes === null || bytes <= 0n || bytes > MAX_TRAFFIC_BYTES) return null;
+  return text;
 }
 
 /** Whole days in `[1, MAX_DURATION_DAYS]`, or null. */
@@ -142,7 +149,7 @@ export function ExtraPackagesPage({
           subtitle={t('web.extra_devices_subtitle')}
         />
       )}
-      {!denied && (
+      {(!denied || mayEdit) && (
         <Tabs
           value={tab}
           onChange={setTab}

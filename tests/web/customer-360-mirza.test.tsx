@@ -57,7 +57,8 @@ describe('the ledger reasons', () => {
     expect(new Set(LEDGER_REASONS.map((r) => LEDGER_REASON_LABELS[r])).size).toBe(
       LEDGER_REASONS.length,
     );
-    expect(t(LEDGER_REASON_LABELS.MIGRATION_OPENING_BALANCE)).toContain('ربات قبلی');
+    // Round 4: the label is neutral — it no longer names the previous bot.
+    expect(t(LEDGER_REASON_LABELS.MIGRATION_OPENING_BALANCE)).toBe('موجودی اولیه');
   });
 });
 
@@ -65,7 +66,7 @@ describe('the migration report names', () => {
   it('labels sections and codes and links them to the filtered lists; an unknown one stays raw', () => {
     expect(migrationSectionView('services')).toEqual({
       label: t('web.mrz_section_services'),
-      href: '/legacy-services?reviewState=ALL',
+      href: null,
     });
     expect(migrationSectionView('history:ticket').label).toContain(
       t('web.c360_legacy_type_ticket'),

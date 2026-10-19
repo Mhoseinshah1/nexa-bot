@@ -189,6 +189,56 @@ describe('the extra packages page', () => {
     cleanup();
   });
 
+  it('disables Save for a traffic amount past the server maximum', async () => {
+    stubApi(routes());
+    renderPage(page(null));
+    await screen.findByText('ده گیگ');
+    fireEvent.click(screen.getByRole('button', { name: t('web.cb_add') }));
+    await screen.findByText(t('web.extra_packages_new'));
+    const save = () => screen.getByText(t('web.extra_devices_save')) as HTMLButtonElement;
+    fireEvent.change(screen.getByLabelText(t('web.extra_devices_rate_title')), {
+      target: { value: 'x' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.extra_packages_price')), {
+      target: { value: '1000' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.extra_packages_amount_gb')), {
+      target: { value: '1024000' },
+    });
+    expect(save().disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText(t('web.extra_packages_amount_gb')), {
+      target: { value: '1024001' },
+    });
+    expect(save().disabled).toBe(true);
+    cleanup();
+  });
+
+  it('keeps the tab strip for a role that may edit but not view', () => {
+    stubApi(routes());
+    renderPage(
+      <ExtraPackagesPage
+        route={{ path: '/extra-devices', query: new URLSearchParams('') }}
+        denied={true}
+        mayEdit={true}
+      />,
+    );
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    cleanup();
+  });
+
+  it('draws no tab strip when the role may neither view nor edit', () => {
+    stubApi(routes());
+    renderPage(
+      <ExtraPackagesPage
+        route={{ path: '/extra-devices', query: new URLSearchParams('') }}
+        denied={true}
+        mayEdit={false}
+      />,
+    );
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    cleanup();
+  });
+
   it('draws no write control for a role that may only view', async () => {
     stubApi(routes());
     const { container } = renderPage(page(null, false));
@@ -203,6 +253,10 @@ describe('the extra packages page', () => {
     expect(trafficAmountOf(' 0.5 ')).toBe('0.5');
     expect(trafficAmountOf('0')).toBeNull();
     expect(trafficAmountOf('1.234')).toBeNull();
+    // The ceiling is the contract's MAX_TRAFFIC_BYTES: 1,024,000 GB exactly, and not a hundredth more.
+    expect(trafficAmountOf('1024000')).toBe('1024000');
+    expect(trafficAmountOf('1024000.01')).toBeNull();
+    expect(trafficAmountOf('999999999')).toBeNull();
     expect(daysAmountOf('30')).toBe(30);
     expect(daysAmountOf('0')).toBeNull();
     expect(daysAmountOf('3651')).toBeNull();

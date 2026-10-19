@@ -1190,6 +1190,22 @@ describe('the lifecycle tabs', () => {
     await waitFor(() => expect(window.location.search).toBe(''));
   });
 
+  it('shows no original purchase date on a native service, where it equals createdAt', async () => {
+    stubApi(
+      detail({
+        source: 'NEXA',
+        createdAt: '2026-10-18T09:00:00.000Z',
+        originalStartedAt: '2026-10-18T09:00:00.000Z',
+      }),
+    );
+    renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
+    );
+    await screen.findByText(t('web.service_detail'));
+    expect(screen.queryByText(/^تاریخ خرید اصلی: /)).toBeNull();
+    await waitFor(() => expect(window.location.search).toBe(''));
+  });
+
   it('draws the rows in the order the server sent, and their ORIGINAL purchase date', async () => {
     // Deliberately not in date order: the page must not sort what the server ordered.
     const rows = [
