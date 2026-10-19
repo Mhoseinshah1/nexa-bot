@@ -146,3 +146,28 @@
 .bc-list .tbl td {
   padding-block: 10px;
 }
+
+/* --- Content (`#/content`) -------------------------------------------------------------- */
+
+/* The list pane ends in the demo's counted pager, under the ten texts of the page. */
+.content-nav-pager {
+  border-top: 1px solid var(--line);
+  padding: 8px 10px;
+}
+.content-nav-pager .pager {
+  justify-content: center;
+}
+.content-nav-pager .pager {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+.content-nav-pager .pager-info {
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+/* The demo's list column is a little wider than the old 300px, so its pager stays one row. */
+@media (min-width: 1101px) {
+  .content-split {
+    grid-template-columns: 330px minmax(0, 1fr);
+  }
+}

@@ -3,9 +3,12 @@ import {
   APPEARANCE_SLOT_FALLBACKS,
   DEFAULT_EXPLICIT_MAIN_MENU,
   MAIN_MENU_BUTTONS,
+  TEMPLATE_KEYS,
   appearanceResponseSchema,
   botListResponseSchema,
   broadcastListResponseSchema,
+  templateDefinition,
+  templateListResponseSchema,
   botMenuBuilderResponseSchema,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
@@ -224,4 +227,45 @@ const broadcasts = fixture('/broadcasts', broadcastListResponseSchema, {
   nextCursor: 'demo-older-page',
 });
 
-export const DEMO_BOT: readonly ShotFixture[] = [appearance, botButtons, bots, broadcasts];
+/*
+ * `#/content`: EVERY template the catalogue declares (the demo lists 732), so the list
+ * pages ten at a time; four carry the tenant's own text, as the demo's dotted rows do.
+ */
+const CUSTOMISED: Readonly<Record<string, string>> = {
+  'bot.command.paysupport': 'پشتیبانی پرداخت',
+  'bot.menu.catalog': '🛒 خرید سرویس',
+  'bot.menu.services': '📦 سرویس‌های من',
+  'bot.menu.help': '❓ راهنما و پشتیبانی',
+};
+const templates = fixture('/templates', templateListResponseSchema, {
+  templates: TEMPLATE_KEYS.map((key) => {
+    const definition = templateDefinition(key);
+    const defaultBody = (CATALOGUE_FA as Readonly<Record<string, string>>)[key] ?? '';
+    const override = CUSTOMISED[key] ?? null;
+    return {
+      key,
+      locale: 'fa',
+      description: definition.description,
+      format: definition.format,
+      maxLength: definition.maxLength ?? 4096,
+      body: override ?? defaultBody,
+      defaultBody,
+      overrideBody: override,
+      source: override === null ? 'DEFAULT' : 'TENANT',
+      overrideSuppressed: false,
+      version: override === null ? null : 3,
+      revision: override === null ? null : 3,
+      updatedAt: override === null ? null : ago(60 * 24 * 4),
+      updatedByAdminId: null,
+      placeholders: definition.placeholders.map((placeholder) => ({ ...placeholder })),
+    };
+  }),
+});
+
+export const DEMO_BOT: readonly ShotFixture[] = [
+  appearance,
+  botButtons,
+  bots,
+  broadcasts,
+  templates,
+];

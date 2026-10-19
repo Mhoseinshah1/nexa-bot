@@ -42,6 +42,7 @@ import {
   PageHead,
   Pills,
   StateSwitch,
+  usePagedRows,
   useUnsavedChanges,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
@@ -260,6 +261,23 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
   const firstVisible = ordered.find((template) => visible.has(template.key))?.key ?? null;
   const selected = chosen !== null && visible.has(chosen) ? chosen : firstVisible;
 
+  /*
+   * The list pages ten at a time, as the demo's does («۱–۱۰ از ۷۳۲ · صفحه ۱ از ۷۴»). The
+   * endpoint answers every template at once, so the total is the server's collection as
+   * this page filters it — the same figure the «N از M» line above already states. Rows
+   * off the page are HIDDEN, never unmounted, for the reason the filters hide them.
+   */
+  const listed = useMemo(
+    () => ordered.filter((template) => visible.has(template.key)),
+    [ordered, visible],
+  );
+  const { rows: pageRows, pager: listPager } = usePagedRows(
+    listed,
+    [search, category, activeGroupId, source].join('|'),
+    { wholeCollection: true },
+  );
+  const onPage = useMemo(() => new Set(pageRows.map((template) => template.key)), [pageRows]);
+
   const { dirty, report } = useDirtySet();
   useUnsavedChanges(dirty.size > 0);
 
@@ -381,14 +399,14 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                   <section
                     key={section.group.id}
                     aria-labelledby={`templates-group-${section.group.id}`}
-                    hidden={!section.templates.some((template) => visible.has(template.key))}
+                    hidden={!section.templates.some((template) => onPage.has(template.key))}
                   >
                     <h2 id={`templates-group-${section.group.id}`} className="content-nav-group">
                       {section.group.label}
                     </h2>
                     <ul>
                       {section.templates.map((template) => (
-                        <li key={template.key} hidden={!visible.has(template.key)}>
+                        <li key={template.key} hidden={!onPage.has(template.key)}>
                           <TemplateListItem
                             template={template}
                             current={template.key === selected}
@@ -404,6 +422,7 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                   </section>
                 ))}
               </div>
+              {listPager !== null && <div className="content-nav-pager">{listPager}</div>}
             </aside>
 
             {sheet && (
