@@ -317,6 +317,32 @@ describe('reseller tier fixed price per product (Round 4 PR-G)', () => {
     );
   });
 
+  it('leaves a category of unpriced products out of the category list, in SQL', async () => {
+    const tierId = await tableTier();
+    await register(tierId);
+    const empty = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO product_categories (id, tenant_id, name, sort_order)
+      VALUES (${empty}, ${tenantA.tenantId}, 'بی‌قیمت', 1)`);
+    await product(1_000_000n, { categoryId: empty });
+    const priced = await product(1_000_000n);
+    await setPrices(tierId, [{ productId: priced, price: money(900_000n, 'IRT') }]);
+    const categories = async () =>
+      (
+        await ctx.container.products.browseCategories(
+          viaBot,
+          customerActor(key()),
+          50,
+          0,
+          resellerCustomer,
+        )
+      ).items.map((c) => c.id);
+    // The category list carries no price to filter afterwards: only the query's own gate
+    // can keep an empty category out of it.
+    expect(await categories()).not.toContain(empty);
+    expect(await categories()).toContain(SEED_IDS.categoryA);
+  });
+
   // -------------------------------------------------------------------------
   // A product the table does not price
   // -------------------------------------------------------------------------
