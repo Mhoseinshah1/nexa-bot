@@ -747,3 +747,47 @@
 .tiers-list .tbl td {
   vertical-align: top;
 }
+
+/* Round 4 PR-G — a tier's «قیمت محصولات»: one block per category, its bulk fill beside its name. */
+.tier-prices-group {
+  display: grid;
+  gap: 8px;
+  margin-block-end: 14px;
+}
+.tier-prices-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.tier-prices-group-head h3 {
+  margin: 0;
+  font-size: var(--fs-body);
+}
+.tier-prices-fill {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.tier-prices-fill .input,
+.tier-price-input {
+  inline-size: 12ch;
+  text-align: end;
+}
+.tier-price-input.invalid {
+  border-color: var(--danger);
+}
+.tier-prices-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+@media (pointer: coarse) and (hover: none) {
+  .tier-prices-fill .input,
+  .tier-price-input {
+    min-block-size: var(--ctl-h);
+  }
+}

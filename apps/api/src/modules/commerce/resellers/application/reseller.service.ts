@@ -2,10 +2,12 @@ import {
   COMMERCE_ERROR_CODES,
   errors,
   isDiscountablePurpose,
+  isResellerTierPricePurpose,
+  money,
   resellerPriceLayer,
-  resellerReductionMinor,
   type CurrencyCode,
   type DiscountablePurpose,
+  type Money,
   type ProductId,
   type TenantContext,
 } from '@nexa/contracts';
@@ -13,7 +15,12 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { ProductRepository } from '../../catalog/application/ports.js';
 import type { OrderRecord } from '../../orders/application/ports.js';
 import { decideEntitlement, effectiveGrants } from '../domain/entitlement.js';
-import { quotedResellerLayer, type ResellerPricingTerms } from '../domain/reseller-pricing.js';
+import {
+  decideTierPrice,
+  quotedResellerLayer,
+  resellerCostMinor,
+  type ResellerPricingTerms,
+} from '../domain/reseller-pricing.js';
 import type {
   ResellerRecord,
   ResellerRepository,
@@ -37,6 +44,34 @@ export interface ResellerStanding {
    * the catalogue courtesy, the draft, the confirmation, a commercial action — is judged by.
    */
   readonly grants: readonly ResellerTierGrantRecord[];
+}
+
+/**
+ * What is being priced, for the reseller layer (Round 4 PR-G): a price-table tier prices a
+ * PRODUCT, for the purposes its table covers, in the list price's currency.
+ */
+export interface ResellerPricingSubject {
+  readonly purpose: DiscountablePurpose;
+  readonly productId: string | null;
+  readonly currency: CurrencyCode;
+}
+
+/**
+ * The catalogue's half of a price-table tier (Round 4 PR-G): the tier whose table decides
+ * what is sellable, and whether an unpriced product is sold at list. Null for every other
+ * standing — a rate tier, and a reseller whose own override replaces the tier's pricing.
+ */
+export interface TierPriceGate {
+  readonly tierId: string;
+  readonly unpricedListFallback: boolean;
+}
+
+export function tierPriceGateOf(standing: ResellerStanding | null): TierPriceGate | null {
+  if (standing === null) return null;
+  if (standing.tier.pricingMode !== 'FIXED_PRICE_TABLE') return null;
+  // An override other than TIER replaces the tier's pricing, table included (R3).
+  if (standing.reseller.pricingMode !== 'TIER') return null;
+  return { tierId: standing.tier.id, unpricedListFallback: standing.tier.unpricedListFallback };
 }
 
 /** What a commercial action asks for; the category is resolved here, from the product. */
@@ -162,14 +197,94 @@ export class ResellerService {
     }).allowed;
   }
 
-  /** The layer that prices this customer, or null for an ordinary customer (R3). */
+  /**
+   * The layer that prices this customer for this subject, or null for an ordinary customer
+   * (R3). A price-table tier refuses a product its table does not price, unless the tier
+   * sells unpriced products at list (Round 4 PR-G): the draft's authoritative refusal, made
+   * at the one pricing boundary.
+   */
   async pricingTerms(
     scope: TenantContext,
     customerId: string,
+    subject: ResellerPricingSubject,
     tx?: unknown,
   ): Promise<ResellerPricingTerms | null> {
     const standing = await this.standing(scope, customerId, tx);
-    return standing === null ? null : termsOf(standing);
+    return standing === null ? null : this.termsFor(scope, standing, subject, tx);
+  }
+
+  /**
+   * The price this reseller would be quoted, before promotions, for each product — what a
+   * catalogue or a renewal menu SHOWS (Round 4 PR-G), from `resellerCostMinor`, the function
+   * the quote itself uses. Null for a product a price-table tier does not sell. A courtesy:
+   * the price charged is `PricingService.price`'s, decided again at the draft.
+   */
+  async offeredPrices(
+    scope: TenantContext,
+    standing: ResellerStanding,
+    purpose: DiscountablePurpose,
+    items: readonly { readonly id: string; readonly price: Money | null }[],
+  ): Promise<ReadonlyMap<string, Money | null>> {
+    const gate = tierPriceGateOf(standing);
+    const table =
+      gate === null || !isResellerTierPricePurpose(purpose)
+        ? new Map<string, { readonly price: Money }>()
+        : await this.deps.resellers.tierPricesFor(
+            scope,
+            gate.tierId,
+            items.map((i) => i.id),
+          );
+    const offered = new Map<string, Money | null>();
+    for (const item of items) {
+      if (item.price === null) {
+        offered.set(item.id, null);
+        continue;
+      }
+      const terms = this.termsFrom(standing, purpose, item.price.currency, table.get(item.id));
+      offered.set(
+        item.id,
+        terms === 'UNSELLABLE'
+          ? null
+          : money(resellerCostMinor(item.price.amountMinor, terms), item.price.currency),
+      );
+    }
+    return offered;
+  }
+
+  private async termsFor(
+    scope: TenantContext,
+    standing: ResellerStanding,
+    subject: ResellerPricingSubject,
+    tx: unknown,
+  ): Promise<ResellerPricingTerms> {
+    const gate = tierPriceGateOf(standing);
+    const row =
+      gate === null || !isResellerTierPricePurpose(subject.purpose) || subject.productId === null
+        ? undefined
+        : (
+            await this.deps.resellers.tierPricesFor(scope, gate.tierId, [subject.productId], tx)
+          ).get(subject.productId);
+    const terms = this.termsFrom(standing, subject.purpose, subject.currency, row);
+    if (terms === 'UNSELLABLE') throw tierPriceMissing(standing.tier.id);
+    return terms;
+  }
+
+  /** The one statement of a standing's terms for one subject, from the row already read. */
+  private termsFrom(
+    standing: ResellerStanding,
+    purpose: DiscountablePurpose,
+    currency: CurrencyCode,
+    row: { readonly price: Money } | undefined,
+  ): ResellerPricingTerms | 'UNSELLABLE' {
+    const terms = termsOf(standing);
+    const gate = tierPriceGateOf(standing);
+    if (gate === null) return terms;
+    // The table prices products only; everything else keeps its own pricing at list.
+    if (!isResellerTierPricePurpose(purpose)) return { ...terms, layer: 'LIST', percent: null };
+    const decision = decideTierPrice(row?.price ?? null, currency, gate.unpricedListFallback);
+    if (decision.kind === 'UNSELLABLE') return 'UNSELLABLE';
+    if (decision.kind === 'LIST') return { ...terms, layer: 'LIST', percent: null };
+    return { ...terms, layer: 'TIER', percent: null, fixedPrice: decision.price };
   }
 
   /**
@@ -240,11 +355,22 @@ export class ResellerService {
       tx,
     );
 
-    const terms = termsOf(standing);
+    /*
+     * The live terms for THIS order's product and purpose — a price-table tier's row is
+     * read here, under the tier's `FOR SHARE` taken by `standing`, so a price changed
+     * since the quote is seen (and refused below) or waits for this to commit. A product
+     * the table no longer prices is refused as not entitled, exactly as at the draft.
+     */
+    const terms = await this.termsFor(
+      scope,
+      standing,
+      { purpose: order.purpose, productId, currency: order.totals.currency },
+      tx,
+    );
     const base = order.totals.quote.trace.find((s) => s.step === 'BASE_PRICE');
     if (base === undefined) throw termsChanged();
     const list = base.amountAfter.amountMinor;
-    const cost = list - resellerReductionMinor(list, terms.percent);
+    const cost = resellerCostMinor(list, terms);
     const quotedCost = quoted?.cost ?? list;
     const expectedStep =
       cost === list ? null : terms.layer === 'TIER' ? 'TIER_PRICE' : 'USER_OVERRIDE';
@@ -263,6 +389,13 @@ export class ResellerService {
       throw termsChanged();
     }
 
+    /*
+     * A table price that took nothing off the list (a tier price at or above list) charged
+     * the list: recorded as the LIST layer, so `fixed_price` always means a table price was
+     * what the reseller paid.
+     */
+    const fixedPrice = terms.fixedPrice !== null && cost < list;
+    const layer = terms.fixedPrice !== null && !fixedPrice ? 'LIST' : terms.layer;
     await this.deps.resellers.recordTerms(
       scope,
       {
@@ -270,8 +403,9 @@ export class ResellerService {
         resellerCustomerId: order.customerId,
         tierId: terms.tierId,
         tierName: terms.tierName,
-        layer: terms.layer,
+        layer,
         percent: terms.percent,
+        fixedPrice,
         listAmount: list,
         costAmount: cost,
         promotionAmount: order.totals.discount.amountMinor,
@@ -298,7 +432,24 @@ function termsOf(standing: ResellerStanding): ResellerPricingTerms {
     tierName: standing.tier.name,
     layer,
     percent,
+    fixedPrice: null,
   };
+}
+
+/**
+ * A price-table tier's product with no price for it (Round 4 PR-G): not sellable to the tier.
+ * The customer's sentence is the entitlement refusal's — the reason is for the operator.
+ */
+function tierPriceMissing(tierId: string) {
+  return errors.conflict(
+    COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED,
+    'This purchase is not available.',
+    {
+      dimension: 'CATALOGUE',
+      tierId,
+      reason: 'TIER_PRICE_MISSING',
+    },
+  );
 }
 
 function termsChanged() {

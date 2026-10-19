@@ -81,7 +81,10 @@ import type {
   LocationOffer,
 } from '../../locations/application/location-change-policy.js';
 import type { LocationChangeRepository } from '../../locations/application/ports.js';
-import type { ResellerService } from '../../resellers/application/reseller.service.js';
+import {
+  tierPriceGateOf,
+  type ResellerService,
+} from '../../resellers/application/reseller.service.js';
 import type { PricingService } from '../../pricing/application/pricing.service.js';
 import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
@@ -282,7 +285,10 @@ export interface CommercialActionServiceDeps {
    */
   readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
   /** A buyer's reseller standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6). */
-  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled' | 'entitles'>;
+  readonly resellers: Pick<
+    ResellerService,
+    'standing' | 'assertEntitled' | 'entitles' | 'offeredPrices'
+  >;
   /**
    * WP-A6: the one evaluator of what a service may be moved to — its current location,
    * the configured targets, the cooldown and the rolling limit — and the frozen change
@@ -346,11 +352,17 @@ export class CommercialActionService {
     if (kind === 'RENEW') {
       if (renewsFromPanelPlans(service)) {
         // An empty list is an answer, not a refusal: the surface says no plan is available.
-        const plans = await this.panelRenewalPlans(scope, service);
+        const plans = await this.offeredRenewals(
+          scope,
+          service,
+          await this.panelRenewalPlans(scope, service),
+        );
         return { kind, product: null, plans, addons: [], devices: null };
       }
-      const product = await this.renewableProduct(scope, service);
-      return { kind, product, addons: [], devices: null };
+      const [product] = await this.offeredRenewals(scope, service, [
+        await this.renewableProduct(scope, service),
+      ]);
+      return { kind, product: product ?? null, addons: [], devices: null };
     }
 
     if (kind === 'ADD_DEVICES') {
@@ -1675,6 +1687,27 @@ export class CommercialActionService {
   }
 
   /**
+   * Round 4 PR-G: the renewal offer as a reseller is SHOWN it — each product at the price
+   * they will be quoted before promotions (`ResellerService.offeredPrices`, over the quote's
+   * own `resellerCostMinor`), and without a product a price-table tier does not sell. Display
+   * only, applied to the offer and never to the plans a draft prices from: the quote is
+   * `PricingService.price`'s, from the product's list price, every time.
+   */
+  private async offeredRenewals(
+    scope: TenantContext,
+    service: ServiceRecord,
+    items: readonly ProductRecord[],
+  ): Promise<readonly ProductRecord[]> {
+    const standing = await this.deps.resellers.standing(scope, service.customerId, undefined);
+    if (standing === null || items.length === 0) return items;
+    const offered = await this.deps.resellers.offeredPrices(scope, standing, 'RENEW', items);
+    return items.flatMap((product) => {
+      const price = offered.get(product.id) ?? null;
+      return price === null ? [] : [{ ...product, price }];
+    });
+  }
+
+  /**
    * Owner rule 2026-10-18 — the CURRENT sellable plans of an imported service's panel, as
    * this customer may buy them: the customer catalogue's own predicate
    * (`listCustomerVisibleProducts` — live, listed, priced, categorised, on THIS panel), in the
@@ -1697,7 +1730,14 @@ export class CommercialActionService {
         ? { kind: 'CUSTOMER' }
         : (() => {
             const view = catalogueScope(standing.grants, scope.botInstanceId);
-            return { kind: 'RESELLER', productIds: view.productIds, categoryIds: view.categoryIds };
+            // Round 4 PR-G: a price-table tier's unpriced plans are out of the query too.
+            const tierPrices = tierPriceGateOf(standing);
+            return {
+              kind: 'RESELLER',
+              productIds: view.productIds,
+              categoryIds: view.categoryIds,
+              ...(tierPrices === null ? {} : { tierPrices }),
+            };
           })();
     // Every product-dependent predicate is in the query, before its limit (Codex on #292).
     const plans = await this.deps.products.listRenewalPlans(

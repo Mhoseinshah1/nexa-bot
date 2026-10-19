@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { RESELLER_GRANT_DIMENSION, money } from '@nexa/contracts';
 import type {
   Calendar,
@@ -7,6 +7,7 @@ import type {
   OrderPurpose,
   ResellerEntitlementDimension,
   OrderState,
+  ProductStatus,
   ResellerGrantKind,
   ResellerOverrideMode,
   ResellerPriceLayer,
@@ -24,14 +25,18 @@ import {
   customers,
   orderResellerTerms,
   orders,
+  productCategories,
+  products,
   resellerEntitlementOverrides,
   resellerGrantOverrides,
   resellerMinimumNotices,
   resellerTierGrants,
+  resellerTierProductPrices,
   resellerTiers,
   resellers,
   tenants,
 } from '../../../../infrastructure/persistence/schema.js';
+import { archivedClause } from '../../catalog/infrastructure/drizzle-product.repository.js';
 import type {
   OrderResellerTermsRecord,
   ResellerCursor,
@@ -43,6 +48,9 @@ import type {
   ResellerRepository,
   ResellerTierGrantRecord,
   ResellerTierListing,
+  ResellerTierPriceCursor,
+  ResellerTierPriceTableRow,
+  ResellerTierProductPriceRecord,
   ResellerTierRecord,
   ResellerWrite,
   TierWrite,
@@ -72,6 +80,7 @@ function toTier(row: typeof resellerTiers.$inferSelect): ResellerTierRecord {
     discountPercentage: row.discountPercentage,
     creditLimit: money(row.creditLimitAmount, row.creditLimitCurrency as CurrencyCode),
     monthlyMinimum: minimumOf(row.monthlyMinimumAmount, row.monthlyMinimumCurrency),
+    unpricedListFallback: row.unpricedListFallback,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -140,6 +149,7 @@ export class DrizzleResellerRepository implements ResellerRepository {
         discountPercentage: input.discountPercentage,
         creditLimitAmount: input.creditLimit.amountMinor,
         creditLimitCurrency: input.creditLimit.currency,
+        unpricedListFallback: input.unpricedListFallback ?? false,
         createdAt: input.now,
         updatedAt: input.now,
       })
@@ -175,6 +185,7 @@ export class DrizzleResellerRepository implements ResellerRepository {
           discountPercentage: input.discountPercentage,
           creditLimitAmount: input.creditLimit.amountMinor,
           creditLimitCurrency: input.creditLimit.currency,
+          unpricedListFallback: input.unpricedListFallback ?? false,
           updatedAt: input.now,
         })
         .where(and(eq(resellerTiers.tenantId, tenantId), eq(resellerTiers.id, id)))
@@ -298,6 +309,212 @@ export class DrizzleResellerRepository implements ResellerRepository {
       grants: grants.filter((g) => g.tierId === row.tier.id).map(toGrant),
       resellerCount: row.resellerCount,
     }));
+  }
+
+  // -- Round 4 PR-G: a tier's price table ------------------------------------------------
+
+  async tierPricesFor(
+    scope: TenantContext,
+    tierId: string,
+    productIds: readonly string[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<string, ResellerTierProductPriceRecord>> {
+    const tenantId = requireTenantId(scope);
+    if (productIds.length === 0) return new Map();
+    const rows = await exec(this.db, tx)
+      .select()
+      .from(resellerTierProductPrices)
+      .where(
+        and(
+          eq(resellerTierProductPrices.tenantId, tenantId),
+          eq(resellerTierProductPrices.tierId, tierId),
+          // One bind parameter whatever the count (see `listCatalog`'s note on `inArray`).
+          sql`${resellerTierProductPrices.productId} = ANY(${sql.param([...productIds])}::uuid[])`,
+        ),
+      );
+    return new Map(
+      rows.map((row) => [
+        row.productId,
+        {
+          productId: row.productId,
+          price: money(row.priceAmount, row.priceCurrency as CurrencyCode),
+          updatedAt: row.updatedAt,
+        },
+      ]),
+    );
+  }
+
+  async setTierPrices(
+    scope: TenantContext,
+    tierId: string,
+    write: {
+      readonly set: readonly { readonly productId: string; readonly price: Money }[];
+      readonly cleared: readonly string[];
+    },
+    now: Date,
+    tx: unknown,
+  ): Promise<{ readonly set: number; readonly cleared: number }> {
+    const tenantId = requireTenantId(scope);
+    const executor = exec(this.db, tx);
+    let cleared = 0;
+    if (write.cleared.length > 0) {
+      const removed = await executor
+        .delete(resellerTierProductPrices)
+        .where(
+          and(
+            eq(resellerTierProductPrices.tenantId, tenantId),
+            eq(resellerTierProductPrices.tierId, tierId),
+            inArray(resellerTierProductPrices.productId, [...write.cleared]),
+          ),
+        )
+        .returning({ productId: resellerTierProductPrices.productId });
+      cleared = removed.length;
+    }
+    if (write.set.length > 0) {
+      await executor
+        .insert(resellerTierProductPrices)
+        .values(
+          write.set.map((one) => ({
+            tenantId,
+            tierId,
+            productId: one.productId,
+            priceAmount: one.price.amountMinor,
+            priceCurrency: one.price.currency,
+            createdAt: now,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [
+            resellerTierProductPrices.tenantId,
+            resellerTierProductPrices.tierId,
+            resellerTierProductPrices.productId,
+          ],
+          set: {
+            priceAmount: sql`excluded.price_amount`,
+            priceCurrency: sql`excluded.price_currency`,
+            updatedAt: sql`excluded.updated_at`,
+          },
+        });
+    }
+    return { set: write.set.length, cleared };
+  }
+
+  async productListPrices(
+    scope: TenantContext,
+    productIds: readonly string[],
+    tx: unknown,
+  ): Promise<ReadonlyMap<string, Money | null>> {
+    const tenantId = requireTenantId(scope);
+    if (productIds.length === 0) return new Map();
+    const rows = await exec(this.db, tx)
+      .select({
+        id: products.id,
+        amount: products.priceAmount,
+        currency: products.priceCurrency,
+      })
+      .from(products)
+      .where(
+        and(
+          eq(products.tenantId, tenantId),
+          sql`${products.id} = ANY(${sql.param([...productIds])}::uuid[])`,
+        ),
+      );
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        row.amount === null || row.currency === null
+          ? null
+          : money(row.amount, row.currency as CurrencyCode),
+      ]),
+    );
+  }
+
+  async listTierPriceTable(
+    scope: TenantContext,
+    tierId: string,
+    filter: { readonly categoryId?: string },
+    limit: number,
+    cursor: ResellerTierPriceCursor | null,
+  ): Promise<{
+    readonly items: readonly ResellerTierPriceTableRow[];
+    readonly next: ResellerTierPriceCursor | null;
+  }> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * The order is `(category_id NULLS LAST, id)`: groups stay contiguous, and the keyset
+     * is two immutable columns — never `sort_order`, which an operator drags. A NULL
+     * category is spelled as the all-ones uuid in the comparison so the row-value compare
+     * has one total order with the uncategorised group after every real category.
+     */
+    const LAST = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+    const categoryKey = sql`coalesce(${products.categoryId}, ${LAST}::uuid)`;
+    const conditions: (SQL | undefined)[] = [
+      eq(products.tenantId, tenantId),
+      sql`NOT ${archivedClause()}`,
+      filter.categoryId === undefined ? undefined : eq(products.categoryId, filter.categoryId),
+    ];
+    if (cursor !== null) {
+      conditions.push(
+        sql`(${categoryKey}, ${products.id}) > (${cursor.categoryId ?? LAST}::uuid, ${cursor.productId}::uuid)`,
+      );
+    }
+    const rows = await this.db
+      .select({
+        productId: products.id,
+        title: products.title,
+        status: products.status,
+        categoryId: products.categoryId,
+        categoryName: productCategories.name,
+        listAmount: products.priceAmount,
+        listCurrency: products.priceCurrency,
+        tierAmount: resellerTierProductPrices.priceAmount,
+        tierCurrency: resellerTierProductPrices.priceCurrency,
+        tierUpdatedAt: resellerTierProductPrices.updatedAt,
+      })
+      .from(products)
+      .leftJoin(
+        productCategories,
+        and(
+          eq(productCategories.tenantId, products.tenantId),
+          eq(productCategories.id, products.categoryId),
+        ),
+      )
+      .leftJoin(
+        resellerTierProductPrices,
+        and(
+          eq(resellerTierProductPrices.tenantId, products.tenantId),
+          eq(resellerTierProductPrices.productId, products.id),
+          eq(resellerTierProductPrices.tierId, tierId),
+        ),
+      )
+      .where(and(...conditions))
+      .orderBy(asc(categoryKey), asc(products.id))
+      .limit(limit + 1);
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map((row) => ({
+        productId: row.productId,
+        title: row.title,
+        status: row.status as ProductStatus,
+        categoryId: row.categoryId,
+        categoryName: row.categoryName,
+        listPrice:
+          row.listAmount === null || row.listCurrency === null
+            ? null
+            : money(row.listAmount, row.listCurrency as CurrencyCode),
+        tierPrice:
+          row.tierAmount === null || row.tierCurrency === null
+            ? null
+            : money(row.tierAmount, row.tierCurrency as CurrencyCode),
+        tierPriceUpdatedAt: row.tierUpdatedAt,
+      })),
+      next:
+        rows.length > limit && last !== undefined
+          ? { categoryId: last.categoryId, productId: last.productId }
+          : null,
+    };
   }
 
   // -- Resellers ----------------------------------------------------------------------
@@ -808,6 +1025,7 @@ export class DrizzleResellerRepository implements ResellerRepository {
         marginAmount: input.marginAmount,
         currency: input.currency,
         botInstanceId: input.botInstanceId,
+        fixedPrice: input.fixedPrice,
         createdAt: input.now,
       })
       .onConflictDoNothing()
@@ -842,6 +1060,7 @@ export class DrizzleResellerRepository implements ResellerRepository {
       marginAmount: row.marginAmount,
       currency: row.currency as CurrencyCode,
       botInstanceId: row.botInstanceId,
+      fixedPrice: row.fixedPrice,
       createdAt: row.createdAt,
     };
   }

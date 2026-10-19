@@ -20,7 +20,11 @@ import {
   type UnitOfWork,
   trafficBytesAfterEdit,
 } from '@nexa/contracts';
-import type { ResellerService } from '../../resellers/application/reseller.service.js';
+import {
+  tierPriceGateOf,
+  type ResellerService,
+  type ResellerStanding,
+} from '../../resellers/application/reseller.service.js';
 import { catalogueScope } from '../../resellers/domain/entitlement.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -83,7 +87,7 @@ export interface ProductServiceDeps {
    * The browsing customer's reseller standing (`docs/wp9-reseller-audit.md` R5, R6): whose
    * catalogue to build. The catalogue is a courtesy; the order paths decide for themselves.
    */
-  readonly resellers: Pick<ResellerService, 'standing'>;
+  readonly resellers: Pick<ResellerService, 'standing' | 'offeredPrices'>;
   /** Membership only — see `PanelDirectory`. Never a panel projection. */
   readonly panels: PanelDirectory;
   /**
@@ -212,7 +216,11 @@ export class ProductService {
      */
     const view = await this.catalogueView(scope, customerId);
     if (view === null) return { items: [], hasMore: false };
-    return this.deps.repository.listCatalog(scope, bounded, view.panelIds, view.audience);
+    return this.offered(
+      scope,
+      view,
+      await this.deps.repository.listCatalog(scope, bounded, view.panelIds, view.audience),
+    );
   }
 
   /**
@@ -282,7 +290,7 @@ export class ProductService {
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
     const view = await this.catalogueView(scope, customerId);
     if (view === null) return { items: [], hasMore: false };
-    return this.deps.repository.listCustomerProductsInCategory(
+    const page = await this.deps.repository.listCustomerProductsInCategory(
       scope,
       categoryId,
       bounded,
@@ -290,6 +298,36 @@ export class ProductService {
       view.panelIds,
       view.audience,
     );
+    return this.offered(scope, view, page);
+  }
+
+  /**
+   * Round 4 PR-G: a reseller is SHOWN the price they will be quoted before promotions —
+   * `ResellerService.offeredPrices`, over `resellerCostMinor`, the quote's own function —
+   * so a price-table tier's buttons carry the tier price, not the list. A courtesy: the
+   * draft prices again at the one boundary. A product it does not sell is already out of
+   * the SQL page; one that slipped between the two reads is left out here too, never
+   * drawn at a price that will be refused. An ordinary customer's page is returned as is.
+   */
+  private async offered<P extends { readonly items: readonly ProductRecord[] }>(
+    scope: TenantContext,
+    view: { readonly standing?: ResellerStanding },
+    page: P,
+  ): Promise<P> {
+    if (view.standing === undefined) return page;
+    const offered = await this.deps.resellers.offeredPrices(
+      scope,
+      view.standing,
+      'NEW_SERVICE',
+      page.items,
+    );
+    return {
+      ...page,
+      items: page.items.flatMap((product) => {
+        const price = offered.get(product.id) ?? null;
+        return price === null ? [] : [{ ...product, price }];
+      }),
+    };
   }
 
   /**
@@ -325,6 +363,8 @@ export class ProductService {
   ): Promise<{
     readonly panelIds: readonly string[];
     readonly audience: CatalogueAudience;
+    /** The ACTIVE reseller standing that picked a reseller's catalogue; absent otherwise. */
+    readonly standing?: ResellerStanding;
   } | null> {
     const eligible = await this.deps.panelSales.eligiblePanelIds(scope);
     const standing =
@@ -354,9 +394,16 @@ export class ProductService {
     const grantedEligible =
       granted === 'ALL' ? eligible : eligible.filter((id) => granted.includes(id));
     const reach = await this.deps.placement.reachableHomes(scope, grantedEligible);
+    const tierPrices = tierPriceGateOf(standing);
     return {
       panelIds: granted === 'ALL' ? reach : reach.filter((id) => granted.includes(id)),
-      audience: { kind: 'RESELLER', productIds: view.productIds, categoryIds: view.categoryIds },
+      audience: {
+        kind: 'RESELLER',
+        productIds: view.productIds,
+        categoryIds: view.categoryIds,
+        ...(tierPrices === null ? {} : { tierPrices }),
+      },
+      standing,
     };
   }
 
