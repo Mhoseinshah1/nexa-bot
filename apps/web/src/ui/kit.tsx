@@ -1,4 +1,5 @@
 import {
+  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -1872,6 +1873,7 @@ export function DataTable<T>({
   toolbar,
   filters,
   rowClassName,
+  detail,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -1882,7 +1884,23 @@ export function DataTable<T>({
   toolbar?: ReactNode;
   filters?: ReactNode;
   rowClassName?: (row: T) => string | undefined;
+  /**
+   * A row's DETAIL (demo parity X9): the facts a wide list cannot hold as columns at 1440
+   * without scrolling sideways, drawn on a full-width line under the row when its toggle is
+   * opened. `label` names the toggle for a screen reader. The row's own columns stay as the
+   * reference draws them; nothing in the detail is a second copy of a column.
+   */
+  detail?: { label: string; render: (row: T) => ReactNode };
 }) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (key: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const span = columns.length + (detail === undefined ? 0 : 1);
   return (
     <>
       {toolbar !== undefined && <div className="toolbar">{toolbar}</div>}
@@ -1910,25 +1928,54 @@ export function DataTable<T>({
                   {column.header}
                 </th>
               ))}
+              {detail !== undefined && (
+                <th scope="col" className="al-end tbl-toggle">
+                  <span className="visually-hidden">{detail.label}</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={rowKey(row)} className={rowClassName?.(row)}>
-                {columns.map((column) => (
-                  <td
-                    key={column.key}
-                    className={cx(
-                      `al-${column.align === 'end' ? 'end' : 'start'}`,
-                      column.wrap !== undefined && column.wrap !== false && 'wrap',
-                      column.wrap === 'tight' && 'tight',
+            {rows.map((row) => {
+              const key = rowKey(row);
+              const expanded = open.has(key);
+              const detailId = `tbl-detail-${key}`;
+              return (
+                <Fragment key={key}>
+                  <tr className={cx(rowClassName?.(row), expanded && 'expanded')}>
+                    {columns.map((column) => (
+                      <td
+                        key={column.key}
+                        className={cx(
+                          `al-${column.align === 'end' ? 'end' : 'start'}`,
+                          column.wrap !== undefined && column.wrap !== false && 'wrap',
+                          column.wrap === 'tight' && 'tight',
+                        )}
+                      >
+                        {column.render(row)}
+                      </td>
+                    ))}
+                    {detail !== undefined && (
+                      <td className="al-end tbl-toggle">
+                        <IconButton
+                          icon="chevron"
+                          label={detail.label}
+                          size="sm"
+                          aria-expanded={expanded}
+                          {...(expanded ? { 'aria-controls': detailId } : {})}
+                          onClick={() => toggle(key)}
+                        />
+                      </td>
                     )}
-                  >
-                    {column.render(row)}
-                  </td>
-                ))}
-              </tr>
-            ))}
+                  </tr>
+                  {detail !== undefined && expanded && (
+                    <tr className="tbl-detail" id={detailId}>
+                      <td colSpan={span}>{detail.render(row)}</td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

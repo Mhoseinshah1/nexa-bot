@@ -3090,3 +3090,36 @@ textarea.input,
     animation: none;
   }
 }
+
+/*
+ * A row's detail (demo parity X9, `DataTable`'s `detail`): the toggle is the narrow last
+ * column, its chevron turns when open, and the detail is one full-width line under the row
+ * on the row's own tint — the facts a wide list cannot hold as columns at 1440.
+ */
+.tbl th.tbl-toggle,
+.tbl td.tbl-toggle {
+  width: 1%;
+  padding-inline: 4px 8px;
+}
+.tbl td.tbl-toggle .btn.icon svg {
+  transition: transform 0.15s;
+}
+.tbl tr.expanded td.tbl-toggle .btn.icon svg {
+  transform: rotate(180deg);
+}
+.tbl tbody tr.expanded,
+.tbl tbody tr.tbl-detail {
+  background: var(--panel-row);
+}
+.tbl tbody tr.expanded td {
+  border-bottom-color: transparent;
+}
+.tbl tbody tr.tbl-detail > td {
+  white-space: normal;
+  padding: 4px 12px 14px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tbl td.tbl-toggle .btn.icon svg {
+    transition: none;
+  }
+}
