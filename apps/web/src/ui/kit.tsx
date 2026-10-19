@@ -647,6 +647,8 @@ export function DetailHead({
   initial,
   stats,
   level = 2,
+  back,
+  initialClass,
 }: {
   title: ReactNode;
   badge?: ReactNode;
@@ -656,17 +658,30 @@ export function DetailHead({
   initial?: string;
   stats?: readonly { readonly label: ReactNode; readonly value: ReactNode }[];
   level?: 1 | 2;
+  /**
+   * A small «→ فهرست» link to the list the record belongs to, drawn under the breadcrumb and
+   * above the head (the demo's `backl`). Additive: a head without it is unchanged.
+   */
+  back?: { readonly href: string; readonly label: ReactNode };
+  /** An extra class for the avatar tile (a page's tint); additive, absent changes nothing. */
+  initialClass?: string;
 }) {
   const Heading = level === 1 ? 'h1' : 'h2';
   const trail = useContext(PageTrailContext);
+  const onLink = useLinkHandler();
   return (
     <>
       {/* A detail page whose head IS this card still says where it is (X1). */}
       {level === 1 && trail.length > 1 && <Breadcrumbs items={trail} />}
+      {back !== undefined && (
+        <a className="back-link" href={back.href} onClick={onLink}>
+          <span aria-hidden="true">→</span> {back.label}
+        </a>
+      )}
       <section className="card detail-head">
         <div className="head-card">
           {initial !== undefined && (
-            <span className="avatar lg" aria-hidden="true">
+            <span className={cx('avatar', 'lg', initialClass)} aria-hidden="true">
               {initial}
             </span>
           )}
@@ -1874,7 +1889,7 @@ export function DataTable<T>({
   filters,
   rowClassName,
   detail,
-  phoneCards = false,
+  stack = false,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -1893,11 +1908,14 @@ export function DataTable<T>({
    */
   detail?: { label: string; render: (row: T) => ReactNode };
   /**
-   * On a phone (≤ 820px) each row becomes a card, every cell on its own line under its
-   * column's name, as the demo draws its lists at 390 — instead of a table scrolling
-   * sideways. The first column is the card's title. Opt-in, per table.
+   * Demo parity (390): at phone and tablet width the table is drawn as the approved demo
+   * draws every list there — one card per row, its first column as the card's title and
+   * every other cell as a «header … value» line (each cell carries its header in
+   * `data-label`). The same rows, cells and order; only the CSS layout changes.
+   * `'labelled'` draws the first cell as a labelled line too, where the demo does (its
+   * generic lists), instead of as the card's title.
    */
-  phoneCards?: boolean;
+  stack?: boolean | 'labelled';
 }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const toggle = (key: string) =>
@@ -1912,8 +1930,15 @@ export function DataTable<T>({
     <>
       {toolbar !== undefined && <div className="toolbar">{toolbar}</div>}
       {filters !== undefined && <div className="filter-row">{filters}</div>}
-      <div className={cx('tbl-wrap', sticky && 'sticky')}>
-        <table className={cx('tbl', dense && 'dense', phoneCards && 'phone-cards')}>
+      <div
+        className={cx(
+          'tbl-wrap',
+          sticky && 'sticky',
+          stack !== false && 'stack',
+          stack === 'labelled' && 'labelled',
+        )}
+      >
+        <table className={cx('tbl', dense && 'dense')}>
           <caption className="visually-hidden">{caption}</caption>
           <thead>
             <tr>
@@ -1953,7 +1978,7 @@ export function DataTable<T>({
                     {columns.map((column) => (
                       <td
                         key={column.key}
-                        data-label={column.header}
+                        data-label={stack === false ? undefined : column.header}
                         className={cx(
                           `al-${column.align === 'end' ? 'end' : 'start'}`,
                           column.wrap !== undefined && column.wrap !== false && 'wrap',
@@ -2345,8 +2370,24 @@ export interface DistributionSlice {
  * breakdown does not. This component takes slices and knows nothing about
  * either — the caller decides, and the dashboard's caller passes panels.
  */
-export function Distribution({ slices }: { slices: readonly DistributionSlice[] }) {
+export function Distribution({
+  slices,
+  scale = 'total',
+}: {
+  slices: readonly DistributionSlice[];
+  /**
+   * What a full bar means: the slices' `total` (each bar its share, the default), or the
+   * largest slice (`max`: the longest bar is full and the rest compare to it, as the approved
+   * demo's bar cards draw them). The numbers beside the bars are the counts either way.
+   */
+  scale?: 'total' | 'max';
+}) {
   const total = useMemo(() => slices.reduce((sum, slice) => sum + slice.count, 0), [slices]);
+  const largest = useMemo(
+    () => slices.reduce((top, slice) => Math.max(top, slice.count), 0),
+    [slices],
+  );
+  const full = scale === 'max' ? largest : total;
 
   if (total === 0) return <Empty title={t('web.empty')} />;
 
@@ -2376,7 +2417,7 @@ export function Distribution({ slices }: { slices: readonly DistributionSlice[] 
               x="0"
               y="0"
               height="8"
-              width={(slice.count / total) * 100}
+              width={(slice.count / full) * 100}
             />
           </svg>
         </div>

@@ -908,7 +908,7 @@ export function PaymentGatewaysPage({
           {provider === undefined ? (
             <Card title={t('web.payment_gateways_title')} hint={t('web.payment_gateways_hint')}>
               <DataTable
-                phoneCards
+                stack
                 columns={columns}
                 rows={rows}
                 rowKey={(row) => row.provider}

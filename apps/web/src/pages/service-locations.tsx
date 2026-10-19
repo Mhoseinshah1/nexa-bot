@@ -21,7 +21,7 @@ import {
   fetchServiceLocations,
   updateServiceLocation,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatTimestampNumeric } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -378,7 +378,7 @@ export function ServiceLocationsPage({
     {
       key: 'updated',
       header: t('web.service_locations_updated'),
-      render: (row) => <span className="muted small">{formatTimestamp(row.updatedAt)}</span>,
+      render: (row) => <span className="nowrap">{formatTimestampNumeric(row.updatedAt)}</span>,
     },
     {
       key: 'actions',
@@ -405,8 +405,6 @@ export function ServiceLocationsPage({
             <IconButton
               size="sm"
               icon="trash"
-              variant="danger"
-              className="ghost"
               label={t('web.service_locations_delete')}
               disabled={busy}
               onClick={() => setDeleting(row)}
@@ -475,11 +473,11 @@ export function ServiceLocationsPage({
         >
           <Card title={t('web.service_locations_list')}>
             <DataTable
+              stack="labelled"
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}
               caption={t('web.service_locations_list')}
-              dense
             />
           </Card>
         </StateSwitch>

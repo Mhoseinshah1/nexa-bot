@@ -1004,14 +1004,14 @@
 }
 /* In a phone card a key's pill and its date share one line, as the demo's card draws them. */
 @media (max-width: 820px) {
-  .tbl.phone-cards .gateways-stack {
+  .tbl-wrap.stack .gateways-stack {
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
     gap: 2px 6px;
   }
-  .tbl.phone-cards td:not(:first-child) .gateways-lines {
+  .tbl-wrap.stack td:not(:first-child) .gateways-lines {
     align-items: flex-end;
   }
 }

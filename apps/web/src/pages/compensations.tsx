@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import { AUTOMATIC_REFUND_REASON, type CompensationView, type RefundState } from '@nexa/contracts';
 import { fetchCompensations } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatTimestampNumeric } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import {
@@ -150,7 +150,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
       key: 'time',
       header: t('web.compensation_time'),
       render: (row) => (
-        <span className="nowrap">{formatTimestamp(row.completedAt ?? row.createdAt)}</span>
+        <span className="nowrap">{formatTimestampNumeric(row.completedAt ?? row.createdAt)}</span>
       ),
     },
   ];
@@ -166,11 +166,11 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
           ) : (
             <>
               <DataTable
+                stack
                 caption={t('web.compensations_title')}
                 columns={columns}
                 rows={compensations.data.compensations}
                 rowKey={(row) => row.refundId}
-                dense
                 sticky
               />
               <CursorPager

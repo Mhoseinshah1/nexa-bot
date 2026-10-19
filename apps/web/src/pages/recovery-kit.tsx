@@ -73,7 +73,11 @@ export function RecoveryKitSection({ permissions }: { permissions: readonly Perm
   };
 
   return (
-    <Card title={t('web.kit_title')} hint={t('web.kit_intro')} className="recovery-kit">
+    <Card
+      title={t('web.kit_title')}
+      hint={t('web.kit_intro')}
+      className="recovery-kit rcv-inline-head"
+    >
       <Banner tone="warn" title={t('web.kit_warning_title')}>
         {t('web.kit_warning_body')}
       </Banner>

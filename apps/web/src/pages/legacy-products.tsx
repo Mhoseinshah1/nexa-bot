@@ -290,25 +290,25 @@ export function LegacyProductsPage({
   return (
     <>
       <PageHead title={t('web.lpr_title')} subtitle={t('web.lpr_subtitle')} />
-      <Banner tone="info" icon="info">
-        {t('web.lpr_banner')}
-      </Banner>
+      <Banner tone="info">{t('web.lpr_banner')}</Banner>
       <ListFilterBar
         label={t('web.lpr_title')}
         search={
-          <Field label={t('web.lpr_search')} htmlFor="lpr-search" compact>
-            <Input
-              id="lpr-search"
-              size="sm"
-              value={search}
-              maxLength={200}
-              placeholder={t('web.lpr_search')}
-              onChange={(event) => {
-                setSearch(event.target.value);
-                resetPaging();
-              }}
-            />
-          </Field>
+          // The demo's narrow field on the start side, not a full-width search line.
+          <div className="lgr-filters">
+            <Field label={t('web.lpr_search')} htmlFor="lpr-search" compact>
+              <Input
+                id="lpr-search"
+                size="sm"
+                value={search}
+                maxLength={200}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  resetPaging();
+                }}
+              />
+            </Field>
+          </div>
         }
         filters={[
           {
@@ -360,7 +360,6 @@ export function LegacyProductsPage({
             rows={rows}
             rowKey={(row) => row.id}
             caption={t('web.lpr_title')}
-            dense
           />
           <CursorPager
             order="sequence"

@@ -189,7 +189,6 @@ export function CustomerLatestCard({ customerId }: { customerId: string }) {
                   columns={orderColumns}
                   rows={data.orders.latest}
                   rowKey={(row) => row.id}
-                  dense
                 />
               )}
             </section>
@@ -212,7 +211,6 @@ export function CustomerLatestCard({ customerId }: { customerId: string }) {
                   columns={paymentColumns}
                   rows={data.payments.latest}
                   rowKey={(row) => row.id}
-                  dense
                 />
               )}
             </section>

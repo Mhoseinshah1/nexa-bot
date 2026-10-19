@@ -19,6 +19,7 @@ import {
 import { formatTimestamp } from '../format';
 import { LegacyCode } from './code-name';
 import { Modal } from '../ui/overlays';
+import { Icon } from '../ui/icons';
 import { LEGACY_IMPORT_RUN_STATUS_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
@@ -140,7 +141,7 @@ export function LegacyCutoverPage({
     {
       key: 'source',
       header: t('web.lco_field_source'),
-      render: (row) => <Ltr>{row.sourceFingerprint}</Ltr>,
+      render: (row) => <Hash value={row.sourceFingerprint} />,
     },
     {
       key: 'state',
@@ -183,14 +184,14 @@ export function LegacyCutoverPage({
     {
       key: 'fingerprint',
       header: t('web.lco_col_fingerprint'),
-      render: (row) => <Ltr>{row.readSetFingerprint}</Ltr>,
+      render: (row) => <Hash value={row.readSetFingerprint} />,
     },
     {
       key: 'source',
       header: t('web.lco_field_source'),
       render: (row) => (
         <>
-          <Ltr>{row.sourceFingerprint}</Ltr>{' '}
+          <Hash value={row.sourceFingerprint} />{' '}
           {row.synthetic && <Badge tone="warn">{t('web.lco_synthetic')}</Badge>}
         </>
       ),
@@ -211,7 +212,7 @@ export function LegacyCutoverPage({
     {
       key: 'source',
       header: t('web.lco_field_source'),
-      render: (row) => <Ltr>{row.sourceFingerprint}</Ltr>,
+      render: (row) => <Hash value={row.sourceFingerprint} />,
     },
   ];
 
@@ -224,6 +225,7 @@ export function LegacyCutoverPage({
           ? {
               actions: (
                 <button type="button" className="btn primary" onClick={() => setApproving(true)}>
+                  <Icon name="check" />
                   {t('web.lco_approve_title')}
                 </button>
               ),
@@ -241,31 +243,31 @@ export function LegacyCutoverPage({
       <Banner tone="warn" icon="info">
         {t('web.lco_banner')}
       </Banner>
-      <StateSwitch
-        query={approvals.query}
-        denied={denied}
-        isEmpty={
-          queryState(approvals.query) === 'ready' &&
-          approvalRows.length === 0 &&
-          approvals.trail.length === 0
-        }
-        empty={<Empty title={t('web.lco_empty')} hint={t('web.lco_empty_hint')} />}
-      >
-        <Card title={t('web.lco_approvals_title')}>
+      {/* The approvals are a card whose empty state sits inside it, as the demo draws it. */}
+      <Card title={t('web.lco_approvals_title')}>
+        <StateSwitch
+          query={approvals.query}
+          denied={denied}
+          isEmpty={
+            queryState(approvals.query) === 'ready' &&
+            approvalRows.length === 0 &&
+            approvals.trail.length === 0
+          }
+          empty={<Empty title={t('web.lco_empty')} hint={t('web.lco_empty_hint')} />}
+        >
           <DataTable
             columns={approvalColumns}
             rows={approvalRows}
             rowKey={(row) => row.id}
             caption={t('web.lco_approvals_title')}
-            dense
           />
           <Pager
             paged={approvals}
             next={approvals.query.data?.nextCursor ?? null}
             shown={approvalRows.length}
           />
-        </Card>
-      </StateSwitch>
+        </StateSwitch>
+      </Card>
       {!denied && (
         <>
           <Card title={t('web.lco_read_sets_title')}>
@@ -274,7 +276,6 @@ export function LegacyCutoverPage({
               rows={readSets.query.data?.readSets ?? []}
               rowKey={(row) => row.id}
               caption={t('web.lco_read_sets_title')}
-              dense
             />
             <Pager
               paged={readSets}
@@ -288,7 +289,6 @@ export function LegacyCutoverPage({
               rows={runs.query.data?.runs ?? []}
               rowKey={(row) => row.id}
               caption={t('web.lco_runs_title')}
-              dense
             />
             <Pager
               paged={runs}
@@ -303,6 +303,15 @@ export function LegacyCutoverPage({
   );
 }
 
+/** A 64-digit fingerprint in a list: the demo's small code face, so two fit one row. */
+function Hash({ value }: { value: string }) {
+  return (
+    <Ltr>
+      <span className="lgr-hash">{value}</span>
+    </Ltr>
+  );
+}
+
 function Pager({
   paged,
   next,
@@ -314,7 +323,8 @@ function Pager({
 }) {
   return (
     <CursorPager
-      order="sequence"
+      // Every list here is `id` ascending over uuid v7 ids: oldest first.
+      order="oldest-first"
       shown={shown}
       hasPrevious={paged.trail.length > 0}
       hasNext={next !== null}

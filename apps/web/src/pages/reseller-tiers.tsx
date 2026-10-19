@@ -463,7 +463,7 @@ export function ResellerTiersPage({
           }
         >
           <DataTable
-            phoneCards
+            stack
             caption={t('web.reseller_tiers_list_title')}
             columns={columns}
             rows={tierPage.rows}

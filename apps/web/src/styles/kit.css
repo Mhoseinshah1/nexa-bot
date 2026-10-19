@@ -476,6 +476,24 @@
 .content-inner > .crumbs {
   margin-bottom: 8px;
 }
+/* The record's way back to its list (the demo's `backl`): small, quiet, above the head. */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  text-decoration: none;
+  margin-bottom: 4px;
+}
+.back-link:hover {
+  color: var(--accent);
+}
+@media (pointer: coarse) and (hover: none) {
+  .back-link {
+    min-height: var(--ctl-h);
+  }
+}
 @media (max-width: 820px) {
   .page-head h1 {
     font-size: 21px;
@@ -998,6 +1016,64 @@
   white-space: normal;
   line-height: 1.4;
   padding-block: 2px;
+}
+/*
+ * Demo parity (390): a `stack` table at phone and tablet width is one card per row, as the
+ * approved demo draws every list there — the first cell is the row's title, every other cell
+ * a line with its header (`data-label`) at the start and its value at the end. The header row
+ * stays in the accessibility tree, visually hidden.
+ */
+@media (max-width: 820px) {
+  .tbl-wrap.stack,
+  .tbl-wrap.stack.sticky {
+    max-height: none;
+    overflow: visible;
+  }
+  .tbl-wrap.stack .tbl,
+  .tbl-wrap.stack .tbl tbody,
+  .tbl-wrap.stack .tbl tr,
+  .tbl-wrap.stack .tbl td {
+    display: block;
+    width: 100%;
+  }
+  .tbl-wrap.stack .tbl thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tbl-wrap.stack .tbl tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tbl-wrap.stack .tbl tr:last-child {
+    border-bottom: 0;
+  }
+  .tbl-wrap.stack .tbl td {
+    min-width: 0;
+    padding: 3px 0;
+    border: 0;
+    overflow: hidden;
+    text-align: end;
+    white-space: normal;
+  }
+  .tbl-wrap.stack .tbl td::before {
+    content: attr(data-label);
+    float: inline-start;
+    margin-inline-end: 12px;
+    color: var(--fg-3);
+    font-size: var(--fs-xs);
+  }
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child {
+    padding-bottom: 6px;
+    font-size: var(--fs-body);
+    text-align: start;
+  }
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child::before {
+    content: none;
+  }
 }
 .tbl tbody tr {
   transition: background 0.1s;
@@ -3112,74 +3188,39 @@ textarea.input,
 }
 
 /*
- * `DataTable`'s `phoneCards` (demo parity, 390): on a phone each row is a card — the first
- * column its title, every other cell one line under its column's name (`data-label`), the
- * value at the end — instead of a table scrolling sideways. The demo does this at 820px.
+ * A `stack` table's row detail (`DataTable`'s `detail`) on a phone: the toggle sits in the
+ * card's corner beside the title, the detail is one unlabelled line under its card, and a
+ * title's two lines (a Latin code included) keep to the start side. Additive to `.stack`.
  */
 @media (max-width: 820px) {
-  .tbl-wrap:has(> .tbl.phone-cards) {
-    overflow: visible;
-    max-height: none;
-  }
-  .tbl.phone-cards thead {
-    display: none;
-  }
-  .tbl.phone-cards,
-  .tbl.phone-cards tbody,
-  .tbl.phone-cards tr,
-  .tbl.phone-cards td {
-    display: block;
-    width: 100%;
-  }
-  .tbl.phone-cards tbody tr {
+  .tbl-wrap.stack .tbl tbody tr {
     position: relative;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--line);
   }
-  .tbl.phone-cards tbody tr:last-child,
-  .tbl.phone-cards tbody tr.expanded {
+  .tbl-wrap.stack .tbl tbody tr.expanded {
     border-bottom-color: transparent;
   }
-  .tbl.phone-cards td,
-  .tbl.phone-cards td.wrap {
-    min-width: 0;
-    padding: 3px 0;
-    border: 0;
-    white-space: normal;
-    text-align: end;
+  .tbl-wrap.stack .tbl td {
     overflow-wrap: anywhere;
   }
-  .tbl.phone-cards td::before {
-    content: attr(data-label);
-    float: inline-start;
-    margin-inline-end: 12px;
-    color: var(--fg-3);
-    font-size: var(--fs-xs);
-  }
-  .tbl.phone-cards td:first-child {
-    padding-block-end: 6px;
+  .tbl-wrap.stack .tbl tr:has(> td.tbl-toggle) > td:first-child {
     padding-inline-end: 44px;
-    font-size: var(--fs-body);
-    text-align: start;
   }
-  .tbl.phone-cards td:first-child::before,
-  .tbl.phone-cards td.tbl-toggle::before,
-  .tbl.phone-cards tr.tbl-detail > td::before {
-    display: none;
+  .tbl-wrap.stack .tbl td.tbl-toggle::before,
+  .tbl-wrap.stack .tbl tr.tbl-detail > td::before {
+    content: none;
   }
-  .tbl.phone-cards td.tbl-toggle {
+  .tbl-wrap.stack .tbl td.tbl-toggle {
     position: absolute;
     inset-block-start: 6px;
     inset-inline-end: 8px;
     width: auto;
     padding: 0;
   }
-  .tbl.phone-cards tr.tbl-detail > td {
+  .tbl-wrap.stack .tbl tr.tbl-detail > td {
     padding: 0;
     text-align: start;
   }
-  /* A title's two lines each sit on the start side, a Latin code included. */
-  .tbl.phone-cards td:first-child .cell-main {
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child .cell-main {
     align-items: flex-start;
   }
 }

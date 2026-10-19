@@ -129,6 +129,12 @@ describe('the Build-from-NEXA page', () => {
     expect(within(item).getByText('متن تازهٔ منبع')).toBeInTheDocument();
     expect(list.querySelector('[data-kind="UNCHANGED"]')).toBeNull();
     expect(screen.queryByText('قوانین ثابت')).toBeNull();
+    // Demo parity (DIFFS knowledge-build #1): each text is a card of its own, the current one
+    // first; the rows are unnumbered (`kb-proposals` drops the list's markers).
+    const cards = item.querySelectorAll('.kb-text');
+    expect(cards).toHaveLength(2);
+    expect(within(cards[0] as HTMLElement).getByText('متن دستی اپراتور')).toBeInTheDocument();
+    expect(list.classList.contains('kb-proposals')).toBe(true);
   });
 
   it('apply all names no proposal; a single apply names exactly one', async () => {

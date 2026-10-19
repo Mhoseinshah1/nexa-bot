@@ -151,6 +151,29 @@ describe('the ticket inbox', () => {
     expect(screen.queryByText('WAITING_FOR_SUPPORT')).toBeNull();
   });
 
+  it('has no search row of its own: the customer field is a filter in the «فیلترها» panel', async () => {
+    stubApi([
+      { url: '/tickets', body: { tickets: [summary()], nextCursor: null } },
+      { url: '/ticket-categories', body: categories },
+    ]);
+    const { container } = renderPage(
+      <TicketsPage
+        route={route('customer=951001')}
+        denied={false}
+        mayAssign={false}
+        mayEditCategories={false}
+      />,
+    );
+    await screen.findByRole('link', { name: '#42' });
+    // Demo parity (DIFFS tickets #1): the toolbar is the filters and the saved filters only.
+    expect(container.querySelector('.lfb-search')).toBeNull();
+    expect(document.getElementById('tickets-customer')).toBeNull();
+    // The applied customer reads as a removable chip, and the field is in the panel.
+    expect(container.querySelector('.lfb-chip')?.textContent).toContain('951001');
+    const panel = openFilterPanel();
+    expect(within(panel).getByLabelText(t('web.ticket_customer'))).toBeTruthy();
+  });
+
   it('sends every filter it holds, the date range as a half-open interval', async () => {
     const api = stubApi([
       { url: '/tickets', body: { tickets: [], nextCursor: null } },

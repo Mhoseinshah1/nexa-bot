@@ -294,35 +294,29 @@ describe('X9 — a wide table fits its card', () => {
     expect(KIT_CSS).toMatch(/\.tbl td\.wrap \.badge \{[^}]*white-space: normal/);
   });
 
-  it('turns rows into phone cards only when asked, each cell named by its column', () => {
-    const { container, rerender } = renderPage(
+  it('keeps a row detail usable in a stacked (phone card) table', () => {
+    const { container } = renderPage(
       <DataTable
         caption="جدول"
         columns={columns}
         rows={[{ id: '1', at: 'الف', note: 'یک' }]}
         rowKey={(row) => row.id}
+        stack
+        detail={{ label: 'جزئیات', render: (row) => `جزئیات ${row.id}` }}
       />,
     );
-    expect(container.querySelector('table')).not.toHaveClass('phone-cards');
-    rerender(
-      <DataTable
-        caption="جدول"
-        columns={columns}
-        rows={[{ id: '1', at: 'الف', note: 'یک' }]}
-        rowKey={(row) => row.id}
-        phoneCards
-      />,
-    );
-    expect(container.querySelector('table')).toHaveClass('phone-cards');
-    const labels = [...container.querySelectorAll('tbody td')].map((td) =>
-      td.getAttribute('data-label'),
-    );
-    expect(labels).toEqual(['شناسه', 'زمان ثبت', 'یادداشت']);
-    // The card layout is the demo's breakpoint, and the label is drawn from the attribute.
+    expect(container.querySelector('.tbl-wrap')).toHaveClass('stack');
+    // The toggle cell is not a labelled line; the column cells are.
+    const toggleCell = container.querySelector('td.tbl-toggle');
+    expect(toggleCell).not.toHaveAttribute('data-label');
+    expect(container.querySelector('tbody td')).toHaveAttribute('data-label', 'شناسه');
+    fireEvent.click(screen.getByRole('button', { name: 'جزئیات' }));
+    expect(container.querySelector('tr.tbl-detail td')).not.toHaveAttribute('data-label');
+    // On a phone the toggle sits in the card's corner and the detail line carries no label.
+    expect(KIT_CSS).toMatch(/\.tbl-wrap\.stack \.tbl td\.tbl-toggle \{\s*position: absolute;/);
     expect(KIT_CSS).toMatch(
-      /@media \(max-width: 820px\) \{\s*\.tbl-wrap:has\(> \.tbl\.phone-cards\)/,
+      /\.tbl-wrap\.stack \.tbl td\.tbl-toggle::before,\n\s*\.tbl-wrap\.stack \.tbl tr\.tbl-detail > td::before \{\s*content: none;/,
     );
-    expect(KIT_CSS).toMatch(/\.tbl\.phone-cards td::before \{\s*content: attr\(data-label\);/);
   });
 
   it('opens a row detail on one full-width line under its row, and closes it again', () => {

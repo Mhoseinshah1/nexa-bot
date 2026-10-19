@@ -192,7 +192,11 @@ export function RecoveryPage({
       </Card>
 
       {/* Spec 13.2: the automatic schedule, where its backups are. */}
-      <Card title={t('web.backup_schedule_title')} hint={t('web.backup_schedule_hint')}>
+      <Card
+        title={t('web.backup_schedule_title')}
+        hint={t('web.backup_schedule_hint')}
+        className="rcv-inline-head"
+      >
         <StateSwitch query={status} denied={!mayView}>
           {status.data !== undefined && (
             <BackupScheduleCard status={status.data} permissions={permissions} />
@@ -206,7 +210,7 @@ export function RecoveryPage({
         </StateSwitch>
       </Card>
 
-      <Card title={t('web.recovery_history_title')}>
+      <Card title={t('web.recovery_history_title')} className="rcv-history">
         <StateSwitch
           query={history}
           denied={!mayView}
@@ -243,7 +247,7 @@ export function RecoveryPage({
       <Card
         title={t('web.recovery_operations_title')}
         hint={t('web.recovery_upload_hint')}
-        className="recovery-operations"
+        className="recovery-operations rcv-inline-head"
       >
         {/*
           A Mirza restore is authorised by `legacy.migration.*`, not by `backup.view` (Codex
@@ -1069,6 +1073,8 @@ function recoveryColumns(): readonly Column<RecoveryRequestSummary>[] {
     {
       key: 'failure',
       header: t('web.recovery_failure'),
+      // The sentence wraps inside its cell, so the table fits its card (demo parity X9).
+      wrap: true,
       // The failure in words, with the code under it for whoever reads the server log.
       render: (row) =>
         row.failureCode === null ? (

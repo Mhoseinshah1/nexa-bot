@@ -263,7 +263,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             <p className="muted small">{t('web.fx_sources_none')}</p>
           ) : (
             <DataTable
-              phoneCards
+              stack
               columns={sourceColumns}
               rows={status.data.sources}
               rowKey={(row) => row.source}

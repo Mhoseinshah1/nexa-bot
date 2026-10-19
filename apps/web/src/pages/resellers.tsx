@@ -589,7 +589,7 @@ export function ResellersPage({
           }
         >
           <DataTable
-            phoneCards
+            stack="labelled"
             caption={t('web.resellers_list_title')}
             columns={columns}
             rows={rows}

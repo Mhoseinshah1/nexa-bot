@@ -364,7 +364,7 @@ export function CampaignsPage({
           empty={<Empty title={t('web.campaign_empty')} hint={t('web.campaign_empty_hint')} />}
         >
           <DataTable
-            phoneCards
+            stack
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
