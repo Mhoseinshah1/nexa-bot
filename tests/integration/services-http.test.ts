@@ -1,3 +1,6 @@
+import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import type { ProductCategoryId } from '@nexa/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -23,6 +26,7 @@ import {
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { DrizzleLegacyAdoptionStore } from '../../apps/api/src/modules/commerce/legacy-adoption/infrastructure/drizzle-legacy-adoption.store';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   adminActorFor,
@@ -601,6 +605,228 @@ describe('service HTTP surface', () => {
       JSON.parse((await get(`${SERVICE_ROUTES.list}?customerId=${other}`, viewerCookie)).body),
     );
     expect(byOther.services).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // The tabs and the original purchase date (Track 3 §3)
+  // -------------------------------------------------------------------------
+
+  /** Ends a service the way a deletion leaves it: TERMINATED, with its stamp. */
+  const terminate = async (serviceId: string): Promise<void> => {
+    await api.container.database.db.execute(sql`
+      UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${serviceId}`);
+  };
+
+  const listOf = async (query: string): Promise<{ ids: string[]; nextCursor: string | null }> => {
+    const response = await get(`${SERVICE_ROUTES.list}${query}`, viewerCookie);
+    expect(response.statusCode, response.body).toBe(200);
+    const page = serviceListResponseSchema.parse(JSON.parse(response.body));
+    return { ids: page.services.map((s) => s.id), nextCursor: page.nextCursor };
+  };
+
+  /**
+   * A live service ADOPTED by the one-time import, written by the import's OWN store — not an
+   * INSERT this file chose — so the trigger is proved against the statement the importer sends:
+   * the service row carries `created_at = now` (the adoption) and only the order carries the
+   * purchase date the previous bot recorded.
+   */
+  async function adoptedService(key: string, purchasedAt: Date, now: Date): Promise<string> {
+    const product = await products.create(tenantA, {
+      id: api.container.ids.uuid() as ProductId,
+      draft: {
+        title: 'پلن قدیمی',
+        description: null,
+        audience: 'EVERYONE',
+        sortOrder: 10,
+        panelId: panelA as PanelId,
+        categoryId: seededCategoryFor(tenantA) as ProductCategoryId,
+        specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
+        price: money(250_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
+      },
+      now: api.container.clock.now(),
+    });
+    const serviceId = api.container.ids.uuid();
+    const store = new DrizzleLegacyAdoptionStore(api.container.database.db);
+    await api.container.database.db.transaction(async (tx) => {
+      await store.insertAdoption(
+        tenantA,
+        {
+          orderId: api.container.ids.uuid(),
+          serviceId,
+          reservationId: api.container.ids.uuid(),
+          customerId: customerA,
+          panelId: panelA,
+          productId: product.id,
+          line: {
+            title: 'پلن قدیمی',
+            durationDays: 30,
+            trafficBytes: 53_687_091_200n,
+            deviceLimit: null,
+          },
+          currency: 'IRT',
+          settledAt: purchasedAt,
+          service: {
+            state: 'ACTIVE',
+            providerUsername: `legacy${key}`,
+            subscriptionRef: randomBytes(16).toString('hex'),
+            providerClientId: randomUUID(),
+            subscriptionUrl: null,
+            expiresAt: null,
+            trafficLimitBytes: 0n,
+            trafficUsedBytes: 0n,
+            usageSyncedAt: now,
+          },
+          reservation: { namespaceKey: `test:${key}`, username: `legacy${key}` },
+          sourceRef: `invoice:${key}`,
+          now,
+        },
+        { tx, scope: tenantA } as never,
+      );
+    });
+    return serviceId;
+  }
+
+  it('orders an imported service by its ORIGINAL purchase, never by the import', async () => {
+    const recent = await serviceFor('svc-started-1');
+    await api.container.database.db.execute(sql`
+      UPDATE services SET created_at = '2026-09-01T00:00:00Z'::timestamptz
+       WHERE id = ${recent.serviceId}`);
+    // Adopted TODAY (created_at), bought a year ago (the order's settled_at).
+    const imported = await adoptedService(
+      '7001',
+      new Date('2025-10-01T08:00:00.000Z'),
+      new Date('2026-10-18T09:00:00.000Z'),
+    );
+
+    const response = await get(SERVICE_ROUTES.list, viewerCookie);
+    const page = serviceListResponseSchema.parse(JSON.parse(response.body));
+    /*
+     * Ordered by `created_at` the import would be FIRST — "today" — above a service bought
+     * last month. By the original purchase it is last.
+     */
+    expect(page.services.map((s) => s.id)).toEqual([recent.serviceId, imported]);
+    const row = page.services.find((s) => s.id === imported);
+    expect(row?.originalStartedAt).toBe('2025-10-01T08:00:00.000Z');
+    expect(row?.createdAt).toBe('2026-10-18T09:00:00.000Z');
+    // A service this installation made starts when it was made.
+    const native = page.services.find((s) => s.id === recent.serviceId);
+    expect(native?.originalStartedAt).toBe('2026-09-01T00:00:00.000Z');
+  });
+
+  it('fills the original date for an import on INSERT, and leaves a NEXA row alone', async () => {
+    const native = await serviceFor('svc-started-native');
+    const imported = await adoptedService(
+      '7002',
+      new Date('2025-06-01T00:00:00.000Z'),
+      new Date('2026-10-18T09:00:00.000Z'),
+    );
+    // Bought and adopted at one instant: nothing earlier to record.
+    const sameDay = await adoptedService(
+      '7003',
+      new Date('2026-10-18T09:00:00.000Z'),
+      new Date('2026-10-18T09:00:00.000Z'),
+    );
+    const { rows } = (await api.container.database.db.execute(sql`
+      SELECT id, original_started_at IS NULL AS unset,
+             to_char(original_started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day
+        FROM services WHERE id IN (${native.serviceId}, ${imported}, ${sameDay})`)) as unknown as {
+      rows: { id: string; unset: boolean; day: string | null }[];
+    };
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    expect(byId.get(imported)).toMatchObject({ unset: false, day: '2025-06-01' });
+    expect(byId.get(native.serviceId)?.unset).toBe(true);
+    expect(byId.get(sameDay)?.unset).toBe(true);
+  });
+
+  it('backfills the services imported before the column existed, and only those', async () => {
+    const native = await serviceFor('svc-backfill-native');
+    const imported = await adoptedService(
+      '7004',
+      new Date('2025-03-01T00:00:00.000Z'),
+      new Date('2026-10-18T09:00:00.000Z'),
+    );
+    // As a row written by the release before this one: no original date at all.
+    await api.container.database.db.execute(sql`
+      UPDATE services SET original_started_at = NULL WHERE id = ${imported}`);
+
+    // The migration's OWN backfill, read from the file that ships, not retyped here.
+    const file = readFileSync(
+      join(__dirname, '../../apps/api/drizzle/0255_service_original_started.sql'),
+      'utf8',
+    );
+    const backfill = file
+      .split('--> statement-breakpoint')
+      .map((part) => part.trim())
+      .find((part) => /^(--[^\n]*\n)*UPDATE services/.test(part));
+    expect(backfill, 'the migration has no backfill statement').toBeDefined();
+    await api.container.database.db.execute(sql.raw(backfill ?? ''));
+
+    const { rows } = (await api.container.database.db.execute(sql`
+      SELECT id, to_char(original_started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day
+        FROM services WHERE id IN (${native.serviceId}, ${imported})`)) as unknown as {
+      rows: { id: string; day: string | null }[];
+    };
+    const byId = new Map(rows.map((row) => [row.id, row.day]));
+    expect(byId.get(imported)).toBe('2025-03-01');
+    expect(byId.get(native.serviceId)).toBeNull();
+  });
+
+  it('shows live services, ended services or both, as the tab asks', async () => {
+    const live = await serviceFor('svc-tab-live');
+    const ended = await serviceFor('svc-tab-ended');
+    const expired = await serviceFor('svc-tab-expired');
+    await terminate(ended.serviceId);
+    // EXPIRED is renewable, so it is LIVE: only a terminal state is ended.
+    await api.container.database.db.execute(sql`
+      UPDATE services SET state = 'EXPIRED', provisioned_at = now() WHERE id = ${expired.serviceId}`);
+
+    expect(new Set((await listOf('?lifecycle=LIVE')).ids)).toEqual(
+      new Set([live.serviceId, expired.serviceId]),
+    );
+    expect((await listOf('?lifecycle=ENDED')).ids).toEqual([ended.serviceId]);
+    const all = new Set([live.serviceId, ended.serviceId, expired.serviceId]);
+    expect(new Set((await listOf('?lifecycle=ALL')).ids)).toEqual(all);
+    // Absent is ALL, so a caller from the previous release keeps its answer.
+    expect(new Set((await listOf('')).ids)).toEqual(all);
+    // A tab composes with the other filters rather than replacing them.
+    expect((await listOf('?lifecycle=ENDED&state=PENDING_PROVISION')).ids).toEqual([]);
+  });
+
+  it('refuses a lifecycle the contract does not name', async () => {
+    const response = await get(`${SERVICE_ROUTES.list}?lifecycle=ACTIVE`, viewerCookie);
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('pages a tab by the original date, every row exactly once, ties broken by id', async () => {
+    const made: string[] = [];
+    for (const key of ['a', 'b', 'c', 'd'])
+      made.push((await serviceFor(`svc-keyset-${key}`)).serviceId);
+    const ended = await serviceFor('svc-keyset-ended');
+    await terminate(ended.serviceId);
+    // Two share an instant to the microsecond; one carries an earlier ORIGINAL date.
+    await api.container.database.db.execute(sql`
+      UPDATE services SET created_at = '2026-05-01T00:00:00.000123Z'::timestamptz
+       WHERE id IN (${made[0]}, ${made[1]})`);
+    await api.container.database.db.execute(sql`
+      UPDATE services SET created_at = '2026-05-02T00:00:00Z'::timestamptz WHERE id = ${made[2]}`);
+    await api.container.database.db.execute(sql`
+      UPDATE services SET created_at = '2026-10-01T00:00:00Z'::timestamptz,
+                          original_started_at = '2026-04-01T00:00:00.000456Z'::timestamptz
+       WHERE id = ${made[3]}`);
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = await listOf(
+        `?lifecycle=LIVE&limit=1${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`,
+      );
+      seen.push(...page.ids);
+      cursor = page.nextCursor;
+      if (cursor === null) break;
+    }
+    const tied = [made[0]!, made[1]!].sort().reverse();
+    expect(seen).toEqual([made[2], ...tied, made[3]]);
   });
 
   // -------------------------------------------------------------------------

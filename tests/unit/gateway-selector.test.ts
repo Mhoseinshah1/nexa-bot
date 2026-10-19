@@ -11,6 +11,7 @@ import {
   decideAmount,
   externalRoutes,
   filterRoutesByPurpose,
+  routeOfferabilityBlockers,
 } from '../../apps/api/src/modules/commerce/payments/domain/gateway-selection.js';
 
 /**
@@ -170,5 +171,62 @@ describe('the amount window', () => {
       admitted: false,
       reason: 'BOUND_CURRENCY_MISMATCH',
     });
+  });
+});
+
+describe('routeOfferabilityBlockers — the configuration half of the bot’s route decision', () => {
+  const open = {
+    status: 'ACTIVE' as const,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+  };
+  const manual = {
+    settlesVia: 'MANUAL_TRANSFER' as const,
+    hasReceivingAccount: true,
+    priceable: true,
+  };
+
+  it('has no blocker for an active, switched-on, receivable, priceable route', () => {
+    expect(routeOfferabilityBlockers(open, 'WALLET_TOPUP', manual)).toEqual([]);
+    expect(routeOfferabilityBlockers(open, 'SERVICE_PURCHASE', manual)).toEqual([]);
+  });
+
+  it('names each blocker on its own', () => {
+    expect(
+      routeOfferabilityBlockers({ ...open, status: 'DISABLED' }, 'WALLET_TOPUP', manual),
+    ).toEqual(['INACTIVE']);
+    expect(
+      routeOfferabilityBlockers({ ...open, allowWalletTopup: false }, 'WALLET_TOPUP', manual),
+    ).toEqual(['PURPOSE_OFF']);
+    // The other purpose's switch is not this purpose's blocker.
+    expect(
+      routeOfferabilityBlockers({ ...open, allowServicePurchase: false }, 'WALLET_TOPUP', manual),
+    ).toEqual([]);
+    expect(
+      routeOfferabilityBlockers(open, 'WALLET_TOPUP', { ...manual, hasReceivingAccount: false }),
+    ).toEqual(['NO_RECEIVING_ACCOUNT']);
+    expect(
+      routeOfferabilityBlockers(open, 'WALLET_TOPUP', { ...manual, priceable: false }),
+    ).toEqual(['UNPRICEABLE']);
+  });
+
+  it('asks for a receiving account only of a route that settles by manual transfer', () => {
+    expect(
+      routeOfferabilityBlockers(open, 'WALLET_TOPUP', {
+        settlesVia: 'GATEWAY',
+        hasReceivingAccount: false,
+        priceable: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('reports every blocker at once, in a fixed order', () => {
+    expect(
+      routeOfferabilityBlockers(
+        { status: 'DISABLED', allowServicePurchase: true, allowWalletTopup: false },
+        'WALLET_TOPUP',
+        { settlesVia: 'MANUAL_TRANSFER', hasReceivingAccount: false, priceable: false },
+      ),
+    ).toEqual(['INACTIVE', 'PURPOSE_OFF', 'NO_RECEIVING_ACCOUNT', 'UNPRICEABLE']);
   });
 });

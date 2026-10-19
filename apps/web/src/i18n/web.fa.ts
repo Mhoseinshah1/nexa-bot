@@ -1936,10 +1936,12 @@ export const WEB_FA = {
     'این فهرست از قدیمی‌ترین سفارش شروع می‌شود؛ دکمهٔ «تازه‌تر» به سفارش‌های جدیدتر می‌رود.',
   'web.user_orders_all': 'همهٔ سفارش‌های این مشتری',
   'web.user_services_title': 'سرویس‌های این مشتری',
-  'web.user_services_empty': 'این مشتری هنوز سرویسی ندارد.',
   'web.user_services_denied': 'برای دیدن سرویس‌های این مشتری دسترسی services.view لازم است.',
   'web.user_services_hint': 'این فهرست از تازه‌ترین سرویس شروع می‌شود.',
   'web.user_services_all': 'همهٔ سرویس‌های این مشتری',
+  'web.user_services_live_empty': 'این مشتری سرویس فعالی ندارد.',
+  'web.user_services_ended': 'پایان‌یافته',
+  'web.user_services_ended_empty': 'این مشتری سرویس پایان‌یافته‌ای ندارد.',
 
   // --- Wallet (Phase 4C) ---------------------------------------------------
   /*
@@ -2400,6 +2402,17 @@ export const WEB_FA = {
   // actually operate, so there is no Add button and its absence is not a defect.
   'web.payment_gateways_hint':
     'فهرست روش‌ها ثابت است و تنها روش‌هایی را نشان می‌دهد که این نسخه می‌تواند انجام دهد. روش جدید با نسخهٔ جدید اضافه می‌شود، نه از این صفحه.',
+  // The wallet top-up warning: the server's own route decision (the one the bot uses to
+  // hide «💰 افزایش موجودی»), drawn per route. Never re-decided here.
+  'web.payment_gateways_topup_unavailable_title': 'هیچ روشی برای افزایش موجودی کیف پول فعال نیست',
+  'web.payment_gateways_topup_unavailable_body':
+    'برای همین دکمهٔ «💰 افزایش موجودی» در ربات به مشتری نشان داده نمی‌شود. دلیل هر روش:',
+  'web.payment_gateways_topup_block_inactive': 'خاموش است',
+  'web.payment_gateways_topup_block_inactive_keyed': 'کلید API دارد اما خاموش است',
+  'web.payment_gateways_topup_block_inactive_no_key': 'خاموش است و کلید API ندارد',
+  'web.payment_gateways_topup_block_purpose_off': 'افزایش موجودی برای این روش خاموش است',
+  'web.payment_gateways_topup_block_no_receiving_account': 'هیچ کارت مقصد فعالی ندارد',
+  'web.payment_gateways_topup_block_unpriceable': 'نسبت واحد نرخ مرکزی تنظیم نشده است',
   'web.payment_gateway_provider': 'روش',
   'web.payment_gateway_provider_manual_transfer': 'کارت به کارت',
   'web.payment_gateway_provider_tonpays': 'درگاه پرداخت تون پی وبسایت',
@@ -3433,6 +3446,14 @@ export const WEB_FA = {
   'web.services_title': 'سرویس‌ها',
   'web.services_intro': 'سرویس‌هایی که ساخته شده‌اند، و آنهایی که هنوز نشده‌اند.',
   'web.services_empty': 'هنوز سرویسی ساخته نشده است.',
+  'web.services_tab_live': 'فعال',
+  'web.services_tab_ended': 'پایان‌یافته',
+  'web.services_tab_all': 'همه',
+  'web.services_empty_live': 'سرویس فعالی نیست.',
+  'web.services_empty_live_hint': 'سرویس‌های پایان‌یافته در زبانهٔ «پایان‌یافته» هستند.',
+  'web.services_empty_ended': 'سرویس پایان‌یافته‌ای نیست.',
+  'web.service_started_at': 'تاریخ خرید',
+  'web.service_imported_line': 'منتقل‌شده از ربات قبلی · تاریخ خرید اصلی: {date}',
   'web.services_empty_hint':
     'سرویس با تسویهٔ یک سفارش ساخته می‌شود؛ تا آن لحظه چیزی برای دیدن نیست.',
   'web.service_detail': 'جزئیات سرویس',
@@ -3893,6 +3914,50 @@ export const WEB_FA = {
   'web.trials_history_reason': 'دلیل',
   'web.trials_history_time': 'زمان',
 
+  // Track 3 §2: a panel's connection-file caption — its «فایل‌های اتصال» tab.
+  'web.panel_tab_connection_files': 'فایل‌های اتصال',
+  'web.connection_files_title': 'توضیح فایل‌های اتصال',
+  'web.connection_files_hint':
+    'متنی که زیر فایل‌های اتصال این پنل (مثل Android.bpf و Windows.bpf) برای مشتری فرستاده می‌شود.',
+  'web.connection_files_mode': 'حالت توضیح',
+  'web.connection_files_mode_panel_default': 'پیش‌فرض پنل',
+  'web.connection_files_mode_custom': 'سفارشی',
+  'web.connection_files_mode_none': 'بدون توضیح',
+  'web.connection_files_mode_panel_default_note':
+    'توضیح آمادهٔ خود پنل برای هر فایل نشان داده می‌شود؛ اگر پنل توضیحی نفرستد، نام کاربری سرویس.',
+  'web.connection_files_mode_none_note': 'فایل‌ها بدون هیچ توضیحی فرستاده می‌شوند.',
+  'web.connection_files_use_default': 'استفاده از قالب پیش‌فرض',
+  'web.connection_files_use_default_note':
+    'قالب پیش‌فرض همان «توضیح پیش‌فرض فایل‌های اتصال» در صفحهٔ قالب پیام‌هاست.',
+  'web.connection_files_template': 'قالب توضیح این پنل',
+  'web.connection_files_template_hint':
+    'متغیرها را داخل آکولاد بنویسید، مثل {username}. هر خطی که مقدار متغیرهایش برای سرویس موجود نباشد حذف می‌شود. برچسب‌های قالب‌بندی تلگرام مثل <b> و <code> مجازند و مقدار متغیرها هرگز به‌عنوان برچسب خوانده نمی‌شود.',
+  'web.connection_files_variables': 'متغیرهای مجاز',
+  'web.connection_files_unknown_variable':
+    'متغیر ناشناخته: {token}. فقط متغیرهای فهرست‌شده مجازند.',
+  'web.connection_files_template_empty': 'قالب توضیح نمی‌تواند خالی باشد.',
+  'web.connection_files_template_too_long':
+    'قالب توضیح حداکثر {max} نویسه است؛ این قالب {count} نویسه دارد.',
+  'web.connection_files_length': '{count} از {max} نویسه',
+  'web.connection_files_length_warning':
+    'تلگرام توضیح فایل را حداکثر ۱۰۲۴ نویسه می‌پذیرد. اگر متن نهایی با مقدارهای واقعی بلندتر شود، هنگام ارسال کوتاه می‌شود و «…» در پایانش می‌آید.',
+  'web.connection_files_placement': 'محل توضیح',
+  'web.connection_files_placement_last': 'فقط زیر آخرین فایل',
+  'web.connection_files_placement_every': 'زیر همهٔ فایل‌ها',
+  'web.connection_files_preview': 'پیش‌نمایش',
+  'web.connection_files_preview_hint':
+    'این فقط پیش‌نمایش است: به جای هر متغیر نام آن نشان داده می‌شود و مقدار واقعی سرویس هنگام ارسال جایگزین می‌شود.',
+  'web.connection_files_preview_empty': 'با این قالب توضیحی فرستاده نمی‌شود.',
+  'web.connection_files_stale': 'این تنظیم در این فاصله تغییر کرده است؛ مقدار تازه بارگذاری شد.',
+  'web.connection_files_invalid': 'قالب توضیح هنوز ایراد دارد؛ پیش از ذخیره آن را اصلاح کنید.',
+  'web.connection_files_updated_at': 'آخرین تغییر',
+  'web.setting_connection_files_mode_desc':
+    'برای هر پنل جدا، در صفحهٔ همان پنل، بخش «فایل‌های اتصال» تنظیم می‌شود.',
+  'web.setting_connection_files_template_desc':
+    'قالب توضیح سفارشی هر پنل، در صفحهٔ همان پنل، بخش «فایل‌های اتصال».',
+  'web.setting_connection_files_placement_desc':
+    'اینکه توضیح زیر آخرین فایل بیاید یا زیر همهٔ فایل‌ها؛ برای هر پنل جدا.',
+
   // R1: the free trial per panel — its tab on the panel page and the Trials page overview.
   'web.panel_tab_trial': 'سرویس تست',
   'web.service_trial_badge': 'سرویس تست',
@@ -4240,6 +4305,7 @@ export const WEB_FA = {
   'web.ib_button_service_connected': 'وصل شدم',
   'web.ib_button_service_problem': 'مشکل دارم',
   'web.ib_button_service_refresh': 'به‌روزرسانی اطلاعات سرویس',
+  'web.ib_button_service_support': 'تماس با پشتیبانی (سرویس در پنل پیدا نشد)',
   'web.ib_button_service_files': 'دریافت فایل‌های اتصال',
   'web.ib_button_service_link': 'دریافت لینک اتصال',
   'web.ib_button_service_rotate': 'تغییر لینک',
@@ -7102,6 +7168,7 @@ export const WEB_FA = {
   'web.nc_t_panel_capacity': 'ظرفیت پنل رو به پایان است',
   'web.nc_t_panel_budget': 'سهمیهٔ پایش پنل‌ها تمام شده است',
   'web.nc_t_provisioning_stalled': 'ساخت سرویس متوقف مانده است',
+  'web.nc_t_service_panel_account_missing': 'حساب سرویس در پنل پیدا نشد',
   'web.nc_t_refunded_undeliverable': 'سفارشی تحویل‌نشدنی بود و وجه آن بازگشت',
   'web.nc_t_backup_failed': 'پشتیبان‌گیری ناموفق بود',
   'web.nc_t_backup_delivery_failed': 'آرشیو بکاپ از سرور خارج نشد',
@@ -9603,6 +9670,8 @@ export const WEB_FA = {
   'web.opscode_recovery_run_failed': 'بازیابی شکست خورد',
   'web.opscode_recovery_run_ok': 'بازیابی دوباره موفق شد',
   'web.opscode_request_invalid': 'درخواست نامعتبر رد شد',
+  'web.opscode_service_panel_account_found': 'حساب سرویس دوباره در پنل پیدا شد',
+  'web.opscode_service_panel_account_missing': 'حساب سرویس در پنل پیدا نشد',
   'web.opscode_settings_stored_value_invalid': 'مقدار ذخیره‌شدهٔ یک تنظیم نامعتبر است',
   'web.opscode_settings_stored_value_valid': 'مقدار تنظیم دوباره معتبر است',
   'web.opscode_support_ai_provider_available': 'دستیار هوشمند در دسترس است',

@@ -4,6 +4,7 @@ import {
   isSettingKey,
   parseSettingValue,
   settingDefinition,
+  settingScope,
   CONTROL_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   type ActorContext,
@@ -439,7 +440,9 @@ export class SettingsService {
    * gateway setting (INCIDENT-FIN-001).
    */
   private requireKey(key: string): SettingKey {
-    if (!isSettingKey(key)) {
+    // A PANEL-scoped key (Track 3 §2) is as unknown here as a misspelt one: it has no
+    // tenant value, and is read and written on its panel's page (`PanelSettingsService`).
+    if (!isSettingKey(key) || settingScope(key) !== 'TENANT') {
       throw errors.notFound(CONTROL_ERROR_CODES.UNKNOWN_KEY, `No such setting: ${key}.`);
     }
     // Throws if the registry and the type guard ever disagree.

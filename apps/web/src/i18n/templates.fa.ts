@@ -251,6 +251,16 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
  * here and the specific one is in `PLACEHOLDER_LABEL_OVERRIDES_FA` below.
  */
 export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
+  // Track 3 §2: a panel's connection-file caption variables.
+  volume_total: 'حجم کل',
+  volume_used: 'حجم مصرف‌شده',
+  volume_left: 'حجم باقی‌مانده',
+  expires_at_jalali: 'تاریخ انقضا (شمسی)',
+  days_left: 'روزهای باقی‌مانده',
+  platform: 'سکوی فایل',
+  file_name: 'نام فایل',
+  sub_link: 'لینک اشتراک',
+  support: 'پشتیبانی',
   // UX Batch 01 item 4: the connection file caption's facts.
   remaining_volume: 'حجم باقی‌مانده',
   service_name: 'نام سرویس خریداری‌شده',
@@ -526,6 +536,20 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
     location: 'لوکیشن سرویس',
     status: 'وضعیت سرویس',
     subscription_url: 'لینک اشتراک مشتری',
+  },
+  'bot.service.connection_files_caption': {
+    username: 'نام کاربری سرویس',
+    service_name: 'نام سرویس خریداری‌شده',
+    product: 'نام محصول',
+    volume_total: 'حجم کل (نامحدود هم نوشته می‌شود)',
+    volume_used: 'حجم مصرف‌شده',
+    volume_left: 'حجم باقی‌مانده',
+    expires_at_jalali: 'تاریخ انقضا (شمسی)',
+    days_left: 'روزهای باقی‌مانده',
+    platform: 'سکوی فایل (نام فایل بدون پسوند)',
+    file_name: 'نام فایل',
+    sub_link: 'لینک اشتراک',
+    support: 'پشتیبانی',
   },
   'bot.terms.updated': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.order.summary': { username: 'نام کاربری سرویس' },
@@ -1477,7 +1501,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.payment.gateway_receipt_prompt': [
     'درخواست عکس فیش برای تون پی',
-    'از مشتری یک عکس فیش (حداکثر ۵ مگابایت، بدون فایل یا ویدیو) تا زمان اعلام‌شده می‌خواهد.',
+    'از مشتری یک عکس فیش (حداکثر ۱۰ مگابایت، بدون فایل یا ویدیو) تا زمان اعلام‌شده می‌خواهد.',
   ],
   'bot.payment.gateway_receipt_queued': [
     'فیش دریافت شد و در حال ارسال است',
@@ -1492,8 +1516,8 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'وقتی مشتری همان عکسی را می‌فرستد که پیش‌تر برای این پرداخت فرستاده و کارش تمام شده است؛ چیزی ارسال نمی‌شود و عکس دیگری خواسته می‌شود.',
   ],
   'bot.payment.gateway_receipt_too_large': [
-    'عکس فیش بزرگ‌تر از ۵ مگابایت',
-    'وقتی عکس فیش از ۵ مگابایت بزرگ‌تر است؛ از مشتری عکس کوچک‌تری می‌خواهد.',
+    'عکس فیش بزرگ‌تر از ۱۰ مگابایت',
+    'وقتی عکس فیش از ۱۰ مگابایت بزرگ‌تر است؛ از مشتری عکس کوچک‌تری می‌خواهد.',
   ],
 
   // --- My services ------------------------------------------------------------------
@@ -1694,6 +1718,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'توضیح فایل اتصال بدون توضیح پنل',
     'فقط وقتی پنل برای یک فایل توضیحی نفرستاده باشد: نام کاربری سرویس.',
   ],
+  'bot.service.connection_files_caption': [
+    'توضیح پیش‌فرض فایل‌های اتصال',
+    'متن پیش‌فرض زیر فایل‌های اتصال برای پنل‌هایی که حالت توضیح «سفارشی» دارند و قالب خودشان را ندارند. هر پنل می‌تواند در صفحهٔ خود، بخش «فایل‌های اتصال»، قالب جداگانه بگذارد. هر خطی که مقدارش موجود نباشد حذف می‌شود. حداکثر ۱۰۲۴ نویسه.',
+  ],
   'bot.service.link_rotated': [
     'لینک اشتراک تغییر کرد',
     'پس از تغییر لینک همان سرویس؛ لینک جدید را می‌دهد و می‌گوید لینک قبلی دیگر کار نمی‌کند. پس از آن فایل‌های اتصال جدید ارسال می‌شود.',
@@ -1705,6 +1733,18 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.service.refresh_failed': [
     'خطای بروزرسانی اطلاعات',
     'پیام کوتاه روی دکمهٔ بروزرسانی وقتی اطلاعات از سرور خوانده نشد؛ کارت سرویس دست نمی‌خورد.',
+  ],
+  'bot.service.panel_missing': [
+    'سرویس در پنل پیدا نشد',
+    'به‌جای کارت سرویس، وقتی پنل دو بار پاسخ داد که حساب این سرویس وجود ندارد. وضعیت سرویس تغییری نمی‌کند و چیزی حذف یا بازپرداخت نمی‌شود؛ مدیر از پنل وب تصمیم می‌گیرد.',
+  ],
+  'bot.service.last_updated': [
+    'زمان آخرین به‌روزرسانی',
+    'یک خط زیر وضعیت کارت سرویس، وقتی اطلاعات همین حالا از پنل خوانده نشد و اطلاعات ذخیره‌شده نمایش داده می‌شود.',
+  ],
+  'bot.service.support_button': [
+    'دکمهٔ تماس با پشتیبانی',
+    'روی پیام «سرویس در پنل پیدا نشد»؛ صفحهٔ پشتیبانی را باز می‌کند.',
   ],
   'bot.service.files_partial': [
     'برخی فایل‌های اتصال آماده نشد',

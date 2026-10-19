@@ -240,6 +240,26 @@ export const GATEWAY_ROW_RECOVERED_CODE = 'payments.gateway_row_recovered';
 /** Consecutive thrown passes of one row before its condition opens. */
 export const GATEWAY_ROW_FAILURE_ALERT_AFTER = 3;
 
+/**
+ * Track 3 §1: a customer opened a service card and the panel answered — TWICE, the second
+ * read confirming the first — that the service's account does not exist (`found: false`,
+ * a positive statement, never a failed request). The customer's tap changes nothing: the
+ * service keeps its state, nothing is deleted or refunded. This condition is how an
+ * operator learns of it and decides from the Web Admin.
+ *
+ * One condition per service (dedupe key `service.panel_account_missing:<service id>`),
+ * closed by `SERVICE_PANEL_ACCOUNT_FOUND_CODE` the next time a read finds the account. A
+ * timeout, a 429 or a panel that is down is never this code: those are "this installation
+ * does not know", kept apart from "the panel says no" at every layer (CLAUDE.md).
+ */
+export const SERVICE_PANEL_ACCOUNT_MISSING_CODE = 'service.panel_account_missing';
+export const SERVICE_PANEL_ACCOUNT_FOUND_CODE = 'service.panel_account_found';
+
+/** The dedupe key of one service's `SERVICE_PANEL_ACCOUNT_MISSING_CODE` condition. */
+export function servicePanelAccountMissingKey(serviceId: string): string {
+  return `${SERVICE_PANEL_ACCOUNT_MISSING_CODE}:${serviceId}`;
+}
+
 // ---------------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------------
@@ -362,6 +382,8 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   // --- Delivery: provisioning, panels -----------------------------------------------------
   failure('provisioning.stalled', 'DELIVERY', 'CONDITION'),
   recovery('provisioning.delivered', 'DELIVERY', 'provisioning.stalled'),
+  failure(SERVICE_PANEL_ACCOUNT_MISSING_CODE, 'DELIVERY', 'CONDITION'),
+  recovery(SERVICE_PANEL_ACCOUNT_FOUND_CODE, 'DELIVERY', SERVICE_PANEL_ACCOUNT_MISSING_CODE),
   failure('panel.health.', 'PANELS', 'CONDITION', { prefix: true }),
   failure('panel.capacity.full', 'PANELS', 'CONDITION'),
   failure('panel.capacity.warning', 'PANELS', 'CONDITION'),

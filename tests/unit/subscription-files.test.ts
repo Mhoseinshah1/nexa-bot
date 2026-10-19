@@ -16,6 +16,7 @@ import {
 } from '@nexa/contracts';
 import { MarzbanAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/marzban.adapter';
 import { RickpanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
+import { I18N_CAPTION_TEXT } from '../../apps/api/src/modules/commerce/messaging/infrastructure/caption-markup';
 import { SanaeiAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/sanaei.adapter';
 import {
   SUBSCRIPTION_FILES_DEFAULT_RETRY_MS,
@@ -215,6 +216,7 @@ describe('the service, before any panel is asked', () => {
       clock: { now: () => new Date('2026-09-28T00:00:00Z') },
       // WP-A8: no stored policy, so the default — every supported action offered.
       panelPolicy: { forPanel: vi.fn(async () => resolvePanelPolicy(null)) },
+      captionText: I18N_CAPTION_TEXT,
       ...overrides,
     };
     return { built, sendFile, send };

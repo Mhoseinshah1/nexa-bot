@@ -135,6 +135,12 @@ describe('R3 — service delivery, connection files and the service card', () =>
     });
     panelId = created.view.panel.id;
     await validatePanelConnection(ctx.container, tenantA, panelId);
+    /*
+     * Track 3 §2: these tests hold the PANEL's own caption on every file — the behaviour a
+     * panel pinned to PANEL_DEFAULT / EVERY_FILE keeps. The registry default (CUSTOM, last
+     * file only) is held by its own test below and by `panel-settings.test.ts`.
+     */
+    await pinPanelCaption(ctx, owner, panelId);
     customerId = (
       await ctx.container.customers.resolveFromUpdate(tenantA, systemActor('resolve'), {
         idempotencyKey: `resolve-r3-${CUSTOMER_TG}`,
@@ -800,3 +806,17 @@ describe('R3 — service delivery, connection files and the service card', () =>
     });
   });
 });
+
+/** Track 3 §2: the panel's caption as it was before the setting existed. */
+async function pinPanelCaption(ctx: TestContext, owner: ActorContext, panelId: string) {
+  for (const [key, value] of [
+    ['panel.connection_files.caption_mode', 'PANEL_DEFAULT'],
+    ['panel.connection_files.caption_placement', 'EVERY_FILE'],
+  ] as const) {
+    await ctx.container.panelSettings.set(tenantA, owner, panelId, key, {
+      value,
+      expectedVersion: null,
+      idempotencyKey: `pin-${key}`,
+    });
+  }
+}

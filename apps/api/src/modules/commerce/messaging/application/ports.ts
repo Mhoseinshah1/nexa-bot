@@ -293,6 +293,18 @@ export interface CustomerCaption {
    * One level only; a fallback's own fallback is not read.
    */
   readonly fallback?: Omit<CustomerCaption, 'fallback'>;
+  /**
+   * Track 3 §2: a caption ALREADY rendered from `templateKey`'s declaration, by the one
+   * renderer of that key (`renderConnectionFileCaption`) — a panel's own connection-file
+   * caption template, which is a per-panel setting and not the key's resolved body, so
+   * the messenger cannot render it again from the key. Sent as given: plain text and these
+   * entities, within Telegram's bound already, never parsed as HTML. When present,
+   * `values`, `markup` and `fallback` are not read.
+   */
+  readonly rendered?: {
+    readonly text: string;
+    readonly entities: readonly CaptionEntity[];
+  };
 }
 
 /**

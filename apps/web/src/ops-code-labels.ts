@@ -115,6 +115,8 @@ export const OPS_CODE_LABELS: Readonly<Record<string, WebKey>> = {
   'recovery.run_failed': 'web.opscode_recovery_run_failed',
   'recovery.run_ok': 'web.opscode_recovery_run_ok',
   'request.invalid': 'web.opscode_request_invalid',
+  'service.panel_account_found': 'web.opscode_service_panel_account_found',
+  'service.panel_account_missing': 'web.opscode_service_panel_account_missing',
   'settings.stored_value_invalid': 'web.opscode_settings_stored_value_invalid',
   'settings.stored_value_valid': 'web.opscode_settings_stored_value_valid',
   'support.ai_provider.available': 'web.opscode_support_ai_provider_available',

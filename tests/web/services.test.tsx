@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   SERVICE_OPERATOR_ACTIONS,
+  SERVICE_STATES,
   type ServiceActionBlocker,
   type ServiceOperatorAction,
 } from '@nexa/contracts';
@@ -11,10 +12,12 @@ import {
   ServiceDetailPage,
   ServicesPage,
 } from '../../apps/web/src/pages/services';
-import { formatNumber } from '../../apps/web/src/format';
+import { formatDate, formatNumber, formatTimestamp } from '../../apps/web/src/format';
+import { massDefinitionOf, type ServiceFilters } from '../../apps/web/src/pages/service-ops';
 import { resolve } from '../../apps/web/src/app';
 import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { renderPage, stubApi } from './harness';
+import { openFilterPanel } from './ui-helpers';
 import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
 
@@ -249,10 +252,29 @@ describe('the service list', () => {
 
   it('says the list is empty rather than drawing an empty table', async () => {
     stubApi(list([]));
-    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    renderPage(
+      <ServicesPage
+        route={{ path: '/services', query: new URLSearchParams({ lifecycle: 'ALL' }) }}
+        denied={false}
+      />,
+    );
 
     expect(await screen.findByText('هنوز سرویسی ساخته نشده است.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  /*
+   * Track 3 §3: the default tab is the LIVE services, so an empty default view says there is
+   * no live service — never "nothing has been built yet", which an installation holding a
+   * whole imported history of ended services would read as a lost import.
+   */
+  it('says no service is live on an empty default tab, and where the ended ones are', async () => {
+    stubApi(list([]));
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+
+    expect(await screen.findByText('سرویس فعالی نیست.')).toBeInTheDocument();
+    expect(screen.getByText('سرویس‌های پایان‌یافته در زبانهٔ «پایان‌یافته» هستند.')).toBeTruthy();
+    expect(screen.queryByText('هنوز سرویسی ساخته نشده است.')).toBeNull();
   });
 
   it('asks the server for the name through the one search box, sent unfolded', async () => {
@@ -985,12 +1007,46 @@ describe('rows imported from Mirza', () => {
     source: 'MIRZA',
   });
 
-  it('marks only the imported service', async () => {
+  /*
+   * Track 3 §3 (owner, after a large import): the list rows carry no import badge any more —
+   * every row would be marked, and a mark on every row marks nothing. The service page says
+   * it in one quiet line instead (below), and the «منبع» filter still narrows the list.
+   */
+  it('marks no row of the list as imported', async () => {
     stubApi(list([native, imported]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('nx-mirza01');
-    expect(rowHasBadge('nx-mirza01')).toBe(true);
+    expect(rowHasBadge('nx-mirza01')).toBe(false);
     expect(rowHasBadge('nx-native1')).toBe(false);
+  });
+
+  it('says on the service page that it was carried over, with the ORIGINAL purchase date', async () => {
+    stubApi(
+      detail({
+        source: 'MIRZA',
+        createdAt: '2026-10-18T09:00:00.000Z',
+        originalStartedAt: '2025-10-01T08:00:00.000Z',
+      }),
+    );
+    renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
+    );
+    const line = await screen.findByText(/^منتقل‌شده از ربات قبلی · تاریخ خرید اصلی: /);
+    // The previous bot's date, as a Jalali day — never the day of the import.
+    expect(line.textContent).toContain(formatDate('2025-10-01T08:00:00.000Z'));
+    expect(line.textContent).not.toContain(formatDate('2026-10-18T09:00:00.000Z'));
+    expect(line.className).toContain('muted');
+    // No «میرزا» wording on the operator's page.
+    expect(document.body.textContent).not.toContain('میرزا');
+  });
+
+  it('draws no carried-over line for a service this installation made', async () => {
+    stubApi(detail());
+    renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
+    );
+    await screen.findAllByText('nx-7f3a91');
+    expect(screen.queryByText(/منتقل‌شده از ربات قبلی/)).toBeNull();
   });
 
   it('puts the «منبع» filter in the URL and asks the API for it', async () => {
@@ -1009,5 +1065,178 @@ describe('rows imported from Mirza', () => {
       />,
     );
     await waitFor(() => expect(requestsWithSource(again.calls, '/services', 'MIRZA')).toBe(1));
+  });
+});
+
+/**
+ * Track 3 §3: the list after a large import. Live services by default, the tab in the URL, the
+ * server's order (by the ORIGINAL purchase) drawn as it arrives, and the tab carried into what a
+ * mass action selects.
+ */
+describe('the lifecycle tabs', () => {
+  const listParams = (calls: readonly { url: string; method: string }[]) =>
+    calls
+      .filter((call) => call.method === 'GET' && /\/services(\?|$)/.test(call.url))
+      .map((call) => new URL(call.url, 'http://x').searchParams);
+
+  it('asks the server for the LIVE services when the URL names no tab', async () => {
+    const api = stubApi(list([service()]));
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('nx-7f3a91');
+
+    expect(listParams(api.calls).map((params) => params.get('lifecycle'))).toEqual(['LIVE']);
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['فعال', 'پایان‌یافته', 'همه']);
+    expect(screen.getByRole('tab', { name: 'فعال' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  /*
+   * Codex review of #291: a URL from before the tabs names a state and no tab. Defaulting it
+   * to LIVE turned `/services?state=TERMINATED` into an empty live list with its filter
+   * hidden; the tab is the state's own, and the page never sends a contradictory pair.
+   */
+  it('takes the tab from the state when the URL names none, or names one that contradicts it', async () => {
+    for (const [query, tab] of [
+      [{ state: 'TERMINATED' }, 'ENDED'],
+      [{ state: 'SUSPENDED' }, 'LIVE'],
+      [{ state: 'EXPIRED' }, 'LIVE'],
+      [{ lifecycle: 'LIVE', state: 'TERMINATED' }, 'ENDED'],
+      [{ lifecycle: 'ENDED', state: 'ACTIVE' }, 'LIVE'],
+      [{ lifecycle: 'ALL', state: 'TERMINATED' }, 'ALL'],
+      [{ lifecycle: 'ENDED', state: 'NOT_A_STATE' }, 'ENDED'],
+    ] as const) {
+      const api = stubApi(list([service()]));
+      const { unmount } = renderPage(
+        <ServicesPage
+          route={{ path: '/services', query: new URLSearchParams(query) }}
+          denied={false}
+        />,
+      );
+      await screen.findByText('nx-7f3a91');
+      const sent = listParams(api.calls);
+      expect(
+        sent.map((params) => params.get('lifecycle')),
+        JSON.stringify(query),
+      ).toEqual([tab]);
+      expect(screen.getByRole('tab', { selected: true }).textContent).toBe(
+        { LIVE: 'فعال', ENDED: 'پایان‌یافته', ALL: 'همه' }[tab],
+      );
+      unmount();
+    }
+  });
+
+  it('reads the tab from the URL and asks the server for exactly it', async () => {
+    for (const lifecycle of ['ENDED', 'ALL'] as const) {
+      const api = stubApi(list([service({ state: 'TERMINATED' })]));
+      const { unmount } = renderPage(
+        <ServicesPage
+          route={{ path: '/services', query: new URLSearchParams({ lifecycle }) }}
+          denied={false}
+        />,
+      );
+      await screen.findByText('nx-7f3a91');
+      expect(listParams(api.calls).map((params) => params.get('lifecycle'))).toEqual([lifecycle]);
+      unmount();
+    }
+  });
+
+  it('puts a tab in the URL, back at the first page, dropping a state the tab cannot show', async () => {
+    window.history.replaceState(null, '', '/services?state=SUSPENDED&cursor=c2&q=nx');
+    stubApi(list([service()]));
+    renderPage(
+      <ServicesPage
+        route={{
+          path: '/services',
+          query: new URLSearchParams({ state: 'SUSPENDED', cursor: 'c2', q: 'nx' }),
+        }}
+        denied={false}
+      />,
+    );
+    await screen.findByText('nx-7f3a91');
+    fireEvent.click(screen.getByRole('tab', { name: 'پایان‌یافته' }));
+    await waitFor(() =>
+      expect(new URLSearchParams(window.location.search).get('lifecycle')).toBe('ENDED'),
+    );
+    const query = new URLSearchParams(window.location.search);
+    expect(query.get('cursor')).toBeNull();
+    expect(query.get('state')).toBeNull();
+    // The search is not the tab's to clear.
+    expect(query.get('q')).toBe('nx');
+  });
+
+  it('returns to the default tab by leaving the URL without one', async () => {
+    window.history.replaceState(null, '', '/services?lifecycle=ALL');
+    stubApi(list([service()]));
+    renderPage(
+      <ServicesPage
+        route={{ path: '/services', query: new URLSearchParams({ lifecycle: 'ALL' }) }}
+        denied={false}
+      />,
+    );
+    await screen.findByText('nx-7f3a91');
+    fireEvent.click(screen.getByRole('tab', { name: 'فعال' }));
+    await waitFor(() => expect(window.location.search).toBe(''));
+  });
+
+  it('draws the rows in the order the server sent, and their ORIGINAL purchase date', async () => {
+    // Deliberately not in date order: the page must not sort what the server ordered.
+    const rows = [
+      service({
+        id: '019250ab-cdef-7012-8345-6789abcdef11',
+        providerUsername: 'nx-first',
+        createdAt: '2026-10-18T09:00:00.000Z',
+        originalStartedAt: '2025-01-01T09:00:00.000Z',
+      }),
+      service({
+        id: '019250ab-cdef-7012-8345-6789abcdef12',
+        providerUsername: 'nx-second',
+        createdAt: '2026-01-01T09:00:00.000Z',
+        originalStartedAt: '2026-01-01T09:00:00.000Z',
+      }),
+    ];
+    stubApi(list(rows));
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('nx-first');
+    const bodyRows = [...document.querySelectorAll('tbody tr')].map((tr) => tr.textContent ?? '');
+    expect(bodyRows.findIndex((text) => text.includes('nx-first'))).toBeLessThan(
+      bodyRows.findIndex((text) => text.includes('nx-second')),
+    );
+    expect(screen.getByRole('columnheader', { name: 'تاریخ خرید' })).toBeTruthy();
+    const first = bodyRows.find((text) => text.includes('nx-first')) ?? '';
+    expect(first).toContain(formatTimestamp('2025-01-01T09:00:00.000Z'));
+    expect(first).not.toContain(formatTimestamp('2026-10-18T09:00:00.000Z'));
+  });
+
+  it('offers only the states the open tab can show', async () => {
+    stubApi(list([service()]));
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('nx-7f3a91');
+    const panel = openFilterPanel();
+    expect(within(panel).queryByRole('button', { name: 'فعال' })).not.toBeNull();
+    expect(
+      within(panel).queryByRole('button', { name: t('web.service_state_terminated') }),
+    ).toBeNull();
+  });
+
+  it('carries the tab into what a mass action selects', () => {
+    const base: ServiceFilters = {
+      state: null,
+      deliveryState: null,
+      panelId: null,
+      productId: null,
+      locationKey: null,
+      expiringWithinHours: null,
+      q: '',
+    };
+    const statesOf = (filters: ServiceFilters) =>
+      (massDefinitionOf(filters) as { service: { states: string[] } } | null)?.service.states;
+    expect(statesOf({ ...base, lifecycle: 'LIVE' })).toEqual(
+      SERVICE_STATES.filter((state) => state !== 'TERMINATED'),
+    );
+    expect(statesOf({ ...base, lifecycle: 'ENDED' })).toEqual(['TERMINATED']);
+    expect(statesOf({ ...base, lifecycle: 'ALL' })).toEqual([]);
+    expect(statesOf({ ...base, lifecycle: 'LIVE', state: 'SUSPENDED' })).toEqual(['SUSPENDED']);
+    // A state the tab cannot show selects nothing on screen, so nothing in bulk.
+    expect(massDefinitionOf({ ...base, lifecycle: 'ENDED', state: 'SUSPENDED' })).toBeNull();
   });
 });

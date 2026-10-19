@@ -95,6 +95,12 @@ export interface ServiceRecord {
   readonly lastSeenState: ServiceLastSeenState | null;
   /** The customer's own note. Display only; never provider identity. */
   readonly customerNote: string | null;
+  /**
+   * When the service was ORIGINALLY bought (Track 3 §3): `COALESCE(original_started_at,
+   * created_at)`, so never null. For an imported service the purchase date the previous bot
+   * recorded; otherwise `createdAt`. The instant the list pages by.
+   */
+  readonly originalStartedAt: Date;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -147,7 +153,14 @@ export interface ServiceSecretSource {
 
 export interface ServiceCursor {
   /**
-   * The stored `created_at`, as PostgreSQL's OWN text, NEVER as a `Date`.
+   * The keyset's instant — `COALESCE(original_started_at, created_at)` since Track 3 §3, the
+   * service's ORIGINAL purchase — as PostgreSQL's OWN text, NEVER as a `Date`.
+   *
+   * Still named `createdAt` because every keyset cursor here shares the `{ createdAt, id }`
+   * shape (`KeysetToken`, `encodeKeysetCursor`), and for every service this installation made
+   * the value IS `created_at`; only an imported row orders at its earlier, original date. A
+   * cursor minted before the order changed lands at a nearby position, never on another
+   * tenant's or customer's row: the filters, not the cursor, are the scope.
    *
    * This was a `Date` until 4H exposed the list over HTTP, and it was the defect
    * `CustomerCursor` and `PanelCursor` already carry the measurement for:
@@ -181,6 +194,11 @@ export interface ServiceCustomerIdentity {
 
 export interface ServiceSearch {
   readonly customerId?: UserId;
+  /**
+   * Track 3 §3, the list's tabs: `LIVE` is every non-terminal state, `ENDED` the terminal
+   * ones (`SERVICE_TERMINAL_STATES`). Absent is every service.
+   */
+  readonly lifecycle?: 'LIVE' | 'ENDED';
   /** Only rows from this source (the source filter). */
   readonly source?: RecordSource;
   /**

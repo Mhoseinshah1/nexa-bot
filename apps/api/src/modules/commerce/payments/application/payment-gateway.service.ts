@@ -15,6 +15,7 @@ import {
   type PaymentGatewayProvider,
   type PaymentGatewayStatus,
   type PaymentPurpose,
+  type PaymentRouteUnofferableReason,
   type PermissionKey,
   type TenantContext,
   type ResolvedConversion,
@@ -45,7 +46,12 @@ import {
   type GatewayAudience,
   type GatewayEligibility,
 } from '../domain/gateway-eligibility.js';
-import { allowsPurpose, boundsOf, decideAmount } from '../domain/gateway-selection.js';
+import {
+  allowsPurpose,
+  boundsOf,
+  decideAmount,
+  routeOfferabilityBlockers,
+} from '../domain/gateway-selection.js';
 import type {
   GatewayAudienceReader,
   PaymentGatewayRecord,
@@ -217,6 +223,15 @@ export interface OfferedRoute {
   readonly gateway: PaymentGatewayRecord;
 }
 
+/** Whether any route can fund a wallet top-up, and each route's blockers (empty: it can). */
+export interface WalletTopupReadiness {
+  readonly available: boolean;
+  readonly routes: readonly {
+    readonly provider: PaymentGatewayProvider;
+    readonly blockers: readonly PaymentRouteUnofferableReason[];
+  }[];
+}
+
 /**
  * The payment routes an operator offers, and which of them a customer may use.
  *
@@ -253,6 +268,12 @@ export class PaymentGatewayService {
     gateways: readonly PaymentGatewayRecord[];
     currency: SalesCurrencyCode;
     facts: ReadonlyMap<PaymentGatewayProvider, GatewayOperatorFacts>;
+    /**
+     * Whether any route can fund a wallet top-up, before any customer's thresholds — the
+     * bot's own route decision (`offerability`), so the operator sees why «💰 افزایش
+     * موجودی» is missing rather than a second guess at it.
+     */
+    walletTopup: WalletTopupReadiness;
   }> {
     await this.deps.guard.check(scope, actor, PAYMENT_GATEWAY_VIEW_PERMISSION);
     const [gateways, currency] = await Promise.all([
@@ -262,7 +283,20 @@ export class PaymentGatewayService {
     const facts = new Map<PaymentGatewayProvider, GatewayOperatorFacts>();
     for (const gateway of gateways)
       facts.set(gateway.provider, await this.factsFor(scope, gateway.provider));
-    return { gateways, currency, facts };
+    const blockersOf = await this.offerability(scope, gateways, 'WALLET_TOPUP');
+    const routes = gateways.map((gateway) => ({
+      provider: gateway.provider,
+      blockers: blockersOf(gateway),
+    }));
+    return {
+      gateways,
+      currency,
+      facts,
+      walletTopup: {
+        available: routes.some((route) => route.blockers.length === 0),
+        routes,
+      },
+    };
   }
 
   /**
@@ -1247,37 +1281,11 @@ export class PaymentGatewayService {
   }> {
     const gateways = await this.deps.repository.list(scope, tx);
     const audience = await this.audienceFor(scope, customerId, tx);
-    /*
-     * A route that settles by manual transfer needs somewhere for the money to go. With
-     * no enabled account the route is CONFIGURED and cannot be paid through, and the
-     * customer would learn that on the last tap — after typing an amount and choosing
-     * it. So the destination is part of what makes the route offerable, for both
-     * purposes, and its absence drops the route from the list rather than the tap.
-     */
-    const destination = await this.deps.accounts.hasEnabled(scope, tx);
-    /*
-     * Spec §8, a COURTESY: a route priced only by the central rate is not offered while its
-     * unit ratio is unset — every tap would be refused. The attempt decides authoritatively.
-     */
-    const unpriceable = new Set<PaymentGatewayProvider>();
-    for (const gateway of gateways) {
-      const spec = PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion;
-      if (
-        gateway.status === 'ACTIVE' &&
-        pricedOnlyByCentralFx(spec) &&
-        (await this.centralUnitRatio(scope, spec, tx)) === null
-      ) {
-        unpriceable.add(gateway.provider);
-      }
-    }
+    const blockersOf = await this.offerability(scope, gateways, purpose, tx);
     const routes = gateways
       .filter(
         (gateway) =>
-          gateway.status === 'ACTIVE' &&
-          !unpriceable.has(gateway.provider) &&
-          (PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia !== 'MANUAL_TRANSFER' ||
-            destination) &&
-          allowsPurpose(gateway, purpose) &&
+          blockersOf(gateway).length === 0 &&
           evaluateGatewayEligibility(gateway.status, gateway, audience).eligible &&
           /*
            * The amount, against the row's OWN denomination — `boundsOf` says why the
@@ -1301,6 +1309,51 @@ export class PaymentGatewayService {
         gateway,
       }));
     return { gateways, audience, routes };
+  }
+
+  /**
+   * The configuration half of the route decision, as a function of the route: why it
+   * cannot be offered for `purpose` to anybody. Shared by `evaluateRoutes` (the bot's
+   * question, per customer) and `list` (the operator's wallet top-up warning), so the two
+   * cannot disagree about why «💰 افزایش موجودی» is missing.
+   */
+  private async offerability(
+    scope: TenantContext,
+    gateways: readonly PaymentGatewayRecord[],
+    purpose: PaymentPurpose,
+    tx?: unknown,
+  ): Promise<(gateway: PaymentGatewayRecord) => PaymentRouteUnofferableReason[]> {
+    /*
+     * A route that settles by manual transfer needs somewhere for the money to go. With
+     * no enabled account the route is CONFIGURED and cannot be paid through, and the
+     * customer would learn that on the last tap — after typing an amount and choosing
+     * it. So the destination is part of what makes the route offerable, for both
+     * purposes, and its absence drops the route from the list rather than the tap.
+     */
+    const destination = await this.deps.accounts.hasEnabled(scope, tx);
+    /*
+     * Spec §8, a COURTESY: a route priced only by the central rate is not offered while its
+     * unit ratio is unset — every tap would be refused. The attempt decides authoritatively.
+     */
+    const unpriceable = new Set<PaymentGatewayProvider>();
+    for (const gateway of gateways) {
+      const spec = PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion;
+      /*
+       * Decided whatever the route's status (Codex review of #291): an inactive route is
+       * already refused by INACTIVE, so the bot's answer is unchanged, but the operator's
+       * warning must name every blocker at once — otherwise the missing ratio is found
+       * only after switching the route on.
+       */
+      if (pricedOnlyByCentralFx(spec) && (await this.centralUnitRatio(scope, spec, tx)) === null) {
+        unpriceable.add(gateway.provider);
+      }
+    }
+    return (gateway) =>
+      routeOfferabilityBlockers(gateway, purpose, {
+        settlesVia: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia,
+        hasReceivingAccount: destination,
+        priceable: !unpriceable.has(gateway.provider),
+      });
   }
 
   private adapterAdmits(gateway: PaymentGatewayRecord, amount: Money): boolean {

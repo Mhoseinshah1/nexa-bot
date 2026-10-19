@@ -15,6 +15,7 @@ import { CustomerDirectMessagesController } from './surfaces/web/customer-direct
 import { IncidentsController } from './surfaces/web/incidents.controller.js';
 import { CustomerCrmController } from './surfaces/web/customer-crm.controller.js';
 import { TrialsController } from './surfaces/web/trials.controller.js';
+import { PanelSettingsController } from './surfaces/web/panel-settings.controller.js';
 import { ProductsController } from './surfaces/web/products.controller.js';
 import { ProductCategoriesController } from './surfaces/web/product-categories.controller.js';
 import { ServiceAddonsController } from './surfaces/web/service-addons.controller.js';
@@ -120,6 +121,8 @@ export class AppModule implements NestModule {
         // Program §8: operator-only notes and tags.
         CustomerCrmController as never,
         TrialsController as never,
+        // Track 3 §2: a panel's PANEL-scoped settings («فایل‌های اتصال»).
+        PanelSettingsController as never,
         ProductsController as never,
         ProductCategoriesController as never,
         ServiceAddonsController as never,

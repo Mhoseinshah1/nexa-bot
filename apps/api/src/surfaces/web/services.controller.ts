@@ -89,6 +89,7 @@ export class ServicesController {
     const page = serviceListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      ...(query.lifecycle === undefined ? {} : { lifecycle: query.lifecycle }),
       ...(query.state === undefined ? {} : { state: query.state }),
       ...(query.deliveryState === undefined ? {} : { deliveryState: query.deliveryState }),
       ...(query.source === undefined ? {} : { source: query.source }),
@@ -113,6 +114,10 @@ export class ServicesController {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: serviceCursorFrom(page.cursor) }),
       search: {
+        /* `ALL` is no filter at all, the same as leaving it out. */
+        ...(page.lifecycle === undefined || page.lifecycle === 'ALL'
+          ? {}
+          : { lifecycle: page.lifecycle }),
         ...(page.state === undefined ? {} : { state: page.state }),
         ...(page.deliveryState === undefined ? {} : { deliveryState: page.deliveryState }),
         ...(page.source === undefined ? {} : { source: page.source }),
@@ -510,6 +515,8 @@ function toSummary(
     terminatedAt: record.terminatedAt === null ? null : record.terminatedAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+    // The ORIGINAL purchase (Track 3 §3): the import's own date for an imported service.
+    originalStartedAt: record.originalStartedAt.toISOString(),
     locationLabel: record.locationLabel,
   };
 }

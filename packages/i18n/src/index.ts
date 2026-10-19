@@ -16,8 +16,10 @@ import {
   type TemplateValue,
   type TemplateValues,
   type Translator,
+  TELEGRAM_CAPTION_MAX_LENGTH,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from './catalogue.fa.js';
+import { clipEntities, parseCaptionMarkup, type CaptionMarkup } from './caption-markup.js';
 
 /**
  * @nexa/i18n — the shared message catalogue.
@@ -349,6 +351,52 @@ export function renderTemplateBody(
   return dropped ? joined.replace(/\n{3,}/g, '\n\n').replace(/\n+$/u, '') : joined;
 }
 
+/**
+ * Track 3 §2: one connection-file caption, from a RAW template body — the panel's own
+ * (`panel.connection_files.caption_template`) or the default key's resolved body — to the
+ * text and Telegram entities that are sent. The ONE renderer: the bot's send and the Web
+ * Admin's preview both call it, so the preview cannot show a caption the bot would not send.
+ *
+ * 1. `renderTemplateBody` under `bot.service.connection_files_caption`'s declaration — the
+ *    twelve optional variables, an absent fact's line dropped, and (TELEGRAM_HTML) every
+ *    value HTML-ESCAPED, so a username or a link carrying `<` is text, never markup.
+ * 2. `parseCaptionMarkup` — the closed grammar: the operator's `<b>`/`<code>`/… become
+ *    entities, anything else stays text. Telegram's HTML parser never sees the caption, so
+ *    no template and no value can make a send fail to parse.
+ * 3. Telegram's 1024-unit caption bound: a longer render is TRUNCATED, never refused — cut
+ *    to 1023 units with a visible `…` (never inside a surrogate pair), every entity clipped
+ *    to what is left. Truncation rather than a fallback, because the operator's own words,
+ *    cut, still say more than a caption they did not write.
+ *
+ * An empty result means "no caption", and the caller sends the file bare.
+ */
+export function renderConnectionFileCaption(
+  body: string,
+  values: TemplateValues,
+  presentation?: TemplatePresentation,
+): CaptionMarkup {
+  const rendered = renderTemplateBody(
+    templateDefinition('bot.service.connection_files_caption'),
+    body,
+    values,
+    DEFAULT_LOCALE,
+    presentation,
+  );
+  return boundCaptionMarkup(parseCaptionMarkup(rendered));
+}
+
+/** A caption within Telegram's bound: cut with an ellipsis, its entities clipped to the cut. */
+export function boundCaptionMarkup(markup: CaptionMarkup): CaptionMarkup {
+  if (markup.text.length <= TELEGRAM_CAPTION_MAX_LENGTH) return markup;
+  let cut = TELEGRAM_CAPTION_MAX_LENGTH - 1;
+  const last = markup.text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return {
+    text: `${markup.text.slice(0, cut)}…`,
+    entities: clipEntities(markup.entities, 0, cut),
+  };
+}
+
 export class CatalogueTranslator implements Translator {
   constructor(readonly locale: Locale = DEFAULT_LOCALE) {}
 
@@ -392,6 +440,14 @@ export function auditCatalogue(locale: Locale): {
 }
 
 export { CATALOGUE_FA };
+export {
+  CAPTION_ENTITY_TYPES,
+  clipEntities,
+  parseCaptionMarkup,
+  type CaptionEntity,
+  type CaptionEntityType,
+  type CaptionMarkup,
+} from './caption-markup.js';
 export {
   REPORT_EXPORT_HEADERS_FA,
   REPORT_EXPORT_SHEETS_FA,

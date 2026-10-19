@@ -127,6 +127,12 @@ describe('Package E — RickPanel subscription files', () => {
     });
     panelId = created.view.panel.id;
     await validatePanelConnection(ctx.container, tenantA, panelId);
+    /*
+     * Track 3 §2: these tests hold the PANEL's own caption on every file — the behaviour a
+     * panel pinned to PANEL_DEFAULT / EVERY_FILE keeps. The registry default (CUSTOM, last
+     * file only) is held by its own test below and by `panel-settings.test.ts`.
+     */
+    await pinPanelCaption(ctx, owner, panelId);
 
     const resolve = async (tg: string) =>
       (
@@ -268,6 +274,47 @@ describe('Package E — RickPanel subscription files', () => {
     ]);
     expect(album).not.toContain('👤 نام کاربری');
     expect(panel.filesCalls()).toBe(1);
+  });
+
+  /*
+   * Track 3 §2: a panel at the registry defaults — CUSTOM, the catalogue's template, on the
+   * LAST file only — with the panel's template rendering an operator's formatting and an
+   * HTML-escaped value, never through Telegram's HTML parser.
+   */
+  it('captions only the last file, from the panel template, at the registry defaults', async () => {
+    // Back to the registry defaults this suite's setup pinned away from.
+    for (const [key, value] of [
+      ['panel.connection_files.caption_mode', 'CUSTOM'],
+      ['panel.connection_files.caption_placement', 'LAST_FILE'],
+    ] as const) {
+      await ctx.container.panelSettings.set(tenantA, owner, panelId, key, {
+        value,
+        expectedVersion: 1,
+        idempotencyKey: `unpin-${key}`,
+      });
+    }
+    const service = await deliveredService('custom');
+    await ctx.container.panelSettings.set(
+      tenantA,
+      owner,
+      panelId,
+      'panel.connection_files.caption_template',
+      {
+        value: '<b>{platform}</b> · {username} <x>',
+        expectedVersion: null,
+        idempotencyKey: 'custom-template',
+      },
+    );
+    expect(await send(service.id)).toEqual({ outcome: 'SENT', sent: 2, failed: 0 });
+    const album = albums()[0]!.raw;
+    const media = mediaOf(album) as { caption?: string; caption_entities?: unknown }[];
+    expect(media[0]?.caption).toBeUndefined();
+    expect(media[1]?.caption).toBe(`${service.providerUsername} · ${service.providerUsername} <x>`);
+    expect(media[1]?.caption_entities).toEqual([
+      { type: 'bold', offset: 0, length: service.providerUsername.length },
+    ]);
+    expect(album).not.toContain('parse_mode');
+    expect(album).not.toContain('👤 نام کاربری');
   });
 
   it("keeps the panel's caption, <code> as code and never a raw tag, with no HTML parse mode", async () => {
@@ -537,3 +584,17 @@ describe('Package E — RickPanel subscription files', () => {
     });
   });
 });
+
+/** Track 3 §2: the panel's caption as it was before the setting existed. */
+async function pinPanelCaption(ctx: TestContext, owner: ActorContext, panelId: string) {
+  for (const [key, value] of [
+    ['panel.connection_files.caption_mode', 'PANEL_DEFAULT'],
+    ['panel.connection_files.caption_placement', 'EVERY_FILE'],
+  ] as const) {
+    await ctx.container.panelSettings.set(tenantA, owner, panelId, key, {
+      value,
+      expectedVersion: null,
+      idempotencyKey: `pin-${key}`,
+    });
+  }
+}

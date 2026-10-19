@@ -1,6 +1,7 @@
 import {
-  SETTINGS,
+  TENANT_SETTING_KEYS,
   settingDefinition,
+  settingScope,
   type OperationalEventRecorder,
   type ScopeContext,
   type SettingClassification,
@@ -78,8 +79,8 @@ export class SettingsResolver {
     const stored = new Map((await this.settings.findAll(scope, tx)).map((row) => [row.key, row]));
 
     const resolved: ResolvedSetting[] = [];
-    for (const definition of SETTINGS) {
-      const key = definition.key as SettingKey;
+    // TENANT keys only (Track 3 §2): a PANEL-scoped key has no tenant value to resolve.
+    for (const key of TENANT_SETTING_KEYS) {
       const row = stored.get(key);
       resolved.push(await this.resolveOne(scope, key, row ?? null, tx));
     }
@@ -125,6 +126,11 @@ export class SettingsResolver {
     } | null,
     tx?: unknown,
   ): Promise<ResolvedSetting> {
+    if (settingScope(key) !== 'TENANT') {
+      // A programming error: a PANEL key's value lives per panel (`PanelSettingsResolver`),
+      // and reading it here would answer "the default" for a panel that set something else.
+      throw new Error(`${key} is not a TENANT-scoped setting.`);
+    }
     const definition = settingDefinition(key);
     const base = {
       key,

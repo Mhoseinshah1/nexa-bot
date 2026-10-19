@@ -2,8 +2,10 @@ import {
   money,
   type CurrencyCode,
   type Money,
+  type PaymentGatewayStatus,
   type PaymentMethod,
   type PaymentPurpose,
+  type PaymentRouteUnofferableReason,
 } from '@nexa/contracts';
 
 /**
@@ -39,6 +41,40 @@ export function allowsPurpose(flags: RoutePurposeFlags, purpose: PaymentPurpose)
     case 'WALLET_TOPUP':
       return flags.allowWalletTopup;
   }
+}
+
+/** What decides whether a route can be offered at all, before any customer is asked. */
+export interface RouteOfferabilityFacts {
+  /** The route's descriptor: a manual transfer needs a receiving account. */
+  readonly settlesVia: PaymentMethod;
+  /** Whether this tenant has at least one ENABLED receiving account. */
+  readonly hasReceivingAccount: boolean;
+  /** False only for an ACTIVE route priced by the central rate whose unit ratio is unset. */
+  readonly priceable: boolean;
+}
+
+/**
+ * Why a route cannot be offered for `purpose` to anybody — empty when it can.
+ *
+ * The configuration half of the route decision, and the ONE place it is made: the bot's
+ * `routesFor` keeps a route only when this is empty (and then asks the customer's
+ * thresholds and the amount), and the operator's "no route can fund a wallet top-up"
+ * warning is this list per route. Every reason is reported, not just the first, so an
+ * operator who switches a route on learns in the same reading that it still has no card.
+ */
+export function routeOfferabilityBlockers(
+  route: RoutePurposeFlags & { readonly status: PaymentGatewayStatus },
+  purpose: PaymentPurpose,
+  facts: RouteOfferabilityFacts,
+): PaymentRouteUnofferableReason[] {
+  const blockers: PaymentRouteUnofferableReason[] = [];
+  if (route.status !== 'ACTIVE') blockers.push('INACTIVE');
+  if (!allowsPurpose(route, purpose)) blockers.push('PURPOSE_OFF');
+  if (facts.settlesVia === 'MANUAL_TRANSFER' && !facts.hasReceivingAccount) {
+    blockers.push('NO_RECEIVING_ACCOUNT');
+  }
+  if (!facts.priceable) blockers.push('UNPRICEABLE');
+  return blockers;
 }
 
 /** The rows whose switch for this purpose is on, in the order they were given. */
