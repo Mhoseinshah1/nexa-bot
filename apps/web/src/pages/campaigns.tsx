@@ -368,7 +368,6 @@ export function CampaignsPage({
             rows={rows}
             rowKey={(row) => row.id}
             caption={t('web.campaigns_title')}
-            dense
           />
           <CursorPager
             order="newest-first"
