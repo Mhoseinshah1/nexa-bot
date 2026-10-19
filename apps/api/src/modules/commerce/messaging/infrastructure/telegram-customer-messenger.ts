@@ -1235,7 +1235,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * `editMessageText` with `rich_message`. A definite refusal (other than "not modified")
      * falls back to the ordinary edit below, once; with the switch off nothing is sent here.
      */
-    const richOutcome = await this.richEdit(scope, message, token, buttons, decoration);
+    // An edit with no buttons is not an inline-button screen: the ordinary edit, as `send`.
+    const richOutcome =
+      buttons.length > 0 ? await this.richEdit(scope, message, token, buttons, decoration) : null;
     if (richOutcome !== null) {
       if (isMessageNotModified(richOutcome)) return { outcome: 'DELIVERED' };
       const richSent = this.classify(richOutcome).sent;
@@ -1531,6 +1533,30 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   } | null> {
     const mode = await this.richModeFor(scope);
     if (!mode.enabled) return null;
+    /*
+     * PR #295 review: building the rich screen re-renders the template (and its table
+     * cells). Any failure there is a reason to send the ordinary message — which `send` /
+     * `edit` already rendered — never a reason to fail the reply.
+     */
+    return this.bestEffort('build a rich message', null, () =>
+      this.richScreenFor(scope, message, labelled, decoration, mode),
+    );
+  }
+
+  private async richScreenFor(
+    scope: TenantContext,
+    message: {
+      readonly templateKey: TemplateKey;
+      readonly values: TemplateValues;
+      readonly buttons?: readonly CustomerButton[];
+    },
+    labelled: readonly TelegramButton[],
+    decoration: AppearanceDecoration,
+    mode: RichMessageMode,
+  ): Promise<{
+    readonly blocks: RichBlock[];
+    readonly inlineRows: Record<string, unknown>[][];
+  } | null> {
     const renderer = this.templates;
     const marked =
       renderer.renderWithInstants === undefined

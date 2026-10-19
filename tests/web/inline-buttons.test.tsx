@@ -781,4 +781,13 @@ describe('the rich-message preview and the suggested colours', () => {
     expect(calls.calls.filter((call) => call.method !== 'GET')).toEqual([]);
     expect(screen.getByText(t('web.ib_unsaved'))).toBeTruthy();
   });
+
+  it('keeps a `default` the operator stored explicitly (PR #295 review)', async () => {
+    api({ 'payment.sent': 'default' }, 3);
+    renderPage(section());
+    await loaded();
+    fireEvent.click(screen.getByTestId('ib-suggest'));
+    expect(styleOf('payment.sent')).toBe('default');
+    expect(styleOf('order.cancel')).toBe('danger');
+  });
 });

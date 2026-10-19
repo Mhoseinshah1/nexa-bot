@@ -59,6 +59,7 @@ function harness(
     readonly rendered?: Partial<Record<string, string>>;
     readonly eligible?: boolean;
     readonly marked?: Partial<Record<string, string>>;
+    readonly markedFails?: boolean;
   } = {},
 ) {
   const calls: Call[] = [];
@@ -78,13 +79,16 @@ function harness(
   const renderer = {
     render: async (_scope: unknown, key: string) =>
       rendered[key] ?? CATALOGUE_FA[key as never] ?? key,
-    ...(options.marked === undefined
+    ...(options.marked === undefined && options.markedFails !== true
       ? {}
       : {
-          renderWithInstants: async (_scope: unknown, key: string) => ({
-            text: rendered[key] ?? key,
-            marked: options.marked?.[key] ?? rendered[key] ?? key,
-          }),
+          renderWithInstants: async (_scope: unknown, key: string) => {
+            if (options.markedFails === true) throw new Error('resolution failed');
+            return {
+              text: rendered[key] ?? key,
+              marked: options.marked?.[key] ?? rendered[key] ?? key,
+            };
+          },
         }),
   };
   const mode = options.mode ?? { enabled: false, premiumEmoji: false };
@@ -566,5 +570,42 @@ describe('premium emoji in rich messages (F3)', () => {
     });
     expect(calls[0]?.method).toBe('sendRichMessage');
     expect(calls[1]).toEqual(ordinary?.[0]);
+  });
+});
+
+describe('PR #295 review', () => {
+  it('edits a screen with no buttons the ordinary way even with the switch on', async () => {
+    const edit: CustomerEditMessage = {
+      chatId: '42',
+      messageId: 9,
+      botInstanceId,
+      templateKey: PLAIN_KEY,
+      values: {},
+      buttons: [],
+    };
+    const ordinary = harness({ rendered: RENDERED });
+    ordinary.respondWith([OK]);
+    await ordinary.messenger.edit(scope, edit);
+    const on = harness({ mode: ON, rendered: RENDERED });
+    on.respondWith([OK]);
+    expect(await on.messenger.edit(scope, edit)).toEqual({ outcome: 'DELIVERED' });
+    expect(on.calls).toEqual(ordinary.calls);
+    expect(on.calls[0]?.body).not.toHaveProperty('rich_message');
+  });
+
+  it('sends the ordinary message when building the rich one fails, never failing the reply', async () => {
+    const [ordinary] = await sendAll({ enabled: false, premiumEmoji: false });
+    const { messenger, calls, events, respondWith } = harness({
+      mode: ON,
+      rendered: RENDERED,
+      markedFails: true,
+    });
+    respondWith([OK]);
+    expect(await messenger.send(scope, SCREENS[0]?.message as CustomerMessage)).toEqual({
+      outcome: 'DELIVERED',
+      messageId: 11,
+    });
+    expect(calls).toEqual(ordinary);
+    expect(events).toEqual([]);
   });
 });

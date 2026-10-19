@@ -71,7 +71,7 @@ touched for F1. The bodies are built in one new pure module,
 - **Switch.** `rich_messages` («دکمه‌های داخل پیام», «قابلیت‌ها»), default off, read per
   tenant through `RichMessageSupport.modeFor` (`container.ts`). A failed read is "off".
 - **Which screens.** A ONE-part message with inline buttons and no reply keyboard
-  (`send`), and every edit (`edit`). The main menu (a reply keyboard), a message without
+  (`send`), and every edit that carries buttons (`edit`); a failure while building the rich screen sends the ordinary message. The main menu (a reply keyboard), a message without
   buttons, a body over 4096 units and every file/photo send take the ordinary path, unchanged.
 - **Off.** `richSend`/`richEdit` return before any request; the ordinary loop runs exactly as
   before. `tests/unit/telegram-messenger-rich.test.ts` sends every screen shape through a

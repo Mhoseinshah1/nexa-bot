@@ -469,14 +469,12 @@ export function InlineButtonsSection({
   const resetDisabled =
     save.isPending || (overridden === 0 && iconCount === 0 && !invalid && !iconsInvalid);
   /*
-   * R4 PR-F (F4): the owner's colour rule, applied to the draft for every button still drawn
-   * with the client default. A colour an operator already chose is never replaced, and
+   * R4 PR-F (F4): the owner's colour rule, applied to the draft for every button the tenant
+   * never styled. A colour an operator already chose — `default` included — is never replaced, and
    * nothing is written until Save — the ordinary versioned, audited setting save.
    */
   const suggestion = Object.fromEntries(
-    Object.entries(suggestedInlineButtonStyles()).filter(
-      ([key]) => inlineButtonStyleOf(key as InlineButtonKey, current) === 'default',
-    ),
+    Object.entries(suggestedInlineButtonStyles()).filter(([key]) => !(key in current)),
   ) as InlineButtonStyles;
   const suggestionCount = Object.keys(suggestion).length;
   /*
