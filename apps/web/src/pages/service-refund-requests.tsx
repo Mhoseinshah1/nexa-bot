@@ -16,7 +16,7 @@ import {
   fetchServiceRefundRequestsForService,
   rejectServiceRefundRequest,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatTimestampNumeric } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
@@ -155,6 +155,8 @@ function columns(
     {
       key: 'customer',
       header: t('web.service_refund_customer'),
+      // X9: the Telegram id over the username when the queue is tight at 1440.
+      wrap: 'tight',
       render: (row) => (
         <Ltr>
           {row.customerTelegramUserId ?? '—'}
@@ -217,6 +219,8 @@ function columns(
     {
       key: 'outcome',
       header: t('web.service_refund_outcome'),
+      // X9: a failure sentence breaks between its words, so the queue fits its card at 1440.
+      wrap: 'tight',
       render: (row) =>
         row.rejectionReason ??
         (row.failureKind === null ? (
@@ -228,7 +232,9 @@ function columns(
     {
       key: 'created',
       header: t('web.service_refund_created'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      // X9: the date over its time when the row is tight, never sideways scrolling.
+      wrap: 'tight',
+      render: (row) => formatTimestampNumeric(row.createdAt),
     },
   ];
   return withService ? all : all.filter((column) => column.key !== 'service');
@@ -276,6 +282,7 @@ export function OpenServiceRefundRequestsCard() {
         ) : (
           <>
             <DataTable
+              stack="labelled"
               caption={t('web.service_refunds_open')}
               columns={columns(onLink, true)}
               rows={rows}
@@ -320,6 +327,7 @@ export function ServiceRefundRequestsCard({
           <Empty variant="compact" title={t('web.service_refunds_empty')} />
         ) : (
           <DataTable
+            stack="labelled"
             caption={t('web.service_refunds')}
             columns={columns(
               onLink,

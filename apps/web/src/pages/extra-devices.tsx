@@ -19,7 +19,7 @@ import {
   setServiceAddonActive,
   updateServiceAddon,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatTimestampNumeric } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -298,12 +298,13 @@ export function ExtraDevicesPage({
     {
       key: 'max',
       header: t('web.extra_devices_max_quantity'),
-      align: 'end',
       render: (row) => <span className="num">{String(row.maxQuantity ?? '—')}</span>,
     },
     {
       key: 'scope',
       header: t('web.extra_devices_scope'),
+      // X9: the scope breaks between its words before the table scrolls sideways at 1440.
+      wrap: 'tight',
       render: (row) => (
         <span className="muted">{`${panelName(row.panelId)} / ${productName(row.productId)}`}</span>
       ),
@@ -320,7 +321,8 @@ export function ExtraDevicesPage({
     {
       key: 'updated',
       header: t('web.extra_devices_updated'),
-      render: (row) => <span className="muted small">{formatTimestamp(row.updatedAt)}</span>,
+      wrap: 'tight',
+      render: (row) => <span className="nowrap">{formatTimestampNumeric(row.updatedAt)}</span>,
     },
     {
       key: 'actions',
@@ -398,13 +400,6 @@ export function ExtraDevicesPage({
           )}
         </Banner>
       )}
-      {toggle.error !== null && (
-        <Banner tone="danger">
-          {messageFor(toggle.error)}
-          <ErrorRef error={toggle.error} />
-        </Banner>
-      )}
-
       <div className="stack">
         <StateSwitch
           query={rates}
@@ -422,12 +417,22 @@ export function ExtraDevicesPage({
         >
           <Card title={t('web.extra_devices_rates')}>
             <DataTable
+              stack="labelled"
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}
               caption={t('web.extra_devices_rates')}
-              dense
             />
+            {/*
+              A refused toggle is said under the rows it concerns, never above them: a banner
+              inserted above the list moved the row the operator just clicked (no-scroll, 390).
+            */}
+            {toggle.error !== null && (
+              <Banner tone="danger">
+                {messageFor(toggle.error)}
+                <ErrorRef error={toggle.error} />
+              </Banner>
+            )}
             <CursorPager
               order="oldest-first"
               shown={rows.length}

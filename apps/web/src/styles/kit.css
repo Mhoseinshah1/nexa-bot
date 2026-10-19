@@ -1016,6 +1016,64 @@
   line-height: 1.4;
   padding-block: 2px;
 }
+/*
+ * Demo parity (390): a `stack` table at phone and tablet width is one card per row, as the
+ * approved demo draws every list there — the first cell is the row's title, every other cell
+ * a line with its header (`data-label`) at the start and its value at the end. The header row
+ * stays in the accessibility tree, visually hidden.
+ */
+@media (max-width: 820px) {
+  .tbl-wrap.stack,
+  .tbl-wrap.stack.sticky {
+    max-height: none;
+    overflow: visible;
+  }
+  .tbl-wrap.stack .tbl,
+  .tbl-wrap.stack .tbl tbody,
+  .tbl-wrap.stack .tbl tr,
+  .tbl-wrap.stack .tbl td {
+    display: block;
+    width: 100%;
+  }
+  .tbl-wrap.stack .tbl thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tbl-wrap.stack .tbl tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tbl-wrap.stack .tbl tr:last-child {
+    border-bottom: 0;
+  }
+  .tbl-wrap.stack .tbl td {
+    min-width: 0;
+    padding: 3px 0;
+    border: 0;
+    overflow: hidden;
+    text-align: end;
+    white-space: normal;
+  }
+  .tbl-wrap.stack .tbl td::before {
+    content: attr(data-label);
+    float: inline-start;
+    margin-inline-end: 12px;
+    color: var(--fg-3);
+    font-size: var(--fs-xs);
+  }
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child {
+    padding-bottom: 6px;
+    font-size: var(--fs-body);
+    text-align: start;
+  }
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child::before {
+    content: none;
+  }
+}
 .tbl tbody tr {
   transition: background 0.1s;
 }
