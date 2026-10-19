@@ -214,7 +214,8 @@ form.set-row > * + * {
 /* Where support goes is edited on the settings page: said in one quiet line. */
 .support-destination {
   display: flex;
-  align-items: center;
+  /* Demo parity (DIFFS support #2): the icon and «رفتن به تنظیمات» align with the title. */
+  align-items: flex-start;
   gap: 12px;
   padding: 12px 16px;
   border: 1px solid var(--line);
@@ -229,6 +230,9 @@ form.set-row > * + * {
 }
 .support-destination p {
   margin: 2px 0 0;
+}
+.support-destination > svg {
+  margin-top: 3px;
 }
 /*
  * The answer under its question, two lines at most in the list. TB10: each paragraph takes
