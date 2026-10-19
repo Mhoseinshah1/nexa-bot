@@ -5,7 +5,6 @@ import {
   effectiveCooldownMs,
   isNexaError,
   servicePanelAccountMissingKey,
-  SERVICE_PANEL_ACCOUNT_FOUND_CODE,
   SERVICE_PANEL_ACCOUNT_MISSING_CODE,
   type ActorContext,
   type Clock,
@@ -36,6 +35,7 @@ import { checkUrl, type UrlPolicyOptions } from '../../../../infrastructure/net/
 import { decideOperability } from './panel-operability.js';
 import { OPERATION_LEGAL_FROM, providerRefFor, usageSyncCall } from './provision-executor.js';
 import type { ServiceRecord, ServiceRepository } from './ports.js';
+import { closePanelAccountMissing, type ServiceConditionReader } from './panel-account-recovery.js';
 import { CUSTOMER_ROTATION_PERMISSION, type ProvisioningService } from './provisioning.service.js';
 
 /**
@@ -113,10 +113,7 @@ export type ServiceLiveCheckResult =
   | { readonly outcome: 'FRESH' | 'MISSING_ON_PANEL'; readonly source: 'PANEL' | 'CACHE' }
   | { readonly outcome: 'STALE'; readonly reason: ServiceLiveCheckStaleReason };
 
-/** Which of one subject's conditions is open — the opslog's condition reader. */
-export interface ServiceConditionReader {
-  conditionIsOpen(scope: TenantContext, dedupeKey: string, tx?: TransactionScope): Promise<boolean>;
-}
+export type { ServiceConditionReader } from './panel-account-recovery.js';
 
 /**
  * The one-at-a-time rule for the refresh button, as the database holds it
@@ -404,7 +401,17 @@ export class ServiceRefreshService {
       this.missingVerdicts.delete(verdictKey);
     }
     const interval = effectiveCooldownMs(cacheMs, policy, 'USAGE_READ');
-    if (service.usageSyncedAt !== null && now - service.usageSyncedAt.getTime() < interval) {
+    if (
+      service.usageSyncedAt !== null &&
+      now - service.usageSyncedAt.getTime() < interval &&
+      // A fresh figure from some other writer says the panel answered — but while this
+      // service's missing-account condition is open, the cache is not trusted: the panel
+      // is read so the answer (and the condition's recovery) comes from the panel itself.
+      !(await this.deps.conditions.conditionIsOpen(
+        scope,
+        servicePanelAccountMissingKey(service.id),
+      ))
+    ) {
       return { outcome: 'FRESH', source: 'CACHE' };
     }
 
@@ -436,11 +443,13 @@ export class ServiceRefreshService {
     const timeoutMs = this.deps.liveCheckTimeoutMs ?? SERVICE_LIVE_CHECK_TIMEOUT_MS;
     const client = http.forBase(prepared.baseUrl);
     const ref = providerRefFor(service);
-    const lookup = async (): Promise<ProviderLookupOutcome | typeof DEADLINE_PASSED> =>
-      withinDeadline(
-        prepared.adapter.lookupUser(prepared.target, client, ref),
-        timeoutMs - (this.deps.clock.now().getTime() - startedAt.getTime()),
-      );
+    const lookup = async (): Promise<ProviderLookupOutcome | typeof DEADLINE_PASSED> => {
+      // Decided BEFORE the request exists (Codex on #291): a first read that spent the
+      // whole deadline must not start a confirming request nobody will wait for.
+      const remaining = timeoutMs - (this.deps.clock.now().getTime() - startedAt.getTime());
+      if (remaining <= 0) return DEADLINE_PASSED;
+      return withinDeadline(prepared.adapter.lookupUser(prepared.target, client, ref), remaining);
+    };
 
     let ended = false;
     try {
@@ -609,24 +618,7 @@ export class ServiceRefreshService {
         { usedBytes: usage.usedBytes, syncedAt: now, lastSeen: usage.lastSeen },
         tx,
       );
-      const key = servicePanelAccountMissingKey(service.id);
-      if (await this.deps.conditions.conditionIsOpen(scope, key, tx)) {
-        await this.deps.opsEvents.record(
-          scope,
-          {
-            code: SERVICE_PANEL_ACCOUNT_FOUND_CODE,
-            severity: 'INFO',
-            message: 'The panel holds this service’s account again.',
-            context: {
-              serviceId: service.id,
-              panelId: service.panelId,
-            },
-            recoversCode: SERVICE_PANEL_ACCOUNT_MISSING_CODE,
-            recoversDedupeKey: key,
-          },
-          tx,
-        );
-      }
+      await closePanelAccountMissing(this.deps, scope, service, tx);
       return true;
     });
   }

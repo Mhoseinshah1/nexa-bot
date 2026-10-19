@@ -69,7 +69,7 @@ interface Harness {
 }
 
 function harness(
-  answers: readonly (ProviderLookupOutcome | 'HANG')[],
+  answers: readonly (ProviderLookupOutcome | 'HANG' | (() => ProviderLookupOutcome))[],
   options: {
     readonly supports?: boolean;
     readonly budgetPermits?: readonly boolean[];
@@ -100,7 +100,7 @@ function harness(
     const next = answers[Math.min(answer, answers.length - 1)];
     answer += 1;
     if (next === 'HANG' || next === undefined) return new Promise<never>(() => undefined);
-    return next;
+    return typeof next === 'function' ? next() : next;
   });
   const rick = new RickpanelAdapter();
   const adapter = Object.assign(Object.create(rick) as ProviderAdapter, {
@@ -374,5 +374,49 @@ describe('opening a card checks the panel live (Track 3 §1)', () => {
     h.row.state = 'SUSPENDED';
     expect(await h.service.liveCheck(scope, actor, input)).toEqual({ outcome: 'NOT_READ' });
     expect(h.lookup).not.toHaveBeenCalled();
+  });
+  /*
+   * Codex on #291 (b): a first read that used up the whole deadline must not START a
+   * confirming request — the remaining time is decided before the request exists.
+   */
+  it('a first read that spends the deadline starts no confirming request', async () => {
+    const held: { harness?: Harness } = {};
+    const h = harness(
+      [
+        () => {
+          // The panel answered «not found» just as the deadline passed.
+          if (held.harness !== undefined) held.harness.clock.at = new Date(T0.getTime() + 2_000);
+          return MISSING;
+        },
+        MISSING,
+      ],
+      { timeoutMs: 1_500 },
+    );
+    held.harness = h;
+    expect(await h.service.liveCheck(scope, actor, input)).toEqual({
+      outcome: 'STALE',
+      reason: 'TIMEOUT',
+    });
+    expect(h.lookup, 'no detached second request').toHaveBeenCalledTimes(1);
+    expect(h.recorded).toEqual([]);
+  });
+
+  /*
+   * Codex on #291 (a): a figure some OTHER writer made fresh (the scheduled sync) is not
+   * trusted while this service's missing-account condition is open — the panel is read,
+   * and the read closes the condition.
+   */
+  it('a fresh cached figure is not trusted while the missing condition is open', async () => {
+    const h = harness([FOUND], {
+      usageSyncedAt: new Date(T0.getTime() - 1_000),
+    });
+    h.openConditions.add(servicePanelAccountMissingKey('s-1'));
+    expect(await h.service.liveCheck(scope, actor, input)).toEqual({
+      outcome: 'FRESH',
+      source: 'PANEL',
+    });
+    expect(h.lookup).toHaveBeenCalledTimes(1);
+    expect(h.recorded.map((event) => event.code)).toEqual([SERVICE_PANEL_ACCOUNT_FOUND_CODE]);
+    expect(h.openConditions.size).toBe(0);
   });
 });
