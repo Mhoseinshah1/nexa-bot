@@ -3134,4 +3134,9 @@ textarea.input,
   .tbl.stack-phone td[data-label='']::before {
     content: none;
   }
+  /* Stacked rows read down the page; a bounded sticky pane would trap them in a scroll. */
+  .tbl-wrap.sticky:has(> .tbl.stack-phone) {
+    max-height: none;
+    overflow: visible;
+  }
 }
