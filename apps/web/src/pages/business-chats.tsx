@@ -508,13 +508,14 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
             />
           }
         >
-          <DataTable
-            caption={t('web.bchats_title')}
-            columns={columns}
-            rows={shownRows}
-            rowKey={(row) => row.id}
-            dense
-          />
+          <div className="bchat-inbox">
+            <DataTable
+              caption={t('web.bchats_title')}
+              columns={columns}
+              rows={shownRows}
+              rowKey={(row) => row.id}
+            />
+          </div>
           <div className="pager bchat-more">
             <span className="muted small">
               {t('web.showing')} <Num value={shownRows.length} />

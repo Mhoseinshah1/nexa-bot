@@ -488,7 +488,7 @@ export function TicketsPage({
         row.assignedAdminUsername === null ? (
           <span className="muted">{t('web.ticket_unassigned')}</span>
         ) : (
-          <Ltr mono={false}>@{row.assignedAdminUsername}</Ltr>
+          <Ltr>@{row.assignedAdminUsername}</Ltr>
         ),
     },
     {
@@ -770,7 +770,6 @@ export function TicketsPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            dense
             rowClassName={(row) => (row.status === 'CLOSED' ? 'tickets-row-closed' : undefined)}
           />
           <CursorPager
@@ -938,7 +937,6 @@ function TicketCategoriesCard({
           columns={columns}
           rows={categories}
           rowKey={(row) => row.id}
-          dense
         />
       </StateSwitch>
       {mayEdit && (

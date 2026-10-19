@@ -217,9 +217,9 @@ form.set-row > * + * {
   /* Demo parity (DIFFS support #2): the icon and «رفتن به تنظیمات» align with the title. */
   align-items: flex-start;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: calc(var(--radius-card) - 6px);
+  border-radius: var(--radius-card);
   background: var(--panel-row);
   color: var(--fg-3);
 }
@@ -394,6 +394,16 @@ form.set-row > * + * {
 .bchat-ticket:hover,
 .bchat-ticket:focus-visible {
   text-decoration: underline;
+}
+/* Demo parity: the inbox's headers stay on one line and a preview is one truncated line. */
+.bchat-inbox th {
+  white-space: nowrap;
+}
+.bchat-inbox .bchat-preview {
+  -webkit-line-clamp: 1;
+}
+.tbl td a.bchat-ticket:not(:hover):not(:focus-visible) {
+  text-decoration: none;
 }
 /* TB10: the customer's wait — a figure and its unit, never split across lines. */
 .bchat-wait {
