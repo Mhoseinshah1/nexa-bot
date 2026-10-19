@@ -5,6 +5,7 @@ import {
   EMPTY_PRODUCT_DISPLAY,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
   money,
+  PUBLIC_CODE_PATTERN,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -294,7 +295,10 @@ describe('a customer pays through the approved screens', () => {
       const body = lastText();
       // Batch 2026-10-10 (brief C2.2): the money model's labels, the wallet icon on the wallet
       // line only, and the figure the customer pays last in the facts block.
-      expect(body.startsWith('🧾 پیش‌فاکتور\n\n📦 سرویس: پلن pre\n')).toBe(true);
+      // PR-C: the order's short public code under the title.
+      expect(body).toMatch(
+        /^🧾 پیش‌فاکتور\n🔖 کد سفارش: [2-9A-HJKMNP-TV-Z]{8}\n\n📦 سرویس: پلن pre\n/u,
+      );
       expect(body).toMatch(/👤 نام کاربری: nx[a-z0-9]+\n/u);
       expect(body).toContain(
         '📅 مدت: 30 روز\n📊 حجم: 50 گیگابایت\n💵 مبلغ سفارش: 250,000 تومان\n\n',
@@ -453,16 +457,19 @@ describe('a customer pays through the approved screens', () => {
       expect(result.replyKey).toBe('bot.payment.transfer_instructions');
       // FIX-02: the order's card-to-card invoice carries the public code before payment.
       const issued = await ctx.container.database.db.execute(
-        sql`SELECT reference FROM payments WHERE order_id = ${orderId}`,
+        sql`SELECT reference, code FROM payments WHERE order_id = ${orderId}`,
       );
-      const reference = String((issued.rows[0] as { reference: string }).reference);
+      const { reference, code } = issued.rows[0] as { reference: string; code: string };
       expect(reference).toMatch(/^[0-9a-f]{16}:manual$/u);
-      expect(lastText()).toContain(`کد پیگیری پرداخت: ${reference.split(':')[0]!}`);
+      // PR-C: the payment's 8-character public code, never the FIX-02 operation id.
+      expect(code).toMatch(PUBLIC_CODE_PATTERN);
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
+      expect(lastText()).not.toContain(reference.split(':')[0]!);
       expect(lastText()).not.toContain(':manual');
       // Asking again hands back the live payment: the same code, never a second one.
       const again = await handle(tap(`m:${orderId}`));
       expect(again.replyKey).toBe('bot.payment.transfer_instructions');
-      expect(lastText()).toContain(`کد پیگیری پرداخت: ${reference.split(':')[0]!}`);
+      expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
       const count = await ctx.container.database.db.execute(
         sql`SELECT count(*)::int AS n FROM payments WHERE order_id = ${orderId}`,
       );
@@ -543,11 +550,13 @@ describe('a customer pays through the approved screens', () => {
       // FIX-02: the top-up invoice carries the public code under the exact label — never the
       // stored `<code>:topup` reference — before anything is paid.
       const stored = await ctx.container.database.db.execute(
-        sql`SELECT reference FROM payments WHERE tenant_id = ${tenantA.tenantId}`,
+        sql`SELECT reference, code FROM payments WHERE tenant_id = ${tenantA.tenantId}`,
       );
-      const reference = String((stored.rows[0] as { reference: string }).reference);
+      const { reference, code } = stored.rows[0] as { reference: string; code: string };
       expect(reference).toMatch(/^[0-9a-f]{16}:topup$/u);
-      const code = reference.split(':')[0]!;
+      // PR-C: the payment's 8-character public code is the tracking code.
+      expect(code).toMatch(PUBLIC_CODE_PATTERN);
+      expect(lastText()).not.toContain(reference.split(':')[0]!);
       expect(lastText()).toContain(`کد پیگیری پرداخت: ${code}`);
       expect(lastText()).not.toContain(':topup');
 

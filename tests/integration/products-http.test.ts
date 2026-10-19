@@ -230,6 +230,8 @@ describe('product HTTP surface', () => {
         // WP5: the category a product is filed under — an id this tenant owns, never
         // a panel fact, so it does not widen what `catalog.view` can see.
         'categoryId',
+        // PR-C: the per-tenant product code («P-102»), never a panel fact.
+        'code',
         'createdAt',
         'deviceLimit',
         'description',
