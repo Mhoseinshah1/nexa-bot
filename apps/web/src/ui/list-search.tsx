@@ -313,9 +313,15 @@ const READ_AT = new Intl.DateTimeFormat('fa-IR', {
 export function ListFreshness({
   query,
   hidden = false,
+  labelled = false,
 }: {
   query: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown };
   hidden?: boolean;
+  /**
+   * The refresh as a labelled «خواندن دوباره» button rather than the round icon button — the
+   * reference's choice for the ticket queue, where re-reading is the page's main act.
+   */
+  labelled?: boolean;
 }) {
   const shown = !hidden && query.dataUpdatedAt !== 0;
   return (
@@ -325,17 +331,29 @@ export function ListFreshness({
           ? t('web.list_read_at').replace('{time}', READ_AT.format(new Date(query.dataUpdatedAt)))
           : ''}
       </span>
-      {shown && (
-        <IconButton
-          icon="refresh"
-          size="sm"
-          label={query.isFetching ? t('web.list_refreshing') : t('web.list_refresh')}
-          aria-busy={query.isFetching}
-          onClick={() => {
-            if (!query.isFetching) void query.refetch();
-          }}
-        />
-      )}
+      {shown &&
+        (labelled ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="refresh"
+            aria-busy={query.isFetching}
+            onClick={() => {
+              if (!query.isFetching) void query.refetch();
+            }}
+          >
+            {query.isFetching ? t('web.list_refreshing') : t('web.list_refresh')}
+          </Button>
+        ) : (
+          <IconButton
+            icon="refresh"
+            label={query.isFetching ? t('web.list_refreshing') : t('web.list_refresh')}
+            aria-busy={query.isFetching}
+            onClick={() => {
+              if (!query.isFetching) void query.refetch();
+            }}
+          />
+        ))}
     </span>
   );
 }

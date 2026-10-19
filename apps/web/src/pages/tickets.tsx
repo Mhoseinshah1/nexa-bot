@@ -543,7 +543,7 @@ export function TicketsPage({
       <PageHead
         title={t('web.tickets_title')}
         subtitle={t('web.tickets_intro')}
-        actions={<ListFreshness query={tickets} hidden={!requestable} />}
+        actions={<ListFreshness query={tickets} hidden={!requestable} labelled />}
       />
 
       <Card>
