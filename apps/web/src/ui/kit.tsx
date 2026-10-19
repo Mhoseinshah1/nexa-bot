@@ -969,28 +969,29 @@ export function Banner({
   tone = 'info',
   title,
   children,
-  icon,
   role,
   action,
 }: {
   tone?: Tone;
   title?: string;
   children?: ReactNode;
+  /**
+   * Accepted and not drawn. The approved demo draws no sign on ANY callout — information,
+   * warning or error alike (every `.note` in `approved-demo.html`, checked on 25 routes) — so
+   * the tone's colour and outline are the whole signal, and `role` carries the urgency for
+   * assistive technology. Kept on the type only so the pages that still pass one need no edit
+   * in this change; removing those props is a page-file follow-up.
+   */
   icon?: IconName;
   /** Overrides the tone's default. See `StaleNotice` for why one needs to. */
   role?: 'status' | 'alert' | undefined;
   /** A control that resolves what the banner says — at the end of the line. */
   action?: ReactNode;
 }) {
-  // An information callout is an outlined card with no ⓘ (demo parity X5): the outline is
-  // what sets it apart, and an icon on every explanatory paragraph was noise. A warning or
-  // an error keeps its sign, because there the icon carries the urgency.
-  const iconless = tone === 'info' || tone === 'neutral';
+  // Demo parity X5 (and its follow-up): a callout is an outlined card in its tone, with no
+  // ⓘ or ⚠. An error still announces itself (`role="alert"`), which the icon never did.
   return (
     <div className={`banner ${tone}`} role={role ?? (tone === 'danger' ? 'alert' : undefined)}>
-      {!iconless && (
-        <Icon name={icon ?? (tone === 'danger' || tone === 'warn' ? 'alert' : 'info')} size={16} />
-      )}
       <div>
         {title !== undefined && <strong>{title}</strong>}
         {children}

@@ -155,8 +155,8 @@ describe('X2 — CountedPager counts only a server total', () => {
   });
 });
 
-describe('X5 — an information callout is outlined, without the ⓘ', () => {
-  it('draws no icon on info and neutral, and keeps the sign on a warning', () => {
+describe('X5 — a callout is outlined in its tone, without a sign', () => {
+  it('draws no icon on any tone, as every callout in the demo; an error still alerts', () => {
     const { container } = renderPage(
       <>
         <Banner tone="info" title="عنوان">
@@ -167,19 +167,28 @@ describe('X5 — an information callout is outlined, without the ⓘ', () => {
         </Banner>
         <Banner tone="neutral">متن</Banner>
         <Banner tone="warn">هشدار</Banner>
+        <Banner tone="warn" icon="info">
+          هشدار
+        </Banner>
+        <Banner tone="danger">خطا</Banner>
+        <Banner tone="ok">انجام شد</Banner>
       </>,
     );
-    const [info, infoWithIcon, neutral, warn] = [...container.querySelectorAll('.banner')];
-    expect(info?.querySelector('svg')).toBeNull();
-    expect(infoWithIcon?.querySelector('svg')).toBeNull();
-    expect(neutral?.querySelector('svg')).toBeNull();
-    expect(warn?.querySelector('svg')).not.toBeNull();
+    const banners = [...container.querySelectorAll('.banner')];
+    expect(banners).toHaveLength(7);
+    for (const banner of banners) expect(banner.querySelector('svg')).toBeNull();
+    expect(banners[5]).toHaveAttribute('role', 'alert');
   });
 
   it('is outlined in the accent over its soft fill', () => {
     const css = rule(KIT_CSS, '.banner.info');
     expect(css).toContain('border-color: var(--accent)');
     expect(css).toContain('background: var(--accent-soft)');
+  });
+
+  it("outlines a warning and an error in their full tone, as the demo's .note.warn/.danger", () => {
+    expect(rule(KIT_CSS, '.banner.warn')).toContain('border-color: var(--warn)');
+    expect(rule(KIT_CSS, '.banner.danger')).toContain('border-color: var(--danger)');
   });
 });
 

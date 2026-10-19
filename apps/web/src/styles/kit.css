@@ -1839,12 +1839,6 @@ textarea.input,
   color: var(--fg-2);
   font-size: var(--fs-ui);
 }
-.banner > svg {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  margin-top: 3px;
-}
 .banner > div {
   flex: 1;
   min-width: 0;
@@ -1861,19 +1855,20 @@ textarea.input,
 }
 .banner.warn {
   background: var(--warn-soft);
-  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  border-color: var(--warn);
+  color: var(--fg);
 }
-.banner.warn > svg,
+/* The demo's callout title is the body colour; the outline and fill carry the tone. */
 .banner.warn strong {
-  color: var(--warn);
+  color: var(--fg);
 }
 .banner.danger {
   background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  border-color: var(--danger);
+  color: var(--fg);
 }
-.banner.danger > svg,
 .banner.danger strong {
-  color: var(--danger);
+  color: var(--fg);
 }
 /*
  * The information callout (demo parity X5): an outlined card a step brighter than the page —
@@ -1892,7 +1887,6 @@ textarea.input,
   background: var(--ok-soft);
   border-color: color-mix(in srgb, var(--ok) 40%, transparent);
 }
-.banner.ok > svg,
 .banner.ok strong {
   color: var(--ok);
 }
@@ -1900,7 +1894,6 @@ textarea.input,
   background: var(--violet-soft);
   border-color: color-mix(in srgb, var(--violet) 40%, transparent);
 }
-.banner.violet > svg,
 .banner.violet strong {
   color: var(--violet);
 }
@@ -1908,12 +1901,8 @@ textarea.input,
   background: var(--teal-soft);
   border-color: color-mix(in srgb, var(--teal) 40%, transparent);
 }
-.banner.teal > svg,
 .banner.teal strong {
   color: var(--teal);
-}
-.banner.neutral > svg {
-  color: var(--fg-3);
 }
 .banner p + p {
   margin-top: 4px;
