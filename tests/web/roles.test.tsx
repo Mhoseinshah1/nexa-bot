@@ -185,11 +185,14 @@ describe('the roles section', () => {
   it('W1.7: compares the roles in a table, one column per role', async () => {
     stubApi(routes());
     renderPage(<SystemPage route={route} permissions={['admins.view']} />);
-    const card = (
-      await screen.findByRole('heading', { name: t('web.rbac_catalog_title') })
-    ).closest('section') as HTMLElement;
+    // Demo parity: the roles card's own «جدول مقایسه» opens the catalogue on the matrix.
+    const card = (await screen.findByRole('heading', { name: t('web.rbac_roles_title') })).closest(
+      'section',
+    ) as HTMLElement;
+    await within(card).findByText(t('web.role_key_owner'));
     fireEvent.click(within(card).getByRole('button', { name: t('web.pc_view_matrix') }));
-    const table = within(card).getByRole('table');
+    const region = within(card).getByRole('region', { name: t('web.rbac_catalog_title') });
+    const table = within(region).getByRole('table');
     const headers = within(table)
       .getAllByRole('columnheader')
       .map((one) => one.textContent);

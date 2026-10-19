@@ -1178,9 +1178,9 @@ form.set-row > * + * {
   align-items: center;
   gap: 8px;
 }
+/* Demo parity: the roles are rows of one list, a hairline between them. */
 .rbac .rbac-roles {
   display: grid;
-  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1188,10 +1188,17 @@ form.set-row > * + * {
 .rbac .rbac-role {
   display: grid;
   gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--panel-row);
+  padding: 12px 4px;
+}
+.rbac .rbac-role + .rbac-role {
+  border-top: 1px solid var(--line);
+}
+/* The view switch and «نقش تازه», side by side in the roles card's header. */
+.rbac-head-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 .rbac-domain {
   display: grid;
@@ -1305,9 +1312,12 @@ form.set-row > * + * {
   align-items: center;
 }
 /* A refusal or a failure stays in the log, marked rather than hidden. */
-/* Demo parity: a refused or failed row is tinted red across, not marked at one edge. */
-.audit-row-refused td {
-  background: var(--danger-soft);
+/* Demo parity: a refused or failed row is tinted red across, not marked at one edge (on a
+   desk; the phone's row cards are not tinted, as the demo's are not). */
+@media (min-width: 821px) {
+  .audit-row-refused td {
+    background: var(--danger-soft);
+  }
 }
 /* The recorded values: long JSON wraps inside its cell instead of widening the page. */
 .audit-diff td {

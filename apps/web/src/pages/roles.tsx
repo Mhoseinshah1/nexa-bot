@@ -111,6 +111,12 @@ export function RolesSection({ denied, mayEdit }: { denied: boolean; mayEdit: bo
   });
   const [editing, setEditing] = useState<Editing | null>(null);
   const [deleting, setDeleting] = useState<RoleView | null>(null);
+  /*
+   * Demo parity: the roles card switches between its list of roles («فهرست») and the
+   * catalogue compared across roles («جدول مقایسه»), in its own header — instead of a
+   * second card under it. The catalogue keeps its own list view and search.
+   */
+  const [view, setView] = useState<'roles' | 'compare'>('roles');
   const list = roles.data?.roles ?? [];
 
   return (
@@ -119,49 +125,75 @@ export function RolesSection({ denied, mayEdit }: { denied: boolean; mayEdit: bo
         title={t('web.rbac_roles_title')}
         hint={t('web.rbac_roles_hint')}
         actions={
-          mayEdit && !denied ? (
-            <button
-              type="button"
-              className="btn primary sm"
-              onClick={() => setEditing({ mode: 'create' })}
-            >
-              <Icon name="plus" />
-              {t('web.rbac_new_role')}
-            </button>
-          ) : undefined
+          denied ? undefined : (
+            <span className="rbac-head-actions">
+              {list.length > 0 && (
+                <span className="btn-group segmented" role="group">
+                  <button
+                    type="button"
+                    className="btn sm"
+                    aria-pressed={view === 'roles'}
+                    onClick={() => setView('roles')}
+                  >
+                    {t('web.pc_view_list')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn sm"
+                    aria-pressed={view === 'compare'}
+                    onClick={() => setView('compare')}
+                  >
+                    {t('web.pc_view_matrix')}
+                  </button>
+                </span>
+              )}
+              {mayEdit && (
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  onClick={() => setEditing({ mode: 'create' })}
+                >
+                  <Icon name="plus" />
+                  {t('web.rbac_new_role')}
+                </button>
+              )}
+            </span>
+          )
         }
       >
         <StateSwitch query={roles} denied={denied} isEmpty={list.length === 0}>
-          <ul className="rbac-roles">
-            {list.map((role) => (
-              <RoleRow
-                key={role.key}
-                role={role}
-                mayEdit={mayEdit}
-                onEdit={() => setEditing({ mode: 'edit', role })}
-                onClone={() => setEditing({ mode: 'clone', role })}
-                onDelete={() => setDeleting(role)}
+          {view === 'compare' ? (
+            // W1.7: the whole catalogue, one column per role in «جدول مقایسه».
+            <div role="region" aria-label={t('web.rbac_catalog_title')}>
+              <p className="muted small">{t('web.rbac_catalog_hint')}</p>
+              <PermissionCatalog
+                keys={PERMISSION_KEYS}
+                mode="view"
+                idPrefix="rbac-catalog"
+                initialView="matrix"
+                matrix={list.map((role) => ({
+                  key: role.key,
+                  label: roleLabel(role.key, role.name),
+                  has: (permission: string) => role.permissions.includes(permission),
+                }))}
               />
-            ))}
-          </ul>
+            </div>
+          ) : (
+            <ul className="rbac-roles">
+              {list.map((role) => (
+                <RoleRow
+                  key={role.key}
+                  role={role}
+                  mayEdit={mayEdit}
+                  onEdit={() => setEditing({ mode: 'edit', role })}
+                  onClone={() => setEditing({ mode: 'clone', role })}
+                  onDelete={() => setDeleting(role)}
+                />
+              ))}
+            </ul>
+          )}
         </StateSwitch>
       </Card>
-
-      {!denied && list.length > 0 && (
-        // W1.7: the whole catalogue, and «جدول مقایسه» with one column per role.
-        <Card title={t('web.rbac_catalog_title')} hint={t('web.rbac_catalog_hint')}>
-          <PermissionCatalog
-            keys={PERMISSION_KEYS}
-            mode="view"
-            idPrefix="rbac-catalog"
-            matrix={list.map((role) => ({
-              key: role.key,
-              label: roleLabel(role.key, role.name),
-              has: (permission: string) => role.permissions.includes(permission),
-            }))}
-          />
-        </Card>
-      )}
 
       {!denied && <EffectivePreview />}
 
