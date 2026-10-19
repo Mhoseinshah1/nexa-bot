@@ -256,6 +256,7 @@ export function LegacyCutoverPage({
           empty={<Empty title={t('web.lco_empty')} hint={t('web.lco_empty_hint')} />}
         >
           <DataTable
+            stack="labelled"
             columns={approvalColumns}
             rows={approvalRows}
             rowKey={(row) => row.id}
@@ -272,6 +273,7 @@ export function LegacyCutoverPage({
         <>
           <Card title={t('web.lco_read_sets_title')}>
             <DataTable
+              stack="labelled"
               columns={readSetColumns}
               rows={readSets.query.data?.readSets ?? []}
               rowKey={(row) => row.id}
@@ -285,6 +287,7 @@ export function LegacyCutoverPage({
           </Card>
           <Card title={t('web.lco_runs_title')}>
             <DataTable
+              stack="labelled"
               columns={runColumns}
               rows={runs.query.data?.runs ?? []}
               rowKey={(row) => row.id}

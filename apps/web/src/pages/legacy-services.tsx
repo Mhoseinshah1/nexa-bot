@@ -529,6 +529,7 @@ export function LegacyServicesPage({
       >
         <Card title={t('web.lsr_title')}>
           <DataTable
+            stack="labelled"
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
