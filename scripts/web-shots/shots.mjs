@@ -36,7 +36,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ROOT, buildWeb, delay, launchChrome, openPage, startServer } from './harness.mjs';
-import { needsTypeStripping, shotProblems } from './policy.mjs';
+import { TABLE_OVERFLOW_MIN_WIDTH, needsTypeStripping, shotProblems } from './policy.mjs';
 
 /** The default set: one of each page type, the shell states the brief names. */
 const DEFAULT_ROUTES = ['/', '/users', '/panels/01a05e35-c9ad-7e93-bef3-1ed9b55292c8', '/settings'];
@@ -175,6 +175,15 @@ async function shoot(cdp, shot) {
         errorStates: document.querySelectorAll('.empty.error').length,
         horizontalOverflow: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
         contentHeight: content ? content.scrollHeight - content.clientHeight : 0,
+        // X9: a table that scrolls sideways inside its card. Named by its caption (or its
+        // first header) so the line says which table, and by how many pixels.
+        tableOverflow: [...document.querySelectorAll('.tbl-wrap')]
+          .filter((wrap) => wrap.scrollWidth > wrap.clientWidth + 1 && wrap.getClientRects().length > 0)
+          .map((wrap) => {
+            const caption = wrap.querySelector('caption, th');
+            const name = (caption ? caption.textContent : '').trim().slice(0, 40) || '?';
+            return name + ' +' + (wrap.scrollWidth - wrap.clientWidth) + 'px';
+          }),
       };
     })()`);
 
@@ -189,6 +198,8 @@ async function shoot(cdp, shot) {
       stillLoading: facts.stillLoading,
       errorStates: facts.errorStates,
       horizontalOverflow: facts.horizontalOverflow,
+      // Desktop only: a phone may scroll a wide table inside its card by design.
+      tableOverflow: shot.width >= TABLE_OVERFLOW_MIN_WIDTH ? facts.tableOverflow : [],
       errors: page.errors,
     };
   } finally {
