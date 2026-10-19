@@ -342,3 +342,7 @@
     white-space: normal;
   }
 }
+/* «ذخیرهٔ پیکربندی» closes the form on its end side, as the demo places it. */
+.sai-config > .form-actions {
+  justify-content: flex-end;
+}
