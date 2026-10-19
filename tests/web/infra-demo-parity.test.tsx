@@ -3,7 +3,7 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { opsCodeLabel } from '../../apps/web/src/ops-code-labels';
-import { FailureBadge, PanelDetailPage } from '../../apps/web/src/pages/panels';
+import { FailureBadge, PanelDetailPage, PanelsPage } from '../../apps/web/src/pages/panels';
 import { AlertsPage } from '../../apps/web/src/pages/alerts';
 import { AuditLogPage } from '../../apps/web/src/pages/audit-log';
 import { OpsGroupPage } from '../../apps/web/src/pages/ops-group';
@@ -188,31 +188,21 @@ describe('the infrastructure demo-parity fixtures', () => {
   );
 });
 
-describe('DataTable phoneCards (demo parity, kit)', () => {
-  it('labels each cell with its header only when the table opts in', async () => {
-    const { DataTable } = await import('../../apps/web/src/ui/kit');
-    const columns = [
-      { key: 'a', header: 'نام', render: (row: { id: string }) => row.id },
-      { key: 'b', header: 'وضعیت', render: () => 'x' },
-    ];
-    const { container, rerender } = renderPage(
-      <DataTable caption="c" columns={columns} rows={[{ id: 'r1' }]} rowKey={(row) => row.id} />,
-    );
-    expect(container.querySelector('td[data-label]')).toBeNull();
-    expect(container.querySelector('table.phone-cards')).toBeNull();
-    rerender(
-      <DataTable
-        caption="c"
-        columns={columns}
-        rows={[{ id: 'r1' }]}
-        rowKey={(row) => row.id}
-        phoneCards
+describe('phone cards (demo parity, 390)', () => {
+  it('draws the panel list as the kit stacking table', async () => {
+    stubApi([{ url: '/panels', body: { panels: [panel()], nextCursor: null } }]);
+    const { container } = renderPage(
+      <PanelsPage
+        route={{ path: '/panels', query: new URLSearchParams() }}
+        mayEdit={false}
+        denied={false}
       />,
     );
-    expect(container.querySelector('table.phone-cards')).not.toBeNull();
+    await screen.findByText('Frankfurt A');
+    expect(container.querySelector('.tbl-wrap.stack')).not.toBeNull();
     const labels = [...container.querySelectorAll('td')].map((cell) =>
       cell.getAttribute('data-label'),
     );
-    expect(labels).toEqual(['نام', 'وضعیت']);
+    expect(labels).toContain(t('web.panel_capacity'));
   });
 });

@@ -301,7 +301,7 @@ export function BackupScheduleCard({
         </Banner>
       )}
 
-      <Disclosure summary={t('web.settings_technical')}>
+      <Disclosure summary={t('web.settings_technical')} variant="boxed">
         <p className="muted small">{t('web.backup_schedule_technical')}</p>
         <KV
           items={[

@@ -476,6 +476,24 @@
 .content-inner > .crumbs {
   margin-bottom: 8px;
 }
+/* The record's way back to its list (the demo's `backl`): small, quiet, above the head. */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  text-decoration: none;
+  margin-bottom: 4px;
+}
+.back-link:hover {
+  color: var(--accent);
+}
+@media (pointer: coarse) and (hover: none) {
+  .back-link {
+    min-height: var(--ctl-h);
+  }
+}
 @media (max-width: 820px) {
   .page-head h1 {
     font-size: 21px;
@@ -1000,59 +1018,61 @@
   padding-block: 2px;
 }
 /*
- * Demo parity: a `phoneCards` table becomes one card per row at ≤ 820px — no header row,
- * the first cell as the card's heading, every other cell «label … value» (the label from
- * `data-label`, on the start side; the value on the end side), as the approved demo draws.
+ * Demo parity (390): a `stack` table at phone and tablet width is one card per row, as the
+ * approved demo draws every list there — the first cell is the row's title, every other cell
+ * a line with its header (`data-label`) at the start and its value at the end. The header row
+ * stays in the accessibility tree, visually hidden.
  */
 @media (max-width: 820px) {
-  .tbl-wrap:has(> .tbl.phone-cards) {
+  .tbl-wrap.stack,
+  .tbl-wrap.stack.sticky {
+    max-height: none;
     overflow: visible;
   }
-  .tbl.phone-cards thead {
-    display: none;
-  }
-  .tbl.phone-cards,
-  .tbl.phone-cards tbody,
-  .tbl.phone-cards tr,
-  .tbl.phone-cards td {
+  .tbl-wrap.stack .tbl,
+  .tbl-wrap.stack .tbl tbody,
+  .tbl-wrap.stack .tbl tr,
+  .tbl-wrap.stack .tbl td {
     display: block;
     width: 100%;
   }
-  .tbl.phone-cards tr {
+  .tbl-wrap.stack .tbl thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tbl-wrap.stack .tbl tr {
     padding: 10px 12px;
     border-bottom: 1px solid var(--line);
   }
-  .tbl.phone-cards tr:last-child {
+  .tbl-wrap.stack .tbl tr:last-child {
     border-bottom: 0;
   }
-  .tbl.phone-cards td,
-  .tbl.phone-cards td.al-start,
-  .tbl.phone-cards td.al-end {
+  .tbl-wrap.stack .tbl td {
+    min-width: 0;
     padding: 3px 0;
     border: 0;
-    white-space: normal;
-    min-width: 0;
-    text-align: end;
     overflow: hidden;
+    text-align: end;
+    white-space: normal;
   }
-  /* The label and its value never touch: a gap after the label. */
-  .tbl.phone-cards td::before {
-    margin-inline-end: 12px;
-  }
-  .tbl.phone-cards td::before {
+  .tbl-wrap.stack .tbl td::before {
     content: attr(data-label);
     float: inline-start;
+    margin-inline-end: 12px;
     color: var(--fg-3);
     font-size: var(--fs-xs);
   }
-  .tbl.phone-cards td:first-child,
-  .tbl.phone-cards td.al-start:first-child {
-    font-size: var(--fs-body);
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child {
     padding-bottom: 6px;
+    font-size: var(--fs-body);
     text-align: start;
   }
-  .tbl.phone-cards td:first-child::before {
-    display: none;
+  .tbl-wrap.stack:not(.labelled) .tbl td:first-child::before {
+    content: none;
   }
 }
 .tbl tbody tr {

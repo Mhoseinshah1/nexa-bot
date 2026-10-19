@@ -22,6 +22,17 @@
   gap: 6px;
   margin-top: 6px;
 }
+/* Demo parity (390): in a stacked row the two decisions are full-width capsules, one a line. */
+@media (max-width: 820px) {
+  .tbl-wrap.stack .wb-row-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tbl-wrap.stack .wb-row-actions > .btn {
+    justify-content: center;
+    width: 100%;
+  }
+}
 
 /* W2: a card a jump landed on is flashed once, never scrolled to. */
 .wb-flash {
@@ -33,4 +44,316 @@
   .wb-flash {
     transition: none;
   }
+}
+
+/*
+ * Customer 360 (demo parity): the identity head is NOT a card — avatar, the name at the page
+ * title's size, the pills and the meta line sit on the page itself, as a list page's header does.
+ */
+.c360 > .detail-head {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.c360 > .detail-head::before,
+.c360 > .detail-head::after {
+  display: none;
+}
+.c360 > .detail-head > .head-card {
+  padding: 0;
+  align-items: center;
+}
+.c360 > .detail-head .ident-block h1 {
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1.5;
+}
+@media (max-width: 820px) {
+  .c360 > .detail-head .ident-block h1 {
+    font-size: 21px;
+  }
+}
+
+/* The six figures: six equal cards on one row at desktop, values large and neutral. */
+.c360-stats {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.c360-stats > .stat .lbl {
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+.c360-stats > .stat .val {
+  font-size: 18px;
+}
+
+/* «میان‌برهای اپراتور»: one link per line, as the demo lists them. */
+.c360ws-shortcuts {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+/* «نیازمند رسیدگی» with nothing waiting: one short line with a green check, not a tall hole. */
+#c360-attention .empty {
+  flex-direction: row;
+  justify-content: flex-start;
+  text-align: start;
+  padding: 12px 18px 16px;
+}
+#c360-attention .empty > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--ok);
+  opacity: 1;
+}
+.c360-stats > .stat .val {
+  white-space: nowrap;
+}
+
+/* The demo's avatar tints (`avc`): six soft tones, chosen by the name. */
+.avatar.av0 {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.avatar.av1 {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.avatar.av2 {
+  background: var(--violet-soft);
+  color: var(--violet);
+}
+.avatar.av3 {
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+.avatar.av4 {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.avatar.av5 {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.c360 > .detail-head .avatar.lg {
+  border-radius: 50%;
+}
+
+/*
+ * The notification center (reference: the demo's `#/inbox`): the filter line sits on the page
+ * with no rule under it, the «خوانده‌نشده / همه» control is compact on the start side, and an
+ * unread item is marked by a line on its start edge rather than a filled row.
+ */
+.nc-toolbar > .list-filter-bar {
+  border-bottom: 0;
+  padding: 0;
+}
+.nc-toolbar .lfb-search > * {
+  justify-self: start;
+}
+.nc-list {
+  padding: 4px 0;
+}
+.nc-item {
+  margin-inline: 12px;
+  padding: 14px 12px;
+}
+.nc-item:last-child {
+  border-block-end: 0;
+}
+.nc-item.unread {
+  background: none;
+  border-inline-start: 2px solid var(--accent);
+}
+
+/*
+ * The support AI's configuration (demo parity, DIFFS support-ai #1, #5): each group is a soft
+ * inset card with its caption in the border; the modes are one per line; a step's provider and
+ * model share the row equally; «افزودن پشتیبان» is a compact button on the start side.
+ */
+.sai-config fieldset.field {
+  margin: 0;
+  padding: 10px 14px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+  min-width: 0;
+}
+.sai-config fieldset.field > legend {
+  padding-inline: 6px;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+.sai-config fieldset.field > .stack-sm > .check {
+  display: flex;
+}
+.sai-step .row {
+  flex-wrap: nowrap;
+}
+.sai-step .row > .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sai-config .sai-fallback-add {
+  align-self: flex-start;
+  justify-self: start;
+  margin-top: 8px;
+}
+
+/* The provider keys: one block per provider, divided by a rule, as the demo lists them. */
+.sai-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* Replace and delete on one line, the connection test and its model on the next. */
+.sai-keys .btn-group,
+.sai-keys .ops-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.sai-keys > li {
+  padding-block: 14px;
+  border-block-end: 1px solid var(--line);
+}
+.sai-keys > li:first-child {
+  padding-block-start: 0;
+}
+.sai-keys > li:last-child {
+  border-block-end: 0;
+  padding-block-end: 0;
+}
+
+/*
+ * Support analytics (demo parity): the period card holds «بازه» and the pills on one line; each
+ * bar row is the label, the bar, then the number — one line, label on the start side.
+ */
+.sa-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+}
+.sa-range[hidden] {
+  display: none;
+}
+.sa-range > .filter-row {
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+.sa-range-label {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.sa-body .dist {
+  gap: 12px;
+}
+.sa-body .dist-row {
+  grid-template-columns: minmax(0, 34%) minmax(0, 1fr) auto;
+  gap: 12px;
+}
+.sa-body .dist-row > :first-child {
+  grid-column: 1;
+  grid-row: 1;
+}
+.sa-body .dist-row svg.bar {
+  grid-column: 2;
+  grid-row: 1;
+}
+/* A bar grows from the start side, beside its label (the SVG's x runs left to right). */
+[dir='rtl'] .sa-body .dist-row svg.bar {
+  transform: scaleX(-1);
+}
+.sa-body .dist-row > .num {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 3ch;
+  text-align: end;
+  color: var(--fg);
+  font-weight: 650;
+}
+
+/*
+ * The knowledge build (demo parity): proposals are unnumbered rows divided by rules — the kind
+ * and source on top, the texts as bordered cards side by side (the current one on the start
+ * side; an addition's only card there too), the row's action under them on the start side.
+ */
+.kb-proposals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kb-proposals > li {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-block: 16px;
+  border-block-end: 1px solid var(--line);
+}
+.kb-proposals > li:first-child {
+  padding-block-start: 4px;
+}
+.kb-proposals > li:last-child {
+  border-block-end: 0;
+  padding-block-end: 0;
+}
+.kb-texts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.kb-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+}
+.kb-text p {
+  margin: 0;
+}
+.kb-retire-note {
+  margin: 0;
+  color: var(--fg-2);
+}
+.kb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+@media (max-width: 820px) {
+  .kb-texts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Support knowledge: the filter line is a card of its own, with no rule inside it. */
+.sk-filters .list-filter-bar {
+  border-bottom: 0;
+}
+.sk-pills {
+  display: flex;
+  padding: 10px 12px;
+}
+@media (max-width: 520px) {
+  /* Two figures a row on a phone: a date takes two short lines rather than leaving its card. */
+  .c360-stats > .stat .val {
+    font-size: 15px;
+    white-space: normal;
+  }
+}
+/* «ذخیرهٔ پیکربندی» closes the form on its end side, as the demo places it. */
+.sai-config > .form-actions {
+  justify-content: flex-end;
 }

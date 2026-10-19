@@ -153,10 +153,11 @@ describe('the legacy service candidates page', () => {
     fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_outcome')), {
       target: { value: 'NO_PANEL' },
     });
-    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_panel_code')), {
+    // The three exact codes are one inline row of fields under the filter line (demo parity).
+    fireEvent.change(screen.getByLabelText(t('web.lsr_col_panel_code')), {
       target: { value: 'rp2' },
     });
-    fireEvent.change(within(openFilterPanel()).getByLabelText(t('web.lsr_col_product_code')), {
+    fireEvent.change(screen.getByLabelText(t('web.lsr_col_product_code')), {
       target: { value: 'p1' },
     });
     fireEvent.change(screen.getByLabelText(t('web.lsr_search_invoice')), {

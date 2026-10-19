@@ -530,7 +530,7 @@ export function PanelsPage({
           }
         >
           <DataTable
-            phoneCards
+            stack
             caption={t('web.panels_title')}
             columns={columns}
             rows={rows}
@@ -3131,7 +3131,7 @@ export function ProvidersPage() {
       <Card>
         <StateSwitch query={providers} isEmpty={rows.length === 0}>
           <DataTable
-            phoneCards
+            stack
             dense
             caption={t('web.providers_title')}
             rows={rows}

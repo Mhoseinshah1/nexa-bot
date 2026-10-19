@@ -1,5 +1,9 @@
 import type { ShotFixture } from '../../fixture.ts';
 import { DEMO_DASHBOARD, DEMO_DASHBOARD_EMPTY } from './dashboard.ts';
+import { DEMO_RECOVERY } from './recovery.ts';
+import { DEMO_SERVICES_FAMILY } from './services.ts';
+import { DEMO_CUSTOMERS_FAMILY } from './customers.ts';
+import { DEMO_SUPPORT_FAMILY } from './support.ts';
 import { DEMO_INFRA } from './infra.ts';
 
 /*
@@ -13,7 +17,14 @@ import { DEMO_INFRA } from './infra.ts';
  *
  * Selected with `pnpm web:shots … --fixtures demo-parity` (or `NEXA_SHOT_FIXTURES`).
  */
-export const DEMO_PARITY: readonly ShotFixture[] = [...DEMO_DASHBOARD, ...DEMO_INFRA];
+export const DEMO_PARITY: readonly ShotFixture[] = [
+  ...DEMO_DASHBOARD,
+  ...DEMO_RECOVERY,
+  ...DEMO_SERVICES_FAMILY,
+  ...DEMO_CUSTOMERS_FAMILY,
+  ...DEMO_SUPPORT_FAMILY,
+  ...DEMO_INFRA,
+];
 
 /** The demo's EMPTY dashboard: nothing in the period, nothing waiting. */
 export const DEMO_PARITY_EMPTY: readonly ShotFixture[] = [
