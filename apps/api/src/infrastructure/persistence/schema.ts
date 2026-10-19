@@ -416,7 +416,7 @@ function recordSourceChecks(
 /**
  * The short public code (Round 4, PR-C; `@nexa/contracts` `public-code.ts`): 8 characters of
  * Crockford base32 without 0/O/1/I/L, unique per tenant and table, beside the uuid key and
- * never instead of it. Nullable only for the expand step: `nexa_assign_public_code` (0258)
+ * never instead of it. Nullable only for the expand step: `nexa_assign_public_code` (0259)
  * fills it on every INSERT from every writer, and the post-migration backfill
  * (`public-code-backfill.ts`) fills every row that existed before. Written once: the
  * database refuses changing a code that is set.
@@ -9377,6 +9377,12 @@ export const resellerTiers = pgTable(
      */
     monthlyMinimumAmount: bigint('monthly_minimum_amount', { mode: 'bigint' }),
     monthlyMinimumCurrency: text('monthly_minimum_currency'),
+    /**
+     * Round 4 PR-G, «قیمت عادی برای محصولات بدون قیمت»: under `FIXED_PRICE_TABLE`, a product
+     * `reseller_tier_product_prices` does not price is sold at its list price (true) or not
+     * sold to the tier at all (false, the default). Read by no other mode.
+     */
+    unpricedListFallback: boolean('unpriced_list_fallback').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -9411,6 +9417,57 @@ export const resellerTiers = pgTable(
       'reseller_tiers_discount_range_check',
       sql`discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)`,
     ),
+  ],
+);
+
+/**
+ * Round 4 PR-G: a `FIXED_PRICE_TABLE` tier's exact price for one product — the price the
+ * `TIER_PRICE` step replaces the list subtotal with, for the purposes in
+ * `RESELLER_TIER_PRICE_PURPOSES`. At most one row per (tier, product): no priority, no
+ * date scope, nothing to overlap. No row is "not priced for this tier", which the tier's
+ * `unpriced_list_fallback` decides.
+ *
+ * Written only under the tier's `FOR UPDATE` (`ResellerAdminService.setProductPrices`), so a
+ * confirmation reading the tier `FOR SHARE` and then this row sees the price its quote was
+ * compared with, or waits for the change. The currency is the product's own list currency
+ * at write time; a row whose currency no longer matches the product is read as no price.
+ */
+export const resellerTierProductPrices = pgTable(
+  'reseller_tier_product_prices',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    tierId: uuid('tier_id').notNull(),
+    productId: uuid('product_id').notNull(),
+    priceAmount: bigint('price_amount', { mode: 'bigint' }).notNull(),
+    priceCurrency: text('price_currency').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.tierId, table.productId],
+      name: 'reseller_tier_product_prices_pkey',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.tierId],
+      foreignColumns: [resellerTiers.tenantId, resellerTiers.id],
+      name: 'reseller_tier_product_prices_tier_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'reseller_tier_product_prices_product_fk',
+    }).onDelete('cascade'),
+    /** A product's prices across tiers: the cascade's and an operator's "who prices this". */
+    index('reseller_tier_product_prices_product_idx').on(table.tenantId, table.productId),
+    check(
+      'reseller_tier_product_prices_currency_check',
+      enumCheck('price_currency', CURRENCY_CODES),
+    ),
+    /** Never zero: a zero-cost order is one nobody can pay (`resellerReductionMinor`). */
+    check('reseller_tier_product_prices_amount_check', sql`price_amount > 0`),
   ],
 );
 
@@ -9740,6 +9797,11 @@ export const orderResellerTerms = pgTable(
     marginAmount: bigint('margin_amount', { mode: 'bigint' }).notNull(),
     currency: text('currency').notNull(),
     botInstanceId: uuid('bot_instance_id'),
+    /**
+     * Round 4 PR-G: the cost is a `FIXED_PRICE_TABLE` tier's price for the product (layer
+     * `TIER`, no percent), not a rate. False on every row written before the table existed.
+     */
+    fixedPrice: boolean('fixed_price').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
@@ -9771,8 +9833,13 @@ export const orderResellerTerms = pgTable(
     check(
       'order_reseller_terms_percent_check',
       sql`(percent IS NULL OR (percent >= 1 AND percent <= 100))
-          AND (layer <> 'TIER' OR percent IS NOT NULL)
+          AND (layer <> 'TIER' OR percent IS NOT NULL OR fixed_price)
           AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))`,
+    ),
+    /** A table price is the tier's, has no percent, and took something off the list. */
+    check(
+      'order_reseller_terms_fixed_price_check',
+      sql`NOT fixed_price OR (layer = 'TIER' AND percent IS NULL AND cost_amount < list_amount AND cost_amount > 0)`,
     ),
   ],
 );

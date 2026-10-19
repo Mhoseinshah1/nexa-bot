@@ -190,7 +190,7 @@ describe('short public codes', () => {
 
   it('a product created before the backfill never takes a number ahead of the older catalogue', async () => {
     const panelA = await a.panel();
-    // Two products from before 0257: written with no number.
+    // Two products from before 0258: written with no number.
     await q(`ALTER TABLE products DISABLE TRIGGER nexa_products_code_number`);
     let older: string[];
     try {
@@ -271,7 +271,7 @@ describe('short public codes', () => {
     ).rejects.toMatchObject({ code: '23001' });
   });
 
-  describe('the backfill of rows from before 0257', () => {
+  describe('the backfill of rows from before 0258', () => {
     const TRIGGERS = [
       ['orders', 'nexa_orders_public_code'],
       ['services', 'nexa_services_public_code'],
@@ -280,7 +280,7 @@ describe('short public codes', () => {
       ['products', 'nexa_products_code_number'],
     ] as const;
 
-    /** Rows written as the release before 0258 wrote them: with no code. */
+    /** Rows written as the release before 0259 wrote them: with no code. */
     async function withoutCodes<T>(write: () => Promise<T>): Promise<T> {
       for (const [table, trigger] of TRIGGERS) {
         await q(`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`);

@@ -114,6 +114,7 @@ const RESELLER_STATUS_TONES: Readonly<Record<ResellerStatus, Tone>> = {
 export const TIER_PRICING_LABELS: Readonly<Record<ResellerPricingMode, WebKey>> = {
   LIST_PRICE: 'web.reseller_pricing_list',
   PERCENTAGE_DISCOUNT: 'web.reseller_pricing_percentage',
+  FIXED_PRICE_TABLE: 'web.reseller_pricing_fixed_table',
 };
 
 /** A RESELLER's own pricing over its tier: `TIER` is "no override". */

@@ -3,10 +3,10 @@ import type { DatabaseHandle } from './database.js';
 
 /**
  * The backfill of short public codes (Round 4, PR-C) onto every row that existed before
- * migration 0257 — the imported history included: about 198k customers' worth of orders,
+ * migration 0258 — the imported history included: about 198k customers' worth of orders,
  * 82k services and 213k payments on the owner's test server.
  *
- * Every INSERT since 0258 is coded by the database itself (`nexa_assign_public_code`), so
+ * Every INSERT since 0259 is coded by the database itself (`nexa_assign_public_code`), so
  * this only ever has the rows from before to reach. It runs AFTER the migrator, from
  * `runMigrations`, for the reason `online-indexes.ts` gives: drizzle runs every pending
  * migration in ONE transaction, and an `UPDATE` of every payment inside it would hold a row
@@ -19,7 +19,7 @@ import type { DatabaseHandle } from './database.js';
  *   cursor, in primary-key order, whose code is still NULL. The lock a batch takes is held
  *   for one batch, and a live transaction waits at most one batch for it (`lock_timeout`
  *   bounds the other direction).
- * - **Idempotent**: only `code IS NULL` is ever written, and 0258 refuses changing a code
+ * - **Idempotent**: only `code IS NULL` is ever written, and 0259 refuses changing a code
  *   that is set, so a second run writes nothing and an earlier run's codes are never redrawn.
  * - **Resumable**: there is no progress row to trust. An interrupted run leaves some rows
  *   coded and some NULL; the next run starts its cursor at the beginning and the `code IS

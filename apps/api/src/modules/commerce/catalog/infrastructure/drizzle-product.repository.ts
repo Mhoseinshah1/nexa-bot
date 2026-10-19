@@ -23,6 +23,7 @@ import {
   panels,
   productCategories,
   products,
+  resellerTierProductPrices,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
   CatalogueAudience,
@@ -64,10 +65,32 @@ function audienceClause(audience: CatalogueAudience): SQL {
   if (audience.kind === 'CUSTOMER') {
     return sql`${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')`;
   }
-  const listed = sql`${products.audience} <> 'HIDDEN'`;
+  const listed = and(sql`${products.audience} <> 'HIDDEN'`, tierPricedClause(audience)) as SQL;
   if (audience.productIds === 'ALL' || audience.categoryIds === 'ALL') return listed;
   return sql`(${listed} AND (${products.id} = ANY(${sql.param([...audience.productIds])}::uuid[])
     OR ${products.categoryId} = ANY(${sql.param([...audience.categoryIds])}::uuid[])))`;
+}
+
+/**
+ * Round 4 PR-G: a price-table tier sees only the products its table prices, in the
+ * product's own currency — `decideTierPrice`'s "a row in another currency is no price" —
+ * unless the tier sells unpriced products at list. In the audience clause, so it is ahead
+ * of every LIMIT that clause is.
+ *
+ * The outer columns are written QUALIFIED, by hand: inside this subquery a bare
+ * `price_currency` would bind to the price row's own column and compare it with itself
+ * (the trap `DrizzleResellerRepository.listTiers` records). Every query this clause enters
+ * reads `products` unaliased.
+ */
+function tierPricedClause(audience: CatalogueAudience): SQL | undefined {
+  if (audience.kind !== 'RESELLER' || audience.tierPrices === undefined) return undefined;
+  if (audience.tierPrices.unpricedListFallback) return undefined;
+  return sql`EXISTS (
+    SELECT 1 FROM ${resellerTierProductPrices} rtp
+     WHERE rtp.tenant_id = "products"."tenant_id"
+       AND rtp.tier_id = ${audience.tierPrices.tierId}::uuid
+       AND rtp.product_id = "products"."id"
+       AND rtp.price_currency = "products"."price_currency")`;
 }
 
 /**
@@ -80,7 +103,7 @@ function audienceClause(audience: CatalogueAudience): SQL {
  * hiding it in an archive would be a product nobody can find. And a historical product an
  * operator binds to a panel, publishes or makes visible leaves the archive by itself.
  */
-function archivedClause(): SQL {
+export function archivedClause(): SQL {
   return sql`(${products.status} = 'INACTIVE' AND ${products.audience} = 'HIDDEN'
     AND ${products.panelId} IS NULL
     AND (${products.source} = 'MIRZA' OR EXISTS (

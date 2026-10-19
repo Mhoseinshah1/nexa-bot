@@ -1,5 +1,5 @@
 {
-  "id": "329439e1-50c2-435c-85b4-a738681994ad",
+  "id": "847b5239-6f40-4a4a-b698-2a9c506f3266",
   "prevId": "4042387b-16ec-4223-9168-7e285af2fc9e",
   "version": "7",
   "dialect": "postgresql",
@@ -20329,6 +20329,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "fixed_price": {
+          "name": "fixed_price",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -20439,7 +20446,11 @@
         },
         "order_reseller_terms_percent_check": {
           "name": "order_reseller_terms_percent_check",
-          "value": "(percent IS NULL OR (percent >= 1 AND percent <= 100))\n          AND (layer <> 'TIER' OR percent IS NOT NULL)\n          AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))"
+          "value": "(percent IS NULL OR (percent >= 1 AND percent <= 100))\n          AND (layer <> 'TIER' OR percent IS NOT NULL OR fixed_price)\n          AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))"
+        },
+        "order_reseller_terms_fixed_price_check": {
+          "name": "order_reseller_terms_fixed_price_check",
+          "value": "NOT fixed_price OR (layer = 'TIER' AND percent IS NULL AND cost_amount < list_amount AND cost_amount > 0)"
         }
       },
       "isRLSEnabled": false
@@ -20653,12 +20664,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -20850,10 +20855,6 @@
         "orders_source_ref_check": {
           "name": "orders_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "orders_code_check": {
-          "name": "orders_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "orders_state_check": {
           "name": "orders_state_check",
@@ -23825,12 +23826,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -24150,10 +24145,6 @@
         "payments_source_ref_check": {
           "name": "payments_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "payments_code_check": {
-          "name": "payments_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "payments_state_check": {
           "name": "payments_state_check",
@@ -24590,12 +24581,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code_number": {
-          "name": "code_number",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -24787,10 +24772,6 @@
         "products_source_ref_check": {
           "name": "products_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "products_code_number_check": {
-          "name": "products_code_number_check",
-          "value": "code_number IS NULL OR code_number > 0"
         },
         "products_status_check": {
           "name": "products_status_check",
@@ -27800,6 +27781,147 @@
       },
       "isRLSEnabled": false
     },
+    "public.reseller_tier_product_prices": {
+      "name": "reseller_tier_product_prices",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tier_id": {
+          "name": "tier_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "product_id": {
+          "name": "product_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_amount": {
+          "name": "price_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_currency": {
+          "name": "price_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "reseller_tier_product_prices_product_idx": {
+          "name": "reseller_tier_product_prices_product_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "product_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reseller_tier_product_prices_tenant_id_tenants_id_fk": {
+          "name": "reseller_tier_product_prices_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_tier_product_prices_tier_fk": {
+          "name": "reseller_tier_product_prices_tier_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "reseller_tiers",
+          "columnsFrom": [
+            "tenant_id",
+            "tier_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "reseller_tier_product_prices_product_fk": {
+          "name": "reseller_tier_product_prices_product_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "products",
+          "columnsFrom": [
+            "tenant_id",
+            "product_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "reseller_tier_product_prices_pkey": {
+          "name": "reseller_tier_product_prices_pkey",
+          "columns": [
+            "tenant_id",
+            "tier_id",
+            "product_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_tier_product_prices_currency_check": {
+          "name": "reseller_tier_product_prices_currency_check",
+          "value": "price_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "reseller_tier_product_prices_amount_check": {
+          "name": "reseller_tier_product_prices_amount_check",
+          "value": "price_amount > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.reseller_tiers": {
       "name": "reseller_tiers",
       "schema": "",
@@ -27858,6 +27980,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "unpriced_list_fallback": {
+          "name": "unpriced_list_fallback",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",
@@ -27978,7 +28107,7 @@
         },
         "reseller_tiers_pricing_mode_check": {
           "name": "reseller_tiers_pricing_mode_check",
-          "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT')"
+          "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT', 'FIXED_PRICE_TABLE')"
         },
         "reseller_tiers_credit_currency_check": {
           "name": "reseller_tiers_credit_currency_check",
@@ -31195,12 +31324,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -31509,10 +31632,6 @@
         "services_source_ref_check": {
           "name": "services_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "services_code_check": {
-          "name": "services_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "services_is_test_source_check": {
           "name": "services_is_test_source_check",
@@ -37433,12 +37552,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -37713,10 +37826,6 @@
         "tickets_source_ref_check": {
           "name": "tickets_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "tickets_code_check": {
-          "name": "tickets_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "tickets_status_check": {
           "name": "tickets_status_check",

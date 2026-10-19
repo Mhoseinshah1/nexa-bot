@@ -1337,6 +1337,17 @@ describe("an order's reseller terms", () => {
     expect(list.container.textContent).not.toContain('USER_OVERRIDE');
   });
 
+  it('labels a tier table price as a fixed price, not a rate (Round 4 PR-G)', async () => {
+    const { container } = detail(
+      pricing(
+        terms({ percent: null, fixedPrice: true, costAmount: '200000', marginAmount: '50000' }),
+      ),
+    );
+    expect(await screen.findByText('قیمت ثابت سطح برای این محصول')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('نرخ سطح');
+    expect(container.textContent).toContain('TIER_PRICE');
+  });
+
   it('draws no reseller block for an ordinary customer', async () => {
     detail(pricing(null));
     await screen.findByText('قیمت این سفارش کش‌بکی در بر ندارد.');
