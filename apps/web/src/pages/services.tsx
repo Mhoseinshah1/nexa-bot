@@ -579,6 +579,7 @@ export function ServicesPage({
         )}
         <div hidden={toolbarHidden}>
           <ListFilterBar
+            first="search"
             label={t('web.services_title')}
             search={
               <ListSearchBox

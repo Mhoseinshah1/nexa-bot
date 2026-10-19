@@ -253,8 +253,8 @@ describe('X7 — linkable identifiers', () => {
   });
 });
 
-describe('X8 — the filter row comes before the search', () => {
-  it('draws «فیلترها» and the saved filters first, then the search', () => {
+describe('X8 (owner decision 2026-10-19: the order follows the demo page by page)', () => {
+  it('by default draws «فیلترها» and the saved filters first, then the search', () => {
     const { container } = renderPage(
       <ListFilterBar
         filters={[]}
@@ -270,6 +270,31 @@ describe('X8 — the filter row comes before the search', () => {
       (one) => one.getAttribute('aria-label') ?? one.textContent,
     );
     expect(reachable.indexOf('saved')).toBeLessThan(reachable.indexOf('جست‌وجو'));
+  });
+
+  it('with first="search" draws the search first, then «فیلترها» and the saved filters', () => {
+    const { container } = renderPage(
+      <ListFilterBar
+        first="search"
+        filters={[]}
+        search={<input aria-label="جست‌وجو" />}
+        savedViews={<button type="button">saved</button>}
+      />,
+    );
+    const bar = container.querySelector('.list-filter-bar');
+    const order = [...(bar?.children ?? [])].map((child) => child.className);
+    expect(order).toEqual(['lfb-search', 'lfb-line', 'lfb-saved']);
+    const reachable = [...(bar?.querySelectorAll('button, input') ?? [])].map(
+      (one) => one.getAttribute('aria-label') ?? one.textContent,
+    );
+    expect(reachable.indexOf('جست‌وجو')).toBeLessThan(reachable.indexOf('saved'));
+  });
+});
+
+describe('X8 — which pages put the search first (the demo decides)', () => {
+  it.each(['orders', 'services', 'payments', 'users'])('%s passes first="search"', (page) => {
+    const source = readFileSync(join(process.cwd(), 'apps/web/src/pages', `${page}.tsx`), 'utf8');
+    expect(source).toMatch(/<ListFilterBar\s+first="search"/);
   });
 });
 

@@ -404,6 +404,7 @@ export function UsersPage({
         )}
         <div hidden={toolbarHidden}>
           <ListFilterBar
+            first="search"
             label={t('web.users_title')}
             search={
               maySearch ? (
