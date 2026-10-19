@@ -260,6 +260,105 @@ describe('the gateway form’s purpose switches', () => {
 });
 
 /**
+ * §5 — the wallet top-up warning. The bot hides «💰 افزایش موجودی» when no route can fund
+ * a top-up; the page says so and why, from the server's `walletTopup` alone. These tests
+ * deliberately send route rows whose own fields would say "fine" (ACTIVE, top-up on) beside
+ * a server verdict that says otherwise: the page must draw the verdict, never re-decide it.
+ */
+describe('the wallet top-up warning', () => {
+  const ROW = {
+    status: 'ACTIVE',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  };
+  const MANUAL = { ...ROW, provider: 'MANUAL_TRANSFER' };
+  const TONPAYS = {
+    ...ROW,
+    provider: 'TONPAYS',
+    status: 'DISABLED',
+    credential: { required: true, setAt: '2026-09-11T08:00:00.000Z' },
+  };
+  const TELEGRAM = {
+    ...ROW,
+    provider: 'TONPAYS_TELEGRAM',
+    status: 'DISABLED',
+    credential: { required: true, setAt: null },
+  };
+
+  const render = (walletTopup: unknown, gateways: unknown[] = [MANUAL, TONPAYS, TELEGRAM]) => {
+    stubApi([{ url: '/payment-gateways', body: { gateways, walletTopup } }]);
+    return renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+  };
+
+  it('explains, per route, why no route can fund a top-up — card-to-card with no card, a keyed route switched off', async () => {
+    const view = render({
+      available: false,
+      routes: [
+        { provider: 'MANUAL_TRANSFER', blockers: ['NO_RECEIVING_ACCOUNT'] },
+        { provider: 'TONPAYS', blockers: ['INACTIVE'] },
+        { provider: 'TONPAYS_TELEGRAM', blockers: ['INACTIVE', 'PURPOSE_OFF'] },
+      ],
+    });
+    expect(
+      await screen.findByText(t('web.payment_gateways_topup_unavailable_title')),
+    ).toBeInTheDocument();
+    const text = view.container.textContent ?? '';
+    expect(text).toContain('«💰 افزایش موجودی»');
+    expect(text).toContain(t('web.payment_gateways_topup_block_no_receiving_account'));
+    // TONPAYS has a key and is off; TONPAYS_TELEGRAM has none.
+    expect(text).toContain(t('web.payment_gateways_topup_block_inactive_keyed'));
+    expect(text).toContain(
+      `${t('web.payment_gateways_topup_block_inactive_no_key')}${t('web.list_separator')}${t('web.payment_gateways_topup_block_purpose_off')}`,
+    );
+  });
+
+  it('draws nothing when the server says a route can fund a top-up — even beside rows that look switched off', async () => {
+    const off = {
+      ...MANUAL,
+      status: 'DISABLED',
+      allowServicePurchase: false,
+      allowWalletTopup: false,
+    };
+    render({ available: true, routes: [{ provider: 'MANUAL_TRANSFER', blockers: [] }] }, [off]);
+    await screen.findByText('برای هیچ کاری');
+    expect(screen.queryByText(t('web.payment_gateways_topup_unavailable_title'))).toBeNull();
+  });
+
+  it('draws nothing for a response from the previous release, which sends no verdict', async () => {
+    stubApi([{ url: '/payment-gateways', body: { gateways: [MANUAL] } }]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    await screen.findAllByText(t('web.payment_gateway_provider_manual_transfer'));
+    expect(screen.queryByText(t('web.payment_gateways_topup_unavailable_title'))).toBeNull();
+  });
+
+  it('names the unpriceable route', async () => {
+    const view = render(
+      {
+        available: false,
+        routes: [{ provider: 'MANUAL_TRANSFER', blockers: ['UNPRICEABLE'] }],
+      },
+      [MANUAL],
+    );
+    await screen.findByText(t('web.payment_gateways_topup_unavailable_title'));
+    expect(view.container.textContent).toContain(t('web.payment_gateways_topup_block_unpriceable'));
+  });
+});
+
+/**
  * WP11A — the TonPays route's API key is write-only on this screen.
  *
  * The list shows whether a key is configured and when; the key itself is never in any

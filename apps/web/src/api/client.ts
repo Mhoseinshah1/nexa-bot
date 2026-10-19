@@ -231,6 +231,7 @@ import {
   serviceOperationsResponseSchema,
   serviceResponseSchema,
   type ServiceDeliveryState,
+  type ServiceListLifecycle,
   type ServiceActionResponse,
   type ServiceListResponse,
   type ServiceOperationsResponse,
@@ -1873,11 +1874,14 @@ export function fetchServices(
     expiringWithinHours?: number;
     /** Only rows from this source (the source filter). */
     source?: RecordSource;
+    /** Track 3 §3: the lifecycle tab. Absent is ALL, the server's default. */
+    lifecycle?: ServiceListLifecycle;
   } = {},
 ): Promise<ServiceListResponse> {
   const params = new URLSearchParams();
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.lifecycle !== undefined) params.set('lifecycle', query.lifecycle);
   if (query.state !== undefined) params.set('state', query.state);
   if (query.deliveryState !== undefined) params.set('deliveryState', query.deliveryState);
   if (query.source !== undefined) params.set('source', query.source);
@@ -5616,4 +5620,25 @@ export function cancelLegacyMigration(
     { idempotencyKey },
     legacyMigrationImportResponseSchema,
   );
+}
+
+// Track 3 §2: one panel's PANEL-scoped settings (the «فایل‌های اتصال» tab).
+import {
+  panelSettingListResponseSchema,
+  panelSettingWriteResponseSchema,
+  type PanelSettingListResponse,
+  type PanelSettingWriteResponse,
+} from '@nexa/contracts';
+
+export function fetchPanelSettings(panelId: string): Promise<PanelSettingListResponse> {
+  return authedGet(PANEL_ROUTES.settings(panelId), panelSettingListResponseSchema);
+}
+
+/** One key, with the version it was read at; a stale one is refused, not merged. */
+export function savePanelSetting(
+  panelId: string,
+  input: { key: string; value: unknown; expectedVersion: number | null; idempotencyKey: string },
+): Promise<PanelSettingWriteResponse> {
+  const { key, ...body } = input;
+  return post(PANEL_ROUTES.setting(panelId, key), body, panelSettingWriteResponseSchema);
 }

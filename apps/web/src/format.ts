@@ -47,6 +47,19 @@ export function formatTimestamp(iso: string): string {
   return DATE_TIME.format(at);
 }
 
+const DATE_ONLY = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' });
+
+/**
+ * An ISO timestamp as a Jalali DATE alone, in the viewer's own zone — for a fact that is a
+ * day rather than an instant, such as the original purchase of an imported service. The same
+ * unparseable-string rule as `formatTimestamp`.
+ */
+export function formatDate(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  return DATE_ONLY.format(at);
+}
+
 // ---------------------------------------------------------------------------
 // Money
 // ---------------------------------------------------------------------------

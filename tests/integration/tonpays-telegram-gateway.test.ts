@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
+  TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES,
   isNexaError,
   money,
   type ActorContext,
@@ -860,7 +861,7 @@ describe('TonPays Telegram, through the one settlement path', () => {
       expect(windows?.n).toBe(0);
     });
 
-    it('TPTG-09: a document (even image/*), or a photo declared over 5 MB, is refused before any row', async () => {
+    it('TPTG-09: a document (even image/*), or a photo declared over 10 MB, is refused before any row', async () => {
       const { paymentId } = await createdAttempt();
       await openWindow(paymentId);
       expect(
@@ -868,10 +869,16 @@ describe('TonPays Telegram, through the one settlement path', () => {
           photo('doc-1', { kind: 'DOCUMENT', mimeType: 'image/jpeg', fileName: 'r.jpg' }),
         ),
       ).toBe('PHOTO_ONLY');
-      expect(await sendPhoto(photo('big-1', { fileSize: 5_000_001n }))).toBe('TOO_LARGE');
+      expect(
+        await sendPhoto(
+          photo('big-1', { fileSize: BigInt(TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES) + 1n }),
+        ),
+      ).toBe('TOO_LARGE');
+      expect(await sendPhoto(photo('big-2', { fileSize: 10_000_001n }))).toBe('TOO_LARGE');
       expect(await submissions(paymentId)).toEqual([]);
-      // The window stays open for the photo the customer sends next.
-      expect(await sendPhoto(photo('ok-1'))).toBe('QUEUED');
+      // The window stays open for the photo the customer sends next — one declared at
+      // exactly 10,000,000 bytes, which the old 5 MB bound refused.
+      expect(await sendPhoto(photo('ok-1', { fileSize: 10_000_000n }))).toBe('QUEUED');
     });
 
     it('TPTG-10: opening a provider window supersedes the manual window in the same bot, and opening a manual one supersedes it', async () => {

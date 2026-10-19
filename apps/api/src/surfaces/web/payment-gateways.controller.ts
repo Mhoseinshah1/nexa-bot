@@ -62,11 +62,21 @@ export class PaymentGatewaysController {
   @Get(PAYMENT_GATEWAY_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<PaymentGatewayListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const { gateways, currency, facts } = await this.container.paymentGateways.list(scope, actor);
+    const { gateways, currency, facts, walletTopup } = await this.container.paymentGateways.list(
+      scope,
+      actor,
+    );
     return {
       gateways: gateways.map((gateway) =>
         toView(gateway, currency, facts.get(gateway.provider) ?? NO_FACTS),
       ),
+      walletTopup: {
+        available: walletTopup.available,
+        routes: walletTopup.routes.map((route) => ({
+          provider: route.provider,
+          blockers: [...route.blockers],
+        })),
+      },
     };
   }
 

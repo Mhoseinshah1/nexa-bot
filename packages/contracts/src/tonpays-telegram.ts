@@ -32,11 +32,12 @@ export const TONPAYS_TELEGRAM_RECEIPT_FIELD = 'file';
 export const TONPAYS_TELEGRAM_INVOICE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
 
 /**
- * Documented: "max 5 MB". Whether that is 5,000,000 or 5 × 2^20 bytes is not said
- * (`OQ-TPTG-07`), so Nexa takes the SMALLER reading: an image Nexa accepts is never one the
- * provider's own bound refuses.
+ * Documented: "max 10 MB" (the provider's current API document, adopted 2026-10-18; it
+ * said 5 MB when the route was built). Whether that is 10,000,000 or 10 × 2^20 bytes is not
+ * said (`OQ-TPTG-07`), so Nexa takes the SMALLER reading: an image Nexa accepts is never one
+ * the provider's own bound refuses.
  */
-export const TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES = 5_000_000;
+export const TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES = 10_000_000;
 
 /**
  * NEXA (`OQ-TPTG-07`): "image" is all the documentation says. Telegram re-encodes a photo

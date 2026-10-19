@@ -155,6 +155,8 @@ export const INLINE_BUTTONS = [
 
   // My services: one service's actions
   button('service.refresh', 'SERVICE_ACTIONS', 'bot.service.refresh_button'),
+  // Track 3 §1: support, from the «not found on the panel» answer to opening a card.
+  button('service.support', 'SERVICE_ACTIONS', 'bot.service.support_button'),
   button('service.files', 'SERVICE_ACTIONS', 'bot.service.files_button'),
   button('service.link', 'SERVICE_ACTIONS', 'bot.service.link_button'),
   button('service.rotate', 'SERVICE_ACTIONS', 'bot.service.rotate_button'),

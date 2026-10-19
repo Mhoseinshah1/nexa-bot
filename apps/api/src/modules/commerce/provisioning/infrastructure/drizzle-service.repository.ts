@@ -18,6 +18,7 @@ import {
 import {
   providerUsernameLookupSchema,
   SERVICE_REFUND_REQUEST_ACTIVE_STATES,
+  SERVICE_TERMINAL_STATES,
   type ListSearchTerm,
 } from '@nexa/contracts';
 import type {
@@ -105,6 +106,34 @@ function listedForCustomer(): SQL {
   return sql`${ne(services.state, 'TERMINATED')} AND ${notRefundedAway()}`;
 }
 
+/**
+ * The instant the operator's services list pages by (Track 3 §3): the ORIGINAL purchase.
+ *
+ * ONE spelling, used by the ORDER BY, the keyset comparison and the cursor's text — and
+ * matched character for character by the three `services_*_started_page_idx` online indexes,
+ * because the planner matches an index EXPRESSION to the query's expression, not to what it
+ * means. A second spelling (`coalesce` over a cast, the columns swapped) is a sequential scan
+ * and a sort of every service on every page.
+ */
+const SERVICE_STARTED_AT = sql`COALESCE(${services.originalStartedAt}, ${services.createdAt})`;
+
+/*
+ * The list's tabs, derived from the state machine's terminal list. The predicate is written as
+ * the same LITERAL `services_tenant_live_started_page_idx` is partial on (`state <> 'TERMINATED'`),
+ * so the planner can prove the query implies the index's predicate from the statement text alone,
+ * whatever plan caching a driver does; `services-started-plan.test.ts` asserts the index is taken.
+ * This line fails to compile the day `SERVICE_TERMINAL_STATES` stops being exactly `TERMINATED`,
+ * so the literal and the machine cannot disagree quietly.
+ */
+const TERMINAL_IS_TERMINATED: readonly ['TERMINATED'] = SERVICE_TERMINAL_STATES;
+void TERMINAL_IS_TERMINATED;
+
+function lifecycleCondition(lifecycle: 'LIVE' | 'ENDED'): SQL {
+  return lifecycle === 'LIVE'
+    ? sql`${services.state} <> 'TERMINATED'`
+    : sql`${services.state} = 'TERMINATED'`;
+}
+
 function toRecord(row: Row): ServiceRecord {
   return {
     id: row.id,
@@ -138,6 +167,7 @@ function toRecord(row: Row): ServiceRecord {
     lastSeenAt: row.lastSeenAt,
     lastSeenState: row.lastSeenState as ServiceLastSeenState | null,
     customerNote: row.customerNote,
+    originalStartedAt: row.originalStartedAt ?? row.createdAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -334,7 +364,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
       items: page,
       nextCursor:
         rows.length > limit && lastRow !== undefined
-          ? { createdAt: lastRow.createdAtText, id: lastRow.id }
+          ? { createdAt: lastRow.keysetAtText, id: lastRow.id }
           : null,
     };
   }
@@ -377,6 +407,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     if (search.orderId !== undefined) filters.push(eq(services.orderId, search.orderId));
     if (search.panelId !== undefined) filters.push(eq(services.panelId, search.panelId));
     if (search.state !== undefined) filters.push(eq(services.state, search.state));
+    if (search.lifecycle !== undefined) filters.push(lifecycleCondition(search.lifecycle));
     if (search.source !== undefined) filters.push(eq(services.source, search.source));
     // Program §13: the workspace's product, location and expiry filters.
     if (search.productId !== undefined) filters.push(eq(services.productId, search.productId));
@@ -411,29 +442,31 @@ export class DrizzleServiceRepository implements ServiceRepository {
     if (search.text !== undefined) filters.push(serviceTextCondition(tenantId, search.text));
     if (cursor !== null) {
       /*
-       * Keyset, on `(created_at, id)`, DESCENDING.
+       * Keyset, on `(COALESCE(original_started_at, created_at), id)`, DESCENDING.
        *
-       * `created_at` alone is not unique, so an offset would skip or repeat a row
-       * whenever two services were created in the same millisecond — which is exactly
-       * what a batch settlement produces. The tuple form rather than the spelled-out
-       * `created_at < x OR (created_at = x AND id < y)` is what the btree can use as an
-       * index condition; `backup_runs.page` carries the same note.
+       * The instant is the service's ORIGINAL purchase since Track 3 §3: `created_at` for
+       * every service this installation made, and the previous bot's own date for an
+       * imported one — whose `created_at` is the import for an adopted live service, which
+       * put a year of history at the top of the list as "today". `SERVICE_STARTED_AT` is the
+       * one spelling, shared with the ORDER BY and the three online indexes that serve it.
        *
-       * The DIRECTION is the owner's, recorded as revision 13 and rendered on
-       * `/services` in words: newest first, decided by the server. `/users`,
-       * `/orders` and `/products` page the other way, so this is a deliberate
-       * divergence rather than a copy that drifted — a services list whose first page
-       * is the oldest service the installation ever sold answers nobody's question.
-       * The page the operator sees and the sentence the page prints have to agree, and
-       * the sentence is the one the owner wrote.
+       * The instant alone is not unique, so an offset would skip or repeat a row whenever
+       * two services started in the same millisecond — which is exactly what a batch
+       * settlement or an import produces. The tuple form rather than the spelled-out
+       * `a < x OR (a = x AND id < y)` is what the btree can use as an index condition;
+       * `backup_runs.page` carries the same note.
        *
-       * The instant is PostgreSQL's own microsecond TEXT and is cast back explicitly,
-       * so the value that came out is the value that goes in. It was a `Date` until 4H
-       * put this list behind an endpoint; `ServiceCursor.createdAt` records what that
-       * cost and why nothing had noticed.
+       * The DIRECTION is the owner's, recorded as revision 13 and rendered on `/services`
+       * in words: newest first, decided by the server. `/users`, `/orders` and `/products`
+       * page the other way, so this is a deliberate divergence rather than a copy that
+       * drifted.
+       *
+       * The instant is PostgreSQL's own microsecond TEXT and is cast back explicitly, so
+       * the value that came out is the value that goes in; `ServiceCursor.createdAt`
+       * records what a `Date` cost here and why nothing had noticed.
        */
       filters.push(
-        sql`(${services.createdAt}, ${services.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
+        sql`(${SERVICE_STARTED_AT}, ${services.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
       );
     }
     return this.exec(tx)
@@ -446,11 +479,11 @@ export class DrizzleServiceRepository implements ServiceRepository {
          * because `::text` follows the session's `DateStyle` and this has to be the
          * same string on every connection.
          */
-        createdAtText: sql<string>`to_char(${services.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+        keysetAtText: sql<string>`to_char(${SERVICE_STARTED_AT} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
       })
       .from(services)
       .where(and(...filters))
-      .orderBy(desc(services.createdAt), desc(services.id))
+      .orderBy(desc(SERVICE_STARTED_AT), desc(services.id))
       .limit(limit + 1);
   }
 

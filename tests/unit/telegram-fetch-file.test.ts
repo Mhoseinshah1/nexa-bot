@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PAYMENT_RECEIPT_MAX_BYTES } from '@nexa/contracts';
+import { PAYMENT_RECEIPT_MAX_BYTES, TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES } from '@nexa/contracts';
 import {
   isSafeFilePath,
   telegramFetchFile,
@@ -76,14 +76,14 @@ describe('fetching a receipt file', () => {
         pump();
         return;
       }
-      if (url.includes('six-megabytes')) {
-        // Under the receipt default (20 MiB), over a TonPays Telegram receipt's 5 MB: no
+      if (url.includes('eleven-megabytes')) {
+        // Under the receipt default (20 MiB), over a TonPays Telegram receipt's 10 MB: no
         // declared length, chunked, so only the RUNNING bound can refuse it (TPTG-09).
         response.writeHead(200, { 'content-type': 'image/jpeg' });
         let sent = 0;
         const chunk = Buffer.alloc(256 * 1_024);
         const pump = (): void => {
-          while (sent < 6_000_000) {
+          while (sent < 11_000_000) {
             if (response.writableEnded || response.destroyed) return;
             sent += chunk.byteLength;
             if (!response.write(chunk)) {
@@ -160,18 +160,18 @@ describe('fetching a receipt file', () => {
     );
   });
 
-  it('TPTG-09: a caller-supplied bound (a TonPays Telegram receipt, 5 MB) refuses while streaming, and the default is unchanged', async () => {
+  it('TPTG-09: a caller-supplied bound (a TonPays Telegram receipt, 10 MB) refuses while streaming, and the default is unchanged', async () => {
     const bounded = await telegramFetchFile({
       token: 'test-token',
       apiBaseUrl: base,
       fileBaseUrl: base,
       timeoutMs: 20_000,
-      fileId: 'six-megabytes',
-      maxBytes: 5_000_000,
+      fileId: 'eleven-megabytes',
+      maxBytes: TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES,
     });
     expect(bounded.outcome).toBe('UNAVAILABLE');
     // Without the caller's bound, the receipt default applies and the same file is fetched.
-    const unbounded = await fetchFile('six-megabytes');
+    const unbounded = await fetchFile('eleven-megabytes');
     expect(unbounded.outcome).toBe('SUCCEEDED');
   });
 

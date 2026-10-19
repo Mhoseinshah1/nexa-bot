@@ -55,6 +55,7 @@ function service(overrides: Partial<ServiceRecord> = {}): ServiceRecord {
     lastSeenAt: null,
     lastSeenState: null,
     customerNote: null,
+    originalStartedAt: new Date('2026-09-24T18:00:00Z'),
     createdAt: new Date('2026-09-24T18:00:00Z'),
     updatedAt: new Date('2026-09-24T18:00:00Z'),
     ...overrides,

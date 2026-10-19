@@ -9,6 +9,8 @@ import {
 import { DrizzleDirectMessageRepository } from './modules/commerce/direct-messages/infrastructure/drizzle-direct-message.repository.js';
 import { fileURLToPath } from 'node:url';
 import {
+  type ConnectionFileCaptionMode,
+  type ConnectionFileCaptionPlacement,
   ADMIN_MENU_BUTTON,
   ADMIN_MENU_COMMAND,
   BACKUP_LEASE_STALE_AFTER_MS,
@@ -644,7 +646,14 @@ import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisionin
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { SubscriptionFileService } from './modules/commerce/provisioning/application/subscription-file.service.js';
-import { ServiceRefreshService } from './modules/commerce/provisioning/application/service-refresh.service.js';
+import { I18N_CAPTION_TEXT } from './modules/commerce/messaging/infrastructure/caption-markup.js';
+import {
+  ServiceRefreshService,
+  SERVICE_LIVE_CHECK_TIMEOUT_MS,
+} from './modules/commerce/provisioning/application/service-refresh.service.js';
+import { DrizzlePanelSettingRepository } from './modules/control/settings/infrastructure/drizzle-panel-settings.repository.js';
+import { PanelSettingsResolver } from './modules/control/settings/application/panel-settings-resolver.js';
+import { PanelSettingsService } from './modules/control/settings/application/panel-settings.service.js';
 import {
   OperationCardEditor,
   type ServiceCardRenderer,
@@ -1149,6 +1158,8 @@ export interface Container {
   readonly legacyTrials: LegacyTrialEligibilityService;
   /** R1: each panel's free trial, for an operator. */
   readonly panelTrials: PanelTrialService;
+  /** Track 3 §2: each panel's PANEL-scoped settings, for an operator. */
+  readonly panelSettings: PanelSettingsService;
   /**
    * Round N: the SHARED audience — preview for an operator, evaluation for Broadcast, the
    * mass actions and Campaigns. One query implementation (`audience-sql.ts`).
@@ -2070,6 +2081,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  // Track 3 §2: the PANEL-scoped settings (a panel's connection-file caption).
+  const panelSettingRepository = new DrizzlePanelSettingRepository(database.db);
+  const panelSettingsResolver = new PanelSettingsResolver(panelSettingRepository, opsLog);
   /*
    * Round T: the button builder's rows. Built here, beside the settings it projects into,
    * because three things read it — the `bot.main_menu` change guard, the keyboard's source
@@ -3437,7 +3451,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     cardAdapters: cardTransferAdapters,
     /*
      * A receipt's bytes, with the token of the bot the photo was sent to, bounded at the
-     * provider's 5 MB while streaming. Late-bound: `receiptFiles` is built further down;
+     * provider's 10 MB while streaming. Late-bound: `receiptFiles` is built further down;
      * only the worker's pass calls this, after the container has finished.
      */
     receiptFiles: {
@@ -3671,6 +3685,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // client that retried underneath it would multiply the two, turning one
     // configured cadence into an unconfigured one.
     maxRetries: PANEL_HTTP_RETRIES,
+  });
+  /*
+   * Track 3 §1: the client the live check on opening a service card dials through — the
+   * same policy, CA bundle and size cap, with each request bounded by the check's own hard
+   * deadline, so a read the deadline gave up on does not run on for the full panel timeout.
+   */
+  const panelLiveHttp = new SafeHttpClient({
+    ...urlPolicy,
+    ...(config.PANEL_HTTP_CA_FILE === undefined
+      ? {}
+      : { caCertificates: [readFileSync(config.PANEL_HTTP_CA_FILE, 'utf8')] }),
+    totalTimeoutMs: Math.min(config.PANEL_HTTP_TIMEOUT_MS, SERVICE_LIVE_CHECK_TIMEOUT_MS),
+    maxResponseBytes: config.PANEL_HTTP_MAX_RESPONSE_BYTES,
+    maxRetries: 0,
   });
 
   /*
@@ -4063,6 +4091,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     scopeActivity: tenants,
     clock,
+  });
+  // Track 3 §2: a panel's PANEL-scoped settings, for an operator.
+  const panelSettings = new PanelSettingsService({
+    guard,
+    uow,
+    settings: panelSettingRepository,
+    resolver: panelSettingsResolver,
+    panels: panelRepository,
+    audit,
+    outbox,
+    idempotency,
+    clock,
+    ids,
+    scopeActivity: tenants,
+    // The RAW recorder, as `SettingsService` takes it.
+    opsLog: opsLogWriter,
+    sessions,
   });
   /** Round N: the shared audience (`docs/round-n-broadcast-audit.md` §3). */
   const audienceService = new AudienceService({
@@ -5716,6 +5761,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     operationId: (key) => operationIdFor('provider', key),
     audit,
     opsLog,
+    // Track 3 §1: a successful usage read closes a missing-account condition.
+    conditions: new DrizzleOperationalConditionReader(database.db),
     outbox,
     scopeActivity: tenants,
     settings: settingsResolver,
@@ -5766,8 +5813,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
             serviceStateLabelKey({ ...service, now: clock.now() }),
             {},
           ),
+          product: product?.title ?? null,
         };
       },
+    },
+    /*
+     * Track 3 §2: the panel's caption settings (PANEL-scoped keys), the default key's RAW
+     * body (the tenant's wording or the catalogue's), the tenant's zone, and its first
+     * support account — everything a CUSTOM caption is rendered with at send time.
+     */
+    // The caption grammar and renderer (`@nexa/i18n`), behind the application's port.
+    captionText: I18N_CAPTION_TEXT,
+    connectionCaptions: {
+      policyFor: async (scope, panelId) => {
+        const values = await panelSettingsResolver.valuesOf(scope, panelId);
+        return {
+          mode: values.get('panel.connection_files.caption_mode') as ConnectionFileCaptionMode,
+          template: values.get('panel.connection_files.caption_template') as string | null,
+          placement: values.get(
+            'panel.connection_files.caption_placement',
+          ) as ConnectionFileCaptionPlacement,
+        };
+      },
+      defaultTemplate: async (scope) =>
+        (await templateResolver.resolve(scope, 'bot.service.connection_files_caption')).body,
+      presentationFor: (scope) => templatePresentation.presentationFor(scope),
+      supportHandle: async (scope) =>
+        (await settingsResolver.valueOf<readonly string[]>(scope, 'support.accounts'))[0] ?? null,
     },
   });
 
@@ -7337,6 +7409,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     trialAdmin: trialAdminService,
     legacyTrials: legacyTrialEligibilityService,
     panelTrials,
+    panelSettings,
     audience: audienceService,
     broadcasts: broadcastService,
     broadcastLoop,
@@ -7527,6 +7600,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         // A read is a log-in and a look-up, each bounded by the client's timeout; three
         // of them plus a margin is comfortably longer than any read that is still alive.
         inFlightMs: 3 * config.PANEL_HTTP_TIMEOUT_MS + 30_000,
+        // Track 3 §1: the live check on opening a card — its verdicts and its client.
+        opsEvents: opsLog,
+        conditions: new DrizzleOperationalConditionReader(database.db),
+        liveHttp: panelLiveHttp,
       }),
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
       clientApps: clientAppCatalog,

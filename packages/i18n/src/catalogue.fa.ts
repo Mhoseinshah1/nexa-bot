@@ -891,11 +891,19 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.file_caption': '{caption}',
   // R3: the files' caption, the link-change result and the refresh failure notice.
   'bot.service.connection_file_caption': '{icon:user} نام کاربری: {serviceUsername}',
+  // Track 3 §2: the default CUSTOM caption — once, on the last file by default; no username line.
+  'bot.service.connection_files_caption':
+    '📂 فایل‌های اتصال سرویس {service_name}\nفایل مخصوص دستگاه خود را در برنامه باز کنید.\n⌛ اعتبار تا {expires_at_jalali} ({days_left} روز)\n💬 پشتیبانی: {support}',
   'bot.service.link_rotated':
     '{icon:success} لینک اشتراک سرویس {serviceUsername} با موفقیت تغییر کرد.\nلینک قبلی دیگر قابل استفاده نیست. لطفاً لینک و فایل‌های جدید را در برنامه خود جایگزین کنید.\n\n{icon:link} لینک جدید:\n<code>{subscriptionUrl}</code>',
   'bot.service.back_to_card_button': '🔙 بازگشت به مشخصات سرویس',
   'bot.service.refresh_failed':
     'خواندن اطلاعات از سرور ممکن نشد. لطفاً کمی بعد دوباره امتحان کنید.',
+  // Track 3 §1: the live panel check on opening a service card.
+  'bot.service.panel_missing':
+    'این سرویس در پنل پیدا نشد. اگر فکر می‌کنید اشتباه است با پشتیبانی تماس بگیرید.',
+  'bot.service.last_updated': '{icon:time} آخرین به‌روزرسانی: {at}',
+  'bot.service.support_button': '📨 تماس با پشتیبانی',
   'bot.service.files_partial':
     '{icon:warning} {failed} فرمت از فایل‌های اتصال آماده نشد. فایل‌های دیگر ارسال شدند.',
   'bot.service.files_unavailable':
@@ -1266,7 +1274,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_change_card_button': '🔄 تعویض کارت',
   'bot.payment.gateway_card_check_button': '🔎 بررسی وضعیت',
   'bot.payment.gateway_receipt_prompt':
-    '📤 لطفاً تصویر رسید واریز را همین‌جا به‌صورت عکس بفرستید، نه به‌صورت سند.\n\nحجم تصویر حداکثر ۵ مگابایت است. این درخواست تا {closesAt} باز است.',
+    '📤 لطفاً تصویر رسید واریز را همین‌جا به‌صورت عکس بفرستید، نه به‌صورت سند.\n\nحجم تصویر حداکثر ۱۰ مگابایت است. این درخواست تا {closesAt} باز است.',
   'bot.payment.gateway_receipt_queued':
     '{icon:time} رسید شما دریافت شد و در حال ارسال برای تون‌پی است. نتیجه در پیام پرداخت نمایش داده می‌شود.',
   'bot.payment.gateway_receipt_photo_only':
@@ -1274,7 +1282,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_receipt_already_sent':
     'این تصویر پیش‌تر برای همین پرداخت فرستاده شده است و دوباره ارسال نمی‌شود. اگر رسید دیگری دارید، تصویر آن را بفرستید.',
   'bot.payment.gateway_receipt_too_large':
-    'حجم این تصویر بیش از ۵ مگابایت است. لطفاً تصویر کوچک‌تری از رسید واریز بفرستید.',
+    'حجم این تصویر بیش از ۱۰ مگابایت است. لطفاً تصویر کوچک‌تری از رسید واریز بفرستید.',
   'bot.wallet.summary':
     '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: {telegramId}\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت‌نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس‌های خریداری‌شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت‌شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه‌های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',

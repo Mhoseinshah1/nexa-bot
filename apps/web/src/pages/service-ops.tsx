@@ -4,13 +4,17 @@ import {
   BULK_LARGE_OPERATION,
   BULK_NOTE_MAX_LENGTH,
   SERVICE_GRANT_DURATION_MAX_DAYS,
+  SERVICE_LIST_LIFECYCLES,
   SERVICE_OPERATOR_REASON_MAX_LENGTH,
+  SERVICE_STATES,
+  SERVICE_TERMINAL_STATES,
   TRAFFIC_GB_PATTERN,
   type BulkGrant,
   type BulkPreview,
   type RecordSource,
   type ServiceActionAvailability,
   type ServiceActionBlocker,
+  type ServiceListLifecycle,
   type ServiceOperatorAction,
   type ServiceState,
 } from '@nexa/contracts';
@@ -72,8 +76,44 @@ export const EXPIRING_CHOICES = [
   { id: '168', hours: 168, label: 'web.soc_expiring_7d' },
 ] as const satisfies readonly { id: string; hours: number | null; label: WebKey }[];
 
+/**
+ * Track 3 §3: the states each lifecycle tab shows, derived from the machine's terminal list
+ * exactly as the server derives them — LIVE every non-terminal state, ENDED the terminal ones,
+ * ALL every state.
+ */
+export const LIFECYCLE_STATES: Readonly<Record<ServiceListLifecycle, readonly ServiceState[]>> = {
+  LIVE: SERVICE_STATES.filter(
+    (state) => !(SERVICE_TERMINAL_STATES as readonly ServiceState[]).includes(state),
+  ),
+  ENDED: SERVICE_TERMINAL_STATES,
+  ALL: SERVICE_STATES,
+};
+
+/**
+ * The tab a URL stands for, and never one that contradicts its state filter.
+ *
+ * The tab is `?lifecycle=`; with none (or one the contract does not know) a known `?state=`
+ * decides it — a terminal state is ENDED, any other LIVE — so a bookmark or link from before
+ * the tabs (`/services?state=TERMINATED`) still shows what it named instead of an empty LIVE
+ * list with its filter hidden. A tab that cannot show the URL's state (a hand-edited
+ * `?lifecycle=LIVE&state=TERMINATED`) yields to the state, the more specific of the two, so
+ * the page never asks the server for a set that is empty by construction. With neither, LIVE.
+ */
+export function lifecycleOf(route: Route): ServiceListLifecycle {
+  const raw = SERVICE_LIST_LIFECYCLES.find((one) => one === route.query.get('lifecycle'));
+  const state = SERVICE_STATES.find((one) => one === route.query.get('state'));
+  if (state === undefined) return raw ?? 'LIVE';
+  if (raw !== undefined && LIFECYCLE_STATES[raw].includes(state)) return raw;
+  return LIFECYCLE_STATES.ENDED.includes(state) ? 'ENDED' : 'LIVE';
+}
+
 /** The workspace's filters, as the URL holds them. */
 export interface ServiceFilters {
+  /**
+   * The lifecycle tab (Track 3 §3). The list and a mass action select by it; absent is ALL,
+   * which is what a caller that predates the tabs meant.
+   */
+  readonly lifecycle?: ServiceListLifecycle;
   readonly state: string | null;
   readonly deliveryState: string | null;
   readonly panelId: string | null;
@@ -88,6 +128,7 @@ export interface ServiceFilters {
 export function serviceFiltersOf(route: Route, search: string): ServiceFilters {
   const hours = Number(route.query.get('expiring'));
   return {
+    lifecycle: lifecycleOf(route),
     state: route.query.get('state'),
     deliveryState: route.query.get('deliveryState'),
     panelId: route.query.get('panelId'),
@@ -291,6 +332,19 @@ export function massDefinitionOf(filters: ServiceFilters): unknown {
    * on screen (a SUSPENDED-and-expiring list would preview an empty resume).
    */
   if (filters.expiringWithinHours !== null && filters.state !== 'ACTIVE') return null;
+  /*
+   * Track 3 §3: the tab is part of what the list selects, so it is part of what a mass action
+   * selects. A state filter narrows the tab; a state outside the tab selects nothing on
+   * screen, and nothing is acted on in bulk. ALL (or a caller with no tab) is every state.
+   */
+  const tab = LIFECYCLE_STATES[filters.lifecycle ?? 'ALL'];
+  let states: readonly ServiceState[];
+  if (filters.state !== null) {
+    if (!(tab as readonly string[]).includes(filters.state)) return null;
+    states = [filters.state as ServiceState];
+  } else {
+    states = filters.lifecycle === undefined || filters.lifecycle === 'ALL' ? [] : tab;
+  }
   return {
     version: 1,
     // Every customer: a status change or a grant is about the SERVICE, whatever its owner.
@@ -298,7 +352,7 @@ export function massDefinitionOf(filters: ServiceFilters): unknown {
     service: {
       productIds: filters.productId === null ? [] : [filters.productId],
       panelIds: filters.panelId === null ? [] : [filters.panelId],
-      states: filters.state === null ? [] : [filters.state as ServiceState],
+      states: [...states],
       expiringWithinHours: filters.expiringWithinHours,
       expired: false,
     },

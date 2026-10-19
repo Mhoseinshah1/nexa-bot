@@ -901,8 +901,10 @@ describe('the route table', () => {
     expect(orders.closest('a')?.getAttribute('href')).toBe(
       `/orders?q=${encodeURIComponent(ROW_ID)}`,
     );
+    // ALL (Track 3 §3): "every service of this customer" includes the ended ones, which the
+    // list's default LIVE tab would hide.
     expect(services.closest('a')?.getAttribute('href')).toBe(
-      `/services?q=${encodeURIComponent(ROW_ID)}`,
+      `/services?q=${encodeURIComponent(ROW_ID)}&lifecycle=ALL`,
     );
   });
 
@@ -1553,6 +1555,57 @@ describe("a customer's orders and services", () => {
     expect(screen.queryByText('منتقل‌شده از ربات قبلی')).toBeNull();
   });
 
+  /*
+   * Track 3 §3: the live services open, the ended ones folded under «پایان‌یافته» and not
+   * asked for until the operator opens it — each list the SERVER's, by its own tab.
+   */
+  it('lists the live services first and reads the ended ones only when unfolded', async () => {
+    const endedId = '019250ab-cdef-7012-8345-6789abcdef0e';
+    const api = withCards([
+      { url: '/orders', body: { orders: [], nextCursor: null } },
+      { url: '/services', body: { services: [service()], nextCursor: null } },
+      {
+        url: 'lifecycle=ENDED',
+        body: {
+          services: [service({ id: endedId, providerUsername: 'nx-ended1', state: 'TERMINATED' })],
+          nextCursor: null,
+        },
+      },
+    ]);
+    renderPage(
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock
+        {...NO_WALLET}
+        {...ALL_COMMERCE}
+        denied={false}
+      />,
+    );
+    await openC360Tab('services');
+    await screen.findByText('nx-7f3a91');
+    const lifecycles = () =>
+      api.calls
+        .filter((call) => /\/services\?/.test(call.url))
+        .map((call) => new URL(call.url, 'http://x').searchParams.get('lifecycle'));
+    expect(lifecycles()).toEqual(['LIVE']);
+    expect(screen.queryByText('nx-ended1')).toBeNull();
+
+    const summary = screen.getByText('پایان‌یافته', { selector: 'summary, summary *' });
+    const details = summary.closest('details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    expect(await screen.findByText('nx-ended1')).toBeTruthy();
+    expect(lifecycles()).toEqual(['LIVE', 'ENDED']);
+    // The live list stays above the folded section.
+    const live = screen.getByText('nx-7f3a91');
+    expect(
+      live.compareDocumentPosition(screen.getByText('nx-ended1')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('draws a delivered failure as ACTIVE and FAILED, never as one merged state', async () => {
     withCards([
       { url: '/orders', body: { orders: [], nextCursor: null } },
@@ -1804,7 +1857,8 @@ describe("a customer's orders and services", () => {
     );
     await openC360Tab('services');
     await screen.findByText('این مشتری هنوز سفارشی ثبت نکرده است.');
-    await screen.findByText('این مشتری هنوز سرویسی ندارد.');
+    // Track 3 §3: the open list is the LIVE services; the ended ones are folded below it.
+    await screen.findByText('این مشتری سرویس فعالی ندارد.');
 
     const text = container.textContent ?? '';
     expect(text).not.toContain('تعداد سفارش');

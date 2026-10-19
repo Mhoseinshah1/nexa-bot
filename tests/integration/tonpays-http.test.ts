@@ -107,10 +107,14 @@ describe('TonPays over HTTP', () => {
     const listed = await get(PAYMENT_GATEWAY_ROUTES.list);
     expect(listed.statusCode).toBe(200);
     expect(listed.body).not.toContain(API_KEY);
-    const tonpays = paymentGatewayListResponseSchema
-      .parse(listed.json())
-      .gateways.find((gateway) => gateway.provider === 'TONPAYS');
+    const parsedList = paymentGatewayListResponseSchema.parse(listed.json());
+    const tonpays = parsedList.gateways.find((gateway) => gateway.provider === 'TONPAYS');
     expect(tonpays).toMatchObject({ status: 'ACTIVE', credential: { required: true } });
+    // The wallet top-up readiness travels with the list: the active, keyed route has no blocker.
+    expect(parsedList.walletTopup?.available).toBe(true);
+    expect(
+      parsedList.walletTopup?.routes.find((route) => route.provider === 'TONPAYS')?.blockers,
+    ).toEqual([]);
     // The key was trimmed at the ends, and the stored value is exactly the key.
     const store = new DrizzleGatewayCredentialStore(
       api.container.database.db,

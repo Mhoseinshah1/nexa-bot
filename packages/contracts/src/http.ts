@@ -26,6 +26,7 @@ import {
   PAYMENT_GATEWAY_SORT_MIN,
   PAYMENT_GATEWAY_API_KEY_MAX_LENGTH,
   PAYMENT_GATEWAY_THRESHOLD_MAX,
+  PAYMENT_ROUTE_UNOFFERABLE_REASONS,
   paymentGatewayProviderSchema,
   paymentGatewayStatusSchema,
   topupCashbackPercentSchema,
@@ -141,6 +142,7 @@ import {
 import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR, salesCurrencyCodeSchema } from './money.js';
 import { AUDIT_RESULTS, OPERATIONAL_SEVERITIES } from './ports.js';
 import {
+  PANEL_SETTING_SOURCES,
   SETTING_CLASSIFICATIONS,
   SETTING_CONSUMERS,
   SETTING_MUTABILITIES,
@@ -897,6 +899,33 @@ export const settingWriteResponseSchema = z.object({
   changed: z.boolean(),
 });
 export type SettingWriteResponse = z.infer<typeof settingWriteResponseSchema>;
+
+/**
+ * Track 3 §2: one PANEL-scoped setting (`settingScope(key) === 'PANEL'`) as one panel holds
+ * it. The tenant setting's shape with the panel named and the source narrowed to the two a
+ * panel key can have — the registry default, or a row for this panel. The same version
+ * rule: a row whose value no longer parses reports `DEFAULT` with ITS OWN version.
+ */
+export const resolvedPanelSettingSchema = resolvedSettingSchema.extend({
+  panelId: z.string(),
+  source: z.enum(PANEL_SETTING_SOURCES),
+});
+export type ResolvedPanelSettingResponse = z.infer<typeof resolvedPanelSettingSchema>;
+
+export const panelSettingListResponseSchema = z.object({
+  settings: z.array(resolvedPanelSettingSchema),
+});
+export type PanelSettingListResponse = z.infer<typeof panelSettingListResponseSchema>;
+
+/** The request is the tenant setting's: a value, the version read, and a key. */
+export const setPanelSettingRequestSchema = setSettingRequestSchema;
+export type SetPanelSettingRequest = z.infer<typeof setPanelSettingRequestSchema>;
+
+export const panelSettingWriteResponseSchema = z.object({
+  setting: resolvedPanelSettingSchema,
+  changed: z.boolean(),
+});
+export type PanelSettingWriteResponse = z.infer<typeof panelSettingWriteResponseSchema>;
 
 export const featureFlagSchema = z.object({
   key: z.string(),
@@ -2009,6 +2038,10 @@ export const PANEL_ROUTES = {
   credentials: (id: string) => `/panels/${encodeURIComponent(id)}/credentials`,
   status: (id: string) => `/panels/${encodeURIComponent(id)}/status`,
   test: (id: string) => `/panels/${encodeURIComponent(id)}/test`,
+  /** Track 3 §2: the panel's PANEL-scoped settings. `panels.view`; a write `panels.edit`. */
+  settings: (id: string) => `/panels/${encodeURIComponent(id)}/settings`,
+  setting: (id: string, key: string) =>
+    `/panels/${encodeURIComponent(id)}/settings/${encodeURIComponent(key)}`,
   providers: '/providers',
 } as const;
 
@@ -5365,6 +5398,27 @@ export type PaymentGatewayView = z.infer<typeof paymentGatewaySchema>;
  */
 export const paymentGatewayListResponseSchema = z.object({
   gateways: z.array(paymentGatewaySchema),
+  /**
+   * Whether ANY route can fund a wallet top-up, and why each route cannot.
+   *
+   * The bot hides «💰 افزایش موجودی» when no route is offered for `WALLET_TOPUP`; this is
+   * the same decision before the customer's own thresholds, so the operator can see why the
+   * button is gone. `available` is true when at least one route has no blocker; `routes`
+   * lists every route's blockers, empty for a route that can take top-ups. Null from the
+   * previous release, which did not send it, so nothing is drawn rather than a guess.
+   */
+  walletTopup: z
+    .object({
+      available: z.boolean(),
+      routes: z.array(
+        z.object({
+          provider: paymentGatewayProviderSchema,
+          blockers: z.array(z.enum(PAYMENT_ROUTE_UNOFFERABLE_REASONS)),
+        }),
+      ),
+    })
+    .nullable()
+    .default(null),
 });
 export type PaymentGatewayListResponse = z.infer<typeof paymentGatewayListResponseSchema>;
 
@@ -5803,6 +5857,15 @@ export const serviceSummarySchema = z.object({
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   /**
+   * When the service was ORIGINALLY bought (Track 3 §3), and the instant `GET /services` orders
+   * by, newest first. For a service this installation made it is `createdAt`. For one carried
+   * over from the previous bot it is the purchase date that bot recorded, never the moment of
+   * the import — which is what `createdAt` holds for an adopted live service. Defaulted on parse
+   * like the identity pair below, so a response from the previous release reads "not known";
+   * the server sends it on every row.
+   */
+  originalStartedAt: z.iso.datetime().nullable().default(null),
+  /**
    * Who the service is for, as Telegram knows them (spec §10): the numeric id is the
    * operator-facing customer identity, the internal `customerId` stays for links. Defaulted
    * on PARSE like the payment summary's pair, so a response from the previous release reads
@@ -5930,9 +5993,25 @@ export const serviceDetailSchema = serviceSummarySchema.extend({
 });
 export type ServiceDetailResponse = z.infer<typeof serviceDetailSchema>;
 
+/**
+ * Which part of a service's life the list shows (Track 3 §3, the «فعال | پایان‌یافته | همه» tabs).
+ *
+ * `LIVE` is every state that is not terminal and `ENDED` is the terminal states, both DERIVED
+ * from `SERVICE_TERMINAL_STATES` rather than listed, so a state added later is classified by
+ * the state machine and not by this enum. `EXPIRED` is live: renewal is the product.
+ *
+ * `ALL` is the same as leaving it out, and leaving it out is the default, so a caller from the
+ * previous release (the order page's one-row lookup, a panel's services) keeps its answer. The
+ * Web Admin's services page sends `LIVE` when its URL names no tab.
+ */
+export const SERVICE_LIST_LIFECYCLES = ['LIVE', 'ENDED', 'ALL'] as const;
+export type ServiceListLifecycle = (typeof SERVICE_LIST_LIFECYCLES)[number];
+
 export const serviceListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(SERVICE_PAGE_MAX).optional(),
   cursor: z.string().min(1).max(255).optional(),
+  /** The lifecycle tab; absent means `ALL`. See `SERVICE_LIST_LIFECYCLES`. */
+  lifecycle: z.enum(SERVICE_LIST_LIFECYCLES).optional(),
   /** Only rows from this source (the «منبع» filter). */
   source: recordSourceSchema.optional(),
   state: z.enum(SERVICE_STATES).optional(),

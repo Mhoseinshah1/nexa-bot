@@ -52,6 +52,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'order.refunded_undeliverable': 'PAYMENTS',
   'provisioning.stalled': 'SERVICES',
   'provisioning.delivered': 'SERVICES',
+  'service.panel_account_missing': 'SERVICES',
+  'service.panel_account_found': 'SERVICES',
   'panel.health.': 'PANELS',
   'panel.capacity.full': 'PANELS',
   'panel.capacity.warning': 'PANELS',

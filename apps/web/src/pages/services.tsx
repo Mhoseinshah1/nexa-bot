@@ -11,6 +11,7 @@ import {
   type ServiceActionAvailability,
   type ServiceActionBlocker,
   type ServiceDeliveryState,
+  type ServiceListLifecycle,
   type ServiceOperationResponse,
   type ServiceOperatorAction,
   type ServiceState,
@@ -23,7 +24,7 @@ import {
   fetchServices,
   type ServiceSimpleAction,
 } from '../api/client';
-import { formatTimestamp, formatTrafficGbText } from '../format';
+import { formatDate, formatTimestamp, formatTrafficGbText } from '../format';
 import { messageFor } from './settings';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
@@ -32,7 +33,6 @@ import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
-import { SourceBadge } from '../ui/source-badge';
 import { sourceRouteFilter } from './record-source';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
@@ -57,6 +57,8 @@ import {
   Progress,
   StatCard,
   StateSwitch,
+  TabPanel,
+  Tabs,
   usePagedRows,
   useToast,
   type Column,
@@ -69,6 +71,8 @@ import {
 } from './service-refund-requests';
 import {
   INPUT_ACTIONS,
+  LIFECYCLE_STATES,
+  lifecycleOf,
   ServiceGrantButton,
   ServiceMassActionButton,
   ServiceMoveButton,
@@ -253,6 +257,7 @@ function Bytes({ bytes }: { bytes: bigint }) {
 
 /** Every URL key the service list filters on, its search included (clear-all, saved views). */
 const SERVICE_FILTER_KEYS = [
+  'lifecycle',
   'q',
   'state',
   'deliveryState',
@@ -264,6 +269,16 @@ const SERVICE_FILTER_KEYS = [
 ] as const;
 
 /** The saved-filters menu's suggestions (W1.4), exactly the demo's for this list. */
+/**
+ * The lifecycle tabs (Track 3 §3), in the order drawn. LIVE is the default and is the URL with
+ * no `lifecycle`; the other two put their id there.
+ */
+const LIFECYCLE_TABS = [
+  { id: 'LIVE', label: 'web.services_tab_live', empty: 'web.services_empty_live' },
+  { id: 'ENDED', label: 'web.services_tab_ended', empty: 'web.services_empty_ended' },
+  { id: 'ALL', label: 'web.services_tab_all', empty: 'web.services_empty' },
+] as const satisfies readonly { id: ServiceListLifecycle; label: WebKey; empty: WebKey }[];
+
 export const SERVICE_PRESETS: readonly ViewPreset[] = [
   {
     id: 'expiring-3d',
@@ -308,6 +323,8 @@ export function ServicesPage({
 }) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
+  // Track 3 §3: which part of a service's life is shown; the default is the live services.
+  const lifecycle = lifecycleOf(route);
   const state = route.query.get('state');
   const delivery = route.query.get('deliveryState');
   /*
@@ -324,6 +341,7 @@ export function ServicesPage({
       {
         queryKey: [
           'services',
+          lifecycle,
           cursor,
           state,
           delivery,
@@ -338,6 +356,8 @@ export function ServicesPage({
           fetchServices({
             limit: LIST_PAGE_SIZE,
             ...(cursor === null ? {} : { cursor }),
+            // Sent explicitly, ALL included: the server's default is ALL, the page's is LIVE.
+            lifecycle,
             ...(state === null ? {} : { state: state as ServiceState }),
             ...(delivery === null ? {} : { deliveryState: delivery as ServiceDeliveryState }),
             ...(appliedSearch === '' ? {} : { q: appliedSearch }),
@@ -364,7 +384,6 @@ export function ServicesPage({
           <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
             <Ltr>{row.providerUsername}</Ltr>
           </a>
-          <SourceBadge source={row.source} />
           {/* R1: a free trial, as the database marks it (`services.is_trial`). */}
           {row.isTrial && (
             <>
@@ -424,9 +443,17 @@ export function ServicesPage({
         ),
     },
     {
-      key: 'created',
-      header: t('web.service_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      /*
+       * The ORIGINAL purchase (Track 3 §3), which is what the list is ordered by: for an
+       * imported service the previous bot's date, never the import. A response from the
+       * release before carries none, and then the creation is the honest fallback — it is
+       * the same instant for every service this installation made.
+       */
+      key: 'started',
+      header: t('web.service_started_at'),
+      render: (row) => (
+        <span className="nowrap">{formatTimestamp(row.originalStartedAt ?? row.createdAt)}</span>
+      ),
     },
   ];
 
@@ -441,6 +468,23 @@ export function ServicesPage({
       ['cursor', null],
     ]);
   const knownState = SERVICE_STATES.find((one) => one === state);
+  /*
+   * A tab change starts at the first page, and drops a state filter the new tab cannot show —
+   * a SUSPENDED filter carried into «پایان‌یافته» would answer an empty list for a reason the
+   * operator can no longer see.
+   */
+  const selectLifecycle = (next: ServiceListLifecycle) =>
+    setQueries(route, [
+      ['lifecycle', next === 'LIVE' ? null : next],
+      ['cursor', null],
+      [
+        'state',
+        knownState !== undefined && LIFECYCLE_STATES[next].includes(knownState) ? state : null,
+      ],
+    ]);
+  const tabStates = LIFECYCLE_STATES[lifecycle];
+  const emptyKey =
+    LIFECYCLE_TABS.find((tab) => tab.id === lifecycle)?.empty ?? 'web.services_empty';
   const knownDelivery = SERVICE_DELIVERY_STATES.find((one) => one === delivery);
   const extraRows = useServiceFilterRows({
     route,
@@ -463,7 +507,8 @@ export function ServicesPage({
           onChange={(next) => setFilter('state', next === 'ALL' ? null : next)}
           items={[
             { id: 'ALL', label: t('web.services_filter_all') },
-            ...SERVICE_STATES.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
+            // Only the states the open tab can show.
+            ...tabStates.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
           ]}
         />
       ),
@@ -520,6 +565,15 @@ export function ServicesPage({
       {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
       <Card className="ca-list">
+        {/* Track 3 §3: the tab is in the URL, and the server filters and orders by it. */}
+        {!denied && (
+          <Tabs
+            value={lifecycle}
+            onChange={selectLifecycle}
+            panelId="services-lifecycle"
+            items={LIFECYCLE_TABS.map((tab) => ({ id: tab.id, label: t(tab.label) }))}
+          />
+        )}
         <div hidden={toolbarHidden}>
           <ListFilterBar
             label={t('web.services_title')}
@@ -552,38 +606,45 @@ export function ServicesPage({
           />
         </div>
 
-        <StateSwitch query={services} denied={denied}>
-          {services.data === undefined ? null : services.data.services.length === 0 ? (
-            <Empty title={t('web.services_empty')} hint={t('web.services_empty_hint')} />
-          ) : (
-            <>
-              <DataTable
-                caption={t('web.services_title')}
-                columns={columns}
-                rows={services.data.services}
-                rowKey={(row) => row.id}
-                dense
-                sticky
+        <TabPanel id="services-lifecycle" labelledBy={`services-lifecycle-tab-${lifecycle}`}>
+          <StateSwitch query={services} denied={denied}>
+            {services.data === undefined ? null : services.data.services.length === 0 ? (
+              <Empty
+                title={t(emptyKey)}
+                hint={t(
+                  lifecycle === 'LIVE' ? 'web.services_empty_live_hint' : 'web.services_empty_hint',
+                )}
               />
-              {/*
+            ) : (
+              <>
+                <DataTable
+                  caption={t('web.services_title')}
+                  columns={columns}
+                  rows={services.data.services}
+                  rowKey={(row) => row.id}
+                  dense
+                  sticky
+                />
+                {/*
                 `CursorPager`'s DEFAULT labels, and that is the difference from
                 `/users`, `/orders` and `/products`: `GET /services` pages a
-                DESCENDING keyset, newest service first (owner revision 13), so
-                "next" here really is the older page. The three ascending lists
+                DESCENDING keyset, newest ORIGINAL purchase first (owner revision 13,
+                Track 3 §3), so "next" here really is the older page. The three ascending lists
                 pass the opposite pair explicitly for the opposite reason.
 
                 The cursor lives in the URL, so Previous returns to the first page.
               */}
-              <CursorPager
-                shown={services.data.services.length}
-                hasPrevious={cursor !== null}
-                hasNext={services.data.nextCursor !== null}
-                onPrevious={() => setQuery(route, 'cursor', null)}
-                onNext={() => setQuery(route, 'cursor', services.data?.nextCursor ?? null)}
-              />
-            </>
-          )}
-        </StateSwitch>
+                <CursorPager
+                  shown={services.data.services.length}
+                  hasPrevious={cursor !== null}
+                  hasNext={services.data.nextCursor !== null}
+                  onPrevious={() => setQuery(route, 'cursor', null)}
+                  onNext={() => setQuery(route, 'cursor', services.data?.nextCursor ?? null)}
+                />
+              </>
+            )}
+          </StateSwitch>
+        </TabPanel>
       </Card>
     </>
   );
@@ -1027,6 +1088,19 @@ export function ServiceDetailPage({
               }
               subtitle={t('web.service_detail')}
             />
+            {/*
+              Track 3 §3: one quiet line for a service the one-time import carried over, with
+              the purchase date the previous bot recorded — the date the list orders it by.
+              Provenance only; the service is otherwise an ordinary one.
+            */}
+            {row.source === 'MIRZA' && (
+              <p className="muted small">
+                {t('web.service_imported_line').replace(
+                  '{date}',
+                  formatDate(row.originalStartedAt ?? row.createdAt),
+                )}
+              </p>
+            )}
 
             <ServiceActionPanel
               row={row}

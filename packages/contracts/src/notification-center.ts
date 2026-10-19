@@ -249,6 +249,16 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
   // --- provisioning that did not happen --------------------------------------------------
   { code: 'provisioning.stalled', category: 'PROVISIONING', link: 'SERVICE', minSeverity: 'WARN' },
   /*
+   * Track 3 §1: the panel answered twice that a service's account does not exist. The
+   * customer's tap changed nothing; an operator decides from the service's page.
+   */
+  {
+    code: 'service.panel_account_missing',
+    category: 'PROVISIONING',
+    link: 'SERVICE',
+    minSeverity: 'WARN',
+  },
+  /*
    * A paid order that could not be delivered was refunded to the wallet. Under PAYMENTS and
    * linked to the compensation list, both `payments.view`: under PROVISIONING
    * (`services.view`) it linked to an order page that charges `orders.view`, which the

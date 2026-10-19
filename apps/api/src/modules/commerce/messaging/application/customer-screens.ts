@@ -127,6 +127,13 @@ export interface ServiceCardFacts {
    * card — a rendered template key, e.g. `bot.service.notice_action_failed`.
    */
   readonly notice?: TemplateKey;
+  /**
+   * Track 3 §1: the card is drawn from stored figures because the panel could not be read
+   * just now; the status is followed by `bot.service.last_updated` naming this moment —
+   * the last read (`usage_synced_at`). Absent when the figures are fresh, or were never
+   * read (the traffic lines already say «unknown» then).
+   */
+  readonly lastUpdatedAt?: Date;
 }
 
 /** What a transfer's summary shows of a service (Package F). */
@@ -350,10 +357,19 @@ export class CustomerScreenComposer {
         : SERVICE_STATUS_PRESENTATION[serviceDisplayStatus(facts)].label,
       {},
     );
-    if (facts.notice === undefined) return status;
+    const noticed =
+      facts.notice === undefined
+        ? status
+        : await this.templates.render(scope, 'bot.service.status_with_notice', {
+            status,
+            notice: await this.templates.render(scope, facts.notice, {}),
+          });
+    if (facts.lastUpdatedAt === undefined) return noticed;
     return this.templates.render(scope, 'bot.service.status_with_notice', {
-      status,
-      notice: await this.templates.render(scope, facts.notice, {}),
+      status: noticed,
+      notice: await this.templates.render(scope, 'bot.service.last_updated', {
+        at: facts.lastUpdatedAt,
+      }),
     });
   }
 

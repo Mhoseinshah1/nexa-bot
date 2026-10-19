@@ -58,6 +58,7 @@ import {
 import { messageFor } from './settings';
 import { PanelTrialTab } from './panel-trial';
 import { DeliveryTutorialTab } from './delivery-tutorial';
+import { PanelConnectionFilesTab } from './panel-connection-files';
 import { HEALTH_TONES } from './dashboard';
 /*
  * The product and service vocabularies, imported rather than restated.
@@ -562,8 +563,20 @@ const DETAIL_TABS = [
   'capabilities',
   'trial',
   'delivery-tutorial',
+  'connection-files',
 ] as const;
 type DetailTab = (typeof DETAIL_TABS)[number];
+
+/**
+ * Track 3 §2: whether this panel's provider hands over connection files (RickPanel today),
+ * read from the provider's declared capabilities — the tab is drawn only where it means
+ * something. A courtesy: the server stores the setting for any panel.
+ */
+function sendsConnectionFiles(panel: PanelSummaryResponse): boolean {
+  return (
+    providerDescriptor(panel.providerType)?.capabilities.includes('SUBSCRIPTION_FILES') ?? false
+  );
+}
 
 /** The three credential kinds, once, so no list of them can drift from another. */
 type CredentialField = 'username' | 'password' | 'apiToken';
@@ -812,6 +825,15 @@ export function PanelDetailPage({
                 { id: 'trial', label: t('web.panel_tab_trial') },
                 // Phase 2 item 5: the optional tutorial sent after a delivery on this panel.
                 { id: 'delivery-tutorial', label: t('web.panel_tab_delivery_tutorial') },
+                // Track 3 §2: the connection files' caption, where the provider hands files.
+                ...(sendsConnectionFiles(data)
+                  ? [
+                      {
+                        id: 'connection-files' as const,
+                        label: t('web.panel_tab_connection_files'),
+                      },
+                    ]
+                  : []),
               ]}
             />
 
@@ -861,6 +883,12 @@ export function PanelDetailPage({
               )}
               {tab === 'delivery-tutorial' && (
                 <DeliveryTutorialTab
+                  panelId={data.id}
+                  mayEdit={mayEdit && data.status !== 'ARCHIVED'}
+                />
+              )}
+              {tab === 'connection-files' && sendsConnectionFiles(data) && (
+                <PanelConnectionFilesTab
                   panelId={data.id}
                   mayEdit={mayEdit && data.status !== 'ARCHIVED'}
                 />

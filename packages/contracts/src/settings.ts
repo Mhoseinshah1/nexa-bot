@@ -34,6 +34,7 @@ import {
   BACKUP_SCHEDULE_SETTING_KEYS,
 } from './backup.js';
 import { uuidV7Schema } from './ids.js';
+import { connectionFileCaptionTemplateIssues } from './templates.js';
 import {
   REFERRAL_COMMISSION_PERCENT_MAX,
   REFERRAL_COMMISSION_PERCENT_MIN,
@@ -167,6 +168,25 @@ export type SettingClassification = (typeof SETTING_CLASSIFICATIONS)[number];
 export const SETTING_CONSUMERS = ['ACTIVE', 'PLANNED'] as const;
 export type SettingConsumer = (typeof SETTING_CONSUMERS)[number];
 
+/**
+ * What one stored value of a key belongs to.
+ *
+ * `TENANT` is every key this registry held before Track 3: one value per tenant, in
+ * `setting_values`. `PANEL` is a key whose value differs panel by panel — one value per
+ * (tenant, panel), in `panel_setting_values` — such as how one panel's connection files
+ * are captioned. The registry, the schema, the default, the zero meaning and the
+ * consumer are the same machinery for both; only WHERE a value lives, and so which
+ * surface reads and writes it, differs.
+ *
+ * Deliberately two different stores and two different surfaces rather than one table
+ * with a nullable panel id: a tenant key read with a panel id, or a panel key read
+ * without one, is a question with no answer, and a nullable column would let both be
+ * asked. The tenant settings surface refuses a `PANEL` key as unknown, and the panel
+ * settings surface refuses a `TENANT` key the same way.
+ */
+export const SETTING_SCOPES = ['TENANT', 'PANEL'] as const;
+export type SettingScope = (typeof SETTING_SCOPES)[number];
+
 export interface SettingDefinition<TSchema extends z.ZodType = z.ZodType> {
   readonly key: string;
   readonly description: string;
@@ -189,6 +209,13 @@ export interface SettingDefinition<TSchema extends z.ZodType = z.ZodType> {
   readonly configures: string | null;
   /** Whether anything in this release reads the value. */
   readonly consumer: SettingConsumer;
+  /**
+   * Where a value of this key lives (`SETTING_SCOPES`). Absent means `TENANT`, which
+   * every key declared before panel-scoped keys existed is — so a key that does not say
+   * keeps the meaning it always had, and only a key that is genuinely per panel says so.
+   * Read it through `settingScope`, never by inspecting the field.
+   */
+  readonly scope?: SettingScope;
 }
 
 const telegramChatIdSchema = z
@@ -285,6 +312,22 @@ export function telegramChannelJoinUrl(channel: TelegramChannel): string | null 
 function unique<T>(of: (item: T) => string) {
   return (items: readonly T[]): boolean => new Set(items.map(of)).size === items.length;
 }
+
+/**
+ * Track 3 §2: how one panel captions the connection files it hands a customer.
+ *
+ * - `PANEL_DEFAULT`: the panel's own ready-made caption per file (`bot.service.file_caption`,
+ *   with the username line when the panel gave none) — the behaviour before Track 3.
+ * - `CUSTOM`: the panel's template (`panel.connection_files.caption_template`), or the
+ *   catalogue's `bot.service.connection_files_caption` when it stores none.
+ * - `NONE`: no caption on any file.
+ */
+export const CONNECTION_FILE_CAPTION_MODES = ['PANEL_DEFAULT', 'CUSTOM', 'NONE'] as const;
+export type ConnectionFileCaptionMode = (typeof CONNECTION_FILE_CAPTION_MODES)[number];
+
+/** Track 3 §2: which of a delivery's files carry the caption. */
+export const CONNECTION_FILE_CAPTION_PLACEMENTS = ['LAST_FILE', 'EVERY_FILE'] as const;
+export type ConnectionFileCaptionPlacement = (typeof CONNECTION_FILE_CAPTION_PLACEMENTS)[number];
 
 export const SETTINGS = [
   {
@@ -1439,6 +1482,79 @@ export const SETTINGS = [
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
   },
+  /*
+   * Track 3 §2: a panel's connection-file caption («فایل‌های اتصال» on the panel's page).
+   * PANEL-scoped: one value per panel, edited on that panel's page, never on Settings.
+   */
+  {
+    key: 'panel.connection_files.caption_mode',
+    description:
+      'How this panel captions the connection files sent to a customer. PANEL_DEFAULT: the ' +
+      "panel's own caption per file (bot.service.file_caption), the behaviour before this " +
+      "key existed. CUSTOM: this panel's template (panel.connection_files.caption_template), " +
+      'or the catalogue default bot.service.connection_files_caption when it stores none. ' +
+      'NONE: no caption at all. Which files carry it is ' +
+      'panel.connection_files.caption_placement.',
+    schema: z.enum(CONNECTION_FILE_CAPTION_MODES),
+    defaultValue: 'CUSTOM',
+    configures: null,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+    scope: 'PANEL',
+  },
+  {
+    key: 'panel.connection_files.caption_template',
+    description:
+      "This panel's own connection-file caption template, used when its caption mode is " +
+      'CUSTOM. Stored RAW and rendered only at send time. It may name only ' +
+      'CONNECTION_FILE_CAPTION_VARIABLES and is refused when blank, longer than Telegram\u2019s ' +
+      '1024-unit caption bound, or naming any other variable ' +
+      '(connectionFileCaptionTemplateIssues). Telegram formatting tags are allowed; every ' +
+      'value is HTML-escaped as it is substituted and the result is read by the closed ' +
+      'caption grammar, never by Telegram\u2019s HTML parser. Null means this panel stores no ' +
+      'template and the catalogue default bot.service.connection_files_caption is used.',
+    schema: z
+      .string()
+      .superRefine((body, context) => {
+        for (const issue of connectionFileCaptionTemplateIssues(body)) {
+          context.addIssue({
+            code: 'custom',
+            message:
+              issue.kind === 'UNKNOWN_VARIABLE'
+                ? `Unknown variable {${issue.token}}.`
+                : issue.kind === 'TOO_LONG'
+                  ? `At most ${issue.max} characters; this is ${issue.length}.`
+                  : 'A caption template may not be blank.',
+          });
+        }
+      })
+      .nullable(),
+    defaultValue: null,
+    configures: null,
+    // Null is an ordinary value: "no template of this panel's own, use the default".
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+    scope: 'PANEL',
+  },
+  {
+    key: 'panel.connection_files.caption_placement',
+    description:
+      "Which of this panel's connection files carry the caption: LAST_FILE (the last file " +
+      'of the delivery only, so an album shows one caption under it) or EVERY_FILE. Applies ' +
+      'to every caption mode; NONE has nothing to place.',
+    schema: z.enum(CONNECTION_FILE_CAPTION_PLACEMENTS),
+    defaultValue: 'LAST_FILE',
+    configures: null,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+    scope: 'PANEL',
+  },
 ] as const satisfies readonly SettingDefinition[];
 
 export type SettingKey = (typeof SETTINGS)[number]['key'];
@@ -1459,6 +1575,28 @@ export function settingDefinition(key: SettingKey): SettingDefinition {
 export function isSettingKey(value: string): value is SettingKey {
   return SETTING_BY_KEY.has(value);
 }
+
+/** Where a value of `key` lives: `TENANT` unless the key declares `PANEL`. */
+export function settingScope(key: SettingKey): SettingScope {
+  return settingDefinition(key).scope ?? 'TENANT';
+}
+
+/** The keys whose values are per tenant — what the tenant settings surface lists. */
+export const TENANT_SETTING_KEYS: readonly SettingKey[] = SETTING_KEYS.filter(
+  (key) => settingScope(key) === 'TENANT',
+);
+
+/** The keys whose values are per panel — what a panel's settings surface lists. */
+export const PANEL_SETTING_KEYS: readonly SettingKey[] = SETTING_KEYS.filter(
+  (key) => settingScope(key) === 'PANEL',
+);
+
+/**
+ * Where a panel-scoped value came from: the registry default, or a row for THIS panel.
+ * There is no tenant-wide layer between them — a panel key has no tenant value.
+ */
+export const PANEL_SETTING_SOURCES = ['DEFAULT', 'PANEL'] as const;
+export type PanelSettingSource = (typeof PANEL_SETTING_SOURCES)[number];
 
 /**
  * Where a resolved value came from.
