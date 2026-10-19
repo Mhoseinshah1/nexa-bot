@@ -1208,6 +1208,26 @@ form.set-row > * + * {
 
 /* --- Phase D1 audit log -------------------------------------------------------- */
 
+/* Demo parity: the typed filters as an open grid of labelled fields, the two buttons under. */
+.audit-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(170px, 100%), 1fr));
+  gap: 10px;
+  align-items: start;
+  margin-block: 12px 6px;
+}
+.audit-filters .input,
+.audit-filters .date-field {
+  width: 100%;
+}
+.audit-filters-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
 .audit-code {
   font-size: var(--fs-ui);
 }
@@ -1250,6 +1270,19 @@ form.set-row > * + * {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+/* Demo parity: the action and the entity are filters, drawn as plain accent text that
+   underlines on hover; the entity's own links are small and quiet under it. */
+.audit-cell > .link,
+.audit-entity .link {
+  text-decoration: none;
+}
+.audit-cell > .link:hover,
+.audit-entity .link:hover {
+  text-decoration: underline;
+}
+.audit-links {
+  font-size: var(--fs-xs);
+}
 .audit-badges,
 .audit-links {
   display: inline-flex;
@@ -1258,8 +1291,9 @@ form.set-row > * + * {
   align-items: center;
 }
 /* A refusal or a failure stays in the log, marked rather than hidden. */
-.audit-row-refused td:first-child {
-  box-shadow: inset -3px 0 0 var(--warn);
+/* Demo parity: a refused or failed row is tinted red across, not marked at one edge. */
+.audit-row-refused td {
+  background: var(--danger-soft);
 }
 /* The recorded values: long JSON wraps inside its cell instead of widening the page. */
 .audit-diff td {

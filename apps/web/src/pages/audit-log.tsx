@@ -39,7 +39,7 @@ import {
 } from '../ui/kit';
 import { DateField } from '../ui/date-field';
 import { ListFilterBar } from '../ui/filter-bar';
-import { dayRangeLabel } from '../ops-list-filters';
+import { Icon } from '../ui/icons';
 import { auditActionLabel } from '../audit-action-labels';
 import { auditReasonCode, auditReasonLabel } from '../audit-reason-labels';
 import { CodeLabel, ProviderText } from '../ui/technical-details';
@@ -386,6 +386,7 @@ export function AuditLogPage({
                   download
                   title={t('web.audit_export_hint')}
                 >
+                  <Icon name="download" size={14} />
                   {t('web.audit_export_csv')}
                 </a>
               ),
@@ -397,32 +398,6 @@ export function AuditLogPage({
         {requestable && (
           <ListFilterBar
             label={t('web.audit_title')}
-            search={
-              <form className="ops-search" onSubmit={apply}>
-                <input
-                  id="audit-actor"
-                  className="input sm"
-                  dir="ltr"
-                  aria-label={t('web.audit_filter_actor')}
-                  placeholder={t('web.audit_filter_actor_hint')}
-                  title={t('web.audit_filter_actor_hint')}
-                  value={draft.actor}
-                  onChange={(event) => editField({ actor: event.target.value })}
-                  {...debounce.composition}
-                />
-                <button type="submit" className="btn primary sm" disabled={blocked}>
-                  {t('web.users_search_apply')}
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost sm"
-                  disabled={!filtering}
-                  onClick={clear}
-                >
-                  {t('web.users_search_clear')}
-                </button>
-              </form>
-            }
             onClearAll={clear}
             filters={[
               {
@@ -480,38 +455,6 @@ export function AuditLogPage({
                 ),
               },
               {
-                key: 'action',
-                label: t('web.audit_filter_action'),
-                active:
-                  applied.action === ''
-                    ? null
-                    : (auditActionLabel(applied.action) ?? applied.action),
-                onClear: () => {
-                  edit({ action: '' });
-                  setQuery(route, 'action', null);
-                },
-                control: (
-                  <form onSubmit={apply}>
-                    <Field
-                      label={t('web.audit_filter_action')}
-                      hint={t('web.audit_filter_action_hint')}
-                      htmlFor="audit-action"
-                      compact
-                      {...(problems.action ? { error: t('web.audit_filter_action_invalid') } : {})}
-                    >
-                      <input
-                        id="audit-action"
-                        className="input sm"
-                        dir="ltr"
-                        value={draft.action}
-                        onChange={(event) => editField({ action: event.target.value })}
-                        {...debounce.composition}
-                      />
-                    </Field>
-                  </form>
-                ),
-              },
-              {
                 key: 'entity',
                 label: t('web.audit_col_entity'),
                 active:
@@ -526,7 +469,7 @@ export function AuditLogPage({
                   ]);
                 },
                 control: (
-                  <form className="ops-date-range" onSubmit={apply}>
+                  <form onSubmit={apply}>
                     <Field
                       label={t('web.audit_filter_entity_type')}
                       htmlFor="audit-entity-type"
@@ -551,53 +494,6 @@ export function AuditLogPage({
                           </option>
                         ))}
                       </select>
-                    </Field>
-                    <Field
-                      label={t('web.audit_filter_entity_id')}
-                      htmlFor="audit-entity-id"
-                      compact
-                      {...(problems.entity
-                        ? { error: t('web.audit_filter_entity_id_needs_type') }
-                        : {})}
-                    >
-                      <input
-                        id="audit-entity-id"
-                        className="input sm"
-                        dir="ltr"
-                        value={draft.entityId}
-                        onChange={(event) => editField({ entityId: event.target.value })}
-                        {...debounce.composition}
-                      />
-                    </Field>
-                  </form>
-                ),
-              },
-              {
-                key: 'customer',
-                label: t('web.audit_filter_customer'),
-                active: applied.customerId === '' ? null : applied.customerId.slice(0, 8),
-                onClear: () => {
-                  edit({ customerId: '' });
-                  setQuery(route, 'customerId', null);
-                },
-                control: (
-                  <form onSubmit={apply}>
-                    <Field
-                      label={t('web.audit_filter_customer')}
-                      htmlFor="audit-customer"
-                      compact
-                      {...(problems.customer
-                        ? { error: t('web.audit_filter_customer_invalid') }
-                        : {})}
-                    >
-                      <input
-                        id="audit-customer"
-                        className="input sm"
-                        dir="ltr"
-                        value={draft.customerId}
-                        onChange={(event) => editField({ customerId: event.target.value })}
-                        {...debounce.composition}
-                      />
                     </Field>
                   </form>
                 ),
@@ -627,46 +523,109 @@ export function AuditLogPage({
                   </select>
                 ),
               },
-              {
-                key: 'dates',
-                label: t('web.ops_filter_dates'),
-                active: dayRangeLabel(applied.fromDay, applied.toDay),
-                onClear: () => {
-                  edit({ fromDay: '', toDay: '' });
-                  setQueries(route, [
-                    ['from', null],
-                    ['to', null],
-                  ]);
-                },
-                control: (
-                  <div className="ops-date-range">
-                    <Field label={t('web.audit_filter_from')} htmlFor="audit-from" compact>
-                      <DateField
-                        id="audit-from"
-                        size="sm"
-                        value={draft.fromDay}
-                        onChange={(value) => editField({ fromDay: value })}
-                      />
-                    </Field>
-                    <Field
-                      label={t('web.audit_filter_to')}
-                      htmlFor="audit-to"
-                      compact
-                      {...(problems.dates ? { error: t('web.audit_filter_dates_invalid') } : {})}
-                    >
-                      <DateField
-                        id="audit-to"
-                        size="sm"
-                        value={draft.toDay}
-                        onChange={(value) => editField({ toDay: value })}
-                        invalid={problems.dates}
-                      />
-                    </Field>
-                  </div>
-                ),
-              },
             ]}
           />
+        )}
+        {/*
+          Demo parity: the typed filters as an open grid of six labelled fields under the
+          filters line (actor, action, entity id, customer id, from, to) with an apply and a
+          clear button. They apply themselves (debounced) as before; the selects and the
+          security slices stay in the filters panel.
+        */}
+        {requestable && (
+          <form className="audit-filters" onSubmit={apply} aria-label={t('web.filters')}>
+            <Field
+              label={t('web.audit_filter_actor')}
+              hint={t('web.audit_filter_actor_hint')}
+              htmlFor="audit-actor"
+              compact
+            >
+              <input
+                id="audit-actor"
+                className="input sm"
+                dir="ltr"
+                value={draft.actor}
+                onChange={(event) => editField({ actor: event.target.value })}
+                {...debounce.composition}
+              />
+            </Field>
+            <Field
+              label={t('web.audit_filter_action')}
+              hint={t('web.audit_filter_action_hint')}
+              htmlFor="audit-action"
+              compact
+              {...(problems.action ? { error: t('web.audit_filter_action_invalid') } : {})}
+            >
+              <input
+                id="audit-action"
+                className="input sm"
+                dir="ltr"
+                value={draft.action}
+                onChange={(event) => editField({ action: event.target.value })}
+                {...debounce.composition}
+              />
+            </Field>
+            <Field
+              label={t('web.audit_filter_entity_id')}
+              htmlFor="audit-entity-id"
+              compact
+              {...(problems.entity ? { error: t('web.audit_filter_entity_id_needs_type') } : {})}
+            >
+              <input
+                id="audit-entity-id"
+                className="input sm"
+                dir="ltr"
+                value={draft.entityId}
+                onChange={(event) => editField({ entityId: event.target.value })}
+                {...debounce.composition}
+              />
+            </Field>
+            <Field
+              label={t('web.audit_filter_customer')}
+              htmlFor="audit-customer"
+              compact
+              {...(problems.customer ? { error: t('web.audit_filter_customer_invalid') } : {})}
+            >
+              <input
+                id="audit-customer"
+                className="input sm"
+                dir="ltr"
+                value={draft.customerId}
+                onChange={(event) => editField({ customerId: event.target.value })}
+                {...debounce.composition}
+              />
+            </Field>
+            <Field label={t('web.audit_filter_from')} htmlFor="audit-from" compact>
+              <DateField
+                id="audit-from"
+                size="sm"
+                value={draft.fromDay}
+                onChange={(value) => editField({ fromDay: value })}
+              />
+            </Field>
+            <Field
+              label={t('web.audit_filter_to')}
+              htmlFor="audit-to"
+              compact
+              {...(problems.dates ? { error: t('web.audit_filter_dates_invalid') } : {})}
+            >
+              <DateField
+                id="audit-to"
+                size="sm"
+                value={draft.toDay}
+                onChange={(value) => editField({ toDay: value })}
+                invalid={problems.dates}
+              />
+            </Field>
+            <div className="audit-filters-actions">
+              <button type="submit" className="btn primary sm" disabled={blocked}>
+                {t('web.audit_apply')}
+              </button>
+              <button type="button" className="btn ghost sm" disabled={!filtering} onClick={clear}>
+                {t('web.audit_clear')}
+              </button>
+            </div>
+          </form>
         )}
         {requestable && <p className="muted small">{t('web.audit_no_secrets')}</p>}
 
@@ -839,7 +798,7 @@ function EntityCell({
     });
   }
   return (
-    <span className="cell-main">
+    <span className="cell-main audit-entity">
       <span>
         {row.entityId === null ? (
           label === undefined ? (

@@ -7622,6 +7622,8 @@ export const WEB_FA = {
   'web.audit_filter_to': 'تا تاریخ (خودِ روز هم شامل است)',
   'web.audit_filter_dates_invalid': 'تاریخ پایان نباید پیش از تاریخ شروع باشد.',
   'web.audit_filter_all': 'همه',
+  'web.audit_apply': 'اعمال فیلتر',
+  'web.audit_clear': 'پاک کردن فیلترها',
   'web.audit_export_csv': 'خروجی CSV',
   'web.audit_export_hint':
     'خروجی دقیقاً همین ردیف‌های فیلترشده است، حداکثر ۱۰٬۰۰۰ ردیف؛ بیشتر از آن رد می‌شود تا فیلتر را محدودتر کنید. خودِ خروجی گرفتن در گزارش ممیزی ثبت می‌شود.',
