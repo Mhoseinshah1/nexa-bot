@@ -421,7 +421,7 @@ export function ExtraDevicesPage({
         >
           <Card title={t('web.extra_devices_rates')}>
             <DataTable
-              stack
+              stack="labelled"
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}

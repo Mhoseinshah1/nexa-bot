@@ -473,7 +473,7 @@ export function ServiceLocationsPage({
         >
           <Card title={t('web.service_locations_list')}>
             <DataTable
-              stack
+              stack="labelled"
               columns={columns}
               rows={rows}
               rowKey={(row) => row.id}

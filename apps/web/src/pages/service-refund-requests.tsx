@@ -280,7 +280,7 @@ export function OpenServiceRefundRequestsCard() {
         ) : (
           <>
             <DataTable
-              stack
+              stack="labelled"
               caption={t('web.service_refunds_open')}
               columns={columns(onLink, true)}
               rows={rows}
@@ -325,7 +325,7 @@ export function ServiceRefundRequestsCard({
           <Empty variant="compact" title={t('web.service_refunds_empty')} />
         ) : (
           <DataTable
-            stack
+            stack="labelled"
             caption={t('web.service_refunds')}
             columns={columns(
               onLink,

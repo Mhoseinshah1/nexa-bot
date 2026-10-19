@@ -145,7 +145,7 @@ function PanelTrialsCard({ mayView }: { mayView: boolean }) {
           <Empty title={t('web.trials_panels_empty')} />
         ) : (
           <DataTable
-            stack
+            stack="labelled"
             columns={columns}
             rows={panels.data.panels}
             rowKey={(row) => row.panelId}
@@ -220,7 +220,7 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
         ) : (
           <>
             <DataTable
-              stack
+              stack="labelled"
               caption={t('web.trials_overrides_title')}
               columns={columns}
               rows={overrides.data.overrides}
@@ -364,7 +364,7 @@ function ResetButton({ mayReset }: { mayReset: boolean }) {
                 />
                 <h3 className="ca-subhead">{t('web.trials_reset_sample')}</h3>
                 <DataTable
-                  stack
+                  stack="labelled"
                   caption={t('web.trials_reset_sample')}
                   columns={[
                     {
@@ -478,7 +478,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
         ) : (
           <>
             <DataTable
-              stack
+              stack="labelled"
               caption={t('web.trials_history_title')}
               columns={columns}
               rows={resets.data.resets}

@@ -384,7 +384,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
           }
         >
           <DataTable
-            stack
+            stack="labelled"
             caption={t('web.orders_title')}
             columns={columns}
             rows={rows}
@@ -814,7 +814,7 @@ function OrderServiceOperations({ serviceId }: { serviceId: string }) {
         ) : (
           <>
             <DataTable
-              stack
+              stack="labelled"
               caption={t('web.service_operations_title')}
               columns={OPERATION_COLUMNS}
               rows={operations.data.operations}
@@ -1135,7 +1135,7 @@ function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
         <p className="muted">{t('web.order_pricing_no_adjustments')}</p>
       ) : (
         <DataTable
-          stack
+          stack="labelled"
           caption={t('web.order_pricing_adjustments')}
           columns={adjustmentColumns}
           rows={pricing.adjustments}
@@ -1150,7 +1150,7 @@ function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
         <p className="muted">{t('web.order_pricing_no_redemptions')}</p>
       ) : (
         <DataTable
-          stack
+          stack="labelled"
           caption={t('web.order_pricing_redemptions')}
           columns={redemptionColumns}
           rows={pricing.redemptions}

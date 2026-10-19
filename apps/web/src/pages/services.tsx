@@ -43,6 +43,7 @@ import {
   Banner,
   Button,
   Card,
+  CopyButton,
   Copyable,
   CursorPager,
   DataTable,
@@ -620,7 +621,7 @@ export function ServicesPage({
             ) : (
               <>
                 <DataTable
-                  stack
+                  stack="labelled"
                   caption={t('web.services_title')}
                   columns={columns}
                   rows={services.data.services}
@@ -1076,9 +1077,14 @@ export function ServiceDetailPage({
         {row === undefined ? null : (
           <>
             <PageHead
-              // X7: the demo's title is the bare username, without a copy icon; the panel
-              // user id below keeps its copy control (`ServiceIdentity`).
-              title={<Ltr>{row.providerUsername}</Ltr>}
+              // The demo's title keeps its copy control, drawn only on hover or focus at
+              // desktop and always on a phone (`.ca-title-id`, commerce-a.css).
+              title={
+                <span className="ca-title-id">
+                  <Ltr>{row.providerUsername}</Ltr>
+                  <CopyButton value={row.providerUsername} />
+                </span>
+              }
               badge={
                 <span className="ca-badges">
                   <StateBadge value={row.state} />
@@ -1172,7 +1178,7 @@ function OperationsTable({ operations }: { operations: readonly ServiceOperation
   return (
     <>
       <DataTable
-        stack
+        stack="labelled"
         caption={t('web.service_operations_title')}
         columns={OPERATION_COLUMNS}
         rows={page.rows}

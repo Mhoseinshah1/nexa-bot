@@ -41,7 +41,7 @@ import {
   Button,
   Card,
   ConfirmDialog,
-  IdText,
+  Copyable,
   DataTable,
   Empty,
   Field,
@@ -260,9 +260,12 @@ function ToggleLine({
   );
 }
 
-/** A panel or tier by name (its id when unnamed), without a copy icon — the demo has none (X7). */
+/**
+ * A panel or tier by name (its id when unnamed). Its copy control is the demo's: drawn on the
+ * row's hover or the button's focus at desktop, always on a phone (`.cs-cards`, commerce-b.css).
+ */
 function Reference({ id, name }: { id: string; name: string | undefined }) {
-  return name === undefined ? <IdText value={id} /> : <IdText value={id} display={name} />;
+  return name === undefined ? <Copyable value={id} /> : <Copyable value={id} display={name} />;
 }
 
 // ---------------------------------------------------------------------------

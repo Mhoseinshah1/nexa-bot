@@ -66,6 +66,21 @@ describe('DataTable stack — one card per row at phone width, as the demo', () 
     expect(plain.container.querySelector('.tbl-wrap')).not.toHaveClass('stack');
   });
 
+  it("'labelled' keeps the first cell a labelled line instead of the card's title", () => {
+    const { container } = renderPage(
+      <DataTable
+        caption="c"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        stack="labelled"
+      />,
+    );
+    expect(container.querySelector('.tbl-wrap')).toHaveClass('stack', 'labelled');
+    expect(container.querySelector('td')).toHaveAttribute('data-label', 'نام');
+    expect(KIT_CSS).toContain('.tbl-wrap.stack:not(.labelled) .tbl td:first-child::before');
+  });
+
   it('the stylesheet draws the label from data-label and keeps the header row for readers', () => {
     const at = KIT_CSS.indexOf('@media (max-width: 820px) {\n  .tbl-wrap.stack,');
     expect(at).toBeGreaterThan(-1);
@@ -111,12 +126,22 @@ afterEach(() => {
 });
 
 describe('services detail, as the demo draws it', () => {
-  it('titles the page with the bare username — no copy icon (X7)', async () => {
+  it('keeps the title’s copy control, drawn as the demo’s hover-revealed `.cpb`', async () => {
     stubApi(routesOf(fixturesFor('demo-parity')));
     renderPage(<ServiceDetailPage id={DETAIL_ID} denied={false} mayEdit mayTerminate mayGrant />);
     const title = (await screen.findByText('saeed_d_1084', { selector: 'h1 *' })).closest('h1')!;
-    const head = title.closest('header') ?? title.parentElement!;
-    expect(within(head).queryByRole('button', { name: t('web.copy') })).toBeNull();
+    // The capability stays: a real, focusable copy button for the username.
+    const copy = within(title).getByRole('button', { name: t('web.copy') });
+    expect(copy).toHaveAttribute('data-copy-value', 'saeed_d_1084');
+    const css = readFileSync(
+      join(import.meta.dirname, '../../apps/web/src/styles/pages/commerce-a.css'),
+      'utf8',
+    );
+    expect(css).toMatch(/\.ca-title-id > button\[data-copy-value\] \{\s*opacity: 0;/);
+    expect(css).toContain('.ca-title-id > button[data-copy-value]:focus-visible');
+    expect(css).toMatch(
+      /@media \(hover: none\), \(max-width: 820px\) \{\s*\.ca-title-id > button\[data-copy-value\] \{\s*opacity: 1;/,
+    );
   });
 
   it('puts the usage percentage beside a neutral bar («۷۱٪» of 35.3 / 50 GB)', async () => {
@@ -161,7 +186,8 @@ describe('the services list and its refund queue', () => {
     await screen.findByText('omid_sh_1087');
     const wraps = [...container.querySelectorAll('.tbl-wrap')];
     expect(wraps.length).toBeGreaterThanOrEqual(2);
-    for (const wrap of wraps) expect(wrap).toHaveClass('stack');
+    // The demo labels the first cell of these two lists too (`'labelled'`).
+    for (const wrap of wraps) expect(wrap).toHaveClass('stack', 'labelled');
     const queue = screen.getByText('omid_sh_1087').closest('tr')!;
     const cells = [...queue.querySelectorAll('td')];
     const outcome = cells.find(
@@ -176,12 +202,18 @@ describe('the services list and its refund queue', () => {
 });
 
 describe('custom service, as the demo draws it', () => {
-  it('names a location’s panel without a copy icon (X7)', async () => {
+  it('keeps a location panel’s copy control, revealed on the row’s hover as the demo', async () => {
     stubApi(routesOf(fixturesFor('demo-parity')));
     renderPage(<CustomServicePage denied={false} mayEdit mayViewPanels mayViewTiers />);
-    const panel = await screen.findByText('Frankfurt A', { selector: '.id-text' });
+    const panel = await screen.findByText('Frankfurt A', { selector: '.copyable .val' });
     const row = panel.closest('tr')!;
-    expect(within(row).queryByRole('button', { name: t('web.copy') })).toBeNull();
+    expect(within(row).getByRole('button', { name: t('web.copy') })).toBeInTheDocument();
+    const css = readFileSync(
+      join(import.meta.dirname, '../../apps/web/src/styles/pages/commerce-b.css'),
+      'utf8',
+    );
+    expect(css).toMatch(/\.cs-cards \.copyable > button\[data-copy-value\] \{\s*opacity: 0;/);
+    expect(css).toContain('.cs-cards tr:hover .copyable > button[data-copy-value]');
   });
 
   it('keeps each card’s action level with its title', () => {
