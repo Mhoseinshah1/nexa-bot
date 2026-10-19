@@ -158,14 +158,12 @@
 
 /* --- Features (`#/features`) ------------------------------------------------------------ */
 
-/*
- * The demo pages the flags ten at a time; with no server total the whole list is a
- * height-limited pane instead (nexa-web-design), so the page itself stays short.
- */
-.feature-pane {
-  max-block-size: calc(100vh - 320px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+/* Ten whole rows, the rest behind one button: no pane, so no row is ever clipped. */
+.feature-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
 }
 
 /* A related setting: its name on the start side, its value at the far end, as the demo. */

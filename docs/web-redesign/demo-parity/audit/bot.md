@@ -106,7 +106,7 @@ not patched per page).
 
 | #   | difference                                              | status                                                                                                   |
 | --- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| 1   | DIFFS #1 ten a page with «۱–۱۰ از ۲۱ · صفحه ۱ از ۳»     | ⛔ E-total — `/features` returns no total; the list is a height-limited scroll pane (main drew it whole) |
+| 1   | DIFFS #1 ten a page with «۱–۱۰ از ۲۱ · صفحه ۱ از ۳»     | ⛔ E-total — `/features` returns no total, so no counted pager; round 2: ten whole rows, the rest behind «نمایش بقیهٔ قابلیت‌ها» (no clipped row) |
 | 2   | DIFFS #2 red invalid-value sentence beside the value    | ✅ 6079739e (fixture: an invalid stored minute count)                                                    |
 | 3   | DIFFS #3 values at the far end of a related-setting row | ✅ 6079739e                                                                                              |
 | 4   | DIFFS #4 breadcrumb                                     | ✅ Phase A                                                                                               |

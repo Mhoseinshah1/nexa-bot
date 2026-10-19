@@ -6,7 +6,7 @@ import { formatNumber, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
-import { Badge, Card, Ltr, PageHead, StateSwitch, Switch } from '../ui/kit';
+import { Badge, Button, Card, Ltr, PageHead, StateSwitch, Switch } from '../ui/kit';
 import { featurePresentation } from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
 import { TechnicalDetails } from '../ui/technical-details';
@@ -27,10 +27,15 @@ import { TechnicalDetails } from '../ui/technical-details';
  * threshold sit on different screens, the flag is off, and nothing on either screen says
  * that the value therefore does nothing (CBR-007, GSR-008).
  */
+/** Whole rows, never a clipped one: the first ten, the rest behind one button. */
+const FEATURE_ROWS_SHOWN = 10;
+
 export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags, enabled: !denied });
   const rows = flags.data?.flags ?? [];
 
+  const [showAll, setShowAll] = useState(false);
+  const shown = showAll ? rows : rows.slice(0, FEATURE_ROWS_SHOWN);
   const enabledCount = rows.filter((flag) => flag.enabled).length;
 
   return (
@@ -52,11 +57,20 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
            * whole list sits in a height-limited pane instead (nexa-web-design: counted
            * pagers only over a server total).
            */}
-          <ul className="feature-list feature-pane">
-            {rows.map((flag) => (
+          <ul className="feature-list">
+            {shown.map((flag) => (
               <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
             ))}
           </ul>
+          {rows.length > FEATURE_ROWS_SHOWN && (
+            <div className="feature-more">
+              <Button size="sm" onClick={() => setShowAll((open) => !open)} aria-expanded={showAll}>
+                {showAll
+                  ? t('web.features_show_first')
+                  : `${t('web.features_show_all')} (${formatNumber(rows.length - FEATURE_ROWS_SHOWN)})`}
+              </Button>
+            </div>
+          )}
         </Card>
       </StateSwitch>
     </>

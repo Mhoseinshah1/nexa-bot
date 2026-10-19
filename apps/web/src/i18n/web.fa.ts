@@ -128,6 +128,8 @@ export const WEB_FA = {
   'web.features_list_title': 'همهٔ قابلیت‌ها',
   'web.features_list_hint':
     'هر تغییر همان لحظه اعمال می‌شود؛ خاموش‌کردن قابلیت‌هایی که چیزی را متوقف می‌کنند پیش از اجرا پرسیده می‌شود.',
+  'web.features_show_all': 'نمایش بقیهٔ قابلیت‌ها',
+  'web.features_show_first': 'نمایش ۱۰ قابلیت نخست',
   'web.features_on_count': 'قابلیت‌های روشن',
   'web.templates_list': 'فهرست متن‌ها',
   'web.alerts_all_severities': 'همهٔ شدت‌ها',
