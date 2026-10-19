@@ -543,7 +543,7 @@ function SettingRow({
         {/* For troubleshooting only, and closed by default: the machine key an
             engineer or a log names, and whether the value in force is the
             installation's default or was set here. */}
-        {/* A full-width bordered bar, as the demo draws «اطلاعات فنی» under each row. */}
+        {/* A full-width bordered bar, as the demo draws the technical-details bar under each row. */}
         <Disclosure
           size="sm"
           variant="boxed"

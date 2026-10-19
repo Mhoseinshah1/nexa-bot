@@ -162,7 +162,7 @@ export function RemindersPage({
       templates: EXPIRY_TEMPLATES,
       summary: (
         <>
-          {/* Read right to left, as the demo reads «۷ · ۳ · ۱ روز». */}
+          {/* Read right to left, as the demo reads the day sequence. */}
           <bdi dir="rtl">
             {[
               days('reminders.expiry_early_days'),

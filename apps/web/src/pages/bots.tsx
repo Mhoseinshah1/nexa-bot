@@ -214,7 +214,7 @@ export function BotsPage({
         <div className="bx-sum" data-testid="bots-summary">
           <SummaryPill value={rows.length} label={t('web.bx_bots_count')} />
           <SummaryPill value={active} label={t('web.bot_status_active')} tone="ok" />
-          {/* Always drawn, as the demo's strip is: «۰ نیازمند توجه» is itself an answer. */}
+          {/* Always drawn, as the demo's strip is: a zero needing attention is itself an answer. */}
           <SummaryPill value={attention} label={t('web.bx_bots_attention')} tone="warn" />
         </div>
         {rows.map((bot) => (

@@ -334,7 +334,7 @@ export function TermsPage({
         {data !== undefined && (
           <div className="stack">
             <Card className="bx-enf-card">
-              {/* The switch with its «روشن / خاموش» pill beside it, as the demo draws it. */}
+              {/* The switch with its on/off pill beside it, as the demo draws it. */}
               <div className="toggle-row">
                 <div className="txt">
                   <b>{t('web.terms_enforcement_label')}</b>
