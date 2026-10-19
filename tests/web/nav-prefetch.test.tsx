@@ -302,8 +302,8 @@ describe('the sidebar prefetch', () => {
       .getQueryCache()
       .findAll({ queryKey: ['customers'] })
       .map((query) => query.queryKey[1]);
-    // status | tag | source | search: the search text stays last.
-    expect(keys).toEqual(expect.arrayContaining(['|||', '|||ali_tehran']));
+    // status | tag | search: the search text stays last.
+    expect(keys).toEqual(expect.arrayContaining(['||', '||ali_tehran']));
     expect(new Set(keys).size).toBe(keys.length);
   });
 

@@ -43,6 +43,11 @@
   --accent: #f4f4f5;
   --accent-strong: #ffffff;
   --accent-fg: #0a0a0b;
+  /* The native <select> popup is drawn by the browser on an opaque surface; these are its colours. */
+  --option-bg: #1c1c1f;
+  --option-fg: #f4f4f5;
+  --option-hover-bg: #f4f4f5;
+  --option-hover-fg: #0a0a0b;
   --accent-soft: rgba(255, 255, 255, 0.1);
   --ok: #6ee7a8;
   --ok-soft: rgba(110, 231, 168, 0.15);
@@ -115,6 +120,10 @@
   --accent: #09090b;
   --accent-strong: #000000;
   --accent-fg: #ffffff;
+  --option-bg: #ffffff;
+  --option-fg: #09090b;
+  --option-hover-bg: #09090b;
+  --option-hover-fg: #ffffff;
   --accent-soft: rgba(9, 9, 11, 0.07);
   /* AA on every light surface and on its own tint; the demo's #15803d read under 4.5 on bg-4. */
   --ok: #137236;

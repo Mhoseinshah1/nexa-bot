@@ -24,7 +24,7 @@ introduced here.
 
 It is not Secret Envelope v2. The v1 envelope's shortcomings — no AAD binding,
 one configured KEK so rotation cannot read what the previous key wrote — remain
-recorded as `BLOCKER-SECRETS-V2`, and this checkpoint is deliberately arranged
+recorded as `BLOCKER-SECRETS-V2` (since partly closed — see `docs/open-questions.md`), and this checkpoint is deliberately arranged
 so that migration stays possible: the KEK is a mounted file the operator can
 extend to a keyring, not a value baked into an image or a compose file.
 

@@ -652,8 +652,6 @@ import {
   customerOverviewResponseSchema,
   customerServicesToggleResponseSchema,
   customerTimelineResponseSchema,
-  legacyCustomerAdoptionsResponseSchema,
-  type LegacyCustomerAdoptionsResponse,
   customerTransferPreviewResponseSchema,
   customerTransferResponseSchema,
   type CustomerChannelExemptionRequest,
@@ -686,19 +684,6 @@ import {
   type MarkInboxResponse,
   type NotificationCategory,
 } from '@nexa/contracts';
-// Mirza PR2: the legacy product review.
-import {
-  LEGACY_PRODUCT_REVIEW_ROUTES,
-  legacyProductReviewListResponseSchema,
-  legacyProductReviewResponseSchema,
-  type LegacyProductApproveExistingRequest,
-  type LegacyProductApproveNewRequest,
-  type LegacyProductRejectRequest,
-  type LegacyProductReopenRequest,
-  type LegacyProductReviewListResponse,
-  type LegacyProductReviewResponse,
-  type LegacyProductReviewState,
-} from '@nexa/contracts';
 // Mirza PR3: the legacy invoice archive.
 import {} from '@nexa/contracts';
 // Mirza PR4: legacy wallet debts (negative legacy balances held for review).
@@ -715,36 +700,6 @@ import {
   type LegacyMigrationImportResponse,
   type LegacyMigrationKeyRequest,
   type LegacyMigrationPanelBindingsRequest,
-} from '@nexa/contracts';
-import {
-  LEGACY_CUTOVER_ROUTES,
-  legacyCutoverApplyRunListResponseSchema,
-  legacyCutoverApprovalListResponseSchema,
-  legacyCutoverApprovalResponseSchema,
-  legacyCutoverReadSetListResponseSchema,
-  type LegacyCutoverApplyRunListResponse,
-  type LegacyCutoverApprovalListResponse,
-  type LegacyCutoverApprovalResponse,
-  type LegacyCutoverApproveRequest,
-  type LegacyCutoverReadSetListResponse,
-  type LegacyCutoverRevokeRequest,
-} from '@nexa/contracts';
-// Mirza PR5: legacy service candidates (one outcome each) and their review.
-import {
-  LEGACY_SERVICE_REVIEW_ROUTES,
-  legacyServiceCandidateDetailResponseSchema,
-  legacyServiceCandidateListResponseSchema,
-  legacyServiceCandidateResponseSchema,
-  legacyServiceCandidateSummaryResponseSchema,
-  type LegacyServiceAdoptRequest,
-  type LegacyServiceCandidateDetailResponse,
-  type LegacyServiceCandidateListResponse,
-  type LegacyServiceCandidateResponse,
-  type LegacyServiceCandidateSummaryResponse,
-  type LegacyServiceDecideRequest,
-  type LegacyServiceOutcome,
-  type LegacyServiceReopenRequest,
-  type LegacyServiceReviewState,
 } from '@nexa/contracts';
 // Phase A2: a direct message from Customer 360.
 import {
@@ -5076,18 +5031,6 @@ export function fetchCustomerTimeline(id: string): Promise<CustomerTimelineRespo
   return authedGet(CUSTOMER_360_ROUTES.timeline(id), customerTimelineResponseSchema);
 }
 
-/** Which of these services of the customer were adopted from a Mirza invoice. */
-export function fetchCustomerLegacyAdoptedServices(
-  id: string,
-  serviceIds: readonly string[],
-): Promise<LegacyCustomerAdoptionsResponse> {
-  const params = new URLSearchParams({ serviceIds: serviceIds.join(',') });
-  return authedGet(
-    `${CUSTOMER_360_ROUTES.legacyAdoptedServices(id)}?${params.toString()}`,
-    legacyCustomerAdoptionsResponseSchema,
-  );
-}
-
 /**
  * Roadmap B5: what about one customer waits for a person, and their newest orders and
  * payments. Each section the viewer may not open is null; `users.view` is charged.
@@ -5360,216 +5303,15 @@ export function sendIncidentNotice(
   return post(INCIDENT_ROUTES.notice(encodeURIComponent(id)), body, incidentNoticeResponseSchema);
 }
 
-// --- Mirza PR2: the legacy product review -------------------------------------------------
-
-/**
- * The legacy product review rows, by code (`legacy.products.view`). `attention` is the two
- * states that still want a decision; `after` is the last code of the page before.
- */
-export function fetchLegacyProductReviews(
-  query: {
-    readonly state?: LegacyProductReviewState;
-    readonly attention?: true;
-    readonly q?: string;
-    readonly after?: string;
-    readonly limit?: number;
-  } = {},
-): Promise<LegacyProductReviewListResponse> {
-  const params = new URLSearchParams();
-  if (query.limit !== undefined) params.set('limit', String(query.limit));
-  if (query.state !== undefined) params.set('state', query.state);
-  if (query.attention === true) params.set('attention', 'true');
-  if (query.q !== undefined && query.q.trim() !== '') params.set('q', query.q.trim());
-  if (query.after !== undefined) params.set('after', query.after);
-  const suffix = params.toString();
-  return authedGet(
-    suffix ? `${LEGACY_PRODUCT_REVIEW_ROUTES.list}?${suffix}` : LEGACY_PRODUCT_REVIEW_ROUTES.list,
-    legacyProductReviewListResponseSchema,
-  );
-}
-
-export function fetchLegacyProductReview(id: string): Promise<LegacyProductReviewResponse> {
-  return authedGet(LEGACY_PRODUCT_REVIEW_ROUTES.detail(id), legacyProductReviewResponseSchema);
-}
-
-/** Maps the code to an existing product. `legacy.products.decide`; bound to the facts shown. */
-export function approveLegacyProductExisting(
-  input: LegacyProductApproveExistingRequest & { readonly id: string },
-): Promise<LegacyProductReviewResponse> {
-  const { id, ...body } = input;
-  return post(
-    LEGACY_PRODUCT_REVIEW_ROUTES.approveExisting(id),
-    body,
-    legacyProductReviewResponseSchema,
-  );
-}
-
-/**
- * Creates a DRAFT product (inactive, hidden, unpriced, no category, no panel) and maps the
- * code to it. `legacy.products.decide` AND `catalog.edit`. There is no price to send.
- */
-export function approveLegacyProductNew(
-  input: LegacyProductApproveNewRequest & { readonly id: string },
-): Promise<LegacyProductReviewResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_PRODUCT_REVIEW_ROUTES.approveNew(id), body, legacyProductReviewResponseSchema);
-}
-
-export function rejectLegacyProduct(
-  input: LegacyProductRejectRequest & { readonly id: string },
-): Promise<LegacyProductReviewResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_PRODUCT_REVIEW_ROUTES.reject(id), body, legacyProductReviewResponseSchema);
-}
-
-export function reopenLegacyProduct(
-  input: LegacyProductReopenRequest & { readonly id: string },
-): Promise<LegacyProductReviewResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_PRODUCT_REVIEW_ROUTES.reopen(id), body, legacyProductReviewResponseSchema);
-}
-
-// --- Mirza PR5: legacy service candidates and their review (owner decision 8) ---------------
-
-/**
- * One page of legacy service candidates (`legacy.services.view`). The invoice id is sent
- * VERBATIM — never trimmed: a legacy id ` padded ` is found only by ` padded `. The panel and
- * product codes are stored trimmed, so the server trims those itself.
- */
-export function fetchLegacyServices(
-  query: {
-    readonly outcome?: LegacyServiceOutcome;
-    readonly reviewState?: LegacyServiceReviewState;
-    readonly panelCode?: string;
-    readonly productCode?: string;
-    readonly invoiceId?: string;
-    readonly after?: string;
-    readonly limit?: number;
-  } = {},
-): Promise<LegacyServiceCandidateListResponse> {
-  const params = new URLSearchParams();
-  if (query.limit !== undefined) params.set('limit', String(query.limit));
-  if (query.outcome !== undefined) params.set('outcome', query.outcome);
-  if (query.reviewState !== undefined) params.set('reviewState', query.reviewState);
-  if (query.panelCode !== undefined && query.panelCode.trim() !== '') {
-    params.set('panelCode', query.panelCode);
-  }
-  if (query.productCode !== undefined && query.productCode.trim() !== '') {
-    params.set('productCode', query.productCode);
-  }
-  if (query.invoiceId !== undefined && query.invoiceId !== '') {
-    params.set('invoiceId', query.invoiceId);
-  }
-  if (query.after !== undefined) params.set('after', query.after);
-  const suffix = params.toString();
-  return authedGet(
-    suffix ? `${LEGACY_SERVICE_REVIEW_ROUTES.list}?${suffix}` : LEGACY_SERVICE_REVIEW_ROUTES.list,
-    legacyServiceCandidateListResponseSchema,
-  );
-}
-
-/** Counts by outcome and by review state. Aggregates only. */
-export function fetchLegacyServiceSummary(): Promise<LegacyServiceCandidateSummaryResponse> {
-  return authedGet(
-    LEGACY_SERVICE_REVIEW_ROUTES.summary,
-    legacyServiceCandidateSummaryResponseSchema,
-  );
-}
-
-/** One candidate, its archive revision (non-personal), the map row and the adoptable panels. */
-export function fetchLegacyService(id: string): Promise<LegacyServiceCandidateDetailResponse> {
-  return authedGet(
-    LEGACY_SERVICE_REVIEW_ROUTES.detail(id),
-    legacyServiceCandidateDetailResponseSchema,
-  );
-}
-
-/** ACKNOWLEDGE or KEEP_AS_HISTORY (`legacy.services.decide`). */
-export function decideLegacyService(
-  input: LegacyServiceDecideRequest & { readonly id: string },
-): Promise<LegacyServiceCandidateResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_SERVICE_REVIEW_ROUTES.decide(id), body, legacyServiceCandidateResponseSchema);
-}
-
-/**
- * An explicit ADOPT approval (`legacy.services.decide`). It adopts nothing by itself: the
- * next import run re-runs every adoption check and adopts, or refuses and says why.
- */
-export function approveLegacyServiceAdoption(
-  input: LegacyServiceAdoptRequest & { readonly id: string },
-): Promise<LegacyServiceCandidateResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_SERVICE_REVIEW_ROUTES.adopt(id), body, legacyServiceCandidateResponseSchema);
-}
-
-/** Back to OPEN (`legacy.services.decide`). */
-export function reopenLegacyService(
-  input: LegacyServiceReopenRequest & { readonly id: string },
-): Promise<LegacyServiceCandidateResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_SERVICE_REVIEW_ROUTES.reopen(id), body, legacyServiceCandidateResponseSchema);
-}
-
-// --- Mirza PR6: the owner's cutover approval (owner constraint 3) --------------------------
-
-function pageOf(route: string, after?: string): string {
-  return after === undefined ? route : `${route}?after=${encodeURIComponent(after)}`;
-}
-
-/** One page of cutover approvals (`legacy.cutover.view`). Fingerprints and digests only. */
-export function fetchLegacyCutoverApprovals(
-  after?: string,
-): Promise<LegacyCutoverApprovalListResponse> {
-  return authedGet(
-    pageOf(LEGACY_CUTOVER_ROUTES.approvals, after),
-    legacyCutoverApprovalListResponseSchema,
-  );
-}
-
-/** One page of the recorded read set observations an approval can bind to. */
-export function fetchLegacyCutoverReadSets(
-  after?: string,
-): Promise<LegacyCutoverReadSetListResponse> {
-  return authedGet(
-    pageOf(LEGACY_CUTOVER_ROUTES.readSets, after),
-    legacyCutoverReadSetListResponseSchema,
-  );
-}
-
-/** One page of this tenant's APPLY runs (what a re-run acknowledgement names as prior). */
-export function fetchLegacyCutoverApplyRuns(
-  after?: string,
-): Promise<LegacyCutoverApplyRunListResponse> {
-  return authedGet(
-    pageOf(LEGACY_CUTOVER_ROUTES.applyRuns, after),
-    legacyCutoverApplyRunListResponseSchema,
-  );
-}
-
-/**
- * Record an approval (`legacy.cutover.approve`, CRITICAL). Every value is sent EXACTLY as
- * typed: a fingerprint is never trimmed or case-folded on its way to the server.
- */
-export function approveLegacyCutover(
-  body: LegacyCutoverApproveRequest,
-): Promise<LegacyCutoverApprovalResponse> {
-  return post(LEGACY_CUTOVER_ROUTES.approvals, body, legacyCutoverApprovalResponseSchema);
-}
-
-/** Withdraw an approval, once, for good (`legacy.cutover.approve`). */
-export function revokeLegacyCutover(
-  input: LegacyCutoverRevokeRequest & { readonly id: string },
-): Promise<LegacyCutoverApprovalResponse> {
-  const { id, ...body } = input;
-  return post(LEGACY_CUTOVER_ROUTES.revoke(id), body, legacyCutoverApprovalResponseSchema);
-}
-
 // --- Mirza `.nxpkg` importer (`legacy.migration.*`) -----------------------------------------
 
 /** What the server can do: the flag, the ceilings, the approval phrase, production-likeness. */
 export function fetchLegacyMigrationCapabilities(): Promise<LegacyMigrationCapabilitiesResponse> {
   return authedGet(LEGACY_MIGRATION_ROUTES.capabilities, legacyMigrationCapabilitiesResponseSchema);
+}
+
+function pageOf(route: string, after?: string): string {
+  return after === undefined ? route : `${route}?after=${encodeURIComponent(after)}`;
 }
 
 /** One page of package imports, newest first (`legacy.migration.view`). Counts and codes only. */

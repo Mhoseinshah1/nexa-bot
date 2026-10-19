@@ -317,6 +317,7 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                   <input
                     id="templates-search"
                     type="search"
+                    dir="rtl"
                     className="input"
                     value={search}
                     placeholder={t('web.templates_search_placeholder')}

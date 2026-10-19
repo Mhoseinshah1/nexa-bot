@@ -1,10 +1,9 @@
-import { fireEvent, waitFor, within } from '@testing-library/react';
-import { expect } from 'vitest';
+import { within } from '@testing-library/react';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { openFilterPanel } from './ui-helpers';
 
 /**
- * Drivers for the «از میرزا» badge and the «منبع» filter, shared by the eight lists' tests
+ * Drivers for the «منتقل‌شده از ربات قبلی» badge and the absent «منبع» filter, shared by the eight lists' tests
  * so each file asserts the same thing the same way.
  */
 
@@ -17,32 +16,14 @@ export function rowHasBadge(text: string): boolean {
   return within(row).queryByText(t('web.source_badge_mirza')) !== null;
 }
 
-/** Opens the filter panel and presses the «ربات قبلی» chip of the «منبع» filter. */
-export function pickMirzaSource(): void {
+/**
+ * Round 4 B2: the «منبع» filter is gone from every list. Opens the filter panel and reports
+ * whether no «منبع» group (and no «ربات قبلی» chip) is in it.
+ */
+export function sourceFilterAbsent(): boolean {
   const panel = openFilterPanel();
-  fireEvent.click(within(panel).getByRole('button', { name: t('web.source_mirza') }));
-}
-
-/** The `source` parameter the page wrote to the address bar. */
-export async function sourceInUrl(): Promise<string | null> {
-  let seen: string | null = null;
-  await waitFor(() => {
-    seen = new URLSearchParams(window.location.search).get('source');
-    expect(seen).not.toBeNull();
-  });
-  return seen;
-}
-
-/** The list requests that carried `source=<value>`. */
-export function requestsWithSource(
-  calls: readonly { url: string; method: string }[],
-  path: string,
-  value: string,
-): number {
-  return calls.filter(
-    (call) =>
-      call.method === 'GET' &&
-      call.url.includes(path) &&
-      new URL(call.url, 'http://x').searchParams.get('source') === value,
-  ).length;
+  return (
+    within(panel).queryByText('منبع') === null &&
+    within(panel).queryByRole('button', { name: 'ربات قبلی' }) === null
+  );
 }

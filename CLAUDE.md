@@ -139,7 +139,9 @@ with update and rollback (ADR-0022, `docs/deployment.md`). `v0.2.0` and
 `v0.2.1` HAVE been deployed to a real staging server, and the owner's own
 acceptance on them is what produced the Telegram main menu and the Phase 5
 payment work. What is still unrun is the PRODUCTION checklist —
-`docs/vps-acceptance.md` decides that. `BLOCKER-SECRETS-V2` is still open.
+`docs/vps-acceptance.md` decides that. `BLOCKER-SECRETS-V2` is **partly closed**: the v2
+envelope, keyring, rewrap and retire-check exist; what is open is dropping the legacy
+`SECRETS_KEK` alias and refusing v1 everywhere (`docs/open-questions.md`).
 
 Three deployment rules that are easy to break by accident:
 
