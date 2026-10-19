@@ -300,9 +300,17 @@
   background: var(--teal-soft);
   color: var(--teal);
 }
+/*
+ * Filled vs outlined (demo parity X10): a STATE is a filled pill; a type, a kind or a rule
+ * (حجم / زمان, تخفیف / کش‌بک, a protocol) is outlined — no fill, a hairline in its own
+ * colour, as the demo draws it. A neutral outline reads in the body colour.
+ */
 .badge.outline {
   background: transparent;
-  border: 1px solid var(--line-2);
+  border: 1px solid currentColor;
+}
+.badge.neutral.outline {
+  color: var(--fg);
 }
 .badge.pulse .dot {
   animation: pulse 1.8s infinite;
