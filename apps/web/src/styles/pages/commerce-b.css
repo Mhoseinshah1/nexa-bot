@@ -376,6 +376,15 @@
 .cb-stat-row {
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
 }
+/* Demo parity (X6): the progress strip is four equal cards across the card's full width. */
+.cb-stat-row.minimum-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 640px) {
+  .cb-stat-row.minimum-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .cb-progress-cell {
   display: inline-flex;
   align-items: center;
@@ -527,6 +536,20 @@
 .resellers-foot {
   align-items: start;
 }
+/* Demo parity: the rules card is half the page's width, on the start side. */
+.resellers-foot > .card {
+  max-width: calc(50% - 8px);
+  margin-inline-end: auto;
+}
+@media (max-width: 980px) {
+  .resellers-foot > .card {
+    max-width: none;
+  }
+}
+/* Demo parity: the reseller search is the row's full width, its button beside it. */
+.cb-search.resellers-search {
+  max-width: none;
+}
 /* UX batch 01, item 9: the customer picker. Wraps at 390px; nothing scrolls sideways. */
 .customer-picker-bar {
   display: flex;
@@ -577,13 +600,21 @@
 .tiers-anchor:focus {
   outline: none;
 }
+/* Demo parity: one kind a line — product, category, panel, bot, purchase type — each with its pill. */
 .tiers-grants {
-  display: grid;
-  grid-template-columns: repeat(2, max-content);
-  gap: 2px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
 }
-.tiers-grants > .danger {
-  grid-column: 1 / -1;
+/* «سطح تازه»: the hint on the start side and «ساخت سطح» at the end, on one row (demo). */
+.tiers-form .cb-savebar {
+  flex-wrap: nowrap;
+}
+.tiers-form .cb-savebar > .tiers-form-hint {
+  order: -1;
+  flex: 1 1 0;
+  min-width: 0;
 }
 .tiers-foot {
   align-items: start;
@@ -669,4 +700,13 @@
   .aud-segment {
     min-height: var(--ctl-h);
   }
+}
+@media (max-width: 640px) {
+  .tiers-form .cb-savebar {
+    flex-wrap: wrap;
+  }
+}
+/* A tier's row reads from its top line, beside the first of its five grant lines (demo). */
+.tiers-list .tbl td {
+  vertical-align: top;
 }

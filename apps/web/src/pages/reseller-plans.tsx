@@ -64,7 +64,6 @@ import {
   PageHead,
   StateSwitch,
   Button,
-  FilterChip,
   Progress,
   RowActions,
   StatCard,
@@ -73,7 +72,6 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { ChipGroup } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { ListFilterBar } from '../ui/filter-bar';
 import { chipFilter } from './money-filters';
@@ -756,19 +754,22 @@ function MinimumProgressCard({
         <Banner tone="info">{t('web.reseller_minimum_progress_denied')}</Banner>
       ) : (
         <>
-          {/* The period is the report's range, not a filter: it stays a chip group. */}
-          <div className="filter-row">
-            <ChipGroup label={t('web.reseller_minimum_period')}>
-              {(['THIS_MONTH', 'PREVIOUS_MONTH'] as const).map((id) => (
-                <FilterChip key={id} pressed={period === id} onClick={() => setPeriod(id)}>
-                  {t(PERIOD_LABELS[id])}
-                </FilterChip>
-              ))}
-            </ChipGroup>
-          </div>
+          {/*
+            Demo parity: the progress card draws no segmented control of its own. The month is
+            the report's range, chosen in the filter panel beside the state: this month unless
+            «ماه قبل» is picked, and clearing it returns to this month. The request is the same.
+          */}
           <ListFilterBar
             label={t('web.reseller_minimum_progress_title')}
             filters={[
+              chipFilter({
+                key: 'period',
+                label: t('web.reseller_minimum_period'),
+                value: period === 'THIS_MONTH' ? null : period,
+                allLabel: t(PERIOD_LABELS.THIS_MONTH),
+                onChange: (next) => setPeriod(next ?? 'THIS_MONTH'),
+                items: [{ id: 'PREVIOUS_MONTH' as const, label: t(PERIOD_LABELS.PREVIOUS_MONTH) }],
+              }),
               chipFilter({
                 key: 'state',
                 label: t('web.status'),
@@ -799,7 +800,7 @@ function MinimumProgressCard({
               {data.period.running && (
                 <p className="muted small">{t('web.reseller_minimum_running')}</p>
               )}
-              <div className="stat-grid cb-stat-row">
+              <div className="stat-grid cb-stat-row minimum-strip">
                 <StatCard
                   label={t('web.reseller_minimum_state_achieved')}
                   value={<Num value={data.counts.achieved} />}
@@ -830,7 +831,6 @@ function MinimumProgressCard({
               columns={columns}
               rows={progressPage.rows}
               rowKey={(row) => row.customerId}
-              dense
             />
             {progressPage.pager}
           </StateSwitch>

@@ -445,7 +445,11 @@ export function ResellerTiersPage({
         }
       />
 
-      <Card title={t('web.reseller_tiers_list_title')} hint={t('web.reseller_tiers_list_hint')}>
+      <Card
+        className="tiers-list"
+        title={t('web.reseller_tiers_list_title')}
+        hint={t('web.reseller_tiers_list_hint')}
+      >
         <StateSwitch
           query={tiers}
           denied={denied}
@@ -956,6 +960,7 @@ function TierForm({
 
   return (
     <Card
+      className="tiers-form"
       title={
         mode === 'create' ? t('web.reseller_tier_new_title') : t('web.reseller_tier_edit_title')
       }
@@ -1000,7 +1005,9 @@ function TierForm({
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
       <SaveBar dirty={dirty}>
         {mode === 'create' && (
-          <span className="muted small">{t('web.reseller_tier_created_empty')}</span>
+          <span className="muted small tiers-form-hint">
+            {t('web.reseller_tier_created_empty')}
+          </span>
         )}
         {mode === 'edit' && (
           <Button size="sm" disabled={save.isPending} onClick={onDone}>
