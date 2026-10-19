@@ -8,10 +8,14 @@ import {
   reportReferralsResponseSchema,
   reportSummaryResponseSchema,
   reportTrendResponseSchema,
+  resellerListResponseSchema,
+  resellerMinimumReportSchema,
+  resellerTierListResponseSchema,
   paymentSituationOf,
   type PaymentSituationFacts,
 } from '@nexa/contracts';
 import { ago, fixture, type ShotFixture } from '../../fixture.ts';
+import { CATEGORIES } from '../commerce-b.ts';
 
 /*
  * DEMO PARITY — the finance family (payments, payment methods, discounts, referrals,
@@ -757,7 +761,211 @@ const CAMPAIGNS: readonly ShotFixture[] = [
   }),
 ];
 
+// --- resellers, plans and tiers (`#/resellers`, `#/reseller-plans`, `#/reseller-tiers`) ---
+
+/** The default registry's panels, categories and bot, so every grant resolves to a name. */
+const PANEL_DE = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+const PANEL_NL = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
+const CATEGORY_A = CATEGORIES[0]?.['id'] as string;
+const CATEGORY_B = CATEGORIES[1]?.['id'] as string;
+
+function tierRow(
+  index: number,
+  name: string,
+  pricing: readonly [string, number | null],
+  grants: readonly Json[],
+  resellerCount: number,
+  minimum: string | null,
+): Json {
+  return {
+    id: uid('0199f0ab', index),
+    name,
+    pricingMode: pricing[0],
+    discountPercentage: pricing[1],
+    creditLimit: { amount: '0', currency: 'IRT' },
+    grants,
+    resellerCount,
+    monthlyMinimum: minimum === null ? null : { amount: minimum, currency: 'IRT' },
+    createdAt: ago(60 * 24 * 200),
+    updatedAt: ago(60 * 24 * 20),
+  };
+}
+
+/** The demo's four tiers: «برنزی» (two categories, two purchase types), «نقره‌ای», «طلایی», «آزمایشی» (nothing). */
+const TIER_ROWS: readonly Json[] = [
+  tierRow(
+    1,
+    'برنزی',
+    ['LIST_PRICE', null],
+    [
+      { kind: 'CATEGORY', subject: CATEGORY_A },
+      { kind: 'CATEGORY', subject: CATEGORY_B },
+      { kind: 'PANEL', subject: null },
+      { kind: 'BOT', subject: null },
+      { kind: 'OPERATION', subject: 'NEW_SERVICE' },
+      { kind: 'OPERATION', subject: 'RENEW' },
+    ],
+    4,
+    null,
+  ),
+  tierRow(
+    2,
+    'نقره‌ای',
+    ['PERCENTAGE_DISCOUNT', 10],
+    [
+      { kind: 'PRODUCT', subject: null },
+      { kind: 'PANEL', subject: PANEL_DE },
+      { kind: 'PANEL', subject: PANEL_NL },
+      { kind: 'BOT', subject: '01900000-0000-7000-8000-00000000b001' },
+      { kind: 'OPERATION', subject: null },
+    ],
+    4,
+    '30000000',
+  ),
+  tierRow(
+    3,
+    'طلایی',
+    ['PERCENTAGE_DISCOUNT', 20],
+    [
+      { kind: 'PRODUCT', subject: null },
+      { kind: 'CATEGORY', subject: null },
+      { kind: 'PANEL', subject: null },
+      { kind: 'BOT', subject: null },
+      { kind: 'OPERATION', subject: null },
+    ],
+    2,
+    '80000000',
+  ),
+  tierRow(4, 'آزمایشی', ['LIST_PRICE', null], [], 1, null),
+];
+
+const tierOf = (index: number) => {
+  const tier = TIER_ROWS[index] ?? {};
+  return { id: tier['id'], name: tier['name'] };
+};
+
+type ResellerSeed = readonly [
+  person: number,
+  tier: number,
+  status: string,
+  mode: string,
+  percent: number | null,
+];
+
+/** The demo's ten resellers, in its order: two suspended, one own discount, one list price. */
+const RESELLER_SEEDS: readonly ResellerSeed[] = [
+  [0, 0, 'ACTIVE', 'TIER', null],
+  [10, 1, 'ACTIVE', 'TIER', null],
+  [4, 2, 'ACTIVE', 'PERCENTAGE_DISCOUNT', 25],
+  [14, 1, 'ACTIVE', 'TIER', null],
+  [8, 0, 'ACTIVE', 'TIER', null],
+  [2, 1, 'ACTIVE', 'TIER', null],
+  [12, 2, 'SUSPENDED', 'TIER', null],
+  [1, 0, 'ACTIVE', 'LIST_PRICE', null],
+  [3, 1, 'ACTIVE', 'TIER', null],
+  [5, 3, 'SUSPENDED', 'TIER', null],
+];
+
+const RESELLER_ROWS: readonly Json[] = RESELLER_SEEDS.map(
+  ([who, tier, status, mode, percent], index) => {
+    const one = person(who);
+    return {
+      customerId: one['customerId'],
+      telegramUserId: one['telegramUserId'],
+      displayName: who === 8 ? null : one['displayName'],
+      tier: tierOf(tier),
+      status,
+      pricingMode: mode,
+      discountPercentage: percent,
+      creditLimit: null,
+      effectiveCreditLimit: { amount: '0', currency: 'IRT' },
+      createdAt: ago(60 * 24 * (120 - index * 7)),
+      updatedAt: ago(60 * 24 * index),
+    };
+  },
+);
+
+const IRT = (amount: string) => ({ amount, currency: 'IRT' });
+
+type MinimumSeed = readonly [
+  reseller: number,
+  minimum: string | null,
+  source: string,
+  achieved: string,
+];
+
+/** The demo's progress rows: eleven, so the table pages; the suspended ones «نمایندگی معلق». */
+const MINIMUM_SEEDS: readonly MinimumSeed[] = [
+  [0, null, 'NONE', '42000000'],
+  [1, '50000000', 'RESELLER', '53000000'],
+  [2, '80000000', 'TIER', '25000000'],
+  [3, '30000000', 'TIER', '23000000'],
+  [4, null, 'NONE', '24000000'],
+  [5, null, 'NONE', '55000000'],
+  [6, '80000000', 'TIER', '25000000'],
+  [7, null, 'NONE', '27000000'],
+  [8, '30000000', 'TIER', '34000000'],
+  [9, null, 'NONE', '48000000'],
+  [3, '30000000', 'TIER', '31000000'],
+];
+
+const MINIMUM_ROWS: readonly Json[] = MINIMUM_SEEDS.map(([index, minimum, source, achieved], n) => {
+  const reseller = RESELLER_ROWS[index] ?? {};
+  const suspended = reseller['status'] !== 'ACTIVE';
+  const min = minimum === null ? null : BigInt(minimum);
+  const got = BigInt(achieved);
+  const state = suspended
+    ? 'NOT_ACTIVE'
+    : min === null
+      ? 'NO_MINIMUM'
+      : got >= min
+        ? 'ACHIEVED'
+        : 'BELOW';
+  return {
+    customerId: n === 10 ? uid('0199a0ab', 30) : reseller['customerId'],
+    telegramUserId: reseller['telegramUserId'],
+    displayName: n === 10 ? 'کیان فرهادی' : reseller['displayName'],
+    tier: reseller['tier'],
+    status: reseller['status'],
+    minimum: suspended || min === null ? null : IRT(minimum ?? '0'),
+    source: suspended ? 'NONE' : source,
+    achieved: IRT(achieved),
+    remaining: suspended || min === null ? null : IRT(String(got >= min ? 0n : min - got)),
+    progressBasisPoints: suspended || min === null ? null : Number((got * 10_000n) / min),
+    state,
+  };
+});
+
+const RESELLERS: readonly ShotFixture[] = [
+  fixture('/reseller-tiers', resellerTierListResponseSchema, { tiers: TIER_ROWS }),
+  fixture('/resellers', resellerListResponseSchema, {
+    resellers: RESELLER_ROWS,
+    nextCursor: 'res-2',
+  }),
+  fixture('/reseller-minimums', resellerMinimumReportSchema, {
+    period: {
+      key: 'THIS_MONTH',
+      start: '2026-08-22T20:30:00.000Z',
+      end: '2026-09-22T20:30:00.000Z',
+      startLocal: '1405/07/01',
+      endLocalInclusive: '1405/07/30',
+      timezone: 'Asia/Tehran',
+      calendar: 'jalali',
+      running: true,
+    },
+    rows: MINIMUM_ROWS,
+    counts: {
+      achieved: MINIMUM_ROWS.filter((row) => row['state'] === 'ACHIEVED').length,
+      below: MINIMUM_ROWS.filter((row) => row['state'] === 'BELOW').length,
+      noMinimum: MINIMUM_ROWS.filter((row) => row['state'] === 'NO_MINIMUM').length,
+      notActive: MINIMUM_ROWS.filter((row) => row['state'] === 'NOT_ACTIVE').length,
+    },
+    truncated: false,
+  }),
+];
+
 export const DEMO_FINANCE: readonly ShotFixture[] = [
+  ...RESELLERS,
   ...CAMPAIGNS,
   ...PAYMENTS,
   ...GATEWAYS,
