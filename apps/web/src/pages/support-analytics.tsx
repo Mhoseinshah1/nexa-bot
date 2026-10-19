@@ -19,7 +19,6 @@ import {
   DataTable,
   Distribution,
   Empty,
-  FilterBar,
   FilterChip,
   FilterChips,
   KV,
@@ -121,21 +120,25 @@ export function SupportAnalyticsPage({ route, denied }: { route: Route; denied: 
             : `${t('web.sa_intro')} ${t('web.sa_period_from')} ${formatTimestamp(data.period.start)} ${t('web.sa_period_to')} ${formatTimestamp(data.period.end)}`
         }
       />
-      <Card>
-        <FilterBar hidden={denied}>
-          <FilterChips label={t('web.sa_range')}>
-            {SUPPORT_ANALYTICS_RANGES.map((range) => (
-              <FilterChip
-                key={range}
-                pressed={selection.range === range}
-                onClick={() => setQuery(route, 'range', range)}
-              >
-                {t(REPORT_RANGE_LABELS[range])}
-              </FilterChip>
-            ))}
-          </FilterChips>
-        </FilterBar>
-      </Card>
+      {/* Demo parity (DIFFS support-analytics #2): «بازه» beside the pills, no rule under them. */}
+      {!denied && (
+        <Card className="sa-range-card" tight>
+          <div className="sa-range">
+            <span className="sa-range-label">{t('web.sa_range')}</span>
+            <FilterChips label={t('web.sa_range')}>
+              {SUPPORT_ANALYTICS_RANGES.map((range) => (
+                <FilterChip
+                  key={range}
+                  pressed={selection.range === range}
+                  onClick={() => setQuery(route, 'range', range)}
+                >
+                  {t(REPORT_RANGE_LABELS[range])}
+                </FilterChip>
+              ))}
+            </FilterChips>
+          </div>
+        </Card>
+      )}
       <StateSwitch query={analytics} denied={denied}>
         {data !== undefined && <AnalyticsBody data={data} />}
       </StateSwitch>
@@ -143,9 +146,15 @@ export function SupportAnalyticsPage({ route, denied }: { route: Route; denied: 
   );
 }
 
+/**
+ * The automatic outcomes' bars take a colour each (demo parity, DIFFS support-analytics #4), in
+ * the chart series' order, so neighbouring outcomes are told apart at a glance.
+ */
+const OUTCOME_BAR_TONES = ['info', 'ok', 'violet', 'warn', 'danger', 'teal'] as const;
+
 function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
   return (
-    <div className="stack">
+    <div className="stack sa-body">
       <div className="stat-grid" aria-label={t('web.sa_auto')}>
         <StatCard
           icon="send"
@@ -173,6 +182,7 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
       <div className="grid-2">
         <Card title={t('web.sa_conversations_now')} hint={t('web.sa_snapshot_hint')}>
           <Distribution
+            scale="max"
             slices={data.conversationsNow.map((row) => ({
               key: row.state,
               label: t(BUSINESS_STATE_LABELS[row.state]),
@@ -186,6 +196,7 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
             <Empty title={t('web.sa_none_in_period')} icon="check" />
           ) : (
             <Distribution
+              scale="max"
               slices={supportHandoffCountsOf(data).map((row) => ({
                 key: row.reason,
                 label: t(HANDOFF_LABELS[row.reason]),
@@ -209,10 +220,12 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
           />
           {supportAutoOutcomeCountsOf(data).length > 0 && (
             <Distribution
-              slices={supportAutoOutcomeCountsOf(data).map((row) => ({
+              scale="max"
+              slices={supportAutoOutcomeCountsOf(data).map((row, index) => ({
                 key: row.outcome,
                 label: t(AUTO_OUTCOME_LABELS[row.outcome]),
                 count: row.count,
+                tone: OUTCOME_BAR_TONES[index % OUTCOME_BAR_TONES.length] ?? 'info',
               }))}
             />
           )}
@@ -238,10 +251,12 @@ function AnalyticsBody({ data }: { data: SupportAnalyticsResponse }) {
       <div className="grid-2">
         <Card title={t('web.sa_learning')} hint={t('web.sa_learning_hint')}>
           <Distribution
+            scale="max"
             slices={data.learningByState.map((row) => ({
               key: row.state,
               label: t(CANDIDATE_STATE_LABELS[row.state]),
               count: row.count,
+              tone: row.state === 'APPROVED' ? 'ok' : row.state === 'REJECTED' ? 'violet' : 'info',
             }))}
           />
         </Card>

@@ -217,3 +217,54 @@
   border-block-end: 0;
   padding-block-end: 0;
 }
+
+/*
+ * Support analytics (demo parity): the period card holds «بازه» and the pills on one line; each
+ * bar row is the label, the bar, then the number — one line, label on the start side.
+ */
+.sa-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+}
+.sa-range[hidden] {
+  display: none;
+}
+.sa-range > .filter-row {
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+.sa-range-label {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.sa-body .dist {
+  gap: 12px;
+}
+.sa-body .dist-row {
+  grid-template-columns: minmax(0, 34%) minmax(0, 1fr) auto;
+  gap: 12px;
+}
+.sa-body .dist-row > :first-child {
+  grid-column: 1;
+  grid-row: 1;
+}
+.sa-body .dist-row svg.bar {
+  grid-column: 2;
+  grid-row: 1;
+}
+/* A bar grows from the start side, beside its label (the SVG's x runs left to right). */
+[dir='rtl'] .sa-body .dist-row svg.bar {
+  transform: scaleX(-1);
+}
+.sa-body .dist-row > .num {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 3ch;
+  text-align: end;
+  color: var(--fg);
+  font-weight: 650;
+}
