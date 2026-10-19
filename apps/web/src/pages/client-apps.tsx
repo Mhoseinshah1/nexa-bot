@@ -707,7 +707,12 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
   };
 
   const newButton = (
-    <button type="button" className="btn primary sm" disabled={busy} onClick={openCreate}>
+    <button
+      type="button"
+      className="btn primary sm"
+      disabled={busy || editor.kind !== 'closed'}
+      onClick={openCreate}
+    >
       <Icon name="plus" />
       {t('web.client_apps_new')}
     </button>
@@ -826,7 +831,9 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
         <Card
           title={t('web.client_apps_title')}
           hint={t('web.client_apps_hint')}
-          actions={mayEdit && editor.kind === 'closed' ? newButton : undefined}
+          // Kept in place (disabled) while the sheet is open: a header that lost its button
+          // would shorten the page under the operator and move what they were looking at.
+          actions={mayEdit ? newButton : undefined}
         >
           <DataTable
             stackOnPhone
