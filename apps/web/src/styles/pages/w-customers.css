@@ -157,3 +157,63 @@
   background: none;
   border-inline-start: 2px solid var(--accent);
 }
+
+/*
+ * The support AI's configuration (demo parity, DIFFS support-ai #1, #5): each group is a soft
+ * inset card with its caption in the border; the modes are one per line; a step's provider and
+ * model share the row equally; «افزودن پشتیبان» is a compact button on the start side.
+ */
+.sai-config fieldset.field {
+  margin: 0;
+  padding: 10px 14px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+  min-width: 0;
+}
+.sai-config fieldset.field > legend {
+  padding-inline: 6px;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+.sai-config fieldset.field > .stack-sm > .check {
+  display: flex;
+}
+.sai-step .row {
+  flex-wrap: nowrap;
+}
+.sai-step .row > .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sai-config .sai-fallback-add {
+  align-self: flex-start;
+  justify-self: start;
+  margin-top: 8px;
+}
+
+/* The provider keys: one block per provider, divided by a rule, as the demo lists them. */
+.sai-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* Replace and delete on one line, the connection test and its model on the next. */
+.sai-keys .btn-group,
+.sai-keys .ops-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.sai-keys > li {
+  padding-block: 14px;
+  border-block-end: 1px solid var(--line);
+}
+.sai-keys > li:first-child {
+  padding-block-start: 0;
+}
+.sai-keys > li:last-child {
+  border-block-end: 0;
+  padding-block-end: 0;
+}

@@ -307,6 +307,20 @@ describe('the support AI settings page', () => {
     expect(view.container.querySelectorAll('input[type="password"]')).toHaveLength(0);
   });
 
+  it('composes as the demo: the mode on the controls side, each key a vertical list', async () => {
+    const { view } = settings();
+    const openai = await providerBlock('OPENAI');
+    // DIFFS support-ai #3: the mode pill is not a chip beside the title.
+    const h1 = view.container.querySelector('h1') as HTMLElement;
+    expect(h1.querySelector('.badge')).toBeNull();
+    expect(view.container.querySelector('.page-head .actions .badge')).not.toBeNull();
+    // DIFFS support-ai #1: the key's facts are a label/value LIST, never one inline row,
+    // and the connection test names the model it will use.
+    const list = openai.getByText(t('web.sai_key_set_at')).closest('dl') as HTMLElement;
+    expect(list.classList.contains('inline')).toBe(false);
+    expect(openai.getByText(new RegExp(t('web.sai_test_model')))).toBeTruthy();
+  });
+
   it('sets a key through a password field, clears it, and never renders it', async () => {
     const { api, view } = settings();
     const openai = await providerBlock('OPENAI');

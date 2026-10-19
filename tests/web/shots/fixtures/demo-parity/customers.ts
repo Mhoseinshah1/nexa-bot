@@ -15,7 +15,7 @@ import { SHOT_NOW, ago, fixture, type ShotFixture } from '../../fixture.ts';
  * a conflicting knowledge proposal and a retired one.
  *
  * Only fields the API has. Every body is parsed by its response schema in
- * `tests/web/shots-fixtures.test.tsx`.
+ * `tests/web/customers-parity-fixtures.test.tsx`.
  */
 
 type Json = Record<string, unknown>;
