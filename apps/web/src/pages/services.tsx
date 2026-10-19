@@ -24,7 +24,7 @@ import {
   fetchServices,
   type ServiceSimpleAction,
 } from '../api/client';
-import { formatDate, formatTimestamp, formatTrafficGbText } from '../format';
+import { formatDate, formatNumber, formatTimestampNumeric, formatTrafficGbText } from '../format';
 import { messageFor } from './settings';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
@@ -43,7 +43,6 @@ import {
   Banner,
   Button,
   Card,
-  CopyButton,
   Copyable,
   CursorPager,
   DataTable,
@@ -56,6 +55,7 @@ import {
   PageHead,
   Progress,
   StatCard,
+  progressRatio,
   StateSwitch,
   TabPanel,
   Tabs,
@@ -439,7 +439,7 @@ export function ServicesPage({
         row.expiresAt === null ? (
           <Dash />
         ) : (
-          <span className="nowrap">{formatTimestamp(row.expiresAt)}</span>
+          <span className="nowrap">{formatTimestampNumeric(row.expiresAt)}</span>
         ),
     },
     {
@@ -452,7 +452,9 @@ export function ServicesPage({
       key: 'started',
       header: t('web.service_started_at'),
       render: (row) => (
-        <span className="nowrap">{formatTimestamp(row.originalStartedAt ?? row.createdAt)}</span>
+        <span className="nowrap">
+          {formatTimestampNumeric(row.originalStartedAt ?? row.createdAt)}
+        </span>
       ),
     },
   ];
@@ -618,6 +620,7 @@ export function ServicesPage({
             ) : (
               <>
                 <DataTable
+                  stack
                   caption={t('web.services_title')}
                   columns={columns}
                   rows={services.data.services}
@@ -1073,12 +1076,9 @@ export function ServiceDetailPage({
         {row === undefined ? null : (
           <>
             <PageHead
-              title={
-                <span className="ca-title-id">
-                  <Ltr>{row.providerUsername}</Ltr>
-                  <CopyButton value={row.providerUsername} />
-                </span>
-              }
+              // X7: the demo's title is the bare username, without a copy icon; the panel
+              // user id below keeps its copy control (`ServiceIdentity`).
+              title={<Ltr>{row.providerUsername}</Ltr>}
               badge={
                 <span className="ca-badges">
                   <StateBadge value={row.state} />
@@ -1172,6 +1172,7 @@ function OperationsTable({ operations }: { operations: readonly ServiceOperation
   return (
     <>
       <DataTable
+        stack
         caption={t('web.service_operations_title')}
         columns={OPERATION_COLUMNS}
         rows={page.rows}
@@ -1235,20 +1236,26 @@ function ServiceStats({ row }: { row: ServiceDetail }) {
           </span>
         }
       >
-        {!unlimited && <Progress value={used} max={limit} label={t('web.service_traffic_used')} />}
+        {!unlimited && <UsageMeter used={used} limit={limit} />}
         <span className="ca-stat-line faint">
           <span>{t('web.service_usage_synced_at')}</span>
           {row.usageSyncedAt === null ? (
             <span>{t('web.service_usage_never')}</span>
           ) : (
-            <span>{formatTimestamp(row.usageSyncedAt)}</span>
+            <span>{formatTimestampNumeric(row.usageSyncedAt)}</span>
           )}
         </span>
       </StatCard>
       <StatCard
         icon="calendar"
         label={t('web.service_expires_at')}
-        value={row.expiresAt === null ? <Dash /> : formatTimestamp(row.expiresAt)}
+        value={
+          row.expiresAt === null ? (
+            <Dash />
+          ) : (
+            <span className="ca-stat-when">{formatTimestampNumeric(row.expiresAt)}</span>
+          )
+        }
       />
       <StatCard
         icon="send"
@@ -1260,7 +1267,7 @@ function ServiceStats({ row }: { row: ServiceDetail }) {
             {row.deliveryNextAttemptAt === null ? (
               <Dash />
             ) : (
-              <span>{formatTimestamp(row.deliveryNextAttemptAt)}</span>
+              <span>{formatTimestampNumeric(row.deliveryNextAttemptAt)}</span>
             )}
           </span>
         }
@@ -1277,6 +1284,22 @@ function ServiceStats({ row }: { row: ServiceDetail }) {
         }
       />
     </div>
+  );
+}
+
+/**
+ * The traffic bar with its percentage beside it («۷۱٪»), as the demo's usage tile draws it:
+ * neutral below 75%, warn above it, danger above 90%. The figure is the exact ratio of the
+ * two byte counts the server sent, rounded once.
+ */
+function UsageMeter({ used, limit }: { used: bigint; limit: bigint }) {
+  const percent = Math.round(progressRatio(used, limit) * 100);
+  const tone: Tone = percent > 90 ? 'danger' : percent > 75 ? 'warn' : 'neutral';
+  return (
+    <span className="svc-usage-meter">
+      <Progress value={used} max={limit} label={t('web.service_traffic_used')} tone={tone} />
+      <span className="num">{`${formatNumber(percent)}${t('web.percent_sign')}`}</span>
+    </span>
   );
 }
 
@@ -1327,8 +1350,8 @@ function ServiceIdentity({ row }: { row: ServiceDetail }) {
               </a>
             ),
           ],
-          [t('web.service_created_at'), formatTimestamp(row.createdAt)],
-          [t('web.service_updated_at'), formatTimestamp(row.updatedAt)],
+          [t('web.service_created_at'), formatTimestampNumeric(row.createdAt)],
+          [t('web.service_updated_at'), formatTimestampNumeric(row.updatedAt)],
         ]}
       />
       <p className="muted small">{t('web.service_username_hint')}</p>
@@ -1356,15 +1379,23 @@ function ServiceDelivery({ row }: { row: ServiceDetail }) {
           ],
           [
             t('web.service_delivered_at'),
-            row.deliveredAt === null ? <Dash key="da" /> : formatTimestamp(row.deliveredAt),
+            row.deliveredAt === null ? <Dash key="da" /> : formatTimestampNumeric(row.deliveredAt),
           ],
           [
             t('web.service_provisioned_at'),
-            row.provisionedAt === null ? <Dash key="pa" /> : formatTimestamp(row.provisionedAt),
+            row.provisionedAt === null ? (
+              <Dash key="pa" />
+            ) : (
+              formatTimestampNumeric(row.provisionedAt)
+            ),
           ],
           [
             t('web.service_terminated_at'),
-            row.terminatedAt === null ? <Dash key="ta" /> : formatTimestamp(row.terminatedAt),
+            row.terminatedAt === null ? (
+              <Dash key="ta" />
+            ) : (
+              formatTimestampNumeric(row.terminatedAt)
+            ),
           ],
         ]}
       />
@@ -1397,7 +1428,7 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
   {
     key: 'created',
     header: t('web.operation_created_at'),
-    render: (op) => <span className="nowrap">{formatTimestamp(op.createdAt)}</span>,
+    render: (op) => <span className="nowrap">{formatTimestampNumeric(op.createdAt)}</span>,
   },
   {
     key: 'scheduled',
@@ -1406,7 +1437,7 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
       op.scheduledAt === null ? (
         <Dash />
       ) : (
-        <span className="nowrap">{formatTimestamp(op.scheduledAt)}</span>
+        <span className="nowrap">{formatTimestampNumeric(op.scheduledAt)}</span>
       ),
   },
   {
@@ -1416,7 +1447,7 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
       op.completedAt === null ? (
         <Dash />
       ) : (
-        <span className="nowrap">{formatTimestamp(op.completedAt)}</span>
+        <span className="nowrap">{formatTimestampNumeric(op.completedAt)}</span>
       ),
   },
   {
