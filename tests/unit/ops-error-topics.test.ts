@@ -68,6 +68,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'telegram.customer_send_ok': 'BOT',
   'telegram.appearance_decoration_failed': 'BOT',
   'telegram.appearance_decoration_ok': 'BOT',
+  // R4 PR-F: a refused rich message is an error report, not the bot's own topic.
+  'telegram.rich_message_refused': 'ERRORS',
   'telegram.turn_failed': 'BOT',
   'telegram.ops_group_update_failed': 'BOT',
   'telegram.message_retention_failing': 'BOT',
