@@ -4,6 +4,7 @@ import {
   DEFAULT_EXPLICIT_MAIN_MENU,
   MAIN_MENU_BUTTONS,
   appearanceResponseSchema,
+  botListResponseSchema,
   botMenuBuilderResponseSchema,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
@@ -120,4 +121,56 @@ const botButtons = fixture('/bot-menu/builder', botMenuBuilderResponseSchema, {
   ],
 });
 
-export const DEMO_BOT: readonly ShotFixture[] = [appearance, botButtons];
+/*
+ * `#/bots`: the demo's two bots — the shop bot healthy, the support bot STOPPED with a
+ * webhook registered under an older secret, so its card draws the amber box of causes and
+ * the strip counts it as needing attention.
+ */
+const TENANT = {
+  id: '01900000-0000-7000-8000-000000000001',
+  slug: 'nexa-main',
+  displayName: 'فروشگاه نکسا',
+  kind: 'PRIMARY',
+};
+const bots = fixture('/bots', botListResponseSchema, {
+  bots: [
+    {
+      id: BOT_SHOP,
+      username: 'NexaShopVPN_bot',
+      telegramBotId: '7412983650',
+      status: 'ACTIVE',
+      tenant: TENANT,
+      createdAt: ago(60 * 24 * 120),
+      updatedAt: ago(60 * 24 * 5),
+      webhook: {
+        registeredAt: ago(60 * 24 * 5),
+        url: `https://bot.nexa.example/telegram/webhook/${BOT_SHOP}`,
+        secret: 'MATCHES',
+      },
+      commandMenu: 'CURRENT',
+      readiness: { state: 'REGISTERED', causes: [] },
+    },
+    {
+      id: BOT_SUPPORT,
+      username: 'NexaSupport_bot',
+      telegramBotId: '6990127745',
+      status: 'STOPPED',
+      tenant: TENANT,
+      createdAt: ago(60 * 24 * 90),
+      updatedAt: ago(60 * 24 * 30),
+      webhook: {
+        registeredAt: ago(60 * 24 * 30),
+        url: `https://bot.nexa.example/telegram/webhook/${BOT_SUPPORT}`,
+        secret: 'DIFFERS',
+      },
+      commandMenu: 'STALE',
+      readiness: {
+        state: 'NOT_REGISTERED',
+        causes: ['BOT_NOT_ACTIVE', 'WEBHOOK_SECRET_CHANGED'],
+      },
+    },
+  ],
+  installation: { webhookRouteEnabled: true, webhookSecretConfigured: true },
+});
+
+export const DEMO_BOT: readonly ShotFixture[] = [appearance, botButtons, bots];

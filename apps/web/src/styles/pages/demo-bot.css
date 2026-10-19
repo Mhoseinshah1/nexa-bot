@@ -87,3 +87,36 @@
   border-color: var(--line-2);
   background: var(--bg-2);
 }
+
+/* --- Bots (`#/bots`) ------------------------------------------------------------------ */
+
+/* «افزودن ربات» is the demo's bordered card: a «+» header row, the explanation under it. */
+.bx-add {
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  border-radius: var(--radius-ctl);
+  padding: 9px 12px;
+  margin-top: var(--gap);
+}
+.bx-add-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.bx-add p {
+  margin: 0;
+}
+/* A fact's value reads in the body colour, as the demo draws it; the pills carry the tone. */
+.bx-bot .bx-kv {
+  background: var(--bg-2);
+}
+.bx-bot .bx-kv dd .ok,
+.bx-bot .bx-kv dd .warn {
+  color: var(--fg);
+}
+.bx-bot .bx-kv dd .small {
+  font-size: var(--fs-ui);
+}
