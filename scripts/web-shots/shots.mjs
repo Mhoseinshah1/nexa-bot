@@ -9,6 +9,7 @@
  *   pnpm web:shots / --full --no-build --out /tmp/shots
  *   pnpm web:shots /panels/<id> --click '[role=tab]:nth-child(3)'   a state reached by clicking
  *   pnpm web:shots / --signed-out                  the sign-in screen (the session answers 401)
+ *   pnpm web:shots / --fixtures demo-parity        the approved demo's sample numbers
  *
  * What it does, and why each part is there:
  *
@@ -54,6 +55,7 @@ function parseArgs(argv) {
     timeoutMs: 15_000,
     clicks: [],
     signedOut: false,
+    fixtures: undefined,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -74,6 +76,7 @@ function parseArgs(argv) {
     else if (arg === '--timeout') options.timeoutMs = Number(value());
     else if (arg === '--click') options.clicks.push(value());
     else if (arg === '--signed-out') options.signedOut = true;
+    else if (arg === '--fixtures') options.fixtures = value();
     else if (arg === '--help' || arg === '-h') {
       console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0]);
       process.exit(0);
@@ -91,7 +94,10 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
 
   if (options.build) buildWeb();
-  const server = await startServer({ signedOut: options.signedOut });
+  const server = await startServer({
+    signedOut: options.signedOut,
+    ...(options.fixtures === undefined ? {} : { fixtureSet: options.fixtures }),
+  });
   const chrome = await launchChrome();
   const { cdp } = chrome;
 
@@ -152,6 +158,7 @@ function shotName(route, theme, options) {
     options.full ? 'full' : null,
     options.clicks.length > 0 ? `click${options.clicks.length}` : null,
     options.signedOut ? 'signed-out' : null,
+    options.fixtures ?? null,
   ]
     .filter(Boolean)
     .join('--');
